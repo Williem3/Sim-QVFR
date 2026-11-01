@@ -15,6 +15,7 @@
 #include <tlhelp32.h>
 
 #include "launch_plan.h"
+#include "launcher_version.h"
 
 using namespace aceqv::launcher;
 namespace fs = std::filesystem;
@@ -187,7 +188,7 @@ int run(bool dryRun) {
         return fail(L"cannot copy ace-quadview.ini into " + runFolder.wstring());
     const auto variables = launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring());
 
-    say(L"ace-quadview launcher" + std::wstring(dryRun ? L" (dry run)" : L""));
+    say(L"ace-quadview launcher " + widen(ACE_QV_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
     say(L"  layer:     " + library.wstring());
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");

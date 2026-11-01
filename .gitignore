@@ -1,5 +1,7 @@
 # CMake/MSBuild output, test binaries, runtime logs and PIX captures
 build/
+# Release packages (package.ps1)
+dist/
 out/
 .vs/
 *.user

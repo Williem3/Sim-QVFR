@@ -21,7 +21,8 @@ In any other OpenXR app the DLL does nothing.
 
 ## Build
 
-Shares MinHook and the OpenXR headers with `../lmu-quadview/rebuild/third_party`.
+MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).
+Licence: PolyForm Noncommercial 1.0.0 (`LICENSE.md`); third-party notices in `THIRD_PARTY_NOTICES.md`.
 
 ```bash
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64

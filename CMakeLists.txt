@@ -9,8 +9,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# Shared with the LMU rebuild: MinHook 1.3.4 and the OpenXR SDK headers.
-set(THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/../lmu-quadview/rebuild/third_party)
+# MinHook 1.3.4 and the OpenXR SDK headers, vendored (third_party/README.md).
+set(THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 add_library(minhook STATIC
   ${THIRD_PARTY}/minhook/src/buffer.c
   ${THIRD_PARTY}/minhook/src/hook.c
@@ -110,8 +110,10 @@ target_link_libraries(gpu_frame_timer_test PRIVATE d3d12 dxgi)
 
 # Launcher: starts ACE in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
+set(ACE_QV_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
+configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 add_executable(ace_launcher src/launcher/main.cpp src/launcher/launch_plan.cpp)
-target_include_directories(ace_launcher PRIVATE src)
+target_include_directories(ace_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(ace_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ace_launcher PRIVATE /W4 /permissive- /utf-8)
 set_target_properties(ace_launcher PROPERTIES OUTPUT_NAME ace-quadview-launcher)
