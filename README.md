@@ -9,19 +9,25 @@ a wide low-resolution outer view and a sharp focus view per eye, to cut GPU and 
 > offline sessions only: Kunos validates content online. Please don't report problems you see
 > while using it to the ACE developers.
 
-## Status: probe build (log only)
+## Status: alpha
 
-The current DLL **does not change rendering**. It is an OpenXR layer that forwards every call
-unchanged. In ACE it:
+The layer **changes how ACE renders**. It patches the game in memory, after checking the exe's
+SHA-256 and code anchors. `[experiment] mode` in `ace-quadview.ini` picks the rendering path:
 
-- logs the views, swapchains and frame submission the game uses;
-- after checking the exe's SHA-256 and code anchors, puts log-only hooks on seven of ACE's VR
-  functions (camera update, FOV setter, frustum, locate/acquire, begin/end frame, single-pass
-  decision). Each hook logs the full call stack for its first calls, and every 1800 frames it logs
-  three frames of call order.
+- `views4`, **Quad View Foveated Rendering (QVFR)**: one ACE frame renders four views (the two
+  outer eye views at `periphery_scale` and two focus views at `focus_density` over `focus_percent`
+  of the FOV). The layer blends each focus view into its eye at the headset's native size, following
+  the eyes when eye tracking is available. This is the launcher's default.
+- `quad`, **Two-Loop**: ACE runs two full frames per headset frame (A for the full view, B for the
+  focus box), and the layer blends B into A. Frame generation (VectorXR) has to be off.
+- `off`: rendering unchanged. Only the log-only probes run.
+- Experiments for diagnosis, not for driving: `focus_only`, `two_loops`, `views3`, and
+  `double_render`, which crashes ACE. The comments in `manifest/ace-quadview.ini` describe each one.
 
-That reveals the per-eye render loop, which static analysis cannot reach because it runs through
-ACE's task system. See [docs/recon.md](docs/recon.md) for what is known so far.
+With `probes=1` (the default), the layer also logs the views, swapchains and frame submission. It
+puts log-only hooks on ACE's VR functions, which log call stacks and per-frame call order, and runs
+a D3D12 trace. The launcher's QVFR setup writes `probes=0`. See [docs/recon.md](docs/recon.md) for
+the reverse-engineering notes.
 
 In any other OpenXR app the DLL does nothing.
 
@@ -38,22 +44,28 @@ cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Release
 ```
 
-`build/Release/stub_test.exe` checks the hand-assembled hook stub (arguments, results, stack walk).
+The offline tests are the `build/Release/*_test.exe` executables (hook stub, code patch, compositor,
+focus outline/cull/turn, launcher settings and plan, two-loop and quad flow, and others). Each one
+exits non-zero on failure.
+
+`package.ps1 -Version <version>` builds a release zip in `dist\` from a clean checkout of a commit,
+after running every test. `packaging/README.txt` is the user guide that ships in the zip.
 
 ## Launch (ace-quadview-launcher)
 
-`build/Release/ace-quadview-launcher.exe` opens a settings window (rendering mode QVFR or Two-Loop,
-foveated size, focus and periphery resolution, feather, eye tracking or fixed, a debug outline in
-green, magenta or teal) and starts Assetto Corsa EVO in VR with the layer for that launch only;
+`build/Release/ace-quadview-launcher.exe` opens a settings window and starts Assetto Corsa EVO in VR with the layer for that launch only;
 nothing is installed or registered. It reads `ace-quadview.ini` next to it (the
 layer's settings, plus a `[launcher]` section), finds the game through Steam, and writes a run
 folder under `logs/` with the layer's manifest, a snapshot of the ini and `launch.txt` (what it
-did). The layer's log for that launch is `logs/ace-<time>.log`.
+did). The layer's log for that launch is `logs/ace-<time>.log`. The window has these settings: rendering
+method (QVFR or Two-Loop), eye-tracked or fixed foveation, outer and inner resolution, foveated
+width and height, corner radius, feather, and a focus outline in teal, magenta or green.
 
 OpenXR layer order: the layer is loaded nearest the game. Every enabled implicit layer that can be
 switched off per launch (OpenXR Toolkit, VectorXR, ...) is loaded below it instead, in registry
-order, so nothing can change what ACE renders behind the layer's back. VectorXR is turned off in
-`mode=quad`. Layers that cannot be moved are listed as staying above.
+order, so nothing can change what ACE renders behind the layer's back. VectorXR frame generation is
+turned off for Two-Loop (`mode=quad`, and also `mode=two_loops`); it stays on below the layer for
+QVFR. Layers that cannot be moved are listed as staying above.
 
 ```ini
 [launcher]
@@ -64,27 +76,36 @@ order, so nothing can change what ACE renders behind the layer's back. VectorXR 
 `ace-quadview-launcher.exe --dry-run` writes the run folder and prints the plan without starting
 the game; `--launch` launches without the window. Steam must be running and ACE closed.
 
-## Run one probe session
+## Run without the launcher (registered layer)
+
+For development you can register the layer instead, so that ACE loads it when started from Steam.
+It then runs whatever `build\Release\ace-quadview.ini` says, which may be the launcher's last
+settings. For a log-only probe session, set `mode=off` and `probes=1` in `[experiment]` first.
 
 1. Register the layer for your user (HKCU, removable):
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\Register-ProbeLayer.ps1
    ```
+   `-Machine` registers it in HKLM instead (run as administrator). Use that to order it against
+   another machine-wide layer such as VectorXR.
 2. Start SteamVR, then ACE from Steam as usual. Load a session in VR and drive for about a minute.
-3. Quit ACE and send `build\Release\logs\ace-quadview.log`.
+3. Quit ACE. The log is `build\Release\logs\ace-quadview.log`.
 4. Unregister when done:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\Unregister-ProbeLayer.ps1
    ```
 
-To skip the layer for one launch, set `DISABLE_XR_APILAYER_ACE_quadview=1`. Offline sessions only.
-The probe hooks game code, and Kunos validates content online.
+To skip the layer for one launch, set `DISABLE_XR_APILAYER_ACE_quadview=1`. Offline sessions only:
+the layer patches game code, and Kunos validates content online.
 
 ## Tools
 
 `tools/` holds Python helpers for the 101 MB exe: string cross-references (`xrefs.py`), function
 disassembly with string notes (`disfunc.py`), chunk-to-entry resolution through chained unwind
-info and incremental-link thunks (`func_entry.py`), and RTTI vtable owners (`vtable_owner.py`).
+info and incremental-link thunks (`func_entry.py`), RTTI vtable owners (`vtable_owner.py`),
+struct-field displacement search (`disp_refs.py`) and callee labelling by referenced strings
+(`label_callees.py`). `gen_launcher_theme.py` and `make_app_icon.py` generate the launcher's theme
+header and icon.
 
 ## Development and Support
 
