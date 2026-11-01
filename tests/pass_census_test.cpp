@@ -81,7 +81,8 @@ int main() {
     device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator));
     device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list));
 
-    aceqv::pass_census_set_quarter_width(64);
+    const int left[4] = {0, 64, 128, 192}, width[4] = {64, 64, 64, 64};
+    aceqv::pass_census_set_view_columns(left, width);
     aceqv::pass_census_watch("eyes only pipeline,test compute");
     aceqv::pass_census_set_uav_barriers(true);  // recording a UAV barrier after each dispatch must stay valid
     aceqv::pass_census_arm(1, 1);

@@ -2,16 +2,22 @@
 // copies of the two eyes (recon "The VR view path, mapped"). VR keeps view mode 1, so every
 // VR-only branch runs as usual; what changes:
 //  - viewCount() returns 4 to an allowlist of call sites (logged: every caller seen, once),
-//  - the viewport function lays the 4 views out as quarters of the render target,
+//  - the viewport function lays the 4 views out in the render target (views4_layout.h: equal
+//    quarters, or outer and focus views each at their own size),
 //  - per-view records and the 3-slot camera block fold views 2 and 3 onto 0 and 1,
 //  - the layer doubles the eye width ACE sees, so its double-wide target holds 4 eye-sized views,
 //    and points the submitted projection views at the first two quarters.
 #pragma once
 
+#include "../quad/focus_cull.h"
+#include "../quad/views4_layout.h"
 #include "../xr.h"
 
 namespace aceqv {
 
+// Where the four views sit in ACE's target (views4_layout.h): equal quarters unless set. Call
+// before views4_start.
+void views4_set_layout(const Views4Layout& layout);
 // `callers`: "init" (renderer init's per-view vector sizing only), "all", or "init" plus
 // comma-separated call-site RVAs (hex) of `call viewCount` instructions. Must run before ACE
 // creates its renderer (xrCreateInstance). Verifies every site first; all or nothing.
@@ -22,8 +28,15 @@ namespace aceqv {
 // centred on the eye's forward axis.
 bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focusFraction);
 // Gaze ("cameras"): each eye's focus camera turn (in the eye's frame; focus_turn.h), set at every
-// xrLocateViews. The next focus cameras the builder fills use the latest.
-void views4_set_focus_turns(const XrQuaternionf (&turns)[2]);
+// xrLocateViews. The next focus cameras the builder fills use the latest. `gazeSample`: the turns
+// come from a gaze sample (not the untracked default).
+void views4_set_focus_turns(const XrQuaternionf (&turns)[2], bool gazeSample);
+// Focus cull (views4_focus_cull, needs "cameras"): every filled frame also builds the focus views'
+// world-space frusta (focus_cull.h), their extents widened by `scale`. With `gaze` on, none are
+// built before the first gaze sample. Call before views4_start.
+void views4_set_focus_cull(bool on, double scale, bool gaze);
+// The latest focus frustum of view 2 or 3; false when focus cull is off or none is built yet.
+bool views4_focus_frustum(int view, FocusFrustum& out);
 // The turns the next frame to be composed was rendered with, in rendering order. False until the
 // first focus cameras are filled (then the composition is unturned).
 bool views4_take_focus_turns(XrQuaternionf (&turns)[2]);

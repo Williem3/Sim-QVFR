@@ -17,6 +17,7 @@
 #include "experiment/views4.h"
 #include "log.h"
 #include "probe/d3d12_trace.h"
+#include "probe/gpu_frame_timer.h"
 #include "probe/pass_census.h"
 #include "probe/pix_capture.h"
 #include "quad/focus_turn.h"
@@ -79,8 +80,12 @@ struct Experiment {
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
+    bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
+    double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4ShadowView1Plain = false;   // diagnostic: no view-1 shortcut in deferredShadows (views4.h)
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
+    bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
+    UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
     char passCensusWatch[512] = "";        // the census logs stacks of these pipelines' draws and dispatches (comma-separated)
     bool dred = false;                     // D3D12 DRED report on device removal (default on with views4)
     bool d3d12Debug = false;               // D3D12 debug layer, errors into the log (slow; diagnosis only)
@@ -89,6 +94,7 @@ struct Experiment {
     bool twoLoops = false;        // round 7: two complete ACE frames per display frame
     bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
+    Views4Layout views4Layout;    // views4: outer views at periphery_scale, focus views at focus_density x focus_percent
     double focusFraction = 0.35;  // of the view's tangent-space width and height
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     double feather = 0.10;        // quad: blend band, as a fraction of the focus box
@@ -134,6 +140,12 @@ void load_experiment() {
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
+    experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
+    experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
+    experiment.views4FocusCull = GetPrivateProfileIntW(L"experiment", L"views4_focus_cull", 0, ini.c_str()) != 0;
+    experiment.views4FocusCullMargin =
+        std::clamp(GetPrivateProfileIntW(L"experiment", L"views4_focus_cull_margin_percent", 25, ini.c_str()), 0u, 200u) /
+        100.0;
     experiment.uavBarriers = GetPrivateProfileIntW(L"experiment", L"pass_census_uav_barriers", 0, ini.c_str()) != 0;
     experiment.views4ShadowView1Plain =
         GetPrivateProfileIntW(L"experiment", L"views4_shadow_view1_plain", 0, ini.c_str()) != 0;
@@ -163,10 +175,25 @@ void load_experiment() {
     // Above 100 supersamples (in quad mode this is the outer view's resolution).
     const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 25u, 200u);
     experiment.eyeScale = eyePercent / 100.0;
+    // views4: periphery and focus resolution each on their own. Unset, both follow eye_scale (equal
+    // quarters: periphery = eye_scale, focus density = eye_scale / focus_percent).
+    const UINT peripheryPercent = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str());
+    const UINT focusDensityPercent = GetPrivateProfileIntW(L"experiment", L"focus_density", 0, ini.c_str());
+    const double outer = peripheryPercent ? std::clamp(peripheryPercent, 10u, 200u) / 100.0 : experiment.eyeScale;
+    // The focus views' linear size against the native eye: density times the box's share of the FOV.
+    const double focus = focusDensityPercent
+                             ? std::clamp(focusDensityPercent, 25u, 400u) / 100.0 * experiment.focusFraction
+                             : experiment.eyeScale;
+    experiment.views4Layout = views4_layout(outer, focus);
     logf("experiment: mode=%ls focus_percent=%u b_focus=%d eye_scale=%u feather_percent=%u debug_border=%d gaze=%d "
          "(from %ls)",
          mode, percent, experiment.focusInB ? 1 : 0, eyePercent, featherPercent, experiment.border ? 1 : 0,
          experiment.gaze ? 1 : 0, ini.c_str());
+    if (experiment.views4)
+        logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native (focus views %.0f%% of the "
+             "native eye size)%s",
+             outer * 100, focus / experiment.focusFraction * 100, focus * 100,
+             peripheryPercent || focusDensityPercent ? "" : " (from eye_scale)");
 }
 
 // Round 7: two complete ACE frames per display frame. ACE's frames are paired A, B by its own
@@ -458,23 +485,24 @@ void views4_outline_draw(XrSwapchain swapchain) {
         return;
     ID3D12Resource* image = images->second[index->second];
     const D3D12_RESOURCE_DESC desc = image->GetDesc();
-    // Eye e's outer view is quarter e of the image (views4_submit); the focus box is focus_percent of
+    // Eye e's outer view is view e of the image (views4_submit); the focus box is focus_percent of
     // the eye's tangent extent around its forward axis, as views4's focus cameras use.
-    const int quarter = static_cast<int>(desc.Width / 4), height = static_cast<int>(desc.Height);
     std::vector<OutlineBox> boxes;
+    int thickness = 2;
     for (int e = 0; e < 2; ++e) {
+        const ViewRect v = views4_rect(experiment.views4Layout, e, static_cast<int>(desc.Width), static_cast<int>(desc.Height));
         const XrFovf& f = v4outline.fov[e];
         const double l = std::tan(f.angleLeft), r = std::tan(f.angleRight);
         const double u = std::tan(f.angleUp), d = std::tan(f.angleDown);
         const double hw = (r - l) * experiment.focusFraction / 2, hh = (u - d) * experiment.focusFraction / 2;
         if (!(r > l && u > d))
             return;
-        boxes.push_back(OutlineBox{e * quarter + static_cast<int>((-hw - l) / (r - l) * quarter),
-                                   static_cast<int>((u - hh) / (u - d) * height),
-                                   e * quarter + static_cast<int>((hw - l) / (r - l) * quarter),
-                                   static_cast<int>((u + hh) / (u - d) * height)});
+        boxes.push_back(OutlineBox{v.left + static_cast<int>((-hw - l) / (r - l) * v.width),
+                                   static_cast<int>((u - hh) / (u - d) * v.height),
+                                   v.left + static_cast<int>((hw - l) / (r - l) * v.width),
+                                   static_cast<int>((u + hh) / (u - d) * v.height)});
+        thickness = std::max(2, v.width / 300);
     }
-    const int thickness = std::max(2, quarter / 300);
     v4outline.outline.draw(image, boxes, thickness, v4outline.rgba);
 }
 
@@ -517,6 +545,73 @@ uint64_t locates = 0;
 
 bool sampled(uint64_t count) { return count <= kDetailedFrames || count % kSampleEveryFrames == 0; }
 
+// views4 CPU cost of this layer's hot calls (the focus-cull measurement): each layer entry point
+// in total, and the part spent below it (runtime, VectorXR), so the layer's own share is the
+// difference. Logged every kCpuReportFrames xrEndFrames next to the views4 report.
+struct CpuSpan {
+    std::atomic<uint64_t> ticks{0}, maxTicks{0}, calls{0};
+    void add(int64_t t) {
+        const auto v = static_cast<uint64_t>(t);
+        ticks.fetch_add(v, std::memory_order_relaxed);
+        calls.fetch_add(1, std::memory_order_relaxed);
+        for (uint64_t m = maxTicks.load(std::memory_order_relaxed); v > m && !maxTicks.compare_exchange_weak(m, v);) {
+        }
+    }
+};
+struct CpuTimes {
+    CpuSpan endFrame, endFrameBelow, locate, locateBelow, compose;
+    PFN_xrEndFrame realEndFrame = nullptr;
+    PFN_xrLocateViews realLocateViews = nullptr;
+    double msPerTick = 0;
+};
+CpuTimes cpu;
+constexpr uint64_t kCpuReportFrames = 900;
+
+int64_t qpc_now() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+
+XrResult XRAPI_CALL timedEndFrameBelow(XrSession session, const XrFrameEndInfo* info) {
+    const int64_t t0 = qpc_now();
+    const XrResult r = cpu.realEndFrame(session, info);
+    cpu.endFrameBelow.add(qpc_now() - t0);
+    return r;
+}
+
+XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
+                                          uint32_t capacity, uint32_t* countOutput, XrView* views) {
+    const int64_t t0 = qpc_now();
+    const XrResult r = cpu.realLocateViews(session, info, state, capacity, countOutput, views);
+    cpu.locateBelow.add(qpc_now() - t0);
+    return r;
+}
+
+void report_cpu_times() {
+    const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
+        const uint64_t n = total.calls.exchange(0), t = total.ticks.exchange(0), m = total.maxTicks.exchange(0);
+        const uint64_t bt = below ? below->ticks.exchange(0) : 0;
+        if (below) {
+            below->calls = 0;
+            below->maxTicks = 0;
+        }
+        const double per = n ? cpu.msPerTick / static_cast<double>(n) : 0;
+        if (below)
+            std::snprintf(out, size, "%.3f (layer %.3f, below %.3f, max %.3f) x%llu", t * per,
+                          (t > bt ? t - bt : 0) * per, bt * per, m * cpu.msPerTick, static_cast<unsigned long long>(n));
+        else
+            std::snprintf(out, size, "%.3f (max %.3f) x%llu", t * per, m * cpu.msPerTick, static_cast<unsigned long long>(n));
+    };
+    char end[128], locate[128], compose[128];
+    line(cpu.endFrame, &cpu.endFrameBelow, end, sizeof(end));
+    line(cpu.locate, &cpu.locateBelow, locate, sizeof(locate));
+    line(cpu.compose, nullptr, compose, sizeof(compose));
+    logf("views4 cpu: ms per call over the last %llu frames: xrEndFrame %s; xrLocateViews %s; compose %s",
+         static_cast<unsigned long long>(kCpuReportFrames), end, locate, compose);
+    gpu_frame_timer_report();
+}
+
 bool is_ace_process() {
     wchar_t path[MAX_PATH] = {};
     const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
@@ -535,8 +630,11 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
         quad.nativeW = views[0].recommendedImageRectWidth;
         quad.nativeH = views[0].recommendedImageRectHeight;
     }
-    // views4: ACE's "eye" is two eye widths, so its double-wide target holds four eye-sized views.
-    const double widthScale = experiment.eyeScale * (experiment.views4 ? 2.0 : 1.0);
+    // views4: ACE's "eye" holds one outer and one focus view side by side (views4_layout.h), so its
+    // double-wide target holds all four.
+    const Views4Layout& layout = experiment.views4Layout;
+    const double widthScale = experiment.views4 ? layout.eye_width() : experiment.eyeScale;
+    const double heightScale = experiment.views4 ? layout.eye_height() : experiment.eyeScale;
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum.
@@ -544,11 +642,11 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
             const uint32_t maxH = views[i].maxImageRectHeight ? std::max(64u, views[i].maxImageRectHeight) : UINT32_MAX;
             const auto wanted = static_cast<uint32_t>(views[i].recommendedImageRectWidth * widthScale);
             if (experiment.views4 && wanted > maxW)
-                logf("views4: eye width %u exceeds the runtime maximum %u; quarters will not be eye-sized, lower "
-                     "eye_scale", wanted, maxW);
+                logf("views4: eye width %u exceeds the runtime maximum %u; every view loses resolution, lower "
+                     "periphery_scale or focus_density", wanted, maxW);
             views[i].recommendedImageRectWidth = std::clamp(wanted, 64u, maxW);
             views[i].recommendedImageRectHeight = std::clamp(
-                static_cast<uint32_t>(views[i].recommendedImageRectHeight * experiment.eyeScale), 64u, maxH);
+                static_cast<uint32_t>(views[i].recommendedImageRectHeight * heightScale), 64u, maxH);
         }
     if (stereo) {
         std::lock_guard guard(quad.mutex);
@@ -589,7 +687,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                     log_line("pass census: a UAV barrier follows every dispatch (pass_census_uav_barriers)");
                 if (experiment.passCensus) {
                     pass_census_watch(experiment.passCensusWatch);
-                    pass_census_arm(1500, 10);
+                    pass_census_arm(experiment.passCensusFrame, 10);
                 }
             }
             if (experiment.d3d12Debug)
@@ -597,6 +695,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             std::lock_guard guard(quad.mutex);
             quad.device = d3d12->device;
             quad.queue = d3d12->queue;
+            if (experiment.views4 && experiment.gpuFrameTiming)
+                gpu_frame_timer_start(d3d12->device, d3d12->queue);
         } else if (experiment.quad) {
             log_line("quad: session is not D3D12 (a layer above converted it?); quad pipeline off");
         }
@@ -630,6 +730,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.device = nullptr;
         quad.queue = nullptr;
     }
+    gpu_frame_timer_stop();
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
         gaze.space = XR_NULL_HANDLE;
@@ -685,8 +786,12 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
 }
 
 XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* info) {
-    if (!experiment.twoLoops)
-        return next.BeginFrame(session, info);
+    if (!experiment.twoLoops) {
+        const XrResult r = next.BeginFrame(session, info);
+        if (XR_SUCCEEDED(r))
+            gpu_frame_timer_mark(GpuMark::kBegin);
+        return r;
+    }
     std::unique_lock lock(loops.mutex);
     if (!loops.active) {
         ++loops.begins;
@@ -833,8 +938,8 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
 bool quad_capture_due();
 void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
 
-// views4: ACE's eye image holds the outer views in quarters 0-1 and the focus views in quarters 2-3
-// (the focus cameras: focus_percent of each eye's tangent extent around its forward axis). Composes
+// views4: ACE's eye image holds the outer views as views 0-1 and the focus views as views 2-3 of the
+// layout (the focus cameras: focus_percent of each eye's tangent extent around its forward axis). Composes
 // both eyes into the output chain at native size, on ACE's queue, before ACE releases the image.
 void views4_compose() {
     quad.v4Composed = false;
@@ -856,9 +961,10 @@ void views4_compose() {
         // The focus camera is the eye's turned by turns[e] (in the eye's frame): a direction in the
         // outer view's frame is in the focus view's frame after the inverse turn.
         to_matrix(qconj(turns[e]), eyes[e].rotation);
-        const float outer[4] = {e / 4.0f, 0, 0.25f, 1}, focus[4] = {(e + 2) / 4.0f, 0, 0.25f, 1};
-        std::memcpy(eyes[e].outerSource, outer, sizeof(outer));
-        std::memcpy(eyes[e].focusSource, focus, sizeof(focus));
+        // Outer source = view e, focus source = view e + 2, wherever the layout puts them.
+        const int w = static_cast<int>(quad.appW), h = static_cast<int>(quad.appH);
+        views4_uv(experiment.views4Layout, e, w, h, eyes[e].outerSource);
+        views4_uv(experiment.views4Layout, e + 2, w, h, eyes[e].focusSource);
         eyes[e].feather = static_cast<float>(experiment.feather);
         eyes[e].border = 0;  // the outline is drawn below, in the chosen colour
     }
@@ -922,8 +1028,13 @@ XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSw
         views4_outline_draw(swapchain);  // on ACE's queue, after its frame, before the runtime reads it
     if (experiment.views4Compose) {
         std::lock_guard guard(quad.mutex);
-        if (swapchain == quad.appChain)
+        if (swapchain == quad.appChain) {
+            gpu_frame_timer_mark(GpuMark::kRendered);
+            const int64_t t0 = qpc_now();
             views4_compose();  // reads the image on ACE's queue before the runtime gets it back
+            cpu.compose.add(qpc_now() - t0);
+            gpu_frame_timer_mark(GpuMark::kComposed);
+        }
     }
     if (experiment.quad) {
         bool active;
@@ -1138,8 +1249,8 @@ XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigura
     return XR_SUCCESS;
 }
 
-XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
-                                     uint32_t capacity, uint32_t* countOutput, XrView* views) {
+XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewState* state, uint32_t capacity,
+                      uint32_t* countOutput, XrView* views) {
     XrResult r = next.LocateViews(session, info, state, capacity, countOutput, views);
     if (experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) {
         views4_note_views(views, std::min(*countOutput, capacity));
@@ -1160,13 +1271,14 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
             // displays rotate each eye); untracked gaze recentres after kGazeHoldNs.
             XrQuaternionf turns[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
             XrVector3f direction{0, 0, -1};
-            if (experiment.gaze && gaze_direction(session, info->space, info->displayTime, direction))
+            const bool gazing = experiment.gaze && gaze_direction(session, info->space, info->displayTime, direction);
+            if (gazing)
                 for (int e = 0; e < 2; ++e) {
                     const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
                     if (d.z < -0.1f)
                         turns[e] = focus_turn(views[e].fov, experiment.focusFraction, d.x / -d.z, d.y / -d.z);
                 }
-            views4_set_focus_turns(turns);
+            views4_set_focus_turns(turns, gazing);
         }
     }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
@@ -1208,8 +1320,8 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
     return r;
 }
 
-// views4: ACE's two "eyes" are each two eye widths wide and hold views 0+1 and 2+3 side by side
-// (viewport quarters). Submit the first two quarters, the real eyes, as the projection views.
+// views4: ACE's two "eyes" are each an outer plus a focus view wide and hold views 0+1 and 2+3 side
+// by side (views4_layout.h). Submit views 0 and 1, the real eyes, as the projection views.
 bool views4RectsLogged = false;
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
@@ -1251,9 +1363,13 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         if (!aceLayout)
             continue;
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
+            // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2).
             XrRect2Di& rect = copy[v].subImage.imageRect;
-            rect.extent.width /= 2;
-            rect.offset.x = static_cast<int32_t>(v + (experiment.views4ShowCopies ? 2 : 0)) * rect.extent.width;
+            const ViewRect view = views4_rect(experiment.views4Layout, static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0)),
+                                              2 * rect.extent.width, rect.extent.height);
+            rect.offset.x = view.left;
+            rect.extent.width = view.width;
+            rect.extent.height = view.height;
             if (!views4RectsLogged)
                 logf("views4: projection view %u submitted as rect=%d,%d %dx%d", v, rect.offset.x, rect.offset.y,
                      rect.extent.width, rect.extent.height);
@@ -1268,7 +1384,30 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     return next.EndFrame(session, &submitted);
 }
 
+XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
+                                     uint32_t capacity, uint32_t* countOutput, XrView* views) {
+    if (!cpu.realLocateViews)
+        return locate_views(session, info, state, capacity, countOutput, views);
+    const int64_t t0 = qpc_now();
+    const XrResult r = locate_views(session, info, state, capacity, countOutput, views);
+    cpu.locate.add(qpc_now() - t0);
+    return r;
+}
+
+XrResult end_frame(XrSession session, const XrFrameEndInfo* info);
+
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
+    if (!cpu.realEndFrame)
+        return end_frame(session, info);
+    const int64_t t0 = qpc_now();
+    const XrResult r = end_frame(session, info);
+    cpu.endFrame.add(qpc_now() - t0);
+    if (endFrames % kCpuReportFrames == 0)
+        report_cpu_times();
+    return r;
+}
+
+XrResult end_frame(XrSession session, const XrFrameEndInfo* info) {
     ++endFrames;
     if (experiment.pixCaptureFrame)
         pix_capture_frame(endFrames);
@@ -1444,6 +1583,10 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         views3_patch();
     if (experiment.views4) {
         views4_set_borrow(experiment.views4Borrow);
+        views4_set_layout(experiment.views4Layout);
+        // The cull box: the focus box plus its feather band plus a gaze-latency allowance.
+        views4_set_focus_cull(experiment.views4FocusCull, 1.0 + experiment.feather + experiment.views4FocusCullMargin,
+                              experiment.gaze && experiment.views4Compose);  // gaze turns only when composing
     }
     if (experiment.views4 &&
         !views4_start(experiment.views4Callers, experiment.views4EyesOnlyAdvance,
@@ -1478,6 +1621,15 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     ACEQV_LOAD(LocateSpace)
 #undef ACEQV_LOAD
     gipa(*instance, "xrGetVisibilityMaskKHR", reinterpret_cast<PFN_xrVoidFunction*>(&d.GetVisibilityMaskKHR));
+    if (ok && experiment.views4) {  // time what runs below this layer (report_cpu_times)
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        cpu.msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);
+        cpu.realEndFrame = d.EndFrame;
+        cpu.realLocateViews = d.LocateViews;
+        d.EndFrame = timedEndFrameBelow;
+        d.LocateViews = timedLocateViewsBelow;
+    }
     next = ok ? d : Dispatch{gipa};
     if (!ok)
         log_line("missing downstream functions; pass-through only");

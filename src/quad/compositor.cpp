@@ -29,8 +29,16 @@ V VS(uint id : SV_VertexID) {
     v.position = float4(v.uv * float2(2, -2) + float2(-1, 1), 0, 1);
     return v;
 }
+// Keeps bilinear taps inside a source region (half a texel in from its edges): the views abut each
+// other in ACE's target, and a shorter pair has unused rows below it.
+float2 inside(float2 uv, float4 src, float2 size) {
+    const float2 h = 0.5 / size;
+    return clamp(uv, src.xy + h, src.xy + src.zw - h);
+}
 float4 PS(V v) : SV_Target {
-    float4 color = outerTex.SampleLevel(linearClamp, outerSrc.xy + v.uv * outerSrc.zw, 0);
+    float2 outerSize;
+    outerTex.GetDimensions(outerSize.x, outerSize.y);
+    float4 color = outerTex.SampleLevel(linearClamp, inside(outerSrc.xy + v.uv * outerSrc.zw, outerSrc, outerSize), 0);
     const float3 a = float3(lerp(outerTan.x, outerTan.y, v.uv.x), lerp(outerTan.z, outerTan.w, v.uv.y), -1);
     const float3 b = float3(dot(rot0.xyz, a), dot(rot1.xyz, a), dot(rot2.xyz, a));
     const float2 t = b.xy / max(-b.z, 1e-6);
@@ -48,12 +56,12 @@ float4 PS(V v) : SV_Target {
         focusTex.GetDimensions(size.x, size.y);
         float4 focus;
         if (max(length(dx * size), length(dy * size)) > 1.25) {
-            focus = 0.25 * (focusTex.SampleLevel(linearClamp, uv + 0.25 * (dx + dy), 0) +
-                            focusTex.SampleLevel(linearClamp, uv + 0.25 * (dx - dy), 0) +
-                            focusTex.SampleLevel(linearClamp, uv - 0.25 * (dx - dy), 0) +
-                            focusTex.SampleLevel(linearClamp, uv - 0.25 * (dx + dy), 0));
+            focus = 0.25 * (focusTex.SampleLevel(linearClamp, inside(uv + 0.25 * (dx + dy), focusSrc, size), 0) +
+                            focusTex.SampleLevel(linearClamp, inside(uv + 0.25 * (dx - dy), focusSrc, size), 0) +
+                            focusTex.SampleLevel(linearClamp, inside(uv - 0.25 * (dx - dy), focusSrc, size), 0) +
+                            focusTex.SampleLevel(linearClamp, inside(uv - 0.25 * (dx + dy), focusSrc, size), 0));
         } else {
-            focus = focusTex.SampleLevel(linearClamp, uv, 0);
+            focus = focusTex.SampleLevel(linearClamp, inside(uv, focusSrc, size), 0);
         }
         color = lerp(color, focus, w);
         if (min(edge.x, edge.y) < params.y)

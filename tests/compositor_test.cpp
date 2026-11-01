@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 
 #include "quad/compositor.h"
+#include "quad/views4_layout.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace aceqv;
@@ -77,6 +78,20 @@ void clear_eyes(Gpu& gpu, ID3D12Resource* image, const float (&left)[4], const f
     gpu.flush();
 }
 
+// Clears the whole image to `fill`, then each rect to its colour.
+void clear_rects(Gpu& gpu, ID3D12Resource* image, const float (&fill)[4], const D3D12_RECT* rects,
+                 const float (*colors)[4], int count) {
+    D3D12_RENDER_TARGET_VIEW_DESC v = {};
+    v.Format = kView;
+    v.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = gpu.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    gpu.device->CreateRenderTargetView(image, &v, rtv);
+    gpu.list->ClearRenderTargetView(rtv, fill, 0, nullptr);
+    for (int i = 0; i < count; ++i)
+        gpu.list->ClearRenderTargetView(rtv, colors[i], 1, &rects[i]);
+    gpu.flush();
+}
+
 struct Pixels {
     std::vector<uint8_t> data;
     UINT pitch = 0;
@@ -117,6 +132,11 @@ Pixels read_back(Gpu& gpu, ID3D12Resource* image) {
     std::memcpy(p.data.data(), mapped, p.data.size());
     buffer->Unmap(0, nullptr);
     return p;
+}
+
+void check(bool ok, const char* what) {
+    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
+    failures += ok ? 0 : 1;
 }
 
 void expect(const Pixels& p, int eye, float u, float v, const char* name, uint8_t r, uint8_t g, uint8_t b) {
@@ -217,6 +237,78 @@ int main() {
                         info.nFileSizeLow > 0;
     std::printf("%s debug captures written (%ls-*.png)\n", saved && exists ? "ok  " : "FAIL", prefix.c_str());
     failures += saved && exists ? 0 : 1;
+
+    // views4 layout: equal quarters reproduce the old `quarter = width / 4` rects, unequal ones abut.
+    {
+        const Views4Layout equal = views4_layout(0.4, 0.4);
+        bool same = true;
+        for (const int w : {3228, 1614, 807})
+            for (int v = 0; v < 4; ++v) {
+                const ViewRect r = views4_rect(equal, v, w, 1350);
+                same &= r.left == v * (w / 4) && r.width == w / 4 && r.height == 1350;
+            }
+        check(same, "equal layout gives the old quarters (3228, 1614 and 807 wide)");
+        const Views4Layout l = views4_layout(0.4, 0.31);  // periphery 40%, focus 100% density x 31%
+        const ViewRect r0 = views4_rect(l, 0, 5731, 1350), r2 = views4_rect(l, 2, 5731, 1350),
+                       r3 = views4_rect(l, 3, 5731, 1350);
+        std::printf("     unequal 5731x1350: outer %dx%d, focus at x=%d %dx%d, view 3 at x=%d\n", r0.width, r0.height,
+                    r2.left, r2.width, r2.height, r3.left);
+        check(r0.width == 1614 && r0.height == 1350 && r2.left == 2 * 1614 && r2.width == 1251 && r2.height == 1046 &&
+                  r3.left == r2.left + r2.width && r3.left + r3.width <= 5731,
+              "unequal layout: 1614x1350 outer, 1251x1046 focus views, abutting");
+        check(std::abs(l.eye_width() - 0.71) < 1e-9 && l.eye_height() == 0.4, "offered eye is 0.71 x 0.40 native");
+    }
+
+    // Unequal sources: outer views 64x64 and focus views 32x32 in a 192x64 image, the rows below the
+    // focus views unused (magenta). Neither a neighbour view nor the unused rows may bleed into the output.
+    {
+        const Views4Layout l = views4_layout(0.5, 0.25);
+        constexpr int kW = 192, kH = 64;
+        D3D12_RECT rects[4];
+        for (int v = 0; v < 4; ++v) {
+            const ViewRect r = views4_rect(l, v, kW, kH);
+            rects[v] = {r.left, 0, r.left + r.width, r.height};
+        }
+        check(rects[1].left == 64 && rects[2].left == 128 && rects[2].bottom == 32 && rects[3].right == 192,
+              "test layout is 64 | 64 | 32 | 32 wide, focus 32 high");
+        const float magenta[4] = {1, 0, 1, 1};
+        const float colors[4][4] = {{1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 0, 1}, {1, 1, 0, 1}};
+        auto views = make_image(gpu, kW, kH);
+        clear_rects(gpu, views.Get(), magenta, rects, colors, 4);
+        QuadCompositor c4;
+        if (!c4.initialize(gpu.device.Get(), gpu.queue.Get(), kView) || !c4.capture_outer(views.Get())) {
+            std::printf("FAIL: views4 compositor setup\n");
+            return 1;
+        }
+        EyeComposition v4[2] = {};
+        for (int e = 0; e < 2; ++e) {
+            const float outerTan[4] = {-1, 1, 1, -1}, focusTan[4] = {-0.5f, 0.5f, 0.5f, -0.5f};
+            const float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            std::memcpy(v4[e].outerTan, outerTan, sizeof(outerTan));
+            std::memcpy(v4[e].focusTan, focusTan, sizeof(focusTan));
+            std::memcpy(v4[e].rotation, identity, sizeof(identity));
+            views4_uv(l, e, kW, kH, v4[e].outerSource);
+            views4_uv(l, e + 2, kW, kH, v4[e].focusSource);
+            v4[e].feather = 0;  // hard edge: any bleed at the box edge would show
+        }
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose\n");
+            return 1;
+        }
+        const Pixels q = read_back(gpu, output.Get());
+        expect(q, 0, 0.05f, 0.05f, "outer", 255, 0, 0);
+        expect(q, 0, 0.99f, 0.50f, "outer", 255, 0, 0);  // right edge, next to view 1 (blue)
+        expect(q, 0, 0.50f, 0.99f, "outer", 255, 0, 0);  // bottom edge
+        expect(q, 0, 0.50f, 0.50f, "focus", 0, 255, 0);
+        expect(q, 0, 0.26f, 0.50f, "focus", 0, 255, 0);  // box left edge, next to view 1
+        expect(q, 0, 0.50f, 0.74f, "focus", 0, 255, 0);  // box bottom edge, above the unused rows
+        expect(q, 1, 0.01f, 0.50f, "outer", 0, 0, 255);  // left edge, next to view 0 (red)
+        expect(q, 1, 0.99f, 0.50f, "outer", 0, 0, 255);  // right edge, next to view 2 (green)
+        expect(q, 1, 0.50f, 0.50f, "focus", 255, 255, 0);
+        expect(q, 1, 0.26f, 0.50f, "focus", 255, 255, 0);  // box left edge, next to view 2
+        expect(q, 1, 0.74f, 0.74f, "focus", 255, 255, 0);  // bottom right corner of the box
+        c4.shutdown();
+    }
 
     compositor.shutdown();
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

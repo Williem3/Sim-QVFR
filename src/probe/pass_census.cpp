@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <wrl/client.h>
@@ -40,7 +41,7 @@ DispatchFn dispatchOriginal = nullptr;
 ExecuteIndirectFn indirectOriginal = nullptr;
 RSSetViewportsFn viewportsOriginal = nullptr;
 
-// Where draws land: quarters 0-3 of the target, its halves (x = 0 / x = 2 quarters), or elsewhere.
+// Where draws land: views 0-3 of the target, its halves (views 0-1 / views 2-3 together), or elsewhere.
 enum Region { kQuarter0, kQuarter1, kQuarter2, kQuarter3, kHalf0, kHalf1, kOther, kUnknown, kRegions };
 
 struct Census {
@@ -65,9 +66,25 @@ struct ListState {
 thread_local ListState current;
 thread_local bool barrierAfterNextDispatch = false;  // pass_census_barrier_after_next_dispatch
 
+// Recording cost per region (the focus-cull measurement): direct draws, indirect batches, pipeline
+// changes, and the CPU time between consecutive draws on one list in the same region. That gap is
+// ACE's per-item work (plus these hooks' own), an approximation of each view's recording time.
+struct Recording {
+    std::atomic<uint64_t> draws{0}, indirect{0}, psoChanges{0}, gapTicks{0}, gaps{0};
+};
+Recording recording[kRegions];
+constexpr double kMaxGapMs = 2.0;  // longer gaps are other work (a pass boundary, a wait), not counted
+int64_t maxGapTicks = 0;
+double msPerTick = 0;
+thread_local List* lastDrawList = nullptr;
+thread_local Region lastDrawRegion = kUnknown;
+thread_local int64_t lastDrawTicks = 0;
+
 SRWLOCK lock = SRWLOCK_INIT;
 std::unordered_map<ID3D12PipelineState*, Census> census;
-std::atomic<int> quarterWidth{0};
+// Each view's columns in ACE's full-size target (views4 layout), once known (viewsKnown).
+int viewLeft[4] = {}, viewWidth[4] = {};
+std::atomic<bool> viewsKnown{false};
 std::atomic<bool> counting{false};
 std::atomic<bool> uavBarriers{false};
 uint64_t frame = 0, firstFrame = 0, frameCount = 0;
@@ -81,16 +98,15 @@ ListState& state_of(List* list) {
 }
 
 Region region_of(const D3D12_VIEWPORT& v) {
-    const int q = quarterWidth.load(std::memory_order_relaxed);
-    if (q <= 0)
+    if (!viewsKnown.load(std::memory_order_acquire))
         return kUnknown;
-    const auto close = [](float a, float b) { return std::fabs(a - b) < 1.5f; };
+    const auto close = [](float a, int b) { return std::fabs(a - static_cast<float>(b)) < 1.5f; };
     for (int i = 0; i < 4; ++i)
-        if (close(v.Width, static_cast<float>(q)) && close(v.TopLeftX, static_cast<float>(i * q)))
+        if (close(v.Width, viewWidth[i]) && close(v.TopLeftX, viewLeft[i]))
             return static_cast<Region>(kQuarter0 + i);
-    if (close(v.Width, 2.0f * q) && close(v.TopLeftX, 0.0f))
+    if (close(v.Width, viewWidth[0] + viewWidth[1]) && close(v.TopLeftX, viewLeft[0]))
         return kHalf0;
-    if (close(v.Width, 2.0f * q) && close(v.TopLeftX, 2.0f * q))
+    if (close(v.Width, viewWidth[2] + viewWidth[3]) && close(v.TopLeftX, viewLeft[2]))
         return kHalf1;
     return kOther;
 }
@@ -114,7 +130,10 @@ std::string describe(void* address) {
 }
 
 void STDMETHODCALLTYPE setPsoHook(List* list, ID3D12PipelineState* pso) {
-    state_of(list).pso = pso;
+    ListState& s = state_of(list);
+    s.pso = pso;
+    if (counting.load(std::memory_order_relaxed))
+        recording[s.region].psoChanges.fetch_add(1, std::memory_order_relaxed);
     setPsoOriginal(list, pso);
 }
 
@@ -127,14 +146,17 @@ void STDMETHODCALLTYPE viewportsHook(List* list, UINT count, const D3D12_VIEWPOR
     viewportsOriginal(list, count, viewports);
 }
 
-// Whether `name` is one of pass_census_watch's comma-separated names.
+// Whether `name` is one of pass_census_watch's comma-separated names; a name ending in '*' is a
+// prefix (ACE's material pipelines are named by an id that changes between launches).
 bool is_watched(const std::string& name) {
     if (name.empty())
         return false;
     for (const char* p = watchName; *p;) {
         const char* end = std::strchr(p, ',');
         const size_t length = end ? static_cast<size_t>(end - p) : std::strlen(p);
-        if (name.size() == length && std::strncmp(name.c_str(), p, length) == 0)
+        const bool prefix = length > 0 && p[length - 1] == '*';
+        if ((prefix ? name.size() >= length - 1 : name.size() == length) &&
+            std::strncmp(name.c_str(), p, prefix ? length - 1 : length) == 0)
             return true;
         p = end ? end + 1 : p + length;
     }
@@ -154,9 +176,19 @@ bool take_stack(Census& c, ID3D12PipelineState* pso, std::string* name) {
     return true;
 }
 
+// Logs the caller's stack, each distinct stack once (watched pipelines share their draw loops).
+SRWLOCK stacksLock = SRWLOCK_INIT;
+std::unordered_set<ULONG> stacksSeen;
+
 void log_stack(const char* prefix, ULONG skip) {
     void* frames[12];
-    const USHORT n = RtlCaptureStackBackTrace(skip, 12, frames, nullptr);
+    ULONG hash = 0;
+    const USHORT n = RtlCaptureStackBackTrace(skip, 12, frames, &hash);
+    AcquireSRWLockExclusive(&stacksLock);
+    const bool fresh = stacksSeen.insert(hash).second;
+    ReleaseSRWLockExclusive(&stacksLock);
+    if (!fresh)
+        return;
     char line[1024];
     int len = std::snprintf(line, sizeof(line), "%s stack:", prefix);
     for (USHORT i = 0; i < n && len < 960; ++i)
@@ -164,10 +196,26 @@ void log_stack(const char* prefix, ULONG skip) {
     log_line(line);
 }
 
+void note_recording(List* list, Region region, bool indirect) {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    Recording& r = recording[region];
+    (indirect ? r.indirect : r.draws).fetch_add(1, std::memory_order_relaxed);
+    const int64_t gap = now.QuadPart - lastDrawTicks;
+    if (lastDrawList == list && lastDrawRegion == region && gap >= 0 && gap < maxGapTicks) {
+        r.gapTicks.fetch_add(static_cast<uint64_t>(gap), std::memory_order_relaxed);
+        r.gaps.fetch_add(1, std::memory_order_relaxed);
+    }
+    lastDrawList = list;
+    lastDrawRegion = region;
+    lastDrawTicks = now.QuadPart;
+}
+
 void count_draw(List* list, bool indirect) {
     if (!counting.load(std::memory_order_relaxed))
         return;
     const ListState& s = state_of(list);
+    note_recording(list, s.region, indirect);
     std::string name;
     AcquireSRWLockExclusive(&lock);
     Census& c = entry(s.pso);
@@ -263,9 +311,10 @@ std::string name_of(ID3D12PipelineState* pso) {
 void report() {
     AcquireSRWLockExclusive(&lock);
     const double n = static_cast<double>(frameCount);
-    logf("pass census: %zu pipeline states over %llu frames (quarter width %d); per frame: q0 q1 q2 q3 | half0 "
-         "half1 other unknown",
-         census.size(), static_cast<unsigned long long>(frameCount), quarterWidth.load());
+    logf("pass census: %zu pipeline states over %llu frames (view widths %d/%d/%d/%d); per frame: q0 q1 q2 q3 | "
+         "half0 half1 other unknown",
+         census.size(), static_cast<unsigned long long>(frameCount), viewWidth[0], viewWidth[1], viewWidth[2],
+         viewWidth[3]);
     std::vector<std::pair<ID3D12PipelineState*, const Census*>> rows;
     for (const auto& [pso, c] : census)
         rows.emplace_back(pso, &c);
@@ -305,6 +354,18 @@ void report() {
     }
     census.clear();
     ReleaseSRWLockExclusive(&lock);
+    static const char* const names[kRegions] = {"q0", "q1", "q2", "q3", "half0", "half1", "other", "unknown"};
+    for (int region = 0; region < kRegions; ++region) {
+        Recording& r = recording[region];
+        const uint64_t draws = r.draws.exchange(0), indirect = r.indirect.exchange(0), pso = r.psoChanges.exchange(0);
+        const uint64_t gapTicks = r.gapTicks.exchange(0), gaps = r.gaps.exchange(0);
+        if (draws + indirect + pso == 0)
+            continue;
+        logf("pass census: recording %s per frame: direct draws %.1f, indirect batches %.1f, pipeline changes %.1f, "
+             "time between draws %.3f ms over %.1f gaps (%.2f us each)",
+             names[region], per(draws), per(indirect), per(pso), per(gapTicks) * msPerTick, per(gaps),
+             gaps ? static_cast<double>(gapTicks) * msPerTick * 1000.0 / static_cast<double>(gaps) : 0.0);
+    }
 }
 
 }  // namespace
@@ -321,6 +382,10 @@ bool pass_census_start(ID3D12Device* device) {
         return false;
     }
     list->Close();
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);
+    maxGapTicks = static_cast<int64_t>(kMaxGapMs / msPerTick);
     void** vtable = *reinterpret_cast<void***>(list.Get());
     started = hook(vtable, aceqv_slot_SetPipelineState(), &setPsoHook, &setPsoOriginal) &&
               hook(vtable, aceqv_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
@@ -332,7 +397,13 @@ bool pass_census_start(ID3D12Device* device) {
     return started;
 }
 
-void pass_census_set_quarter_width(int width) { quarterWidth = width; }
+void pass_census_set_view_columns(const int (&left)[4], const int (&width)[4]) {
+    if (viewsKnown.load(std::memory_order_acquire))
+        return;
+    std::memcpy(viewLeft, left, sizeof(viewLeft));
+    std::memcpy(viewWidth, width, sizeof(viewWidth));
+    viewsKnown.store(true, std::memory_order_release);
+}
 
 void pass_census_set_uav_barriers(bool on) { uavBarriers = on; }
 

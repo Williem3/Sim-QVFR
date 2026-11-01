@@ -69,6 +69,14 @@ inline constexpr std::uint8_t kViewCountAnchor[9] = {0x8b, 0x81, 0xdc, 0x4c, 0x1
 inline constexpr std::uintptr_t kViewportRva = 0x1d922b0;
 inline constexpr std::uint8_t kViewportAnchor[16] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74,
                                                      0x24, 0x18, 0x55, 0x57, 0x41, 0x55, 0x41, 0x56};
+// Two init-time callers size per-view resources once, from view 0's viewport, for every view
+// (static, 2026-11-01). Tile culling setup 0x1d96c80 takes ceil(view size / 16) (`(size + 15) *
+// 0.0625`) as the one tile grid at renderer + 0x14a498/+0x14a49c; it sizes every view's tile lists
+// and tile frusta, and the per-frame culling (0x1db890d) passes it as each view's tile count. The
+// volumetrics setup 0x1da1e20 hands view 0's viewport to the system at renderer + 0x13e0. With
+// unequal views both must see the largest view, or the bigger views overrun them.
+inline constexpr std::uintptr_t kTileGridViewportCallSite = 0x1d97049;
+inline constexpr std::uintptr_t kFogViewportCallSite = 0x1da1edf;
 // view(renderer, int i) = renderer[+0x7b8] + i * 0x140 (per-view records).
 inline constexpr std::uintptr_t kViewRecordRva = 0x1d92f50;
 inline constexpr std::uint8_t kViewRecordAnchor[16] = {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x04, 0x80, 0x48,
@@ -103,6 +111,11 @@ inline constexpr std::ptrdiff_t kPassViewport = 0x934, kPassScissor = 0x94c;
 // (0x1dc5627), view * width / 2 in 0x1dc68e0. With quarters, views 1-3 read tiles whole rows away
 // (capture 2400: view 1's bands, the focus views' stepped shadows).
 inline constexpr std::ptrdiff_t kPassScreenOffset = 0x764;
+// The float2 after screenOffset (pass +0x76c/+0x770): pass +0x484 (a target width) x 0.5 in
+// 0x1dc4b70 and / 3 in 0x1dc68e0, and pass +0x488 (its height). Stereo-derived like screenOffset,
+// but never rewritten for equal quarters (and the image was right), so its meaning is unknown.
+// With unequal views it keeps its old ratio to each view's own size.
+inline constexpr std::ptrdiff_t kPassViewExtent = 0x76c;
 // 0x1dc4b70 copies the view, previous view and previous projection into the pass with fixed
 // displacements from the renderer in rdi: view 0 reads slot 0, any other view slot 1 (`test r12d,
 // r12d; jne` at kPassEyeBranchRva). The two paths rejoin at kPassRejoinRva; between them rdi is used

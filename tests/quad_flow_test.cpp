@@ -298,6 +298,58 @@ XrResult ace_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
     return layerEndFrame(nullptr, &end);
 }
 
+// Fake ACE in views4: one frame drawing the four views where the layout puts them (outer views red
+// and blue, focus views green and yellow, the unused rest of the target magenta), submitted as ACE
+// does: the two halves of its double-wide target.
+XrResult ace_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
+    using namespace aceqv;
+    XrFrameState state{XR_TYPE_FRAME_STATE};
+    layerWaitFrame(nullptr, nullptr, &state);
+    layerBeginFrame(nullptr, nullptr);
+    XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+    uint32_t count = 0;
+    XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
+    locate.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    XrViewState viewState{XR_TYPE_VIEW_STATE};
+    layerLocateViews(nullptr, &locate, &viewState, 2, &count, views);
+
+    uint32_t index = 0;
+    layerAcquireSwapchainImage(chain, nullptr, &index);
+    const float magenta[4] = {1, 0, 1, 1};
+    const float colors[4][4] = {{1, 0, 0, 1}, {0, 0, 1, 1}, {0, 1, 0, 1}, {1, 1, 0, 1}};
+    D3D12_RENDER_TARGET_VIEW_DESC v = {};
+    v.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    v.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = gpu.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    gpu.device->CreateRenderTargetView(chain_of(chain)->images[index].Get(), &v, rtv);
+    gpu.list->ClearRenderTargetView(rtv, magenta, 0, nullptr);
+    for (int i = 0; i < 4; ++i) {
+        const ViewRect r = views4_rect(experiment.views4Layout, i, static_cast<int>(2 * eyeW), static_cast<int>(eyeH));
+        const D3D12_RECT rect{r.left, 0, r.left + r.width, r.height};
+        gpu.list->ClearRenderTargetView(rtv, colors[i], 1, &rect);
+    }
+    gpu.flush();
+    layerReleaseSwapchainImage(chain, nullptr);
+
+    XrCompositionLayerProjectionView pv[2];
+    for (int e = 0; e < 2; ++e) {
+        pv[e] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
+        pv[e].pose = views[e].pose;
+        pv[e].fov = views[e].fov;
+        pv[e].subImage = {chain, {{static_cast<int32_t>(e * eyeW), 0}, {static_cast<int32_t>(eyeW),
+                                                                        static_cast<int32_t>(eyeH)}}, 0};
+    }
+    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    layer.viewCount = 2;
+    layer.views = pv;
+    const XrCompositionLayerBaseHeader* layers[] = {reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer)};
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+    end.displayTime = state.predictedDisplayTime;
+    end.layerCount = 1;
+    end.layers = layers;
+    return layerEndFrame(nullptr, &end);
+}
+
 std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
     const D3D12_RESOURCE_DESC d = image->GetDesc();
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp;
@@ -468,6 +520,98 @@ int main() {
         std::printf("     eye %d gaze (%.2f,%.2f) = %u,%u,%u, straight ahead (%.2f,%.2f) = %u,%u,%u\n", eye, gaze_u, gaze_v,
                     g[0], g[1], g[2], ahead_u, ahead_v, ahead[0], ahead[1], ahead[2]);
         check(g[0] == 0 && g[1] == 255 && ahead[0] == 255 && ahead[1] == 0, "focus box follows the gaze");
+    }
+
+    // views4 with unequal views: periphery 50% of native, focus views 25% of the native eye size.
+    // The layer must offer an eye of 0.75 x 0.5 native, compose outer = view e and focus = view e + 2
+    // from wherever the layout puts them (never the unused rows), and without composition submit
+    // views 0 and 1 at their own size.
+    {
+        experiment.quad = experiment.twoLoops = experiment.focusInB = experiment.gaze = false;
+        experiment.views4 = experiment.views4Compose = true;
+        experiment.views4Layout = views4_layout(0.5, 0.25);
+        experiment.focusFraction = 0.35;
+        experiment.feather = 0.0;
+        {
+            std::lock_guard guard(quad.mutex);
+            quad.compositor.shutdown();
+            quad.appChain = quad.outChain = XR_NULL_HANDLE;
+            quad.appImages.clear();
+            quad.outImages.clear();
+            quad.composed = quad.fallbacks = quad.fallbackRun = 0;
+            quad.v4Composed = quad.v4FovValid = false;
+        }
+        layerEnumerateViewConfigurationViews(nullptr, 0, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, cfg);
+        const uint32_t w4 = cfg[0].recommendedImageRectWidth, h4 = cfg[0].recommendedImageRectHeight;
+        std::printf("     views4 offered %ux%u per eye\n", w4, h4);
+        check(w4 == kNativeW * 3 / 4 && h4 == kNativeH / 2, "views4 offers outer + focus wide, the taller one high");
+        // ACE scales what it was offered by its own resolution setting (x1.5 here).
+        const uint32_t v4EyeW = w4 * 3 / 2, v4EyeH = h4 * 3 / 2;
+        XrSwapchainCreateInfo v4ci = sci;
+        v4ci.width = 2 * v4EyeW;
+        v4ci.height = v4EyeH;
+        XrSwapchain v4Chain = XR_NULL_HANDLE;
+        layerCreateSwapchain(nullptr, &v4ci, &v4Chain);
+        layerEnumerateSwapchainImages(v4Chain, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
+        check(quad.appChain == v4Chain && quad.outChain != XR_NULL_HANDLE, "views4 adopts ACE's four-view chain");
+
+        int v4Errors = 0;
+        for (int i = 0; i < 3; ++i)
+            v4Errors += XR_FAILED(ace_views4_frame(v4Chain, v4EyeW, v4EyeH)) ? 1 : 0;
+        check(v4Errors == 0 && rt.violations == 0 && quad.composed == 3 && quad.fallbacks == 0,
+              "views4: every frame composed, runtime rules held");
+        check(rt.submittedChain == quad.outChain && rt.submittedViews[1].subImage.imageRect.extent.width ==
+                                                        static_cast<int32_t>(kNativeW),
+              "views4 submits the native-size output");
+        FakeChain* v4Out = chain_of(quad.outChain);
+        const auto px4 = read_back(v4Out->images[rt.submittedImage].Get(), pitch);
+        auto at4 = [&](int eye, double uu, double vv) {
+            const UINT x = static_cast<UINT>((eye + uu) * kNativeW), y = static_cast<UINT>(vv * kNativeH);
+            return &px4[y * pitch + x * 4];
+        };
+        // The focus box: focus_percent of the tangent extent, centred on the forward axis.
+        const double hw = (r - l) * experiment.focusFraction / 2, hh = (u - d) * experiment.focusFraction / 2;
+        const double boxL = (-hw - l) / (r - l), boxR = (hw - l) / (r - l);
+        const double boxT = (u - hh) / (u - d), boxB = (u + hh) / (u - d);
+        const uint8_t outerRgb[2][3] = {{255, 0, 0}, {0, 0, 255}}, focusRgb[2][3] = {{0, 255, 0}, {255, 255, 0}};
+        for (int eye = 0; eye < 2; ++eye) {
+            const struct {
+                double uu, vv;
+                bool focus;
+                const char* where;
+            } probes[] = {
+                {0.03, 0.03, false, "top left"},           {0.98, 0.5, false, "right edge"},
+                {0.02, 0.5, false, "left edge"},           {0.5, 0.98, false, "bottom edge"},
+                {ahead_u, ahead_v, true, "box centre"},    {ahead_u, boxB - 0.02, true, "box bottom"},
+                {boxL + 0.02, ahead_v, true, "box left"},  {boxR - 0.02, boxB - 0.02, true, "box bottom right"},
+            };
+            bool all = true;
+            for (const auto& pr : probes) {
+                const uint8_t* c = at4(eye, pr.uu, pr.vv);
+                const uint8_t* want = pr.focus ? focusRgb[eye] : outerRgb[eye];
+                const bool good = c[0] == want[0] && c[1] == want[1] && c[2] == want[2];
+                if (!good)
+                    std::printf("     eye %d %s (%.2f,%.2f) = %u,%u,%u, want %u,%u,%u\n", eye, pr.where, pr.uu, pr.vv, c[0],
+                                c[1], c[2], want[0], want[1], want[2]);
+                all &= good;
+            }
+            (void)boxT;
+            check(all, eye ? "views4 eye 1: blue outer view, yellow focus view, no neighbour or unused rows"
+                           : "views4 eye 0: red outer view, green focus view, no neighbour or unused rows");
+        }
+
+        // Without composition ACE's own image goes out: views 0 and 1 at their own size.
+        experiment.views4Compose = false;
+        ace_views4_frame(v4Chain, v4EyeW, v4EyeH);
+        const XrRect2Di& s0 = rt.submittedViews[0].subImage.imageRect;
+        const XrRect2Di& s1 = rt.submittedViews[1].subImage.imageRect;
+        std::printf("     views4 uncomposed rects %d,%d %dx%d and %d,%d %dx%d\n", s0.offset.x, s0.offset.y,
+                    s0.extent.width, s0.extent.height, s1.offset.x, s1.offset.y, s1.extent.width, s1.extent.height);
+        const ViewRect e1 = views4_rect(experiment.views4Layout, 1, static_cast<int>(2 * v4EyeW), static_cast<int>(v4EyeH));
+        check(rt.submittedChain == v4Chain && s0.offset.x == 0 && s0.extent.width == e1.width &&
+                  s1.offset.x == e1.left && s1.extent.width == e1.width && s1.extent.height == static_cast<int32_t>(v4EyeH) &&
+                  e1.width == static_cast<int>(2 * v4EyeW) / 3,
+              "views4 uncomposed: views 0 and 1 submitted at a third of the target each");
     }
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;

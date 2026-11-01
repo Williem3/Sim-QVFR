@@ -16,6 +16,7 @@
 #include "../engine/view3_stubs.h"
 #include "../log.h"
 #include "../probe/pass_census.h"
+#include "../quad/focus_cull.h"
 #include "../quad/focus_turn.h"
 #include "../xr.h"
 
@@ -46,6 +47,7 @@ bool drawLoops = false;  // "lighting" (or "draw"): the builder's lighting loop 
 bool tileViews = false;  // "tiles": tiled light culling builds tile lists for 4 views
 bool slotViews = false;  // "slots": views 2-3 get their own history slots (view 3's at a phantom renderer)
 bool cameraViews = false;  // "cameras": views 2-3 are focus cameras with their own camera slots and records
+Views4Layout layout;       // where the four views sit in the target (views4_set_layout; equal quarters by default)
 bool volumetricViews = false;  // "fog": the volumetrics/atmosphere system has resources for 4 views
 bool foldVolumetrics = false;  // "fogfold": views 2-3 still read the eyes' volumetric resources (diagnostic)
 double focusFraction = 0.35;
@@ -66,6 +68,23 @@ struct FrameTurns {
 FrameTurns turnRing[8];
 uint64_t turnsPushed = 0, turnsTaken = 0, turnResyncs = 0, turnEmptyTakes = 0;
 constexpr uint64_t kMaxTurnBacklog = 3;
+
+// Focus cull (views4_focus_cull): each filled frame's focus frusta in world space, widened by
+// cullScale, under turnLock. The latest two fills are kept (cullFrusta[fill % 2]) in case recording
+// of one frame overlaps filling the next. No frusta while gaze is on but no sample has arrived.
+bool focusCull = false;
+double cullScale = 1.0;
+bool gazeExpected = false, gazeSampled = false;
+struct CullFrusta {
+    FocusFrustum view[2];  // views 2 and 3
+    uint64_t fill = 0;     // turnsPushed when built, + 1 (0 = never)
+};
+CullFrusta cullFrusta[2];
+uint64_t cullBuilt = 0, cullWaitingForGaze = 0;
+
+// CPU time of fill_focus_cameras (the focus-cull measurement), reported with the views4 counters.
+std::atomic<uint64_t> fillTicks{0}, fillMaxTicks{0}, fillCalls{0};
+double msPerTick = 0;
 
 // Every distinct viewCount caller, logged once.
 SRWLOCK callersLock = SRWLOCK_INIT;
@@ -185,6 +204,7 @@ void fill_focus_cameras(uint8_t* renderer) {
     std::memcpy(previousTurns, lastTurn, sizeof(previousTurns));
     ReleaseSRWLockShared(&turnLock);
     bool turned = false;
+    FocusFrustum frusta[2];
     for (int eye = 0; eye < 2; ++eye) {
         if (focusFraction <= 0) {
             // Diagnostic (views4_focus_eye_camera): the focus views are exact copies of the eyes,
@@ -221,6 +241,11 @@ void fill_focus_cameras(uint8_t* renderer) {
         turn_matrix_at(dst + ace::kCameraPreviousView, previousTurns[eye], false);
         turn_matrix_at(dst + ace::kCameraPreviousWorldView, previousTurns[eye], false);
         turned = true;
+        if (focusCull) {
+            float worldView[16];
+            std::memcpy(worldView, dst + ace::kCameraWorldView, sizeof(worldView));
+            frusta[eye] = focus_frustum(worldView, hw * cullScale, hh * cullScale);
+        }
         // Per-view vectors (sized for 4 at init): the eye's inverse view, turned; the focus tangent extents.
         const auto entries = [&](std::ptrdiff_t offset, size_t size) -> uint8_t* {
             auto* const* bounds = reinterpret_cast<uint8_t* const*>(renderer + offset);
@@ -240,6 +265,14 @@ void fill_focus_cameras(uint8_t* renderer) {
     AcquireSRWLockExclusive(&turnLock);
     std::memcpy(lastTurn, turns, sizeof(turns));
     std::memcpy(turnRing[turnsPushed % std::size(turnRing)].eye, turns, sizeof(turns));
+    if (focusCull && (gazeSampled || !gazeExpected)) {
+        CullFrusta& c = cullFrusta[turnsPushed % 2];
+        std::memcpy(c.view, frusta, sizeof(frusta));
+        c.fill = turnsPushed + 1;
+        ++cullBuilt;
+    } else if (focusCull) {
+        ++cullWaitingForGaze;
+    }
     ++turnsPushed;
     ReleaseSRWLockExclusive(&turnLock);
 }
@@ -251,8 +284,17 @@ int viewCountHook(void* renderer) {
     if (mode == 1 && is_allowed(returnRva)) {
         n = kViews;
         widened.fetch_add(1, std::memory_order_relaxed);
-        if (cameraViews && returnRva == ace::kRecordLoopViewCountCallSites[0] + 5)
+        if (cameraViews && returnRva == ace::kRecordLoopViewCountCallSites[0] + 5) {
+            LARGE_INTEGER from, to;
+            QueryPerformanceCounter(&from);
             fill_focus_cameras(static_cast<uint8_t*>(renderer));
+            QueryPerformanceCounter(&to);
+            const auto t = static_cast<uint64_t>(to.QuadPart - from.QuadPart);
+            fillTicks.fetch_add(t, std::memory_order_relaxed);
+            fillCalls.fetch_add(1, std::memory_order_relaxed);
+            for (uint64_t m = fillMaxTicks.load(std::memory_order_relaxed); t > m && !fillMaxTicks.compare_exchange_weak(m, t);) {
+            }
+        }
     }
     note_caller(returnRva, mode, n);
     return n;
@@ -262,7 +304,7 @@ void put_f(uint8_t* p, size_t at, float v) { *reinterpret_cast<float*>(p + at) =
 void put_i(uint8_t* p, size_t at, int32_t v) { *reinterpret_cast<int32_t*>(p + at) = v; }
 float get_f(const uint8_t* p, size_t at) { return *reinterpret_cast<const float*>(p + at); }
 
-// Mode 1 gives two halves; with the doubled eye width each quarter is one eye-sized view.
+// Mode 1 gives two halves; with the doubled eye width the target holds the four views of `layout`.
 void* viewportHook(void* renderer, void* out, const float* renderSize, int view) {
     lastRenderer.store(renderer, std::memory_order_relaxed);
     if (mode_of(renderer) != 1 || view < 0 || view >= kViews)
@@ -277,35 +319,70 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
         viewportMismatch.fetch_add(1, std::memory_order_relaxed);
         return result;
     }
-    const int quarter = width / kViews;
-    const float q = static_cast<float>(quarter), h = static_cast<float>(height);
-    const int left = view * quarter;
+    const ViewRect r = views4_rect(layout, view, width, height);
+    const int left = r.left;
+    const float w = static_cast<float>(r.width), h = static_cast<float>(r.height);
     put_f(o, 0x00, static_cast<float>(left));  // D3D12_VIEWPORT
     put_f(o, 0x04, 0.0f);
-    put_f(o, 0x08, q);
+    put_f(o, 0x08, w);
     put_f(o, 0x0c, h);
     put_i(o, 0x18, left);  // D3D12_RECT scissor
     put_i(o, 0x1c, 0);
-    put_i(o, 0x20, left + quarter);
-    put_i(o, 0x24, height);
-    put_f(o, 0x28, q);  // view size and reciprocal
+    put_i(o, 0x20, left + r.width);
+    put_i(o, 0x24, r.height);
+    put_f(o, 0x28, w);  // view size and reciprocal
     put_f(o, 0x2c, h);
-    put_f(o, 0x30, 1.0f / q);
+    put_f(o, 0x30, 1.0f / w);
     put_f(o, 0x34, 1.0f / h);
     put_f(o, 0x38, static_cast<float>(left));  // pixel offset
     put_f(o, 0x3c, 0.0f);
-    put_f(o, 0x40, 1.0f / kViews);  // UV scale
-    put_f(o, 0x44, 1.0f);
-    put_f(o, 0x48, static_cast<float>(view) / kViews);  // UV offset
+    put_f(o, 0x40, w / static_cast<float>(width));  // UV scale
+    put_f(o, 0x44, h / static_cast<float>(height));
+    put_f(o, 0x48, static_cast<float>(left) / static_cast<float>(width));  // UV offset
     put_f(o, 0x4c, 0.0f);
+    // The tile grid and the volumetrics are sized once from view 0 for every view (ace_abi.h): they
+    // get the largest view's size. Equal views leave this unchanged.
+    const uintptr_t returnRva = reinterpret_cast<uintptr_t>(_ReturnAddress()) - base;
+    if (!layout.equal() && view == 0 &&
+        (returnRva == ace::kTileGridViewportCallSite + 5 || returnRva == ace::kFogViewportCallSite + 5)) {
+        int maxW = 0, maxH = 0;
+        for (int v = 0; v < kViews; ++v) {
+            const ViewRect e = views4_rect(layout, v, width, height);
+            maxW = std::max(maxW, e.width);
+            maxH = std::max(maxH, e.height);
+        }
+        const float mw = static_cast<float>(maxW), mh = static_cast<float>(maxH);
+        put_f(o, 0x08, mw);
+        put_f(o, 0x0c, mh);
+        put_i(o, 0x20, maxW);
+        put_i(o, 0x24, maxH);
+        put_f(o, 0x28, mw);
+        put_f(o, 0x2c, mh);
+        put_f(o, 0x30, 1.0f / mw);
+        put_f(o, 0x34, 1.0f / mh);
+        put_f(o, 0x40, mw / static_cast<float>(width));
+        put_f(o, 0x44, mh / static_cast<float>(height));
+        logf("views4: %s sized for the largest view, %dx%d of %dx%d",
+             returnRva == ace::kFogViewportCallSite + 5 ? "volumetrics" : "tile grid", maxW, maxH, width, height);
+    }
     if (!layoutLogged.exchange(true)) {
-        logf("views4: viewport layout render=%dx%d quarter=%d (view %d at x=%d)", width, height, quarter, view, left);
-        pass_census_set_quarter_width(quarter);
+        int lefts[kViews], widths[kViews];
+        char line[256];
+        int n = std::snprintf(line, sizeof(line), "views4: viewport layout render=%dx%d, views (x, w x h):", width, height);
+        for (int v = 0; v < kViews; ++v) {
+            const ViewRect e = views4_rect(layout, v, width, height);
+            lefts[v] = e.left;
+            widths[v] = e.width;
+            n += std::snprintf(line + n, sizeof(line) - n, " %d: %d, %dx%d;", v, e.left, e.width, e.height);
+        }
+        log_line(line);
+        pass_census_set_view_columns(lefts, widths);
     }
     return result;
 }
 
-// The pass setup halves its target; the half it wrote gives the target width W. Quarter i of W.
+// The pass setup halves its target; the half it wrote gives the target width W, its viewport the
+// height H. View i's rect of W x H.
 // It gets the real view: setting up view 2 as view 0 made it a first view, whose passes clear the
 // target and wiped the eyes (views4 run 5). Its camera-slot reads are folded by the imul patches.
 template <size_t I>
@@ -340,20 +417,31 @@ void passSetupHook(void* renderer, void* pass, int view) {
     }
     const float half = get_f(p, ace::kPassViewport + 0x08);
     const int width = static_cast<int>(half * 2.0f + 0.5f);
-    if (width < kViews) {
+    const int height = static_cast<int>(get_f(p, ace::kPassViewport + 0x0c) + 0.5f);
+    if (width < kViews || height < 1) {
         passMismatch.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    const int quarter = width / kViews, left = view * quarter;
-    put_f(p, ace::kPassViewport + 0x00, static_cast<float>(left));
-    put_f(p, ace::kPassViewport + 0x08, static_cast<float>(quarter));
-    put_i(p, ace::kPassScissor + 0x00, left);
-    put_i(p, ace::kPassScissor + 0x08, left + quarter);
-    put_f(p, ace::kPassScreenOffset + 0x00, static_cast<float>(left));
+    const ViewRect r = views4_rect(layout, view, width, height);
+    put_f(p, ace::kPassViewport + 0x00, static_cast<float>(r.left));
+    put_f(p, ace::kPassViewport + 0x08, static_cast<float>(r.width));
+    put_f(p, ace::kPassViewport + 0x0c, static_cast<float>(r.height));
+    put_i(p, ace::kPassScissor + 0x00, r.left);
+    put_i(p, ace::kPassScissor + 0x08, r.left + r.width);
+    put_i(p, ace::kPassScissor + 0x0c, r.height);
+    put_f(p, ace::kPassScreenOffset + 0x00, static_cast<float>(r.left));
     put_f(p, ace::kPassScreenOffset + 0x04, 0.0f);
+    if (!layout.equal()) {
+        // Same ratio to this view's size as it had to an equal quarter of the target.
+        const int quarter = width / kViews;
+        put_f(p, ace::kPassViewExtent + 0x00,
+              get_f(p, ace::kPassViewExtent + 0x00) * static_cast<float>(r.width) / static_cast<float>(quarter));
+        put_f(p, ace::kPassViewExtent + 0x04,
+              get_f(p, ace::kPassViewExtent + 0x04) * static_cast<float>(r.height) / static_cast<float>(height));
+    }
     if (!passLogged.exchange(true))
-        logf("views4: pass viewport (setup 0x%llx) target width %d -> view %d at x=%d width %d",
-             static_cast<unsigned long long>(ace::kPassSetupRvas[I]), width, view, left, quarter);
+        logf("views4: pass viewport (setup 0x%llx) target %dx%d -> view %d at x=%d, %dx%d",
+             static_cast<unsigned long long>(ace::kPassSetupRvas[I]), width, height, view, r.left, r.width, r.height);
 }
 
 void* viewRecordHook(void* renderer, int view) {
@@ -382,8 +470,9 @@ void normalReconstructHook(void* params) {
     void* renderer = cameraPhantom2 ? *reinterpret_cast<void**>(cameraPhantom2 + ace::kPhantomRenderer) : nullptr;
     const auto* target = *reinterpret_cast<const uint8_t* const*>(p + ace::kNormalParamsTarget);
     const int width = target ? *reinterpret_cast<const int32_t*>(target + ace::kTextureWidth) : 0;
-    const int quarter = width / kViews;
-    if (!recordB || !renderer || mode_of(renderer) != 1 || quarter <= 0 || !pass_census_installed()) {
+    const int eye1 = views4_rect(layout, 1, width, 1).left, focus0 = views4_rect(layout, 2, width, 1).left,
+              focus1 = views4_rect(layout, 3, width, 1).left;
+    if (!recordB || !renderer || mode_of(renderer) != 1 || eye1 <= 0 || !pass_census_installed()) {
         normalReconstructOriginal(params);
         return;
     }
@@ -393,21 +482,21 @@ void normalReconstructHook(void* params) {
     void* record3 = viewRecordOriginal(renderer, 3);
     std::memcpy(focus + ace::kNormalParamsRecordA, &record2, sizeof(void*));
     std::memcpy(focus + ace::kNormalParamsRecordB, &record3, sizeof(void*));
-    const int32_t focusSplit = 3 * quarter;
+    const int32_t focusSplit = focus1;
     std::memcpy(focus + ace::kNormalParamsSplit, &focusSplit, sizeof(focusSplit));
     pass_census_barrier_after_next_dispatch();
     normalReconstructOriginal(focus);
 
     alignas(16) uint8_t eyes[ace::kNormalParamsSize];
     std::memcpy(eyes, p, sizeof(eyes));
-    const int32_t eyeSplit = quarter;
+    const int32_t eyeSplit = eye1;
     std::memcpy(eyes + ace::kNormalParamsSplit, &eyeSplit, sizeof(eyeSplit));
-    normalDispatchGroupsX = static_cast<uint32_t>((2 * quarter + 7) / 8);
+    normalDispatchGroupsX = static_cast<uint32_t>((focus0 + 7) / 8);
     normalReconstructOriginal(eyes);
     normalDispatchGroupsX = 0;
     if (normalPasses.fetch_add(1, std::memory_order_relaxed) == 0)
-        logf("views4: normal reconstruction per quarter: focus split %d, eyes split %d over %u x groups", focusSplit,
-             eyeSplit, (2 * quarter + 7) / 8);
+        logf("views4: normal reconstruction per view: focus split %d, eyes split %d over %u x groups", focusSplit,
+             eyeSplit, (focus0 + 7) / 8);
 }
 
 bool parse_callers(const wchar_t* spec) {
@@ -733,14 +822,26 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         return false;
     }
     started = true;
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);
+    if (focusCull && !cameraViews) {
+        focusCull = false;
+        log_line("views4: views4_focus_cull needs the \"cameras\" token; focus cull off");
+    }
+    if (focusCull)
+        logf("views4: focus cull: focus frusta built every frame at %.0f%% of the focus extent%s; the draw-loop hook is "
+             "not located yet, so no draws are skipped",
+             cullScale * 100, gazeExpected ? " (from the first gaze sample)" : "");
     char list[512];
     int n = std::snprintf(list, sizeof(list), "%s", allowAll ? "all" : "");
     for (size_t i = 0; i < allowedCount && n < static_cast<int>(sizeof(list)) - 16; ++i)
         n += std::snprintf(list + n, sizeof(list) - n, "%s0x%llx", n ? "," : "",
                            static_cast<unsigned long long>(allowed[i] - 5));
-    logf("views4: ACTIVE, 4 views in VR for call sites [%s]%s%s; viewport quarters, views 2-3 %s, "
-         "history slot advance %s",
+    logf("views4: ACTIVE, 4 views in VR for call sites [%s]%s%s; views 0-1 at %.0f%% and 2-3 at %.0f%% of the native "
+         "eye size%s, views 2-3 %s, history slot advance %s",
          list, tileViews ? " (tile culling included)" : "", drawLoops ? ", lighting loop 4 views" : "",
+         layout.outer * 100, layout.focus * 100, layout.equal() ? " (equal quarters)" : "",
          cameraViews ? "are focus cameras" : "copy the eyes", eyesOnlySlotAdvance ? "eyes only" : "every view (ACE's)");
     if (cameraViews)
         logf("views4: focus cameras cover %.0f%% of each eye's tangent extent, camera slots at 0x%llx and 0x%llx",
@@ -919,10 +1020,31 @@ void report_snapshots() {
 
 }  // namespace
 
-void views4_set_focus_turns(const XrQuaternionf (&turns)[2]) {
+void views4_set_focus_turns(const XrQuaternionf (&turns)[2], bool gazeSample) {
     AcquireSRWLockExclusive(&turnLock);
     std::memcpy(gazeTurn, turns, sizeof(gazeTurn));
+    gazeSampled |= gazeSample;
     ReleaseSRWLockExclusive(&turnLock);
+}
+
+void views4_set_layout(const Views4Layout& l) { layout = l; }
+
+void views4_set_focus_cull(bool on, double scale, bool gaze) {
+    focusCull = on;
+    cullScale = scale;
+    gazeExpected = gaze;
+}
+
+bool views4_focus_frustum(int view, FocusFrustum& out) {
+    if (!focusCull || view < 2 || view >= kViews)
+        return false;
+    AcquireSRWLockShared(&turnLock);
+    const CullFrusta& c = cullFrusta[0].fill > cullFrusta[1].fill ? cullFrusta[0] : cullFrusta[1];
+    const bool valid = c.fill != 0;
+    if (valid)
+        out = c.view[view - 2];
+    ReleaseSRWLockShared(&turnLock);
+    return valid;
 }
 
 bool views4_take_focus_turns(XrQuaternionf (&turns)[2]) {
@@ -1012,7 +1134,14 @@ void views4_frame_end() {
              static_cast<unsigned long long>(turnsPushed), static_cast<unsigned long long>(turnsTaken),
              static_cast<unsigned long long>(turnsPushed - turnsTaken), static_cast<unsigned long long>(turnResyncs),
              static_cast<unsigned long long>(turnEmptyTakes), t.x, t.y, t.z, t.w);
+        if (focusCull)
+            logf("views4: focus cull: frusta built %llu, frames waiting for the first gaze sample %llu",
+                 static_cast<unsigned long long>(cullBuilt), static_cast<unsigned long long>(cullWaitingForGaze));
         ReleaseSRWLockShared(&turnLock);
+        const uint64_t calls = fillCalls.exchange(0), ticks = fillTicks.exchange(0), maxTicks = fillMaxTicks.exchange(0);
+        logf("views4 cpu: fill_focus_cameras %.4f ms per call (max %.4f) x%llu",
+             calls ? static_cast<double>(ticks) * msPerTick / static_cast<double>(calls) : 0.0,
+             static_cast<double>(maxTicks) * msPerTick, static_cast<unsigned long long>(calls));
     }
 }
 
