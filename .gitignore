@@ -1,0 +1,12 @@
+# CMake/MSBuild output, test binaries, runtime logs and PIX captures
+build/
+out/
+.vs/
+*.user
+
+# Python caches from tools/
+__pycache__/
+*.pyc
+
+# Disassembly and RTTI dumps of the game executable: local only, never committed
+analysis/
