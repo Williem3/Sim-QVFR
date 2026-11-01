@@ -78,3 +78,9 @@ The probe hooks game code, and Kunos validates content online.
 `tools/` holds Python helpers for the 101 MB exe: string cross-references (`xrefs.py`), function
 disassembly with string notes (`disfunc.py`), chunk-to-entry resolution through chained unwind
 info and incremental-link thunks (`func_entry.py`), and RTTI vtable owners (`vtable_owner.py`).
+
+## Acknowledgements
+
+Thanks to [DSuzuki35](https://github.com/DSuzuki35) for the breakthrough in
+[LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod) and for the starter launcher,
+both of which helped the preliminary ACE quadview development.
