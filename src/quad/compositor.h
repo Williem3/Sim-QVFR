@@ -26,7 +26,8 @@ struct EyeComposition {
     float outerSource[4]; // outer texture region for this eye: u0, v0, du, dv
     float focusSource[4]; // focus texture region for this eye: u0, v0, du, dv
     float feather;        // blend band, as a fraction of the focus box (0..0.5)
-    float border;         // debug: width of a green outline at the box edge, as a fraction of the box (0 = off)
+    float border;         // debug: width of an outline at the box edge, as a fraction of the box (0 = off)
+    float borderColor[4]; // its colour (linear RGBA)
 };
 
 class QuadCompositor {

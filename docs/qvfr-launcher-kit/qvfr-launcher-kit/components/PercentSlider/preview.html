@@ -1,0 +1,21 @@
+<!-- @dsCard group="Inputs" height=150 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PercentSlider preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-direction:column;gap:16px}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  function Demo() {
+    var s = React.useState(50), base = { width: 2584, height: 2160 };
+    return h(React.Fragment, null,
+      h(Q.PercentSlider, { 'aria-label': 'Outer resolution', min: 20, max: 100, value: s[0], onChange: s[1], detail: function (v) { return Math.round(base.width * v / 100) + ' \u00d7 ' + Math.round(base.height * v / 100) + ' px'; } }),
+      h(Q.PercentSlider, { 'aria-label': 'Foveated width', min: 10, max: 100, defaultValue: 39 }),
+      h(Q.PercentSlider, { 'aria-label': 'Outline opacity', defaultValue: 60, disabled: true }));
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(h(Demo));
+</script>
+</body>
+</html>

@@ -95,11 +95,13 @@ struct Experiment {
     bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
     Views4Layout views4Layout;    // views4: outer views at periphery_scale, focus views at focus_density x focus_percent
-    double focusFraction = 0.35;  // of the view's tangent-space width and height
+    double focusFraction = 0.35;  // of the view's tangent-space width (focus_percent)
+    double focusFractionY = 0;    // of its height (focus_height_percent); 0 = the same as the width
+    double focus_y() const { return focusFractionY > 0 ? focusFractionY : focusFraction; }
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     double feather = 0.10;        // quad: blend band, as a fraction of the focus box
-    bool border = false;          // quad: debug green outline on the focus box (views4: on the outer views)
-    bool borderMagenta = false;   // views4 outline colour: magenta instead of green
+    bool border = false;          // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
+    float borderColor[4] = {0, 1, 0, 1};  // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
     bool gaze = true;             // quad: the focus box follows XR_EXT_eye_gaze_interaction
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
@@ -161,38 +163,49 @@ void load_experiment() {
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
     experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
     const UINT percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini.c_str());
-    experiment.focusFraction = std::clamp(percent, 10u, 90u) / 100.0;
+    experiment.focusFraction = std::clamp(percent, 10u, 100u) / 100.0;
+    const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini.c_str());
+    experiment.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
     const UINT featherPercent = std::clamp(GetPrivateProfileIntW(L"quad", L"feather_percent", 10, ini.c_str()), 0u, 50u);
     experiment.feather = featherPercent / 100.0;
     experiment.border = GetPrivateProfileIntW(L"quad", L"debug_border", 0, ini.c_str()) != 0;
     wchar_t borderColor[16] = {};
     GetPrivateProfileStringW(L"quad", L"debug_border_color", L"green", borderColor, 16, ini.c_str());
-    experiment.borderMagenta = _wcsicmp(borderColor, L"magenta") == 0;  // views4 outline; quad mode stays green
+    // Linear values; teal is #00A0A0 in sRGB.
+    const float magentaColor[4] = {1, 0, 1, 1}, tealColor[4] = {0, 0.352f, 0.352f, 1};
+    if (_wcsicmp(borderColor, L"magenta") == 0)
+        std::memcpy(experiment.borderColor, magentaColor, sizeof(magentaColor));
+    else if (_wcsicmp(borderColor, L"teal") == 0)
+        std::memcpy(experiment.borderColor, tealColor, sizeof(tealColor));
     experiment.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini.c_str()) != 0;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
     // Above 100 supersamples (in quad mode this is the outer view's resolution).
-    const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 25u, 200u);
+    const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 10u, 200u);
     experiment.eyeScale = eyePercent / 100.0;
     // views4: periphery and focus resolution each on their own. Unset, both follow eye_scale (equal
     // quarters: periphery = eye_scale, focus density = eye_scale / focus_percent).
     const UINT peripheryPercent = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str());
     const UINT focusDensityPercent = GetPrivateProfileIntW(L"experiment", L"focus_density", 0, ini.c_str());
     const double outer = peripheryPercent ? std::clamp(peripheryPercent, 10u, 200u) / 100.0 : experiment.eyeScale;
-    // The focus views' linear size against the native eye: density times the box's share of the FOV.
-    const double focus = focusDensityPercent
-                             ? std::clamp(focusDensityPercent, 25u, 400u) / 100.0 * experiment.focusFraction
-                             : experiment.eyeScale;
-    experiment.views4Layout = views4_layout(outer, focus);
+    // The focus views' linear size against the native eye: density times the box's share of the FOV,
+    // per axis. Unset, the density is eye_scale / focus_percent (equal quarters for a square box).
+    const double density = focusDensityPercent ? std::clamp(focusDensityPercent, 25u, 400u) / 100.0
+                                               : experiment.eyeScale / experiment.focusFraction;
+    // Unset, exactly eye_scale on the width (not density x fraction, whose rounding would leave equal quarters).
+    const double focus = focusDensityPercent ? density * experiment.focusFraction : experiment.eyeScale;
+    const double focusHeight = experiment.focusFractionY > 0 ? density * experiment.focusFractionY : focus;
+    experiment.views4Layout = views4_layout(outer, focus, focusHeight);
     logf("experiment: mode=%ls focus_percent=%u b_focus=%d eye_scale=%u feather_percent=%u debug_border=%d gaze=%d "
          "(from %ls)",
          mode, percent, experiment.focusInB ? 1 : 0, eyePercent, featherPercent, experiment.border ? 1 : 0,
          experiment.gaze ? 1 : 0, ini.c_str());
     if (experiment.views4)
-        logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native (focus views %.0f%% of the "
-             "native eye size)%s",
-             outer * 100, focus / experiment.focusFraction * 100, focus * 100,
+        logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
+             "(focus views %.0f%% x %.0f%% of the native eye)%s",
+             outer * 100, density * 100, experiment.focusFraction * 100, experiment.focus_y() * 100, focus * 100,
+             focusHeight * 100,
              peripheryPercent || focusDensityPercent ? "" : " (from eye_scale)");
 }
 
@@ -231,6 +244,18 @@ void narrow(float& loAngle, float& hiAngle, double fraction, double centre = 0.0
     centre = std::clamp(centre, lo + half, hi - half);
     loAngle = static_cast<float>(std::atan(centre - half));
     hiAngle = static_cast<float>(std::atan(centre + half));
+}
+
+// What the launcher shows before the next launch (ACE_QV_RUNTIME_INFO, set by the launcher): the
+// headset's recommended per-eye size and whether eye tracking delivered samples. An ini file.
+void runtime_info(const wchar_t* key, const std::wstring& value) {
+    static const std::wstring path = [] {
+        wchar_t buffer[MAX_PATH] = {};
+        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", buffer, MAX_PATH);
+        return n > 0 && n < MAX_PATH ? std::wstring(buffer) : std::wstring();
+    }();
+    if (!path.empty())
+        WritePrivateProfileStringW(L"runtime", key, value.c_str(), path.c_str());
 }
 
 // Eye gaze for the quad focus box (XR_EXT_eye_gaze_interaction, which ACE enables itself). The
@@ -289,6 +314,7 @@ void gaze_init(XrInstance instance) {
     if (XR_FAILED(r)) {
         logf("gaze: action setup failed (%d); focus box stays centred", r);
         gaze.set = XR_NULL_HANDLE;
+        runtime_info(L"eye_tracking", L"0");
         return;
     }
     log_line("gaze: action set created");
@@ -387,6 +413,7 @@ bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& di
             logf("gaze: first tracked sample, direction %.3f,%.3f,%.3f", gaze.direction.x, gaze.direction.y,
                  gaze.direction.z);
         gaze.firstLogged = true;
+        runtime_info(L"eye_tracking", L"1");
     }
     if (!ok && (gaze.directionTime == 0 || time - gaze.directionTime > kGazeHoldNs))
         return false;
@@ -474,12 +501,8 @@ void views4_outline_draw(XrSwapchain swapchain) {
             return;
         }
         v4outline.ready = true;
-        if (experiment.borderMagenta) {
-            v4outline.rgba[0] = 1;
-            v4outline.rgba[1] = 0;
-            v4outline.rgba[2] = 1;
-        }
-        logf("views4: focus outline on, %s", experiment.borderMagenta ? "magenta" : "green");
+        std::memcpy(v4outline.rgba, experiment.borderColor, sizeof(v4outline.rgba));
+        logf("views4: focus outline on, colour %.2f/%.2f/%.2f", v4outline.rgba[0], v4outline.rgba[1], v4outline.rgba[2]);
     }
     const auto images = v4outline.images.find(swapchain);
     const auto index = v4outline.acquired.find(swapchain);
@@ -502,7 +525,7 @@ void views4_outline_draw(XrSwapchain swapchain) {
             fov_tangents(v4outline.fov[e], tan);
         const double l = tan[0], r = tan[1], u = tan[2], d = tan[3];
         double hw, hh;
-        focus_extents(tan, experiment.focusFraction, hw, hh);
+        focus_extents(tan, experiment.focusFraction, experiment.focus_y(), hw, hh);
         if (!(r > l && u > d))
             return;
         boxes.push_back(OutlineBox{v.left + static_cast<int>((-hw - l) / (r - l) * v.width),
@@ -532,11 +555,11 @@ bool quad_ready() {
 // which ACE's screen-space clouds and other effects get wrong: dark skies when the box is far from
 // the centre), the eye camera is turned to face tangent (cx, cy) of the eye's view, without roll,
 // and given a centred projection of the same tangent size.
-void turn_view(XrView& view, double fraction, double tanX, double tanY) {
+void turn_view(XrView& view, double fractionX, double fractionY, double tanX, double tanY) {
     const double l = std::tan(view.fov.angleLeft), r = std::tan(view.fov.angleRight);
     const double d = std::tan(view.fov.angleDown), u = std::tan(view.fov.angleUp);
-    const double hw = (r - l) * fraction / 2, hh = (u - d) * fraction / 2;
-    view.pose.orientation = qmul(view.pose.orientation, focus_turn(view.fov, fraction, tanX, tanY));
+    const double hw = (r - l) * fractionX / 2, hh = (u - d) * fractionY / 2;
+    view.pose.orientation = qmul(view.pose.orientation, focus_turn(view.fov, fractionX, fractionY, tanX, tanY));
     view.fov = {static_cast<float>(-std::atan(hw)), static_cast<float>(std::atan(hw)),
                 static_cast<float>(std::atan(hh)), static_cast<float>(-std::atan(hh))};
 }
@@ -637,6 +660,10 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
         std::lock_guard guard(quad.mutex);
         quad.nativeW = views[0].recommendedImageRectWidth;
         quad.nativeH = views[0].recommendedImageRectHeight;
+        runtime_info(L"recommended_width", std::to_wstring(views[0].recommendedImageRectWidth));
+        runtime_info(L"recommended_height", std::to_wstring(views[0].recommendedImageRectHeight));
+        runtime_info(L"max_width", std::to_wstring(views[0].maxImageRectWidth));
+        runtime_info(L"max_height", std::to_wstring(views[0].maxImageRectHeight));
     }
     // views4: ACE's "eye" holds one outer and one focus view side by side (views4_layout.h), so its
     // double-wide target holds all four.
@@ -715,6 +742,11 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     probe_stop();
     dred_stop();
+    {
+        std::lock_guard guard(gaze.mutex);
+        if (gaze.queries > 900 && gaze.tracked == 0)  // asked for ~10 s, never tracked
+            runtime_info(L"eye_tracking", L"0");
+    }
     {
         std::lock_guard guard(quad.mutex);
         quad.v4Outline.shutdown();
@@ -968,7 +1000,7 @@ void views4_compose() {
         } else {
             fov_tangents(quad.v4Fov[e], eyes[e].outerTan);
             double hw, hh;
-            focus_extents(eyes[e].outerTan, experiment.focusFraction, hw, hh);
+            focus_extents(eyes[e].outerTan, experiment.focusFraction, experiment.focus_y(), hw, hh);
             const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
                                        static_cast<float>(-hh)};
             std::memcpy(eyes[e].focusTan, focusTan, sizeof(focusTan));
@@ -1018,8 +1050,7 @@ void views4_compose() {
                                            e * w + static_cast<int>((x1 - l) / (r - l) * w),
                                            static_cast<int>((u - y0) / (u - d) * h)});
             }
-            const float magenta[4] = {1, 0, 1, 1}, green[4] = {0, 1, 0, 1};
-            quad.v4Outline.draw(out, boxes, std::max(2, w / 300), experiment.borderMagenta ? magenta : green);
+            quad.v4Outline.draw(out, boxes, std::max(2, w / 300), experiment.borderColor);
         }
     }
     if (ok && quad_capture_due())
@@ -1193,6 +1224,7 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
         std::memcpy(eyes[e].focusSource, focus, sizeof(focus));
         eyes[e].feather = static_cast<float>(experiment.feather);
         eyes[e].border = experiment.border ? 0.008f : 0.0f;
+        std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
     }
 
     uint32_t outIndex = 0;
@@ -1320,10 +1352,10 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                 }
             }
             if (experiment.quad) {
-                turn_view(views[i], experiment.focusFraction, tanX, tanY);
+                turn_view(views[i], experiment.focusFraction, experiment.focus_y(), tanX, tanY);
             } else {
                 narrow(views[i].fov.angleLeft, views[i].fov.angleRight, experiment.focusFraction, tanX);
-                narrow(views[i].fov.angleDown, views[i].fov.angleUp, experiment.focusFraction, tanY);
+                narrow(views[i].fov.angleDown, views[i].fov.angleUp, experiment.focus_y(), tanY);
             }
             if (!focusLogged)
                 logf("experiment focus_only view=%u fov %.4f/%.4f/%.4f/%.4f -> %.4f/%.4f/%.4f/%.4f", i,
@@ -1633,7 +1665,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     }
     if (experiment.views4 &&
         !views4_start(experiment.views4Callers, experiment.views4EyesOnlyAdvance,
-                      experiment.views4EyeCamera ? 0.0 : experiment.focusFraction))
+                      experiment.views4EyeCamera ? 0.0 : experiment.focusFraction, experiment.focus_y()))
         experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
     if (experiment.views4 && experiment.views4ShadowView1Plain)
         views4_shadow_view1_plain();

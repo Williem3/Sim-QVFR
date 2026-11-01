@@ -1,0 +1,16 @@
+<!-- @dsCard group="Layout" height=150 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>FormRow preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;width:560px}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(Q.FormSection,null,
+    h(Q.FormRow,{label:'Outer resolution',labelId:'l1',description:'The full field of view, rendered at lower density.'},h(Q.PercentSlider,{'aria-labelledby':'l1',min:20,max:100,defaultValue:50,detail:'1292 \u00d7 1080 px'})),
+    h(Q.FormRow,{label:'Outline color',disabled:true},h(Q.SegmentedControl,{'aria-label':'Outline color',disabled:true,defaultValue:'teal',options:[{value:'teal',label:'Teal',swatch:'var(--overlay-teal)'},{value:'magenta',label:'Magenta',swatch:'var(--overlay-magenta)'},{value:'green',label:'Green',swatch:'var(--overlay-green)'}]}))));
+</script>
+</body>
+</html>

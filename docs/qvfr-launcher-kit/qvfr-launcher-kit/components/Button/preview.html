@@ -1,0 +1,14 @@
+<!-- @dsCard group="Actions" height=72 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Button preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment,null,h(Q.Button,{variant:'primary',size:'large'},'Launch Assetto Corsa EVO'),h(Q.Button,null,'Restore Defaults'),h(Q.Button,{variant:'primary'},'Apply'),h(Q.Button,{variant:'plain'},'Open Log Folder'),h(Q.Button,{disabled:true},'Unavailable')));
+</script>
+</body>
+</html>

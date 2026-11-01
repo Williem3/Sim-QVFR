@@ -1,0 +1,51 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Cover</title>
+<style>
+  html,body{margin:0;background:var(--window-bg)}
+  .cv{position:relative;width:960px;height:288px;overflow:hidden;background:var(--window-bg)}
+  .cv svg{position:absolute;inset:0}
+  .slab{fill:var(--accent-fill);rx:var(--radius-group)}
+  .cut{fill:var(--window-bg);rx:var(--radius-control)}
+  .ring{fill:none;stroke:var(--overlay-teal);stroke-width:3px;rx:var(--radius-control)}
+  .dot{fill:var(--accent-fill)}
+  .mag{fill:var(--overlay-magenta);rx:var(--radius-group)}
+  .grn{fill:var(--overlay-green);rx:var(--radius-group)}
+  .ink{fill:var(--label);rx:var(--radius-group)}
+  .txt{position:absolute;left:40px;bottom:36px;max-width:440px;display:flex;flex-direction:column;gap:16px}
+  .name{margin:0;font-family:var(--font-system);font-size:88px;line-height:.95;font-weight:600;letter-spacing:-0.02em;color:var(--label)}
+  .tag{margin:0;font-family:var(--font-system);font-size:14px;line-height:18px;color:var(--label-secondary)}
+</style>
+</head>
+<body>
+<div class="cv">
+  <svg width="960" height="288" viewBox="0 0 960 288" aria-hidden="true">
+    <!--
+      blocks: accent-fill slab 280×248 (bleeds top), overlay-magenta 100×100, overlay-green 100×56, label ink 140×80 (bleeds right/bottom); radius-group corners
+      arrangement: one tall slab = the outer view, with satellites stacked to its right
+      pattern: literal motif row (the foveated view): a focus region cut from the slab in window-bg, outlined in overlay-teal, filled with a dot grid at space-4 pitch (48 dots) — the kit's whole subject is a sharp region inside a coarse one
+      scales: space-4 (16px) pitch and gaps, space-5 offsets, radius-control for the cut, radius-group for blocks
+    -->
+    <rect class="slab" x="520" y="-16" width="280" height="264" rx="10"/>
+    <rect class="cut" x="600" y="72" width="132" height="104" rx="6"/>
+    <g>
+      <circle class="dot" cx="612" cy="84" r="2"/><circle class="dot" cx="628" cy="84" r="2"/><circle class="dot" cx="644" cy="84" r="2"/><circle class="dot" cx="660" cy="84" r="2"/><circle class="dot" cx="676" cy="84" r="2"/><circle class="dot" cx="692" cy="84" r="2"/><circle class="dot" cx="708" cy="84" r="2"/><circle class="dot" cx="724" cy="84" r="2"/>
+      <circle class="dot" cx="612" cy="100" r="2"/><circle class="dot" cx="628" cy="100" r="2"/><circle class="dot" cx="644" cy="100" r="2"/><circle class="dot" cx="660" cy="100" r="2"/><circle class="dot" cx="676" cy="100" r="2"/><circle class="dot" cx="692" cy="100" r="2"/><circle class="dot" cx="708" cy="100" r="2"/><circle class="dot" cx="724" cy="100" r="2"/>
+      <circle class="dot" cx="612" cy="116" r="2"/><circle class="dot" cx="628" cy="116" r="2"/><circle class="dot" cx="644" cy="116" r="2"/><circle class="dot" cx="660" cy="116" r="2"/><circle class="dot" cx="676" cy="116" r="2"/><circle class="dot" cx="692" cy="116" r="2"/><circle class="dot" cx="708" cy="116" r="2"/><circle class="dot" cx="724" cy="116" r="2"/>
+      <circle class="dot" cx="612" cy="132" r="2"/><circle class="dot" cx="628" cy="132" r="2"/><circle class="dot" cx="644" cy="132" r="2"/><circle class="dot" cx="660" cy="132" r="2"/><circle class="dot" cx="676" cy="132" r="2"/><circle class="dot" cx="692" cy="132" r="2"/><circle class="dot" cx="708" cy="132" r="2"/><circle class="dot" cx="724" cy="132" r="2"/>
+      <circle class="dot" cx="612" cy="148" r="2"/><circle class="dot" cx="628" cy="148" r="2"/><circle class="dot" cx="644" cy="148" r="2"/><circle class="dot" cx="660" cy="148" r="2"/><circle class="dot" cx="676" cy="148" r="2"/><circle class="dot" cx="692" cy="148" r="2"/><circle class="dot" cx="708" cy="148" r="2"/><circle class="dot" cx="724" cy="148" r="2"/>
+      <circle class="dot" cx="612" cy="164" r="2"/><circle class="dot" cx="628" cy="164" r="2"/><circle class="dot" cx="644" cy="164" r="2"/><circle class="dot" cx="660" cy="164" r="2"/><circle class="dot" cx="676" cy="164" r="2"/><circle class="dot" cx="692" cy="164" r="2"/><circle class="dot" cx="708" cy="164" r="2"/><circle class="dot" cx="724" cy="164" r="2"/>
+    </g>
+    <rect class="ring" x="598.5" y="70.5" width="135" height="107" rx="7"/>
+    <rect class="mag" x="816" y="32" width="100" height="100" rx="10"/>
+    <rect class="grn" x="816" y="148" width="100" height="56" rx="10"/>
+    <rect class="ink" x="816" y="220" width="160" height="84" rx="10"/>
+  </svg>
+  <div class="txt">
+    <h1 class="name">QVFR<br>Launcher</h1>
+    <p class="tag">Foveated rendering for Assetto Corsa EVO, in the macOS design language.</p>
+  </div>
+</div>
+</body>
+</html>

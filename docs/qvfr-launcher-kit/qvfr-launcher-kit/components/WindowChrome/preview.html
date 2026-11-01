@@ -1,0 +1,14 @@
+<!-- @dsCard group="Layout" height=260 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>WindowChrome preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:24px;gap:32px}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment,null,h(Q.WindowChrome,{title:'QVFR Launcher',width:300,height:120},h('div',{style:{padding:'16px',color:'var(--label-secondary)',fontSize:'12px'}},'macOS controls (default)')),h(Q.WindowChrome,{title:'QVFR Launcher',width:300,height:120,controls:'windows'},h('div',{style:{padding:'16px',color:'var(--label-secondary)',fontSize:'12px'}},'Windows caption buttons'))));
+</script>
+</body>
+</html>

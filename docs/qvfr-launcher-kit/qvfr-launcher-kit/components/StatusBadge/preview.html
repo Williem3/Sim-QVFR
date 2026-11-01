@@ -1,0 +1,14 @@
+<!-- @dsCard group="Feedback" height=64 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>StatusBadge preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment,null,h(Q.StatusBadge,{tone:'success'},'Ready'),h(Q.StatusBadge,{tone:'warning'},'Eye tracker not detected'),h(Q.StatusBadge,{tone:'danger'},'OpenXR runtime not found'),h(Q.StatusBadge,{tone:'neutral'},'Starting Assetto Corsa EVO\u2026')));
+</script>
+</body>
+</html>

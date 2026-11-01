@@ -24,9 +24,9 @@ void views4_set_layout(const Views4Layout& layout);
 // `eyesOnlySlotAdvance`: views 2-3 skip the history-slot advance (keeps the eyes' buffers, but
 // breaks command recording; runs 7-10). Off = ACE's own advance for every view (runs 5-6: stable,
 // all 4 views render, the eyes read the copies' buffer and show black).
-// `focusFraction`: with "cameras", views 2-3 cover this fraction of each eye's tangent extent,
-// centred on the eye's forward axis.
-bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focusFraction);
+// `focusFraction` / `focusFractionY`: with "cameras", views 2-3 cover this fraction of each eye's
+// tangent width / height, centred on the eye's forward axis (`focusFractionY` <= 0: the same).
+bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focusFraction, double focusFractionY = 0);
 // Gaze ("cameras"): where each eye looks, as tangents (x, y) of that eye's view, set at every
 // xrLocateViews (`valid[e]` false: no turn). The next focus cameras the builder fills turn towards
 // the latest (focus_turn.h), clamped against the FOV ACE actually rendered. `gazeSample`: from a

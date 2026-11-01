@@ -1,0 +1,14 @@
+<!-- @dsCard group="Pages" height=640 width=1000 page subtitle="The full launcher, interactive" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>LauncherWindow preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:20px}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'960px'}},h(Q.LauncherWindow,{height:600,defaultPane:'overlay',defaultSettings:{outline:true}})));
+</script>
+</body>
+</html>

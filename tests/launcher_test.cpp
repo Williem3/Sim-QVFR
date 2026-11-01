@@ -3,6 +3,7 @@
 // which are silenced or left alone, the explicit manifests written, the variables set, the
 // environment block, Steam's library list, and the manifest JSON round trip.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -10,6 +11,7 @@
 #include <windows.h>
 
 #include "launcher/launch_plan.h"
+#include "launcher/settings.h"
 
 using namespace aceqv::launcher;
 namespace fs = std::filesystem;
@@ -119,16 +121,17 @@ int main() {
           "mode=quad turns VectorXR off and off_layers turns Toolkit off");
 
     // Variables.
-    const auto vars = launch_variables(plan, L"C:\\run", L"C:\\run\\ace-quadview.ini", L"C:\\logs\\ace.log");
+    const auto vars = launch_variables(plan, L"C:\\run", L"C:\\run\\ace-quadview.ini", L"C:\\logs\\ace.log", L"C:\\runtime.ini");
     check(value_of(vars, L"XR_ENABLE_API_LAYERS") ==
                   L"XR_APILAYER_ACE_quadview;XR_APILAYER_MBUCCHIA_toolkit;XR_APILAYER_DIENERTECH_VECTORXR" &&
               value_of(vars, L"XR_API_LAYER_PATH") == L"C:\\run" &&
               value_of(vars, L"DISABLE_XR_APILAYER_ACE_quadview") == L"1" &&
               value_of(vars, L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit") == L"1" &&
               value_of(vars, L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR") == L"1" &&
-              value_of(vars, L"ACE_QV_INI") == L"C:\\run\\ace-quadview.ini" && value_of(vars, L"SteamAppId") == L"3058630",
-          "variables: layer order, silenced implicit copies, settings, Steam app id");
-    const auto quadVars = launch_variables(quadPlan, L"C:\\run", L"i", L"l");
+              value_of(vars, L"ACE_QV_INI") == L"C:\\run\\ace-quadview.ini" && value_of(vars, L"SteamAppId") == L"3058630" &&
+              value_of(vars, L"ACE_QV_RUNTIME_INFO") == L"C:\\runtime.ini",
+          "variables: layer order, silenced implicit copies, settings, Steam app id, runtime report");
+    const auto quadVars = launch_variables(quadPlan, L"C:\\run", L"i", L"l", L"r");
     check(value_of(quadVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_ACE_quadview" &&
               value_of(quadVars, L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR") == L"1",
           "mode=quad: only the ACE layer, VectorXR silenced");
@@ -175,6 +178,84 @@ int main() {
               back.find("l")->items.size() == 3 && back.find("l")->items[0].boolean && back.find("e")->items.empty(),
           "JSON: escapes, surrogate pairs, numbers, nesting survive a round trip");
     check(!aceqv::json::parse("{\"a\": 1,}", v) && !aceqv::json::parse("{\"a\": 1} x", v), "JSON: syntax errors rejected");
+
+    // Settings (the window's model): the shipped QVFR ini, a save and reload, the mode switch, other
+    // keys left alone, the runtime report and the kit's readouts.
+    {
+        const std::wstring ini = (folder / L"settings.ini").wstring();
+        write_file(ini, "; comment kept\r\n[experiment]\r\nmode=views4\r\ndred=1\r\nfocus_percent=31\r\neye_scale=40\r\n"
+                        "[quad]\r\nfeather_percent=20\r\ndebug_border=0\r\ndebug_border_color=magenta\r\ngaze=1\r\n");
+        const Settings shipped = load_settings(ini);
+        check(shipped.mode == RenderMode::Qvfr && shipped.outer == 40 && shipped.width == 31 && shipped.height == 31 &&
+                  shipped.inner == 129 && shipped.feather == 20 && shipped.eyeTracking && !shipped.outline &&
+                  shipped.color == OutlineColor::Magenta,
+              "settings: the shipped ini reads as QVFR outer 40%, 31% x 31%, inner 129% (from eye_scale)");
+
+        Settings s = shipped;
+        s.outer = 30;
+        s.inner = 110;
+        s.width = 35;
+        s.height = 25;
+        s.feather = 12;
+        s.eyeTracking = false;
+        s.outline = true;
+        s.color = OutlineColor::Teal;
+        const bool saved = save_settings(ini, s);
+        const Settings reread = load_settings(ini);
+        std::string iniText;
+        read_file(ini, iniText);
+        check(saved && reread.outer == 30 && reread.inner == 110 && reread.width == 35 && reread.height == 25 &&
+                  reread.feather == 12 && !reread.eyeTracking && reread.outline && reread.color == OutlineColor::Teal &&
+                  iniText.find("periphery_scale=30") != std::string::npos && iniText.find("focus_density=110") != std::string::npos &&
+                  iniText.find("focus_height_percent=25") != std::string::npos &&
+                  iniText.find("views4_compose=1") != std::string::npos && iniText.find("debug_border_color=teal") != std::string::npos,
+              "settings: QVFR save writes periphery_scale, focus_density, both focus axes and the views4 keys, and reads back");
+        check(iniText.find("; comment kept") != std::string::npos && iniText.find("dred=1") != std::string::npos,
+              "settings: comments and other keys are left alone");
+
+        s.mode = RenderMode::TwoLoop;
+        save_settings(ini, s);
+        const Settings loop = load_settings(ini);
+        read_file(ini, iniText);
+        check(loop.mode == RenderMode::TwoLoop && loop.outer == 30 && iniText.find("mode=quad") != std::string::npos &&
+                  iniText.find("eye_scale=30") != std::string::npos,
+              "settings: Two-loop writes mode=quad with the outer resolution as eye_scale");
+
+        Settings big;
+        big.outer = 200;
+        big.width = 1;
+        save_settings(ini, big);
+        const Settings clamped = load_settings(ini);
+        check(clamped.outer == kOuterRange.max && clamped.width == kSizeRange.min, "settings: values are clamped to the kit's ranges");
+
+        // The runtime report, and the kit's example: recommended 2584 x 2160, defaults (outer 50,
+        // inner 100, 39% x 39%) give 1292 x 1080 and 1008 x 842, a 4600 x 1080 target, 4.49 M pixels.
+        const std::wstring runtimeIni = (folder / L"runtime.ini").wstring();
+        check(!load_runtime_info(runtimeIni).known(), "runtime report: unknown before the first launch");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nmax_width=8192\r\n"
+                               "max_height=8192\r\neye_tracking=0\r\n");
+        const RuntimeInfo rt = load_runtime_info(runtimeIni);
+        check(rt.known() && rt.width == 2584 && rt.height == 2160 && rt.maxWidth == 8192 && rt.eyeTracker == EyeTracker::Missing,
+              "runtime report: recommended size, maximum and a missing eye tracker");
+        const Readouts r = readouts(Settings{}, rt);
+        std::printf("     kit example: outer %dx%d, focus %dx%d, target %dx%d, %.2f M\n", r.outer.width, r.outer.height,
+                    r.focus.width, r.focus.height, r.target.width, r.target.height, r.pixels / 1e6);
+        check(r.outer.width == 1292 && r.outer.height == 1080 && r.focus.width == 1008 && r.focus.height == 842 &&
+                  r.target.width == 4600 && r.target.height == 1080 && std::abs(r.pixels / 1e6 - 4.49) < 0.005 &&
+                  !r.overRuntimeLimit,
+              "readouts: the kit's example numbers (QVFR.viewPixels)");
+        Settings wide;
+        wide.outer = 100;
+        wide.inner = 200;
+        wide.width = 60;
+        check(readouts(wide, rt).overRuntimeLimit, "readouts: a target wider than the runtime allows is flagged");
+        Settings loopDefaults;
+        loopDefaults.mode = RenderMode::TwoLoop;
+        const Readouts l = readouts(loopDefaults, rt);
+        check(l.focus.width == 1292 && l.target.width == 2584 && std::abs(l.pixels - 4.0 * 1292 * 1080) < 1 &&
+                  std::abs(l.focusDensity - 50.0 / 39) < 1e-9,
+              "readouts: Two-loop renders two outer-size frames; focus density = outer / width");
+    }
 
     fs::remove_all(folder, ec);
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

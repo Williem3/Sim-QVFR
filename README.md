@@ -35,8 +35,10 @@ cmake --build build --config Release
 
 ## Launch (ace-quadview-launcher)
 
-`build/Release/ace-quadview-launcher.exe` starts Assetto Corsa EVO in VR with the layer for that
-launch only; nothing is installed or registered. It reads `ace-quadview.ini` next to it (the
+`build/Release/ace-quadview-launcher.exe` opens a settings window (rendering mode QVFR or Two-Loop,
+foveated size, focus and periphery resolution, feather, eye tracking or fixed, a debug outline in
+green, magenta or teal) and starts Assetto Corsa EVO in VR with the layer for that launch only;
+nothing is installed or registered. It reads `ace-quadview.ini` next to it (the
 layer's settings, plus a `[launcher]` section), finds the game through Steam, and writes a run
 folder under `logs/` with the layer's manifest, a snapshot of the ini and `launch.txt` (what it
 did). The layer's log for that launch is `logs/ace-<time>.log`.
@@ -53,7 +55,7 @@ order, so nothing can change what ACE renders behind the layer's back. VectorXR 
 ```
 
 `ace-quadview-launcher.exe --dry-run` writes the run folder and prints the plan without starting
-the game. Steam must be running and ACE closed.
+the game; `--launch` launches without the window. Steam must be running and ACE closed.
 
 ## Run one probe session
 

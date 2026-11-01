@@ -50,7 +50,7 @@ bool cameraViews = false;  // "cameras": views 2-3 are focus cameras with their 
 Views4Layout layout;       // where the four views sit in the target (views4_set_layout; equal quarters by default)
 bool volumetricViews = false;  // "fog": the volumetrics/atmosphere system has resources for 4 views
 bool foldVolumetrics = false;  // "fogfold": views 2-3 still read the eyes' volumetric resources (diagnostic)
-double focusFraction = 0.35;
+double focusFraction = 0.35, focusFractionY = 0.35;  // the focus box's share of the eye's tangent width / height
 uint64_t cameraPhantom2 = 0;  // C2: C2 + kCameraSlotBase is view 2's camera slot
 uint64_t cameraPhantom = 0;   // C3: the same for view 3
 float lastFocusProjection[2][16];
@@ -256,9 +256,9 @@ void fill_focus_cameras(uint8_t* renderer) {
             continue;
         }
         double hw, hh;
-        focus_extents(frame.outerTan[eye], focusFraction, hw, hh);
+        focus_extents(frame.outerTan[eye], focusFraction, focusFractionY, hw, hh);
         if (gazing[eye])
-            turns[eye] = focus_turn(frame.outerTan[eye], focusFraction, gaze[eye][0], gaze[eye][1]);
+            turns[eye] = focus_turn(frame.outerTan[eye], focusFraction, focusFractionY, gaze[eye][0], gaze[eye][1]);
         const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
                                    static_cast<float>(-hh)};
         std::memcpy(frame.focusTan[eye], focusTan, sizeof(focusTan));
@@ -665,10 +665,11 @@ bool create_hook(uintptr_t rva, void* detour, void** original, const char* name)
 
 }  // namespace
 
-bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus) {
+bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus, double focusY) {
     if (started)
         return true;
     focusFraction = focus;
+    focusFractionY = focusY > 0 ? focusY : focus;
     base = ace_base();
     if (!code_matches(ace::kViewCountRva, ace::kViewCountAnchor, sizeof(ace::kViewCountAnchor)) ||
         !code_matches(ace::kViewportRva, ace::kViewportAnchor, sizeof(ace::kViewportAnchor)) ||
@@ -881,8 +882,8 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
          layout.outer * 100, layout.focus * 100, layout.equal() ? " (equal quarters)" : "",
          cameraViews ? "are focus cameras" : "copy the eyes", eyesOnlySlotAdvance ? "eyes only" : "every view (ACE's)");
     if (cameraViews)
-        logf("views4: focus cameras cover %.0f%% of each eye's tangent extent, camera slots at 0x%llx and 0x%llx",
-             focusFraction * 100, static_cast<unsigned long long>(cameraPhantom2 + ace::kCameraSlotBase),
+        logf("views4: focus cameras cover %.0f%% x %.0f%% of each eye's tangent extent, camera slots at 0x%llx and 0x%llx",
+             focusFraction * 100, focusFractionY * 100, static_cast<unsigned long long>(cameraPhantom2 + ace::kCameraSlotBase),
              static_cast<unsigned long long>(cameraPhantom + ace::kCameraSlotBase));
     return true;
 }

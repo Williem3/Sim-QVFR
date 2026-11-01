@@ -183,6 +183,17 @@ int main() {
         const XrFovf round = tangents_fov(t);
         same &= std::fabs(round.angleLeft - asym.angleLeft) < 1e-6f && std::fabs(round.angleDown - asym.angleDown) < 1e-6f;
         expect(same, "focus_turn on tangents matches focus_turn on the FOV; tangents_fov inverts fov_tangents");
+
+        // A wide, short box (60% of the width, 20% of the height): the clamp uses each axis's own half-extent.
+        const float sym[4] = {-1, 1, 1, -1};
+        const XrQuaternionf corner = focus_turn(sym, 0.6, 0.2, 5.0, 5.0);
+        const XrVector3f c = rotate(corner, {0, 0, -1});
+        const double cx = c.x / -c.z, cy = c.y / -c.z;
+        std::printf("non-square clamp centre %.4f,%.4f (limits 0.4, 0.8)\n", cx, cy);
+        double hw, hh;
+        focus_extents(sym, 0.6, 0.2, hw, hh);
+        expect(std::fabs(cx - 0.4) < 1e-4 && std::fabs(cy - 0.8) < 1e-4 && std::fabs(hw - 0.6) < 1e-9 && std::fabs(hh - 0.2) < 1e-9,
+               "separate width and height fractions clamp and size each axis on its own");
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

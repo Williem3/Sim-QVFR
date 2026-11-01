@@ -60,9 +60,11 @@ bool explicit_copy(const json::Value& manifest, const std::wstring& manifestPath
 bool write_run_folder(const std::wstring& folder, const std::wstring& layerManifest, const std::wstring& layerLibrary,
                       const LayerPlan& plan, std::wstring& error);
 
-// The variables this launch sets (name, value).
+// The variables this launch sets (name, value). `runtimeInfo`: where the layer reports the headset's
+// recommended size and eye tracking for the launcher window (ACE_QV_RUNTIME_INFO).
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
-                                                                    const std::wstring& ini, const std::wstring& log);
+                                                                    const std::wstring& ini, const std::wstring& log,
+                                                                    const std::wstring& runtimeInfo);
 
 // A CreateProcess environment block: `current` ("NAME=value" strings) without inherited ACE_QV_*
 // variables, with `set` applied (case-insensitive names), sorted, double-NUL terminated.

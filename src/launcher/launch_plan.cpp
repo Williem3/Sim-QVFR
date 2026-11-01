@@ -174,7 +174,8 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
 }
 
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
-                                                                    const std::wstring& ini, const std::wstring& log) {
+                                                                    const std::wstring& ini, const std::wstring& log,
+                                                                    const std::wstring& runtimeInfo) {
     std::wstring enabled = widen(kLayerName);  // listed nearest the game first
     for (const MovedLayer& m : plan.below)
         enabled += L";" + widen(m.name);
@@ -184,6 +185,7 @@ std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerP
         {L"DISABLE_" + widen(kLayerName), L"1"},  // an installed copy of this layer
         {L"ACE_QV_INI", ini},
         {L"ACE_QV_LOG", log},
+        {L"ACE_QV_RUNTIME_INFO", runtimeInfo},
         {L"SteamAppId", kAceAppId},
         {L"SteamGameId", kAceAppId},
     };

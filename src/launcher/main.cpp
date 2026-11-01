@@ -3,7 +3,9 @@
 // from ace-quadview.ini next to the launcher; [launcher] holds the launcher's own:
 //   game_dir=   the folder holding AssettoCorsaEVO.exe (default: found through Steam)
 //   off_layers= comma-separated OpenXR layer names to turn off for ACE (e.g. XR_APILAYER_MBUCCHIA_toolkit)
-// Usage: ace-quadview-launcher [--dry-run]   (--dry-run writes the run folder and the plan, starts nothing)
+// Usage: ace-quadview-launcher               the settings window (window.cpp)
+//        ace-quadview-launcher --launch      launch now, report on the console it was started from
+//        ace-quadview-launcher --dry-run     write the run folder and the plan, start nothing
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -12,9 +14,11 @@
 #include <vector>
 
 #include <windows.h>
+#include <shellapi.h>
 #include <tlhelp32.h>
 
 #include "launch_plan.h"
+#include "launcher.h"
 #include "launcher_version.h"
 
 using namespace aceqv::launcher;
@@ -22,11 +26,21 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::wstring report;  // everything printed, also saved as launch.txt in the run folder
+std::wstring report;           // everything said, also saved as launch.txt in the run folder
+HANDLE cliOut = nullptr;       // command-line use: the console or pipe it was started from
 
 void say(const std::wstring& line) {
     report += line + L"\n";
-    std::wprintf(L"%ls\n", line.c_str());
+    if (!cliOut)
+        return;
+    const std::wstring text = line + L"\r\n";
+    DWORD written = 0;
+    if (GetFileType(cliOut) == FILE_TYPE_CHAR) {
+        WriteConsoleW(cliOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
+    } else {
+        const std::string utf8 = narrow(text);
+        WriteFile(cliOut, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+    }
 }
 
 std::wstring exe_folder() {
@@ -130,18 +144,8 @@ std::vector<std::wstring> variable_names(const std::vector<std::wstring>& enviro
     return names;
 }
 
-// Waits for Enter when the launcher has its own console window (double-clicked), so it can be read.
-void pause_if_own_console() {
-    DWORD processes[2];
-    if (GetConsoleProcessList(processes, 2) <= 1) {
-        std::wprintf(L"\nPress Enter to close.");
-        (void)getwchar();
-    }
-}
-
 int fail(const std::wstring& why) {
     say(L"ERROR: " + why);
-    pause_if_own_console();
     return 1;
 }
 
@@ -186,7 +190,7 @@ int run(bool dryRun) {
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy ace-quadview.ini into " + runFolder.wstring());
-    const auto variables = launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring());
+    const auto variables = launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path());
 
     say(L"ace-quadview launcher " + widen(ACE_QV_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
@@ -214,7 +218,6 @@ int run(bool dryRun) {
         if (!steamRunning)
             say(L"  (Steam is not running: a real launch would refuse)");
         write_file((runFolder / L"launch.txt").wstring(), narrow(report));
-        pause_if_own_console();
         return 0;
     }
     if (aceRunning)
@@ -238,9 +241,40 @@ int run(bool dryRun) {
 
 }  // namespace
 
-int wmain(int argc, wchar_t** argv) {
-    bool dryRun = false;
-    for (int i = 1; i < argc; ++i)
+namespace aceqv::launcher {
+
+std::wstring settings_path() { return (fs::path(exe_folder()) / L"ace-quadview.ini").wstring(); }
+
+std::wstring runtime_info_path() { return (fs::path(exe_folder()) / L"runtime.ini").wstring(); }
+
+int launch_ace(bool dryRun, std::wstring& out) {
+    report.clear();
+    const int result = run(dryRun);
+    out = report;
+    return result;
+}
+
+}  // namespace aceqv::launcher
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool dryRun = false, launchNow = false;
+    for (int i = 1; i < argc; ++i) {
         dryRun |= _wcsicmp(argv[i], L"--dry-run") == 0;
+        launchNow |= _wcsicmp(argv[i], L"--launch") == 0;
+    }
+    LocalFree(argv);
+    if (!dryRun && !launchNow)
+        return run_window(instance, show);
+    // Command line: report to the console (or pipe) the launcher was started from, if any.
+    cliOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!cliOut || cliOut == INVALID_HANDLE_VALUE) {
+        cliOut = nullptr;
+        if (AttachConsole(ATTACH_PARENT_PROCESS))
+            cliOut = CreateFileW(L"CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (cliOut == INVALID_HANDLE_VALUE)
+            cliOut = nullptr;
+    }
     return run(dryRun);
 }

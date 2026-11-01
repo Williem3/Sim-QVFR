@@ -472,6 +472,12 @@ int main() {
     D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1};
     gpu.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&gpu.rtvHeap));
 
+    // The launcher's runtime report (ACE_QV_RUNTIME_INFO), read once by the layer.
+    wchar_t tempDir[MAX_PATH];
+    GetTempPathW(MAX_PATH, tempDir);
+    const std::wstring runtimeInfo = std::wstring(tempDir) + L"aceqv-quad-flow-runtime.ini";
+    DeleteFileW(runtimeInfo.c_str());
+    SetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", runtimeInfo.c_str());
     next.EnumerateViewConfigurationViews = fakeViews;
     next.CreateSwapchain = fakeCreateSwapchain;
     next.EnumerateSwapchainImages = fakeEnumerateImages;
@@ -545,6 +551,9 @@ int main() {
         ok &= condition;
     };
     check(offeredW == kNativeW / 2 && offeredH == kNativeH / 2, "ACE is offered the eye_scale size");
+    check(GetPrivateProfileIntW(L"runtime", L"recommended_width", 0, runtimeInfo.c_str()) == kNativeW &&
+              GetPrivateProfileIntW(L"runtime", L"recommended_height", 0, runtimeInfo.c_str()) == kNativeH,
+          "the runtime's recommended size is reported for the launcher (ACE_QV_RUNTIME_INFO)");
     check(scaledAdopted && quad.outChain != XR_NULL_HANDLE && quad.appChain == aceChain,
           "output swapchain created for ACE's chain, scaled by ACE's own resolution setting");
     check(input.suggestedBindings == 2, "gaze binding added to ACE's eye gaze suggestion");

@@ -1,0 +1,14 @@
+<!-- @dsCard group="Inputs" height=80 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>PopUpButton preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment,null,h(Q.PopUpButton,{'aria-label':'Rendering method',defaultValue:'qvfr',options:[{value:'qvfr',label:'Quad View Foveated Rendering'},{value:'tfi',label:'Two-loop Foveated Interlaced'}]}),h(Q.PopUpButton,{'aria-label':'Foveated mode',defaultValue:'eye',width:140,options:[{value:'eye',label:'Eye tracked'},{value:'fixed',label:'Fixed'}]}),h(Q.PopUpButton,{'aria-label':'Foveated mode',defaultValue:'fixed',width:140,disabled:true,options:[{value:'eye',label:'Eye tracked'},{value:'fixed',label:'Fixed'}]})));
+</script>
+</body>
+</html>

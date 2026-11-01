@@ -112,14 +112,16 @@ target_link_libraries(gpu_frame_timer_test PRIVATE d3d12 dxgi)
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
 set(ACE_QV_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
-add_executable(ace_launcher src/launcher/main.cpp src/launcher/launch_plan.cpp)
+add_executable(ace_launcher WIN32 src/launcher/main.cpp src/launcher/settings.cpp src/launcher/launch_plan.cpp
+  src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp)
 target_include_directories(ace_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(ace_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ace_launcher PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(ace_launcher PRIVATE shell32 d2d1 dwrite dwmapi)
 set_target_properties(ace_launcher PROPERTIES OUTPUT_NAME ace-quadview-launcher)
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
-add_executable(launcher_test tests/launcher_test.cpp src/launcher/launch_plan.cpp)
+add_executable(launcher_test tests/launcher_test.cpp src/launcher/launch_plan.cpp src/launcher/settings.cpp)
 target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(launcher_test PRIVATE /W4 /permissive- /utf-8)

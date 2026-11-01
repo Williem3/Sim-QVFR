@@ -1,0 +1,14 @@
+<!-- @dsCard group="Visualization" height=300 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>FoveationPreview preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;align-items:flex-start;gap:24px}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment,null,h('div',{style:{width:'300px'}},h(Q.FoveationPreview,{method:'qvfr',mode:'eye',showOutline:true,outlineColor:'teal',edgeBlend:true})),h('div',{style:{width:'300px'}},h(Q.FoveationPreview,{method:'tfi',mode:'fixed',showOutline:true,outlineColor:'magenta',feather:true}))));
+</script>
+</body>
+</html>

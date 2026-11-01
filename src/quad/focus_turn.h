@@ -28,17 +28,21 @@ inline void to_matrix(const XrQuaternionf& q, float (&m)[9]) {
 }
 
 // The turn (in the eye's own frame) that points the focus camera at tangent (tanX, tanY) of an eye
-// view with field of view `fov`, the centre clamped so the focus box (`fraction` of the eye's tangent
-// extent) stays inside the eye's view.
-// Same, for a view given by its tangents (left, right, up, down).
-inline XrQuaternionf focus_turn(const float (&tan)[4], double fraction, double tanX, double tanY) {
+// view given by its tangents (left, right, up, down), the centre clamped so the focus box
+// (`fractionX` of the view's tangent width, `fractionY` of its height) stays inside the view.
+inline XrQuaternionf focus_turn(const float (&tan)[4], double fractionX, double fractionY, double tanX, double tanY) {
     const double l = tan[0], r = tan[1], u = tan[2], d = tan[3];
-    const double hw = (r - l) * fraction / 2, hh = (u - d) * fraction / 2;
+    const double hw = (r - l) * fractionX / 2, hh = (u - d) * fractionY / 2;
     const double cx = std::clamp(tanX, l + hw, r - hw), cy = std::clamp(tanY, d + hh, u - hh);
     const double yaw = -std::atan(cx), pitch = std::atan(cy / std::sqrt(1 + cx * cx));
     const XrQuaternionf qYaw{0, static_cast<float>(std::sin(yaw / 2)), 0, static_cast<float>(std::cos(yaw / 2))};
     const XrQuaternionf qPitch{static_cast<float>(std::sin(pitch / 2)), 0, 0, static_cast<float>(std::cos(pitch / 2))};
     return qmul(qYaw, qPitch);
+}
+
+// A square-fraction box (the same fraction on both axes).
+inline XrQuaternionf focus_turn(const float (&tan)[4], double fraction, double tanX, double tanY) {
+    return focus_turn(tan, fraction, fraction, tanX, tanY);
 }
 
 inline void fov_tangents(const XrFovf& fov, float (&tan)[4]) {
@@ -52,10 +56,14 @@ inline XrFovf tangents_fov(const float (&tan)[4]) {
     return {std::atan(tan[0]), std::atan(tan[1]), std::atan(tan[2]), std::atan(tan[3])};
 }
 
-inline XrQuaternionf focus_turn(const XrFovf& fov, double fraction, double tanX, double tanY) {
+inline XrQuaternionf focus_turn(const XrFovf& fov, double fractionX, double fractionY, double tanX, double tanY) {
     float tan[4];
     fov_tangents(fov, tan);
-    return focus_turn(tan, fraction, tanX, tanY);
+    return focus_turn(tan, fractionX, fractionY, tanX, tanY);
+}
+
+inline XrQuaternionf focus_turn(const XrFovf& fov, double fraction, double tanX, double tanY) {
+    return focus_turn(fov, fraction, fraction, tanX, tanY);
 }
 
 // The view tangents (left, right, up, down) a projection renders, from ACE's row-major projection
@@ -72,10 +80,15 @@ inline bool projection_tangents(const float (&p)[16], float (&tan)[4]) {
     return true;
 }
 
-// The focus box: `fraction` of a view's tangent extent, as half-extents (hw, hh) around its axis.
+// The focus box: `fractionX` of a view's tangent width and `fractionY` of its height, as
+// half-extents (hw, hh) around its axis.
+inline void focus_extents(const float (&tan)[4], double fractionX, double fractionY, double& hw, double& hh) {
+    hw = (tan[1] - tan[0]) * fractionX / 2;
+    hh = (tan[2] - tan[3]) * fractionY / 2;
+}
+
 inline void focus_extents(const float (&tan)[4], double fraction, double& hw, double& hh) {
-    hw = (tan[1] - tan[0]) * fraction / 2;
-    hh = (tan[2] - tan[3]) * fraction / 2;
+    focus_extents(tan, fraction, fraction, hw, hh);
 }
 
 // A camera turned by `turn` in its own frame sees p * V * R (R = to_matrix(turn)): V <- V * R.

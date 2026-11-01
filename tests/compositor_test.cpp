@@ -257,6 +257,14 @@ int main() {
                   r3.left == r2.left + r2.width && r3.left + r3.width <= 5731,
               "unequal layout: 1614x1350 outer, 1251x1046 focus views, abutting");
         check(std::abs(l.eye_width() - 0.71) < 1e-9 && l.eye_height() == 0.4, "offered eye is 0.71 x 0.40 native");
+        // A wide, short focus box: 100% density x 39% width x 25% height, periphery 50%.
+        const Views4Layout box = views4_layout(0.5, 0.39, 0.25);
+        const ViewRect b0 = views4_rect(box, 0, 3560, 1000), b2 = views4_rect(box, 2, 3560, 1000);
+        std::printf("     focus box 39%% x 25%% in 3560x1000: outer %dx%d, focus at x=%d %dx%d\n", b0.width, b0.height,
+                    b2.left, b2.width, b2.height);
+        check(b0.width == 1000 && b0.height == 1000 && b2.left == 2000 && b2.width == 780 && b2.height == 500 &&
+                  std::abs(box.eye_width() - 0.89) < 1e-9 && box.eye_height() == 0.5 && !box.equal(),
+              "focus width and height are independent: 780x500 focus views beside 1000x1000 outer views");
     }
 
     // Unequal sources: outer views 64x64 and focus views 32x32 in a 192x64 image, the rows below the
@@ -307,6 +315,22 @@ int main() {
         expect(q, 1, 0.50f, 0.50f, "focus", 255, 255, 0);
         expect(q, 1, 0.26f, 0.50f, "focus", 255, 255, 0);  // box left edge, next to view 2
         expect(q, 1, 0.74f, 0.74f, "focus", 255, 255, 0);  // bottom right corner of the box
+
+        // Debug outline in a chosen colour: teal (#00A0A0, linear 0.352) on eye 0's box edge.
+        v4[0].border = 0.05f;
+        const float teal[4] = {0, 0.352f, 0.352f, 1};
+        std::memcpy(v4[0].borderColor, teal, sizeof(teal));
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with outline\n");
+            return 1;
+        }
+        const Pixels o = read_back(gpu, output.Get());
+        const uint8_t* edge = o.at(static_cast<UINT>(0.26f * (kOutW / 2)), kOutH / 2);
+        const bool tealEdge = edge[0] == 0 && std::abs(edge[1] - 160) <= 2 && std::abs(edge[2] - 160) <= 2;
+        std::printf("%s eye 0 outline at the box edge got %3u,%3u,%3u (teal)\n", tealEdge ? "ok  " : "FAIL", edge[0],
+                    edge[1], edge[2]);
+        failures += tealEdge ? 0 : 1;
+        expect(o, 0, 0.50f, 0.50f, "focus", 0, 255, 0);  // inside the outline: still the focus view
         c4.shutdown();
     }
 

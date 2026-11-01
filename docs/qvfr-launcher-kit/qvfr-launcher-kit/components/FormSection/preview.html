@@ -1,0 +1,14 @@
+<!-- @dsCard group="Layout" height=230 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>FormSection preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{width:'560px'}},h(Q.FormSection,{title:'Rendering',footer:'Quad View Foveated Rendering draws a sharp focus view inside a lower-resolution outer view for each eye.'},h(Q.FormRow,{label:'Rendering method'},h(Q.PopUpButton,{'aria-label':'Rendering method',defaultValue:'qvfr',options:[{value:'qvfr',label:'Quad View Foveated Rendering'},{value:'tfi',label:'Two-loop Foveated Interlaced'}]})),h(Q.FormRow,{label:'Foveated mode',description:'The focus region follows your gaze.'},h(Q.PopUpButton,{'aria-label':'Foveated mode',defaultValue:'eye',width:140,options:[{value:'eye',label:'Eye tracked'},{value:'fixed',label:'Fixed'}]})),h(Q.FormRow,null,h(Q.Checkbox,{label:'Show focus outline',description:'Draws a colored border around the focus region.'})))));
+</script>
+</body>
+</html>

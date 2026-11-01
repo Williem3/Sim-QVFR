@@ -1,0 +1,14 @@
+<!-- @dsCard group="Inputs" height=72 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>SegmentedControl preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h(React.Fragment,null,h(Q.SegmentedControl,{'aria-label':'Outline color',defaultValue:'teal',options:[{value:'teal',label:'Teal',swatch:'var(--overlay-teal)'},{value:'magenta',label:'Magenta',swatch:'var(--overlay-magenta)'},{value:'green',label:'Green',swatch:'var(--overlay-green)'}]}),h(Q.SegmentedControl,{'aria-label':'Outline color',disabled:true,defaultValue:'magenta',options:[{value:'teal',label:'Teal',swatch:'var(--overlay-teal)'},{value:'magenta',label:'Magenta',swatch:'var(--overlay-magenta)'},{value:'green',label:'Green',swatch:'var(--overlay-green)'}]})));
+</script>
+</body>
+</html>

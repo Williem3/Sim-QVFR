@@ -4,8 +4,9 @@
 // as the taller of the two, so rows below the shorter pair are unused.
 //
 // Sizes are linear scales of the runtime's native eye size: the outer views render at `outer` of
-// native, the focus views at `focus` (their density times the focus box fraction, since a focus view
-// covers focus_percent of the eye's tangent extent). outer == focus gives the old equal quarters.
+// native on both axes, the focus views at `focus` of the native width and `focusHeight` of the native
+// height (their density times the focus box's share of the eye's tangent width and height). All
+// three equal gives the old equal quarters.
 // Everything is kept as fractions of the target, so it holds for any target ACE derives from the
 // offered size (its own resolution setting, half-resolution passes).
 #pragma once
@@ -16,24 +17,27 @@
 namespace aceqv {
 
 struct Views4Layout {
-    double outer = 1.0, focus = 1.0;  // linear scale of the native eye, per pair
+    double outer = 1.0, focus = 1.0, focusHeight = 1.0;  // linear scale of the native eye width / height
     double width[4] = {0.25, 0.25, 0.25, 0.25};  // fraction of the target width
     double height[4] = {1, 1, 1, 1};             // fraction of the target height
     // The eye size ACE is offered, in native eye widths and heights (its double-wide target is two of these).
     double eye_width() const { return outer + focus; }
-    double eye_height() const { return std::max(outer, focus); }
-    bool equal() const { return outer == focus; }
+    double eye_height() const { return std::max(outer, focusHeight); }
+    bool equal() const { return outer == focus && outer == focusHeight; }
 };
 
-inline Views4Layout views4_layout(double outer, double focus) {
+// `focusHeight` < 0: the same as `focus` (a focus box with the same share on both axes).
+inline Views4Layout views4_layout(double outer, double focus, double focusHeight = -1) {
+    if (focusHeight < 0)
+        focusHeight = focus;
     Views4Layout l;
     l.outer = outer;
     l.focus = focus;
-    const double total = 2 * (outer + focus), tall = std::max(outer, focus);
+    l.focusHeight = focusHeight;
+    const double total = 2 * (outer + focus), tall = std::max(outer, focusHeight);
     for (int v = 0; v < 4; ++v) {
-        const double s = v < 2 ? outer : focus;
-        l.width[v] = s / total;
-        l.height[v] = s / tall;
+        l.width[v] = (v < 2 ? outer : focus) / total;
+        l.height[v] = (v < 2 ? outer : focusHeight) / tall;
     }
     return l;
 }

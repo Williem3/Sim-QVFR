@@ -18,6 +18,7 @@ cbuffer Eye : register(b0) {
     float4 rot0, rot1, rot2;  // rows, A eye frame -> B eye frame
     float4 outerSrc, focusSrc;
     float4 params;  // feather, border
+    float4 borderColor;
 };
 Texture2D outerTex : register(t0);
 Texture2D focusTex : register(t1);
@@ -65,7 +66,7 @@ float4 PS(V v) : SV_Target {
         }
         color = lerp(color, focus, w);
         if (min(edge.x, edge.y) < params.y)
-            color = float4(0, 1, 0, 1);  // green, like the LMU layer's focus outline
+            color = borderColor;
     }
     return color;
 }
@@ -110,7 +111,7 @@ bool QuadCompositor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     D3D12_DESCRIPTOR_RANGE srvRange{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0};
     D3D12_ROOT_PARAMETER params[2] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[0].Constants = {0, 0, 32};
+    params[0].Constants = {0, 0, 36};
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[1].DescriptorTable = {1, &srvRange};
@@ -286,7 +287,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
         list->RSSetViewports(1, &vp);
         list->RSSetScissorRects(1, &scissor);
         const EyeComposition& c = eyes[eye];
-        float constants[32] = {};
+        float constants[36] = {};
         for (int i = 0; i < 4; ++i) {
             constants[i] = c.outerTan[i];
             constants[4 + i] = c.focusTan[i];
@@ -298,7 +299,9 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
                 constants[8 + row * 4 + col] = c.rotation[row * 3 + col];
         constants[28] = c.feather;
         constants[29] = c.border;
-        list->SetGraphicsRoot32BitConstants(0, 32, constants, 0);
+        for (int i = 0; i < 4; ++i)
+            constants[32 + i] = c.borderColor[i];
+        list->SetGraphicsRoot32BitConstants(0, 36, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
     }
     D3D12_RESOURCE_BARRIER back =

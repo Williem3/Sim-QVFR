@@ -1,0 +1,14 @@
+<!-- @dsCard group="Layout" height=230 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Sidebar preview</title>
+<style>body{margin:0;background:var(--window-bg);} #root{padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:16px}</style>
+</head>
+<body>
+<div id="root" class="qv-root"></div>
+<script>
+  var Q = window.QVFR, h = React.createElement;
+  ReactDOM.createRoot(document.getElementById('root')).render(h('div',{style:{height:'200px',borderRadius:'10px',overflow:'hidden'}},h(Q.Sidebar,{selected:'resolution',items:[{id:'rendering',label:'Rendering',icon:'layers'},{id:'resolution',label:'Resolution',icon:'display'},{id:'foveation',label:'Foveation',icon:'eye',attention:'Eye tracker not detected'},{id:'overlay',label:'Focus overlay',icon:'target'},{id:'about',label:'About',icon:'info'}]})));
+</script>
+</body>
+</html>
