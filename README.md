@@ -3,6 +3,12 @@
 Goal: an `lmu_quadview`-style OpenXR layer for **Assetto Corsa EVO** that makes the game render
 a wide low-resolution outer view and a sharp focus view per eye, to cut GPU and VRAM use.
 
+> **Experimental and unofficial. Use at your own risk.** ace-quadview is not made, approved or
+> sanctioned by Kunos Simulazioni or the Assetto Corsa EVO developers. It hooks the game's code and
+> changes how it renders, so a game update can break it, and it can crash the game. Use it in
+> offline sessions only: Kunos validates content online. Please don't report problems you see
+> while using it to the ACE developers.
+
 ## Status: probe build (log only)
 
 The current DLL **does not change rendering**. It is an OpenXR layer that forwards every call
