@@ -556,6 +556,20 @@ float pane_content(float x, float y, float w, bool draw) {
                             col(app.c->label_secondary));
         }
         h += 26 + 8 + 16 + 8 + 16;
+        // The same notice as the README's: unofficial, at the user's own risk.
+        const std::wstring notice =
+            L"ace-quadview is not made, approved or sanctioned by Kunos Simulazioni or the Assetto Corsa EVO "
+            L"developers. It hooks the game's code and changes how it renders, so a game update can break it, and "
+            L"it can crash the game. Use it in offline sessions only, and please don't report problems you see "
+            L"while using it to the ACE developers.";
+        const float nh = app.canvas.measure_height(notice, t::kCallout, w);
+        if (draw) {
+            app.canvas.text(L"Experimental and unofficial. Use at your own risk.", t::kHeadline,
+                            {x, y + h + t::kSpace6, w, 16}, col(app.c->label));
+            app.canvas.text(notice, t::kCallout, {x, y + h + t::kSpace6 + 16 + t::kSpace2, w, nh + 2},
+                            col(app.c->label_secondary), Align::Leading, false, true);
+        }
+        h += t::kSpace6 + 16 + t::kSpace2 + nh;
         // Support: a line and a button that opens the Ko-fi page in the browser.
         const std::wstring support = L"If ace-quadview improves your races, you can support its development on Ko-fi.";
         const float sh = app.canvas.measure_height(support, t::kCallout, w);
