@@ -32,6 +32,28 @@ cmake --build build --config Release
 
 `build/Release/stub_test.exe` checks the hand-assembled hook stub (arguments, results, stack walk).
 
+## Launch (ace-quadview-launcher)
+
+`build/Release/ace-quadview-launcher.exe` starts Assetto Corsa EVO in VR with the layer for that
+launch only; nothing is installed or registered. It reads `ace-quadview.ini` next to it (the
+layer's settings, plus a `[launcher]` section), finds the game through Steam, and writes a run
+folder under `logs/` with the layer's manifest, a snapshot of the ini and `launch.txt` (what it
+did). The layer's log for that launch is `logs/ace-<time>.log`.
+
+OpenXR layer order: the layer is loaded nearest the game. Every enabled implicit layer that can be
+switched off per launch (OpenXR Toolkit, VectorXR, ...) is loaded below it instead, in registry
+order, so nothing can change what ACE renders behind the layer's back. VectorXR is turned off in
+`mode=quad`. Layers that cannot be moved are listed as staying above.
+
+```ini
+[launcher]
+; game_dir=K:\SteamLibrary\steamapps\common\Assetto Corsa EVO   (default: found through Steam)
+; off_layers=XR_APILAYER_MBUCCHIA_toolkit                         (turned off for ACE)
+```
+
+`ace-quadview-launcher.exe --dry-run` writes the run folder and prints the plan without starting
+the game. Steam must be running and ACE closed.
+
 ## Run one probe session
 
 1. Register the layer for your user (HKCU, removable):

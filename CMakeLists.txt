@@ -107,3 +107,17 @@ add_executable(gpu_frame_timer_test tests/gpu_frame_timer_test.cpp src/probe/gpu
 target_include_directories(gpu_frame_timer_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(gpu_frame_timer_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(gpu_frame_timer_test PRIVATE d3d12 dxgi)
+
+# Launcher: starts ACE in VR with this layer for one launch, above every implicit layer it can move
+# (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
+add_executable(ace_launcher src/launcher/main.cpp src/launcher/launch_plan.cpp)
+target_include_directories(ace_launcher PRIVATE src)
+target_compile_definitions(ace_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(ace_launcher PRIVATE /W4 /permissive- /utf-8)
+set_target_properties(ace_launcher PROPERTIES OUTPUT_NAME ace-quadview-launcher)
+
+# Offline check of the launcher's launch plan (tests/launcher_test.cpp).
+add_executable(launcher_test tests/launcher_test.cpp src/launcher/launch_plan.cpp)
+target_include_directories(launcher_test PRIVATE src)
+target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_test PRIVATE /W4 /permissive- /utf-8)
