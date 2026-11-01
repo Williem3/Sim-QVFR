@@ -76,4 +76,7 @@ ace-quadview-launcher.exe --dry-run shows what a launch would do without startin
 
 Removing it: delete the folder. Nothing else was changed on your PC.
 
-Licence: PolyForm Noncommercial 1.0.0 (LICENSE.md). Third-party notices: THIRD_PARTY_NOTICES.md.
+Licence: PolyForm Noncommercial 1.0.0 (LICENSE.md): free for noncommercial use; commercial use needs
+the author's permission. If you share any part of it, changed or not, pass on LICENSE.md with its
+line "Required Notice: Copyright (c) 2026 Williem3 (https://github.com/Williem3/Sim-QVFR)".
+Third-party notices: THIRD_PARTY_NOTICES.md.

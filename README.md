@@ -29,6 +29,7 @@ In any other OpenXR app the DLL does nothing.
 
 MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).
 Licence: PolyForm Noncommercial 1.0.0 (`LICENSE.md`); third-party notices in `THIRD_PARTY_NOTICES.md`.
+See [Licence](#licence) below.
 
 ```bash
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64
@@ -84,6 +85,21 @@ The probe hooks game code, and Kunos validates content online.
 `tools/` holds Python helpers for the 101 MB exe: string cross-references (`xrefs.py`), function
 disassembly with string notes (`disfunc.py`), chunk-to-entry resolution through chained unwind
 info and incremental-link thunks (`func_entry.py`), and RTTI vtable owners (`vtable_owner.py`).
+
+## Licence
+
+ace-quadview is free to use, change and share for any **noncommercial** purpose under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). It is source-available, not open source:
+commercial use needs the author's permission.
+
+**Credit is required.** Anyone who shares any part of ace-quadview, changed or not, must pass on
+`LICENSE.md` (or its URL) together with its `Required Notice:` line:
+
+```
+Required Notice: Copyright (c) 2026 Williem3 (https://github.com/Williem3/Sim-QVFR)
+```
+
+MinHook and the OpenXR headers keep their own licences (`THIRD_PARTY_NOTICES.md`).
 
 ## Acknowledgements
 
