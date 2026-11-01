@@ -50,7 +50,8 @@ bool cameraViews = false;  // "cameras": views 2-3 are focus cameras with their 
 Views4Layout layout;       // where the four views sit in the target (views4_set_layout; equal quarters by default)
 bool volumetricViews = false;  // "fog": the volumetrics/atmosphere system has resources for 4 views
 bool foldVolumetrics = false;  // "fogfold": views 2-3 still read the eyes' volumetric resources (diagnostic)
-double focusFraction = 0.35, focusFractionY = 0.35;  // the focus box's share of the eye's tangent width / height
+// The focus box's share of the eye's tangent width / height; changed live under turnLock (views4_set_live).
+double focusFraction = 0.35, focusFractionY = 0.35;
 uint64_t cameraPhantom2 = 0;  // C2: C2 + kCameraSlotBase is view 2's camera slot
 uint64_t cameraPhantom = 0;   // C3: the same for view 3
 float lastFocusProjection[2][16];
@@ -230,6 +231,8 @@ void fill_focus_cameras(uint8_t* renderer) {
     std::memcpy(gaze, gazeTan, sizeof(gaze));
     std::memcpy(gazing, gazeValid, sizeof(gazing));
     std::memcpy(previousTurns, lastTurn, sizeof(previousTurns));
+    // One focus box for the whole frame, whatever views4_set_live does meanwhile.
+    const double boxX = focusFraction, boxY = focusFractionY, cull = cullScale;
     ReleaseSRWLockShared(&turnLock);
     Views4Frame frame{};
     XrQuaternionf turns[2] = {kNoTurn, kNoTurn};
@@ -245,7 +248,7 @@ void fill_focus_cameras(uint8_t* renderer) {
         if (!(outer[1] - outer[0] > 0.02f && outer[2] - outer[3] > 0.02f))
             return;  // no located views yet
         check_rendered_fov(eye, frame.outerTan[eye], views[eye].fov);
-        if (focusFraction <= 0) {
+        if (boxX <= 0) {
             // Diagnostic (views4_focus_eye_camera): the focus views are exact copies of the eyes,
             // so any difference between quarters e and e + 2 comes from the view index.
             std::memcpy(reinterpret_cast<uint8_t*>((eye == 0 ? cameraPhantom2 : cameraPhantom) + ace::kCameraSlotBase),
@@ -256,9 +259,9 @@ void fill_focus_cameras(uint8_t* renderer) {
             continue;
         }
         double hw, hh;
-        focus_extents(frame.outerTan[eye], focusFraction, focusFractionY, hw, hh);
+        focus_extents(frame.outerTan[eye], boxX, boxY, hw, hh);
         if (gazing[eye])
-            turns[eye] = focus_turn(frame.outerTan[eye], focusFraction, focusFractionY, gaze[eye][0], gaze[eye][1]);
+            turns[eye] = focus_turn(frame.outerTan[eye], boxX, boxY, gaze[eye][0], gaze[eye][1]);
         const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
                                    static_cast<float>(-hh)};
         std::memcpy(frame.focusTan[eye], focusTan, sizeof(focusTan));
@@ -284,7 +287,7 @@ void fill_focus_cameras(uint8_t* renderer) {
         if (focusCull) {
             float worldView[16];
             std::memcpy(worldView, dst + ace::kCameraWorldView, sizeof(worldView));
-            frusta[eye] = focus_frustum(worldView, hw * cullScale, hh * cullScale);
+            frusta[eye] = focus_frustum(worldView, hw * cull, hh * cull);
         }
         // Per-view vectors (sized for 4 at init): the eye's inverse view, turned; the focus tangent extents.
         const auto entries = [&](std::ptrdiff_t offset, size_t size) -> uint8_t* {
@@ -303,7 +306,7 @@ void fill_focus_cameras(uint8_t* renderer) {
     views4_push_frame(frame);
     AcquireSRWLockExclusive(&turnLock);
     std::memcpy(lastTurn, turns, sizeof(turns));
-    if (focusCull && focusFraction > 0 && (gazeSampled || !gazeExpected)) {
+    if (focusCull && boxX > 0 && (gazeSampled || !gazeExpected)) {
         CullFrusta& c = cullFrusta[(turnsPushed - 1) % 2];
         std::memcpy(c.view, frusta, sizeof(frusta));
         c.fill = turnsPushed;
@@ -1088,6 +1091,15 @@ void views4_set_focus_cull(bool on, double scale, bool gaze) {
     focusCull = on;
     cullScale = scale;
     gazeExpected = gaze;
+}
+
+void views4_set_live(double focus, double focusY, double scale, bool gaze) {
+    AcquireSRWLockExclusive(&turnLock);
+    focusFraction = focus;
+    focusFractionY = focusY > 0 ? focusY : focus;
+    cullScale = scale;
+    gazeExpected = gaze;
+    ReleaseSRWLockExclusive(&turnLock);
 }
 
 bool views4_focus_frustum(int view, FocusFrustum& out) {

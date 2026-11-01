@@ -47,6 +47,10 @@ void views4_push_frame(const Views4Frame& frame);
 // world-space frusta (focus_cull.h), their extents widened by `scale`. With `gaze` on, none are
 // built before the first gaze sample. Call before views4_start.
 void views4_set_focus_cull(bool on, double scale, bool gaze);
+// Live settings (between frames, any time after views4_start): the focus box (as views4_start) and
+// the focus cull's scale and gaze. The focus views keep their pixel size, so the box's density
+// changes with it. The next focus cameras filled use them.
+void views4_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze);
 // The latest focus frustum of view 2 or 3; false when focus cull is off or none is built yet.
 bool views4_focus_frustum(int view, FocusFrustum& out);
 // The record of the next frame to be composed, in rendering order. False until the first focus

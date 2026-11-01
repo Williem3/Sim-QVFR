@@ -47,6 +47,9 @@ struct Hit {
 };
 
 enum class Status { Idle, Starting, Error };
+// After a change while ACE runs: its live keys went to the running game (Applied), and resolution
+// or method differ from what it runs with (NextLaunch).
+enum class Live { Off, Applied, NextLaunch };
 
 struct Popup {
     bool open = false;
@@ -79,6 +82,7 @@ struct App {
     Range dragRange{0, 100};
     Popup popup;
     Status status = Status::Idle;
+    Live live = Live::Off;
     std::wstring error;
     float scroll = 0, scrollMax = 0;
     Rect scrollArea;
@@ -114,10 +118,24 @@ void apply_theme() {
 
 bool eye_warning() { return app.s.eyeTracking && app.runtime.eyeTracker == EyeTracker::Missing; }
 
+// A running ACE reloads the live keys from its own ini (the run folder's copy) between frames.
+void push_live() {
+    app.live = Live::Off;
+    const std::wstring running = running_live_ini(runtime_info_path());
+    if (running.empty() || !save_live_settings(running, app.s))
+        return;
+    const Settings now = load_settings(running);
+    const bool resolution = now.mode != app.s.mode || now.outer != app.s.outer ||
+                            (app.s.mode == RenderMode::Qvfr && now.inner != app.s.inner);
+    app.live = resolution ? Live::NextLaunch : Live::Applied;
+}
+
 void changed(bool save = true) {
     app.status = Status::Idle;
-    if (save && app.iniFound)
+    if (save && app.iniFound) {
         save_settings(app.ini, app.s);
+        push_live();
+    }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -772,6 +790,10 @@ void paint() {
         badge(t::kSpace5, by, 1, L"Eye tracker not detected", badgeMax);
     else if (app.runtime.known() && ro.overRuntimeLimit)
         badge(t::kSpace5, by, 1, L"Larger than the runtime’s maximum image size", badgeMax);
+    else if (app.live == Live::NextLaunch)
+        badge(t::kSpace5, by, 1, L"Foveation applied live · resolution and method at the next launch", badgeMax);
+    else if (app.live == Live::Applied)
+        badge(t::kSpace5, by, 0, L"Applied to the running game", badgeMax);
     else
         badge(t::kSpace5, by, 0, L"Ready", badgeMax);
     button(kRestore, restoreR, L"Restore Defaults", false);
@@ -813,8 +835,11 @@ void set_slider_from_x(float x) {
         return;
     const float travel = app.dragTrack.w - 18;
     const float f = std::clamp((x - app.dragTrack.x - 9) / travel, 0.0f, 1.0f);
+    const int before = *v;
     *v = app.dragRange.min + static_cast<int>(std::lround(f * (app.dragRange.max - app.dragRange.min)));
     changed(false);
+    if (*v != before && app.iniFound)
+        push_live();  // the running game follows the knob; the settings save once it is let go
 }
 
 void open_popup(Ctl owner) {

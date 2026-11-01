@@ -71,6 +71,41 @@ int main() {
     std::printf("frame generator above: active=%d broken=%d (expected 0 and 1)\n", aceqv::loops.active ? 1 : 0,
                 aceqv::loops.broken ? 1 : 0);
     ok &= !aceqv::loops.active && aceqv::loops.broken;
+
+    // Live settings: an edited ini applies at the next xrEndFrame, but never between frames A and B.
+    {
+        using namespace aceqv;
+        wchar_t temp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"ace-quadview-live-test.ini";
+        WritePrivateProfileStringW(L"experiment", L"focus_percent", L"35", ini.c_str());
+        live = Live{};
+        live.ini = ini;  // as load_experiment leaves it: written time read at launch
+        WIN32_FILE_ATTRIBUTE_DATA attributes{};
+        GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes);
+        live.written = attributes.ftLastWriteTime;
+        experiment.focusFraction = 0.35;
+        experiment.feather = 0.10;
+        Sleep(20);
+        WritePrivateProfileStringW(L"experiment", L"focus_percent", L"50", ini.c_str());
+        WritePrivateProfileStringW(L"quad", L"feather_percent", L"25", ini.c_str());
+        loops.active = true;
+        loops.pairedEnds = 1;  // A ended, B pending
+        live_reload();
+        const bool heldForB = experiment.focusFraction == 0.35;
+        loops.pairedEnds = 2;
+        live_reload();
+        const bool applied = experiment.focusFraction == 0.5 && experiment.feather == 0.25;
+        experiment.focusFraction = 0.35;
+        live_reload();  // unchanged file within kLiveCheckMs: nothing re-read
+        const bool quiet = experiment.focusFraction == 0.35;
+        loops.active = false;
+        live = Live{};
+        DeleteFileW(ini.c_str());
+        std::printf("live reload: held between A and B=%d, applied after B=%d, no re-read=%d\n", heldForB ? 1 : 0,
+                    applied ? 1 : 0, quiet ? 1 : 0);
+        ok &= heldForB && applied && quiet;
+    }
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;
 }

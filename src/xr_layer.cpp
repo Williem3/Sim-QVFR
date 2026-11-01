@@ -95,20 +95,74 @@ struct Experiment {
     bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
     Views4Layout views4Layout;    // views4: outer views at periphery_scale, focus views at focus_density x focus_percent
-    double focusFraction = 0.35;  // of the view's tangent-space width (focus_percent)
-    double focusFractionY = 0;    // of its height (focus_height_percent); 0 = the same as the width
-    double focus_y() const { return focusFractionY > 0 ? focusFractionY : focusFraction; }
+    // Atomic: live settings (live_reload), changed between frames while other threads read them.
+    std::atomic<double> focusFraction = 0.35;  // of the view's tangent-space width (focus_percent)
+    std::atomic<double> focusFractionY = 0;    // of its height (focus_height_percent); 0 = the same as the width
+    double focus_y() const {
+        const double y = focusFractionY;
+        return y > 0 ? y : focusFraction.load();
+    }
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
-    double feather = 0.10;        // quad: blend band, as a fraction of the focus box
-    double cornerRadius = 0;      // rounded focus box: radius as a share of half its shorter side (0 = square)
-    bool border = false;          // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
-    float borderColor[4] = {0, 1, 0, 1};  // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
-    bool gaze = true;             // quad: the focus box follows XR_EXT_eye_gaze_interaction
+    std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
+    std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
+    std::atomic<bool> border = false;      // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
+    bool borderAtLaunch = false;           // views4 without composition tracks the outline's chains only if on at launch
+    float borderColor[4] = {0, 1, 0, 1};   // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
+    std::atomic<bool> gaze = true;         // quad: the focus box follows XR_EXT_eye_gaze_interaction
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
 };
 Experiment experiment;
 bool focusLogged = false;
+
+// The settings a running game takes from its ini without a restart (live_reload): the focus box,
+// its blend and outline, and gaze. Resolution is fixed at launch: ACE sizes its render target once,
+// from the eye size offered at session start, so the focus views keep their pixels and a live box
+// size changes their density.
+struct LiveSettings {
+    double focusFraction = 0.35, focusFractionY = 0, feather = 0.10, cornerRadius = 0;
+    bool border = false, gaze = true;
+    float borderColor[4] = {0, 1, 0, 1};
+};
+
+LiveSettings read_live(const wchar_t* ini) {
+    LiveSettings l;
+    l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
+    const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
+    l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
+    l.feather = std::clamp(GetPrivateProfileIntW(L"quad", L"feather_percent", 10, ini), 0u, 50u) / 100.0;
+    l.cornerRadius = std::clamp(GetPrivateProfileIntW(L"quad", L"corner_radius_percent", 0, ini), 0u, 100u) / 100.0;
+    l.border = GetPrivateProfileIntW(L"quad", L"debug_border", 0, ini) != 0;
+    wchar_t borderColor[16] = {};
+    GetPrivateProfileStringW(L"quad", L"debug_border_color", L"green", borderColor, 16, ini);
+    // Linear values; teal is #00A0A0 in sRGB.
+    const float magentaColor[4] = {1, 0, 1, 1}, tealColor[4] = {0, 0.352f, 0.352f, 1};
+    if (_wcsicmp(borderColor, L"magenta") == 0)
+        std::memcpy(l.borderColor, magentaColor, sizeof(magentaColor));
+    else if (_wcsicmp(borderColor, L"teal") == 0)
+        std::memcpy(l.borderColor, tealColor, sizeof(tealColor));
+    l.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini) != 0;
+    return l;
+}
+
+// The keys that apply only at the next launch, as one string (live_reload says when they change).
+std::wstring restart_keys(const wchar_t* ini) {
+    std::wstring out;
+    for (const wchar_t* key : {L"mode", L"eye_scale", L"periphery_scale", L"focus_density"}) {
+        wchar_t value[64] = {};
+        GetPrivateProfileStringW(L"experiment", key, L"", value, 64, ini);
+        out += std::wstring(key) + L"=" + value + L" ";
+    }
+    return out;
+}
+
+struct Live {
+    std::wstring ini;          // the ini load_experiment read
+    std::wstring restartKeys;  // restart_keys when last read
+    FILETIME written{};        // the ini's last write time when last read
+    int64_t nextCheck = 0;     // QPC
+};
+Live live;
 
 void load_experiment() {
     HMODULE self = nullptr;
@@ -163,25 +217,21 @@ void load_experiment() {
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
     experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
-    const UINT percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini.c_str());
-    experiment.focusFraction = std::clamp(percent, 10u, 100u) / 100.0;
-    const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini.c_str());
-    experiment.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
-    const UINT featherPercent = std::clamp(GetPrivateProfileIntW(L"quad", L"feather_percent", 10, ini.c_str()), 0u, 50u);
-    experiment.feather = featherPercent / 100.0;
-    experiment.cornerRadius =
-        std::clamp(GetPrivateProfileIntW(L"quad", L"corner_radius_percent", 0, ini.c_str()), 0u, 100u) / 100.0;
-    experiment.border = GetPrivateProfileIntW(L"quad", L"debug_border", 0, ini.c_str()) != 0;
-    wchar_t borderColor[16] = {};
-    GetPrivateProfileStringW(L"quad", L"debug_border_color", L"green", borderColor, 16, ini.c_str());
-    // Linear values; teal is #00A0A0 in sRGB.
-    const float magentaColor[4] = {1, 0, 1, 1}, tealColor[4] = {0, 0.352f, 0.352f, 1};
-    if (_wcsicmp(borderColor, L"magenta") == 0)
-        std::memcpy(experiment.borderColor, magentaColor, sizeof(magentaColor));
-    else if (_wcsicmp(borderColor, L"teal") == 0)
-        std::memcpy(experiment.borderColor, tealColor, sizeof(tealColor));
-    experiment.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini.c_str()) != 0;
+    const LiveSettings settings = read_live(ini.c_str());
+    experiment.focusFraction = settings.focusFraction;
+    experiment.focusFractionY = settings.focusFractionY;
+    experiment.feather = settings.feather;
+    experiment.cornerRadius = settings.cornerRadius;
+    experiment.border = settings.border;
+    experiment.borderAtLaunch = settings.border;
+    std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
+    experiment.gaze = settings.gaze;
+    live.ini = ini;
+    live.restartKeys = restart_keys(ini.c_str());
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
+        live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
     // Above 100 supersamples (in quad mode this is the outer view's resolution).
@@ -200,9 +250,10 @@ void load_experiment() {
     const double focus = focusDensityPercent ? density * experiment.focusFraction : experiment.eyeScale;
     const double focusHeight = experiment.focusFractionY > 0 ? density * experiment.focusFractionY : focus;
     experiment.views4Layout = views4_layout(outer, focus, focusHeight);
-    logf("experiment: mode=%ls focus_percent=%u b_focus=%d eye_scale=%u feather_percent=%u corner_radius_percent=%.0f "
+    logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%u feather_percent=%.0f corner_radius_percent=%.0f "
          "debug_border=%d gaze=%d (from %ls)",
-         mode, percent, experiment.focusInB ? 1 : 0, eyePercent, featherPercent, experiment.cornerRadius * 100,
+         mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
+         experiment.cornerRadius * 100,
          experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, ini.c_str());
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
@@ -484,12 +535,12 @@ Views4Outline v4outline;
 
 // Without composition the outline goes on ACE's outer views; with it, on the composed output.
 bool views4_outline_on() {
-    return experiment.views4 && experiment.border && !experiment.views4ShowCopies && !experiment.views4Compose;
+    return experiment.views4 && experiment.borderAtLaunch && !experiment.views4ShowCopies && !experiment.views4Compose;
 }
 
 void views4_outline_draw(XrSwapchain swapchain) {
     std::lock_guard guard(v4outline.mutex);
-    if (swapchain != v4outline.chain || !v4outline.fovValid || v4outline.failed)
+    if (swapchain != v4outline.chain || !v4outline.fovValid || v4outline.failed || !experiment.border)
         return;
     if (!v4outline.ready) {
         if (!quad.device || !quad.queue)
@@ -535,6 +586,7 @@ void views4_outline_draw(XrSwapchain swapchain) {
                                    static_cast<int>((u + hh) / (u - d) * v.height)});
         thickness = std::max(2, v.width / 300);
     }
+    std::memcpy(v4outline.rgba, experiment.borderColor, sizeof(v4outline.rgba));  // live (debug_border_color)
     v4outline.outline.draw(image, boxes, thickness, v4outline.rgba);
 }
 
@@ -1451,14 +1503,83 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
 
 XrResult end_frame(XrSession session, const XrFrameEndInfo* info);
 
+// Live settings: applies the ini's live keys (LiveSettings). Called between display frames.
+void live_apply(const LiveSettings& l) {
+    experiment.focusFraction = l.focusFraction;
+    experiment.focusFractionY = l.focusFractionY;
+    experiment.feather = l.feather;
+    experiment.cornerRadius = l.cornerRadius;
+    std::memcpy(experiment.borderColor, l.borderColor, sizeof(experiment.borderColor));
+    experiment.border = l.border;
+    experiment.gaze = l.gaze;
+    bool gazeAvailable;
+    {
+        std::lock_guard guard(gaze.mutex);
+        gazeAvailable = gaze.set != XR_NULL_HANDLE;
+    }
+    if (experiment.views4 && !experiment.views4EyeCamera)
+        views4_set_live(l.focusFraction, l.focusFractionY, 1.0 + l.feather + experiment.views4FocusCullMargin,
+                        l.gaze && experiment.views4Compose);
+    logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d", l.focusFraction * 100,
+         experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0, l.gaze ? 1 : 0);
+    if (experiment.views4)  // the focus views keep their pixels: their density follows the box
+        logf("live: focus density now %.0f%% x %.0f%% of native (focus views stay %.0f%% x %.0f%% of the native eye)",
+             experiment.views4Layout.focus / l.focusFraction * 100,
+             experiment.views4Layout.focusHeight / experiment.focus_y() * 100, experiment.views4Layout.focus * 100,
+             experiment.views4Layout.focusHeight * 100);
+    if (l.gaze && !gazeAvailable && (experiment.quad || experiment.views4Compose))
+        log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
+    if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.views4Compose)
+        log_line("live: debug_border without views4_compose starts at the next launch");
+}
+
+constexpr int64_t kLiveCheckMs = 250;
+
+// Checks the ini's write time every kLiveCheckMs and applies its live keys when it changed. Only
+// between display frames: with two_loops, never between frame A and frame B.
+void live_reload() {
+    if (live.ini.empty())
+        return;
+    static const int64_t frequency = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart;
+    }();
+    const int64_t now = qpc_now();
+    if (now < live.nextCheck)
+        return;
+    {
+        std::lock_guard guard(loops.mutex);
+        if (loops.active && loops.pairedEnds % 2 != 0)
+            return;  // A ended, B not yet: check again after B
+    }
+    live.nextCheck = now + frequency * kLiveCheckMs / 1000;
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(live.ini.c_str(), GetFileExInfoStandard, &attributes) ||
+        CompareFileTime(&attributes.ftLastWriteTime, &live.written) == 0)
+        return;
+    live.written = attributes.ftLastWriteTime;
+    live_apply(read_live(live.ini.c_str()));
+    const std::wstring restartKeys = restart_keys(live.ini.c_str());
+    if (restartKeys != live.restartKeys) {
+        logf("live: %ls-> %ls(resolution and mode apply at the next launch)", live.restartKeys.c_str(),
+             restartKeys.c_str());
+        live.restartKeys = restartKeys;
+    }
+}
+
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
-    if (!cpu.realEndFrame)
-        return end_frame(session, info);
-    const int64_t t0 = qpc_now();
-    const XrResult r = end_frame(session, info);
-    cpu.endFrame.add(qpc_now() - t0);
-    if (endFrames % kCpuReportFrames == 0)
-        report_cpu_times();
+    XrResult r;
+    if (!cpu.realEndFrame) {
+        r = end_frame(session, info);
+    } else {
+        const int64_t t0 = qpc_now();
+        r = end_frame(session, info);
+        cpu.endFrame.add(qpc_now() - t0);
+        if (endFrames % kCpuReportFrames == 0)
+            report_cpu_times();
+    }
+    live_reload();
     return r;
 }
 
@@ -1620,6 +1741,9 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         return r;
     }
     load_experiment();
+    // Where the launcher writes live settings while this ACE runs (live_reload).
+    runtime_info(L"live_ini", live.ini);
+    runtime_info(L"live_pid", std::to_wstring(GetCurrentProcessId()));
     log_layer_order(layerInfo->nextInfo->next);
     logf("xrCreateApiLayerInstance app=%s engine=%s extensions=%u result=%d", info->applicationInfo.applicationName,
          info->applicationInfo.engineName, info->enabledExtensionCount, r);
@@ -1645,7 +1769,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     }
     if (experiment.views4 &&
         !views4_start(experiment.views4Callers, experiment.views4EyesOnlyAdvance,
-                      experiment.views4EyeCamera ? 0.0 : experiment.focusFraction, experiment.focus_y()))
+                      experiment.views4EyeCamera ? 0.0 : experiment.focusFraction.load(), experiment.focus_y()))
         experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
     if (experiment.views4 && experiment.views4ShadowView1Plain)
         views4_shadow_view1_plain();

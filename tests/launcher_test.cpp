@@ -257,6 +257,27 @@ int main() {
         check(l.focus.width == 1292 && l.target.width == 2584 && std::abs(l.pixels - 4.0 * 1292 * 1080) < 1 &&
                   std::abs(l.focusDensity - 50.0 / 39) < 1e-9,
               "readouts: Two-loop renders two outer-size frames; focus density = outer / width");
+
+        // Live settings: only the reloadable keys go to the running game's ini, and only while that
+        // process is ACE.
+        const std::wstring liveIni = (folder / L"live.ini").wstring();
+        write_file(liveIni, "[experiment]\r\nmode=views4\r\nperiphery_scale=50\r\nfocus_percent=39\r\n");
+        Settings changedLive = Settings{};
+        changedLive.outer = 70;
+        changedLive.width = 45;
+        changedLive.feather = 25;
+        changedLive.outline = true;
+        check(save_live_settings(liveIni, changedLive), "live: the live keys are written");
+        read_file(liveIni, iniText);
+        check(iniText.find("focus_percent=45") != std::string::npos && iniText.find("feather_percent=25") != std::string::npos &&
+                  iniText.find("debug_border=1") != std::string::npos && iniText.find("periphery_scale=50") != std::string::npos &&
+                  iniText.find("focus_density") == std::string::npos && iniText.find("eye_scale") == std::string::npos,
+              "live: foveation keys change, resolution keys stay as launched");
+        write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=" +
+                                   std::to_string(GetCurrentProcessId()) + "\r\n");
+        check(running_live_ini(runtimeIni).empty(), "live: a live_pid that is not ACE is ignored");
+        write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=0\r\n");
+        check(running_live_ini(runtimeIni).empty(), "live: no running game, no live ini");
     }
 
     fs::remove_all(folder, ec);

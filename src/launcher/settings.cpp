@@ -83,6 +83,17 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    return save_live_settings(ini, s) && ok;
+}
+
+bool save_live_settings(const std::wstring& ini, const Settings& in) {
+    Settings s = in;
+    s.width = clamp_to(s.width, kSizeRange);
+    s.height = clamp_to(s.height, kSizeRange);
+    s.feather = clamp_to(s.feather, kFeatherRange);
+    s.corner = clamp_to(s.corner, kCornerRange);
+    const auto n = [](int v) { return std::to_wstring(v); };
+    bool ok = true;
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
     ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
@@ -92,6 +103,29 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"quad", L"debug_border_color", color_name(s.color));
     return ok;
 }
+
+std::wstring running_live_ini(const std::wstring& runtimeInfo) {
+    const std::wstring ini = read_string(runtimeInfo, L"runtime", L"live_ini");
+    const DWORD pid = static_cast<DWORD>(read_int(runtimeInfo, L"runtime", L"live_pid", 0));
+    if (ini.empty() || pid == 0)
+        return {};
+    // That process, still running, and still ACE (not a reused id).
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process)
+        return {};
+    DWORD code = 0;
+    wchar_t path[MAX_PATH] = {};
+    DWORD length = MAX_PATH;
+    const bool running = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE &&
+                         QueryFullProcessImageNameW(process, 0, path, &length);
+    CloseHandle(process);
+    const std::wstring exe = path;
+    const std::wstring ace = L"\\AssettoCorsaEVO.exe";
+    if (!running || exe.size() < ace.size() || _wcsicmp(exe.c_str() + exe.size() - ace.size(), ace.c_str()) != 0)
+        return {};
+    return ini;
+}
+
 
 RuntimeInfo load_runtime_info(const std::wstring& path) {
     RuntimeInfo r;

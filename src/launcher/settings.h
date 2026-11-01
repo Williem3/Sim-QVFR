@@ -36,6 +36,11 @@ inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10
 Settings load_settings(const std::wstring& ini);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.
 bool save_settings(const std::wstring& ini, const Settings& settings);
+// The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,
+// outline and eye tracking. Resolution and method apply at the next launch.
+bool save_live_settings(const std::wstring& ini, const Settings& settings);
+// The ini a running ACE reads (runtime.ini's live_ini, while its live_pid is still ACE), or empty.
+std::wstring running_live_ini(const std::wstring& runtimeInfo);
 
 // What the layer reported from the last session (runtime.ini): the headset's recommended per-eye
 // size and runtime maximum (0 = not known yet), and whether eye tracking delivered samples.
