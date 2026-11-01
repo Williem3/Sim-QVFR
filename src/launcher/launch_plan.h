@@ -61,10 +61,12 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
                       const LayerPlan& plan, std::wstring& error);
 
 // The variables this launch sets (name, value). `runtimeInfo`: where the layer reports the headset's
-// recommended size and eye tracking for the launcher window (ACE_QV_RUNTIME_INFO).
+// recommended size and eye tracking for the launcher window (ACE_QV_RUNTIME_INFO). `settings`: the
+// launcher's own ini, where the in-headset menu saves its changes (ACE_QV_SETTINGS; empty: not set).
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
                                                                     const std::wstring& ini, const std::wstring& log,
-                                                                    const std::wstring& runtimeInfo);
+                                                                    const std::wstring& runtimeInfo,
+                                                                    const std::wstring& settings = {});
 
 // A CreateProcess environment block: `current` ("NAME=value" strings) without inherited ACE_QV_*
 // variables, with `set` applied (case-insensitive names), sorted, double-NUL terminated.

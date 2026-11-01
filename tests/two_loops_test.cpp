@@ -106,6 +106,36 @@ int main() {
                     applied ? 1 : 0, quiet ? 1 : 0);
         ok &= heldForB && applied && quiet;
     }
+
+    // The settings menu opens (its first key press) and steps a value into the ini, without a session
+    // or panel: the open path takes the layer's locks, so this would hang or throw on a lock taken twice.
+    {
+        using namespace aceqv;
+        wchar_t temp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"ace-quadview-menu-open-test.ini";
+        WritePrivateProfileStringW(L"experiment", L"periphery_scale", L"30", ini.c_str());
+        live = Live{};
+        live.ini = ini;
+        experiment.views4 = true;
+        experiment.views4Layout = views4_layout(0.3, 0.39);
+        {
+            std::lock_guard guard(quad.mutex);
+            quad.nativeW = 5190;
+            quad.nativeH = 4168;
+        }
+        const int64_t now = qpc_now();
+        menu_press(MenuKey::Right, now);  // opens
+        const bool opened = menu.visible && menu.model.launch.nativeWidth == 5190 && menu.model.values.periphery == 30;
+        menu_press(MenuKey::Left, now);  // periphery 30 -> 25
+        const bool stepped = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()) == 25;
+        menu.visible = false;
+        experiment.views4 = false;
+        live = Live{};
+        DeleteFileW(ini.c_str());
+        std::printf("settings menu: opened=%d, stepped into the ini=%d\n", opened ? 1 : 0, stepped ? 1 : 0);
+        ok &= opened && stepped;
+    }
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;
 }

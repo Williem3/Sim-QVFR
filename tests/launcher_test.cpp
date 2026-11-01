@@ -240,6 +240,14 @@ int main() {
         check(rt.known() && rt.width == 2584 && rt.height == 2160 && rt.maxWidth == 8192 && rt.eyeTracker == EyeTracker::Missing,
               "runtime report: recommended size, maximum and a missing eye tracker");
         const Readouts r = readouts(Settings{}, rt);
+        check(r.centerPpd == 0, "readouts: no Center PPD before the layer reports it");
+        RuntimeInfo withPpd = rt;
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nnative_center_ppd=45.32\r\n");
+        withPpd.centerPpd = load_runtime_info(runtimeIni).centerPpd;
+        Settings sharp;
+        sharp.inner = 120;
+        check(std::abs(withPpd.centerPpd - 45.32) < 1e-9 && std::lround(readouts(sharp, withPpd).centerPpd) == 54,
+              "readouts: Center PPD = the reported native PPD x the focus density (45.32 x 120% = 54)");
         std::printf("     kit example: outer %dx%d, focus %dx%d, target %dx%d, %.2f M\n", r.outer.width, r.outer.height,
                     r.focus.width, r.focus.height, r.target.width, r.target.height, r.pixels / 1e6);
         check(r.outer.width == 1292 && r.outer.height == 1080 && r.focus.width == 1008 && r.focus.height == 842 &&

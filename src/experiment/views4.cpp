@@ -48,7 +48,8 @@ bool tileViews = false;  // "tiles": tiled light culling builds tile lists for 4
 bool slotViews = false;  // "slots": views 2-3 get their own history slots (view 3's at a phantom renderer)
 bool cameraViews = false;  // "cameras": views 2-3 are focus cameras with their own camera slots and records
 Views4Layout layout;       // where the four views sit in the target (views4_set_layout; equal quarters by default)
-Views4Layout pendingLive;  // live sizes for the next filled frame (views4_set_live_layout), under turnLock
+Views4Layout launchLayout;  // the layout at launch (the tile grid and volumetrics are sized for its largest view)
+Views4Layout pendingLive;  // the view layout for the next filled frame (views4_set_live_layout), under turnLock
 bool livePending = false;
 bool volumetricViews = false;  // "fog": the volumetrics/atmosphere system has resources for 4 views
 bool foldVolumetrics = false;  // "fogfold": views 2-3 still read the eyes' volumetric resources (diagnostic)
@@ -236,19 +237,16 @@ void fill_focus_cameras(uint8_t* renderer) {
     // One focus box for the whole frame, whatever views4_set_live does meanwhile.
     const double boxX = focusFraction, boxY = focusFractionY, cull = cullScale;
     Views4Frame frame{};
-    if (livePending) {
-        std::memcpy(frame.liveX, pendingLive.liveX, sizeof(frame.liveX));
-        std::memcpy(frame.liveY, pendingLive.liveY, sizeof(frame.liveY));
-    } else {
-        std::memcpy(frame.liveX, layout.liveX, sizeof(frame.liveX));
-        std::memcpy(frame.liveY, layout.liveY, sizeof(frame.liveY));
-    }
+    const Views4Layout& latched = livePending ? pendingLive : layout;
+    frame.live = true;
+    std::memcpy(frame.width, latched.width, sizeof(frame.width));
+    std::memcpy(frame.height, latched.height, sizeof(frame.height));
     ReleaseSRWLockShared(&turnLock);
-    // This frame's views render at these sizes (the viewport and pass setups read `layout`).
-    if (std::memcmp(frame.liveX, layout.liveX, sizeof(frame.liveX)) != 0 ||
-        std::memcmp(frame.liveY, layout.liveY, sizeof(frame.liveY)) != 0) {
-        std::memcpy(layout.liveX, frame.liveX, sizeof(layout.liveX));
-        std::memcpy(layout.liveY, frame.liveY, sizeof(layout.liveY));
+    // This frame's views render with this layout (the viewport and pass setups read `layout`).
+    if (std::memcmp(frame.width, layout.width, sizeof(frame.width)) != 0 ||
+        std::memcmp(frame.height, layout.height, sizeof(frame.height)) != 0) {
+        std::memcpy(layout.width, frame.width, sizeof(layout.width));
+        std::memcpy(layout.height, frame.height, sizeof(layout.height));
         layoutLogged = false;  // log the new rects
     }
     XrQuaternionf turns[2] = {kNoTurn, kNoTurn};
@@ -399,11 +397,11 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
     // The tile grid and the volumetrics are sized once from view 0 for every view (ace_abi.h): they
     // get the largest view's size. Equal views leave this unchanged.
     const uintptr_t returnRva = reinterpret_cast<uintptr_t>(_ReturnAddress()) - base;
-    if (!layout.equal() && view == 0 &&
+    if (!launchLayout.equal() && view == 0 &&
         (returnRva == ace::kTileGridViewportCallSite + 5 || returnRva == ace::kFogViewportCallSite + 5)) {
         int maxW = 0, maxH = 0;
         for (int v = 0; v < kViews; ++v) {
-            const ViewRect e = views4_slot(layout, v, width, height);  // live sizes only shrink
+            const ViewRect e = views4_rect(launchLayout, v, width, height);  // live views fit within these
             maxW = std::max(maxW, e.width);
             maxH = std::max(maxH, e.height);
         }
@@ -1101,7 +1099,7 @@ bool views4_latest_frame(Views4Frame& frame) {
     return any;
 }
 
-void views4_set_layout(const Views4Layout& l) { layout = l; }
+void views4_set_layout(const Views4Layout& l) { layout = launchLayout = l; }
 
 void views4_set_focus_cull(bool on, double scale, bool gaze) {
     focusCull = on;
@@ -1114,8 +1112,8 @@ void views4_set_live_layout(const Views4Layout& live) {
     pendingLive = live;
     livePending = true;
     if (!cameraViews) {  // no focus cameras to latch at: from the next viewport call
-        std::memcpy(layout.liveX, live.liveX, sizeof(layout.liveX));
-        std::memcpy(layout.liveY, live.liveY, sizeof(layout.liveY));
+        std::memcpy(layout.width, live.width, sizeof(layout.width));
+        std::memcpy(layout.height, live.height, sizeof(layout.height));
         layoutLogged = false;
     }
     ReleaseSRWLockExclusive(&turnLock);

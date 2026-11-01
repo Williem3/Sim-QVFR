@@ -160,6 +160,7 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.height = read_int(path, L"runtime", L"recommended_height", 0);
     r.maxWidth = read_int(path, L"runtime", L"max_width", 0);
     r.maxHeight = read_int(path, L"runtime", L"max_height", 0);
+    r.centerPpd = _wtof(read_string(path, L"runtime", L"native_center_ppd").c_str());
     const int eye = read_int(path, L"runtime", L"eye_tracking", -1);
     r.eyeTracker = eye == 1 ? EyeTracker::Detected : eye == 0 ? EyeTracker::Missing : EyeTracker::Unknown;
     return r;
@@ -202,6 +203,7 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
     r.runtime = {runtime.width, runtime.height};
     r.runtimePixels = 2.0 * area(r.runtime);
     r.saved = r.runtimePixels > 0 ? 1.0 - r.pixels / r.runtimePixels : 0;
+    r.centerPpd = runtime.centerPpd * r.focusDensity * sx;  // a runtime-maximum clamp lowers the density too
     return r;
 }
 

@@ -60,6 +60,7 @@ bool fits_launch(const Settings& settings, const LaunchSizes& launch);
 enum class EyeTracker { Unknown, Detected, Missing };
 struct RuntimeInfo {
     int width = 0, height = 0, maxWidth = 0, maxHeight = 0;
+    double centerPpd = 0;  // pixels per degree at the view's centre at 100% density (the layer's native_center_ppd)
     EyeTracker eyeTracker = EyeTracker::Unknown;
     bool known() const { return width > 0 && height > 0; }
 };
@@ -77,6 +78,7 @@ struct Readouts {
     double runtimePixels = 0;  // both eyes at the runtime's recommended size, as ACE renders without the layer
     double saved = 0;          // 1 - pixels / runtimePixels; negative when the layer renders more
     double focusDensity = 0;   // focus pixel density against recommended (horizontal)
+    double centerPpd = 0;      // the focus area's pixels per degree at its centre (0: not known yet)
     bool overRuntimeLimit = false;  // the offered eye is wider or taller than the runtime's maximum
 };
 Readouts readouts(const Settings& settings, const RuntimeInfo& runtime);

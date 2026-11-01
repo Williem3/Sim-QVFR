@@ -20,20 +20,18 @@ struct Views4Layout {
     double outer = 1.0, focus = 1.0, focusHeight = 1.0;  // linear scale of the native eye width / height
     double width[4] = {0.25, 0.25, 0.25, 0.25};  // fraction of the target width
     double height[4] = {1, 1, 1, 1};             // fraction of the target height
-    // Live resolution: view v renders in the top-left part of its slot, liveX[v] of the slot's width
-    // and liveY[v] of its height (1 = the whole slot). The slots stay where the launch layout put
-    // them, since ACE sizes its target once, so live sizes can only shrink (views4_live).
-    double liveX[4] = {1, 1, 1, 1}, liveY[4] = {1, 1, 1, 1};
+    // `outer`, `focus` and `focusHeight` size ACE's target (at launch); live resolution (views4_live)
+    // changes only `width` and `height`, laying the views out again inside that target.
     // The eye size ACE is offered, in native eye widths and heights (its double-wide target is two of these).
     double eye_width() const { return outer + focus; }
     double eye_height() const { return std::max(outer, focusHeight); }
-    bool full() const {
+    // Equal quarters of the target (the old layout, also after a live change).
+    bool equal() const {
         for (int v = 0; v < 4; ++v)
-            if (liveX[v] != 1 || liveY[v] != 1)
+            if (width[v] != 0.25 || height[v] != 1)
                 return false;
         return true;
     }
-    bool equal() const { return outer == focus && outer == focusHeight && full(); }
 };
 
 // `focusHeight` < 0: the same as `focus` (a focus box with the same share on both axes).
@@ -52,25 +50,53 @@ inline Views4Layout views4_layout(double outer, double focus, double focusHeight
     return l;
 }
 
-// The launch layout `launch` at live sizes (the same units as views4_layout), each view clamped to its
-// slot: no larger than at launch, and at least kMinLive of it.
+// Live resolution: sizes (the units of views4_layout) that fit the target ACE made at launch. The
+// views stay one row, laid out again, so periphery and focus trade width:
+//  - the row, 2 x (outer + focus), no wider than the target,
+//  - no view taller than the target,
+//  - no view larger than the largest launch view (the tile grid and the volumetrics are sized for it),
+//  - each at least kMinLive of its launch size.
+// Focus first: the periphery (square) takes the width the focus views leave.
 inline constexpr double kMinLive = 0.1;
+struct Views4Fit {
+    double outer = 0, focus = 0, focusHeight = 0;  // in effect
+    bool outerCapped = false, focusCapped = false;
+    bool outerByRoom = false;  // the periphery is held by the focus views' width (less focus makes room)
+};
+inline Views4Fit views4_fit(const Views4Layout& launch, double outer, double focus, double focusHeight) {
+    constexpr double kSlack = 1e-4;  // the launch sizes come from the same integers
+    const double row = launch.outer + launch.focus, tall = launch.eye_height(),
+                 largestW = std::max(launch.outer, launch.focus), minOuter = kMinLive * launch.outer;
+    Views4Fit f;
+    f.focus = std::clamp(focus, kMinLive * launch.focus, std::min(largestW, row - minOuter));
+    f.focusHeight = std::clamp(focusHeight, kMinLive * launch.focusHeight, tall);
+    f.focusCapped = f.focus < focus - kSlack || f.focusHeight < focusHeight - kSlack;
+    const double ownLimit = std::min(largestW, tall), room = row - f.focus;
+    f.outer = std::clamp(outer, minOuter, std::min(ownLimit, room));
+    f.outerCapped = f.outer < outer - kSlack;
+    f.outerByRoom = f.outerCapped && room < ownLimit;
+    return f;
+}
+
+// The launch layout `launch` with its views at live sizes (views4_fit), side by side from x = 0.
 inline Views4Layout views4_live(const Views4Layout& launch, double outer, double focus, double focusHeight) {
+    const Views4Fit f = views4_fit(launch, outer, focus, focusHeight);
     Views4Layout l = launch;
-    const auto share = [](double wanted, double slot) { return slot > 0 ? std::clamp(wanted / slot, kMinLive, 1.0) : 1.0; };
+    const double total = 2 * launch.eye_width(), tall = launch.eye_height();
     for (int v = 0; v < 4; ++v) {
-        l.liveX[v] = share(v < 2 ? outer : focus, v < 2 ? launch.outer : launch.focus);
-        l.liveY[v] = share(v < 2 ? outer : focusHeight, v < 2 ? launch.outer : launch.focusHeight);
+        l.width[v] = (v < 2 ? f.outer : f.focus) / total;
+        l.height[v] = (v < 2 ? f.outer : f.focusHeight) / tall;
     }
     return l;
 }
 
-// `l` with the live sizes of another (a frame's record).
-inline Views4Layout views4_with_live(Views4Layout l, const double (&liveX)[4], const double (&liveY)[4]) {
-    for (int v = 0; v < 4; ++v) {
-        l.liveX[v] = liveX[v];
-        l.liveY[v] = liveY[v];
-    }
+// `l` with a frame's recorded view layout (`live`: recorded; otherwise `l` as it is).
+inline Views4Layout views4_with_live(Views4Layout l, bool live, const double (&width)[4], const double (&height)[4]) {
+    if (live)
+        for (int v = 0; v < 4; ++v) {
+            l.width[v] = width[v];
+            l.height[v] = height[v];
+        }
     return l;
 }
 
@@ -85,19 +111,9 @@ inline ViewRect views4_rect(const Views4Layout& l, int view, int targetWidth, in
     ViewRect r;
     for (int v = 0; v < view; ++v)
         r.left += pixels(l.width[v], targetWidth);
-    r.width = pixels(l.width[view], targetWidth);
-    r.height = pixels(l.height[view], targetHeight);
-    if (l.liveX[view] != 1)
-        r.width = std::max(1, static_cast<int>(std::floor(r.width * l.liveX[view] + 1e-6)));
-    if (l.liveY[view] != 1)
-        r.height = std::max(1, static_cast<int>(std::floor(r.height * l.liveY[view] + 1e-6)));
+    r.width = std::max(1, pixels(l.width[view], targetWidth));
+    r.height = std::max(1, pixels(l.height[view], targetHeight));
     return r;
-}
-
-// The view's whole slot (its rect at launch size, whatever the live sizes).
-inline ViewRect views4_slot(Views4Layout l, int view, int targetWidth, int targetHeight) {
-    l.liveX[view] = l.liveY[view] = 1;
-    return views4_rect(l, view, targetWidth, targetHeight);
 }
 
 // The rect as a texture region (u0, v0, du, dv) of a target of that size.

@@ -25,6 +25,8 @@
 #include "probe/probe.h"
 #include "quad/compositor.h"
 #include "quad/focus_outline.h"
+#include "quad/menu_panel.h"
+#include "quad/settings_menu.h"
 #include "xr.h"
 
 namespace aceqv {
@@ -57,6 +59,13 @@ struct Dispatch {
     PFN_xrSyncActions SyncActions = nullptr;
     PFN_xrCreateActionSpace CreateActionSpace = nullptr;
     PFN_xrLocateSpace LocateSpace = nullptr;
+    PFN_xrCreateReferenceSpace CreateReferenceSpace = nullptr;
+    PFN_xrDestroySpace DestroySpace = nullptr;
+    PFN_xrDestroySwapchain DestroySwapchain = nullptr;
+    PFN_xrGetActionStateBoolean GetActionStateBoolean = nullptr;
+    PFN_xrGetActionStateVector2f GetActionStateVector2f = nullptr;
+    PFN_xrGetCurrentInteractionProfile GetCurrentInteractionProfile = nullptr;
+    PFN_xrPathToString PathToString = nullptr;
     PFN_xrGetVisibilityMaskKHR GetVisibilityMaskKHR = nullptr;  // optional (XR_KHR_visibility_mask)
 };
 
@@ -339,12 +348,19 @@ void narrow(float& loAngle, float& hiAngle, double fraction, double centre = 0.0
 // replaces a profile's suggested bindings on every call, so the set rides along in ACE's own calls:
 // its gaze binding is added to ACE's suggestion for the eye gaze profile, and the set is added to
 // ACE's xrAttachSessionActionSets and xrSyncActions.
+// The same action set also carries the settings menu's controller actions (menuToggle: open or
+// close, menuNavigate: select and step), bound for the common controller profiles next to ACE's own.
 struct Gaze {
     std::mutex mutex;
     XrInstance instance = XR_NULL_HANDLE;
     XrActionSet set = XR_NULL_HANDLE;
     XrAction action = XR_NULL_HANDLE;
+    XrAction menuToggle = XR_NULL_HANDLE, menuNavigate = XR_NULL_HANDLE;
     XrPath profile = XR_NULL_PATH, pose = XR_NULL_PATH;
+    // The layer's bindings per interaction profile (the eye gaze one and the controllers'), and which
+    // were suggested, merged into ACE's suggestion or on their own at attach.
+    std::map<XrPath, std::vector<XrActionSuggestedBinding>> bindings;
+    std::map<XrPath, bool> profileSuggested;
     bool suggested = false, attached = false;
     uint64_t appSyncs = 0;
     XrSpace space = XR_NULL_HANDLE;
@@ -368,8 +384,28 @@ XrVector3f rotate(const XrQuaternionf& q, const XrVector3f& v) {
     return {v.x + q.w * t2.x + c.x, v.y + q.w * t2.y + c.y, v.z + q.w * t2.z + c.z};
 }
 
+// Controller profiles for the settings menu: left stick (or pad) click opens and closes it, the right
+// stick (or pad) selects and steps. Core profiles only: one that needs an extension ACE does not
+// enable (HP's) is refused. Pimax controllers report as Touch controllers.
+struct MenuProfile {
+    const char* profile;
+    const char* toggle;
+    const char* navigate;
+};
+constexpr MenuProfile kMenuProfiles[] = {
+    {"/interaction_profiles/oculus/touch_controller", "/user/hand/left/input/thumbstick/click",
+     "/user/hand/right/input/thumbstick"},
+    {"/interaction_profiles/valve/index_controller", "/user/hand/left/input/thumbstick/click",
+     "/user/hand/right/input/thumbstick"},
+    {"/interaction_profiles/microsoft/motion_controller", "/user/hand/left/input/thumbstick/click",
+     "/user/hand/right/input/thumbstick"},
+    {"/interaction_profiles/htc/vive_controller", "/user/hand/left/input/trackpad/click",
+     "/user/hand/right/input/trackpad"},
+};
+
+// Gaze (and menu) actions. Also with gaze off at launch, so gaze can be turned on live.
 void gaze_init(XrInstance instance) {
-    if ((!experiment.quad && !experiment.views4Compose) || !experiment.gaze || !next.CreateActionSet)
+    if ((!experiment.quad && !experiment.views4Compose) || !next.CreateActionSet)
         return;
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
     strcpy_s(setInfo.actionSetName, "acequadview_gaze");
@@ -393,25 +429,65 @@ void gaze_init(XrInstance instance) {
         runtime_info(L"eye_tracking", L"0");
         return;
     }
+    gaze.bindings[gaze.profile].push_back({gaze.action, gaze.pose});
     log_line("gaze: action set created");
+    // The settings menu's controller actions; without them the menu still works from the keyboard.
+    XrActionCreateInfo toggleInfo{XR_TYPE_ACTION_CREATE_INFO};
+    toggleInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    strcpy_s(toggleInfo.actionName, "settings_menu");
+    strcpy_s(toggleInfo.localizedActionName, "ace-quadview settings menu");
+    XrActionCreateInfo navigateInfo{XR_TYPE_ACTION_CREATE_INFO};
+    navigateInfo.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+    strcpy_s(navigateInfo.actionName, "settings_navigate");
+    strcpy_s(navigateInfo.localizedActionName, "ace-quadview settings navigate");
+    if (XR_FAILED(next.CreateAction(gaze.set, &toggleInfo, &gaze.menuToggle)) ||
+        XR_FAILED(next.CreateAction(gaze.set, &navigateInfo, &gaze.menuNavigate))) {
+        log_line("settings menu: controller actions failed; keyboard only");
+        gaze.menuToggle = gaze.menuNavigate = XR_NULL_HANDLE;
+        return;
+    }
+    for (const MenuProfile& p : kMenuProfiles) {
+        XrPath profile = XR_NULL_PATH, toggle = XR_NULL_PATH, navigate = XR_NULL_PATH;
+        if (XR_SUCCEEDED(next.StringToPath(instance, p.profile, &profile)) &&
+            XR_SUCCEEDED(next.StringToPath(instance, p.toggle, &toggle)) &&
+            XR_SUCCEEDED(next.StringToPath(instance, p.navigate, &navigate))) {
+            gaze.bindings[profile].push_back({gaze.menuToggle, toggle});
+            gaze.bindings[profile].push_back({gaze.menuNavigate, navigate});
+        }
+    }
+}
+
+// A path's name for the log ("?" when the runtime cannot say).
+std::string path_name(XrInstance instance, XrPath path) {
+    char name[XR_MAX_PATH_LENGTH] = "?";
+    uint32_t length = 0;
+    if (next.PathToString)
+        next.PathToString(instance, path, sizeof(name), &length, name);
+    return name;
 }
 
 XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
                                                           const XrInteractionProfileSuggestedBinding* suggested) {
     std::lock_guard guard(gaze.mutex);
-    if (!gaze.set || !suggested || suggested->interactionProfile != gaze.profile)
+    if (suggested)
+        logf("input: ACE suggests %u binding(s) for %s", suggested->countSuggestedBindings,
+             path_name(instance, suggested->interactionProfile).c_str());
+    const auto own = suggested ? gaze.bindings.find(suggested->interactionProfile) : gaze.bindings.end();
+    if (!gaze.set || own == gaze.bindings.end())
         return next.SuggestInteractionProfileBindings(instance, suggested);
     std::vector<XrActionSuggestedBinding> bindings(suggested->suggestedBindings,
                                                    suggested->suggestedBindings + suggested->countSuggestedBindings);
-    bindings.push_back({gaze.action, gaze.pose});
+    bindings.insert(bindings.end(), own->second.begin(), own->second.end());
     XrInteractionProfileSuggestedBinding merged = *suggested;
     merged.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
     merged.suggestedBindings = bindings.data();
     XrResult r = next.SuggestInteractionProfileBindings(instance, &merged);
-    logf("gaze: added to ACE's eye gaze bindings (%u of its own), result=%d", suggested->countSuggestedBindings, r);
+    logf("input: added %zu layer binding(s) to ACE's %u, result=%d", own->second.size(),
+         suggested->countSuggestedBindings, r);
     if (XR_FAILED(r))
         return next.SuggestInteractionProfileBindings(instance, suggested);
-    gaze.suggested = true;
+    gaze.profileSuggested[suggested->interactionProfile] = true;
+    gaze.suggested |= suggested->interactionProfile == gaze.profile;
     return r;
 }
 
@@ -419,14 +495,20 @@ XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSess
     std::lock_guard guard(gaze.mutex);
     if (!gaze.set || !info)
         return next.AttachSessionActionSets(session, info);
-    if (!gaze.suggested) {  // ACE suggested nothing for the eye gaze profile: suggest the layer's binding alone
-        const XrActionSuggestedBinding binding{gaze.action, gaze.pose};
+    // Profiles ACE suggested nothing for: the layer's bindings alone.
+    for (const auto& [profile, bindings] : gaze.bindings) {
+        if (gaze.profileSuggested[profile])
+            continue;
         XrInteractionProfileSuggestedBinding own{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
-        own.interactionProfile = gaze.profile;
-        own.countSuggestedBindings = 1;
-        own.suggestedBindings = &binding;
-        gaze.suggested = XR_SUCCEEDED(next.SuggestInteractionProfileBindings(gaze.instance, &own));
-        logf("gaze: suggested the layer's own eye gaze binding, %s", gaze.suggested ? "ok" : "failed");
+        own.interactionProfile = profile;
+        own.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
+        own.suggestedBindings = bindings.data();
+        const XrResult r = next.SuggestInteractionProfileBindings(gaze.instance, &own);
+        gaze.profileSuggested[profile] = XR_SUCCEEDED(r);
+        if (profile == gaze.profile)
+            gaze.suggested = XR_SUCCEEDED(r);
+        logf("input: suggested the layer's own %zu binding(s) for %s, result=%d", bindings.size(),
+             path_name(gaze.instance, profile).c_str(), r);
     }
     std::vector<XrActionSet> sets(info->actionSets, info->actionSets + info->countActionSets);
     sets.push_back(gaze.set);
@@ -590,7 +672,7 @@ void views4_outline_draw(XrSwapchain swapchain) {
     int thickness = 2;
     Views4Frame frame{};
     const bool recorded = views4_latest_frame(frame);  // ACE's rendered FOV, else the located one
-    const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.liveX, frame.liveY);
+    const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
     for (int e = 0; e < 2; ++e) {
         const ViewRect v = views4_rect(layout, e, static_cast<int>(desc.Width), static_cast<int>(desc.Height));
         float tan[4];
@@ -815,7 +897,10 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     return r;
 }
 
+void menu_shutdown();  // the settings menu's panel (below)
+
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
+    menu_shutdown();  // its swapchain and space belong to the session
     probe_stop();
     dred_stop();
     {
@@ -1088,7 +1173,7 @@ void views4_compose() {
         // Outer source = view e, focus source = view e + 2, wherever the layout puts them.
         const int w = static_cast<int>(quad.appW), h = static_cast<int>(quad.appH);
         // At the sizes this frame was rendered with (live resolution); launch sizes until the first record.
-        const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.liveX, frame.liveY);
+        const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
         views4_uv(layout, e, w, h, eyes[e].outerSource);
         views4_uv(layout, e + 2, w, h, eyes[e].focusSource);
         eyes[e].feather = static_cast<float>(experiment.feather);
@@ -1491,7 +1576,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         }
         Views4Frame latest{};
         views4_latest_frame(latest);  // the rendered sizes (live resolution)
-        const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.liveX, latest.liveY);
+        const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.live, latest.width, latest.height);
         bool aceLayout = true;
         for (uint32_t v = 0; v < proj->viewCount; ++v)
             aceLayout &= copy[v].subImage.imageRect.offset.x == static_cast<int32_t>(v) * copy[v].subImage.imageRect.extent.width;
@@ -1537,17 +1622,16 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* info);
 void live_resolution(const LiveSettings& l) {
     const Views4Layout& launch = experiment.views4Layout;
     const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
-    const Views4Layout layout = views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight);
-    views4_set_live_layout(layout);
-    const double outer = launch.outer * layout.liveX[0], focus = launch.focus * layout.liveX[2],
-                 focusHeight = launch.focusHeight * layout.liveY[2];
-    const bool capped = wanted.outer > launch.outer + 1e-9 || wanted.focus > launch.focus + 1e-9 ||
-                        wanted.focusHeight > launch.focusHeight + 1e-9;
+    views4_set_live_layout(views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight));
+    const Views4Fit fit = views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight);
     logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
-         "eye; launch %.0f%%, %.0f%% x %.0f%%)%s",
-         outer * 100, focus / l.focusFraction * 100, focusHeight / experiment.focus_y() * 100, focus * 100,
-         focusHeight * 100, launch.outer * 100, launch.focus * 100, launch.focusHeight * 100,
-         capped ? " (capped at the launch size: more applies at the next launch)" : "");
+         "eye; launch %.0f%%, %.0f%% x %.0f%%)%s%s",
+         fit.outer * 100, fit.focus / l.focusFraction * 100, fit.focusHeight / experiment.focus_y() * 100,
+         fit.focus * 100, fit.focusHeight * 100, launch.outer * 100, launch.focus * 100, launch.focusHeight * 100,
+         fit.focusCapped ? " (focus capped: larger than the launch target allows)" : "",
+         fit.outerCapped ? (fit.outerByRoom ? " (periphery capped: the focus views use the width)"
+                                            : " (periphery capped: larger than the launch target allows)")
+                         : "");
 }
 
 // Live settings: applies the ini's live keys (LiveSettings). Called between display frames.
@@ -1577,6 +1661,8 @@ void live_apply(const LiveSettings& l) {
         log_line("live: debug_border without views4_compose starts at the next launch");
 }
 
+void menu_values_changed();  // the settings menu shows the ini's values (below)
+
 constexpr int64_t kLiveCheckMs = 250;
 
 // Checks the ini's write time every kLiveCheckMs and applies its live keys when it changed. Only
@@ -1604,12 +1690,337 @@ void live_reload() {
         return;
     live.written = attributes.ftLastWriteTime;
     live_apply(read_live(live.ini.c_str()));
+    menu_values_changed();
     const std::wstring restartKeys = restart_keys(live.ini.c_str(), experiment.views4);
     if (restartKeys != live.restartKeys) {
         logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(),
              restartKeys.c_str());
         live.restartKeys = restartKeys;
     }
+}
+
+// ---- Settings menu ---------------------------------------------------------------------------
+// In the headset (settings_menu.h): Ctrl+Alt+arrows while ACE has focus, or a controller's left
+// stick click (open, close) and right stick (select, change). Changes are written to the ini the
+// layer reloads from and to the launcher's (ACE_QV_SETTINGS), so they apply as the launcher's do.
+// Shown as a head-locked quad layer on top of whatever this layer submits; hidden kMenuHideMs after
+// the last input.
+struct Menu {
+    SettingsMenu model;
+    bool visible = false, dirty = true, failed = false, uploaded = false;
+    int64_t hideAt = 0;  // QPC
+    std::wstring settingsIni;
+    XrSpace view = XR_NULL_HANDLE;
+    XrSwapchain chain = XR_NULL_HANDLE;
+    std::vector<ID3D12Resource*> images;
+    PanelUpload upload;
+    XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    int heldKey = -1;  // keyboard repeat: the held arrow (index into kMenuKeys)
+    int64_t keyRepeat = 0;
+    int stickDir = -1;  // controller repeat: the held stick direction
+    int64_t stickRepeat = 0;
+    bool togglePrevious = false;
+    bool profileLogged = false;
+};
+Menu menu;
+constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
+constexpr int kMenuKeys[] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT};
+constexpr MenuKey kMenuKeyOf[] = {MenuKey::Up, MenuKey::Down, MenuKey::Left, MenuKey::Right};
+
+int64_t qpc_ms(int64_t ms) {
+    static const int64_t frequency = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart;
+    }();
+    return frequency * ms / 1000;
+}
+
+bool ace_focused() {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    return pid == GetCurrentProcessId();
+}
+
+double native_center_ppd();  // below
+
+// The launcher (or the menu itself) changed the ini: an open menu shows the new values.
+void menu_values_changed() {
+    if (!menu.visible)
+        return;
+    menu.model.values = read_menu_values(live.ini.c_str());
+    menu.dirty = true;
+}
+
+void menu_open(int64_t now) {
+    if (menu.settingsIni.empty()) {  // the launcher's own ini, where the next launch reads them
+        wchar_t path[MAX_PATH] = {};
+        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            menu.settingsIni = path;
+    }
+    if (!menu.visible) {
+        menu.model.values = read_menu_values(live.ini.c_str());
+        const Views4Layout& l = experiment.views4Layout;
+        {
+            std::lock_guard guard(quad.mutex);  // the native eye, for the notes' pixel sizes
+            menu.model.launch = {experiment.views4, l.outer * 100, l.focus * 100, l.focusHeight * 100,
+                                 static_cast<int>(quad.nativeW), static_cast<int>(quad.nativeH), 0,
+                                 experiment.eyeScale * 100};
+        }
+        menu.model.launch.nativePpd = native_center_ppd();  // takes quad.mutex itself
+        menu.visible = menu.dirty = true;
+        log_line("settings menu: open");
+    }
+    menu.hideAt = now + qpc_ms(kMenuHideMs);
+}
+
+void menu_press(MenuKey key, int64_t now) {
+    if (!menu.visible) {  // the first press only opens it
+        menu_open(now);
+        return;
+    }
+    menu.hideAt = now + qpc_ms(kMenuHideMs);
+    menu.dirty = true;
+    if (!menu_key(menu.model, key))
+        return;
+    const bool qvfr = menu.model.launch.qvfr;
+    write_menu_values(live.ini.c_str(), menu.model.values, qvfr);
+    if (!menu.settingsIni.empty())
+        write_menu_values(menu.settingsIni.c_str(), menu.model.values, qvfr);  // the next launch starts from them
+    live.nextCheck = 0;  // apply at this frame's live_reload
+}
+
+// Held keys and stick directions repeat after kRepeatDelayMs, every kRepeatMs.
+bool repeat(int& held, int64_t& nextAt, int direction, int64_t now) {
+    if (direction < 0) {
+        held = -1;
+        return false;
+    }
+    if (held != direction) {
+        held = direction;
+        nextAt = now + qpc_ms(kRepeatDelayMs);
+        return true;
+    }
+    if (now < nextAt)
+        return false;
+    nextAt = now + qpc_ms(kRepeatMs);
+    return true;
+}
+
+void menu_keyboard(int64_t now) {
+    int down = -1;
+    if (ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000))
+        for (int i = 0; i < 4 && down < 0; ++i)
+            if (GetAsyncKeyState(kMenuKeys[i]) & 0x8000)
+                down = i;
+    if (repeat(menu.heldKey, menu.keyRepeat, down, now))
+        menu_press(kMenuKeyOf[down], now);
+}
+
+void menu_controllers(XrSession session, int64_t now) {
+    bool toggle = false;
+    XrVector2f stick{};
+    {
+        std::lock_guard guard(gaze.mutex);
+        if (!gaze.attached || !gaze.menuToggle)
+            return;
+        if (gaze.appSyncs == 0) {  // ACE never syncs actions: sync the layer's set alone
+            const XrActiveActionSet active{gaze.set, XR_NULL_PATH};
+            XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+            sync.countActiveActionSets = 1;
+            sync.activeActionSets = &active;
+            next.SyncActions(session, &sync);
+        }
+        XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
+        get.action = gaze.menuToggle;
+        XrActionStateBoolean pressed{XR_TYPE_ACTION_STATE_BOOLEAN};
+        if (XR_SUCCEEDED(next.GetActionStateBoolean(session, &get, &pressed)) && pressed.isActive)
+            toggle = pressed.currentState;
+        get.action = gaze.menuNavigate;
+        XrActionStateVector2f axes{XR_TYPE_ACTION_STATE_VECTOR2F};
+        if (XR_SUCCEEDED(next.GetActionStateVector2f(session, &get, &axes)) && axes.isActive)
+            stick = axes.currentState;
+        if (!menu.profileLogged && (toggle || stick.x != 0 || stick.y != 0)) {
+            menu.profileLogged = true;
+            XrPath hand = XR_NULL_PATH;
+            XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+            const bool known = XR_SUCCEEDED(next.StringToPath(gaze.instance, "/user/hand/right", &hand)) &&
+                               XR_SUCCEEDED(next.GetCurrentInteractionProfile(session, hand, &state));
+            logf("settings menu: controller input from %s",
+                 known ? path_name(gaze.instance, state.interactionProfile).c_str() : "?");
+        }
+    }
+    if (toggle && !menu.togglePrevious) {
+        if (menu.visible) {
+            menu.visible = false;
+            log_line("settings menu: closed");
+        } else {
+            menu_open(now);
+        }
+    }
+    menu.togglePrevious = toggle;
+    // A clear push in one direction; back below kRelease ends it.
+    constexpr float kPush = 0.6f, kRelease = 0.3f;
+    int dir = menu.stickDir;
+    const float ax = std::fabs(stick.x), ay = std::fabs(stick.y);
+    if (std::max(ax, ay) < kRelease)
+        dir = -1;
+    else if (ay >= kPush && ay > ax)
+        dir = stick.y > 0 ? 0 : 1;
+    else if (ax >= kPush && ax > ay)
+        dir = stick.x < 0 ? 2 : 3;
+    if (menu.visible && repeat(menu.stickDir, menu.stickRepeat, dir, now))
+        menu_press(kMenuKeyOf[dir], now);
+    else if (!menu.visible)
+        menu.stickDir = dir;  // a push held while opening does not step
+}
+
+bool menu_resources(XrSession session) {
+    if (menu.chain)
+        return true;
+    if (menu.failed)
+        return false;
+    ID3D12Device* device;
+    ID3D12CommandQueue* queue;
+    {
+        std::lock_guard guard(quad.mutex);
+        device = quad.device;
+        queue = quad.queue;
+    }
+    if (!device || !queue)
+        return false;  // not a D3D12 session (yet)
+    XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    spaceInfo.poseInReferenceSpace.orientation.w = 1;
+    XrSwapchainCreateInfo chainInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    chainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    chainInfo.format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    chainInfo.sampleCount = 1;
+    chainInfo.width = kPanelWidth;
+    chainInfo.height = kPanelHeight;
+    chainInfo.faceCount = 1;
+    chainInfo.arraySize = 1;
+    chainInfo.mipCount = 1;
+    uint32_t count = 0;
+    XrResult r = next.CreateReferenceSpace(session, &spaceInfo, &menu.view);
+    if (XR_SUCCEEDED(r))
+        r = next.CreateSwapchain(session, &chainInfo, &menu.chain);
+    if (XR_SUCCEEDED(r))
+        r = next.EnumerateSwapchainImages(menu.chain, 0, &count, nullptr);
+    std::vector<XrSwapchainImageD3D12KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
+    if (XR_SUCCEEDED(r) && count)
+        r = next.EnumerateSwapchainImages(menu.chain, count, &count,
+                                          reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(r) || !count || !menu.upload.initialize(device, queue)) {
+        logf("settings menu: panel setup failed (%d); the menu still changes settings", r);
+        menu.failed = true;
+        return false;
+    }
+    for (const auto& image : images)
+        menu.images.push_back(image.texture);
+    XrCompositionLayerQuad& l = menu.layer;
+    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+    l.space = menu.view;
+    l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    l.subImage.swapchain = menu.chain;
+    l.subImage.imageRect = {{0, 0}, {kPanelWidth, kPanelHeight}};
+    l.pose.orientation.w = 1;
+    l.pose.position = {0.0f, -0.06f, -0.8f};  // 0.8 m ahead, a little below eye level
+    l.size = {0.48f, 0.48f * kPanelHeight / kPanelWidth};
+    log_line("settings menu: panel ready");
+    return true;
+}
+
+// Pixels per degree at the centre of the view at the runtime's recommended size (100% density), over
+// the FOV ACE renders with: views4 reads it back from ACE's projection (the focus density is against
+// it), Two-loop uses frame A's. 0 until known.
+double native_center_ppd() {
+    float tan[4] = {};
+    Views4Frame frame{};
+    if (experiment.views4 && views4_latest_frame(frame))
+        std::memcpy(tan, frame.outerTan[0], sizeof(tan));
+    std::lock_guard guard(quad.mutex);
+    if (!(tan[1] > tan[0])) {
+        if (experiment.views4 && quad.v4FovValid)
+            fov_tangents(quad.v4Fov[0], tan);
+        else if (quad.aViewsValid)
+            fov_tangents(quad.aViews[0].fov, tan);
+    }
+    const double width = static_cast<double>(tan[1]) - tan[0];
+    return quad.nativeW && width > 0.02 ? quad.nativeW / width * 3.14159265358979 / 180 : 0;
+}
+
+void menu_render() {
+    std::wstring title = experiment.views4 ? L"QVFR settings" : L"Two-loop settings";
+    const std::wstring hint = L"Ctrl+Alt+arrows, or right stick: select and change · left stick click: close";
+    if (menu.model.launch.nativePpd <= 0)  // known once ACE has rendered a frame
+        menu.model.launch.nativePpd = native_center_ppd();
+    const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
+                                                         menu_lines(menu.model),
+                                                         menu_notes(menu.model), hint);
+    uint32_t index = 0;
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait.timeout = 100'000'000;
+    if (XR_FAILED(next.AcquireSwapchainImage(menu.chain, nullptr, &index)))
+        return;
+    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() &&
+                    menu.upload.upload(menu.images[index], pixels);
+    next.ReleaseSwapchainImage(menu.chain, nullptr);
+    if (ok) {
+        menu.uploaded = true;
+        menu.dirty = false;
+    }
+}
+
+// This frame's layers with the menu panel on top while it is shown; `info` itself otherwise.
+const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, XrFrameEndInfo& storage,
+                                 std::vector<const XrCompositionLayerBaseHeader*>& layers) {
+    if (live.ini.empty() || (!experiment.views4 && !experiment.quad))
+        return info;
+    // For the launcher's Center PPD: once, when ACE has rendered.
+    static bool ppdReported = false;
+    if (!ppdReported && endFrames % 90 == 0) {
+        if (const double ppd = native_center_ppd(); ppd > 0) {
+            wchar_t text[32];
+            swprintf_s(text, L"%.2f", ppd);
+            runtime_info(L"native_center_ppd", text);
+            logf("settings menu: %.2f px per degree at the centre at 100%% density", ppd);
+            ppdReported = true;
+        }
+    }
+    const int64_t now = qpc_now();
+    menu_keyboard(now);
+    menu_controllers(session, now);
+    if (menu.visible && now >= menu.hideAt) {
+        menu.visible = false;
+        log_line("settings menu: hidden");
+    }
+    if (!menu.visible || !menu_resources(session))
+        return info;
+    if (menu.dirty)
+        menu_render();
+    if (!menu.uploaded)
+        return info;
+    layers.assign(info->layers, info->layers + info->layerCount);
+    layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu.layer));
+    storage = *info;
+    storage.layerCount = static_cast<uint32_t>(layers.size());
+    storage.layers = layers.data();
+    return &storage;
+}
+
+void menu_shutdown() {
+    menu.upload.shutdown();
+    if (menu.chain)
+        next.DestroySwapchain(menu.chain);
+    if (menu.view)
+        next.DestroySpace(menu.view);
+    menu.chain = XR_NULL_HANDLE;
+    menu.view = XR_NULL_HANDLE;
+    menu.images.clear();
+    menu.visible = menu.uploaded = menu.failed = false;
+    menu.dirty = true;
 }
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
@@ -1627,7 +2038,10 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
     return r;
 }
 
-XrResult end_frame(XrSession session, const XrFrameEndInfo* info) {
+XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
+    XrFrameEndInfo withMenu{};
+    std::vector<const XrCompositionLayerBaseHeader*> menuLayers;
+    const XrFrameEndInfo* info = menu_frame(session, frameInfo, withMenu, menuLayers);
     ++endFrames;
     if (experiment.pixCaptureFrame)
         pix_capture_frame(endFrames);
@@ -1842,6 +2256,13 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     ACEQV_LOAD(SyncActions)
     ACEQV_LOAD(CreateActionSpace)
     ACEQV_LOAD(LocateSpace)
+    ACEQV_LOAD(CreateReferenceSpace)
+    ACEQV_LOAD(DestroySpace)
+    ACEQV_LOAD(DestroySwapchain)
+    ACEQV_LOAD(GetActionStateBoolean)
+    ACEQV_LOAD(GetActionStateVector2f)
+    ACEQV_LOAD(GetCurrentInteractionProfile)
+    ACEQV_LOAD(PathToString)
 #undef ACEQV_LOAD
     gipa(*instance, "xrGetVisibilityMaskKHR", reinterpret_cast<PFN_xrVoidFunction*>(&d.GetVisibilityMaskKHR));
     if (ok && experiment.views4) {  // time what runs below this layer (report_cpu_times)

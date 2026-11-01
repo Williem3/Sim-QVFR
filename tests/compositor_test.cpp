@@ -266,23 +266,34 @@ int main() {
                   std::abs(box.eye_width() - 0.89) < 1e-9 && box.eye_height() == 0.5 && !box.equal(),
               "focus width and height are independent: 780x500 focus views beside 1000x1000 outer views");
 
-        // Live resolution: the same launch layout at periphery 25% and focus 0.39 x 0.125 renders in
-        // the top-left part of each slot; the slots stay put, and nothing grows past its launch size.
+        // Live resolution: the views are laid out again inside the launch target, one row from x = 0.
         const Views4Layout shrunk = views4_live(box, 0.25, 0.39, 0.125);
         const ViewRect s0 = views4_rect(shrunk, 0, 3560, 1000), s1 = views4_rect(shrunk, 1, 3560, 1000),
-                       s2 = views4_rect(shrunk, 2, 3560, 1000), slot0 = views4_slot(shrunk, 0, 3560, 1000);
-        const Views4Layout grown = views4_live(box, 0.8, 0.6, 0.6);
-        const ViewRect g0 = views4_rect(grown, 0, 3560, 1000), g2 = views4_rect(grown, 2, 3560, 1000);
-        const Views4Layout tiny = views4_live(box, 0.001, 0.39, 0.25);
+                       s2 = views4_rect(shrunk, 2, 3560, 1000);
         std::printf("     live 25%% / 39%% x 12.5%%: outer %dx%d, view 1 at x=%d, focus at x=%d %dx%d\n", s0.width,
                     s0.height, s1.left, s2.left, s2.width, s2.height);
-        check(s0.width == 500 && s0.height == 500 && s1.left == 1000 && s2.left == 2000 && s2.width == 780 &&
-                  s2.height == 250 && slot0.width == 1000 && slot0.height == 1000 && !shrunk.equal() && !shrunk.full(),
-              "live sizes shrink each view inside its unmoved slot");
-        check(g0.width == 1000 && g0.height == 1000 && g2.width == 780 && g2.height == 500 && grown.full(),
-              "live sizes above the launch size are capped at it");
-        check(std::abs(tiny.liveX[0] - kMinLive) < 1e-12 && views4_rect(tiny, 0, 3560, 1000).width == 100,
-              "live sizes keep at least kMinLive of the slot");
+        check(s0.width == 500 && s0.height == 500 && s1.left == 500 && s2.left == 1000 && s2.width == 780 &&
+                  s2.height == 250 && !shrunk.equal() && shrunk.eye_width() == box.eye_width(),
+              "live sizes re-lay the views inside the launch target (the target itself unchanged)");
+        // The 14:19 launch (periphery 10%, focus 36% x 30% of a 5190x4168 eye: a 4774x1250 target).
+        const Views4Layout run = views4_layout(0.10, 0.36, 0.30);
+        const Views4Fit traded = views4_fit(run, 0.22, 0.24, 0.20), over = views4_fit(run, 0.30, 0.24, 0.20),
+                        roomy = views4_fit(run, 0.30, 0.15, 0.125);
+        const Views4Layout tradedLayout = views4_live(run, 0.22, 0.24, 0.20);
+        const ViewRect t0 = views4_rect(tradedLayout, 0, 4774, 1250), t3 = views4_rect(tradedLayout, 3, 4774, 1250);
+        check(!traded.outerCapped && !traded.focusCapped && t0.width == 1141 && t0.height == 916 &&
+                  t3.left + t3.width <= 4774,
+              "a smaller focus area makes room: periphery 22% (above its launch 10%) fits");
+        check(over.outerCapped && over.outerByRoom && std::abs(over.outer - 0.22) < 1e-9 && !over.focusCapped,
+              "periphery 30% beside a 24% focus area is held at the room left (22%)");
+        check(!roomy.outerCapped && std::abs(roomy.outer - 0.30) < 1e-9,
+              "with a 15% focus area, periphery 30% (the target's height) fits");
+        const Views4Fit grown = views4_fit(box, 0.8, 0.6, 0.6);
+        check(grown.focusCapped && std::abs(grown.focus - 0.5) < 1e-9 && std::abs(grown.focusHeight - 0.5) < 1e-9 &&
+                  grown.outerCapped && grown.outerByRoom && std::abs(grown.outer - 0.39) < 1e-9,
+              "nothing exceeds the largest launch view or the target; focus first, the periphery takes what is left");
+        const Views4Layout tiny = views4_live(box, 0.001, 0.39, 0.25);
+        check(views4_rect(tiny, 0, 3560, 1000).width == 100, "live sizes keep at least kMinLive of the launch size");
     }
 
     // Unequal sources: outer views 64x64 and focus views 32x32 in a 192x64 image, the rows below the

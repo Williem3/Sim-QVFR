@@ -190,7 +190,8 @@ int run(bool dryRun) {
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy ace-quadview.ini into " + runFolder.wstring());
-    const auto variables = launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path());
+    const auto variables =
+        launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring());
 
     say(L"ace-quadview launcher " + widen(ACE_QV_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());

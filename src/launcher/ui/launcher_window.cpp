@@ -74,6 +74,7 @@ struct App {
     RuntimeInfo runtime;
     std::wstring ini;
     bool iniFound = false;
+    FILETIME iniWritten{};  // the ini's write time when last read or saved here (follow_ini)
     Pane pane = Pane::Rendering;
     Ctl focus = kNone;
     bool keyboard = false;  // focus rings show after keyboard use only (:focus-visible)
@@ -128,12 +129,31 @@ void push_live() {
     app.live = fits_launch(app.s, load_launch_sizes(runtime_info_path())) ? Live::Applied : Live::NextLaunch;
 }
 
+FILETIME ini_written() {
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    return GetFileAttributesExW(app.ini.c_str(), GetFileExInfoStandard, &a) ? a.ftLastWriteTime : FILETIME{};
+}
+
 void changed(bool save = true) {
     app.status = Status::Idle;
     if (save && app.iniFound) {
         save_settings(app.ini, app.s);
+        app.iniWritten = ini_written();
         push_live();
     }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// The in-headset settings menu saves into the same ini: show what it set (not while a knob is held).
+constexpr UINT_PTR kFollowTimer = 1;
+void follow_ini() {
+    if (!app.iniFound || app.dragging != kNone)
+        return;
+    const FILETIME written = ini_written();
+    if (CompareFileTime(&written, &app.iniWritten) == 0)
+        return;
+    app.iniWritten = written;
+    app.s = load_settings(app.ini);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -651,6 +671,7 @@ float preview(float x, float y, float w, bool draw) {
         {L"Focus view", known ? dims(ro.focus) : dash},
         {L"Pixels per frame", known ? widen(mp) : dash},
         {L"Pixels saved", known ? widen(saved) : dash},
+        {L"Center PPD", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) : dash},
     };
     for (const auto& [name, value] : lines) {
         if (draw) {
@@ -996,6 +1017,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         apply_theme();
         if (!app.canvas.initialize(hwnd))
             return -1;
+        app.iniWritten = ini_written();
+        SetTimer(hwnd, kFollowTimer, 500, nullptr);
+        return 0;
+    case WM_TIMER:
+        if (wParam == kFollowTimer)
+            follow_ini();
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;

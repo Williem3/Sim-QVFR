@@ -175,7 +175,8 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
 
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
                                                                     const std::wstring& ini, const std::wstring& log,
-                                                                    const std::wstring& runtimeInfo) {
+                                                                    const std::wstring& runtimeInfo,
+                                                                    const std::wstring& settings) {
     std::wstring enabled = widen(kLayerName);  // listed nearest the game first
     for (const MovedLayer& m : plan.below)
         enabled += L";" + widen(m.name);
@@ -189,6 +190,8 @@ std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerP
         {L"SteamAppId", kAceAppId},
         {L"SteamGameId", kAceAppId},
     };
+    if (!settings.empty())
+        v.emplace_back(L"ACE_QV_SETTINGS", settings);
     for (const MovedLayer& m : plan.below)
         v.emplace_back(m.disableVar, L"1");
     for (const auto& [name, variable] : plan.off)
