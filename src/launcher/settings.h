@@ -24,12 +24,14 @@ struct Settings {
     bool outline = false;     // [quad] debug_border
     OutlineColor color = OutlineColor::Teal;
     int feather = 20;         // [quad] feather_percent: blend band, percent of the focus region
+    int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
 };
 
 struct Range {
     int min, max;
 };
-inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10, 100}, kFeatherRange{0, 50};
+inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10, 100}, kFeatherRange{0, 50},
+    kCornerRange{0, 100};
 
 Settings load_settings(const std::wstring& ini);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.

@@ -197,6 +197,7 @@ int main() {
         s.width = 35;
         s.height = 25;
         s.feather = 12;
+        s.corner = 40;
         s.eyeTracking = false;
         s.outline = true;
         s.color = OutlineColor::Teal;
@@ -205,9 +206,10 @@ int main() {
         std::string iniText;
         read_file(ini, iniText);
         check(saved && reread.outer == 30 && reread.inner == 110 && reread.width == 35 && reread.height == 25 &&
-                  reread.feather == 12 && !reread.eyeTracking && reread.outline && reread.color == OutlineColor::Teal &&
+                  reread.feather == 12 && reread.corner == 40 && !reread.eyeTracking && reread.outline && reread.color == OutlineColor::Teal &&
                   iniText.find("periphery_scale=30") != std::string::npos && iniText.find("focus_density=110") != std::string::npos &&
                   iniText.find("focus_height_percent=25") != std::string::npos &&
+                  iniText.find("corner_radius_percent=40") != std::string::npos &&
                   iniText.find("views4_compose=1") != std::string::npos && iniText.find("debug_border_color=teal") != std::string::npos,
               "settings: QVFR save writes periphery_scale, focus_density, both focus axes and the views4 keys, and reads back");
         check(iniText.find("; comment kept") != std::string::npos && iniText.find("dred=1") != std::string::npos,

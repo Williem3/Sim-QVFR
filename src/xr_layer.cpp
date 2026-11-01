@@ -100,6 +100,7 @@ struct Experiment {
     double focus_y() const { return focusFractionY > 0 ? focusFractionY : focusFraction; }
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     double feather = 0.10;        // quad: blend band, as a fraction of the focus box
+    double cornerRadius = 0;      // rounded focus box: radius as a share of half its shorter side (0 = square)
     bool border = false;          // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
     float borderColor[4] = {0, 1, 0, 1};  // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
     bool gaze = true;             // quad: the focus box follows XR_EXT_eye_gaze_interaction
@@ -169,6 +170,8 @@ void load_experiment() {
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
     const UINT featherPercent = std::clamp(GetPrivateProfileIntW(L"quad", L"feather_percent", 10, ini.c_str()), 0u, 50u);
     experiment.feather = featherPercent / 100.0;
+    experiment.cornerRadius =
+        std::clamp(GetPrivateProfileIntW(L"quad", L"corner_radius_percent", 0, ini.c_str()), 0u, 100u) / 100.0;
     experiment.border = GetPrivateProfileIntW(L"quad", L"debug_border", 0, ini.c_str()) != 0;
     wchar_t borderColor[16] = {};
     GetPrivateProfileStringW(L"quad", L"debug_border_color", L"green", borderColor, 16, ini.c_str());
@@ -197,10 +200,10 @@ void load_experiment() {
     const double focus = focusDensityPercent ? density * experiment.focusFraction : experiment.eyeScale;
     const double focusHeight = experiment.focusFractionY > 0 ? density * experiment.focusFractionY : focus;
     experiment.views4Layout = views4_layout(outer, focus, focusHeight);
-    logf("experiment: mode=%ls focus_percent=%u b_focus=%d eye_scale=%u feather_percent=%u debug_border=%d gaze=%d "
-         "(from %ls)",
-         mode, percent, experiment.focusInB ? 1 : 0, eyePercent, featherPercent, experiment.border ? 1 : 0,
-         experiment.gaze ? 1 : 0, ini.c_str());
+    logf("experiment: mode=%ls focus_percent=%u b_focus=%d eye_scale=%u feather_percent=%u corner_radius_percent=%.0f "
+         "debug_border=%d gaze=%d (from %ls)",
+         mode, percent, experiment.focusInB ? 1 : 0, eyePercent, featherPercent, experiment.cornerRadius * 100,
+         experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, ini.c_str());
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
              "(focus views %.0f%% x %.0f%% of the native eye)%s",
@@ -457,8 +460,6 @@ struct Quad {
     XrFovf v4SubmitFov[2] = {};  // the FOV the composed output covers (views4_compose), for views4_submit
     XrFovf v4LoggedAceFov[2] = {};  // ACE's submitted FOV, as last logged against v4SubmitFov
     bool v4Composed = false;
-    FocusOutline v4Outline;
-    bool v4OutlineReady = false;
     int captures = 0;
     ULONGLONG lastCapture = 0;
     bool failureLogged = false;
@@ -749,8 +750,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     }
     {
         std::lock_guard guard(quad.mutex);
-        quad.v4Outline.shutdown();
-        quad.v4OutlineReady = quad.v4Composed = quad.v4FovValid = false;
+        quad.v4Composed = quad.v4FovValid = false;
     }
     {
         std::lock_guard guard(v4outline.mutex);
@@ -1015,7 +1015,11 @@ void views4_compose() {
         views4_uv(experiment.views4Layout, e, w, h, eyes[e].outerSource);
         views4_uv(experiment.views4Layout, e + 2, w, h, eyes[e].focusSource);
         eyes[e].feather = static_cast<float>(experiment.feather);
-        eyes[e].border = 0;  // the outline is drawn below, in the chosen colour
+        // The outline (debug_border) is drawn by the compositor along the focus area's exact edge,
+        // turned and rounded as it is.
+        eyes[e].border = experiment.border ? 0.008f : 0.0f;
+        std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
+        eyes[e].cornerRadius = static_cast<float>(experiment.cornerRadius);
     }
     uint32_t outIndex = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -1028,31 +1032,6 @@ void views4_compose() {
     ID3D12Resource* out = quad.outImages[outIndex];
     bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) && quad.compositor.capture_outer(app) &&
               quad.compositor.compose(app, out, eyes);
-    if (ok && experiment.border) {
-        if (!quad.v4OutlineReady)
-            quad.v4OutlineReady = quad.v4Outline.initialize(quad.device, quad.queue, quad.format);
-        if (quad.v4OutlineReady) {
-            std::vector<OutlineBox> boxes;
-            const int w = static_cast<int>(quad.nativeW), h = static_cast<int>(quad.nativeH);
-            for (int e = 0; e < 2; ++e) {
-                // The turned focus view's corners, as tangents of the outer view: their bounding box.
-                const float l = eyes[e].outerTan[0], r = eyes[e].outerTan[1], u = eyes[e].outerTan[2],
-                            d = eyes[e].outerTan[3], hw = eyes[e].focusTan[1], hh = eyes[e].focusTan[2];
-                float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
-                for (const float sx : {-hw, hw})
-                    for (const float sy : {-hh, hh}) {
-                        const XrVector3f c = rotate(turns[e], {sx, sy, -1});
-                        const float tx = c.x / -c.z, ty = c.y / -c.z;
-                        x0 = std::min(x0, tx), x1 = std::max(x1, tx), y0 = std::min(y0, ty), y1 = std::max(y1, ty);
-                    }
-                boxes.push_back(OutlineBox{e * w + static_cast<int>((x0 - l) / (r - l) * w),
-                                           static_cast<int>((u - y1) / (u - d) * h),
-                                           e * w + static_cast<int>((x1 - l) / (r - l) * w),
-                                           static_cast<int>((u - y0) / (u - d) * h)});
-            }
-            quad.v4Outline.draw(out, boxes, std::max(2, w / 300), experiment.borderColor);
-        }
-    }
     if (ok && quad_capture_due())
         views4_capture(app, out);
     next.ReleaseSwapchainImage(quad.outChain, &release);
@@ -1225,6 +1204,7 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
         eyes[e].feather = static_cast<float>(experiment.feather);
         eyes[e].border = experiment.border ? 0.008f : 0.0f;
         std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
+        eyes[e].cornerRadius = static_cast<float>(experiment.cornerRadius);
     }
 
     uint32_t outIndex = 0;

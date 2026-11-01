@@ -331,6 +331,35 @@ int main() {
                     edge[1], edge[2]);
         failures += tealEdge ? 0 : 1;
         expect(o, 0, 0.50f, 0.50f, "focus", 0, 255, 0);  // inside the outline: still the focus view
+
+        // Rounded corners: radius 100% turns eye 0's square box (tangents -0.5..0.5) into a circle.
+        // Just inside the box's corner is now outside the circle (the outer view), the edge
+        // midpoints and the centre are still the focus view, and the outline follows the curve.
+        v4[0].border = 0;
+        v4[0].cornerRadius = 1.0f;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with rounded corners\n");
+            return 1;
+        }
+        const Pixels round = read_back(gpu, output.Get());
+        expect(round, 0, 0.27f, 0.27f, "outer", 255, 0, 0);  // the box's top-left corner, cut off
+        expect(round, 0, 0.73f, 0.73f, "outer", 255, 0, 0);  // bottom-right
+        expect(round, 0, 0.50f, 0.27f, "focus", 0, 255, 0);  // top edge midpoint
+        expect(round, 0, 0.27f, 0.50f, "focus", 0, 255, 0);  // left edge midpoint
+        expect(round, 0, 0.50f, 0.50f, "focus", 0, 255, 0);
+        expect(round, 1, 0.27f, 0.27f, "focus", 255, 255, 0);  // eye 1 keeps square corners
+        v4[0].border = 0.05f;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with a rounded outline\n");
+            return 1;
+        }
+        const Pixels ring = read_back(gpu, output.Get());
+        // Inside the ring (tangent radius 0.45..0.5) at 45 degrees: tangent 0.475 / sqrt 2 = 0.336 on
+        // each axis, i.e. 0.168 of the eye's width and height (tangents -1..1) from the centre.
+        const uint8_t* arc = ring.at(static_cast<UINT>((0.5f - 0.168f) * (kOutW / 2)), static_cast<UINT>((0.5f - 0.168f) * kOutH));
+        const bool onArc = arc[0] == 0 && std::abs(arc[1] - 160) <= 2 && std::abs(arc[2] - 160) <= 2;
+        std::printf("%s eye 0 rounded outline on the arc got %3u,%3u,%3u (teal)\n", onArc ? "ok  " : "FAIL", arc[0], arc[1], arc[2]);
+        failures += onArc ? 0 : 1;
         c4.shutdown();
     }
 

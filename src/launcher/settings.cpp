@@ -52,6 +52,7 @@ Settings load_settings(const std::wstring& ini) {
     const int density = read_int(ini, L"experiment", L"focus_density", 0);
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
+    s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
     s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
     s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
@@ -68,6 +69,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     s.width = clamp_to(s.width, kSizeRange);
     s.height = clamp_to(s.height, kSizeRange);
     s.feather = clamp_to(s.feather, kFeatherRange);
+    s.corner = clamp_to(s.corner, kCornerRange);
     const auto n = [](int v) { return std::to_wstring(v); };
     bool ok = true;
     if (s.mode == RenderMode::Qvfr) {
@@ -84,6 +86,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
     ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
+    ok &= write(ini, L"quad", L"corner_radius_percent", n(s.corner));
     ok &= write(ini, L"quad", L"gaze", s.eyeTracking ? L"1" : L"0");
     ok &= write(ini, L"quad", L"debug_border", s.outline ? L"1" : L"0");
     ok &= write(ini, L"quad", L"debug_border_color", color_name(s.color));

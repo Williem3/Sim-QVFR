@@ -28,6 +28,7 @@ struct EyeComposition {
     float feather;        // blend band, as a fraction of the focus box (0..0.5)
     float border;         // debug: width of an outline at the box edge, as a fraction of the box (0 = off)
     float borderColor[4]; // its colour (linear RGBA)
+    float cornerRadius;   // rounded box corners: radius as a share of half the box's shorter side (0 = square)
 };
 
 class QuadCompositor {

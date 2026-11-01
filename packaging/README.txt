@@ -32,7 +32,8 @@ Settings save as you change them and apply at the next launch.
 - Resolution: Outer resolution (the full view) and Inner resolution (pixel density in the focus
   region), each a percent of the headset's recommended resolution and set independently. In
   Two-loop the inner resolution follows from the outer resolution and the foveated size.
-- Foveation: Foveated width and Foveated height, each a share of the outer view.
+- Foveation: Foveated width and Foveated height, each a share of the outer view, and Corner radius
+  (rounds the focus region's corners; 0 = square, 100% = fully round ends).
 - Focus overlay: Show focus outline, its color (teal, magenta, green) and Feather (the blend band).
 - The preview shows the focus region and the resulting view sizes. Pixel sizes appear after the
   first launch, once the headset has reported its recommended resolution (runtime.ini).
@@ -51,6 +52,7 @@ Settings (ace-quadview.ini, read when the game starts; the window writes them)
   headset (the runtime's 8192-pixel limit).
 [quad]
   feather_percent=20   blend band at the edge of the focus area.
+  corner_radius_percent=0  rounds its corners (percent of half the shorter side).
   gaze=1               focus area follows your eyes (0 = fixed in the centre).
   debug_border=1       outlines the focus area (to check where it is).
   debug_border_color=  green, magenta or teal.

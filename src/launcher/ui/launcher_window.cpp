@@ -32,7 +32,7 @@ namespace {
 namespace t = tokens;
 
 enum class Pane { Rendering, Resolution, Foveation, Overlay, About };
-enum Ctl { kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kOutline, kColor, kFeather, kRestore, kLaunch };
+enum Ctl { kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kRestore, kLaunch };
 
 struct Hit {
     Ctl id;
@@ -122,6 +122,7 @@ int* slider_value(Ctl id) {
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
     case kFeather: return &app.s.feather;
+    case kCorner: return &app.s.corner;
     default: return nullptr;
     }
 }
@@ -131,6 +132,7 @@ Range slider_range(Ctl id) {
     case kOuter: return kOuterRange;
     case kInner: return kInnerRange;
     case kFeather: return kFeatherRange;
+    case kCorner: return kCornerRange;
     default: return kSizeRange;
     }
 }
@@ -146,7 +148,7 @@ std::vector<Ctl> focus_order() {
         if (!inner_disabled())
             order.push_back(kInner);
         break;
-    case Pane::Foveation: order.insert(order.end(), {kWidth, kHeight}); break;
+    case Pane::Foveation: order.insert(order.end(), {kWidth, kHeight, kCorner}); break;
     case Pane::Overlay:
         order.push_back(kOutline);
         if (app.s.outline)
@@ -482,7 +484,8 @@ float pane_content(float x, float y, float w, bool draw) {
         }
         h += section(x, y + h, w, L"Focus region",
                      {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
-                      slider_row(kHeight, L"Foveated height", L"", app.s.height, L"")},
+                      slider_row(kHeight, L"Foveated height", L"", app.s.height, L""),
+                      slider_row(kCorner, L"Corner radius", L"Rounds the corners of the focus region.", app.s.corner, L"")},
                      L"Share of the outer view that the focus view covers.", draw);
         break;
     }
@@ -550,22 +553,29 @@ float preview(float x, float y, float w, bool draw) {
         if (tfi)
             for (float iy = 0; iy < H; iy += 4)
                 app.canvas.fill(R(0, iy, W, 2), col(app.c->preview_canvas, 0.55f));
-        // Feather: the focus region fades in over feather % of its size, as the compositor blends it.
+        // Feather: the focus region fades in over feather % of its size, as the compositor blends it;
+        // its corners rounded by corner % of half the shorter side.
         const float band = std::min(fw, fh) * app.s.feather / 100.0f;
+        const float corner = std::min(fw, fh) / 2 * app.s.corner / 100.0f;
         const int steps = band > 0.5f ? 6 : 1;
         for (int i = 0; i < steps; ++i) {
             const float in = band * i / steps, alpha = steps == 1 ? 1.0f : static_cast<float>(i + 1) / steps;
-            app.canvas.fill(R(fx + in, fy + in, fw - 2 * in, fh - 2 * in), col(app.c->preview_focus, alpha));
+            app.canvas.fill(R(fx + in, fy + in, fw - 2 * in, fh - 2 * in), col(app.c->preview_focus, alpha),
+                            std::max(0.0f, corner - in) * k);
         }
-        // The focus region's finer grid (the kit's focus pattern), on its own grid origin.
-        app.canvas.push_clip(R(fx, fy, fw, fh));
+        // The focus region's finer grid (the kit's focus pattern), on its own grid origin, inside its shape.
+        ComPtr<ID2D1RoundedRectangleGeometry> shape;
+        app.canvas.factory()->CreateRoundedRectangleGeometry(D2D1::RoundedRect(R(fx, fy, fw, fh).d2d(), corner * k, corner * k), &shape);
+        ComPtr<ID2D1Layer> focusLayer;
+        rt->CreateLayer(&focusLayer);
+        rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), shape.Get()), focusLayer.Get());
         for (float lx = fx; lx <= fx + fw; lx += fc)
             app.canvas.line(x + lx * k, y + fy * k, x + lx * k, y + (fy + fh) * k, col(app.c->preview_periphery), 0.4f * k);
         for (float ly = fy; ly <= fy + fh; ly += fc)
             app.canvas.line(x + fx * k, y + ly * k, x + (fx + fw) * k, y + ly * k, col(app.c->preview_periphery), 0.4f * k);
-        app.canvas.pop_clip();
+        rt->PopLayer();
         if (app.s.outline)
-            app.canvas.stroke(R(fx, fy, fw, fh), col(overlay(static_cast<int>(app.s.color))), 2 * k);
+            app.canvas.stroke(R(fx, fy, fw, fh), col(overlay(static_cast<int>(app.s.color))), 2 * k, corner * k);
         if (eye) {
             const float cx = x + gx * W * k, cy = y + gy * H * k;
             const Color label = col(app.c->preview_label);

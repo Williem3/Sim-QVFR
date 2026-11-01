@@ -17,7 +17,7 @@ cbuffer Eye : register(b0) {
     float4 focusTan;
     float4 rot0, rot1, rot2;  // rows, A eye frame -> B eye frame
     float4 outerSrc, focusSrc;
-    float4 params;  // feather, border
+    float4 params;  // feather, border, corner radius
     float4 borderColor;
 };
 Texture2D outerTex : register(t0);
@@ -36,6 +36,22 @@ float2 inside(float2 uv, float4 src, float2 size) {
     const float2 h = 0.5 / size;
     return clamp(uv, src.xy + h, src.xy + src.zw - h);
 }
+// How far inside the focus box a point is (f: 0..1 across it), as a share of the box. Square corners:
+// the nearer edge's share of its own axis. Rounded corners (params.z: the radius as a share of half
+// the shorter side): the distance to the rounded edge over the shorter side, measured in the box's
+// tangent proportions so the corners are circular. Negative outside.
+float inside_box(float2 f) {
+    if (params.z <= 0) {
+        const float2 e = min(f, 1 - f);
+        return min(e.x, e.y);
+    }
+    const float2 size = abs(float2(focusTan.y - focusTan.x, focusTan.z - focusTan.w));
+    const float2 hs = 0.5 * size;
+    const float r = params.z * min(hs.x, hs.y);
+    const float2 q = abs((f - 0.5) * size) - hs + r;
+    const float d = length(max(q, 0)) + min(max(q.x, q.y), 0) - r;
+    return -d / min(size.x, size.y);
+}
 float4 PS(V v) : SV_Target {
     float2 outerSize;
     outerTex.GetDimensions(outerSize.x, outerSize.y);
@@ -47,9 +63,9 @@ float4 PS(V v) : SV_Target {
     // Derivatives before any branch (they are undefined inside divergent flow).
     const float2 uv = focusSrc.xy + f * focusSrc.zw;
     const float2 dx = ddx(uv), dy = ddy(uv);
-    if (b.z < 0 && all(f >= 0) && all(f <= 1)) {
-        float2 edge = min(f, 1 - f);
-        float w = saturate(min(edge.x, edge.y) / max(params.x, 1e-4));
+    const float e = b.z < 0 && all(f >= 0) && all(f <= 1) ? inside_box(f) : -1;
+    if (e >= 0) {
+        float w = saturate(e / max(params.x, 1e-4));
         w = w * w * (3 - 2 * w);
         // A supersampled focus view has several texels per output pixel: average four bilinear taps
         // spread over the pixel's footprint instead of sampling it once (which would alias).
@@ -65,7 +81,7 @@ float4 PS(V v) : SV_Target {
             focus = focusTex.SampleLevel(linearClamp, inside(uv, focusSrc, size), 0);
         }
         color = lerp(color, focus, w);
-        if (min(edge.x, edge.y) < params.y)
+        if (e < params.y)
             color = borderColor;
     }
     return color;
@@ -299,6 +315,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
                 constants[8 + row * 4 + col] = c.rotation[row * 3 + col];
         constants[28] = c.feather;
         constants[29] = c.border;
+        constants[30] = c.cornerRadius;
         for (int i = 0; i < 4; ++i)
             constants[32 + i] = c.borderColor[i];
         list->SetGraphicsRoot32BitConstants(0, 36, constants, 0);
