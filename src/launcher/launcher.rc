@@ -1,0 +1,2 @@
+// The launcher's icon (tools/make_app_icon.py builds res/app.ico from assets/app-icon.png).
+1 ICON "res/app.ico"

@@ -1067,7 +1067,10 @@ int run_window(HINSTANCE instance, int show) {
     cls.hInstance = instance;
     cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     cls.lpszClassName = L"QvfrLauncher";
-    cls.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    // The app icon (launcher.rc): the large one for Alt+Tab and the taskbar, the small one for the title bar.
+    cls.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
+    cls.hIconSm = static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(1), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                                GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
     RegisterClassExW(&cls);
     // The kit's 960 x 600 window includes its 38px title bar; the native caption replaces it.
     const UINT dpi = GetDpiForSystem();
