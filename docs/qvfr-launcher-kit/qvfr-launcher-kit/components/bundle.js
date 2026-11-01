@@ -229,8 +229,10 @@
     function set(k, v) { var n = Object.assign({}, st); n[k] = v; s[1](n); launch[1]('idle'); if (p.onChange) p.onChange(n); }
     var base = p.recommendedResolution || { width: 2584, height: 2160 };
     var vp = viewPixels(st, base);
-    var atlasW = 2 * (vp.outer.width + vp.inner.width), atlasH = Math.max(vp.outer.height, vp.inner.height);
-    var mpix = (2 * (vp.outer.width * vp.outer.height + vp.inner.width * vp.inner.height) / 1e6).toFixed(2);
+    var pix = 2 * (vp.outer.width * vp.outer.height + vp.inner.width * vp.inner.height), basePix = 2 * base.width * base.height;
+    var mpix = (pix / 1e6).toFixed(2) + ' M of ' + (basePix / 1e6).toFixed(2) + ' M';
+    var savedPct = Math.round(100 * (1 - pix / basePix));
+    var saved = savedPct >= 0 ? savedPct + '%' : 'None (' + -savedPct + '% more)';
     function setSize(axis, v) { var n = Object.assign({}, st.size); n[axis] = v; set('size', n); }
     var eyeWarn = st.mode === 'eye' && !eyeOK;
     var items = PANES.map(function (x) { return x.id === 'foveation' && eyeWarn ? Object.assign({}, x, { attention: 'Eye tracker not detected' }) : x; });
@@ -273,10 +275,11 @@
           h('h3', null, 'Preview'),
           h(FoveationPreview, { method: st.method, mode: eyeWarn ? 'fixed' : st.mode, outer: vp.outer, inner: vp.inner, focusSize: st.size, showOutline: st.outline, outlineColor: st.outlineColor, edgeBlend: st.blend, feather: st.feather }),
           h('dl', { className: 'qv-readouts' },
+            h('dt', null, 'Runtime resolution'), h('dd', null, base.width + ' × ' + base.height),
             h('dt', null, 'Outer view'), h('dd', null, vp.outer.width + ' × ' + vp.outer.height),
             h('dt', null, 'Focus view'), h('dd', null, vp.inner.width + ' × ' + vp.inner.height),
-            h('dt', null, 'Render target'), h('dd', null, atlasW + ' × ' + atlasH),
-            h('dt', null, 'Pixels per frame'), h('dd', null, mpix + ' M')))),
+            h('dt', null, 'Pixels per frame'), h('dd', null, mpix),
+            h('dt', null, 'Pixels saved'), h('dd', null, saved)))),
       h('div', { className: 'qv-actionbar' },
         badge,
         h('span', { className: 'qv-actionbar-spacer' }),

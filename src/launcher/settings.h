@@ -52,14 +52,17 @@ struct RuntimeInfo {
 };
 RuntimeInfo load_runtime_info(const std::wstring& path);
 
-// The kit's readouts for a recommended per-eye size: view sizes in px, the render target and the
-// pixels rendered per headset frame (Two-loop: both frames).
+// The kit's readouts for a recommended per-eye size: view sizes in px, ACE's double-wide target and
+// the pixels rendered per headset frame (Two-loop: both frames) against the runtime's own.
 struct Size {
     int width = 0, height = 0;
 };
 struct Readouts {
+    Size runtime;              // the runtime's recommended eye, before the layer changes it
     Size outer, focus, target;
     double pixels = 0;         // per headset frame
+    double runtimePixels = 0;  // both eyes at the runtime's recommended size, as ACE renders without the layer
+    double saved = 0;          // 1 - pixels / runtimePixels; negative when the layer renders more
     double focusDensity = 0;   // focus pixel density against recommended (horizontal)
     bool overRuntimeLimit = false;  // the offered eye is wider or taller than the runtime's maximum
 };

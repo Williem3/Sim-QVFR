@@ -9,5 +9,5 @@ The complete launcher, composed from the kit: sidebar panes, grouped settings, l
 
 **Use**
 - Outer view px = recommended × outer %. Focus view px = recommended × inner % × foveated size %. `QVFR.viewPixels(settings, recommended)` does both.
-- Render target = 2 × (outer width + focus width) by the taller of the two heights. Pixels per frame = 2 × (outer area + focus area).
+- Runtime resolution = recommended per eye, as the runtime reports it before the layer changes it. Pixels per frame = 2 × (outer area + focus area), shown against the runtime's 2 × recommended area. Pixels saved = 1 − pixels per frame / runtime pixels.
 - Launch is the default button. Settings save as they change; resolution changes apply at next launch.

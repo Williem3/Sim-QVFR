@@ -47,7 +47,8 @@ Pixel sizes come from the headset's recommended per-eye resolution (OpenXR `reco
 
 - Outer view px = recommended × outer %.
 - Focus view px = recommended × inner % × size %.
-- Render target = 2 × (outer width + focus width) by the taller height. Pixels per frame = 2 × (outer area + focus area).
+- Runtime resolution = recommended per eye, as the runtime reports it before the layer changes it (any OpenXR runtime).
+- Pixels per frame = 2 × (outer area + focus area), shown against the runtime's 2 × recommended area. Pixels saved = 1 − pixels per frame / runtime pixels.
 
 `components/bundle.js` exports `QVFR.viewPixels(settings, recommended)` and `QVFR.ranges` as the reference implementation.
 

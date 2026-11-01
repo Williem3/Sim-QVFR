@@ -640,13 +640,19 @@ float preview(float x, float y, float w, bool draw) {
     // Readouts.
     const t::TypeStyle dt{12, 16, 400, false};
     const std::wstring dash = L"—";
-    char mp[32];
-    std::snprintf(mp, sizeof(mp), "%.2f M", ro.pixels / 1e6);
+    char mp[32], saved[48];
+    std::snprintf(mp, sizeof(mp), "%.2f M of %.2f M", ro.pixels / 1e6, ro.runtimePixels / 1e6);
+    const int savedPercent = static_cast<int>(std::lround(ro.saved * 100));
+    if (savedPercent >= 0)
+        std::snprintf(saved, sizeof(saved), "%d%%", savedPercent);
+    else
+        std::snprintf(saved, sizeof(saved), "None (%d%% more)", -savedPercent);
     const std::pair<std::wstring, std::wstring> lines[] = {
+        {L"Runtime resolution", known ? dims(ro.runtime) : dash},
         {L"Outer view", known ? dims(ro.outer) : dash},
         {L"Focus view", known ? dims(ro.focus) : dash},
-        {L"Render target", known ? dims(ro.target) : dash},
         {L"Pixels per frame", known ? widen(mp) : dash},
+        {L"Pixels saved", known ? widen(saved) : dash},
     };
     for (const auto& [name, value] : lines) {
         if (draw) {

@@ -250,7 +250,19 @@ int main() {
         wide.outer = 100;
         wide.inner = 200;
         wide.width = 60;
-        check(readouts(wide, rt).overRuntimeLimit, "readouts: a target wider than the runtime allows is flagged");
+        check(r.runtime.width == 2584 && r.runtime.height == 2160 && std::abs(r.runtimePixels - 2.0 * 2584 * 2160) < 1 &&
+                  std::abs(r.saved - (1 - r.pixels / r.runtimePixels)) < 1e-12 && std::lround(r.saved * 100) == 60,
+              "readouts: pixels saved against both eyes at the runtime's recommended size");
+        const Readouts w = readouts(wide, rt);
+        check(w.overRuntimeLimit, "readouts: a target wider than the runtime allows is flagged");
+        // The layer clamps the offered eye to half the maximum width and the views keep their shares.
+        std::printf("     clamped: outer %dx%d, focus %dx%d, target %dx%d\n", w.outer.width, w.outer.height, w.focus.width,
+                    w.focus.height, w.target.width, w.target.height);
+        check(std::abs(w.target.width / 2 - 4096) <= 2 && w.outer.height == 2160 &&
+                  std::abs(w.pixels - 2.0 * (static_cast<double>(w.outer.width) * w.outer.height +
+                                             static_cast<double>(w.focus.width) * w.focus.height)) < 1 &&
+                  w.saved < 0,
+              "readouts: views shrink with the clamped eye; more pixels than the runtime shows as negative saved");
         Settings loopDefaults;
         loopDefaults.mode = RenderMode::TwoLoop;
         const Readouts l = readouts(loopDefaults, rt);

@@ -143,26 +143,40 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
 Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
     Readouts r;
     const auto scaled = [](int base, double fraction) { return static_cast<int>(std::lround(base * fraction)); };
+    const auto area = [](Size v) { return static_cast<double>(v.width) * v.height; };
     r.outer = {scaled(runtime.width, s.outer / 100.0), scaled(runtime.height, s.outer / 100.0)};
     if (s.mode == RenderMode::Qvfr) {
         // The kit's QVFR.viewPixels: focus px = recommended x inner % x foveated size %.
         r.focus = {scaled(runtime.width, s.inner / 100.0 * s.width / 100.0),
                    scaled(runtime.height, s.inner / 100.0 * s.height / 100.0)};
         r.target = {2 * (r.outer.width + r.focus.width), std::max(r.outer.height, r.focus.height)};
-        r.pixels = 2.0 * (static_cast<double>(r.outer.width) * r.outer.height +
-                          static_cast<double>(r.focus.width) * r.focus.height);
         r.focusDensity = s.inner / 100.0;
     } else {
         // Two frames per headset frame, both at the outer size; frame B spans the foveated size.
         r.focus = r.outer;
         r.target = {2 * r.outer.width, r.outer.height};
-        r.pixels = 4.0 * r.outer.width * r.outer.height;
         r.focusDensity = static_cast<double>(s.outer) / s.width;
     }
     // ACE's double-wide target must fit the runtime's maximum width, so each eye gets half.
     const int eyeWidth = r.target.width / 2;
-    r.overRuntimeLimit = (runtime.maxWidth > 0 && eyeWidth > runtime.maxWidth / 2) ||
-                         (runtime.maxHeight > 0 && r.target.height > runtime.maxHeight);
+    const int maxEyeWidth = runtime.maxWidth > 0 ? std::max(64, runtime.maxWidth / 2) : 0;
+    const int maxEyeHeight = runtime.maxHeight > 0 ? std::max(64, runtime.maxHeight) : 0;
+    const double sx = maxEyeWidth > 0 && eyeWidth > maxEyeWidth ? static_cast<double>(maxEyeWidth) / eyeWidth : 1.0;
+    const double sy = maxEyeHeight > 0 && r.target.height > maxEyeHeight ? static_cast<double>(maxEyeHeight) / r.target.height : 1.0;
+    r.overRuntimeLimit = sx < 1.0 || sy < 1.0;
+    if (r.overRuntimeLimit) {
+        // The layer clamps the offered eye to the maximum and every view keeps its share of it, so all
+        // of them shrink by the same factor on that axis.
+        const auto shrink = [&](Size v) { return Size{scaled(v.width, sx), scaled(v.height, sy)}; };
+        r.outer = shrink(r.outer);
+        r.focus = shrink(r.focus);
+        r.target = shrink(r.target);
+    }
+    // QVFR: two outer and two focus views. Two-loop: two frames of two outer-sized eyes.
+    r.pixels = s.mode == RenderMode::Qvfr ? 2.0 * (area(r.outer) + area(r.focus)) : 4.0 * area(r.outer);
+    r.runtime = {runtime.width, runtime.height};
+    r.runtimePixels = 2.0 * area(r.runtime);
+    r.saved = r.runtimePixels > 0 ? 1.0 - r.pixels / r.runtimePixels : 0;
     return r;
 }
 
