@@ -15,6 +15,7 @@
 
 #include <windows.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <windowsx.h>
 
 #include "../launcher.h"
@@ -32,7 +33,12 @@ namespace {
 namespace t = tokens;
 
 enum class Pane { Rendering, Resolution, Foveation, Overlay, About };
-enum Ctl { kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kRestore, kLaunch };
+enum Ctl {
+    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kSupport, kRestore,
+    kLaunch
+};
+
+constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
 
 struct Hit {
     Ctl id;
@@ -155,7 +161,7 @@ std::vector<Ctl> focus_order() {
             order.push_back(kColor);
         order.push_back(kFeather);
         break;
-    case Pane::About: break;
+    case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
     return order;
@@ -514,6 +520,17 @@ float pane_content(float x, float y, float w, bool draw) {
                             col(app.c->label_secondary));
         }
         h += 26 + 8 + 16 + 8 + 16;
+        // Support: a line and a button that opens the Ko-fi page in the browser.
+        const std::wstring support = L"If ace-quadview improves your races, you can support its development on Ko-fi.";
+        const float sh = app.canvas.measure_height(support, t::kCallout, w);
+        if (draw)
+            app.canvas.text(support, t::kCallout, {x, y + h + t::kSpace6, w, sh + 2}, col(app.c->label_secondary),
+                            Align::Leading, false, true);
+        h += t::kSpace6 + sh + t::kSpace2;
+        const float bw = std::ceil(app.canvas.measure(L"Support on Ko-fi", t::kBody)) + 2 * t::kSpace3;
+        if (draw)
+            button(kSupport, {x, y + h, bw, t::kControlHeight}, L"Support on Ko-fi", false);
+        h += t::kControlHeight;
         break;
     }
     }
@@ -855,6 +872,7 @@ void activate(Ctl id, int option) {
         changed();
         return;
     case kLaunch: launch(); return;
+    case kSupport: ShellExecuteW(app.hwnd, L"open", kSupportUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     default: break;
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -929,6 +947,7 @@ void on_key(WPARAM key) {
     case kMethod:
     case kMode:
     case kOutline:
+    case kSupport:
     case kRestore:
     case kLaunch:
         if (key == VK_SPACE)
@@ -1003,7 +1022,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.dragRange = slider_range(h->id);
             SetCapture(hwnd);
             set_slider_from_x(x);
-        } else if (h->id == kRestore || h->id == kLaunch) {
+        } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport) {
             app.pressed = h->id;
             SetCapture(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
