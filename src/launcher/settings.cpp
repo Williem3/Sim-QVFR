@@ -23,6 +23,12 @@ std::wstring read_string(const std::wstring& ini, const wchar_t* section, const 
     return buffer;
 }
 
+// Signed: GetPrivateProfileInt reads negative values as 0.
+int read_signed(const std::wstring& ini, const wchar_t* section, const wchar_t* key, int fallback) {
+    const std::wstring text = read_string(ini, section, key);
+    return text.empty() ? fallback : _wtoi(text.c_str());
+}
+
 int clamp_to(int v, Range r) { return std::clamp(v, r.min, r.max); }
 
 bool write(const std::wstring& ini, const wchar_t* section, const wchar_t* key, const std::wstring& value) {
@@ -59,6 +65,9 @@ Settings load_settings(const std::wstring& ini) {
     s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
               : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
                                                        : OutlineColor::Teal;
+    s.menuYaw = clamp_to(read_signed(ini, L"menu", L"yaw", s.menuYaw), kMenuYawRange);
+    s.menuPitch = clamp_to(read_signed(ini, L"menu", L"pitch", s.menuPitch), kMenuPitchRange);
+    s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
     return s;
 }
 
@@ -105,6 +114,9 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"quad", L"gaze", s.eyeTracking ? L"1" : L"0");
     ok &= write(ini, L"quad", L"debug_border", s.outline ? L"1" : L"0");
     ok &= write(ini, L"quad", L"debug_border_color", color_name(s.color));
+    ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));
+    ok &= write(ini, L"menu", L"pitch", n(clamp_to(s.menuPitch, kMenuPitchRange)));
+    ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
     return ok;
 }
 

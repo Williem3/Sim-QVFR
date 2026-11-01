@@ -22,6 +22,10 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Width, L"Focus width", 10, 100, 1},     {MenuItem::Height, L"Focus height", 10, 100, 1},
     {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
     {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
+    // The panel's place, degrees (the launcher's kMenuYawRange, kMenuPitchRange, kMenuWidthRange).
+    {MenuItem::MenuYaw, L"Menu left / right", -kMenuYawMax, kMenuYawMax, 1},
+    {MenuItem::MenuPitch, L"Menu up / down", -kMenuPitchMax, kMenuPitchMax, 1},
+    {MenuItem::MenuWidth, L"Menu size", kMenuWidthMin, kMenuWidthMax, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -39,6 +43,9 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Height: return &v.height;
     case MenuItem::Feather: return &v.feather;
     case MenuItem::Corners: return &v.corners;
+    case MenuItem::MenuYaw: return &v.placement.yaw;
+    case MenuItem::MenuPitch: return &v.placement.pitch;
+    case MenuItem::MenuWidth: return &v.placement.width;
     default: return nullptr;
     }
 }
@@ -58,7 +65,8 @@ std::vector<MenuItem> menu_items(bool qvfr) {
     if (qvfr)
         items = {MenuItem::Periphery, MenuItem::Density};
     items.insert(items.end(), {MenuItem::Width, MenuItem::Height, MenuItem::Feather, MenuItem::Corners,
-                               MenuItem::Outline, MenuItem::EyeTracking});
+                               MenuItem::Outline, MenuItem::EyeTracking, MenuItem::MenuYaw, MenuItem::MenuPitch,
+                               MenuItem::MenuWidth});
     return items;
 }
 
@@ -96,6 +104,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.corners = std::clamp(read_int(ini, L"quad", L"corner_radius_percent", v.corners), 0, 100);
     v.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     v.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
+    v.placement = read_menu_placement(ini);
     return v;
 }
 
@@ -111,6 +120,9 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
     ok &= write(ini, L"quad", L"corner_radius_percent", v.corners);
     ok &= write(ini, L"quad", L"debug_border", v.outline ? 1 : 0);
     ok &= write(ini, L"quad", L"gaze", v.eyeTracking ? 1 : 0);
+    ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
+    ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
+    ok &= write(ini, L"menu", L"width", v.placement.width);
     return ok;
 }
 
@@ -149,6 +161,11 @@ bool menu_over_launch(const SettingsMenu& menu) {
 }
 
 namespace {
+
+// "12° right", "4° down", "0°".
+std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
+    return v == 0 ? L"0\u00b0" : std::to_wstring(v < 0 ? -v : v) + L"\u00b0 " + (v > 0 ? plus : minus);
+}
 
 std::wstring percent(double v) { return std::to_wstring(static_cast<int>(std::lround(v))) + L"%"; }
 
@@ -248,6 +265,12 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = v.outline ? L"On" : L"Off";
         else if (items[i] == MenuItem::EyeTracking)
             line.value = v.eyeTracking ? L"On" : L"Off";
+        else if (items[i] == MenuItem::MenuYaw)
+            line.value = degrees(v.placement.yaw, L"right", L"left");
+        else if (items[i] == MenuItem::MenuPitch)
+            line.value = degrees(v.placement.pitch, L"up", L"down");
+        else if (items[i] == MenuItem::MenuWidth)
+            line.value = std::to_wstring(v.placement.width) + L"\u00b0";
         else
             line.value = std::to_wstring(*value_of(v, items[i])) + L"%";
         // What is in effect when the asked value does not fit the launch size.
@@ -263,6 +286,38 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
         lines.push_back(line);
     }
     return lines;
+}
+
+MenuPlacement read_menu_placement(const wchar_t* ini) {
+    // As strings: GetPrivateProfileInt reads negative values as 0.
+    const auto read = [ini](const wchar_t* key, int fallback) {
+        wchar_t text[16] = {};
+        GetPrivateProfileStringW(L"menu", key, L"", text, 16, ini);
+        return text[0] ? _wtoi(text) : fallback;
+    };
+    MenuPlacement p;
+    p.yaw = std::clamp(read(L"yaw", p.yaw), -kMenuYawMax, kMenuYawMax);
+    p.pitch = std::clamp(read(L"pitch", p.pitch), -kMenuPitchMax, kMenuPitchMax);
+    p.width = std::clamp(read(L"width", p.width), kMenuWidthMin, kMenuWidthMax);
+    return p;
+}
+
+MenuPose menu_pose(const MenuPlacement& p, float aspect) {
+    constexpr double kRad = 3.14159265358979 / 180;
+    const double yaw = p.yaw * kRad, pitch = p.pitch * kRad;
+    MenuPose pose;
+    pose.position[0] = static_cast<float>(kMenuDistance * std::sin(yaw) * std::cos(pitch));
+    pose.position[1] = static_cast<float>(kMenuDistance * std::sin(pitch));
+    pose.position[2] = static_cast<float>(-kMenuDistance * std::cos(yaw) * std::cos(pitch));
+    // Turn about Y by -yaw, then about X by pitch: the quad's +Z (its front) points back at the eye.
+    const double hy = -yaw / 2, hp = pitch / 2;
+    pose.orientation[0] = static_cast<float>(std::cos(hy) * std::sin(hp));
+    pose.orientation[1] = static_cast<float>(std::sin(hy) * std::cos(hp));
+    pose.orientation[2] = static_cast<float>(-std::sin(hy) * std::sin(hp));
+    pose.orientation[3] = static_cast<float>(std::cos(hy) * std::cos(hp));
+    pose.width = static_cast<float>(2 * kMenuDistance * std::tan(p.width * kRad / 2));
+    pose.height = pose.width * aspect;
+    return pose;
 }
 
 }  // namespace aceqv

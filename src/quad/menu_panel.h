@@ -13,7 +13,7 @@
 
 namespace aceqv {
 
-inline constexpr int kPanelWidth = 1024, kPanelHeight = 772;
+inline constexpr int kPanelWidth = 1024, kPanelHeight = 922;  // up to 11 lines and 3 notes
 
 // RGBA8 pixels (sRGB-encoded, straight alpha), kPanelWidth x kPanelHeight, rows top to bottom.
 // `title`, then ACE's render target (max and now, QVFR), the centre PPD and pixels saved, the lines

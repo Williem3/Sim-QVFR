@@ -26,12 +26,12 @@ void check(bool ok, const char* what) {
 int main() {
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
-    check(menu_items(true).size() == 8 && menu_items(false).size() == 6 &&
+    check(menu_items(true).size() == 11 && menu_items(false).size() == 9 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
 
     menu_key(m, MenuKey::Up);
-    check(m.selected == 7, "Up from the first item wraps to the last");
+    check(m.selected == 10, "Up from the first item wraps to the last");
     menu_key(m, MenuKey::Down);
     check(m.selected == 0, "Down from the last wraps to the first");
     bool changed = menu_key(m, MenuKey::Left);
@@ -168,9 +168,26 @@ int main() {
     SettingsMenu shown;
     shown.selected = 1;
     const std::vector<MenuLine> lines = menu_lines(shown);
-    check(lines.size() == 8 && lines[1].selected && lines[1].label == L"Focus density" && lines[1].value == L"100%" &&
-              lines[7].value == L"On",
-          "lines carry labels, values and the selection");
+    check(lines.size() == 11 && lines[1].selected && lines[1].label == L"Focus density" && lines[1].value == L"100%" &&
+              lines[7].value == L"On" && lines[8].value == L"0°" && lines[9].value == L"4° down" &&
+              lines[10].value == L"33°",
+          "lines carry labels, values and the selection; the panel's place in degrees");
+
+    // The panel's place from the menu itself: stepped, shown and written to [menu] for the layer to move it.
+    SettingsMenu moving;
+    moving.selected = 8;  // Menu left / right
+    menu_key(moving, MenuKey::Left);
+    menu_key(moving, MenuKey::Left);
+    moving.selected = 10;  // Menu size
+    menu_key(moving, MenuKey::Right);
+    const auto movingIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_moving.ini").wstring();
+    write_menu_values(movingIni.c_str(), moving.values, true);
+    const MenuPlacement moved = read_menu_placement(movingIni.c_str());
+    const MenuValues reread = read_menu_values(movingIni.c_str());
+    DeleteFileW(movingIni.c_str());
+    check(moved.yaw == -2 && moved.pitch == -4 && moved.width == 34 && reread.placement == moved &&
+              menu_lines(moving)[8].value == L"2° left",
+          "the menu moves itself: left 2 degrees and 1 degree wider, written to [menu] and read back");
     const std::vector<uint32_t> pixels =
         draw_menu_panel(L"QVFR settings", menu_resolution(shown), menu_stats(shown), lines, {}, L"hint");
     bool alpha = !pixels.empty(), highlight = false, bright = false, red = false;
@@ -191,6 +208,27 @@ int main() {
     for (uint32_t p : cappedPixels)
         cappedRed |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) < 0x90;
     check(cappedRed, "a capped value and its note draw in red");
+
+    // The panel's place: the defaults keep its first pose; turned, it still faces the eye.
+    const MenuPose first = menu_pose(MenuPlacement{}, static_cast<float>(kPanelHeight) / kPanelWidth);
+    check(std::fabs(first.width - 0.48f) < 0.01f && std::fabs(first.position[1] + 0.056f) < 0.005f &&
+              std::fabs(first.position[2] + 0.8f) < 0.005f && std::fabs(first.position[0]) < 1e-6f,
+          "menu placement: the defaults are the panel's first place (0.48 m wide, a little low, 0.8 m ahead)");
+    const MenuPose turned = menu_pose(MenuPlacement{30, 20, 40}, 0.75f);
+    // The quad's +Z, rotated by its orientation, points back along -position.
+    const float qx = turned.orientation[0], qy = turned.orientation[1], qz = turned.orientation[2], qw = turned.orientation[3];
+    const float zx = 2 * (qx * qz + qw * qy), zy = 2 * (qy * qz - qw * qx), zz = 1 - 2 * (qx * qx + qy * qy);
+    check(turned.position[0] > 0 && turned.position[1] > 0 && std::fabs(zx + turned.position[0] / kMenuDistance) < 1e-4f &&
+              std::fabs(zy + turned.position[1] / kMenuDistance) < 1e-4f &&
+              std::fabs(zz + turned.position[2] / kMenuDistance) < 1e-4f,
+          "menu placement: right of and above ahead, the panel faces the eye");
+    const auto placementIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_placement.ini").wstring();
+    WritePrivateProfileStringW(L"menu", L"yaw", L"-50", placementIni.c_str());
+    WritePrivateProfileStringW(L"menu", L"pitch", L"-7", placementIni.c_str());
+    const MenuPlacement read = read_menu_placement(placementIni.c_str());
+    DeleteFileW(placementIni.c_str());
+    check(read.yaw == -kMenuYawMax && read.pitch == -7 && read.width == 33,
+          "menu placement: [menu] reads negative degrees, clamps them and defaults the rest");
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;

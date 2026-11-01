@@ -9,9 +9,23 @@
 namespace aceqv {
 
 enum class MenuKey { Up, Down, Left, Right };
-enum class MenuItem { Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking };
+enum class MenuItem {
+    Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking, MenuYaw, MenuPitch, MenuWidth
+};
 
-// Percent values, as the launcher's Settings (src/launcher/settings.h), with its ranges.
+// Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
+// reloaded live): degrees right (yaw) and up (pitch) of straight ahead, and the panel's width in
+// degrees, kMenuDistance in front of the head. The defaults are the panel's first place: 0.48 m wide,
+// a little low, at 0.8 m.
+struct MenuPlacement {
+    int yaw = 0, pitch = -4, width = 33;
+    bool operator==(const MenuPlacement&) const = default;
+};
+inline constexpr int kMenuYawMax = 35, kMenuPitchMax = 30, kMenuWidthMin = 20, kMenuWidthMax = 60;
+inline constexpr float kMenuDistance = 0.8f;
+
+// Percent values, as the launcher's Settings (src/launcher/settings.h), with its ranges; the panel's
+// place in degrees.
 struct MenuValues {
     int periphery = 50;  // periphery_scale
     int density = 100;   // focus_density
@@ -21,6 +35,7 @@ struct MenuValues {
     int corners = 0;     // [quad] corner_radius_percent
     bool outline = false;     // [quad] debug_border
     bool eyeTracking = true;  // [quad] gaze
+    MenuPlacement placement;  // [menu]
 };
 
 // What the running game launched with: the outer and focus views' sizes, percent of the native eye
@@ -40,7 +55,7 @@ struct SettingsMenu {
     int selected = 0;
 };
 
-// The items for the method: QVFR also resizes its views live.
+// The items for the method: QVFR also resizes its views live. The panel's own place comes last.
 std::vector<MenuItem> menu_items(bool qvfr);
 // One key: Up/Down select (wrapping), Left/Right step the value. True when a value changed.
 bool menu_key(SettingsMenu& menu, MenuKey key);
@@ -89,5 +104,16 @@ struct MenuStats {
     int savedPercent = 0;
 };
 MenuStats menu_stats(const SettingsMenu& menu);
+
+MenuPlacement read_menu_placement(const wchar_t* ini);
+
+// The quad layer in view space (OpenXR: -Z ahead, +X right, +Y up): its centre on the sphere at
+// kMenuDistance, turned to face the eye, and its size in metres for an image `aspect` high per wide.
+struct MenuPose {
+    float position[3] = {};
+    float orientation[4] = {0, 0, 0, 1};  // x, y, z, w
+    float width = 0, height = 0;
+};
+MenuPose menu_pose(const MenuPlacement& placement, float aspect);
 
 }  // namespace aceqv

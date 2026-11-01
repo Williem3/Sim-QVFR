@@ -25,6 +25,11 @@ struct Settings {
     OutlineColor color = OutlineColor::Teal;
     int feather = 20;         // [quad] feather_percent: blend band, percent of the focus region
     int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
+    // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
+    // right and up of straight ahead, and the panel's width in degrees.
+    int menuYaw = 0;          // [menu] yaw
+    int menuPitch = -4;       // [menu] pitch
+    int menuWidth = 33;       // [menu] width
 };
 
 struct Range {
@@ -32,12 +37,14 @@ struct Range {
 };
 inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10, 100}, kFeatherRange{0, 50},
     kCornerRange{0, 100};
+// The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.
+inline constexpr Range kMenuYawRange{-35, 35}, kMenuPitchRange{-30, 30}, kMenuWidthRange{20, 60};
 
 Settings load_settings(const std::wstring& ini);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.
 bool save_settings(const std::wstring& ini, const Settings& settings);
 // The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,
-// outline, eye tracking and, for QVFR, the resolution (up to its launch size). The method and
+// outline, eye tracking, the headset menu's place and, for QVFR, the resolution (up to its launch size). The method and
 // Two-loop's resolution apply at the next launch.
 bool save_live_settings(const std::wstring& ini, const Settings& settings);
 // The ini a running ACE reads (runtime.ini's live_ini, while its live_pid is still ACE), or empty.

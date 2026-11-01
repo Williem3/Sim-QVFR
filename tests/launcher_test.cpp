@@ -230,6 +230,23 @@ int main() {
         const Settings clamped = load_settings(ini);
         check(clamped.outer == kOuterRange.max && clamped.width == kSizeRange.min, "settings: values are clamped to the kit's ranges");
 
+        Settings placed;
+        placed.menuYaw = -20;
+        placed.menuPitch = -12;
+        placed.menuWidth = 45;
+        save_settings(ini, placed);
+        const Settings menu = load_settings(ini);
+        read_file(ini, iniText);
+        check(menu.menuYaw == -20 && menu.menuPitch == -12 && menu.menuWidth == 45 && iniText.find("[menu]") != std::string::npos &&
+                  iniText.find("yaw=-20") != std::string::npos,
+              "settings: the headset menu's place round-trips through [menu], negative degrees included");
+        placed.menuYaw = 90;
+        placed.menuWidth = 5;
+        save_settings(ini, placed);
+        const Settings outside = load_settings(ini);
+        check(outside.menuYaw == kMenuYawRange.max && outside.menuWidth == kMenuWidthRange.min,
+              "settings: the headset menu's place is clamped to its ranges");
+
         // The runtime report, and the kit's example: recommended 2584 x 2160, defaults (outer 50,
         // inner 100, 39% x 39%) give 1292 x 1080 and 1008 x 842, a 4600 x 1080 target, 4.49 M pixels.
         const std::wstring runtimeIni = (folder / L"runtime.ini").wstring();

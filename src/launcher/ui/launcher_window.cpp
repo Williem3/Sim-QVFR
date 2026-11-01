@@ -1,6 +1,7 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Rendering, Resolution, Foveation, Focus overlay, About), grouped forms with the kit's
-// controls, a live foveation preview with readouts, and an action bar with the status badge,
+// of panes (Rendering, Resolution, Foveation, Focus overlay, Headset menu, About), grouped forms with
+// the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
+// to drag the in-headset settings menu around), and an action bar with the status badge,
 // Restore Defaults and Launch. Every colour, size and type style comes from theme_tokens.h; every
 // label is the kit's. Settings save as they change (settings.h); Launch runs launch_ace (main.cpp).
 //
@@ -32,10 +33,11 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Rendering, Resolution, Foveation, Overlay, About };
+enum class Pane { Rendering, Resolution, Foveation, Overlay, Menu, About };
+constexpr int kPanes = 6;
 enum Ctl {
-    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kSupport, kRestore,
-    kLaunch
+    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kMenuYaw,
+    kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch
 };
 
 constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
@@ -64,6 +66,11 @@ constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
 constexpr float kMinWidth = 820, kMinHeight = 540, kDefaultWidth = 960, kDefaultHeight = 600;
 constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes its title bar; ours is native
+// The placement preview's reference view (degrees) and the panel's distance (the layer's kMenuDistance).
+constexpr float kRefFovX = 100, kRefFovY = 80, kMenuDistance = 0.8f;
+// The in-headset panel's image (the layer's kPanelWidth x kPanelHeight) and colours (menu_panel.cpp).
+constexpr float kMenuAspect = 922.0f / 1024;
+constexpr uint32_t kMenuBackground = 0x16181c, kMenuHighlight = 0x0a6e78, kMenuLabel = 0xe8eaed, kMenuDim = 0x9aa0a6;
 
 struct App {
     HWND hwnd = nullptr;
@@ -81,6 +88,8 @@ struct App {
     Ctl pressed = kNone, dragging = kNone;
     Rect dragTrack;
     Range dragRange{0, 100};
+    Rect placeFrame;                   // the placement preview's reference view, as last drawn
+    float grabYaw = 0, grabPitch = 0;  // dragging the panel: its centre less the pointer, degrees
     Popup popup;
     Status status = Status::Idle;
     Live live = Live::Off;
@@ -165,6 +174,9 @@ int* slider_value(Ctl id) {
     case kHeight: return &app.s.height;
     case kFeather: return &app.s.feather;
     case kCorner: return &app.s.corner;
+    case kMenuYaw: return &app.s.menuYaw;
+    case kMenuPitch: return &app.s.menuPitch;
+    case kMenuWidth: return &app.s.menuWidth;
     default: return nullptr;
     }
 }
@@ -175,6 +187,9 @@ Range slider_range(Ctl id) {
     case kInner: return kInnerRange;
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
+    case kMenuYaw: return kMenuYawRange;
+    case kMenuPitch: return kMenuPitchRange;
+    case kMenuWidth: return kMenuWidthRange;
     default: return kSizeRange;
     }
 }
@@ -197,6 +212,7 @@ std::vector<Ctl> focus_order() {
             order.push_back(kColor);
         order.push_back(kFeather);
         break;
+    case Pane::Menu: order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel}); break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -270,8 +286,9 @@ void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disable
     app.hits.push_back({id, r});
 }
 
-// The kit's PercentSlider: track, value readout and an optional detail line. Height 20 (+16 with detail).
-void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled) {
+// The kit's PercentSlider: track, value readout (in `unit`) and an optional detail line. Height 20 (+16 with detail).
+void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
+            const wchar_t* unit = L"%") {
     const float valueW = 40, trackW = r.w - valueW - t::kSpace3;
     const Rect track{r.x, r.y, trackW, 20};
     const float knob = 18, travel = track.w - knob;
@@ -279,14 +296,17 @@ void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& d
     const float kx = track.x + travel * f, cy = track.y + 10;
     const Color fill = col(disabled ? app.c->label_tertiary : app.c->accent_fill);
     app.canvas.fill({track.x, cy - 2, track.w, 4}, col(app.c->segment_track), 2);
-    app.canvas.fill({track.x, cy - 2, kx + knob / 2 - track.x, 4}, fill, 2);
+    // Filled from the range's start, or from 0 when it spans both signs (degrees left and right).
+    const float zx = range.min < 0 && range.max > 0 ? track.x + travel * (0.0f - range.min) / (range.max - range.min) : track.x;
+    const float kc = kx + knob / 2;
+    app.canvas.fill({std::min(zx, kc), cy - 2, std::abs(kc - zx), 4}, fill, 2);
     const Rect k{kx, cy - knob / 2, knob, knob};
     app.canvas.control_shadow(k, knob / 2, app.dark);
     app.canvas.fill(k, col(app.c->control_bg), knob / 2);
     app.canvas.stroke(k, col(app.c->control_border), 1, knob / 2);
     if (focused(id))
         app.canvas.circle(k.x + knob / 2, k.y + knob / 2, knob / 2 + 1.5f, col(app.c->focus_ring), false, 3);
-    app.canvas.text(std::to_wstring(value) + L"%", t::kValue, {track.right() + t::kSpace3, r.y, valueW, 20},
+    app.canvas.text(std::to_wstring(value) + unit, t::kValue, {track.right() + t::kSpace3, r.y, valueW, 20},
                     col(disabled ? app.c->label_tertiary : app.c->label), Align::Trailing);
     if (!detail.empty())
         app.canvas.text(detail, t::kSubheadline, {r.x, r.y + 22, r.w, 14}, col(disabled ? app.c->label_tertiary : app.c->label_secondary));
@@ -458,7 +478,7 @@ std::wstring px(Size s) { return std::to_wstring(s.width) + L" × " + std::to_ws
 std::wstring dims(Size s) { return std::to_wstring(s.width) + L" × " + std::to_wstring(s.height); }
 
 Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int value, const std::wstring& detail,
-               bool disabled = false) {
+               bool disabled = false, const wchar_t* unit = L"%") {
     Row row;
     row.label = label;
     row.desc = desc;
@@ -466,7 +486,7 @@ Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int 
     row.controlH = detail.empty() ? 20.0f : 36.0f;
     row.disabled = disabled;
     const Range range = slider_range(id);
-    row.control = [=](const Rect& r) { slider(id, r, value, range, detail, disabled); };
+    row.control = [=](const Rect& r) { slider(id, r, value, range, detail, disabled, unit); };
     return row;
 }
 
@@ -545,6 +565,29 @@ float pane_content(float x, float y, float w, bool draw) {
         h += section(x, y, w, L"Focus overlay",
                      {show, color, slider_row(kFeather, L"Feather", L"Softens the edge of the focus region.", app.s.feather, L"")},
                      L"The outline is drawn into the headset image, to show where the focus region is.", draw);
+        break;
+    }
+    case Pane::Menu: {
+        h += section(x, y, w, L"Placement",
+                     {slider_row(kMenuYaw, L"Horizontal", L"Degrees right of straight ahead. Negative is left.", app.s.menuYaw,
+                                 L"", false, L"°"),
+                      slider_row(kMenuPitch, L"Vertical", L"Degrees above eye level. Negative is below.", app.s.menuPitch, L"",
+                                 false, L"°"),
+                      slider_row(kMenuWidth, L"Size", L"Width of the panel, in degrees of your view.", app.s.menuWidth, L"",
+                                 false, L"°")},
+                     L"The settings menu stays 0.8 m in front of your head, wherever you look. Drag it in the preview, "
+                     L"or move it from the menu itself in the headset. While the game runs, it moves at once.",
+                     draw);
+        const std::wstring open = L"Ctrl+Alt+arrows while the game has focus, or click the left controller stick. The right "
+                                  L"stick selects and changes values; the menu hides after a few seconds.";
+        const float oh = app.canvas.measure_height(open, t::kCallout, w - 2 * t::kSpace3);
+        if (draw) {
+            app.canvas.text(L"Opening the menu", t::kHeadline, {x + t::kSpace3, y + h + t::kSpace6, w - t::kSpace3, 16},
+                            col(app.c->label));
+            app.canvas.text(open, t::kCallout, {x + t::kSpace3, y + h + t::kSpace6 + 16 + 6, w - 2 * t::kSpace3, oh + 2},
+                            col(app.c->label_secondary), Align::Leading, false, true);
+        }
+        h += t::kSpace6 + 16 + 6 + oh;
         break;
     }
     case Pane::About: {
@@ -697,6 +740,109 @@ float preview(float x, float y, float w, bool draw) {
     return h - 4;
 }
 
+// Angular size of the panel: its height in degrees for a width in degrees, at any distance.
+float menu_height_deg(int widthDeg) {
+    constexpr float kRad = 3.14159265f / 180;
+    return 2 * std::atan(std::tan(widthDeg * kRad / 2) * kMenuAspect) / kRad;
+}
+
+std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
+    return v == 0 ? L"0°" : std::to_wstring(std::abs(v)) + L"° " + (v > 0 ? plus : minus);
+}
+
+// The settings menu's place (Headset menu pane) at (x, y), width w: a kRefFovX x kRefFovY view in
+// degrees with the panel, drawn in its own colours, where it floats. Returns its height.
+float placement_preview(float x, float y, float w, bool draw) {
+    const float k = w / kRefFovX, frameH = std::round(kRefFovY * k);
+    const Rect frame{x, y, w, frameH};
+    const float pw = app.s.menuWidth * k, ph = menu_height_deg(app.s.menuWidth) * k;
+    const float pcx = x + (kRefFovX / 2 + app.s.menuYaw) * k, pcy = y + (kRefFovY / 2 - app.s.menuPitch) * k;
+    const Rect panel{pcx - pw / 2, pcy - ph / 2, pw, ph};
+    if (draw) {
+        app.placeFrame = frame;
+        ComPtr<ID2D1RoundedRectangleGeometry> clip;
+        app.canvas.factory()->CreateRoundedRectangleGeometry(D2D1::RoundedRect(frame.d2d(), t::kRadiusGroup, t::kRadiusGroup), &clip);
+        ComPtr<ID2D1Layer> layer;
+        ID2D1RenderTarget* rt = app.canvas.target();
+        rt->CreateLayer(&layer);
+        rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), clip.Get()), layer.Get());
+        app.canvas.fill(frame, col(app.c->preview_periphery));
+        // A 10° grid, with the horizon and straight ahead stronger.
+        for (float d = 10; d < kRefFovX; d += 10)
+            app.canvas.line(x + d * k, y, x + d * k, y + frameH, col(app.c->preview_canvas), 0.6f);
+        for (float d = 10; d < kRefFovY; d += 10)
+            app.canvas.line(x, y + d * k, x + w, y + d * k, col(app.c->preview_canvas), 0.6f);
+        const float cx = x + w / 2, cy = y + frameH / 2;
+        const Color axis = col(app.c->preview_label, 0.35f);
+        app.canvas.line(cx, y, cx, y + frameH, axis, 1);
+        app.canvas.line(x, cy, x + w, cy, axis, 1);
+        app.canvas.circle(cx, cy, 5, col(app.c->preview_label, 0.8f), false, 1.2f);
+        // The panel as the headset shows it: title, resolution line, the settings rows (the first
+        // selected) and the hint, in its own colours (in panel pixels, 1024 x 922).
+        const bool active = app.dragging == kMenuPanel;
+        app.canvas.fill({panel.x, panel.y + 2, panel.w, panel.h}, {0, 0.35f}, 4);
+        app.canvas.fill(panel, col(kMenuBackground, 0.92f), 4);
+        const float m = pw * 36 / 1024, u = ph / 922;
+        const auto bar = [&](float bx, float by, float bw, float bh, Color c) {
+            app.canvas.fill({panel.x + bx, panel.y + by * u, bw, std::max(1.5f, bh * u)}, c, 1);
+        };
+        bar(m, 30, pw * 0.42f, 34, col(kMenuLabel));
+        bar(m, 100, pw * 0.36f, 22, col(kMenuDim));
+        bar(pw / 2, 100, pw * 0.3f, 22, col(kMenuLabel, 0.8f));
+        for (int i = 0; i < 11; ++i) {
+            const float ry = 200 + 50.0f * i;
+            if (i == 0)
+                app.canvas.fill({panel.x + m * 0.55f, panel.y + (ry - 8) * u, pw - 1.1f * m, 50 * u}, col(kMenuHighlight), 1);
+            bar(m, ry + 8, pw * (0.22f + 0.04f * (i % 3)), 18, col(kMenuLabel, 0.85f));
+            const float vw = pw * 0.12f;
+            bar(pw - m - vw, ry + 8, vw, 18, col(kMenuLabel, 0.85f));
+        }
+        bar(m, 880, pw * 0.6f, 14, col(kMenuDim, 0.7f));
+        app.canvas.stroke(panel, col(active ? app.c->accent : app.c->preview_label, active ? 1 : 0.45f), active ? 1.5f : 0.75f, 4);
+        if (focused(kMenuPanel))
+            focus_ring(panel, 4);
+        const t::TypeStyle tiny{9.5f, 12, 400, false};
+        app.canvas.text(L"Reference view  " + std::to_wstring(static_cast<int>(kRefFovX)) + L"° × " +
+                            std::to_wstring(static_cast<int>(kRefFovY)) + L"°",
+                        tiny, {x + 8, y + 5, w - 16, 12}, col(app.c->preview_label, 0.75f), Align::Leading, false);
+        rt->PopLayer();
+        app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
+        app.hits.push_back({kMenuPanel, frame, 0});  // empty space: the panel's centre jumps there
+        app.hits.push_back({kMenuPanel, panel, 1});  // the panel: dragged from where it is held
+    }
+    float h = frameH + t::kSpace2;
+    const std::wstring caption = L"Drag the panel to place it  ·  Headsets’ fields of view vary";
+    const float ch = app.canvas.measure_height(caption, t::kSubheadline, w);
+    if (draw)
+        app.canvas.text(caption, t::kSubheadline, {x, y + h, w, ch + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+    h += ch + t::kSpace4;
+    const t::TypeStyle dt{12, 16, 400, false};
+    char size[48], metres[48], distance[16];
+    std::snprintf(size, sizeof(size), "%d° × %d°", app.s.menuWidth, static_cast<int>(std::lround(menu_height_deg(app.s.menuWidth))));
+    std::snprintf(metres, sizeof(metres), "%.2f m", 2 * kMenuDistance * std::tan(app.s.menuWidth * 3.14159265 / 360));
+    std::snprintf(distance, sizeof(distance), "%.1f m", kMenuDistance);
+    const std::pair<std::wstring, std::wstring> lines[] = {
+        {L"Horizontal", degrees(app.s.menuYaw, L"right", L"left")},
+        {L"Vertical", degrees(app.s.menuPitch, L"up", L"down")},
+        {L"Panel size", widen(size)},
+        {L"Panel width", widen(metres)},
+        {L"Distance", widen(distance)},
+    };
+    for (const auto& [name, value] : lines) {
+        if (draw) {
+            app.canvas.text(name, dt, {x, y + h, w / 2, 16}, col(app.c->label_secondary));
+            app.canvas.text(value, t::kValue, {x + w / 2, y + h, w / 2, 16}, col(app.c->label), Align::Trailing);
+        }
+        h += 16 + 4;
+    }
+    return h - 4;
+}
+
+// The preview column: the placement preview on the Headset menu pane, the foveation preview elsewhere.
+float side_preview(float x, float y, float w, bool draw) {
+    return app.pane == Pane::Menu ? placement_preview(x, y, w, draw) : preview(x, y, w, draw);
+}
+
 // ---- Window ------------------------------------------------------------------------------------
 
 struct Item {
@@ -709,6 +855,7 @@ const Item kItems[] = {
     {L"Resolution", {"M3.25 2.75H12.75C13.6 2.75 14.25 3.4 14.25 4.25V9.75C14.25 10.6 13.6 11.25 12.75 11.25H3.25C2.4 11.25 1.75 10.6 1.75 9.75V4.25C1.75 3.4 2.4 2.75 3.25 2.75Z", "M5.5 14h5M8 11.25V14", nullptr}},
     {L"Foveation", {"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", nullptr, nullptr}},
     {L"Focus overlay", {"M5 5H11V11H5Z", nullptr, nullptr}},
+    {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
     {L"About", {"M8 7.25V11", nullptr, nullptr}},
 };
 
@@ -726,7 +873,7 @@ void sidebar_icon(int i, const Rect& r, Color c) {
             app.canvas.line(r.x + 1.75f, r.y + d, r.x + 1.75f, r.y + e, c, 1.5f);
             app.canvas.line(r.x + 14.25f, r.y + d, r.x + 14.25f, r.y + e, c, 1.5f);
         }
-    if (i == 4) {
+    if (i == 5) {
         app.canvas.circle(r.x + 8, r.y + 8, 6.25f, c, false, 1.5f);
         app.canvas.circle(r.x + 8, r.y + 5, 0.9f, c, true);
     }
@@ -761,7 +908,7 @@ void paint() {
     cv.fill({0, 0, t::kSidebarWidth, bodyH}, col(app.c->sidebar_bg));
     cv.line(t::kSidebarWidth - 0.25f, 0, t::kSidebarWidth - 0.25f, bodyH, col(app.c->separator), 0.5f);
     float sy = t::kSpace2;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < kPanes; ++i) {
         const Rect row{10, sy, t::kSidebarWidth - 20, 28};
         const bool selected = static_cast<int>(app.pane) == i;
         if (selected)
@@ -789,8 +936,7 @@ void paint() {
     app.scrollArea = {mainX, 0, W - mainX, bodyH};
     cv.push_clip(app.scrollArea);
     const float y0 = t::kSpace5 - app.scroll;
-    const wchar_t* titles[] = {L"Rendering", L"Resolution", L"Foveation", L"Focus overlay", L"About"};
-    cv.text(titles[static_cast<int>(app.pane)], t::kTitle2, {contentX, y0, contentW, 22}, col(app.c->label));
+    cv.text(kItems[static_cast<int>(app.pane)].label, t::kTitle2, {contentX, y0, contentW, 22}, col(app.c->label));
     float contentH = 22 + t::kSpace6;
     contentH += pane_content(contentX, y0 + contentH, contentW, true);
     float total = contentH + t::kSpace5;
@@ -798,14 +944,14 @@ void paint() {
         const float py = y0 + total + t::kSpace2;
         cv.text(L"Preview", t::kHeadline, {contentX + 2, py, contentW, 16}, col(app.c->label));
         const float pw = std::min(contentW, t::kPreviewWidth - t::kSpace5);
-        total += t::kSpace2 + 16 + t::kSpace4 + preview(contentX, py + 16 + t::kSpace4, pw, true) + t::kSpace5;
+        total += t::kSpace2 + 16 + t::kSpace4 + side_preview(contentX, py + 16 + t::kSpace4, pw, true) + t::kSpace5;
     }
     cv.pop_clip();
     app.scrollMax = std::max(0.0f, total + t::kSpace5 - bodyH);
     if (!narrow) {
         const float ax = W - t::kPreviewWidth, aw = t::kPreviewWidth - t::kSpace5;
         cv.text(L"Preview", t::kHeadline, {ax + 2, t::kSpace5, aw, 16}, col(app.c->label));
-        preview(ax, t::kSpace5 + 16 + t::kSpace4, aw, true);
+        side_preview(ax, t::kSpace5 + 16 + t::kSpace4, aw, true);
     }
 
     // Action bar: status badge, Restore Defaults, Launch.
@@ -882,6 +1028,23 @@ void set_slider_from_x(float x) {
     changed(false);
     if (*v != before && app.iniFound)
         push_live();  // the running game follows the knob; the settings save once it is let go
+}
+
+// Dragging the panel in the placement preview: its centre follows the pointer (less where it was held).
+void set_panel_from(float x, float y) {
+    const float k = app.placeFrame.w / kRefFovX;
+    if (k <= 0)
+        return;
+    const int yaw = std::clamp(static_cast<int>(std::lround((x - app.placeFrame.x) / k - kRefFovX / 2 + app.grabYaw)),
+                               kMenuYawRange.min, kMenuYawRange.max);
+    const int pitch = std::clamp(static_cast<int>(std::lround(kRefFovY / 2 - (y - app.placeFrame.y) / k + app.grabPitch)),
+                                 kMenuPitchRange.min, kMenuPitchRange.max);
+    const bool moved = yaw != app.s.menuYaw || pitch != app.s.menuPitch;
+    app.s.menuYaw = yaw;
+    app.s.menuPitch = pitch;
+    changed(false);
+    if (moved && app.iniFound)
+        push_live();  // the running game moves it as it is dragged; the settings save once it is let go
 }
 
 void open_popup(Ctl owner) {
@@ -1001,10 +1164,21 @@ void on_key(WPARAM key) {
     switch (app.focus) {
     case kSidebar:
         if (key == VK_UP || key == VK_DOWN) {
-            const int p = std::clamp(static_cast<int>(app.pane) + (key == VK_DOWN ? 1 : -1), 0, 4);
+            const int p = std::clamp(static_cast<int>(app.pane) + (key == VK_DOWN ? 1 : -1), 0, kPanes - 1);
             activate(kSidebar, p);
         }
         break;
+    case kMenuPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
+        const int step = key == VK_PRIOR || key == VK_NEXT ? 10 : 1;
+        const int dx = key == VK_RIGHT ? step : key == VK_LEFT ? -step : 0;
+        const int dy = key == VK_UP || key == VK_PRIOR ? step : key == VK_DOWN || key == VK_NEXT ? -step : 0;
+        if (dx || dy) {
+            app.s.menuYaw = std::clamp(app.s.menuYaw + dx, kMenuYawRange.min, kMenuYawRange.max);
+            app.s.menuPitch = std::clamp(app.s.menuPitch + dy, kMenuPitchRange.min, kMenuPitchRange.max);
+            changed();
+        }
+        break;
+    }
     case kColor:
         if (key == VK_LEFT || key == VK_RIGHT || key == VK_UP || key == VK_DOWN) {
             const int d = key == VK_RIGHT || key == VK_DOWN ? 1 : 2;
@@ -1095,6 +1269,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.dragRange = slider_range(h->id);
             SetCapture(hwnd);
             set_slider_from_x(x);
+        } else if (h->id == kMenuPanel) {
+            app.dragging = kMenuPanel;
+            const float k = app.placeFrame.w / kRefFovX;
+            // Held on the panel: that point stays under the pointer; on empty space, the centre jumps there.
+            app.grabYaw = h->option == 1 ? app.s.menuYaw - ((x - app.placeFrame.x) / k - kRefFovX / 2) : 0;
+            app.grabPitch = h->option == 1 ? app.s.menuPitch - (kRefFovY / 2 - (y - app.placeFrame.y) / k) : 0;
+            SetCapture(hwnd);
+            set_panel_from(x, y);
         } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport) {
             app.pressed = h->id;
             SetCapture(hwnd);
@@ -1106,7 +1288,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     }
     case WM_MOUSEMOVE: {
         const float x = dip(lParam, false), y = dip(lParam, true);
-        if (app.dragging != kNone)
+        if (app.dragging == kMenuPanel)
+            set_panel_from(x, y);
+        else if (app.dragging != kNone)
             set_slider_from_x(x);
         else if (app.popup.open) {
             const int hover = popup_item_at(x, y);

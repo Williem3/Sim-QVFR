@@ -195,6 +195,7 @@ Views4Sizes views4_sizes(const wchar_t* ini, double focusFraction, double focusF
 struct Live {
     std::wstring ini;          // the ini load_experiment read
     std::wstring restartKeys;  // restart_keys when last read
+    MenuPlacement menuPlacement;  // the settings menu's place ([menu]) when last read
     FILETIME written{};        // the ini's last write time when last read
     int64_t nextCheck = 0;     // QPC
 };
@@ -277,6 +278,7 @@ void load_experiment() {
     experiment.gaze = settings.gaze;
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
+    live.menuPlacement = read_menu_placement(ini.c_str());
     WIN32_FILE_ATTRIBUTE_DATA attributes{};
     if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
         live.written = attributes.ftLastWriteTime;
@@ -1662,6 +1664,7 @@ void live_apply(const LiveSettings& l) {
 }
 
 void menu_values_changed();  // the settings menu shows the ini's values (below)
+void menu_placement_changed();  // the launcher moved the settings menu's panel (below)
 
 constexpr int64_t kLiveCheckMs = 250;
 
@@ -1691,6 +1694,7 @@ void live_reload() {
     live.written = attributes.ftLastWriteTime;
     live_apply(read_live(live.ini.c_str()));
     menu_values_changed();
+    menu_placement_changed();
     const std::wstring restartKeys = restart_keys(live.ini.c_str(), experiment.views4);
     if (restartKeys != live.restartKeys) {
         logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(),
@@ -1703,8 +1707,8 @@ void live_reload() {
 // In the headset (settings_menu.h): Ctrl+Alt+arrows while ACE has focus, or a controller's left
 // stick click (open, close) and right stick (select, change). Changes are written to the ini the
 // layer reloads from and to the launcher's (ACE_QV_SETTINGS), so they apply as the launcher's do.
-// Shown as a head-locked quad layer on top of whatever this layer submits; hidden kMenuHideMs after
-// the last input.
+// Shown as a head-locked quad layer on top of whatever this layer submits, where the launcher's
+// Headset menu pane places it ([menu], live); hidden kMenuHideMs after the last input.
 struct Menu {
     SettingsMenu model;
     bool visible = false, dirty = true, failed = false, uploaded = false;
@@ -1744,12 +1748,33 @@ bool ace_focused() {
 
 double native_center_ppd();  // below
 
-// The launcher (or the menu itself) changed the ini: an open menu shows the new values.
+void menu_place(const MenuPlacement& placement) {
+    const MenuPose pose = menu_pose(placement, static_cast<float>(kPanelHeight) / kPanelWidth);
+    menu.layer.pose.position = {pose.position[0], pose.position[1], pose.position[2]};
+    menu.layer.pose.orientation = {pose.orientation[0], pose.orientation[1], pose.orientation[2], pose.orientation[3]};
+    menu.layer.size = {pose.width, pose.height};
+}
+
+// The launcher changed the ini: an open menu shows the new values.
 void menu_values_changed() {
     if (!menu.visible)
         return;
     menu.model.values = read_menu_values(live.ini.c_str());
     menu.dirty = true;
+}
+
+void menu_open(int64_t now);
+
+// Moved from the launcher (its Headset menu pane): the panel goes there and shows, so you can see it.
+void menu_placement_changed() {
+    const MenuPlacement placement = read_menu_placement(live.ini.c_str());
+    if (placement == live.menuPlacement)
+        return;
+    live.menuPlacement = placement;
+    menu_place(placement);
+    logf("settings menu: moved to %d deg right, %d deg up, %d deg wide", placement.yaw, placement.pitch, placement.width);
+    if (experiment.views4 || experiment.quad)
+        menu_open(qpc_now());
 }
 
 void menu_open(int64_t now) {
@@ -1925,10 +1950,9 @@ bool menu_resources(XrSession session) {
     l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
     l.subImage.swapchain = menu.chain;
     l.subImage.imageRect = {{0, 0}, {kPanelWidth, kPanelHeight}};
-    l.pose.orientation.w = 1;
-    l.pose.position = {0.0f, -0.06f, -0.8f};  // 0.8 m ahead, a little below eye level
-    l.size = {0.48f, 0.48f * kPanelHeight / kPanelWidth};
-    log_line("settings menu: panel ready");
+    const MenuPlacement& placement = live.menuPlacement;
+    menu_place(placement);
+    logf("settings menu: panel ready, %d deg right, %d deg up, %d deg wide", placement.yaw, placement.pitch, placement.width);
     return true;
 }
 
