@@ -282,9 +282,45 @@ int main() {
         check(save_live_settings(liveIni, changedLive), "live: the live keys are written");
         read_file(liveIni, iniText);
         check(iniText.find("focus_percent=45") != std::string::npos && iniText.find("feather_percent=25") != std::string::npos &&
-                  iniText.find("debug_border=1") != std::string::npos && iniText.find("periphery_scale=50") != std::string::npos &&
-                  iniText.find("focus_density") == std::string::npos && iniText.find("eye_scale") == std::string::npos,
-              "live: foveation keys change, resolution keys stay as launched");
+                  iniText.find("debug_border=1") != std::string::npos && iniText.find("periphery_scale=70") != std::string::npos &&
+                  iniText.find("focus_density=100") != std::string::npos && iniText.find("eye_scale") == std::string::npos &&
+                  iniText.find("mode=views4") != std::string::npos,
+              "live: QVFR sends foveation and resolution, never the method or eye_scale");
+        write_file(liveIni, "[experiment]\r\nmode=quad\r\neye_scale=50\r\n");
+        changedLive.mode = RenderMode::TwoLoop;
+        save_live_settings(liveIni, changedLive);
+        read_file(liveIni, iniText);
+        check(iniText.find("periphery_scale") == std::string::npos && iniText.find("eye_scale=50") != std::string::npos,
+              "live: Two-loop sends no resolution");
+
+        // Live resolution fits the launch: QVFR up to its launch sizes, Two-loop only unchanged.
+        write_file(runtimeIni, "[runtime]\r\nlaunch_mode=views4\r\nlaunch_outer=50\r\nlaunch_focus_width=39\r\n"
+                               "launch_focus_height=39\r\n");
+        const LaunchSizes qvfrLaunch = load_launch_sizes(runtimeIni);
+        Settings lower = Settings{};  // outer 50, inner 100 x 39%: exactly the launch
+        check(qvfrLaunch.known && qvfrLaunch.mode == RenderMode::Qvfr && fits_launch(lower, qvfrLaunch),
+              "live fit: the launch settings fit");
+        lower.outer = 30;
+        lower.inner = 80;
+        lower.width = 45;  // 80% x 45% = 36% of the native eye, under 39%
+        check(fits_launch(lower, qvfrLaunch), "live fit: lower periphery and a wider box at lower density fit");
+        Settings higher = Settings{};
+        higher.inner = 120;  // 120% x 39% = 47%, over 39%
+        Settings wider = Settings{};
+        wider.width = 50;  // the same density over a larger box needs more pixels
+        Settings sharper = Settings{};
+        sharper.outer = 60;
+        Settings loopMode = Settings{};
+        loopMode.mode = RenderMode::TwoLoop;
+        check(!fits_launch(higher, qvfrLaunch) && !fits_launch(wider, qvfrLaunch) && !fits_launch(sharper, qvfrLaunch) &&
+                  !fits_launch(loopMode, qvfrLaunch),
+              "live fit: more density, a larger box at the same density, more periphery or another method do not");
+        write_file(runtimeIni, "[runtime]\r\nlaunch_mode=quad\r\nlaunch_outer=50\r\n");
+        const LaunchSizes loopLaunch = load_launch_sizes(runtimeIni);
+        Settings loopLower = loopMode;
+        loopLower.outer = 40;
+        check(fits_launch(loopMode, loopLaunch) && !fits_launch(loopLower, loopLaunch) && !load_launch_sizes(liveIni).known,
+              "live fit: Two-loop resolution is fixed; no launch report, no fit");
         write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=" +
                                    std::to_string(GetCurrentProcessId()) + "\r\n");
         check(running_live_ini(runtimeIni).empty(), "live: a live_pid that is not ACE is ignored");

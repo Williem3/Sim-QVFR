@@ -146,14 +146,41 @@ LiveSettings read_live(const wchar_t* ini) {
 }
 
 // The keys that apply only at the next launch, as one string (live_reload says when they change).
-std::wstring restart_keys(const wchar_t* ini) {
+// views4 resizes its views live (views4_live), up to their launch size.
+std::wstring restart_keys(const wchar_t* ini, bool views4) {
     std::wstring out;
     for (const wchar_t* key : {L"mode", L"eye_scale", L"periphery_scale", L"focus_density"}) {
+        if (views4 && _wcsicmp(key, L"mode") != 0)
+            continue;
         wchar_t value[64] = {};
         GetPrivateProfileStringW(L"experiment", key, L"", value, 64, ini);
         out += std::wstring(key) + L"=" + value + L" ";
     }
     return out;
+}
+
+// views4: the outer and focus views' sizes, linear scales of the native eye (views4_layout.h), from
+// periphery_scale and focus_density and the focus box. Unset, both follow eye_scale (equal quarters:
+// periphery = eye_scale, focus density = eye_scale / focus_percent).
+struct Views4Sizes {
+    double outer = 1, density = 1, focus = 1, focusHeight = 1;
+    bool fromEyeScale = false;
+};
+
+Views4Sizes views4_sizes(const wchar_t* ini, double focusFraction, double focusFractionY) {
+    const double eyeScale = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini), 10u, 200u) / 100.0;
+    const UINT peripheryPercent = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini);
+    const UINT focusDensityPercent = GetPrivateProfileIntW(L"experiment", L"focus_density", 0, ini);
+    Views4Sizes s;
+    s.fromEyeScale = !peripheryPercent && !focusDensityPercent;
+    s.outer = peripheryPercent ? std::clamp(peripheryPercent, 10u, 200u) / 100.0 : eyeScale;
+    // The focus views' linear size against the native eye: density times the box's share of the FOV,
+    // per axis. Unset, the density is eye_scale / focus_percent (equal quarters for a square box).
+    s.density = focusDensityPercent ? std::clamp(focusDensityPercent, 25u, 400u) / 100.0 : eyeScale / focusFraction;
+    // Unset, exactly eye_scale on the width (not density x fraction, whose rounding would leave equal quarters).
+    s.focus = focusDensityPercent ? s.density * focusFraction : eyeScale;
+    s.focusHeight = focusFractionY > 0 ? s.density * focusFractionY : s.focus;
+    return s;
 }
 
 struct Live {
@@ -163,6 +190,18 @@ struct Live {
     int64_t nextCheck = 0;     // QPC
 };
 Live live;
+
+// What the launcher shows before the next launch (ACE_QV_RUNTIME_INFO, set by the launcher): the
+// headset's recommended per-eye size and whether eye tracking delivered samples. An ini file.
+void runtime_info(const wchar_t* key, const std::wstring& value) {
+    static const std::wstring path = [] {
+        wchar_t buffer[MAX_PATH] = {};
+        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", buffer, MAX_PATH);
+        return n > 0 && n < MAX_PATH ? std::wstring(buffer) : std::wstring();
+    }();
+    if (!path.empty())
+        WritePrivateProfileStringW(L"runtime", key, value.c_str(), path.c_str());
+}
 
 void load_experiment() {
     HMODULE self = nullptr;
@@ -228,7 +267,7 @@ void load_experiment() {
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
     experiment.gaze = settings.gaze;
     live.ini = ini;
-    live.restartKeys = restart_keys(ini.c_str());
+    live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     WIN32_FILE_ATTRIBUTE_DATA attributes{};
     if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
         live.written = attributes.ftLastWriteTime;
@@ -237,19 +276,15 @@ void load_experiment() {
     // Above 100 supersamples (in quad mode this is the outer view's resolution).
     const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 10u, 200u);
     experiment.eyeScale = eyePercent / 100.0;
-    // views4: periphery and focus resolution each on their own. Unset, both follow eye_scale (equal
-    // quarters: periphery = eye_scale, focus density = eye_scale / focus_percent).
-    const UINT peripheryPercent = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str());
-    const UINT focusDensityPercent = GetPrivateProfileIntW(L"experiment", L"focus_density", 0, ini.c_str());
-    const double outer = peripheryPercent ? std::clamp(peripheryPercent, 10u, 200u) / 100.0 : experiment.eyeScale;
-    // The focus views' linear size against the native eye: density times the box's share of the FOV,
-    // per axis. Unset, the density is eye_scale / focus_percent (equal quarters for a square box).
-    const double density = focusDensityPercent ? std::clamp(focusDensityPercent, 25u, 400u) / 100.0
-                                               : experiment.eyeScale / experiment.focusFraction;
-    // Unset, exactly eye_scale on the width (not density x fraction, whose rounding would leave equal quarters).
-    const double focus = focusDensityPercent ? density * experiment.focusFraction : experiment.eyeScale;
-    const double focusHeight = experiment.focusFractionY > 0 ? density * experiment.focusFractionY : focus;
-    experiment.views4Layout = views4_layout(outer, focus, focusHeight);
+    // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most
+    // either can be live.
+    const Views4Sizes sizes = views4_sizes(ini.c_str(), experiment.focusFraction, experiment.focusFractionY);
+    experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight);
+    // For the launcher: what live sizes can reach (percent of the native eye).
+    runtime_info(L"launch_mode", mode);
+    runtime_info(L"launch_outer", std::to_wstring(std::lround((experiment.views4 ? sizes.outer : experiment.eyeScale) * 100)));
+    runtime_info(L"launch_focus_width", std::to_wstring(std::lround(sizes.focus * 100)));
+    runtime_info(L"launch_focus_height", std::to_wstring(std::lround(sizes.focusHeight * 100)));
     logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%u feather_percent=%.0f corner_radius_percent=%.0f "
          "debug_border=%d gaze=%d (from %ls)",
          mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
@@ -258,9 +293,8 @@ void load_experiment() {
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
              "(focus views %.0f%% x %.0f%% of the native eye)%s",
-             outer * 100, density * 100, experiment.focusFraction * 100, experiment.focus_y() * 100, focus * 100,
-             focusHeight * 100,
-             peripheryPercent || focusDensityPercent ? "" : " (from eye_scale)");
+             sizes.outer * 100, sizes.density * 100, experiment.focusFraction * 100, experiment.focus_y() * 100,
+             sizes.focus * 100, sizes.focusHeight * 100, sizes.fromEyeScale ? " (from eye_scale)" : "");
 }
 
 // Round 7: two complete ACE frames per display frame. ACE's frames are paired A, B by its own
@@ -298,18 +332,6 @@ void narrow(float& loAngle, float& hiAngle, double fraction, double centre = 0.0
     centre = std::clamp(centre, lo + half, hi - half);
     loAngle = static_cast<float>(std::atan(centre - half));
     hiAngle = static_cast<float>(std::atan(centre + half));
-}
-
-// What the launcher shows before the next launch (ACE_QV_RUNTIME_INFO, set by the launcher): the
-// headset's recommended per-eye size and whether eye tracking delivered samples. An ini file.
-void runtime_info(const wchar_t* key, const std::wstring& value) {
-    static const std::wstring path = [] {
-        wchar_t buffer[MAX_PATH] = {};
-        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", buffer, MAX_PATH);
-        return n > 0 && n < MAX_PATH ? std::wstring(buffer) : std::wstring();
-    }();
-    if (!path.empty())
-        WritePrivateProfileStringW(L"runtime", key, value.c_str(), path.c_str());
 }
 
 // Eye gaze for the quad focus box (XR_EXT_eye_gaze_interaction, which ACE enables itself). The
@@ -568,8 +590,9 @@ void views4_outline_draw(XrSwapchain swapchain) {
     int thickness = 2;
     Views4Frame frame{};
     const bool recorded = views4_latest_frame(frame);  // ACE's rendered FOV, else the located one
+    const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.liveX, frame.liveY);
     for (int e = 0; e < 2; ++e) {
-        const ViewRect v = views4_rect(experiment.views4Layout, e, static_cast<int>(desc.Width), static_cast<int>(desc.Height));
+        const ViewRect v = views4_rect(layout, e, static_cast<int>(desc.Width), static_cast<int>(desc.Height));
         float tan[4];
         if (recorded)
             std::memcpy(tan, frame.outerTan[e], sizeof(tan));
@@ -1064,8 +1087,10 @@ void views4_compose() {
         to_matrix(qconj(turns[e]), eyes[e].rotation);
         // Outer source = view e, focus source = view e + 2, wherever the layout puts them.
         const int w = static_cast<int>(quad.appW), h = static_cast<int>(quad.appH);
-        views4_uv(experiment.views4Layout, e, w, h, eyes[e].outerSource);
-        views4_uv(experiment.views4Layout, e + 2, w, h, eyes[e].focusSource);
+        // At the sizes this frame was rendered with (live resolution); launch sizes until the first record.
+        const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.liveX, frame.liveY);
+        views4_uv(layout, e, w, h, eyes[e].outerSource);
+        views4_uv(layout, e + 2, w, h, eyes[e].focusSource);
         eyes[e].feather = static_cast<float>(experiment.feather);
         // The outline (debug_border) is drawn by the compositor along the focus area's exact edge,
         // turned and rounded as it is.
@@ -1464,6 +1489,9 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 continue;
             }
         }
+        Views4Frame latest{};
+        views4_latest_frame(latest);  // the rendered sizes (live resolution)
+        const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.liveX, latest.liveY);
         bool aceLayout = true;
         for (uint32_t v = 0; v < proj->viewCount; ++v)
             aceLayout &= copy[v].subImage.imageRect.offset.x == static_cast<int32_t>(v) * copy[v].subImage.imageRect.extent.width;
@@ -1472,7 +1500,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
             // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2).
             XrRect2Di& rect = copy[v].subImage.imageRect;
-            const ViewRect view = views4_rect(experiment.views4Layout, static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0)),
+            const ViewRect view = views4_rect(layout, static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0)),
                                               2 * rect.extent.width, rect.extent.height);
             rect.offset.x = view.left;
             rect.extent.width = view.width;
@@ -1503,6 +1531,25 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
 
 XrResult end_frame(XrSession session, const XrFrameEndInfo* info);
 
+// Live resolution (views4): periphery_scale and focus_density resize the views inside ACE's target,
+// up to their launch size (views4_live). A larger focus box at the same density needs more pixels;
+// beyond the launch size the density gives.
+void live_resolution(const LiveSettings& l) {
+    const Views4Layout& launch = experiment.views4Layout;
+    const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
+    const Views4Layout layout = views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight);
+    views4_set_live_layout(layout);
+    const double outer = launch.outer * layout.liveX[0], focus = launch.focus * layout.liveX[2],
+                 focusHeight = launch.focusHeight * layout.liveY[2];
+    const bool capped = wanted.outer > launch.outer + 1e-9 || wanted.focus > launch.focus + 1e-9 ||
+                        wanted.focusHeight > launch.focusHeight + 1e-9;
+    logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
+         "eye; launch %.0f%%, %.0f%% x %.0f%%)%s",
+         outer * 100, focus / l.focusFraction * 100, focusHeight / experiment.focus_y() * 100, focus * 100,
+         focusHeight * 100, launch.outer * 100, launch.focus * 100, launch.focusHeight * 100,
+         capped ? " (capped at the launch size: more applies at the next launch)" : "");
+}
+
 // Live settings: applies the ini's live keys (LiveSettings). Called between display frames.
 void live_apply(const LiveSettings& l) {
     experiment.focusFraction = l.focusFraction;
@@ -1522,11 +1569,8 @@ void live_apply(const LiveSettings& l) {
                         l.gaze && experiment.views4Compose);
     logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d", l.focusFraction * 100,
          experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0, l.gaze ? 1 : 0);
-    if (experiment.views4)  // the focus views keep their pixels: their density follows the box
-        logf("live: focus density now %.0f%% x %.0f%% of native (focus views stay %.0f%% x %.0f%% of the native eye)",
-             experiment.views4Layout.focus / l.focusFraction * 100,
-             experiment.views4Layout.focusHeight / experiment.focus_y() * 100, experiment.views4Layout.focus * 100,
-             experiment.views4Layout.focusHeight * 100);
+    if (experiment.views4)
+        live_resolution(l);
     if (l.gaze && !gazeAvailable && (experiment.quad || experiment.views4Compose))
         log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
     if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.views4Compose)
@@ -1560,9 +1604,9 @@ void live_reload() {
         return;
     live.written = attributes.ftLastWriteTime;
     live_apply(read_live(live.ini.c_str()));
-    const std::wstring restartKeys = restart_keys(live.ini.c_str());
+    const std::wstring restartKeys = restart_keys(live.ini.c_str(), experiment.views4);
     if (restartKeys != live.restartKeys) {
-        logf("live: %ls-> %ls(resolution and mode apply at the next launch)", live.restartKeys.c_str(),
+        logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(),
              restartKeys.c_str());
         live.restartKeys = restartKeys;
     }

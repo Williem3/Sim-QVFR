@@ -265,6 +265,24 @@ int main() {
         check(b0.width == 1000 && b0.height == 1000 && b2.left == 2000 && b2.width == 780 && b2.height == 500 &&
                   std::abs(box.eye_width() - 0.89) < 1e-9 && box.eye_height() == 0.5 && !box.equal(),
               "focus width and height are independent: 780x500 focus views beside 1000x1000 outer views");
+
+        // Live resolution: the same launch layout at periphery 25% and focus 0.39 x 0.125 renders in
+        // the top-left part of each slot; the slots stay put, and nothing grows past its launch size.
+        const Views4Layout shrunk = views4_live(box, 0.25, 0.39, 0.125);
+        const ViewRect s0 = views4_rect(shrunk, 0, 3560, 1000), s1 = views4_rect(shrunk, 1, 3560, 1000),
+                       s2 = views4_rect(shrunk, 2, 3560, 1000), slot0 = views4_slot(shrunk, 0, 3560, 1000);
+        const Views4Layout grown = views4_live(box, 0.8, 0.6, 0.6);
+        const ViewRect g0 = views4_rect(grown, 0, 3560, 1000), g2 = views4_rect(grown, 2, 3560, 1000);
+        const Views4Layout tiny = views4_live(box, 0.001, 0.39, 0.25);
+        std::printf("     live 25%% / 39%% x 12.5%%: outer %dx%d, view 1 at x=%d, focus at x=%d %dx%d\n", s0.width,
+                    s0.height, s1.left, s2.left, s2.width, s2.height);
+        check(s0.width == 500 && s0.height == 500 && s1.left == 1000 && s2.left == 2000 && s2.width == 780 &&
+                  s2.height == 250 && slot0.width == 1000 && slot0.height == 1000 && !shrunk.equal() && !shrunk.full(),
+              "live sizes shrink each view inside its unmoved slot");
+        check(g0.width == 1000 && g0.height == 1000 && g2.width == 780 && g2.height == 500 && grown.full(),
+              "live sizes above the launch size are capped at it");
+        check(std::abs(tiny.liveX[0] - kMinLive) < 1e-12 && views4_rect(tiny, 0, 3560, 1000).width == 100,
+              "live sizes keep at least kMinLive of the slot");
     }
 
     // Unequal sources: outer views 64x64 and focus views 32x32 in a 192x64 image, the rows below the

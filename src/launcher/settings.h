@@ -37,10 +37,23 @@ Settings load_settings(const std::wstring& ini);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.
 bool save_settings(const std::wstring& ini, const Settings& settings);
 // The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,
-// outline and eye tracking. Resolution and method apply at the next launch.
+// outline, eye tracking and, for QVFR, the resolution (up to its launch size). The method and
+// Two-loop's resolution apply at the next launch.
 bool save_live_settings(const std::wstring& ini, const Settings& settings);
 // The ini a running ACE reads (runtime.ini's live_ini, while its live_pid is still ACE), or empty.
 std::wstring running_live_ini(const std::wstring& runtimeInfo);
+
+// What the running game launched with (runtime.ini, written by the layer at launch): its method and
+// view sizes, percent of the native eye (QVFR: the outer and focus views; Two-loop: eye_scale).
+struct LaunchSizes {
+    bool known = false;
+    RenderMode mode = RenderMode::Qvfr;
+    int outer = 0, focusWidth = 0, focusHeight = 0;
+};
+LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo);
+// Whether `settings` applies live in full to a game launched with `launch`: the same method and, for
+// QVFR, no view larger than at launch (live sizes can only shrink); Two-loop's resolution unchanged.
+bool fits_launch(const Settings& settings, const LaunchSizes& launch);
 
 // What the layer reported from the last session (runtime.ini): the headset's recommended per-eye
 // size and runtime maximum (0 = not known yet), and whether eye tracking delivered samples.

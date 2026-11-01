@@ -94,6 +94,10 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     s.corner = clamp_to(s.corner, kCornerRange);
     const auto n = [](int v) { return std::to_wstring(v); };
     bool ok = true;
+    if (s.mode == RenderMode::Qvfr) {  // QVFR resizes its views live, up to their launch size
+        ok &= write(ini, L"experiment", L"periphery_scale", n(clamp_to(s.outer, kOuterRange)));
+        ok &= write(ini, L"experiment", L"focus_density", n(clamp_to(s.inner, kInnerRange)));
+    }
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
     ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
@@ -124,6 +128,27 @@ std::wstring running_live_ini(const std::wstring& runtimeInfo) {
     if (!running || exe.size() < ace.size() || _wcsicmp(exe.c_str() + exe.size() - ace.size(), ace.c_str()) != 0)
         return {};
     return ini;
+}
+
+LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo) {
+    LaunchSizes l;
+    const std::wstring mode = read_string(runtimeInfo, L"runtime", L"launch_mode");
+    l.known = !mode.empty();
+    l.mode = _wcsicmp(mode.c_str(), L"quad") == 0 ? RenderMode::TwoLoop : RenderMode::Qvfr;
+    l.outer = read_int(runtimeInfo, L"runtime", L"launch_outer", 0);
+    l.focusWidth = read_int(runtimeInfo, L"runtime", L"launch_focus_width", 0);
+    l.focusHeight = read_int(runtimeInfo, L"runtime", L"launch_focus_height", 0);
+    return l;
+}
+
+bool fits_launch(const Settings& s, const LaunchSizes& launch) {
+    if (!launch.known || s.mode != launch.mode)
+        return false;
+    if (s.mode == RenderMode::TwoLoop)
+        return s.outer == launch.outer;
+    // The focus views' size against the native eye, as the layer computes it (percent, rounded there).
+    const double focusWidth = s.inner * s.width / 100.0, focusHeight = s.inner * s.height / 100.0;
+    return s.outer <= launch.outer && focusWidth <= launch.focusWidth + 0.5 && focusHeight <= launch.focusHeight + 0.5;
 }
 
 

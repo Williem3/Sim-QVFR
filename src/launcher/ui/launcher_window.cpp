@@ -124,10 +124,8 @@ void push_live() {
     const std::wstring running = running_live_ini(runtime_info_path());
     if (running.empty() || !save_live_settings(running, app.s))
         return;
-    const Settings now = load_settings(running);
-    const bool resolution = now.mode != app.s.mode || now.outer != app.s.outer ||
-                            (app.s.mode == RenderMode::Qvfr && now.inner != app.s.inner);
-    app.live = resolution ? Live::NextLaunch : Live::Applied;
+    // QVFR resolution applies live up to the launch size; more, the method or Two-loop's resolution next launch.
+    app.live = fits_launch(app.s, load_launch_sizes(runtime_info_path())) ? Live::Applied : Live::NextLaunch;
 }
 
 void changed(bool save = true) {
@@ -797,7 +795,10 @@ void paint() {
     else if (app.runtime.known() && ro.overRuntimeLimit)
         badge(t::kSpace5, by, 1, L"Larger than the runtime’s maximum image size", badgeMax);
     else if (app.live == Live::NextLaunch)
-        badge(t::kSpace5, by, 1, L"Foveation applied live · resolution and method at the next launch", badgeMax);
+        badge(t::kSpace5, by, 1, app.s.mode == RenderMode::Qvfr
+                                     ? L"Applied live up to the launch resolution · the rest at the next launch"
+                                     : L"Foveation applied live · resolution and method at the next launch",
+              badgeMax);
     else if (app.live == Live::Applied)
         badge(t::kSpace5, by, 0, L"Applied to the running game", badgeMax);
     else

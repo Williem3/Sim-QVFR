@@ -40,6 +40,7 @@ struct Views4Frame {
     float outerTan[2][4];
     float focusTan[2][4];
     XrQuaternionf turn[2];
+    double liveX[4] = {1, 1, 1, 1}, liveY[4] = {1, 1, 1, 1};  // the views' live sizes (views4_layout.h)
 };
 // Queues a frame record for the composition (fill_focus_cameras; tests feed it directly).
 void views4_push_frame(const Views4Frame& frame);
@@ -47,6 +48,9 @@ void views4_push_frame(const Views4Frame& frame);
 // world-space frusta (focus_cull.h), their extents widened by `scale`. With `gaze` on, none are
 // built before the first gaze sample. Call before views4_start.
 void views4_set_focus_cull(bool on, double scale, bool gaze);
+// Live resolution: the live sizes of `live` (views4_live) replace the layout's from the next focus
+// cameras filled on, so one ACE frame renders with one set; its Views4Frame records them.
+void views4_set_live_layout(const Views4Layout& live);
 // Live settings (between frames, any time after views4_start): the focus box (as views4_start) and
 // the focus cull's scale and gaze. The focus views keep their pixel size, so the box's density
 // changes with it. The next focus cameras filled use them.
