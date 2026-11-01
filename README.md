@@ -86,6 +86,15 @@ The probe hooks game code, and Kunos validates content online.
 disassembly with string notes (`disfunc.py`), chunk-to-entry resolution through chained unwind
 info and incremental-link thunks (`func_entry.py`), and RTTI vtable owners (`vtable_owner.py`).
 
+## Development and Support
+
+### Show your appreciation
+
+If SIM QVFR has given you smoother VR, extra FPS, or room to turn up the resolution, please
+consider donating.
+
+[![Donate on Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-FF69B4?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/williem3)
+
 ## Licence
 
 ace-quadview is free to use, change and share for any **noncommercial** purpose under the
