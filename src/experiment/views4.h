@@ -27,19 +27,33 @@ void views4_set_layout(const Views4Layout& layout);
 // `focusFraction`: with "cameras", views 2-3 cover this fraction of each eye's tangent extent,
 // centred on the eye's forward axis.
 bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focusFraction);
-// Gaze ("cameras"): each eye's focus camera turn (in the eye's frame; focus_turn.h), set at every
-// xrLocateViews. The next focus cameras the builder fills use the latest. `gazeSample`: the turns
-// come from a gaze sample (not the untracked default).
-void views4_set_focus_turns(const XrQuaternionf (&turns)[2], bool gazeSample);
+// Gaze ("cameras"): where each eye looks, as tangents (x, y) of that eye's view, set at every
+// xrLocateViews (`valid[e]` false: no turn). The next focus cameras the builder fills turn towards
+// the latest (focus_turn.h), clamped against the FOV ACE actually rendered. `gazeSample`: from a
+// gaze sample (not the untracked default).
+void views4_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample);
+// What one ACE frame's views were rendered with, recorded when the builder fills the focus cameras:
+// per eye the outer view's tangents (left, right, up, down; read back from ACE's own eye projection,
+// so they hold whatever FOV ACE used), the focus view's tangents, and the focus camera's turn (in the
+// eye's frame). The composition maps the views with exactly these, on any headset.
+struct Views4Frame {
+    float outerTan[2][4];
+    float focusTan[2][4];
+    XrQuaternionf turn[2];
+};
+// Queues a frame record for the composition (fill_focus_cameras; tests feed it directly).
+void views4_push_frame(const Views4Frame& frame);
 // Focus cull (views4_focus_cull, needs "cameras"): every filled frame also builds the focus views'
 // world-space frusta (focus_cull.h), their extents widened by `scale`. With `gaze` on, none are
 // built before the first gaze sample. Call before views4_start.
 void views4_set_focus_cull(bool on, double scale, bool gaze);
 // The latest focus frustum of view 2 or 3; false when focus cull is off or none is built yet.
 bool views4_focus_frustum(int view, FocusFrustum& out);
-// The turns the next frame to be composed was rendered with, in rendering order. False until the
-// first focus cameras are filled (then the composition is unturned).
-bool views4_take_focus_turns(XrQuaternionf (&turns)[2]);
+// The record of the next frame to be composed, in rendering order. False until the first focus
+// cameras are filled (then the composition falls back to the located FOV, unturned).
+bool views4_take_frame(Views4Frame& frame);
+// The latest record, without taking it (the uncomposed debug outline).
+bool views4_latest_frame(Views4Frame& frame);
 // Diagnostic (views4_shadow_view1_plain): the deferredShadows loop's view-1 shortcut is skipped, so
 // view 1 computes its shadow matrices like every other view.
 bool views4_shadow_view1_plain();

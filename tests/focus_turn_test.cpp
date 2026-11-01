@@ -137,6 +137,54 @@ int main() {
                "centred gaze gives no turn");
     }
 
+    // Rendered tangents read back from a projection in ACE's convention, for several headsets: the
+    // user's (vertically symmetric, dumped in gate run 18), a vertically asymmetric one, a wide one.
+    {
+        const float headsets[][4] = {
+            {-1.40195f, 1.21310f, 1.09131f, -1.09131f},
+            {-0.94f, 0.80f, 0.80f, -0.94f},
+            {-2.10f, 1.60f, 1.20f, -1.45f},
+        };
+        bool all = true;
+        for (const auto& t : headsets) {
+            float p[16] = {};
+            p[0] = 2 / (t[1] - t[0]);
+            p[8] = (t[1] + t[0]) / (t[1] - t[0]);
+            p[5] = 2 / (t[2] - t[3]);
+            p[9] = (t[2] + t[3]) / (t[2] - t[3]);
+            p[11] = -1;
+            p[14] = 0.1f;
+            float back[4];
+            const bool ok = projection_tangents(p, back);
+            for (int i = 0; i < 4; ++i)
+                all &= ok && std::fabs(back[i] - t[i]) < 1e-5f;
+        }
+        // The dumped eye-0 projection itself.
+        float dumped[16] = {};
+        dumped[0] = 0.76480f;
+        dumped[5] = 0.91633f;
+        dumped[8] = -0.07222f;
+        float back[4];
+        all &= projection_tangents(dumped, back) && std::fabs(back[0] + 1.40195f) < 1e-3f &&
+               std::fabs(back[1] - 1.21310f) < 1e-3f && std::fabs(back[2] - 1.09131f) < 1e-3f;
+        float none[16] = {};
+        all &= !projection_tangents(none, back);
+        expect(all, "projection tangents round-trip for three headsets and the dumped projection");
+
+        // The tangent form of focus_turn clamps exactly like the XrFovf form.
+        const XrFovf asym{std::atan(-0.94f), std::atan(0.80f), std::atan(0.80f), std::atan(-0.94f)};
+        float t[4];
+        fov_tangents(asym, t);
+        bool same = true;
+        for (const double g : {-3.0, -0.5, 0.0, 0.4, 3.0}) {
+            const XrQuaternionf a = focus_turn(asym, 0.3, g, -g), b = focus_turn(t, 0.3, g, -g);
+            same &= std::fabs(a.x - b.x) < 1e-6f && std::fabs(a.y - b.y) < 1e-6f && std::fabs(a.w - b.w) < 1e-6f;
+        }
+        const XrFovf round = tangents_fov(t);
+        same &= std::fabs(round.angleLeft - asym.angleLeft) < 1e-6f && std::fabs(round.angleDown - asym.angleDown) < 1e-6f;
+        expect(same, "focus_turn on tangents matches focus_turn on the FOV; tangents_fov inverts fov_tangents");
+    }
+
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }

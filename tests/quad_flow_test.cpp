@@ -350,6 +350,74 @@ XrResult ace_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
     return layerEndFrame(nullptr, &end);
 }
 
+// Fake ACE in views4, rendering a FOV of its own: each view is split at a tangent (x = `split`
+// for a vertical boundary, or y = `split` for a horizontal one) into two colours, the outer views
+// rendered with `rendered` tangents (red | blue), the focus views with that frame's focus tangents
+// (green | yellow), the unused rest black. The frame's record goes to the composition first, as
+// fill_focus_cameras would push it. If the composition maps both views with the geometry they were
+// rendered with, both boundaries land on the same output tangent.
+XrResult ace_views4_split_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH, const aceqv::Views4Frame& frame,
+                                bool vertical, float split) {
+    using namespace aceqv;
+    XrFrameState state{XR_TYPE_FRAME_STATE};
+    layerWaitFrame(nullptr, nullptr, &state);
+    layerBeginFrame(nullptr, nullptr);
+    XrView views[2] = {{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+    uint32_t count = 0;
+    XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO};
+    locate.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    XrViewState viewState{XR_TYPE_VIEW_STATE};
+    layerLocateViews(nullptr, &locate, &viewState, 2, &count, views);
+    views4_push_frame(frame);
+
+    uint32_t index = 0;
+    layerAcquireSwapchainImage(chain, nullptr, &index);
+    const float black[4] = {0, 0, 0, 1};
+    const float colors[2][2][4] = {{{1, 0, 0, 1}, {0, 0, 1, 1}}, {{0, 1, 0, 1}, {1, 1, 0, 1}}};  // [focus][side]
+    D3D12_RENDER_TARGET_VIEW_DESC v = {};
+    v.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    v.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = gpu.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    gpu.device->CreateRenderTargetView(chain_of(chain)->images[index].Get(), &v, rtv);
+    gpu.list->ClearRenderTargetView(rtv, black, 0, nullptr);
+    for (int i = 0; i < 4; ++i) {
+        const ViewRect r = views4_rect(experiment.views4Layout, i, static_cast<int>(2 * eyeW), static_cast<int>(eyeH));
+        const float* t = i < 2 ? frame.outerTan[i] : frame.focusTan[i - 2];
+        const bool focus = i >= 2;
+        if (vertical) {
+            const LONG x = r.left + static_cast<LONG>(std::lround((split - t[0]) / (t[1] - t[0]) * r.width));
+            const D3D12_RECT a{r.left, 0, x, r.height}, b{x, 0, r.left + r.width, r.height};
+            gpu.list->ClearRenderTargetView(rtv, colors[focus][0], 1, &a);
+            gpu.list->ClearRenderTargetView(rtv, colors[focus][1], 1, &b);
+        } else {
+            const LONG y = static_cast<LONG>(std::lround((t[2] - split) / (t[2] - t[3]) * r.height));
+            const D3D12_RECT a{r.left, 0, r.left + r.width, y}, b{r.left, y, r.left + r.width, r.height};
+            gpu.list->ClearRenderTargetView(rtv, colors[focus][0], 1, &a);
+            gpu.list->ClearRenderTargetView(rtv, colors[focus][1], 1, &b);
+        }
+    }
+    gpu.flush();
+    layerReleaseSwapchainImage(chain, nullptr);
+
+    XrCompositionLayerProjectionView pv[2];
+    for (int e = 0; e < 2; ++e) {
+        pv[e] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
+        pv[e].pose = views[e].pose;
+        pv[e].fov = views[e].fov;  // ACE submits the located FOV, though it rendered another
+        pv[e].subImage = {chain, {{static_cast<int32_t>(e * eyeW), 0}, {static_cast<int32_t>(eyeW),
+                                                                        static_cast<int32_t>(eyeH)}}, 0};
+    }
+    XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    layer.viewCount = 2;
+    layer.views = pv;
+    const XrCompositionLayerBaseHeader* layers[] = {reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer)};
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+    end.displayTime = state.predictedDisplayTime;
+    end.layerCount = 1;
+    end.layers = layers;
+    return layerEndFrame(nullptr, &end);
+}
+
 std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
     const D3D12_RESOURCE_DESC d = image->GetDesc();
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp;
@@ -598,6 +666,78 @@ int main() {
             (void)boxT;
             check(all, eye ? "views4 eye 1: blue outer view, yellow focus view, no neighbour or unused rows"
                            : "views4 eye 0: red outer view, green focus view, no neighbour or unused rows");
+        }
+
+        // Headset-agnostic alignment: ACE renders a FOV other than the located one (vertically
+        // asymmetric, and different every frame). The composition must use the frame's record (what
+        // was rendered), submit the output with that FOV, and line the focus view up with the outer
+        // view on both axes.
+        {
+            const float rendered[2][4] = {{-1.00f, 0.90f, 0.70f, -1.10f}, {-1.05f, 0.95f, 0.74f, -1.16f}};
+            const struct {
+                bool vertical;
+                float split;
+            } splits[] = {{true, 0.15f}, {false, -0.12f}};
+            bool aligned = true, submittedRendered = true;
+            for (int f = 0; f < 2; ++f) {
+                Views4Frame frame{};
+                for (int e = 0; e < 2; ++e) {
+                    std::memcpy(frame.outerTan[e], rendered[f], sizeof(rendered[f]));
+                    double hw, hh;
+                    focus_extents(rendered[f], experiment.focusFraction, hw, hh);
+                    const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                               static_cast<float>(-hh)};
+                    std::memcpy(frame.focusTan[e], focusTan, sizeof(focusTan));
+                    frame.turn[e] = {0, 0, 0, 1};
+                }
+                const auto& sp = splits[f];
+                if (XR_FAILED(ace_views4_split_frame(v4Chain, v4EyeW, v4EyeH, frame, sp.vertical, sp.split)))
+                    aligned = false;
+                for (int e = 0; e < 2; ++e) {
+                    const XrFovf& sub = rt.submittedViews[e].fov;
+                    const float* t = rendered[f];
+                    submittedRendered &= std::fabs(std::tan(sub.angleLeft) - t[0]) < 1e-4f &&
+                                         std::fabs(std::tan(sub.angleRight) - t[1]) < 1e-4f &&
+                                         std::fabs(std::tan(sub.angleUp) - t[2]) < 1e-4f &&
+                                         std::fabs(std::tan(sub.angleDown) - t[3]) < 1e-4f;
+                }
+                const auto pxs = read_back(chain_of(quad.outChain)->images[rt.submittedImage].Get(), pitch);
+                const float* t = rendered[f];
+                auto colour = [&](int eye, double tx, double ty) {
+                    const double uu = (tx - t[0]) / (t[1] - t[0]), vv = (t[2] - ty) / (t[2] - t[3]);
+                    const UINT x = static_cast<UINT>((eye + uu) * kNativeW), y = static_cast<UINT>(vv * kNativeH);
+                    return &pxs[y * pitch + x * 4];
+                };
+                constexpr double kStep = 0.08;
+                for (int e = 0; e < 2; ++e) {
+                    // (tangent x, tangent y, want): just before and after the split, inside the box
+                    // (focus colours) and outside it (outer colours).
+                    struct Probe {
+                        double tx, ty;
+                        uint8_t r, g, b;
+                    };
+                    const Probe vertical[] = {{sp.split - kStep, 0.0, 0, 255, 0},
+                                              {sp.split + kStep, 0.0, 255, 255, 0},
+                                              {sp.split - kStep, 0.55, 255, 0, 0},
+                                              {sp.split + kStep, 0.55, 0, 0, 255}};
+                    const Probe horizontal[] = {{0.0, sp.split + kStep, 0, 255, 0},
+                                                {0.0, sp.split - kStep, 255, 255, 0},
+                                                {-0.7, sp.split + kStep, 255, 0, 0},
+                                                {-0.7, sp.split - kStep, 0, 0, 255}};
+                    const Probe* list = sp.vertical ? vertical : horizontal;
+                    for (int k = 0; k < 4; ++k) {
+                        const Probe& pr = list[k];
+                        const uint8_t* c = colour(e, pr.tx, pr.ty);
+                        const bool good = c[0] == pr.r && c[1] == pr.g && c[2] == pr.b;
+                        if (!good)
+                            std::printf("     frame %d eye %d tangent (%.2f,%.2f) = %u,%u,%u, want %u,%u,%u\n", f, e, pr.tx,
+                                        pr.ty, c[0], c[1], c[2], pr.r, pr.g, pr.b);
+                        aligned &= good;
+                    }
+                }
+            }
+            check(submittedRendered, "views4 submits the output with the FOV ACE rendered, not the one it submitted");
+            check(aligned, "views4 focus and outer views line up on both axes when ACE renders a FOV of its own");
         }
 
         // Without composition ACE's own image goes out: views 0 and 1 at their own size.

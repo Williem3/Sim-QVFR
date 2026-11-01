@@ -427,6 +427,8 @@ struct Quad {
     // views4 composition: done at ACE's image release, submitted at xrEndFrame.
     XrFovf v4Fov[2] = {};
     bool v4FovValid = false;
+    XrFovf v4SubmitFov[2] = {};  // the FOV the composed output covers (views4_compose), for views4_submit
+    XrFovf v4LoggedAceFov[2] = {};  // ACE's submitted FOV, as last logged against v4SubmitFov
     bool v4Composed = false;
     FocusOutline v4Outline;
     bool v4OutlineReady = false;
@@ -489,12 +491,18 @@ void views4_outline_draw(XrSwapchain swapchain) {
     // the eye's tangent extent around its forward axis, as views4's focus cameras use.
     std::vector<OutlineBox> boxes;
     int thickness = 2;
+    Views4Frame frame{};
+    const bool recorded = views4_latest_frame(frame);  // ACE's rendered FOV, else the located one
     for (int e = 0; e < 2; ++e) {
         const ViewRect v = views4_rect(experiment.views4Layout, e, static_cast<int>(desc.Width), static_cast<int>(desc.Height));
-        const XrFovf& f = v4outline.fov[e];
-        const double l = std::tan(f.angleLeft), r = std::tan(f.angleRight);
-        const double u = std::tan(f.angleUp), d = std::tan(f.angleDown);
-        const double hw = (r - l) * experiment.focusFraction / 2, hh = (u - d) * experiment.focusFraction / 2;
+        float tan[4];
+        if (recorded)
+            std::memcpy(tan, frame.outerTan[e], sizeof(tan));
+        else
+            fov_tangents(v4outline.fov[e], tan);
+        const double l = tan[0], r = tan[1], u = tan[2], d = tan[3];
+        double hw, hh;
+        focus_extents(tan, experiment.focusFraction, hw, hh);
         if (!(r > l && u > d))
             return;
         boxes.push_back(OutlineBox{v.left + static_cast<int>((-hw - l) / (r - l) * v.width),
@@ -946,18 +954,27 @@ void views4_compose() {
     if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
         return;
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
+    // What this frame's views were rendered with (ACE's own eye projections, the focus boxes and
+    // turns, views4.h); before the first focus cameras are filled, the located FOV, unturned.
+    Views4Frame frame{};
+    const bool recorded = views4_take_frame(frame);
     XrQuaternionf turns[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
-    views4_take_focus_turns(turns);  // what this frame's focus cameras were rendered with
     EyeComposition eyes[2] = {};
     for (int e = 0; e < 2; ++e) {
-        const XrFovf& f = quad.v4Fov[e];
-        const float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp),
-                    d = std::tan(f.angleDown);
-        const float hw = static_cast<float>((r - l) * experiment.focusFraction / 2);
-        const float hh = static_cast<float>((u - d) * experiment.focusFraction / 2);
-        const float outerTan[4] = {l, r, u, d}, focusTan[4] = {-hw, hw, hh, -hh};
-        std::memcpy(eyes[e].outerTan, outerTan, sizeof(outerTan));
-        std::memcpy(eyes[e].focusTan, focusTan, sizeof(focusTan));
+        if (recorded) {
+            std::memcpy(eyes[e].outerTan, frame.outerTan[e], sizeof(eyes[e].outerTan));
+            std::memcpy(eyes[e].focusTan, frame.focusTan[e], sizeof(eyes[e].focusTan));
+            turns[e] = frame.turn[e];
+        } else {
+            fov_tangents(quad.v4Fov[e], eyes[e].outerTan);
+            double hw, hh;
+            focus_extents(eyes[e].outerTan, experiment.focusFraction, hw, hh);
+            const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                       static_cast<float>(-hh)};
+            std::memcpy(eyes[e].focusTan, focusTan, sizeof(focusTan));
+        }
+        // The output covers the outer view's tangents, so that is the FOV it is submitted with.
+        quad.v4SubmitFov[e] = tangents_fov(eyes[e].outerTan);
         // The focus camera is the eye's turned by turns[e] (in the eye's frame): a direction in the
         // outer view's frame is in the focus view's frame after the inverse turn.
         to_matrix(qconj(turns[e]), eyes[e].rotation);
@@ -1267,18 +1284,23 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                 quad.v4Fov[1] = views[1].fov;
                 quad.v4FovValid = true;
             }
-            // Gaze: each eye's focus camera turns to face the gaze ray, in that eye's frame (canted
-            // displays rotate each eye); untracked gaze recentres after kGazeHoldNs.
-            XrQuaternionf turns[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
+            // Gaze: where the gaze ray points in each eye's frame (canted displays rotate each eye), as
+            // tangents; the focus cameras turn towards it, clamped against the FOV ACE renders with
+            // (fill_focus_cameras). Untracked gaze recentres after kGazeHoldNs.
+            float tan[2][2] = {};
+            bool valid[2] = {};
             XrVector3f direction{0, 0, -1};
             const bool gazing = experiment.gaze && gaze_direction(session, info->space, info->displayTime, direction);
             if (gazing)
                 for (int e = 0; e < 2; ++e) {
                     const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
-                    if (d.z < -0.1f)
-                        turns[e] = focus_turn(views[e].fov, experiment.focusFraction, d.x / -d.z, d.y / -d.z);
+                    valid[e] = d.z < -0.1f;
+                    if (valid[e]) {
+                        tan[e][0] = d.x / -d.z;
+                        tan[e][1] = d.y / -d.z;
+                    }
                 }
-            views4_set_focus_turns(turns, gazing);
+            views4_set_gaze(tan, valid, gazing);
         }
     }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
@@ -1323,6 +1345,23 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
 // views4: ACE's two "eyes" are each an outer plus a focus view wide and hold views 0+1 and 2+3 side
 // by side (views4_layout.h). Submit views 0 and 1, the real eyes, as the projection views.
 bool views4RectsLogged = false;
+
+// Logs ACE's own submitted FOV next to the one the output is submitted with, once and on a change.
+void log_submitted_fov(uint32_t eye, const XrFovf& ace, const XrFovf& composed) {
+    XrFovf& last = quad.v4LoggedAceFov[eye];
+    const auto same = [](const XrFovf& a, const XrFovf& b, float eps) {
+        return std::fabs(a.angleLeft - b.angleLeft) < eps && std::fabs(a.angleRight - b.angleRight) < eps &&
+               std::fabs(a.angleUp - b.angleUp) < eps && std::fabs(a.angleDown - b.angleDown) < eps;
+    };
+    if (same(ace, last, 0.002f))
+        return;
+    last = ace;
+    logf("views4: eye %u ACE submits FOV %.4f/%.4f/%.4f/%.4f, output submitted with %.4f/%.4f/%.4f/%.4f (its "
+         "rendered projection)%s",
+         eye, ace.angleLeft, ace.angleRight, ace.angleUp, ace.angleDown, composed.angleLeft, composed.angleRight,
+         composed.angleUp, composed.angleDown, same(ace, composed, 0.002f) ? "" : "  <-- DIFFERENT");
+}
+
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
     std::vector<XrCompositionLayerProjection> projections;
@@ -1345,6 +1384,10 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 // The composed output, at native size, with ACE's own pose and FOV for each eye.
                 quad.v4Composed = false;
                 for (uint32_t v = 0; v < 2; ++v) {
+                    log_submitted_fov(v, copy[v].fov, quad.v4SubmitFov[v]);
+                    // The FOV the output was composed over (ACE's rendered projection), which is what
+                    // the runtime must display it with, whatever ACE's own projection view says.
+                    copy[v].fov = quad.v4SubmitFov[v];
                     copy[v].next = nullptr;  // depth info would describe ACE's quarters, not the output
                     copy[v].subImage.swapchain = quad.outChain;
                     copy[v].subImage.imageRect = {{static_cast<int32_t>(v * quad.nativeW), 0},

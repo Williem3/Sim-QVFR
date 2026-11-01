@@ -56,18 +56,21 @@ uint64_t cameraPhantom = 0;   // C3: the same for view 3
 float lastFocusProjection[2][16];
 bool lastFocusValid[2] = {};
 
-// Gaze turns of the focus cameras. `gazeTurn`: the latest, from xrLocateViews. `lastTurn`: what
-// the previous focus cameras used (their previous-frame matrices are turned by it). `turnRing`:
-// the turns of each filled frame, taken in the same order by the composition.
+// Gaze and frame records. `gazeTan`/`gazeValid`: where each eye looks (tangents of its view), the
+// latest from xrLocateViews. `lastTurn`: what the previous focus cameras used (their previous-frame
+// matrices are turned by it). `frameRing`: what each filled frame was rendered with (Views4Frame),
+// taken in the same order by the composition.
 constexpr XrQuaternionf kNoTurn{0, 0, 0, 1};
 SRWLOCK turnLock = SRWLOCK_INIT;
-XrQuaternionf gazeTurn[2] = {kNoTurn, kNoTurn}, lastTurn[2] = {kNoTurn, kNoTurn}, lastTaken[2] = {kNoTurn, kNoTurn};
-struct FrameTurns {
-    XrQuaternionf eye[2];
-};
-FrameTurns turnRing[8];
+float gazeTan[2][2] = {};
+bool gazeValid[2] = {};
+XrQuaternionf lastTurn[2] = {kNoTurn, kNoTurn};
+Views4Frame frameRing[8], lastTaken{}, lastPushed{};
 uint64_t turnsPushed = 0, turnsTaken = 0, turnResyncs = 0, turnEmptyTakes = 0;
 constexpr uint64_t kMaxTurnBacklog = 3;
+// Rendered-vs-located check: the outer tangents last logged per eye (logged again on a change).
+float loggedTan[2][4] = {};
+std::atomic<uint64_t> fovMismatchFrames{0};
 
 // Focus cull (views4_focus_cull): each filled frame's focus frusta in world space, widened by
 // cullScale, under turnLock. The latest two fills are kept (cullFrusta[fill % 2]) in case recording
@@ -181,11 +184,33 @@ void turn_matrix_at(uint8_t* p, const XrQuaternionf& turn, bool inverse) {
     std::memcpy(p, m, sizeof(m));
 }
 
+// Logs each eye's rendered tangents (from ACE's projection) next to the located FOV, once and again
+// whenever they change by more than 0.5%; warns when they disagree, since everything the focus
+// views and the composition do follows the rendered ones.
+void check_rendered_fov(int eye, const float (&rendered)[4], const XrFovf& located) {
+    float loc[4];
+    fov_tangents(located, loc);
+    bool changed = false, differs = false;
+    for (int i = 0; i < 4; ++i) {
+        changed |= std::fabs(rendered[i] - loggedTan[eye][i]) > 0.005f * std::max(1.0f, std::fabs(rendered[i]));
+        differs |= std::fabs(rendered[i] - loc[i]) > 0.005f * std::max(1.0f, std::fabs(loc[i]));
+    }
+    if (differs)
+        ++fovMismatchFrames;
+    if (!changed)
+        return;
+    std::memcpy(loggedTan[eye], rendered, sizeof(loggedTan[eye]));
+    logf("views4: eye %d rendered with tangents %.4f/%.4f/%.4f/%.4f (ACE's projection), located %.4f/%.4f/%.4f/%.4f%s",
+         eye, rendered[0], rendered[1], rendered[2], rendered[3], loc[0], loc[1], loc[2], loc[3],
+         differs ? "  <-- DIFFERENT: the focus views and the composition follow ACE's projection" : "");
+}
+
 // Focus cameras for views 2-3, written just before the builder copies the camera slots into the
 // view records (the VR branch has filled the eyes' slots by then). Each focus view is its eye's
-// slot with the projection replaced by a symmetric box of focusFraction of the eye's tangent
-// extent, its camera turned towards the gaze (gazeTurn), and its own previous-frame projection
-// and turn.
+// slot with the projection replaced by a symmetric box of focusFraction of the tangent extent ACE
+// actually renders the eye with (read back from its projection, not assumed from xrLocateViews),
+// its camera turned towards the gaze, and its own previous-frame projection and turn. The frame's
+// geometry goes to the composition as a Views4Frame.
 void fill_focus_cameras(uint8_t* renderer) {
     XrView views[2];
     AcquireSRWLockShared(&viewsLock);
@@ -198,33 +223,49 @@ void fill_focus_cameras(uint8_t* renderer) {
         std::memcpy(phantom + ace::kRendererField8, renderer + ace::kRendererField8, sizeof(void*));
         std::memcpy(phantom + ace::kPhantomRenderer, &renderer, sizeof(void*));
     }
-    XrQuaternionf turns[2], previousTurns[2];
+    float gaze[2][2];
+    bool gazing[2];
+    XrQuaternionf previousTurns[2];
     AcquireSRWLockShared(&turnLock);
-    std::memcpy(turns, gazeTurn, sizeof(turns));
+    std::memcpy(gaze, gazeTan, sizeof(gaze));
+    std::memcpy(gazing, gazeValid, sizeof(gazing));
     std::memcpy(previousTurns, lastTurn, sizeof(previousTurns));
     ReleaseSRWLockShared(&turnLock);
-    bool turned = false;
+    Views4Frame frame{};
+    XrQuaternionf turns[2] = {kNoTurn, kNoTurn};
     FocusFrustum frusta[2];
     for (int eye = 0; eye < 2; ++eye) {
+        const uint8_t* src = renderer + ace::kCameraSlotBase + eye * ace::kCameraSlotStride;
+        float projection[16];
+        std::memcpy(projection, src + ace::kCameraProjection, sizeof(projection));
+        // What ACE renders this eye with; the located FOV only if the projection is unreadable.
+        float* outer = frame.outerTan[eye];
+        if (!projection_tangents(projection, frame.outerTan[eye]))
+            fov_tangents(views[eye].fov, frame.outerTan[eye]);
+        if (!(outer[1] - outer[0] > 0.02f && outer[2] - outer[3] > 0.02f))
+            return;  // no located views yet
+        check_rendered_fov(eye, frame.outerTan[eye], views[eye].fov);
         if (focusFraction <= 0) {
             // Diagnostic (views4_focus_eye_camera): the focus views are exact copies of the eyes,
             // so any difference between quarters e and e + 2 comes from the view index.
             std::memcpy(reinterpret_cast<uint8_t*>((eye == 0 ? cameraPhantom2 : cameraPhantom) + ace::kCameraSlotBase),
-                        renderer + ace::kCameraSlotBase + eye * ace::kCameraSlotStride, ace::kCameraSlotStride);
+                        src, ace::kCameraSlotStride);
             copy_per_view(renderer, eye, eye + 2);
+            std::memcpy(frame.focusTan[eye], outer, sizeof(frame.focusTan[eye]));
+            frame.turn[eye] = kNoTurn;
             continue;
         }
-        const XrFovf& f = views[eye].fov;
-        const double hw = (std::tan(f.angleRight) - std::tan(f.angleLeft)) * focusFraction / 2;
-        const double hh = (std::tan(f.angleUp) - std::tan(f.angleDown)) * focusFraction / 2;
-        if (!(hw > 0.01 && hh > 0.01))
-            return;  // no located views yet
+        double hw, hh;
+        focus_extents(frame.outerTan[eye], focusFraction, hw, hh);
+        if (gazing[eye])
+            turns[eye] = focus_turn(frame.outerTan[eye], focusFraction, gaze[eye][0], gaze[eye][1]);
+        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                   static_cast<float>(-hh)};
+        std::memcpy(frame.focusTan[eye], focusTan, sizeof(focusTan));
+        frame.turn[eye] = turns[eye];
         const int view = eye + 2;
-        const uint8_t* src = renderer + ace::kCameraSlotBase + eye * ace::kCameraSlotStride;
         uint8_t* dst = reinterpret_cast<uint8_t*>((view == 2 ? cameraPhantom2 : cameraPhantom) + ace::kCameraSlotBase);
         std::memcpy(dst, src, ace::kCameraSlotStride);
-        float projection[16];
-        std::memcpy(projection, src + ace::kCameraProjection, sizeof(projection));
         projection[0] = static_cast<float>(1.0 / hw);  // 2 / (tanR - tanL) with tanR = -tanL = hw
         projection[5] = static_cast<float>(1.0 / hh);
         projection[8] = 0.0f;
@@ -240,7 +281,6 @@ void fill_focus_cameras(uint8_t* renderer) {
         turn_matrix_at(dst + ace::kCameraWorldView, turns[eye], false);
         turn_matrix_at(dst + ace::kCameraPreviousView, previousTurns[eye], false);
         turn_matrix_at(dst + ace::kCameraPreviousWorldView, previousTurns[eye], false);
-        turned = true;
         if (focusCull) {
             float worldView[16];
             std::memcpy(worldView, dst + ace::kCameraWorldView, sizeof(worldView));
@@ -260,20 +300,17 @@ void fill_focus_cameras(uint8_t* renderer) {
         if (auto* y = reinterpret_cast<float*>(entries(ace::kPerViewTanY, 4)))
             y[view] = static_cast<float>(hh);
     }
-    if (!turned)
-        return;
+    views4_push_frame(frame);
     AcquireSRWLockExclusive(&turnLock);
     std::memcpy(lastTurn, turns, sizeof(turns));
-    std::memcpy(turnRing[turnsPushed % std::size(turnRing)].eye, turns, sizeof(turns));
-    if (focusCull && (gazeSampled || !gazeExpected)) {
-        CullFrusta& c = cullFrusta[turnsPushed % 2];
+    if (focusCull && focusFraction > 0 && (gazeSampled || !gazeExpected)) {
+        CullFrusta& c = cullFrusta[(turnsPushed - 1) % 2];
         std::memcpy(c.view, frusta, sizeof(frusta));
-        c.fill = turnsPushed + 1;
+        c.fill = turnsPushed;
         ++cullBuilt;
     } else if (focusCull) {
         ++cullWaitingForGaze;
     }
-    ++turnsPushed;
     ReleaseSRWLockExclusive(&turnLock);
 }
 
@@ -1020,11 +1057,28 @@ void report_snapshots() {
 
 }  // namespace
 
-void views4_set_focus_turns(const XrQuaternionf (&turns)[2], bool gazeSample) {
+void views4_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample) {
     AcquireSRWLockExclusive(&turnLock);
-    std::memcpy(gazeTurn, turns, sizeof(gazeTurn));
+    std::memcpy(gazeTan, tan, sizeof(gazeTan));
+    std::memcpy(gazeValid, valid, sizeof(gazeValid));
     gazeSampled |= gazeSample;
     ReleaseSRWLockExclusive(&turnLock);
+}
+
+void views4_push_frame(const Views4Frame& frame) {
+    AcquireSRWLockExclusive(&turnLock);
+    frameRing[turnsPushed % std::size(frameRing)] = frame;
+    lastPushed = frame;
+    ++turnsPushed;
+    ReleaseSRWLockExclusive(&turnLock);
+}
+
+bool views4_latest_frame(Views4Frame& frame) {
+    AcquireSRWLockShared(&turnLock);
+    const bool any = turnsPushed > 0;
+    frame = lastPushed;
+    ReleaseSRWLockShared(&turnLock);
+    return any;
 }
 
 void views4_set_layout(const Views4Layout& l) { layout = l; }
@@ -1047,22 +1101,22 @@ bool views4_focus_frustum(int view, FocusFrustum& out) {
     return valid;
 }
 
-bool views4_take_focus_turns(XrQuaternionf (&turns)[2]) {
+bool views4_take_frame(Views4Frame& frame) {
     AcquireSRWLockExclusive(&turnLock);
     const bool any = turnsPushed > 0;
     if (turnsTaken < turnsPushed) {
         // Frames filled but never composed (loading, a dropped frame) would leave every later
-        // composition using an older frame's turn: keep at most a short backlog.
+        // composition using an older frame's geometry: keep at most a short backlog.
         if (turnsPushed - turnsTaken > kMaxTurnBacklog) {
             turnsTaken = turnsPushed - 1;
             ++turnResyncs;
         }
-        std::memcpy(lastTaken, turnRing[turnsTaken % std::size(turnRing)].eye, sizeof(lastTaken));
+        lastTaken = frameRing[turnsTaken % std::size(frameRing)];
         ++turnsTaken;
     } else if (any) {
-        ++turnEmptyTakes;  // composed before this frame's focus cameras were filled: reuse the last turns
+        ++turnEmptyTakes;  // composed before this frame's focus cameras were filled: reuse the last record
     }
-    std::memcpy(turns, lastTaken, sizeof(turns));
+    frame = lastTaken;
     ReleaseSRWLockExclusive(&turnLock);
     return any;
 }
@@ -1128,12 +1182,13 @@ void views4_frame_end() {
          static_cast<unsigned long long>(recordsFolded.exchange(0)));
     if (cameraViews) {
         AcquireSRWLockShared(&turnLock);
-        const XrQuaternionf t = gazeTurn[0];
-        logf("views4: focus turns filled %llu, composed %llu (backlog %llu, resyncs %llu, composed before filling %llu); "
-             "eye 0 turn %.3f,%.3f,%.3f,%.3f",
+        const XrQuaternionf t = lastTurn[0];
+        logf("views4: frames filled %llu, composed %llu (backlog %llu, resyncs %llu, composed before filling %llu); "
+             "eye 0 turn %.3f,%.3f,%.3f,%.3f; frames rendered with a FOV other than the located one %llu",
              static_cast<unsigned long long>(turnsPushed), static_cast<unsigned long long>(turnsTaken),
              static_cast<unsigned long long>(turnsPushed - turnsTaken), static_cast<unsigned long long>(turnResyncs),
-             static_cast<unsigned long long>(turnEmptyTakes), t.x, t.y, t.z, t.w);
+             static_cast<unsigned long long>(turnEmptyTakes), t.x, t.y, t.z, t.w,
+             static_cast<unsigned long long>(fovMismatchFrames.load()));
         if (focusCull)
             logf("views4: focus cull: frusta built %llu, frames waiting for the first gaze sample %llu",
                  static_cast<unsigned long long>(cullBuilt), static_cast<unsigned long long>(cullWaitingForGaze));
