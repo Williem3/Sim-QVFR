@@ -10,3 +10,5 @@ __pycache__/
 
 # Disassembly and RTTI dumps of the game executable: local only, never committed
 analysis/
+# Reverse-engineering notes on the game engine: local only, never committed
+docs/recon.md
