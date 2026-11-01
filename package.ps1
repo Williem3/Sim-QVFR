@@ -1,11 +1,13 @@
-# Builds a portable ace-quadview release from a commit: a clean checkout of it in a temporary
+# Builds a portable ace-quadview release from a commit: a clean checkout of it in a scratch
 # folder (so nothing uncommitted or outside the repo gets in), a Release build, every offline test,
 # then dist\ace-quadview-<version>.zip and its folder.
 #   powershell -ExecutionPolicy Bypass -File package.ps1 -Version 2026.11.1.4-alpha [-Commit HEAD]
 param([Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Za-z.\-]+$')][string]$Version,
       [string]$Commit = 'HEAD',
-      [string]$OutputDirectory = (Join-Path $PSScriptRoot 'dist'))
+      [string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
+$repo = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'dist' }
 
 function Invoke-Native([string]$What, [scriptblock]$Command) {
     # Native tools write progress to stderr; only the exit code decides.
@@ -19,7 +21,6 @@ function Invoke-Native([string]$What, [scriptblock]$Command) {
     return $output
 }
 
-$repo = $PSScriptRoot
 $hash = (Invoke-Native 'git rev-parse' { git -C $repo rev-parse --verify "$Commit^{commit}" } | Select-Object -Last 1).ToString().Trim()
 $short = $hash.Substring(0, 7)
 if (Invoke-Native 'git status' { git -C $repo status --porcelain --untracked-files=no }) {
@@ -31,7 +32,9 @@ $stage = Join-Path $OutputDirectory $name
 $archive = "$stage.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $archive)) { throw "$stage(.zip) already exists" }
 
-$work = Join-Path ([IO.Path]::GetTempPath()) ("ace-quadview-package-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+# Outside the repo's folder tree (so a sibling folder cannot stand in for a missing file) and not
+# under %TEMP%, which MSBuild warns about (MSB8029).
+$work = Join-Path (Join-Path $env:LOCALAPPDATA 'ace-quadview-package') ([Guid]::NewGuid().ToString('N').Substring(0, 8))
 Invoke-Native 'git worktree add' { git -C $repo worktree add --detach $work $hash } | Out-Null
 try {
     Write-Host "Building $short in $work"
