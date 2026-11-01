@@ -87,7 +87,7 @@ struct Experiment {
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
     UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
     char passCensusWatch[512] = "";        // the census logs stacks of these pipelines' draws and dispatches (comma-separated)
-    bool dred = false;                     // D3D12 DRED report on device removal (default on with views4)
+    bool dred = false;                     // D3D12 DRED report on device removal (dred=1; off by default, costs GPU time)
     bool d3d12Debug = false;               // D3D12 debug layer, errors into the log (slow; diagnosis only)
     bool gpuValidation = false;            // d3d12_debug=2: plus GPU-based validation (very slow)
     UINT pixCaptureFrame = 0;              // PIX GPU capture from this xrEndFrame (probe/pix_capture.h), 0 = off
@@ -156,7 +156,7 @@ void load_experiment() {
         GetPrivateProfileStringW(L"experiment", L"pass_census_watch", L"", watch, 512, ini.c_str());
         std::snprintf(experiment.passCensusWatch, sizeof(experiment.passCensusWatch), "%ls", watch);
     }
-    experiment.dred = GetPrivateProfileIntW(L"experiment", L"dred", experiment.views4 ? 1 : 0, ini.c_str()) != 0;
+    experiment.dred = GetPrivateProfileIntW(L"experiment", L"dred", 0, ini.c_str()) != 0;  // diagnosis only: costs GPU time
     experiment.d3d12Debug = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) != 0;
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
