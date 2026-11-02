@@ -9,6 +9,9 @@
 
 #include <string>
 
+#include "../cheeky/cheeky_settings.h"
+#include "../quad/osd.h"
+
 namespace aceqv::launcher {
 
 enum class RenderMode { Qvfr, TwoLoop };
@@ -30,6 +33,9 @@ struct Settings {
     int menuYaw = 0;          // [menu] yaw
     int menuPitch = -4;       // [menu] pitch
     int menuWidth = 33;       // [menu] width
+    OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
+    // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
+    CheekySettings cheeky;
 };
 
 struct Range {
@@ -69,8 +75,19 @@ struct RuntimeInfo {
     int width = 0, height = 0, maxWidth = 0, maxHeight = 0;
     double centerPpd = 0;  // pixels per degree at the view's centre at 100% density (the layer's native_center_ppd)
     EyeTracker eyeTracker = EyeTracker::Unknown;
+    // Cheeky at the last launch: off, missing, refused or running (empty: no launch yet), and its version.
+    std::wstring cheekyStatus, cheekyVersion;
     bool known() const { return width > 0 && height > 0; }
 };
+
+// Cheeky's runtime as the layer will look for it: [cheeky] runtime, or CheekyFoveatedDLSSRuntime.dll in
+// [cheeky] config_dir (default CheekyFoveatedDLSS), relative paths against the layer's folder.
+std::wstring cheeky_runtime_path(const std::wstring& ini, const std::wstring& layerFolder);
+// Sets [cheeky] runtime (an absolute path). False if the file cannot be written.
+bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime);
+// Cheeky's OpenXR layer (CheekyOpenXRSetup.exe): registered as an implicit layer, and enabled.
+enum class CheekyLayer { Missing, Disabled, Enabled };
+CheekyLayer cheeky_layer_state();
 RuntimeInfo load_runtime_info(const std::wstring& path);
 
 // The kit's readouts for a recommended per-eye size: view sizes in px, ACE's double-wide target and

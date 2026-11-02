@@ -26,23 +26,26 @@ void check(bool ok, const char* what) {
 int main() {
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
-    check(menu_items(true).size() == 11 && menu_items(false).size() == 9 &&
+    check(menu_items(true).size() == 8 && menu_items(false).size() == 6 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
+    check(menu_page_items(m).size() == 9 && menu_page_items(m).front() == MenuItem::Page && menu_pages(m).size() == 2,
+          "the first page: the page switch, then the method's items; two pages without Cheeky");
 
     menu_key(m, MenuKey::Up);
-    check(m.selected == 10, "Up from the first item wraps to the last");
+    check(m.selected == 8, "Up from the first item wraps to the last");
     menu_key(m, MenuKey::Down);
     check(m.selected == 0, "Down from the last wraps to the first");
+    m.selected = 1;  // periphery
     bool changed = menu_key(m, MenuKey::Left);
     check(changed && m.values.periphery == 45, "periphery steps by 5");
     for (int i = 0; i < 30; ++i)
         menu_key(m, MenuKey::Left);
     check(m.values.periphery == 10 && !menu_key(m, MenuKey::Left), "periphery stops at 10%, no change reported");
-    m.selected = 2;
+    m.selected = 3;
     menu_key(m, MenuKey::Right);
     check(m.values.width == 40, "focus width steps by 1");
-    m.selected = 6;
+    m.selected = 7;
     check(menu_key(m, MenuKey::Right) && m.values.outline && menu_key(m, MenuKey::Left) && !m.values.outline,
           "outline toggles either way");
 
@@ -69,8 +72,8 @@ int main() {
           "the run's values: periphery held at 10%, density 84% x 71% in effect (as the layer logged)");
     run.selected = 1;
     const std::vector<MenuLine> runLines = menu_lines(run);
-    check(runLines[0].capped && runLines[0].value == L"30%  (10% now)" && runLines[1].capped &&
-              runLines[1].value == L"100%  (84% x 71% now)" && !runLines[2].capped,
+    check(runLines[1].capped && runLines[1].value == L"30%  (10% now)" && runLines[2].capped &&
+              runLines[2].value == L"100%  (84% x 71% now)" && !runLines[3].capped,
           "capped lines show the asked value and what is in effect");
     const std::vector<std::wstring> notes = menu_notes(run);
     check(notes.size() == 2 &&
@@ -125,7 +128,7 @@ int main() {
     run.values.height = 35;  // 84% x 43% = 36.1%: still over 36%
     check(menu_notes(run).size() == 1 && menu_fit(run).focusCapped, "a value just over the launch still flags");
     run.values.width = 42;  // 84% x 42% = 35.3%, 84% x 35% = 29.4%: fits
-    check(menu_notes(run).empty() && !menu_lines(run)[1].capped, "lowering the box makes it fit: no notes, no red");
+    check(menu_notes(run).empty() && !menu_lines(run)[2].capped, "lowering the box makes it fit: no notes, no red");
     run.launch.nativeWidth = 0;
     run.values.density = 150;
     check(menu_notes(run).size() == 1 && menu_notes(run)[0].find(L"px") == std::wstring::npos,
@@ -150,10 +153,11 @@ int main() {
     v.corners = 60;
     v.outline = true;
     v.eyeTracking = false;
+    v.overlay = {true, -12, 20, 30};
     check(write_menu_values(ini.c_str(), v, true), "the menu's keys are written");
     const MenuValues back = read_menu_values(ini.c_str());
     check(back.periphery == 35 && back.density == 110 && back.width == 30 && back.height == 25 && back.feather == 12 &&
-              back.corners == 60 && back.outline && !back.eyeTracking,
+              back.corners == 60 && back.outline && !back.eyeTracking && back.overlay == v.overlay,
           "and read back");
     const std::wstring loopIni = std::wstring(temp) + L"ace-quadview-menu-test-loop.ini";
     DeleteFileW(loopIni.c_str());
@@ -166,27 +170,46 @@ int main() {
 
     // Lines and the panel image.
     SettingsMenu shown;
-    shown.selected = 1;
+    shown.selected = 2;
     const std::vector<MenuLine> lines = menu_lines(shown);
-    check(lines.size() == 11 && lines[1].selected && lines[1].label == L"Focus density" && lines[1].value == L"100%" &&
-              lines[7].value == L"On" && lines[8].value == L"0°" && lines[9].value == L"4° down" &&
-              lines[10].value == L"33°",
-          "lines carry labels, values and the selection; the panel's place in degrees");
+    check(lines.size() == 9 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
+              lines[2].label == L"Focus density" && lines[2].value == L"100%" && lines[8].value == L"On",
+          "lines carry labels, values and the selection");
 
-    // The panel's place from the menu itself: stepped, shown and written to [menu] for the layer to move it.
+    // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
+    // [menu] for the layer to move them.
     SettingsMenu moving;
-    moving.selected = 8;  // Menu left / right
+    moving.page = 1;
+    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 8,
+          "the Overlay and menu page");
+    const std::vector<MenuLine> placeLines = menu_lines(moving);
+    check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
+              placeLines[3].value == L"18° up" && placeLines[4].value == L"26°" && placeLines[5].value == L"0°" &&
+              placeLines[6].value == L"4° down" && placeLines[7].value == L"33°",
+          "the overlay's and the menu's places in degrees");
+    moving.selected = 1;
+    menu_key(moving, MenuKey::Right);  // overlay on
+    moving.selected = 2;
+    for (int i = 0; i < 3; ++i)
+        menu_key(moving, MenuKey::Right);
+    moving.selected = 3;
+    menu_key(moving, MenuKey::Left);
+    moving.selected = 5;  // Menu left / right
     menu_key(moving, MenuKey::Left);
     menu_key(moving, MenuKey::Left);
-    moving.selected = 10;  // Menu size
+    moving.selected = 7;  // Menu size
     menu_key(moving, MenuKey::Right);
     const auto movingIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_moving.ini").wstring();
     write_menu_values(movingIni.c_str(), moving.values, true);
     const MenuPlacement moved = read_menu_placement(movingIni.c_str());
+    const OsdPlacement overlayMoved = read_osd_placement(movingIni.c_str());
     const MenuValues reread = read_menu_values(movingIni.c_str());
     DeleteFileW(movingIni.c_str());
+    check(overlayMoved == OsdPlacement{true, 3, 17, 26} && reread.overlay == overlayMoved &&
+              menu_lines(moving)[2].value == L"3° right",
+          "the overlay turns on and moves: right 3 degrees and down 1, written to [osd] and read back");
     check(moved.yaw == -2 && moved.pitch == -4 && moved.width == 34 && reread.placement == moved &&
-              menu_lines(moving)[8].value == L"2° left",
+              menu_lines(moving)[5].value == L"2° left",
           "the menu moves itself: left 2 degrees and 1 degree wider, written to [menu] and read back");
     const std::vector<uint32_t> pixels =
         draw_menu_panel(L"QVFR settings", menu_resolution(shown), menu_stats(shown), lines, {}, L"hint");
@@ -229,6 +252,136 @@ int main() {
     DeleteFileW(placementIni.c_str());
     check(read.yaw == -kMenuYawMax && read.pitch == -7 && read.width == 33,
           "menu placement: [menu] reads negative degrees, clamps them and defaults the rest");
+
+    // Foveated DLSS (Cheeky running): a page switch first, then the method's items or Cheeky's.
+    {
+        SettingsMenu c;
+        c.launch = {true, 50, 39, 39};
+        check(menu_pages(c).size() == 2 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
+        c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
+        check(menu_pages(c).size() == 4 && menu_page_items(c).size() == 9 && menu_page_items(c).front() == MenuItem::Page &&
+                  menu_title(c) == L"QVFR settings",
+              "with Cheeky: four pages, the first the QVFR items under the page switch");
+        check(!menu_key(c, MenuKey::Right) && c.page == 1 && c.selected == 0 && menu_page_items(c).size() == 11 &&
+                  menu_title(c) == L"Foveated DLSS" && menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3",
+              "the switch turns to the Foveated DLSS page, titled, with Cheeky's credit line and version");
+        menu_key(c, MenuKey::Down);  // Foveated DLSS on/off
+        check(menu_key(c, MenuKey::Right) && !c.cheeky.values.processing, "Foveated DLSS turns off");
+        menu_key(c, MenuKey::Down);
+        menu_key(c, MenuKey::Down);  // outer scale
+        for (int i = 0; i < 30; ++i)
+            menu_key(c, MenuKey::Left);
+        check(c.cheeky.values.outerScale == kCheekyScaleMin, "outer DLAA scale stops at Cheeky's minimum");
+        menu_key(c, MenuKey::Down);  // outer preset: E, J, K, L, M, never the game default
+        bool neverDefault = true;
+        for (int i = 0; i < 6; ++i) {
+            menu_key(c, MenuKey::Right);
+            neverDefault &= c.cheeky.values.outerPreset != 0;
+        }
+        check(neverDefault && c.cheeky.values.outerPreset == 10, "the outer preset cycles without the game default");
+        menu_key(c, MenuKey::Down);  // focus preset: from the game default back to M
+        menu_key(c, MenuKey::Left);
+        check(c.cheeky.values.focusPreset == 13 && std::wstring(cheeky_preset_name(13)) == L"M",
+              "the focus preset wraps from the game default to M");
+        const std::vector<MenuLine> lines = menu_lines(c);
+        check(lines.size() == 11 && lines[0].value == L"Foveated DLSS" && lines[1].value == L"Off" &&
+                  lines[3].value == L"20%" && lines[5].value == L"M" && menu_notes(c).empty() &&
+                  !menu_resolution(c).shown,
+              "the page's lines show Cheeky's values; no resolution or notes there");
+        const std::string set = cheeky_set_lines(c.cheeky.values, true);
+        check(set.find("Enabled=0\n") == 0 && set.find("PeripheralDlaaScale=0.20") != std::string::npos &&
+                  set.find("CenterPreset=13") != std::string::npos && set.find("QuadView4Role=4") != std::string::npos &&
+                  cheeky_set_lines(c.cheeky.values, false).find("Quad") == std::string::npos,
+              "Cheeky's set lines carry the values, and the quad roles only for QVFR");
+        const auto cheekyIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_cheeky.ini").wstring();
+        DeleteFileW(cheekyIni.c_str());
+        write_cheeky_settings(cheekyIni.c_str(), c.cheeky.values, false);
+        const CheekySettings back = read_cheeky_settings(cheekyIni.c_str());
+        DeleteFileW(cheekyIni.c_str());
+        check(back == c.cheeky.values && !back.load, "[cheeky]'s live keys round-trip; enabled is the launcher's");
+        c.page = 0;
+        c.launch.dlssHeld = true;
+        check(!menu_notes(c).empty() && menu_notes(c).front().find(L"DLSS") == 0,
+              "with DLSS holding the views, page 0 says resolution waits for the next launch");
+        const std::vector<uint32_t> page = draw_menu_panel(menu_title(c), menu_resolution(c), menu_stats(c),
+                                                           menu_lines(c), menu_notes(c), L"hint", L"credit");
+        check(page.size() == static_cast<size_t>(kPanelWidth) * kPanelHeight, "the panel draws 12 lines and a subtitle");
+
+        // The experimental focus-view options: supersampling, motion-vector fix, DLSS-NR.
+        c.page = 1;
+        c.selected = 6;  // focus supersampling
+        for (int i = 0; i < 30; ++i)
+            menu_key(c, MenuKey::Right);
+        check(c.cheeky.values.supersampling == kCheekySupersamplingMax, "focus supersampling stops at 200%");
+        menu_key(c, MenuKey::Down);
+        menu_key(c, MenuKey::Right);
+        menu_key(c, MenuKey::Down);
+        menu_key(c, MenuKey::Right);
+        menu_key(c, MenuKey::Down);
+        menu_key(c, MenuKey::Left);  // NR preset: from Default back to B
+        menu_key(c, MenuKey::Down);
+        for (int i = 0; i < 5; ++i)
+            menu_key(c, MenuKey::Right);
+        const std::vector<MenuLine> more = menu_lines(c);
+        check(c.cheeky.values.motionFix && c.cheeky.values.nr && c.cheeky.values.nrPreset == 2 &&
+                  c.cheeky.values.nrPasses == kCheekyNrPassesMax && more[6].value == L"200%" &&
+                  more[9].value == L"B (Faster)" && more[10].value == L"3",
+              "motion-vector fix and DLSS-NR turn on; the NR preset wraps; NR passes stop at 3");
+        const std::string nrSet = cheeky_set_lines(c.cheeky.values, true);
+        check(nrSet.find("CenterSupersampling=2.00") != std::string::npos && nrSet.find("FixMotionBlur=1") != std::string::npos &&
+                  nrSet.find("NrEnabled=1") != std::string::npos && nrSet.find("NrPreset=2") != std::string::npos &&
+                  nrSet.find("NrPasses=3") != std::string::npos,
+              "Cheeky's set lines carry supersampling, the motion fix and DLSS-NR");
+        const auto nrIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_cheeky_nr.ini").wstring();
+        DeleteFileW(nrIni.c_str());
+        write_cheeky_settings(nrIni.c_str(), c.cheeky.values, false);
+        const CheekySettings nrBack = read_cheeky_settings(nrIni.c_str());
+        DeleteFileW(nrIni.c_str());
+        check(nrBack == c.cheeky.values, "the experimental keys round-trip through [cheeky]");
+
+        // Frame generation: the third page, reached either way round from the page switch.
+        c.page = 0;
+        c.selected = 0;
+        menu_key(c, MenuKey::Left);
+        check(c.page == 3 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
+        menu_key(c, MenuKey::Left);
+        check(c.page == 2 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 7 &&
+                  menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
+              "then Frame generation, with the credit line; no note while FG is off");
+        menu_key(c, MenuKey::Down);
+        menu_key(c, MenuKey::Right);  // FG on
+        menu_key(c, MenuKey::Down);
+        for (int i = 0; i < 5; ++i)
+            menu_key(c, MenuKey::Right);  // multiplier stops at 4x
+        menu_key(c, MenuKey::Down);
+        menu_key(c, MenuKey::Down);
+        for (int i = 0; i < 5; ++i)
+            menu_key(c, MenuKey::Left);  // centre FG scale stops at 25%
+        const std::vector<MenuLine> fgLines = menu_lines(c);
+        check(c.cheeky.values.fg && c.cheeky.values.fgMultiplier == kCheekyFgMultiplierMax &&
+                  c.cheeky.values.fgScale == 25 && fgLines[2].value == L"4x" && fgLines[4].value == L"25%" &&
+                  !menu_notes(c).empty() && menu_notes(c).front().find(L"Turbo") != std::wstring::npos,
+              "FG turns on; its multiplier and scales stop at Cheeky's limits; the page warns about Turbo mode");
+        const std::string fgSet = cheeky_set_lines(c.cheeky.values, true);
+        check(fgSet.find("FgEnabled=1") != std::string::npos && fgSet.find("FgMultiplier=4") != std::string::npos &&
+                  fgSet.find("FgReleasePoint=8") != std::string::npos && fgSet.find("FgWidth=0.30") != std::string::npos &&
+                  fgSet.find("FgResolutionPercent=25") != std::string::npos && fgSet.find("FgCenterMethod=0") != std::string::npos,
+              "Cheeky's set lines carry FG with the settings that work in ACE (DLSS-G, release after capture)");
+        check(fgSet.find("CenterMode=0") != std::string::npos &&
+                  cheeky_set_lines(c.cheeky.values, true, true).find("CenterMode=1") != std::string::npos,
+              "the FG region follows the eyes (CenterMode 1) only when QVFR's focus does");
+        c.cheeky.values.fgBorder = true;
+        check(cheeky_set_lines(c.cheeky.values, true, true).find("FgShowBorder=1") != std::string::npos &&
+                  menu_lines(c).back().label == L"Show FG region" && menu_lines(c).back().value == L"On",
+              "the FG region outline is the page's last row and reaches Cheeky as FgShowBorder");
+        menu_key(c, MenuKey::Up);
+        menu_key(c, MenuKey::Up);
+        menu_key(c, MenuKey::Up);
+        menu_key(c, MenuKey::Up);  // back on the page switch
+        menu_key(c, MenuKey::Right);
+        menu_key(c, MenuKey::Right);
+        check(c.page == 0 && menu_title(c) == L"QVFR settings", "Right from Frame generation, then Overlay and menu, wraps to the first page");
+    }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;

@@ -22,10 +22,34 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Width, L"Focus width", 10, 100, 1},     {MenuItem::Height, L"Focus height", 10, 100, 1},
     {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
     {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
+    // The performance overlay's place, degrees (the launcher's sliders).
+    {MenuItem::Overlay, L"Performance overlay", 0, 1, 1},
+    {MenuItem::OverlayYaw, L"Overlay left / right", -kOsdYawMax, kOsdYawMax, 1},
+    {MenuItem::OverlayPitch, L"Overlay up / down", -kOsdPitchMax, kOsdPitchMax, 1},
+    {MenuItem::OverlayWidth, L"Overlay size", kOsdWidthMin, kOsdWidthMax, 1},
     // The panel's place, degrees (the launcher's kMenuYawRange, kMenuPitchRange, kMenuWidthRange).
     {MenuItem::MenuYaw, L"Menu left / right", -kMenuYawMax, kMenuYawMax, 1},
     {MenuItem::MenuPitch, L"Menu up / down", -kMenuPitchMax, kMenuPitchMax, 1},
     {MenuItem::MenuWidth, L"Menu size", kMenuWidthMin, kMenuWidthMax, 1},
+    // The page switch and the Foveated DLSS page (cheeky_settings.h's ranges; presets step through its list).
+    {MenuItem::Page, L"Page", 0, 1, 1},
+    {MenuItem::CheekyProcessing, L"Foveated DLSS", 0, 1, 1},
+    {MenuItem::CheekyOuterDlaa, L"Cheaper outer views", 0, 1, 1},
+    {MenuItem::CheekyOuterScale, L"Outer DLAA scale", kCheekyScaleMin, kCheekyScaleMax, kCheekyScaleStep},
+    {MenuItem::CheekyOuterPreset, L"Outer preset", 0, 0, 1},
+    {MenuItem::CheekyFocusPreset, L"Focus preset", 0, 0, 1},
+    {MenuItem::CheekySupersampling, L"Focus supersampling", kCheekySupersamplingMin, kCheekySupersamplingMax,
+     kCheekySupersamplingStep},
+    {MenuItem::CheekyMotionFix, L"Fix motion-vector blur", 0, 1, 1},
+    {MenuItem::CheekyNr, L"DLSS-NR (experimental)", 0, 1, 1},
+    {MenuItem::CheekyNrPreset, L"DLSS-NR preset", 0, kCheekyNrPresetMax, 1},
+    {MenuItem::CheekyNrPasses, L"DLSS-NR passes", 1, kCheekyNrPassesMax, 1},
+    {MenuItem::FgOn, L"Frame generation", 0, 1, 1},
+    {MenuItem::FgMultiplier, L"Multiplier", 2, kCheekyFgMultiplierMax, 1},
+    {MenuItem::FgSize, L"Center region", kCheekyFgSizeMin, kCheekyFgSizeMax, kCheekyFgSizeStep},
+    {MenuItem::FgScale, L"Center FG scale", 25, 100, 25},
+    {MenuItem::FgPeriphery, L"Periphery FG scale", 25, 100, 25},
+    {MenuItem::FgBorder, L"Show FG region", 0, 1, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -46,6 +70,9 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::MenuYaw: return &v.placement.yaw;
     case MenuItem::MenuPitch: return &v.placement.pitch;
     case MenuItem::MenuWidth: return &v.placement.width;
+    case MenuItem::OverlayYaw: return &v.overlay.yaw;
+    case MenuItem::OverlayPitch: return &v.overlay.pitch;
+    case MenuItem::OverlayWidth: return &v.overlay.width;
     default: return nullptr;
     }
 }
@@ -65,13 +92,69 @@ std::vector<MenuItem> menu_items(bool qvfr) {
     if (qvfr)
         items = {MenuItem::Periphery, MenuItem::Density};
     items.insert(items.end(), {MenuItem::Width, MenuItem::Height, MenuItem::Feather, MenuItem::Corners,
-                               MenuItem::Outline, MenuItem::EyeTracking, MenuItem::MenuYaw, MenuItem::MenuPitch,
-                               MenuItem::MenuWidth});
+                               MenuItem::Outline, MenuItem::EyeTracking});
     return items;
 }
 
+std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
+    if (menu.cheeky.available)
+        return {MenuPage::Settings, MenuPage::Dlss, MenuPage::Fg, MenuPage::Headset};
+    return {MenuPage::Settings, MenuPage::Headset};
+}
+
+MenuPage menu_page(const SettingsMenu& menu) {
+    const std::vector<MenuPage> pages = menu_pages(menu);
+    return pages[std::clamp(menu.page, 0, static_cast<int>(pages.size()) - 1)];
+}
+
+std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
+    std::vector<MenuItem> items = {MenuItem::Page};
+    const MenuPage page = menu_page(menu);
+    if (page == MenuPage::Headset) {
+        items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
+                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth});
+    } else if (page == MenuPage::Fg) {
+        items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
+                                   MenuItem::FgPeriphery, MenuItem::FgBorder});
+    } else if (page == MenuPage::Dlss) {
+        items.insert(items.end(), {MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
+                                   MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
+                                   MenuItem::CheekyMotionFix, MenuItem::CheekyNr, MenuItem::CheekyNrPreset,
+                                   MenuItem::CheekyNrPasses});
+    } else {
+        const std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
+        items.insert(items.end(), method.begin(), method.end());
+    }
+    return items;
+}
+
+namespace {
+
+std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
+    switch (page) {
+    case MenuPage::Dlss: return L"Foveated DLSS";
+    case MenuPage::Fg: return L"Frame generation";
+    case MenuPage::Headset: return L"Overlay and menu";
+    default: return menu.launch.qvfr ? L"QVFR" : L"Two-loop";
+    }
+}
+
+}  // namespace
+
+std::wstring menu_title(const SettingsMenu& menu) {
+    const MenuPage page = menu_page(menu);
+    return page == MenuPage::Settings ? page_name(menu, page) + L" settings" : page_name(menu, page);
+}
+
+std::wstring menu_subtitle(const SettingsMenu& menu) {
+    const MenuPage page = menu_page(menu);
+    return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";
+}
+
 bool menu_key(SettingsMenu& menu, MenuKey key) {
-    const std::vector<MenuItem> items = menu_items(menu.launch.qvfr);
+    const int pages = static_cast<int>(menu_pages(menu).size());
+    menu.page = std::clamp(menu.page, 0, pages - 1);
+    const std::vector<MenuItem> items = menu_page_items(menu);
     const int n = static_cast<int>(items.size());
     menu.selected = std::clamp(menu.selected, 0, n - 1);
     if (key == MenuKey::Up || key == MenuKey::Down) {
@@ -79,8 +162,60 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         return false;
     }
     const MenuItem item = items[menu.selected];
-    if (item == MenuItem::Outline || item == MenuItem::EyeTracking) {
-        bool& flag = item == MenuItem::Outline ? menu.values.outline : menu.values.eyeTracking;
+    if (item == MenuItem::Page) {  // the next or previous page, with the switch still selected
+        menu.page = (menu.page + (key == MenuKey::Right ? 1 : pages - 1)) % pages;
+        menu.selected = 0;
+        return false;
+    }
+    CheekySettings& c = menu.cheeky.values;
+    const int step = key == MenuKey::Right ? 1 : -1;
+    switch (item) {
+    case MenuItem::CheekyProcessing: c.processing = !c.processing; return true;
+    case MenuItem::CheekyOuterDlaa: c.outerDlaa = !c.outerDlaa; return true;
+    case MenuItem::CheekyOuterScale: {
+        const int before = c.outerScale;
+        c.outerScale = std::clamp(c.outerScale + step * kCheekyScaleStep, kCheekyScaleMin, kCheekyScaleMax);
+        return c.outerScale != before;
+    }
+    case MenuItem::CheekyOuterPreset: c.outerPreset = cheeky_preset_step(c.outerPreset, step, false); return true;
+    case MenuItem::CheekyFocusPreset: c.focusPreset = cheeky_preset_step(c.focusPreset, step, true); return true;
+    case MenuItem::CheekySupersampling: {
+        const int before = c.supersampling;
+        c.supersampling = std::clamp(c.supersampling + step * kCheekySupersamplingStep, kCheekySupersamplingMin,
+                                     kCheekySupersamplingMax);
+        return c.supersampling != before;
+    }
+    case MenuItem::CheekyMotionFix: c.motionFix = !c.motionFix; return true;
+    case MenuItem::CheekyNr: c.nr = !c.nr; return true;
+    case MenuItem::CheekyNrPreset: c.nrPreset = ((c.nrPreset + step) % (kCheekyNrPresetMax + 1) + kCheekyNrPresetMax + 1) %
+                                                (kCheekyNrPresetMax + 1);
+        return true;
+    case MenuItem::CheekyNrPasses: {
+        const int before = c.nrPasses;
+        c.nrPasses = std::clamp(c.nrPasses + step, 1, kCheekyNrPassesMax);
+        return c.nrPasses != before;
+    }
+    case MenuItem::FgOn: c.fg = !c.fg; return true;
+    case MenuItem::FgBorder: c.fgBorder = !c.fgBorder; return true;
+    case MenuItem::FgMultiplier:
+    case MenuItem::FgSize:
+    case MenuItem::FgScale:
+    case MenuItem::FgPeriphery: {
+        const Spec& sp = spec(item);
+        int& v = item == MenuItem::FgMultiplier ? c.fgMultiplier
+                 : item == MenuItem::FgSize     ? c.fgSize
+                 : item == MenuItem::FgScale    ? c.fgScale
+                                                : c.fgPeriphery;
+        const int before = v;
+        v = std::clamp(v + step * sp.step, sp.min, sp.max);
+        return v != before;
+    }
+    default: break;
+    }
+    if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay) {
+        bool& flag = item == MenuItem::Outline       ? menu.values.outline
+                     : item == MenuItem::EyeTracking ? menu.values.eyeTracking
+                                                     : menu.values.overlay.enabled;
         flag = !flag;
         return true;
     }
@@ -104,6 +239,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.corners = std::clamp(read_int(ini, L"quad", L"corner_radius_percent", v.corners), 0, 100);
     v.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     v.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
+    v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
     return v;
 }
@@ -120,6 +256,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
     ok &= write(ini, L"quad", L"corner_radius_percent", v.corners);
     ok &= write(ini, L"quad", L"debug_border", v.outline ? 1 : 0);
     ok &= write(ini, L"quad", L"gaze", v.eyeTracking ? 1 : 0);
+    ok &= write_osd_placement(ini, v.overlay);
     ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
     ok &= write(ini, L"menu", L"width", v.placement.width);
@@ -195,7 +332,7 @@ std::wstring target(const MenuLaunch& l, double outer, double focusWidth, double
 MenuResolution menu_resolution(const SettingsMenu& menu) {
     MenuResolution r;
     const MenuLaunch& l = menu.launch;
-    if (!l.qvfr)
+    if (!l.qvfr || (menu.cheeky.available && menu.page > 0))
         return r;
     const MenuFit f = menu_fit(menu);
     r.shown = true;
@@ -235,6 +372,15 @@ MenuStats menu_stats(const SettingsMenu& menu) {
 
 std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     std::vector<std::wstring> notes;
+    if (menu.cheeky.available && menu.page == 2) {
+        if (menu.cheeky.values.fg)
+            notes.push_back(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off");
+        return notes;
+    }
+    if (menu.cheeky.available && menu.page == 1)
+        return notes;
+    if (menu.launch.qvfr && menu.launch.dlssHeld)
+        notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
     const MenuFit f = menu_fit(menu);
     const MenuLaunch& l = menu.launch;
     const bool known = l.nativeWidth > 0 && l.nativeHeight > 0;
@@ -254,17 +400,60 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
 
 std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
     std::vector<MenuLine> lines;
-    const std::vector<MenuItem> items = menu_items(menu.launch.qvfr);
+    const std::vector<MenuItem> items = menu_page_items(menu);
     MenuValues v = menu.values;
+    const CheekySettings& c = menu.cheeky.values;
     const MenuFit fit = menu_fit(menu);
     for (size_t i = 0; i < items.size(); ++i) {
         MenuLine line;
         line.label = spec(items[i]).label;
         line.selected = static_cast<int>(i) == menu.selected;
-        if (items[i] == MenuItem::Outline)
+        if (items[i] == MenuItem::Page)
+            line.value = page_name(menu, menu_page(menu));
+        else if (items[i] == MenuItem::FgOn)
+            line.value = c.fg ? L"On" : L"Off";
+        else if (items[i] == MenuItem::FgMultiplier)
+            line.value = std::to_wstring(c.fgMultiplier) + L"x";
+        else if (items[i] == MenuItem::FgSize)
+            line.value = std::to_wstring(c.fgSize) + L"%";
+        else if (items[i] == MenuItem::FgScale)
+            line.value = std::to_wstring(c.fgScale) + L"%";
+        else if (items[i] == MenuItem::FgPeriphery)
+            line.value = std::to_wstring(c.fgPeriphery) + L"%";
+        else if (items[i] == MenuItem::FgBorder)
+            line.value = c.fgBorder ? L"On" : L"Off";
+        else if (items[i] == MenuItem::CheekyProcessing)
+            line.value = c.processing ? L"On" : L"Off";
+        else if (items[i] == MenuItem::CheekyOuterDlaa)
+            line.value = c.outerDlaa ? L"On" : L"Off";
+        else if (items[i] == MenuItem::CheekyOuterScale)
+            line.value = std::to_wstring(c.outerScale) + L"%";
+        else if (items[i] == MenuItem::CheekyOuterPreset)
+            line.value = cheeky_preset_name(c.outerPreset);
+        else if (items[i] == MenuItem::CheekyFocusPreset)
+            line.value = cheeky_preset_name(c.focusPreset);
+        else if (items[i] == MenuItem::CheekySupersampling)
+            line.value = std::to_wstring(c.supersampling) + L"%";
+        else if (items[i] == MenuItem::CheekyMotionFix)
+            line.value = c.motionFix ? L"On" : L"Off";
+        else if (items[i] == MenuItem::CheekyNr)
+            line.value = c.nr ? L"On" : L"Off";
+        else if (items[i] == MenuItem::CheekyNrPreset)
+            line.value = kCheekyNrPresets[std::clamp(c.nrPreset, 0, kCheekyNrPresetMax)];
+        else if (items[i] == MenuItem::CheekyNrPasses)
+            line.value = std::to_wstring(c.nrPasses);
+        else if (items[i] == MenuItem::Outline)
             line.value = v.outline ? L"On" : L"Off";
         else if (items[i] == MenuItem::EyeTracking)
             line.value = v.eyeTracking ? L"On" : L"Off";
+        else if (items[i] == MenuItem::Overlay)
+            line.value = v.overlay.enabled ? L"On" : L"Off";
+        else if (items[i] == MenuItem::OverlayYaw)
+            line.value = degrees(v.overlay.yaw, L"right", L"left");
+        else if (items[i] == MenuItem::OverlayPitch)
+            line.value = degrees(v.overlay.pitch, L"up", L"down");
+        else if (items[i] == MenuItem::OverlayWidth)
+            line.value = std::to_wstring(v.overlay.width) + L"\u00b0";
         else if (items[i] == MenuItem::MenuYaw)
             line.value = degrees(v.placement.yaw, L"right", L"left");
         else if (items[i] == MenuItem::MenuPitch)

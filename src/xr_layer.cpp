@@ -6,13 +6,16 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <mutex>
 #include <utility>
 #include <vector>
 
 #include "cheeky/cheeky_host.h"
+#include "cheeky/cheeky_settings.h"
 #include "experiment/double_render.h"
 #include "experiment/views3.h"
 #include "experiment/views4.h"
@@ -29,8 +32,12 @@
 #include "quad/compositor.h"
 #include "quad/focus_outline.h"
 #include "quad/menu_panel.h"
+#include "quad/osd.h"
 #include "quad/settings_menu.h"
 #include "xr.h"
+
+#include <dxgi1_4.h>
+#include <intrin.h>
 
 namespace aceqv {
 namespace {
@@ -809,6 +816,8 @@ XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateI
     return r;
 }
 
+bool osd_owns_gpu_timer();  // the performance overlay (below)
+
 void report_cpu_times() {
     const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
         const uint64_t n = total.calls.exchange(0), t = total.ticks.exchange(0), m = total.maxTicks.exchange(0);
@@ -830,7 +839,8 @@ void report_cpu_times() {
     line(cpu.compose, nullptr, compose, sizeof(compose));
     logf("views4 cpu: ms per call over the last %llu frames: xrEndFrame %s; xrLocateViews %s; compose %s",
          static_cast<unsigned long long>(kCpuReportFrames), end, locate, compose);
-    gpu_frame_timer_report();
+    if (!osd_owns_gpu_timer())  // the overlay's draws collect the timer's frames
+        gpu_frame_timer_report();
 }
 
 bool is_ace_process() {
@@ -934,9 +944,11 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 }
 
 void menu_shutdown();  // the settings menu's panel (below)
+void osd_shutdown();   // the performance overlay's card (below)
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     menu_shutdown();  // its swapchain and space belong to the session
+    osd_shutdown();
     probe_stop();
     batch_watch_stop();
     dred_stop();
@@ -979,9 +991,15 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     return next.DestroySession(session);
 }
 
+void osd_waited(XrDuration period);  // the performance overlay's frame budget (below)
+
 XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state) {
-    if (!experiment.twoLoops)
-        return next.WaitFrame(session, info, state);
+    if (!experiment.twoLoops) {
+        const XrResult r = next.WaitFrame(session, info, state);
+        if (XR_SUCCEEDED(r))
+            osd_waited(state->predictedDisplayPeriod);
+        return r;
+    }
     std::unique_lock lock(loops.mutex);
     if (!loops.active && !loops.broken && loops.waits >= kArmAfterFrames && loops.waits == loops.begins &&
         loops.begins == loops.ends && (!experiment.quad || quad_ready())) {
@@ -1020,6 +1038,8 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
     loops.pendingState.predictedDisplayPeriod = state->predictedDisplayPeriod;
     loops.pendingState.shouldRender = state->shouldRender;
     QueryPerformanceCounter(&loops.aWaitReturned);
+    if (XR_SUCCEEDED(r))
+        osd_waited(state->predictedDisplayPeriod / 2);  // two ACE frames per display frame
     return r;
 }
 
@@ -1700,7 +1720,15 @@ void live_apply(const LiveSettings& l) {
 }
 
 void menu_values_changed();  // the settings menu shows the ini's values (below)
+
+// Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
+void cheeky_apply_ini() {
+    if (cheeky_running() && !live.ini.empty())
+        cheeky_apply(cheeky_set_lines(read_cheeky_settings(live.ini.c_str()), experiment.views4,
+                                      read_live(live.ini.c_str()).gaze));
+}
 void menu_placement_changed();  // the launcher moved the settings menu's panel (below)
+void osd_placement_changed();   // the performance overlay was turned on or off or moved (below)
 
 constexpr int64_t kLiveCheckMs = 250;
 
@@ -1729,8 +1757,10 @@ void live_reload() {
         return;
     live.written = attributes.ftLastWriteTime;
     live_apply(read_live(live.ini.c_str()));
+    cheeky_apply_ini();
     menu_values_changed();
     menu_placement_changed();
+    osd_placement_changed();
     const std::wstring restartKeys = restart_keys(live.ini.c_str(), experiment.views4);
     if (restartKeys != live.restartKeys) {
         logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(),
@@ -1796,6 +1826,7 @@ void menu_values_changed() {
     if (!menu.visible)
         return;
     menu.model.values = read_menu_values(live.ini.c_str());
+    menu.model.cheeky.values = read_cheeky_settings(live.ini.c_str());
     menu.dirty = true;
 }
 
@@ -1822,6 +1853,7 @@ void menu_open(int64_t now) {
     }
     if (!menu.visible) {
         menu.model.values = read_menu_values(live.ini.c_str());
+        menu.model.cheeky = {cheeky_running(), cheeky_version(), read_cheeky_settings(live.ini.c_str())};
         const Views4Layout& l = experiment.views4Layout;
         {
             std::lock_guard guard(quad.mutex);  // the native eye, for the notes' pixel sizes
@@ -1847,8 +1879,13 @@ void menu_press(MenuKey key, int64_t now) {
         return;
     const bool qvfr = menu.model.launch.qvfr;
     write_menu_values(live.ini.c_str(), menu.model.values, qvfr);
-    if (!menu.settingsIni.empty())
-        write_menu_values(menu.settingsIni.c_str(), menu.model.values, qvfr);  // the next launch starts from them
+    if (menu.model.cheeky.available)
+        write_cheeky_settings(live.ini.c_str(), menu.model.cheeky.values, false);
+    if (!menu.settingsIni.empty()) {  // the next launch starts from them
+        write_menu_values(menu.settingsIni.c_str(), menu.model.values, qvfr);
+        if (menu.model.cheeky.available)
+            write_cheeky_settings(menu.settingsIni.c_str(), menu.model.cheeky.values, false);
+    }
     live.nextCheck = 0;  // apply at this frame's live_reload
 }
 
@@ -2012,13 +2049,14 @@ double native_center_ppd() {
 }
 
 void menu_render() {
-    std::wstring title = experiment.views4 ? L"QVFR settings" : L"Two-loop settings";
+    const std::wstring title = menu_title(menu.model);
     const std::wstring hint = L"Ctrl+Alt+arrows, or right stick: select and change · left stick click: close";
     if (menu.model.launch.nativePpd <= 0)  // known once ACE has rendered a frame
         menu.model.launch.nativePpd = native_center_ppd();
+    menu.model.launch.dlssHeld = experiment.views4 && views4_dlss_held();
     const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
                                                          menu_lines(menu.model),
-                                                         menu_notes(menu.model), hint);
+                                                         menu_notes(menu.model), hint, menu_subtitle(menu.model));
     uint32_t index = 0;
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     wait.timeout = 100'000'000;
@@ -2033,7 +2071,10 @@ void menu_render() {
     }
 }
 
-// This frame's layers with the menu panel on top while it is shown; `info` itself otherwise.
+const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);  // the overlay's card (below)
+
+// This frame's layers with the performance overlay and the menu panel on top while they are shown;
+// `info` itself otherwise.
 const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, XrFrameEndInfo& storage,
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers) {
     if (live.ini.empty() || (!experiment.views4 && !experiment.quad))
@@ -2056,14 +2097,18 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
         menu.visible = false;
         log_line("settings menu: hidden");
     }
-    if (!menu.visible || !menu_resources(session))
-        return info;
-    if (menu.dirty)
+    bool showMenu = menu.visible && menu_resources(session);
+    if (showMenu && menu.dirty)
         menu_render();
-    if (!menu.uploaded)
+    showMenu = showMenu && menu.uploaded;
+    const XrCompositionLayerBaseHeader* card = osd_frame(session, now);
+    if (!showMenu && !card)
         return info;
     layers.assign(info->layers, info->layers + info->layerCount);
-    layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu.layer));
+    if (card)
+        layers.push_back(card);
+    if (showMenu)  // the menu over the card
+        layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&menu.layer));
     storage = *info;
     storage.layerCount = static_cast<uint32_t>(layers.size());
     storage.layers = layers.data();
@@ -2083,8 +2128,283 @@ void menu_shutdown() {
     menu.dirty = true;
 }
 
+// ---- Performance overlay ---------------------------------------------------------------------
+// [osd] (quad/osd.h): a head-locked card where the launcher's Headset menu pane or the menu places it, redrawn every kOsdDrawMs from the
+// frames since the last draw. The numbers are gathered on the frame thread; the card is drawn on a
+// worker (GDI takes milliseconds) and uploaded at a later frame. Ctrl+Alt+P while ACE has focus turns it on and off, written to the ini
+// the layer reloads from and to the launcher's, as the launcher's Headset menu pane does.
+// ACE's frame: xrEndFrame to xrEndFrame; its CPU time: the cycles the thread calling xrEndFrame ran
+// between the two (ACE's render thread; time it spends blocked is not counted); its GPU time: the
+// views4 GPU frame timer (probe/gpu_frame_timer.h), started when the card first shows.
+struct Osd {
+    OsdPlacement placement;  // [osd] when last read
+    bool read = false, failed = false, uploaded = false, hotkeyHeld = false;
+    XrSpace view = XR_NULL_HANDLE;
+    XrSwapchain chain = XR_NULL_HANDLE;
+    std::vector<ID3D12Resource*> images;
+    PanelUpload upload;
+    XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    std::atomic<int64_t> periodNs{0};  // the display's, from xrWaitFrame (any thread)
+    // On the thread calling xrEndFrame.
+    int64_t lastEnd = 0;
+    DWORD thread = 0;
+    uint64_t lastCycles = 0;
+    int64_t tscStartQpc = 0;
+    uint64_t tscStart = 0;
+    double cyclesPerMs = 0;  // the TSC's rate, measured against QPC
+    std::vector<OsdFrame> frames;  // since the last draw
+    std::deque<double> history;    // the graph: the last kOsdHistory frame times
+    int64_t nextDraw = 0;
+    uint64_t gazeQueries = 0, gazeTracked = 0;  // at the last draw
+    std::future<std::vector<uint32_t>> drawing;  // the card being drawn
+    CheekySettings cheeky;                         // [cheeky] when last read
+    std::string cheekySnapshot;
+    int64_t nextCheeky = 0;
+    IDXGIAdapter3* adapter = nullptr;
+};
+Osd osd;
+constexpr int64_t kOsdDrawMs = 500, kOsdCheekyMs = 1000;
+constexpr size_t kOsdHistory = 150;
+
+bool osd_owns_gpu_timer() { return osd.placement.enabled && experiment.views4; }
+
+void osd_waited(XrDuration period) { osd.periodNs.store(period, std::memory_order_relaxed); }
+
+void osd_measure() {
+    if (!osd.placement.enabled)
+        return;
+    const int64_t now = qpc_now();
+    const DWORD thread = GetCurrentThreadId();
+    ULONG64 cycles = 0;
+    QueryThreadCycleTime(GetCurrentThread(), &cycles);
+    if (!osd.tscStartQpc) {
+        osd.tscStartQpc = now;
+        osd.tscStart = __rdtsc();
+    } else if (osd.cyclesPerMs == 0 && now - osd.tscStartQpc > qpc_ms(500)) {
+        osd.cyclesPerMs = static_cast<double>(__rdtsc() - osd.tscStart) /
+                          (static_cast<double>(now - osd.tscStartQpc) * 1000.0 / static_cast<double>(qpc_ms(1000)));
+    }
+    if (osd.lastEnd) {
+        OsdFrame frame;
+        frame.intervalMs = static_cast<double>(now - osd.lastEnd) * 1000.0 / static_cast<double>(qpc_ms(1000));
+        if (thread == osd.thread && osd.cyclesPerMs > 0)
+            frame.cpuMs = static_cast<double>(cycles - osd.lastCycles) / osd.cyclesPerMs;
+        osd.frames.push_back(frame);
+        osd.history.push_back(frame.intervalMs);
+        if (osd.history.size() > kOsdHistory)
+            osd.history.pop_front();
+    }
+    osd.lastEnd = now;
+    osd.thread = thread;
+    osd.lastCycles = cycles;
+}
+
+void osd_place() {
+    const OsdPlacement& p = osd.placement;
+    const MenuPose pose = menu_pose({p.yaw, p.pitch, p.width}, static_cast<float>(kOsdHeight) / kOsdWidth);
+    osd.layer.pose.position = {pose.position[0], pose.position[1], pose.position[2]};
+    osd.layer.pose.orientation = {pose.orientation[0], pose.orientation[1], pose.orientation[2], pose.orientation[3]};
+    osd.layer.size = {pose.width, pose.height};
+}
+
+void osd_placement_changed() {
+    osd.cheeky = read_cheeky_settings(live.ini.c_str());  // frame generation on or off, its multiplier
+    const OsdPlacement placement = read_osd_placement(live.ini.c_str());
+    if (osd.read && placement == osd.placement)
+        return;
+    if (osd.read || placement.enabled)
+        logf("performance overlay: %s, %d deg right, %d deg up, %d deg wide", placement.enabled ? "on" : "off",
+             placement.yaw, placement.pitch, placement.width);
+    if (placement.enabled && !osd.placement.enabled) {  // a fresh window
+        osd.frames.clear();
+        osd.history.clear();
+        osd.lastEnd = 0;
+        osd.nextDraw = 0;
+    }
+    osd.placement = placement;
+    osd.read = true;
+    osd_place();
+}
+
+void osd_hotkey() {
+    const bool held = ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                      (GetAsyncKeyState('P') & 0x8000);
+    if (held && !osd.hotkeyHeld) {
+        OsdPlacement placement = osd.placement;
+        placement.enabled = !placement.enabled;
+        write_osd_placement(live.ini.c_str(), placement);
+        wchar_t path[MAX_PATH] = {};  // the launcher's own ini: the next launch starts with it
+        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+            write_osd_placement(path, placement);
+        osd_placement_changed();
+    }
+    osd.hotkeyHeld = held;
+}
+
+bool osd_resources(XrSession session) {
+    if (osd.chain)
+        return true;
+    if (osd.failed)
+        return false;
+    ID3D12Device* device;
+    ID3D12CommandQueue* queue;
+    {
+        std::lock_guard guard(quad.mutex);
+        device = quad.device;
+        queue = quad.queue;
+    }
+    if (!device || !queue)
+        return false;
+    XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+    spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    spaceInfo.poseInReferenceSpace.orientation.w = 1;
+    XrSwapchainCreateInfo chainInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    chainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    chainInfo.format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    chainInfo.sampleCount = 1;
+    chainInfo.width = kOsdWidth;
+    chainInfo.height = kOsdHeight;
+    chainInfo.faceCount = 1;
+    chainInfo.arraySize = 1;
+    chainInfo.mipCount = 1;
+    uint32_t count = 0;
+    XrResult r = next.CreateReferenceSpace(session, &spaceInfo, &osd.view);
+    if (XR_SUCCEEDED(r))
+        r = next.CreateSwapchain(session, &chainInfo, &osd.chain);
+    if (XR_SUCCEEDED(r))
+        r = next.EnumerateSwapchainImages(osd.chain, 0, &count, nullptr);
+    std::vector<XrSwapchainImageD3D12KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
+    if (XR_SUCCEEDED(r) && count)
+        r = next.EnumerateSwapchainImages(osd.chain, count, &count,
+                                          reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(r) || !count || !osd.upload.initialize(device, queue, kOsdWidth, kOsdHeight)) {
+        logf("performance overlay: card setup failed (%d)", r);
+        osd.failed = true;
+        return false;
+    }
+    for (const auto& image : images)
+        osd.images.push_back(image.texture);
+    XrCompositionLayerQuad& l = osd.layer;
+    l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+    l.space = osd.view;
+    l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+    l.subImage.swapchain = osd.chain;
+    l.subImage.imageRect = {{0, 0}, {kOsdWidth, kOsdHeight}};
+    osd_place();
+    if (experiment.views4)
+        gpu_frame_timer_start(device, queue);
+    // VRAM: this process's use of the adapter's local memory against the budget Windows gives it.
+    IDXGIFactory4* factory = nullptr;
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        if (FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&osd.adapter))))
+            osd.adapter = nullptr;
+        factory->Release();
+    }
+    log_line(osd.adapter ? "performance overlay: card ready" : "performance overlay: card ready (no VRAM numbers)");
+    return true;
+}
+
+OsdInput osd_input(int64_t now) {
+    OsdInput in;
+    in.frames.swap(osd.frames);
+    in.periodMs = static_cast<double>(osd.periodNs.load(std::memory_order_relaxed)) / 1e6;
+    if (experiment.views4) {
+        const GpuFrameStats gpu = gpu_frame_timer_collect();
+        if (gpu.frames) {
+            in.gpuMs = gpu.renderAvg;
+            if (experiment.views4Compose)
+                in.composeMs = gpu.composeAvg;
+        }
+    }
+    if (osd.adapter) {
+        DXGI_QUERY_VIDEO_MEMORY_INFO memory{};
+        if (SUCCEEDED(osd.adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memory))) {
+            in.vramUsed = memory.CurrentUsage;
+            in.vramBudget = memory.Budget;
+        }
+    }
+    {
+        std::lock_guard guard(gaze.mutex);
+        const uint64_t queries = gaze.queries - osd.gazeQueries, tracked = gaze.tracked - osd.gazeTracked;
+        osd.gazeQueries = gaze.queries;
+        osd.gazeTracked = gaze.tracked;
+        if (!experiment.gaze || queries == 0)  // off, or not asked (the focus does not follow the eyes here)
+            in.gaze = gaze.action || !experiment.gaze ? OsdGaze::Off : OsdGaze::Unavailable;
+        else
+            in.gaze = tracked * 10 >= queries * 9 ? OsdGaze::Tracking : tracked * 2 >= queries ? OsdGaze::Partial : OsdGaze::Lost;
+    }
+    // Frame generation: Cheeky's, when the layer runs it with [cheeky] fg on.
+    const CheekySettings& cheeky = osd.cheeky;
+    if (cheeky_running() && cheeky.processing && cheeky.fg) {
+        if (now >= osd.nextCheeky) {
+            osd.cheekySnapshot = cheeky_snapshot();
+            osd.nextCheeky = now + qpc_ms(kOsdCheekyMs);
+        }
+        const OsdCheeky c = osd_cheeky(osd.cheekySnapshot);
+        in.fg = c.active ? OsdFg::On : OsdFg::Starting;
+        in.fgMultiplier = cheeky.fgMultiplier;
+        in.fgOutputFps = c.outputFps;
+        in.fgMs = c.fgMs;
+        in.fgState = c.state;
+        in.gpuBusyPercent = c.gpuBusyPercent;
+    }
+    return in;
+}
+
+const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
+    if (!osd.read)
+        osd_placement_changed();
+    osd_hotkey();
+    if (!osd.placement.enabled || !osd_resources(session))
+        return nullptr;
+    if (now >= osd.nextDraw && !osd.drawing.valid()) {
+        osd.nextDraw = now + qpc_ms(kOsdDrawMs);
+        osd.drawing = std::async(std::launch::async, [in = osd_input(now),
+                                                      history = std::vector<double>(osd.history.begin(), osd.history.end())] {
+            const OsdSummary summary = osd_summary(in);
+            return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary));
+        });
+    }
+    if (osd.drawing.valid() && osd.drawing.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const std::vector<uint32_t> pixels = osd.drawing.get();
+        uint32_t index = 0;
+        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+        wait.timeout = 100'000'000;
+        if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
+            const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() &&
+                            osd.upload.upload(osd.images[index], pixels);
+            next.ReleaseSwapchainImage(osd.chain, nullptr);
+            osd.uploaded = osd.uploaded || ok;
+        }
+    }
+    return osd.uploaded ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&osd.layer) : nullptr;
+}
+
+void osd_shutdown() {
+    if (osd.drawing.valid())
+        osd.drawing.wait();
+    osd.drawing = {};
+    osd.upload.shutdown();
+    if (osd.chain)
+        next.DestroySwapchain(osd.chain);
+    if (osd.view)
+        next.DestroySpace(osd.view);
+    if (osd.adapter)
+        osd.adapter->Release();
+    osd.chain = XR_NULL_HANDLE;
+    osd.view = XR_NULL_HANDLE;
+    osd.adapter = nullptr;
+    osd.images.clear();
+    osd.uploaded = osd.failed = false;
+    osd.frames.clear();
+    osd.history.clear();
+    osd.lastEnd = 0;
+}
+
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
+    osd_measure();   // before the layer's own work in the frame
     cheeky_frame();  // Cheeky's frame callback, after ACE's frame is recorded
     XrResult r;
     if (!cpu.realEndFrame) {
@@ -2274,6 +2594,13 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         return r;
     // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created.
     cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
+    {  // for the launcher's Foveated DLSS pane
+        static const wchar_t* const kStatus[] = {L"off", L"missing", L"refused", L"running"};
+        runtime_info(L"cheeky_status", kStatus[static_cast<int>(cheeky_status())]);
+        if (cheeky_running())
+            runtime_info(L"cheeky_version", cheeky_version());
+    }
+    cheeky_apply_ini();
     // Before ACE creates its D3D12 device and renderer, so renderer init sees the patched mode.
     if (experiment.dred)
         dred_enable();

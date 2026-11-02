@@ -247,6 +247,35 @@ int main() {
         check(outside.menuYaw == kMenuYawRange.max && outside.menuWidth == kMenuWidthRange.min,
               "settings: the headset menu's place is clamped to its ranges");
 
+        // Cheeky Foveated DLSS: [cheeky] round-trips; the live save leaves `enabled` (next launch) alone.
+        Settings dlss = placed;
+        dlss.cheeky = {true, false, true, 60, 12, 10};
+        dlss.cheeky.supersampling = 150;
+        dlss.cheeky.motionFix = dlss.cheeky.nr = true;
+        dlss.cheeky.nrPreset = 1;
+        dlss.cheeky.nrPasses = 2;
+        dlss.cheeky.fg = true;
+        dlss.cheeky.fgMultiplier = 3;
+        dlss.cheeky.fgSize = 40;
+        dlss.cheeky.fgScale = 75;
+        dlss.cheeky.fgPeriphery = 25;
+        save_settings(ini, dlss);
+        check(load_settings(ini).cheeky == dlss.cheeky, "settings: [cheeky] round-trips (load, processing, outer, presets, supersampling, motion fix, DLSS-NR, frame generation)");
+        Settings dlssLive = dlss;
+        dlssLive.cheeky.load = false;
+        dlssLive.cheeky.outerScale = 40;
+        save_live_settings(ini, dlssLive);
+        const aceqv::CheekySettings afterLive = load_settings(ini).cheeky;
+        check(afterLive.load && afterLive.outerScale == 40, "settings: the live save changes Cheeky's settings, not enabled");
+        dlssLive.osd = {true, -15, 22, 30};
+        save_live_settings(ini, dlssLive);
+        check(load_settings(ini).osd == dlssLive.osd, "settings: [osd] (the performance overlay) round-trips, live");
+        check(cheeky_runtime_path(ini, L"C:\\layer") == L"C:\\layer\\CheekyFoveatedDLSS\\CheekyFoveatedDLSSRuntime.dll",
+              "Cheeky runtime: by default in CheekyFoveatedDLSS next to the layer");
+        save_cheeky_runtime(ini, L"D:\\cheeky\\CheekyFoveatedDLSSRuntime.dll");
+        check(cheeky_runtime_path(ini, L"C:\\layer") == L"D:\\cheeky\\CheekyFoveatedDLSSRuntime.dll",
+              "Cheeky runtime: a chosen path is used as it is");
+
         // The runtime report, and the kit's example: recommended 2584 x 2160, defaults (outer 50,
         // inner 100, 39% x 39%) give 1292 x 1080 and 1008 x 842, a 4600 x 1080 target, 4.49 M pixels.
         const std::wstring runtimeIni = (folder / L"runtime.ini").wstring();

@@ -59,6 +59,9 @@ void views4_set_live_layout(const Views4Layout& live);
 // the focus cull's scale and gaze. The focus views keep their pixel size, so the box's density
 // changes with it. The next focus cameras filled use them.
 void views4_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze);
+// Whether ACE's renderer upscales with DLSS, so the views keep their launch sizes (live resolution waits
+// for the next launch).
+bool views4_dlss_held();
 // The latest focus frustum of view 2 or 3; false when focus cull is off or none is built yet.
 bool views4_focus_frustum(int view, FocusFrustum& out);
 // The record of the next frame to be composed, in rendering order. False until the first focus

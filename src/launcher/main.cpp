@@ -151,11 +151,8 @@ int fail(const std::wstring& why) {
 
 int run(bool dryRun) {
     const fs::path here = exe_folder();
-    // The layer: next to the launcher (development build) or in ace\ (release package).
-    fs::path layerFolder = here;
+    const fs::path layerFolder = layer_folder();
     std::error_code ec;
-    if (!fs::exists(layerFolder / L"ace-quadview.dll", ec))
-        layerFolder = here / L"ace";
     const fs::path library = layerFolder / L"ace-quadview.dll", manifest = layerFolder / L"XR_APILAYER_ACE_quadview.json";
     if (!fs::exists(library, ec) || !fs::exists(manifest, ec))
         return fail(L"ace-quadview.dll and XR_APILAYER_ACE_quadview.json not found next to the launcher or in its ace folder");
@@ -247,6 +244,13 @@ namespace aceqv::launcher {
 std::wstring settings_path() { return (fs::path(exe_folder()) / L"ace-quadview.ini").wstring(); }
 
 std::wstring runtime_info_path() { return (fs::path(exe_folder()) / L"runtime.ini").wstring(); }
+
+std::wstring layer_folder() {
+    // The layer: next to the launcher (development build) or in ace\ (release package).
+    const fs::path here = exe_folder();
+    std::error_code ec;
+    return (fs::exists(here / L"ace-quadview.dll", ec) ? here : here / L"ace").wstring();
+}
 
 int launch_ace(bool dryRun, std::wstring& out) {
     report.clear();

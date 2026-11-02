@@ -34,7 +34,8 @@ void text(HDC dc, HFONT font, const std::wstring& s, int left, int top, int righ
 
 std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResolution& resolution,
                                       const MenuStats& stats, const std::vector<MenuLine>& lines,
-                                      const std::vector<std::wstring>& notes, const std::wstring& hint) {
+                                      const std::vector<std::wstring>& notes, const std::wstring& hint,
+                                      const std::wstring& subtitle) {
     std::vector<uint32_t> out(static_cast<size_t>(kPanelWidth) * kPanelHeight, 0);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -69,12 +70,17 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
              DT_RIGHT);
         y += 36;
     }
-    // The focus area's sharpness at its centre and what the foveation saves.
-    const std::wstring ppd = stats.centerPpd > 0 ? std::to_wstring(stats.centerPpd) : L"\u2014";
-    const std::wstring saved = stats.savedPercent >= 0 ? std::to_wstring(stats.savedPercent) + L"%"
-                                                       : L"None (" + std::to_wstring(-stats.savedPercent) + L"% more)";
-    text(dc, smallFont, L"Center PPD  " + ppd, kMargin, y, kPanelWidth / 2, y + 36, kLabel, DT_LEFT);
-    text(dc, smallFont, L"Pixels saved  " + saved, kPanelWidth / 2, y, kPanelWidth - kMargin, y + 36, kLabel, DT_RIGHT);
+    if (!subtitle.empty()) {  // the Foveated DLSS page: Cheeky's credit line
+        text(dc, smallFont, subtitle, kMargin, y, kPanelWidth - kMargin, y + 36, kDim, DT_LEFT);
+    } else {
+        // The focus area's sharpness at its centre and what the foveation saves.
+        const std::wstring ppd = stats.centerPpd > 0 ? std::to_wstring(stats.centerPpd) : L"\u2014";
+        const std::wstring saved = stats.savedPercent >= 0 ? std::to_wstring(stats.savedPercent) + L"%"
+                                                           : L"None (" + std::to_wstring(-stats.savedPercent) + L"% more)";
+        text(dc, smallFont, L"Center PPD  " + ppd, kMargin, y, kPanelWidth / 2, y + 36, kLabel, DT_LEFT);
+        text(dc, smallFont, L"Pixels saved  " + saved, kPanelWidth / 2, y, kPanelWidth - kMargin, y + 36, kLabel,
+             DT_RIGHT);
+    }
     y += 36 + 8;
     for (const MenuLine& line : lines) {
         if (line.selected)
@@ -108,14 +114,18 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
     return out;
 }
 
-bool PanelUpload::initialize(ID3D12Device* device, ID3D12CommandQueue* queue) {
+bool PanelUpload::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, int width, int height) {
     shutdown();
+    if (width <= 0 || height <= 0 || (width * 4) % 256 != 0)
+        return false;
+    width_ = width;
+    height_ = height;
     device_ = device;
     queue_ = queue;
     D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_UPLOAD};
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    desc.Width = static_cast<UINT64>(kPanelWidth) * 4 * kPanelHeight;  // row pitch 4096: 256-aligned
+    desc.Width = static_cast<UINT64>(width_) * 4 * height_;  // row pitch width x 4: 256-aligned
     desc.Height = 1;
     desc.DepthOrArraySize = 1;
     desc.MipLevels = 1;
@@ -167,7 +177,7 @@ void PanelUpload::shutdown() {
 }
 
 bool PanelUpload::upload(ID3D12Resource* image, const std::vector<uint32_t>& pixels) {
-    if (!list_ || !image || pixels.size() != static_cast<size_t>(kPanelWidth) * kPanelHeight)
+    if (!list_ || !image || pixels.size() != static_cast<size_t>(width_) * height_)
         return false;
     wait();  // the previous copy is done with the buffer and the allocator
     std::memcpy(mapped_, pixels.data(), pixels.size() * 4);
@@ -184,8 +194,8 @@ bool PanelUpload::upload(ID3D12Resource* image, const std::vector<uint32_t>& pix
     dst.SubresourceIndex = 0;
     D3D12_TEXTURE_COPY_LOCATION src{buffer_, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
     src.PlacedFootprint.Offset = 0;
-    src.PlacedFootprint.Footprint = {image->GetDesc().Format, static_cast<UINT>(kPanelWidth),
-                                     static_cast<UINT>(kPanelHeight), 1, static_cast<UINT>(kPanelWidth) * 4};
+    src.PlacedFootprint.Footprint = {image->GetDesc().Format, static_cast<UINT>(width_), static_cast<UINT>(height_), 1,
+                                     static_cast<UINT>(width_) * 4};
     list_->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
     std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
     list_->ResourceBarrier(1, &barrier);

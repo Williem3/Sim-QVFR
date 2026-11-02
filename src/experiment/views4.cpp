@@ -1133,6 +1133,8 @@ bool views4_latest_frame(Views4Frame& frame) {
 
 void views4_set_layout(const Views4Layout& l) { layout = launchLayout = l; }
 
+bool views4_dlss_held() { return dlssHeld; }
+
 void views4_set_screen_size_legacy(bool legacy) { screenSizeLegacy = legacy; }
 
 void views4_set_focus_cull(bool on, double scale, bool gaze) {

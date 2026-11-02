@@ -6,11 +6,21 @@
 #include <string>
 #include <vector>
 
+#include "../cheeky/cheeky_settings.h"
+#include "osd.h"
+
 namespace aceqv {
 
 enum class MenuKey { Up, Down, Left, Right };
 enum class MenuItem {
-    Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking, MenuYaw, MenuPitch, MenuWidth
+    Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking,
+    // The Overlay and menu page: the performance overlay ([osd], osd.h) and the panels' places.
+    Overlay, OverlayYaw, OverlayPitch, OverlayWidth, MenuYaw, MenuPitch, MenuWidth,
+    // The page switch, and with Cheeky running the Foveated DLSS page ([cheeky], cheeky_settings.h).
+    Page, CheekyProcessing, CheekyOuterDlaa, CheekyOuterScale, CheekyOuterPreset, CheekyFocusPreset,
+    CheekySupersampling, CheekyMotionFix, CheekyNr, CheekyNrPreset, CheekyNrPasses,
+    // The Frame generation page (Cheeky's DLSS-G).
+    FgOn, FgMultiplier, FgSize, FgScale, FgPeriphery, FgBorder
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -35,6 +45,7 @@ struct MenuValues {
     int corners = 0;     // [quad] corner_radius_percent
     bool outline = false;     // [quad] debug_border
     bool eyeTracking = true;  // [quad] gaze
+    OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
 };
 
@@ -47,16 +58,37 @@ struct MenuLaunch {
     int nativeWidth = 0, nativeHeight = 0;
     double nativePpd = 0;       // pixels per degree at the centre at 100% density (0: unknown)
     double twoLoopScale = 100;  // Two-loop: eye_scale, percent (both frames' resolution, fixed at launch)
+    bool dlssHeld = false;      // QVFR with DLSS on: the views keep their launch sizes (resolution: next launch)
+};
+
+// Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.
+struct MenuCheeky {
+    bool available = false;
+    std::wstring version;
+    CheekySettings values;
 };
 
 struct SettingsMenu {
     MenuLaunch launch;
     MenuValues values;
+    MenuCheeky cheeky;
+    int page = 0;  // index into menu_pages
     int selected = 0;
 };
 
-// The items for the method: QVFR also resizes its views live. The panel's own place comes last.
+// The menu's pages: the method's settings, with Cheeky running Foveated DLSS and Frame generation,
+// then the performance overlay and the panels' places.
+enum class MenuPage { Settings, Dlss, Fg, Headset };
+std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
+MenuPage menu_page(const SettingsMenu& menu);
+
+// The items for the method: QVFR also resizes its views live.
 std::vector<MenuItem> menu_items(bool qvfr);
+// The current page's items: the page switch first, then the page's.
+std::vector<MenuItem> menu_page_items(const SettingsMenu& menu);
+// The current page's title, and its credit line (Cheeky's pages: "CheekyFoveatedDLSS - v0.6.3"; else empty).
+std::wstring menu_title(const SettingsMenu& menu);
+std::wstring menu_subtitle(const SettingsMenu& menu);
 // One key: Up/Down select (wrapping), Left/Right step the value. True when a value changed.
 bool menu_key(SettingsMenu& menu, MenuKey key);
 

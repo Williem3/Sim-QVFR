@@ -34,6 +34,14 @@ CheekyConfig cheeky_config(const wchar_t* ini, const std::wstring& layerDir);
 // refused; Cheeky then stays off for this ACE run.
 bool cheeky_start(const CheekyConfig& config);
 bool cheeky_running();
+// Why Cheeky runs or not, for the launcher (runtime.ini cheeky_status).
+enum class CheekyStatus { Off, Missing, Refused, Running };
+CheekyStatus cheeky_status();
+// Cheeky's version as it reports it ("0.6.3-standalone"); empty unless running.
+std::wstring cheeky_version();
+// Applies "Name=value" lines (cheeky_settings.h's cheeky_set_lines) unless they are the ones last
+// applied, and logs them. False if Cheeky refused them.
+bool cheeky_apply(const std::string& lines);
 // The session's D3D12 device and queue (xrCreateSession), or none (xrDestroySession: processing
 // pauses until the next session).
 void cheeky_session(ID3D12Device* device, ID3D12CommandQueue* queue);

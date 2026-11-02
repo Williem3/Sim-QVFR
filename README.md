@@ -31,13 +31,71 @@ the reverse-engineering notes.
 
 In any other OpenXR app the DLL does nothing.
 
-**Cheeky Foveated DLSS (spike, off by default).** With `[cheeky] enabled=1` the layer runs
-[Cheeky Foveated DLSS](https://github.com/Williem3/CheekyFoveatedDLSS)'s resident runtime
-(`CheekyFoveatedDLSSRuntime.dll`, GPL v3, not included: take it from a Cheeky release or build)
-through Cheeky's runtime ABI, instead of Cheeky's `dxgi.dll` loader: it starts it at OpenXR start and
-hands it ACE's D3D12 device each frame (`src/cheeky/cheeky_host.h`). Cheeky's settings stay in its own
-`CheekyFoveatedDLSS.ini`. Every `report_s` seconds the log lists each DLSS view Cheeky sees with its
-sizes and evaluations per frame. The keys are described in `manifest/ace-quadview.ini`.
+**Foveated DLSS with Cheeky Foveated DLSS (optional, off by default).** ace-quadview can run
+[Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS) by
+[ClarkCheekyKent](https://github.com/ClarkCheekyKent) inside ACE, integrated with his permission. See
+[Foveated DLSS setup](#foveated-dlss-setup-cheeky-foveated-dlss) below.
+
+**Performance overlay (`[osd]`, off by default).** A card in the headset view
+(`src/quad/osd.h`) shows ACE's frame rate and pacing, its CPU and GPU time with their headroom and
+which one limits the frame, GPU overhead, VRAM, frame generation and eye tracking. Turn it on in the
+launcher's Headset menu pane, from the headset menu, or with Ctrl+Alt+P in the game; the pane and the
+headset menu's Overlay and menu page also place it, as they place the menu.
+
+## Foveated DLSS setup (Cheeky Foveated DLSS)
+
+The DLSS features come from [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS)
+by [ClarkCheekyKent](https://github.com/ClarkCheekyKent), who gave permission to integrate it into
+ace-quadview. With QVFR it gives:
+
+- **Foveated DLSS:** the outer views get Cheeky's cheaper DLAA pass at a lower resolution, and the focus
+  views keep full DLSS.
+- **Focus-view options (experimental):** supersampling, a fix for motion-vector blur, and DLSS-NR.
+- **Frame generation (experimental):** Cheeky's DLSS-G between ACE's frames, guided by ACE's own depth and
+  motion. A centre region gets full quality and follows your eyes with an eye-tracked focus.
+
+Cheeky Foveated DLSS is a separate download under the GNU GPL v3. ace-quadview doesn't include it. The
+layer loads Cheeky's runtime (`CheekyFoveatedDLSSRuntime.dll`) through its runtime interface instead of
+Cheeky's `dxgi.dll` loader. Each frame it hands the runtime ACE's D3D12 device, and it sets Cheeky's
+quad view roles and the pane's settings live (`src/cheeky/`).
+
+### What you need
+
+| Download | From | Why |
+| --- | --- | --- |
+| `CheekyFoveatedDLSS-0.6.3-Standalone-ace.2.zip` | [Cheeky Foveated DLSS v0.6.3-ace.2](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-ace.2) | Cheeky v0.6.3 with the D3D12 output-size fixes ACE's quad views need ([pull request](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/pull/76)). Official v0.6.3 shows the outer views shrunk ("picture in picture"). |
+| `CheekyFoveatedDLSS-0.6.3-Standalone-TEST-SIGNED.zip` | [Cheeky Foveated DLSS v0.6.3](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/releases/tag/v0.6.3) (official) | Only for `OpenXR\CheekyOpenXRSetup.exe`, which installs Cheeky's OpenXR layer. The layer is unchanged in the fork build, which doesn't include it. |
+
+Once a Cheeky release includes the fixes, its own Standalone ZIP replaces both.
+
+You also need an NVIDIA RTX GPU with DLSS turned on in ACE. Use the launcher's QVFR method (Rendering pane).
+
+### Steps
+
+1. **Install Cheeky's OpenXR layer.** From the official v0.6.3 ZIP, run `OpenXR\CheekyOpenXRSetup.exe`.
+2. **Put Cheeky's runtime next to the layer.** From the ace.2 ZIP, copy the `CheekyFoveatedDLSS` folder into
+   the folder that holds `ace-quadview.dll` (`ace\` in the release ZIP). You should then have
+   `ace\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll`. You can also keep it anywhere and pick the DLL with
+   **Choose…** in the Foveated DLSS pane.
+3. **Don't use Cheeky's loader.** Leave `dxgi.dll` and `version.dll` from Cheeky's ZIP out of the game folder,
+   and remove them if they are there. ace-quadview loads Cheeky itself, and Cheeky refuses to run twice.
+4. **Check the OpenXR layer order** if you use OpenXR Toolkit. Toolkit must be above Cheeky's layer, that is
+   earlier in the implicit layer list (OpenXR API Layers GUI). Otherwise ACE crashes at start.
+5. **Turn it on.** In the launcher's **Foveated DLSS** pane, tick **Use Cheeky Foveated DLSS**. The pane shows
+   whether it finds the runtime and the OpenXR layer. After a launch, it also shows Cheeky's status and version
+   ("CheekyFoveatedDLSS - v0.6.3").
+6. **Launch.** The other settings in the pane apply live. The headset menu's Foveated DLSS and Frame
+   generation pages set the same options.
+
+**Frame generation:** turn on **Frame generation** in the same pane. Turn OpenXR Toolkit's **Turbo mode**
+off, because ACE crashes with it. Don't run another frame generator, such as VectorXR's, at the same time.
+**Show the center region** outlines the full-quality region, so you can check that it follows your eyes.
+
+**Notes:**
+- With DLSS on, resolution changes apply at the next launch, because DLSS sizes its views when the game starts.
+- The settings are the `[cheeky]` keys in `manifest/ace-quadview.ini`.
+- For problems, send the newest `logs\ace-*.log`. When Cheeky runs, ace-quadview also writes
+  `logs\cheeky-snapshot.json`.
 
 ## Build
 
@@ -144,3 +202,10 @@ MinHook and the OpenXR headers keep their own licences (`THIRD_PARTY_NOTICES.md`
 Thanks to [DSuzuki35](https://github.com/DSuzuki35) for the breakthrough in
 [LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod) and for the starter launcher,
 both of which helped the preliminary ACE quadview development.
+
+Thanks to [ClarkCheekyKent](https://github.com/ClarkCheekyKent) for
+[Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS), which provides the Foveated
+DLSS, DLSS-NR and frame generation features, and for permission to integrate it into ace-quadview.
+Cheeky Foveated DLSS is free software under the GNU GPL v3. ace-quadview loads its runtime as a separate
+download and doesn't include it. The launcher and the headset menu show its version wherever they
+control it.

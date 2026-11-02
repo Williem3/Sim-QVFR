@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <filesystem>
 #include <string>
 
 #include <windows.h>
@@ -68,6 +69,8 @@ Settings load_settings(const std::wstring& ini) {
     s.menuYaw = clamp_to(read_signed(ini, L"menu", L"yaw", s.menuYaw), kMenuYawRange);
     s.menuPitch = clamp_to(read_signed(ini, L"menu", L"pitch", s.menuPitch), kMenuPitchRange);
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
+    s.cheeky = read_cheeky_settings(ini.c_str());
+    s.osd = read_osd_placement(ini.c_str());
     return s;
 }
 
@@ -92,6 +95,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
     return save_live_settings(ini, s) && ok;
 }
 
@@ -117,7 +121,55 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));
     ok &= write(ini, L"menu", L"pitch", n(clamp_to(s.menuPitch, kMenuPitchRange)));
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
+    ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
+    ok &= write_osd_placement(ini.c_str(), s.osd);
     return ok;
+}
+
+std::wstring cheeky_runtime_path(const std::wstring& ini, const std::wstring& layerFolder) {
+    const auto absolute = [&](const std::wstring& path) {
+        const std::filesystem::path p(path);
+        return (p.is_absolute() ? p : std::filesystem::path(layerFolder) / p).lexically_normal().wstring();
+    };
+    const std::wstring runtime = read_string(ini, L"cheeky", L"runtime");
+    if (!runtime.empty())
+        return absolute(runtime);
+    std::wstring configDir = read_string(ini, L"cheeky", L"config_dir");
+    if (configDir.empty())
+        configDir = L"CheekyFoveatedDLSS";
+    return (std::filesystem::path(absolute(configDir)) / L"CheekyFoveatedDLSSRuntime.dll").wstring();
+}
+
+bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime) {
+    return write(ini, L"cheeky", L"runtime", runtime);
+}
+
+CheekyLayer cheeky_layer_state() {
+    // Implicit layers: value name = manifest path, data 0 = enabled (the OpenXR loader's convention).
+    CheekyLayer state = CheekyLayer::Missing;
+    for (HKEY root : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER}) {
+        HKEY key = nullptr;
+        if (RegOpenKeyExW(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit", 0, KEY_READ, &key) != ERROR_SUCCESS)
+            continue;
+        wchar_t name[1024];
+        for (DWORD i = 0;; ++i) {
+            DWORD nameLength = static_cast<DWORD>(std::size(name)), data = 1, dataSize = sizeof(data), type = 0;
+            if (RegEnumValueW(key, i, name, &nameLength, nullptr, &type, reinterpret_cast<BYTE*>(&data), &dataSize) !=
+                ERROR_SUCCESS)
+                break;
+            std::wstring lower(name, nameLength);
+            for (wchar_t& ch : lower)
+                ch = static_cast<wchar_t>(towlower(ch));
+            if (lower.find(L"xr_apilayer_cheeky") == std::wstring::npos)
+                continue;
+            if (type == REG_DWORD && data == 0)
+                state = CheekyLayer::Enabled;
+            else if (state == CheekyLayer::Missing)
+                state = CheekyLayer::Disabled;
+        }
+        RegCloseKey(key);
+    }
+    return state;
 }
 
 std::wstring running_live_ini(const std::wstring& runtimeInfo) {
@@ -175,6 +227,8 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.centerPpd = _wtof(read_string(path, L"runtime", L"native_center_ppd").c_str());
     const int eye = read_int(path, L"runtime", L"eye_tracking", -1);
     r.eyeTracker = eye == 1 ? EyeTracker::Detected : eye == 0 ? EyeTracker::Missing : EyeTracker::Unknown;
+    r.cheekyStatus = read_string(path, L"runtime", L"cheeky_status");
+    r.cheekyVersion = read_string(path, L"runtime", L"cheeky_version");
     return r;
 }
 

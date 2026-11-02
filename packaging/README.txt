@@ -35,6 +35,13 @@ Settings save as you change them and apply at the next launch.
 - Foveation: Foveated width and Foveated height, each a share of the outer view, and Corner radius
   (rounds the focus region's corners; 0 = square, 100% = fully round ends).
 - Focus overlay: Show focus outline, its color (teal, magenta, green) and Feather (the blend band).
+- Foveated DLSS: optional Cheeky Foveated DLSS (see below), its runtime and OpenXR layer status, and
+  its settings (cheaper outer views, their DLAA scale and preset, the focus preset). The settings
+  apply live; the headset menu's second page has them too.
+- Headset menu: where the in-headset settings menu floats, and the performance overlay (on/off,
+  where it floats and its size; drag either in the preview): frame rate and pacing, CPU and GPU time
+  with their headroom and which one limits the frame, VRAM, frame generation and eye tracking.
+  Ctrl+Alt+P in the game turns it on and off; the headset menu's Overlay and menu page moves both.
 - The preview shows the focus region and the resulting view sizes. Pixel sizes appear after the
   first launch, once the headset has reported its recommended resolution (runtime.ini).
 - Restore Defaults returns to the kit's defaults. Return launches the game.
@@ -61,6 +68,39 @@ Settings (ace-quadview.ini, read when the game starts; the window writes them)
   off_layers=          OpenXR layers to turn off for the game, comma-separated,
                        e.g. XR_APILAYER_MBUCCHIA_toolkit.
 
+Foveated DLSS (Cheeky Foveated DLSS, optional)
+----------------------------------------------
+The DLSS features come from Cheeky Foveated DLSS by ClarkCheekyKent, integrated with his permission.
+With DLSS on in the game and the QVFR method, the outer views get a cheaper DLAA pass while the focus
+views keep full DLSS. It also offers focus-view supersampling, DLSS-NR and frame generation. It is a
+separate download (GNU GPL v3), not included. You need an NVIDIA RTX GPU.
+
+Downloads:
+- CheekyFoveatedDLSS-0.6.3-Standalone-ace.2.zip, from
+  https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-ace.2
+  (Cheeky v0.6.3 with the fixes ACE's quad views need; official v0.6.3 shows the outer views shrunk).
+- CheekyFoveatedDLSS-0.6.3-Standalone-TEST-SIGNED.zip, from the official release
+  https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/releases/tag/v0.6.3
+  (only for OpenXR\CheekyOpenXRSetup.exe, Cheeky's OpenXR layer installer).
+
+Steps:
+1. Run OpenXR\CheekyOpenXRSetup.exe from the official ZIP.
+2. From the ace.2 ZIP, copy the CheekyFoveatedDLSS folder into this package's ace folder, so that
+   you have ace\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll. You can also keep it elsewhere and
+   pick the DLL with Choose... in the pane.
+3. Don't put Cheeky's dxgi.dll or version.dll in the game folder (remove them if they are there).
+   ace-quadview loads Cheeky itself.
+4. If you use OpenXR Toolkit, it must be above Cheeky's layer in the OpenXR layer order (earlier in
+   the list, e.g. in OpenXR API Layers GUI). Otherwise the game crashes at start.
+5. In the Foveated DLSS pane, tick Use Cheeky Foveated DLSS and launch. The pane shows whether it
+   finds the runtime and the layer, and after a launch Cheeky's status and version.
+Frame generation (experimental, in the same pane): Cheeky's DLSS-G between the game's frames. Turn
+OpenXR Toolkit's Turbo mode off (the game crashes with it), and don't run another frame generator
+(such as VectorXR's) with it. Show the center region outlines the full-quality region.
+With DLSS on, resolution changes apply at the next launch (DLSS sizes its views when the game starts).
+The pane's other settings apply live. The headset menu's Foveated DLSS and Frame generation pages
+set them too.
+
 Other OpenXR layers (OpenXR Toolkit, VectorXR, ...)
 ---------------------------------------------------
 The launcher loads ace-quadview nearest the game and moves every other installed OpenXR layer
@@ -79,4 +119,5 @@ Removing it: delete the folder. Nothing else was changed on your PC.
 Licence: PolyForm Noncommercial 1.0.0 (LICENSE.md): free for noncommercial use; commercial use needs
 the author's permission. If you share any part of it, changed or not, pass on LICENSE.md with its
 line "Required Notice: Copyright (c) 2026 Williem3 (https://github.com/Williem3/Sim-QVFR)".
-Third-party notices: THIRD_PARTY_NOTICES.md.
+Third-party notices: THIRD_PARTY_NOTICES.md. Cheeky Foveated DLSS (optional, separate download) is
+by ClarkCheekyKent, GNU GPL v3: https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS

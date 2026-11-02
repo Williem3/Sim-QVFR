@@ -12,6 +12,8 @@ std::wstring settings_path();
 // runtime.ini next to the launcher: the layer's report of the last session's headset (recommended
 // per-eye size, eye tracking), written while the game runs.
 std::wstring runtime_info_path();
+// The folder holding ace-quadview.dll: next to the launcher (development build) or its ace folder.
+std::wstring layer_folder();
 // One launch (or dry run) with the settings in that file; `report` gets what it did. 0 on success.
 int launch_ace(bool dryRun, std::wstring& report);
 // The settings window; returns the process exit code.

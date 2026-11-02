@@ -1,5 +1,5 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Rendering, Resolution, Foveation, Focus overlay, Headset menu, About), grouped forms with
+// of panes (Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, About), grouped forms with
 // the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
 // to drag the in-headset settings menu around), and an action bar with the status badge,
 // Restore Defaults and Launch. Every colour, size and type style comes from theme_tokens.h; every
@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <windows.h>
+#include <commdlg.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <windowsx.h>
@@ -26,6 +27,7 @@
 #include "launcher_version.h"
 
 #pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "comdlg32.lib")
 
 namespace aceqv::launcher {
 namespace ui {
@@ -33,12 +35,21 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Rendering, Resolution, Foveation, Overlay, Menu, About };
-constexpr int kPanes = 6;
+enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, About };
+constexpr int kPanes = 7;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kMenuYaw,
-    kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch
+    kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
+    // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
+    kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
+    kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
+    kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgBorder,
+    // The performance overlay ([osd], Headset menu pane).
+    kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel
 };
+
+constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
+constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 
 constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
 
@@ -69,8 +80,10 @@ constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes it
 // The placement preview's reference view (degrees) and the panel's distance (the layer's kMenuDistance).
 constexpr float kRefFovX = 100, kRefFovY = 80, kMenuDistance = 0.8f;
 // The in-headset panel's image (the layer's kPanelWidth x kPanelHeight) and colours (menu_panel.cpp).
-constexpr float kMenuAspect = 922.0f / 1024;
+constexpr float kMenuAspect = 972.0f / 1024;
 constexpr uint32_t kMenuBackground = 0x16181c, kMenuHighlight = 0x0a6e78, kMenuLabel = 0xe8eaed, kMenuDim = 0x9aa0a6;
+// The performance overlay's card (quad/osd_panel.cpp's colours).
+constexpr uint32_t kOsdCard = 0x1c1c1e, kOsdTrack = 0x2c2c2e, kOsdGreen = 0x30d158, kOsdYellow = 0xffd60a;
 
 struct App {
     HWND hwnd = nullptr;
@@ -177,6 +190,12 @@ int* slider_value(Ctl id) {
     case kMenuYaw: return &app.s.menuYaw;
     case kMenuPitch: return &app.s.menuPitch;
     case kMenuWidth: return &app.s.menuWidth;
+    case kCheekyScale: return &app.s.cheeky.outerScale;
+    case kCheekySupersampling: return &app.s.cheeky.supersampling;
+    case kFgSize: return &app.s.cheeky.fgSize;
+    case kOsdYaw: return &app.s.osd.yaw;
+    case kOsdPitch: return &app.s.osd.pitch;
+    case kOsdSize: return &app.s.osd.width;
     default: return nullptr;
     }
 }
@@ -190,6 +209,12 @@ Range slider_range(Ctl id) {
     case kMenuYaw: return kMenuYawRange;
     case kMenuPitch: return kMenuPitchRange;
     case kMenuWidth: return kMenuWidthRange;
+    case kCheekyScale: return {kCheekyScaleMin, kCheekyScaleMax};
+    case kCheekySupersampling: return {kCheekySupersamplingMin, kCheekySupersamplingMax};
+    case kFgSize: return {kCheekyFgSizeMin, kCheekyFgSizeMax};
+    case kOsdYaw: return {-kOsdYawMax, kOsdYawMax};
+    case kOsdPitch: return {-kOsdPitchMax, kOsdPitchMax};
+    case kOsdSize: return {kOsdWidthMin, kOsdWidthMax};
     default: return kSizeRange;
     }
 }
@@ -212,7 +237,20 @@ std::vector<Ctl> focus_order() {
             order.push_back(kColor);
         order.push_back(kFeather);
         break;
-    case Pane::Menu: order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel}); break;
+    case Pane::Dlss:
+        order.insert(order.end(), {kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset,
+                                   kCheekyFocusPreset, kCheekySupersampling, kCheekyMotionFix, kCheekyNr});
+        if (app.s.cheeky.nr)
+            order.insert(order.end(), {kCheekyNrPreset, kCheekyNrPasses});
+        order.push_back(kFgOn);
+        if (app.s.cheeky.fg)
+            order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgBorder});
+        break;
+    case Pane::Menu:
+        order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kOsdOn});
+        if (app.s.osd.enabled)
+            order.insert(order.end(), {kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel});
+        break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -477,6 +515,18 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
 std::wstring px(Size s) { return std::to_wstring(s.width) + L" × " + std::to_wstring(s.height) + L" px"; }
 std::wstring dims(Size s) { return std::to_wstring(s.width) + L" × " + std::to_wstring(s.height); }
 
+// A row with a popup button: `names[selected]` of `count` choices.
+Row choice_row(Ctl id, const std::wstring& label, const std::wstring* names, int count, int selected, bool disabled) {
+    Row row;
+    row.label = label;
+    row.disabled = disabled;
+    row.controlW = popup_width(names, count, 140);
+    row.controlH = t::kControlHeight;
+    const std::wstring value = names[selected];
+    row.control = [id, value, disabled](const Rect& r) { popup_button(id, r, value, disabled); };
+    return row;
+}
+
 Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int value, const std::wstring& detail,
                bool disabled = false, const wchar_t* unit = L"%") {
     Row row;
@@ -567,6 +617,140 @@ float pane_content(float x, float y, float w, bool draw) {
                      L"The outline is drawn into the headset image, to show where the focus region is.", draw);
         break;
     }
+    case Pane::Dlss: {
+        // Cheeky's author asked for this credit, with the version, wherever the UI controls Cheeky.
+        const std::wstring credit = cheeky_version_label(app.runtime.cheekyVersion) +
+                                    (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L"");
+        if (draw)
+            app.canvas.text(credit, t::kSubheadline, {x + t::kSpace3, y, w - t::kSpace3, 16}, col(app.c->label_secondary));
+        h += 16 + t::kSpace4;
+        const std::wstring runtime = cheeky_runtime_path(app.ini, layer_folder());
+        const bool found = GetFileAttributesW(runtime.c_str()) != INVALID_FILE_ATTRIBUTES;
+        const CheekyLayer layer = cheeky_layer_state();
+        const auto badge_row = [](const std::wstring& label, const std::wstring& desc, int tone, const std::wstring& text) {
+            Row row;
+            row.label = label;
+            row.desc = desc;
+            row.controlW = 7 + 12 + 5 + std::ceil(app.canvas.measure(text, {11, 14, 500, false})) + 9;
+            row.controlH = 20;
+            row.control = [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); };
+            return row;
+        };
+        Row use;
+        const std::wstring useDesc = L"Loads Cheeky’s DLSS runtime into Assetto Corsa EVO, so the outer views can use a "
+                                     L"cheaper DLSS pass. Applies at the next launch.";
+        use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
+        use.full = [useDesc](const Rect& r) { checkbox(kCheekyUse, r, app.s.cheeky.load, L"Use Cheeky Foveated DLSS", useDesc); };
+        Row rt;
+        rt.label = L"Runtime";
+        rt.desc = (found ? L"" : L"Not found: ") + runtime;
+        rt.controlW = std::ceil(app.canvas.measure(L"Choose…", t::kBody)) + 2 * t::kSpace3;
+        rt.controlH = t::kControlHeight;
+        rt.control = [](const Rect& r) { button(kCheekyRuntime, r, L"Choose…", false); };
+        const Row xr = layer == CheekyLayer::Enabled
+                           ? badge_row(L"OpenXR layer", L"Cheeky’s layer tells its runtime the frame timing it needs.", 0, L"Installed")
+                       : layer == CheekyLayer::Disabled
+                           ? badge_row(L"OpenXR layer", L"Registered but turned off: run CheekyOpenXRSetup.exe again.", 1, L"Turned off")
+                           : badge_row(L"OpenXR layer", L"Install it with CheekyOpenXRSetup.exe from Cheeky’s release.", 2, L"Not installed");
+        const std::wstring& status = app.runtime.cheekyStatus;
+        const std::wstring last = status == L"running"   ? L"Cheeky ran at the last launch."
+                                  : status == L"missing" ? L"At the last launch, Cheeky’s runtime was not found."
+                                  : status == L"refused" ? L"At the last launch, Cheeky did not start: see its log next to its runtime."
+                                                         : L"";
+        h += section(x, y + h, w, L"Cheeky Foveated DLSS", {use, rt, xr},
+                     L"Put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to ace-quadview.dll, or choose "
+                     L"its runtime. No Cheeky loader goes in the game folder. " + last,
+                     draw) + t::kSpace6;
+        const bool outer = app.s.cheeky.outerDlaa;
+        Row on, cheap;
+        const std::wstring onDesc = L"Off leaves ACE’s own DLSS on every view.";
+        on.fullHeight = [onDesc](float width) { return checkbox_height(onDesc, width); };
+        on.full = [onDesc](const Rect& r) { checkbox(kCheekyOn, r, app.s.cheeky.processing, L"Foveated DLSS", onDesc); };
+        const std::wstring cheapDesc = L"The outer views get Cheeky’s own DLAA pass at a lower resolution instead of ACE’s DLSS.";
+        cheap.fullHeight = [cheapDesc](float width) { return checkbox_height(cheapDesc, width); };
+        cheap.full = [cheapDesc](const Rect& r) { checkbox(kCheekyOuter, r, app.s.cheeky.outerDlaa, L"Cheaper outer views", cheapDesc); };
+        std::wstring presetNames[std::size(kCheekyPresets)];
+        for (size_t i = 0; i < std::size(kCheekyPresets); ++i)
+            presetNames[i] = kCheekyPresets[i].name;
+        const float presetW = popup_width(presetNames, static_cast<int>(std::size(presetNames)), 140);
+        const auto preset_row = [presetW](Ctl id, const std::wstring& label, const std::wstring& desc, int value, bool disabled) {
+            Row row;
+            row.label = label;
+            row.desc = desc;
+            row.disabled = disabled;
+            row.controlW = presetW;
+            row.controlH = t::kControlHeight;
+            row.control = [id, value, disabled](const Rect& r) { popup_button(id, r, cheeky_preset_name(value), disabled); };
+            return row;
+        };
+        h += section(x, y + h, w, L"Processing",
+                     {on, cheap,
+                      slider_row(kCheekyScale, L"Outer DLAA scale", L"That pass’s resolution, a share of ACE’s render size.",
+                                 app.s.cheeky.outerScale, L"", !outer),
+                      preset_row(kCheekyOuterPreset, L"Outer preset", L"", app.s.cheeky.outerPreset, !outer),
+                      preset_row(kCheekyFocusPreset, L"Focus preset", L"DLSS preset for the sharp focus views.",
+                                 app.s.cheeky.focusPreset, false)},
+                     L"Applies live while the game runs. In Quad View Foveated Rendering, ace-quadview tells Cheeky which "
+                     L"views are outer and which are focus.",
+                     draw);
+        h += t::kSpace6;
+        Row fix, nr;
+        const std::wstring fixDesc = L"Cheeky’s workaround for smearing with some presets. Adds GPU work.";
+        fix.fullHeight = [fixDesc](float width) { return checkbox_height(fixDesc, width); };
+        fix.full = [fixDesc](const Rect& r) { checkbox(kCheekyMotionFix, r, app.s.cheeky.motionFix, L"Fix motion-vector blur", fixDesc); };
+        const std::wstring nrDesc = L"NVIDIA’s DLSS-NR (DLSS 5) on the focus views. Needs nvngx_dlssnr.dll next to the game.";
+        nr.fullHeight = [nrDesc](float width) { return checkbox_height(nrDesc, width); };
+        nr.full = [nrDesc](const Rect& r) { checkbox(kCheekyNr, r, app.s.cheeky.nr, L"DLSS-NR", nrDesc); };
+        const std::wstring nrPresets[] = {kCheekyNrPresets[0], kCheekyNrPresets[1], kCheekyNrPresets[2]};
+        const std::wstring nrPasses[] = {L"1 pass", L"2 passes", L"3 passes"};
+        std::vector<Row> experimental = {
+            slider_row(kCheekySupersampling, L"Focus supersampling",
+                       L"Runs the focus views’ DLSS above their size for extra sharpness, at a GPU cost.",
+                       app.s.cheeky.supersampling, L""),
+            fix, nr,
+            choice_row(kCheekyNrPreset, L"DLSS-NR preset", nrPresets, 3, std::clamp(app.s.cheeky.nrPreset, 0, 2), !app.s.cheeky.nr),
+            choice_row(kCheekyNrPasses, L"DLSS-NR passes", nrPasses, 3, std::clamp(app.s.cheeky.nrPasses, 1, 3) - 1,
+                       !app.s.cheeky.nr)};
+        h += section(x, y + h, w, L"Experimental: focus views", experimental,
+                     L"Cheeky applies these to the focus views only. Applies live. Each extra DLSS-NR pass costs about "
+                     L"one more NR evaluation.",
+                     draw);
+        h += t::kSpace6;
+        Row fgOn;
+        const std::wstring fgDesc = L"Cheeky’s DLSS-G adds generated frames between ACE’s, guided by its depth and motion. "
+                                    L"Turn OpenXR Toolkit’s Turbo mode and other frame generation (VectorXR’s) off.";
+        fgOn.fullHeight = [fgDesc](float width) { return checkbox_height(fgDesc, width); };
+        fgOn.full = [fgDesc](const Rect& r) { checkbox(kFgOn, r, app.s.cheeky.fg, L"Frame generation", fgDesc); };
+        const bool fgOff = !app.s.cheeky.fg;
+        Row fgBorder;
+        const std::wstring borderDesc = L"Outlines the region in the headset, to check that it follows your eyes.";
+        fgBorder.fullHeight = [borderDesc](float width) { return checkbox_height(borderDesc, width); };
+        fgBorder.full = [borderDesc](const Rect& r) {
+            checkbox(kFgBorder, r, app.s.cheeky.fgBorder, L"Show the center region", borderDesc);
+        };
+        const std::wstring multipliers[] = {kFgMultipliers[0], kFgMultipliers[1], kFgMultipliers[2]};
+        const std::wstring quarters[] = {kFgQuarters[0], kFgQuarters[1], kFgQuarters[2], kFgQuarters[3]};
+        h += section(x, y + h, w, L"Frame generation (experimental)",
+                     {fgOn,
+                      choice_row(kFgMultiplier, L"Multiplier", multipliers, 3, std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2), fgOff),
+                      slider_row(kFgSize, L"Center region", L"Where frames are generated at full quality, a share of each eye.",
+                                 app.s.cheeky.fgSize, L"", fgOff),
+                      choice_row(kFgScale, L"Center FG scale", quarters, 4, std::clamp(app.s.cheeky.fgScale / 25 - 1, 0, 3), fgOff),
+                      choice_row(kFgPeriphery, L"Periphery FG scale", quarters, 4,
+                                 std::clamp(app.s.cheeky.fgPeriphery / 25 - 1, 0, 3), fgOff),
+                      fgBorder},
+                     L"Outside the center region frames are warped with ACE’s motion. Lower scales use less GPU time "
+                     L"and memory. Applies live. With an eye-tracked focus (Rendering pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
+                     draw);
+        const std::wstring license = L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the "
+                                     L"GNU GPL v3 (github.com/ClarkCheekyKent/CheekyFoveatedDLSS).";
+        const float lh = app.canvas.measure_height(license, t::kCallout, w);
+        if (draw)
+            app.canvas.text(license, t::kCallout, {x, y + h + t::kSpace6, w, lh + 2}, col(app.c->label_secondary),
+                            Align::Leading, false, true);
+        h += t::kSpace6 + lh;
+        break;
+    }
     case Pane::Menu: {
         h += section(x, y, w, L"Placement",
                      {slider_row(kMenuYaw, L"Horizontal", L"Degrees right of straight ahead. Negative is left.", app.s.menuYaw,
@@ -588,6 +772,24 @@ float pane_content(float x, float y, float w, bool draw) {
                             col(app.c->label_secondary), Align::Leading, false, true);
         }
         h += t::kSpace6 + 16 + 6 + oh;
+        h += t::kSpace6;
+        Row osdOn;
+        const std::wstring osdDesc = L"Frame rate and pacing, CPU and GPU time with their headroom and which one limits the "
+                                     L"frame, VRAM, frame generation and eye tracking, floating in your view.";
+        osdOn.fullHeight = [osdDesc](float width) { return checkbox_height(osdDesc, width); };
+        osdOn.full = [osdDesc](const Rect& r) { checkbox(kOsdOn, r, app.s.osd.enabled, L"Show the overlay", osdDesc); };
+        const bool osdOff = !app.s.osd.enabled;
+        h += section(x, y + h, w, L"Performance overlay",
+                     {osdOn,
+                      slider_row(kOsdYaw, L"Horizontal", L"Degrees right of straight ahead. Negative is left.", app.s.osd.yaw,
+                                 L"", osdOff, L"°"),
+                      slider_row(kOsdPitch, L"Vertical", L"Degrees above eye level. Negative is below.", app.s.osd.pitch, L"",
+                                 osdOff, L"°"),
+                      slider_row(kOsdSize, L"Size", L"Width of the overlay, in degrees of your view.", app.s.osd.width, L"",
+                                 osdOff, L"°")},
+                     L"Drag it in the preview, or move it from the headset menu’s Overlay and menu page. Ctrl+Alt+P "
+                     L"while the game has focus turns it on and off. While the game runs, it changes at once.",
+                     draw);
         break;
     }
     case Pane::About: {
@@ -740,11 +942,13 @@ float preview(float x, float y, float w, bool draw) {
     return h - 4;
 }
 
-// Angular size of the panel: its height in degrees for a width in degrees, at any distance.
-float menu_height_deg(int widthDeg) {
+// Angular size of a panel: its height in degrees for a width in degrees, at any distance.
+float panel_height_deg(int widthDeg, float aspect) {
     constexpr float kRad = 3.14159265f / 180;
-    return 2 * std::atan(std::tan(widthDeg * kRad / 2) * kMenuAspect) / kRad;
+    return 2 * std::atan(std::tan(widthDeg * kRad / 2) * aspect) / kRad;
 }
+float menu_height_deg(int widthDeg) { return panel_height_deg(widthDeg, kMenuAspect); }
+float osd_height_deg(int widthDeg) { return panel_height_deg(widthDeg, static_cast<float>(kOsdHeight) / kOsdWidth); }
 
 std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
     return v == 0 ? L"0°" : std::to_wstring(std::abs(v)) + L"° " + (v > 0 ? plus : minus);
@@ -778,11 +982,11 @@ float placement_preview(float x, float y, float w, bool draw) {
         app.canvas.line(x, cy, x + w, cy, axis, 1);
         app.canvas.circle(cx, cy, 5, col(app.c->preview_label, 0.8f), false, 1.2f);
         // The panel as the headset shows it: title, resolution line, the settings rows (the first
-        // selected) and the hint, in its own colours (in panel pixels, 1024 x 922).
+        // selected) and the hint, in its own colours (in panel pixels, 1024 x 972).
         const bool active = app.dragging == kMenuPanel;
         app.canvas.fill({panel.x, panel.y + 2, panel.w, panel.h}, {0, 0.35f}, 4);
         app.canvas.fill(panel, col(kMenuBackground, 0.92f), 4);
-        const float m = pw * 36 / 1024, u = ph / 922;
+        const float m = pw * 36 / 1024, u = ph / 972;
         const auto bar = [&](float bx, float by, float bw, float bh, Color c) {
             app.canvas.fill({panel.x + bx, panel.y + by * u, bw, std::max(1.5f, bh * u)}, c, 1);
         };
@@ -801,6 +1005,36 @@ float placement_preview(float x, float y, float w, bool draw) {
         app.canvas.stroke(panel, col(active ? app.c->accent : app.c->preview_label, active ? 1 : 0.45f), active ? 1.5f : 0.75f, 4);
         if (focused(kMenuPanel))
             focus_ring(panel, 4);
+        // The performance overlay, when it is on: four number tiles, the frame-time strip and its cells.
+        Rect card{};
+        if (app.s.osd.enabled) {
+            const float cw = app.s.osd.width * k, ch = osd_height_deg(app.s.osd.width) * k;
+            const float ccx = x + (kRefFovX / 2 + app.s.osd.yaw) * k, ccy = y + (kRefFovY / 2 - app.s.osd.pitch) * k;
+            card = {ccx - cw / 2, ccy - ch / 2, cw, ch};
+            const bool held = app.dragging == kOsdPanel;
+            const float r = std::max(2.0f, cw * 32 / kOsdWidth), cu = cw / kOsdWidth, cv = ch / kOsdHeight;
+            app.canvas.fill({card.x, card.y + 2, card.w, card.h}, {0, 0.35f}, r);
+            app.canvas.fill(card, col(kOsdCard, 0.9f), r);
+            const auto block = [&](float bx, float by, float bw, float bh, Color c) {
+                app.canvas.fill({card.x + bx * cu, card.y + by * cv, std::max(1.0f, bw * cu), std::max(1.0f, bh * cv)}, c, 1);
+            };
+            for (int i = 0; i < 4; ++i) {
+                const float tx = 36 + i * 238.0f + (i ? 24 : 0);
+                block(tx, 30, 90, 14, col(kMenuDim, 0.8f));
+                block(tx, 58, 110.0f + 20 * (i % 2), 40, col(kMenuLabel));
+                block(tx, 126, 120, 14, col(i == 3 ? kOsdYellow : kOsdGreen, 0.9f));
+            }
+            block(36, 166, kOsdWidth - 72, 60, col(kOsdTrack));
+            block(44, 184, kOsdWidth - 88, 36, col(kOsdGreen, 0.75f));
+            for (int i = 0; i < 6; ++i) {
+                const float cx2 = 36 + (i % 3) * 317.0f, cy2 = 244 + (i / 3) * 76.0f;
+                block(cx2, cy2, 100, 12, col(kMenuDim, 0.8f));
+                block(cx2, cy2 + 30, 150, 22, i % 3 == 1 || i == 5 ? col(kOsdGreen, 0.55f) : col(kMenuLabel, 0.85f));
+            }
+            app.canvas.stroke(card, col(held ? app.c->accent : app.c->preview_label, held ? 1 : 0.45f), held ? 1.5f : 0.75f, r);
+            if (focused(kOsdPanel))
+                focus_ring(card, r);
+        }
         const t::TypeStyle tiny{9.5f, 12, 400, false};
         app.canvas.text(L"Reference view  " + std::to_wstring(static_cast<int>(kRefFovX)) + L"° × " +
                             std::to_wstring(static_cast<int>(kRefFovY)) + L"°",
@@ -809,9 +1043,12 @@ float placement_preview(float x, float y, float w, bool draw) {
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
         app.hits.push_back({kMenuPanel, frame, 0});  // empty space: the panel's centre jumps there
         app.hits.push_back({kMenuPanel, panel, 1});  // the panel: dragged from where it is held
+        if (app.s.osd.enabled)
+            app.hits.push_back({kOsdPanel, card, 1});  // the overlay, over the menu
     }
     float h = frameH + t::kSpace2;
-    const std::wstring caption = L"Drag the panel to place it  ·  Headsets’ fields of view vary";
+    const std::wstring caption = app.s.osd.enabled ? L"Drag the menu or the overlay to place it  ·  Headsets’ fields of view vary"
+                                                   : L"Drag the panel to place it  ·  Headsets’ fields of view vary";
     const float ch = app.canvas.measure_height(caption, t::kSubheadline, w);
     if (draw)
         app.canvas.text(caption, t::kSubheadline, {x, y + h, w, ch + 2}, col(app.c->label_secondary), Align::Leading, false, true);
@@ -855,6 +1092,7 @@ const Item kItems[] = {
     {L"Resolution", {"M3.25 2.75H12.75C13.6 2.75 14.25 3.4 14.25 4.25V9.75C14.25 10.6 13.6 11.25 12.75 11.25H3.25C2.4 11.25 1.75 10.6 1.75 9.75V4.25C1.75 3.4 2.4 2.75 3.25 2.75Z", "M5.5 14h5M8 11.25V14", nullptr}},
     {L"Foveation", {"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", nullptr, nullptr}},
     {L"Focus overlay", {"M5 5H11V11H5Z", nullptr, nullptr}},
+    {L"Foveated DLSS", {"M8 1.75L9.6 6.4 14.25 8 9.6 9.6 8 14.25 6.4 9.6 1.75 8 6.4 6.4Z", nullptr, nullptr}},
     {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
     {L"About", {"M8 7.25V11", nullptr, nullptr}},
 };
@@ -873,7 +1111,7 @@ void sidebar_icon(int i, const Rect& r, Color c) {
             app.canvas.line(r.x + 1.75f, r.y + d, r.x + 1.75f, r.y + e, c, 1.5f);
             app.canvas.line(r.x + 14.25f, r.y + d, r.x + 14.25f, r.y + e, c, 1.5f);
         }
-    if (i == 5) {
+    if (i == static_cast<int>(Pane::About)) {
         app.canvas.circle(r.x + 8, r.y + 8, 6.25f, c, false, 1.5f);
         app.canvas.circle(r.x + 8, r.y + 5, 0.9f, c, true);
     }
@@ -1030,18 +1268,24 @@ void set_slider_from_x(float x) {
         push_live();  // the running game follows the knob; the settings save once it is let go
 }
 
-// Dragging the panel in the placement preview: its centre follows the pointer (less where it was held).
+// The place a preview drag or the arrows change: the settings menu's or the performance overlay's.
+std::pair<int*, int*> placement_of(Ctl id) {
+    return id == kOsdPanel ? std::pair{&app.s.osd.yaw, &app.s.osd.pitch} : std::pair{&app.s.menuYaw, &app.s.menuPitch};
+}
+
+// Dragging a panel in the placement preview: its centre follows the pointer (less where it was held).
 void set_panel_from(float x, float y) {
     const float k = app.placeFrame.w / kRefFovX;
     if (k <= 0)
         return;
+    const auto [yawOf, pitchOf] = placement_of(app.dragging);
     const int yaw = std::clamp(static_cast<int>(std::lround((x - app.placeFrame.x) / k - kRefFovX / 2 + app.grabYaw)),
                                kMenuYawRange.min, kMenuYawRange.max);
     const int pitch = std::clamp(static_cast<int>(std::lround(kRefFovY / 2 - (y - app.placeFrame.y) / k + app.grabPitch)),
                                  kMenuPitchRange.min, kMenuPitchRange.max);
-    const bool moved = yaw != app.s.menuYaw || pitch != app.s.menuPitch;
-    app.s.menuYaw = yaw;
-    app.s.menuPitch = pitch;
+    const bool moved = yaw != *yawOf || pitch != *pitchOf;
+    *yawOf = yaw;
+    *pitchOf = pitch;
     changed(false);
     if (moved && app.iniFound)
         push_live();  // the running game moves it as it is dragged; the settings save once it is let go
@@ -1054,9 +1298,34 @@ void open_popup(Ctl owner) {
             break;
         }
     app.popup.owner = owner;
-    app.popup.items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
-                                       : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
-    app.popup.selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
+    if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
+        const bool focus = owner == kCheekyFocusPreset;
+        const int value = focus ? app.s.cheeky.focusPreset : app.s.cheeky.outerPreset;
+        app.popup.items.clear();
+        app.popup.selected = 0;
+        for (const CheekyPreset& p : kCheekyPresets)
+            if (focus || p.value != 0) {
+                if (p.value == value)
+                    app.popup.selected = static_cast<int>(app.popup.items.size());
+                app.popup.items.push_back(p.name);
+            }
+    } else if (owner == kCheekyNrPreset) {
+        app.popup.items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
+        app.popup.selected = app.s.cheeky.nrPreset;
+    } else if (owner == kFgMultiplier) {
+        app.popup.items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
+        app.popup.selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
+    } else if (owner == kFgScale || owner == kFgPeriphery) {
+        app.popup.items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
+        app.popup.selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
+    } else if (owner == kCheekyNrPasses) {
+        app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
+        app.popup.selected = app.s.cheeky.nrPasses - 1;
+    } else {
+        app.popup.items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
+                                           : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
+        app.popup.selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
+    }
     app.popup.hover = app.popup.selected;
     app.popup.open = true;
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -1067,6 +1336,20 @@ void choose(Ctl owner, int option) {
         app.s.mode = option == 0 ? RenderMode::Qvfr : RenderMode::TwoLoop;
     else if (owner == kMode)
         app.s.eyeTracking = option == 0;
+    else if (owner == kCheekyFocusPreset)
+        app.s.cheeky.focusPreset = kCheekyPresets[option].value;
+    else if (owner == kCheekyOuterPreset)
+        app.s.cheeky.outerPreset = kCheekyPresets[option + 1].value;  // the list without the game default
+    else if (owner == kCheekyNrPreset)
+        app.s.cheeky.nrPreset = option;
+    else if (owner == kCheekyNrPasses)
+        app.s.cheeky.nrPasses = option + 1;
+    else if (owner == kFgMultiplier)
+        app.s.cheeky.fgMultiplier = option + 2;
+    else if (owner == kFgScale)
+        app.s.cheeky.fgScale = (option + 1) * 25;
+    else if (owner == kFgPeriphery)
+        app.s.cheeky.fgPeriphery = (option + 1) * 25;
     changed();
 }
 
@@ -1087,6 +1370,25 @@ int popup_item_at(float x, float y) {
     return -1;
 }
 
+// Picks Cheeky's runtime DLL (from Cheeky's Standalone ZIP) and saves its path to [cheeky] runtime.
+void choose_cheeky_runtime() {
+    wchar_t path[MAX_PATH] = {};
+    const std::wstring current = cheeky_runtime_path(app.ini, layer_folder());
+    wcsncpy_s(path, current.c_str(), _TRUNCATE);
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = app.hwnd;
+    ofn.lpstrFilter = L"Cheeky runtime (CheekyFoveatedDLSSRuntime.dll)\0CheekyFoveatedDLSSRuntime.dll\0DLL files\0*.dll\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"Choose Cheeky Foveated DLSS's runtime";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&ofn) && app.iniFound) {
+        save_cheeky_runtime(app.ini, path);
+        app.iniWritten = ini_written();
+    }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 void activate(Ctl id, int option) {
     switch (id) {
     case kSidebar:
@@ -1094,8 +1396,24 @@ void activate(Ctl id, int option) {
         app.scroll = 0;
         break;
     case kMethod:
-    case kMode: open_popup(id); return;
+    case kMode:
+    case kCheekyOuterPreset:
+    case kCheekyFocusPreset:
+    case kCheekyNrPreset:
+    case kCheekyNrPasses:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery: open_popup(id); return;
+    case kFgOn: app.s.cheeky.fg = !app.s.cheeky.fg; changed(); return;
+    case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
+    case kFgBorder: app.s.cheeky.fgBorder = !app.s.cheeky.fgBorder; changed(); return;
+    case kCheekyMotionFix: app.s.cheeky.motionFix = !app.s.cheeky.motionFix; changed(); return;
+    case kCheekyNr: app.s.cheeky.nr = !app.s.cheeky.nr; changed(); return;
     case kOutline: app.s.outline = !app.s.outline; changed(); return;
+    case kCheekyUse: app.s.cheeky.load = !app.s.cheeky.load; changed(); return;
+    case kCheekyOn: app.s.cheeky.processing = !app.s.cheeky.processing; changed(); return;
+    case kCheekyOuter: app.s.cheeky.outerDlaa = !app.s.cheeky.outerDlaa; changed(); return;
+    case kCheekyRuntime: choose_cheeky_runtime(); return;
     case kColor: app.s.color = static_cast<OutlineColor>(option); changed(); return;
     case kRestore:
         app.s = Settings{};
@@ -1168,13 +1486,15 @@ void on_key(WPARAM key) {
             activate(kSidebar, p);
         }
         break;
-    case kMenuPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
+    case kMenuPanel:
+    case kOsdPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
         const int step = key == VK_PRIOR || key == VK_NEXT ? 10 : 1;
         const int dx = key == VK_RIGHT ? step : key == VK_LEFT ? -step : 0;
         const int dy = key == VK_UP || key == VK_PRIOR ? step : key == VK_DOWN || key == VK_NEXT ? -step : 0;
         if (dx || dy) {
-            app.s.menuYaw = std::clamp(app.s.menuYaw + dx, kMenuYawRange.min, kMenuYawRange.max);
-            app.s.menuPitch = std::clamp(app.s.menuPitch + dy, kMenuPitchRange.min, kMenuPitchRange.max);
+            const auto [yawOf, pitchOf] = placement_of(app.focus);
+            *yawOf = std::clamp(*yawOf + dx, kMenuYawRange.min, kMenuYawRange.max);
+            *pitchOf = std::clamp(*pitchOf + dy, kMenuPitchRange.min, kMenuPitchRange.max);
             changed();
         }
         break;
@@ -1188,6 +1508,22 @@ void on_key(WPARAM key) {
     case kMethod:
     case kMode:
     case kOutline:
+    case kCheekyUse:
+    case kCheekyRuntime:
+    case kCheekyOn:
+    case kCheekyOuter:
+    case kCheekyOuterPreset:
+    case kCheekyFocusPreset:
+    case kCheekyMotionFix:
+    case kCheekyNr:
+    case kCheekyNrPreset:
+    case kCheekyNrPasses:
+    case kFgOn:
+    case kFgBorder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery:
+    case kOsdOn:
     case kSupport:
     case kRestore:
     case kLaunch:
@@ -1269,12 +1605,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.dragRange = slider_range(h->id);
             SetCapture(hwnd);
             set_slider_from_x(x);
-        } else if (h->id == kMenuPanel) {
-            app.dragging = kMenuPanel;
+        } else if (h->id == kMenuPanel || h->id == kOsdPanel) {
+            app.dragging = h->id;
             const float k = app.placeFrame.w / kRefFovX;
+            const auto [yawOf, pitchOf] = placement_of(h->id);
             // Held on the panel: that point stays under the pointer; on empty space, the centre jumps there.
-            app.grabYaw = h->option == 1 ? app.s.menuYaw - ((x - app.placeFrame.x) / k - kRefFovX / 2) : 0;
-            app.grabPitch = h->option == 1 ? app.s.menuPitch - (kRefFovY / 2 - (y - app.placeFrame.y) / k) : 0;
+            app.grabYaw = h->option == 1 ? *yawOf - ((x - app.placeFrame.x) / k - kRefFovX / 2) : 0;
+            app.grabPitch = h->option == 1 ? *pitchOf - (kRefFovY / 2 - (y - app.placeFrame.y) / k) : 0;
             SetCapture(hwnd);
             set_panel_from(x, y);
         } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport) {
@@ -1288,7 +1625,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     }
     case WM_MOUSEMOVE: {
         const float x = dip(lParam, false), y = dip(lParam, true);
-        if (app.dragging == kMenuPanel)
+        if (app.dragging == kMenuPanel || app.dragging == kOsdPanel)
             set_panel_from(x, y);
         else if (app.dragging != kNone)
             set_slider_from_x(x);

@@ -1,5 +1,6 @@
 #include "cheeky/cheeky_host.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +61,9 @@ struct Host {
     size_t viewsLogged = 0;
     std::vector<CheekyView> views;
     std::filesystem::path snapshotFile;
+    CheekyStatus status = CheekyStatus::Off;
+    std::string version;  // Cheeky's, from its snapshot ("0.6.3-standalone")
+    std::string applied;  // the last settings applied (cheeky_apply)
 } host;
 
 std::wstring absolute(const std::wstring& path, const std::wstring& base) {
@@ -131,6 +135,7 @@ bool cheeky_start(const CheekyConfig& config) {
                                      LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (!runtime) {
         logf("cheeky: cannot load %ls (error %lu); Cheeky off", config.runtime.c_str(), GetLastError());
+        host.status = CheekyStatus::Missing;
         return false;
     }
     const auto start = reinterpret_cast<StartFn>(GetProcAddress(runtime, "CheekyRuntime_Start"));
@@ -141,6 +146,7 @@ bool cheeky_start(const CheekyConfig& config) {
     if (!start || !host.tick || !host.command || !host.snapshot || !host.detach) {
         logf("cheeky: %ls lacks the runtime ABI exports; Cheeky off", config.runtime.c_str());
         host.tick = nullptr;
+        host.status = CheekyStatus::Refused;
         return false;
     }
     std::error_code ec;
@@ -154,17 +160,41 @@ bool cheeky_start(const CheekyConfig& config) {
              "mismatch); see the Cheeky log in %ls",
              config.configDir.c_str());
         host.tick = nullptr;
+        host.status = CheekyStatus::Refused;
         return false;
     }
     host.reportSeconds = config.reportSeconds;
     host.snapshotFile = std::filesystem::path(log_directory()) / L"cheeky-snapshot.json";
     host.running = true;
+    host.status = CheekyStatus::Running;
+    const std::string json = snapshot_locked();
+    const size_t at = json.find("\"version\":\"");
+    if (at != std::string::npos) {
+        const size_t begin = at + 11, end = json.find('"', begin);
+        host.version = json.substr(begin, end == std::string::npos ? 0 : end - begin);
+    }
     logf("cheeky: runtime %ls started (attachment %llu, settings in %ls); waiting for the session's D3D12 device",
          config.runtime.c_str(), static_cast<unsigned long long>(host.attachment), config.configDir.c_str());
     return true;
 }
 
 bool cheeky_running() { return host.running; }
+
+CheekyStatus cheeky_status() { return host.status; }
+
+std::wstring cheeky_version() { return std::wstring(host.version.begin(), host.version.end()); }
+
+bool cheeky_apply(const std::string& lines) {
+    if (!host.running || lines == host.applied)
+        return true;
+    const bool ok = cheeky_set(lines);
+    if (ok)
+        host.applied = lines;
+    std::string shown = lines;
+    std::replace(shown.begin(), shown.end(), '\n', ' ');
+    logf("cheeky: settings %s: %s", ok ? "applied" : "REFUSED", shown.c_str());
+    return ok;
+}
 
 void cheeky_session(ID3D12Device* device, ID3D12CommandQueue* queue) {
     if (!host.running)
