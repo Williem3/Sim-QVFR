@@ -31,6 +31,14 @@ the reverse-engineering notes.
 
 In any other OpenXR app the DLL does nothing.
 
+**Cheeky Foveated DLSS (spike, off by default).** With `[cheeky] enabled=1` the layer runs
+[Cheeky Foveated DLSS](https://github.com/Williem3/CheekyFoveatedDLSS)'s resident runtime
+(`CheekyFoveatedDLSSRuntime.dll`, GPL v3, not included: take it from a Cheeky release or build)
+through Cheeky's runtime ABI, instead of Cheeky's `dxgi.dll` loader: it starts it at OpenXR start and
+hands it ACE's D3D12 device each frame (`src/cheeky/cheeky_host.h`). Cheeky's settings stay in its own
+`CheekyFoveatedDLSS.ini`. Every `report_s` seconds the log lists each DLSS view Cheeky sees with its
+sizes and evaluations per frame. The keys are described in `manifest/ace-quadview.ini`.
+
 ## Build
 
 MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).

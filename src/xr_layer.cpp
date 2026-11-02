@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "cheeky/cheeky_host.h"
 #include "experiment/double_render.h"
 #include "experiment/views3.h"
 #include "experiment/views4.h"
@@ -218,14 +219,19 @@ void runtime_info(const wchar_t* key, const std::wstring& value) {
         WritePrivateProfileStringW(L"runtime", key, value.c_str(), path.c_str());
 }
 
-void load_experiment() {
+// The folder this DLL is in.
+std::wstring layer_directory() {
     HMODULE self = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                       reinterpret_cast<LPCWSTR>(&load_experiment), &self);
+                       reinterpret_cast<LPCWSTR>(&layer_directory), &self);
     wchar_t module[MAX_PATH] = {};
     GetModuleFileNameW(self, module, MAX_PATH);
+    return std::filesystem::path(module).parent_path().wstring();
+}
+
+void load_experiment() {
     // A launcher passes its per-launch settings in ACE_QV_INI; otherwise the ini next to the DLL.
-    std::wstring ini = (std::filesystem::path(module).parent_path() / L"ace-quadview.ini").wstring();
+    std::wstring ini = (std::filesystem::path(layer_directory()) / L"ace-quadview.ini").wstring();
     wchar_t env[MAX_PATH] = {};
     const DWORD n = GetEnvironmentVariableW(L"ACE_QV_INI", env, MAX_PATH);
     if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
@@ -919,6 +925,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             quad.queue = d3d12->queue;
             if (experiment.views4 && experiment.gpuFrameTiming)
                 gpu_frame_timer_start(d3d12->device, d3d12->queue);
+            cheeky_session(d3d12->device, d3d12->queue);
         } else if (experiment.quad) {
             log_line("quad: session is not D3D12 (a layer above converted it?); quad pipeline off");
         }
@@ -967,6 +974,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         gaze.attached = false;
         gaze.appSyncs = 0;
     }
+    cheeky_session(nullptr, nullptr);
     log_line("xrDestroySession");
     return next.DestroySession(session);
 }
@@ -2077,6 +2085,7 @@ void menu_shutdown() {
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
+    cheeky_frame();  // Cheeky's frame callback, after ACE's frame is recorded
     XrResult r;
     if (!cpu.realEndFrame) {
         r = end_frame(session, info);
@@ -2263,6 +2272,8 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         logf("  extension %s", info->enabledExtensionNames[i]);
     if (XR_FAILED(r))
         return r;
+    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created.
+    cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
     // Before ACE creates its D3D12 device and renderer, so renderer init sees the patched mode.
     if (experiment.dred)
         dred_enable();
