@@ -127,6 +127,7 @@ int main() {
         const int64_t now = qpc_now();
         menu_press(MenuKey::Right, now);  // opens
         const bool opened = menu.visible && menu.model.launch.nativeWidth == 5190 && menu.model.values.periphery == 30;
+        menu_press(MenuKey::Down, now);  // past the page switch to periphery
         menu_press(MenuKey::Left, now);  // periphery 30 -> 25
         const bool stepped = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()) == 25;
         menu.visible = false;
