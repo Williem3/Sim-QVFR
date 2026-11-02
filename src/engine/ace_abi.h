@@ -278,6 +278,18 @@ inline constexpr std::ptrdiff_t kBatchGroupsBegin = 0x1a8, kBatchGroupsEnd = 0x1
 inline constexpr std::ptrdiff_t kGroupDraws = 0x30, kGroupSubEntries = 0x48, kGroupInstances = 0x7c, kGroupLods = 0x80;
 inline constexpr std::size_t kDrawSize = 0xa8, kSubEntrySize = 0x20;
 inline constexpr std::int64_t kBatchLodLimit = 0x100000, kBatchDrawCap = 0x20000;
+// The three limit stores in 0x1ed9da0 (`mov dword [rcx], 0xc00000; mov dword [rcx+4], 10000;
+// mov dword [rcx+8], 80000`). Every per-view group counts about the whole scene's instances (the
+// GPU culls per view later), so views 2-3 add 8+ groups: a 22-car grid reached 14.1M instances and
+// 9775 draws (crash report run 22:33). views4 doubles all three before the renderer is created;
+// draws stay under kBatchDrawCap.
+inline constexpr std::uintptr_t kBatchLimitStoresRva = 0x1ed9dc1;
+inline constexpr std::uint8_t kBatchLimitStoresAnchor[20] = {0xc7, 0x01, 0x00, 0x00, 0xc0, 0x00, 0xc7,
+                                                             0x41, 0x04, 0x10, 0x27, 0x00, 0x00, 0xc7,
+                                                             0x41, 0x08, 0x80, 0x38, 0x01, 0x00};
+inline constexpr std::uint8_t kBatchLimitStoresPatch[20] = {0xc7, 0x01, 0x00, 0x00, 0x80, 0x01,  // 0x1800000
+                                                            0xc7, 0x41, 0x04, 0x20, 0x4e, 0x00, 0x00,  // 20000
+                                                            0xc7, 0x41, 0x08, 0x00, 0x71, 0x02, 0x00};  // 160000
 // The deferredShadows loop (0x1dab9af, "oitpass") gives view 1, under a flag (0xb0753), two matrices
 // from a per-frame structure instead of its own: a two-eye shortcut. Diagnostic: always the own path.
 inline constexpr std::uintptr_t kShadowView1BranchRva = 0x1dabd72;

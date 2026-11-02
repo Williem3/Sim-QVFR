@@ -896,6 +896,14 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         logf("views4: focus cull: focus frusta built every frame at %.0f%% of the focus extent%s; the draw-loop hook is "
              "not located yet, so no draws are skipped",
              cullScale * 100, gazeExpected ? " (from the first gaze sample)" : "");
+    // The instance visibility batch limits (ace_abi.h kBatchLimitStoresRva): without this a 20+ car
+    // grid throws "Instance visibility batch is too large". Applied before ACE creates its renderer,
+    // which sizes the batch buffers from them.
+    if (code_matches(ace::kBatchLimitStoresRva, ace::kBatchLimitStoresAnchor, sizeof(ace::kBatchLimitStoresAnchor)) &&
+        code_write(ace::kBatchLimitStoresRva, ace::kBatchLimitStoresPatch, sizeof(ace::kBatchLimitStoresPatch)))
+        log_line("views4: instance visibility batch limits doubled (instances 25165824, draws 20000, sub-entries 160000)");
+    else
+        log_line("views4: instance visibility batch limits not raised (anchor mismatch); 20+ car grids may crash ACE");
     char list[512];
     int n = std::snprintf(list, sizeof(list), "%s", allowAll ? "all" : "");
     for (size_t i = 0; i < allowedCount && n < static_cast<int>(sizeof(list)) - 16; ++i)
