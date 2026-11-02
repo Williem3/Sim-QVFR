@@ -22,6 +22,7 @@
 #include "probe/pix_capture.h"
 #include "quad/focus_turn.h"
 #include "probe/dred.h"
+#include "probe/batch_watch.h"
 #include "probe/probe.h"
 #include "quad/compositor.h"
 #include "quad/focus_outline.h"
@@ -121,6 +122,7 @@ struct Experiment {
     std::atomic<bool> gaze = true;         // quad: the focus box follows XR_EXT_eye_gaze_interaction
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
+    bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (probe/batch_watch.h)
 };
 Experiment experiment;
 bool focusLogged = false;
@@ -287,6 +289,7 @@ void load_experiment() {
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
+    experiment.batchWatch = GetPrivateProfileIntW(L"experiment", L"batch_watch", 1, ini.c_str()) != 0;
     // Above 100 supersamples (in quad mode this is the outer view's resolution).
     const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 10u, 200u);
     experiment.eyeScale = eyePercent / 100.0;
@@ -870,6 +873,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             if (experiment.views3)
                 views3_watch();
         }
+        if (experiment.batchWatch)
+            batch_watch_start();
         if (!experiment.probes)
             log_line(experiment.views3 ? "engine probes and D3D12 trace off (probes=0); views3 cannot report the view mode"
                                        : "engine probes and D3D12 trace off (probes=0)");
@@ -907,6 +912,7 @@ void menu_shutdown();  // the settings menu's panel (below)
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     menu_shutdown();  // its swapchain and space belong to the session
     probe_stop();
+    batch_watch_stop();
     dred_stop();
     {
         std::lock_guard guard(gaze.mutex);
@@ -2099,6 +2105,7 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     }
     if (experiment.passCensus)
         pass_census_frame_end();
+    batch_watch_frame_end();
     if (experiment.views4) {
         views4_frame_end();
         return views4_submit(session, info);

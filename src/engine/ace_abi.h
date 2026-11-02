@@ -258,6 +258,26 @@ inline constexpr CallSiteGroup kOptionalViewCountGroups[] = {
     {L"final", {0x1db1d62, 0x1db1d7c, 0x1db1daf}},                        // executor: the final pass's view list
     {L"oitpass", {0x1dab9a2, 0x1dac60d}},  // 0x1dab9af: the deferredShadows sun-shadow mask, one cell per view
 };
+// Instance visibility batch merge 0x1d6bfd0 (renderer in rcx; builder 0x1d84a80 calls it at
+// 0x1d88ec0 every frame). It appends every visibility group's lists to the renderer's frame batch
+// and throws "Instance visibility batch is too large" (crash report 2026-11-01: 22-car grid,
+// views4) when a total passes a limit. Groups: renderer + 0x1a8/+0x1b0, 0x330 each, parallel to
+// the named entries at renderer + 0x150 (0xa20 each, std::string name at +8). Per group: draws
+// +0x30/+0x38 (0xa8 each), sub-entries +0x48/+0x50 (0x20 each), instance count +0x7c (int),
+// per-LOD entries +0x80/+0x88 (4 each); a group with no draws is skipped. Limits: renderer +
+// 0x498 -> {instances (total must stay below), draws, sub-entries}, set once by 0x1ed9da0 to
+// 0xc00000, 10000, 80000; per-LOD entries at most 0x100000 and draws at most 0x20000 (immediates).
+inline constexpr std::uintptr_t kBatchMergeRva = 0x1d6bfd0;
+inline constexpr std::uint8_t kBatchMergeAnchor[16] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c,
+                                                       0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57};
+inline constexpr std::uintptr_t kBatchLodLimitRva = 0x1d6c932;
+inline constexpr std::uint8_t kBatchLodLimitAnchor[5] = {0x3d, 0x00, 0x00, 0x10, 0x00};  // cmp eax, 0x100000
+inline constexpr std::ptrdiff_t kBatchGroupsBegin = 0x1a8, kBatchGroupsEnd = 0x1b0, kBatchGroupStride = 0x330,
+                                kBatchEntries = 0x150, kBatchEntryStride = 0xa20, kBatchEntryName = 0x8,
+                                kBatchLimits = 0x498;
+inline constexpr std::ptrdiff_t kGroupDraws = 0x30, kGroupSubEntries = 0x48, kGroupInstances = 0x7c, kGroupLods = 0x80;
+inline constexpr std::size_t kDrawSize = 0xa8, kSubEntrySize = 0x20;
+inline constexpr std::int64_t kBatchLodLimit = 0x100000, kBatchDrawCap = 0x20000;
 // The deferredShadows loop (0x1dab9af, "oitpass") gives view 1, under a flag (0xb0753), two matrices
 // from a per-frame structure instead of its own: a two-eye shortcut. Diagnostic: always the own path.
 inline constexpr std::uintptr_t kShadowView1BranchRva = 0x1dabd72;
