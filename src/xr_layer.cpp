@@ -92,6 +92,7 @@ struct Experiment {
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4ShadowView1Plain = false;   // diagnostic: no view-1 shortcut in deferredShadows (views4.h)
+    bool views4ScreenSizeLegacy = false;   // diagnostic: screenSizeDiv keeps the stereo ratio (views4.h)
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
     UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
@@ -255,6 +256,8 @@ void load_experiment() {
     experiment.uavBarriers = GetPrivateProfileIntW(L"experiment", L"pass_census_uav_barriers", 0, ini.c_str()) != 0;
     experiment.views4ShadowView1Plain =
         GetPrivateProfileIntW(L"experiment", L"views4_shadow_view1_plain", 0, ini.c_str()) != 0;
+    experiment.views4ScreenSizeLegacy =
+        GetPrivateProfileIntW(L"experiment", L"views4_screen_size_legacy", 0, ini.c_str()) != 0;
     {
         wchar_t watch[512] = {};
         GetPrivateProfileStringW(L"experiment", L"pass_census_watch", L"", watch, 512, ini.c_str());
@@ -2245,6 +2248,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     if (experiment.views4) {
         views4_set_borrow(experiment.views4Borrow);
         views4_set_layout(experiment.views4Layout);
+        views4_set_screen_size_legacy(experiment.views4ScreenSizeLegacy);
         // The cull box: the focus box plus its feather band plus a gaze-latency allowance.
         views4_set_focus_cull(experiment.views4FocusCull, 1.0 + experiment.feather + experiment.views4FocusCullMargin,
                               experiment.gaze && experiment.views4Compose);  // gaze turns only when composing

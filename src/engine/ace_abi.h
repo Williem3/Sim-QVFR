@@ -111,11 +111,11 @@ inline constexpr std::ptrdiff_t kPassViewport = 0x934, kPassScissor = 0x94c;
 // (0x1dc5627), view * width / 2 in 0x1dc68e0. With quarters, views 1-3 read tiles whole rows away
 // (capture 2400: view 1's bands, the focus views' stepped shadows).
 inline constexpr std::ptrdiff_t kPassScreenOffset = 0x764;
-// The float2 after screenOffset (pass +0x76c/+0x770): pass +0x484 (a target width) x 0.5 in
-// 0x1dc4b70 and / 3 in 0x1dc68e0, and pass +0x488 (its height). Stereo-derived like screenOffset,
-// but never rewritten for equal quarters (and the image was right), so its meaning is unknown.
-// With unequal views it keeps its old ratio to each view's own size.
-inline constexpr std::ptrdiff_t kPassViewExtent = 0x76c;
+// The float2 after screenOffset (pass +0x76c/+0x770) is renderPassData.screenSizeDiv (embedded shader
+// reflection: screenOffset, screenSizeDiv, jitter, jitterOffset): pass +0x484 (a target width) x 0.5
+// in 0x1dc4b70 and / 3 in 0x1dc68e0, and pass +0x488 (its height), i.e. one view's size in stock.
+// views4 writes each view's own size (until 2026-11-01 it kept the stereo ratio: twice the view's width).
+inline constexpr std::ptrdiff_t kPassScreenSizeDiv = 0x76c;
 // 0x1dc4b70 copies the view, previous view and previous projection into the pass with fixed
 // displacements from the renderer in rdi: view 0 reads slot 0, any other view slot 1 (`test r12d,
 // r12d; jne` at kPassEyeBranchRva). The two paths rejoin at kPassRejoinRva; between them rdi is used

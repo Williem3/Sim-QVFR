@@ -18,6 +18,9 @@ namespace aceqv {
 // Where the four views sit in ACE's target (views4_layout.h): equal quarters unless set. Call
 // before views4_start.
 void views4_set_layout(const Views4Layout& layout);
+// Diagnostic (views4_screen_size_legacy): the passes' screenSizeDiv keeps its stereo value scaled to
+// each view (twice the view's width) instead of the view's own size. Call before views4_start.
+void views4_set_screen_size_legacy(bool legacy);
 // `callers`: "init" (renderer init's per-view vector sizing only), "all", or "init" plus
 // comma-separated call-site RVAs (hex) of `call viewCount` instructions. Must run before ACE
 // creates its renderer (xrCreateInstance). Verifies every site first; all or nothing.

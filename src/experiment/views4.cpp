@@ -51,6 +51,7 @@ Views4Layout layout;       // where the four views sit in the target (views4_set
 Views4Layout launchLayout;  // the layout at launch (the tile grid and volumetrics are sized for its largest view)
 Views4Layout pendingLive;  // the view layout for the next filled frame (views4_set_live_layout), under turnLock
 bool livePending = false;
+bool screenSizeLegacy = false;  // views4_screen_size_legacy: screenSizeDiv keeps the stereo ratio
 bool volumetricViews = false;  // "fog": the volumetrics/atmosphere system has resources for 4 views
 bool foldVolumetrics = false;  // "fogfold": views 2-3 still read the eyes' volumetric resources (diagnostic)
 // The focus box's share of the eye's tangent width / height; changed live under turnLock (views4_set_live).
@@ -485,17 +486,24 @@ void passSetupHook(void* renderer, void* pass, int view) {
     put_i(p, ace::kPassScissor + 0x0c, r.height);
     put_f(p, ace::kPassScreenOffset + 0x00, static_cast<float>(r.left));
     put_f(p, ace::kPassScreenOffset + 0x04, 0.0f);
-    if (!layout.equal()) {
-        // Same ratio to this view's size as it had to an equal quarter of the target.
+    if (!screenSizeLegacy) {
+        // One view's size, as ACE's stereo setups write for each eye.
+        put_f(p, ace::kPassScreenSizeDiv + 0x00, static_cast<float>(r.width));
+        put_f(p, ace::kPassScreenSizeDiv + 0x04, static_cast<float>(r.height));
+    } else if (!layout.equal()) {
+        // Legacy (views4_screen_size_legacy): the same ratio to this view's size as it had to an
+        // equal quarter of the target.
         const int quarter = width / kViews;
-        put_f(p, ace::kPassViewExtent + 0x00,
-              get_f(p, ace::kPassViewExtent + 0x00) * static_cast<float>(r.width) / static_cast<float>(quarter));
-        put_f(p, ace::kPassViewExtent + 0x04,
-              get_f(p, ace::kPassViewExtent + 0x04) * static_cast<float>(r.height) / static_cast<float>(height));
+        put_f(p, ace::kPassScreenSizeDiv + 0x00,
+              get_f(p, ace::kPassScreenSizeDiv + 0x00) * static_cast<float>(r.width) / static_cast<float>(quarter));
+        put_f(p, ace::kPassScreenSizeDiv + 0x04,
+              get_f(p, ace::kPassScreenSizeDiv + 0x04) * static_cast<float>(r.height) / static_cast<float>(height));
     }
     if (!passLogged.exchange(true))
-        logf("views4: pass viewport (setup 0x%llx) target %dx%d -> view %d at x=%d, %dx%d",
-             static_cast<unsigned long long>(ace::kPassSetupRvas[I]), width, height, view, r.left, r.width, r.height);
+        logf("views4: pass viewport (setup 0x%llx) target %dx%d -> view %d at x=%d, %dx%d, screenSizeDiv %.0fx%.0f%s",
+             static_cast<unsigned long long>(ace::kPassSetupRvas[I]), width, height, view, r.left, r.width, r.height,
+             get_f(p, ace::kPassScreenSizeDiv), get_f(p, ace::kPassScreenSizeDiv + 0x04),
+             screenSizeLegacy ? " (legacy)" : "");
 }
 
 void* viewRecordHook(void* renderer, int view) {
@@ -1100,6 +1108,8 @@ bool views4_latest_frame(Views4Frame& frame) {
 }
 
 void views4_set_layout(const Views4Layout& l) { layout = launchLayout = l; }
+
+void views4_set_screen_size_legacy(bool legacy) { screenSizeLegacy = legacy; }
 
 void views4_set_focus_cull(bool on, double scale, bool gaze) {
     focusCull = on;
