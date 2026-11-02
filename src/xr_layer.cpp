@@ -413,6 +413,21 @@ constexpr MenuProfile kMenuProfiles[] = {
 
 // Gaze (and menu) actions. Also with gaze off at launch, so gaze can be turned on live.
 void gaze_init(XrInstance instance) {
+    {
+        // Handles and suggestions belong to one instance. ACE creates a short-lived instance before its
+        // real one, and an action from the destroyed instance in the real one's suggestion made the
+        // Pimax runtime read freed memory in xrSuggestInteractionProfileBindings (start-up crash).
+        std::lock_guard guard(gaze.mutex);
+        gaze.instance = XR_NULL_HANDLE;
+        gaze.set = XR_NULL_HANDLE;
+        gaze.action = gaze.menuToggle = gaze.menuNavigate = XR_NULL_HANDLE;
+        gaze.profile = gaze.pose = XR_NULL_PATH;
+        gaze.bindings.clear();
+        gaze.profileSuggested.clear();
+        gaze.suggested = gaze.attached = false;
+        gaze.appSyncs = 0;
+        gaze.space = XR_NULL_HANDLE;
+    }
     if ((!experiment.quad && !experiment.views4Compose) || !next.CreateActionSet)
         return;
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};

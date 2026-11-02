@@ -202,6 +202,8 @@ struct FakeInput {
     std::map<std::string, XrPath> paths;
     uint32_t suggestedBindings = 0, attachedSets = 0, syncedSets = 0;
     int syncs = 0;
+    uintptr_t nextAction = 0x200;           // each created action gets its own handle
+    std::vector<XrAction> suggestedActions;  // the last eye gaze suggestion's actions
 } input;
 
 XrResult XRAPI_CALL fakeStringToPath(XrInstance, const char* s, XrPath* path) {
@@ -214,11 +216,16 @@ XrResult XRAPI_CALL fakeCreateActionSet(XrInstance, const XrActionSetCreateInfo*
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL fakeCreateAction(XrActionSet, const XrActionCreateInfo*, XrAction* action) {
-    *action = reinterpret_cast<XrAction>(0x200);
+    *action = reinterpret_cast<XrAction>(input.nextAction++);
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL fakeSuggest(XrInstance, const XrInteractionProfileSuggestedBinding* s) {
     input.suggestedBindings = s->countSuggestedBindings;
+    if (s->interactionProfile == input.paths["/interaction_profiles/ext/eye_gaze_interaction"]) {
+        input.suggestedActions.clear();
+        for (uint32_t i = 0; i < s->countSuggestedBindings; ++i)
+            input.suggestedActions.push_back(s->suggestedBindings[i].action);
+    }
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL fakeAttach(XrSession, const XrSessionActionSetsAttachInfo* info) {
@@ -502,7 +509,10 @@ int main() {
     experiment.feather = 0.0;
     quad.device = gpu.device.Get();
     quad.queue = gpu.queue.Get();
+    // ACE creates a short-lived instance before its real one: only the real one's actions may be suggested.
     gaze_init(reinterpret_cast<XrInstance>(1));
+    const XrAction realGaze = reinterpret_cast<XrAction>(input.nextAction);
+    gaze_init(reinterpret_cast<XrInstance>(2));
 
     // ACE's input setup: its own eye gaze binding, then its one attach.
     XrPath profile = XR_NULL_PATH, posePath = XR_NULL_PATH;
@@ -557,6 +567,8 @@ int main() {
     check(scaledAdopted && quad.outChain != XR_NULL_HANDLE && quad.appChain == aceChain,
           "output swapchain created for ACE's chain, scaled by ACE's own resolution setting");
     check(input.suggestedBindings == 2, "gaze binding added to ACE's eye gaze suggestion");
+    check(input.suggestedActions.size() == 2 && input.suggestedActions[1] == realGaze,
+          "only the second instance's gaze action is suggested (none left from the first instance)");
     check(XR_SUCCEEDED(attachResult) && input.attachedSets == 2, "gaze action set attached with ACE's");
 
     int endErrors = 0;
