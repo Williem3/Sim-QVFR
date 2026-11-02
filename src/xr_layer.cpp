@@ -23,6 +23,7 @@
 #include "quad/focus_turn.h"
 #include "probe/dred.h"
 #include "probe/batch_watch.h"
+#include "probe/hang_watch.h"
 #include "probe/probe.h"
 #include "quad/compositor.h"
 #include "quad/focus_outline.h"
@@ -123,6 +124,7 @@ struct Experiment {
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
     bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (probe/batch_watch.h)
+    UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h)
 };
 Experiment experiment;
 bool focusLogged = false;
@@ -290,6 +292,7 @@ void load_experiment() {
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
     experiment.batchWatch = GetPrivateProfileIntW(L"experiment", L"batch_watch", 1, ini.c_str()) != 0;
+    experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", 30, ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution).
     const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 10u, 200u);
     experiment.eyeScale = eyePercent / 100.0;
@@ -882,6 +885,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     XrResult r = next.CreateSession(instance, info, session);
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
     if (XR_SUCCEEDED(r)) {
+        hang_watch_arm(experiment.hangWatchSeconds);
         if (experiment.probes && probe_start()) {
             if (experiment.doubleRender)
                 double_render_start();
@@ -2072,6 +2076,7 @@ void menu_shutdown() {
 }
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
+    hang_watch_frame();
     XrResult r;
     if (!cpu.realEndFrame) {
         r = end_frame(session, info);
