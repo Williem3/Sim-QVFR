@@ -257,6 +257,11 @@ inline constexpr CallSiteGroup kOptionalViewCountGroups[] = {
     {L"lens", {0x1d9cbfa}},                                               // 0x1d9ca10: lens dirt / post setup
     {L"final", {0x1db1d62, 0x1db1d7c, 0x1db1daf}},                        // executor: the final pass's view list
     {L"oitpass", {0x1dab9a2, 0x1dac60d}},  // 0x1dab9af: the deferredShadows sun-shadow mask, one cell per view
+    // DLSS features, made in renderer init 0x1d43090: two vector sizings, the loop entry, a per-view flag and
+    // the loop back. The loop creates one feature per view (0x1f90430) at the view's rect (viewport 0x1d922b0).
+    // The final pass 0x1f7a6e0 runs DLSS only when it has as many features as views (0x1f7ab05), so with
+    // "final" and 2 features it skipped DLSS and showed the 2/3-size render unscaled.
+    {L"dlss", {0x1d4509b, 0x1d45161, 0x1d4521c, 0x1d45429, 0x1d4547b}},
 };
 // Instance visibility batch merge 0x1d6bfd0 (renderer in rcx; builder 0x1d84a80 calls it at
 // 0x1d88ec0 every frame). It appends every visibility group's lists to the renderer's frame batch

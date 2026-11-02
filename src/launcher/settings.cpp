@@ -11,7 +11,7 @@ namespace aceqv::launcher {
 namespace {
 
 // The views4 call sites of the tested QVFR configuration (recon "Darkness fixed").
-constexpr wchar_t kQvfrCallers[] = L"init,draw,tiles,slots,cameras,fog,consts,final,oitpass";
+constexpr wchar_t kQvfrCallers[] = L"init,draw,tiles,slots,cameras,fog,consts,final,oitpass,dlss";
 
 int read_int(const std::wstring& ini, const wchar_t* section, const wchar_t* key, int fallback) {
     return static_cast<int>(GetPrivateProfileIntW(section, key, fallback, ini.c_str()));
