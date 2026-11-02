@@ -107,6 +107,14 @@ std::atomic<bool> layoutLogged{false};
 
 // Camera dump (to identify the slot matrices): the renderer, and the views ACE last located.
 std::atomic<void*> lastRenderer{nullptr};
+
+// Whether this renderer upscales with DLSS (it made DLSS features, ace_abi.h).
+bool dlss_upscaling(const uint8_t* renderer) {
+    const auto* features = reinterpret_cast<void* const*>(renderer + ace::kRendererDlssFeatures);
+    return renderer[ace::kRendererDlssReady] != 0 && features[0] != features[1];
+}
+// Whether the last frame filled held the launch layout for DLSS (logged when it changes).
+std::atomic<bool> dlssHeld{false};
 SRWLOCK viewsLock = SRWLOCK_INIT;
 XrView lastViews[2] = {};
 constexpr uint64_t kDumpFrames[] = {600, 1800};
@@ -238,11 +246,19 @@ void fill_focus_cameras(uint8_t* renderer) {
     // One focus box for the whole frame, whatever views4_set_live does meanwhile.
     const double boxX = focusFraction, boxY = focusFractionY, cull = cullScale;
     Views4Frame frame{};
-    const Views4Layout& latched = livePending ? pendingLive : layout;
+    // ACE makes each view's DLSS feature at the view's size when it builds the renderer, and its passes
+    // map the views between render and output resolution by their fractions of the target. A live
+    // size would leave the DLSS output (fixed size) out of place, so with DLSS the views keep their
+    // launch sizes; a live layout waits (pending) for a renderer without DLSS or the next launch.
+    const bool dlss = dlss_upscaling(renderer);
+    const Views4Layout& latched = dlss ? launchLayout : livePending ? pendingLive : layout;
     frame.live = true;
     std::memcpy(frame.width, latched.width, sizeof(frame.width));
     std::memcpy(frame.height, latched.height, sizeof(frame.height));
     ReleaseSRWLockShared(&turnLock);
+    if (dlssHeld.exchange(dlss) != dlss)
+        log_line(dlss ? "views4: DLSS is on: the views keep their launch sizes (live resolution applies at the next launch)"
+                      : "views4: DLSS is off: live resolution applies");
     // This frame's views render with this layout (the viewport and pass setups read `layout`).
     if (std::memcmp(frame.width, layout.width, sizeof(frame.width)) != 0 ||
         std::memcmp(frame.height, layout.height, sizeof(frame.height)) != 0) {

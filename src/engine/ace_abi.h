@@ -60,6 +60,10 @@ inline constexpr std::uint8_t kInitVrModeAnchor[16] = {0xbb, 0x01, 0x00, 0x00, 0
 
 // views4 stage gate (recon "The VR view path, mapped"). VR keeps view mode 1; only the view count
 // grows to 4 for chosen callers.
+// DLSS in the renderer (made with it in renderer init 0x1d43090; ACE makes a new renderer when the
+// graphics settings change): +0x1d5171 is set when DLSS is set up (0x1d45073), and +0x1d5188 is the
+// vector of its per-view features (0x20 bytes each), which the final pass 0x1f7a6e0 evaluates.
+inline constexpr std::ptrdiff_t kRendererDlssReady = 0x1d5171, kRendererDlssFeatures = 0x1d5188;
 // viewCount(renderer) = mode + 1: `mov eax,[rcx+0x1d4cdc]; inc eax; ret`.
 inline constexpr std::uintptr_t kViewCountRva = 0x1dc7f50;
 inline constexpr std::uint8_t kViewCountAnchor[9] = {0x8b, 0x81, 0xdc, 0x4c, 0x1d, 0x00, 0xff, 0xc0, 0xc3};
