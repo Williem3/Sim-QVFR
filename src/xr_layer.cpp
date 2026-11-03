@@ -26,7 +26,9 @@
 #include "experiment/views4.h"
 #include "log.h"
 #include "probe/d3d12_trace.h"
+#include "probe/cpu_load.h"
 #include "probe/gpu_frame_timer.h"
+#include "probe/gpu_load.h"
 #include "probe/pass_census.h"
 #include "probe/pix_capture.h"
 #include "quad/focus_turn.h"
@@ -870,6 +872,17 @@ struct CpuTimes {
 CpuTimes cpu;
 constexpr uint64_t kCpuReportFrames = 900;
 
+// views4 frame pacing (render thread): ACE's xrEndFrame-to-xrEndFrame interval, the time it spends in
+// xrWaitFrame (the runtime holding it to the display) and the display period the runtime predicts.
+// Logged with the CPU times as a "views4 pacing:" line: frames that miss their display slot wait a whole
+// extra period, so the frame rate falls below the refresh even with headroom on average.
+struct Pacing {
+    std::vector<float> interval, wait;  // ms
+    int64_t lastEnd = 0;
+    double periodMs = 0;
+};
+Pacing pacing;
+
 int64_t qpc_now() {
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
@@ -891,7 +904,74 @@ XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateI
     return r;
 }
 
-bool osd_owns_gpu_timer();  // the performance overlay (below)
+// The pacing line, and resets: ACE's frame interval and its time in and outside xrWaitFrame (p50, p90),
+// and how many frames took one display period, two, three or more (rounded to the nearest). Returns the
+// mean frame interval (0 without frames).
+double report_pacing() {
+    if (pacing.interval.empty())
+        return 0;
+    const auto at = [](std::vector<float> v, double p) {
+        if (v.empty())
+            return 0.0;
+        const size_t k = std::min(v.size() - 1, static_cast<size_t>(p * static_cast<double>(v.size())));
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(k), v.end());
+        return static_cast<double>(v[k]);
+    };
+    double sum = 0, longest = 0;
+    size_t periods[4] = {};  // 1, 2, 3, 4 or more
+    for (const float i : pacing.interval) {
+        sum += i;
+        longest = std::max(longest, static_cast<double>(i));
+        if (pacing.periodMs > 0)
+            ++periods[std::clamp(static_cast<int>(std::lround(i / pacing.periodMs)), 1, 4) - 1];
+    }
+    const double mean = sum / static_cast<double>(pacing.interval.size());
+    std::vector<float> outside;  // ACE's own frame time: the interval less its wait (pairs in order)
+    for (size_t i = 0; i < pacing.interval.size() && i < pacing.wait.size(); ++i)
+        outside.push_back(std::max(0.0f, pacing.interval[i] - pacing.wait[i]));
+    logf("views4 pacing: display period %.2f ms; ACE frame interval p50 %.2f ms, p90 %.2f, max %.2f (%.1f fps over %zu "
+         "frames); in xrWaitFrame p50 %.2f ms, p90 %.2f; outside it p50 %.2f ms, p90 %.2f; frames of 1/2/3/4+ display "
+         "periods %zu/%zu/%zu/%zu",
+         pacing.periodMs, at(pacing.interval, 0.5), at(pacing.interval, 0.9), longest, mean > 0 ? 1000 / mean : 0,
+         pacing.interval.size(), at(pacing.wait, 0.5), at(pacing.wait, 0.9), at(outside, 0.5), at(outside, 0.9),
+         periods[0], periods[1], periods[2], periods[3]);
+    pacing.interval.clear();
+    pacing.wait.clear();
+    return mean;
+}
+
+bool osd_shown(OsdSummary& out);  // the overlay's last numbers (below)
+
+// The load line, over the same 900 frames: the whole GPU's busy share (ACE's part) and so its time per frame
+// (`frameMs`: the mean interval), ACE's busiest thread and the render thread's share of a core, all ACE's
+// threads; and, with the overlay on, what it last showed.
+void report_load(double frameMs) {
+    int gpuSamples = 0, cpuSamples = 0;
+    const GpuLoad gpu = gpu_load_window(gpuSamples);
+    const CpuLoad threads = cpu_load_window(cpuSamples);
+    if (!gpu.valid && !threads.valid)
+        return;
+    char gpuText[192] = "GPU load unknown", cpuText[256] = "threads unknown", shown[256] = "";
+    if (gpu.valid)
+        std::snprintf(gpuText, sizeof(gpuText), "GPU %.0f%% busy (%ls engine; ACE %.0f%%): %.1f ms of GPU per ACE frame",
+                      gpu.busy, gpu.engine.c_str(), gpu.ace, gpu.busy / 100 * frameMs);
+    if (threads.valid)
+        std::snprintf(cpuText, sizeof(cpuText),
+                      "busiest ACE thread %.0f%% of a core (last: %u%s%ls%s), render thread %.0f%%, all threads %.0f%% "
+                      "(%d)",
+                      threads.busiestPercent, threads.busiestThread, threads.busiestName.empty() ? "" : " \"",
+                      threads.busiestName.c_str(), threads.busiestName.empty() ? "" : "\"", threads.renderPercent,
+                      threads.processPercent, threads.threads);
+    OsdSummary s{};
+    if (osd_shown(s)) {
+        static const char* const kBounds[] = {"unknown", "neither", "CPU", "GPU", "pacing"};
+        std::snprintf(shown, sizeof(shown),
+                      "; overlay: CPU %.1f ms (%.0f%% headroom), GPU %.1f ms%s (%.0f%% headroom), limited by %s",
+                      std::max(s.cpuMs, s.cpuThreadMs), s.cpuHeadroom, s.gpuMs, s.gpuWhole ? " all work" : "", s.gpuHeadroom,
+                      kBounds[static_cast<int>(s.bound)]);
+    }
+    logf("views4 load: %s; %s%s (%d and %d samples)", gpuText, cpuText, shown, gpuSamples, cpuSamples);
+}
 
 void report_cpu_times() {
     const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
@@ -914,8 +994,9 @@ void report_cpu_times() {
     line(cpu.compose, nullptr, compose, sizeof(compose));
     logf("views4 cpu: ms per call over the last %llu frames: xrEndFrame %s; xrLocateViews %s; compose %s",
          static_cast<unsigned long long>(kCpuReportFrames), end, locate, compose);
-    if (!osd_owns_gpu_timer())  // the overlay's draws collect the timer's frames
-        gpu_frame_timer_report();
+    const double frameMs = report_pacing();
+    gpu_frame_timer_report();  // its own samples: it logs while the overlay collects too
+    report_load(frameMs);
 }
 
 bool is_ace_process() {
@@ -1010,6 +1091,11 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             quad.queue = d3d12->queue;
             if (experiment.views4 && experiment.gpuFrameTiming)
                 gpu_frame_timer_start(d3d12->device, d3d12->queue);
+            if (experiment.views4) {  // the whole GPU's and ACE's threads' load (the overlay, the log)
+                const LUID adapter = d3d12->device->GetAdapterLuid();
+                gpu_load_start(static_cast<uint32_t>(adapter.HighPart), adapter.LowPart);
+                cpu_load_start();
+            }
             cheeky_session(d3d12->device, d3d12->queue);
         } else if (experiment.quad) {
             log_line("quad: session is not D3D12 (a layer above converted it?); quad pipeline off");
@@ -1068,6 +1154,8 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.helmetHinted.clear();
     }
     gpu_frame_timer_stop();
+    gpu_load_stop();
+    cpu_load_stop();
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
         gaze.space = XR_NULL_HANDLE;
@@ -1080,12 +1168,21 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
 }
 
 void osd_waited(XrDuration period);  // the performance overlay's frame budget (below)
+void osd_wait_returned(double waitMs);  // where the render thread's work for a frame starts (below)
 
 XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state) {
     if (!experiment.twoLoops) {
+        const int64_t t0 = qpc_now();
         const XrResult r = next.WaitFrame(session, info, state);
-        if (XR_SUCCEEDED(r))
+        if (XR_SUCCEEDED(r)) {
             osd_waited(state->predictedDisplayPeriod);
+            const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
+            if (experiment.views4 && pacing.wait.size() < 4 * kCpuReportFrames) {
+                pacing.wait.push_back(static_cast<float>(waitMs));
+                pacing.periodMs = state->predictedDisplayPeriod / 1e6;
+            }
+            osd_wait_returned(waitMs);
+        }
         return r;
     }
     std::unique_lock lock(loops.mutex);
@@ -2768,14 +2865,38 @@ struct Osd {
     std::string cheekySnapshot;
     int64_t nextCheeky = 0;
     IDXGIAdapter3* adapter = nullptr;
+    // xrWaitFrame's last return (the render thread's work for the frame runs from it to xrEndFrame).
+    int64_t waitReturnQpc = 0;
+    uint64_t waitReturnCycles = 0;
+    DWORD waitThread = 0;
+    double waitMs = -1;
+    OsdSummary shown;  // the card's numbers at its last draw (for the log)
+    bool shownValid = false;
 };
 Osd osd;
 constexpr int64_t kOsdDrawMs = 500, kOsdCheekyMs = 1000;
 constexpr size_t kOsdHistory = 150;
 
-bool osd_owns_gpu_timer() { return osd.placement.enabled && experiment.views4; }
 
 void osd_waited(XrDuration period) { osd.periodNs.store(period, std::memory_order_relaxed); }
+
+bool osd_shown(OsdSummary& out) {
+    if (!osd.placement.enabled || !osd.shownValid)
+        return false;
+    out = osd.shown;
+    return true;
+}
+
+void osd_wait_returned(double waitMs) {
+    if (!osd.placement.enabled)
+        return;
+    osd.waitReturnQpc = qpc_now();
+    ULONG64 cycles = 0;
+    QueryThreadCycleTime(GetCurrentThread(), &cycles);
+    osd.waitReturnCycles = cycles;
+    osd.waitThread = GetCurrentThreadId();
+    osd.waitMs = waitMs;
+}
 
 void osd_measure() {
     if (!osd.placement.enabled)
@@ -2794,8 +2915,14 @@ void osd_measure() {
     if (osd.lastEnd) {
         OsdFrame frame;
         frame.intervalMs = static_cast<double>(now - osd.lastEnd) * 1000.0 / static_cast<double>(qpc_ms(1000));
-        if (thread == osd.thread && osd.cyclesPerMs > 0)
+        if (thread == osd.waitThread && osd.waitReturnQpc > osd.lastEnd && osd.cyclesPerMs > 0) {
+            // The render thread's work for the frame: from xrWaitFrame's return, its wall time and what of it ran.
+            frame.workMs = static_cast<double>(now - osd.waitReturnQpc) * 1000.0 / static_cast<double>(qpc_ms(1000));
+            frame.cpuMs = static_cast<double>(cycles - osd.waitReturnCycles) / osd.cyclesPerMs;
+            frame.waitMs = osd.waitMs;
+        } else if (thread == osd.thread && osd.cyclesPerMs > 0) {
             frame.cpuMs = static_cast<double>(cycles - osd.lastCycles) / osd.cyclesPerMs;
+        }
         osd.frames.push_back(frame);
         osd.history.push_back(frame.intervalMs);
         if (osd.history.size() > kOsdHistory)
@@ -2987,6 +3114,20 @@ OsdInput osd_input(int64_t now) {
         in.fgMs = c.fgMs;
         in.fgState = c.state;
         in.gpuBusyPercent = c.gpuBusyPercent;
+        if (c.refreshHz > 0)
+            in.refreshMs = 1000.0 / c.refreshHz;  // the headset's own refresh (ACE's period may be multiplied)
+    }
+    // The whole GPU and ACE's threads, from the layer's own samplers (Cheeky's GPU share only without them),
+    // averaged over the card's window (since its last draw).
+    int samples = 0;
+    if (const GpuLoad gpu = gpu_load_window(samples, 0); gpu.valid) {
+        in.gpuBusyPercent = gpu.busy;
+        in.gpuAcePercent = gpu.ace;
+    }
+    if (const CpuLoad threads = cpu_load_window(samples, 0); threads.valid) {
+        in.cpuBusiestPercent = threads.busiestPercent;
+        in.cpuBusiestName = threads.busiestName;
+        in.cpuBusiestIsRender = threads.busiestThread == osd.thread;
     }
     return in;
 }
@@ -3000,9 +3141,11 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         return nullptr;
     if (now >= osd.nextDraw && !osd.drawing.valid()) {
         osd.nextDraw = now + qpc_ms(kOsdDrawMs);
-        osd.drawing = std::async(std::launch::async, [in = osd_input(now),
+        OsdInput in = osd_input(now);
+        osd.shown = osd_summary(in);  // also for the log
+        osd.shownValid = true;
+        osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,
                                                       history = std::vector<double>(osd.history.begin(), osd.history.end())] {
-            const OsdSummary summary = osd_summary(in);
             return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary));
         });
     }
@@ -3044,6 +3187,13 @@ void osd_shutdown() {
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
+    cpu_load_render_thread(GetCurrentThreadId());
+    if (experiment.views4 && cpu.msPerTick > 0) {
+        const int64_t now = qpc_now();
+        if (pacing.lastEnd && pacing.interval.size() < 4 * kCpuReportFrames)
+            pacing.interval.push_back(static_cast<float>((now - pacing.lastEnd) * cpu.msPerTick));
+        pacing.lastEnd = now;
+    }
     osd_measure();   // before the layer's own work in the frame
     cheeky_frame();  // Cheeky's frame callback, after ACE's frame is recorded
     XrResult r;

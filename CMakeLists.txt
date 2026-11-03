@@ -22,7 +22,7 @@ add_library(ace_quadview SHARED
   src/xr_layer.cpp
   src/log.cpp
   src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp
-  src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp
+  src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp
   src/probe/d3d12_vtable_index.c
   src/experiment/double_render.cpp src/experiment/views3.cpp src/experiment/views4.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
@@ -30,7 +30,7 @@ add_library(ace_quadview SHARED
 target_include_directories(ace_quadview PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(ace_quadview PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ace_quadview PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(ace_quadview PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32)
+target_link_libraries(ace_quadview PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh)
 set_target_properties(ace_quadview PROPERTIES OUTPUT_NAME ace-quadview)
 
 add_custom_command(TARGET ace_quadview POST_BUILD
@@ -57,20 +57,20 @@ target_compile_definitions(compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 target_link_libraries(compositor_test PRIVATE d3d12 dxgi d3dcompiler windowscodecs ole32)
 
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
-add_executable(two_loops_test tests/two_loops_test.cpp src/log.cpp src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp
+add_executable(two_loops_test tests/two_loops_test.cpp src/log.cpp src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp
   src/probe/d3d12_vtable_index.c src/experiment/double_render.cpp src/experiment/views3.cpp src/experiment/views4.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
   src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/cheeky/cheeky_host.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(two_loops_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32)
+target_link_libraries(two_loops_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh)
 
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
-add_executable(quad_flow_test tests/quad_flow_test.cpp src/log.cpp src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp
+add_executable(quad_flow_test tests/quad_flow_test.cpp src/log.cpp src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp
   src/probe/d3d12_vtable_index.c src/experiment/double_render.cpp src/experiment/views3.cpp src/experiment/views4.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
   src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/cheeky/cheeky_host.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(quad_flow_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32)
+target_link_libraries(quad_flow_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh)
 
 # Offline check of the views4 index-folding trampolines (tests/code_patch_test.cpp).
 add_executable(code_patch_test tests/code_patch_test.cpp src/engine/code_patch.cpp src/log.cpp)
@@ -120,6 +120,12 @@ target_compile_definitions(focus_cull_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 
 # Offline check of the GPU frame timer on a WARP device (tests/gpu_frame_timer_test.cpp).
 add_executable(gpu_frame_timer_test tests/gpu_frame_timer_test.cpp src/probe/gpu_frame_timer.cpp src/log.cpp)
+
+# Offline check of the GPU and CPU load samplers (tests/load_test.cpp).
+add_executable(load_test tests/load_test.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/log.cpp)
+target_include_directories(load_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(load_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(load_test PRIVATE pdh dxgi)
 target_include_directories(gpu_frame_timer_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(gpu_frame_timer_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(gpu_frame_timer_test PRIVATE d3d12 dxgi)

@@ -515,6 +515,12 @@ std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
 
 int main() {
     using namespace aceqv;
+    // The log goes to a file of the test's own (opened at its first line); the pacing check reads it back.
+    wchar_t logDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, logDir);
+    const std::wstring logPath = std::wstring(logDir) + L"aceqv-quad-flow-test.log";
+    DeleteFileW(logPath.c_str());
+    SetEnvironmentVariableW(L"ACE_QV_LOG", logPath.c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) || FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
@@ -899,6 +905,48 @@ int main() {
         experiment.set_crop(FovCrop{});
         DeleteFileW(brow.c_str());
     }
+    // The pacing line: frames sorted by the display periods they took (a 22.5 ms frame is two of 11.1 ms).
+    {
+        pacing = Pacing{};
+        pacing.periodMs = 11.1;
+        pacing.interval = {11.0f, 22.5f, 22.0f, 33.4f, 50.0f};
+        pacing.wait = {5.0f, 10.0f, 10.0f, 2.0f, 1.0f};
+        report_pacing();
+        std::string logged;
+        if (FILE* f = _wfopen(logPath.c_str(), L"rb")) {
+            char buffer[4096];
+            for (size_t n; (n = fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                logged.append(buffer, n);
+            fclose(f);
+        }
+        const size_t at = logged.rfind("views4 pacing:");
+        const std::string line = at == std::string::npos ? "" : logged.substr(at, logged.find('\n', at) - at);
+        std::printf("     %s\n", line.c_str());
+        check(line.find("frames of 1/2/3/4+ display periods 1/2/1/1") != std::string::npos &&
+                  line.find("display period 11.10 ms") != std::string::npos && pacing.interval.empty(),
+              "pacing: frames counted by the display periods they took, then reset");
+        // The load line: ACE's threads sampled (a second's worth), reported once, the window emptied.
+        cpu_load_start();
+        Sleep(1200);
+        cpu_load_stop();  // no sample lands after the report
+        report_load(22.2);
+        std::string after;
+        if (FILE* f = _wfopen(logPath.c_str(), L"rb")) {
+            char buffer[4096];
+            for (size_t n; (n = fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                after.append(buffer, n);
+            fclose(f);
+        }
+        const size_t loadAt = after.rfind("views4 load:");
+        const std::string load = loadAt == std::string::npos ? "" : after.substr(loadAt, after.find('\n', loadAt) - loadAt);
+        std::printf("     %s\n", load.c_str());
+        int left = 0;
+        cpu_load_window(left);
+        check(load.find("busiest ACE thread") != std::string::npos && load.find("GPU load unknown") != std::string::npos &&
+                  left == 0,
+              "load: the threads' line, the GPU unknown without its sampler; the window emptied");
+    }
+    DeleteFileW(logPath.c_str());
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;
 }

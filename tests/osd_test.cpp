@@ -93,8 +93,9 @@ int main() {
             R"("cadence": {"valid": true, "game_fps": 86.1, "unique_fps": 90.1143, "refresh_hz": 90.0}}})";
         const OsdCheeky c = osd_cheeky(json);
         check(c.valid && c.active && c.state == L"Generating frames" && close_to(c.outputFps, 90.1143, 0.001) &&
-                  close_to(c.fgMs, 1.72236, 0.0001) && close_to(c.gpuBusyPercent, 78.0024, 0.0001),
-              "Cheeky's snapshot: FG active, its state, output fps, FG time and GPU busy");
+                  close_to(c.fgMs, 1.72236, 0.0001) && close_to(c.gpuBusyPercent, 78.0024, 0.0001) &&
+                  close_to(c.refreshHz, 90, 0.001),
+              "Cheeky's snapshot: FG active, its state, output fps, FG time, GPU busy and the headset's refresh");
         check(!osd_cheeky("{}").valid && !osd_cheeky("").valid, "no snapshot: nothing from Cheeky");
     }
     {
@@ -113,8 +114,10 @@ int main() {
         const OsdRow* vram = row(rows, L"VRAM");
         const OsdRow* fg = row(rows, L"Frame generation");
         const OsdRow* gaze = row(rows, L"Eye tracking");
-        const OsdRow* overhead = row(rows, L"GPU overhead");
-        check(rows.size() == 6, "six cells");
+        const OsdRow* gpuParts = row(rows, L"GPU ms: ACE/FG/layer/rest");
+        check(rows.size() == 9 && row(rows, L"Busiest ACE thread") && row(rows, L"Render thread") &&
+                  row(rows, L"Frame p90 · 1% low"),
+              "nine cells: three rows of three");
         const std::vector<OsdTile> tiles = osd_tiles(in, osd_summary(in));
         check(tiles.size() == 4 && tiles[0].value == L"90" && tiles[0].unit == L"fps" && tiles[0].detail == L"of 90 Hz" &&
                   tiles[1].value == L"11.1" && tiles[1].tone == OsdTone::Good && tiles[2].label == L"CPU" &&
@@ -125,13 +128,84 @@ int main() {
         check(fg && fg->pill && fg->value == L"Waiting for guides" && fg->tone == OsdTone::Warn,
               "frame generation not yet generating shows Cheeky's state");
         check(gaze && gaze->pill && gaze->value == L"Tracking" && gaze->tone == OsdTone::Good, "eye tracking badge");
-        check(overhead && overhead->value == L"QVFR 0.40 ms", "the layer's own GPU time");
+        check(gpuParts && gpuParts->value == L"7.0 / — / 0.4 / —", "without the whole GPU's load: ACE's queue and the layer");
         in.fg = OsdFg::On;
         in.fgMultiplier = 2;
         in.fgOutputFps = 180;
         const std::vector<OsdTile> fgTiles = osd_tiles(in, osd_summary(in));
         check(fgTiles[0].value == L"180" && fgTiles[0].detail.find(L"ACE 90") == 0,
               "with frame generation the frame rate tile shows what the headset shows, and ACE's own");
+    }
+    // The whole GPU and ACE's threads (the layer's samplers): 2x frame generation at 90 Hz (a 22.2 ms budget).
+    const auto measured = [](double intervalMs, double busyMs, double workMs, double waitMs, double gpuBusy,
+                             double busiest) {
+        OsdInput in;
+        in.periodMs = 11.111;
+        in.fg = OsdFg::On;
+        in.fgMultiplier = 2;
+        in.fgMs = 1.1;
+        in.gpuMs = 19;
+        in.composeMs = 0.4;
+        in.gpuBusyPercent = gpuBusy;
+        in.cpuBusiestPercent = busiest;
+        for (int i = 0; i < 100; ++i)
+            in.frames.push_back({intervalMs, busyMs, workMs, waitMs});
+        return in;
+    };
+    {
+        const OsdInput in = measured(22.222, 9, 12.5, 9.7, 98, 60);
+        const OsdSummary s = osd_summary(in);
+        check(s.gpuWhole && close_to(s.gpuMs, 0.98 * 22.222, 0.01) && close_to(s.gpuRestMs, 0.98 * 22.222 - 19 - 1.1 - 0.4, 0.01) &&
+                  close_to(s.gpuFgMs, 1.1) && s.bound == OsdBound::Gpu && s.gpuHeadroom < 3,
+              "the whole GPU 98% busy: its time per frame, the rest beyond ACE, FG and the layer; GPU bound, ~2% left");
+        const std::vector<OsdRow> rows = osd_rows(in, s);
+        check(row(rows, L"GPU ms: ACE/FG/layer/rest")->value == L"19.0 / 1.1 / 0.4 / 1.3" &&
+                  row(rows, L"Limited by")->value == L"GPU" && osd_tiles(in, s)[3].label == L"GPU (all work)",
+              "the GPU row shows its parts; the tile says it is all the GPU's work");
+        check(close_to(s.cpuMs, 12.5) && close_to(s.cpuBusyMs, 9) && close_to(s.cpuBlockedMs, 3.5) &&
+                  close_to(s.cpuThreadMs, 0.6 * 22.222, 0.01) && close_to(s.waitMs, 9.7) &&
+                  row(rows, L"Render thread")->value == L"9.0 busy · 3.5 blocked",
+              "the render thread: 12.5 ms of work, 9 running and 3.5 blocked; the busiest thread 60% of the frame");
+        check(close_to(s.cpuHeadroom, (22.222 - 0.6 * 22.222) / 22.222 * 100, 0.1),
+              "CPU headroom from the busier of the render thread's work and the busiest thread");
+    }
+    {
+        // Cheeky's layer gives ACE the doubled period (22.2 ms): with the headset's refresh known, the budget is
+        // that refresh times the multiplier, not doubled again (the 44.4 ms that showed false headroom).
+        OsdInput doubled = measured(22.4, 9, 12.6, 9.7, 71, 60);
+        doubled.periodMs = 22.222;
+        doubled.refreshMs = 11.111;
+        const OsdSummary d = osd_summary(doubled);
+        check(close_to(d.budgetMs, 22.222) && close_to(d.refreshHz, 90, 0.01) &&
+                  close_to(d.gpuHeadroom, (22.222 - 0.71 * 22.4) / 22.222 * 100, 0.1),
+              "frame generation through Cheeky's layer: the budget is 22.2 ms (not 44.4), the refresh 90 Hz");
+        OsdInput plain = doubled;
+        plain.periodMs = 11.111;  // a runtime that gives ACE the refresh period itself
+        check(close_to(osd_summary(plain).budgetMs, 22.222), "the refresh period given as it is: multiplied once");
+        // ACE held in xrWaitFrame yet 3% past its slot (43 fps of 45), neither processor full: pacing.
+        OsdInput slip = doubled;
+        for (OsdFrame& f : slip.frames)
+            f.intervalMs = 22.9;
+        check(osd_summary(slip).bound == OsdBound::Pacing, "held and 3% past the budget: pacing (under the 5% late mark)");
+    }
+    {
+        check(osd_summary(measured(26, 9, 25.5, 0.3, 80, 60)).bound == OsdBound::Cpu,
+              "over budget, barely held in xrWaitFrame, the GPU not full: CPU bound");
+        check(osd_summary(measured(22.222, 9, 12, 10, 70, 97)).bound == OsdBound::Cpu,
+              "a thread at a full core: CPU bound, whatever the render thread shows");
+        const OsdInput paced = measured(26, 9, 12, 13, 80, 60);
+        check(osd_summary(paced).bound == OsdBound::Pacing && osd_rows(paced, osd_summary(paced))[1].value == L"Pacing",
+              "over budget, held in xrWaitFrame, neither processor full: pacing");
+        check(osd_summary(measured(22.222, 9, 12, 10, 70, 60)).bound == OsdBound::None, "on budget with both to spare: neither");
+    }
+    {
+        OsdInput in = measured(22.222, 9, 12, 10, 70, 60);
+        for (int i = 0; i < 10; ++i)
+            in.frames[i * 10].intervalMs = 23.5;  // 6% over
+        in.frames[50].intervalMs = 40;
+        const OsdSummary s = osd_summary(in);
+        check(close_to(s.latePercent, 10) && close_to(s.frameP90Ms, 23.5) && close_to(s.low1Fps, 1000 / 40.0, 0.01),
+              "frames 6% over count as late; p90 23.5 ms; the 1% low from the slowest frame");
     }
     {
         const std::wstring ini = (std::filesystem::temp_directory_path() / L"aceqv_osd_test.ini").wstring();
@@ -145,6 +219,34 @@ int main() {
         WritePrivateProfileStringW(L"osd", L"yaw", L"-90", ini.c_str());
         check(read_osd_placement(ini.c_str()).yaw == -kOsdYawMax, "and so is the yaw");
         DeleteFileW(ini.c_str());
+    }
+    // ACEQV_OSD_SAVE=<file.bmp>: the card with every cell filled, as a bitmap to look at.
+    if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"ACEQV_OSD_SAVE", path, MAX_PATH)) {
+        const OsdInput in = measured(24.6, 9.1, 12.5, 10.9, 97, 64);
+        OsdInput full = in;
+        full.vramUsed = 13ull << 30;
+        full.vramBudget = 15ull << 30;
+        full.gaze = OsdGaze::Tracking;
+        full.fgOutputFps = 81;
+        full.cpuBusiestName = L"GameThread";
+        const OsdSummary s = osd_summary(full);
+        std::vector<double> history(150, 24.6);
+        const std::vector<uint32_t> pixels = draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s));
+        if (FILE* f = _wfopen(path, L"wb")) {
+            const int w = kOsdWidth, h = kOsdHeight;
+            BITMAPFILEHEADER file{0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + w * h * 4), 0, 0,
+                                  sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)};
+            BITMAPINFOHEADER info{sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
+            fwrite(&file, sizeof(file), 1, f);
+            fwrite(&info, sizeof(info), 1, f);
+            for (const uint32_t p : pixels) {  // RGBA -> BGRA over a dark grey (the card is see-through)
+                const double a = (p >> 24) / 255.0;
+                const auto over = [a](uint32_t c) { return static_cast<uint8_t>(c * a + 40 * (1 - a)); };
+                const uint8_t bgra[4] = {over((p >> 16) & 0xff), over((p >> 8) & 0xff), over(p & 0xff), 255};
+                fwrite(bgra, 4, 1, f);
+            }
+            fclose(f);
+        }
     }
     {
         OsdInput in = steady(11.111, 5, 7);

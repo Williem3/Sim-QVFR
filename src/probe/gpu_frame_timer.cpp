@@ -17,6 +17,24 @@ using Microsoft::WRL::ComPtr;
 
 constexpr int kSlots = 16;  // frames in flight that can be timed
 constexpr int kMarks = 3;   // GpuMark values
+constexpr size_t kWindowMax = 20000;  // samples a window keeps when nobody collects it (the overlay off)
+
+// Samples since a reader last collected them: 0 the performance overlay's, 1 the log's.
+struct Window {
+    std::vector<float> render, interval, compose;
+    uint64_t skipped = 0;
+    void add(std::vector<float> Window::*samples, float v) {
+        auto& s = this->*samples;
+        if (s.size() < kWindowMax)
+            s.push_back(v);
+    }
+    void clear() {
+        render.clear();
+        interval.clear();
+        compose.clear();
+        skipped = 0;
+    }
+};
 
 struct Slot {
     ComPtr<ID3D12CommandAllocator> allocator[kMarks];
@@ -40,8 +58,7 @@ struct Timer {
     uint64_t frame = 0;
     int current = -1;  // the slot of the frame being marked, -1 when it is not timed
     uint64_t lastRenderedFrame = 0, lastRenderedTicks = 0;
-    std::vector<float> render, interval, compose;
-    uint64_t skipped = 0;
+    Window windows[2];
     bool started = false;
 };
 Timer timer;
@@ -59,11 +76,13 @@ void harvest() {
                    composed = static_cast<int>(GpuMark::kComposed);
         if (!s.used[begin] || !s.used[rendered] || t[rendered] < t[begin])
             continue;
-        timer.render.push_back(static_cast<float>((t[rendered] - t[begin]) * timer.msPerTick));
-        if (s.used[composed] && t[composed] >= t[rendered])
-            timer.compose.push_back(static_cast<float>((t[composed] - t[rendered]) * timer.msPerTick));
-        if (timer.lastRenderedFrame + 1 == s.frame && t[rendered] > timer.lastRenderedTicks)
-            timer.interval.push_back(static_cast<float>((t[rendered] - timer.lastRenderedTicks) * timer.msPerTick));
+        for (Window& w : timer.windows) {
+            w.add(&Window::render, static_cast<float>((t[rendered] - t[begin]) * timer.msPerTick));
+            if (s.used[composed] && t[composed] >= t[rendered])
+                w.add(&Window::compose, static_cast<float>((t[composed] - t[rendered]) * timer.msPerTick));
+            if (timer.lastRenderedFrame + 1 == s.frame && t[rendered] > timer.lastRenderedTicks)
+                w.add(&Window::interval, static_cast<float>((t[rendered] - timer.lastRenderedTicks) * timer.msPerTick));
+        }
         timer.lastRenderedFrame = s.frame;
         timer.lastRenderedTicks = t[rendered];
     }
@@ -183,9 +202,8 @@ void gpu_frame_timer_stop() {
     timer.fence.Reset();
     timer.queue.Reset();
     timer.current = -1;
-    timer.render.clear();
-    timer.interval.clear();
-    timer.compose.clear();
+    for (Window& w : timer.windows)
+        w.clear();
     timer.started = false;
 }
 
@@ -200,7 +218,8 @@ void gpu_frame_timer_mark(GpuMark mark) {
         const int slot = static_cast<int>(++timer.frame % kSlots);
         Slot& s = timer.slots[slot];
         if (!s.harvested) {  // still in flight sixteen frames later: leave this frame out
-            ++timer.skipped;
+            for (Window& w : timer.windows)
+                ++w.skipped;
             return;
         }
         std::memset(s.used, 0, sizeof(s.used));
@@ -215,33 +234,40 @@ void gpu_frame_timer_mark(GpuMark mark) {
         stamp(s, timer.current, m);
 }
 
-GpuFrameStats gpu_frame_timer_collect() {
+namespace {
+
+// The window's frames, and resets it.
+GpuFrameStats collect(Window& w) {
     std::lock_guard guard(timer.mutex);
     GpuFrameStats stats;
     if (!timer.started)
         return stats;
     harvest();
-    stats.frames = timer.render.size();
-    stats.renderAvg = average(timer.render);
-    stats.renderP50 = percentile(timer.render, 0.5);
-    stats.renderP90 = percentile(timer.render, 0.9);
-    stats.intervalP50 = percentile(timer.interval, 0.5);
-    stats.composeAvg = average(timer.compose);
-    stats.skipped = timer.skipped;
-    timer.render.clear();
-    timer.interval.clear();
-    timer.compose.clear();
-    timer.skipped = 0;
+    stats.frames = w.render.size();
+    stats.renderAvg = average(w.render);
+    stats.renderP50 = percentile(w.render, 0.5);
+    stats.renderP90 = percentile(w.render, 0.9);
+    stats.intervalP50 = percentile(w.interval, 0.5);
+    stats.intervalP90 = percentile(w.interval, 0.9);
+    stats.composeAvg = average(w.compose);
+    stats.composeP90 = percentile(w.compose, 0.9);
+    stats.skipped = w.skipped;
+    w.clear();
     return stats;
 }
+
+}  // namespace
+
+GpuFrameStats gpu_frame_timer_collect() { return collect(timer.windows[0]); }
 
 void gpu_frame_timer_report() {
     if (!timer.started)
         return;
-    const GpuFrameStats s = gpu_frame_timer_collect();
+    const GpuFrameStats s = collect(timer.windows[1]);
     logf("views4 gpu: ACE's frame on its queue (xrBeginFrame to eye-image release) p50 %.2f ms, p90 %.2f, avg %.2f over "
-         "%zu frames; rendered-to-rendered p50 %.2f ms; composition %.3f ms avg; frames not timed %llu",
-         s.renderP50, s.renderP90, s.renderAvg, s.frames, s.intervalP50, s.composeAvg,
+         "%zu frames; rendered-to-rendered p50 %.2f ms, p90 %.2f; composition (with the helmet layer) %.3f ms avg, "
+         "p90 %.3f; frames not timed %llu",
+         s.renderP50, s.renderP90, s.renderAvg, s.frames, s.intervalP50, s.intervalP90, s.composeAvg, s.composeP90,
          static_cast<unsigned long long>(s.skipped));
 }
 

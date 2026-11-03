@@ -19,8 +19,8 @@ enum class GpuMark { kBegin, kRendered, kComposed };
 struct GpuFrameStats {
     size_t frames = 0;       // frames with both begin and rendered timestamps
     double renderP50 = 0, renderP90 = 0, renderAvg = 0;  // begin to rendered, ms
-    double intervalP50 = 0;  // rendered to the next frame's rendered, ms
-    double composeAvg = 0;   // rendered to composed, ms (0 when not composing)
+    double intervalP50 = 0, intervalP90 = 0;  // rendered to the next frame's rendered, ms
+    double composeAvg = 0, composeP90 = 0;     // rendered to composed, ms (0 when not composing)
     uint64_t skipped = 0;    // frames not timed: every timestamp slot was still in flight
 };
 
@@ -28,9 +28,10 @@ bool gpu_frame_timer_start(ID3D12Device* device, ID3D12CommandQueue* queue);
 void gpu_frame_timer_stop();
 // Called on the thread that runs the frame: kBegin starts a frame, the others time points in it.
 void gpu_frame_timer_mark(GpuMark mark);
-// The frames timed since the last call (finished ones only), and resets.
+// The frames timed since the last call (finished ones only), and resets (the performance overlay's).
 GpuFrameStats gpu_frame_timer_collect();
-// Logs gpu_frame_timer_collect() as a "views4 gpu:" line.
+// Logs the frames timed since its last call as a "views4 gpu:" line: its own window of samples, so it
+// logs while the overlay collects too.
 void gpu_frame_timer_report();
 
 }  // namespace aceqv

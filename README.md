@@ -38,7 +38,10 @@ In any other OpenXR app the DLL does nothing.
 
 **Performance overlay (`[osd]`, off by default).** A card in the headset view
 (`src/quad/osd.h`) shows ACE's frame rate and pacing, its CPU and GPU time with their headroom and
-which one limits the frame, GPU overhead, VRAM, frame generation and eye tracking. Turn it on in the
+which one limits the frame, VRAM, frame generation and eye tracking. The GPU time is the whole GPU's,
+from Windows' GPU engine counters (`src/probe/gpu_load.h`), so the runtime's compositor and frame
+generation count too, split by who used it. The CPU time includes ACE's busiest thread
+(`src/probe/cpu_load.h`) as well as the render thread. Turn it on in the
 launcher's Headset menu pane, from the headset menu, or with Ctrl+Alt+P in the game; the pane and the
 headset menu's Overlay and menu page also place it, as they place the menu.
 

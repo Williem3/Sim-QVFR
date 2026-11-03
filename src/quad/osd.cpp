@@ -85,6 +85,7 @@ OsdCheeky osd_cheeky(const std::string& json) {
                 c.state += static_cast<wchar_t>(static_cast<unsigned char>(json[i]));
     }
     c.outputFps = number_at(json, value_at(json, "unique_fps", value_at(json, "cadence", fg)), 0);
+    c.refreshHz = number_at(json, value_at(json, "refresh_hz", value_at(json, "cadence", fg)), 0);
     c.fgMs = number_at(json, value_at(json, "total_ms", value_at(json, "performance", fg)), -1);
     const size_t load = value_at(json, "system_load", 0);
     const size_t gpuValid = value_at(json, "gpu_valid", load);
@@ -95,13 +96,22 @@ OsdCheeky osd_cheeky(const std::string& json) {
 
 OsdSummary osd_summary(const OsdInput& in) {
     OsdSummary s;
-    double total = 0, cpuTotal = 0;
-    size_t cpuFrames = 0;
+    double total = 0, cpuTotal = 0, workTotal = 0, busyTotal = 0, waitTotal = 0;
+    size_t cpuFrames = 0, workFrames = 0, waitFrames = 0;
     for (const OsdFrame& f : in.frames) {
         total += f.intervalMs;
         if (f.cpuMs >= 0) {
             cpuTotal += f.cpuMs;
             ++cpuFrames;
+        }
+        if (f.workMs >= 0 && f.cpuMs >= 0) {
+            workTotal += f.workMs;
+            busyTotal += f.cpuMs;
+            ++workFrames;
+        }
+        if (f.waitMs >= 0) {
+            waitTotal += f.waitMs;
+            ++waitFrames;
         }
     }
     const size_t n = in.frames.size();
@@ -112,23 +122,70 @@ OsdSummary osd_summary(const OsdInput& in) {
         for (const OsdFrame& f : in.frames)
             squares += (f.intervalMs - s.frameMs) * (f.intervalMs - s.frameMs);
         s.jitterMs = std::sqrt(squares / static_cast<double>(n));
+        std::vector<double> sorted;
+        for (const OsdFrame& f : in.frames)
+            sorted.push_back(f.intervalMs);
+        std::sort(sorted.begin(), sorted.end());
+        const auto at = [&](double p) { return sorted[std::min(n - 1, static_cast<size_t>(p * static_cast<double>(n)))]; };
+        s.frameP90Ms = at(0.9);
+        s.low1Fps = at(0.99) > 0 ? 1000.0 / at(0.99) : 0;
     }
     // With frame generation running, ACE only has to deliver every multiplier-th displayed frame.
-    s.budgetMs = in.periodMs > 0 ? in.periodMs * (in.fg == OsdFg::On ? std::max(1, in.fgMultiplier) : 1) : 0;
+    // The budget: the headset's refresh period times the frame generation multiplier. Cheeky's layer below
+    // gives ACE the multiplied period already, so with the refresh known the period is not multiplied again;
+    // without it, the period is taken as the refresh's.
+    const int multiplier = in.fg == OsdFg::On ? std::max(1, in.fgMultiplier) : 1;
+    const double refreshMs = in.refreshMs > 0 ? in.refreshMs : in.periodMs;
+    s.budgetMs = in.refreshMs > 0 ? std::max(in.periodMs, in.refreshMs * multiplier)
+                 : in.periodMs > 0 ? in.periodMs * multiplier
+                                   : 0;
     if (s.budgetMs > 0 && n) {
         size_t late = 0;
         for (const OsdFrame& f : in.frames)
-            late += f.intervalMs > 1.5 * s.budgetMs;
+            late += f.intervalMs > 1.05 * s.budgetMs;
         s.latePercent = 100.0 * static_cast<double>(late) / static_cast<double>(n);
     }
-    s.refreshHz = in.periodMs > 0 ? 1000.0 / in.periodMs : 0;
+    s.refreshHz = refreshMs > 0 ? 1000.0 / refreshMs : 0;
     s.shownFps = in.fg == OsdFg::On && in.fgOutputFps > 0 ? in.fgOutputFps : s.fps;
-    s.cpuMs = cpuFrames ? cpuTotal / static_cast<double>(cpuFrames) : -1;
-    s.gpuMs = in.gpuMs;
-    s.cpuHeadroom = headroom(s.cpuMs, s.budgetMs);
+    // CPU: the render thread's work per frame when known (else its CPU time), and the busiest thread's.
+    if (workFrames) {
+        s.cpuMs = workTotal / static_cast<double>(workFrames);
+        s.cpuBusyMs = busyTotal / static_cast<double>(workFrames);
+        s.cpuBlockedMs = std::max(0.0, s.cpuMs - s.cpuBusyMs);
+    } else {
+        s.cpuMs = cpuFrames ? cpuTotal / static_cast<double>(cpuFrames) : -1;
+    }
+    s.waitMs = waitFrames ? waitTotal / static_cast<double>(waitFrames) : -1;
+    s.cpuThreadMs = in.cpuBusiestPercent >= 0 && s.frameMs > 0 ? in.cpuBusiestPercent / 100 * s.frameMs : -1;
+    s.cpuHeadroom = headroom(std::max(s.cpuMs, s.cpuThreadMs), s.budgetMs);
+    // GPU: the whole GPU's time per frame when its busy share is known; ACE's queue time otherwise.
+    s.gpuAceMs = in.gpuMs;
+    s.gpuLayerMs = in.composeMs;
+    s.gpuFgMs = in.fg == OsdFg::On && in.fgMs >= 0 ? in.fgMs * std::max(0, in.fgMultiplier - 1) : -1;
+    if (in.gpuBusyPercent >= 0 && s.frameMs > 0) {
+        s.gpuWhole = true;
+        s.gpuMs = in.gpuBusyPercent / 100 * s.frameMs;
+        s.gpuRestMs = std::max(0.0, s.gpuMs - std::max(0.0, s.gpuAceMs) - std::max(0.0, s.gpuFgMs) -
+                                        std::max(0.0, s.gpuLayerMs));
+    } else {
+        s.gpuMs = in.gpuMs;
+    }
     s.gpuHeadroom = headroom(s.gpuMs, s.budgetMs);
     if (s.budgetMs <= 0 || (s.cpuMs < 0 && s.gpuMs < 0 && in.gpuBusyPercent < 0))
         return s;
+    // Direct signals, when the layer measures them: the whole GPU busy (95% or more: nothing left), the busiest
+    // thread at a full core, or frames over budget with ACE barely held in xrWaitFrame (it was late itself).
+    // Over budget with neither: the runtime or frame generation paces ACE.
+    const bool over = s.frameMs > 1.05 * s.budgetMs;
+    if (in.gpuBusyPercent >= 0 && (s.waitMs >= 0 || in.cpuBusiestPercent >= 0)) {
+        const bool gpuFull = in.gpuBusyPercent >= 95;
+        const bool cpuFull = in.cpuBusiestPercent >= 95 || (over && s.waitMs >= 0 && s.waitMs < 1.0 && !gpuFull);
+        // Held in xrWaitFrame and still past the budget, even by a little: something below ACE (the runtime,
+        // frame generation) sets its pace, not its own work.
+        const bool held = s.waitMs >= 1.0 && s.frameMs > 1.01 * s.budgetMs;
+        s.bound = gpuFull ? OsdBound::Gpu : cpuFull ? OsdBound::Cpu : over || held ? OsdBound::Pacing : OsdBound::None;
+        return s;
+    }
     // The GPU time is an upper bound: it also counts the GPU waiting for ACE to submit (gpu_frame_timer.h).
     // So a GPU time close to the CPU time means the CPU held the GPU up. The GPU's busy share, when
     // known, says it directly.
@@ -169,8 +226,10 @@ std::vector<OsdTile> osd_tiles(const OsdInput& in, const OsdSummary& s) {
         }
         return t;
     };
-    tiles.push_back(processor(L"CPU", s.cpuMs, s.cpuHeadroom));
-    OsdTile gpu = processor(L"GPU", s.gpuMs, s.gpuHeadroom);
+    // The CPU's time per frame: the render thread's work or the busiest thread's, whichever is longer (the
+    // headroom's measure; the cells below show both).
+    tiles.push_back(processor(L"CPU", std::max(s.cpuMs, s.cpuThreadMs), s.cpuHeadroom));
+    OsdTile gpu = processor(s.gpuWhole ? L"GPU (all work)" : L"GPU", s.gpuMs, s.gpuHeadroom);
     if (s.gpuMs < 0 && in.gpuBusyPercent >= 0)  // no timestamps (not QVFR): the GPU's busy share
         gpu.detail = format(L"%.0f%% busy", in.gpuBusyPercent);
     tiles.push_back(gpu);
@@ -196,20 +255,44 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         switch (s.bound) {
         case OsdBound::Gpu: r.value = L"GPU"; r.tone = OsdTone::Warn; break;
         case OsdBound::Cpu: r.value = L"CPU"; r.tone = OsdTone::Warn; break;
+        case OsdBound::Pacing: r.value = L"Pacing"; r.tone = OsdTone::Warn; break;
         case OsdBound::None: r.value = L"Neither"; r.tone = OsdTone::Good; break;
         case OsdBound::Unknown: r.value = L"—"; r.pill = false; break;
         }
         rows.push_back(r);
     }
     {
-        std::wstring overhead;
-        if (in.composeMs >= 0)
-            overhead = format(L"QVFR %.2f", in.composeMs);
-        if (in.fg == OsdFg::On && in.fgMs >= 0)
-            overhead += (overhead.empty() ? L"" : L"  ") + format(L"FG %.2f", in.fgMs);
-        if (!overhead.empty())
-            overhead += L" ms";
-        rows.push_back({L"GPU overhead", overhead.empty() ? L"—" : overhead});
+        OsdRow r{L"Frame p90 · 1% low"};
+        r.value = s.frameP90Ms > 0 ? format(L"%.1f ms · %.0f fps", s.frameP90Ms, s.low1Fps) : L"—";
+        if (s.frameP90Ms > 0 && s.budgetMs > 0)
+            r.tone = s.frameP90Ms <= 1.05 * s.budgetMs ? OsdTone::Good : s.frameP90Ms <= 1.25 * s.budgetMs ? OsdTone::Warn : OsdTone::Bad;
+        rows.push_back(r);
+    }
+    {
+        // The GPU's time per ACE frame, by who used it (ms): ACE's queue, frame generation, the layer, the rest.
+        const auto part = [](double ms) { return ms >= 0 ? format(L"%.1f", ms) : std::wstring(L"—"); };
+        OsdRow r{L"GPU ms: ACE/FG/layer/rest"};
+        r.value = s.gpuWhole ? part(s.gpuAceMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / " +
+                                   part(s.gpuRestMs)
+                  : s.gpuAceMs >= 0 ? part(s.gpuAceMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / —"
+                                    : L"—";
+        rows.push_back(r);
+    }
+    {
+        OsdRow r{L"Busiest ACE thread"};
+        if (in.cpuBusiestPercent < 0) {
+            r.value = L"—";
+        } else {
+            std::wstring who = in.cpuBusiestIsRender ? L"render" : in.cpuBusiestName.substr(0, 12);
+            r.value = format(L"%.0f%%", in.cpuBusiestPercent) + (who.empty() ? L"" : L" · " + who);
+            r.tone = in.cpuBusiestPercent >= 95 ? OsdTone::Bad : in.cpuBusiestPercent >= 85 ? OsdTone::Warn : OsdTone::Good;
+        }
+        rows.push_back(r);
+    }
+    {
+        OsdRow r{L"Render thread"};
+        r.value = s.cpuBusyMs >= 0 ? format(L"%.1f busy · %.1f blocked", s.cpuBusyMs, s.cpuBlockedMs) : L"—";
+        rows.push_back(r);
     }
     {
         OsdRow r{L"VRAM"};
