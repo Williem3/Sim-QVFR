@@ -3,6 +3,7 @@
 // which are silenced or left alone, the explicit manifests written, the variables set, the
 // environment block, Steam's library list, and the manifest JSON round trip.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -12,6 +13,7 @@
 
 #include "launcher/launch_plan.h"
 #include "launcher/layer_order.h"
+#include "launcher/report.h"
 #include "launcher/settings.h"
 
 using namespace aceqv::launcher;
@@ -619,6 +621,127 @@ int main() {
         check(running_live_ini(runtimeIni).empty(), "live: a live_pid that is not ACE is ignored");
         write_file(runtimeIni, "[runtime]\r\nlive_ini=" + narrow(liveIni) + "\r\nlive_pid=0\r\n");
         check(running_live_ini(runtimeIni).empty(), "live: no running game, no live ini");
+    }
+
+    // Report an issue (report.h): the files zipped, the zip, the issue's body and link.
+    {
+        const fs::path logs = folder / L"report" / L"logs";
+        fs::create_directories(logs);
+        const auto now = fs::file_time_type::clock::now();
+        const auto day = std::chrono::hours(24);
+        const auto make = [&](const std::wstring& name, fs::file_time_type::duration age, size_t size = 10) {
+            write_file((logs / name).wstring(), std::string(size, 'x'));
+            fs::last_write_time(logs / name, now - age);
+        };
+        make(L"ace-20261101-100000.log", 30 * day);
+        make(L"ace-20261103-100000.log", std::chrono::hours(4));
+        make(L"ace-20261103-110000.log", std::chrono::hours(3));
+        make(L"ace-20261103-120000.log", std::chrono::hours(2));
+        make(L"ace-20261103-130000.log", std::chrono::hours(1));
+        make(L"ace-quadview.log", std::chrono::minutes(1));  // the old single log: not a session log
+        for (int i = 0; i < 4; ++i)
+            make(L"cpu-profile-2026110" + std::to_wstring(i) + L".txt", std::chrono::hours(5 - i));
+        make(L"cpu-profile-old.txt", 9 * day);
+        make(L"cheeky-snapshot.json", std::chrono::hours(1));
+        make(L"hang-101010.dmp", std::chrono::hours(1));
+        make(L"hang-090909.dmp", 9 * day);
+        make(L"hang-111111.dmp", std::chrono::minutes(5), static_cast<size_t>(kReportMaxDumpBytes) + 1);
+        make(L"other.txt", std::chrono::hours(1));
+        const std::wstring settingsIni = (folder / L"report" / L"ace-quadview.ini").wstring();
+        const std::wstring reportRuntime = (folder / L"report" / L"runtime.ini").wstring();
+        write_file(settingsIni, "[experiment]\r\nmode=views4\r\n");
+        write_file(reportRuntime, "[runtime]\r\nrecommended_width=2584\r\n");
+        const uint64_t nowTicks = static_cast<uint64_t>(now.time_since_epoch().count());
+        const std::vector<ReportFile> files = report_files({logs.wstring(), reportRuntime, settingsIni}, nowTicks);
+        std::vector<std::wstring> zipped;
+        for (const ReportFile& f : files)
+            zipped.push_back(f.name);
+        const std::vector<std::wstring> want = {L"ace-quadview.ini",         L"runtime.ini",
+                                                L"ace-20261103-130000.log",  L"ace-20261103-120000.log",
+                                                L"ace-20261103-110000.log",  L"cpu-profile-20261103.txt",
+                                                L"cpu-profile-20261102.txt", L"cpu-profile-20261101.txt",
+                                                L"cheeky-snapshot.json",     L"hang-101010.dmp"};
+        check(zipped == want, "report: the inis, the newest three session logs and CPU captures, Cheeky's snapshot, "
+                              "a recent dump under the cap; no old, oversized or other files");
+        for (const wchar_t* name : {L"ace-20261103-100000.log", L"ace-20261103-110000.log", L"ace-20261103-120000.log",
+                                    L"ace-20261103-130000.log"})
+            fs::remove(logs / name);
+        const std::vector<ReportFile> old = report_files({logs.wstring(), reportRuntime, settingsIni}, nowTicks);
+        check(std::count_if(old.begin(), old.end(), [](const ReportFile& f) { return f.name == L"ace-20261101-100000.log"; }) == 1,
+              "report: only an old session log: the newest one still goes in");
+
+        check(crc32("123456789", 9) == 0xcbf43926u, "report: CRC-32 check value");
+        const std::vector<ReportFile> zipEntries = {{L"runtime.ini", reportRuntime}, {L"issue.md", L"", "# Problem \xc3\xa9"}};
+        const std::wstring zip = (folder / L"report" / L"report.zip").wstring();
+        const std::wstring zipError = write_zip(zip, zipEntries);
+        std::string bytes;
+        if (FILE* f = nullptr; _wfopen_s(&f, zip.c_str(), L"rb") == 0 && f) {
+            char buffer[4096];
+            for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                bytes.append(buffer, n);
+            std::fclose(f);
+        }
+        const auto u16 = [&](size_t at) {
+            return static_cast<unsigned char>(bytes[at]) | static_cast<unsigned char>(bytes[at + 1]) << 8;
+        };
+        const size_t eocd = bytes.size() >= 22 ? bytes.size() - 22 : 0;
+        check(zipError.empty() && bytes.compare(0, 4, "PK\x03\x04") == 0 && bytes.compare(eocd, 4, "PK\x05\x06") == 0 &&
+                  u16(eocd + 10) == 2 && bytes.find("# Problem \xc3\xa9") != std::string::npos &&
+                  bytes.find("recommended_width=2584") != std::string::npos,
+              "report: a stored zip of both entries, its end record counting them");
+        check(!write_zip((folder / L"missing" / L"x.zip").wstring(), zipEntries).empty(), "report: an unwritable zip says why");
+
+        check(windows_name(26100, L"24H2", 2314) == L"Windows 11 24H2 (build 26100.2314)" &&
+                  windows_name(19045, L"22H2", 0) == L"Windows 10 22H2 (build 19045)",
+              "report: Windows 11 from the build number");
+        const uint64_t umd = (32ull << 48) | (15ull << 16) | 6094;
+        check(gpu_driver_text(0x10de, umd) == L"560.94 (32.0.15.6094)" && gpu_driver_text(0x1002, umd) == L"32.0.15.6094",
+              "report: NVIDIA's driver number from the Windows version");
+        check(openxr_runtime_name(R"({"runtime": {"name": "SteamVR", "library_path": "x.dll"}})", L"C:\\a\\steamxr.json") ==
+                      L"SteamVR" &&
+                  openxr_runtime_name(R"({"runtime": {"library_path": "x.dll"}})", L"C:\\a\\pimax.json") == L"pimax.json",
+              "report: the OpenXR runtime's name, else its manifest's file");
+        check(url_encode(L"a b&\u00e9\n~") == "a%20b%26%C3%A9%0A~", "report: URL encoding of UTF-8");
+
+        IssueReport report;
+        report.version = L"1.2.3";
+        report.zipName = L"ace-quadview-report-20261103-120000.zip";
+        report.system = {L"AMD Ryzen 7 9800X3D, 16 threads", L"NVIDIA GeForce RTX 5090, 32 GB", L"581.57 (32.0.15.8157)",
+                         L"Windows 11 24H2 (build 26100.2314)", L"Pimax OpenXR", 64};
+        report.runtime.width = 2584;
+        report.runtime.height = 2160;
+        report.runtime.eyeTracker = EyeTracker::Detected;
+        SessionInfo& session = report.runtime.session;
+        session.fps = 89.9;
+        session.frameP50 = 11.1;
+        session.frameP90 = 12.4;
+        session.limited = L"GPU";
+        session.log = L"C:\\Users\\someone\\ace\\logs\\ace-20261103-120000.log";
+        session.threads = {{L"GameThread", 71}, {L"RHIThread", 40}};
+        const std::wstring body = issue_body(report);
+        const auto has = [&](const wchar_t* text) { return body.find(text) != std::wstring::npos; };
+        check(body.starts_with(L"## Describe your problem") && has(report.zipName.c_str()) && has(L"screenshots") &&
+                  has(L"RTX 5090") && has(L"581.57") && has(L"Pimax OpenXR") && has(L"64 GB") && has(L"2584\u00d72160") &&
+                  has(L"eye tracked") && has(L"89.9 fps") && has(L"GameThread 71%") && has(L"Limited by: GPU") &&
+                  has(L"detected") && has(L"ace-quadview 1.2.3"),
+              "report: the body asks first, then lists version, hardware, headset, settings and the last session");
+        check(!has(L"someone") && has(L"Log: ace-20261103-120000.log"),
+              "report: the session log by name, not by a path with the user's name");
+
+        const std::string url = issue_url(kIssueRepo, L"ace-quadview 1.2.3: ", body);
+        check(url.starts_with("https://github.com/Williem3/Sim-QVFR/issues/new?title=ace-quadview%201.2.3%3A%20&body=%23%23%20Describe") &&
+                  url.size() <= kIssueUrlMax && url.find("Trimmed") == std::string::npos,
+              "report: the issue link, whole when it fits");
+        std::wstring longBody = body;
+        for (int i = 0; i < 400; ++i)  // inside the session's ``` block, before its closing fence
+            longBody.insert(longBody.size() - 4, L"Busiest thread line " + std::to_wstring(i) + L"\n");
+        const std::string trimmed = issue_url(kIssueRepo, L"t", longBody, 4000);
+        size_t fences = 0;
+        for (size_t at = trimmed.find("%60%60%60"); at != std::string::npos; at = trimmed.find("%60%60%60", at + 9))
+            ++fences;
+        check(trimmed.size() <= 4000 && trimmed.find("Describe%20your%20problem") != std::string::npos &&
+                  trimmed.find("Trimmed") != std::string::npos && fences % 2 == 0,
+              "report: a long body is cut from its end to fit, its code block closed, with a note");
     }
 
     fs::remove_all(folder, ec);

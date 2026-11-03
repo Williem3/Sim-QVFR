@@ -23,6 +23,7 @@
 
 #include "../launcher.h"
 #include "../launch_plan.h"
+#include "../report.h"
 #include "../settings.h"
 #include "canvas.h"
 #include "launcher_version.h"
@@ -57,8 +58,8 @@ enum Ctl {
     kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
-    // The Diagnostics pane: the CPU capture switch, copying the summary, the logs folder.
-    kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
+    // The Diagnostics pane: reporting an issue, the CPU capture switch, copying the summary, the logs folder.
+    kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -358,7 +359,7 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
+    case Pane::Diagnostics: order.insert(order.end(), {kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -397,6 +398,9 @@ void focus_ring(const Rect& r, float radius) {
 
 bool focused(Ctl id) { return app.keyboard && app.focus == id && !app.popup.open; }
 
+// A primary button's label (Launch's); measure with it when sizing one.
+constexpr t::TypeStyle kPrimaryLabel{15, 20, 500, false};
+
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {
     const bool down = app.pressed == id;
     Color bg = col(primary ? app.c->accent_fill : app.c->control_bg);
@@ -407,7 +411,7 @@ void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {
         app.canvas.control_shadow(r, t::kRadiusControl, app.dark);
     app.canvas.fill(r, bg, t::kRadiusControl);
     app.canvas.stroke(r, col(primary ? app.c->accent_fill : app.c->control_border), 1, t::kRadiusControl);
-    const t::TypeStyle style = primary ? t::TypeStyle{15, 20, 500, false} : t::kBody;
+    const t::TypeStyle style = primary ? kPrimaryLabel : t::kBody;
     app.canvas.text(label, style, r, col(primary ? app.c->on_accent : app.c->label), Align::Center);
     if (focused(id))
         focus_ring(r, t::kRadiusControl);
@@ -990,16 +994,61 @@ void copy_summary() {
     CloseClipboard();
 }
 
+// Report an issue: the logs zipped into logsce-quadview-report-<time>.zip (with the issue's text as
+// issue.md), Explorer showing it, and a new GitHub issue prefilled (report.h).
+void report_issue() {
+    const std::wstring logs = logs_folder();
+    CreateDirectoryW(logs.c_str(), nullptr);
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t name[64];
+    swprintf_s(name, L"ace-quadview-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
+               now.wMinute, now.wSecond);
+    app.runtime = load_runtime_info(runtime_info_path());
+    IssueReport report{widen(ACE_QV_VERSION), app.s, app.runtime, system_info(), name};
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    std::vector<ReportFile> files =
+        report_files({logs, runtime_info_path(), app.ini}, (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
+    files.push_back({L"issue.md", L"", utf8(issue_body(report))});
+    const std::wstring zip = logs + L"\\" + name;
+    const std::wstring error = write_zip(zip, files);
+    if (error.empty()) {
+        const std::wstring select = L"/select,\"" + zip + L"\"";
+        ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
+    } else {
+        app.status = Status::Error;
+        app.error = L"Could not write the report's zip: " + error;
+        report.zipName.clear();
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+    }
+    const std::string url = issue_url(kIssueRepo, L"ace-quadview " + report.version + L": ", issue_body(report));
+    ShellExecuteA(app.hwnd, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 float diagnostics_pane(float x, float y, float w, bool draw) {
     const SessionInfo& s = app.runtime.session;
     const std::wstring dash = L"—";
     float h = 0;
+    // Report an issue, first: what most people come here for.
+    Row report;
+    report.fullHeight = [](float) { return t::kControlHeight; };
+    report.full = [](const Rect& r) {
+        const float reportW = std::ceil(app.canvas.measure(L"Report an issue", kPrimaryLabel)) + 2 * t::kSpace4;
+        button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
+    };
+    h += section(x, y + h, w, L"Report an issue", {report},
+                 L"Zips the logs into the logs folder and shows it in Explorer, then opens a new issue on GitHub with "
+                 L"your settings, the last session and your PC filled in. Describe the problem at the top, and drag "
+                 L"in the zip and any screenshots.",
+                 draw);
+    h += t::kSpace6;
     if (!s.known()) {
         const std::wstring none = L"No session measured yet. Start the game with this launcher: this page fills in "
                                   L"while it runs, and keeps the last session's numbers after it closes.";
         const float nh = app.canvas.measure_height(none, t::kBody, w);
         if (draw)
-            app.canvas.text(none, t::kBody, {x, y, w, nh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+            app.canvas.text(none, t::kBody, {x, y + h, w, nh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
         h += nh + t::kSpace6;
     } else {
         std::wstring head = s.time + L"  ·  " + s.mode;
@@ -1007,7 +1056,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
             head += formatted(L"  ·  %.0f Hz", s.refreshHz);
         head += s.frameGeneration ? L"  ·  Frame generation on" : L"  ·  Frame generation off";
         if (draw)
-            app.canvas.text(head, t::kSubheadline, {x + t::kSpace3, y, w - t::kSpace3, 18}, col(app.c->label_secondary));
+            app.canvas.text(head, t::kSubheadline, {x + t::kSpace3, y + h, w - t::kSpace3, 18}, col(app.c->label_secondary));
         h += 18 + t::kSpace4;
         const double budget = s.refreshHz > 0 ? 1000 / s.refreshHz : 0;
         std::vector<Row> rows = {
@@ -1084,7 +1133,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     std::wstring footer = L"When asking for help, send a screenshot of this page (or paste the summary) and the session's "
                           L"ace-*.log from the logs folder";
     footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
-    h += section(x, y + h, w, L"Report", {capture, baseline, actions}, footer, draw);
+    h += section(x, y + h, w, L"Capture and share", {capture, baseline, actions}, footer, draw);
     return h;
 }
 
@@ -2148,6 +2197,7 @@ void activate(Ctl id, int option) {
         break;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
+    case kDiagReport: report_issue(); return;
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
     case kLayerProfile: open_popup(id); return;
