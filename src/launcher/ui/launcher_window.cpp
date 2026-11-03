@@ -1,5 +1,6 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, About), grouped forms with
+// of panes (Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, OpenXR layers, Diagnostics,
+// Report an issue, About), grouped forms with
 // the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
 // to drag the in-headset settings menu around), and an action bar with the status badge,
 // Restore Defaults and Launch. Every colour, size and type style comes from theme_tokens.h; every
@@ -37,8 +38,8 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, About };
-constexpr int kPanes = 9;
+enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, Report, About };
+constexpr int kPanes = 10;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -58,8 +59,8 @@ enum Ctl {
     kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
-    // The Diagnostics pane: reporting an issue (its kind, the description box, the button), the CPU capture
-    // switch, copying the summary, the logs folder.
+    // The Report an issue pane (its kind, the description box, the button) and the Diagnostics pane (the CPU
+    // capture switch, copying the summary, the logs folder).
     kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
 };
 
@@ -369,7 +370,8 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
+    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
+    case Pane::Report: order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport}); break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -1053,12 +1055,11 @@ void report_issue() {
     ShellExecuteA(app.hwnd, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
-float diagnostics_pane(float x, float y, float w, bool draw) {
-    const SessionInfo& s = app.runtime.session;
-    const std::wstring dash = L"—";
+// The Report an issue pane: what the last session points to, then the kind of problem, what happened and the
+// button (report_issue).
+float report_pane(float x, float y, float w, bool draw) {
     float h = 0;
-    // Report an issue, first: what most people come here for. Known causes the last session shows come
-    // before it: many problems end there.
+    // Known causes the last session shows come first: many problems end there.
     const std::vector<Cause> causes = likely_causes(app.s, app.runtime);
     if (!causes.empty()) {
         std::vector<Row> rows;
@@ -1107,12 +1108,18 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         const float reportW = std::ceil(app.canvas.measure(L"Report an issue", kPrimaryLabel)) + 2 * t::kSpace4;
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
-    h += section(x, y + h, w, L"Report an issue", {kind, description, report},
+    h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
                  L"Zips the logs into the logs folder and shows it in Explorer, then opens a new issue on GitHub with "
                  L"what you wrote, your settings, the last session and your PC filled in. Add the steps there, and "
                  L"drag in the zip and any screenshots.",
                  draw);
-    h += t::kSpace6;
+    return h;
+}
+
+float diagnostics_pane(float x, float y, float w, bool draw) {
+    const SessionInfo& s = app.runtime.session;
+    const std::wstring dash = L"—";
+    float h = 0;
     if (!s.known()) {
         const std::wstring none = L"No session measured yet. Start the game with this launcher: this page fills in "
                                   L"while it runs, and keeps the last session's numbers after it closes.";
@@ -1200,8 +1207,8 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         button(kDiagCopy, {r.x, r.y, copyW, t::kControlHeight}, L"Copy summary", false);
         button(kDiagLogs, {r.x + copyW + t::kSpace3, r.y, logsW, t::kControlHeight}, L"Open logs folder", false);
     };
-    std::wstring footer = L"When asking for help, send a screenshot of this page (or paste the summary) and the session's "
-                          L"ace-*.log from the logs folder";
+    std::wstring footer = L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the "
+                          L"issue. Elsewhere, send a screenshot of this page (or paste the summary) and the session's ace-*.log";
     footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
     h += section(x, y + h, w, L"Capture and share", {capture, baseline, actions}, footer, draw);
     return h;
@@ -1561,6 +1568,7 @@ float pane_content(float x, float y, float w, bool draw) {
     }
     case Pane::Layers: h += layers_pane(x, y, w, draw); break;
     case Pane::Diagnostics: h += diagnostics_pane(x, y, w, draw); break;
+    case Pane::Report: h += report_pane(x, y, w, draw); break;
     case Pane::About: {
         if (draw) {
             app.canvas.text(L"QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
@@ -1924,6 +1932,7 @@ const Item kItems[] = {
     {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
     {L"OpenXR layers", {"M2.5 4.5H10.5", "M2.5 8H10.5", "M2.5 11.5H10.5"}},
     {L"Diagnostics", {"M1.5 8.5H4.5L6.25 4.5L9.75 11.5L11.5 8.5H14.5", nullptr, nullptr}},
+    {L"Report an issue", {"M3.5 14.25V2", "M3.5 2.75H12.5L10.5 5.5L12.5 8.25H3.5", nullptr}},
     {L"About", {"M8 7.25V11", nullptr, nullptr}},
 };
 
@@ -2331,7 +2340,7 @@ void activate(Ctl id, int option) {
         app.scroll = 0;
         if (app.pane == Pane::Layers)
             refresh_layers();
-        if (app.pane == Pane::Diagnostics)
+        if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
             app.runtime = load_runtime_info(runtime_info_path());
         break;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
@@ -2574,10 +2583,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_TIMER:
         if (wParam == kFollowTimer) {
             follow_ini();
-            // The Diagnostics pane follows a running session: the layer rewrites runtime.ini every ~10 s.
+            // Diagnostics and Report an issue follow a running session: the layer rewrites runtime.ini every ~10 s.
             static FILETIME seen{};
             WIN32_FILE_ATTRIBUTE_DATA a{};
-            if (app.pane == Pane::Diagnostics &&
+            if ((app.pane == Pane::Diagnostics || app.pane == Pane::Report) &&
                 GetFileAttributesExW(runtime_info_path().c_str(), GetFileExInfoStandard, &a) &&
                 CompareFileTime(&a.ftLastWriteTime, &seen) != 0) {
                 seen = a.ftLastWriteTime;
