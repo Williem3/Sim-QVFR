@@ -25,29 +25,58 @@ struct Worker {
     std::atomic<uint32_t> render{0};
     double busiestSum[2] = {}, renderSum[2] = {}, processSum[2] = {};  // cpu_load_window's, per window
     int samples[2] = {}, renderSamples[2] = {};
+    std::map<uint32_t, double> threadSum;  // cpu_load_threads': each thread's share summed over its samples
+    std::map<uint32_t, double> latestShares;  // the latest sample's
+    int threadSamples = 0;
 };
 Worker worker;
 
-// This process's threads and their cycles so far.
-std::map<uint32_t, uint64_t> snapshot() {
-    std::map<uint32_t, uint64_t> cycles;
+// This process's threads, kept open between samples. Listing them takes a snapshot of every thread on the
+// system (thousands): done every kRefreshSamples samples, not every one (every half second it cost the
+// sampler ~15% of a core, CPU profile 2026-11-03). Between refreshes a new thread is not seen yet.
+constexpr int kRefreshSamples = 10;
+std::map<uint32_t, HANDLE> kept;  // the worker's only
+
+void refresh_threads() {
     const DWORD pid = GetCurrentProcessId();
     HANDLE all = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (all == INVALID_HANDLE_VALUE)
-        return cycles;
+        return;
+    std::map<uint32_t, HANDLE> listed;
     THREADENTRY32 entry{sizeof(entry)};
     for (BOOL more = Thread32First(all, &entry); more; more = Thread32Next(all, &entry)) {
         if (entry.th32OwnerProcessID != pid)
             continue;
-        HANDLE t = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
-        if (!t)
-            continue;
-        ULONG64 c = 0;
-        if (QueryThreadCycleTime(t, &c))
-            cycles[entry.th32ThreadID] = c;
-        CloseHandle(t);
+        const auto known = kept.find(entry.th32ThreadID);
+        DWORD code = 0;
+        // A known id is the same thread unless that one has ended (ids are reused).
+        if (known != kept.end() && GetExitCodeThread(known->second, &code) && code == STILL_ACTIVE) {
+            listed[entry.th32ThreadID] = known->second;
+            kept.erase(known);
+        } else if (HANDLE t = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID)) {
+            listed[entry.th32ThreadID] = t;
+        }
     }
     CloseHandle(all);
+    for (const auto& [id, handle] : kept)  // ended, or reused by another
+        CloseHandle(handle);
+    kept.swap(listed);
+}
+
+void close_threads() {
+    for (const auto& [id, handle] : kept)
+        CloseHandle(handle);
+    kept.clear();
+}
+
+// The kept threads' cycles so far.
+std::map<uint32_t, uint64_t> snapshot() {
+    std::map<uint32_t, uint64_t> cycles;
+    for (const auto& [id, handle] : kept) {
+        ULONG64 c = 0;
+        if (QueryThreadCycleTime(handle, &c))
+            cycles[id] = c;
+    }
     return cycles;
 }
 
@@ -70,22 +99,32 @@ std::wstring describe(uint32_t id) {
 }
 
 void run() {
+    refresh_threads();
     std::map<uint32_t, uint64_t> before = snapshot();
     uint64_t tsc = __rdtsc();
+    int sampled = 0;
     std::unique_lock lock(worker.mutex);
     while (!worker.stop) {
         worker.wake.wait_for(lock, std::chrono::milliseconds(kCpuLoadMs), [] { return worker.stop; });
         if (worker.stop)
             break;
         lock.unlock();
+        // A refresh only adds threads (they count from their next sample, as cpu_load_from skips new ones).
+        if (++sampled % kRefreshSamples == 0)
+            refresh_threads();
         const std::map<uint32_t, uint64_t> after = snapshot();
         const uint64_t now = __rdtsc();
         CpuLoad load = cpu_load_from(before, after, now - tsc, worker.render.load());
         if (load.valid)
             load.busiestName = describe(load.busiestThread);
+        const std::map<uint32_t, double> shares = cpu_load_shares(before, after, now - tsc);
         before = after;
         tsc = now;
         lock.lock();
+        for (const auto& [id, percent] : shares)
+            worker.threadSum[id] += percent;
+        worker.latestShares = shares;
+        ++worker.threadSamples;
         worker.latest = load;
         if (load.valid)
             for (int w = 0; w < 2; ++w) {
@@ -98,6 +137,8 @@ void run() {
                 }
             }
     }
+    lock.unlock();
+    close_threads();
 }
 
 }  // namespace
@@ -123,6 +164,19 @@ CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map
         }
     }
     return load;
+}
+
+std::map<uint32_t, double> cpu_load_shares(const std::map<uint32_t, uint64_t>& before,
+                                           const std::map<uint32_t, uint64_t>& after, uint64_t elapsedCycles) {
+    std::map<uint32_t, double> shares;
+    if (!elapsedCycles)
+        return shares;
+    for (const auto& [id, cycles] : after) {
+        const auto was = before.find(id);
+        if (was != before.end() && cycles >= was->second)
+            shares[id] = 100.0 * static_cast<double>(cycles - was->second) / static_cast<double>(elapsedCycles);
+    }
+    return shares;
 }
 
 bool cpu_load_start() {
@@ -157,6 +211,43 @@ void cpu_load_render_thread(uint32_t thread) { worker.render.store(thread, std::
 CpuLoad cpu_load_latest() {
     std::lock_guard guard(worker.mutex);
     return worker.latest;
+}
+
+std::vector<ThreadLoad> cpu_load_threads(size_t count) {
+    std::map<uint32_t, double> sums;
+    int samples = 0;
+    {
+        std::lock_guard guard(worker.mutex);
+        sums.swap(worker.threadSum);
+        samples = worker.threadSamples;
+        worker.threadSamples = 0;
+    }
+    std::vector<ThreadLoad> threads;
+    if (!samples)
+        return threads;
+    for (const auto& [id, sum] : sums)
+        threads.push_back({id, sum / samples, {}});
+    std::sort(threads.begin(), threads.end(), [](const ThreadLoad& a, const ThreadLoad& b) { return a.percent > b.percent; });
+    if (threads.size() > count)
+        threads.resize(count);
+    for (ThreadLoad& t : threads)
+        t.name = describe(t.id);
+    return threads;
+}
+
+std::vector<ThreadLoad> cpu_load_latest_threads(size_t count) {
+    std::vector<ThreadLoad> threads;
+    {
+        std::lock_guard guard(worker.mutex);
+        for (const auto& [id, percent] : worker.latestShares)
+            threads.push_back({id, percent, {}});
+    }
+    std::sort(threads.begin(), threads.end(), [](const ThreadLoad& a, const ThreadLoad& b) { return a.percent > b.percent; });
+    if (threads.size() > count)
+        threads.resize(count);
+    for (ThreadLoad& t : threads)
+        t.name = describe(t.id);
+    return threads;
 }
 
 CpuLoad cpu_load_window(int& samples, int window) {

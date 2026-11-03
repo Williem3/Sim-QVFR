@@ -7,10 +7,18 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace aceqv {
 
 inline constexpr int kCpuLoadMs = 500;
+
+// One thread's load, averaged over a window: its share of one core, and its description when ACE set one.
+struct ThreadLoad {
+    uint32_t id = 0;
+    double percent = 0;
+    std::wstring name;
+};
 
 struct CpuLoad {
     bool valid = false;
@@ -33,5 +41,13 @@ CpuLoad cpu_load_latest();
 // The average of every sample since the last call (the log's window: the busiest thread's share and the
 // render thread's averaged; the name and id the last sample's), and resets.
 CpuLoad cpu_load_window(int& samples, int window = 1);  // 0 the overlay's, 1 the log's
+// Every thread's average load since the last call, busiest first (at most `count`), and resets. A thread
+// counts from the samples it was seen in, over the whole window (a thread that ran only part of it shows less).
+std::vector<ThreadLoad> cpu_load_threads(size_t count);
+// The threads' loads in the latest sample (half a second), busiest first (at most `count`); nothing is reset.
+std::vector<ThreadLoad> cpu_load_latest_threads(size_t count);
+// Per-thread shares from two snapshots, as cpu_load_from (offline tests).
+std::map<uint32_t, double> cpu_load_shares(const std::map<uint32_t, uint64_t>& before,
+                                           const std::map<uint32_t, uint64_t>& after, uint64_t elapsedCycles);
 
 }  // namespace aceqv

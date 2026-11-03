@@ -27,6 +27,7 @@
 #include "log.h"
 #include "probe/d3d12_trace.h"
 #include "probe/cpu_load.h"
+#include "probe/cpu_profile.h"
 #include "probe/gpu_frame_timer.h"
 #include "probe/gpu_load.h"
 #include "probe/pass_census.h"
@@ -116,6 +117,11 @@ struct Experiment {
     bool views4DlssLive = false;           // experimental: live resolution below DLSS (views4.h)
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
+    // CPU sampling profiler (probe/cpu_profile.h): on (Ctrl+Alt+C starts a capture), seconds per capture, the
+    // busiest threads it samples (and the render thread), and the frame a capture starts at by itself (0: none).
+    bool cpuProfile = false;
+    int cpuProfileSeconds = 20, cpuProfileThreads = 4;
+    uint64_t cpuProfileFrame = 0;
     UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
     char passCensusWatch[512] = "";        // the census logs stacks of these pipelines' draws and dispatches (comma-separated)
     bool dred = false;                     // D3D12 DRED report on device removal (dred=1; off by default, costs GPU time)
@@ -308,6 +314,12 @@ void load_experiment() {
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
+    experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;
+    experiment.cpuProfileSeconds =
+        std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_seconds", 20, ini.c_str())), 1, 300);
+    experiment.cpuProfileThreads =
+        std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_threads", 4, ini.c_str())), 1, 16);
+    experiment.cpuProfileFrame = GetPrivateProfileIntW(L"experiment", L"cpu_profile_frame", 0, ini.c_str());
     experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
     experiment.views4FocusCull = GetPrivateProfileIntW(L"experiment", L"views4_focus_cull", 0, ini.c_str()) != 0;
     experiment.views4FocusCullMargin =
@@ -980,6 +992,20 @@ void report_load(double frameMs) {
                       kBounds[static_cast<int>(s.bound)]);
     }
     logf("views4 load: %s; %s%s (%d and %d samples)", gpuText, cpuText, shown, gpuSamples, cpuSamples);
+    // Every busy thread, not only the busiest: a share of one core each (a thread near 100% limits the frame
+    // however idle the other cores are), by ACE's own thread names where it set them.
+    const std::vector<ThreadLoad> threadLoads = cpu_load_threads(8);
+    std::string list;
+    for (const ThreadLoad& t : threadLoads) {
+        if (t.percent < 5)
+            break;
+        char item[160];
+        std::snprintf(item, sizeof(item), "%s%ls%s%u %.0f%%", list.empty() ? "" : ", ", t.name.c_str(),
+                      t.name.empty() ? "" : " ", t.id, t.percent);
+        list += item;
+    }
+    if (!list.empty())
+        logf("views4 threads: %s (of one core each)", list.c_str());
 }
 
 void report_cpu_times() {
@@ -3207,9 +3233,43 @@ void osd_shutdown() {
     osd.lastEnd = 0;
 }
 
+// cpu_profile=1: a capture of the busiest threads (and this one, the render thread) at cpu_profile_frame, and
+// whenever Ctrl+Alt+C is pressed while ACE has focus and none is running.
+bool cpuProfileHotkeyHeld = false;
+void cpu_profile_poll() {
+    if (!experiment.cpuProfile)
+        return;
+    const bool held = ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
+                      (GetAsyncKeyState('C') & 0x8000);
+    const bool pressed = held && !cpuProfileHotkeyHeld;
+    cpuProfileHotkeyHeld = held;
+    if (!pressed && endFrames != experiment.cpuProfileFrame)
+        return;
+    if (cpu_profile_running()) {
+        log_line("cpu profile: a capture is running already");
+        return;
+    }
+    // The render thread (this one), ACE's game and physics threads by name (busy or not at this moment: a
+    // capture started on a loading screen still gets them), then the busiest others.
+    CpuProfileRequest request;
+    request.seconds = experiment.cpuProfileSeconds;
+    request.threads.push_back(GetCurrentThreadId());
+    const std::vector<ThreadLoad> all = cpu_load_latest_threads(256);
+    for (const ThreadLoad& t : all)
+        if (t.name == L"GameThread" || t.name == L"Physics")
+            request.threads.push_back(t.id);
+    for (size_t i = 0, added = 0; i < all.size() && added < static_cast<size_t>(experiment.cpuProfileThreads); ++i)
+        if (std::find(request.threads.begin(), request.threads.end(), all[i].id) == request.threads.end()) {
+            request.threads.push_back(all[i].id);
+            ++added;
+        }
+    cpu_profile_start(request);
+}
+
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
     cpu_load_render_thread(GetCurrentThreadId());
+    cpu_profile_poll();
     if (experiment.views4 && cpu.msPerTick > 0) {
         const int64_t now = qpc_now();
         if (pacing.lastEnd && pacing.interval.size() < 4 * kCpuReportFrames)
