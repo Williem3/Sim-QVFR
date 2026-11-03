@@ -386,9 +386,17 @@ void load_experiment() {
     experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
     experiment.batchWatch = GetPrivateProfileIntW(L"experiment", L"batch_watch", 1, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", 30, ini.c_str());
-    // Above 100 supersamples (in quad mode this is the outer view's resolution).
+    // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
+    // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
+    // resolution the user set before launch (the launcher writes eye_scale for Two-loop and QVFR's fallback,
+    // so a baseline run got 30% of it, 2026-11-03).
     const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 10u, 200u);
-    experiment.eyeScale = eyePercent / 100.0;
+    const bool scaledMode = experiment.views4 || experiment.twoLoops || experiment.focusOnly || experiment.doubleRender ||
+                            experiment.views3;
+    experiment.eyeScale = scaledMode ? eyePercent / 100.0 : 1.0;
+    if (!scaledMode && eyePercent != 100)
+        logf("experiment: mode=off: ACE gets the runtime's own eye size (eye_scale=%u applies to the other modes)",
+             eyePercent);
     // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most
     // either can be live.
     const Views4Sizes sizes = views4_sizes(ini.c_str(), experiment.focusFraction, experiment.focusFractionY);
