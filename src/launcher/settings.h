@@ -47,6 +47,7 @@ struct Settings {
     double crop_height() const;
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
     CheekySettings cheeky;
+    bool cpuProfile = false;  // [experiment] cpu_profile: Ctrl+Alt+C records a CPU capture (Diagnostics pane)
 };
 
 struct Range {
@@ -90,6 +91,17 @@ struct Size {
     int width = 0, height = 0;
 };
 
+// The last session's measurements (runtime.ini's session_* keys, the layer's write_session_summary, updated
+// every ~10 s while ACE runs): for the Diagnostics pane and a summary users can paste. -1: not measured.
+struct SessionInfo {
+    std::wstring time, mode, limited, layersBelow, log, cpuProfile;
+    double fps = -1, frameP50 = -1, frameP90 = -1, latePercent = -1, refreshHz = -1;
+    double cpuMs = -1, gpuMs = -1, gpuBusy = -1, cores = -1, gazeMs = -1, layerMs = -1;
+    bool frameGeneration = false;
+    std::vector<std::pair<std::wstring, double>> threads;  // name, share of one core (percent), busiest first
+    bool known() const { return fps > 0; }
+};
+
 // What the layer reported from the last session (runtime.ini): the headset's recommended per-eye
 // size and runtime maximum (0 = not known yet), and whether eye tracking delivered samples.
 enum class EyeTracker { Unknown, Detected, Missing };
@@ -103,6 +115,7 @@ struct RuntimeInfo {
     // MB; the part of it in render targets that follow ACE's target, and that target's size (0: none yet).
     double vramUsedMb = 0, vramBudgetMb = 0, vramScaledMb = 0;
     Size vramTarget;
+    SessionInfo session;
     bool known() const { return width > 0 && height > 0; }
 };
 
@@ -137,6 +150,9 @@ struct VramEstimate {
     double mb = 0, budgetMb = 0;
 };
 VramEstimate vram_estimate(const Settings& settings, const Readouts& readouts, const RuntimeInfo& runtime);
+
+// The last session as plain text, one item a line, for pasting into a message (the Diagnostics pane's Copy).
+std::wstring session_summary_text(const RuntimeInfo& runtime);
 
 const wchar_t* color_name(OutlineColor color);
 

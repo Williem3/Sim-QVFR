@@ -92,6 +92,32 @@ std::map<uint32_t, uint64_t> snapshot() {
 }
 
 // A thread's description (Windows 10 1607 on), or empty.
+// For a thread without a description: the module its start address is in, "(aSeeVRClient.dll)" (empty if
+// unknown, or ACE's own). The eye tracker's client and drivers start threads ACE never names.
+std::wstring started_in(uint32_t id) {
+    using Query = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+    static const auto query = reinterpret_cast<Query>(
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread")));
+    constexpr int kThreadQuerySetWin32StartAddress = 9;
+    HANDLE t = query ? OpenThread(THREAD_QUERY_INFORMATION, FALSE, id) : nullptr;
+    if (!t)
+        return {};
+    void* start = nullptr;
+    const bool ok = query(t, kThreadQuerySetWin32StartAddress, &start, sizeof(start), nullptr) >= 0 && start;
+    CloseHandle(t);
+    HMODULE module = nullptr;
+    if (!ok || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   static_cast<LPCWSTR>(start), &module))
+        return {};
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(module, path, MAX_PATH);
+    const wchar_t* slash = wcsrchr(path, L'\\');
+    const std::wstring file = slash ? slash + 1 : path;
+    if (file.empty() || _wcsicmp(file.c_str(), L"AssettoCorsaEVO.exe") == 0)
+        return {};
+    return L"(" + file + L")";
+}
+
 std::wstring describe(uint32_t id) {
     using Describe = HRESULT(WINAPI*)(HANDLE, PWSTR*);
     static const auto get = reinterpret_cast<Describe>(
@@ -106,6 +132,8 @@ std::wstring describe(uint32_t id) {
         LocalFree(text);
     }
     CloseHandle(t);
+    if (name.empty())
+        name = started_in(id);
     return name;
 }
 
