@@ -53,11 +53,14 @@ try {
     }
     Remove-Item Env:ACE_QV_LOG
 
-    New-Item -ItemType Directory -Path $stage, (Join-Path $stage 'ace'), (Join-Path $stage 'licenses') | Out-Null
+    New-Item -ItemType Directory -Path $stage, (Join-Path $stage 'ace'), (Join-Path $stage 'ace\helmet'), (Join-Path $stage 'licenses') | Out-Null
     $files = [ordered]@{
         'build\Release\ace-quadview-launcher.exe'          = 'ace-quadview-launcher.exe'
         'build\Release\ace-quadview.dll'                   = 'ace\ace-quadview.dll'
         'manifest\XR_APILAYER_ACE_quadview.json'           = 'ace\XR_APILAYER_ACE_quadview.json'
+        'assets\helmet\top.png'                            = 'ace\helmet\top.png'
+        'assets\helmet\bottom.png'                         = 'ace\helmet\bottom.png'
+        'assets\helmet\visor.png'                          = 'ace\helmet\visor.png'
         'manifest\ace-quadview.ini'                        = 'ace-quadview.ini'
         'packaging\README.txt'                             = 'README.txt'
         'LICENSE.md'                                       = 'LICENSE.md'

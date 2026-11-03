@@ -40,9 +40,9 @@ Settings save as you change them and apply at the next launch.
   savings follow at the next launch.
   Helmet overlay (Quad View Foveated Rendering only, off by default): draws a helmet's visor opening
   around the view, following the crop, lit by the scene. Rim (how far the padding reaches into the
-  view), Corners and Lighting apply live. For your own helmet, put top.png (brow), bottom.png (chin
-  bar) and visor.png, PNGs with alpha of the whole face from inside the helmet, in a "helmet" folder
-  next to ace-quadview.dll. They're shown as their own layer over the game, so frame generation
+  view), Corners and Lighting apply live. A helmet comes in ace\helmet: top.png (brow), bottom.png
+  (chin bar) and visor.png, PNGs with alpha of the whole face from inside the helmet. Replace them
+  with your own to change it (delete them for the drawn rim instead). They're shown as their own layer over the game, so frame generation
   isn't disturbed. Size and Height place them, Depth sets how far in front of your eyes they sit
   (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096, sharper); the Visor is Closed, Half or Open (Ctrl+Alt+V in the game). The
   headset menu's Helmet page has them all. The log suggests the crop that matches their opening.

@@ -56,7 +56,8 @@ menu's View crop page, live: the view crops at once, and the outer views' pixels
 **Helmet overlay (`[helmet]`, QVFR only, off by default).** The layer draws a helmet's visor opening
 around each eye (`src/quad/helmet.h`). Built in, the opening is the crop's rectangle with rounded
 corners and the padded rim reaches a little into the view with a soft edge. It's lit by the frame: each side takes the light of the rendered image along it, so it darkens
-in tunnels and brightens under a bright sky. Your own helmet can replace the built-in look: `top.png`
+in tunnels and brightens under a bright sky. The package ships a helmet (`assets/helmet/`, installed
+to `ace\helmet`), and your own can replace it: `top.png`
 (brow), `bottom.png` (chin bar) and `visor.png` with alpha in a `helmet` folder next to the layer DLL,
 fixed to the head with a size, height and depth (how far in front of your eyes, for stereo depth).
 They're drawn into a head-locked layer of their own that the headset composites after any frame
