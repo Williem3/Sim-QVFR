@@ -32,6 +32,20 @@ Settings save as you change them and apply at the next launch.
 - Resolution: Outer resolution (the full view) and Inner resolution (pixel density in the focus
   region), each a percent of the headset's recommended resolution and set independently. In
   Two-loop the inner resolution follows from the outer resolution and the foveated size.
+  Field of view crop (Quad View Foveated Rendering only, off by default): Top, Bottom, Outer side
+  (toward the temple) and Inner side (toward the nose), each a share of the eye's view and set
+  independently. The game doesn't render the cropped edges and the headset shows black there, so
+  pixels a helmet would cover aren't wasted. The outer view keeps its sharpness and the focus region
+  its size. It applies live, also from the headset menu's View crop page; with DLSS on, the pixel
+  savings follow at the next launch.
+  Helmet overlay (Quad View Foveated Rendering only, off by default): draws a helmet's visor opening
+  around the view, following the crop, lit by the scene. Rim (how far the padding reaches into the
+  view), Corners and Lighting apply live. For your own helmet, put top.png (brow), bottom.png (chin
+  bar) and visor.png, PNGs with alpha of the whole face from inside the helmet, in a "helmet" folder
+  next to ace-quadview.dll. They're shown as their own layer over the game, so frame generation
+  isn't disturbed. Size and Height place them, Depth sets how far in front of your eyes they sit
+  (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096, sharper); the Visor is Closed, Half or Open (Ctrl+Alt+V in the game). The
+  headset menu's Helmet page has them all. The log suggests the crop that matches their opening.
 - Foveation: Foveated width and Foveated height, each a share of the outer view, and Corner radius
   (rounds the focus region's corners; 0 = square, 100% = fully round ends).
 - Focus overlay: Show focus outline, its color (teal, magenta, green) and Feather (the blend band).

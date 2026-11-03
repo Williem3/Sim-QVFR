@@ -29,8 +29,8 @@ int main() {
     check(menu_items(true).size() == 8 && menu_items(false).size() == 6 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
-    check(menu_page_items(m).size() == 9 && menu_page_items(m).front() == MenuItem::Page && menu_pages(m).size() == 2,
-          "the first page: the page switch, then the method's items; two pages without Cheeky");
+    check(menu_page_items(m).size() == 9 && menu_page_items(m).front() == MenuItem::Page && menu_pages(m).size() == 4,
+          "the first page: the page switch, then the method's items; four pages without Cheeky (QVFR: View crop, Helmet)");
 
     menu_key(m, MenuKey::Up);
     check(m.selected == 8, "Up from the first item wraps to the last");
@@ -179,7 +179,7 @@ int main() {
     // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
     // [menu] for the layer to move them.
     SettingsMenu moving;
-    moving.page = 1;
+    moving.page = 3;
     check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 8,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
@@ -257,12 +257,14 @@ int main() {
     {
         SettingsMenu c;
         c.launch = {true, 50, 39, 39};
-        check(menu_pages(c).size() == 2 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
+        check(menu_pages(c).size() == 4 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
-        check(menu_pages(c).size() == 4 && menu_page_items(c).size() == 9 && menu_page_items(c).front() == MenuItem::Page &&
+        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 9 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
-              "with Cheeky: four pages, the first the QVFR items under the page switch");
-        check(!menu_key(c, MenuKey::Right) && c.page == 1 && c.selected == 0 && menu_page_items(c).size() == 11 &&
+              "with Cheeky: six pages, the first the QVFR items under the page switch");
+        check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"View crop", "then the View crop page");
+        check(!menu_key(c, MenuKey::Right) && c.page == 2 && menu_title(c) == L"Helmet", "then the Helmet page");
+        check(!menu_key(c, MenuKey::Right) && c.page == 3 && c.selected == 0 && menu_page_items(c).size() == 11 &&
                   menu_title(c) == L"Foveated DLSS" && menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3",
               "the switch turns to the Foveated DLSS page, titled, with Cheeky's credit line and version");
         menu_key(c, MenuKey::Down);  // Foveated DLSS on/off
@@ -308,7 +310,7 @@ int main() {
         check(page.size() == static_cast<size_t>(kPanelWidth) * kPanelHeight, "the panel draws 12 lines and a subtitle");
 
         // The experimental focus-view options: supersampling, motion-vector fix, DLSS-NR.
-        c.page = 1;
+        c.page = 3;
         c.selected = 6;  // focus supersampling
         for (int i = 0; i < 30; ++i)
             menu_key(c, MenuKey::Right);
@@ -343,9 +345,9 @@ int main() {
         c.page = 0;
         c.selected = 0;
         menu_key(c, MenuKey::Left);
-        check(c.page == 3 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
+        check(c.page == 5 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
         menu_key(c, MenuKey::Left);
-        check(c.page == 2 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 7 &&
+        check(c.page == 4 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 7 &&
                   menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
               "then Frame generation, with the credit line; no note while FG is off");
         menu_key(c, MenuKey::Down);
@@ -381,6 +383,99 @@ int main() {
         menu_key(c, MenuKey::Right);
         menu_key(c, MenuKey::Right);
         check(c.page == 0 && menu_title(c) == L"QVFR settings", "Right from Frame generation, then Overlay and menu, wraps to the first page");
+    }
+
+    // The View crop page (QVFR): off shows only the switch; on, four sides, each on its own, written to
+    // [crop]; the outer views shrink with it in the fit and the pixels saved.
+    {
+        SettingsMenu v;
+        v.launch = {true, 50, 39, 39, 2000, 2000};
+        v.page = 1;
+        check(menu_title(v) == L"View crop" && menu_page_items(v).size() == 2 && menu_resolution(v).shown,
+              "View crop: off, only the switch (and the resolution)");
+        const int savedBefore = menu_stats(v).savedPercent;
+        v.selected = 1;
+        check(menu_key(v, MenuKey::Right) && v.values.crop && menu_page_items(v).size() == 6, "View crop turns on: four sides");
+        v.selected = 2;  // top
+        for (int i = 0; i < 50; ++i)
+            menu_key(v, MenuKey::Right);
+        v.selected = 4;  // outer side
+        for (int i = 0; i < 10; ++i)
+            menu_key(v, MenuKey::Right);
+        check(v.values.cropTop == 40 && v.values.cropBottom == 0 && v.values.cropOuter == 10 && v.values.cropInner == 0,
+              "View crop: the top stops at 40%; the other sides stay as they were");
+        check(menu_stats(v).savedPercent > savedBefore && menu_lines(v)[2].value == L"40%" &&
+                  menu_resolution(v).current == L"3360x780 (2.6 MP)",
+              "View crop: fewer pixels; 900x600 outer views beside the 780x780 focus views");
+        check(menu_notes(v).empty(),
+              "View crop: no note when it only takes more off than at launch");
+        v.launch.dlssHeld = true;
+        check(menu_notes(v).front().find(L"DLSS is on") == 0, "View crop with DLSS: the savings wait for the next launch");
+        const auto cropIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_crop.ini").wstring();
+        DeleteFileW(cropIni.c_str());
+        write_menu_values(cropIni.c_str(), v.values, true);
+        const MenuValues back = read_menu_values(cropIni.c_str());
+        DeleteFileW(cropIni.c_str());
+        check(back.crop && back.cropTop == 40 && back.cropOuter == 10 && back.cropBottom == 0, "View crop: [crop] round-trips");
+        // The Helmet page: on, its rim, corners and lighting stepped, written to [helmet].
+        v.page = 2;
+        v.selected = 1;
+        check(menu_title(v) == L"Helmet" && menu_key(v, MenuKey::Right) && v.values.helmet.on &&
+                  menu_page_items(v).size() == 6 && menu_lines(v)[1].value == L"On" && menu_notes(v).empty(),
+              "Helmet overlay turns on: rim, corners, lighting and the light diagnostic");
+        v.selected = 2;
+        for (int i = 0; i < 30; ++i)
+            menu_key(v, MenuKey::Right);
+        v.selected = 4;
+        menu_key(v, MenuKey::Left);
+        v.selected = 5;  // the light diagnostic
+        menu_key(v, MenuKey::Right);
+        write_menu_values(cropIni.c_str(), v.values, true);
+        const HelmetSettings helmetBack = read_helmet_settings(cropIni.c_str());
+        DeleteFileW(cropIni.c_str());
+        check(helmetBack.on && helmetBack.rim == kHelmetRimMax && helmetBack.light == 60 && helmetBack.corners == 40 &&
+                  helmetBack.debugLight,
+              "Helmet: the rim stops at its maximum, lighting steps by 10, the light diagnostic; [helmet] round-trips");
+        // With the helmet's own images: visor, size, height and depth instead of rim and corners.
+        v.launch.helmetPieces = true;
+        const std::vector<MenuItem> pieceItems = menu_page_items(v);
+        check(pieceItems.size() == 9 && pieceItems[2] == MenuItem::Visor && pieceItems[3] == MenuItem::HelmetSize &&
+                  pieceItems[4] == MenuItem::HelmetHeight && pieceItems[5] == MenuItem::HelmetDepth &&
+                  pieceItems[6] == MenuItem::HelmetDetail,
+              "Helmet with images: visor, size, height, depth and detail rows");
+        v.selected = 6;
+        const bool performance = menu_lines(v)[6].value == L"Performance";
+        check(performance && menu_key(v, MenuKey::Right) && v.values.helmet.detail && menu_lines(v)[6].value == L"Detail",
+              "Helmet detail: Performance (2048) by default, Detail (4096) at a step");
+        v.values.helmet.detail = false;
+        v.selected = 2;
+        menu_key(v, MenuKey::Right);
+        menu_key(v, MenuKey::Right);
+        menu_key(v, MenuKey::Right);  // stops at open
+        v.selected = 4;
+        menu_key(v, MenuKey::Left);
+        check(v.values.helmet.visor == VisorPosition::Open && menu_lines(v)[2].value == L"Open" &&
+                  v.values.helmet.height == -1 && menu_lines(v)[4].value == L"1° down",
+              "Visor steps to Open and stops; height in degrees");
+        // Depth: far, then 3 cm, 1 cm a step up close and 5 cm from 20 cm; back down to far.
+        v.selected = 5;
+        const bool startsFar = menu_lines(v)[5].value == L"Far";
+        menu_key(v, MenuKey::Right);
+        const bool nearest = v.values.helmet.depth == kHelmetDepthMin && menu_lines(v)[5].value == L"3 cm";
+        for (int i = 0; i < 17; ++i)
+            menu_key(v, MenuKey::Right);
+        const bool twenty = v.values.helmet.depth == 20;
+        menu_key(v, MenuKey::Right);
+        const bool coarse = v.values.helmet.depth == 25;
+        for (int i = 0; i < 60; ++i)
+            menu_key(v, MenuKey::Left);
+        check(startsFar && nearest && twenty && coarse && v.values.helmet.depth == 0,
+              "Helmet depth: Far, then 3 cm, 1 cm steps to 20 cm, then 5 cm; down again to Far");
+        v.launch.helmetPieces = false;
+        v.page = 1;  // back on View crop
+        v.launch.dlssHeld = false;
+        v.launch.cropHeight = 50;  // launched with more off: less now is softer until the next launch
+        check(!menu_notes(v).empty() && menu_notes(v).back().find(L"Less crop") == 0, "View crop: less than at launch is noted");
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

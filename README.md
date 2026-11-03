@@ -42,6 +42,27 @@ which one limits the frame, GPU overhead, VRAM, frame generation and eye trackin
 launcher's Headset menu pane, from the headset menu, or with Ctrl+Alt+P in the game; the pane and the
 headset menu's Overlay and menu page also place it, as they place the menu.
 
+**Field-of-view crop (`[crop]`, QVFR only, off by default).** Narrows each eye's field of view before
+ACE sees it, so the edges a helmet covers (a helmet mod's visor, for example) are never rendered
+(`src/quad/fov_crop.h`). Top, bottom, outer (temple) and inner (nose) sides are set independently.
+The outer views shrink with the crop at the same pixel density, the focus box keeps its size, and
+the headset shows black outside the crop. Set it in the launcher's Resolution pane or on the headset
+menu's View crop page, live: the view crops at once, and the outer views' pixels follow without DLSS
+(with DLSS on, at the next launch).
+
+**Helmet overlay (`[helmet]`, QVFR only, off by default).** The layer draws a helmet's visor opening
+around each eye (`src/quad/helmet.h`). Built in, the opening is the crop's rectangle with rounded
+corners and the padded rim reaches a little into the view with a soft edge. It's lit by the frame: each side takes the light of the rendered image along it, so it darkens
+in tunnels and brightens under a bright sky. Your own helmet can replace the built-in look: `top.png`
+(brow), `bottom.png` (chin bar) and `visor.png` with alpha in a `helmet` folder next to the layer DLL,
+fixed to the head with a size, height and depth (how far in front of your eyes, for stereo depth).
+They're drawn into a head-locked layer of their own that the headset composites after any frame
+generation, so the scene keeps the FOV ACE rendered and Cheeky's frame generation stays aligned. Only
+the bands the pieces draw on are rendered and composited, at 2048 or, with `detail`, 4096 pixels a side.
+The visor slides closed, half or open (Ctrl+Alt+V in the game), and the log suggests the crop that
+matches the images' opening. It applies live, from the launcher's Resolution pane or the headset
+menu's Helmet page.
+
 ## Foveated DLSS setup (Cheeky Foveated DLSS)
 
 The DLSS features come from [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS)

@@ -6,9 +6,11 @@
 #include "../src/xr_layer.cpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 #include <dxgi1_6.h>
+#include <wincodec.h>
 
 namespace {
 
@@ -58,6 +60,9 @@ struct FakeRuntime {
     uint32_t submittedImage = 0;
     XrCompositionLayerProjectionView submittedViews[2] = {};
     int submittedLayers = 0;
+    int submittedProjectionAt = -1, submittedQuadAt = -1;  // layer indices (-1: none)
+    XrCompositionLayerQuad submittedQuad{};                // the last quad layer
+    int spaces = 0;
 } rt;
 
 void violation(const char* what) {
@@ -68,6 +73,17 @@ void violation(const char* what) {
 FakeChain* chain_of(XrSwapchain h) {
     const auto i = reinterpret_cast<uintptr_t>(h);
     return i >= 1 && i <= rt.chains.size() ? &rt.chains[i - 1] : nullptr;
+}
+
+// The layer's output chain, to read its pixels: without one (the compositor did not start) the test
+// stops with a failure rather than reading through a null chain.
+FakeChain& output_chain(XrSwapchain h, const char* where) {
+    FakeChain* chain = chain_of(h);
+    if (!chain) {
+        std::printf("FAIL %s: no output chain (the compositor did not start; see logs)\nRESULT: FAIL\n", where);
+        std::exit(1);
+    }
+    return *chain;
 }
 
 XrResult XRAPI_CALL fakeViews(XrInstance, XrSystemId, XrViewConfigurationType, uint32_t capacity, uint32_t* count,
@@ -168,9 +184,19 @@ XrResult XRAPI_CALL fakeEnd(XrSession, const XrFrameEndInfo* info) {
         violation("end without begin");
     rt.begun = false;
     rt.submittedLayers = static_cast<int>(info->layerCount);
+    rt.submittedProjectionAt = rt.submittedQuadAt = -1;
     for (uint32_t i = 0; i < info->layerCount; ++i) {
+        if (info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
+            rt.submittedQuad = *reinterpret_cast<const XrCompositionLayerQuad*>(info->layers[i]);
+            rt.submittedQuadAt = static_cast<int>(i);
+            FakeChain* qc = chain_of(rt.submittedQuad.subImage.swapchain);
+            if (!qc || qc->lastReleased == UINT32_MAX || !qc->outstanding.empty())
+                violation("submitted a quad layer whose swapchain has no released image");
+            continue;
+        }
         if (info->layers[i]->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION)
             continue;
+        rt.submittedProjectionAt = static_cast<int>(i);
         auto* proj = reinterpret_cast<const XrCompositionLayerProjection*>(info->layers[i]);
         FakeChain* c = chain_of(proj->views[0].subImage.swapchain);
         if (!c || c->lastReleased == UINT32_MAX)
@@ -184,6 +210,32 @@ XrResult XRAPI_CALL fakeEnd(XrSession, const XrFrameEndInfo* info) {
     }
     return info->displayTime == rt.time ? XR_SUCCESS : XR_ERROR_TIME_INVALID;
 }
+// A helmet top piece for the flow: 8 x 8, its first two rows opaque white.
+void write_file_png(const std::wstring& path) {
+    BYTE bgra[8 * 8 * 4] = {};
+    for (int i = 0; i < 2 * 8 * 4; ++i)
+        bgra[i] = 255;
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
+        SUCCEEDED(wic->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
+        SUCCEEDED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+        SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
+        SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
+        SUCCEEDED(frame->SetSize(8, 8)) && SUCCEEDED(frame->SetPixelFormat(&format)))
+        frame->WritePixels(8, 8 * 4, sizeof(bgra), bgra), frame->Commit(), encoder->Commit();
+}
+
+XrResult XRAPI_CALL fakeCreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo*, XrSpace* space) {
+    *space = reinterpret_cast<XrSpace>(static_cast<uintptr_t>(0x5000 + ++rt.spaces));
+    return XR_SUCCESS;
+}
+XrResult XRAPI_CALL fakeDestroySpace(XrSpace) { return XR_SUCCESS; }
+XrResult XRAPI_CALL fakeDestroySwapchain(XrSwapchain) { return XR_SUCCESS; }
 XrResult XRAPI_CALL fakeLocate(XrSession, const XrViewLocateInfo*, XrViewState*, uint32_t capacity, uint32_t* count,
                                XrView* views) {
     *count = 2;
@@ -487,6 +539,9 @@ int main() {
     SetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", runtimeInfo.c_str());
     next.EnumerateViewConfigurationViews = fakeViews;
     next.CreateSwapchain = fakeCreateSwapchain;
+    next.CreateReferenceSpace = fakeCreateReferenceSpace;
+    next.DestroySpace = fakeDestroySpace;
+    next.DestroySwapchain = fakeDestroySwapchain;
     next.EnumerateSwapchainImages = fakeEnumerateImages;
     next.AcquireSwapchainImage = fakeAcquire;
     next.WaitSwapchainImage = fakeWaitImage;
@@ -593,7 +648,7 @@ int main() {
 
     // Pixels: the focus box is centred on the gaze; straight ahead is now outside it.
     UINT pitch = 0;
-    FakeChain* out = chain_of(quad.outChain);
+    FakeChain* out = &output_chain(quad.outChain, "quad pixels");
     const auto px = read_back(out->images[rt.submittedImage].Get(), pitch);
     auto at = [&](int eye, double u, double v) {
         const UINT x = static_cast<UINT>((eye + u) * kNativeW), y = static_cast<UINT>(v * kNativeH);
@@ -652,7 +707,7 @@ int main() {
         check(rt.submittedChain == quad.outChain && rt.submittedViews[1].subImage.imageRect.extent.width ==
                                                         static_cast<int32_t>(kNativeW),
               "views4 submits the native-size output");
-        FakeChain* v4Out = chain_of(quad.outChain);
+        FakeChain* v4Out = &output_chain(quad.outChain, "views4 pixels");
         const auto px4 = read_back(v4Out->images[rt.submittedImage].Get(), pitch);
         auto at4 = [&](int eye, double uu, double vv) {
             const UINT x = static_cast<UINT>((eye + uu) * kNativeW), y = static_cast<UINT>(vv * kNativeH);
@@ -722,7 +777,7 @@ int main() {
                                          std::fabs(std::tan(sub.angleUp) - t[2]) < 1e-4f &&
                                          std::fabs(std::tan(sub.angleDown) - t[3]) < 1e-4f;
                 }
-                const auto pxs = read_back(chain_of(quad.outChain)->images[rt.submittedImage].Get(), pitch);
+                const auto pxs = read_back(output_chain(quad.outChain, "views4 FOV pixels").images[rt.submittedImage].Get(), pitch);
                 const float* t = rendered[f];
                 auto colour = [&](int eye, double tx, double ty) {
                     const double uu = (tx - t[0]) / (t[1] - t[0]), vv = (t[2] - ty) / (t[2] - t[3]);
@@ -773,6 +828,76 @@ int main() {
                   s1.offset.x == e1.left && s1.extent.width == e1.width && s1.extent.height == static_cast<int32_t>(v4EyeH) &&
                   e1.width == static_cast<int>(2 * v4EyeW) / 3,
               "views4 uncomposed: views 0 and 1 submitted at a third of the target each");
+
+        // A compositor that cannot start (a shader that does not compile, say): no output chain, and ACE's
+        // own image goes out, every frame, with nothing failing.
+        experiment.views4Compose = true;
+        {
+            std::lock_guard guard(quad.mutex);
+            quad.compositor.shutdown();
+            quad.appChain = quad.outChain = XR_NULL_HANDLE;
+            quad.appImages.clear();
+            quad.outImages.clear();
+            quad.composed = quad.fallbacks = quad.fallbackRun = 0;
+            quad.v4Composed = quad.v4FovValid = false;
+        }
+        QuadCompositor::failInitialize = true;
+        XrSwapchain broken = XR_NULL_HANDLE;
+        layerCreateSwapchain(nullptr, &v4ci, &broken);
+        layerEnumerateSwapchainImages(broken, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
+        int brokenErrors = 0;
+        for (int i = 0; i < 3; ++i)
+            brokenErrors += XR_FAILED(ace_views4_frame(broken, v4EyeW, v4EyeH)) ? 1 : 0;
+        QuadCompositor::failInitialize = false;
+        check(quad.outChain == XR_NULL_HANDLE && brokenErrors == 0 && rt.violations == 0 && quad.composed == 0 &&
+                  rt.submittedChain == broken,
+              "views4 without a compositor: ACE's own image is submitted, nothing fails");
+
+        // The helmet's pieces in their own head-locked layer, with the crop: the scene keeps the cropped FOV
+        // ACE renders (so frame generation's depth and motion match it), the quad goes right after it, in VIEW
+        // space, at the helmet's distance, its swapchain image released.
+        {
+            std::lock_guard guard(quad.mutex);
+            quad.compositor.shutdown();
+            quad.appChain = quad.outChain = XR_NULL_HANDLE;
+            quad.appImages.clear();
+            quad.outImages.clear();
+            quad.composed = quad.fallbacks = quad.fallbackRun = 0;
+            quad.v4Composed = quad.v4FovValid = false;
+            for (int p = 0; p < 3; ++p)
+                quad.helmetPiecesTried[p].clear();
+        }
+        const std::wstring brow = std::wstring(tempDir) + L"aceqv-flow-top.png";
+        write_file_png(brow);
+        helmetSettings = HelmetSettings{};
+        helmetSettings.on = true;
+        helmetSettings.topImage = brow;
+        helmetSettings.bottomImage = helmetSettings.visorImage = L"";
+        helmetSettings.depth = 8;
+        experiment.set_crop(fov_crop(20, 20, 0, 0));
+        XrSwapchain helmeted = XR_NULL_HANDLE;
+        layerCreateSwapchain(nullptr, &v4ci, &helmeted);
+        layerEnumerateSwapchainImages(helmeted, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
+        int helmetErrors = 0;
+        for (int i = 0; i < 4; ++i)
+            helmetErrors += XR_FAILED(ace_views4_frame(helmeted, v4EyeW, v4EyeH)) ? 1 : 0;
+        const XrRect2Di& scene = rt.submittedViews[0].subImage.imageRect;
+        const XrCompositionLayerQuad& hq = rt.submittedQuad;
+        std::printf("     helmet: scene %dx%d (native %ux%u), quad at layer %d (scene %d), %.3f x %.3f m, %.3f m ahead\n",
+                    scene.extent.width, scene.extent.height, kNativeW, kNativeH, rt.submittedQuadAt,
+                    rt.submittedProjectionAt, hq.size.width, hq.size.height, -hq.pose.position.z);
+        check(helmetErrors == 0 && rt.violations == 0 && quad.helmetChain != XR_NULL_HANDLE &&
+                  rt.submittedQuadAt == rt.submittedProjectionAt + 1 && hq.subImage.swapchain == quad.helmetChain &&
+                  hq.space == quad.helmetSpace && std::fabs(hq.pose.position.z + 0.08f) < 1e-4f && hq.size.width > 0.16f &&
+                  (hq.layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) &&
+                  !(hq.layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT),
+              "helmet: its own premultiplied quad layer over the scene, 8 cm ahead");
+        check(scene.extent.height == static_cast<int32_t>(std::lround(kNativeH * 0.6)) &&
+                  std::tan(rt.submittedViews[0].fov.angleUp) < std::tan(kFullFov.angleUp) - 0.01f,
+              "helmet: the scene is submitted cropped, not over the whole eye");
+        helmetSettings = HelmetSettings{};
+        experiment.set_crop(FovCrop{});
+        DeleteFileW(brow.c_str());
     }
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;

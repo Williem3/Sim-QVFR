@@ -270,6 +270,37 @@ int main() {
         dlssLive.osd = {true, -15, 22, 30};
         save_live_settings(ini, dlssLive);
         check(load_settings(ini).osd == dlssLive.osd, "settings: [osd] (the performance overlay) round-trips, live");
+        Settings cropSave = load_settings(ini);
+        cropSave.mode = RenderMode::Qvfr;
+        cropSave.crop = true;
+        cropSave.cropTop = 30;
+        cropSave.cropBottom = 55;  // above kCropRange: clamped on its own
+        cropSave.cropOuter = 12;
+        cropSave.cropInner = 0;
+        save_settings(ini, cropSave);
+        const Settings cropBack = load_settings(ini);
+        check(cropBack.crop && cropBack.cropTop == 30 && cropBack.cropBottom == kCropRange.max && cropBack.cropOuter == 12 &&
+                  cropBack.cropInner == 0,
+              "settings: [crop] round-trips, each side clamped on its own");
+        LaunchSizes launched;
+        launched.known = true;
+        launched.outer = cropBack.outer;
+        launched.focusWidth = launched.focusHeight = 1000;
+        launched.crop = L"30,40,12,0";
+        const bool sameCrop = fits_launch(cropBack, launched);
+        launched.crop = L"0,0,0,0";
+        const bool moreCrop = fits_launch(cropBack, launched);
+        Settings lessCrop = cropBack;
+        lessCrop.crop = false;
+        launched.crop = L"30,40,12,0";
+        Settings helmetSave = cropBack;
+        helmetSave.helmet.on = true;
+        helmetSave.helmet.rim = 9;
+        helmetSave.helmet.light = 30;
+        save_settings(ini, helmetSave);
+        check(load_settings(ini).helmet == helmetSave.helmet, "settings: [helmet] round-trips");
+        check(sameCrop && moreCrop && !fits_launch(lessCrop, launched),
+              "live: a crop applies live, up to the launch's outer views (less crop than at launch: next launch)");
         check(cheeky_runtime_path(ini, L"C:\\layer") == L"C:\\layer\\CheekyFoveatedDLSS\\CheekyFoveatedDLSSRuntime.dll",
               "Cheeky runtime: by default in CheekyFoveatedDLSS next to the layer");
         save_cheeky_runtime(ini, L"D:\\cheeky\\CheekyFoveatedDLSSRuntime.dll");
@@ -317,6 +348,19 @@ int main() {
                                              static_cast<double>(w.focus.width) * w.focus.height)) < 1 &&
                   w.saved < 0,
               "readouts: views shrink with the clamped eye; more pixels than the runtime shows as negative saved");
+        // FOV crop: the outer views keep their density over the kept share; the focus views are unchanged.
+        Settings cropped;
+        cropped.crop = true;
+        cropped.cropTop = 15;
+        cropped.cropBottom = 5;
+        cropped.cropOuter = 10;
+        const Readouts cr = readouts(cropped, rt);
+        check(cr.outer.width == 1163 && cr.outer.height == 864 && cr.focus.width == r.focus.width && cr.pixels < r.pixels,
+              "readouts: a crop of 15/5 top/bottom and 10 outer gives 1163 x 864 outer views, the same focus views");
+        Settings cropOff = cropped;
+        cropOff.crop = false;
+        check(readouts(cropOff, rt).outer.width == 1292 && crop_key(cropOff) == L"0,0,0,0" && crop_key(cropped) == L"15,5,10,0",
+              "readouts: a crop that is off changes nothing");
         Settings loopDefaults;
         loopDefaults.mode = RenderMode::TwoLoop;
         const Readouts l = readouts(loopDefaults, rt);

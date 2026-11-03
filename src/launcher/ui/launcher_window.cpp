@@ -45,7 +45,11 @@ enum Ctl {
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgBorder,
     // The performance overlay ([osd], Headset menu pane).
-    kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel
+    kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
+    // The FOV crop ([crop], Resolution pane).
+    kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
+    // The helmet overlay ([helmet], Resolution pane).
+    kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail
 };
 
 constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
@@ -196,6 +200,16 @@ int* slider_value(Ctl id) {
     case kOsdYaw: return &app.s.osd.yaw;
     case kOsdPitch: return &app.s.osd.pitch;
     case kOsdSize: return &app.s.osd.width;
+    case kCropTop: return &app.s.cropTop;
+    case kCropBottom: return &app.s.cropBottom;
+    case kCropOuter: return &app.s.cropOuter;
+    case kCropInner: return &app.s.cropInner;
+    case kHelmetRim: return &app.s.helmet.rim;
+    case kHelmetCorners: return &app.s.helmet.corners;
+    case kHelmetLight: return &app.s.helmet.light;
+    case kHelmetSize: return &app.s.helmet.size;
+    case kHelmetHeight: return &app.s.helmet.height;
+    case kHelmetDepth: return &app.s.helmet.depth;
     default: return nullptr;
     }
 }
@@ -215,6 +229,16 @@ Range slider_range(Ctl id) {
     case kOsdYaw: return {-kOsdYawMax, kOsdYawMax};
     case kOsdPitch: return {-kOsdPitchMax, kOsdPitchMax};
     case kOsdSize: return {kOsdWidthMin, kOsdWidthMax};
+    case kCropTop:
+    case kCropBottom:
+    case kCropOuter:
+    case kCropInner: return kCropRange;
+    case kHelmetRim: return {0, kHelmetRimMax};
+    case kHelmetCorners: return {0, kHelmetCornersMax};
+    case kHelmetLight: return {0, kHelmetLightMax};
+    case kHelmetSize: return {kHelmetSizeMin, kHelmetSizeMax};
+    case kHelmetHeight: return {-kHelmetHeightMax, kHelmetHeightMax};
+    case kHelmetDepth: return {0, kHelmetDepthMax};
     default: return kSizeRange;
     }
 }
@@ -227,8 +251,15 @@ std::vector<Ctl> focus_order() {
     case Pane::Rendering: order.insert(order.end(), {kMethod, kMode}); break;
     case Pane::Resolution:
         order.push_back(kOuter);
-        if (!inner_disabled())
-            order.push_back(kInner);
+        if (!inner_disabled()) {
+            order.insert(order.end(), {kInner, kCropOn});
+            if (app.s.crop)
+                order.insert(order.end(), {kCropTop, kCropBottom, kCropOuter, kCropInner});
+            order.push_back(kHelmetOn);
+            if (app.s.helmet.on)
+                order.insert(order.end(), {kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight,
+                                           kHelmetDepth, kHelmetDetail});
+        }
         break;
     case Pane::Foveation: order.insert(order.end(), {kWidth, kHeight, kCorner}); break;
     case Pane::Overlay:
@@ -586,6 +617,62 @@ float pane_content(float x, float y, float w, bool draw) {
                        known && qvfr ? px(ro.focus) : L"", !qvfr),
         };
         h += section(x, y, w, L"Per-eye resolution", rows, footer, draw);
+        h += t::kSpace6;
+        // The FOV crop: each side on its own, QVFR only.
+        Row cropOn;
+        const std::wstring cropDesc = qvfr ? L"Skips the edges of each eye that a helmet covers, so they are never rendered."
+                                           : L"Available in Quad View Foveated Rendering.";
+        cropOn.fullHeight = [cropDesc](float width) { return checkbox_height(cropDesc, width); };
+        cropOn.full = [cropDesc](const Rect& r) { checkbox(kCropOn, r, app.s.crop, L"Crop the view", cropDesc); };
+        const bool cropOff = !qvfr || !app.s.crop;
+        h += section(x, y + h, w, L"Field of view crop",
+                     {cropOn, slider_row(kCropTop, L"Top", L"", app.s.cropTop, L"", cropOff),
+                      slider_row(kCropBottom, L"Bottom", L"", app.s.cropBottom, L"", cropOff),
+                      slider_row(kCropOuter, L"Outer side", L"Toward the temple, mirrored for each eye.", app.s.cropOuter, L"",
+                                 cropOff),
+                      slider_row(kCropInner, L"Inner side", L"Toward the nose.", app.s.cropInner, L"", cropOff)},
+                     L"Share of each eye’s field of view removed at that side; the headset shows black there. The outer "
+                     L"view keeps its sharpness and the focus region its size. Applies live while the game runs; with DLSS "
+                     L"on, or with less crop than at launch, the pixel count follows at the next launch.",
+                     draw);
+        h += t::kSpace6;
+        Row helmetOn;
+        const std::wstring helmetDesc = qvfr ? L"Draws a helmet’s visor opening around the view, lit by the scene."
+                                             : L"Available in Quad View Foveated Rendering.";
+        helmetOn.fullHeight = [helmetDesc](float width) { return checkbox_height(helmetDesc, width); };
+        helmetOn.full = [helmetDesc](const Rect& r) { checkbox(kHelmetOn, r, app.s.helmet.on, L"Show a helmet", helmetDesc); };
+        const bool helmetOff = !qvfr || !app.s.helmet.on;
+        h += section(x, y + h, w, L"Helmet overlay",
+                     {helmetOn,
+                      slider_row(kHelmetRim, L"Rim", L"How far the padding reaches into the view.", app.s.helmet.rim, L"",
+                                 helmetOff),
+                      slider_row(kHelmetCorners, L"Corners", L"Rounds the visor opening.", app.s.helmet.corners, L"",
+                                 helmetOff),
+                      slider_row(kHelmetLight, L"Lighting", L"How much the scene lights the helmet.", app.s.helmet.light, L"",
+                                 helmetOff),
+                      [&] {
+                          const std::wstring names[3] = {kVisorPositionNames[0], kVisorPositionNames[1], kVisorPositionNames[2]};
+                          Row visor = choice_row(kVisor, L"Visor", names, 3, static_cast<int>(app.s.helmet.visor), helmetOff);
+                          visor.desc = L"Your images only. Ctrl+Alt+V in the game steps it.";
+                          return visor;
+                      }(),
+                      slider_row(kHelmetSize, L"Size", L"Your images only: how wide they are, in degrees of view.",
+                                 app.s.helmet.size, L"", helmetOff, L"°"),
+                      slider_row(kHelmetHeight, L"Height", L"Your images only: degrees above straight ahead.",
+                                 app.s.helmet.height, L"", helmetOff, L"°"),
+                      slider_row(kHelmetDepth, L"Depth",
+                                 L"Your images only: how far in front of your eyes, in cm. 0 is far away, with no depth.",
+                                 app.s.helmet.depth, L"", helmetOff, L" cm"),
+                      [&] {
+                          const std::wstring names[2] = {L"Performance (2048)", L"Detail (4096)"};
+                          Row detail = choice_row(kHelmetDetail, L"Detail", names, 2, app.s.helmet.detail ? 1 : 0, helmetOff);
+                          detail.desc = L"Your images only: Detail is sharper, Performance costs less GPU and memory.";
+                          return detail;
+                      }()},
+                     L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png "
+                     L"and visor.png with alpha in the helmet folder next to the layer; the log suggests the crop that "
+                     L"matches them. Applies live.",
+                     draw);
         break;
     }
     case Pane::Foveation: {
@@ -836,8 +923,9 @@ float pane_content(float x, float y, float w, bool draw) {
 float preview(float x, float y, float w, bool draw) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool known = app.runtime.known();
-    // Without a recommended size, the kit's example aspect (2584 x 2160) shapes the drawing.
-    const Size outer = known ? ro.outer : Size{2584 * app.s.outer / 100, 2160 * app.s.outer / 100};
+    // The whole eye (the FOV crop is drawn over it); without a recommended size, the kit's example
+    // aspect (2584 x 2160) shapes the drawing.
+    const Size outer = known ? ro.runtime : Size{2584, 2160};
     const float W = 320, H = std::round(W * outer.height / std::max(1, outer.width)), k = w / W;
     const float frameH = H * k;
     if (draw) {
@@ -853,7 +941,13 @@ float preview(float x, float y, float w, bool draw) {
         const bool eye = app.s.eyeTracking && !eye_warning();
         const float fw = W * app.s.width / 100, fh = H * app.s.height / 100;
         const float gx = eye ? 0.6f : 0.5f, gy = eye ? 0.45f : 0.5f;
-        const float fx = std::clamp(gx * W - fw / 2, 0.0f, W - fw), fy = std::clamp(gy * H - fh / 2, 0.0f, H - fh);
+        // The kept view (the left eye: its outer side is on the left); the focus region stays inside it.
+        const float cl = W * static_cast<float>(app.s.crop_width() < 1 ? app.s.cropOuter : 0) / 100,
+                    cr = W * static_cast<float>(app.s.crop_width() < 1 ? app.s.cropInner : 0) / 100,
+                    ct = H * static_cast<float>(app.s.crop_height() < 1 ? app.s.cropTop : 0) / 100,
+                    cb = H * static_cast<float>(app.s.crop_height() < 1 ? app.s.cropBottom : 0) / 100;
+        const float fx = std::clamp(gx * W - fw / 2, cl, std::max(cl, W - cr - fw)),
+                    fy = std::clamp(gy * H - fh / 2, ct, std::max(ct, H - cb - fh));
         // Grid cell size shows pixel density: 8 in the periphery, 8 / ratio in the focus region.
         const double ratio = tfi ? ro.focusDensity * 100 / app.s.outer : ro.focusDensity * 100 / app.s.outer;
         const float pc = 8, fc = std::clamp(static_cast<float>(pc / std::max(0.01, ratio)), 2.0f, 8.0f);
@@ -888,6 +982,14 @@ float preview(float x, float y, float w, bool draw) {
         rt->PopLayer();
         if (app.s.outline)
             app.canvas.stroke(R(fx, fy, fw, fh), col(overlay(static_cast<int>(app.s.color))), 2 * k, corner * k);
+        // The cropped edges, as the headset shows them; with the helmet, its rim reaches into the view.
+        const bool helmet = app.s.mode == RenderMode::Qvfr && app.s.helmet.on;
+        const float rim = helmet ? H * app.s.helmet.rim / 100.0f : 0;
+        const Color cropped = col(app.c->preview_canvas, helmet ? 1.0f : 0.9f);
+        app.canvas.fill(R(0, 0, W, ct + rim), cropped);
+        app.canvas.fill(R(0, H - cb - rim, W, cb + rim), cropped);
+        app.canvas.fill(R(0, ct, cl + rim, H - ct - cb), cropped);
+        app.canvas.fill(R(W - cr - rim, ct, cr + rim, H - ct - cb), cropped);
         if (eye) {
             const float cx = x + gx * W * k, cy = y + gy * H * k;
             const Color label = col(app.c->preview_label);
@@ -900,7 +1002,8 @@ float preview(float x, float y, float w, bool draw) {
         const t::TypeStyle tiny{9.5f * k, 12 * k, 400, false};
         if (known) {
             app.canvas.text(L"Focus " + dims(ro.focus), tiny, R(fx + 6, fy + 4, W - fx - 6, 12), col(app.c->preview_label), Align::Leading, false);
-            app.canvas.text(L"Outer " + dims(ro.outer), tiny, R(8, H - 17, W - 16, 12), col(app.c->preview_label), Align::Leading, false);
+            app.canvas.text(L"Outer " + dims(ro.outer), tiny, R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label),
+                            Align::Leading, false);
         }
         rt->PopLayer();
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
@@ -1318,6 +1421,12 @@ void open_popup(Ctl owner) {
     } else if (owner == kFgScale || owner == kFgPeriphery) {
         app.popup.items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
         app.popup.selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
+    } else if (owner == kVisor) {
+        app.popup.items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
+        app.popup.selected = static_cast<int>(app.s.helmet.visor);
+    } else if (owner == kHelmetDetail) {
+        app.popup.items = {L"Performance (2048)", L"Detail (4096)"};
+        app.popup.selected = app.s.helmet.detail ? 1 : 0;
     } else if (owner == kCheekyNrPasses) {
         app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
         app.popup.selected = app.s.cheeky.nrPasses - 1;
@@ -1350,6 +1459,10 @@ void choose(Ctl owner, int option) {
         app.s.cheeky.fgScale = (option + 1) * 25;
     else if (owner == kFgPeriphery)
         app.s.cheeky.fgPeriphery = (option + 1) * 25;
+    else if (owner == kVisor)
+        app.s.helmet.visor = static_cast<VisorPosition>(std::clamp(option, 0, 2));
+    else if (owner == kHelmetDetail)
+        app.s.helmet.detail = option == 1;
     changed();
 }
 
@@ -1403,9 +1516,23 @@ void activate(Ctl id, int option) {
     case kCheekyNrPasses:
     case kFgMultiplier:
     case kFgScale:
-    case kFgPeriphery: open_popup(id); return;
+    case kFgPeriphery:
+    case kVisor:
+    case kHelmetDetail: open_popup(id); return;
     case kFgOn: app.s.cheeky.fg = !app.s.cheeky.fg; changed(); return;
     case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
+    case kCropOn:
+        if (app.s.mode == RenderMode::Qvfr) {
+            app.s.crop = !app.s.crop;
+            changed();
+        }
+        return;
+    case kHelmetOn:
+        if (app.s.mode == RenderMode::Qvfr) {
+            app.s.helmet.on = !app.s.helmet.on;
+            changed();
+        }
+        return;
     case kFgBorder: app.s.cheeky.fgBorder = !app.s.cheeky.fgBorder; changed(); return;
     case kCheekyMotionFix: app.s.cheeky.motionFix = !app.s.cheeky.motionFix; changed(); return;
     case kCheekyNr: app.s.cheeky.nr = !app.s.cheeky.nr; changed(); return;
@@ -1524,6 +1651,10 @@ void on_key(WPARAM key) {
     case kFgScale:
     case kFgPeriphery:
     case kOsdOn:
+    case kCropOn:
+    case kHelmetOn:
+    case kVisor:
+    case kHelmetDetail:
     case kSupport:
     case kRestore:
     case kLaunch:

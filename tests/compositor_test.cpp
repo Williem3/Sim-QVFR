@@ -6,10 +6,17 @@
 #include <cstdio>
 #include <cstring>
 
+#include <string>
+#include <vector>
+
 #include <dxgi1_6.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 
 #include "quad/compositor.h"
+#include "quad/focus_turn.h"
+#include "quad/fov_crop.h"
+#include "quad/helmet.h"
 #include "quad/views4_layout.h"
 
 using Microsoft::WRL::ComPtr;
@@ -90,6 +97,33 @@ void clear_rects(Gpu& gpu, ID3D12Resource* image, const float (&fill)[4], const 
     for (int i = 0; i < count; ++i)
         gpu.list->ClearRenderTargetView(rtv, colors[i], 1, &rects[i]);
     gpu.flush();
+}
+
+// A 1-pixel-wide PNG of `rows` RGBA rows (straight alpha), for the helmet's pieces.
+bool write_png(const std::wstring& path, const std::vector<uint32_t>& rows) {
+    const UINT height = static_cast<UINT>(rows.size());
+    std::vector<uint8_t> bgra(height * 4);
+    for (UINT y = 0; y < height; ++y) {
+        const uint32_t c = rows[y];  // 0xRRGGBBAA
+        bgra[y * 4 + 0] = static_cast<uint8_t>(c >> 8);
+        bgra[y * 4 + 1] = static_cast<uint8_t>(c >> 16);
+        bgra[y * 4 + 2] = static_cast<uint8_t>(c >> 24);
+        bgra[y * 4 + 3] = static_cast<uint8_t>(c);
+    }
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+    return SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
+           SUCCEEDED(wic->CreateStream(&stream)) && SUCCEEDED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) &&
+           SUCCEEDED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) &&
+           SUCCEEDED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) &&
+           SUCCEEDED(encoder->CreateNewFrame(&frame, nullptr)) && SUCCEEDED(frame->Initialize(nullptr)) &&
+           SUCCEEDED(frame->SetSize(1, height)) && SUCCEEDED(frame->SetPixelFormat(&format)) &&
+           SUCCEEDED(frame->WritePixels(height, 4, static_cast<UINT>(bgra.size()), bgra.data())) &&
+           SUCCEEDED(frame->Commit()) && SUCCEEDED(encoder->Commit());
 }
 
 struct Pixels {
@@ -296,6 +330,66 @@ int main() {
         check(views4_rect(tiny, 0, 3560, 1000).width == 100, "live sizes keep at least kMinLive of the launch size");
     }
 
+    // FOV crop: the sides are independent, outer is the temple side of each eye, in tangent space.
+    {
+        const XrFovf fov{std::atan(-1.0f), std::atan(1.0f), std::atan(1.0f), std::atan(-1.0f)};
+        const FovCrop crop = fov_crop(20, 10, 25, 5);
+        float left[4], right[4];
+        fov_tangents(crop_fov(fov, crop, 0), left);
+        fov_tangents(crop_fov(fov, crop, 1), right);
+        const auto close = [](float a, double b) { return std::abs(a - b) < 1e-5; };
+        check(close(left[0], -0.5) && close(left[1], 0.9) && close(left[2], 0.6) && close(left[3], -0.8),
+              "crop: left eye loses 25% at its temple (left), 5% at the nose, 20% top, 10% bottom");
+        check(close(right[0], -0.9) && close(right[1], 0.5) && close(right[2], 0.6) && close(right[3], -0.8),
+              "crop: the right eye mirrors outer and inner");
+        const FovCrop moreTop = fov_crop(35, 10, 25, 5);
+        float t[4];
+        fov_tangents(crop_fov(fov, moreTop, 0), t);
+        check(close(t[0], -0.5) && close(t[1], 0.9) && close(t[2], 0.3) && close(t[3], -0.8) &&
+                  std::abs(moreTop.kept_width() - crop.kept_width()) < 1e-12,
+              "crop: more off the top leaves the bottom and both sides as they were");
+        const FovCrop clamped = fov_crop(90, -5, 0, 0);
+        check(clamped.top == kCropMax && clamped.bottom == 0 && !FovCrop{}.on() && clamped.on(),
+              "crop: each side is clamped to 0..kCropMax on its own");
+        check(std::abs(cropped_share(0.31, 0.7) - 0.31 / 0.7) < 1e-12 && cropped_share(0.8, 0.6) == 1.0,
+              "crop: the focus box keeps its share of the uncropped eye (at most the whole cropped view)");
+
+        // The outer views shrink by the kept shares and keep their density; the focus views are unchanged.
+        const Views4Layout plain = views4_layout(0.5, 0.39, 0.25), cut = views4_layout(0.5, 0.39, 0.25, 0.7, 0.6);
+        check(std::abs(cut.outer_width() - 0.35) < 1e-12 && std::abs(cut.outer_height() - 0.30) < 1e-12 &&
+                  std::abs(cut.eye_width() - 0.74) < 1e-12 && std::abs(cut.eye_height() - 0.30) < 1e-12,
+              "crop layout: outer views 0.35 x 0.30 native, the offered eye 0.74 x 0.30");
+        const ViewRect c0 = views4_rect(cut, 0, 2960, 1200), c2 = views4_rect(cut, 2, 2960, 1200);
+        std::printf("     crop 70%% x 60%% in 2960x1200: outer %dx%d, focus at x=%d %dx%d\n", c0.width, c0.height, c2.left,
+                    c2.width, c2.height);
+        check(c0.width == 700 && c0.height == 1200 && c2.left == 1400 && c2.width == 780 && c2.height == 1000 &&
+                  views4_rect(plain, 2, 3560, 1000).width == 780,
+              "crop layout: 700x1200 outer views beside unchanged 780x1000 focus views");
+        // Live: the periphery's density, its views keeping the crop's shape.
+        const Views4Layout live = views4_live(cut, 0.25, 0.39, 0.25);
+        const ViewRect l0 = views4_rect(live, 0, 2960, 1200);
+        check(l0.width == 350 && l0.height == 600, "crop live: periphery 25% gives 350x600 outer views");
+        // The helmet's uncropped eye from a cropped view, and its shape.
+        float cut0[4], back[4];
+        fov_tangents(crop_fov(fov, crop, 0), cut0);
+        uncrop_tangents(cut0, crop, 0, back);
+        float cut1[4], back1[4];
+        fov_tangents(crop_fov(fov, crop, 1), cut1);
+        uncrop_tangents(cut1, crop, 1, back1);
+        check(close(back[0], -1) && close(back[1], 1) && close(back[2], 1) && close(back[3], -1) && close(back1[0], -1) &&
+                  close(back1[1], 1),
+              "helmet: uncrop_tangents recovers each eye's uncropped FOV");
+        HelmetSettings hs;
+        hs.rim = 10;
+        hs.corners = 50;
+        const HelmetShape shape = helmet_shape(hs, back, cut0);
+        check(close(shape.rim, 0.2) && close(shape.radius, 0.5 * 0.5 * 1.4) && close(shape.opening[0], -0.5),
+              "helmet: the rim is a share of the eye's height, the corners of half the opening's shorter side");
+        const Views4Fit over = views4_fit(cut, 0.8, 0.39, 0.25);
+        check(over.outerCapped && std::abs(over.outer - 0.5) < 1e-9,
+              "crop live: the periphery's density is capped at its launch target (the cropped views' height)");
+    }
+
     // Unequal sources: outer views 64x64 and focus views 32x32 in a 192x64 image, the rows below the
     // focus views unused (magenta). Neither a neighbour view nor the unused rows may bleed into the output.
     {
@@ -389,6 +483,286 @@ int main() {
         const bool onArc = arc[0] == 0 && std::abs(arc[1] - 160) <= 2 && std::abs(arc[2] - 160) <= 2;
         std::printf("%s eye 0 rounded outline on the arc got %3u,%3u,%3u (teal)\n", onArc ? "ok  " : "FAIL", arc[0], arc[1], arc[2]);
         failures += onArc ? 0 : 1;
+
+        // FOV crop: eye 0 drawn into the top-left 50% x 75% of its half; the rest left as it was.
+        clear_eyes(gpu, output.Get(), black, black);
+        v4[0].border = 0;
+        v4[0].cornerRadius = 0;
+        v4[0].outputSize[0] = 0.5f;
+        v4[0].outputSize[1] = 0.75f;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with a crop\n");
+            return 1;
+        }
+        const Pixels cropped = read_back(gpu, output.Get());
+        expect(cropped, 0, 0.05f, 0.05f, "outer", 255, 0, 0);
+        expect(cropped, 0, 0.25f, 0.375f, "focus", 0, 255, 0);  // the box, centred in the drawn rect
+        expect(cropped, 0, 0.75f, 0.30f, "cropped", 0, 0, 0);    // right of the drawn rect
+        expect(cropped, 0, 0.20f, 0.90f, "cropped", 0, 0, 0);    // below it
+        expect(cropped, 1, 0.50f, 0.50f, "focus", 255, 255, 0);  // eye 1 (no outputSize) fills its half
+        expect(cropped, 1, 0.95f, 0.95f, "outer", 0, 0, 255);
+
+        // The helmet: eye 0's output covers tangents -2..2, ACE rendered -1..1 (the opening). Inside the
+        // opening beyond the rim the view is untouched; the lip just inside its edge and the shell outside
+        // it take the frame's light (eye 0's outer view is red), the lip brighter; eye 1 stays as it was.
+        clear_eyes(gpu, output.Get(), black, black);
+        v4[0].outputSize[0] = v4[0].outputSize[1] = 0;
+        const float wide[4] = {-2, 2, 2, -2}, opening[4] = {-1, 1, 1, -1};
+        std::memcpy(v4[0].viewTan, wide, sizeof(wide));
+        std::memcpy(v4[0].helmetOpening, opening, sizeof(opening));
+        v4[0].helmetRim = 0.1f;
+        v4[0].helmetRadius = 0;
+        v4[0].helmetLight = 1;
+        v4[0].helmet = 1;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with the helmet\n");
+            return 1;
+        }
+        const Pixels hq = read_back(gpu, output.Get());
+        expect(hq, 0, 0.50f, 0.50f, "focus", 0, 255, 0);
+        expect(hq, 0, 0.30f, 0.50f, "outer", 255, 0, 0);  // inside the opening, past the rim
+        const uint8_t* lip = hq.at(static_cast<UINT>(0.252f * (kOutW / 2)), kOutH / 2);
+        const uint8_t* shell = hq.at(static_cast<UINT>(0.05f * (kOutW / 2)), kOutH / 2);
+        const bool lit = lip[0] > 40 && lip[0] < 200 && lip[1] < 12 && lip[2] < 12 && shell[0] > 5 && shell[0] < lip[0] &&
+                         shell[1] < 8 && shell[2] < 8;
+        std::printf("%s helmet lip %3u,%3u,%3u, shell %3u,%3u,%3u (red light, lip brighter)\n", lit ? "ok  " : "FAIL",
+                    lip[0], lip[1], lip[2], shell[0], shell[1], shell[2]);
+        failures += lit ? 0 : 1;
+        expect(hq, 1, 0.50f, 0.50f, "focus", 255, 255, 0);
+        // The light for the log: asked for, copied at the next composition, read once the GPU is done.
+        float light[2][4][3] = {};
+        const bool none = !c4.read_light(light);
+        c4.request_light();
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose for the light copy\n");
+            return 1;
+        }
+        read_back(gpu, output.Get());  // waits for the queue
+        const bool readLight = c4.read_light(light);
+        bool sides = readLight;
+        for (int s = 0; s < 4; ++s)
+            sides = sides && std::abs(light[0][s][0] - 1) < 0.01f && light[0][s][1] < 0.01f && light[0][s][2] < 0.01f &&
+                    light[1][s][0] < 0.01f && light[1][s][1] < 0.01f && std::abs(light[1][s][2] - 1) < 0.01f;
+        std::printf("%s helmet light read back: eye 0 left %.3f/%.3f/%.3f, eye 1 left %.3f/%.3f/%.3f\n",
+                    none && sides && !c4.read_light(light) ? "ok  " : "FAIL", light[0][0][0], light[0][0][1],
+                    light[0][0][2], light[1][0][0], light[1][0][1], light[1][0][2]);
+        failures += none && sides && !c4.read_light(light) ? 0 : 1;
+        // The light diagnostic: the shell shows the frame's light itself (eye 0's sides are all red).
+        v4[0].helmet = 3;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with the helmet's light diagnostic\n");
+            return 1;
+        }
+        const Pixels dq = read_back(gpu, output.Get());
+        expect(dq, 0, 0.05f, 0.50f, "the frame's light", 255, 0, 0);
+
+        // The pieces (light 0: as drawn), over the whole output (tangents -2..2, no turn), 8 rows each: the
+        // top piece's first quarter is white, the bottom piece's last quarter yellow, the visor's second
+        // quarter black; the rest of each is clear (white, so a fringe would show). The visor slid up by a
+        // quarter takes its band with it.
+        wchar_t tempDir[MAX_PATH];
+        GetTempPathW(MAX_PATH, tempDir);
+        const std::wstring top = std::wstring(tempDir) + L"aceqv-helmet-top.png",
+                           bottom = std::wstring(tempDir) + L"aceqv-helmet-bottom.png",
+                           visor = std::wstring(tempDir) + L"aceqv-helmet-visor.png";
+        const uint32_t clear = 0xFFFFFF00;
+        const bool written =
+            write_png(top, {0xFFFFFFFF, 0xFFFFFFFF, clear, clear, clear, clear, clear, clear}) &&
+            write_png(bottom, {clear, clear, clear, clear, clear, clear, 0xFFFF00FF, 0xFFFF00FF}) &&
+            write_png(visor, {clear, clear, 0x000000FF, 0x000000FF, clear, clear, clear, clear});
+        const bool loaded = written && c4.load_helmet_piece(HelmetPiece::Top, top) &&
+                            c4.load_helmet_piece(HelmetPiece::Bottom, bottom) && c4.load_helmet_piece(HelmetPiece::Visor, visor);
+        check(loaded && c4.has_helmet_pieces() && std::abs(c4.helmet_edge(HelmetPiece::Top) - 0.25) < 1e-9 &&
+                  std::abs(c4.helmet_edge(HelmetPiece::Bottom) - 0.25) < 1e-9 && c4.helmet_aspect() == 8,
+              "helmet pieces: loaded, each opaque edge found down the middle");
+        const float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        std::memcpy(v4[0].helmetRotation, identity, sizeof(identity));
+        v4[0].helmetTanHalf[0] = v4[0].helmetTanHalf[1] = 2;
+        v4[0].helmetLight = 0;
+        v4[0].visorOffset = 0;
+        v4[0].helmet = 2;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with the helmet's pieces\n");
+            return 1;
+        }
+        const Pixels pq = read_back(gpu, output.Get());
+        expect(pq, 0, 0.30f, 0.05f, "top piece", 255, 255, 255);
+        expect(pq, 0, 0.30f, 0.95f, "bottom piece", 255, 255, 0);
+        expect(pq, 0, 0.30f, 0.375f, "visor band", 0, 0, 0);
+        expect(pq, 0, 0.30f, 0.60f, "the scene through them", 255, 0, 0);
+        // Depth: the eye's shift of the images' tangents moves them (up 0.5 here: the top piece reaches lower).
+        v4[0].helmetShift[1] = 0.5f;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with a depth shift\n");
+            return 1;
+        }
+        const Pixels hs = read_back(gpu, output.Get());
+        expect(hs, 0, 0.30f, 0.30f, "top piece, shifted down by depth", 255, 255, 255);
+        v4[0].helmetShift[1] = 0;
+        const uint8_t* unshifted = pq.at(static_cast<UINT>(0.30f * (kOutW / 2)), static_cast<UINT>(0.30f * kOutH));
+        check(!(unshifted[0] == 255 && unshifted[1] == 255 && unshifted[2] == 255),
+              "without the shift the top piece does not reach that point");
+        v4[0].visorOffset = 0.25f;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with the visor slid up\n");
+            return 1;
+        }
+        const Pixels sq = read_back(gpu, output.Get());
+        expect(sq, 0, 0.30f, 0.375f, "the scene where the visor was", 255, 0, 0);
+        expect(sq, 0, 0.30f, 0.05f, "top piece over the slid visor", 255, 255, 255);
+        // The light diagnostic with pieces: their shapes in the frame's light (eye 0's sides are red), the
+        // scene where they are clear.
+        v4[0].helmet = 3;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with the pieces' light diagnostic\n");
+            return 1;
+        }
+        const Pixels cq = read_back(gpu, output.Get());
+        expect(cq, 0, 0.30f, 0.05f, "top piece in the frame's light", 255, 0, 0);
+        expect(cq, 0, 0.30f, 0.60f, "the scene through the pieces", 255, 0, 0);
+        v4[0].helmet = 2;
+
+        // An opaque visor is glass: white passes the scene as it is, a mid-grey band (linear 0.5) halves it;
+        // slid up past the band, the scene is whole again; below its image there is no visor.
+        const bool glass = write_png(visor, {0xFFFFFFFF, 0xFFFFFFFF, 0xBCBCBCFF, 0xBCBCBCFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                                             0xFFFFFFFF, 0xFFFFFFFF}) &&
+                           c4.load_helmet_piece(HelmetPiece::Top, L"") && c4.load_helmet_piece(HelmetPiece::Visor, visor);
+        v4[0].visorOffset = 0;
+        v4[0].visorBlend = 0;
+        if (!glass || !c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with a glass visor\n");
+            return 1;
+        }
+        const Pixels gq = read_back(gpu, output.Get());
+        expect(gq, 0, 0.30f, 0.60f, "clear glass", 255, 0, 0);
+        expect(gq, 0, 0.30f, 0.375f, "the tinted band (half the light)", 188, 0, 0);
+        v4[0].visorOffset = 0.75f;  // the band above the view, the image's bottom at a quarter
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with the glass visor open\n");
+            return 1;
+        }
+        const Pixels oq = read_back(gpu, output.Get());
+        expect(oq, 0, 0.30f, 0.375f, "no visor below its image", 255, 0, 0);
+        // The helmet's own layer (light 0: as drawn), the quad over exactly the images: the top piece white
+        // and opaque, the clear middle transparent (nothing drawn, nothing hidden), the glass band letting half
+        // the scene through (alpha ~0.5, no colour); edges extend outward from a quad wider than the images.
+        const bool layerPieces = write_png(top, {0xFFFFFFFF, 0xFFFFFFFF, clear, clear, clear, clear, clear, clear}) &&
+                                 c4.load_helmet_piece(HelmetPiece::Top, top);
+        auto layer = make_image(gpu, 64, 64);
+        HelmetLayerDraw draw{};
+        draw.coverTan[0] = draw.coverTan[1] = draw.imageTan[0] = draw.imageTan[1] = 1;
+        std::memcpy(draw.outerSource[0], v4[0].outerSource, sizeof(draw.outerSource[0]));
+        std::memcpy(draw.outerSource[1], v4[1].outerSource, sizeof(draw.outerSource[1]));
+        v4[0].visorOffset = 0;
+        if (!layerPieces || !c4.compose(views.Get(), output.Get(), v4) || !c4.draw_helmet_layer(layer.Get(), draw)) {
+            std::printf("FAIL: the helmet layer\n");
+            return 1;
+        }
+        const Pixels lq = read_back(gpu, layer.Get());
+        const auto rgba = [&](float u, float v) { return lq.at(static_cast<UINT>(u * 64), static_cast<UINT>(v * 64)); };
+        const uint8_t *topPx = rgba(0.5f, 0.1f), *middle = rgba(0.5f, 0.65f), *band = rgba(0.5f, 0.375f);
+        const bool layerOk = topPx[0] == 255 && topPx[3] == 255 && middle[0] == 0 && middle[3] == 0 &&
+                             band[0] == 0 && std::abs(band[3] - 127) <= 2;
+        std::printf("%s helmet layer: top %u/%u, middle %u/%u, glass band %u/%u (colour/alpha)\n", layerOk ? "ok  " : "FAIL",
+                    topPx[0], topPx[3], middle[0], middle[3], band[0], band[3]);
+        failures += layerOk ? 0 : 1;
+        draw.coverTan[0] = draw.coverTan[1] = 2;  // the quad twice the images: the top piece's edge reaches out
+        if (!c4.load_helmet_piece(HelmetPiece::Visor, L"") || !c4.draw_helmet_layer(layer.Get(), draw)) {
+            std::printf("FAIL: the wider helmet layer\n");
+            return 1;
+        }
+        const Pixels wq = read_back(gpu, layer.Get());
+        const uint8_t *corner = wq.at(1, 1), *centre = wq.at(32, 32);
+        check(corner[0] == 255 && corner[3] == 255 && centre[3] == 0,
+              "helmet layer wider than the images: their edges extend to its corners, the middle stays clear");
+
+        // Only the bands: the layer image cleared magenta, the top quarter drawn; the rest left as it was.
+        const float magentaClear[4] = {1, 0, 1, 1};
+        clear_eyes(gpu, layer.Get(), magentaClear, magentaClear);
+        draw.coverTan[0] = draw.coverTan[1] = 1;
+        draw.bands = {{0, 0.25f}};
+        if (!c4.draw_helmet_layer(layer.Get(), draw)) {
+            std::printf("FAIL: the banded helmet layer\n");
+            return 1;
+        }
+        const Pixels bq = read_back(gpu, layer.Get());
+        const uint8_t *drawnTop = bq.at(32, 4), *untouched = bq.at(32, 48);
+        check(drawnTop[0] == 255 && drawnTop[1] == 255 && drawnTop[3] == 255 && untouched[0] == 255 && untouched[1] == 0 &&
+                  untouched[2] == 255,
+              "helmet layer: only its bands are drawn (below the top band the image is untouched)");
+        draw.bands.clear();
+
+        // The rows the pieces draw on: the top piece's first quarter; a glass visor only where it tints (its grey
+        // band, rows 2-3 of 8: the second quarter), slid up with it; as drawn (alpha), all of it.
+        const bool rowPieces = write_png(visor, {0xFFFFFFFF, 0xFFFFFFFF, 0xBCBCBCFF, 0xBCBCBCFF, 0xFFFFFFFF, 0xFFFFFFFF,
+                                                 0xFFFFFFFF, 0xFFFFFFFF}) &&
+                               c4.load_helmet_piece(HelmetPiece::Visor, visor);
+        const auto covered = [](const std::vector<bool>& rows, double v) { return rows[static_cast<size_t>(v * kHelmetRows)]; };
+        const std::vector<bool> closedRows = c4.helmet_rows(0, 0), slidRows = c4.helmet_rows(0.25, 0), asDrawn = c4.helmet_rows(0, 2);
+        check(rowPieces && covered(closedRows, 0.1) && covered(closedRows, 0.4) && !covered(closedRows, 0.7) &&
+                  covered(slidRows, 0.1) && !covered(slidRows, 0.4) && covered(asDrawn, 0.7),
+              "helmet rows: the brow, the visor's tinted band (gone when slid up), all of an alpha visor");
+        {
+        // The bands from the rows: drawn at the top and bottom quarters, clear between (one row of margin).
+        std::vector<bool> rows(kHelmetRows, false);
+        for (int i = 0; i < kHelmetRows / 4; ++i)
+            rows[i] = rows[kHelmetRows - 1 - i] = true;
+        const std::vector<HelmetBand> two = helmet_bands(rows, 1, 1);
+        check(two.size() == 2 && two[0].top == 0 && std::abs(two[0].bottom - 65.0f / 256) < 1e-6f &&
+                  std::abs(two[1].top - 191.0f / 256) < 1e-6f && two[1].bottom == 1,
+              "helmet bands: the brow and chin bands, the clear middle left out");
+        const std::vector<HelmetBand> wider = helmet_bands(rows, 1, 2);  // the quad twice the images' height
+        check(wider.size() == 2 && std::abs(wider[0].bottom - (0.5f - (0.5f - 65.0f / 256) / 2)) < 1e-6f,
+              "helmet bands: mapped from the images onto a larger quad");
+        std::vector<bool> top(kHelmetRows, false);
+        for (int i = 0; i < kHelmetRows / 4; ++i)
+            top[i] = true;
+        const std::vector<HelmetBand> brow = helmet_bands(top, 1, 1);
+        check(brow.size() == 1 && brow[0].top == 0 && brow[0].bottom < 0.3f,
+              "helmet bands: a clear bottom row leaves that end of the quad out");
+        check(helmet_bands(std::vector<bool>(kHelmetRows, true), 1, 1).size() == 1 &&
+                  helmet_bands(std::vector<bool>(kHelmetRows, true), 1, 1)[0].bottom == 1,
+              "helmet bands: drawn everywhere (a closed tinted visor), the whole quad");
+        std::vector<bool> nearly(kHelmetRows, true);
+        for (int i = 120; i < 130; ++i)
+            nearly[i] = false;
+        check(helmet_bands(nearly, 1, 1).size() == 1, "helmet bands: a clear run under 8% of the quad is kept");
+        }
+        DeleteFileW(top.c_str());
+        DeleteFileW(bottom.c_str());
+        DeleteFileW(visor.c_str());
+
+        // Depth: an eye 3.2 cm left of the middle sees the images 8 cm away shifted by -0.4 (tangent); far, not at all.
+        HelmetSettings deep;
+        deep.depth = 8;
+        float shift[2] = {};
+        const float leftEye[3] = {-0.032f, 0, 0};
+        helmet_parallax(deep, leftEye, shift);
+        HelmetSettings distant;
+        float noShift[2] = {1, 1};
+        helmet_parallax(distant, leftEye, noShift);
+        check(std::abs(shift[0] + 0.4f) < 1e-6f && shift[1] == 0 && noShift[0] == 0 && noShift[1] == 0 &&
+                  helmet_depth(1) == kHelmetDepthMin && helmet_depth(0) == 0 && helmet_depth(999) == kHelmetDepthMax,
+              "helmet depth: the parallax of an eye at 8 cm; none when far; depth clamps (0 is far)");
+        // The quad's cover: eyes straight ahead seeing tangents -1..1 need +-1 (and a 5% margin); an eye 3.2 cm
+        // left of the middle with the quad 8 cm away needs 0.4 more across.
+        const float straight[2][9] = {{1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 0, 0, 0, 1, 0, 0, 0, 1}};
+        const float centred[2][3] = {}, apart[2][3] = {{-0.032f, 0, 0}, {0.032f, 0, 0}};
+        const float eyeViews[2][4] = {{-1, 1, 1, -1}, {-1, 1, 1, -1}};
+        double coverX = 0, coverY = 0, nearX = 0, nearY = 0;
+        helmet_cover(straight, centred, eyeViews, 10, coverX, coverY);
+        helmet_cover(straight, apart, eyeViews, 0.08, nearX, nearY);
+        check(std::abs(coverX - 1.05) < 1e-6 && std::abs(coverY - 1.05) < 1e-6 && std::abs(nearX - 1.4 * 1.05) < 1e-5 &&
+                  std::abs(nearY - 1.05) < 1e-6,
+              "helmet layer: the quad covers both eyes' views, wider by the parallax when near");
+        // The crop hint: an image 110 degrees wide and as high, its top piece opaque down to a quarter
+        // of its height and its bottom piece up from three quarters, over an eye of tangents +-1.
+        HelmetSettings pieces;
+        int hintTop = 0, hintBottom = 0;
+        helmet_crop_hint(pieces, 1.0, 0.25, 0.75, 1, -1, hintTop, hintBottom);
+        const double openingTan = std::tan(110 * kHelmetDegrees / 2) * 0.5;  // tangent of the opening's edge
+        check(hintTop == std::lround((1 - openingTan) / 2 * 100) && hintBottom == hintTop,
+              "helmet: the crop hint meets the pieces' opening");
         c4.shutdown();
     }
 

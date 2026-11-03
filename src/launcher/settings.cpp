@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
 #include <iterator>
 #include <filesystem>
 #include <string>
@@ -71,7 +72,28 @@ Settings load_settings(const std::wstring& ini) {
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
+    s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
+    s.cropTop = clamp_to(read_int(ini, L"crop", L"top", 0), kCropRange);
+    s.cropBottom = clamp_to(read_int(ini, L"crop", L"bottom", 0), kCropRange);
+    s.cropOuter = clamp_to(read_int(ini, L"crop", L"outer", 0), kCropRange);
+    s.cropInner = clamp_to(read_int(ini, L"crop", L"inner", 0), kCropRange);
+    s.helmet = read_helmet_settings(ini.c_str());
     return s;
+}
+
+double Settings::crop_width() const {
+    return mode == RenderMode::Qvfr && crop ? 1 - (clamp_to(cropOuter, kCropRange) + clamp_to(cropInner, kCropRange)) / 100.0 : 1;
+}
+
+double Settings::crop_height() const {
+    return mode == RenderMode::Qvfr && crop ? 1 - (clamp_to(cropTop, kCropRange) + clamp_to(cropBottom, kCropRange)) / 100.0 : 1;
+}
+
+std::wstring crop_key(const Settings& s) {
+    if (s.mode != RenderMode::Qvfr || !s.crop)
+        return L"0,0,0,0";
+    const auto n = [](int v) { return std::to_wstring(clamp_to(v, kCropRange)); };
+    return n(s.cropTop) + L"," + n(s.cropBottom) + L"," + n(s.cropOuter) + L"," + n(s.cropInner);
 }
 
 bool save_settings(const std::wstring& ini, const Settings& in) {
@@ -110,6 +132,12 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     if (s.mode == RenderMode::Qvfr) {  // QVFR resizes its views live, up to their launch size
         ok &= write(ini, L"experiment", L"periphery_scale", n(clamp_to(s.outer, kOuterRange)));
         ok &= write(ini, L"experiment", L"focus_density", n(clamp_to(s.inner, kInnerRange)));
+        ok &= write(ini, L"crop", L"enabled", s.crop ? L"1" : L"0");  // and the FOV crop
+        ok &= write(ini, L"crop", L"top", n(clamp_to(s.cropTop, kCropRange)));
+        ok &= write(ini, L"crop", L"bottom", n(clamp_to(s.cropBottom, kCropRange)));
+        ok &= write(ini, L"crop", L"outer", n(clamp_to(s.cropOuter, kCropRange)));
+        ok &= write(ini, L"crop", L"inner", n(clamp_to(s.cropInner, kCropRange)));
+        ok &= write_helmet_settings(ini.c_str(), s.helmet);
     }
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
@@ -202,6 +230,9 @@ LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo) {
     l.outer = read_int(runtimeInfo, L"runtime", L"launch_outer", 0);
     l.focusWidth = read_int(runtimeInfo, L"runtime", L"launch_focus_width", 0);
     l.focusHeight = read_int(runtimeInfo, L"runtime", L"launch_focus_height", 0);
+    l.crop = read_string(runtimeInfo, L"runtime", L"launch_crop");
+    if (l.crop.empty())
+        l.crop = L"0,0,0,0";  // a layer from before the crop
     return l;
 }
 
@@ -212,7 +243,12 @@ bool fits_launch(const Settings& s, const LaunchSizes& launch) {
         return s.outer == launch.outer;
     // The focus views' size against the native eye, as the layer computes it (percent, rounded there).
     const double focusWidth = s.inner * s.width / 100.0, focusHeight = s.inner * s.height / 100.0;
-    return s.outer <= launch.outer && focusWidth <= launch.focusWidth + 0.5 && focusHeight <= launch.focusHeight + 0.5;
+    // The outer views (periphery density over the crop's share) no larger than at launch.
+    int top = 0, bottom = 0, outer = 0, inner = 0;
+    swscanf_s(launch.crop.c_str(), L"%d,%d,%d,%d", &top, &bottom, &outer, &inner);
+    const double launchWidth = launch.outer * (100 - outer - inner) / 100.0, launchHeight = launch.outer * (100 - top - bottom) / 100.0;
+    return s.outer * s.crop_width() <= launchWidth + 0.5 && s.outer * s.crop_height() <= launchHeight + 0.5 &&
+           focusWidth <= launch.focusWidth + 0.5 && focusHeight <= launch.focusHeight + 0.5;
 }
 
 
@@ -236,7 +272,8 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
     Readouts r;
     const auto scaled = [](int base, double fraction) { return static_cast<int>(std::lround(base * fraction)); };
     const auto area = [](Size v) { return static_cast<double>(v.width) * v.height; };
-    r.outer = {scaled(runtime.width, s.outer / 100.0), scaled(runtime.height, s.outer / 100.0)};
+    // QVFR's FOV crop: the outer views keep their density over the kept share of the eye.
+    r.outer = {scaled(runtime.width, s.outer / 100.0 * s.crop_width()), scaled(runtime.height, s.outer / 100.0 * s.crop_height())};
     if (s.mode == RenderMode::Qvfr) {
         // The kit's QVFR.viewPixels: focus px = recommended x inner % x foveated size %.
         r.focus = {scaled(runtime.width, s.inner / 100.0 * s.width / 100.0),

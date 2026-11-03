@@ -1,5 +1,7 @@
 #include "compositor.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <utility>
 
@@ -19,9 +21,21 @@ cbuffer Eye : register(b0) {
     float4 outerSrc, focusSrc;
     float4 params;  // feather, border, corner radius
     float4 borderColor;
+    float4 viewTan;        // the output's tangents (all 0: outerTan)
+    float4 helmetOpening;  // the visor opening's tangents / looks 2 and 4: xy the eye's shift of the images' tangents (depth)
+    // x: rim (tangents) / looks 2 and 4: the loaded pieces (1 visor, 2 bottom, 4 top, 8 the visor as a tint);
+    // y: corner radius (tangents) / the visor's white point (linear); z: light (0..1); w: the look (EyeComposition)
+    float4 helmet;
+    // Look 2: rows taking a direction in the eye's frame into the images'; w: tangent half extents across and
+    // up/down, the visor's slide in image heights.
+    float4 helmetRot0, helmetRot1, helmetRot2;
 };
 Texture2D outerTex : register(t0);
 Texture2D focusTex : register(t1);
+Texture2D lightTex : register(t2);   // the frame's light per eye side (LightPS)
+Texture2D visorTex : register(t3);   // look 2: the pieces
+Texture2D bottomTex : register(t4);
+Texture2D topTex : register(t5);
 SamplerState linearClamp : register(s0);
 struct V { float4 position : SV_Position; float2 uv : TEXCOORD0; };
 V VS(uint id : SV_VertexID) {
@@ -52,11 +66,76 @@ float inside_box(float2 f) {
     const float d = length(max(q, 0)) + min(max(q.x, q.y), 0) - r;
     return -d / min(size.x, size.y);
 }
+// The helmet over a point `a` (tangents) at `p` (0..1 across the eye's output): the visor opening is a
+// rounded rectangle; the lip reaches helmet.x into it, soft (out of focus), lit by the frame's light
+// at the nearest sides and brightest where light comes in; a dark seal runs along the opening's edge,
+// and deeper in the shell takes less light. The lining is a mid grey, so the frame's light (a tunnel,
+// a bright sky) shows plainly. Look 3 (the light diagnostic) shows the frame's light itself.
+float3 helmet_apply(float3 scene, float2 a, float2 p) {
+    const float2 c = 0.5 * float2(helmetOpening.x + helmetOpening.y, helmetOpening.z + helmetOpening.w);
+    const float2 hs = 0.5 * float2(helmetOpening.y - helmetOpening.x, helmetOpening.z - helmetOpening.w);
+    const float r = min(helmet.y, min(hs.x, hs.y));
+    const float2 q = abs(a - c) - hs + r;
+    const float d = length(max(q, 0)) + min(max(q.x, q.y), 0) - r;  // > 0 outside the opening
+    const float rim = max(helmet.x, 1e-4);
+    float4 w = float4((1 - p.x) * (1 - p.x), p.x * p.x, (1 - p.y) * (1 - p.y), p.y * p.y);
+    w /= dot(w, float4(1, 1, 1, 1));
+    const int row = (int)params.w;  // the eye
+    const float3 frame = w.x * lightTex.Load(int3(0, row, 0)).rgb + w.y * lightTex.Load(int3(1, row, 0)).rgb +
+                         w.z * lightTex.Load(int3(2, row, 0)).rgb + w.w * lightTex.Load(int3(3, row, 0)).rgb;
+    const float alpha = smoothstep(-rim, -0.4 * rim, d);
+    if (helmet.w > 2.5 && helmet.w < 3.5)
+        return lerp(scene, frame, alpha);
+    if (helmet.w > 1.5) {
+        // The pieces, fixed to the head: this eye's direction in the images' frame, then over each other.
+        const float3 a3 = float3(a, -1);
+        const float3 d = float3(dot(helmetRot0.xyz, a3), dot(helmetRot1.xyz, a3), dot(helmetRot2.xyz, a3));
+        const float2 t = d.xy / max(-d.z, 1e-3) + helmetOpening.xy;  // + the parallax of the images' depth
+        const float2 uv = float2(0.5 + t.x / (2 * helmetRot0.w), 0.5 - t.y / (2 * helmetRot1.w));
+        const float3 lit = lerp(1.0, 2.5 * frame, helmet.z);
+        const uint pieces = (uint)helmet.x;
+        const bool check = helmet.w > 3.5;  // the light diagnostic: the pieces' shapes in the frame's light
+        float3 color = scene;  // the pieces over it, back to front (premultiplied, as they are loaded)
+        const float2 vu = uv + float2(0, helmetRot2.w);
+        if ((pieces & 1) && vu.y >= 0 && vu.y <= 1) {  // no visor above or below its image (open clears the view)
+            const float4 v = visorTex.SampleLevel(linearClamp, vu, 0);
+            if (pieces & 8) {
+                // Glass: it passes the scene filtered by its colour (the image's brightest part is clear) and
+                // reflects a little of the frame's light.
+                const float3 through = saturate(v.rgb / max(v.a, 1e-4) / max(helmet.y, 1e-3));
+                if (!check)
+                    color = color * lerp(1.0, through, v.a) + 0.05 * helmet.z * frame * v.a;
+            } else {
+                color = (check ? frame * v.a : v.rgb * lit) + color * (1 - v.a);
+            }
+        }
+        if (pieces & 2) {
+            const float4 v = bottomTex.SampleLevel(linearClamp, uv, 0);
+            color = (check ? frame * v.a : v.rgb * lit) + color * (1 - v.a);
+        }
+        if (pieces & 4) {
+            const float4 v = topTex.SampleLevel(linearClamp, uv, 0);
+            color = (check ? frame * v.a : v.rgb * lit) + color * (1 - v.a);
+        }
+        return color;
+    }
+    const float3 light = lerp(0.3, frame, helmet.z);
+    const float lip = exp(-max(d + rim, 0) / (1.2 * rim));
+    const float seal = 1 - 0.55 * exp(-(d * d) / (0.02 * rim * rim));
+    return lerp(scene, 0.30 * (0.35 + 1.4 * lip) * seal * light, alpha);
+}
 float4 PS(V v) : SV_Target {
     float2 outerSize;
     outerTex.GetDimensions(outerSize.x, outerSize.y);
-    float4 color = outerTex.SampleLevel(linearClamp, inside(outerSrc.xy + v.uv * outerSrc.zw, outerSrc, outerSize), 0);
-    const float3 a = float3(lerp(outerTan.x, outerTan.y, v.uv.x), lerp(outerTan.z, outerTan.w, v.uv.y), -1);
+    const float4 vt = viewTan.y > viewTan.x ? viewTan : outerTan;
+    const float3 a = float3(lerp(vt.x, vt.y, v.uv.x), lerp(vt.z, vt.w, v.uv.y), -1);
+    // Where the point is in the rendered outer view (v.uv itself when the output covers just it).
+    const float2 o = viewTan.y > viewTan.x
+                         ? float2((a.x - outerTan.x) / (outerTan.y - outerTan.x), (outerTan.z - a.y) / (outerTan.z - outerTan.w))
+                         : v.uv;
+    const bool rendered = all(o >= 0) && all(o <= 1);
+    float4 color = rendered ? outerTex.SampleLevel(linearClamp, inside(outerSrc.xy + o * outerSrc.zw, outerSrc, outerSize), 0)
+                            : float4(0, 0, 0, 1);
     const float3 b = float3(dot(rot0.xyz, a), dot(rot1.xyz, a), dot(rot2.xyz, a));
     const float2 t = b.xy / max(-b.z, 1e-6);
     const float2 f = float2((t.x - focusTan.x) / (focusTan.y - focusTan.x), (focusTan.z - t.y) / (focusTan.z - focusTan.w));
@@ -84,9 +163,83 @@ float4 PS(V v) : SV_Target {
         if (e < params.y)
             color = borderColor;
     }
+    if (helmet.w > 0)
+        color.rgb = helmet_apply(color.rgb, a.xy, v.uv);
     return color;
 }
+// The helmet as its own layer: the quad spans tangents +-outerTan.xy of the images' plane, the images
+// +-outerTan.zw; focusTan.x is the visor's slide; helmet as in helmet_apply's looks 2 and 4. Premultiplied
+// colour, alpha how much of the scene the pieces hide (a glass visor: its transmission's brightness).
+float4 HelmetLayerPS(V v) : SV_Target {
+    const float2 t = float2((v.uv.x - 0.5) * 2 * outerTan.x, (0.5 - v.uv.y) * 2 * outerTan.y);
+    const float2 uv = float2(0.5 + t.x / (2 * outerTan.z), 0.5 - t.y / (2 * outerTan.w));
+    // The frame's light at this side of the view, both eyes'.
+    const float2 p = v.uv;
+    float4 w = float4((1 - p.x) * (1 - p.x), p.x * p.x, (1 - p.y) * (1 - p.y), p.y * p.y);
+    w /= dot(w, float4(1, 1, 1, 1));
+    float3 frame = 0;
+    for (int row = 0; row < 2; ++row)
+        frame += 0.5 * (w.x * lightTex.Load(int3(0, row, 0)).rgb + w.y * lightTex.Load(int3(1, row, 0)).rgb +
+                        w.z * lightTex.Load(int3(2, row, 0)).rgb + w.w * lightTex.Load(int3(3, row, 0)).rgb);
+    const float3 lit = lerp(1.0, 2.5 * frame, helmet.z);
+    const uint pieces = (uint)helmet.x;
+    const bool check = helmet.w > 3.5;
+    float3 color = 0;     // premultiplied, back to front
+    float through = 1;    // how much of the scene shows through
+    const float2 vu = uv + float2(0, focusTan.x);
+    if ((pieces & 1) && vu.y >= 0 && vu.y <= 1) {
+        const float4 v4 = visorTex.SampleLevel(linearClamp, vu, 0);
+        if (pieces & 8) {  // glass: the scene through it at the brightness of its transmission, and a faint reflection
+            const float3 glass = saturate(v4.rgb / max(v4.a, 1e-4) / max(helmet.y, 1e-3));
+            through = lerp(1.0, dot(glass, float3(0.2126, 0.7152, 0.0722)), v4.a);
+            color = check ? 0 : 0.05 * helmet.z * frame * v4.a;
+        } else {
+            color = check ? frame * v4.a : v4.rgb * lit;
+            through = 1 - v4.a;
+        }
+    }
+    if (pieces & 2) {
+        const float4 v4 = bottomTex.SampleLevel(linearClamp, uv, 0);
+        color = (check ? frame * v4.a : v4.rgb * lit) + color * (1 - v4.a);
+        through *= 1 - v4.a;
+    }
+    if (pieces & 4) {
+        const float4 v4 = topTex.SampleLevel(linearClamp, uv, 0);
+        color = (check ? frame * v4.a : v4.rgb * lit) + color * (1 - v4.a);
+        through *= 1 - v4.a;
+    }
+    return float4(color, 1 - through);
+}
+// The helmet's light: one texel per eye side (x: left, right, top, bottom; y: the eye), from a band 30%
+// deep along that side of the rendered outer view (eye 0's region in outerSrc, eye 1's in focusSrc),
+// weighted by brightness so the sky or the sun through a window counts more than the dark cockpit
+// around it, blended into the last frames' by the pipeline's blend factor.
+float4 LightPS(V v) : SV_Target {
+    const int side = (int)v.position.x, eye = (int)v.position.y;
+    const float4 src = eye == 0 ? outerSrc : focusSrc;
+    float2 size;
+    outerTex.GetDimensions(size.x, size.y);
+    float3 sum = 0;
+    float weights = 0;
+    for (int i = 0; i < 8; ++i)
+        for (int j = 0; j < 6; ++j) {
+            const float along = (i + 0.5) / 8, across = (j + 0.5) / 6 * 0.30;
+            const float2 f = side == 0 ? float2(across, along) : side == 1 ? float2(1 - across, along)
+                           : side == 2 ? float2(along, across) : float2(along, 1 - across);
+            const float3 c = outerTex.SampleLevel(linearClamp, inside(src.xy + f * src.zw, src, size), 0).rgb;
+            const float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
+            const float w = lum * lum + 1e-4;
+            sum += c * w;
+            weights += w;
+        }
+    return float4(sum / weights, 1);
+}
 )";
+
+constexpr UINT kConstants = 60;
+constexpr UINT kSrvsPerSlot = 6;  // outer, focus, light, the helmet's visor, bottom and top
+constexpr DXGI_FORMAT kLightFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+constexpr float kLightBlend = 0.08f;  // per composed frame: the light settles within about half a second
 
 bool is_typeless(DXGI_FORMAT f) {
     switch (f) {
@@ -111,23 +264,31 @@ D3D12_RESOURCE_BARRIER transition(ID3D12Resource* r, D3D12_RESOURCE_STATES from,
 bool QuadCompositor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, DXGI_FORMAT viewFormat) {
     if (ready_)
         return true;
+    if (failInitialize) {
+        log_line("compositor: initialize failed (forced by a test)");
+        return false;
+    }
     device_ = device;
     queue_ = queue;
     viewFormat_ = viewFormat;
 
-    Com<ID3DBlob> vs, ps, errors;
+    Com<ID3DBlob> vs, ps, lightPs, helmetPs, errors;
     if (FAILED(D3DCompile(kShader, sizeof(kShader) - 1, "quad-compose", nullptr, nullptr, "VS", "vs_5_0", 0, 0, &vs,
                           &errors)) ||
         FAILED(D3DCompile(kShader, sizeof(kShader) - 1, "quad-compose", nullptr, nullptr, "PS", "ps_5_0", 0, 0, &ps,
-                          &errors))) {
+                          &errors)) ||
+        FAILED(D3DCompile(kShader, sizeof(kShader) - 1, "quad-compose", nullptr, nullptr, "LightPS", "ps_5_0", 0, 0,
+                          &lightPs, &errors)) ||
+        FAILED(D3DCompile(kShader, sizeof(kShader) - 1, "quad-compose", nullptr, nullptr, "HelmetLayerPS", "ps_5_0", 0, 0,
+                          &helmetPs, &errors))) {
         logf("compositor: shader compile failed: %s", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return false;
     }
 
-    D3D12_DESCRIPTOR_RANGE srvRange{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0};
+    D3D12_DESCRIPTOR_RANGE srvRange{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kSrvsPerSlot, 0, 0, 0};
     D3D12_ROOT_PARAMETER params[2] = {};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[0].Constants = {0, 0, 36};
+    params[0].Constants = {0, 0, kConstants};
     params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     params[1].DescriptorTable = {1, &srvRange};
@@ -163,10 +324,51 @@ bool QuadCompositor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
         logf("compositor: pipeline state failed for format %d", viewFormat);
         return false;
     }
+    // The helmet layer: into its own swapchain image, no blending (it carries its own alpha).
+    {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC layer = pso;
+        layer.PS = {helmetPs->GetBufferPointer(), helmetPs->GetBufferSize()};
+        layer.RTVFormats[0] = kHelmetLayerFormat;
+        if (FAILED(device->CreateGraphicsPipelineState(&layer, IID_PPV_ARGS(&helmetLayerPipeline_)))) {
+            log_line("compositor: helmet layer pipeline failed");
+            return false;
+        }
+    }
+    // The helmet's light pass: into the light texture, blended with the last frames' by the blend factor.
+    pso.PS = {lightPs->GetBufferPointer(), lightPs->GetBufferSize()};
+    pso.RTVFormats[0] = kLightFormat;
+    D3D12_RENDER_TARGET_BLEND_DESC& blend = pso.BlendState.RenderTarget[0];
+    blend.BlendEnable = TRUE;
+    blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_BLEND_FACTOR;
+    blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_INV_BLEND_FACTOR;
+    blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    D3D12_HEAP_PROPERTIES lightHeap{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC lightDesc{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 4, 2, 1, 1, kLightFormat, {1, 0},
+                                  D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+    if (FAILED(device->CreateGraphicsPipelineState(&pso, IID_PPV_ARGS(&lightPipeline_))) ||
+        FAILED(device->CreateCommittedResource(&lightHeap, D3D12_HEAP_FLAG_NONE, &lightDesc,
+                                               D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&light_)))) {
+        log_line("compositor: helmet light pass setup failed");
+        return false;
+    }
+    {  // read_light's buffer
+        UINT64 total = 0;
+        device->GetCopyableFootprints(&lightDesc, 0, 1, 0, &lightFootprint_, nullptr, nullptr, &total);
+        D3D12_HEAP_PROPERTIES readback{D3D12_HEAP_TYPE_READBACK};
+        D3D12_RESOURCE_DESC bufferDesc = {};
+        bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bufferDesc.Width = total;
+        bufferDesc.Height = bufferDesc.DepthOrArraySize = bufferDesc.MipLevels = 1;
+        bufferDesc.SampleDesc.Count = 1;
+        bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(&readback, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                                   D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&lightReadback_))))
+            lightReadback_.Reset();  // no light in the log; the overlay itself is unaffected
+    }
 
-    D3D12_DESCRIPTOR_HEAP_DESC srvDesc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSlots * 2,
+    D3D12_DESCRIPTOR_HEAP_DESC srvDesc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSlots * kSrvsPerSlot,
                                        D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
-    D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kSlots};
+    D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kSlots + 2};  // + the light texture, the helmet layer
     if (FAILED(device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&srvHeap_))) ||
         FAILED(device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&rtvHeap_))) ||
         FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence_)))) {
@@ -175,6 +377,11 @@ bool QuadCompositor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
     }
     srvIncrement_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     rtvIncrement_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE lightRtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
+        lightRtv.ptr += static_cast<SIZE_T>(kSlots) * rtvIncrement_;
+        device->CreateRenderTargetView(light_.Get(), nullptr, lightRtv);
+    }
     fenceEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     for (Slot& s : slots_) {
         if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&s.allocator))) ||
@@ -265,17 +472,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
     if (!slot)
         return false;
 
-    auto srv = [&](ID3D12Resource* r, UINT index) {
-        const D3D12_RESOURCE_DESC d = r->GetDesc();
-        D3D12_SHADER_RESOURCE_VIEW_DESC v = {};
-        v.Format = is_typeless(d.Format) ? viewFormat_ : d.Format;
-        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        v.Texture2D.MipLevels = 1;
-        device_->CreateShaderResourceView(r, &v, srv_cpu(index));
-    };
-    srv(outer_.Get(), slotIndex * 2);
-    srv(focusImage, slotIndex * 2 + 1);
+    const UINT pieceMask = bind_sources(slotIndex, focusImage);
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += static_cast<SIZE_T>(slotIndex) * rtvIncrement_;
     const D3D12_RESOURCE_DESC outDesc = output->GetDesc();
@@ -291,19 +488,24 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
     ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
     list->SetDescriptorHeaps(1, heaps);
     list->SetGraphicsRootSignature(rootSignature_.Get());
-    list->SetPipelineState(pipeline_.Get());
-    list->SetGraphicsRootDescriptorTable(1, srv_gpu(slotIndex * 2));
-    list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    list->SetGraphicsRootDescriptorTable(1, srv_gpu(slotIndex * kSrvsPerSlot));
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const bool lightCopied =
+        (eyes[0].helmet > 0 || eyes[1].helmet > 0) && record_light(list, eyes[0].outerSource, eyes[1].outerSource);
+    list->SetPipelineState(pipeline_.Get());
+    list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     const float eyeWidth = static_cast<float>(outDesc.Width) / 2.0f;
     for (int eye = 0; eye < 2; ++eye) {
-        D3D12_VIEWPORT vp{eye * eyeWidth, 0, eyeWidth, static_cast<float>(outDesc.Height), 0, 1};
-        D3D12_RECT scissor{static_cast<LONG>(eye * eyeWidth), 0, static_cast<LONG>((eye + 1) * eyeWidth),
-                           static_cast<LONG>(outDesc.Height)};
+        const EyeComposition& c = eyes[eye];
+        // The FOV crop draws the eye into the top left of its half, at the same density.
+        const float w = eyeWidth * (c.outputSize[0] > 0 ? c.outputSize[0] : 1.0f),
+                    h = static_cast<float>(outDesc.Height) * (c.outputSize[1] > 0 ? c.outputSize[1] : 1.0f);
+        D3D12_VIEWPORT vp{eye * eyeWidth, 0, w, h, 0, 1};
+        D3D12_RECT scissor{static_cast<LONG>(eye * eyeWidth), 0, static_cast<LONG>(std::ceil(eye * eyeWidth + w)),
+                           static_cast<LONG>(std::ceil(h))};
         list->RSSetViewports(1, &vp);
         list->RSSetScissorRects(1, &scissor);
-        const EyeComposition& c = eyes[eye];
-        float constants[36] = {};
+        float constants[kConstants] = {};
         for (int i = 0; i < 4; ++i) {
             constants[i] = c.outerTan[i];
             constants[4 + i] = c.focusTan[i];
@@ -316,15 +518,385 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
         constants[28] = c.feather;
         constants[29] = c.border;
         constants[30] = c.cornerRadius;
-        for (int i = 0; i < 4; ++i)
+        for (int i = 0; i < 4; ++i) {
             constants[32 + i] = c.borderColor[i];
-        list->SetGraphicsRoot32BitConstants(0, 36, constants, 0);
+            constants[36 + i] = c.viewTan[i];
+            constants[40 + i] = c.helmetOpening[i];  // the pieces' looks: the depth shift (below)
+        }
+        // Without pieces, the built-in look (and its light diagnostic); with them, the diagnostic keeps their shapes.
+        const int look = c.helmet == 2 && !pieceMask ? 1 : c.helmet == 3 && pieceMask ? 4 : c.helmet;
+        const bool pieceLook = look == 2 || look == 4;
+        const Piece& visor = pieces_[static_cast<int>(HelmetPiece::Visor)];
+        const bool tint = visor.texture && (c.visorBlend == 1 || (c.visorBlend == 0 && visor.opaque));
+        constants[31] = static_cast<float>(eye);
+        constants[44] = pieceLook ? static_cast<float>(pieceMask | (tint ? 8u : 0u)) : c.helmetRim;
+        constants[45] = pieceLook ? static_cast<float>(visor.whitePoint) : c.helmetRadius;
+        if (pieceLook) {
+            constants[40] = c.helmetShift[0];
+            constants[41] = c.helmetShift[1];
+        }
+        constants[46] = c.helmetLight;
+        constants[47] = static_cast<float>(look);
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 3; ++col)
+                constants[48 + row * 4 + col] = c.helmetRotation[row * 3 + col];
+        constants[51] = c.helmetTanHalf[0];
+        constants[55] = c.helmetTanHalf[1];
+        constants[59] = c.visorOffset;
+        list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
     }
     D3D12_RESOURCE_BARRIER back =
         transition(focusImage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
     list->ResourceBarrier(1, &back);
-    return submit(*slot);
+    const bool ok = submit(*slot);
+    if (ok && lightCopied)
+        lightCopyFence_ = slot->fenceValue;
+    return ok;
+}
+
+UINT QuadCompositor::bind_sources(UINT slotIndex, ID3D12Resource* focus) {
+    auto srv = [&](ID3D12Resource* r, UINT index) {
+        const D3D12_RESOURCE_DESC d = r->GetDesc();
+        D3D12_SHADER_RESOURCE_VIEW_DESC v = {};
+        v.Format = is_typeless(d.Format) ? viewFormat_ : d.Format;
+        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        v.Texture2D.MipLevels = 1;
+        device_->CreateShaderResourceView(r, &v, srv_cpu(index));
+    };
+    srv(outer_.Get(), slotIndex * kSrvsPerSlot);
+    srv(focus, slotIndex * kSrvsPerSlot + 1);
+    srv(light_.Get(), slotIndex * kSrvsPerSlot + 2);
+    UINT pieceMask = 0;
+    for (UINT p = 0; p < 3; ++p) {
+        if (pieces_[p].texture) {
+            srv(pieces_[p].texture.Get(), slotIndex * kSrvsPerSlot + 3 + p);
+            pieceMask |= 1u << p;
+        } else {  // a null view: reads 0, never sampled without the piece
+            D3D12_SHADER_RESOURCE_VIEW_DESC none = {};
+            none.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            none.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            none.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            none.Texture2D.MipLevels = 1;
+            device_->CreateShaderResourceView(nullptr, &none, srv_cpu(slotIndex * kSrvsPerSlot + 3 + p));
+        }
+    }
+    return pieceMask;
+}
+
+bool QuadCompositor::record_light(ID3D12GraphicsCommandList* list, const float (&source0)[4], const float (&source1)[4]) {
+    bool lightCopied = false;
+    {
+        // The helmet's light: each eye's sides, from the outer views, blended over frames.
+        D3D12_CPU_DESCRIPTOR_HANDLE lightRtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
+        lightRtv.ptr += static_cast<SIZE_T>(kSlots) * rtvIncrement_;
+        D3D12_RESOURCE_BARRIER toTarget =
+            transition(light_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        list->ResourceBarrier(1, &toTarget);
+        list->SetPipelineState(lightPipeline_.Get());
+        list->OMSetRenderTargets(1, &lightRtv, FALSE, nullptr);
+        const float factor = lightFresh_ ? 1.0f : kLightBlend, factors[4] = {factor, factor, factor, factor};
+        list->OMSetBlendFactor(factors);
+        const D3D12_VIEWPORT lightVp{0, 0, 4, 2, 0, 1};
+        const D3D12_RECT lightScissor{0, 0, 4, 2};
+        list->RSSetViewports(1, &lightVp);
+        list->RSSetScissorRects(1, &lightScissor);
+        float constants[kConstants] = {};
+        std::memcpy(&constants[20], source0, sizeof(source0));
+        std::memcpy(&constants[24], source1, sizeof(source1));
+        list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
+        list->DrawInstanced(3, 1, 0, 0);
+        if (lightWanted_ && lightReadback_ && !lightCopyFence_) {  // for read_light
+            D3D12_RESOURCE_BARRIER toCopy =
+                transition(light_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            list->ResourceBarrier(1, &toCopy);
+            D3D12_TEXTURE_COPY_LOCATION dst{lightReadback_.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+            dst.PlacedFootprint = lightFootprint_;
+            D3D12_TEXTURE_COPY_LOCATION src{light_.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            D3D12_RESOURCE_BARRIER back =
+                transition(light_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            list->ResourceBarrier(1, &back);
+            lightCopied = true;
+            lightWanted_ = false;
+        } else {
+            D3D12_RESOURCE_BARRIER lightToRead =
+                transition(light_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            list->ResourceBarrier(1, &lightToRead);
+        }
+        lightFresh_ = false;
+    }
+    return lightCopied;
+}
+
+bool QuadCompositor::draw_helmet_layer(ID3D12Resource* target, const HelmetLayerDraw& d) {
+    if (!ready_ || !outerValid_ || !target || !has_helmet_pieces())
+        return false;
+    const UINT slotIndex = slotIndex_ % kSlots;
+    Slot* slot = next_slot();
+    if (!slot)
+        return false;
+    const UINT pieceMask = bind_sources(slotIndex, outer_.Get());  // no focus view here
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += static_cast<SIZE_T>(kSlots + 1) * rtvIncrement_;
+    D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+    rtvDesc.Format = kHelmetLayerFormat;
+    rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    device_->CreateRenderTargetView(target, &rtvDesc, rtv);
+    ID3D12GraphicsCommandList* list = slot->list.Get();
+    ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
+    list->SetDescriptorHeaps(1, heaps);
+    list->SetGraphicsRootSignature(rootSignature_.Get());
+    list->SetGraphicsRootDescriptorTable(1, srv_gpu(slotIndex * kSrvsPerSlot));
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const bool lightCopied = record_light(list, d.outerSource[0], d.outerSource[1]);
+    list->SetPipelineState(helmetLayerPipeline_.Get());
+    list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    const D3D12_RESOURCE_DESC desc = target->GetDesc();
+    const D3D12_VIEWPORT vp{0, 0, static_cast<float>(desc.Width), static_cast<float>(desc.Height), 0, 1};
+    list->RSSetViewports(1, &vp);
+    const Piece& visor = pieces_[static_cast<int>(HelmetPiece::Visor)];
+    const bool tint = visor.texture && (d.visorBlend == 1 || (d.visorBlend == 0 && visor.opaque));
+    float constants[kConstants] = {};
+    constants[0] = d.coverTan[0];
+    constants[1] = d.coverTan[1];
+    constants[2] = d.imageTan[0];
+    constants[3] = d.imageTan[1];
+    constants[4] = d.visorOffset;
+    constants[44] = static_cast<float>(pieceMask | (tint ? 8u : 0u));
+    constants[45] = static_cast<float>(visor.whitePoint);
+    constants[46] = d.light;
+    constants[47] = d.checkLight ? 4.0f : 2.0f;
+    list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
+    // Only the bands the pieces draw on (the rest of the image is never submitted).
+    const std::vector<HelmetBand> whole = {{0, 1}};
+    for (const HelmetBand& b : d.bands.empty() ? whole : d.bands) {
+        const D3D12_RECT scissor{0, static_cast<LONG>(std::floor(b.top * desc.Height)), static_cast<LONG>(desc.Width),
+                                 static_cast<LONG>(std::ceil(b.bottom * desc.Height))};
+        list->RSSetScissorRects(1, &scissor);
+        list->DrawInstanced(3, 1, 0, 0);
+    }
+    const bool ok = submit(*slot);
+    if (ok && lightCopied)
+        lightCopyFence_ = slot->fenceValue;
+    return ok;
+}
+
+namespace {
+
+// IEEE half to float (the light texture is R16G16B16A16_FLOAT).
+float half_to_float(uint16_t h) {
+    const uint32_t sign = (h & 0x8000u) << 16, exponent = (h >> 10) & 0x1f, mantissa = h & 0x3ffu;
+    uint32_t bits;
+    if (exponent == 0)
+        return (sign ? -1.0f : 1.0f) * std::ldexp(static_cast<float>(mantissa), -24);
+    if (exponent == 31)
+        bits = sign | 0x7f800000u | (mantissa << 13);
+    else
+        bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
+}  // namespace
+
+bool QuadCompositor::read_light(float (&rgb)[2][4][3]) {
+    if (!lightCopyFence_ || !fence_ || fence_->GetCompletedValue() < lightCopyFence_)
+        return false;
+    lightCopyFence_ = 0;
+    uint8_t* mapped = nullptr;
+    if (FAILED(lightReadback_->Map(0, nullptr, reinterpret_cast<void**>(&mapped))))
+        return false;
+    for (int eye = 0; eye < 2; ++eye)
+        for (int side = 0; side < 4; ++side) {
+            uint16_t texel[4];
+            std::memcpy(texel, mapped + lightFootprint_.Offset + static_cast<size_t>(eye) * lightFootprint_.Footprint.RowPitch +
+                                   static_cast<size_t>(side) * sizeof(texel),
+                        sizeof(texel));
+            for (int c = 0; c < 3; ++c)
+                rgb[eye][side][c] = half_to_float(texel[c]);
+        }
+    const D3D12_RANGE nothing{0, 0};
+    lightReadback_->Unmap(0, &nothing);
+    return true;
+}
+
+std::vector<bool> QuadCompositor::helmet_rows(double visorOffset, int visorBlend) const {
+    std::vector<bool> rows(kHelmetRows, false);
+    for (const HelmetPiece p : {HelmetPiece::Top, HelmetPiece::Bottom}) {
+        const Piece& piece = pieces_[static_cast<int>(p)];
+        if (piece.texture)
+            for (int i = 0; i < kHelmetRows; ++i)
+                rows[i] = rows[i] || piece.rows[i];
+    }
+    const Piece& visor = pieces_[static_cast<int>(HelmetPiece::Visor)];
+    if (visor.texture) {
+        const bool tint = visorBlend == 1 || (visorBlend == 0 && visor.opaque);
+        const std::vector<bool>& drawn = tint ? visor.tintRows : visor.rows;
+        for (int i = 0; i < kHelmetRows; ++i) {  // image row v shows the visor's row v + offset (none past its ends)
+            const double v = (i + 0.5) / kHelmetRows + visorOffset;
+            if (v >= 0 && v < 1)
+                rows[i] = rows[i] || drawn[static_cast<size_t>(v * kHelmetRows)];
+        }
+    }
+    return rows;
+}
+
+double QuadCompositor::helmet_aspect() const {
+    for (const Piece& p : pieces_)
+        if (p.texture)
+            return p.aspect;
+    return 1;
+}
+
+bool QuadCompositor::load_helmet_piece(HelmetPiece which, const std::wstring& path) {
+    if (!ready_)
+        return false;
+    Piece& piece = pieces_[static_cast<int>(which)];
+    piece = Piece{};
+    if (path.empty())
+        return true;
+    // Decode with WIC as straight-alpha RGBA.
+    std::vector<uint8_t> pixels;
+    UINT width = 0, height = 0;
+    const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    {
+        Com<IWICImagingFactory> wic;
+        Com<IWICBitmapDecoder> decoder;
+        Com<IWICBitmapFrameDecode> frame;
+        Com<IWICFormatConverter> converter;
+        if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
+            SUCCEEDED(wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+                                                     &decoder)) &&
+            SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
+            SUCCEEDED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr,
+                                            0, WICBitmapPaletteTypeCustom)) &&
+            SUCCEEDED(converter->GetSize(&width, &height)) && width > 0 && height > 0 && width <= 8192 && height <= 8192) {
+            pixels.resize(static_cast<size_t>(width) * height * 4);
+            if (FAILED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(pixels.size()), pixels.data())))
+                pixels.clear();
+        }
+    }
+    if (SUCCEEDED(co))
+        CoUninitialize();
+    if (pixels.empty()) {
+        logf("compositor: helmet image %ls could not be read", path.c_str());
+        return false;
+    }
+    // Where the piece's opaque part ends down its middle column: the top piece from its top row, the
+    // bottom piece from its bottom row (for the crop hint).
+    if (which != HelmetPiece::Visor) {
+        const bool fromTop = which == HelmetPiece::Top;
+        UINT rows = 0;
+        while (rows < height) {
+            const UINT y = fromTop ? rows : height - 1 - rows;
+            if (pixels[(static_cast<size_t>(y) * width + width / 2) * 4 + 3] < 128)
+                break;
+            ++rows;
+        }
+        piece.edge = rows ? static_cast<double>(rows) / height : -1;
+    }
+    piece.aspect = static_cast<double>(height) / width;
+    // Whether it has (almost) no transparency, and its white point: the linear brightness its brightest
+    // 1% reach (for a visor drawn as a tint, that counts as clear).
+    {
+        size_t seeThrough = 0;
+        size_t histogram[256] = {};
+        for (size_t i = 0; i < pixels.size(); i += 4) {
+            seeThrough += pixels[i + 3] < 250;
+            ++histogram[std::max({pixels[i], pixels[i + 1], pixels[i + 2]})];
+        }
+        const size_t count = pixels.size() / 4;
+        piece.opaque = seeThrough * 200 < count;
+        size_t above = 0;
+        int level = 255;
+        for (; level > 0; --level) {
+            above += histogram[level];
+            if (above * 100 >= count)
+                break;
+        }
+        const double encoded = level / 255.0;
+        const double linear = encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4);
+        piece.whitePoint = std::max(0.05, linear);
+    }
+    // The rows it draws on (any pixel more than faintly opaque) and, as glass, the rows it tints (any pixel
+    // passing less than 98.5% of the scene): the helmet layer leaves the clear ones out (helmet_bands).
+    {
+        double linearOf[256];  // sRGB to linear, once per value
+        for (int c = 0; c < 256; ++c) {
+            const double e = c / 255.0;
+            linearOf[c] = e <= 0.04045 ? e / 12.92 : std::pow((e + 0.055) / 1.055, 2.4);
+        }
+        const auto linear = [&linearOf](uint8_t c) { return linearOf[c]; };
+        piece.rows.assign(kHelmetRows, false);
+        piece.tintRows.assign(kHelmetRows, false);
+        for (UINT y = 0; y < height; ++y) {
+            bool drawn = false, tints = false;
+            for (UINT x = 0; x < width && !(drawn && tints); ++x) {
+                const uint8_t* px = &pixels[(static_cast<size_t>(y) * width + x) * 4];
+                if (px[3] <= 2)
+                    continue;
+                drawn = true;
+                const double lum = 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]);
+                tints = tints || lum / piece.whitePoint < 0.985;
+            }
+            // Every bin the image row spans (several for an image shorter than kHelmetRows).
+            const size_t first = static_cast<size_t>(y) * kHelmetRows / height,
+                         last = std::max(first, static_cast<size_t>(y + 1) * kHelmetRows / height - 1);
+            for (size_t bin = first; bin <= last && bin < kHelmetRows; ++bin) {
+                piece.rows[bin] = piece.rows[bin] || drawn;
+                piece.tintRows[bin] = piece.tintRows[bin] || tints;
+            }
+        }
+    }
+    // Premultiplied, so filtering never blends in the colour of transparent pixels (no fringes at the edges).
+    for (size_t i = 0; i < pixels.size(); i += 4)
+        for (size_t c = 0; c < 3; ++c)
+            pixels[i + c] = static_cast<uint8_t>((pixels[i + c] * pixels[i + 3] + 127) / 255);
+    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT}, upload{D3D12_HEAP_TYPE_UPLOAD};
+    D3D12_RESOURCE_DESC desc{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, width, height, 1, 1,
+                             DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE};
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
+    UINT64 total = 0;
+    device_->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &total);
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = total;
+    bufferDesc.Height = bufferDesc.DepthOrArraySize = bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    Com<ID3D12Resource> texture, buffer;
+    uint8_t* mapped = nullptr;
+    if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                nullptr, IID_PPV_ARGS(&texture))) ||
+        FAILED(device_->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer))) ||
+        FAILED(buffer->Map(0, nullptr, reinterpret_cast<void**>(&mapped))))
+        return false;
+    for (UINT y = 0; y < height; ++y)
+        std::memcpy(mapped + footprint.Offset + static_cast<size_t>(y) * footprint.Footprint.RowPitch,
+                    &pixels[static_cast<size_t>(y) * width * 4], static_cast<size_t>(width) * 4);
+    buffer->Unmap(0, nullptr);
+    Slot* slot = next_slot();
+    if (!slot)
+        return false;
+    D3D12_TEXTURE_COPY_LOCATION dst{texture.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION src{buffer.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    src.PlacedFootprint = footprint;
+    slot->list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    D3D12_RESOURCE_BARRIER ready =
+        transition(texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    slot->list->ResourceBarrier(1, &ready);
+    if (!submit(*slot))
+        return false;
+    fence_->SetEventOnCompletion(slot->fenceValue, fenceEvent_);  // the upload buffer must outlive the copy
+    WaitForSingleObject(fenceEvent_, 5000);
+    piece.texture = texture;
+    logf("compositor: helmet image %ls, %ux%u%s, white point %.2f", path.c_str(), width, height,
+         piece.opaque ? ", opaque" : "", piece.whitePoint);
+    return true;
 }
 
 bool QuadCompositor::save_left_eye(ID3D12Resource* image, D3D12_RESOURCE_STATES state, const std::wstring& path,
@@ -426,6 +998,15 @@ void QuadCompositor::shutdown() {
     for (Slot& s : slots_)
         s = Slot{};
     outer_.Reset();
+    light_.Reset();
+    lightReadback_.Reset();
+    lightCopyFence_ = 0;
+    lightWanted_ = false;
+    for (Piece& p : pieces_)
+        p = Piece{};
+    lightPipeline_.Reset();
+    helmetLayerPipeline_.Reset();
+    lightFresh_ = true;
     pipeline_.Reset();
     rootSignature_.Reset();
     srvHeap_.Reset();

@@ -1,5 +1,6 @@
 #include "settings_menu.h"
 
+#include "fov_crop.h"
 #include "views4_layout.h"
 
 #include <algorithm>
@@ -50,6 +51,22 @@ constexpr Spec kSpecs[] = {
     {MenuItem::FgScale, L"Center FG scale", 25, 100, 25},
     {MenuItem::FgPeriphery, L"Periphery FG scale", 25, 100, 25},
     {MenuItem::FgBorder, L"Show FG region", 0, 1, 1},
+    // The View crop page: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
+    {MenuItem::Crop, L"Crop the view", 0, 1, 1},
+    {MenuItem::CropTop, L"Top", 0, static_cast<int>(kCropMax * 100), 1},
+    {MenuItem::CropBottom, L"Bottom", 0, static_cast<int>(kCropMax * 100), 1},
+    {MenuItem::CropOuter, L"Outer side (temple)", 0, static_cast<int>(kCropMax * 100), 1},
+    {MenuItem::CropInner, L"Inner side (nose)", 0, static_cast<int>(kCropMax * 100), 1},
+    {MenuItem::Helmet, L"Helmet overlay", 0, 1, 1},
+    {MenuItem::HelmetRim, L"Helmet rim", 0, kHelmetRimMax, 1},
+    {MenuItem::HelmetCorners, L"Helmet corners", 0, kHelmetCornersMax, 10},
+    {MenuItem::HelmetLight, L"Helmet lighting", 0, kHelmetLightMax, kHelmetLightStep},
+    {MenuItem::HelmetDebug, L"Show helmet light", 0, 1, 1},
+    {MenuItem::Visor, L"Visor", 0, 2, 1},
+    {MenuItem::HelmetSize, L"Helmet size", kHelmetSizeMin, kHelmetSizeMax, 5},
+    {MenuItem::HelmetHeight, L"Helmet height", -kHelmetHeightMax, kHelmetHeightMax, 1},
+    {MenuItem::HelmetDepth, L"Helmet depth", 0, kHelmetDepthMax, 1},
+    {MenuItem::HelmetDetail, L"Helmet detail", 0, 1, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -73,6 +90,15 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::OverlayYaw: return &v.overlay.yaw;
     case MenuItem::OverlayPitch: return &v.overlay.pitch;
     case MenuItem::OverlayWidth: return &v.overlay.width;
+    case MenuItem::CropTop: return &v.cropTop;
+    case MenuItem::CropBottom: return &v.cropBottom;
+    case MenuItem::CropOuter: return &v.cropOuter;
+    case MenuItem::CropInner: return &v.cropInner;
+    case MenuItem::HelmetRim: return &v.helmet.rim;
+    case MenuItem::HelmetCorners: return &v.helmet.corners;
+    case MenuItem::HelmetLight: return &v.helmet.light;
+    case MenuItem::HelmetSize: return &v.helmet.size;
+    case MenuItem::HelmetHeight: return &v.helmet.height;
     default: return nullptr;
     }
 }
@@ -97,9 +123,13 @@ std::vector<MenuItem> menu_items(bool qvfr) {
 }
 
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
+    std::vector<MenuPage> pages = {MenuPage::Settings};
+    if (menu.launch.qvfr)
+        pages.insert(pages.end(), {MenuPage::Crop, MenuPage::Helmet});
     if (menu.cheeky.available)
-        return {MenuPage::Settings, MenuPage::Dlss, MenuPage::Fg, MenuPage::Headset};
-    return {MenuPage::Settings, MenuPage::Headset};
+        pages.insert(pages.end(), {MenuPage::Dlss, MenuPage::Fg});
+    pages.push_back(MenuPage::Headset);
+    return pages;
 }
 
 MenuPage menu_page(const SettingsMenu& menu) {
@@ -116,6 +146,17 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else if (page == MenuPage::Fg) {
         items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
                                    MenuItem::FgPeriphery, MenuItem::FgBorder});
+    } else if (page == MenuPage::Crop) {
+        items.push_back(MenuItem::Crop);
+        if (menu.values.crop)
+            items.insert(items.end(), {MenuItem::CropTop, MenuItem::CropBottom, MenuItem::CropOuter, MenuItem::CropInner});
+    } else if (page == MenuPage::Helmet) {
+        items.push_back(MenuItem::Helmet);
+        if (menu.values.helmet.on && menu.launch.helmetPieces)
+            items.insert(items.end(), {MenuItem::Visor, MenuItem::HelmetSize, MenuItem::HelmetHeight, MenuItem::HelmetDepth,
+                                       MenuItem::HelmetDetail, MenuItem::HelmetLight, MenuItem::HelmetDebug});
+        else if (menu.values.helmet.on)
+            items.insert(items.end(), {MenuItem::HelmetRim, MenuItem::HelmetCorners, MenuItem::HelmetLight, MenuItem::HelmetDebug});
     } else if (page == MenuPage::Dlss) {
         items.insert(items.end(), {MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
                                    MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
@@ -135,6 +176,8 @@ std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     case MenuPage::Dlss: return L"Foveated DLSS";
     case MenuPage::Fg: return L"Frame generation";
     case MenuPage::Headset: return L"Overlay and menu";
+    case MenuPage::Crop: return L"View crop";
+    case MenuPage::Helmet: return L"Helmet";
     default: return menu.launch.qvfr ? L"QVFR" : L"Two-loop";
     }
 }
@@ -195,6 +238,20 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         c.nrPasses = std::clamp(c.nrPasses + step, 1, kCheekyNrPassesMax);
         return c.nrPasses != before;
     }
+    case MenuItem::HelmetDepth: {  // far (0), then 3 cm on: 1 cm a step up close, 5 cm from 20 cm
+        int& d = menu.values.helmet.depth;
+        const int before = d;
+        if (step > 0)
+            d = d == 0 ? kHelmetDepthMin : std::min(kHelmetDepthMax, d + (d >= 20 ? 5 : 1));
+        else
+            d = d <= kHelmetDepthMin ? 0 : d - (d > 20 ? 5 : 1);
+        return d != before;
+    }
+    case MenuItem::Visor: {  // closed, half, open (no wrap)
+        const int before = static_cast<int>(menu.values.helmet.visor);
+        menu.values.helmet.visor = static_cast<VisorPosition>(std::clamp(before + step, 0, 2));
+        return static_cast<int>(menu.values.helmet.visor) != before;
+    }
     case MenuItem::FgOn: c.fg = !c.fg; return true;
     case MenuItem::FgBorder: c.fgBorder = !c.fgBorder; return true;
     case MenuItem::FgMultiplier:
@@ -212,9 +269,14 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     }
     default: break;
     }
-    if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay) {
+    if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Crop ||
+        item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
                      : item == MenuItem::EyeTracking ? menu.values.eyeTracking
+                     : item == MenuItem::Crop        ? menu.values.crop
+                     : item == MenuItem::Helmet      ? menu.values.helmet.on
+                     : item == MenuItem::HelmetDebug ? menu.values.helmet.debugLight
+                     : item == MenuItem::HelmetDetail ? menu.values.helmet.detail
                                                      : menu.values.overlay.enabled;
         flag = !flag;
         return true;
@@ -241,6 +303,13 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
     v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
+    const int cropMax = static_cast<int>(kCropMax * 100);
+    v.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
+    v.cropTop = std::clamp(read_int(ini, L"crop", L"top", 0), 0, cropMax);
+    v.cropBottom = std::clamp(read_int(ini, L"crop", L"bottom", 0), 0, cropMax);
+    v.cropOuter = std::clamp(read_int(ini, L"crop", L"outer", 0), 0, cropMax);
+    v.cropInner = std::clamp(read_int(ini, L"crop", L"inner", 0), 0, cropMax);
+    v.helmet = read_helmet_settings(ini);
     return v;
 }
 
@@ -249,6 +318,12 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
     if (qvfr) {
         ok &= write(ini, L"experiment", L"periphery_scale", v.periphery);
         ok &= write(ini, L"experiment", L"focus_density", v.density);
+        ok &= write(ini, L"crop", L"enabled", v.crop ? 1 : 0);
+        ok &= write(ini, L"crop", L"top", v.cropTop);
+        ok &= write(ini, L"crop", L"bottom", v.cropBottom);
+        ok &= write(ini, L"crop", L"outer", v.cropOuter);
+        ok &= write(ini, L"crop", L"inner", v.cropInner);
+        ok &= write_helmet_settings(ini, v.helmet);
     }
     ok &= write(ini, L"experiment", L"focus_percent", v.width);
     ok &= write(ini, L"experiment", L"focus_height_percent", v.height);
@@ -264,7 +339,9 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
 }
 
 // The launch layout from the launch sizes (percent of the native eye), as the layer has it.
-Views4Layout launch_layout(const MenuLaunch& l) { return views4_layout(l.outer / 100, l.focusWidth / 100, l.focusHeight / 100); }
+Views4Layout launch_layout(const MenuLaunch& l) {
+    return views4_layout(l.outer / 100, l.focusWidth / 100, l.focusHeight / 100, l.cropWidth / 100, l.cropHeight / 100);
+}
 
 MenuFit menu_fit(const SettingsMenu& menu) {
     const MenuValues& v = menu.values;
@@ -280,7 +357,7 @@ MenuFit menu_fit(const SettingsMenu& menu) {
         return f;
     // The layer's own rule (views4_fit), in percent.
     const Views4Fit fit = views4_fit(launch_layout(menu.launch), v.periphery / 100.0, f.wantFocusWidth / 100,
-                                     f.wantFocusHeight / 100);
+                                     f.wantFocusHeight / 100, v.crop_width() / 100, v.crop_height() / 100);
     f.periphery = fit.outer * 100;
     f.focusWidth = fit.focus * 100;
     f.focusHeight = fit.focusHeight * 100;
@@ -315,13 +392,15 @@ std::wstring pixels(const MenuLaunch& l, double width, double height) {
     return std::to_wstring(px(l.nativeWidth, width)) + L"x" + std::to_wstring(px(l.nativeHeight, height));
 }
 
-// ACE's double-wide target for views of these sizes (percent of the native eye): the row of four
-// views, as tall as the taller pair.
-std::wstring target(const MenuLaunch& l, double outer, double focusWidth, double focusHeight) {
+// ACE's double-wide target for views of these sizes (percent of the native eye; `outer` the
+// periphery's density, over `cropWidth` x `cropHeight` percent of the eye): the row of four views, as
+// tall as the taller pair.
+std::wstring target(const MenuLaunch& l, double outer, double focusWidth, double focusHeight, double cropWidth,
+                    double cropHeight) {
     if (l.nativeWidth <= 0 || l.nativeHeight <= 0)
         return L"?";
-    const int w = 2 * (px(l.nativeWidth, outer) + px(l.nativeWidth, focusWidth));
-    const int h = std::max(px(l.nativeHeight, outer), px(l.nativeHeight, focusHeight));
+    const int w = 2 * (px(l.nativeWidth, outer * cropWidth / 100) + px(l.nativeWidth, focusWidth));
+    const int h = std::max(px(l.nativeHeight, outer * cropHeight / 100), px(l.nativeHeight, focusHeight));
     wchar_t mpx[16];
     swprintf_s(mpx, L"%.1f", static_cast<double>(w) * h / 1e6);
     return std::to_wstring(w) + L"x" + std::to_wstring(h) + L" (" + mpx + L" MP)";
@@ -332,15 +411,17 @@ std::wstring target(const MenuLaunch& l, double outer, double focusWidth, double
 MenuResolution menu_resolution(const SettingsMenu& menu) {
     MenuResolution r;
     const MenuLaunch& l = menu.launch;
-    if (!l.qvfr || (menu.cheeky.available && menu.page > 0))
+    const MenuPage page = menu_page(menu);
+    if (!l.qvfr || (page != MenuPage::Settings && page != MenuPage::Crop && menu.cheeky.available))
         return r;
     const MenuFit f = menu_fit(menu);
+    const MenuValues& v = menu.values;
     r.shown = true;
-    r.max = target(l, l.outer, l.focusWidth, l.focusHeight);
-    r.current = target(l, f.periphery, f.focusWidth, f.focusHeight);
+    r.max = target(l, l.outer, l.focusWidth, l.focusHeight, l.cropWidth, l.cropHeight);
+    r.current = target(l, f.periphery, f.focusWidth, f.focusHeight, v.crop_width(), v.crop_height());
     r.capped = f.peripheryCapped || f.focusCapped;
     if (r.capped)
-        r.asked = target(l, menu.values.periphery, f.wantFocusWidth, f.wantFocusHeight);
+        r.asked = target(l, v.periphery, f.wantFocusWidth, f.wantFocusHeight, v.crop_width(), v.crop_height());
     return r;
 }
 
@@ -358,11 +439,13 @@ MenuStats menu_stats(const SettingsMenu& menu) {
         const auto area = [&](double w, double h) {
             return static_cast<double>(px(l.nativeWidth, w)) * px(l.nativeHeight, h);
         };
-        rendered = l.qvfr ? 2 * (area(f.periphery, f.periphery) + area(f.focusWidth, f.focusHeight))
+        rendered = l.qvfr ? 2 * (area(f.periphery * menu.values.crop_width() / 100, f.periphery * menu.values.crop_height() / 100) +
+                                 area(f.focusWidth, f.focusHeight))
                           : 4 * area(l.twoLoopScale, l.twoLoopScale);
         native = 2.0 * l.nativeWidth * l.nativeHeight;
     } else {
-        rendered = l.qvfr ? 2 * (f.periphery * f.periphery + f.focusWidth * f.focusHeight)
+        rendered = l.qvfr ? 2 * (f.periphery * f.periphery * menu.values.crop_width() * menu.values.crop_height() / 1e4 +
+                                 f.focusWidth * f.focusHeight)
                           : 4 * l.twoLoopScale * l.twoLoopScale;
         native = 2 * 100.0 * 100.0;
     }
@@ -372,13 +455,22 @@ MenuStats menu_stats(const SettingsMenu& menu) {
 
 std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     std::vector<std::wstring> notes;
-    if (menu.cheeky.available && menu.page == 2) {
+    const MenuPage page = menu_page(menu);
+    if (page == MenuPage::Fg) {
         if (menu.cheeky.values.fg)
             notes.push_back(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off");
         return notes;
     }
-    if (menu.cheeky.available && menu.page == 1)
+    if (page == MenuPage::Dlss || page == MenuPage::Helmet)
         return notes;
+    if (page == MenuPage::Crop) {
+        // The FOV follows at once; the views' pixels only without DLSS (and up to the launch size).
+        if (menu.launch.dlssHeld)
+            notes.push_back(L"DLSS is on: the view crops now, its pixel savings apply at the next launch");
+        if (menu.values.crop_width() > menu.launch.cropWidth + 0.5 || menu.values.crop_height() > menu.launch.cropHeight + 0.5)
+            notes.push_back(L"Less crop than at launch: the periphery is softer until the next launch");
+        return notes;
+    }
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
     const MenuFit f = menu_fit(menu);
@@ -388,9 +480,13 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         notes.push_back(known ? L"Focus area needs " + pixels(l, f.wantFocusWidth, f.wantFocusHeight) + L" px, " +
                                     pixels(l, f.focusWidth, f.focusHeight) + L" fits: lower Focus density, width or height"
                               : L"Focus area is too large for this launch: lower Focus density, width or height");
+    // The periphery's views at a density, over the FOV crop's share of the eye.
+    const auto periphery = [&](double density) {
+        return pixels(l, density * menu.values.crop_width() / 100, density * menu.values.crop_height() / 100);
+    };
     if (f.peripheryCapped && f.peripheryByRoom)
-        notes.push_back(L"Periphery needs " + (known ? pixels(l, menu.values.periphery, menu.values.periphery) + L" px, the focus area leaves " +
-                                                           pixels(l, f.periphery, f.periphery)
+        notes.push_back(L"Periphery needs " + (known ? periphery(menu.values.periphery) + L" px, the focus area leaves " +
+                                                           periphery(f.periphery)
                                                      : std::wstring(L"more room")) +
                         L": lower Focus density or size to make room");
     else if (f.peripheryCapped)
@@ -448,6 +544,22 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = v.eyeTracking ? L"On" : L"Off";
         else if (items[i] == MenuItem::Overlay)
             line.value = v.overlay.enabled ? L"On" : L"Off";
+        else if (items[i] == MenuItem::Crop)
+            line.value = v.crop ? L"On" : L"Off";
+        else if (items[i] == MenuItem::Helmet)
+            line.value = v.helmet.on ? L"On" : L"Off";
+        else if (items[i] == MenuItem::HelmetDebug)
+            line.value = v.helmet.debugLight ? L"On" : L"Off";
+        else if (items[i] == MenuItem::Visor)
+            line.value = kVisorPositionNames[static_cast<int>(v.helmet.visor)];
+        else if (items[i] == MenuItem::HelmetSize)
+            line.value = std::to_wstring(v.helmet.size) + L"\u00b0";
+        else if (items[i] == MenuItem::HelmetHeight)
+            line.value = degrees(v.helmet.height, L"up", L"down");
+        else if (items[i] == MenuItem::HelmetDetail)
+            line.value = kHelmetDetailNames[v.helmet.detail ? 1 : 0];
+        else if (items[i] == MenuItem::HelmetDepth)
+            line.value = v.helmet.depth ? std::to_wstring(v.helmet.depth) + L" cm" : L"Far";
         else if (items[i] == MenuItem::OverlayYaw)
             line.value = degrees(v.overlay.yaw, L"right", L"left");
         else if (items[i] == MenuItem::OverlayPitch)

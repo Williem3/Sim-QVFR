@@ -10,6 +10,7 @@
 #include <string>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../quad/helmet.h"
 #include "../quad/osd.h"
 
 namespace aceqv::launcher {
@@ -34,6 +35,14 @@ struct Settings {
     int menuPitch = -4;       // [menu] pitch
     int menuWidth = 33;       // [menu] width
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
+    // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
+    // layer's fov_crop.h): outer is the temple side, inner the nose side. Applies at the next launch.
+    bool crop = false;        // [crop] enabled
+    int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
+    HelmetSettings helmet;    // [helmet] (QVFR): the helmet overlay round the view (live)
+    // The outer views' kept share of the eye's width and height (1 without a crop or in Two-loop).
+    double crop_width() const;
+    double crop_height() const;
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
     CheekySettings cheeky;
 };
@@ -42,7 +51,7 @@ struct Range {
     int min, max;
 };
 inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10, 100}, kFeatherRange{0, 50},
-    kCornerRange{0, 100};
+    kCornerRange{0, 100}, kCropRange{0, 40};  // kCropRange: the layer's kCropMax
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.
 inline constexpr Range kMenuYawRange{-35, 35}, kMenuPitchRange{-30, 30}, kMenuWidthRange{20, 60};
 
@@ -50,7 +59,8 @@ Settings load_settings(const std::wstring& ini);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.
 bool save_settings(const std::wstring& ini, const Settings& settings);
 // The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,
-// outline, eye tracking, the headset menu's place and, for QVFR, the resolution (up to its launch size). The method and
+// outline, eye tracking, the headset menu's place and, for QVFR, the resolution (up to its launch size)
+// and the FOV crop. The method and
 // Two-loop's resolution apply at the next launch.
 bool save_live_settings(const std::wstring& ini, const Settings& settings);
 // The ini a running ACE reads (runtime.ini's live_ini, while its live_pid is still ACE), or empty.
@@ -62,10 +72,14 @@ struct LaunchSizes {
     bool known = false;
     RenderMode mode = RenderMode::Qvfr;
     int outer = 0, focusWidth = 0, focusHeight = 0;
+    std::wstring crop;  // the FOV crop launched with, "top,bottom,outer,inner" percent (crop_key)
 };
+// A crop as the layer reports it at launch: "top,bottom,outer,inner" percent, all 0 without one.
+std::wstring crop_key(const Settings& settings);
 LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo);
 // Whether `settings` applies live in full to a game launched with `launch`: the same method and, for
-// QVFR, no view larger than at launch (live sizes can only shrink); Two-loop's resolution unchanged.
+// QVFR, no view larger than at launch (live sizes can only shrink; the FOV crop shapes the outer
+// views); Two-loop's resolution unchanged.
 bool fits_launch(const Settings& settings, const LaunchSizes& launch);
 
 // What the layer reported from the last session (runtime.ini): the headset's recommended per-eye

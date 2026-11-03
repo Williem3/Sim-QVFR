@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../cheeky/cheeky_settings.h"
+#include "helmet.h"
 #include "osd.h"
 
 namespace aceqv {
@@ -20,7 +21,10 @@ enum class MenuItem {
     Page, CheekyProcessing, CheekyOuterDlaa, CheekyOuterScale, CheekyOuterPreset, CheekyFocusPreset,
     CheekySupersampling, CheekyMotionFix, CheekyNr, CheekyNrPreset, CheekyNrPasses,
     // The Frame generation page (Cheeky's DLSS-G).
-    FgOn, FgMultiplier, FgSize, FgScale, FgPeriphery, FgBorder
+    FgOn, FgMultiplier, FgSize, FgScale, FgPeriphery, FgBorder,
+    // The View crop page (QVFR, [crop], fov_crop.h), and the Helmet page ([helmet], helmet.h).
+    Crop, CropTop, CropBottom, CropOuter, CropInner, Helmet, HelmetRim, HelmetCorners, HelmetLight, HelmetDebug,
+    Visor, HelmetSize, HelmetHeight, HelmetDepth, HelmetDetail
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -47,6 +51,12 @@ struct MenuValues {
     bool eyeTracking = true;  // [quad] gaze
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
+    bool crop = false;        // [crop] enabled (QVFR)
+    int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
+    HelmetSettings helmet;    // [helmet] (QVFR)
+    // The outer views' kept share of the eye (percent; 100 without a crop).
+    double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }
+    double crop_height() const { return crop ? 100.0 - cropTop - cropBottom : 100.0; }
 };
 
 // What the running game launched with: the outer and focus views' sizes, percent of the native eye
@@ -59,6 +69,8 @@ struct MenuLaunch {
     double nativePpd = 0;       // pixels per degree at the centre at 100% density (0: unknown)
     double twoLoopScale = 100;  // Two-loop: eye_scale, percent (both frames' resolution, fixed at launch)
     bool dlssHeld = false;      // QVFR with DLSS on: the views keep their launch sizes (resolution: next launch)
+    double cropWidth = 100, cropHeight = 100;  // the FOV crop launched with: the outer views' kept share of the eye, percent
+    bool helmetPieces = false;  // the helmet draws its images (helmet.h): visor, size and height instead of rim and corners
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.
@@ -76,9 +88,9 @@ struct SettingsMenu {
     int selected = 0;
 };
 
-// The menu's pages: the method's settings, with Cheeky running Foveated DLSS and Frame generation,
-// then the performance overlay and the panels' places.
-enum class MenuPage { Settings, Dlss, Fg, Headset };
+// The menu's pages: the method's settings, for QVFR the view crop and the helmet, with Cheeky running
+// Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
+enum class MenuPage { Settings, Crop, Helmet, Dlss, Fg, Headset };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 
@@ -94,12 +106,13 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
-// Writes the menu's keys (resolution only for QVFR). False if the file cannot be written.
+// Writes the menu's keys (resolution, the crop and the helmet only for QVFR). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus
-// views keep what they ask for first. Sizes in percent of the native eye.
+// views keep what they ask for first; the outer views take the values' crop. Sizes in percent of the
+// native eye (periphery: its density).
 struct MenuFit {
     bool peripheryCapped = false, focusCapped = false;
     bool peripheryByRoom = false;  // the periphery is held because the focus views use the width

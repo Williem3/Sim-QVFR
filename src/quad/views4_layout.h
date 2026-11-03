@@ -4,7 +4,8 @@
 // as the taller of the two, so rows below the shorter pair are unused.
 //
 // Sizes are linear scales of the runtime's native eye size: the outer views render at `outer` of
-// native on both axes, the focus views at `focus` of the native width and `focusHeight` of the native
+// native density over `cropWidth` x `cropHeight` of the eye (the FOV crop, fov_crop.h; 1 x 1 without
+// one), the focus views at `focus` of the native width and `focusHeight` of the native
 // height (their density times the focus box's share of the eye's tangent width and height). All
 // three equal gives the old equal quarters.
 // Everything is kept as fractions of the target, so it holds for any target ACE derives from the
@@ -18,13 +19,17 @@ namespace aceqv {
 
 struct Views4Layout {
     double outer = 1.0, focus = 1.0, focusHeight = 1.0;  // linear scale of the native eye width / height
+    double cropWidth = 1.0, cropHeight = 1.0;            // the outer views' kept share of the eye (FOV crop)
     double width[4] = {0.25, 0.25, 0.25, 0.25};  // fraction of the target width
     double height[4] = {1, 1, 1, 1};             // fraction of the target height
     // `outer`, `focus` and `focusHeight` size ACE's target (at launch); live resolution (views4_live)
     // changes only `width` and `height`, laying the views out again inside that target.
     // The eye size ACE is offered, in native eye widths and heights (its double-wide target is two of these).
-    double eye_width() const { return outer + focus; }
-    double eye_height() const { return std::max(outer, focusHeight); }
+    double eye_width() const { return outer_width() + focus; }
+    double eye_height() const { return std::max(outer_height(), focusHeight); }
+    // The outer views' size, in native eye widths and heights.
+    double outer_width() const { return outer * cropWidth; }
+    double outer_height() const { return outer * cropHeight; }
     // Equal quarters of the target (the old layout, also after a live change).
     bool equal() const {
         for (int v = 0; v < 4; ++v)
@@ -35,17 +40,21 @@ struct Views4Layout {
 };
 
 // `focusHeight` < 0: the same as `focus` (a focus box with the same share on both axes).
-inline Views4Layout views4_layout(double outer, double focus, double focusHeight = -1) {
+// `cropWidth` / `cropHeight`: the outer views' kept share of the eye (FovCrop::kept_width / kept_height).
+inline Views4Layout views4_layout(double outer, double focus, double focusHeight = -1, double cropWidth = 1,
+                                  double cropHeight = 1) {
     if (focusHeight < 0)
         focusHeight = focus;
     Views4Layout l;
     l.outer = outer;
     l.focus = focus;
     l.focusHeight = focusHeight;
-    const double total = 2 * (outer + focus), tall = std::max(outer, focusHeight);
+    l.cropWidth = cropWidth;
+    l.cropHeight = cropHeight;
+    const double total = 2 * l.eye_width(), tall = l.eye_height();
     for (int v = 0; v < 4; ++v) {
-        l.width[v] = (v < 2 ? outer : focus) / total;
-        l.height[v] = (v < 2 ? outer : focusHeight) / tall;
+        l.width[v] = (v < 2 ? l.outer_width() : focus) / total;
+        l.height[v] = (v < 2 ? l.outer_height() : focusHeight) / tall;
     }
     return l;
 }
@@ -56,22 +65,26 @@ inline Views4Layout views4_layout(double outer, double focus, double focusHeight
 //  - no view taller than the target,
 //  - no view larger than the largest launch view (the tile grid and the volumetrics are sized for it),
 //  - each at least kMinLive of its launch size.
-// Focus first: the periphery (square) takes the width the focus views leave.
+// Focus first: the periphery takes the width the focus views leave. `outer` is the periphery's
+// density; its views are `cropWidth` x `cropHeight` of the eye (the live FOV crop; < 0: the launch's).
 inline constexpr double kMinLive = 0.1;
 struct Views4Fit {
-    double outer = 0, focus = 0, focusHeight = 0;  // in effect
+    double outer = 0, focus = 0, focusHeight = 0;  // in effect (outer: the periphery's density)
     bool outerCapped = false, focusCapped = false;
     bool outerByRoom = false;  // the periphery is held by the focus views' width (less focus makes room)
 };
-inline Views4Fit views4_fit(const Views4Layout& launch, double outer, double focus, double focusHeight) {
+inline Views4Fit views4_fit(const Views4Layout& launch, double outer, double focus, double focusHeight,
+                            double cropWidth = -1, double cropHeight = -1) {
     constexpr double kSlack = 1e-4;  // the launch sizes come from the same integers
-    const double row = launch.outer + launch.focus, tall = launch.eye_height(),
-                 largestW = std::max(launch.outer, launch.focus), minOuter = kMinLive * launch.outer;
+    const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
+    const double row = launch.eye_width(), tall = launch.eye_height(),
+                 largestW = std::max(launch.outer_width(), launch.focus), minOuter = kMinLive * launch.outer;
     Views4Fit f;
-    f.focus = std::clamp(focus, kMinLive * launch.focus, std::min(largestW, row - minOuter));
+    f.focus = std::clamp(focus, kMinLive * launch.focus, std::min(largestW, row - minOuter * cw));
     f.focusHeight = std::clamp(focusHeight, kMinLive * launch.focusHeight, tall);
     f.focusCapped = f.focus < focus - kSlack || f.focusHeight < focusHeight - kSlack;
-    const double ownLimit = std::min(largestW, tall), room = row - f.focus;
+    // In density: the outer views no wider than the largest launch view nor taller than the target.
+    const double ownLimit = std::min(largestW / cw, tall / ch), room = (row - f.focus) / cw;
     f.outer = std::clamp(outer, minOuter, std::min(ownLimit, room));
     f.outerCapped = f.outer < outer - kSlack;
     f.outerByRoom = f.outerCapped && room < ownLimit;
@@ -79,13 +92,15 @@ inline Views4Fit views4_fit(const Views4Layout& launch, double outer, double foc
 }
 
 // The launch layout `launch` with its views at live sizes (views4_fit), side by side from x = 0.
-inline Views4Layout views4_live(const Views4Layout& launch, double outer, double focus, double focusHeight) {
-    const Views4Fit f = views4_fit(launch, outer, focus, focusHeight);
+inline Views4Layout views4_live(const Views4Layout& launch, double outer, double focus, double focusHeight,
+                               double cropWidth = -1, double cropHeight = -1) {
+    const Views4Fit f = views4_fit(launch, outer, focus, focusHeight, cropWidth, cropHeight);
+    const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
     Views4Layout l = launch;
     const double total = 2 * launch.eye_width(), tall = launch.eye_height();
     for (int v = 0; v < 4; ++v) {
-        l.width[v] = (v < 2 ? f.outer : f.focus) / total;
-        l.height[v] = (v < 2 ? f.outer : f.focusHeight) / tall;
+        l.width[v] = (v < 2 ? f.outer * cw : f.focus) / total;
+        l.height[v] = (v < 2 ? f.outer * ch : f.focusHeight) / tall;
     }
     return l;
 }
