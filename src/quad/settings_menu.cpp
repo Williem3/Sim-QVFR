@@ -196,6 +196,8 @@ std::wstring menu_title(const SettingsMenu& menu) {
 }
 
 std::wstring menu_subtitle(const SettingsMenu& menu) {
+    if (!menu.notice.empty())
+        return menu.notice;
     const MenuPage page = menu_page(menu);
     if (page == MenuPage::Settings)
         return menu.optimizeDetail;

@@ -459,6 +459,34 @@ int main() {
         half.target = {2300, 1080};
         check(std::abs(vram_estimate(Settings{}, half, withVram).mb - 8000) < 1e-6,
               "vram estimate: half the target's area, half of the 2000 MB that follows it (9000 -> 8000)");
+        // The last session (the layer's session_* keys): read back, and the pasteable summary.
+        check(!withVram.session.known() && session_summary_text(withVram).find(L"no session") != std::wstring::npos,
+              "session: none before a launch reports one");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nvram_used_mb=12519\r\n"
+                               "vram_budget_mb=13008\r\nsession_time=2026-11-03 09:07\r\nsession_mode=QVFR\r\n"
+                               "session_fps=90.0\r\nsession_frame_p50_ms=11.11\r\nsession_frame_p90_ms=11.66\r\n"
+                               "session_late_percent=0.1\r\nsession_refresh_hz=90\r\nsession_cpu_ms=7.70\r\n"
+                               "session_gpu_ms=8.60\r\nsession_gpu_busy=78\r\nsession_cpu_cores=4.8\r\n"
+                               "session_limited=Neither (headroom)\r\n"
+                               "session_threads=(aSeeVRClient.dll)=96|Physics=95|GameThread=69|Render Worker 0=26\r\n"
+                               "session_frame_generation=0\r\nsession_gaze_ms=0.020\r\nsession_layer_ms=0.03\r\n"
+                               "session_layers_below=XR_APILAYER_MBUCCHIA_toolkit\r\nsession_cpu_profile=\r\n");
+        const RuntimeInfo withSession = load_runtime_info(runtimeIni);
+        const SessionInfo& si = withSession.session;
+        check(si.known() && std::abs(si.fps - 90) < 1e-9 && std::abs(si.cpuMs - 7.7) < 1e-9 && std::abs(si.gpuMs - 8.6) < 1e-9 &&
+                  si.limited == L"Neither (headroom)" && !si.frameGeneration && si.cpuProfile.empty(),
+              "session: frame rate, CPU and GPU frame time, what limits it read back");
+        check(si.threads.size() == 4 && si.threads[0].first == L"(aSeeVRClient.dll)" && std::abs(si.threads[0].second - 96) < 1e-9 &&
+                  si.threads[3].first == L"Render Worker 0",
+              "session: the busiest threads in order, names with spaces and parentheses kept");
+        const std::wstring summaryText = session_summary_text(withSession);
+        std::printf("     summary:\n%ls", summaryText.c_str());
+        check(summaryText.find(L"CPU frame time (render thread): 7.70 ms") != std::wstring::npos &&
+                  summaryText.find(L"GPU frame time (whole GPU): 8.60 ms, 78% busy") != std::wstring::npos &&
+                  summaryText.find(L"GameThread 69%") != std::wstring::npos &&
+                  summaryText.find(L"VRAM: 12.2 GB of 12.7 GB") != std::wstring::npos &&
+                  summaryText.find(L"frame generation off") != std::wstring::npos,
+              "session: the summary has the frame times, threads, VRAM and frame generation");
         Settings twoLoop;
         twoLoop.mode = RenderMode::TwoLoop;
         check(vram_estimate(twoLoop, r, withVram).mb == 0, "vram estimate: QVFR only");

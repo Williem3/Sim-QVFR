@@ -64,6 +64,7 @@ Settings load_settings(const std::wstring& ini) {
     s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
     s.offset = read_focus_offset(ini.c_str());
     s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
+    s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
     s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
               : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
@@ -118,6 +119,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
     return save_live_settings(ini, s) && ok;
 }
@@ -271,7 +273,91 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.vramBudgetMb = read_int(path, L"runtime", L"vram_budget_mb", 0);
     r.vramScaledMb = read_int(path, L"runtime", L"vram_scaled_mb", 0);
     swscanf_s(read_string(path, L"runtime", L"vram_target").c_str(), L"%dx%d", &r.vramTarget.width, &r.vramTarget.height);
+    // The last session's measurements (empty keys: not measured).
+    SessionInfo& s = r.session;
+    const auto number = [&](const wchar_t* key) {
+        const std::wstring v = read_string(path, L"runtime", key);
+        return v.empty() ? -1.0 : _wtof(v.c_str());
+    };
+    s.time = read_string(path, L"runtime", L"session_time");
+    s.mode = read_string(path, L"runtime", L"session_mode");
+    s.limited = read_string(path, L"runtime", L"session_limited");
+    s.layersBelow = read_string(path, L"runtime", L"session_layers_below");
+    s.log = read_string(path, L"runtime", L"session_log");
+    s.cpuProfile = read_string(path, L"runtime", L"session_cpu_profile");
+    s.fps = number(L"session_fps");
+    s.frameP50 = number(L"session_frame_p50_ms");
+    s.frameP90 = number(L"session_frame_p90_ms");
+    s.latePercent = number(L"session_late_percent");
+    s.refreshHz = number(L"session_refresh_hz");
+    s.cpuMs = number(L"session_cpu_ms");
+    s.gpuMs = number(L"session_gpu_ms");
+    s.gpuBusy = number(L"session_gpu_busy");
+    s.cores = number(L"session_cpu_cores");
+    s.gazeMs = number(L"session_gaze_ms");
+    s.layerMs = number(L"session_layer_ms");
+    s.frameGeneration = read_int(path, L"runtime", L"session_frame_generation", 0) != 0;
+    // "GameThread=69|Physics=95|(aSeeVRClient.dll)=97": name, share of one core.
+    const std::wstring list = read_string(path, L"runtime", L"session_threads");
+    for (size_t at = 0; at < list.size();) {
+        const size_t bar = list.find(L'|', at), end = bar == std::wstring::npos ? list.size() : bar;
+        const std::wstring item = list.substr(at, end - at);
+        const size_t eq = item.rfind(L'=');
+        if (eq != std::wstring::npos && eq > 0)
+            s.threads.push_back({item.substr(0, eq), _wtof(item.c_str() + eq + 1)});
+        at = end + 1;
+    }
     return r;
+}
+
+std::wstring session_summary_text(const RuntimeInfo& r) {
+    const SessionInfo& s = r.session;
+    if (!s.known())
+        return L"ace-quadview: no session measured yet.";
+    const auto f = [](const wchar_t* format, double v) {  // at whatever length it comes to
+        const int n = _scwprintf(format, v);
+        if (n <= 0)
+            return std::wstring();
+        std::wstring text(static_cast<size_t>(n), L'\0');
+        swprintf_s(text.data(), static_cast<size_t>(n) + 1, format, v);
+        return text;
+    };
+    std::wstring t = L"ace-quadview session " + s.time + L" · " + s.mode;
+    if (s.refreshHz > 0)
+        t += f(L" · %.0f Hz", s.refreshHz);
+    t += s.frameGeneration ? L" · frame generation on\n" : L" · frame generation off\n";
+    t += f(L"Frame rate: %.1f fps", s.fps);
+    if (s.frameP50 > 0)
+        t += f(L"; frame time %.2f ms median", s.frameP50) + f(L", %.2f ms 90th percentile", s.frameP90);
+    if (s.latePercent >= 0)
+        t += f(L"; %.1f%% of frames late", s.latePercent);
+    t += L"\n";
+    if (s.cpuMs >= 0)
+        t += f(L"CPU frame time (render thread): %.2f ms\n", s.cpuMs);
+    if (s.gpuMs >= 0)
+        t += f(L"GPU frame time (whole GPU): %.2f ms", s.gpuMs) + f(L", %.0f%% busy\n", s.gpuBusy);
+    if (!s.limited.empty())
+        t += L"Limited by: " + s.limited + L"\n";
+    if (s.cores >= 0)
+        t += f(L"CPU in use: %.1f cores in all\n", s.cores);
+    if (!s.threads.empty()) {
+        t += L"Busiest threads (share of one core):";
+        for (size_t i = 0; i < s.threads.size(); ++i)
+            t += (i ? L"," : L"") + std::wstring(L" ") + s.threads[i].first + f(L" %.0f%%", s.threads[i].second);
+        t += L"\n";
+    }
+    if (s.gazeMs >= 0)
+        t += f(L"Eye tracking lookup: %.3f ms (own thread)\n", s.gazeMs);
+    if (s.layerMs >= 0)
+        t += f(L"Layer's own render-thread time: %.2f ms per frame\n", s.layerMs);
+    if (r.vramUsedMb > 0)
+        t += f(L"VRAM: %.1f GB", r.vramUsedMb / 1024) + f(L" of %.1f GB\n", r.vramBudgetMb / 1024);
+    t += L"Layers below: " + (s.layersBelow.empty() ? std::wstring(L"none") : s.layersBelow) + L"\n";
+    if (!s.log.empty())
+        t += L"Log: " + s.log + L"\n";
+    if (!s.cpuProfile.empty())
+        t += L"CPU capture: " + s.cpuProfile + L"\n";
+    return t;
 }
 
 Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {

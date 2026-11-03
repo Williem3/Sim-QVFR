@@ -49,9 +49,10 @@ struct Target {
     uint32_t id = 0;
     HANDLE handle = nullptr;
     uint64_t lastCycles = 0;
-    uint64_t cycles = 0;          // used while profiled (the samples' weights)
+    uint64_t cycles = 0;          // used while profiled: its load
     uint64_t samples = 0, idle = 0, failed = 0;
-    std::unordered_map<uint64_t, uint64_t> self, total;  // function start -> cycles
+    uint64_t running = 0, blocked = 0;  // read samples: in its own code, or blocked in a wait (not broken down)
+    std::unordered_map<uint64_t, uint64_t> self, total;  // function start -> running samples
 };
 
 struct State {
@@ -238,7 +239,7 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
         const uint64_t rva = start - base;
         for (const Label& l : kAceLabels)
             if (l.rva == rva) {
-                swprintf_s(text, L"%ls+0x%llx (%hs)", module.c_str(), static_cast<unsigned long long>(rva), l.name);
+                _snwprintf_s(text, _TRUNCATE, L"%ls+0x%llx (%hs)", module.c_str(), static_cast<unsigned long long>(rva), l.name);
                 return text;
             }
     }
@@ -251,9 +252,9 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
         // Export-only modules name the nearest export, which can be far off: trust a symbol only near its start.
         if (symbols.fromAddr(GetCurrentProcess(), start, &displacement, info) && displacement < 0x1000) {
             if (displacement)
-                swprintf_s(text, L"%ls!%ls+0x%llx", module.c_str(), info->Name, static_cast<unsigned long long>(displacement));
+                _snwprintf_s(text, _TRUNCATE, L"%ls!%ls+0x%llx", module.c_str(), info->Name, static_cast<unsigned long long>(displacement));
             else
-                swprintf_s(text, L"%ls!%ls", module.c_str(), info->Name);
+                _snwprintf_s(text, _TRUNCATE, L"%ls!%ls", module.c_str(), info->Name);
             return text;
         }
     }
@@ -265,12 +266,12 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
     if (after != e.begin() && !(after - 1)->second.empty() && rva - (after - 1)->first < 0x100) {
         const uint32_t displacement = rva - (after - 1)->first;
         if (displacement)
-            swprintf_s(text, L"%ls!%hs+0x%x", module.c_str(), (after - 1)->second.c_str(), displacement);
+            _snwprintf_s(text, _TRUNCATE, L"%ls!%hs+0x%x", module.c_str(), (after - 1)->second.c_str(), displacement);
         else
-            swprintf_s(text, L"%ls!%hs", module.c_str(), (after - 1)->second.c_str());
+            _snwprintf_s(text, _TRUNCATE, L"%ls!%hs", module.c_str(), (after - 1)->second.c_str());
         return text;
     }
-    swprintf_s(text, L"%ls+0x%llx", module.c_str(), static_cast<unsigned long long>(start - base));
+    _snwprintf_s(text, _TRUNCATE, L"%ls+0x%llx", module.c_str(), static_cast<unsigned long long>(start - base));
     return text;
 }
 
@@ -308,22 +309,24 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
             std::fwprintf(f, L"%ls\n", s.c_str());
     };
     line(L"ace-quadview CPU profile: " + std::to_wstring(seconds) + L" s, a sample every " +
-         std::to_wstring(kCpuProfileSampleMs) + L" ms per thread, weighted by the CPU cycles the thread used since the "
-         L"previous one (time it spent blocked counts for nothing).");
-    line(L"Self: where the thread was running. Total: in the function or anything it called (each function counted "
-         L"once per sample). Percentages of the thread's own CPU time; 'of a core' is its load.");
+         std::to_wstring(kCpuProfileSampleMs) + L" ms per thread. 'Of a core' is the thread's load (its CPU cycles).");
+    line(L"Samples where the thread was blocked in a wait (or had not run since the last) are counted apart. The rest: "
+         L"Self, where it was running; Total, in the function or anything it called (each function once per sample), "
+         L"as shares of those running samples.");
     for (Target& t : targets) {
         const std::wstring name = thread_name(t.id);
         const double load = elapsedTsc ? 100.0 * static_cast<double>(t.cycles) / static_cast<double>(elapsedTsc) : 0;
         wchar_t head[256];
-        swprintf_s(head, L"\nThread %u%ls%ls%ls: %.0f%% of a core (%llu samples, %llu idle, %llu unreadable)", t.id,
-                   name.empty() ? L"" : L" \"", name.c_str(), name.empty() ? L"" : L"\"", load,
-                   static_cast<unsigned long long>(t.samples), static_cast<unsigned long long>(t.idle),
+        _snwprintf_s(head, _TRUNCATE, L"\nThread %u%ls%ls%ls: %.0f%% of a core (%llu samples: %llu running, %llu blocked in a wait, "
+                         L"%llu idle, %llu unreadable)",
+                   t.id, name.empty() ? L"" : L" \"", name.c_str(), name.empty() ? L"" : L"\"", load,
+                   static_cast<unsigned long long>(t.samples), static_cast<unsigned long long>(t.running),
+                   static_cast<unsigned long long>(t.blocked), static_cast<unsigned long long>(t.idle),
                    static_cast<unsigned long long>(t.failed));
         line(head);
-        if (!t.cycles)
+        if (!t.running)
             continue;
-        const auto percent = [&](uint64_t cycles) { return 100.0 * static_cast<double>(cycles) / static_cast<double>(t.cycles); };
+        const auto percent = [&](uint64_t samples) { return 100.0 * static_cast<double>(samples) / static_cast<double>(t.running); };
         // By module, from the self time.
         std::map<std::wstring, uint64_t> modules;
         for (const auto& [start, cycles] : t.self) {
@@ -340,7 +343,7 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         std::wstring mods = L"  By module (self):";
         for (size_t i = 0; i < byModule.size() && i < 8; ++i) {
             wchar_t item[160];
-            swprintf_s(item, L"%ls %ls %.1f%%", i ? L"," : L"", moduleNames[byModule[i].first].c_str(), percent(byModule[i].second));
+            _snwprintf_s(item, _TRUNCATE, L"%ls %ls %.1f%%", i ? L"," : L"", moduleNames[byModule[i].first].c_str(), percent(byModule[i].second));
             mods += item;
         }
         line(mods);
@@ -348,20 +351,20 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         line(L"  Self time:");
         for (size_t i = 0; i < self.size() && i < kTop; ++i) {
             wchar_t item[600];
-            swprintf_s(item, L"    %5.1f%%  %ls", percent(self[i].second), function_name(symbols, self[i].first).c_str());
+            _snwprintf_s(item, _TRUNCATE, L"    %5.1f%%  %ls", percent(self[i].second), function_name(symbols, self[i].first).c_str());
             line(item);
         }
         line(L"  Total time:");
         for (size_t i = 0; i < total.size() && i < kTop; ++i) {
             wchar_t item[600];
-            swprintf_s(item, L"    %5.1f%%  %ls", percent(total[i].second), function_name(symbols, total[i].first).c_str());
+            _snwprintf_s(item, _TRUNCATE, L"    %5.1f%%  %ls", percent(total[i].second), function_name(symbols, total[i].first).c_str());
             line(item);
         }
         // The log: the thread and its top three by self time.
         std::wstring summary;
         for (size_t i = 0; i < self.size() && i < 3; ++i) {
             wchar_t item[600];
-            swprintf_s(item, L"%ls%.0f%% %ls", i ? L", " : L"", percent(self[i].second), function_name(symbols, self[i].first).c_str());
+            _snwprintf_s(item, _TRUNCATE, L"%ls%.0f%% %ls", i ? L", " : L"", percent(self[i].second), function_name(symbols, self[i].first).c_str());
             summary += item;
         }
         logf("cpu profile: thread %u%s%ls%s %.0f%% of a core; self: %ls", t.id, name.empty() ? "" : " \"", name.c_str(),
@@ -370,6 +373,25 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
     if (f)
         std::fclose(f);
     logf("cpu profile: report %ls%s", path.c_str(), f ? "" : " (could not be written)");
+}
+
+// Whether a sample's innermost function is a blocking system call (ntdll's and win32u's waits): the thread
+// is not running there. Such samples are counted apart, not broken down, or a thread that worked and then
+// blocked would show its work as the wait's (each sample carries no weight of its own).
+bool blocked_in_wait(uint64_t start) {
+    uint64_t base = 0;
+    const std::wstring module = module_name(start, base);
+    if (_wcsicmp(module.c_str(), L"ntdll.dll") != 0 && _wcsicmp(module.c_str(), L"win32u.dll") != 0)
+        return false;
+    const Exports& e = exports_of(base);
+    const uint32_t rva = static_cast<uint32_t>(start - base);
+    const auto after = std::upper_bound(e.begin(), e.end(), rva, [](uint32_t r, const auto& x) { return r < x.first; });
+    if (after == e.begin() || rva - (after - 1)->first >= 0x40)
+        return false;
+    const std::string& name = (after - 1)->second;
+    const bool syscall = name.rfind("Nt", 0) == 0 || name.rfind("Zw", 0) == 0;
+    return syscall && (name.find("Wait") != std::string::npos || name.find("DelayExecution") != std::string::npos ||
+                       name.find("RemoveIoCompletion") != std::string::npos);
 }
 
 void run(std::vector<Target> targets, int seconds, std::wstring path) {
@@ -411,15 +433,22 @@ void run(std::vector<Target> targets, int seconds, std::wstring path) {
             t.cycles += weight;
             const int n = walk(context, copy.data(), size, rsp, frames);
             // Looked up after the thread runs again: the unwind tables' locks are never taken while it is paused.
+            if (n == 0)
+                continue;
+            if (blocked_in_wait(function_start(frames[0]))) {
+                ++t.blocked;
+                continue;
+            }
+            ++t.running;
             uint64_t seen[kMaxFrames];
             int unique = 0;
             for (int i = 0; i < n; ++i) {
                 const uint64_t start = function_start(frames[i]);
                 if (i == 0)
-                    t.self[start] += weight;
+                    ++t.self[start];
                 if (std::find(seen, seen + unique, start) == seen + unique) {
                     seen[unique++] = start;
-                    t.total[start] += weight;
+                    ++t.total[start];
                 }
             }
         }

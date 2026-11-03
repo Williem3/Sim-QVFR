@@ -36,8 +36,8 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, About };
-constexpr int kPanes = 8;
+enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, About };
+constexpr int kPanes = 9;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -52,7 +52,9 @@ enum Ctl {
     // The helmet overlay ([helmet], Resolution pane).
     kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
-    kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset
+    kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
+    // The Diagnostics pane: the CPU capture switch, copying the summary, the logs folder.
+    kDiagCapture, kDiagCopy, kDiagLogs
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -319,6 +321,7 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
+    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagCopy, kDiagLogs}); break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -871,6 +874,173 @@ float layers_preview(float x, float y, float w, bool draw) {
 }
 
 // The current pane's content at (x, y), width w. Returns its height.
+// ---- Diagnostics -------------------------------------------------------------------------------
+// The last session's measurements (runtime.ini's session_* keys, written by the layer every ~10 s while ACE
+// runs), for users to read and to screenshot or copy when asking for help; the CPU capture switch.
+
+// A read-only row: its label (and a line under it) with the value on the right.
+Row value_row(const std::wstring& label, const std::wstring& desc, const std::wstring& value) {
+    Row row;
+    row.label = label;
+    row.desc = desc;
+    row.controlW = std::ceil(app.canvas.measure(value, t::kValue)) + 2;
+    row.controlH = 16;
+    row.control = [value](const Rect& r) { app.canvas.text(value, t::kValue, r, col(app.c->label), Align::Trailing); };
+    return row;
+}
+
+// `format` with one number, at whatever length it comes to (a fixed buffer too short for a description made
+// swprintf_s end the launcher: the Diagnostics pane's first version).
+std::wstring formatted(const wchar_t* format, double v) {
+    const int n = _scwprintf(format, v);
+    if (n <= 0)
+        return {};
+    std::wstring text(static_cast<size_t>(n), L'\0');
+    swprintf_s(text.data(), static_cast<size_t>(n) + 1, format, v);
+    return text;
+}
+
+// What a thread is, for the names users will see most (others: none).
+std::wstring thread_note(const std::wstring& name) {
+    if (name == L"GameThread")
+        return L"ACE's main thread, which here also submits each frame. Near 100% it limits the frame rate.";
+    if (name == L"Physics")
+        return L"Waits for each physics step by spinning on the clock, so it always looks busy.";
+    if (name.find(L"aSeeVRClient") != std::wstring::npos)
+        return L"The Pimax eye tracker's client: it polls the tracker continuously, so it always looks busy.";
+    if (name.find(L"Cheeky") != std::wstring::npos)
+        return L"Cheeky Foveated DLSS's frame generation.";
+    return L"";
+}
+
+// The layers below ace-quadview as people know them: "XR_APILAYER_MBUCCHIA_toolkit, ..." -> "OpenXR Toolkit, ...".
+std::wstring friendly_layers(const std::wstring& names) {
+    std::wstring out;
+    for (size_t at = 0; at < names.size();) {
+        const size_t comma = names.find(L',', at), end = comma == std::wstring::npos ? names.size() : comma;
+        std::wstring name = names.substr(at, end - at);
+        name.erase(0, name.find_first_not_of(L' '));
+        if (!name.empty()) {
+            std::string ascii;  // layer names are ASCII
+            for (const wchar_t c : name)
+                ascii += static_cast<char>(c);
+            out += (out.empty() ? L"" : L", ") + friendly_layer(ascii);
+        }
+        at = end + 1;
+    }
+    return out;
+}
+
+std::wstring logs_folder() {
+    const std::wstring runtime = runtime_info_path();  // the launcher's folder\runtime.ini
+    const size_t slash = runtime.find_last_of(L"\\/");
+    return (slash == std::wstring::npos ? std::wstring(L".") : runtime.substr(0, slash)) + L"\\logs";
+}
+
+void copy_summary() {
+    const std::wstring text = session_summary_text(app.runtime);
+    if (!OpenClipboard(app.hwnd))
+        return;
+    EmptyClipboard();
+    const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    if (HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+        std::memcpy(GlobalLock(memory), text.c_str(), bytes);
+        GlobalUnlock(memory);
+        if (!SetClipboardData(CF_UNICODETEXT, memory))
+            GlobalFree(memory);
+    }
+    CloseClipboard();
+}
+
+float diagnostics_pane(float x, float y, float w, bool draw) {
+    const SessionInfo& s = app.runtime.session;
+    const std::wstring dash = L"—";
+    float h = 0;
+    if (!s.known()) {
+        const std::wstring none = L"No session measured yet. Start the game with this launcher: this page fills in "
+                                  L"while it runs, and keeps the last session's numbers after it closes.";
+        const float nh = app.canvas.measure_height(none, t::kBody, w);
+        if (draw)
+            app.canvas.text(none, t::kBody, {x, y, w, nh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+        h += nh + t::kSpace6;
+    } else {
+        std::wstring head = s.time + L"  ·  " + s.mode;
+        if (s.refreshHz > 0)
+            head += formatted(L"  ·  %.0f Hz", s.refreshHz);
+        head += s.frameGeneration ? L"  ·  Frame generation on" : L"  ·  Frame generation off";
+        if (draw)
+            app.canvas.text(head, t::kSubheadline, {x + t::kSpace3, y, w - t::kSpace3, 18}, col(app.c->label_secondary));
+        h += 18 + t::kSpace4;
+        const double budget = s.refreshHz > 0 ? 1000 / s.refreshHz : 0;
+        std::vector<Row> rows = {
+            value_row(L"Frame rate", L"", formatted(L"%.1f fps", s.fps)),
+            value_row(L"Frame time", L"Median and 90th percentile: the slower frames, which you feel as stutter.",
+                      s.frameP50 > 0 ? formatted(L"%.2f ms", s.frameP50) + formatted(L"  ·  %.2f ms", s.frameP90) : dash),
+            value_row(L"Late frames", L"Frames that missed the headset's refresh.",
+                      s.latePercent >= 0 ? formatted(L"%.1f%%", s.latePercent) : dash),
+            value_row(L"CPU frame time",
+                      budget > 0 ? formatted(L"ACE's render thread's work per frame. Close to %.1f ms, the CPU limits the frame.",
+                                             budget)
+                                 : L"ACE's render thread's work per frame.",
+                      s.cpuMs >= 0 ? formatted(L"%.2f ms", s.cpuMs) : dash),
+            value_row(L"GPU frame time", L"The whole GPU per ACE frame, the compositor and frame generation included.",
+                      s.gpuMs >= 0 ? formatted(L"%.2f ms", s.gpuMs) + formatted(L"  ·  %.0f%% busy", s.gpuBusy) : dash),
+            value_row(L"Limited by", L"", s.limited.empty() ? dash : s.limited),
+            value_row(L"CPU in use", L"All of ACE's threads together.", s.cores >= 0 ? formatted(L"%.1f cores", s.cores) : dash)};
+        h += section(x, y + h, w, L"Last session", rows, L"", draw);
+        h += t::kSpace6;
+        std::vector<Row> threads;
+        for (const auto& [name, percent] : s.threads)
+            threads.push_back(value_row(name, thread_note(name), formatted(L"%.0f%% of a core", percent)));
+        if (threads.empty())
+            threads.push_back(value_row(L"Not measured", L"", dash));
+        h += section(x, y + h, w, L"Busiest threads", threads,
+                     L"Each thread is a share of ONE core. A thread near 100% can hold the frame rate back even when "
+                     L"Windows shows the whole CPU at 15%; a thread that spins by design looks busy whatever limits it.",
+                     draw);
+        h += t::kSpace6;
+        const bool toolkit = s.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos;
+        std::vector<Row> layer;
+        if (s.gazeMs >= 0)
+            layer.push_back(value_row(L"Eye tracking lookup", L"On the layer's own thread, not ACE's.",
+                                      formatted(L"%.3f ms", s.gazeMs)));
+        layer.push_back(value_row(L"Layer on the render thread", L"ace-quadview's own time in each frame (composition apart).",
+                                  s.layerMs >= 0 ? formatted(L"%.2f ms", s.layerMs) : dash));
+        layer.push_back(value_row(L"Layers below", toolkit ? L"OpenXR Toolkit adds time to every frame's submission (about "
+                                                             L"0.8 ms measured): switch it off for ACE in OpenXR layers if you "
+                                                             L"don't use it."
+                                                           : L"",
+                                  s.layersBelow.empty() ? L"None" : friendly_layers(s.layersBelow)));
+        if (app.runtime.vramUsedMb > 0)
+            layer.push_back(value_row(L"VRAM", L"ACE's use against what Windows allows it.",
+                                      formatted(L"%.1f GB", app.runtime.vramUsedMb / 1024) +
+                                          formatted(L" of %.1f GB", app.runtime.vramBudgetMb / 1024)));
+        h += section(x, y + h, w, L"Layer and memory", layer, L"", draw);
+        h += t::kSpace6;
+    }
+    // Asking for help: the capture switch, copying the numbers above, the logs folder.
+    Row capture;
+    const std::wstring captureDesc =
+        L"At the next launch, Ctrl+Alt+C while driving records for 20 s where ACE's busiest threads spend their time, "
+        L"into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; the game may "
+        L"stutter slightly while it records.";
+    capture.fullHeight = [captureDesc](float width) { return checkbox_height(captureDesc, width); };
+    capture.full = [captureDesc](const Rect& r) { checkbox(kDiagCapture, r, app.s.cpuProfile, L"CPU capture", captureDesc); };
+    Row actions;
+    actions.fullHeight = [](float) { return t::kControlHeight; };
+    actions.full = [](const Rect& r) {
+        const float copyW = std::ceil(app.canvas.measure(L"Copy summary", t::kBody)) + 2 * t::kSpace3;
+        const float logsW = std::ceil(app.canvas.measure(L"Open logs folder", t::kBody)) + 2 * t::kSpace3;
+        button(kDiagCopy, {r.x, r.y, copyW, t::kControlHeight}, L"Copy summary", false);
+        button(kDiagLogs, {r.x + copyW + t::kSpace3, r.y, logsW, t::kControlHeight}, L"Open logs folder", false);
+    };
+    std::wstring footer = L"When asking for help, send a screenshot of this page (or paste the summary) and the session's "
+                          L"ace-*.log from the logs folder";
+    footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
+    h += section(x, y + h, w, L"Report", {capture, actions}, footer, draw);
+    return h;
+}
+
 float pane_content(float x, float y, float w, bool draw) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool qvfr = app.s.mode == RenderMode::Qvfr;
@@ -1197,6 +1367,7 @@ float pane_content(float x, float y, float w, bool draw) {
         break;
     }
     case Pane::Layers: h += layers_pane(x, y, w, draw); break;
+    case Pane::Diagnostics: h += diagnostics_pane(x, y, w, draw); break;
     case Pane::About: {
         if (draw) {
             app.canvas.text(L"QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
@@ -1528,8 +1699,11 @@ const Item kItems[] = {
     {L"Foveated DLSS", {"M8 1.75L9.6 6.4 14.25 8 9.6 9.6 8 14.25 6.4 9.6 1.75 8 6.4 6.4Z", nullptr, nullptr}},
     {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
     {L"OpenXR layers", {"M2.5 4.5H10.5", "M2.5 8H10.5", "M2.5 11.5H10.5"}},
+    {L"Diagnostics", {"M1.5 8.5H4.5L6.25 4.5L9.75 11.5L11.5 8.5H14.5", nullptr, nullptr}},
     {L"About", {"M8 7.25V11", nullptr, nullptr}},
 };
+
+static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 
 void sidebar_icon(int i, const Rect& r, Color c) {
     for (const char* p : kItems[i].icon)
@@ -1859,7 +2033,12 @@ void activate(Ctl id, int option) {
         app.scroll = 0;
         if (app.pane == Pane::Layers)
             refresh_layers();
+        if (app.pane == Pane::Diagnostics)
+            app.runtime = load_runtime_info(runtime_info_path());
         break;
+    case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
+    case kDiagCopy: copy_summary(); return;
+    case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
     case kLayerProfile: open_popup(id); return;
     case kLayerOn: app.layerRow = option; toggle_layer(option); break;
     case kLayerUp: move_layer(option, -1); break;
@@ -2064,8 +2243,19 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         return 0;
     case WM_TIMER:
-        if (wParam == kFollowTimer)
+        if (wParam == kFollowTimer) {
             follow_ini();
+            // The Diagnostics pane follows a running session: the layer rewrites runtime.ini every ~10 s.
+            static FILETIME seen{};
+            WIN32_FILE_ATTRIBUTE_DATA a{};
+            if (app.pane == Pane::Diagnostics &&
+                GetFileAttributesExW(runtime_info_path().c_str(), GetFileExInfoStandard, &a) &&
+                CompareFileTime(&a.ftLastWriteTime, &seen) != 0) {
+                seen = a.ftLastWriteTime;
+                app.runtime = load_runtime_info(runtime_info_path());
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;

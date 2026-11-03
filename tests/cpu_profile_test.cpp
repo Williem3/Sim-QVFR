@@ -42,6 +42,17 @@ __declspec(noinline) void busy_outer() {
     std::printf("     (%llu)\n", static_cast<unsigned long long>(x & 1));
 }
 
+// Works, then sleeps, over and over: samples land in the sleep (blocked) and in the work.
+__declspec(noinline) void work_then_sleep() {
+    uint64_t x = 3;
+    while (!stop) {
+        for (int i = 0; i < 20; ++i)
+            x = busy_leaf(x);
+        Sleep(1);
+    }
+    std::printf("     (%llu)\n", static_cast<unsigned long long>(x & 1));
+}
+
 // How the report names a function (at its start, `address`) without symbols: module+offset.
 std::string start_offset(void* address) {
     char text[64];
@@ -59,11 +70,16 @@ int main() {
         id = GetCurrentThreadId();
         busy_outer();
     });
-    while (!id)
+    DWORD sleeperId = 0;
+    std::thread sleeper([&sleeperId] {
+        sleeperId = GetCurrentThreadId();
+        work_then_sleep();
+    });
+    while (!id || !sleeperId)
         Sleep(1);
     const std::wstring path = (std::filesystem::temp_directory_path() / L"ace-qv-cpu-profile-test.txt").wstring();
     DeleteFileW(path.c_str());
-    check(cpu_profile_start({{id, GetCurrentThreadId()}, 1, path}), "a capture starts (the calling thread profiled too)");
+    check(cpu_profile_start({{id, GetCurrentThreadId(), sleeperId}, 1, path}), "a capture starts (the calling thread profiled too)");
     check(!cpu_profile_start({{id}, 1, path}), "only one capture at a time");
     cpu_profile_wait();
     const uint64_t before = spins.load();
@@ -71,6 +87,7 @@ int main() {
     check(spins.load() > before, "the profiled thread runs on after the capture (never left paused)");
     stop = true;
     worker.join();
+    sleeper.join();
 
     std::wifstream in(path);
     std::wstringstream text;
@@ -97,6 +114,21 @@ int main() {
     check(utf8.find("% of a core") != std::string::npos, "the thread's load is reported");
     check(utf8.find("Thread " + std::to_string(GetCurrentThreadId())) != std::string::npos,
           "the thread that started the capture is in it (the layer starts captures from ACE's render thread)");
+    {
+        // The sleeper: samples in its sleep count as blocked, and its work still comes out on top.
+        const size_t at = utf8.find("Thread " + std::to_string(sleeperId));
+        const std::string part = at == std::string::npos ? "" : utf8.substr(at, utf8.find("\nThread ", at + 1) - at);
+        unsigned long long running = 0, blocked = 0;
+        const size_t counts = part.find("samples: ");
+        if (counts != std::string::npos)
+            sscanf_s(part.c_str() + counts, "samples: %llu running, %llu blocked", &running, &blocked);
+        const size_t selfAt = part.find("Self time:");
+        const std::string top = selfAt == std::string::npos ? "" : first_line(part.substr(selfAt));
+        std::printf("     sleeper: %llu running, %llu blocked; top self: %s\n", running, blocked, top.c_str());
+        check(blocked > 0 && running > 0, "work then sleep: the sleeps are counted apart as blocked");
+        check(top.find("busy_leaf") != std::string::npos || top.find(leaf) != std::string::npos,
+              "work then sleep: its work, not the sleep, is on top by self time");
+    }
     check(utf8.find("ntdll.dll!") != std::string::npos || utf8.find("KERNEL32.DLL!") != std::string::npos ||
               utf8.find("KERNELBASE.dll!") != std::string::npos,
           "system functions are named from their exports (the waiting main thread is in one)");

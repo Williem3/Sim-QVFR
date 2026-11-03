@@ -122,6 +122,10 @@ struct Experiment {
     // CPU sampling profiler (probe/cpu_profile.h): on (Ctrl+Alt+C starts a capture), seconds per capture, the
     // busiest threads it samples (and the render thread), and the frame a capture starts at by itself (0: none).
     bool cpuProfile = false;
+    // [experiment] measure=1: the CPU and pacing reports (views4 cpu/pacing/load/threads lines) and the load
+    // samplers in any mode, so a mode=off run measures what ACE costs without the four views. Always on in
+    // views4; cpu_profile=1 turns it on too (its thread choice needs the load sampler).
+    bool measure = false;
     int cpuProfileSeconds = 20, cpuProfileThreads = 4;
     uint64_t cpuProfileFrame = 0;
     UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
@@ -300,6 +304,13 @@ void load_experiment() {
         ini = env;
     wchar_t mode[32] = {};
     GetPrivateProfileStringW(L"experiment", L"mode", L"off", mode, 32, ini.c_str());
+    // [experiment] baseline=1: mode=off whatever `mode` says (the launcher writes its own mode at every launch),
+    // with the measurement reports on: ACE's own two views, for comparing what the four views cost.
+    const bool baseline = GetPrivateProfileIntW(L"experiment", L"baseline", 0, ini.c_str()) != 0;
+    if (baseline) {
+        logf("experiment: baseline=1: running as mode=off (ini mode=%ls), measuring", mode);
+        wcscpy_s(mode, L"off");
+    }
     experiment.focusOnly = _wcsicmp(mode, L"focus_only") == 0;
     experiment.doubleRender = _wcsicmp(mode, L"double_render") == 0;
     experiment.views3 = _wcsicmp(mode, L"views3") == 0;
@@ -326,6 +337,8 @@ void load_experiment() {
     experiment.cpuProfileThreads =
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_threads", 4, ini.c_str())), 1, 16);
     experiment.cpuProfileFrame = GetPrivateProfileIntW(L"experiment", L"cpu_profile_frame", 0, ini.c_str());
+    experiment.measure =
+        GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline;
     experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
     experiment.views4FocusCull = GetPrivateProfileIntW(L"experiment", L"views4_focus_cull", 0, ini.c_str()) != 0;
     experiment.views4FocusCullMargin =
@@ -1088,6 +1101,16 @@ XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateI
 // The pacing line, and resets: ACE's frame interval and its time in and outside xrWaitFrame (p50, p90),
 // and how many frames took one display period, two, three or more (rounded to the nearest). Returns the
 // mean frame interval (0 without frames).
+// The latest report's numbers, for the launcher's Diagnostics pane (write_session_summary).
+struct SessionSummary {
+    double fps = 0, frameP50 = 0, frameP90 = 0, latePercent = 0, periodMs = 0;
+    double cpuMs = -1, gpuMs = -1, gpuBusy = -1, cores = -1;  // the render thread's CPU and the whole GPU per frame
+    std::vector<ThreadLoad> threads;
+};
+SessionSummary summary;
+std::string layersBelow;  // the layers between this one and the runtime (log_layer_order)
+bool frame_generation_on();  // Cheeky's, now (below)
+
 double report_pacing() {
     if (pacing.interval.empty())
         return 0;
@@ -1116,6 +1139,12 @@ double report_pacing() {
          pacing.periodMs, at(pacing.interval, 0.5), at(pacing.interval, 0.9), longest, mean > 0 ? 1000 / mean : 0,
          pacing.interval.size(), at(pacing.wait, 0.5), at(pacing.wait, 0.9), at(outside, 0.5), at(outside, 0.9),
          periods[0], periods[1], periods[2], periods[3]);
+    summary.fps = mean > 0 ? 1000 / mean : 0;
+    summary.frameP50 = at(pacing.interval, 0.5);
+    summary.frameP90 = at(pacing.interval, 0.9);
+    summary.latePercent = 100.0 * static_cast<double>(periods[1] + periods[2] + periods[3]) /
+                          static_cast<double>(pacing.interval.size());
+    summary.periodMs = pacing.periodMs;
     pacing.interval.clear();
     pacing.wait.clear();
     return mean;
@@ -1130,6 +1159,10 @@ void report_load(double frameMs) {
     int gpuSamples = 0, cpuSamples = 0;
     const GpuLoad gpu = gpu_load_window(gpuSamples);
     const CpuLoad threads = cpu_load_window(cpuSamples);
+    summary.gpuBusy = gpu.valid ? gpu.busy : -1;
+    summary.gpuMs = gpu.valid ? gpu.busy / 100 * frameMs : -1;
+    summary.cpuMs = threads.valid && threads.renderPercent >= 0 ? threads.renderPercent / 100 * frameMs : -1;
+    summary.cores = threads.valid ? threads.processPercent / 100 : -1;
     if (!gpu.valid && !threads.valid)
         return;
     char gpuText[192] = "GPU load unknown", cpuText[256] = "threads unknown", shown[256] = "";
@@ -1155,6 +1188,7 @@ void report_load(double frameMs) {
     // Every busy thread, not only the busiest: a share of one core each (a thread near 100% limits the frame
     // however idle the other cores are), by ACE's own thread names where it set them.
     const std::vector<ThreadLoad> threadLoads = cpu_load_threads(8);
+    summary.threads = threadLoads;
     std::string list;
     for (const ThreadLoad& t : threadLoads) {
         if (t.percent < 5)
@@ -1207,6 +1241,77 @@ void report_vram() {
     });
 }
 
+// The session summary in the runtime info ([runtime] session_*), at every report: what the launcher's
+// Diagnostics pane shows after the session (launcher/settings.h's SessionInfo). `layerMs`: the layer's own
+// CPU time per frame on ACE's render thread.
+void write_session_summary(double layerMs) {
+    if (summary.fps <= 0)
+        return;
+    const SessionSummary s = summary;
+    // What limits the frame: the GPU busy all the time, or the render thread near its whole budget (the
+    // spinning Physics and eye-tracker threads are not counted: they look busy whatever limits the frame).
+    const wchar_t* limited = s.gpuBusy >= 95                                ? L"GPU"
+                             : s.cpuMs >= 0 && s.cpuMs >= 0.9 * s.periodMs ? L"CPU (render thread)"
+                             : s.latePercent > 5                           ? L"Pacing (frames late, neither saturated)"
+                                                                           : L"Neither (headroom)";
+    std::wstring threads;
+    for (const ThreadLoad& t : s.threads) {
+        if (t.percent < 5)
+            break;
+        wchar_t item[160];
+        _snwprintf_s(item, _TRUNCATE, L"%ls%ls=%.0f", threads.empty() ? L"" : L"|",
+                   t.name.empty() ? (L"thread " + std::to_wstring(t.id)).c_str() : t.name.c_str(), t.percent);
+        threads += item;
+    }
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t time[32];
+    swprintf_s(time, L"%04u-%02u-%02u %02u:%02u", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
+    const std::wstring mode = experiment.views4                       ? L"QVFR"
+                              : experiment.quad || experiment.twoLoops ? L"Two-loop"
+                                                                       : L"Off (ACE's own two views)";
+    const bool fg = frame_generation_on();
+    double gazeMs = -1;
+    {
+        std::lock_guard guard(gazeThread.mutex);
+        if (gazeThread.lookups)
+            gazeMs = gazeThread.lookupMs / gazeThread.lookups;
+    }
+    wchar_t log[MAX_PATH] = {};
+    GetEnvironmentVariableW(L"ACE_QV_LOG", log, MAX_PATH);
+    const std::wstring profile = cpu_profile_last_report();
+    const std::wstring layers(layersBelow.begin(), layersBelow.end());
+    ini_write_later([s, limited = std::wstring(limited), threads, time = std::wstring(time), mode, fg, gazeMs, layerMs,
+                     log = std::wstring(log), profile, layers] {
+        const auto number = [](double v, int digits) {
+            if (v < 0)
+                return std::wstring();
+            wchar_t text[32];
+            swprintf_s(text, L"%.*f", digits, v);
+            return std::wstring(text);
+        };
+        runtime_info(L"session_time", time);
+        runtime_info(L"session_mode", mode);
+        runtime_info(L"session_fps", number(s.fps, 1));
+        runtime_info(L"session_frame_p50_ms", number(s.frameP50, 2));
+        runtime_info(L"session_frame_p90_ms", number(s.frameP90, 2));
+        runtime_info(L"session_late_percent", number(s.latePercent, 1));
+        runtime_info(L"session_refresh_hz", number(s.periodMs > 0 ? 1000 / s.periodMs : -1, 0));
+        runtime_info(L"session_cpu_ms", number(s.cpuMs, 2));
+        runtime_info(L"session_gpu_ms", number(s.gpuMs, 2));
+        runtime_info(L"session_gpu_busy", number(s.gpuBusy, 0));
+        runtime_info(L"session_cpu_cores", number(s.cores, 1));
+        runtime_info(L"session_limited", limited);
+        runtime_info(L"session_threads", threads);
+        runtime_info(L"session_frame_generation", fg ? L"1" : L"0");
+        runtime_info(L"session_gaze_ms", number(gazeMs, 3));
+        runtime_info(L"session_layer_ms", number(layerMs, 2));
+        runtime_info(L"session_layers_below", layers);
+        runtime_info(L"session_log", log);
+        runtime_info(L"session_cpu_profile", profile);
+    });
+}
+
 void report_cpu_times() {
     const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
         const uint64_t n = total.calls.exchange(0), t = total.ticks.exchange(0), m = total.maxTicks.exchange(0);
@@ -1222,6 +1327,12 @@ void report_cpu_times() {
         else
             std::snprintf(out, size, "%.3f (max %.3f) x%llu", t * per, m * cpu.msPerTick, static_cast<unsigned long long>(n));
     };
+    // The layer's own time per frame on the render thread, before the lines below reset the spans.
+    const auto own = [](const CpuSpan& total, const CpuSpan* below) {
+        const uint64_t n = total.calls.load(), t = total.ticks.load(), b = below ? below->ticks.load() : 0;
+        return n ? static_cast<double>(t > b ? t - b : 0) * cpu.msPerTick / static_cast<double>(n) : 0.0;
+    };
+    const double layerMs = own(cpu.endFrame, &cpu.endFrameBelow) + own(cpu.locate, &cpu.locateBelow);
     char end[128], locate[128], compose[128];
     line(cpu.endFrame, &cpu.endFrameBelow, end, sizeof(end));
     line(cpu.locate, &cpu.locateBelow, locate, sizeof(locate));
@@ -1232,6 +1343,7 @@ void report_cpu_times() {
     gpu_frame_timer_report();  // its own samples: it logs while the overlay collects too
     report_load(frameMs);
     report_vram();
+    write_session_summary(layerMs);
     gaze_thread_report(frameMs * kCpuReportFrames / 1000);
 }
 
@@ -1329,7 +1441,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             quad.queue = d3d12->queue;
             if (experiment.views4 && experiment.gpuFrameTiming)
                 gpu_frame_timer_start(d3d12->device, d3d12->queue);
-            if (experiment.views4) {  // the whole GPU's and ACE's threads' load (the overlay, the log)
+            if (experiment.views4 || experiment.measure) {  // the whole GPU's and ACE's threads' load (the overlay, the log)
                 const LUID adapter = d3d12->device->GetAdapterLuid();
                 gpu_load_start(static_cast<uint32_t>(adapter.HighPart), adapter.LowPart);
                 cpu_load_start();
@@ -1416,7 +1528,7 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
         if (XR_SUCCEEDED(r)) {
             osd_waited(state->predictedDisplayPeriod);
             const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
-            if (experiment.views4 && pacing.wait.size() < 4 * kCpuReportFrames) {
+            if ((experiment.views4 || experiment.measure) && pacing.wait.size() < 4 * kCpuReportFrames) {
                 pacing.wait.push_back(static_cast<float>(waitMs));
                 pacing.periodMs = state->predictedDisplayPeriod / 1e6;
             }
@@ -3156,6 +3268,8 @@ constexpr size_t kOsdHistory = 150;
 
 void osd_waited(XrDuration period) { osd.periodNs.store(period, std::memory_order_relaxed); }
 
+bool frame_generation_on() { return cheeky_running() && osd.cheeky.processing && osd.cheeky.fg; }
+
 bool osd_shown(OsdSummary& out) {
     if (!osd.placement.enabled || !osd.shownValid)
         return false;
@@ -3619,9 +3733,34 @@ void optimize_tick(int64_t now) {
 // cpu_profile=1: a capture of the busiest threads (and this one, the render thread) at cpu_profile_frame, and
 // whenever Ctrl+Alt+C is pressed while ACE has focus and none is running.
 bool cpuProfileHotkeyHeld = false;
+// The capture's start and end in the headset: the settings menu's panel shows for a few seconds with a line
+// under its title (QVFR and Two-loop: the panel is theirs; with mode=off only the log says).
+struct ProfileNotice {
+    int64_t until = 0;
+    bool wasRunning = false;
+};
+ProfileNotice profileNotice;
+void profile_notice(const std::wstring& text, int64_t ms) {
+    const int64_t now = qpc_now();
+    menu.model.notice = text;
+    menu.dirty = true;
+    menu_open(now);
+    menu.hideAt = now + qpc_ms(ms);
+    profileNotice.until = menu.hideAt;
+}
+
 void cpu_profile_poll() {
     if (!experiment.cpuProfile)
         return;
+    const bool running = cpu_profile_running();
+    if (profileNotice.wasRunning && !running)
+        profile_notice(L"CPU capture done: the report is in the logs folder", 5000);
+    profileNotice.wasRunning = running;
+    if (profileNotice.until && qpc_now() >= profileNotice.until) {
+        profileNotice.until = 0;
+        menu.model.notice.clear();
+        menu.dirty = true;
+    }
     const bool held = ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
                       (GetAsyncKeyState('C') & 0x8000);
     const bool pressed = held && !cpuProfileHotkeyHeld;
@@ -3646,14 +3785,17 @@ void cpu_profile_poll() {
             request.threads.push_back(all[i].id);
             ++added;
         }
-    cpu_profile_start(request);
+    if (cpu_profile_start(request)) {
+        profileNotice.wasRunning = true;
+        profile_notice(L"CPU capture: " + std::to_wstring(experiment.cpuProfileSeconds) + L" s, keep driving", 4000);
+    }
 }
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
     cpu_load_render_thread(GetCurrentThreadId());
     cpu_profile_poll();
-    if (experiment.views4 && cpu.msPerTick > 0) {
+    if ((experiment.views4 || experiment.measure) && cpu.msPerTick > 0) {
         const int64_t now = qpc_now();
         if (pacing.lastEnd && pacing.interval.size() < 4 * kCpuReportFrames)
             pacing.interval.push_back(static_cast<float>((now - pacing.lastEnd) * cpu.msPerTick));
@@ -3816,6 +3958,7 @@ void log_layer_order(const XrApiLayerNextInfo* below) {
         vectorxrBelow |= std::strstr(n->layerName, "VECTORXR") != nullptr;
     }
     logf("layers below this one: [%s]", names.c_str());
+    layersBelow = names;
     if (!vectorxrBelow && GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll"))
         log_line("VectorXR is loaded above this layer: its frame generation would see ACE's four-view image; move "
                  "this layer above VectorXR (machine-wide registration, then VectorXR's layer order)");
@@ -3914,7 +4057,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     ACEQV_LOAD(PathToString)
 #undef ACEQV_LOAD
     gipa(*instance, "xrGetVisibilityMaskKHR", reinterpret_cast<PFN_xrVoidFunction*>(&d.GetVisibilityMaskKHR));
-    if (ok && experiment.views4) {  // time what runs below this layer (report_cpu_times)
+    if (ok && (experiment.views4 || experiment.measure)) {  // time what runs below this layer (report_cpu_times)
         LARGE_INTEGER frequency;
         QueryPerformanceFrequency(&frequency);
         cpu.msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);
