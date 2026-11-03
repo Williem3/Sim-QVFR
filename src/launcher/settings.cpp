@@ -65,6 +65,7 @@ Settings load_settings(const std::wstring& ini) {
     s.offset = read_focus_offset(ini.c_str());
     s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
+    s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
     s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
               : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
@@ -120,6 +121,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
+    ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
     return save_live_settings(ini, s) && ok;
 }

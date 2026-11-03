@@ -3168,11 +3168,14 @@ void optimize_tick(int64_t now);  // the QVFR optimizer (below)
 // `info` itself otherwise.
 const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, XrFrameEndInfo& storage,
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers) {
-    if (live.ini.empty() || (!experiment.views4 && !experiment.quad))
+    // The performance overlay also while measuring without QVFR (baseline=1), to compare the two; the settings
+    // menu only with a method of the layer's (its settings would change nothing in mode=off).
+    const bool method = experiment.views4 || experiment.quad;
+    if (live.ini.empty() || (!method && !experiment.measure))
         return info;
     // For the launcher's Center PPD: once, when ACE has rendered.
     static bool ppdReported = false;
-    if (!ppdReported && endFrames % 90 == 0) {
+    if (method && !ppdReported && endFrames % 90 == 0) {
         if (const double ppd = native_center_ppd(); ppd > 0) {
             wchar_t text[32];
             swprintf_s(text, L"%.2f", ppd);
@@ -3182,9 +3185,11 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
         }
     }
     const int64_t now = qpc_now();
-    menu_keyboard(now);
-    menu_controllers(session, now);
-    optimize_tick(now);
+    if (method) {
+        menu_keyboard(now);
+        menu_controllers(session, now);
+        optimize_tick(now);
+    }
     if (menu.visible && now >= menu.hideAt) {
         menu.visible = false;
         log_line("settings menu: hidden");
@@ -3741,6 +3746,8 @@ struct ProfileNotice {
 };
 ProfileNotice profileNotice;
 void profile_notice(const std::wstring& text, int64_t ms) {
+    if (!experiment.views4 && !experiment.quad)
+        return;  // no settings menu to show it in (baseline): the log has it
     const int64_t now = qpc_now();
     menu.model.notice = text;
     menu.dirty = true;

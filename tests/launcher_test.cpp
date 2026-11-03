@@ -327,6 +327,23 @@ int main() {
         check(reread.offset.fixed == -6 && reread.offset.gaze == 3 && iniText.find("fixed_offset_y=-6") != std::string::npos &&
                   iniText.find("gaze_offset_y=3") != std::string::npos,
               "settings: both vertical offsets are written (negative too) and read back");
+        {
+            // The Diagnostics pane's switches: the CPU capture and the one launch without QVFR.
+            Settings d = reread;
+            d.cpuProfile = true;
+            d.baselineNext = true;
+            save_settings(ini, d);
+            std::string diagText;
+            read_file(ini, diagText);
+            const Settings diag = load_settings(ini);
+            check(diag.cpuProfile && diag.baselineNext && diagText.find("cpu_profile=1") != std::string::npos &&
+                      diagText.find("baseline_next=1") != std::string::npos && diagText.find("baseline=") == std::string::npos,
+                  "settings: CPU capture and next launch without QVFR are saved and read back ([experiment] baseline untouched)");
+            d.cpuProfile = d.baselineNext = false;
+            save_settings(ini, d);
+            const Settings off = load_settings(ini);
+            check(!off.cpuProfile && !off.baselineNext, "settings: and both turn off again");
+        }
 
         s.mode = RenderMode::TwoLoop;
         save_settings(ini, s);
