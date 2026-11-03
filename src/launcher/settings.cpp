@@ -62,6 +62,7 @@ Settings load_settings(const std::wstring& ini) {
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
     s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
+    s.offset = read_focus_offset(ini.c_str());
     s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
     s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
@@ -144,6 +145,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
     ok &= write(ini, L"quad", L"corner_radius_percent", n(s.corner));
     ok &= write(ini, L"quad", L"gaze", s.eyeTracking ? L"1" : L"0");
+    ok &= write_focus_offset(ini.c_str(), s.offset);
     ok &= write(ini, L"quad", L"debug_border", s.outline ? L"1" : L"0");
     ok &= write(ini, L"quad", L"debug_border_color", color_name(s.color));
     ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));

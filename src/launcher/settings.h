@@ -10,6 +10,7 @@
 #include <string>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../quad/focus_offset.h"
 #include "../quad/helmet.h"
 #include "../quad/osd.h"
 
@@ -29,6 +30,7 @@ struct Settings {
     OutlineColor color = OutlineColor::Teal;
     int feather = 20;         // [quad] feather_percent: blend band, percent of the focus region
     int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
+    FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y: the focus region's vertical offset, degrees up
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
     // right and up of straight ahead, and the panel's width in degrees.
     int menuYaw = 0;          // [menu] yaw
@@ -51,7 +53,8 @@ struct Range {
     int min, max;
 };
 inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10, 100}, kFeatherRange{0, 50},
-    kCornerRange{0, 100}, kCropRange{0, 40};  // kCropRange: the layer's kCropMax
+    kCornerRange{0, 100}, kCropRange{0, 40},  // kCropRange: the layer's kCropMax
+    kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax};
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.
 inline constexpr Range kMenuYawRange{-35, 35}, kMenuPitchRange{-30, 30}, kMenuWidthRange{20, 60};
 

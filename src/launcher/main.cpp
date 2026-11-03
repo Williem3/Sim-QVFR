@@ -3,9 +3,13 @@
 // from ace-quadview.ini next to the launcher; [launcher] holds the launcher's own:
 //   game_dir=   the folder holding AssettoCorsaEVO.exe (default: found through Steam)
 //   off_layers= comma-separated OpenXR layer names to turn off for ACE (e.g. XR_APILAYER_MBUCCHIA_toolkit)
+//   on_layers=  layers switched off in Windows to load for ACE all the same
+//   layer_order= the layers' order below the ACE layer (the OpenXR layers pane; layer_order.h)
 // Usage: ace-quadview-launcher               the settings window (window.cpp)
 //        ace-quadview-launcher --launch      launch now, report on the console it was started from
 //        ace-quadview-launcher --dry-run     write the run folder and the plan, start nothing
+//        ace-quadview-launcher --apply-system-layers <request>   (elevated, from the window) writes
+//                                            HKLM's part of Windows' layer list (layer_order.h)
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -17,6 +21,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 
+#include "../cheeky/cheeky_settings.h"
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
@@ -53,21 +58,6 @@ std::wstring ini_string(const std::wstring& ini, const wchar_t* section, const w
     wchar_t buffer[2048] = {};
     GetPrivateProfileStringW(section, key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
     return buffer;
-}
-
-std::vector<std::string> split_names(const std::wstring& list) {
-    std::vector<std::string> out;
-    std::string current;
-    for (const char c : narrow(list) + ",") {
-        if (c == ',' || c == ';') {
-            if (!current.empty())
-                out.push_back(current);
-            current.clear();
-        } else if (c != ' ' && c != '\t') {
-            current += c;
-        }
-    }
-    return out;
 }
 
 std::vector<Registration> implicit_registrations() {
@@ -144,6 +134,48 @@ std::vector<std::wstring> variable_names(const std::vector<std::wstring>& enviro
     return names;
 }
 
+// The launch's layer options from the ini: the launcher's profile and what the method and Cheeky lock.
+Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstring>& environment) {
+    const std::wstring mode = ini_string(ini, L"experiment", L"mode");
+    const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
+    return launch_options(read_launcher_layers(ini),
+                          _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0, cheeky.load,
+                          cheeky.fg, variable_names(environment));
+}
+
+std::wstring stamp_now() {
+    wchar_t stamp[32];
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+    localtime_s(&local, &now);
+    std::wcsftime(stamp, std::size(stamp), L"%Y%m%d-%H%M%S", &local);
+    return stamp;
+}
+
+// Writes one hive of `want`, backed up into logs first.
+bool write_hive(bool machine, const std::vector<SystemLayer>& want, std::wstring& error) {
+    const fs::path logs = fs::path(exe_folder()) / L"logs";
+    std::error_code ec;
+    fs::create_directories(logs, ec);
+    const std::wstring backup =
+        (logs / (L"openxr-layers-" + std::wstring(machine ? L"machine-" : L"user-") + stamp_now() + L".reg")).wstring();
+    return write_system_hive(machine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, kImplicitLayersKey, machine, want, backup,
+                             error);
+}
+
+// --apply-system-layers: the elevated copy writes HKLM's part of the request (the window wrote HKCU's).
+int apply_request(const std::wstring& path) {
+    std::string text;
+    std::vector<SystemLayer> want;
+    if (!read_file(path, text) || !parse_system_request(text, want))
+        return 2;
+    std::wstring error;
+    if (write_hive(true, want, error))
+        return 0;
+    write_file(path + L".error", narrow(error));
+    return 1;
+}
+
 int fail(const std::wstring& why) {
     say(L"ERROR: " + why);
     return 1;
@@ -169,17 +201,9 @@ int run(bool dryRun) {
 
     const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
-    Options options;
-    options.offLayers = split_names(ini_string(ini.wstring(), L"launcher", L"off_layers"));
-    options.frameGenerationOff = _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0;
-    options.setVariables = variable_names(environment);
-    const LayerPlan plan = plan_layers(implicit_registrations(), options);
+    const LayerPlan plan = plan_layers(implicit_registrations(), ini_layer_options(ini.wstring(), environment));
 
-    wchar_t stamp[32];
-    const std::time_t now = std::time(nullptr);
-    std::tm local{};
-    localtime_s(&local, &now);
-    std::wcsftime(stamp, std::size(stamp), L"%Y%m%d-%H%M%S", &local);
+    const std::wstring stamp = stamp_now();
     const fs::path logs = here / L"logs", runFolder = logs / (std::wstring(L"run-") + stamp);
     const fs::path log = logs / (std::wstring(L"ace-") + stamp + L".log"), iniCopy = runFolder / L"ace-quadview.ini";
     std::wstring error;
@@ -200,10 +224,12 @@ int run(bool dryRun) {
     for (const MovedLayer& m : plan.below)
         order += L" -> " + widen(m.name);
     say(L"  OpenXR:    " + order + L" -> runtime");
-    for (const auto& [name, variable] : plan.off)
-        say(L"  off:       " + widen(name) + (name == kFrameGenerationLayer && options.frameGenerationOff
-                                                  ? L" (frame generation breaks mode=quad)"
-                                                  : L" (off_layers)"));
+    for (const PlannedLayer& p : plan.layers)
+        if (!p.on)
+            say(L"  off:       " + widen(p.name) +
+                (!p.lock.empty() ? L" (" + widen(p.lock) + L")" : p.systemOn ? L" (off_layers)" : L" (off in Windows)"));
+        else if (!p.lock.empty() || !p.systemOn)
+            say(L"  on:        " + widen(p.name) + L" (" + (p.lock.empty() ? L"on_layers" : widen(p.lock)) + L")");
     for (const std::string& note : plan.notes)
         say(L"  note:      " + widen(note));
     for (const auto& [name, value] : variables)
@@ -252,6 +278,48 @@ std::wstring layer_folder() {
     return (fs::exists(here / L"ace-quadview.dll", ec) ? here : here / L"ace").wstring();
 }
 
+LayerPlan launcher_layer_plan() {
+    return plan_layers(implicit_registrations(), ini_layer_options(settings_path(), current_environment()));
+}
+
+std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& want) {
+    const std::vector<SystemLayer> current = read_system_layers();
+    std::wstring error;
+    if (!write_hive(false, want, error))
+        return error;
+    if (!system_needs_admin(current, want))
+        return {};
+    // HKLM: the same request, written by an elevated copy of this launcher (one UAC prompt).
+    const fs::path logs = fs::path(exe_folder()) / L"logs";
+    std::error_code ec;
+    fs::create_directories(logs, ec);
+    const std::wstring request = (logs / (L"openxr-layers-request-" + stamp_now() + L".txt")).wstring();
+    if (!write_file(request, system_request(want)))
+        return L"cannot write " + request;
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::wstring parameters = L"--apply-system-layers \"" + request + L"\"";
+    SHELLEXECUTEINFOW info{sizeof(info)};
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.hwnd = owner;
+    info.lpVerb = L"runas";
+    info.lpFile = exe;
+    info.lpParameters = parameters.c_str();
+    info.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&info) || !info.hProcess)
+        return GetLastError() == ERROR_CANCELLED ? L"administrator rights were declined; the machine-wide layers are unchanged"
+                                                 : L"the elevated launcher did not start";
+    WaitForSingleObject(info.hProcess, 60000);
+    DWORD code = 1;
+    GetExitCodeProcess(info.hProcess, &code);
+    CloseHandle(info.hProcess);
+    std::string why;
+    read_file(request + L".error", why);
+    DeleteFileW(request.c_str());
+    DeleteFileW((request + L".error").c_str());
+    return code == 0 ? std::wstring() : why.empty() ? L"writing the machine-wide layers failed" : widen(why);
+}
+
 int launch_ace(bool dryRun, std::wstring& out) {
     report.clear();
     const int result = run(dryRun);
@@ -265,11 +333,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     bool dryRun = false, launchNow = false;
+    std::wstring request;
     for (int i = 1; i < argc; ++i) {
         dryRun |= _wcsicmp(argv[i], L"--dry-run") == 0;
         launchNow |= _wcsicmp(argv[i], L"--launch") == 0;
+        if (_wcsicmp(argv[i], L"--apply-system-layers") == 0 && i + 1 < argc)
+            request = argv[++i];
     }
     LocalFree(argv);
+    if (!request.empty())
+        return apply_request(request);
     if (!dryRun && !launchNow)
         return run_window(instance, show);
     // Command line: report to the console (or pipe) the launcher was started from, if any.

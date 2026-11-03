@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../cheeky/cheeky_settings.h"
+#include "focus_offset.h"
 #include "helmet.h"
 #include "osd.h"
 
@@ -15,6 +16,7 @@ namespace aceqv {
 enum class MenuKey { Up, Down, Left, Right };
 enum class MenuItem {
     Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking,
+    FocusOffset,  // the vertical offset of the mode in use (eye tracked or fixed; focus_offset.h)
     // The Overlay and menu page: the performance overlay ([osd], osd.h) and the panels' places.
     Overlay, OverlayYaw, OverlayPitch, OverlayWidth, MenuYaw, MenuPitch, MenuWidth,
     // The page switch, and with Cheeky running the Foveated DLSS page ([cheeky], cheeky_settings.h).
@@ -49,6 +51,7 @@ struct MenuValues {
     int corners = 0;     // [quad] corner_radius_percent
     bool outline = false;     // [quad] debug_border
     bool eyeTracking = true;  // [quad] gaze
+    FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
     bool crop = false;        // [crop] enabled (QVFR)

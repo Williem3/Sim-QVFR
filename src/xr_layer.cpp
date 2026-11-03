@@ -39,6 +39,7 @@
 #include "probe/hang_watch.h"
 #include "probe/probe.h"
 #include "quad/compositor.h"
+#include "quad/focus_offset.h"
 #include "quad/focus_outline.h"
 #include "quad/menu_panel.h"
 #include "quad/osd.h"
@@ -153,6 +154,8 @@ struct Experiment {
     bool borderAtLaunch = false;           // views4 without composition tracks the outline's chains only if on at launch
     float borderColor[4] = {0, 1, 0, 1};   // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
     std::atomic<bool> gaze = true;         // quad: the focus box follows XR_EXT_eye_gaze_interaction
+    // The focus box's vertical offset, degrees up (focus_offset.h): fixed, and added to a tracked gaze.
+    std::atomic<int> fixedOffsetY = 0, gazeOffsetY = 0;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
     bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (probe/batch_watch.h)
@@ -170,6 +173,7 @@ HelmetSettings helmetSettings;
 struct LiveSettings {
     double focusFraction = 0.35, focusFractionY = 0, feather = 0.10, cornerRadius = 0;
     bool border = false, gaze = true;
+    FocusOffset offset;
     float borderColor[4] = {0, 1, 0, 1};
     FovCrop crop;  // views4 only
     HelmetSettings helmet;  // views4 composing only
@@ -202,6 +206,7 @@ LiveSettings read_live(const wchar_t* ini) {
     else if (_wcsicmp(borderColor, L"teal") == 0)
         std::memcpy(l.borderColor, tealColor, sizeof(tealColor));
     l.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini) != 0;
+    l.offset = read_focus_offset(ini);
     return l;
 }
 
@@ -333,6 +338,8 @@ void load_experiment() {
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
     experiment.gaze = settings.gaze;
+    experiment.fixedOffsetY = settings.offset.fixed;
+    experiment.gazeOffsetY = settings.offset.gaze;
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());
@@ -366,10 +373,10 @@ void load_experiment() {
                      percent(c.top) + L"," + percent(c.bottom) + L"," + percent(c.outer) + L"," + percent(c.inner));
     }
     logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%u feather_percent=%.0f corner_radius_percent=%.0f "
-         "debug_border=%d gaze=%d (from %ls)",
+         "debug_border=%d gaze=%d fixed_offset_y=%d gaze_offset_y=%d (from %ls)",
          mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
          experiment.cornerRadius * 100,
-         experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, ini.c_str());
+         experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze, ini.c_str());
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
              "(focus views %.0f%% x %.0f%% of the native eye)%s",
@@ -2051,20 +2058,27 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             }
             // Gaze: where the gaze ray points in each eye's frame (canted displays rotate each eye), as
             // tangents; the focus cameras turn towards it, clamped against the FOV ACE renders with
-            // (fill_focus_cameras). Untracked gaze recentres after kGazeHoldNs.
+            // (fill_focus_cameras). Untracked gaze recentres after kGazeHoldNs. The vertical offset
+            // (focus_offset.h) moves the tracked gaze, or the fixed box off each eye's forward axis.
             float tan[2][2] = {};
             bool valid[2] = {};
             XrVector3f direction{0, 0, -1};
             const bool gazing = experiment.gaze && gaze_direction(session, info->space, info->displayTime, direction);
-            if (gazing)
-                for (int e = 0; e < 2; ++e) {
+            const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
+            for (int e = 0; e < 2; ++e) {
+                if (gazing) {
                     const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
                     valid[e] = d.z < -0.1f;
                     if (valid[e]) {
                         tan[e][0] = d.x / -d.z;
                         tan[e][1] = d.y / -d.z;
                     }
+                } else {
+                    valid[e] = offset != 0;
                 }
+                if (valid[e] && offset != 0)
+                    tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
+            }
             views4_set_gaze(tan, valid, gazing);
         }
     }
@@ -2084,6 +2098,8 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                     tanY = d.y / -d.z;
                 }
             }
+            if (experiment.quad)  // the vertical offset (focus_offset.h), on the gaze or the fixed box
+                tanY = offset_tan_y(tanY, gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY);
             if (experiment.quad) {
                 turn_view(views[i], experiment.focusFraction, experiment.focus_y(), tanX, tanY);
             } else {
@@ -2267,6 +2283,8 @@ void live_apply(const LiveSettings& l) {
     std::memcpy(experiment.borderColor, l.borderColor, sizeof(experiment.borderColor));
     experiment.border = l.border;
     experiment.gaze = l.gaze;
+    experiment.fixedOffsetY = l.offset.fixed;
+    experiment.gazeOffsetY = l.offset.gaze;
     bool gazeAvailable;
     {
         std::lock_guard guard(gaze.mutex);
@@ -2277,8 +2295,10 @@ void live_apply(const LiveSettings& l) {
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.views4Compose);
-    logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d", l.focusFraction * 100,
-         experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0, l.gaze ? 1 : 0);
+    logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
+         "gaze %d deg",
+         l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
+         l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze);
     if (experiment.views4)
         live_resolution(l);
     if (l.gaze && !gazeAvailable && (experiment.quad || experiment.views4Compose))

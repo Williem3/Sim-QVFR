@@ -7,7 +7,9 @@
 // upscaling or foveation) or one that must see the composed frame (VectorXR frame generation)
 // would sit between ACE and this layer. Every enabled implicit layer that the loader lets us
 // silence (its manifest names a disable_environment) is therefore loaded as an explicit copy
-// below this layer, in registry order, and its implicit copy is silenced for this launch.
+// below this layer, and its implicit copy is silenced for this launch. Their order and which are on
+// are the launcher's layer profile (layer_order.h; default: registry order, as Windows has them on);
+// a layer switched off in Windows can be loaded for ACE alone the same way.
 #pragma once
 
 #include <string>
@@ -20,6 +22,7 @@ namespace aceqv::launcher {
 
 inline constexpr char kLayerName[] = "XR_APILAYER_ACE_quadview";
 inline constexpr char kFrameGenerationLayer[] = "XR_APILAYER_DIENERTECH_VECTORXR";
+inline constexpr char kCheekyLayer[] = "XR_APILAYER_CHEEKY_foveated_dlss";
 inline constexpr wchar_t kAceAppId[] = L"3058630";
 
 // One implicit layer registration (HKLM then HKCU, the loader's order).
@@ -28,23 +31,45 @@ struct Registration {
     bool enabled = true;  // registry DWORD 0
 };
 
+// A layer this launch needs on or off whatever the profile says, and why (layer_order.h's launch_options).
+struct ForcedLayer {
+    std::string name;
+    bool on = false;
+    std::string why;
+};
+
 struct Options {
     std::vector<std::string> offLayers;  // layer names silenced for this launch (ini: off_layers)
+    std::vector<std::string> onLayers;   // switched off in Windows, loaded for ACE all the same (ini: on_layers)
+    std::vector<std::string> order;      // the order below the ACE layer (ini: layer_order); unlisted layers
+                                         // follow the listed ones, in registry order
     bool frameGenerationOff = false;     // mode=quad (two ACE frames per headset frame): VectorXR off
+    std::vector<ForcedLayer> forced;     // beats offLayers and onLayers
     std::vector<std::wstring> setVariables;  // environment variables set in the launcher's environment
 };
 
 struct MovedLayer {
     std::string name;
     std::wstring library;     // absolute
-    std::wstring disableVar;  // silences the implicit copy
+    std::wstring disableVar;  // silences the implicit copy (empty: switched off in Windows, nothing to silence)
     json::Value manifest;     // the explicit copy: absolute library_path, no enable/disable switches
+};
+
+// Every layer the launcher can place below the ACE layer, on or off for this launch (the layers pane's rows).
+struct PlannedLayer {
+    std::string name;
+    std::wstring manifest;
+    bool on = false;
+    bool systemOn = true;  // switched on in Windows (the profile's default)
+    std::string lock;      // why this launch fixes its on/off (empty: the profile decides)
 };
 
 struct LayerPlan {
     std::vector<MovedLayer> below;                          // loaded below the ACE layer, in this order
     std::vector<std::pair<std::string, std::wstring>> off;  // silenced: name, its disable variable
     std::vector<std::string> notes;                         // one line per layer left alone, and why
+    std::vector<PlannedLayer> layers;                       // below's and every movable layer off, in profile order
+    std::vector<std::string> above;  // on in Windows without a disable_environment: they stay above the ACE layer
 };
 
 // Reads each registered manifest and decides where its layer goes.

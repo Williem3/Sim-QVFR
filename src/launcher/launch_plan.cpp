@@ -85,59 +85,101 @@ bool explicit_copy(const json::Value& manifest, const std::wstring& manifestPath
 
 LayerPlan plan_layers(const std::vector<Registration>& registrations, const Options& options) {
     LayerPlan plan;
-    std::vector<std::string> seen;
     const auto is_set = [&](const std::string& variable) {
         const std::wstring w = widen(variable);
         return std::any_of(options.setVariables.begin(), options.setVariables.end(),
                            [&](const std::wstring& v) { return same_name(v, w); });
     };
+    const auto listed = [](const std::vector<std::string>& names, const std::string& name) {
+        return std::find(names.begin(), names.end(), name) != names.end();
+    };
+    // A layer registered more than once: the first registration switched on in Windows, or else the first.
+    struct Candidate {
+        std::string name;
+        std::wstring manifestPath, library, disable;
+        json::Value copy;
+        bool systemOn = true;
+    };
+    std::vector<Candidate> candidates;
     for (const Registration& r : registrations) {
         const std::string where = narrow(r.manifest);
-        if (!r.enabled)
-            continue;  // registered but switched off: the loader ignores it too
         std::string text;
         json::Value manifest;
         if (!read_file(r.manifest, text) || !json::parse(text, manifest) || !layer_of(manifest)) {
-            plan.notes.push_back(where + ": unreadable manifest, left alone");
+            if (r.enabled)
+                plan.notes.push_back(where + ": unreadable manifest, left alone");
             continue;
         }
         const json::Value& layer = *layer_of(manifest);
         const std::string name = layer.string_at("name");
         if (name.empty()) {
-            plan.notes.push_back(where + ": manifest without a layer name, left alone");
+            if (r.enabled)
+                plan.notes.push_back(where + ": manifest without a layer name, left alone");
             continue;
         }
         if (name == kLayerName)
             continue;  // this layer's installed copy: silenced below, loaded explicitly instead
-        if (std::find(seen.begin(), seen.end(), name) != seen.end())
+        const auto same = std::find_if(candidates.begin(), candidates.end(), [&](const Candidate& c) { return c.name == name; });
+        if (same != candidates.end() && (same->systemOn || !r.enabled))
             continue;  // a second registration of a layer already handled (same disable variable)
         const std::string enable = layer.string_at("enable_environment");
-        if (!enable.empty() && !is_set(enable))
+        if (r.enabled && !enable.empty() && !is_set(enable))
             continue;  // inactive unless its enable variable is set
-        json::Value copy;
-        std::wstring library;
-        if (!explicit_copy(manifest, r.manifest, copy, library)) {
-            plan.notes.push_back(name + ": no library_path, left alone");
+        Candidate c{name, r.manifest, {}, {}, {}, r.enabled};
+        if (!explicit_copy(manifest, r.manifest, c.copy, c.library)) {
+            if (r.enabled)
+                plan.notes.push_back(name + ": no library_path, left alone");
             continue;
         }
         std::error_code ec;
-        if (!fs::exists(library, ec)) {
-            plan.notes.push_back(name + ": library " + narrow(library) + " missing (the loader skips it too)");
+        if (!fs::exists(c.library, ec)) {
+            if (r.enabled)
+                plan.notes.push_back(name + ": library " + narrow(c.library) + " missing (the loader skips it too)");
             continue;
         }
-        seen.push_back(name);
         const std::string disable = layer.string_at("disable_environment");
-        if (!is_variable_name(disable)) {
+        // Switched off in Windows it needs no silencing, so even a layer without a disable variable can be
+        // loaded below this one. Switched on without one, the loader keeps it above.
+        if (r.enabled && !is_variable_name(disable)) {
             plan.notes.push_back(name + ": has no disable_environment, so it stays ABOVE the ACE layer (" + where + ")");
+            plan.above.push_back(name);
+            if (same != candidates.end())
+                candidates.erase(same);
             continue;
         }
-        const bool off = std::find(options.offLayers.begin(), options.offLayers.end(), name) != options.offLayers.end() ||
-                         (options.frameGenerationOff && name == kFrameGenerationLayer);
-        if (off) {
-            plan.off.emplace_back(name, widen(disable));
-            continue;
+        if (r.enabled)
+            c.disable = widen(disable);
+        if (same != candidates.end())
+            *same = std::move(c);  // the switched-on registration replaces a switched-off one, in its place
+        else
+            candidates.push_back(std::move(c));
+    }
+    // The profile's order: listed layers first, in its order; the rest after them in registry order.
+    const auto rank = [&](const Candidate& c) {
+        const auto it = std::find(options.order.begin(), options.order.end(), c.name);
+        return it == options.order.end() ? options.order.size() : static_cast<size_t>(it - options.order.begin());
+    };
+    std::stable_sort(candidates.begin(), candidates.end(), [&](const Candidate& a, const Candidate& b) { return rank(a) < rank(b); });
+    for (Candidate& c : candidates) {
+        PlannedLayer p{c.name, c.manifestPath, c.systemOn, c.systemOn, {}};
+        if (listed(options.offLayers, c.name))
+            p.on = false;
+        else if (listed(options.onLayers, c.name))
+            p.on = true;
+        if (options.frameGenerationOff && c.name == kFrameGenerationLayer) {
+            p.on = false;
+            p.lock = "frame generation breaks Two-loop";
         }
-        plan.below.push_back(MovedLayer{name, library, widen(disable), std::move(copy)});
+        for (const ForcedLayer& f : options.forced)
+            if (f.name == c.name) {
+                p.on = f.on;
+                p.lock = f.why;
+            }
+        if (p.on)
+            plan.below.push_back(MovedLayer{c.name, c.library, c.disable, std::move(c.copy)});
+        else if (c.systemOn)
+            plan.off.emplace_back(c.name, c.disable);
+        plan.layers.push_back(std::move(p));
     }
     return plan;
 }
@@ -193,7 +235,8 @@ std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerP
     if (!settings.empty())
         v.emplace_back(L"ACE_QV_SETTINGS", settings);
     for (const MovedLayer& m : plan.below)
-        v.emplace_back(m.disableVar, L"1");
+        if (!m.disableVar.empty())
+            v.emplace_back(m.disableVar, L"1");
     for (const auto& [name, variable] : plan.off)
         v.emplace_back(variable, L"1");
     return v;

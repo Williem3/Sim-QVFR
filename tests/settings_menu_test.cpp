@@ -26,14 +26,14 @@ void check(bool ok, const char* what) {
 int main() {
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
-    check(menu_items(true).size() == 8 && menu_items(false).size() == 6 &&
+    check(menu_items(true).size() == 9 && menu_items(false).size() == 7 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
-    check(menu_page_items(m).size() == 9 && menu_page_items(m).front() == MenuItem::Page && menu_pages(m).size() == 4,
+    check(menu_page_items(m).size() == 10 && menu_page_items(m).front() == MenuItem::Page && menu_pages(m).size() == 4,
           "the first page: the page switch, then the method's items; four pages without Cheeky (QVFR: View crop, Helmet)");
 
     menu_key(m, MenuKey::Up);
-    check(m.selected == 8, "Up from the first item wraps to the last");
+    check(m.selected == 9, "Up from the first item wraps to the last");
     menu_key(m, MenuKey::Down);
     check(m.selected == 0, "Down from the last wraps to the first");
     m.selected = 1;  // periphery
@@ -172,9 +172,37 @@ int main() {
     SettingsMenu shown;
     shown.selected = 2;
     const std::vector<MenuLine> lines = menu_lines(shown);
-    check(lines.size() == 9 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
-              lines[2].label == L"Focus density" && lines[2].value == L"100%" && lines[8].value == L"On",
+    check(lines.size() == 10 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
+              lines[2].label == L"Focus density" && lines[2].value == L"100%" && lines[8].value == L"On" &&
+              lines[9].label == L"Focus up / down" && lines[9].value == L"0°",
           "lines carry labels, values and the selection");
+
+    // The vertical offset: each mode keeps its own, stepped by the one item, written to [quad].
+    {
+        SettingsMenu o;
+        o.selected = 9;
+        o.values.eyeTracking = false;
+        check(menu_key(o, MenuKey::Left) && menu_key(o, MenuKey::Left) && o.values.offset.fixed == -2 &&
+                  o.values.offset.gaze == 0 && menu_lines(o)[9].value == L"2° down",
+              "Focus up / down steps the fixed offset with eye tracking off");
+        o.values.eyeTracking = true;
+        check(menu_key(o, MenuKey::Right) && o.values.offset.gaze == 1 && o.values.offset.fixed == -2 &&
+                  menu_lines(o)[9].value == L"1° up",
+              "and the gaze offset with it on, leaving the fixed one");
+        o.values.offset.gaze = kFocusOffsetMax;
+        check(!menu_key(o, MenuKey::Right) && o.values.offset.gaze == kFocusOffsetMax, "clamped at the most");
+        const std::wstring offsetIni = std::wstring(temp) + L"ace-quadview-menu-test-offset.ini";
+        DeleteFileW(offsetIni.c_str());
+        check(write_menu_values(offsetIni.c_str(), o.values, true), "offsets written");
+        const FocusOffset read = read_menu_values(offsetIni.c_str()).offset;
+        check(read.fixed == -2 && read.gaze == kFocusOffsetMax, "negative and positive offsets read back");
+        WritePrivateProfileStringW(L"quad", L"fixed_offset_y", L"-99", offsetIni.c_str());
+        check(read_focus_offset(offsetIni.c_str()).fixed == -kFocusOffsetMax, "out-of-range offsets clamp");
+        DeleteFileW(offsetIni.c_str());
+        check(std::abs(offset_tan_y(0, 0)) < 1e-9 && std::abs(offset_tan_y(0, 45) - 1) < 1e-9 &&
+                  std::abs(offset_tan_y(1, -45)) < 1e-9 && std::abs(offset_tan_y(std::tan(0.5), 10) - std::tan(0.5 + 3.14159265358979 / 18)) < 1e-9,
+              "offset_tan_y turns the tangent by the angle");
+    }
 
     // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
     // [menu] for the layer to move them.
@@ -259,7 +287,7 @@ int main() {
         c.launch = {true, 50, 39, 39};
         check(menu_pages(c).size() == 4 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
-        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 9 && menu_page_items(c).front() == MenuItem::Page &&
+        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 10 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
               "with Cheeky: six pages, the first the QVFR items under the page switch");
         check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"View crop", "then the View crop page");

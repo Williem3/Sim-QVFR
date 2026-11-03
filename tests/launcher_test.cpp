@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include "launcher/launch_plan.h"
+#include "launcher/layer_order.h"
 #include "launcher/settings.h"
 
 using namespace aceqv::launcher;
@@ -120,6 +121,114 @@ int main() {
               quadPlan.off[1].second == L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR",
           "mode=quad turns VectorXR off and off_layers turns Toolkit off");
 
+    // The launcher's layer profile (layer_order.h): order, on/off either way, and what a launch locks.
+    {
+        std::vector<Registration> regs = registrations;
+        regs.push_back({layer("cheeky", kCheekyLayer, "CHEEKY_OPENXR_LAYER_DISABLE"), false});  // off in Windows
+        check(plan.above == std::vector<std::string>{"XR_APILAYER_NO_SWITCH"}, "profile: a layer that cannot be silenced stays above");
+        LauncherLayers profile;
+        Options o = launch_options(profile, false, false, false);
+        LayerPlan p = plan_layers(regs, o);
+        check(p.layers.size() == 4 && p.layers[0].name == "XR_APILAYER_MBUCCHIA_toolkit" && p.layers[0].on &&
+                  p.layers[1].name == "XR_APILAYER_MBUCCHIA_quadviews" && !p.layers[1].on && !p.layers[1].systemOn &&
+                  p.layers[3].name == kCheekyLayer && !p.layers[3].on && names(p).size() == 2,
+              "profile: by default every movable layer is listed in registry order, as Windows has it on or off");
+        check(move_launcher_layer(profile, p, kFrameGenerationLayer, -1) && profile.order.size() == 4 &&
+                  profile.order[1] == kFrameGenerationLayer,
+              "profile: a layer moves up; the whole order is the profile's from then on");
+        p = plan_layers(regs, launch_options(profile, false, false, false));
+        check(p.layers[1].name == kFrameGenerationLayer && !move_launcher_layer(profile, p, "XR_APILAYER_MBUCCHIA_toolkit", -1) &&
+                  move_launcher_layer(profile, p, "XR_APILAYER_MBUCCHIA_toolkit", 1),
+              "profile: the top layer cannot move further up, and moves down");
+        p = plan_layers(regs, launch_options(profile, false, false, false));
+        check(names(p) == std::vector<std::string>{kFrameGenerationLayer, "XR_APILAYER_MBUCCHIA_toolkit"},
+              "profile: the launch loads the profile's order below the ACE layer");
+        set_launcher_layer(profile, "XR_APILAYER_MBUCCHIA_quadviews", true, false);
+        set_launcher_layer(profile, "XR_APILAYER_MBUCCHIA_toolkit", false, true);
+        p = plan_layers(regs, launch_options(profile, false, false, false));
+        const auto pv = launch_variables(p, L"C:\\run", L"i", L"l", L"r");
+        check(names(p) == std::vector<std::string>{kFrameGenerationLayer, "XR_APILAYER_MBUCCHIA_quadviews"} &&
+                  value_of(pv, L"DISABLE_QUADVIEWS") == L"<unset>" &&
+                  value_of(pv, L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit") == L"1" && profile.on.size() == 1 && profile.off.size() == 1,
+              "profile: a layer off in Windows loads for ACE alone (nothing to silence); one on in Windows is silenced");
+        set_launcher_layer(profile, "XR_APILAYER_MBUCCHIA_toolkit", true, true);
+        check(profile.off.empty(), "profile: back to its Windows state, the layer is no longer listed");
+        // Locks: Cheeky loaded keeps its layer on; its frame generation, or Two-loop, keeps VectorXR off.
+        LauncherLayers against = profile;
+        set_launcher_layer(against, kCheekyLayer, false, false);
+        p = plan_layers(regs, launch_options(against, false, true, true));
+        const auto locked = [&](const char* n) {
+            return *std::find_if(p.layers.begin(), p.layers.end(), [&](const PlannedLayer& l) { return l.name == n; });
+        };
+        check(locked(kCheekyLayer).on && !locked(kCheekyLayer).lock.empty() && !locked(kFrameGenerationLayer).on &&
+                  !locked(kFrameGenerationLayer).lock.empty() &&
+                  std::find(names(p).begin(), names(p).end(), std::string(kCheekyLayer)) != names(p).end(),
+              "locks: Cheeky on keeps its layer on, its frame generation keeps VectorXR off");
+        p = plan_layers(regs, launch_options(LauncherLayers{}, true, false, false));
+        check(!locked(kFrameGenerationLayer).on && locked(kFrameGenerationLayer).lock.find("Two-loop") != std::string::npos,
+              "locks: Two-loop keeps VectorXR off");
+        // The ini: written and read back; old off_layers files keep working.
+        const std::wstring profileIni = (folder / L"profile.ini").wstring();
+        write_file(profileIni, "[launcher]\r\noff_layers=A, B;A\r\n");
+        check(read_launcher_layers(profileIni).off == std::vector<std::string>{"A", "B"}, "profile: off_layers as before (deduplicated)");
+        check(write_launcher_layers(profileIni, profile) && read_launcher_layers(profileIni) == profile,
+              "profile: layer_order, off_layers and on_layers round trip");
+    }
+
+    // Windows' list (layer_order.h), on a scratch key: the ACE layer locked first, moves within a hive,
+    // switches, the rewrite in order with a backup, and a stale list refused.
+    {
+        HKEY base = nullptr, machine = nullptr, user = nullptr, key = nullptr;
+        RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\aceqv-launcher-test");
+        RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\aceqv-launcher-test", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &base, nullptr);
+        RegCreateKeyExW(base, L"machine", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &machine, nullptr);
+        RegCreateKeyExW(base, L"user", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &user, nullptr);
+        const std::wstring toolkit = layer("toolkit", "XR_APILAYER_MBUCCHIA_toolkit", "DISABLE_XR_APILAYER_MBUCCHIA_toolkit"),
+                           ace = layer("ace", kLayerName, "DISABLE_XR_APILAYER_ACE_quadview"),
+                           vxr = layer("vxr1", kFrameGenerationLayer, "DISABLE_XR_APILAYER_DIENERTECH_VECTORXR"),
+                           qvf = layer("qvf", "XR_APILAYER_MBUCCHIA_quadviews", "DISABLE_QUADVIEWS");
+        const auto put = [](HKEY parent, const std::wstring& name, DWORD v) {
+            HKEY k = nullptr;
+            RegCreateKeyExW(parent, L"Implicit", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &k, nullptr);
+            RegSetValueExW(k, name.c_str(), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&v), sizeof(v));
+            RegCloseKey(k);
+        };
+        put(machine, toolkit, 0);
+        put(machine, ace, 0);
+        put(machine, vxr, 1);
+        put(user, qvf, 0);
+        std::vector<SystemLayer> sys = read_system_layers(machine, user, L"Implicit");
+        check(sys.size() == 4 && sys[0].name == kLayerName && !sys[0].lock.empty() && sys[1].name == "XR_APILAYER_MBUCCHIA_toolkit" &&
+                  !sys[2].on && sys[3].name == "XR_APILAYER_MBUCCHIA_quadviews" && !sys[3].machine,
+              "system: both hives read, named, switched; the ACE layer locked first in its hive");
+        check(!move_system_layer(sys, 1, -1) && !move_system_layer(sys, 0, 1) && !move_system_layer(sys, 2, 1) &&
+                  move_system_layer(sys, 2, -1) && sys[1].name == kFrameGenerationLayer,
+              "system: nothing moves above the ACE layer or across hives; others swap");
+        const std::vector<SystemLayer> before = read_system_layers(machine, user, L"Implicit");
+        sys[1].on = true;
+        check(system_needs_admin(before, sys) && !system_needs_admin(before, before), "system: an HKLM change needs administrator rights");
+        std::vector<SystemLayer> roundTrip;
+        check(parse_system_request(system_request(sys), roundTrip) && roundTrip == sys, "system: the elevated request round trips");
+        std::wstring error;
+        const std::wstring backup = (folder / L"backup.reg").wstring();
+        check(write_system_hive(machine, L"Implicit", true, sys, backup, error) &&
+                  write_system_hive(user, L"Implicit", false, sys, L"", error),
+              "system: both hives written");
+        const std::vector<SystemLayer> after = read_system_layers(machine, user, L"Implicit");
+        check(after == sys, "system: the registry now holds that order and those switches");
+        std::string reg;
+        check(read_file(backup, reg) && reg.size() > 2 && reg[0] == '\xff' && reg[1] == '\xfe', "system: a .reg backup of the key as it was");
+        sys.pop_back();
+        sys.erase(sys.begin() + 1);
+        check(!write_system_hive(machine, L"Implicit", true, sys, L"", error) && read_system_layers(machine, user, L"Implicit") == after,
+              "system: a list that no longer matches the key is refused, the key untouched");
+        RegCloseKey(machine);
+        RegCloseKey(user);
+        RegCloseKey(base);
+        (void)key;
+        RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\aceqv-launcher-test");
+    }
+
     // Variables.
     const auto vars = launch_variables(plan, L"C:\\run", L"C:\\run\\ace-quadview.ini", L"C:\\logs\\ace.log", L"C:\\runtime.ini");
     check(value_of(vars, L"XR_ENABLE_API_LAYERS") ==
@@ -201,6 +310,7 @@ int main() {
         s.eyeTracking = false;
         s.outline = true;
         s.color = OutlineColor::Teal;
+        s.offset = {-6, 3};
         const bool saved = save_settings(ini, s);
         const Settings reread = load_settings(ini);
         std::string iniText;
@@ -214,6 +324,9 @@ int main() {
               "settings: QVFR save writes periphery_scale, focus_density, both focus axes and the views4 keys, and reads back");
         check(iniText.find("; comment kept") != std::string::npos && iniText.find("dred=1") != std::string::npos,
               "settings: comments and other keys are left alone");
+        check(reread.offset.fixed == -6 && reread.offset.gaze == 3 && iniText.find("fixed_offset_y=-6") != std::string::npos &&
+                  iniText.find("gaze_offset_y=3") != std::string::npos,
+              "settings: both vertical offsets are written (negative too) and read back");
 
         s.mode = RenderMode::TwoLoop;
         save_settings(ini, s);

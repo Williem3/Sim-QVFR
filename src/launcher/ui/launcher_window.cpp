@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -35,10 +36,10 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, About };
-constexpr int kPanes = 7;
+enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, About };
+constexpr int kPanes = 8;
 enum Ctl {
-    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kOutline, kColor, kFeather, kMenuYaw,
+    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
@@ -49,8 +50,12 @@ enum Ctl {
     // The FOV crop ([crop], Resolution pane).
     kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
     // The helmet overlay ([helmet], Resolution pane).
-    kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail
+    kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
+    // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
+    kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset
 };
+
+constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
 
 constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
@@ -114,9 +119,20 @@ struct App {
     float scroll = 0, scrollMax = 0;
     Rect scrollArea;
     std::vector<Hit> hits;
+    // The OpenXR layers pane: 0 with the launcher (layerPlan, from the ini), 1 Windows' list (layersDraft,
+    // edited until applied over layersWindows). layerRow: the keyboard's row.
+    int layerProfile = 0, layerRow = 0;
+    LayerPlan layerPlan;
+    std::vector<SystemLayer> layersWindows, layersDraft;
+    bool layersLockMoved = false;  // Windows has the ACE layer below another one: applying moves it first
+    std::wstring layerMessage;
+    int layerTone = 0;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
+
+// The OpenXR layers pane: Windows' list has changes not applied yet.
+bool layers_dirty() { return app.layersDraft != app.layersWindows || app.layersLockMoved; }
 
 bool system_dark() {
     // ACE_QV_LAUNCHER_THEME=light|dark overrides the Windows app theme (for checking both).
@@ -203,6 +219,7 @@ int* slider_value(Ctl id) {
     case kHeight: return &app.s.height;
     case kFeather: return &app.s.feather;
     case kCorner: return &app.s.corner;
+    case kFocusOffset: return &app.s.offset.for_mode(app.s.eyeTracking);
     case kMenuYaw: return &app.s.menuYaw;
     case kMenuPitch: return &app.s.menuPitch;
     case kMenuWidth: return &app.s.menuWidth;
@@ -232,6 +249,7 @@ Range slider_range(Ctl id) {
     case kInner: return kInnerRange;
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
+    case kFocusOffset: return kFocusOffsetRange;
     case kMenuYaw: return kMenuYawRange;
     case kMenuPitch: return kMenuPitchRange;
     case kMenuWidth: return kMenuWidthRange;
@@ -273,7 +291,7 @@ std::vector<Ctl> focus_order() {
                                            kHelmetDepth, kHelmetDetail});
         }
         break;
-    case Pane::Foveation: order.insert(order.end(), {kWidth, kHeight, kCorner}); break;
+    case Pane::Foveation: order.insert(order.end(), {kWidth, kHeight, kCorner, kFocusOffset}); break;
     case Pane::Overlay:
         order.push_back(kOutline);
         if (app.s.outline)
@@ -293,6 +311,13 @@ std::vector<Ctl> focus_order() {
         order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kOsdOn});
         if (app.s.osd.enabled)
             order.insert(order.end(), {kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel});
+        break;
+    case Pane::Layers:
+        order.insert(order.end(), {kLayerProfile, kLayerList});
+        if (app.layerProfile == 0)
+            order.push_back(kLayerReset);
+        else if (layers_dirty())
+            order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
     case Pane::About: order.push_back(kSupport); break;
     }
@@ -587,6 +612,264 @@ Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int 
     return row;
 }
 
+// ---- OpenXR layers -----------------------------------------------------------------------------
+
+// Reads both profiles again; Windows' draft is kept while it has changes (`keepDraft`).
+void refresh_layers(bool keepDraft = true) {
+    app.layerPlan = launcher_layer_plan();
+    const bool dirty = app.layersDraft != app.layersWindows || app.layersLockMoved;
+    app.layersWindows = read_system_layers(HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER, kImplicitLayersKey, &app.layersLockMoved);
+    if (!keepDraft || !dirty || app.layersDraft.size() != app.layersWindows.size())
+        app.layersDraft = app.layersWindows;
+}
+
+int layer_rows() {
+    return static_cast<int>(app.layerProfile == 0 ? app.layerPlan.layers.size() : app.layersDraft.size());
+}
+
+// A layer's name as people know it; the registered name for the rest.
+std::wstring friendly_layer(const std::string& name, const std::wstring& manifest = {}) {
+    static const std::pair<const char*, const wchar_t*> kKnown[] = {
+        {"XR_APILAYER_MBUCCHIA_toolkit", L"OpenXR Toolkit"},
+        {"XR_APILAYER_DIENERTECH_VECTORXR", L"VectorXR"},
+        {"XR_APILAYER_CHEEKY_foveated_dlss", L"Cheeky Foveated DLSS"},
+        {"XR_APILAYER_MBUCCHIA_quadviews", L"Quad-Views-Foveated"},
+        {"XR_APILAYER_ACE_quadview", L"ACE layer (ace-quadview)"},
+        {"XR_APILAYER_NOVENDOR_motion_compensation", L"OpenXR Motion Compensation"},
+        {"XR_APILAYER_FREDEMMOTT_OpenKneeboard", L"OpenKneeboard"},
+        {"XR_APILAYER_FREDEMMOTT_HandTrackedCockpitClicking", L"Hand Tracked Cockpit Clicking"},
+    };
+    for (const auto& [n, label] : kKnown)
+        if (_stricmp(n, name.c_str()) == 0)
+            return label;
+    if (name.empty())
+        return std::filesystem::path(manifest).filename().wstring();
+    return widen(name);
+}
+
+// The launcher's profile changes in the ini, then the plan is read again.
+void edit_launcher_layers(const std::function<void(LauncherLayers&)>& change) {
+    if (!app.iniFound)
+        return;
+    LauncherLayers profile = read_launcher_layers(app.ini);
+    change(profile);
+    write_launcher_layers(app.ini, profile);
+    app.iniText = ini_text();
+    refresh_layers();
+}
+
+void toggle_layer(int i) {
+    if (app.layerProfile == 0) {
+        if (i < 0 || i >= static_cast<int>(app.layerPlan.layers.size()) || !app.layerPlan.layers[i].lock.empty())
+            return;
+        const PlannedLayer l = app.layerPlan.layers[i];
+        edit_launcher_layers([&](LauncherLayers& p) { set_launcher_layer(p, l.name, !l.on, l.systemOn); });
+    } else if (i >= 0 && i < static_cast<int>(app.layersDraft.size())) {
+        app.layersDraft[i].on = !app.layersDraft[i].on;
+    }
+    app.layerMessage.clear();
+}
+
+void move_layer(int i, int step) {
+    if (app.layerProfile == 0) {
+        if (i < 0 || i >= static_cast<int>(app.layerPlan.layers.size()))
+            return;
+        const std::string name = app.layerPlan.layers[i].name;
+        bool moved = false;
+        edit_launcher_layers([&](LauncherLayers& p) { moved = move_launcher_layer(p, app.layerPlan, name, step); });
+        if (moved)
+            app.layerRow = i + step;
+    } else if (move_system_layer(app.layersDraft, static_cast<size_t>(i), step)) {
+        app.layerRow = i + step;
+    }
+    app.layerMessage.clear();
+}
+
+void apply_layers() {
+    const std::wstring error = apply_system_layers(app.hwnd, app.layersDraft);
+    refresh_layers(!error.empty());
+    app.layerMessage = error.empty() ? L"Windows’ OpenXR layers updated. A backup of each list is in the logs folder." : error;
+    app.layerTone = error.empty() ? 0 : 2;
+}
+
+void mini_check(int option, const Rect& box, bool on, bool disabled) {
+    const Color fill = col(disabled ? app.c->label_tertiary : app.c->accent_fill);
+    if (on) {
+        app.canvas.fill(box, fill, t::kRadiusCheck);
+        app.canvas.path("M4 7.2l2.1 2.1L10.2 4.6", box, 14, col(app.c->on_accent), 2);
+    } else {
+        app.canvas.fill(box, col(app.c->control_bg), t::kRadiusCheck);
+        app.canvas.stroke(box, col(disabled ? app.c->separator : app.c->control_border), 1, t::kRadiusCheck);
+    }
+    if (!disabled)
+        app.hits.push_back({kLayerOn, {box.x - 4, box.y - 4, box.w + 8, box.h + 8}, option});
+}
+
+void arrow_button(Ctl id, int option, const Rect& r, bool disabled) {
+    if (!disabled)
+        app.canvas.control_shadow(r, t::kRadiusControl, app.dark);
+    app.canvas.fill(r, col(app.c->control_bg), t::kRadiusControl);
+    app.canvas.stroke(r, col(disabled ? app.c->separator : app.c->control_border), 1, t::kRadiusControl);
+    app.canvas.path(id == kLayerUp ? "M3 7.5L6 4.5l3 3" : "M3 4.5L6 7.5l3-3", {r.x + (r.w - 12) / 2, r.y + (r.h - 12) / 2, 12, 12},
+                    12, col(disabled ? app.c->label_tertiary : app.c->label), 1.5f);
+    if (!disabled)
+        app.hits.push_back({id, r, option});
+}
+
+constexpr float kLayerControlsW = 14 + 12 + 26 + 4 + 26;
+
+// One movable layer: its switch (disabled when locked) and its moves.
+Row layer_row(const std::wstring& label, const std::wstring& desc, int index, bool on, bool switchLocked, bool canUp,
+              bool canDown) {
+    Row row;
+    row.label = label;
+    row.desc = desc;
+    row.controlW = kLayerControlsW;
+    row.controlH = 24;
+    row.control = [=](const Rect& r) {
+        mini_check(index, {r.x, r.y + 5, 14, 14}, on, switchLocked);
+        arrow_button(kLayerUp, index, {r.x + 26, r.y, 26, 24}, !canUp);
+        arrow_button(kLayerDown, index, {r.x + 56, r.y, 26, 24}, !canDown);
+        if (focused(kLayerList) && app.layerRow == index)
+            focus_ring({r.x - 2, r.y - 2, r.w + 4, r.h + 4}, t::kRadiusControl);
+    };
+    return row;
+}
+
+// A layer nothing here can change: a badge saying so.
+Row locked_row(const std::wstring& label, const std::wstring& desc, const std::wstring& text) {
+    Row row;
+    row.label = label;
+    row.desc = desc;
+    row.controlW = 7 + 12 + 5 + std::ceil(app.canvas.measure(text, {11, 14, 500, false})) + 9;
+    row.controlH = 20;
+    row.control = [text](const Rect& r) { badge(r.x, r.y, 3, text); };
+    return row;
+}
+
+float layers_pane(float x, float y, float w, bool draw) {
+    float h = 0;
+    {
+        const std::wstring names[2] = {kLayerProfileNames[0], kLayerProfileNames[1]};
+        Row profile = choice_row(kLayerProfile, L"Profile", names, 2, app.layerProfile, false);
+        profile.desc = app.layerProfile == 0 ? L"What ACE loads when you launch it from here. Windows’ own list stays as it is."
+                                             : L"What every other app loads, and ACE started from Steam. Changes Windows’ registry.";
+        h += section(x, y, w, L"", {profile}, L"", draw) + t::kSpace6;
+    }
+    if (app.layerProfile == 0) {
+        std::vector<Row> rows;
+        for (const std::string& name : app.layerPlan.above)
+            rows.push_back(locked_row(friendly_layer(name), L"Has no switch to turn it off per launch, so it stays above the ACE layer.",
+                                      L"Above"));
+        rows.push_back(locked_row(friendly_layer(kLayerName), L"Always nearest the game.", L"Locked"));
+        const int n = static_cast<int>(app.layerPlan.layers.size());
+        for (int i = 0; i < n; ++i) {
+            const PlannedLayer& l = app.layerPlan.layers[i];
+            std::wstring desc = !l.lock.empty() ? widen(l.lock) : l.systemOn ? L"" : L"Off in Windows";
+            if (friendly_layer(l.name) != widen(l.name))
+                desc += (desc.empty() ? L"" : L" · ") + widen(l.name);
+            rows.push_back(layer_row(friendly_layer(l.name), desc, i, l.on, !l.lock.empty(), i > 0, i + 1 < n));
+        }
+        h += section(x, y + h, w, L"Load order for ACE",
+                     rows,
+                     L"Nearest the game first. Each launch loads these below the ACE layer in this order; a layer off in "
+                     L"Windows can still be loaded for ACE alone. Locked switches keep the mod and ACE working.",
+                     draw);
+        Row reset;
+        reset.label = L"Windows’ order";
+        reset.desc = L"Forget this profile: launches follow Windows’ order and switches again.";
+        reset.controlW = std::ceil(app.canvas.measure(L"Reset", t::kBody)) + 2 * t::kSpace3;
+        reset.controlH = t::kControlHeight;
+        reset.control = [](const Rect& r) { button(kLayerReset, r, L"Reset", false); };
+        h += t::kSpace6 + section(x, y + h + t::kSpace6, w, L"", {reset}, L"", draw);
+    } else {
+        for (const bool machine : {true, false}) {
+            std::vector<Row> rows;
+            const int n = static_cast<int>(app.layersDraft.size());
+            for (int i = 0; i < n; ++i) {
+                const SystemLayer& l = app.layersDraft[i];
+                if (l.machine != machine)
+                    continue;
+                const bool up = i > 0 && app.layersDraft[i - 1].machine == machine && app.layersDraft[i - 1].lock.empty() && l.lock.empty();
+                const bool down = i + 1 < n && app.layersDraft[i + 1].machine == machine && l.lock.empty();
+                std::wstring desc = l.lock.empty() ? std::wstring() : widen(l.lock) + L" · ";
+                desc += l.name.empty() ? L"Unreadable manifest: " + l.manifest : l.manifest;
+                rows.push_back(layer_row(friendly_layer(l.name, l.manifest), desc, i, l.on, false, up, down));
+            }
+            if (rows.empty())
+                continue;
+            h += section(x, y + h, w, machine ? L"All users (HKLM)" : L"This user (HKCU)", rows,
+                         machine ? L"Changing these needs administrator rights: Windows asks once when you apply."
+                                 : L"Windows loads these after the machine-wide ones.",
+                         draw) +
+                 t::kSpace6;
+        }
+        if (app.layersDraft.empty()) {
+            if (draw)
+                badge(x, y + h, 3, L"No OpenXR layers are registered in Windows.", w);
+            h += 20 + t::kSpace6;
+        }
+        Row apply;
+        apply.label = layers_dirty() ? L"Changes not applied" : L"Windows’ list";
+        apply.desc = app.layersLockMoved ? L"The ACE layer is not first in its list: applying moves it there."
+                                         : L"Nearest the game first. The current list is backed up into logs before it changes.";
+        const float applyW = std::ceil(app.canvas.measure(L"Apply", t::kBody)) + 2 * t::kSpace3,
+                    revertW = std::ceil(app.canvas.measure(L"Revert", t::kBody)) + 2 * t::kSpace3;
+        apply.controlW = applyW + t::kSpace2 + revertW;
+        apply.controlH = t::kControlHeight;
+        const bool dirty = layers_dirty();
+        apply.control = [=](const Rect& r) {
+            if (dirty) {
+                button(kLayerRevert, {r.x, r.y, revertW, r.h}, L"Revert", false);
+                button(kLayerApply, {r.x + revertW + t::kSpace2, r.y, applyW, r.h}, L"Apply", true);
+            }
+        };
+        h += section(x, y + h, w, L"", {apply}, L"", draw);
+    }
+    if (!app.layerMessage.empty()) {
+        if (draw)
+            badge(x, y + h + t::kSpace4, app.layerTone, app.layerMessage, w);
+        h += t::kSpace4 + 20;
+    }
+    return h;
+}
+
+// The preview: the chain a frame goes through, the game at the top, the runtime at the bottom.
+float layers_preview(float x, float y, float w, bool draw) {
+    std::vector<std::pair<std::wstring, int>> chain;  // tone: 0 end, 1 locked, 2 layer
+    chain.push_back({L"Assetto Corsa EVO", 0});
+    if (app.layerProfile == 0) {
+        for (const std::string& name : app.layerPlan.above)
+            chain.push_back({friendly_layer(name), 2});
+        chain.push_back({friendly_layer(kLayerName), 1});
+        for (const PlannedLayer& l : app.layerPlan.layers)
+            if (l.on)
+                chain.push_back({friendly_layer(l.name), l.lock.empty() ? 2 : 1});
+    } else {
+        for (const SystemLayer& l : app.layersDraft)
+            if (l.on)
+                chain.push_back({friendly_layer(l.name, l.manifest), l.lock.empty() ? 2 : 1});
+    }
+    chain.push_back({L"OpenXR runtime", 0});
+    const float pill = 30, gap = 14;
+    if (draw)
+        for (size_t i = 0; i < chain.size(); ++i) {
+            const Rect r{x, y + i * (pill + gap), w, pill};
+            const auto& [text, tone] = chain[i];
+            app.canvas.fill(r, col(tone == 0 ? app.c->segment_track : tone == 1 ? app.c->accent_fill : app.c->group_bg), pill / 2);
+            if (tone == 2)
+                app.canvas.stroke(r, col(app.c->separator), 1, pill / 2);
+            app.canvas.text(text, t::kBody, {r.x + 14, r.y, r.w - 28, r.h}, col(tone == 1 ? app.c->on_accent : app.c->label),
+                            Align::Center);
+            if (i + 1 < chain.size()) {
+                const float cx = x + w / 2, top = r.bottom() + 2, bottom = r.bottom() + gap - 2;
+                app.canvas.line(cx, top, cx, bottom, col(app.c->label_secondary), 1.5f);
+                app.canvas.path("M2 3l3 3 3-3", {cx - 5, bottom - 6, 10, 8}, 10, col(app.c->label_secondary), 1.5f);
+            }
+        }
+    return chain.size() * (pill + gap) - gap;
+}
+
 // The current pane's content at (x, y), width w. Returns its height.
 float pane_content(float x, float y, float w, bool draw) {
     const Readouts ro = readouts(app.s, app.runtime);
@@ -700,8 +983,17 @@ float pane_content(float x, float y, float w, bool draw) {
         h += section(x, y + h, w, L"Focus region",
                      {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
                       slider_row(kHeight, L"Foveated height", L"", app.s.height, L""),
-                      slider_row(kCorner, L"Corner radius", L"Rounds the corners of the focus region.", app.s.corner, L"")},
-                     L"Share of the outer view that the focus view covers.", draw);
+                      slider_row(kCorner, L"Corner radius", L"Rounds the corners of the focus region.", app.s.corner, L""),
+                      app.s.eyeTracking
+                          ? slider_row(kFocusOffset, L"Gaze offset",
+                                       L"Moves the focus region above (+) or below (−) where you look, if it sits off.",
+                                       app.s.offset.gaze, L"", false, L"°")
+                          : slider_row(kFocusOffset, L"Vertical position",
+                                       L"Raises (+) or lowers (−) the fixed focus region, e.g. toward the road or the dash.",
+                                       app.s.offset.fixed, L"", false, L"°")},
+                     L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
+                     L"vertical offset; it applies live.",
+                     draw);
         break;
     }
     case Pane::Overlay: {
@@ -904,6 +1196,7 @@ float pane_content(float x, float y, float w, bool draw) {
                      draw);
         break;
     }
+    case Pane::Layers: h += layers_pane(x, y, w, draw); break;
     case Pane::About: {
         if (draw) {
             app.canvas.text(L"QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
@@ -965,7 +1258,9 @@ float preview(float x, float y, float w, bool draw) {
         const bool tfi = app.s.mode == RenderMode::TwoLoop;
         const bool eye = app.s.eyeTracking && !eye_warning();
         const float fw = W * app.s.width / 100, fh = H * app.s.height / 100;
-        const float gx = eye ? 0.6f : 0.5f, gy = eye ? 0.45f : 0.5f;
+        // Centred on the lens in both modes (eye tracked: looking straight ahead), moved by the vertical
+        // offset, roughly: about 100 degrees of view top to bottom.
+        const float gx = 0.5f, gy = 0.5f - app.s.offset.for_mode(app.s.eyeTracking) / 100.0f;
         // The kept view (the left eye: its outer side is on the left); the focus region stays inside it.
         const float cl = W * static_cast<float>(app.s.crop_width() < 1 ? app.s.cropOuter : 0) / 100,
                     cr = W * static_cast<float>(app.s.crop_width() < 1 ? app.s.cropInner : 0) / 100,
@@ -1205,7 +1500,9 @@ float placement_preview(float x, float y, float w, bool draw) {
 
 // The preview column: the placement preview on the Headset menu pane, the foveation preview elsewhere.
 float side_preview(float x, float y, float w, bool draw) {
-    return app.pane == Pane::Menu ? placement_preview(x, y, w, draw) : preview(x, y, w, draw);
+    return app.pane == Pane::Menu     ? placement_preview(x, y, w, draw)
+           : app.pane == Pane::Layers ? layers_preview(x, y, w, draw)
+                                      : preview(x, y, w, draw);
 }
 
 // ---- Window ------------------------------------------------------------------------------------
@@ -1222,6 +1519,7 @@ const Item kItems[] = {
     {L"Focus overlay", {"M5 5H11V11H5Z", nullptr, nullptr}},
     {L"Foveated DLSS", {"M8 1.75L9.6 6.4 14.25 8 9.6 9.6 8 14.25 6.4 9.6 1.75 8 6.4 6.4Z", nullptr, nullptr}},
     {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
+    {L"OpenXR layers", {"M2.5 4.5H10.5", "M2.5 8H10.5", "M2.5 11.5H10.5"}},
     {L"About", {"M8 7.25V11", nullptr, nullptr}},
 };
 
@@ -1239,6 +1537,10 @@ void sidebar_icon(int i, const Rect& r, Color c) {
             app.canvas.line(r.x + 1.75f, r.y + d, r.x + 1.75f, r.y + e, c, 1.5f);
             app.canvas.line(r.x + 14.25f, r.y + d, r.x + 14.25f, r.y + e, c, 1.5f);
         }
+    if (i == static_cast<int>(Pane::Layers)) {  // the list's order: an up and a down arrow
+        app.canvas.path("M12.5 6.5V2.5M11 4l1.5-1.5L14 4", r, 16, c, 1.5f);
+        app.canvas.path("M12.5 9.5V13.5M11 12l1.5 1.5L14 12", r, 16, c, 1.5f);
+    }
     if (i == static_cast<int>(Pane::About)) {
         app.canvas.circle(r.x + 8, r.y + 8, 6.25f, c, false, 1.5f);
         app.canvas.circle(r.x + 8, r.y + 5, 0.9f, c, true);
@@ -1455,6 +1757,9 @@ void open_popup(Ctl owner) {
     } else if (owner == kHelmetDetail) {
         app.popup.items = {L"Performance (2048)", L"Detail (4096)"};
         app.popup.selected = app.s.helmet.detail ? 1 : 0;
+    } else if (owner == kLayerProfile) {
+        app.popup.items = {kLayerProfileNames[0], kLayerProfileNames[1]};
+        app.popup.selected = app.layerProfile;
     } else if (owner == kCheekyNrPasses) {
         app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
         app.popup.selected = app.s.cheeky.nrPasses - 1;
@@ -1493,6 +1798,13 @@ void choose(Ctl owner, int option) {
         app.s.helmet.visor = static_cast<VisorPosition>(std::clamp(option, 0, 2));
     else if (owner == kHelmetDetail)
         app.s.helmet.detail = option == 1;
+    else if (owner == kLayerProfile) {
+        app.layerProfile = std::clamp(option, 0, 1);
+        app.layerRow = 0;
+        app.layerMessage.clear();
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
     changed();
 }
 
@@ -1537,6 +1849,23 @@ void activate(Ctl id, int option) {
     case kSidebar:
         app.pane = static_cast<Pane>(option);
         app.scroll = 0;
+        if (app.pane == Pane::Layers)
+            refresh_layers();
+        break;
+    case kLayerProfile: open_popup(id); return;
+    case kLayerOn: app.layerRow = option; toggle_layer(option); break;
+    case kLayerUp: move_layer(option, -1); break;
+    case kLayerDown: move_layer(option, 1); break;
+    case kLayerApply: apply_layers(); break;
+    case kLayerRevert:
+        app.layersDraft = app.layersWindows;
+        app.layersLockMoved = false;
+        app.layerMessage.clear();
+        refresh_layers(false);
+        break;
+    case kLayerReset:
+        edit_launcher_layers([](LauncherLayers& p) { p = {}; });
+        app.layerMessage.clear();
         break;
     case kMethod:
     case kMode:
@@ -1638,6 +1967,21 @@ void on_key(WPARAM key) {
         return;
     }
     switch (app.focus) {
+    case kLayerList: {  // Up/Down pick a row, Space switches it, Ctrl+Up/Down moves it
+        const int n = layer_rows();
+        if (n == 0)
+            break;
+        app.layerRow = std::clamp(app.layerRow, 0, n - 1);
+        const bool ctrl = GetKeyState(VK_CONTROL) < 0;
+        if ((key == VK_UP || key == VK_DOWN) && ctrl)
+            move_layer(app.layerRow, key == VK_UP ? -1 : 1);
+        else if (key == VK_UP || key == VK_DOWN)
+            app.layerRow = std::clamp(app.layerRow + (key == VK_UP ? -1 : 1), 0, n - 1);
+        else if (key == VK_SPACE)
+            toggle_layer(app.layerRow);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        break;
+    }
     case kSidebar:
         if (key == VK_UP || key == VK_DOWN) {
             const int p = std::clamp(static_cast<int>(app.pane) + (key == VK_DOWN ? 1 : -1), 0, kPanes - 1);
@@ -1687,6 +2031,10 @@ void on_key(WPARAM key) {
     case kHelmetOn:
     case kVisor:
     case kHelmetDetail:
+    case kLayerProfile:
+    case kLayerApply:
+    case kLayerRevert:
+    case kLayerReset:
     case kSupport:
     case kRestore:
     case kLaunch:
@@ -1747,6 +2095,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_ACTIVATE:
         if (LOWORD(wParam) != WA_INACTIVE) {  // a session may have reported the headset meanwhile
             app.runtime = load_runtime_info(runtime_info_path());
+            if (app.pane == Pane::Layers)  // a layer may have been installed or switched meanwhile
+                refresh_layers();
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         break;
@@ -1777,7 +2127,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.grabPitch = h->option == 1 ? *pitchOf - (kRefFovY / 2 - (y - app.placeFrame.y) / k) : 0;
             SetCapture(hwnd);
             set_panel_from(x, y);
-        } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport) {
+        } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport || h->id == kLayerApply ||
+                   h->id == kLayerRevert || h->id == kLayerReset) {
             app.pressed = h->id;
             SetCapture(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
