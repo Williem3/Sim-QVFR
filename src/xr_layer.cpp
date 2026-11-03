@@ -116,7 +116,7 @@ struct Experiment {
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4ShadowView1Plain = false;   // diagnostic: no view-1 shortcut in deferredShadows (views4.h)
     bool views4ScreenSizeLegacy = false;   // diagnostic: screenSizeDiv keeps the stereo ratio (views4.h)
-    bool views4DlssLive = false;           // experimental: live resolution below DLSS (views4.h)
+    bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
     // CPU sampling profiler (probe/cpu_profile.h): on (Ctrl+Alt+C starts a capture), seconds per capture, the
@@ -349,7 +349,7 @@ void load_experiment() {
         GetPrivateProfileIntW(L"experiment", L"views4_shadow_view1_plain", 0, ini.c_str()) != 0;
     experiment.views4ScreenSizeLegacy =
         GetPrivateProfileIntW(L"experiment", L"views4_screen_size_legacy", 0, ini.c_str()) != 0;
-    experiment.views4DlssLive = GetPrivateProfileIntW(L"experiment", L"views4_dlss_live", 0, ini.c_str()) != 0;
+    experiment.views4DlssLive = GetPrivateProfileIntW(L"experiment", L"views4_dlss_live", 1, ini.c_str()) != 0;
     {
         wchar_t watch[512] = {};
         GetPrivateProfileStringW(L"experiment", L"pass_census_watch", L"", watch, 512, ini.c_str());
@@ -3606,7 +3606,7 @@ void optimize_start(int64_t now) {
     optimize.note.clear();
     // It measures what each step does, so the views must resize live (with DLSS: views4_dlss_live).
     if (views4_dlss_held()) {
-        optimize.note = L"DLSS holds the view sizes until the next launch: set views4_dlss_live=1 to optimize live";
+        optimize.note = L"DLSS holds the view sizes until the next launch (DLAA, or views4_dlss_live=0): it can't measure live";
         return;
     }
     int nativeW = 0;

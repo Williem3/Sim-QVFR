@@ -60,7 +60,7 @@ void views4_set_live_layout(const Views4Layout& live);
 // the focus cull's scale and gaze. The focus views keep their pixel size, so the box's density
 // changes with it. The next focus cameras filled use them.
 void views4_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze);
-// Experimental (views4_dlss_live): with DLSS, live resolution resizes the views ACE renders (DLSS's input)
+// views4_dlss_live (on by default): with DLSS, live resolution resizes the views ACE renders (DLSS's input)
 // and keeps the layout DLSS writes (its output, fixed when the features were made) at the launch sizes:
 // DLSS dynamic resolution (ace_abi.h). Passes on a target of the output's size (or a half or quarter of
 // it) take the output layout. Off: with DLSS the views keep their launch sizes. Call before views4_start.
