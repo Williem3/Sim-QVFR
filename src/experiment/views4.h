@@ -43,8 +43,9 @@ struct Views4Frame {
     float outerTan[2][4];
     float focusTan[2][4];
     XrQuaternionf turn[2];
-    bool live = false;  // `width`/`height`: the view layout rendered with (live resolution, views4_layout.h)
-    double width[4] = {}, height[4] = {};
+    bool live = false;  // `width`/`height`: the view layout in ACE's output (live resolution, views4_layout.h)
+    double width[4] = {}, height[4] = {};  // what the composition reads; with DLSS, its output layout
+    double renderWidth[4] = {}, renderHeight[4] = {};  // the views rendered (DLSS's input; else the same)
 };
 // Queues a frame record for the composition (fill_focus_cameras; tests feed it directly).
 void views4_push_frame(const Views4Frame& frame);
@@ -59,8 +60,13 @@ void views4_set_live_layout(const Views4Layout& live);
 // the focus cull's scale and gaze. The focus views keep their pixel size, so the box's density
 // changes with it. The next focus cameras filled use them.
 void views4_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze);
-// Whether ACE's renderer upscales with DLSS, so the views keep their launch sizes (live resolution waits
-// for the next launch).
+// Experimental (views4_dlss_live): with DLSS, live resolution resizes the views ACE renders (DLSS's input)
+// and keeps the layout DLSS writes (its output, fixed when the features were made) at the launch sizes:
+// DLSS dynamic resolution (ace_abi.h). Passes on a target of the output's size (or a half or quarter of
+// it) take the output layout. Off: with DLSS the views keep their launch sizes. Call before views4_start.
+void views4_set_dlss_live(bool on);
+// Whether ACE's renderer upscales with DLSS and the views keep their launch sizes (live resolution waits
+// for the next launch); false with views4_dlss_live.
 bool views4_dlss_held();
 // The latest focus frustum of view 2 or 3; false when focus cull is off or none is built yet.
 bool views4_focus_frustum(int view, FocusFrustum& out);
