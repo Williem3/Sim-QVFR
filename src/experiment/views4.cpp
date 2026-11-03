@@ -48,6 +48,12 @@ bool tileViews = false;  // "tiles": tiled light culling builds tile lists for 4
 bool slotViews = false;  // "slots": views 2-3 get their own history slots (view 3's at a phantom renderer)
 bool cameraViews = false;  // "cameras": views 2-3 are focus cameras with their own camera slots and records
 Views4Layout layout;       // where the four views sit in the target (views4_set_layout; equal quarters by default)
+// Where they sit in a target of the output's size (views4_dlss_live with DLSS: the launch layout, which DLSS
+// writes; else `layout`). Set with `layout`, each filled frame.
+Views4Layout outputLayout;
+bool dlssLive = false;  // views4_dlss_live
+// The render and output sizes the builder last laid the views out at (its two viewport calls, ace_abi.h).
+std::atomic<int> renderW{0}, renderH{0}, outputW{0}, outputH{0};
 Views4Layout launchLayout;  // the layout at launch (the tile grid and volumetrics are sized for its largest view)
 Views4Layout pendingLive;  // the view layout for the next filled frame (views4_set_live_layout), under turnLock
 bool livePending = false;
@@ -103,7 +109,7 @@ std::atomic<uint64_t> widened{0}, viewportCalls[kViews + 1], viewportMismatch{0}
 std::atomic<uint64_t> passCalls[kViews + 1], passMismatch{0};
 std::atomic<bool> passLogged{false};
 uint64_t frames = 0;
-std::atomic<bool> layoutLogged{false};
+std::atomic<bool> layoutLogged{false}, outputLogged{true};  // outputLogged: until views4_dlss_live has an output layout to log
 
 // Camera dump (to identify the slot matrices): the renderer, and the views ACE last located.
 std::atomic<void*> lastRenderer{nullptr};
@@ -113,8 +119,10 @@ bool dlss_upscaling(const uint8_t* renderer) {
     const auto* features = reinterpret_cast<void* const*>(renderer + ace::kRendererDlssFeatures);
     return renderer[ace::kRendererDlssReady] != 0 && features[0] != features[1];
 }
-// Whether the last frame filled held the launch layout for DLSS (logged when it changes).
+// Whether the last frame filled held the launch layout for DLSS; dlssState: 0 no DLSS, 1 held, 2 live below
+// DLSS (views4_dlss_live), logged when it changes.
 std::atomic<bool> dlssHeld{false};
+std::atomic<int> dlssState{-1};
 SRWLOCK viewsLock = SRWLOCK_INIT;
 XrView lastViews[2] = {};
 constexpr uint64_t kDumpFrames[] = {600, 1800};
@@ -246,25 +254,48 @@ void fill_focus_cameras(uint8_t* renderer) {
     // One focus box for the whole frame, whatever views4_set_live does meanwhile.
     const double boxX = focusFraction, boxY = focusFractionY, cull = cullScale;
     Views4Frame frame{};
-    // ACE makes each view's DLSS feature at the view's size when it builds the renderer, and its passes
-    // map the views between render and output resolution by their fractions of the target. A live
-    // size would leave the DLSS output (fixed size) out of place, so with DLSS the views keep their
-    // launch sizes; a live layout waits (pending) for a renderer without DLSS or the next launch.
+    // ACE makes each view's DLSS feature at the view's size when it builds the renderer. DLSS's output
+    // is that size for good, so a live layout would leave it out of place: with DLSS the views keep their
+    // launch sizes, and a live layout waits (pending) for a renderer without DLSS or the next launch.
+    // With views4_dlss_live only the output keeps them: the views render at the live sizes (DLSS's input,
+    // which may be smaller than its features were made for) and DLSS upscales them into the launch layout.
+    // Only while the output's targets can be told from the render's by size (output_target): not with DLAA,
+    // nor before the builder has laid the views out at both sizes.
     const bool dlss = dlss_upscaling(renderer);
-    const Views4Layout& latched = dlss ? launchLayout : livePending ? pendingLive : layout;
+    const int rw = renderW.load(std::memory_order_relaxed), ow = outputW.load(std::memory_order_relaxed);
+    const bool distinct = rw > 0 && ow > 0 && (rw != ow || renderH.load(std::memory_order_relaxed) != outputH.load(std::memory_order_relaxed));
+    const bool below = dlss && dlssLive && distinct;
+    const Views4Layout& live = livePending ? pendingLive : layout;
+    const Views4Layout& rendered = dlss && !below ? launchLayout : live;
+    const Views4Layout& output = dlss ? launchLayout : rendered;
     frame.live = true;
-    std::memcpy(frame.width, latched.width, sizeof(frame.width));
-    std::memcpy(frame.height, latched.height, sizeof(frame.height));
+    std::memcpy(frame.width, output.width, sizeof(frame.width));
+    std::memcpy(frame.height, output.height, sizeof(frame.height));
+    std::memcpy(frame.renderWidth, rendered.width, sizeof(frame.renderWidth));
+    std::memcpy(frame.renderHeight, rendered.height, sizeof(frame.renderHeight));
     ReleaseSRWLockShared(&turnLock);
-    if (dlssHeld.exchange(dlss) != dlss)
-        log_line(dlss ? "views4: DLSS is on: the views keep their launch sizes (live resolution applies at the next launch)"
-                      : "views4: DLSS is off: live resolution applies");
-    // This frame's views render with this layout (the viewport and pass setups read `layout`).
-    if (std::memcmp(frame.width, layout.width, sizeof(frame.width)) != 0 ||
-        std::memcmp(frame.height, layout.height, sizeof(frame.height)) != 0) {
-        std::memcpy(layout.width, frame.width, sizeof(layout.width));
-        std::memcpy(layout.height, frame.height, sizeof(layout.height));
+    const int state = !dlss ? 0 : below ? 2 : 1;
+    dlssHeld = state == 1;
+    if (dlssState.exchange(state) != state)
+        log_line(state == 1 && dlssLive
+                     ? "views4: DLSS is on, rendering at its output size (DLAA) or not laid out yet: the views keep their "
+                       "launch sizes (views4_dlss_live needs render and output sizes that differ)"
+                 : state == 1 ? "views4: DLSS is on: the views keep their launch sizes (live resolution applies at the next launch)"
+                 : state == 2 ? "views4: DLSS is on: live resolution renders below DLSS, its output keeps the launch layout "
+                                "(views4_dlss_live)"
+                              : "views4: DLSS is off: live resolution applies");
+    // This frame's views render with this layout (the viewport and pass setups read `layout`, and
+    // `outputLayout` on a target of the output's size).
+    if (std::memcmp(frame.renderWidth, layout.width, sizeof(frame.renderWidth)) != 0 ||
+        std::memcmp(frame.renderHeight, layout.height, sizeof(frame.renderHeight)) != 0 ||
+        std::memcmp(frame.width, outputLayout.width, sizeof(frame.width)) != 0 ||
+        std::memcmp(frame.height, outputLayout.height, sizeof(frame.height)) != 0) {
+        std::memcpy(layout.width, frame.renderWidth, sizeof(layout.width));
+        std::memcpy(layout.height, frame.renderHeight, sizeof(layout.height));
+        std::memcpy(outputLayout.width, frame.width, sizeof(outputLayout.width));
+        std::memcpy(outputLayout.height, frame.height, sizeof(outputLayout.height));
         layoutLogged = false;  // log the new rects
+        outputLogged = !dlssLive;
     }
     XrQuaternionf turns[2] = {kNoTurn, kNoTurn};
     FocusFrustum frusta[2];
@@ -375,7 +406,41 @@ void put_f(uint8_t* p, size_t at, float v) { *reinterpret_cast<float*>(p + at) =
 void put_i(uint8_t* p, size_t at, int32_t v) { *reinterpret_cast<int32_t*>(p + at) = v; }
 float get_f(const uint8_t* p, size_t at) { return *reinterpret_cast<const float*>(p + at); }
 
-// Mode 1 gives two halves; with the doubled eye width the target holds the four views of `layout`.
+// Whether a target of this size holds DLSS's output (views4_dlss_live): the output's size, or a half or a
+// quarter of it, while that differs from the render size (equal sizes, DLAA: ambiguous, the render layout).
+bool output_target(int width, int height) {
+    const int ow = outputW.load(std::memory_order_relaxed), oh = outputH.load(std::memory_order_relaxed);
+    if (!dlssLive || ow <= 0 || (ow == renderW.load(std::memory_order_relaxed) && oh == renderH.load(std::memory_order_relaxed)))
+        return false;
+    for (int k = 1; k <= 4; k *= 2)
+        if (std::abs(width - ow / k) <= 1 && std::abs(height - oh / k) <= 1)
+            return true;
+    return false;
+}
+
+// views4_dlss_live: each distinct target size and the layout it got, logged once (for the first runs).
+SRWLOCK targetsLock = SRWLOCK_INIT;
+uint64_t targetsSeen[32];
+size_t targetsSeenCount = 0;
+void note_target(const char* what, uintptr_t site, int width, int height, bool output) {
+    if (!dlssLive)
+        return;
+    const uint64_t key = (static_cast<uint64_t>(width) << 32) | (static_cast<uint64_t>(height) << 1) | (output ? 1 : 0);
+    AcquireSRWLockExclusive(&targetsLock);
+    bool known = false;
+    for (size_t i = 0; i < targetsSeenCount && !known; ++i)
+        known = targetsSeen[i] == key;
+    if (!known && targetsSeenCount < std::size(targetsSeen))
+        targetsSeen[targetsSeenCount++] = key;
+    ReleaseSRWLockExclusive(&targetsLock);
+    if (!known)
+        logf("views4 dlss-live: %s 0x%llx target %dx%d -> %s layout (render %dx%d, output %dx%d)", what,
+             static_cast<unsigned long long>(site), width, height, output ? "output" : "render", renderW.load(),
+             renderH.load(), outputW.load(), outputH.load());
+}
+
+// Mode 1 gives two halves; with the doubled eye width the target holds the four views of `layout`
+// (`outputLayout` on DLSS's output, views4_dlss_live).
 void* viewportHook(void* renderer, void* out, const float* renderSize, int view) {
     lastRenderer.store(renderer, std::memory_order_relaxed);
     if (mode_of(renderer) != 1 || view < 0 || view >= kViews)
@@ -390,7 +455,22 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
         viewportMismatch.fetch_add(1, std::memory_order_relaxed);
         return result;
     }
-    const ViewRect r = views4_rect(layout, view, width, height);
+    // The builder's two calls give the render and output sizes; other callers go by their target's size.
+    const uintptr_t returnRva = reinterpret_cast<uintptr_t>(_ReturnAddress()) - base;
+    bool output = false;
+    if (returnRva == ace::kBuilderRenderViewportCallSite + 5) {
+        renderW.store(width, std::memory_order_relaxed);
+        renderH.store(height, std::memory_order_relaxed);
+    } else if (returnRva == ace::kBuilderOutputViewportCallSite + 5) {
+        outputW.store(width, std::memory_order_relaxed);
+        outputH.store(height, std::memory_order_relaxed);
+        output = dlssLive;
+    } else {
+        output = output_target(width, height);
+    }
+    if (view == 0)
+        note_target("viewport", returnRva - 5, width, height, output);
+    const ViewRect r = views4_rect(output ? outputLayout : layout, view, width, height);
     const int left = r.left;
     const float w = static_cast<float>(r.width), h = static_cast<float>(r.height);
     put_f(o, 0x00, static_cast<float>(left));  // D3D12_VIEWPORT
@@ -413,7 +493,6 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
     put_f(o, 0x4c, 0.0f);
     // The tile grid and the volumetrics are sized once from view 0 for every view (ace_abi.h): they
     // get the largest view's size. Equal views leave this unchanged.
-    const uintptr_t returnRva = reinterpret_cast<uintptr_t>(_ReturnAddress()) - base;
     if (!launchLayout.equal() && view == 0 &&
         (returnRva == ace::kTileGridViewportCallSite + 5 || returnRva == ace::kFogViewportCallSite + 5)) {
         int maxW = 0, maxH = 0;
@@ -436,18 +515,21 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
         logf("views4: %s sized for the largest view, %dx%d of %dx%d",
              returnRva == ace::kFogViewportCallSite + 5 ? "volumetrics" : "tile grid", maxW, maxH, width, height);
     }
-    if (!layoutLogged.exchange(true)) {
+    // The rects, once per layout (render: also the pass census's columns; output: views4_dlss_live).
+    if (!(output ? outputLogged : layoutLogged).exchange(true)) {
         int lefts[kViews], widths[kViews];
         char line[256];
-        int n = std::snprintf(line, sizeof(line), "views4: viewport layout render=%dx%d, views (x, w x h):", width, height);
+        int n = std::snprintf(line, sizeof(line), "views4: viewport layout %s=%dx%d, views (x, w x h):",
+                              output ? "output" : "render", width, height);
         for (int v = 0; v < kViews; ++v) {
-            const ViewRect e = views4_rect(layout, v, width, height);
+            const ViewRect e = views4_rect(output ? outputLayout : layout, v, width, height);
             lefts[v] = e.left;
             widths[v] = e.width;
             n += std::snprintf(line + n, sizeof(line) - n, " %d: %d, %dx%d;", v, e.left, e.width, e.height);
         }
         log_line(line);
-        pass_census_set_view_columns(lefts, widths);
+        if (!output)
+            pass_census_set_view_columns(lefts, widths);
     }
     return result;
 }
@@ -493,7 +575,10 @@ void passSetupHook(void* renderer, void* pass, int view) {
         passMismatch.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    const ViewRect r = views4_rect(layout, view, width, height);
+    const bool output = output_target(width, height);
+    if (view == 0)
+        note_target("pass setup", ace::kPassSetupRvas[I], width, height, output);
+    const ViewRect r = views4_rect(output ? outputLayout : layout, view, width, height);
     put_f(p, ace::kPassViewport + 0x00, static_cast<float>(r.left));
     put_f(p, ace::kPassViewport + 0x08, static_cast<float>(r.width));
     put_f(p, ace::kPassViewport + 0x0c, static_cast<float>(r.height));
@@ -1131,7 +1216,12 @@ bool views4_latest_frame(Views4Frame& frame) {
     return any;
 }
 
-void views4_set_layout(const Views4Layout& l) { layout = launchLayout = l; }
+void views4_set_layout(const Views4Layout& l) { layout = launchLayout = outputLayout = l; }
+
+void views4_set_dlss_live(bool on) {
+    dlssLive = on;
+    outputLogged = !on;
+}
 
 bool views4_dlss_held() { return dlssHeld; }
 
