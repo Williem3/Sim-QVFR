@@ -48,6 +48,8 @@ struct Settings {
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
     CheekySettings cheeky;
     bool cpuProfile = false;  // [experiment] cpu_profile: Ctrl+Alt+C records a CPU capture (Diagnostics pane)
+    // [launcher] baseline_next: the next launch runs without QVFR (ACE's own two views, measured), once.
+    bool baselineNext = false;
 };
 
 struct Range {

@@ -54,7 +54,7 @@ enum Ctl {
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
     // The Diagnostics pane: the CPU capture switch, copying the summary, the logs folder.
-    kDiagCapture, kDiagCopy, kDiagLogs
+    kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -321,7 +321,7 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagCopy, kDiagLogs}); break;
+    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -1026,6 +1026,15 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         L"stutter slightly while it records.";
     capture.fullHeight = [captureDesc](float width) { return checkbox_height(captureDesc, width); };
     capture.full = [captureDesc](const Rect& r) { checkbox(kDiagCapture, r, app.s.cpuProfile, L"CPU capture", captureDesc); };
+    Row baseline;
+    const std::wstring baselineDesc =
+        L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the "
+        L"same race with and without QVFR. It turns itself off after that launch; the next one has QVFR again. The "
+        L"performance overlay works in it, the settings menu does not.";
+    baseline.fullHeight = [baselineDesc](float width) { return checkbox_height(baselineDesc, width); };
+    baseline.full = [baselineDesc](const Rect& r) {
+        checkbox(kDiagBaseline, r, app.s.baselineNext, L"Next launch without QVFR", baselineDesc);
+    };
     Row actions;
     actions.fullHeight = [](float) { return t::kControlHeight; };
     actions.full = [](const Rect& r) {
@@ -1037,7 +1046,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     std::wstring footer = L"When asking for help, send a screenshot of this page (or paste the summary) and the session's "
                           L"ace-*.log from the logs folder";
     footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
-    h += section(x, y + h, w, L"Report", {capture, actions}, footer, draw);
+    h += section(x, y + h, w, L"Report", {capture, baseline, actions}, footer, draw);
     return h;
 }
 
@@ -2037,6 +2046,7 @@ void activate(Ctl id, int option) {
             app.runtime = load_runtime_info(runtime_info_path());
         break;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
+    case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
     case kLayerProfile: open_popup(id); return;

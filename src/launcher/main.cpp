@@ -211,6 +211,11 @@ int run(bool dryRun) {
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy ace-quadview.ini into " + runFolder.wstring());
+    // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
+    // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
+    const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
+    if (baseline)
+        WritePrivateProfileStringW(L"experiment", L"baseline", L"1", iniCopy.c_str());
     const auto variables =
         launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring());
 
@@ -218,6 +223,8 @@ int run(bool dryRun) {
     say(L"  game:      " + exe.wstring());
     say(L"  layer:     " + library.wstring());
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
+    if (baseline)
+        say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
     say(L"  run:       " + runFolder.wstring());
     say(L"  layer log: " + log.wstring());
     std::wstring order = L"ACE -> " + widen(kLayerName);
@@ -257,6 +264,8 @@ int run(bool dryRun) {
                         game.c_str(), &si, &pi))
         return fail(L"starting Assetto Corsa EVO failed (error " + std::to_wstring(GetLastError()) + L")");
     say(L"Started Assetto Corsa EVO (pid " + std::to_wstring(pi.dwProcessId) + L").");
+    if (baseline)  // one launch only
+        WritePrivateProfileStringW(L"launcher", L"baseline_next", L"0", ini.c_str());
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     write_file((runFolder / L"launch.txt").wstring(), narrow(report));
