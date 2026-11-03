@@ -40,7 +40,8 @@ GpuLoad gpu_load_from(const std::vector<std::pair<std::wstring, double>>& sample
 bool gpu_load_start(uint32_t luidHigh, uint32_t luidLow);
 void gpu_load_stop();
 GpuLoad gpu_load_latest();
-// The average of every sample since the last call for `window` (0 the overlay's, 1 the log's; `samples` how
+// The average of every sample since the last call for `window` (0 the overlay's, 1 the log's, 2 the QVFR
+// optimizer's; `samples` how
 // many), and resets that window.
 GpuLoad gpu_load_window(int& samples, int window = 1);
 

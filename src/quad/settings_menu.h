@@ -26,7 +26,9 @@ enum class MenuItem {
     FgOn, FgMultiplier, FgSize, FgScale, FgPeriphery, FgRelease, FgBorder,
     // The View crop page (QVFR, [crop], fov_crop.h), and the Helmet page ([helmet], helmet.h).
     Crop, CropTop, CropBottom, CropOuter, CropInner, Helmet, HelmetRim, HelmetCorners, HelmetLight, HelmetDebug,
-    Visor, HelmetSize, HelmetHeight, HelmetDepth, HelmetDetail
+    Visor, HelmetSize, HelmetHeight, HelmetDepth, HelmetDetail,
+    // QVFR: finds the resolution that holds the frame rate (qvfr_optimizer.h). Right runs (or stops) it, Left undoes.
+    Optimize
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -89,6 +91,9 @@ struct SettingsMenu {
     MenuCheeky cheeky;
     int page = 0;  // index into menu_pages
     int selected = 0;
+    std::wstring optimizeStatus;  // the optimizer's line, short (empty: not run yet)
+    std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
+    int optimizeRequest = 0;      // set by menu_key on Optimize: 1 run or stop, -1 undo; the layer takes it
 };
 
 // The menu's pages: the method's settings, for QVFR the view crop and the helmet, with Cheeky running
@@ -97,11 +102,12 @@ enum class MenuPage { Settings, Crop, Helmet, Dlss, Fg, Headset };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 
-// The items for the method: QVFR also resizes its views live.
+// The items for the method: QVFR also resizes its views live (and the settings page ends with Optimize).
 std::vector<MenuItem> menu_items(bool qvfr);
 // The current page's items: the page switch first, then the page's.
 std::vector<MenuItem> menu_page_items(const SettingsMenu& menu);
-// The current page's title, and its credit line (Cheeky's pages: "CheekyFoveatedDLSS - v0.6.3"; else empty).
+// The current page's title, and its line under it: Cheeky's pages their credit ("CheekyFoveatedDLSS - v0.6.3"),
+// the settings page the optimizer's detail while it has one; else empty.
 std::wstring menu_title(const SettingsMenu& menu);
 std::wstring menu_subtitle(const SettingsMenu& menu);
 // One key: Up/Down select (wrapping), Left/Right step the value. True when a value changed.

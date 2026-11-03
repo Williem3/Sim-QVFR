@@ -38,11 +38,13 @@
 #include "probe/batch_watch.h"
 #include "probe/hang_watch.h"
 #include "probe/probe.h"
+#include "probe/vram_census.h"
 #include "quad/compositor.h"
 #include "quad/focus_offset.h"
 #include "quad/focus_outline.h"
 #include "quad/menu_panel.h"
 #include "quad/osd.h"
+#include "quad/qvfr_optimizer.h"
 #include "quad/settings_menu.h"
 #include "xr.h"
 
@@ -982,6 +984,45 @@ void report_load(double frameMs) {
     logf("views4 load: %s; %s%s (%d and %d samples)", gpuText, cpuText, shown, gpuSamples, cpuSamples);
 }
 
+uint64_t ini_write_later(std::function<void()> write);  // (below)
+
+// VRAM (views4): this process's use of the GPU's local memory and the census of ACE's render targets
+// (probe/vram_census.h) against its render and output sizes, logged and written to the runtime info, where
+// the launcher scales the part that follows the targets to estimate other settings (launcher/settings.h).
+IDXGIAdapter3* vramAdapter = nullptr;
+void report_vram() {
+    int render[2], output[2];
+    views4_target_sizes(render, output);
+    if (output[0] <= 0 || !quad.device)
+        return;
+    if (!vramAdapter) {
+        IDXGIFactory4* factory = nullptr;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+            if (FAILED(factory->EnumAdapterByLuid(quad.device->GetAdapterLuid(), IID_PPV_ARGS(&vramAdapter))))
+                vramAdapter = nullptr;
+            factory->Release();
+        }
+        if (!vramAdapter)
+            return;
+    }
+    DXGI_QUERY_VIDEO_MEMORY_INFO memory{};
+    if (FAILED(vramAdapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memory)))
+        return;
+    const VramCensus c = vram_census(render[0], render[1], output[0], output[1]);
+    constexpr double kMb = 1024.0 * 1024.0;
+    logf("vram: %.0f MB used of %.0f MB; render targets %.0f MB that follow the %dx%d render and %dx%d output "
+         "targets (%zu textures), %.0f MB other (%zu)",
+         memory.CurrentUsage / kMb, memory.Budget / kMb, c.scaledBytes / kMb, render[0], render[1], output[0],
+         output[1], c.scaledTextures, c.otherBytes / kMb, c.otherTextures);
+    ini_write_later([used = memory.CurrentUsage / kMb, budget = memory.Budget / kMb, scaled = c.scaledBytes / kMb,
+                     w = output[0], h = output[1]] {
+        runtime_info(L"vram_used_mb", std::to_wstring(std::lround(used)));
+        runtime_info(L"vram_budget_mb", std::to_wstring(std::lround(budget)));
+        runtime_info(L"vram_scaled_mb", std::to_wstring(std::lround(scaled)));
+        runtime_info(L"vram_target", std::to_wstring(w) + L"x" + std::to_wstring(h));
+    });
+}
+
 void report_cpu_times() {
     const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
         const uint64_t n = total.calls.exchange(0), t = total.ticks.exchange(0), m = total.maxTicks.exchange(0);
@@ -1006,6 +1047,7 @@ void report_cpu_times() {
     const double frameMs = report_pacing();
     gpu_frame_timer_report();  // its own samples: it logs while the overlay collects too
     report_load(frameMs);
+    report_vram();
 }
 
 bool is_ace_process() {
@@ -1082,6 +1124,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
             if (experiment.probes)
                 d3d12_trace_start(d3d12->device);
+            if (experiment.views4)  // before ACE makes its renderer: what VRAM follows the resolution
+                vram_census_start(d3d12->device);
             if (experiment.dred)
                 dred_watch(d3d12->device);
             if ((experiment.passCensus || experiment.uavBarriers) && pass_census_start(d3d12->device)) {
@@ -1648,13 +1692,15 @@ void log_helmet_light() {
 // both eyes into the output chain at native size, on ACE's queue, before ACE releases the image.
 void views4_compose() {
     quad.v4Composed = false;
+    // What this frame's views were rendered with (ACE's own eye projections, the focus boxes and
+    // turns, views4.h); before the first focus cameras are filled, the located FOV, unturned.
+    // Taken before anything can skip this frame: a frame filled but not taken would leave every later
+    // composition a frame behind, its focus placed by an older gaze (focus lagging the eyes, 2026-11-02).
+    Views4Frame frame{};
+    const bool recorded = views4_take_frame(frame);
     if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
         return;
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
-    // What this frame's views were rendered with (ACE's own eye projections, the focus boxes and
-    // turns, views4.h); before the first focus cameras are filled, the located FOV, unturned.
-    Views4Frame frame{};
-    const bool recorded = views4_take_frame(frame);
     XrQuaternionf turns[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
@@ -2469,6 +2515,18 @@ void live_reload() {
     }
 }
 
+// The settings menu's QVFR optimizer (quad/qvfr_optimizer.h; run below, after the overlay): the frames
+// the overlay's measurement gives it while it runs (osd_measure).
+struct Optimize {
+    QvfrOptimizer optimizer;
+    std::vector<OsdFrame> frames;  // since the last window
+    int64_t nextWindow = 0;
+    bool shown = false;  // the menu shows its detail (from the first run until the menu reopens)
+    std::wstring note;   // why it did not start, shown instead of its own status
+};
+Optimize optimize;
+constexpr int64_t kOptimizeWindowMs = 500;
+
 // ---- Settings menu ---------------------------------------------------------------------------
 // In the headset (settings_menu.h): Ctrl+Alt+arrows while ACE has focus, or a controller's left
 // stick click (open, close) and right stick (select, change). Changes are written to the ini the
@@ -2577,6 +2635,10 @@ void menu_open(int64_t now) {
             menu.model.launch.helmetPieces = quad.compositor.has_helmet_pieces();
         }
         menu.model.launch.nativePpd = native_center_ppd();  // takes quad.mutex itself
+        if (!optimize.optimizer.running()) {  // a finished run's detail is not kept over a reopen
+            optimize.shown = false;
+            optimize.note.clear();
+        }
         menu.visible = menu.dirty = true;
         log_line("settings menu: open");
     }
@@ -2592,6 +2654,10 @@ void menu_press(MenuKey key, int64_t now) {
     menu.dirty = true;
     if (!menu_key(menu.model, key))
         return;
+    if (optimize.optimizer.running()) {  // a value changed by hand: the optimizer's measurements no longer hold
+        optimize.optimizer.cancel();
+        log_line("optimize: stopped (a setting was changed)");
+    }
     {  // what was set, to check against what applies ("live:", "cheeky: settings applied")
         const std::vector<MenuLine> lines = menu_lines(menu.model);
         const int i = menu.model.selected;
@@ -2798,6 +2864,7 @@ void menu_render() {
 }
 
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);  // the overlay's card (below)
+void optimize_tick(int64_t now);  // the QVFR optimizer (below)
 
 // This frame's layers with the performance overlay and the menu panel on top while they are shown;
 // `info` itself otherwise.
@@ -2819,6 +2886,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     const int64_t now = qpc_now();
     menu_keyboard(now);
     menu_controllers(session, now);
+    optimize_tick(now);
     if (menu.visible && now >= menu.hideAt) {
         menu.visible = false;
         log_line("settings menu: hidden");
@@ -2910,7 +2978,7 @@ bool osd_shown(OsdSummary& out) {
 }
 
 void osd_wait_returned(double waitMs) {
-    if (!osd.placement.enabled)
+    if (!osd.placement.enabled && !optimize.optimizer.running())
         return;
     osd.waitReturnQpc = qpc_now();
     ULONG64 cycles = 0;
@@ -2921,7 +2989,7 @@ void osd_wait_returned(double waitMs) {
 }
 
 void osd_measure() {
-    if (!osd.placement.enabled)
+    if (!osd.placement.enabled && !optimize.optimizer.running())
         return;
     const int64_t now = qpc_now();
     const DWORD thread = GetCurrentThreadId();
@@ -2945,10 +3013,14 @@ void osd_measure() {
         } else if (thread == osd.thread && osd.cyclesPerMs > 0) {
             frame.cpuMs = static_cast<double>(cycles - osd.lastCycles) / osd.cyclesPerMs;
         }
-        osd.frames.push_back(frame);
-        osd.history.push_back(frame.intervalMs);
-        if (osd.history.size() > kOsdHistory)
-            osd.history.pop_front();
+        if (osd.placement.enabled) {
+            osd.frames.push_back(frame);
+            osd.history.push_back(frame.intervalMs);
+            if (osd.history.size() > kOsdHistory)
+                osd.history.pop_front();
+        }
+        if (optimize.optimizer.running())
+            optimize.frames.push_back(frame);
     }
     osd.lastEnd = now;
     osd.thread = thread;
@@ -3205,6 +3277,157 @@ void osd_shutdown() {
     osd.frames.clear();
     osd.history.clear();
     osd.lastEnd = 0;
+}
+
+// ---- QVFR optimizer --------------------------------------------------------------------------
+// The settings menu's Optimize (quad/qvfr_optimizer.h): Right runs it (or stops a run), Left undoes it.
+// Every kOptimizeWindowMs a window of ACE's frames goes to the optimizer: the GPU timer's own samples
+// (90th percentile) and the render thread's work, which the overlay's rule (osd_summary) also uses to say
+// whether the CPU limits the frame. The values it asks for are written as a menu step is, so the live
+// reload resizes the views (or, with DLSS holding them, the next launch does). [optimize] in the ini:
+// target_percent (of the frame budget), min_periphery, min_density, min_focus (the floors it lowers to).
+void optimize_apply(const QvfrValues& q) {
+    MenuValues& v = menu.model.values;
+    v.periphery = q.periphery;
+    v.density = q.density;
+    v.width = q.width;
+    v.height = q.height;
+    menu.dirty = true;
+    menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = v] {
+        write_menu_values(ini.c_str(), values, true);
+        if (!settings.empty())
+            write_menu_values(settings.c_str(), values, true);
+    });
+    logf("optimize: periphery %d%%, focus density %d%%, focus box %d%% x %d%%", q.periphery, q.density, q.width,
+         q.height);
+}
+
+void optimize_start(int64_t now) {
+    optimize.note.clear();
+    // It measures what each step does, so the views must resize live (with DLSS: views4_dlss_live).
+    if (views4_dlss_held()) {
+        optimize.note = L"DLSS holds the view sizes until the next launch: set views4_dlss_live=1 to optimize live";
+        return;
+    }
+    int nativeW = 0;
+    {
+        std::lock_guard guard(quad.mutex);
+        if (!gpu_frame_timer_start(quad.device, quad.queue)) {
+            optimize.note = L"No GPU frame timing on this device";
+            return;
+        }
+        nativeW = static_cast<int>(quad.nativeW);
+    }
+    gpu_frame_timer_collect_optimizer();  // drop what the windows gathered before the run
+    int samples = 0;
+    gpu_load_window(samples, 2);
+    cpu_load_window(samples, 2);
+    optimize.frames.clear();
+    optimize.nextWindow = now + qpc_ms(kOptimizeWindowMs);
+    const wchar_t* ini = live.ini.c_str();
+    const auto read = [ini](const wchar_t* key, int fallback, int lo, int hi) {
+        return std::clamp(static_cast<int>(GetPrivateProfileIntW(L"optimize", key, fallback, ini)), lo, hi);
+    };
+    const MenuValues& v = menu.model.values;
+    const MenuLaunch& l = menu.model.launch;
+    QvfrLimits limits;
+    const int minFocus = read(L"min_focus", limits.floor.width, 10, 100);
+    limits.floor = {read(L"min_periphery", limits.floor.periphery, 10, 100), read(L"min_density", limits.floor.density, 50, 200),
+                    minFocus, minFocus};
+    limits.cropWidth = v.crop_width();
+    limits.cropHeight = v.crop_height();
+    limits.nativeWidth = nativeW;
+    // The views fit in the launch target (views4_live), at most their launch sizes.
+    limits.ceiling.periphery = static_cast<int>(l.outer);
+    limits.ceiling.density = static_cast<int>(std::min(l.focusWidth * 100 / v.width, l.focusHeight * 100 / v.height));
+    if (nativeW > 0)
+        limits.maxTargetWidth = static_cast<int>(2.0 * nativeW * (l.outer * l.cropWidth / 1e4 + l.focusWidth / 100));
+    // From what is in effect (a value above the launch size renders at what fits).
+    const MenuFit fit = menu_fit(menu.model);
+    const QvfrValues current{static_cast<int>(std::lround(fit.periphery)), static_cast<int>(std::lround(fit.densityX)),
+                             v.width, v.height};
+    optimize.optimizer.start(current, limits, read(L"target_percent", 88, 50, 98) / 100.0);
+    logf("optimize: start from periphery %d%%, focus density %d%%, box %d%% x %d%%; floors %d%%, %d%%, %d%%; "
+         "ceilings %d%%, %d%%",
+         current.periphery, current.density, current.width, current.height, limits.floor.periphery,
+         limits.floor.density, limits.floor.width, limits.ceiling.periphery, limits.ceiling.density);
+}
+
+// The budget is the period xrWaitFrame gives ACE: with Cheeky's frame generation already the multiplied
+// one, so `in` leaves frame generation off. The GPU time is the whole GPU's per ACE frame (frame
+// generation, the composition and the runtime's compositor too) when the load sampler has it, else ACE's
+// own queue (90th percentile).
+QvfrWindow optimize_window() {
+    const GpuFrameStats gpu = gpu_frame_timer_collect_optimizer();
+    OsdInput in;
+    in.frames.swap(optimize.frames);
+    in.periodMs = static_cast<double>(osd.periodNs.load(std::memory_order_relaxed)) / 1e6;
+    in.gpuMs = gpu.frames ? gpu.renderP90 : -1;
+    int samples = 0;
+    if (const GpuLoad load = gpu_load_window(samples, 2); load.valid) {
+        in.gpuBusyPercent = load.busy;
+        in.gpuAcePercent = load.ace;
+    }
+    if (const CpuLoad threads = cpu_load_window(samples, 2); threads.valid) {
+        in.cpuBusiestPercent = threads.busiestPercent;
+        in.cpuBusiestIsRender = threads.busiestThread == osd.thread;
+    }
+    const OsdSummary s = osd_summary(in);
+    QvfrWindow w;
+    w.gpuMs = s.gpuMs;
+    w.cpuMs = s.cpuMs;
+    w.budgetMs = s.budgetMs;
+    w.cpuBound = s.bound == OsdBound::Cpu;
+    w.frames = gpu.frames;
+    return w;
+}
+
+void optimize_tick(int64_t now) {
+    QvfrOptimizer& o = optimize.optimizer;
+    if (const int request = std::exchange(menu.model.optimizeRequest, 0); request != 0 && experiment.views4) {
+        optimize.shown = true;
+        if (request > 0 && o.running()) {
+            o.cancel();
+            log_line("optimize: stopped");
+        } else if (request > 0) {
+            optimize_start(now);
+        } else {
+            o.cancel();
+            optimize.note.clear();
+            if (const QvfrAction back = o.undo(); back.apply)
+                optimize_apply(back.values);
+        }
+    }
+    if (o.running()) {
+        if (menu.visible)  // shown until it is done
+            menu.hideAt = std::max(menu.hideAt, now + qpc_ms(kMenuHideMs));
+        if (now >= optimize.nextWindow) {
+            optimize.nextWindow = now + qpc_ms(kOptimizeWindowMs);
+            if (const QvfrAction a = o.feed(optimize_window()); a.apply)
+                optimize_apply(a.values);
+        }
+    } else {
+        optimize.frames.clear();
+    }
+    // The menu's line and detail.
+    std::wstring line, detail;
+    if (optimize.shown) {
+        detail = optimize.note.empty() ? o.status() : optimize.note;
+        switch (o.state()) {
+        case QvfrState::Measuring:
+        case QvfrState::Settling: line = L"Running…"; break;
+        case QvfrState::Done: line = o.can_undo() ? L"Done (Left: undo)" : L"Done"; break;
+        case QvfrState::Failed: line = L"Not possible"; break;
+        default: line = optimize.note.empty() ? L"" : L"Not possible"; break;
+        }
+    }
+    if (line != menu.model.optimizeStatus || detail != menu.model.optimizeDetail) {
+        if (detail != menu.model.optimizeDetail && !detail.empty())
+            logf("optimize: %ls", detail.c_str());
+        menu.model.optimizeStatus = line;
+        menu.model.optimizeDetail = detail;
+        menu.dirty = true;
+    }
 }
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {

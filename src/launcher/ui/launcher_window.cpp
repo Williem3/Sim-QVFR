@@ -1347,6 +1347,13 @@ float preview(float x, float y, float w, bool draw) {
         std::snprintf(saved, sizeof(saved), "%d%%", savedPercent);
     else
         std::snprintf(saved, sizeof(saved), "None (%d%% more)", -savedPercent);
+    // VRAM, scaled from the last QVFR launch's measurement (settings.h's vram_estimate).
+    const VramEstimate vram = vram_estimate(app.s, ro, app.runtime);
+    char vramText[48] = "";
+    if (vram.budgetMb > 0)
+        std::snprintf(vramText, sizeof(vramText), "%.1f GB of %.1f GB", vram.mb / 1024, vram.budgetMb / 1024);
+    else
+        std::snprintf(vramText, sizeof(vramText), "%.1f GB", vram.mb / 1024);
     const std::pair<std::wstring, std::wstring> lines[] = {
         {L"Runtime resolution", known ? dims(ro.runtime) : dash},
         {L"Outer view", known ? dims(ro.outer) : dash},
@@ -1354,6 +1361,7 @@ float preview(float x, float y, float w, bool draw) {
         {L"Pixels per frame", known ? widen(mp) : dash},
         {L"Pixels saved", known ? widen(saved) : dash},
         {L"Center PPD", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) : dash},
+        {L"VRAM (estimate)", known && vram.mb > 0 ? widen(vramText) : dash},
     };
     for (const auto& [name, value] : lines) {
         if (draw) {

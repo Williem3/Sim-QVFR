@@ -79,6 +79,9 @@ XrQuaternionf lastTurn[2] = {kNoTurn, kNoTurn};
 Views4Frame frameRing[8], lastTaken{}, lastPushed{};
 uint64_t turnsPushed = 0, turnsTaken = 0, turnResyncs = 0, turnEmptyTakes = 0;
 constexpr uint64_t kMaxTurnBacklog = 3;
+// Compositions in a row that left records behind before the backlog counts as an offset (views4_take_frame).
+constexpr uint64_t kDriftTakes = 90;
+uint64_t turnsBehind = 0;
 // Rendered-vs-located check: the outer tangents last logged per eye (logged again on a change).
 float loggedTan[2][4] = {};
 std::atomic<uint64_t> fovMismatchFrames{0};
@@ -1225,6 +1228,13 @@ void views4_set_dlss_live(bool on) {
 
 bool views4_dlss_held() { return dlssHeld; }
 
+void views4_target_sizes(int (&render)[2], int (&output)[2]) {
+    render[0] = renderW.load(std::memory_order_relaxed);
+    render[1] = renderH.load(std::memory_order_relaxed);
+    output[0] = outputW.load(std::memory_order_relaxed);
+    output[1] = outputH.load(std::memory_order_relaxed);
+}
+
 void views4_set_screen_size_legacy(bool legacy) { screenSizeLegacy = legacy; }
 
 void views4_set_focus_cull(bool on, double scale, bool gaze) {
@@ -1269,6 +1279,8 @@ bool views4_focus_frustum(int view, FocusFrustum& out) {
 bool views4_take_frame(Views4Frame& frame) {
     AcquireSRWLockExclusive(&turnLock);
     const bool any = turnsPushed > 0;
+    bool drifted = false;
+    uint64_t behind = 0;
     if (turnsTaken < turnsPushed) {
         // Frames filled but never composed (loading, a dropped frame) would leave every later
         // composition using an older frame's geometry: keep at most a short backlog.
@@ -1278,11 +1290,28 @@ bool views4_take_frame(Views4Frame& frame) {
         }
         lastTaken = frameRing[turnsTaken % std::size(frameRing)];
         ++turnsTaken;
+        // ACE fills a frame's focus cameras and composes it on the same thread, one after the other, so
+        // records left over after every composition for a while are not frames in flight but a lasting
+        // offset (a frame filled and never composed): each image would get an older frame's gaze turn.
+        // Then the newest record is this frame's.
+        behind = turnsPushed - turnsTaken;
+        turnsBehind = behind ? turnsBehind + 1 : 0;
+        if (turnsBehind >= kDriftTakes) {
+            lastTaken = frameRing[(turnsPushed - 1) % std::size(frameRing)];
+            turnsTaken = turnsPushed;
+            turnsBehind = 0;
+            ++turnResyncs;
+            drifted = true;
+        }
     } else if (any) {
         ++turnEmptyTakes;  // composed before this frame's focus cameras were filled: reuse the last record
+        turnsBehind = 0;
     }
     frame = lastTaken;
     ReleaseSRWLockExclusive(&turnLock);
+    if (drifted)
+        logf("views4: frame records stayed %llu behind the compositions for %llu frames: resynced to the newest",
+             static_cast<unsigned long long>(behind), static_cast<unsigned long long>(kDriftTakes));
     return any;
 }
 

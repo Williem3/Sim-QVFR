@@ -32,6 +32,6 @@ void cpu_load_render_thread(uint32_t thread);
 CpuLoad cpu_load_latest();
 // The average of every sample since the last call (the log's window: the busiest thread's share and the
 // render thread's averaged; the name and id the last sample's), and resets.
-CpuLoad cpu_load_window(int& samples, int window = 1);  // 0 the overlay's, 1 the log's
+CpuLoad cpu_load_window(int& samples, int window = 1);  // 0 the overlay's, 1 the log's, 2 the QVFR optimizer's
 
 }  // namespace aceqv

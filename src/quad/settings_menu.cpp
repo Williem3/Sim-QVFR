@@ -69,6 +69,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HelmetHeight, L"Helmet height", -kHelmetHeightMax, kHelmetHeightMax, 1},
     {MenuItem::HelmetDepth, L"Helmet depth", 0, kHelmetDepthMax, 1},
     {MenuItem::HelmetDetail, L"Helmet detail", 0, 1, 1},
+    {MenuItem::Optimize, L"Optimize for frame rate", 0, 0, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -168,6 +169,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else {
         const std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
         items.insert(items.end(), method.begin(), method.end());
+        if (menu.launch.qvfr)  // last: Up from the page switch reaches it
+            items.push_back(MenuItem::Optimize);
     }
     return items;
 }
@@ -194,6 +197,8 @@ std::wstring menu_title(const SettingsMenu& menu) {
 
 std::wstring menu_subtitle(const SettingsMenu& menu) {
     const MenuPage page = menu_page(menu);
+    if (page == MenuPage::Settings)
+        return menu.optimizeDetail;
     return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";
 }
 
@@ -208,6 +213,10 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         return false;
     }
     const MenuItem item = items[menu.selected];
+    if (item == MenuItem::Optimize) {  // the layer runs it; no value of the menu's changes
+        menu.optimizeRequest = key == MenuKey::Right ? 1 : -1;
+        return false;
+    }
     if (item == MenuItem::Page) {  // the next or previous page, with the switch still selected
         menu.page = (menu.page + (key == MenuKey::Right ? 1 : pages - 1)) % pages;
         menu.selected = 0;
@@ -516,6 +525,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
         line.selected = static_cast<int>(i) == menu.selected;
         if (items[i] == MenuItem::Page)
             line.value = page_name(menu, menu_page(menu));
+        else if (items[i] == MenuItem::Optimize)
+            line.value = menu.optimizeStatus.empty() ? L"Right: run · Left: undo" : menu.optimizeStatus;
         else if (items[i] == MenuItem::FgOn)
             line.value = c.fg ? L"On" : L"Off";
         else if (items[i] == MenuItem::FgMultiplier)
