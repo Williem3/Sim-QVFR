@@ -59,6 +59,12 @@ struct State {
     std::thread worker;
     std::atomic<bool> running{false};
     std::wstring lastReport;
+    // A worker never joined (a capture ran, none started after it) would end the process in std::terminate when
+    // this is destroyed at exit, even after it finished. At a process exit it has ended, so the join returns at once.
+    ~State() {
+        if (worker.joinable())
+            worker.join();
+    }
 };
 State state;
 
