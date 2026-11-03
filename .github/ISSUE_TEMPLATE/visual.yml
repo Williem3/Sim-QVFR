@@ -37,19 +37,19 @@ body:
     attributes:
       label: Where is it?
       options:
-        - Inside the focus area
-        - At the focus area's edge
-        - In the outer view
-        - Everywhere
-        - Only in one eye
+        - "Inside the focus area"
+        - "At the focus area's edge"
+        - "In the outer view"
+        - "Everywhere"
+        - "Only in one eye"
   - type: dropdown
     id: mirror
     attributes:
       label: Does it show on the desktop mirror too?
       options:
-        - Yes
-        - No
-        - Not sure
+        - "Yes"
+        - "No"
+        - "Not sure"
   - type: textarea
     id: files
     attributes:

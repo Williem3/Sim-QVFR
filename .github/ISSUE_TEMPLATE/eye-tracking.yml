@@ -43,9 +43,9 @@ body:
     attributes:
       label: Did you calibrate the eye tracker before the session?
       options:
-        - Yes
-        - No
-        - Not sure
+        - "Yes"
+        - "No"
+        - "Not sure"
   - type: textarea
     id: files
     attributes:

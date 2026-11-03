@@ -37,18 +37,18 @@ body:
     attributes:
       label: How does it stop?
       options:
-        - The game closes
-        - The game freezes (the window stops responding)
-        - The headset shows nothing or goes grey
-        - Something else
+        - "The game closes"
+        - "The game freezes (the window stops responding)"
+        - "The headset shows nothing or goes grey"
+        - "Something else"
   - type: dropdown
     id: every
     attributes:
       label: Does it happen every time?
       options:
-        - Every time
-        - Sometimes
-        - Once so far
+        - "Every time"
+        - "Sometimes"
+        - "Once so far"
   - type: textarea
     id: files
     attributes:
