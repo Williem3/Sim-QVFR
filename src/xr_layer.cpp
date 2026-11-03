@@ -42,6 +42,7 @@
 #include "probe/vram_census.h"
 #include "quad/compositor.h"
 #include "quad/focus_offset.h"
+#include "quad/gaze_deadzone.h"
 #include "quad/focus_outline.h"
 #include "quad/menu_panel.h"
 #include "quad/osd.h"
@@ -173,6 +174,9 @@ struct Experiment {
     int gazePollHz = 250;
     // The focus box's vertical offset, degrees up (focus_offset.h): fixed, and added to a tracked gaze.
     std::atomic<int> fixedOffsetY = 0, gazeOffsetY = 0;
+    // [quad] gaze_deadzone: the focus box holds still while the gaze stays this many degrees of where it
+    // aims, so tracker noise does not turn the focus cameras every frame (MSAA shimmer in the box).
+    std::atomic<double> gazeDeadzone = 1.5;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
     bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (probe/batch_watch.h)
@@ -191,6 +195,7 @@ struct LiveSettings {
     double focusFraction = 0.35, focusFractionY = 0, feather = 0.10, cornerRadius = 0;
     bool border = false, gaze = true;
     FocusOffset offset;
+    double gazeDeadzone = 1.5;  // degrees
     float borderColor[4] = {0, 1, 0, 1};
     FovCrop crop;  // views4 only
     HelmetSettings helmet;  // views4 composing only
@@ -224,6 +229,7 @@ LiveSettings read_live(const wchar_t* ini) {
         std::memcpy(l.borderColor, tealColor, sizeof(tealColor));
     l.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini) != 0;
     l.offset = read_focus_offset(ini);
+    l.gazeDeadzone = read_gaze_deadzone(ini) / 10.0;
     return l;
 }
 
@@ -376,6 +382,7 @@ void load_experiment() {
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"gaze_poll_hz", 250, ini.c_str())), 30, 1000);
     experiment.fixedOffsetY = settings.offset.fixed;
     experiment.gazeOffsetY = settings.offset.gaze;
+    experiment.gazeDeadzone = settings.gazeDeadzone;
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());
@@ -860,6 +867,42 @@ bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& directio
         return false;
     direction = gazeThread.direction;
     return true;
+}
+
+// The gaze the focus box aims at (ACE's render thread only): held while the tracked gaze stays within
+// gaze_deadzone of it, so a fixation keeps the focus cameras still, and moved to the gaze at once when it
+// leaves (a saccade). Held in the located space, so a fixation on the scene holds through a head turn.
+struct GazeHold {
+    XrVector3f direction{0, 0, -1};
+    bool held = false;
+    std::atomic<uint64_t> samples = 0, moves = 0;  // for the log (gaze_hold_report)
+};
+GazeHold gazeHold;
+
+// `direction` (unit, from gaze_now or gaze_direction) replaced by the held gaze; `tracked` false drops the hold.
+void steady_gaze(bool tracked, XrVector3f& direction) {
+    if (!tracked) {
+        gazeHold.held = false;
+        return;
+    }
+    const XrVector3f& h = gazeHold.direction;
+    const double cosAngle = std::clamp(static_cast<double>(h.x * direction.x + h.y * direction.y + h.z * direction.z), -1.0, 1.0);
+    const double deadzone = experiment.gazeDeadzone.load(std::memory_order_relaxed) * 3.14159265358979 / 180;
+    ++gazeHold.samples;
+    if (!gazeHold.held || std::acos(cosAngle) > deadzone) {
+        gazeHold.direction = direction;
+        gazeHold.held = true;
+        ++gazeHold.moves;
+    }
+    direction = gazeHold.direction;
+}
+
+// For the log, every report: how often the held gaze moved, of the tracked frames since the last one.
+void gaze_hold_report() {
+    const uint64_t samples = gazeHold.samples.exchange(0), moves = gazeHold.moves.exchange(0);
+    if (samples)
+        logf("gaze dead-zone %.1f deg: the focus box moved on %llu of %llu tracked frames (%.0f%%)",
+             experiment.gazeDeadzone.load(), moves, samples, 100.0 * moves / samples);
 }
 
 // For the log, every report: the gaze thread's lookups since the last one.
@@ -1353,6 +1396,7 @@ void report_cpu_times() {
     report_vram();
     write_session_summary(layerMs);
     gaze_thread_report(frameMs * kCpuReportFrames / 1000);
+    gaze_hold_report();
 }
 
 bool is_ace_process() {
@@ -2418,6 +2462,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             bool valid[2] = {};
             XrVector3f direction{0, 0, -1};
             const bool gazing = experiment.gaze && gaze_now(session, info->space, info->displayTime, direction);
+            steady_gaze(gazing, direction);
             const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
             for (int e = 0; e < 2; ++e) {
                 if (gazing) {
@@ -2441,6 +2486,8 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
         XrVector3f direction{0, 0, -1};
         const bool gazing = experiment.quad && experiment.gaze &&
                             gaze_direction(session, info->space, info->displayTime, direction);
+        if (experiment.quad)
+            steady_gaze(gazing, direction);
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             const XrFovf before = views[i].fov;
             double tanX = 0, tanY = 0;
@@ -2639,6 +2686,7 @@ void live_apply(const LiveSettings& l) {
     experiment.gaze = l.gaze;
     experiment.fixedOffsetY = l.offset.fixed;
     experiment.gazeOffsetY = l.offset.gaze;
+    experiment.gazeDeadzone = l.gazeDeadzone;
     bool gazeAvailable;
     {
         std::lock_guard guard(gaze.mutex);
@@ -2650,9 +2698,9 @@ void live_apply(const LiveSettings& l) {
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.views4Compose);
     logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
-         "gaze %d deg",
+         "gaze %d deg, gaze dead-zone %.1f deg",
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
-         l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze);
+         l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
     if (experiment.views4)
         live_resolution(l);
     if (l.gaze && !gazeAvailable && (experiment.quad || experiment.views4Compose))
@@ -3780,7 +3828,8 @@ void cpu_profile_poll() {
                       (GetAsyncKeyState('C') & 0x8000);
     const bool pressed = held && !cpuProfileHotkeyHeld;
     cpuProfileHotkeyHeld = held;
-    if (!pressed && endFrames != experiment.cpuProfileFrame)
+    // cpu_profile_frame=0 is no capture by itself, not one at the session's first frame.
+    if (!pressed && (experiment.cpuProfileFrame == 0 || endFrames != experiment.cpuProfileFrame))
         return;
     if (cpu_profile_running()) {
         log_line("cpu profile: a capture is running already");

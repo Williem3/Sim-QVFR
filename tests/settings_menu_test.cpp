@@ -26,20 +26,20 @@ void check(bool ok, const char* what) {
 int main() {
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
-    check(menu_items(true).size() == 9 && menu_items(false).size() == 7 &&
+    check(menu_items(true).size() == 10 && menu_items(false).size() == 8 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
-    check(menu_page_items(m).size() == 11 && menu_page_items(m).front() == MenuItem::Page &&
+    check(menu_page_items(m).size() == 12 && menu_page_items(m).front() == MenuItem::Page &&
               menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 4,
           "the first page: the page switch, the method's items, then Optimize; four pages without Cheeky (QVFR: View crop, Helmet)");
     {
         SettingsMenu loop;
         loop.launch.qvfr = false;
-        check(menu_page_items(loop).back() == MenuItem::FocusOffset, "Two-loop: no Optimize");
+        check(menu_page_items(loop).back() == MenuItem::GazeDeadzone, "Two-loop: no Optimize");
     }
 
     menu_key(m, MenuKey::Up);
-    check(m.selected == 10, "Up from the first item wraps to the last (Optimize)");
+    check(m.selected == 11, "Up from the first item wraps to the last (Optimize)");
     {
         SettingsMenu o = m;
         const MenuValues before = o.values;
@@ -191,7 +191,7 @@ int main() {
     SettingsMenu shown;
     shown.selected = 2;
     const std::vector<MenuLine> lines = menu_lines(shown);
-    check(lines.size() == 11 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
+    check(lines.size() == 12 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
               lines[2].label == L"Focus density" && lines[2].value == L"100%" && lines[8].value == L"On" &&
               lines[9].label == L"Focus up / down" && lines[9].value == L"0°",
           "lines carry labels, values and the selection");
@@ -221,6 +221,31 @@ int main() {
         check(std::abs(offset_tan_y(0, 0)) < 1e-9 && std::abs(offset_tan_y(0, 45) - 1) < 1e-9 &&
                   std::abs(offset_tan_y(1, -45)) < 1e-9 && std::abs(offset_tan_y(std::tan(0.5), 10) - std::tan(0.5 + 3.14159265358979 / 18)) < 1e-9,
               "offset_tan_y turns the tangent by the angle");
+    }
+
+    // The gaze dead-zone: tenths of a degree, 0.5 a step, written to [quad] gaze_deadzone as degrees.
+    {
+        SettingsMenu d;
+        d.selected = 10;
+        check(menu_lines(d)[10].label == L"Gaze dead-zone" && menu_lines(d)[10].value == L"1.5°", "the dead-zone at 1.5° by default");
+        check(menu_key(d, MenuKey::Right) && d.values.gazeDeadzone == 20 && menu_lines(d)[10].value == L"2.0°", "it steps by 0.5°");
+        for (int i = 0; i < 10; ++i)
+            menu_key(d, MenuKey::Left);
+        check(d.values.gazeDeadzone == 0 && menu_lines(d)[10].value == L"Off (follows every sample)", "down to 0: off");
+        d.values.eyeTracking = false;
+        check(menu_lines(d)[10].value == L"Eye tracking off", "and says so without eye tracking");
+        const std::wstring deadzoneIni = std::wstring(temp) + L"ace-quadview-menu-test-deadzone.ini";
+        DeleteFileW(deadzoneIni.c_str());
+        check(read_gaze_deadzone(deadzoneIni.c_str()) == kGazeDeadzoneDefault, "unset reads as the default");
+        d.values.gazeDeadzone = 25;
+        write_menu_values(deadzoneIni.c_str(), d.values, true);
+        wchar_t text[16] = {};
+        GetPrivateProfileStringW(L"quad", L"gaze_deadzone", L"", text, 16, deadzoneIni.c_str());
+        check(std::wstring(text) == L"2.5" && read_menu_values(deadzoneIni.c_str()).gazeDeadzone == 25,
+              "written as degrees (2.5) and read back");
+        WritePrivateProfileStringW(L"quad", L"gaze_deadzone", L"9", deadzoneIni.c_str());
+        check(read_gaze_deadzone(deadzoneIni.c_str()) == kGazeDeadzoneMax, "out-of-range clamps to 5°");
+        DeleteFileW(deadzoneIni.c_str());
     }
 
     // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
@@ -306,7 +331,7 @@ int main() {
         c.launch = {true, 50, 39, 39};
         check(menu_pages(c).size() == 4 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
-        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 11 && menu_page_items(c).front() == MenuItem::Page &&
+        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
               "with Cheeky: six pages, the first the QVFR items under the page switch");
         check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"View crop", "then the View crop page");

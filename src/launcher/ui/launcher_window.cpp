@@ -39,7 +39,7 @@ namespace t = tokens;
 enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, About };
 constexpr int kPanes = 9;
 enum Ctl {
-    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kOutline, kColor, kFeather, kMenuYaw,
+    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
@@ -222,6 +222,7 @@ int* slider_value(Ctl id) {
     case kFeather: return &app.s.feather;
     case kCorner: return &app.s.corner;
     case kFocusOffset: return &app.s.offset.for_mode(app.s.eyeTracking);
+    case kGazeDeadzone: return &app.s.gazeDeadzone;
     case kMenuYaw: return &app.s.menuYaw;
     case kMenuPitch: return &app.s.menuPitch;
     case kMenuWidth: return &app.s.menuWidth;
@@ -252,6 +253,7 @@ Range slider_range(Ctl id) {
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
     case kFocusOffset: return kFocusOffsetRange;
+    case kGazeDeadzone: return kGazeDeadzoneRange;
     case kMenuYaw: return kMenuYawRange;
     case kMenuPitch: return kMenuPitchRange;
     case kMenuWidth: return kMenuWidthRange;
@@ -293,7 +295,11 @@ std::vector<Ctl> focus_order() {
                                            kHelmetDepth, kHelmetDetail});
         }
         break;
-    case Pane::Foveation: order.insert(order.end(), {kWidth, kHeight, kCorner, kFocusOffset}); break;
+    case Pane::Foveation:
+        order.insert(order.end(), {kWidth, kHeight, kCorner, kFocusOffset});
+        if (app.s.eyeTracking)
+            order.push_back(kGazeDeadzone);
+        break;
     case Pane::Overlay:
         order.push_back(kOutline);
         if (app.s.outline)
@@ -400,8 +406,9 @@ void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disable
 }
 
 // The kit's PercentSlider: track, value readout (in `unit`) and an optional detail line. Height 20 (+16 with detail).
+// `tenths`: the value is in tenths, shown with one decimal ("1.5°").
 void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
-            const wchar_t* unit = L"%") {
+            const wchar_t* unit = L"%", bool tenths = false) {
     const float valueW = 40, trackW = r.w - valueW - t::kSpace3;
     const Rect track{r.x, r.y, trackW, 20};
     const float knob = 18, travel = track.w - knob;
@@ -419,7 +426,7 @@ void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& d
     app.canvas.stroke(k, col(app.c->control_border), 1, knob / 2);
     if (focused(id))
         app.canvas.circle(k.x + knob / 2, k.y + knob / 2, knob / 2 + 1.5f, col(app.c->focus_ring), false, 3);
-    app.canvas.text(std::to_wstring(value) + unit, t::kValue, {track.right() + t::kSpace3, r.y, valueW, 20},
+    app.canvas.text((tenths ? gaze_deadzone_text(value) : std::to_wstring(value)) + unit, t::kValue, {track.right() + t::kSpace3, r.y, valueW, 20},
                     col(disabled ? app.c->label_tertiary : app.c->label), Align::Trailing);
     if (!detail.empty())
         app.canvas.text(detail, t::kSubheadline, {r.x, r.y + 22, r.w, 14}, col(disabled ? app.c->label_tertiary : app.c->label_secondary));
@@ -603,7 +610,7 @@ Row choice_row(Ctl id, const std::wstring& label, const std::wstring* names, int
 }
 
 Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int value, const std::wstring& detail,
-               bool disabled = false, const wchar_t* unit = L"%") {
+               bool disabled = false, const wchar_t* unit = L"%", bool tenths = false) {
     Row row;
     row.label = label;
     row.desc = desc;
@@ -611,7 +618,7 @@ Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int 
     row.controlH = detail.empty() ? 20.0f : 36.0f;
     row.disabled = disabled;
     const Range range = slider_range(id);
-    row.control = [=](const Rect& r) { slider(id, r, value, range, detail, disabled, unit); };
+    row.control = [=](const Rect& r) { slider(id, r, value, range, detail, disabled, unit, tenths); };
     return row;
 }
 
@@ -1169,9 +1176,13 @@ float pane_content(float x, float y, float w, bool draw) {
                                        app.s.offset.gaze, L"", false, L"°")
                           : slider_row(kFocusOffset, L"Vertical position",
                                        L"Raises (+) or lowers (−) the fixed focus region, e.g. toward the road or the dash.",
-                                       app.s.offset.fixed, L"", false, L"°")},
+                                       app.s.offset.fixed, L"", false, L"°"),
+                      slider_row(kGazeDeadzone, L"Gaze dead-zone",
+                                 L"How far your gaze moves before the focus region follows. Higher holds it steadier "
+                                 L"against eye-tracker jitter (shimmer with MSAA); 0 follows every sample.",
+                                 app.s.gazeDeadzone, L"", !app.s.eyeTracking, L"°", true)},
                      L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
-                     L"vertical offset; it applies live.",
+                     L"vertical offset. All apply live.",
                      draw);
         break;
     }
