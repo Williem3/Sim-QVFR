@@ -82,10 +82,9 @@ QvfrValues qvfr_values_for(double pixels, const QvfrValues& start, const QvfrLim
     return v;
 }
 
-void QvfrOptimizer::start(const QvfrValues& current, const QvfrLimits& limits, bool held, double targetShare) {
+void QvfrOptimizer::start(const QvfrValues& current, const QvfrLimits& limits, double targetShare) {
     limits_ = limits;
     start_ = current_ = current;
-    held_ = held;
     targetShare_ = std::clamp(targetShare, 0.5, 0.98);
     started_ = true;
     steps_ = 0;
@@ -199,11 +198,6 @@ QvfrAction QvfrOptimizer::step(double gpu, double budget) {
     }
     current_ = next;
     ++steps_;
-    if (held_) {
-        const double predicted = fixed + perPixel * qvfr_pixels(next, limits_.cropWidth, limits_.cropHeight);
-        finish(QvfrState::Done, measured + L"; about " + ms(predicted) + L" ms at the next launch (DLSS holds sizes)");
-        return {true, next};
-    }
     state_ = QvfrState::Settling;
     windows_ = 0;
     status_ = L"Step " + std::to_wstring(steps_) + L": " + measured + L", trying periphery " +

@@ -444,6 +444,24 @@ int main() {
                   r.target.width == 4600 && r.target.height == 1080 && std::abs(r.pixels / 1e6 - 4.49) < 0.005 &&
                   !r.overRuntimeLimit,
               "readouts: the kit's example numbers (QVFR.viewPixels)");
+        // VRAM: none before a QVFR launch measures it; then the part that follows ACE's target scales with
+        // the target's area (here the same target, then one with half the area) and the rest stays.
+        check(vram_estimate(Settings{}, r, rt).mb == 0, "vram estimate: none before a launch reports it");
+        write_file(runtimeIni, "[runtime]\r\nrecommended_width=2584\r\nrecommended_height=2160\r\nvram_used_mb=9000\r\n"
+                               "vram_budget_mb=15000\r\nvram_scaled_mb=2000\r\nvram_target=4600x1080\r\n");
+        const RuntimeInfo withVram = load_runtime_info(runtimeIni);
+        check(withVram.vramUsedMb == 9000 && withVram.vramBudgetMb == 15000 && withVram.vramScaledMb == 2000 &&
+                  withVram.vramTarget.width == 4600 && withVram.vramTarget.height == 1080,
+              "runtime report: VRAM used, budget, the part that follows the target and its size");
+        const VramEstimate same = vram_estimate(Settings{}, r, withVram);
+        check(std::abs(same.mb - 9000) < 1e-6 && same.budgetMb == 15000, "vram estimate: at the launch's target, what it measured");
+        Readouts half = r;
+        half.target = {2300, 1080};
+        check(std::abs(vram_estimate(Settings{}, half, withVram).mb - 8000) < 1e-6,
+              "vram estimate: half the target's area, half of the 2000 MB that follows it (9000 -> 8000)");
+        Settings twoLoop;
+        twoLoop.mode = RenderMode::TwoLoop;
+        check(vram_estimate(twoLoop, r, withVram).mb == 0, "vram estimate: QVFR only");
         Settings wide;
         wide.outer = 100;
         wide.inner = 200;

@@ -23,8 +23,8 @@ struct Worker {
     bool stop = false, running = false;
     CpuLoad latest;
     std::atomic<uint32_t> render{0};
-    double busiestSum[2] = {}, renderSum[2] = {}, processSum[2] = {};  // cpu_load_window's, per window
-    int samples[2] = {}, renderSamples[2] = {};
+    double busiestSum[3] = {}, renderSum[3] = {}, processSum[3] = {};  // cpu_load_window's, per window
+    int samples[3] = {}, renderSamples[3] = {};
 };
 Worker worker;
 
@@ -88,7 +88,7 @@ void run() {
         lock.lock();
         worker.latest = load;
         if (load.valid)
-            for (int w = 0; w < 2; ++w) {
+            for (int w = 0; w < 3; ++w) {
                 worker.busiestSum[w] += load.busiestPercent;
                 worker.processSum[w] += load.processPercent;
                 ++worker.samples[w];
@@ -161,7 +161,7 @@ CpuLoad cpu_load_latest() {
 
 CpuLoad cpu_load_window(int& samples, int window) {
     std::lock_guard guard(worker.mutex);
-    const int w = window == 0 ? 0 : 1;
+    const int w = window == 0 || window == 2 ? window : 1;
     CpuLoad load = worker.latest;
     samples = worker.samples[w];
     load.valid = samples > 0;

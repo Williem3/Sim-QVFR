@@ -85,6 +85,11 @@ LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo);
 // views); Two-loop's resolution unchanged.
 bool fits_launch(const Settings& settings, const LaunchSizes& launch);
 
+// A size in pixels.
+struct Size {
+    int width = 0, height = 0;
+};
+
 // What the layer reported from the last session (runtime.ini): the headset's recommended per-eye
 // size and runtime maximum (0 = not known yet), and whether eye tracking delivered samples.
 enum class EyeTracker { Unknown, Detected, Missing };
@@ -94,6 +99,10 @@ struct RuntimeInfo {
     EyeTracker eyeTracker = EyeTracker::Unknown;
     // Cheeky at the last launch: off, missing, refused or running (empty: no launch yet), and its version.
     std::wstring cheekyStatus, cheekyVersion;
+    // VRAM at the last QVFR launch (the layer's vram census): this process's use and Windows' budget for it,
+    // MB; the part of it in render targets that follow ACE's target, and that target's size (0: none yet).
+    double vramUsedMb = 0, vramBudgetMb = 0, vramScaledMb = 0;
+    Size vramTarget;
     bool known() const { return width > 0 && height > 0; }
 };
 
@@ -109,9 +118,6 @@ RuntimeInfo load_runtime_info(const std::wstring& path);
 
 // The kit's readouts for a recommended per-eye size: view sizes in px, ACE's double-wide target and
 // the pixels rendered per headset frame (Two-loop: both frames) against the runtime's own.
-struct Size {
-    int width = 0, height = 0;
-};
 struct Readouts {
     Size runtime;              // the runtime's recommended eye, before the layer changes it
     Size outer, focus, target;
@@ -123,6 +129,14 @@ struct Readouts {
     bool overRuntimeLimit = false;  // the offered eye is wider or taller than the runtime's maximum
 };
 Readouts readouts(const Settings& settings, const RuntimeInfo& runtime);
+
+// VRAM at `settings` (QVFR), from the last launch's measurement: ACE's render targets that follow its
+// target scale with the target's area, the rest of its use stays. `mb` 0: not known (no QVFR launch yet,
+// or Two-loop). Measured on whatever track and cars that launch loaded, so a heavier one adds to it.
+struct VramEstimate {
+    double mb = 0, budgetMb = 0;
+};
+VramEstimate vram_estimate(const Settings& settings, const Readouts& readouts, const RuntimeInfo& runtime);
 
 const wchar_t* color_name(OutlineColor color);
 

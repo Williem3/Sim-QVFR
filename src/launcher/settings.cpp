@@ -267,6 +267,10 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.eyeTracker = eye == 1 ? EyeTracker::Detected : eye == 0 ? EyeTracker::Missing : EyeTracker::Unknown;
     r.cheekyStatus = read_string(path, L"runtime", L"cheeky_status");
     r.cheekyVersion = read_string(path, L"runtime", L"cheeky_version");
+    r.vramUsedMb = read_int(path, L"runtime", L"vram_used_mb", 0);
+    r.vramBudgetMb = read_int(path, L"runtime", L"vram_budget_mb", 0);
+    r.vramScaledMb = read_int(path, L"runtime", L"vram_scaled_mb", 0);
+    swscanf_s(read_string(path, L"runtime", L"vram_target").c_str(), L"%dx%d", &r.vramTarget.width, &r.vramTarget.height);
     return r;
 }
 
@@ -310,6 +314,18 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
     r.saved = r.runtimePixels > 0 ? 1.0 - r.pixels / r.runtimePixels : 0;
     r.centerPpd = runtime.centerPpd * r.focusDensity * sx;  // a runtime-maximum clamp lowers the density too
     return r;
+}
+
+VramEstimate vram_estimate(const Settings& s, const Readouts& r, const RuntimeInfo& runtime) {
+    VramEstimate e;
+    const double launchArea = static_cast<double>(runtime.vramTarget.width) * runtime.vramTarget.height;
+    if (s.mode != RenderMode::Qvfr || runtime.vramUsedMb <= 0 || launchArea <= 0)
+        return e;
+    const double area = static_cast<double>(r.target.width) * r.target.height;
+    const double scaled = std::min(runtime.vramScaledMb, runtime.vramUsedMb);
+    e.mb = runtime.vramUsedMb - scaled + scaled * area / launchArea;
+    e.budgetMb = runtime.vramBudgetMb;
+    return e;
 }
 
 }  // namespace aceqv::launcher

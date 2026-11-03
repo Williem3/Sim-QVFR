@@ -83,7 +83,7 @@ int main() {
         sim.values = start;
         sim.perPixel = (12.5 - sim.fixed) / qvfr_pixels(start);
         QvfrOptimizer o;
-        o.start(start, limits, false);
+        o.start(start, limits);
         int applies = 0;
         run(o, sim, &applies);
         const double target = QvfrOptimizer::kTargetShare * 11.111;
@@ -102,7 +102,7 @@ int main() {
         sim.fixed = 9;
         sim.perPixel = (12.0 - sim.fixed) / qvfr_pixels(start);
         QvfrOptimizer o;
-        o.start(start, limits, false);
+        o.start(start, limits);
         run(o, sim);
         const double target = QvfrOptimizer::kTargetShare * 11.111;
         check(o.state() == QvfrState::Done && sim.gpu() <= target, "mostly fixed cost: it still ends under the target");
@@ -112,7 +112,7 @@ int main() {
         sim.values = start;
         sim.perPixel = (9.4 - sim.fixed) / qvfr_pixels(start);
         QvfrOptimizer o;
-        o.start(start, limits, false);
+        o.start(start, limits);
         int applies = 0;
         run(o, sim, &applies);
         check(o.state() == QvfrState::Done && applies == 0, "already in the band: done, nothing changed");
@@ -124,7 +124,7 @@ int main() {
         QvfrLimits l;
         l.ceiling = {100, 200, 100, 100};
         QvfrOptimizer o;
-        o.start(start, l, false);
+        o.start(start, l);
         run(o, sim);
         check(sim.values.density > start.density && sim.gpu() <= QvfrOptimizer::kTargetShare * 11.111,
               "headroom: it raises the values and stays under the target");
@@ -134,7 +134,7 @@ int main() {
         sim.values = start;
         sim.perPixel = (40.0 - sim.fixed) / qvfr_pixels(start);
         QvfrOptimizer o;
-        o.start(start, limits, false);
+        o.start(start, limits);
         run(o, sim);
         check(o.state() == QvfrState::Done && sim.values.periphery == 25 && sim.values.density == 80 &&
                   o.status().find(L"floors") != std::wstring::npos,
@@ -146,31 +146,19 @@ int main() {
         sim.perPixel = (12.5 - sim.fixed) / qvfr_pixels(start);
         sim.cpuBound = true;
         QvfrOptimizer o;
-        o.start(start, limits, false);
+        o.start(start, limits);
         int applies = 0;
         run(o, sim, &applies);
         check(o.state() == QvfrState::Failed && applies == 0 && o.status().find(L"CPU") != std::wstring::npos,
               "CPU limited: nothing changes, and it says why");
     }
     {
-        Sim sim;
-        sim.values = start;
-        sim.perPixel = (12.5 - sim.fixed) / qvfr_pixels(start);
         QvfrOptimizer o;
-        o.start(start, limits, true);
-        int applies = 0;
-        run(o, sim, &applies);
-        check(o.state() == QvfrState::Done && applies == 1 && sim.values.periphery < start.periphery &&
-                  o.status().find(L"next launch") != std::wstring::npos,
-              "DLSS holding the sizes: one step, for the next launch");
-    }
-    {
-        QvfrOptimizer o;
-        o.start(start, limits, false);
+        o.start(start, limits);
         for (int i = 0; i < QvfrOptimizer::kMeasureWindows; ++i)
             o.feed({-1, -1, 11.111, false, 0});
         check(o.state() == QvfrState::Failed, "no GPU timing: it fails instead of guessing");
-        o.start(start, limits, false);
+        o.start(start, limits);
         o.cancel();
         check(o.state() == QvfrState::Idle && !o.running(), "cancel stops it");
     }

@@ -12,8 +12,8 @@
 // box; raising (headroom left), the other way round, up to `ceiling`. A pixel count maps to one set of
 // values (qvfr_values_for), the same however the search got there.
 //
-// With DLSS on, the views keep their launch sizes (views4_dlss_held): nothing can be measured live, so
-// one step from the first measurement is written for the next launch (held).
+// It needs live resolution: the layer does not start it while DLSS holds the views at their launch sizes
+// (views4_dlss_held; views4_dlss_live lifts that).
 #pragma once
 
 #include <string>
@@ -44,7 +44,7 @@ QvfrValues qvfr_values_for(double pixels, const QvfrValues& start, const QvfrLim
 
 // One measurement window (about half a second of frames).
 struct QvfrWindow {
-    double gpuMs = -1;     // ACE's GPU time per frame, 90th percentile (-1: not timed)
+    double gpuMs = -1;     // GPU time per ACE frame: the whole GPU's when known, else ACE's queue (-1: not timed)
     double cpuMs = -1;     // the render thread's work per frame (-1: unknown)
     double budgetMs = 0;   // the frame budget (the display period; 0: unknown)
     bool cpuBound = false; // the overlay's rule says the CPU limits the frame
@@ -68,9 +68,8 @@ public:
     static constexpr int kMeasureWindows = 4;      // then this many are measured (about 2 s)
     static constexpr int kMaxSteps = 5;
 
-    // Starts from the values in effect. `held`: DLSS keeps the launch sizes (one step, for the next launch).
-    // `targetShare`: of the budget ([optimize] target_percent).
-    void start(const QvfrValues& current, const QvfrLimits& limits, bool held, double targetShare = kTargetShare);
+    // Starts from the values in effect. `targetShare`: of the budget ([optimize] target_percent).
+    void start(const QvfrValues& current, const QvfrLimits& limits, double targetShare = kTargetShare);
     // Back to the values it started from (the layer applies them); Idle.
     QvfrAction undo();
     void cancel();
@@ -93,7 +92,7 @@ private:
     QvfrState state_ = QvfrState::Idle;
     QvfrLimits limits_;
     QvfrValues start_, current_;
-    bool held_ = false, started_ = false;
+    bool started_ = false;
     double targetShare_ = kTargetShare;
     int windows_ = 0, steps_ = 0;
     double gpuSum_ = 0, cpuSum_ = 0, budget_ = 0;

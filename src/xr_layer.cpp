@@ -38,6 +38,7 @@
 #include "probe/batch_watch.h"
 #include "probe/hang_watch.h"
 #include "probe/probe.h"
+#include "probe/vram_census.h"
 #include "quad/compositor.h"
 #include "quad/focus_offset.h"
 #include "quad/focus_outline.h"
@@ -983,6 +984,45 @@ void report_load(double frameMs) {
     logf("views4 load: %s; %s%s (%d and %d samples)", gpuText, cpuText, shown, gpuSamples, cpuSamples);
 }
 
+uint64_t ini_write_later(std::function<void()> write);  // (below)
+
+// VRAM (views4): this process's use of the GPU's local memory and the census of ACE's render targets
+// (probe/vram_census.h) against its render and output sizes, logged and written to the runtime info, where
+// the launcher scales the part that follows the targets to estimate other settings (launcher/settings.h).
+IDXGIAdapter3* vramAdapter = nullptr;
+void report_vram() {
+    int render[2], output[2];
+    views4_target_sizes(render, output);
+    if (output[0] <= 0 || !quad.device)
+        return;
+    if (!vramAdapter) {
+        IDXGIFactory4* factory = nullptr;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+            if (FAILED(factory->EnumAdapterByLuid(quad.device->GetAdapterLuid(), IID_PPV_ARGS(&vramAdapter))))
+                vramAdapter = nullptr;
+            factory->Release();
+        }
+        if (!vramAdapter)
+            return;
+    }
+    DXGI_QUERY_VIDEO_MEMORY_INFO memory{};
+    if (FAILED(vramAdapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &memory)))
+        return;
+    const VramCensus c = vram_census(render[0], render[1], output[0], output[1]);
+    constexpr double kMb = 1024.0 * 1024.0;
+    logf("vram: %.0f MB used of %.0f MB; render targets %.0f MB that follow the %dx%d render and %dx%d output "
+         "targets (%zu textures), %.0f MB other (%zu)",
+         memory.CurrentUsage / kMb, memory.Budget / kMb, c.scaledBytes / kMb, render[0], render[1], output[0],
+         output[1], c.scaledTextures, c.otherBytes / kMb, c.otherTextures);
+    ini_write_later([used = memory.CurrentUsage / kMb, budget = memory.Budget / kMb, scaled = c.scaledBytes / kMb,
+                     w = output[0], h = output[1]] {
+        runtime_info(L"vram_used_mb", std::to_wstring(std::lround(used)));
+        runtime_info(L"vram_budget_mb", std::to_wstring(std::lround(budget)));
+        runtime_info(L"vram_scaled_mb", std::to_wstring(std::lround(scaled)));
+        runtime_info(L"vram_target", std::to_wstring(w) + L"x" + std::to_wstring(h));
+    });
+}
+
 void report_cpu_times() {
     const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
         const uint64_t n = total.calls.exchange(0), t = total.ticks.exchange(0), m = total.maxTicks.exchange(0);
@@ -1007,6 +1047,7 @@ void report_cpu_times() {
     const double frameMs = report_pacing();
     gpu_frame_timer_report();  // its own samples: it logs while the overlay collects too
     report_load(frameMs);
+    report_vram();
 }
 
 bool is_ace_process() {
@@ -1083,6 +1124,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
             if (experiment.probes)
                 d3d12_trace_start(d3d12->device);
+            if (experiment.views4)  // before ACE makes its renderer: what VRAM follows the resolution
+                vram_census_start(d3d12->device);
             if (experiment.dred)
                 dred_watch(d3d12->device);
             if ((experiment.passCensus || experiment.uavBarriers) && pass_census_start(d3d12->device)) {
@@ -1649,13 +1692,15 @@ void log_helmet_light() {
 // both eyes into the output chain at native size, on ACE's queue, before ACE releases the image.
 void views4_compose() {
     quad.v4Composed = false;
+    // What this frame's views were rendered with (ACE's own eye projections, the focus boxes and
+    // turns, views4.h); before the first focus cameras are filled, the located FOV, unturned.
+    // Taken before anything can skip this frame: a frame filled but not taken would leave every later
+    // composition a frame behind, its focus placed by an older gaze (focus lagging the eyes, 2026-11-02).
+    Views4Frame frame{};
+    const bool recorded = views4_take_frame(frame);
     if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
         return;
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
-    // What this frame's views were rendered with (ACE's own eye projections, the focus boxes and
-    // turns, views4.h); before the first focus cameras are filled, the located FOV, unturned.
-    Views4Frame frame{};
-    const bool recorded = views4_take_frame(frame);
     XrQuaternionf turns[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
@@ -3259,8 +3304,9 @@ void optimize_apply(const QvfrValues& q) {
 
 void optimize_start(int64_t now) {
     optimize.note.clear();
-    if (cheeky_running() && osd.cheeky.processing && osd.cheeky.fg) {
-        optimize.note = L"Turn frame generation off to optimize the resolution";
+    // It measures what each step does, so the views must resize live (with DLSS: views4_dlss_live).
+    if (views4_dlss_held()) {
+        optimize.note = L"DLSS holds the view sizes until the next launch: set views4_dlss_live=1 to optimize live";
         return;
     }
     int nativeW = 0;
@@ -3272,7 +3318,10 @@ void optimize_start(int64_t now) {
         }
         nativeW = static_cast<int>(quad.nativeW);
     }
-    gpu_frame_timer_collect_optimizer();  // drop what the window gathered before the run
+    gpu_frame_timer_collect_optimizer();  // drop what the windows gathered before the run
+    int samples = 0;
+    gpu_load_window(samples, 2);
+    cpu_load_window(samples, 2);
     optimize.frames.clear();
     optimize.nextWindow = now + qpc_ms(kOptimizeWindowMs);
     const wchar_t* ini = live.ini.c_str();
@@ -3288,35 +3337,44 @@ void optimize_start(int64_t now) {
     limits.cropWidth = v.crop_width();
     limits.cropHeight = v.crop_height();
     limits.nativeWidth = nativeW;
-    const bool held = views4_dlss_held();
-    if (!held) {  // live: the views fit in the launch target (views4_live), at most their launch sizes
-        limits.ceiling.periphery = static_cast<int>(l.outer);
-        limits.ceiling.density = static_cast<int>(std::min(l.focusWidth * 100 / v.width, l.focusHeight * 100 / v.height));
-        if (nativeW > 0)
-            limits.maxTargetWidth =
-                static_cast<int>(2.0 * nativeW * (l.outer * l.cropWidth / 1e4 + l.focusWidth / 100));
-    }
+    // The views fit in the launch target (views4_live), at most their launch sizes.
+    limits.ceiling.periphery = static_cast<int>(l.outer);
+    limits.ceiling.density = static_cast<int>(std::min(l.focusWidth * 100 / v.width, l.focusHeight * 100 / v.height));
+    if (nativeW > 0)
+        limits.maxTargetWidth = static_cast<int>(2.0 * nativeW * (l.outer * l.cropWidth / 1e4 + l.focusWidth / 100));
     // From what is in effect (a value above the launch size renders at what fits).
     const MenuFit fit = menu_fit(menu.model);
     const QvfrValues current{static_cast<int>(std::lround(fit.periphery)), static_cast<int>(std::lround(fit.densityX)),
                              v.width, v.height};
-    optimize.optimizer.start(current, limits, held, read(L"target_percent", 88, 50, 98) / 100.0);
+    optimize.optimizer.start(current, limits, read(L"target_percent", 88, 50, 98) / 100.0);
     logf("optimize: start from periphery %d%%, focus density %d%%, box %d%% x %d%%; floors %d%%, %d%%, %d%%; "
-         "ceilings %d%%, %d%%%s",
+         "ceilings %d%%, %d%%",
          current.periphery, current.density, current.width, current.height, limits.floor.periphery,
-         limits.floor.density, limits.floor.width, limits.ceiling.periphery, limits.ceiling.density,
-         held ? " (DLSS holds the sizes: for the next launch)" : "");
+         limits.floor.density, limits.floor.width, limits.ceiling.periphery, limits.ceiling.density);
 }
 
+// The budget is the period xrWaitFrame gives ACE: with Cheeky's frame generation already the multiplied
+// one, so `in` leaves frame generation off. The GPU time is the whole GPU's per ACE frame (frame
+// generation, the composition and the runtime's compositor too) when the load sampler has it, else ACE's
+// own queue (90th percentile).
 QvfrWindow optimize_window() {
     const GpuFrameStats gpu = gpu_frame_timer_collect_optimizer();
     OsdInput in;
     in.frames.swap(optimize.frames);
     in.periodMs = static_cast<double>(osd.periodNs.load(std::memory_order_relaxed)) / 1e6;
     in.gpuMs = gpu.frames ? gpu.renderP90 : -1;
+    int samples = 0;
+    if (const GpuLoad load = gpu_load_window(samples, 2); load.valid) {
+        in.gpuBusyPercent = load.busy;
+        in.gpuAcePercent = load.ace;
+    }
+    if (const CpuLoad threads = cpu_load_window(samples, 2); threads.valid) {
+        in.cpuBusiestPercent = threads.busiestPercent;
+        in.cpuBusiestIsRender = threads.busiestThread == osd.thread;
+    }
     const OsdSummary s = osd_summary(in);
     QvfrWindow w;
-    w.gpuMs = in.gpuMs;
+    w.gpuMs = s.gpuMs;
     w.cpuMs = s.cpuMs;
     w.budgetMs = s.budgetMs;
     w.cpuBound = s.bound == OsdBound::Cpu;

@@ -43,8 +43,8 @@ struct Worker {
     bool stop = false, running = false;
     uint32_t luidHigh = 0, luidLow = 0;
     GpuLoad latest;
-    double busySum[2] = {}, aceSum[2] = {};  // gpu_load_window's, per window
-    int samples[2] = {};
+    double busySum[3] = {}, aceSum[3] = {};  // gpu_load_window's, per window
+    int samples[3] = {};
 };
 Worker worker;
 
@@ -90,7 +90,7 @@ void run() {
         lock.lock();
         worker.latest = load;
         if (load.valid)
-            for (int w = 0; w < 2; ++w) {
+            for (int w = 0; w < 3; ++w) {
                 worker.busySum[w] += load.busy;
                 worker.aceSum[w] += load.ace;
                 ++worker.samples[w];
@@ -190,7 +190,7 @@ GpuLoad gpu_load_latest() {
 
 GpuLoad gpu_load_window(int& samples, int window) {
     std::lock_guard guard(worker.mutex);
-    const int w = window == 0 ? 0 : 1;
+    const int w = window == 0 || window == 2 ? window : 1;
     GpuLoad load = worker.latest;
     samples = worker.samples[w];
     load.valid = samples > 0;

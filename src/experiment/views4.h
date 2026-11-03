@@ -68,6 +68,9 @@ void views4_set_dlss_live(bool on);
 // Whether ACE's renderer upscales with DLSS and the views keep their launch sizes (live resolution waits
 // for the next launch); false with views4_dlss_live.
 bool views4_dlss_held();
+// ACE's render and output target sizes (width, height) as its builder last laid the views out at (0
+// before the first frame). Without DLSS they are the same.
+void views4_target_sizes(int (&render)[2], int (&output)[2]);
 // The latest focus frustum of view 2 or 3; false when focus cull is off or none is built yet.
 bool views4_focus_frustum(int view, FocusFrustum& out);
 // The record of the next frame to be composed, in rendering order. False until the first focus

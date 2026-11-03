@@ -946,6 +946,54 @@ int main() {
                   left == 0,
               "load: the threads' line, the GPU unknown without its sampler; the window emptied");
     }
+    {
+        // Frame records: filled and composed in lockstep, each composition gets its own frame's record. Two
+        // records filled and never composed (2026-11-02, the focus lagging the eyes) put every composition two
+        // frames behind; after a while of that the queue resyncs to the newest record.
+        using namespace aceqv;
+        const auto marked = [](float marker) {
+            Views4Frame f{};
+            f.outerTan[0][0] = marker;
+            return f;
+        };
+        Views4Frame taken{};
+        for (int i = 0; i < 200; ++i) {  // whatever earlier checks left: until a composition gets its own record
+            views4_push_frame(marked(-1.0f - i));
+            views4_take_frame(taken);
+            if (taken.outerTan[0][0] == -1.0f - i)
+                break;
+        }
+        bool lockstep = true;
+        for (int i = 0; i < 200; ++i) {
+            views4_push_frame(marked(1000.0f + i));
+            views4_take_frame(taken);
+            lockstep &= taken.outerTan[0][0] == 1000.0f + i;
+        }
+        check(lockstep, "frame records: filled and composed in lockstep, every composition gets its own frame's");
+        views4_push_frame(marked(1.0f));  // filled, never composed
+        views4_push_frame(marked(2.0f));
+        int behindFrames = 0, firstOwn = -1;
+        for (int i = 0; i < 200; ++i) {
+            views4_push_frame(marked(5000.0f + i));
+            views4_take_frame(taken);
+            if (taken.outerTan[0][0] == 5000.0f + i) {
+                if (firstOwn < 0)
+                    firstOwn = i;
+            } else if (firstOwn < 0 && taken.outerTan[0][0] == (i >= 2 ? 5000.0f + i - 2 : static_cast<float>(i + 1))) {
+                ++behindFrames;
+            }
+        }
+        std::printf("     two frames behind for %d compositions, own records from composition %d\n", behindFrames, firstOwn);
+        check(firstOwn > 0 && firstOwn <= 100 && behindFrames == firstOwn,
+              "frame records: two filled and never composed are made up within the drift window, not kept for good");
+        bool stays = true;
+        for (int i = 0; i < 200; ++i) {
+            views4_push_frame(marked(9000.0f + i));
+            views4_take_frame(taken);
+            stays &= taken.outerTan[0][0] == 9000.0f + i;
+        }
+        check(stays, "frame records: in lockstep again afterwards");
+    }
     DeleteFileW(logPath.c_str());
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;
