@@ -347,7 +347,7 @@ int main() {
         menu_key(c, MenuKey::Left);
         check(c.page == 5 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
         menu_key(c, MenuKey::Left);
-        check(c.page == 4 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 7 &&
+        check(c.page == 4 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 8 &&
                   menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
               "then Frame generation, with the credit line; no note while FG is off");
         menu_key(c, MenuKey::Down);
@@ -372,6 +372,28 @@ int main() {
         check(fgSet.find("CenterMode=0") != std::string::npos &&
                   cheeky_set_lines(c.cheeky.values, true, true).find("CenterMode=1") != std::string::npos,
               "the FG region follows the eyes (CenterMode 1) only when QVFR's focus does");
+        // When Cheeky releases ACE: Capture (8) by default, then Generated (3); Never (5) the other way; the set lines carry it.
+        c.selected = 6;
+        const bool captureFirst = menu_lines(c)[6].label == L"Release ACE" && menu_lines(c)[6].value == L"Capture (8)" &&
+                                  cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=8") != std::string::npos;
+        menu_key(c, MenuKey::Right);
+        const bool generated = c.cheeky.values.fgRelease == 3 && menu_lines(c)[6].value == L"Generated (3)" &&
+                               !menu_key(c, MenuKey::Right);  // stops at the end
+        menu_key(c, MenuKey::Left);
+        menu_key(c, MenuKey::Left);
+        check(captureFirst && generated && c.cheeky.values.fgRelease == 5 && menu_lines(c)[6].value == L"Never (5)" &&
+                  cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=5") != std::string::npos,
+              "Release ACE: Capture (8), Generated (3), Never (5); Cheeky's FgReleasePoint follows");
+        const auto releaseIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_release.ini").wstring();
+        DeleteFileW(releaseIni.c_str());
+        write_cheeky_settings(releaseIni.c_str(), c.cheeky.values, false);
+        const bool roundTrip = read_cheeky_settings(releaseIni.c_str()).fgRelease == 5;
+        WritePrivateProfileStringW(L"cheeky", L"fg_release", L"4", releaseIni.c_str());
+        const bool unknownIsCapture = read_cheeky_settings(releaseIni.c_str()).fgRelease == 8;
+        DeleteFileW(releaseIni.c_str());
+        check(roundTrip && unknownIsCapture, "fg_release round-trips through [cheeky]; a value not offered is 8");
+        c.cheeky.values.fgRelease = 8;
+        c.selected = 4;  // back on Center FG scale, where the steps above left it
         c.cheeky.values.fgBorder = true;
         check(cheeky_set_lines(c.cheeky.values, true, true).find("FgShowBorder=1") != std::string::npos &&
                   menu_lines(c).back().label == L"Show FG region" && menu_lines(c).back().value == L"On",

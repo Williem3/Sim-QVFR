@@ -43,7 +43,7 @@ enum Ctl {
     // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
-    kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgBorder,
+    kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // The FOV crop ([crop], Resolution pane).
@@ -287,7 +287,7 @@ std::vector<Ctl> focus_order() {
             order.insert(order.end(), {kCheekyNrPreset, kCheekyNrPasses});
         order.push_back(kFgOn);
         if (app.s.cheeky.fg)
-            order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgBorder});
+            order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder});
         break;
     case Pane::Menu:
         order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kOsdOn});
@@ -841,6 +841,15 @@ float pane_content(float x, float y, float w, bool draw) {
                       choice_row(kFgScale, L"Center FG scale", quarters, 4, std::clamp(app.s.cheeky.fgScale / 25 - 1, 0, 3), fgOff),
                       choice_row(kFgPeriphery, L"Periphery FG scale", quarters, 4,
                                  std::clamp(app.s.cheeky.fgPeriphery / 25 - 1, 0, 3), fgOff),
+                      [&] {
+                          const std::wstring names[3] = {kCheekyFgReleaseNames[0], kCheekyFgReleaseNames[1],
+                                                         kCheekyFgReleaseNames[2]};
+                          Row release = choice_row(kFgRelease, L"Release ACE", names, 3,
+                                                   cheeky_fg_release_index(app.s.cheeky.fgRelease), fgOff);
+                          release.desc = L"When ACE starts its next frame. Never: CPU and GPU overlap (most frames). "
+                                         L"Capture: after the GPU finishes. Generated: after the generated frame.";
+                          return release;
+                      }(),
                       fgBorder},
                      L"Outside the center region frames are warped with ACE’s motion. Lower scales use less GPU time "
                      L"and memory. Applies live. With an eye-tracked focus (Rendering pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
@@ -1434,6 +1443,9 @@ void open_popup(Ctl owner) {
     } else if (owner == kFgMultiplier) {
         app.popup.items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
         app.popup.selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
+    } else if (owner == kFgRelease) {
+        app.popup.items.assign(std::begin(kCheekyFgReleaseNames), std::end(kCheekyFgReleaseNames));
+        app.popup.selected = cheeky_fg_release_index(app.s.cheeky.fgRelease);
     } else if (owner == kFgScale || owner == kFgPeriphery) {
         app.popup.items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
         app.popup.selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
@@ -1475,6 +1487,8 @@ void choose(Ctl owner, int option) {
         app.s.cheeky.fgScale = (option + 1) * 25;
     else if (owner == kFgPeriphery)
         app.s.cheeky.fgPeriphery = (option + 1) * 25;
+    else if (owner == kFgRelease)
+        app.s.cheeky.fgRelease = kCheekyFgReleasePoints[std::clamp(option, 0, 2)];
     else if (owner == kVisor)
         app.s.helmet.visor = static_cast<VisorPosition>(std::clamp(option, 0, 2));
     else if (owner == kHelmetDetail)
@@ -1533,6 +1547,7 @@ void activate(Ctl id, int option) {
     case kFgMultiplier:
     case kFgScale:
     case kFgPeriphery:
+    case kFgRelease:
     case kVisor:
     case kHelmetDetail: open_popup(id); return;
     case kFgOn: app.s.cheeky.fg = !app.s.cheeky.fg; changed(); return;
@@ -1666,6 +1681,7 @@ void on_key(WPARAM key) {
     case kFgMultiplier:
     case kFgScale:
     case kFgPeriphery:
+    case kFgRelease:
     case kOsdOn:
     case kCropOn:
     case kHelmetOn:

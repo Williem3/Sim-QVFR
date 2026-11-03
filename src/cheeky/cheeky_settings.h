@@ -39,10 +39,22 @@ struct CheekySettings {
     int fgScale = 50;         // fg_scale: FgResolutionPercent, the centre's FG resolution (25, 50, 75, 100)
     int fgPeriphery = 50;     // fg_periphery: FgPeripheralPercent, the periphery's (25, 50, 75, 100)
     bool fgBorder = false;    // fg_border: FgShowBorder, outlines the centre region (to check it follows the eyes)
+    // fg_release: FgReleasePoint, when Cheeky lets ACE out of xrWaitFrame (kCheekyFgReleasePoints): 5 never
+    // held (ACE's CPU and the GPU overlap; a capture slot must be free), 8 once the GPU has captured the
+    // previous frame (they take turns), 3 once the generated frame is submitted (Cheeky's default; tightest).
+    int fgRelease = 8;
     bool operator==(const CheekySettings&) const = default;
 };
 
 inline constexpr int kCheekyFgMultiplierMax = 4, kCheekyFgSizeMin = 10, kCheekyFgSizeMax = 100, kCheekyFgSizeStep = 5;
+// The release points offered, in order, and their names; anything else is 8.
+inline constexpr int kCheekyFgReleasePoints[] = {5, 8, 3};
+inline constexpr const wchar_t* kCheekyFgReleaseNames[] = {L"Never (5)", L"Capture (8)", L"Generated (3)"};
+inline int cheeky_fg_release(int point) { return point == 5 || point == 3 ? point : 8; }
+inline int cheeky_fg_release_index(int point) {
+    const int p = cheeky_fg_release(point);
+    return p == 5 ? 0 : p == 8 ? 1 : 2;
+}
 // FG resolutions are quarters (Cheeky's choices).
 inline int cheeky_fg_quarter(int percent) { return std::clamp((percent + 12) / 25 * 25, 25, 100); }
 
@@ -108,6 +120,7 @@ inline CheekySettings read_cheeky_settings(const wchar_t* ini) {
     c.fgScale = cheeky_fg_quarter(get(L"fg_scale", c.fgScale));
     c.fgPeriphery = cheeky_fg_quarter(get(L"fg_periphery", c.fgPeriphery));
     c.fgBorder = get(L"fg_border", 0) != 0;
+    c.fgRelease = cheeky_fg_release(get(L"fg_release", c.fgRelease));
     return c;
 }
 
@@ -135,6 +148,7 @@ inline bool write_cheeky_settings(const wchar_t* ini, const CheekySettings& c, b
     ok &= put(L"fg_scale", cheeky_fg_quarter(c.fgScale));
     ok &= put(L"fg_periphery", cheeky_fg_quarter(c.fgPeriphery));
     ok &= put(L"fg_border", c.fgBorder ? 1 : 0);
+    ok &= put(L"fg_release", cheeky_fg_release(c.fgRelease));
     return ok;
 }
 
@@ -154,14 +168,15 @@ inline std::string cheeky_set_lines(const CheekySettings& c, bool quadRoles, boo
                     "\nNrEnabled=" + std::to_string(c.nr ? 1 : 0) +
                     "\nNrPreset=" + std::to_string(std::clamp(c.nrPreset, 0, kCheekyNrPresetMax)) +
                     "\nNrPasses=" + std::to_string(std::clamp(c.nrPasses, 1, kCheekyNrPassesMax));
-    // Frame generation as tested in ACE: DLSS-G centre, warped periphery, foveated on its own region, and
-    // the game released once its colour is captured (the default holds it until generation, which
-    // deadlocked here: DLSS-G shares ACE's queue).
+    // Frame generation as tested in ACE: DLSS-G centre, warped periphery, foveated on its own region. The
+    // release point is fg_release: 8 (once its colour is captured) was chosen when Cheeky's default 3 seemed
+    // to deadlock (DLSS-G shares ACE's queue; OpenXR Toolkit's Turbo mode, which crashes ACE, may have been on),
+    // but it makes ACE's CPU wait for the GPU each frame; 5 never holds it.
     char fgSize[16];
     snprintf(fgSize, sizeof(fgSize), "%.2f", std::clamp(c.fgSize, kCheekyFgSizeMin, kCheekyFgSizeMax) / 100.0);
     s += "\nFgEnabled=" + std::to_string(c.fg ? 1 : 0) +
          "\nFgMultiplier=" + std::to_string(std::clamp(c.fgMultiplier, 2, kCheekyFgMultiplierMax)) +
-         "\nFgCenterMethod=0\nFgPeripheralMethod=1\nFgFoveated=1\nFgMatchSrRegion=0\nFgReleasePoint=8" +
+         "\nFgCenterMethod=0\nFgPeripheralMethod=1\nFgFoveated=1\nFgMatchSrRegion=0\nFgReleasePoint=" + std::to_string(cheeky_fg_release(c.fgRelease)) +
          "\nFgXOffset=0\nFgYOffset=0\nCenterMode=" + std::to_string(gaze ? 1 : 0) +
          "\nFgWidth=" + fgSize + "\nFgHeight=" + fgSize +
          "\nFgResolutionPercent=" + std::to_string(cheeky_fg_quarter(c.fgScale)) +

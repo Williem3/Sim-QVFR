@@ -21,7 +21,7 @@ enum class MenuItem {
     Page, CheekyProcessing, CheekyOuterDlaa, CheekyOuterScale, CheekyOuterPreset, CheekyFocusPreset,
     CheekySupersampling, CheekyMotionFix, CheekyNr, CheekyNrPreset, CheekyNrPasses,
     // The Frame generation page (Cheeky's DLSS-G).
-    FgOn, FgMultiplier, FgSize, FgScale, FgPeriphery, FgBorder,
+    FgOn, FgMultiplier, FgSize, FgScale, FgPeriphery, FgRelease, FgBorder,
     // The View crop page (QVFR, [crop], fov_crop.h), and the Helmet page ([helmet], helmet.h).
     Crop, CropTop, CropBottom, CropOuter, CropInner, Helmet, HelmetRim, HelmetCorners, HelmetLight, HelmetDebug,
     Visor, HelmetSize, HelmetHeight, HelmetDepth, HelmetDetail

@@ -50,6 +50,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::FgSize, L"Center region", kCheekyFgSizeMin, kCheekyFgSizeMax, kCheekyFgSizeStep},
     {MenuItem::FgScale, L"Center FG scale", 25, 100, 25},
     {MenuItem::FgPeriphery, L"Periphery FG scale", 25, 100, 25},
+    {MenuItem::FgRelease, L"Release ACE", 0, 2, 1},
     {MenuItem::FgBorder, L"Show FG region", 0, 1, 1},
     // The View crop page: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
     {MenuItem::Crop, L"Crop the view", 0, 1, 1},
@@ -145,7 +146,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
                                    MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth});
     } else if (page == MenuPage::Fg) {
         items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
-                                   MenuItem::FgPeriphery, MenuItem::FgBorder});
+                                   MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
     } else if (page == MenuPage::Crop) {
         items.push_back(MenuItem::Crop);
         if (menu.values.crop)
@@ -251,6 +252,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         const int before = static_cast<int>(menu.values.helmet.visor);
         menu.values.helmet.visor = static_cast<VisorPosition>(std::clamp(before + step, 0, 2));
         return static_cast<int>(menu.values.helmet.visor) != before;
+    }
+    case MenuItem::FgRelease: {  // never, capture, generated (no wrap)
+        const int before = cheeky_fg_release_index(c.fgRelease);
+        c.fgRelease = kCheekyFgReleasePoints[std::clamp(before + step, 0, 2)];
+        return cheeky_fg_release_index(c.fgRelease) != before;
     }
     case MenuItem::FgOn: c.fg = !c.fg; return true;
     case MenuItem::FgBorder: c.fgBorder = !c.fgBorder; return true;
@@ -518,6 +524,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = std::to_wstring(c.fgPeriphery) + L"%";
         else if (items[i] == MenuItem::FgBorder)
             line.value = c.fgBorder ? L"On" : L"Off";
+        else if (items[i] == MenuItem::FgRelease)
+            line.value = kCheekyFgReleaseNames[cheeky_fg_release_index(c.fgRelease)];
         else if (items[i] == MenuItem::CheekyProcessing)
             line.value = c.processing ? L"On" : L"Off";
         else if (items[i] == MenuItem::CheekyOuterDlaa)

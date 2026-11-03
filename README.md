@@ -114,6 +114,9 @@ You also need an NVIDIA RTX GPU with DLSS turned on in ACE. Use the launcher's Q
 **Frame generation:** turn on **Frame generation** in the same pane. Turn OpenXR Toolkit's **Turbo mode**
 off, because ACE crashes with it. Don't run another frame generator, such as VectorXR's, at the same time.
 **Show the center region** outlines the full-quality region, so you can check that it follows your eyes.
+**Release ACE** (`[cheeky] fg_release`) sets when Cheeky lets ACE start its next frame: Never (5) lets
+ACE's CPU and the GPU overlap for the most frames, Capture (8, the default) waits for the GPU to finish
+the previous frame, and Generated (3, Cheeky's own default) waits for the generated frame.
 
 **Notes:**
 - With DLSS on, resolution changes apply at the next launch, because DLSS sizes its views when the game starts.
