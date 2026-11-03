@@ -43,8 +43,8 @@ body:
     attributes:
       label: Frame generation
       options:
-        - On
-        - Off
+        - "On"
+        - "Off"
   - type: textarea
     id: files
     attributes:
