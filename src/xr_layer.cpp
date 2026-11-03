@@ -163,6 +163,10 @@ struct Experiment {
     bool borderAtLaunch = false;           // views4 without composition tracks the outline's chains only if on at launch
     float borderColor[4] = {0, 1, 0, 1};   // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
     std::atomic<bool> gaze = true;         // quad: the focus box follows XR_EXT_eye_gaze_interaction
+    // [quad] gaze_thread: the gaze is looked up on the layer's own thread, not inside ACE's xrLocateViews
+    // (a lookup took ~1.5 ms of ACE's render thread every frame on the Pimax runtime, 2026-11-03).
+    bool gazeThread = true;
+    int gazePollHz = 250;
     // The focus box's vertical offset, degrees up (focus_offset.h): fixed, and added to a tracked gaze.
     std::atomic<int> fixedOffsetY = 0, gazeOffsetY = 0;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
@@ -354,6 +358,9 @@ void load_experiment() {
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
     experiment.gaze = settings.gaze;
+    experiment.gazeThread = GetPrivateProfileIntW(L"quad", L"gaze_thread", 1, ini.c_str()) != 0;
+    experiment.gazePollHz =
+        std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"gaze_poll_hz", 250, ini.c_str())), 30, 1000);
     experiment.fixedOffsetY = settings.offset.fixed;
     experiment.gazeOffsetY = settings.offset.gaze;
     live.ini = ini;
@@ -692,6 +699,157 @@ bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& di
         return false;
     direction = gaze.direction;
     return true;
+}
+
+// The gaze thread ([quad] gaze_thread, on by default): ACE's xrLocateViews only reads the latest gaze; this
+// thread looks it up (xrLocateSpace on the gaze action's space) at gaze_poll_hz, at the display time ACE last
+// located its views for, in the space it located them in. The lookup can be slow (~1.5 ms on the Pimax
+// runtime) and now costs ACE's render thread nothing; the gaze it gets is at most a poll period plus a
+// lookup old. It runs only while ACE syncs actions itself (it does: it binds eye gaze too), so the layer
+// never syncs from two threads; otherwise, or with gaze_thread=0, xrLocateViews looks the gaze up itself.
+// The lookup runs outside gaze.mutex, so ACE's xrSyncActions never waits for it.
+struct GazeThread {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::thread thread;
+    bool stop = false;
+    // From xrLocateViews: what to locate against.
+    XrSession session = XR_NULL_HANDLE;
+    XrSpace base = XR_NULL_HANDLE;
+    XrTime time = 0;
+    // The thread's last result: the gaze in `base` and the display time it was located at (0: none tracked).
+    XrVector3f direction{0, 0, -1};
+    XrTime directionTime = 0;
+    // For the log: lookups and their time since the last report.
+    uint64_t lookups = 0;
+    double lookupMs = 0, lookupMaxMs = 0;
+    // A running thread left at exit (no xrDestroySession) would end the process in std::terminate. At a
+    // process exit it has already ended, so the join returns at once.
+    ~GazeThread() {
+        {
+            std::lock_guard guard(mutex);
+            stop = true;
+        }
+        wake.notify_all();
+        if (thread.joinable())
+            thread.join();
+    }
+};
+GazeThread gazeThread;
+
+void gaze_thread_run() {
+    std::unique_lock lock(gazeThread.mutex);
+    const auto period = std::chrono::microseconds(1'000'000 / std::max(1, experiment.gazePollHz));
+    while (!gazeThread.stop) {
+        const auto due = std::chrono::steady_clock::now() + period;
+        const XrSession session = gazeThread.session;
+        const XrSpace base = gazeThread.base;
+        const XrTime time = gazeThread.time;
+        lock.unlock();
+        XrSpace space = XR_NULL_HANDLE;
+        {
+            std::lock_guard guard(gaze.mutex);
+            if (gaze.attached && !gaze.space) {
+                XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+                spaceInfo.action = gaze.action;
+                spaceInfo.poseInActionSpace.orientation.w = 1;
+                next.CreateActionSpace(session, &spaceInfo, &gaze.space);
+            }
+            space = gaze.attached ? gaze.space : XR_NULL_HANDLE;
+        }
+        if (space && base && time) {
+            XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool ok = XR_SUCCEEDED(next.LocateSpace(space, base, time, &location)) &&
+                            (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
+                            (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            const XrVector3f direction = rotate(location.pose.orientation, {0, 0, -1});
+            bool first = false;
+            {
+                std::lock_guard guard(gaze.mutex);  // the counts the overlay and the log read
+                ++gaze.queries;
+                if (ok) {
+                    ++gaze.tracked;
+                    gaze.direction = direction;
+                    gaze.directionTime = time;
+                    first = !gaze.firstLogged;
+                    gaze.firstLogged = true;
+                }
+            }
+            if (first) {
+                logf("gaze: first tracked sample (gaze thread, %d Hz), direction %.3f,%.3f,%.3f", experiment.gazePollHz,
+                     direction.x, direction.y, direction.z);
+                runtime_info(L"eye_tracking", L"1");
+            }
+            lock.lock();
+            if (ok) {
+                gazeThread.direction = direction;
+                gazeThread.directionTime = time;
+            }
+            ++gazeThread.lookups;
+            gazeThread.lookupMs += ms;
+            gazeThread.lookupMaxMs = std::max(gazeThread.lookupMaxMs, ms);
+        } else {
+            lock.lock();
+        }
+        gazeThread.wake.wait_until(lock, due, [] { return gazeThread.stop; });
+    }
+}
+
+void gaze_thread_stop() {
+    std::thread thread;
+    {
+        std::lock_guard guard(gazeThread.mutex);
+        gazeThread.stop = true;
+        thread.swap(gazeThread.thread);
+    }
+    gazeThread.wake.notify_all();
+    if (thread.joinable())
+        thread.join();
+    std::lock_guard guard(gazeThread.mutex);  // ready for the next session
+    gazeThread.stop = false;
+    gazeThread.session = XR_NULL_HANDLE;
+    gazeThread.base = XR_NULL_HANDLE;
+    gazeThread.time = gazeThread.directionTime = 0;
+    gazeThread.direction = {0, 0, -1};
+    gazeThread.lookups = 0;
+    gazeThread.lookupMs = gazeThread.lookupMaxMs = 0;
+}
+
+// The gaze for ACE's xrLocateViews in views4 (Two-loop looks it up per frame itself): from the gaze thread while it can run (it is started on the first
+// call), else looked up here. False while not tracked (the last tracked gaze is kept kGazeHoldNs).
+bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& direction) {
+    bool threaded = experiment.gazeThread;
+    if (threaded) {
+        std::lock_guard guard(gaze.mutex);
+        threaded = gaze.attached && gaze.appSyncs > 0;
+    }
+    if (!threaded)
+        return gaze_direction(session, base, time, direction);
+    std::lock_guard guard(gazeThread.mutex);
+    gazeThread.session = session;
+    gazeThread.base = base;
+    gazeThread.time = time;
+    if (!gazeThread.thread.joinable() && !gazeThread.stop) {
+        gazeThread.thread = std::thread(gaze_thread_run);
+        logf("gaze: looked up on the layer's own thread at %d Hz (gaze_thread)", experiment.gazePollHz);
+    }
+    if (gazeThread.directionTime == 0 || time - gazeThread.directionTime > kGazeHoldNs)
+        return false;
+    direction = gazeThread.direction;
+    return true;
+}
+
+// For the log, every report: the gaze thread's lookups since the last one.
+void gaze_thread_report(double seconds) {
+    std::lock_guard guard(gazeThread.mutex);
+    if (!gazeThread.lookups)
+        return;
+    logf("gaze thread: %.0f lookups/s, xrLocateSpace %.3f ms avg, %.3f ms max (off ACE's render thread)",
+         seconds > 0 ? gazeThread.lookups / seconds : 0.0, gazeThread.lookupMs / gazeThread.lookups, gazeThread.lookupMaxMs);
+    gazeThread.lookups = 0;
+    gazeThread.lookupMs = gazeThread.lookupMaxMs = 0;
 }
 // Quad pipeline (mode=quad), on top of two_loops with b_focus. ACE renders frame A with the full
 // FOV and frame B with the focus FOV into its own (eye_scale-sized) double-wide swapchain, which
@@ -1074,6 +1232,7 @@ void report_cpu_times() {
     gpu_frame_timer_report();  // its own samples: it logs while the overlay collects too
     report_load(frameMs);
     report_vram();
+    gaze_thread_report(frameMs * kCpuReportFrames / 1000);
 }
 
 bool is_ace_process() {
@@ -1235,6 +1394,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     gpu_frame_timer_stop();
     gpu_load_stop();
     cpu_load_stop();
+    gaze_thread_stop();  // before the spaces it locates go
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
         gaze.space = XR_NULL_HANDLE;
@@ -2137,7 +2297,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             float tan[2][2] = {};
             bool valid[2] = {};
             XrVector3f direction{0, 0, -1};
-            const bool gazing = experiment.gaze && gaze_direction(session, info->space, info->displayTime, direction);
+            const bool gazing = experiment.gaze && gaze_now(session, info->space, info->displayTime, direction);
             const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
             for (int e = 0; e < 2; ++e) {
                 if (gazing) {

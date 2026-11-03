@@ -994,6 +994,50 @@ int main() {
         }
         check(stays, "frame records: in lockstep again afterwards");
     }
+    {
+        // The gaze thread (views4): ACE's xrLocateViews reads the latest gaze, the thread looks it up at its own
+        // rate. Needs the gaze action attached and ACE syncing actions, as the quad frames above left it.
+        bool ready;
+        {
+            std::lock_guard guard(gaze.mutex);
+            ready = gaze.attached && gaze.appSyncs > 0;
+        }
+        check(ready, "gaze thread: the gaze action attached and ACE syncing (the precondition)");
+        experiment.gazeThread = true;
+        experiment.gazePollHz = 40;  // slow: lookups follow the thread's rate, not the calls
+        const XrSpace base = reinterpret_cast<XrSpace>(0x200);
+        XrVector3f d{};
+        gaze_now(nullptr, base, 1000, d);  // starts the thread
+        Sleep(100);
+        uint64_t before;
+        {
+            std::lock_guard guard(gaze.mutex);
+            before = gaze.queries;
+        }
+        bool got = true;
+        for (int i = 0; i < 100; ++i)
+            got &= gaze_now(nullptr, base, 1000 + i, d);
+        uint64_t after;
+        {
+            std::lock_guard guard(gaze.mutex);
+            after = gaze.queries;
+        }
+        const double len = std::sqrt(kGazeX * kGazeX + kGazeY * kGazeY + 1);
+        std::printf("     gaze thread: %llu lookups during 100 calls, direction %.3f,%.3f,%.3f\n",
+                    static_cast<unsigned long long>(after - before), d.x, d.y, d.z);
+        check(got && std::abs(d.x - kGazeX / len) < 1e-3 && std::abs(d.y - kGazeY / len) < 1e-3,
+              "gaze thread: xrLocateViews gets the tracked gaze the thread looked up");
+        check(after - before <= 3, "gaze thread: 100 xrLocateViews calls look nothing up themselves");
+        {
+            std::lock_guard guard(gaze.mutex);
+            gaze.appSyncs = 0;
+        }
+        const uint64_t inlineBefore = gaze.queries;
+        gaze_now(nullptr, base, 2000, d);
+        check(gaze.queries == inlineBefore + 1, "gaze thread: without ACE syncing actions, looked up inline as before");
+        gaze_thread_stop();
+        check(!gazeThread.thread.joinable(), "gaze thread: stops with the session");
+    }
     DeleteFileW(logPath.c_str());
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;
