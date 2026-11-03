@@ -50,6 +50,9 @@ public:
     void stroke(const Rect& r, Color c, float width, float radius = 0);
     void line(float x0, float y0, float x1, float y1, Color c, float width);
     void circle(float cx, float cy, float radius, Color c, bool filled, float width = 1);
+    // Any Direct2D geometry (from factory()), filled, or stroked centred on its edge.
+    void fill(ID2D1Geometry* g, Color c);
+    void stroke(ID2D1Geometry* g, Color c, float width);
     // The kit's raised-control shadow: a soft 0.5px drop under a rounded rectangle.
     void control_shadow(const Rect& r, float radius, bool dark);
     // An SVG path ('d' attribute: M L H V C S Z, absolute or relative) scaled from a `box`-sized

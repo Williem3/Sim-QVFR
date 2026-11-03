@@ -25,6 +25,16 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
     {MenuItem::FocusOffset, L"Focus up / down", -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::GazeDeadzone, L"Gaze dead-zone", 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
+    // The Focus shape page: each corner's insets, percent of the box (focus_shape.h's kFocusCornerMax).
+    {MenuItem::Shape, L"Shape", 0, 1, 1},
+    {MenuItem::ShapeTopLeftIn, L"Top left in", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeTopLeftDown, L"Top left down", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeTopRightIn, L"Top right in", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeTopRightDown, L"Top right down", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomLeftIn, L"Bottom left in", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomLeftUp, L"Bottom left up", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomRightIn, L"Bottom right in", 0, kFocusCornerMax, 5},
+    {MenuItem::ShapeBottomRightUp, L"Bottom right up", 0, kFocusCornerMax, 5},
     // The performance overlay's place, degrees (the launcher's sliders).
     {MenuItem::Overlay, L"Performance overlay", 0, 1, 1},
     {MenuItem::OverlayYaw, L"Overlay left / right", -kOsdYawMax, kOsdYawMax, 1},
@@ -90,6 +100,14 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Corners: return &v.corners;
     case MenuItem::FocusOffset: return &v.offset.for_mode(v.eyeTracking);
     case MenuItem::GazeDeadzone: return &v.gazeDeadzone;
+    case MenuItem::ShapeTopLeftIn: return &v.shape.in[static_cast<int>(FocusCorner::TopLeft)];
+    case MenuItem::ShapeTopLeftDown: return &v.shape.vertical[static_cast<int>(FocusCorner::TopLeft)];
+    case MenuItem::ShapeTopRightIn: return &v.shape.in[static_cast<int>(FocusCorner::TopRight)];
+    case MenuItem::ShapeTopRightDown: return &v.shape.vertical[static_cast<int>(FocusCorner::TopRight)];
+    case MenuItem::ShapeBottomLeftIn: return &v.shape.in[static_cast<int>(FocusCorner::BottomLeft)];
+    case MenuItem::ShapeBottomLeftUp: return &v.shape.vertical[static_cast<int>(FocusCorner::BottomLeft)];
+    case MenuItem::ShapeBottomRightIn: return &v.shape.in[static_cast<int>(FocusCorner::BottomRight)];
+    case MenuItem::ShapeBottomRightUp: return &v.shape.vertical[static_cast<int>(FocusCorner::BottomRight)];
     case MenuItem::MenuYaw: return &v.placement.yaw;
     case MenuItem::MenuPitch: return &v.placement.pitch;
     case MenuItem::MenuWidth: return &v.placement.width;
@@ -129,7 +147,7 @@ std::vector<MenuItem> menu_items(bool qvfr) {
 }
 
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
-    std::vector<MenuPage> pages = {MenuPage::Settings};
+    std::vector<MenuPage> pages = {MenuPage::Settings, MenuPage::Shape};
     if (menu.launch.qvfr)
         pages.insert(pages.end(), {MenuPage::Crop, MenuPage::Helmet});
     if (menu.cheeky.available)
@@ -152,6 +170,12 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else if (page == MenuPage::Fg) {
         items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
                                    MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
+    } else if (page == MenuPage::Shape) {
+        items.push_back(MenuItem::Shape);
+        if (menu.values.shape.corners)
+            items.insert(items.end(), {MenuItem::ShapeTopLeftIn, MenuItem::ShapeTopLeftDown, MenuItem::ShapeTopRightIn,
+                                       MenuItem::ShapeTopRightDown, MenuItem::ShapeBottomLeftIn, MenuItem::ShapeBottomLeftUp,
+                                       MenuItem::ShapeBottomRightIn, MenuItem::ShapeBottomRightUp});
     } else if (page == MenuPage::Crop) {
         items.push_back(MenuItem::Crop);
         if (menu.values.crop)
@@ -184,6 +208,7 @@ std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     case MenuPage::Dlss: return L"Foveated DLSS";
     case MenuPage::Fg: return L"Frame generation";
     case MenuPage::Headset: return L"Overlay and menu";
+    case MenuPage::Shape: return L"Focus shape";
     case MenuPage::Crop: return L"View crop";
     case MenuPage::Helmet: return L"Helmet";
     default: return menu.launch.qvfr ? L"QVFR" : L"Two-loop";
@@ -291,8 +316,10 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     default: break;
     }
     if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Crop ||
-        item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail) {
+        item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
+        item == MenuItem::Shape) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
+                     : item == MenuItem::Shape       ? menu.values.shape.corners
                      : item == MenuItem::EyeTracking ? menu.values.eyeTracking
                      : item == MenuItem::Crop        ? menu.values.crop
                      : item == MenuItem::Helmet      ? menu.values.helmet.on
@@ -324,6 +351,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
     v.offset = read_focus_offset(ini);
     v.gazeDeadzone = read_gaze_deadzone(ini);
+    v.shape = read_focus_shape(ini);
     v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
     const int cropMax = static_cast<int>(kCropMax * 100);
@@ -356,6 +384,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
     ok &= write(ini, L"quad", L"gaze", v.eyeTracking ? 1 : 0);
     ok &= write_focus_offset(ini, v.offset);
     ok &= write_gaze_deadzone(ini, v.gazeDeadzone);
+    ok &= write_focus_shape(ini, v.shape);
     ok &= write_osd_placement(ini, v.overlay);
     ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
@@ -488,6 +517,12 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     }
     if (page == MenuPage::Dlss || page == MenuPage::Helmet)
         return notes;
+    if (page == MenuPage::Shape) {
+        notes.push_back(menu.values.shape.corners
+                            ? L"The focus views still render the whole box: the shape picks what stays sharp"
+                            : L"Corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid");
+        return notes;
+    }
     if (page == MenuPage::Crop) {
         // The FOV follows at once; the views' pixels only without DLSS (and up to the launch size).
         if (menu.launch.dlssHeld)
@@ -569,6 +604,10 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = std::to_wstring(c.nrPasses);
         else if (items[i] == MenuItem::Outline)
             line.value = v.outline ? L"On" : L"Off";
+        else if (items[i] == MenuItem::Shape)
+            line.value = v.shape.corners ? L"Corners" : L"Box";
+        else if (items[i] == MenuItem::Corners && v.shape.corners)
+            line.value = L"Corner shape";
         else if (items[i] == MenuItem::EyeTracking)
             line.value = v.eyeTracking ? L"On" : L"Off";
         else if (items[i] == MenuItem::Overlay)

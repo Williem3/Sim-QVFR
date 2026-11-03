@@ -124,6 +124,10 @@ void Canvas::stroke(const Rect& r, Color c, float width, float radius) {
         target_->DrawRectangle(in.d2d(), brush(c), width);
 }
 
+void Canvas::fill(ID2D1Geometry* g, Color c) { target_->FillGeometry(g, brush(c)); }
+
+void Canvas::stroke(ID2D1Geometry* g, Color c, float width) { target_->DrawGeometry(g, brush(c), width); }
+
 void Canvas::line(float x0, float y0, float x1, float y1, Color c, float width) {
     target_->DrawLine(D2D1::Point2F(x0, y0), D2D1::Point2F(x1, y1), brush(c), width, round_.Get());
 }

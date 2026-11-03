@@ -328,6 +328,25 @@ int main() {
                   iniText.find("gaze_offset_y=3") != std::string::npos,
               "settings: both vertical offsets are written (negative too) and read back");
         {
+            // The focus shape: a box by default (the shipped ini has no shape keys); corners round-trip.
+            Settings f = reread;
+            check(!f.shape.corners && f.shape == aceqv::FocusShape{}, "settings: the focus shape is a box by default");
+            f.shape.corners = true;
+            f.shape.in[static_cast<int>(aceqv::FocusCorner::TopLeft)] = 25;
+            f.shape.in[static_cast<int>(aceqv::FocusCorner::TopRight)] = 25;
+            f.shape.vertical[static_cast<int>(aceqv::FocusCorner::BottomLeft)] = 60;  // clamps to kFocusCornerMax
+            save_live_settings(ini, f);
+            std::string shapeText;
+            read_file(ini, shapeText);
+            const Settings shape = load_settings(ini);
+            check(shape.shape.corners && shape.shape.in[0] == 25 && shape.shape.in[1] == 25 &&
+                      shape.shape.vertical[static_cast<int>(aceqv::FocusCorner::BottomLeft)] == aceqv::kFocusCornerMax &&
+                      shapeText.find("focus_shape=corners") != std::string::npos &&
+                      shapeText.find("shape_top_left_in=25") != std::string::npos,
+                  "settings: the corner shape is written live and read back, its insets clamped");
+            save_settings(ini, reread);
+        }
+        {
             // The Diagnostics pane's switches: the CPU capture and the one launch without QVFR.
             Settings d = reread;
             d.cpuProfile = true;

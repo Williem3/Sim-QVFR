@@ -484,6 +484,40 @@ int main() {
         std::printf("%s eye 0 rounded outline on the arc got %3u,%3u,%3u (teal)\n", onArc ? "ok  " : "FAIL", arc[0], arc[1], arc[2]);
         failures += onArc ? 0 : 1;
 
+        // Corner shape: eye 0's top corners pulled 40% in (a trapezoid, the top edge 0.4..0.6 of the box, the
+        // left edge from there to the bottom-left corner). It replaces the rounded corners; the outline
+        // follows the slanted edge.
+        v4[0].border = 0;
+        v4[0].cornerInset[0] = 0.4f;  // top left, across
+        v4[0].cornerInset[2] = 0.4f;  // top right, across
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with a corner shape\n");
+            return 1;
+        }
+        const Pixels trapezoid = read_back(gpu, output.Get());
+        expect(trapezoid, 0, 0.27f, 0.27f, "outer", 255, 0, 0);  // the box's top-left corner, cut off
+        expect(trapezoid, 0, 0.73f, 0.27f, "outer", 255, 0, 0);  // top-right
+        expect(trapezoid, 0, 0.27f, 0.50f, "outer", 255, 0, 0);  // left of the slanted edge halfway down
+        expect(trapezoid, 0, 0.50f, 0.27f, "focus", 0, 255, 0);  // top edge midpoint
+        expect(trapezoid, 0, 0.27f, 0.73f, "focus", 0, 255, 0);  // bottom-left corner, kept
+        expect(trapezoid, 0, 0.73f, 0.73f, "focus", 0, 255, 0);  // bottom-right (not rounded)
+        expect(trapezoid, 0, 0.40f, 0.50f, "focus", 0, 255, 0);
+        expect(trapezoid, 1, 0.27f, 0.27f, "focus", 255, 255, 0);  // eye 1 keeps the box
+        v4[0].border = 0.05f;
+        if (!c4.compose(views.Get(), output.Get(), v4)) {
+            std::printf("FAIL: views4 compose with a corner shape outline\n");
+            return 1;
+        }
+        const Pixels slant = read_back(gpu, output.Get());
+        // Halfway down, the left edge is at 0.2 of the box: 0.23 is just inside it, within the outline.
+        const uint8_t* side = slant.at(static_cast<UINT>((0.25f + 0.5f * 0.23f) * (kOutW / 2)), kOutH / 2);
+        const bool onSide = side[0] == 0 && std::abs(side[1] - 160) <= 2 && std::abs(side[2] - 160) <= 2;
+        std::printf("%s eye 0 corner shape outline on the slanted edge got %3u,%3u,%3u (teal)\n", onSide ? "ok  " : "FAIL",
+                    side[0], side[1], side[2]);
+        failures += onSide ? 0 : 1;
+        expect(slant, 0, 0.50f, 0.50f, "focus", 0, 255, 0);
+        std::memset(v4[0].cornerInset, 0, sizeof(v4[0].cornerInset));
+
         // FOV crop: eye 0 drawn into the top-left 50% x 75% of its half; the rest left as it was.
         clear_eyes(gpu, output.Get(), black, black);
         v4[0].border = 0;

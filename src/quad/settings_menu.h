@@ -8,6 +8,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "focus_offset.h"
+#include "focus_shape.h"
 #include "gaze_deadzone.h"
 #include "helmet.h"
 #include "osd.h"
@@ -19,6 +20,9 @@ enum class MenuItem {
     Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking,
     FocusOffset,  // the vertical offset of the mode in use (eye tracked or fixed; focus_offset.h)
     GazeDeadzone,  // how far the gaze moves before the focus box follows (gaze_deadzone.h)
+    // The Focus shape page (focus_shape.h): box or corners, then each corner's insets.
+    Shape, ShapeTopLeftIn, ShapeTopLeftDown, ShapeTopRightIn, ShapeTopRightDown, ShapeBottomLeftIn, ShapeBottomLeftUp,
+    ShapeBottomRightIn, ShapeBottomRightUp,
     // The Overlay and menu page: the performance overlay ([osd], osd.h) and the panels' places.
     Overlay, OverlayYaw, OverlayPitch, OverlayWidth, MenuYaw, MenuPitch, MenuWidth,
     // The page switch, and with Cheeky running the Foveated DLSS page ([cheeky], cheeky_settings.h).
@@ -57,6 +61,7 @@ struct MenuValues {
     bool eyeTracking = true;  // [quad] gaze
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone, tenths of a degree
+    FocusShape shape;         // [quad] focus_shape and its corners
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
     bool crop = false;        // [crop] enabled (QVFR)
@@ -100,9 +105,9 @@ struct SettingsMenu {
     int optimizeRequest = 0;      // set by menu_key on Optimize: 1 run or stop, -1 undo; the layer takes it
 };
 
-// The menu's pages: the method's settings, for QVFR the view crop and the helmet, with Cheeky running
-// Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
-enum class MenuPage { Settings, Crop, Helmet, Dlss, Fg, Headset };
+// The menu's pages: the method's settings, the focus area's shape, for QVFR the view crop and the helmet, with
+// Cheeky running Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
+enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, Headset };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 
