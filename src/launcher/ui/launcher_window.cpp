@@ -1,5 +1,5 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Launch checks, Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, OpenXR layers, Diagnostics,
+// of panes (Launch checks, Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, Hotkeys, OpenXR layers, Diagnostics,
 // Report an issue, About), grouped forms with
 // the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
 // to drag the in-headset settings menu around), and an action bar with the status badge,
@@ -29,6 +29,7 @@
 #include "../preflight.h"
 #include "../report.h"
 #include "../settings.h"
+#include "../../input/pad_input.h"
 #include "../../sha256_file.h"
 #include "canvas.h"
 #include "launcher_version.h"
@@ -42,8 +43,8 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Checks, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, Report, About };
-constexpr int kPanes = 11;
+enum class Pane { Checks, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
+constexpr int kPanes = 12;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -67,7 +68,9 @@ enum Ctl {
     // capture switch, copying the summary, the logs folder).
     kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
     // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
-    kCheckFix, kChecksBadge
+    kCheckFix, kChecksBadge,
+    // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
+    kHotkeyKey, kHotkeyPad, kHotkeysReset
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -78,6 +81,13 @@ constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
 // The exe's hash, done on a worker: its message carries a new std::string (the hex digest).
 constexpr UINT kHashedMessage = WM_APP + 1;
+// The Hotkeys pane catching a wheel or controller button: polled this often.
+constexpr UINT_PTR kCaptureTimer = 2;
+constexpr UINT kCaptureMs = 30;
+// The hotkeys' names, in HotkeyAction's order.
+constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {L"Open or close", L"Up",      L"Down",         L"Left",
+                                                          L"Right",         L"Overlay",       L"Helmet visor",
+                                                          L"CPU capture"};
 
 struct Hit {
     Ctl id;
@@ -161,6 +171,13 @@ struct App {
     uint64_t hashedStamp = 0;
     std::string exeSha;
     bool hashing = false;
+    // The Hotkeys pane: the action catching a press (-1: none), from the keyboard or (capturePad) a wheel or
+    // controller, whose controls already held when it started don't count (captureHeld).
+    int captureAction = -1;
+    bool capturePad = false;
+    PadInput pads;
+    bool padsOpen = false;
+    std::vector<PadHeld> captureHeld;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -359,6 +376,7 @@ std::vector<Ctl> focus_order() {
     std::vector<Ctl> order = {kSidebar};
     switch (app.pane) {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
+    case Pane::Hotkeys: order.push_back(kHotkeysReset); break;  // the bindings are the mouse's, as the fix buttons
     case Pane::Rendering: order.insert(order.end(), {kMethod, kMode}); break;
     case Pane::Resolution:
         order.push_back(kOuter);
@@ -1269,6 +1287,89 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     return h;
 }
 
+// The wheels and controllers DirectInput finds (opened when the Hotkeys pane shows), for the pane's note.
+void open_pads() {
+    if (!app.padsOpen)
+        app.padsOpen = app.pads.open(app.hwnd);
+    else
+        app.pads.rescan();  // a wheel plugged in since
+}
+
+std::wstring pads_found() {
+    if (!app.padsOpen)
+        return L"DirectInput isn’t available: wheel and controller buttons can’t be read.";
+    std::wstring names;
+    for (const auto& [id, name] : app.pads.devices())
+        names += (names.empty() ? L"" : L", ") + name;
+    return names.empty() ? L"No wheel or controller found: plug it in, then come back to this pane."
+                         : L"Found: " + names + L".";
+}
+
+// Hotkeys ([hotkeys], input/hotkeys.h): each action's key and wheel button. Click one, then press.
+float hotkeys_pane(float x, float y, float w, bool draw) {
+    static const wchar_t* const kDescriptions[kHotkeyActions] = {
+        L"Opens the headset menu, or closes it.",
+        L"Selects the line above.",
+        L"Selects the line below.",
+        L"Lowers the selected value.",
+        L"Raises the selected value.",
+        L"Turns the performance overlay on or off.",
+        L"Steps the helmet’s visor: closed, half, open.",
+        L"Records a CPU capture, with CPU capture on in the Diagnostics pane."};
+    const float slotW = 136;
+    const auto row = [slotW](HotkeyAction action) {
+        const int a = static_cast<int>(action);
+        const Hotkey& h = app.s.hotkeys[a];
+        Row r;
+        r.label = kHotkeyLabels[a];
+        r.desc = kDescriptions[a];
+        if (h.pad.set())
+            r.desc += L" Wheel button on " + (h.pad.name.empty() ? h.pad.device : h.pad.name) + L".";
+        if (const int other = hotkey_clash(app.s.hotkeys, action, false); other >= 0)
+            r.desc += L" " + key_text(h.key) + L" is also " + kHotkeyLabels[other] + L".";
+        if (const int other = hotkey_clash(app.s.hotkeys, action, true); other >= 0)
+            r.desc += L" Its wheel button is also " + std::wstring(kHotkeyLabels[other]) + L".";
+        r.controlW = 2 * slotW + t::kSpace2;
+        r.controlH = t::kControlHeight;
+        r.control = [a, slotW](const Rect& rect) {
+            const Hotkey& k = app.s.hotkeys[a];
+            const bool keyCapture = app.captureAction == a && !app.capturePad, padCapture = app.captureAction == a && app.capturePad;
+            const std::wstring keyLabel = keyCapture ? L"Press keys…" : k.key.set() ? key_text(k.key) : L"No key";
+            const std::wstring padLabel = padCapture ? L"Press a button…" : k.pad.set() ? control_text(k.pad.control) : L"No wheel button";
+            button(kHotkeyKey, {rect.x, rect.y, slotW, rect.h}, keyLabel, keyCapture);
+            app.hits.back().option = a;
+            button(kHotkeyPad, {rect.x + slotW + t::kSpace2, rect.y, slotW, rect.h}, padLabel, padCapture);
+            app.hits.back().option = a;
+        };
+        return r;
+    };
+    float h = 0;
+    h += section(x, y + h, w, L"Headset menu",
+                 {row(HotkeyAction::MenuToggle), row(HotkeyAction::MenuUp), row(HotkeyAction::MenuDown),
+                  row(HotkeyAction::MenuLeft), row(HotkeyAction::MenuRight)},
+                 L"A key’s first press also opens the menu. A wheel’s directions act only while the menu shows, so a "
+                 L"switch the game also uses doesn’t open it: use Open or close first. " + pads_found(),
+                 draw) +
+         t::kSpace6;
+    h += section(x, y + h, w, L"In the game",
+                 {row(HotkeyAction::Overlay), row(HotkeyAction::Visor), row(HotkeyAction::CpuCapture)},
+                 L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever "
+                 L"the game runs. Click a button above, then press the keys or the wheel button: Esc cancels, Delete "
+                 L"clears it. They apply to a running game at once.",
+                 draw) +
+         t::kSpace6;
+    Row reset;
+    reset.fullHeight = [](float) { return t::kControlHeight; };
+    reset.full = [](const Rect& r) {
+        const float resetW = std::ceil(app.canvas.measure(L"Reset hotkeys", t::kBody)) + 2 * t::kSpace3;
+        button(kHotkeysReset, {r.x, r.y, resetW, t::kControlHeight}, L"Reset hotkeys", false);
+    };
+    h += section(x, y + h, w, L"", {reset}, L"Back to Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V and Ctrl+Alt+C, without wheel buttons. "
+                                        L"Restore Defaults leaves the hotkeys as they are.",
+                 draw);
+    return h;
+}
+
 // Launch checks (preflight.h): what needs attention first, each with its fix, then what is ready.
 float checks_pane(float x, float y, float w, bool draw) {
     static const wchar_t* const kToneText[] = {L"OK", L"Check", L"Problem", L"Checking"};  // CheckTone's order
@@ -1314,6 +1415,7 @@ float pane_content(float x, float y, float w, bool draw) {
     float h = 0;
     switch (app.pane) {
     case Pane::Checks: h += checks_pane(x, y, w, draw); break;
+    case Pane::Hotkeys: h += hotkeys_pane(x, y, w, draw); break;
     case Pane::Rendering: {
         Row method, mode;
         method.label = L"Rendering method";
@@ -2026,6 +2128,7 @@ const Item kItems[] = {
     {L"Focus overlay", {"M5 5H11V11H5Z", nullptr, nullptr}},
     {L"Foveated DLSS", {"M8 1.75L9.6 6.4 14.25 8 9.6 9.6 8 14.25 6.4 9.6 1.75 8 6.4 6.4Z", nullptr, nullptr}},
     {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
+    {L"Hotkeys", {"M2.25 4.25H13.75V11.75H2.25Z", "M4.75 6.75H5.25M7.75 6.75H8.25M10.75 6.75H11.25", "M5.25 9.25H10.75"}},
     {L"OpenXR layers", {"M2.5 4.5H10.5", "M2.5 8H10.5", "M2.5 11.5H10.5"}},
     {L"Diagnostics", {"M1.5 8.5H4.5L6.25 4.5L9.75 11.5L11.5 8.5H14.5", nullptr, nullptr}},
     {L"Report an issue", {"M3.5 14.25V2", "M3.5 2.75H12.5L10.5 5.5L12.5 8.25H3.5", nullptr}},
@@ -2449,6 +2552,84 @@ void choose_cheeky_runtime() {
 
 void activate(Ctl id, int option);
 
+void end_capture() {
+    if (app.captureAction < 0)
+        return;
+    app.captureAction = -1;
+    KillTimer(app.hwnd, kCaptureTimer);
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// The Hotkeys pane: `action`'s key or (pad) wheel button takes the next press.
+void start_capture(int action, bool pad) {
+    if (pad) {
+        open_pads();
+        if (!app.padsOpen) {
+            MessageBoxW(app.hwnd, L"DirectInput isn’t available, so wheel and controller buttons can’t be read.", L"QVFR Launcher",
+                        MB_OK | MB_ICONWARNING);
+            return;
+        }
+        app.captureHeld = app.pads.poll();
+        SetTimer(app.hwnd, kCaptureTimer, kCaptureMs, nullptr);
+    }
+    app.captureAction = action;
+    app.capturePad = pad;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+void set_hotkey(const KeyCombo* key, const PadControl* pad) {
+    Hotkey& h = app.s.hotkeys[app.captureAction];
+    if (key)
+        h.key = *key;
+    if (pad)
+        h.pad = *pad;
+    end_capture();
+    changed();
+}
+
+// A key while catching one: Esc cancels, Delete or Backspace alone clears, modifiers wait for their key.
+bool capture_key(WPARAM vk) {
+    if (app.captureAction < 0)
+        return false;
+    const bool ctrl = GetKeyState(VK_CONTROL) < 0, alt = GetKeyState(VK_MENU) < 0, shift = GetKeyState(VK_SHIFT) < 0;
+    if (vk == VK_ESCAPE) {
+        end_capture();
+    } else if ((vk == VK_DELETE || vk == VK_BACK) && !ctrl && !alt && !shift) {
+        const KeyCombo none;
+        const PadControl noPad;
+        set_hotkey(app.capturePad ? nullptr : &none, app.capturePad ? &noPad : nullptr);
+    } else if (!app.capturePad && vk != VK_CONTROL && vk != VK_MENU && vk != VK_SHIFT && vk != VK_LWIN && vk != VK_RWIN) {
+        const KeyCombo key{static_cast<int>(vk), ctrl, alt, shift};
+        set_hotkey(&key, nullptr);
+    }
+    return true;
+}
+
+// The capture timer: the first control pressed that wasn't held when the capture started.
+void capture_poll() {
+    if (app.captureAction < 0 || !app.capturePad)
+        return;
+    const std::vector<PadHeld> held = app.pads.poll();
+    const auto in = [](const std::vector<PadHeld>& list, const PadHeld& p) {
+        for (const PadHeld& q : list)
+            if (q.control == p.control && q.device == p.device)
+                return true;
+        return false;
+    };
+    for (const PadHeld& p : held)
+        if (!in(app.captureHeld, p)) {
+            const PadControl pad{p.device, p.control, p.name};
+            set_hotkey(nullptr, &pad);
+            return;
+        }
+    // A control let go since counts when pressed again.
+    std::vector<PadHeld> still;
+    for (const PadHeld& p : app.captureHeld)
+        if (in(held, p))
+            still.push_back(p);
+    app.captureHeld = std::move(still);
+}
+
 // A launch check's button (preflight.h's CheckFix).
 void fix_check(const Check& c) {
     switch (c.fix) {
@@ -2474,16 +2655,28 @@ void fix_check(const Check& c) {
 }
 
 void activate(Ctl id, int option) {
+    end_capture();  // any click ends catching a hotkey (one on a hotkey's button starts again)
     switch (id) {
     case kSidebar:
         app.pane = static_cast<Pane>(option);
         app.scroll = 0;
         if (app.pane == Pane::Layers)
             refresh_layers();
+        if (app.pane == Pane::Hotkeys)
+            open_pads();
         if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
             app.runtime = load_runtime_info(runtime_info_path());
         break;
     case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
+    case kHotkeyKey:
+    case kHotkeyPad:
+        if (option >= 0 && option < kHotkeyActions)
+            start_capture(option, id == kHotkeyPad);
+        return;
+    case kHotkeysReset:
+        app.s.hotkeys = default_hotkeys();
+        changed();
+        return;
     case kCheckFix:
         if (option >= 0 && option < static_cast<int>(app.checks.size()))
             fix_check(app.checks[option]);
@@ -2554,10 +2747,13 @@ void activate(Ctl id, int option) {
     case kCheekyOuter: app.s.cheeky.outerDlaa = !app.s.cheeky.outerDlaa; changed(); return;
     case kCheekyRuntime: choose_cheeky_runtime(); return;
     case kColor: app.s.color = static_cast<OutlineColor>(option); changed(); return;
-    case kRestore:
+    case kRestore: {
+        const Hotkeys hotkeys = app.s.hotkeys;  // the Hotkeys pane resets those
         app.s = Settings{};
+        app.s.hotkeys = hotkeys;
         changed();
         return;
+    }
     case kLaunch: launch(); return;
     case kSupport: ShellExecuteW(app.hwnd, L"open", kSupportUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     default: break;
@@ -2735,6 +2931,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         }
         break;
     case WM_TIMER:
+        if (wParam == kCaptureTimer)
+            capture_poll();
         if (wParam == kFollowTimer) {
             follow_ini();
             // Launch checks: Steam, ACE, the layers and the game folder change outside the launcher.
@@ -2880,8 +3078,18 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         }
         return 0;
     case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:  // Alt held: the Hotkeys pane catches Alt combinations
+        if (capture_key(wParam))
+            return 0;
+        if (message == WM_SYSKEYDOWN)
+            break;
         on_key(wParam);
         return 0;
+    case WM_SYSCHAR:
+    case WM_SYSKEYUP:
+        if (app.captureAction >= 0)
+            return 0;  // no beep, and no system menu when Alt is let go, while catching a key
+        break;
     case WM_GETDLGCODE:
         return DLGC_WANTALLKEYS;
     case WM_DESTROY:

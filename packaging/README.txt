@@ -27,6 +27,12 @@ Start
 The window
 ----------
 Settings save as you change them and apply at the next launch.
+- Hotkeys: a key and a wheel, button box or controller button for opening and closing the headset
+  menu, moving through it (up, down, lower, raise), the performance overlay, the helmet's visor and a CPU
+  capture. Click a binding, then press the keys or the wheel button (Esc cancels, Delete clears); the pane
+  lists the wheels and controllers it finds. Keys work while the game window has focus, wheel buttons
+  whenever the game runs; a wheel's menu buttons act only while the menu shows, so bind Open or close too.
+  Changes apply to a running game at once. Defaults: Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C.
 - Launch checks: what would stop ace-quadview at the next launch, each with a fix: a game update
   (ace-quadview supports one AssettoCorsaEVO.exe build; after an update it stays off and the game runs
   as normal, and the headset says so for the first 30 seconds), Steam not running, the game already
@@ -51,7 +57,7 @@ Settings save as you change them and apply at the next launch.
   (chin bar) and visor.png, PNGs with alpha of the whole face from inside the helmet. Replace them
   with your own to change it (delete them for the drawn rim instead). They're shown as their own layer over the game, so frame generation
   isn't disturbed. Size and Height place them, Depth sets how far in front of your eyes they sit
-  (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096, sharper); the Visor is Closed, Half or Open (Ctrl+Alt+V in the game). The
+  (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096, sharper); the Visor is Closed, Half or Open (its hotkey, Ctrl+Alt+V). The
   headset menu's Helmet page has them all. The log suggests the crop that matches their opening.
 - Foveation: Foveated width and Foveated height, each a share of the outer view, and Corner radius
   (rounds the focus region's corners; 0 = square, 100% = fully round ends).
@@ -62,7 +68,7 @@ Settings save as you change them and apply at the next launch.
 - Headset menu: where the in-headset settings menu floats, and the performance overlay (on/off,
   where it floats and its size; drag either in the preview): frame rate and pacing, CPU and GPU time
   with their headroom and which one limits the frame, VRAM, frame generation and eye tracking.
-  Ctrl+Alt+P in the game turns it on and off; the headset menu's Overlay and menu page moves both.
+  Its hotkey (Ctrl+Alt+P) turns it on and off in the game; the headset menu's Overlay and menu page moves both.
 - The preview shows the focus region and the resulting view sizes. Pixel sizes appear after the
   first launch, once the headset has reported its recommended resolution (runtime.ini).
 - Restore Defaults returns to the kit's defaults. Return launches the game.

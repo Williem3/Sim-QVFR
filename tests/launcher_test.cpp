@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include "engine/ace_abi.h"
+#include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/layer_order.h"
 #include "launcher/preflight.h"
@@ -19,6 +20,7 @@
 #include "launcher/settings.h"
 #include "sha256_file.h"
 
+using namespace aceqv;
 using namespace aceqv::launcher;
 namespace fs = std::filesystem;
 
@@ -965,6 +967,68 @@ int main() {
         check(aceqv::sha256_file(hashed.c_str()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
                   aceqv::sha256_file((folder / "missing").c_str()).empty(),
               "sha256_file: a known digest; empty for a missing file");
+    }
+
+    // Hotkeys (input/hotkeys.h): key and wheel control text both ways, hats, the ini, clashes, the launcher's settings.
+    {
+        KeyCombo k;
+        check(parse_key(L"Ctrl+Alt+P", k) && k == KeyCombo{'P', true, true, false} && key_text(k) == L"Ctrl+Alt+P",
+              "hotkeys: Ctrl+Alt+P both ways");
+        check(parse_key(L"shift+f5", k) && k == KeyCombo{VK_F5, false, false, true} && key_text(k) == L"Shift+F5",
+              "hotkeys: names and modifiers in any case");
+        check(parse_key(L"Ctrl+Num +", k) && k.vk == VK_ADD && k.ctrl && key_text(k) == L"Ctrl+Num +" &&
+                  parse_key(L"Alt+Page Down", k) && k.vk == VK_NEXT && parse_key(L"Num 7", k) && k.vk == VK_NUMPAD7,
+              "hotkeys: a key named with a plus, a space, the number pad");
+        check(parse_key(key_text(KeyCombo{0xE2, false, true, false}), k) && k.vk == 0xE2,
+              "hotkeys: a key without a name round-trips by its number");
+        check(!parse_key(L"", k) && !parse_key(L"Ctrl+", k) && !parse_key(L"Ctrl+Alt", k) && !parse_key(L"Hyper+P", k) &&
+                  !parse_key(L"F25", k),
+              "hotkeys: not keys");
+        check(key_text(KeyCombo{}).empty(), "hotkeys: no key, no text");
+
+        PadControl pad;
+        check(parse_pad(L"0EB7_0020:button13:Fanatec Wheel", pad) && pad.device == L"0EB7_0020" && pad.control == 12 &&
+                  pad.name == L"Fanatec Wheel" && pad_value(pad) == L"0EB7_0020:button13:Fanatec Wheel" &&
+                  control_text(pad.control) == L"Button 13",
+              "hotkeys: a wheel button both ways, numbered from 1 as Windows shows it");
+        check(parse_pad(L"046D_C24F:hat1left:G29", pad) && pad.control == kPadHatBase + kHatLeft && control_text(pad.control) == L"Hat left" &&
+                  parse_pad(L"046D_C24F:hat2up:", pad) && pad.control == kPadHatBase + 4 + kHatUp &&
+                  control_text(pad.control) == L"Hat 2 up" && pad_value(pad) == L"046D_C24F:hat2up:",
+              "hotkeys: hat directions");
+        check(!parse_pad(L"", pad) && !parse_pad(L"046D_C24F:button0:", pad) && !parse_pad(L"046D_C24F:button129:", pad) &&
+                  !parse_pad(L":button1:", pad) && !parse_pad(L"046D_C24F:hat5up:", pad) && !parse_pad(L"046D_C24F:hat1in:", pad),
+              "hotkeys: not wheel controls");
+        check(pad_value(PadControl{L"1234_5678", 0, L"Box; v2\r\n"}) == L"1234_5678:button1:Box  v2  ",
+              "hotkeys: a name keeps no ini comment or line break");
+        check(hat_directions(0xFFFFFFFF) == 0 && hat_directions(0) == (1u << kHatUp) && hat_directions(9000) == (1u << kHatRight) &&
+                  hat_directions(4500) == ((1u << kHatUp) | (1u << kHatRight)) && hat_directions(27000) == (1u << kHatLeft) &&
+                  hat_directions(31500) == ((1u << kHatLeft) | (1u << kHatUp)),
+              "hotkeys: a hat's angle, diagonals holding two directions");
+
+        const std::wstring hotkeysIni = (folder / "hotkeys.ini").wstring();
+        const Hotkeys defaults = default_hotkeys();
+        check(read_hotkeys(hotkeysIni.c_str()) == defaults &&
+                  key_text(defaults[static_cast<int>(HotkeyAction::Overlay)].key) == L"Ctrl+Alt+P" &&
+                  !defaults[static_cast<int>(HotkeyAction::MenuToggle)].key.set(),
+              "hotkeys: unset, the defaults (no open/close key)");
+        Hotkeys changedKeys = defaults;
+        changedKeys[static_cast<int>(HotkeyAction::Visor)].key = {};
+        changedKeys[static_cast<int>(HotkeyAction::MenuToggle)].pad = {L"0EB7_0020", 4, L"Wheel"};
+        changedKeys[static_cast<int>(HotkeyAction::MenuUp)].pad = {L"0EB7_0020", kPadHatBase + kHatUp, L"Wheel"};
+        check(write_hotkeys(hotkeysIni.c_str(), changedKeys) && read_hotkeys(hotkeysIni.c_str()) == changedKeys,
+              "hotkeys: written and read back, a cleared key staying cleared");
+        changedKeys[static_cast<int>(HotkeyAction::Overlay)].key = changedKeys[static_cast<int>(HotkeyAction::CpuCapture)].key;
+        changedKeys[static_cast<int>(HotkeyAction::MenuDown)].pad = changedKeys[static_cast<int>(HotkeyAction::MenuToggle)].pad;
+        check(hotkey_clash(changedKeys, HotkeyAction::Overlay, false) == static_cast<int>(HotkeyAction::CpuCapture) &&
+                  hotkey_clash(changedKeys, HotkeyAction::MenuToggle, true) == static_cast<int>(HotkeyAction::MenuDown) &&
+                  hotkey_clash(changedKeys, HotkeyAction::Visor, false) == -1 && hotkey_clash(changedKeys, HotkeyAction::Visor, true) == -1,
+              "hotkeys: clashes, but none between two unset ones");
+
+        Settings withKeys;
+        withKeys.hotkeys[static_cast<int>(HotkeyAction::Overlay)].key = {VK_F9, false, false, false};
+        check(save_settings(hotkeysIni, withKeys) &&
+                  load_settings(hotkeysIni).hotkeys[static_cast<int>(HotkeyAction::Overlay)].key.vk == VK_F9,
+              "hotkeys: saved and loaded with the launcher's settings (the live keys)");
     }
 
     fs::remove_all(folder, ec);

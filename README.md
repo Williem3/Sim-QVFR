@@ -42,7 +42,7 @@ which one limits the frame, VRAM, frame generation and eye tracking. The GPU tim
 from Windows' GPU engine counters (`src/probe/gpu_load.h`), so the runtime's compositor and frame
 generation count too, split by who used it. The CPU time includes ACE's busiest thread
 (`src/probe/cpu_load.h`) as well as the render thread. Turn it on in the
-launcher's Headset menu pane, from the headset menu, or with Ctrl+Alt+P in the game; the pane and the
+launcher's Headset menu pane, from the headset menu, or with its hotkey in the game (Ctrl+Alt+P); the pane and the
 headset menu's Overlay and menu page also place it, as they place the menu.
 
 **Field-of-view crop (`[crop]`, QVFR only, off by default).** Narrows each eye's field of view before
@@ -63,7 +63,7 @@ fixed to the head with a size, height and depth (how far in front of your eyes, 
 They're drawn into a head-locked layer of their own that the headset composites after any frame
 generation, so the scene keeps the FOV ACE rendered and Cheeky's frame generation stays aligned. Only
 the bands the pieces draw on are rendered and composited, at 2048 or, with `detail`, 4096 pixels a side.
-The visor slides closed, half or open (Ctrl+Alt+V in the game), and the log suggests the crop that
+The visor slides closed, half or open (its hotkey, Ctrl+Alt+V), and the log suggests the crop that
 matches the images' opening. It applies live, from the launcher's Resolution pane or the headset
 menu's Helmet page.
 
@@ -162,6 +162,14 @@ game folder, and with Cheeky on its runtime, its OpenXR layer, OpenXR Toolkit's 
 Toolkit's Turbo mode with frame generation. The action bar shows the first problem; Launch asks before
 starting a game that would crash or run without the layer. After a game update the layer refuses to patch,
 ACE runs unchanged, and the headset shows a notice for the first 30 seconds saying so.
+
+**Hotkeys (`[hotkeys]`).** The launcher's Hotkeys pane sets a keyboard combination and a wheel, button box or
+controller button for each of the layer's actions in the game: the headset menu's open/close and its four
+directions, the performance overlay, the helmet's visor and a CPU capture (`src/input/hotkeys.h`). Click a
+binding, then press the keys or the wheel button. Keys act while ACE has focus; wheel buttons are read through
+DirectInput on a thread of the layer's own whenever one is bound (`src/input/pad_input.h`), whatever has focus,
+including D-pad hats. A wheel's menu directions act only while the menu shows, so a switch the game also uses
+doesn't open it. They reload live.
 
 OpenXR layer order: the layer is loaded nearest the game. Every enabled implicit layer that can be
 switched off per launch (OpenXR Toolkit, VectorXR, ...) is loaded below it instead, in registry
