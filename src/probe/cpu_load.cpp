@@ -142,6 +142,7 @@ void run() {
     std::map<uint32_t, uint64_t> before = snapshot();
     uint64_t tsc = __rdtsc();
     int sampled = 0;
+    std::map<uint32_t, bool> spins;  // thread id -> it spins (cpu_load_spins), cleared at each refresh (ids are reused)
     std::unique_lock lock(worker.mutex);
     while (!worker.stop) {
         worker.wake.wait_for(lock, std::chrono::milliseconds(kCpuLoadMs), [] { return worker.stop; });
@@ -149,14 +150,30 @@ void run() {
             break;
         lock.unlock();
         // A refresh only adds threads (they count from their next sample, as cpu_load_from skips new ones).
-        if (++sampled % kRefreshSamples == 0)
+        if (++sampled % kRefreshSamples == 0) {
             refresh_threads();
+            spins.clear();
+        }
         const std::map<uint32_t, uint64_t> after = snapshot();
         const uint64_t now = __rdtsc();
-        CpuLoad load = cpu_load_from(before, after, now - tsc, worker.render.load());
-        if (load.valid)
-            load.busiestName = describe(load.busiestThread);
         const std::map<uint32_t, double> shares = cpu_load_shares(before, after, now - tsc);
+        // The spinning threads among the busiest: described busiest first, until one that does not spin.
+        std::vector<std::pair<double, uint32_t>> busiest;
+        for (const auto& [id, percent] : shares)
+            busiest.push_back({percent, id});
+        std::sort(busiest.rbegin(), busiest.rend());
+        std::set<uint32_t> spinning;
+        for (const auto& [percent, id] : busiest) {
+            auto known = spins.find(id);
+            if (known == spins.end())
+                known = spins.emplace(id, cpu_load_spins(describe(id))).first;
+            if (!known->second)
+                break;
+            spinning.insert(id);
+        }
+        CpuLoad load = cpu_load_from(before, after, now - tsc, worker.render.load(), spinning);
+        if (load.busiestThread)
+            load.busiestName = describe(load.busiestThread);
         before = after;
         tsc = now;
         lock.lock();
@@ -183,7 +200,7 @@ void run() {
 }  // namespace
 
 CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map<uint32_t, uint64_t>& after,
-                      uint64_t elapsedCycles, uint32_t renderThread) {
+                      uint64_t elapsedCycles, uint32_t renderThread, const std::set<uint32_t>& spinning) {
     CpuLoad load;
     if (!elapsedCycles)
         return load;
@@ -192,17 +209,21 @@ CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map
         if (was == before.end() || cycles < was->second)
             continue;  // new this span: its cycles are not all from it
         const double percent = 100.0 * static_cast<double>(cycles - was->second) / static_cast<double>(elapsedCycles);
+        load.valid = true;
         ++load.threads;
         load.processPercent += percent;
         if (id == renderThread)
             load.renderPercent = percent;
-        if (!load.valid || percent > load.busiestPercent) {
-            load.valid = true;
+        if (!spinning.count(id) && (!load.busiestThread || percent > load.busiestPercent)) {
             load.busiestThread = id;
             load.busiestPercent = percent;
         }
     }
     return load;
+}
+
+bool cpu_load_spins(const std::wstring& name) {
+    return name == L"Physics" || name.find(L"aSeeVRClient") != std::wstring::npos;
 }
 
 std::map<uint32_t, double> cpu_load_shares(const std::map<uint32_t, uint64_t>& before,
@@ -226,7 +247,8 @@ bool cpu_load_start() {
     worker.latest = CpuLoad{};
     worker.running = true;
     worker.thread = std::thread(run);
-    logf("cpu load: sampling ACE's threads every %d ms", kCpuLoadMs);
+    logf("cpu load: sampling ACE's threads every %d ms (the busiest leaves out Physics and the eye tracker's client: they spin)",
+         kCpuLoadMs);
     return true;
 }
 
