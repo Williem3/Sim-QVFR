@@ -41,6 +41,10 @@ constexpr int kPanes = 9;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
+    // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
+    // (FocusCorner's order, across then up or down).
+    kShape, kShapeTopLeftIn, kShapeTopLeftDown, kShapeTopRightIn, kShapeTopRightDown, kShapeBottomRightIn,
+    kShapeBottomRightUp, kShapeBottomLeftIn, kShapeBottomLeftUp,
     // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
@@ -86,6 +90,7 @@ struct Popup {
 constexpr wchar_t kMethodNames[2][32] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced"};
 constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
+constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
 constexpr float kMinWidth = 820, kMinHeight = 540, kDefaultWidth = 960, kDefaultHeight = 600;
 constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes its title bar; ours is native
 // The placement preview's reference view (degrees) and the panel's distance (the layer's kMenuDistance).
@@ -223,6 +228,17 @@ int* slider_value(Ctl id) {
     case kCorner: return &app.s.corner;
     case kFocusOffset: return &app.s.offset.for_mode(app.s.eyeTracking);
     case kGazeDeadzone: return &app.s.gazeDeadzone;
+    case kShapeTopLeftIn:
+    case kShapeTopLeftDown:
+    case kShapeTopRightIn:
+    case kShapeTopRightDown:
+    case kShapeBottomRightIn:
+    case kShapeBottomRightUp:
+    case kShapeBottomLeftIn:
+    case kShapeBottomLeftUp: {
+        const int i = id - kShapeTopLeftIn;
+        return i % 2 ? &app.s.shape.vertical[i / 2] : &app.s.shape.in[i / 2];
+    }
     case kMenuYaw: return &app.s.menuYaw;
     case kMenuPitch: return &app.s.menuPitch;
     case kMenuWidth: return &app.s.menuWidth;
@@ -254,6 +270,14 @@ Range slider_range(Ctl id) {
     case kCorner: return kCornerRange;
     case kFocusOffset: return kFocusOffsetRange;
     case kGazeDeadzone: return kGazeDeadzoneRange;
+    case kShapeTopLeftIn:
+    case kShapeTopLeftDown:
+    case kShapeTopRightIn:
+    case kShapeTopRightDown:
+    case kShapeBottomRightIn:
+    case kShapeBottomRightUp:
+    case kShapeBottomLeftIn:
+    case kShapeBottomLeftUp: return kFocusCornerRange;
     case kMenuYaw: return kMenuYawRange;
     case kMenuPitch: return kMenuPitchRange;
     case kMenuWidth: return kMenuWidthRange;
@@ -296,9 +320,16 @@ std::vector<Ctl> focus_order() {
         }
         break;
     case Pane::Foveation:
-        order.insert(order.end(), {kWidth, kHeight, kCorner, kFocusOffset});
+        order.insert(order.end(), {kWidth, kHeight});
+        if (!app.s.shape.corners)
+            order.push_back(kCorner);
+        order.push_back(kFocusOffset);
         if (app.s.eyeTracking)
             order.push_back(kGazeDeadzone);
+        order.push_back(kShape);
+        if (app.s.shape.corners)  // in reading order, as the pane lists them
+            order.insert(order.end(), {kShapeTopLeftIn, kShapeTopLeftDown, kShapeTopRightIn, kShapeTopRightDown,
+                                       kShapeBottomLeftIn, kShapeBottomLeftUp, kShapeBottomRightIn, kShapeBottomRightUp});
         break;
     case Pane::Overlay:
         order.push_back(kOutline);
@@ -1169,7 +1200,9 @@ float pane_content(float x, float y, float w, bool draw) {
         h += section(x, y + h, w, L"Focus region",
                      {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
                       slider_row(kHeight, L"Foveated height", L"", app.s.height, L""),
-                      slider_row(kCorner, L"Corner radius", L"Rounds the corners of the focus region.", app.s.corner, L""),
+                      slider_row(kCorner, L"Corner radius",
+                                 app.s.shape.corners ? L"Box shape only." : L"Rounds the corners of the focus region.",
+                                 app.s.corner, L"", app.s.shape.corners),
                       app.s.eyeTracking
                           ? slider_row(kFocusOffset, L"Gaze offset",
                                        L"Moves the focus region above (+) or below (−) where you look, if it sits off.",
@@ -1184,6 +1217,27 @@ float pane_content(float x, float y, float w, bool draw) {
                      L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
                      L"vertical offset. All apply live.",
                      draw);
+        h += t::kSpace6;
+        {
+            const std::wstring names[2] = {kShapeNames[0], kShapeNames[1]};
+            Row shape = choice_row(kShape, L"Shape", names, 2, app.s.shape.corners ? 1 : 0, false);
+            shape.desc = L"Box: a rectangle, with the corner radius above. Corners: move each corner in on its own.";
+            const bool off = !app.s.shape.corners;
+            const auto corner = [&](Ctl id, const wchar_t* label) {
+                return slider_row(id, label, L"", *slider_value(id), L"", off);
+            };
+            h += section(x, y + h, w, L"Focus shape",
+                         {shape, corner(kShapeTopLeftIn, L"Top left in"), corner(kShapeTopLeftDown, L"Top left down"),
+                          corner(kShapeTopRightIn, L"Top right in"), corner(kShapeTopRightDown, L"Top right down"),
+                          corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"),
+                          corner(kShapeBottomRightIn, L"Bottom right in"),
+                          corner(kShapeBottomRightUp, L"Bottom right up")},
+                         L"Each corner moves toward the middle of the focus region, percent of its width (in) or "
+                         L"height (down, up). Pull the top corners in for a trapezoid: more of the dash sharp, less "
+                         L"of the far field. The focus view still renders the whole box, so the cost stays the same. "
+                         L"Applies live.",
+                         draw);
+        }
         break;
     }
     case Pane::Overlay: {
@@ -1471,18 +1525,47 @@ float preview(float x, float y, float w, bool draw) {
             for (float iy = 0; iy < H; iy += 4)
                 app.canvas.fill(R(0, iy, W, 2), col(app.c->preview_canvas, 0.55f));
         // Feather: the focus region fades in over feather % of its size, as the compositor blends it;
-        // its corners rounded by corner % of half the shorter side.
+        // its corners rounded by corner % of half the shorter side, or with the corner shape, each corner
+        // pulled in (focus_shape.h; its feather drawn as the quadrilateral shrunk toward its middle).
         const float band = std::min(fw, fh) * app.s.feather / 100.0f;
-        const float corner = std::min(fw, fh) / 2 * app.s.corner / 100.0f;
+        const float corner = app.s.shape.corners ? 0.0f : std::min(fw, fh) / 2 * app.s.corner / 100.0f;
+        const auto quad = [&](float in) {  // the corner shape, `in` from its edges across and down
+            ComPtr<ID2D1PathGeometry> path;
+            app.canvas.factory()->CreatePathGeometry(&path);
+            ComPtr<ID2D1GeometrySink> sink;
+            path->Open(&sink);
+            const float sx = (fw - 2 * in) / fw, sy = (fh - 2 * in) / fh;
+            for (int i = 0; i < kFocusCorners; ++i) {
+                float u, v;
+                focus_corner_point(app.s.shape, static_cast<FocusCorner>(i), u, v);
+                const D2D1_POINT_2F p{x + (fx + fw / 2 + (u - 0.5f) * fw * sx) * k, y + (fy + fh / 2 + (v - 0.5f) * fh * sy) * k};
+                if (i == 0)
+                    sink->BeginFigure(p, D2D1_FIGURE_BEGIN_FILLED);
+                else
+                    sink->AddLine(p);
+            }
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            sink->Close();
+            return path;
+        };
         const int steps = band > 0.5f ? 6 : 1;
         for (int i = 0; i < steps; ++i) {
             const float in = band * i / steps, alpha = steps == 1 ? 1.0f : static_cast<float>(i + 1) / steps;
-            app.canvas.fill(R(fx + in, fy + in, fw - 2 * in, fh - 2 * in), col(app.c->preview_focus, alpha),
-                            std::max(0.0f, corner - in) * k);
+            if (app.s.shape.corners)
+                app.canvas.fill(quad(in).Get(), col(app.c->preview_focus, alpha));
+            else
+                app.canvas.fill(R(fx + in, fy + in, fw - 2 * in, fh - 2 * in), col(app.c->preview_focus, alpha),
+                                std::max(0.0f, corner - in) * k);
         }
         // The focus region's finer grid (the kit's focus pattern), on its own grid origin, inside its shape.
-        ComPtr<ID2D1RoundedRectangleGeometry> shape;
-        app.canvas.factory()->CreateRoundedRectangleGeometry(D2D1::RoundedRect(R(fx, fy, fw, fh).d2d(), corner * k, corner * k), &shape);
+        ComPtr<ID2D1Geometry> shape;
+        if (app.s.shape.corners) {
+            shape = quad(0);
+        } else {
+            ComPtr<ID2D1RoundedRectangleGeometry> box;
+            app.canvas.factory()->CreateRoundedRectangleGeometry(D2D1::RoundedRect(R(fx, fy, fw, fh).d2d(), corner * k, corner * k), &box);
+            shape = box;
+        }
         ComPtr<ID2D1Layer> focusLayer;
         rt->CreateLayer(&focusLayer);
         rt->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), shape.Get()), focusLayer.Get());
@@ -1491,7 +1574,9 @@ float preview(float x, float y, float w, bool draw) {
         for (float ly = fy; ly <= fy + fh; ly += fc)
             app.canvas.line(x + fx * k, y + ly * k, x + (fx + fw) * k, y + ly * k, col(app.c->preview_periphery), 0.4f * k);
         rt->PopLayer();
-        if (app.s.outline)
+        if (app.s.outline && app.s.shape.corners)
+            app.canvas.stroke(quad(1).Get(), col(overlay(static_cast<int>(app.s.color))), 2 * k);
+        else if (app.s.outline)
             app.canvas.stroke(R(fx, fy, fw, fh), col(overlay(static_cast<int>(app.s.color))), 2 * k, corner * k);
         // The cropped edges, as the headset shows them; with the helmet, its rim reaches into the view.
         const bool helmet = app.s.mode == RenderMode::Qvfr && app.s.helmet.on;
@@ -1956,6 +2041,9 @@ void open_popup(Ctl owner) {
     } else if (owner == kVisor) {
         app.popup.items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
         app.popup.selected = static_cast<int>(app.s.helmet.visor);
+    } else if (owner == kShape) {
+        app.popup.items.assign(std::begin(kShapeNames), std::end(kShapeNames));
+        app.popup.selected = app.s.shape.corners ? 1 : 0;
     } else if (owner == kHelmetDetail) {
         app.popup.items = {L"Performance (2048)", L"Detail (4096)"};
         app.popup.selected = app.s.helmet.detail ? 1 : 0;
@@ -2000,6 +2088,8 @@ void choose(Ctl owner, int option) {
         app.s.helmet.visor = static_cast<VisorPosition>(std::clamp(option, 0, 2));
     else if (owner == kHelmetDetail)
         app.s.helmet.detail = option == 1;
+    else if (owner == kShape)
+        app.s.shape.corners = option == 1;
     else if (owner == kLayerProfile) {
         app.layerProfile = std::clamp(option, 0, 1);
         app.layerRow = 0;
@@ -2086,6 +2176,7 @@ void activate(Ctl id, int option) {
     case kFgPeriphery:
     case kFgRelease:
     case kVisor:
+    case kShape:
     case kHelmetDetail: open_popup(id); return;
     case kFgOn: app.s.cheeky.fg = !app.s.cheeky.fg; changed(); return;
     case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
@@ -2238,6 +2329,7 @@ void on_key(WPARAM key) {
     case kCropOn:
     case kHelmetOn:
     case kVisor:
+    case kShape:
     case kHelmetDetail:
     case kLayerProfile:
     case kLayerApply:

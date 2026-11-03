@@ -17,7 +17,10 @@ constexpr char kShader[] = R"(
 cbuffer Eye : register(b0) {
     float4 outerTan;  // left, right, up, down
     float4 focusTan;
-    float4 rot0, rot1, rot2;  // rows, A eye frame -> B eye frame
+    // Rows, A eye frame -> B eye frame. rot0.w, rot1.w (as uints): the focus area's corners pulled in, a byte
+    // each in percent of the box: top left across and down, top right across and down; bottom right across
+    // and up, bottom left across and up (EyeComposition::cornerInset). All 0: the box.
+    float4 rot0, rot1, rot2;
     float4 outerSrc, focusSrc;
     float4 params;  // feather, border, corner radius
     float4 borderColor;
@@ -50,11 +53,36 @@ float2 inside(float2 uv, float4 src, float2 size) {
     const float2 h = 0.5 / size;
     return clamp(uv, src.xy + h, src.xy + src.zw - h);
 }
+// How far inside the quadrilateral of the pulled-in corners a point is, measured as the square box is
+// (in shares of each axis, so the corners all left in place give the box). Its edges never cross (each
+// corner stays in its quarter of the box); concave is fine. Negative outside.
+float inside_quad(float2 f, uint2 packed) {
+    float2 c[4];
+    [unroll] for (int i = 0; i < 4; ++i) {
+        const uint word = i < 2 ? packed.x : packed.y, shift = (i & 1) * 16;
+        const float2 pulled = float2((word >> shift) & 0xff, (word >> (shift + 8)) & 0xff) / 100;
+        c[i] = float2(i == 1 || i == 2 ? 1 - pulled.x : pulled.x, i >= 2 ? 1 - pulled.y : pulled.y);
+    }
+    // The distance to the nearest edge, its sign from the crossings of a ray to the right (even: outside).
+    float d = 1e9;
+    bool outside = true;
+    [unroll] for (int j = 0; j < 4; ++j) {
+        const float2 a = c[j], e = c[(j + 1) & 3] - a, w = f - a;
+        const float2 b = w - e * saturate(dot(w, e) / dot(e, e));
+        d = min(d, dot(b, b));
+        if ((a.y > f.y) != (a.y + e.y > f.y) && f.x < a.x + e.x * (f.y - a.y) / e.y)
+            outside = !outside;
+    }
+    return outside ? -sqrt(d) : sqrt(d);
+}
 // How far inside the focus box a point is (f: 0..1 across it), as a share of the box. Square corners:
 // the nearer edge's share of its own axis. Rounded corners (params.z: the radius as a share of half
 // the shorter side): the distance to the rounded edge over the shorter side, measured in the box's
-// tangent proportions so the corners are circular. Negative outside.
+// tangent proportions so the corners are circular. Pulled-in corners: inside_quad. Negative outside.
 float inside_box(float2 f) {
+    const uint2 corners = uint2(asuint(rot0.w), asuint(rot1.w));
+    if (any(corners))
+        return inside_quad(f, corners);
     if (params.z <= 0) {
         const float2 e = min(f, 1 - f);
         return min(e.x, e.y);
@@ -518,6 +546,14 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
         constants[28] = c.feather;
         constants[29] = c.border;
         constants[30] = c.cornerRadius;
+        // The pulled-in corners, a byte each in percent (the shader's rot0.w, rot1.w).
+        for (int word = 0; word < 2; ++word) {
+            uint32_t packed = 0;
+            for (int i = 0; i < 4; ++i)
+                packed |= static_cast<uint32_t>(std::lround(std::clamp(c.cornerInset[word * 4 + i], 0.0f, 0.45f) * 100))
+                          << (8 * i);
+            std::memcpy(&constants[11 + 4 * word], &packed, sizeof(packed));
+        }
         for (int i = 0; i < 4; ++i) {
             constants[32 + i] = c.borderColor[i];
             constants[36 + i] = c.viewTan[i];

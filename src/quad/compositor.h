@@ -30,6 +30,10 @@ struct EyeComposition {
     float border;         // debug: width of an outline at the box edge, as a fraction of the box (0 = off)
     float borderColor[4]; // its colour (linear RGBA)
     float cornerRadius;   // rounded box corners: radius as a share of half the box's shorter side (0 = square)
+    // The focus area's corners pulled in (focus_shape.h): top left, top right, bottom right, bottom left, each
+    // across then up or down, as shares of the box (0..0.45). Any nonzero: that quadrilateral, without
+    // cornerRadius; all 0: the box.
+    float cornerInset[8];
     float outputSize[2];  // the share of the eye's half of the output drawn, from its top left (FOV crop); 0 = all
     // The helmet overlay (helmet.h). viewTan: the tangents the eye's output covers (left, right, up, down;
     // all 0 = outerTan); with the helmet on, the uncropped eye, and what ACE did not render is the shell.

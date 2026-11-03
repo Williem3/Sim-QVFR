@@ -30,8 +30,8 @@ int main() {
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
     check(menu_page_items(m).size() == 12 && menu_page_items(m).front() == MenuItem::Page &&
-              menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 4,
-          "the first page: the page switch, the method's items, then Optimize; four pages without Cheeky (QVFR: View crop, Helmet)");
+              menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 5,
+          "the first page: the page switch, the method's items, then Optimize; five pages without Cheeky (Focus shape; QVFR: View crop, Helmet)");
     {
         SettingsMenu loop;
         loop.launch.qvfr = false;
@@ -251,7 +251,7 @@ int main() {
     // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
     // [menu] for the layer to move them.
     SettingsMenu moving;
-    moving.page = 3;
+    moving.page = 4;
     check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 8,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
@@ -329,14 +329,15 @@ int main() {
     {
         SettingsMenu c;
         c.launch = {true, 50, 39, 39};
-        check(menu_pages(c).size() == 4 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
+        check(menu_pages(c).size() == 5 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
-        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
+        check(menu_pages(c).size() == 7 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
-              "with Cheeky: six pages, the first the QVFR items under the page switch");
-        check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"View crop", "then the View crop page");
-        check(!menu_key(c, MenuKey::Right) && c.page == 2 && menu_title(c) == L"Helmet", "then the Helmet page");
-        check(!menu_key(c, MenuKey::Right) && c.page == 3 && c.selected == 0 && menu_page_items(c).size() == 11 &&
+              "with Cheeky: seven pages, the first the QVFR items under the page switch");
+        check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"Focus shape", "then the Focus shape page");
+        check(!menu_key(c, MenuKey::Right) && c.page == 2 && menu_title(c) == L"View crop", "then the View crop page");
+        check(!menu_key(c, MenuKey::Right) && c.page == 3 && menu_title(c) == L"Helmet", "then the Helmet page");
+        check(!menu_key(c, MenuKey::Right) && c.page == 4 && c.selected == 0 && menu_page_items(c).size() == 11 &&
                   menu_title(c) == L"Foveated DLSS" && menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3",
               "the switch turns to the Foveated DLSS page, titled, with Cheeky's credit line and version");
         menu_key(c, MenuKey::Down);  // Foveated DLSS on/off
@@ -382,7 +383,7 @@ int main() {
         check(page.size() == static_cast<size_t>(kPanelWidth) * kPanelHeight, "the panel draws 12 lines and a subtitle");
 
         // The experimental focus-view options: supersampling, motion-vector fix, DLSS-NR.
-        c.page = 3;
+        c.page = 4;
         c.selected = 6;  // focus supersampling
         for (int i = 0; i < 30; ++i)
             menu_key(c, MenuKey::Right);
@@ -417,9 +418,9 @@ int main() {
         c.page = 0;
         c.selected = 0;
         menu_key(c, MenuKey::Left);
-        check(c.page == 5 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
+        check(c.page == 6 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
         menu_key(c, MenuKey::Left);
-        check(c.page == 4 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 8 &&
+        check(c.page == 5 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 8 &&
                   menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
               "then Frame generation, with the credit line; no note while FG is off");
         menu_key(c, MenuKey::Down);
@@ -484,7 +485,7 @@ int main() {
     {
         SettingsMenu v;
         v.launch = {true, 50, 39, 39, 2000, 2000};
-        v.page = 1;
+        v.page = 2;
         check(menu_title(v) == L"View crop" && menu_page_items(v).size() == 2 && menu_resolution(v).shown,
               "View crop: off, only the switch (and the resolution)");
         const int savedBefore = menu_stats(v).savedPercent;
@@ -512,7 +513,7 @@ int main() {
         DeleteFileW(cropIni.c_str());
         check(back.crop && back.cropTop == 40 && back.cropOuter == 10 && back.cropBottom == 0, "View crop: [crop] round-trips");
         // The Helmet page: on, its rim, corners and lighting stepped, written to [helmet].
-        v.page = 2;
+        v.page = 3;
         v.selected = 1;
         check(menu_title(v) == L"Helmet" && menu_key(v, MenuKey::Right) && v.values.helmet.on &&
                   menu_page_items(v).size() == 6 && menu_lines(v)[1].value == L"On" && menu_notes(v).empty(),
@@ -566,10 +567,67 @@ int main() {
         check(startsFar && nearest && twenty && coarse && v.values.helmet.depth == 0,
               "Helmet depth: Far, then 3 cm, 1 cm steps to 20 cm, then 5 cm; down again to Far");
         v.launch.helmetPieces = false;
-        v.page = 1;  // back on View crop
+        v.page = 2;  // back on View crop
         v.launch.dlssHeld = false;
         v.launch.cropHeight = 50;  // launched with more off: less now is softer until the next launch
         check(!menu_notes(v).empty() && menu_notes(v).back().find(L"Less crop") == 0, "View crop: less than at launch is noted");
+    }
+
+    // The Focus shape page (both methods): a box by default, only the switch; corners, its eight insets,
+    // stepped by 5 up to kFocusCornerMax, written to [quad] and read back.
+    {
+        SettingsMenu f;
+        f.launch.qvfr = false;
+        f.page = 1;
+        check(menu_title(f) == L"Focus shape" && menu_page_items(f).size() == 2 && menu_lines(f)[1].value == L"Box" &&
+                  !menu_notes(f).empty(),
+              "Focus shape: a box, only the switch, and a note on what Corners does");
+        f.selected = 1;
+        check(menu_key(f, MenuKey::Right) && f.values.shape.corners && menu_page_items(f).size() == 10 &&
+                  menu_lines(f)[1].value == L"Corners" && menu_lines(f)[2].label == L"Top left in",
+              "Focus shape: Corners lists each corner's insets, top left first");
+        f.selected = 2;  // top left in
+        for (int i = 0; i < 20; ++i)
+            menu_key(f, MenuKey::Right);
+        f.selected = 4;  // top right in
+        for (int i = 0; i < 4; ++i)
+            menu_key(f, MenuKey::Right);
+        f.selected = 9;  // bottom right up
+        menu_key(f, MenuKey::Right);
+        const FocusShape& sh = f.values.shape;
+        check(sh.in[static_cast<int>(FocusCorner::TopLeft)] == kFocusCornerMax &&
+                  sh.in[static_cast<int>(FocusCorner::TopRight)] == 20 &&
+                  sh.vertical[static_cast<int>(FocusCorner::BottomRight)] == 5 &&
+                  sh.in[static_cast<int>(FocusCorner::BottomLeft)] == 0 && menu_lines(f)[4].value == L"20%",
+              "Focus shape: corners step by 5 and stop at 45%; the others stay");
+        f.page = 0;
+        const std::vector<MenuLine> first = menu_lines(f);
+        check(first[4].label == L"Corners" && first[4].value == L"Corner shape",
+              "the settings page's corner radius says the corner shape replaces it");
+        const auto shapeIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_shape.ini").wstring();
+        DeleteFileW(shapeIni.c_str());
+        write_menu_values(shapeIni.c_str(), f.values, false);
+        const FocusShape back = read_focus_shape(shapeIni.c_str());
+        wchar_t text[16] = {};
+        GetPrivateProfileStringW(L"quad", L"shape_top_right_in", L"", text, 16, shapeIni.c_str());
+        WritePrivateProfileStringW(L"quad", L"shape_bottom_left_up", L"80", shapeIni.c_str());
+        const FocusShape clamped = read_focus_shape(shapeIni.c_str());
+        DeleteFileW(shapeIni.c_str());
+        check(back == sh && std::wstring(text) == L"20" &&
+                  clamped.vertical[static_cast<int>(FocusCorner::BottomLeft)] == kFocusCornerMax,
+              "Focus shape: [quad] focus_shape and its corners round-trip; out of range clamps to 45%");
+        // The bits the layer keeps and the compositor's shares.
+        float inset[2 * kFocusCorners];
+        focus_shape_insets(focus_shape_bits(sh), inset);
+        FocusShape box = sh;
+        box.corners = false;
+        check(inset[0] == 0.45f && inset[1] == 0 && inset[2] == 0.2f && inset[5] == 0.05f && focus_shape_bits(box) == 0,
+              "Focus shape: the compositor gets shares of the box; a box sends none");
+        f.values.shape.corners = false;
+        f.page = 1;
+        f.selected = 1;
+        check(menu_key(f, MenuKey::Left) && f.values.shape.corners && f.values.shape.in[0] == kFocusCornerMax,
+              "Focus shape: back to Corners keeps the corners set before");
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

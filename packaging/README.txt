@@ -74,6 +74,12 @@ Settings (ace-quadview.ini, read when the game starts; the window writes them)
 [quad]
   feather_percent=20   blend band at the edge of the focus area.
   corner_radius_percent=0  rounds its corners (percent of half the shorter side).
+  focus_shape=box      box, or corners: each corner of the focus area pulled in on its own, e.g. a
+                       trapezoid (top corners in) for more of the dash and less of the far field.
+  shape_top_left_in=0, shape_top_left_down=0, shape_top_right_in=0, shape_top_right_down=0,
+  shape_bottom_left_in=0, shape_bottom_left_up=0, shape_bottom_right_in=0, shape_bottom_right_up=0
+                       with focus_shape=corners: how far each corner moves toward the middle,
+                       percent of the area's width (in) or height (down, up), 0..45.
   gaze=1               focus area follows your eyes (0 = fixed in the centre).
   debug_border=1       outlines the focus area (to check where it is).
   debug_border_color=  green, magenta or teal.

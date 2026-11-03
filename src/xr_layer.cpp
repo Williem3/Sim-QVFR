@@ -42,6 +42,7 @@
 #include "probe/vram_census.h"
 #include "quad/compositor.h"
 #include "quad/focus_offset.h"
+#include "quad/focus_shape.h"
 #include "quad/gaze_deadzone.h"
 #include "quad/focus_outline.h"
 #include "quad/menu_panel.h"
@@ -164,6 +165,7 @@ struct Experiment {
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
+    std::atomic<uint64_t> focusShape = 0;  // the focus area's pulled-in corners (focus_shape.h's bits; 0 = the box)
     std::atomic<bool> border = false;      // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
     bool borderAtLaunch = false;           // views4 without composition tracks the outline's chains only if on at launch
     float borderColor[4] = {0, 1, 0, 1};   // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
@@ -193,6 +195,7 @@ HelmetSettings helmetSettings;
 // size changes their density.
 struct LiveSettings {
     double focusFraction = 0.35, focusFractionY = 0, feather = 0.10, cornerRadius = 0;
+    FocusShape shape;  // focus_shape.h; with corners the box's corner radius is not used
     bool border = false, gaze = true;
     FocusOffset offset;
     double gazeDeadzone = 1.5;  // degrees
@@ -218,6 +221,9 @@ LiveSettings read_live(const wchar_t* ini) {
     l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
     l.feather = std::clamp(GetPrivateProfileIntW(L"quad", L"feather_percent", 10, ini), 0u, 50u) / 100.0;
     l.cornerRadius = std::clamp(GetPrivateProfileIntW(L"quad", L"corner_radius_percent", 0, ini), 0u, 100u) / 100.0;
+    l.shape = read_focus_shape(ini);
+    if (l.shape.corners)
+        l.cornerRadius = 0;
     l.border = GetPrivateProfileIntW(L"quad", L"debug_border", 0, ini) != 0;
     wchar_t borderColor[16] = {};
     GetPrivateProfileStringW(L"quad", L"debug_border_color", L"green", borderColor, 16, ini);
@@ -373,6 +379,7 @@ void load_experiment() {
     experiment.focusFractionY = settings.focusFractionY;
     experiment.feather = settings.feather;
     experiment.cornerRadius = settings.cornerRadius;
+    experiment.focusShape = focus_shape_bits(settings.shape);
     experiment.border = settings.border;
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
@@ -428,6 +435,7 @@ void load_experiment() {
          mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
          experiment.cornerRadius * 100,
          experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze, ini.c_str());
+    logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
              "(focus views %.0f%% x %.0f%% of the native eye)%s",
@@ -2092,6 +2100,7 @@ void views4_compose() {
         eyes[e].border = experiment.border ? 0.008f : 0.0f;
         std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
         eyes[e].cornerRadius = static_cast<float>(experiment.cornerRadius);
+        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), eyes[e].cornerInset);
         float full[4];
         uncrop_tangents(eyes[e].outerTan, quad.v4Crop, e, full);
         std::memcpy(fullView[e], full, sizeof(full));
@@ -2336,6 +2345,7 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
         eyes[e].border = experiment.border ? 0.008f : 0.0f;
         std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
         eyes[e].cornerRadius = static_cast<float>(experiment.cornerRadius);
+        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), eyes[e].cornerInset);
     }
 
     uint32_t outIndex = 0;
@@ -2681,6 +2691,7 @@ void live_apply(const LiveSettings& l) {
     experiment.focusFractionY = l.focusFractionY;
     experiment.feather = l.feather;
     experiment.cornerRadius = l.cornerRadius;
+    experiment.focusShape = focus_shape_bits(l.shape);
     std::memcpy(experiment.borderColor, l.borderColor, sizeof(experiment.borderColor));
     experiment.border = l.border;
     experiment.gaze = l.gaze;
@@ -2701,6 +2712,7 @@ void live_apply(const LiveSettings& l) {
          "gaze %d deg, gaze dead-zone %.1f deg",
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
+    logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
     if (experiment.views4)
         live_resolution(l);
     if (l.gaze && !gazeAvailable && (experiment.quad || experiment.views4Compose))

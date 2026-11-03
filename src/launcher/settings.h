@@ -11,6 +11,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "../quad/focus_offset.h"
+#include "../quad/focus_shape.h"
 #include "../quad/gaze_deadzone.h"
 #include "../quad/helmet.h"
 #include "../quad/osd.h"
@@ -31,6 +32,7 @@ struct Settings {
     OutlineColor color = OutlineColor::Teal;
     int feather = 20;         // [quad] feather_percent: blend band, percent of the focus region
     int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
+    FocusShape shape;         // [quad] focus_shape: the box (rounded by corner), or each corner pulled in on its own
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y: the focus region's vertical offset, degrees up
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
@@ -59,7 +61,8 @@ struct Range {
 };
 inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 200}, kSizeRange{10, 100}, kFeatherRange{0, 50},
     kCornerRange{0, 100}, kCropRange{0, 40},  // kCropRange: the layer's kCropMax
-    kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax};
+    kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
+    kFocusCornerRange{0, kFocusCornerMax};
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.
 inline constexpr Range kMenuYawRange{-35, 35}, kMenuPitchRange{-30, 30}, kMenuWidthRange{20, 60};
 
