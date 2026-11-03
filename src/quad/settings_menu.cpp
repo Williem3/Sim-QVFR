@@ -24,6 +24,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
     {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
     {MenuItem::FocusOffset, L"Focus up / down", -kFocusOffsetMax, kFocusOffsetMax, 1},
+    {MenuItem::GazeDeadzone, L"Gaze dead-zone", 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
     // The performance overlay's place, degrees (the launcher's sliders).
     {MenuItem::Overlay, L"Performance overlay", 0, 1, 1},
     {MenuItem::OverlayYaw, L"Overlay left / right", -kOsdYawMax, kOsdYawMax, 1},
@@ -88,6 +89,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Feather: return &v.feather;
     case MenuItem::Corners: return &v.corners;
     case MenuItem::FocusOffset: return &v.offset.for_mode(v.eyeTracking);
+    case MenuItem::GazeDeadzone: return &v.gazeDeadzone;
     case MenuItem::MenuYaw: return &v.placement.yaw;
     case MenuItem::MenuPitch: return &v.placement.pitch;
     case MenuItem::MenuWidth: return &v.placement.width;
@@ -122,7 +124,7 @@ std::vector<MenuItem> menu_items(bool qvfr) {
     if (qvfr)
         items = {MenuItem::Periphery, MenuItem::Density};
     items.insert(items.end(), {MenuItem::Width, MenuItem::Height, MenuItem::Feather, MenuItem::Corners,
-                               MenuItem::Outline, MenuItem::EyeTracking, MenuItem::FocusOffset});
+                               MenuItem::Outline, MenuItem::EyeTracking, MenuItem::FocusOffset, MenuItem::GazeDeadzone});
     return items;
 }
 
@@ -321,6 +323,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     v.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
     v.offset = read_focus_offset(ini);
+    v.gazeDeadzone = read_gaze_deadzone(ini);
     v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
     const int cropMax = static_cast<int>(kCropMax * 100);
@@ -352,6 +355,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
     ok &= write(ini, L"quad", L"debug_border", v.outline ? 1 : 0);
     ok &= write(ini, L"quad", L"gaze", v.eyeTracking ? 1 : 0);
     ok &= write_focus_offset(ini, v.offset);
+    ok &= write_gaze_deadzone(ini, v.gazeDeadzone);
     ok &= write_osd_placement(ini, v.overlay);
     ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
@@ -583,6 +587,10 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = degrees(v.helmet.height, L"up", L"down");
         else if (items[i] == MenuItem::FocusOffset)
             line.value = degrees(v.offset.for_mode(v.eyeTracking), L"up", L"down");
+        else if (items[i] == MenuItem::GazeDeadzone)
+            line.value = !v.eyeTracking      ? L"Eye tracking off"
+                         : v.gazeDeadzone == 0 ? L"Off (follows every sample)"
+                                               : gaze_deadzone_text(v.gazeDeadzone) + L"°";
         else if (items[i] == MenuItem::HelmetDetail)
             line.value = kHelmetDetailNames[v.helmet.detail ? 1 : 0];
         else if (items[i] == MenuItem::HelmetDepth)

@@ -8,6 +8,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "focus_offset.h"
+#include "gaze_deadzone.h"
 #include "helmet.h"
 #include "osd.h"
 
@@ -17,6 +18,7 @@ enum class MenuKey { Up, Down, Left, Right };
 enum class MenuItem {
     Periphery, Density, Width, Height, Feather, Corners, Outline, EyeTracking,
     FocusOffset,  // the vertical offset of the mode in use (eye tracked or fixed; focus_offset.h)
+    GazeDeadzone,  // how far the gaze moves before the focus box follows (gaze_deadzone.h)
     // The Overlay and menu page: the performance overlay ([osd], osd.h) and the panels' places.
     Overlay, OverlayYaw, OverlayPitch, OverlayWidth, MenuYaw, MenuPitch, MenuWidth,
     // The page switch, and with Cheeky running the Foveated DLSS page ([cheeky], cheeky_settings.h).
@@ -54,6 +56,7 @@ struct MenuValues {
     bool outline = false;     // [quad] debug_border
     bool eyeTracking = true;  // [quad] gaze
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y
+    int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone, tenths of a degree
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
     bool crop = false;        // [crop] enabled (QVFR)
