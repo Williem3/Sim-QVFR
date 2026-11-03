@@ -1,0 +1,69 @@
+# What the image looks like.
+# The launcher's Report an issue (Diagnostics pane) opens this form for "Visual glitch" and fills the fields
+# what, files, checks and details by id (src/launcher/report.cpp's issue_fields; kIssueTemplates maps the
+# kinds to these files): every template keeps those ids.
+name: Visual glitch
+description: Flicker, seams, shimmer, a wrong-sized view or anything else that looks wrong.
+title: "[Visual glitch] "
+labels: ["bug", "visual"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The quickest way here is the launcher: **Diagnostics → Report an issue** zips your logs and fills in
+        your settings, the last session and your PC below.
+  - type: textarea
+    id: what
+    attributes:
+      label: What do you see?
+      description: What looks wrong, and how should it look?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From starting the launcher, the settings you changed, the track and car, and what you did.
+      placeholder: |
+        1.
+        2.
+  - type: textarea
+    id: when
+    attributes:
+      label: When does it happen?
+      description: Every launch, after some minutes, on one track or car, since an update...
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where is it?
+      options:
+        - Inside the focus area
+        - At the focus area's edge
+        - In the outer view
+        - Everywhere
+        - Only in one eye
+  - type: dropdown
+    id: mirror
+    attributes:
+      label: Does it show on the desktop mirror too?
+      options:
+        - Yes
+        - No
+        - Not sure
+  - type: textarea
+    id: files
+    attributes:
+      label: Screenshots and logs
+      description: |
+        A photo through the lens or a screenshot of the mirror helps most. Drag it in with the report zip from
+        the launcher's logs folder (ace-quadview-report-*.zip).
+  - type: textarea
+    id: checks
+    attributes:
+      label: Launcher checks
+      description: What the launcher noticed about the last session (filled in by the launcher).
+  - type: textarea
+    id: details
+    attributes:
+      label: Collected by the launcher
+      description: Version, PC, headset, settings and the last session's numbers (filled in by the launcher).

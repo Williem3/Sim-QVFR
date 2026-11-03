@@ -58,8 +58,9 @@ enum Ctl {
     kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
-    // The Diagnostics pane: reporting an issue, the CPU capture switch, copying the summary, the logs folder.
-    kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
+    // The Diagnostics pane: reporting an issue (its kind, the description box, the button), the CPU capture
+    // switch, copying the summary, the logs folder.
+    kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -126,6 +127,15 @@ struct App {
     std::wstring error;
     float scroll = 0, scrollMax = 0;
     Rect scrollArea;
+    // Report an issue: the kind (kIssueKinds) and the description, a native multi-line edit over the canvas
+    // at reportEditRect (empty when this frame drew none), with its font and background brush.
+    int reportKind = 0;
+    HWND reportEdit = nullptr;
+    Rect reportEditRect;
+    HFONT reportFont = nullptr;
+    UINT reportFontDpi = 0;
+    HBRUSH reportBrush = nullptr;
+    uint32_t reportBrushRgb = 0;
     std::vector<Hit> hits;
     // The OpenXR layers pane: 0 with the launcher (layerPlan, from the ini), 1 Windows' list (layersDraft,
     // edited until applied over layersWindows). layerRow: the keyboard's row.
@@ -359,7 +369,7 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
+    case Pane::Diagnostics: order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::About: order.push_back(kSupport); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -994,8 +1004,15 @@ void copy_summary() {
     CloseClipboard();
 }
 
-// Report an issue: the logs zipped into logsce-quadview-report-<time>.zip (with the issue's text as
-// issue.md), Explorer showing it, and a new GitHub issue prefilled (report.h).
+// Whether the description box's field is wholly inside the scrolling area: only then is the native edit
+// shown (a child window cannot be clipped like the canvas); otherwise the canvas draws its text.
+bool report_edit_fits() {
+    const Rect& r = app.reportEditRect;
+    return r.w > 0 && r.y >= app.scrollArea.y && r.bottom() <= app.scrollArea.bottom();
+}
+
+// Report an issue: the logs zipped into logs\ace-quadview-report-<time>.zip (with the issue's text as
+// issue.md), Explorer showing it, and a new issue on the kind's form, its fields prefilled (report.h).
 void report_issue() {
     const std::wstring logs = logs_folder();
     CreateDirectoryW(logs.c_str(), nullptr);
@@ -1005,7 +1022,13 @@ void report_issue() {
     swprintf_s(name, L"ace-quadview-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
                now.wMinute, now.wSecond);
     app.runtime = load_runtime_info(runtime_info_path());
-    IssueReport report{widen(ACE_QV_VERSION), app.s, app.runtime, system_info(), name};
+    IssueReport report{widen(ACE_QV_VERSION), app.s, app.runtime, system_info(), name, app.reportKind};
+    const int length = GetWindowTextLengthW(app.reportEdit);
+    report.description.resize(static_cast<size_t>(std::max(length, 0)));
+    GetWindowTextW(app.reportEdit, report.description.data(), length + 1);
+    for (size_t at; (at = report.description.find(L"\r\n")) != std::wstring::npos;)  // the edit's line ends
+        report.description.erase(at, 1);
+    report.causes = likely_causes(app.s, app.runtime);
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     std::vector<ReportFile> files =
@@ -1022,7 +1045,11 @@ void report_issue() {
         report.zipName.clear();
         InvalidateRect(app.hwnd, nullptr, FALSE);
     }
-    const std::string url = issue_url(kIssueRepo, L"ace-quadview " + report.version + L": ", issue_body(report));
+    // [launcher] issue_repo: another repository with the forms, to try them before they reach this one's.
+    wchar_t repo[128] = {};
+    GetPrivateProfileStringW(L"launcher", L"issue_repo", kIssueRepo, repo, static_cast<DWORD>(std::size(repo)), app.ini.c_str());
+    const std::string url = issue_url(repo, kIssueTemplates[std::clamp(report.kind, 0, kIssueKindCount - 1)],
+                                      issue_title(report), issue_fields(report));
     ShellExecuteA(app.hwnd, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
@@ -1030,17 +1057,60 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     const SessionInfo& s = app.runtime.session;
     const std::wstring dash = L"—";
     float h = 0;
-    // Report an issue, first: what most people come here for.
+    // Report an issue, first: what most people come here for. Known causes the last session shows come
+    // before it: many problems end there.
+    const std::vector<Cause> causes = likely_causes(app.s, app.runtime);
+    if (!causes.empty()) {
+        std::vector<Row> rows;
+        for (const Cause& c : causes) {
+            Row row;
+            row.label = c.title;
+            row.desc = c.fix;
+            row.control = [](const Rect&) {};  // text only
+            rows.push_back(row);
+        }
+        h += section(x, y + h, w, L"Before you report", rows,
+                     L"What the launcher noticed about the last session, and what to try. The report includes these.", draw);
+        h += t::kSpace6;
+    }
+    Row kind;
+    kind.label = L"Kind of problem";
+    const std::vector<std::wstring> kinds(std::begin(kIssueKinds), std::end(kIssueKinds));
+    kind.controlW = popup_width(kinds.data(), kIssueKindCount, 160);
+    kind.controlH = t::kControlHeight;
+    kind.control = [](const Rect& r) { popup_button(kDiagKind, r, kIssueKinds[app.reportKind], false); };
+    Row description;
+    constexpr float kEditH = 96;
+    description.fullHeight = [](float) { return t::kBody.lineHeight + t::kSpace2 + kEditH; };
+    description.full = [](const Rect& r) {
+        app.canvas.text(L"What happened?", t::kBody, {r.x, r.y, r.w, t::kBody.lineHeight}, col(app.c->label));
+        const Rect field{r.x, r.y + t::kBody.lineHeight + t::kSpace2, r.w, kEditH};
+        app.canvas.fill(field, col(app.c->field_bg), t::kRadiusControl);
+        app.canvas.stroke(field, col(app.c->control_border), 1, t::kRadiusControl);
+        if (focused(kDiagDescription) || GetFocus() == app.reportEdit)
+            focus_ring(field, t::kRadiusControl);
+        app.reportEditRect = {field.x + 6, field.y + 5, field.w - 12, field.h - 10};
+        app.hits.push_back({kDiagDescription, field});
+        if (!IsWindowVisible(app.reportEdit) || !report_edit_fits()) {  // the edit is hidden: its text, clipped here
+            std::wstring text(static_cast<size_t>(GetWindowTextLengthW(app.reportEdit)), L'\0');
+            GetWindowTextW(app.reportEdit, text.data(), static_cast<int>(text.size()) + 1);
+            app.canvas.push_clip(field);
+            app.canvas.text(text.empty() ? L"What you saw, and what you expected instead." : text, t::kBody,
+                            app.reportEditRect, col(text.empty() ? app.c->label_secondary : app.c->label), Align::Leading,
+                            false, true);
+            app.canvas.pop_clip();
+        }
+    };
     Row report;
     report.fullHeight = [](float) { return t::kControlHeight; };
     report.full = [](const Rect& r) {
         const float reportW = std::ceil(app.canvas.measure(L"Report an issue", kPrimaryLabel)) + 2 * t::kSpace4;
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
-    h += section(x, y + h, w, L"Report an issue", {report},
+    h += section(x, y + h, w, L"Report an issue", {kind, description, report},
                  L"Zips the logs into the logs folder and shows it in Explorer, then opens a new issue on GitHub with "
-                 L"your settings, the last session and your PC filled in. Describe the problem at the top, and drag "
-                 L"in the zip and any screenshots.",
+                 L"what you wrote, your settings, the last session and your PC filled in. Add the steps there, and "
+                 L"drag in the zip and any screenshots.",
                  draw);
     h += t::kSpace6;
     if (!s.known()) {
@@ -1898,10 +1968,71 @@ Rect popup_menu_rect() {
     return menu;
 }
 
+// The description box (a native edit, kept in step with the canvas after each paint): over the field the
+// Diagnostics pane drew; hidden when it is not wholly in view, or a popup is open.
+void place_report_edit() {
+    const Rect& r = app.reportEditRect;
+    if (!app.reportEdit)
+        return;
+    if (!report_edit_fits() || app.popup.open) {
+        if (GetFocus() == app.reportEdit)
+            SetFocus(app.hwnd);
+        ShowWindow(app.reportEdit, SW_HIDE);
+        return;
+    }
+    const float k = app.canvas.dpi_scale();
+    const UINT dpi = static_cast<UINT>(std::lround(96 * k));
+    if (app.reportFontDpi != dpi) {
+        HFONT font = CreateFontW(-MulDiv(13, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        SendMessageW(app.reportEdit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        if (app.reportFont)
+            DeleteObject(app.reportFont);
+        app.reportFont = font;
+        app.reportFontDpi = dpi;
+    }
+    const int x = static_cast<int>(std::lround(r.x * k)), y = static_cast<int>(std::lround(r.y * k));
+    const int w = static_cast<int>(std::lround(r.w * k)), h = static_cast<int>(std::lround(r.h * k));
+    SetWindowPos(app.reportEdit, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (app.reportBrushRgb != app.c->field_bg)  // the theme changed: its colours (WM_CTLCOLOREDIT)
+        InvalidateRect(app.reportEdit, nullptr, TRUE);
+}
+
+void on_key(WPARAM key);
+
+// The description box's keys: Tab and Shift+Tab move on through the window's focus order; Escape leaves it.
+LRESULT CALLBACK report_edit_proc(HWND edit, UINT message, WPARAM wParam, LPARAM lParam) {
+    static const WNDPROC base = reinterpret_cast<WNDPROC>(GetPropW(edit, L"aceqv.base"));
+    if (message == WM_KEYDOWN && (wParam == VK_TAB || wParam == VK_ESCAPE)) {
+        app.focus = kDiagDescription;
+        SetFocus(app.hwnd);
+        if (wParam == VK_TAB)
+            on_key(VK_TAB);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return 0;
+    }
+    if (message == WM_CHAR && (wParam == L'\t' || wParam == 27))  // already handled as keys
+        return 0;
+    if (message == WM_SETFOCUS || message == WM_KILLFOCUS)
+        InvalidateRect(app.hwnd, nullptr, FALSE);  // the field's focus ring
+    return CallWindowProcW(base, edit, message, wParam, lParam);
+}
+
+void create_report_edit() {
+    app.reportEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+                                     0, 0, 0, 0, app.hwnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!app.reportEdit)
+        return;
+    SendMessageW(app.reportEdit, EM_SETLIMITTEXT, 4000, 0);  // the link has room for about that much
+    SetPropW(app.reportEdit, L"aceqv.base", reinterpret_cast<HANDLE>(GetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC)));
+    SetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(report_edit_proc));
+}
+
 void paint() {
     if (!app.canvas.begin())
         return;
     app.hits.clear();
+    app.reportEditRect = {};
     Canvas& cv = app.canvas;
     const float W = cv.width(), Hh = cv.height();
     const float actionH = 10 + t::kControlHeightLarge + 10;
@@ -2010,6 +2141,7 @@ void paint() {
         }
     }
     cv.end();
+    place_report_edit();
 }
 
 // ---- Input -------------------------------------------------------------------------------------
@@ -2093,6 +2225,9 @@ void open_popup(Ctl owner) {
     } else if (owner == kShape) {
         app.popup.items.assign(std::begin(kShapeNames), std::end(kShapeNames));
         app.popup.selected = app.s.shape.corners ? 1 : 0;
+    } else if (owner == kDiagKind) {
+        app.popup.items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
+        app.popup.selected = app.reportKind;
     } else if (owner == kHelmetDetail) {
         app.popup.items = {L"Performance (2048)", L"Detail (4096)"};
         app.popup.selected = app.s.helmet.detail ? 1 : 0;
@@ -2113,6 +2248,10 @@ void open_popup(Ctl owner) {
 }
 
 void choose(Ctl owner, int option) {
+    if (owner == kDiagKind) {  // not a setting
+        app.reportKind = option;
+        return;
+    }
     if (owner == kMethod)
         app.s.mode = option == 0 ? RenderMode::Qvfr : RenderMode::TwoLoop;
     else if (owner == kMode)
@@ -2197,6 +2336,16 @@ void activate(Ctl id, int option) {
         break;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
+    case kDiagKind: open_popup(id); return;
+    case kDiagDescription:
+        if (!report_edit_fits()) {  // scroll the field into view first: the edit shows only then
+            const Rect& r = app.reportEditRect;
+            const float by = r.bottom() > app.scrollArea.bottom() ? r.bottom() + 5 - app.scrollArea.bottom() : r.y - 5 - app.scrollArea.y;
+            app.scroll = std::clamp(app.scroll + by + (by > 0 ? t::kSpace4 : -t::kSpace4), 0.0f, app.scrollMax);
+            RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        }
+        SetFocus(app.reportEdit);
+        return;
     case kDiagReport: report_issue(); return;
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
@@ -2286,6 +2435,8 @@ void on_key(WPARAM key) {
         i = (i + (shift ? static_cast<int>(order.size()) - 1 : 1)) % static_cast<int>(order.size());
         app.focus = order[i];
         app.keyboard = true;
+        if (app.focus == kDiagDescription)  // typing goes to the description box
+            activate(kDiagDescription, -1);
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
@@ -2404,7 +2555,22 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             return -1;
         app.iniText = ini_text();
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
+        create_report_edit();
         return 0;
+    case WM_CTLCOLOREDIT:  // the description box in the theme's field colours
+        if (reinterpret_cast<HWND>(lParam) == app.reportEdit) {
+            if (!app.reportBrush || app.reportBrushRgb != app.c->field_bg) {
+                if (app.reportBrush)
+                    DeleteObject(app.reportBrush);
+                app.reportBrush = CreateSolidBrush(colorref(app.c->field_bg));
+                app.reportBrushRgb = app.c->field_bg;
+            }
+            const HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, colorref(app.c->label));
+            SetBkColor(dc, colorref(app.c->field_bg));
+            return reinterpret_cast<LRESULT>(app.reportBrush);
+        }
+        break;
     case WM_TIMER:
         if (wParam == kFollowTimer) {
             follow_ini();
@@ -2464,6 +2630,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_LBUTTONDOWN: {
         const float x = dip(lParam, false), y = dip(lParam, true);
         app.keyboard = false;
+        if (GetFocus() != hwnd)  // a click outside the description box leaves it
+            SetFocus(hwnd);
         if (app.popup.open) {
             app.popup.hover = popup_item_at(x, y);
             close_popup(app.popup.hover >= 0);
@@ -2580,7 +2748,7 @@ int run_window(HINSTANCE instance, int show) {
     const UINT dpi = GetDpiForSystem();
     RECT r{0, 0, MulDiv(static_cast<int>(kDefaultWidth), dpi, 96), MulDiv(static_cast<int>(kDefaultHeight - kTitlebar), dpi, 96)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
-    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"QVFR Launcher", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                 r.right - r.left, r.bottom - r.top, nullptr, nullptr, instance, nullptr);
     if (!hwnd)
         return 1;
