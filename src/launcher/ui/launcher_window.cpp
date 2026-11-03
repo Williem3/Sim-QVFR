@@ -633,7 +633,7 @@ std::wstring friendly_layer(const std::string& name, const std::wstring& manifes
         {"XR_APILAYER_MBUCCHIA_toolkit", L"OpenXR Toolkit"},
         {"XR_APILAYER_DIENERTECH_VECTORXR", L"VectorXR"},
         {"XR_APILAYER_CHEEKY_foveated_dlss", L"Cheeky Foveated DLSS"},
-        {"XR_APILAYER_MBUCCHIA_quadviews", L"Quad-Views-Foveated"},
+        {"XR_APILAYER_MBUCCHIA_quad_views_foveated", L"Quad-Views-Foveated"},
         {"XR_APILAYER_ACE_quadview", L"ACE layer (ace-quadview)"},
         {"XR_APILAYER_NOVENDOR_motion_compensation", L"OpenXR Motion Compensation"},
         {"XR_APILAYER_FREDEMMOTT_OpenKneeboard", L"OpenKneeboard"},
