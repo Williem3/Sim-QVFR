@@ -83,6 +83,7 @@ Settings load_settings(const std::wstring& ini) {
     s.cropOuter = clamp_to(read_int(ini, L"crop", L"outer", 0), kCropRange);
     s.cropInner = clamp_to(read_int(ini, L"crop", L"inner", 0), kCropRange);
     s.helmet = read_helmet_settings(ini.c_str());
+    s.hotkeys = read_hotkeys(ini.c_str());
     return s;
 }
 
@@ -161,6 +162,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_osd_placement(ini.c_str(), s.osd);
+    ok &= write_hotkeys(ini.c_str(), s.hotkeys);
     return ok;
 }
 

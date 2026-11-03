@@ -46,6 +46,8 @@
 #include "quad/gaze_deadzone.h"
 #include "quad/focus_outline.h"
 #include "quad/menu_panel.h"
+#include "input/hotkeys.h"
+#include "input/pad_input.h"
 #include "quad/osd.h"
 #include "quad/qvfr_optimizer.h"
 #include "quad/settings_menu.h"
@@ -307,6 +309,8 @@ std::wstring layer_directory() {
     return std::filesystem::path(module).parent_path().wstring();
 }
 
+void hotkeys_changed(const Hotkeys& h);  // [hotkeys] (below)
+
 void load_experiment() {
     // A launcher passes its per-launch settings in ACE_QV_INI; otherwise the ini next to the DLL.
     std::wstring ini = (std::filesystem::path(layer_directory()) / L"ace-quadview.ini").wstring();
@@ -393,6 +397,7 @@ void load_experiment() {
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());
+    hotkeys_changed(read_hotkeys(ini.c_str()));
     WIN32_FILE_ATTRIBUTE_DATA attributes{};
     if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
         live.written = attributes.ftLastWriteTime;
@@ -1516,6 +1521,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 
 void menu_shutdown();  // the settings menu's panel (below)
 void osd_shutdown();   // the performance overlay's card (below)
+void pad_watch_stop();  // the hotkeys' wheel and controller thread (below)
 
 void ini_worker_sync();  // (below)
 void helmet_layer_release();  // (below)
@@ -1566,6 +1572,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     gpu_frame_timer_stop();
     gpu_load_stop();
     cpu_load_stop();
+    pad_watch_stop();
     gaze_thread_stop();  // before the spaces it locates go
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
@@ -2736,6 +2743,7 @@ void cheeky_apply_ini() {
 void menu_placement_changed(const MenuPlacement& placement);  // the launcher moved the settings menu's panel (below)
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);  // the overlay (below)
 void osd_placement_changed();
+void hotkeys_changed(const Hotkeys& h);  // [hotkeys] (below)
 
 constexpr int64_t kLiveCheckMs = 250;
 
@@ -2746,6 +2754,7 @@ struct IniSnapshot {
     MenuValues menu;
     MenuPlacement menuPlacement;
     OsdPlacement osd;
+    Hotkeys hotkeys;
     std::wstring restartKeys;
     uint64_t writesBefore = 0;  // ini_write_later's writes done before it was read (menu_values_changed)
 };
@@ -2757,6 +2766,7 @@ IniSnapshot read_snapshot(const wchar_t* ini) {
     s.menu = read_menu_values(ini);
     s.menuPlacement = read_menu_placement(ini);
     s.osd = read_osd_placement(ini);
+    s.hotkeys = read_hotkeys(ini);
     s.restartKeys = restart_keys(ini, experiment.views4);
     return s;
 }
@@ -2875,6 +2885,7 @@ void live_reload() {
     menu_values_changed(*s);
     menu_placement_changed(s->menuPlacement);
     osd_placement_changed(s->osd, s->cheeky);
+    hotkeys_changed(s->hotkeys);
     if (s->restartKeys != live.restartKeys) {
         logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());
         live.restartKeys = s->restartKeys;
@@ -2893,8 +2904,166 @@ struct Optimize {
 Optimize optimize;
 constexpr int64_t kOptimizeWindowMs = 500;
 
+// ---- Hotkeys ---------------------------------------------------------------------------------
+// [hotkeys] (input/hotkeys.h), reloaded live: each action's keyboard combination, held while ACE has focus,
+// and its wheel or controller button, read by a thread of its own through DirectInput (input/pad_input.h)
+// whenever one is bound. The thread polls every kPadPollMs and publishes the actions held as bits.
+Hotkeys hotkeys = default_hotkeys();  // the frame thread's
+
+struct PadWatch {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::thread thread;
+    bool stop = false;
+    Hotkeys bindings;              // a copy for the thread
+    std::atomic<uint32_t> held{0};  // bit per HotkeyAction
+    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate.
+    ~PadWatch() {
+        {
+            std::lock_guard guard(mutex);
+            stop = true;
+        }
+        wake.notify_all();
+        if (thread.joinable())
+            thread.join();
+    }
+};
+PadWatch padWatch;
+constexpr int kPadPollMs = 8, kPadRescanMs = 3000;
+
+bool pad_bound(const Hotkeys& h) {
+    for (const Hotkey& k : h)
+        if (k.pad.set())
+            return true;
+    return false;
+}
+
+void pad_watch_run() {
+    // DirectInput wants a top-level window of this process; a hidden one of the thread's own.
+    HWND window = CreateWindowExW(0, L"STATIC", L"ace-quadview input", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr);
+    PadInput pads;
+    if (!window || !pads.open(window)) {
+        log_line("hotkeys: DirectInput not available; wheel and controller buttons do nothing");
+        if (window)
+            DestroyWindow(window);
+        return;
+    }
+    {
+        std::wstring found;
+        for (const auto& [id, name] : pads.devices())
+            found += (found.empty() ? L"" : L", ") + name + L" (" + id + L")";
+        logf("hotkeys: game controllers: %ls", found.empty() ? L"none" : found.c_str());
+    }
+    int64_t nextRescan = qpc_now() + qpc_ms(kPadRescanMs);
+    std::unique_lock lock(padWatch.mutex);
+    while (!padWatch.stop) {
+        const Hotkeys bindings = padWatch.bindings;
+        lock.unlock();
+        const std::vector<PadHeld> held = pads.poll();
+        const auto devices = pads.devices();
+        uint32_t bits = 0;
+        bool missing = false;
+        for (int a = 0; a < kHotkeyActions; ++a) {
+            const PadControl& want = bindings[a].pad;
+            if (!want.set())
+                continue;
+            bool connected = false;
+            for (const PadHeld& h : held)
+                if (_wcsicmp(h.device.c_str(), want.device.c_str()) == 0 && h.control == want.control)
+                    bits |= 1u << a;
+            for (const auto& [id, name] : devices)
+                connected |= _wcsicmp(id.c_str(), want.device.c_str()) == 0;
+            missing |= !connected;
+        }
+        padWatch.held.store(bits, std::memory_order_relaxed);
+        if (missing && qpc_now() >= nextRescan) {  // a bound device plugged in since
+            pads.rescan();
+            nextRescan = qpc_now() + qpc_ms(kPadRescanMs);
+        }
+        lock.lock();
+        padWatch.wake.wait_for(lock, std::chrono::milliseconds(kPadPollMs), [] { return padWatch.stop; });
+    }
+    lock.unlock();
+    pads.close();
+    DestroyWindow(window);
+}
+
+// Starts the thread once a wheel or controller button is bound (from the frame thread, each frame).
+void pad_watch_ensure() {
+    if (!pad_bound(hotkeys))
+        return;
+    std::lock_guard guard(padWatch.mutex);
+    if (!padWatch.thread.joinable()) {
+        padWatch.stop = false;
+        padWatch.bindings = hotkeys;
+        padWatch.thread = std::thread(pad_watch_run);
+    }
+}
+
+void pad_watch_stop() {
+    std::thread thread;
+    {
+        std::lock_guard guard(padWatch.mutex);
+        padWatch.stop = true;
+        thread.swap(padWatch.thread);
+    }
+    padWatch.wake.notify_all();
+    if (thread.joinable())
+        thread.join();
+    padWatch.held.store(0);
+}
+
+void hotkeys_changed(const Hotkeys& h) {
+    if (h == hotkeys)
+        return;
+    hotkeys = h;
+    {
+        std::lock_guard guard(padWatch.mutex);
+        padWatch.bindings = h;
+    }
+    std::wstring line;
+    for (int a = 0; a < kHotkeyActions; ++a) {
+        const std::wstring key = key_text(h[a].key), pad = control_text(h[a].pad.control);
+        line += std::wstring(a ? L", " : L"") + hotkey_ini_key(static_cast<HotkeyAction>(a)) + L"=" + (key.empty() ? L"-" : key) +
+                (pad.empty() ? L"" : L" / " + pad);
+    }
+    logf("hotkeys: %ls", line.c_str());
+}
+
+bool ace_focused();
+
+// Exactly `key`'s modifiers and its key held, while ACE has focus.
+bool key_held(const KeyCombo& key) {
+    if (!key.set() || !ace_focused())
+        return false;
+    const auto down = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
+    return down(key.vk) && down(VK_CONTROL) == key.ctrl && down(VK_MENU) == key.alt && down(VK_SHIFT) == key.shift;
+}
+
+bool pad_held(HotkeyAction action) {
+    return (padWatch.held.load(std::memory_order_relaxed) >> static_cast<int>(action)) & 1;
+}
+
+bool hotkey_held(HotkeyAction action) { return key_held(hotkeys[static_cast<int>(action)].key) || pad_held(action); }
+
+// The settings menu's hint: how to select and change, and how to close.
+std::wstring menu_hint() {
+    const Hotkeys defaults = default_hotkeys();
+    bool defaultKeys = true, padKeys = false;
+    for (int a = static_cast<int>(HotkeyAction::MenuUp); a <= static_cast<int>(HotkeyAction::MenuRight); ++a) {
+        defaultKeys &= hotkeys[a].key == defaults[a].key;
+        padKeys |= hotkeys[a].pad.set();
+    }
+    const Hotkey& toggle = hotkeys[static_cast<int>(HotkeyAction::MenuToggle)];
+    std::wstring hint = defaultKeys ? L"Ctrl+Alt+arrows" : L"Your menu hotkeys";
+    hint += padKeys ? L", wheel buttons or right stick: select and change" : L", or right stick: select and change";
+    hint += toggle.key.set() || toggle.pad.set() ? L" · open/close hotkey or left stick click: close" : L" · left stick click: close";
+    return hint;
+}
+
 // ---- Settings menu ---------------------------------------------------------------------------
-// In the headset (settings_menu.h): Ctrl+Alt+arrows while ACE has focus, or a controller's left
+// In the headset (settings_menu.h): its hotkeys (above; Ctrl+Alt+arrows by default), or a controller's left
 // stick click (open, close) and right stick (select, change). Changes are written to the ini the
 // layer reloads from and to the launcher's (ACE_QV_SETTINGS), so they apply as the launcher's do.
 // Shown as a head-locked quad layer on top of whatever this layer submits, where the launcher's
@@ -2914,12 +3083,12 @@ struct Menu {
     int stickDir = -1;  // controller repeat: the held stick direction
     int64_t stickRepeat = 0;
     bool togglePrevious = false;
+    bool hotkeyTogglePrevious = false;  // the open/close hotkey, held at the last frame
     bool profileLogged = false;
     uint64_t lastWrite = 0;  // ini_write_later's number for the latest step
 };
 Menu menu;
 constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
-constexpr int kMenuKeys[] = {VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT};
 constexpr MenuKey kMenuKeyOf[] = {MenuKey::Up, MenuKey::Down, MenuKey::Left, MenuKey::Right};
 
 int64_t qpc_ms(int64_t ms) {
@@ -3063,12 +3232,26 @@ bool repeat(int& held, int64_t& nextAt, int direction, int64_t now) {
     return true;
 }
 
+// The menu's hotkeys: the open/close one, and the four directions. A key's first press opens the menu; a wheel's
+// directions act only while it shows (the game may use the same switch).
 void menu_keyboard(int64_t now) {
+    pad_watch_ensure();
+    const bool toggle = hotkey_held(HotkeyAction::MenuToggle);
+    if (toggle && !menu.hotkeyTogglePrevious) {
+        if (menu.visible) {
+            menu.visible = false;
+            log_line("settings menu: closed");
+        } else {
+            menu_open(now);
+        }
+    }
+    menu.hotkeyTogglePrevious = toggle;
     int down = -1;
-    if (ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000))
-        for (int i = 0; i < 4 && down < 0; ++i)
-            if (GetAsyncKeyState(kMenuKeys[i]) & 0x8000)
-                down = i;
+    for (int i = 0; i < 4 && down < 0; ++i) {
+        const HotkeyAction a = static_cast<HotkeyAction>(static_cast<int>(HotkeyAction::MenuUp) + i);
+        if (key_held(hotkeys[static_cast<int>(a)].key) || (menu.visible && pad_held(a)))
+            down = i;
+    }
     if (repeat(menu.heldKey, menu.keyRepeat, down, now))
         menu_press(kMenuKeyOf[down], now);
 }
@@ -3208,7 +3391,7 @@ double native_center_ppd() {
 
 void menu_render() {
     const std::wstring title = menu_title(menu.model);
-    const std::wstring hint = L"Ctrl+Alt+arrows, or right stick: select and change · left stick click: close";
+    const std::wstring hint = menu_hint();
     if (menu.model.launch.nativePpd <= 0)  // known once ACE has rendered a frame
         menu.model.launch.nativePpd = native_center_ppd();
     menu.model.launch.dlssHeld = experiment.views4 && views4_dlss_held();
@@ -3451,12 +3634,11 @@ void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& 
     osd_place();
 }
 
-// Ctrl+Alt+V while ACE has focus steps the helmet's visor (closed, half, open, closed), written to the ini
-// the layer reloads from and to the launcher's, as the headset menu writes it.
+// The visor hotkey (Ctrl+Alt+V by default) steps the helmet's visor (closed, half, open, closed), written to the
+// ini the layer reloads from and to the launcher's, as the headset menu writes it.
 bool visorHotkeyHeld = false;
 void visor_hotkey() {
-    const bool held = ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
-                      (GetAsyncKeyState('V') & 0x8000);
+    const bool held = hotkey_held(HotkeyAction::Visor);
     if (held && !visorHotkeyHeld && experiment.views4Compose) {
         HelmetSettings h;
         {
@@ -3472,14 +3654,14 @@ void visor_hotkey() {
             if (!settings.empty())
                 write_helmet_settings(settings.c_str(), h);
         });
-        logf("helmet: visor %ls (Ctrl+Alt+V)", kVisorPositionNames[static_cast<int>(h.visor)]);
+        logf("helmet: visor %ls (hotkey)", kVisorPositionNames[static_cast<int>(h.visor)]);
     }
     visorHotkeyHeld = held;
 }
 
 void osd_hotkey() {
-    const bool held = ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
-                      (GetAsyncKeyState('P') & 0x8000);
+    pad_watch_ensure();  // also without a method of the layer's (baseline=1)
+    const bool held = hotkey_held(HotkeyAction::Overlay);
     if (held && !osd.hotkeyHeld) {
         OsdPlacement placement = osd.placement;
         placement.enabled = !placement.enabled;
@@ -3891,8 +4073,7 @@ void cpu_profile_poll() {
         menu.model.notice.clear();
         menu.dirty = true;
     }
-    const bool held = ace_focused() && (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
-                      (GetAsyncKeyState('C') & 0x8000);
+    const bool held = hotkey_held(HotkeyAction::CpuCapture);
     const bool pressed = held && !cpuProfileHotkeyHeld;
     cpuProfileHotkeyHeld = held;
     // cpu_profile_frame=0 is no capture by itself, not one at the session's first frame.

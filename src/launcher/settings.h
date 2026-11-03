@@ -10,6 +10,7 @@
 #include <string>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../input/hotkeys.h"
 #include "../quad/focus_offset.h"
 #include "../quad/focus_shape.h"
 #include "../quad/gaze_deadzone.h"
@@ -51,7 +52,8 @@ struct Settings {
     double crop_height() const;
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
     CheekySettings cheeky;
-    bool cpuProfile = false;  // [experiment] cpu_profile: Ctrl+Alt+C records a CPU capture (Diagnostics pane)
+    bool cpuProfile = false;  // [experiment] cpu_profile: the CPU capture hotkey records one (Diagnostics pane)
+    Hotkeys hotkeys = default_hotkeys();  // [hotkeys] (input/hotkeys.h; the Hotkeys pane): live
     // [launcher] baseline_next: the next launch runs without QVFR (ACE's own two views, measured), once.
     bool baselineNext = false;
 };
@@ -70,7 +72,7 @@ Settings load_settings(const std::wstring& ini);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.
 bool save_settings(const std::wstring& ini, const Settings& settings);
 // The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,
-// outline, eye tracking, the headset menu's place and, for QVFR, the resolution (up to its launch size)
+// outline, eye tracking, the headset menu's place, the hotkeys and, for QVFR, the resolution (up to its launch size)
 // and the FOV crop. The method and
 // Two-loop's resolution apply at the next launch.
 bool save_live_settings(const std::wstring& ini, const Settings& settings);
