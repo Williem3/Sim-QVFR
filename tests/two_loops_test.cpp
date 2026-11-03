@@ -91,13 +91,16 @@ int main() {
         WritePrivateProfileStringW(L"quad", L"feather_percent", L"25", ini.c_str());
         loops.active = true;
         loops.pairedEnds = 1;  // A ended, B pending
+        live_reload();  // points the ini worker at the file
+        ini_worker_sync();  // it has read the change (the render thread never reads the file)
         live_reload();
         const bool heldForB = experiment.focusFraction == 0.35;
         loops.pairedEnds = 2;
         live_reload();
         const bool applied = experiment.focusFraction == 0.5 && experiment.feather == 0.25;
         experiment.focusFraction = 0.35;
-        live_reload();  // unchanged file within kLiveCheckMs: nothing re-read
+        ini_worker_sync();
+        live_reload();  // unchanged file: nothing re-read
         const bool quiet = experiment.focusFraction == 0.35;
         loops.active = false;
         live = Live{};
@@ -129,7 +132,48 @@ int main() {
         const bool opened = menu.visible && menu.model.launch.nativeWidth == 5190 && menu.model.values.periphery == 30;
         menu_press(MenuKey::Down, now);  // past the page switch to periphery
         menu_press(MenuKey::Left, now);  // periphery 30 -> 25
+        ini_worker_sync();  // written on the ini worker
         const bool stepped = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()) == 25;
+        DWORD writer = 0;
+        ini_write_later([&writer] { writer = GetCurrentThreadId(); });
+        ini_worker_sync();
+        const bool offThread = writer != 0 && writer != GetCurrentThreadId();
+        std::printf("ini writes: on the ini worker (not the render thread)=%d\n", offThread ? 1 : 0);
+        ok &= offThread;
+        // Two steps in quick succession while frames run (live_reload each frame): both reach the ini, and the
+        // second is applied too (the menu then shows it), not only the first.
+        live_reload();
+        ini_worker_sync();
+        live_reload();
+        menu_press(MenuKey::Left, qpc_now());  // 25 -> 20
+        for (int i = 0; i < 3; ++i) {
+            Sleep(11);
+            live_reload();
+        }
+        menu_press(MenuKey::Left, qpc_now());  // 20 -> 15
+        bool second = false;
+        for (int i = 0; i < 200 && !second; ++i) {
+            Sleep(11);
+            live_reload();
+            second = menu.model.values.periphery == 15;
+        }
+        std::printf("two quick steps: the ini has %d, the menu shows %d after the reloads\n",
+                    GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()), menu.model.values.periphery);
+        ok &= second;
+        // A reload read before the latest step was written leaves the menu as it is; one read after it shows.
+        IniSnapshot older;
+        older.menu = menu.model.values;
+        older.menu.periphery = 40;
+        older.cheeky = menu.model.cheeky.values;
+        older.writesBefore = menu.lastWrite - 1;
+        menu_values_changed(older);
+        const bool keptStep = menu.model.values.periphery == 15;
+        older.writesBefore = menu.lastWrite;
+        menu_values_changed(older);
+        const bool newerShown = menu.model.values.periphery == 40;
+        std::printf("menu reloads: one older than the last step ignored=%d, a newer one shown=%d\n", keptStep ? 1 : 0,
+                    newerShown ? 1 : 0);
+        ok &= keptStep && newerShown;
         menu.visible = false;
         experiment.views4 = false;
         live = Live{};

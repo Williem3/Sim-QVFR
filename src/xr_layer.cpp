@@ -4,13 +4,18 @@
 // ace-quadview.ini.
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -241,7 +246,6 @@ struct Live {
     std::wstring restartKeys;  // restart_keys when last read
     MenuPlacement menuPlacement;  // the settings menu's place ([menu]) when last read
     FILETIME written{};        // the ini's last write time when last read
-    int64_t nextCheck = 0;     // QPC
 };
 Live live;
 
@@ -1017,9 +1021,11 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 void menu_shutdown();  // the settings menu's panel (below)
 void osd_shutdown();   // the performance overlay's card (below)
 
+void ini_worker_sync();  // (below)
 void helmet_layer_release();  // (below)
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
+    ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
     menu_shutdown();  // its swapchain and space belong to the session
     osd_shutdown();
     probe_stop();
@@ -2184,53 +2190,163 @@ void live_apply(const LiveSettings& l) {
         log_line("live: debug_border without views4_compose starts at the next launch");
 }
 
-void menu_values_changed();  // the settings menu shows the ini's values (below)
+struct IniSnapshot;
+void menu_values_changed(const IniSnapshot& s);  // the settings menu shows the ini's values (below)
 
 // Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
-void cheeky_apply_ini() {
-    if (cheeky_running() && !live.ini.empty())
-        cheeky_apply(cheeky_set_lines(read_cheeky_settings(live.ini.c_str()), experiment.views4,
-                                      read_live(live.ini.c_str()).gaze));
+void cheeky_apply_settings(const CheekySettings& c, bool gazeOn) {
+    if (cheeky_running())
+        cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn));
 }
-void menu_placement_changed();  // the launcher moved the settings menu's panel (below)
-void osd_placement_changed();   // the performance overlay was turned on or off or moved (below)
+void cheeky_apply_ini() {
+    if (!live.ini.empty())
+        cheeky_apply_settings(read_cheeky_settings(live.ini.c_str()), read_live(live.ini.c_str()).gaze);
+}
+void menu_placement_changed(const MenuPlacement& placement);  // the launcher moved the settings menu's panel (below)
+void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);  // the overlay (below)
+void osd_placement_changed();
 
 constexpr int64_t kLiveCheckMs = 250;
 
-// Checks the ini's write time every kLiveCheckMs and applies its live keys when it changed. Only
-// between display frames: with two_loops, never between frame A and frame B.
+// Everything the live reload takes from the ini, read in one go (on the ini worker).
+struct IniSnapshot {
+    LiveSettings live;
+    CheekySettings cheeky;
+    MenuValues menu;
+    MenuPlacement menuPlacement;
+    OsdPlacement osd;
+    std::wstring restartKeys;
+    uint64_t writesBefore = 0;  // ini_write_later's writes done before it was read (menu_values_changed)
+};
+
+IniSnapshot read_snapshot(const wchar_t* ini) {
+    IniSnapshot s;
+    s.live = read_live(ini);
+    s.cheeky = read_cheeky_settings(ini);
+    s.menu = read_menu_values(ini);
+    s.menuPlacement = read_menu_placement(ini);
+    s.osd = read_osd_placement(ini);
+    s.restartKeys = restart_keys(ini, experiment.views4);
+    return s;
+}
+
+// The ini worker: every read and write of the ini while the game runs, off the render thread (each
+// Get/WritePrivateProfileString opens the file; a menu step wrote and re-read about a hundred keys, up to
+// ~130 ms in xrEndFrame). It runs the queued writes (the menu's, the hotkeys'), then, every kLiveCheckMs or
+// when woken, reads a snapshot when the ini's write time changed; live_reload applies the latest.
+struct IniWorker {
+    std::mutex mutex;
+    std::condition_variable wake, settled;
+    std::deque<std::function<void()>> writes;
+    std::wstring ini;     // the ini watched
+    FILETIME written{};   // its write time when last read
+    std::optional<IniSnapshot> ready;  // the latest read, not yet applied
+    uint64_t requested = 0, done = 0;  // passes asked for (ini_worker_sync) and finished
+    uint64_t writesQueued = 0, writesDone = 0;  // ini_write_later's writes, numbered from 1
+    bool poke = false, started = false;
+};
+IniWorker iniWorker;
+
+void ini_worker_loop() {
+    std::unique_lock lock(iniWorker.mutex);
+    for (;;) {
+        iniWorker.wake.wait_for(lock, std::chrono::milliseconds(kLiveCheckMs),
+                                [] { return iniWorker.poke || !iniWorker.writes.empty(); });
+        iniWorker.poke = false;
+        std::deque<std::function<void()>> writes;
+        writes.swap(iniWorker.writes);
+        const std::wstring ini = iniWorker.ini;
+        const FILETIME seen = iniWorker.written;
+        const uint64_t pass = iniWorker.requested;
+        const uint64_t through = iniWorker.writesDone + writes.size();
+        lock.unlock();
+        for (auto& write : writes)
+            write();
+        // After its own writes it reads the ini whatever its write time says (a write can leave it unchanged).
+        std::optional<IniSnapshot> snapshot;
+        WIN32_FILE_ATTRIBUTE_DATA attributes{};
+        const bool stamped = !ini.empty() && GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes);
+        const bool changed = stamped && (!writes.empty() || CompareFileTime(&attributes.ftLastWriteTime, &seen) != 0);
+        if (changed) {
+            snapshot = read_snapshot(ini.c_str());
+            snapshot->writesBefore = through;
+        }
+        lock.lock();
+        iniWorker.writesDone = through;
+        if (snapshot && ini == iniWorker.ini) {
+            iniWorker.ready = std::move(snapshot);
+            iniWorker.written = attributes.ftLastWriteTime;
+        }
+        iniWorker.done = std::max(iniWorker.done, pass);
+        iniWorker.settled.notify_all();
+    }
+}
+
+// Starts the worker (once) and points it at `ini`, read from `written` on (a new path drops what it read).
+// Under iniWorker.mutex.
+void ini_worker_watch(const std::wstring& ini, const FILETIME& written) {
+    if (!iniWorker.started) {
+        iniWorker.started = true;
+        std::thread(ini_worker_loop).detach();  // ends with the process (ExitProcess stops it before teardown)
+    }
+    if (ini != iniWorker.ini) {
+        iniWorker.ini = ini;
+        iniWorker.written = written;
+        iniWorker.ready.reset();
+    }
+}
+
+// Queues a write to the ini (or the launcher's) and wakes the worker; the live reload follows it. Returns
+// the write's number: snapshots read after it carry writesBefore >= it.
+uint64_t ini_write_later(std::function<void()> write) {
+    std::lock_guard guard(iniWorker.mutex);
+    ini_worker_watch(live.ini, live.written);
+    iniWorker.writes.push_back(std::move(write));
+    iniWorker.wake.notify_one();
+    return ++iniWorker.writesQueued;
+}
+
+// Waits until the writes queued so far are done and the ini has been read after them (tests; the
+// session's end, so no change is lost).
+void ini_worker_sync() {
+    std::unique_lock lock(iniWorker.mutex);
+    if (!iniWorker.started)
+        return;
+    const uint64_t want = ++iniWorker.requested;
+    iniWorker.poke = true;
+    iniWorker.wake.notify_one();
+    iniWorker.settled.wait(lock, [want] { return iniWorker.done >= want; });
+}
+
+// Applies the ini's live keys when the worker read a change. Only between display frames: with
+// two_loops, never between frame A and frame B. No file access here.
 void live_reload() {
     if (live.ini.empty())
         return;
-    static const int64_t frequency = [] {
-        LARGE_INTEGER f;
-        QueryPerformanceFrequency(&f);
-        return f.QuadPart;
-    }();
-    const int64_t now = qpc_now();
-    if (now < live.nextCheck)
-        return;
+    {
+        std::lock_guard guard(iniWorker.mutex);
+        ini_worker_watch(live.ini, live.written);
+    }
     {
         std::lock_guard guard(loops.mutex);
         if (loops.active && loops.pairedEnds % 2 != 0)
-            return;  // A ended, B not yet: check again after B
+            return;  // A ended, B not yet: apply after B
     }
-    live.nextCheck = now + frequency * kLiveCheckMs / 1000;
-    WIN32_FILE_ATTRIBUTE_DATA attributes{};
-    if (!GetFileAttributesExW(live.ini.c_str(), GetFileExInfoStandard, &attributes) ||
-        CompareFileTime(&attributes.ftLastWriteTime, &live.written) == 0)
+    std::optional<IniSnapshot> s;
+    {
+        std::lock_guard guard(iniWorker.mutex);
+        s.swap(iniWorker.ready);
+    }
+    if (!s)
         return;
-    live.written = attributes.ftLastWriteTime;
-    live_apply(read_live(live.ini.c_str()));
-    cheeky_apply_ini();
-    menu_values_changed();
-    menu_placement_changed();
-    osd_placement_changed();
-    const std::wstring restartKeys = restart_keys(live.ini.c_str(), experiment.views4);
-    if (restartKeys != live.restartKeys) {
-        logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(),
-             restartKeys.c_str());
-        live.restartKeys = restartKeys;
+    live_apply(s->live);
+    cheeky_apply_settings(s->cheeky, s->live.gaze);
+    menu_values_changed(*s);
+    menu_placement_changed(s->menuPlacement);
+    osd_placement_changed(s->osd, s->cheeky);
+    if (s->restartKeys != live.restartKeys) {
+        logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());
+        live.restartKeys = s->restartKeys;
     }
 }
 
@@ -2256,6 +2372,7 @@ struct Menu {
     int64_t stickRepeat = 0;
     bool togglePrevious = false;
     bool profileLogged = false;
+    uint64_t lastWrite = 0;  // ini_write_later's number for the latest step
 };
 Menu menu;
 constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
@@ -2287,19 +2404,20 @@ void menu_place(const MenuPlacement& placement) {
 }
 
 // The launcher changed the ini: an open menu shows the new values.
-void menu_values_changed() {
-    if (!menu.visible)
+// A snapshot read before the latest step was written would put the menu back a step (and the next step's
+// write would carry the old value: two quick steps lost the second), so the menu waits for a newer one.
+void menu_values_changed(const IniSnapshot& s) {
+    if (!menu.visible || s.writesBefore < menu.lastWrite)
         return;
-    menu.model.values = read_menu_values(live.ini.c_str());
-    menu.model.cheeky.values = read_cheeky_settings(live.ini.c_str());
+    menu.model.values = s.menu;
+    menu.model.cheeky.values = s.cheeky;
     menu.dirty = true;
 }
 
 void menu_open(int64_t now);
 
 // Moved from the launcher (its Headset menu pane): the panel goes there and shows, so you can see it.
-void menu_placement_changed() {
-    const MenuPlacement placement = read_menu_placement(live.ini.c_str());
+void menu_placement_changed(const MenuPlacement& placement) {
     if (placement == live.menuPlacement)
         return;
     live.menuPlacement = placement;
@@ -2317,8 +2435,15 @@ void menu_open(int64_t now) {
             menu.settingsIni = path;
     }
     if (!menu.visible) {
-        menu.model.values = read_menu_values(live.ini.c_str());
-        menu.model.cheeky = {cheeky_running(), cheeky_version(), read_cheeky_settings(live.ini.c_str())};
+        bool stepPending;  // reopened before its last step reached the ini: keep the values it shows
+        {
+            std::lock_guard guard(iniWorker.mutex);
+            stepPending = iniWorker.writesDone < menu.lastWrite;
+        }
+        if (!stepPending)
+            menu.model.values = read_menu_values(live.ini.c_str());
+        menu.model.cheeky = {cheeky_running(), cheeky_version(),
+                             stepPending ? menu.model.cheeky.values : read_cheeky_settings(live.ini.c_str())};
         const Views4Layout& l = experiment.views4Layout;
         {
             std::lock_guard guard(quad.mutex);  // the native eye, for the notes' pixel sizes
@@ -2348,16 +2473,26 @@ void menu_press(MenuKey key, int64_t now) {
     menu.dirty = true;
     if (!menu_key(menu.model, key))
         return;
-    const bool qvfr = menu.model.launch.qvfr;
-    write_menu_values(live.ini.c_str(), menu.model.values, qvfr);
-    if (menu.model.cheeky.available)
-        write_cheeky_settings(live.ini.c_str(), menu.model.cheeky.values, false);
-    if (!menu.settingsIni.empty()) {  // the next launch starts from them
-        write_menu_values(menu.settingsIni.c_str(), menu.model.values, qvfr);
-        if (menu.model.cheeky.available)
-            write_cheeky_settings(menu.settingsIni.c_str(), menu.model.cheeky.values, false);
+    {  // what was set, to check against what applies ("live:", "cheeky: settings applied")
+        const std::vector<MenuLine> lines = menu_lines(menu.model);
+        const int i = menu.model.selected;
+        if (i >= 0 && i < static_cast<int>(lines.size()))
+            logf("settings menu: %ls: %ls -> %ls", menu_title(menu.model).c_str(), lines[i].label.c_str(),
+                 lines[i].value.c_str());
     }
-    live.nextCheck = 0;  // apply at this frame's live_reload
+    // Written on the ini worker (off the render thread), to the ini the layer reloads and the launcher's
+    // (the next launch starts from them); the live reload follows within a frame or two.
+    menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
+                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr] {
+        write_menu_values(ini.c_str(), values, qvfr);
+        if (cheeky.available)
+            write_cheeky_settings(ini.c_str(), cheeky.values, false);
+        if (!settings.empty()) {
+            write_menu_values(settings.c_str(), values, qvfr);
+            if (cheeky.available)
+                write_cheeky_settings(settings.c_str(), cheeky.values, false);
+        }
+    });
 }
 
 // Held keys and stick directions repeat after kRepeatDelayMs, every kRepeatMs.
@@ -2680,8 +2815,11 @@ void osd_place() {
 }
 
 void osd_placement_changed() {
-    osd.cheeky = read_cheeky_settings(live.ini.c_str());  // frame generation on or off, its multiplier
-    const OsdPlacement placement = read_osd_placement(live.ini.c_str());
+    osd_placement_changed(read_osd_placement(live.ini.c_str()), read_cheeky_settings(live.ini.c_str()));
+}
+
+void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky) {
+    osd.cheeky = cheeky;  // frame generation on or off, its multiplier
     if (osd.read && placement == osd.placement)
         return;
     if (osd.read || placement.enabled)
@@ -2707,16 +2845,18 @@ void visor_hotkey() {
     if (held && !visorHotkeyHeld && experiment.views4Compose) {
         HelmetSettings h;
         {
-            std::lock_guard guard(quad.mutex);
+            std::lock_guard guard(quad.mutex);  // at once; the ini on the worker
             helmetSettings.visor = static_cast<VisorPosition>((static_cast<int>(helmetSettings.visor) + 1) % 3);
             h = helmetSettings;
         }
         wchar_t path[MAX_PATH] = {};
         const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
         const std::wstring settings = n > 0 && n < MAX_PATH ? std::wstring(path) : std::wstring();
-        write_helmet_settings(live.ini.c_str(), h);
-        if (!settings.empty())
-            write_helmet_settings(settings.c_str(), h);
+        ini_write_later([ini = live.ini, settings, h] {
+            write_helmet_settings(ini.c_str(), h);
+            if (!settings.empty())
+                write_helmet_settings(settings.c_str(), h);
+        });
         logf("helmet: visor %ls (Ctrl+Alt+V)", kVisorPositionNames[static_cast<int>(h.visor)]);
     }
     visorHotkeyHeld = held;
@@ -2728,12 +2868,15 @@ void osd_hotkey() {
     if (held && !osd.hotkeyHeld) {
         OsdPlacement placement = osd.placement;
         placement.enabled = !placement.enabled;
-        write_osd_placement(live.ini.c_str(), placement);
         wchar_t path[MAX_PATH] = {};  // the launcher's own ini: the next launch starts with it
         const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
-        if (n > 0 && n < MAX_PATH)
-            write_osd_placement(path, placement);
-        osd_placement_changed();
+        const std::wstring settings = n > 0 && n < MAX_PATH ? std::wstring(path) : std::wstring();
+        ini_write_later([ini = live.ini, settings, placement] {
+            write_osd_placement(ini.c_str(), placement);
+            if (!settings.empty())
+                write_osd_placement(settings.c_str(), placement);
+        });
+        osd_placement_changed(placement, osd.cheeky);  // at once; the ini on the worker
     }
     osd.hotkeyHeld = held;
 }

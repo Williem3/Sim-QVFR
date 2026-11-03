@@ -98,7 +98,7 @@ struct App {
     RuntimeInfo runtime;
     std::wstring ini;
     bool iniFound = false;
-    FILETIME iniWritten{};  // the ini's write time when last read or saved here (follow_ini)
+    std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
     Pane pane = Pane::Rendering;
     Ctl focus = kNone;
     bool keyboard = false;  // focus rings show after keyboard use only (:focus-visible)
@@ -155,30 +155,42 @@ void push_live() {
     app.live = fits_launch(app.s, load_launch_sizes(runtime_info_path())) ? Live::Applied : Live::NextLaunch;
 }
 
-FILETIME ini_written() {
-    WIN32_FILE_ATTRIBUTE_DATA a{};
-    return GetFileAttributesExW(app.ini.c_str(), GetFileExInfoStandard, &a) ? a.ftLastWriteTime : FILETIME{};
+// The ini's bytes: follow_ini compares them, not the write time, which can miss a change (a read between
+// the menu's writes that lands on the same timestamp as the last one; that lost a release point).
+std::string ini_text() {
+    std::string text;
+    HANDLE file = CreateFileW(app.ini.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return text;
+    char buffer[16 * 1024];
+    DWORD read = 0;
+    while (ReadFile(file, buffer, sizeof(buffer), &read, nullptr) && read)
+        text.append(buffer, read);
+    CloseHandle(file);
+    return text;
 }
 
 void changed(bool save = true) {
     app.status = Status::Idle;
     if (save && app.iniFound) {
         save_settings(app.ini, app.s);
-        app.iniWritten = ini_written();
+        app.iniText = ini_text();
         push_live();
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
-// The in-headset settings menu saves into the same ini: show what it set (not while a knob is held).
+// The in-headset settings menu saves into the same ini: show what it set (not while a knob is held). A
+// read halfway through the menu's writes is read again on the next tick (the bytes differ by then).
 constexpr UINT_PTR kFollowTimer = 1;
 void follow_ini() {
     if (!app.iniFound || app.dragging != kNone)
         return;
-    const FILETIME written = ini_written();
-    if (CompareFileTime(&written, &app.iniWritten) == 0)
+    std::string text = ini_text();
+    if (text == app.iniText)
         return;
-    app.iniWritten = written;
+    app.iniText = std::move(text);
     app.s = load_settings(app.ini);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -295,7 +307,11 @@ void launch() {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
+    // Every change here was saved when it was made; the ini may have changed since (the headset menu), so
+    // launch from what it holds, not from what this window last read.
+    app.s = load_settings(app.ini);
     save_settings(app.ini, app.s);
+    app.iniText = ini_text();
     app.status = Status::Starting;
     RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     std::wstring report;
@@ -1497,7 +1513,7 @@ void choose_cheeky_runtime() {
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn) && app.iniFound) {
         save_cheeky_runtime(app.ini, path);
-        app.iniWritten = ini_written();
+        app.iniText = ini_text();
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -1672,7 +1688,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         apply_theme();
         if (!app.canvas.initialize(hwnd))
             return -1;
-        app.iniWritten = ini_written();
+        app.iniText = ini_text();
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         return 0;
     case WM_TIMER:
@@ -1769,6 +1785,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         }
         return 0;
     }
+    case WM_CAPTURECHANGED:  // a drag that lost the mouse (no button-up): end it, or follow_ini stays off
+        if (app.dragging != kNone) {
+            app.dragging = kNone;
+            changed();
+        }
+        return 0;
     case WM_LBUTTONUP: {
         ReleaseCapture();
         if (app.dragging != kNone) {
