@@ -81,6 +81,15 @@ inline constexpr std::uint8_t kViewportAnchor[16] = {0x48, 0x89, 0x5c, 0x24, 0x1
 // unequal views both must see the largest view, or the bigger views overrun them.
 inline constexpr std::uintptr_t kTileGridViewportCallSite = 0x1d97049;
 inline constexpr std::uintptr_t kFogViewportCallSite = 0x1da1edf;
+// The builder 0x1d84a80 lays each view out twice every frame (static, 2026-11-02): at the render size
+// (renderer + 0x14a288 -> +0x30/+0x34, the DLSS input; into the per-view vector +0x7d0) and at the output
+// size (renderer[+0x38] -> +0x48/+0x4c, the swapchain atlas; into +0x7e8). The final pass 0x1f7a6e0 hands
+// DLSS (0x1f920f0 -> evaluate 0x1f8fa40) a per-view input rect (x, y, w, h: Render.Subrect.Dimensions and
+// the input bases) and output position (Output.Subrect.Base) every frame; MV.Scale is 1. NGX takes a render
+// subrect up to the size the feature was made with (renderer init, from these viewports at launch), but
+// the output is always that size: DLSS dynamic resolution with the output layout fixed.
+inline constexpr std::uintptr_t kBuilderRenderViewportCallSite = 0x1d8828c;
+inline constexpr std::uintptr_t kBuilderOutputViewportCallSite = 0x1d882e7;
 // view(renderer, int i) = renderer[+0x7b8] + i * 0x140 (per-view records).
 inline constexpr std::uintptr_t kViewRecordRva = 0x1d92f50;
 inline constexpr std::uint8_t kViewRecordAnchor[16] = {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x04, 0x80, 0x48,
