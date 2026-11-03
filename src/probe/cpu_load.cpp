@@ -28,6 +28,17 @@ struct Worker {
     std::map<uint32_t, double> threadSum;  // cpu_load_threads': each thread's share summed over its samples
     std::map<uint32_t, double> latestShares;  // the latest sample's
     int threadSamples = 0;
+    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate. At a
+    // process exit it has ended, so the join returns at once.
+    ~Worker() {
+        {
+            std::lock_guard guard(mutex);
+            stop = true;
+        }
+        wake.notify_all();
+        if (thread.joinable())
+            thread.join();
+    }
 };
 Worker worker;
 
