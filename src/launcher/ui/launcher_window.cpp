@@ -1,5 +1,5 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, OpenXR layers, Diagnostics,
+// of panes (Launch checks, Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, OpenXR layers, Diagnostics,
 // Report an issue, About), grouped forms with
 // the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
 // to drag the in-headset settings menu around), and an action bar with the status badge,
@@ -13,7 +13,9 @@
 #include <cstdio>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
@@ -24,8 +26,10 @@
 
 #include "../launcher.h"
 #include "../launch_plan.h"
+#include "../preflight.h"
 #include "../report.h"
 #include "../settings.h"
+#include "../../sha256_file.h"
 #include "canvas.h"
 #include "launcher_version.h"
 
@@ -38,8 +42,8 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, Report, About };
-constexpr int kPanes = 10;
+enum class Pane { Checks, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Layers, Diagnostics, Report, About };
+constexpr int kPanes = 11;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -61,7 +65,9 @@ enum Ctl {
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
     // The Report an issue pane (its kind, the description box, the button) and the Diagnostics pane (the CPU
     // capture switch, copying the summary, the logs folder).
-    kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs
+    kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
+    // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
+    kCheckFix, kChecksBadge
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -70,6 +76,8 @@ constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 
 constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
+// The exe's hash, done on a worker: its message carries a new std::string (the hex digest).
+constexpr UINT kHashedMessage = WM_APP + 1;
 
 struct Hit {
     Ctl id;
@@ -146,6 +154,13 @@ struct App {
     bool layersLockMoved = false;  // Windows has the ACE layer below another one: applying moves it first
     std::wstring layerMessage;
     int layerTone = 0;
+    // Launch checks (preflight.h), refreshed every few seconds. The game exe is hashed once per file (its size
+    // and write time): hashedExe/hashedStamp name the file exeSha is for, or the one being hashed.
+    std::vector<Check> checks;
+    std::wstring hashedExe;
+    uint64_t hashedStamp = 0;
+    std::string exeSha;
+    bool hashing = false;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -228,6 +243,31 @@ void follow_ini() {
     app.iniText = std::move(text);
     app.s = load_settings(app.ini);
     InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// The exe's size and write time: a game update changes them.
+uint64_t file_stamp(const std::wstring& path) {
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a))
+        return 0;
+    return (static_cast<uint64_t>(a.ftLastWriteTime.dwHighDateTime) << 32 | a.ftLastWriteTime.dwLowDateTime) ^
+           (static_cast<uint64_t>(a.nFileSizeHigh) << 32 | a.nFileSizeLow);
+}
+
+void refresh_checks() {
+    const std::wstring exe = launcher_game_exe();
+    const uint64_t stamp = exe.empty() ? 0 : file_stamp(exe);
+    if (!exe.empty() && (exe != app.hashedExe || stamp != app.hashedStamp) && !app.hashing) {
+        app.hashedExe = exe;
+        app.hashedStamp = stamp;
+        app.exeSha.clear();
+        app.hashing = true;
+        std::thread([hwnd = app.hwnd, exe] {  // ~100 MB: a second or so from a cold disk
+            PostMessageW(hwnd, kHashedMessage, 0, reinterpret_cast<LPARAM>(new std::string(sha256_file(exe.c_str()))));
+        }).detach();
+    }
+    const bool current = exe == app.hashedExe && stamp == app.hashedStamp;
+    app.checks = preflight_checks(launcher_preflight(exe, build_state(current ? app.exeSha : "", current && app.hashing)));
 }
 
 int* slider_value(Ctl id) {
@@ -318,6 +358,7 @@ bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
 std::vector<Ctl> focus_order() {
     std::vector<Ctl> order = {kSidebar};
     switch (app.pane) {
+    case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
     case Pane::Rendering: order.insert(order.end(), {kMethod, kMode}); break;
     case Pane::Resolution:
         order.push_back(kOuter);
@@ -390,6 +431,20 @@ void launch() {
     app.s = load_settings(app.ini);
     save_settings(app.ini, app.s);
     app.iniText = ini_text();
+    // A launch that would crash the game, or run it without ace-quadview: ask first.
+    refresh_checks();
+    std::wstring problems;
+    for (const Check& c : app.checks)
+        if (c.confirm)
+            problems += L"\u2022 " + c.title + L"\n";
+    if (!problems.empty() &&
+        MessageBoxW(app.hwnd, (L"The launch checks found:\n\n" + problems + L"\nLaunch Assetto Corsa EVO anyway?").c_str(),
+                    L"QVFR Launcher", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+        app.pane = Pane::Checks;
+        app.scroll = 0;
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
     app.status = Status::Starting;
     RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     std::wstring report;
@@ -1214,11 +1269,51 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     return h;
 }
 
+// Launch checks (preflight.h): what needs attention first, each with its fix, then what is ready.
+float checks_pane(float x, float y, float w, bool draw) {
+    static const wchar_t* const kToneText[] = {L"OK", L"Check", L"Problem", L"Checking"};  // CheckTone's order
+    // Each row: its fix's button, else a badge with its state (the section says which need attention).
+    const auto check_row = [](size_t i) {
+        const Check& c = app.checks[i];
+        Row row;
+        row.label = c.title;
+        row.desc = c.detail;
+        if (!c.fixLabel.empty()) {
+            row.controlW = std::ceil(app.canvas.measure(c.fixLabel, t::kBody)) + 2 * t::kSpace3;
+            row.controlH = t::kControlHeight;
+            row.control = [i](const Rect& r) {
+                button(kCheckFix, r, app.checks[i].fixLabel, false);
+                app.hits.back().option = static_cast<int>(i);
+            };
+        } else {
+            const int tone = static_cast<int>(c.tone);  // the badge's tones are CheckTone's
+            const std::wstring text = kToneText[tone];
+            row.controlW = 7 + 12 + 5 + std::ceil(app.canvas.measure(text, {11, 14, 500, false})) + 9;
+            row.controlH = 20;
+            row.control = [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); };
+        }
+        return row;
+    };
+    std::vector<Row> attention, ready;
+    for (size_t i = 0; i < app.checks.size(); ++i)
+        (app.checks[i].tone == CheckTone::Bad || app.checks[i].tone == CheckTone::Warn ? attention : ready).push_back(check_row(i));
+    float h = 0;
+    if (!attention.empty())
+        h += section(x, y + h, w, L"Needs attention", attention,
+                     L"Launch asks before starting the game while a problem would crash it or leave ace-quadview off.", draw) +
+             t::kSpace6;
+    if (!ready.empty())
+        h += section(x, y + h, w, attention.empty() ? L"Ready to launch" : L"Ready", ready,
+                     attention.empty() ? L"Nothing found that would stop ace-quadview at the next launch." : L"", draw);
+    return h;
+}
+
 float pane_content(float x, float y, float w, bool draw) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool qvfr = app.s.mode == RenderMode::Qvfr;
     float h = 0;
     switch (app.pane) {
+    case Pane::Checks: h += checks_pane(x, y, w, draw); break;
     case Pane::Rendering: {
         Row method, mode;
         method.label = L"Rendering method";
@@ -1924,6 +2019,7 @@ struct Item {
 };
 // The kit's sidebar glyphs (16 x 16, 1.5 stroke); circles and rects are drawn as paths.
 const Item kItems[] = {
+    {L"Launch checks", {"M2 4.25l1.5 1.5 2.75-3", "M2 10.75l1.5 1.5 2.75-3", "M8.75 4.5H14M8.75 11H14"}},
     {L"Rendering", {"M8 2l6 3-6 3-6-3 6-3z", "M2 8.5l6 3 6-3", "M2 11.5l6 3 6-3"}},
     {L"Resolution", {"M3.25 2.75H12.75C13.6 2.75 14.25 3.4 14.25 4.25V9.75C14.25 10.6 13.6 11.25 12.75 11.25H3.25C2.4 11.25 1.75 10.6 1.75 9.75V4.25C1.75 3.4 2.4 2.75 3.25 2.75Z", "M5.5 14h5M8 11.25V14", nullptr}},
     {L"Foveation", {"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", nullptr, nullptr}},
@@ -1942,9 +2038,9 @@ void sidebar_icon(int i, const Rect& r, Color c) {
     for (const char* p : kItems[i].icon)
         if (p)
             app.canvas.path(p, r, 16, c, 1.5f);
-    if (i == 2)
+    if (i == static_cast<int>(Pane::Foveation))
         app.canvas.circle(r.x + 8, r.y + 8, 2, c, false, 1.5f);
-    if (i == 3)  // the outer square, dashed 2 / 2 along each edge
+    if (i == static_cast<int>(Pane::Overlay))  // the outer square, dashed 2 / 2 along each edge
         for (float d = 1.75f; d < 14.25f; d += 4) {
             const float e = std::min(d + 2, 14.25f);
             app.canvas.line(r.x + d, r.y + 1.75f, r.x + e, r.y + 1.75f, c, 1.5f);
@@ -2037,6 +2133,16 @@ void create_report_edit() {
     SetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(report_edit_proc));
 }
 
+// The action bar's badge for the launch checks' first problem (and how many more); it opens the pane.
+void checks_badge(float y, int tone, const Check& first, float maxWidth) {
+    size_t more = 0;
+    for (const Check& c : app.checks)
+        more += c.tone == CheckTone::Bad || c.tone == CheckTone::Warn ? 1 : 0;
+    const std::wstring text = first.title + (more > 1 ? L"  ·  " + std::to_wstring(more - 1) + L" more" : L"");
+    const float w = badge(t::kSpace5, y, tone, text, maxWidth);
+    app.hits.push_back({kChecksBadge, {t::kSpace5, y, w, 20}});
+}
+
 void paint() {
     if (!app.canvas.begin())
         return;
@@ -2060,10 +2166,14 @@ void paint() {
         const Color fg = col(selected ? app.c->on_accent : app.c->label);
         sidebar_icon(i, {row.x + t::kSpace2, row.y + 6, 16, 16}, col(selected ? app.c->on_accent : app.c->accent));
         cv.text(kItems[i].label, t::kBody, {row.x + t::kSpace2 + 16 + t::kSpace2, row.y, row.w - 40, 28}, fg);
-        if (i == 2 && eye_warning()) {
+        // A mark on Foveation without an eye tracker, and on Launch checks with a problem (red) or warning.
+        const CheckTone worst = worst_tone(app.checks);
+        const bool checksMark = i == static_cast<int>(Pane::Checks) && worst != CheckTone::Ok;
+        if ((i == static_cast<int>(Pane::Foveation) && eye_warning()) || checksMark) {
+            const bool danger = checksMark && worst == CheckTone::Bad;
             const float bx = row.right() - t::kSpace2 - 16, by = row.y + 6;
-            cv.circle(bx + 8, by + 8, 8, col(selected ? app.c->on_accent : app.c->warning_bg), true);
-            const Color mark = col(selected ? app.c->accent_fill : app.c->warning);
+            cv.circle(bx + 8, by + 8, 8, col(selected ? app.c->on_accent : danger ? app.c->danger_bg : app.c->warning_bg), true);
+            const Color mark = col(selected ? app.c->accent_fill : danger ? app.c->danger : app.c->warning);
             cv.line(bx + 8, by + 5, bx + 8, by + 8.5f, mark, 1.6f);
             cv.circle(bx + 8, by + 10.75f, 0.9f, mark, true);
         }
@@ -2115,10 +2225,14 @@ void paint() {
         badge(t::kSpace5, by, 2, app.error, badgeMax);
     else if (!app.iniFound)
         badge(t::kSpace5, by, 2, L"ace-quadview.ini not found next to the launcher.", badgeMax);
+    else if (const Check* bad = first_with(app.checks, CheckTone::Bad))
+        checks_badge(by, 2, *bad, badgeMax);
     else if (eye_warning())
         badge(t::kSpace5, by, 1, L"Eye tracker not detected", badgeMax);
     else if (app.runtime.known() && ro.overRuntimeLimit)
         badge(t::kSpace5, by, 1, L"Larger than the runtime’s maximum image size", badgeMax);
+    else if (const Check* warn = first_with(app.checks, CheckTone::Warn))
+        checks_badge(by, 1, *warn, badgeMax);
     else if (app.live == Live::NextLaunch)
         badge(t::kSpace5, by, 1, app.s.mode == RenderMode::Qvfr
                                      ? L"Applied live up to the launch resolution · the rest at the next launch"
@@ -2333,6 +2447,32 @@ void choose_cheeky_runtime() {
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+void activate(Ctl id, int option);
+
+// A launch check's button (preflight.h's CheckFix).
+void fix_check(const Check& c) {
+    switch (c.fix) {
+    case CheckFix::OpenReleases: ShellExecuteW(app.hwnd, L"open", kReleasesUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
+    case CheckFix::StartSteam: ShellExecuteW(app.hwnd, L"open", L"steam://open/main", nullptr, nullptr, SW_SHOWNORMAL); break;
+    case CheckFix::ShowFile: {
+        const std::wstring select = L"/select,\"" + c.fixTarget + L"\"";
+        ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
+        return;
+    }
+    case CheckFix::OpenLayers: activate(kSidebar, static_cast<int>(Pane::Layers)); return;
+    case CheckFix::OpenDlss: activate(kSidebar, static_cast<int>(Pane::Dlss)); return;
+    case CheckFix::OpenRendering: activate(kSidebar, static_cast<int>(Pane::Rendering)); return;
+    case CheckFix::TurboOff:
+        if (!toolkit_turbo_off(launcher_game_exe()))
+            MessageBoxW(app.hwnd, L"OpenXR Toolkit’s settings for ACE could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.",
+                        L"QVFR Launcher", MB_OK | MB_ICONWARNING);
+        break;
+    case CheckFix::None: return;
+    }
+    refresh_checks();
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 void activate(Ctl id, int option) {
     switch (id) {
     case kSidebar:
@@ -2343,6 +2483,11 @@ void activate(Ctl id, int option) {
         if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
             app.runtime = load_runtime_info(runtime_info_path());
         break;
+    case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
+    case kCheckFix:
+        if (option >= 0 && option < static_cast<int>(app.checks.size()))
+            fix_check(app.checks[option]);
+        return;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
     case kDiagKind: open_popup(id); return;
@@ -2565,7 +2710,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         app.iniText = ini_text();
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         create_report_edit();
+        refresh_checks();
         return 0;
+    case kHashedMessage: {
+        const std::unique_ptr<std::string> sha(reinterpret_cast<std::string*>(lParam));
+        app.exeSha = *sha;
+        app.hashing = false;
+        refresh_checks();  // also hashes again if the exe changed meanwhile
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
     case WM_CTLCOLOREDIT:  // the description box in the theme's field colours
         if (reinterpret_cast<HWND>(lParam) == app.reportEdit) {
             if (!app.reportBrush || app.reportBrushRgb != app.c->field_bg) {
@@ -2583,6 +2737,12 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_TIMER:
         if (wParam == kFollowTimer) {
             follow_ini();
+            // Launch checks: Steam, ACE, the layers and the game folder change outside the launcher.
+            static int ticks = 0;
+            if (++ticks % 4 == 0) {
+                refresh_checks();
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             // Diagnostics and Report an issue follow a running session: the layer rewrites runtime.ini every ~10 s.
             static FILETIME seen{};
             WIN32_FILE_ATTRIBUTE_DATA a{};
@@ -2633,6 +2793,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.runtime = load_runtime_info(runtime_info_path());
             if (app.pane == Pane::Layers)  // a layer may have been installed or switched meanwhile
                 refresh_layers();
+            refresh_checks();
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         break;

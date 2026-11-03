@@ -195,4 +195,55 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
     return out;
 }
 
+std::vector<uint32_t> draw_notice_panel(const std::wstring& title, const std::vector<std::wstring>& lines) {
+    std::vector<uint32_t> out(static_cast<size_t>(kOsdWidth) * kOsdHeight, 0);
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = kOsdWidth;
+    bi.bmiHeader.biHeight = -kOsdHeight;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    if (!bitmap || !bits) {
+        if (dc)
+            DeleteDC(dc);
+        return out;
+    }
+    HGDIOBJ previous = SelectObject(dc, bitmap);
+    const auto font = [](int height, int weight) {
+        return CreateFontW(-height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                           CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    };
+    HFONT titleFont = font(44, FW_SEMIBOLD), bodyFont = font(28, FW_NORMAL);
+    SetBkMode(dc, TRANSPARENT);
+    fill(dc, 0, 0, kOsdWidth, kOsdHeight, kCard);
+    // A yellow bar down the left edge, the title beside it, then each paragraph wrapped.
+    rounded(dc, kMargin, 44, kMargin + 8, 100, 8, kYellow);
+    text(dc, titleFont, title, kMargin + 28, 40, kOsdWidth - kMargin, 104, kYellow, DT_LEFT);
+    int y = 132;
+    SelectObject(dc, bodyFont);
+    for (size_t i = 0; i < lines.size() && y < kOsdHeight - kMargin; ++i) {
+        SetTextColor(dc, gdi(i == 0 ? kPrimary : kSecondary));
+        RECT r{kMargin + 28, y, kOsdWidth - kMargin, kOsdHeight - kMargin};
+        y += DrawTextW(dc, lines[i].c_str(), static_cast<int>(lines[i].size()), &r, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX) + 18;
+    }
+    GdiFlush();
+    const auto* src = static_cast<const uint32_t*>(bits);
+    for (int py = 0; py < kOsdHeight; ++py)
+        for (int px = 0; px < kOsdWidth; ++px) {
+            const size_t i = static_cast<size_t>(py) * kOsdWidth + px;
+            const uint32_t p = src[i];
+            out[i] = ((p >> 16) & 0xff) | (p & 0xff00) | ((p & 0xff) << 16) | (static_cast<uint32_t>(card_alpha(px, py)) << 24);
+        }
+    SelectObject(dc, previous);
+    DeleteObject(titleFont);
+    DeleteObject(bodyFont);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    return out;
+}
+
 }  // namespace aceqv

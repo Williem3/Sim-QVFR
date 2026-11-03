@@ -8,6 +8,7 @@
 
 #include "launch_plan.h"
 #include "layer_order.h"
+#include "preflight.h"
 
 namespace aceqv::launcher {
 
@@ -22,6 +23,11 @@ std::wstring layer_folder();
 int launch_ace(bool dryRun, std::wstring& report);
 // The layers a launch with the settings in that file would load, and how (the OpenXR layers pane).
 LayerPlan launcher_layer_plan();
+// AssettoCorsaEVO.exe as a launch would start it ([launcher] game_dir, else through Steam); empty if not found.
+std::wstring launcher_game_exe();
+// The launch checks' input (preflight.h) for `exe` from the ini, Steam, the game folder and Windows' layers;
+// the exe's build is `build` (the window hashes the exe on a worker).
+PreflightInput launcher_preflight(const std::wstring& exe, BuildState build);
 // Writes Windows' implicit layer list `want` (layer_order.h): HKCU here, HKLM through an elevated copy of
 // the launcher (--apply-system-layers), each hive backed up into logs first. Empty on success, else why.
 std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& want);

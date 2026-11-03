@@ -129,4 +129,9 @@ inline constexpr int kOsdWidth = 1024, kOsdHeight = 496;
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows);
 
+// The same card with a notice instead of the numbers: `title` in yellow, then `lines`, each a paragraph
+// (wrapped; the first in white, the rest grey). The layer shows it for a while at the session's start when
+// it could not do what it was asked (xr_layer.cpp's notice).
+std::vector<uint32_t> draw_notice_panel(const std::wstring& title, const std::vector<std::wstring>& lines);
+
 }  // namespace aceqv
