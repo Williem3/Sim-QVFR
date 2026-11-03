@@ -1,11 +1,13 @@
 // ACE's threads' CPU load, sampled every kCpuLoadMs on a worker: each thread's cycles (QueryThreadCycleTime)
 // against the processor's time-stamp counter over the same span, i.e. its share of one core. The
 // busiest thread says whether a thread other than the render thread (ACE's game or physics thread)
-// holds the frame up, which the render thread's own time cannot show.
+// holds the frame up, which the render thread's own time cannot show. It leaves out the threads that spin
+// while they wait (cpu_load_spins): always near a whole core, they would read as holding every frame up.
 #pragma once
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -22,16 +24,20 @@ struct ThreadLoad {
 
 struct CpuLoad {
     bool valid = false;
-    uint32_t busiestThread = 0;
+    uint32_t busiestThread = 0;  // of the threads not left out (0: none)
     double busiestPercent = 0;  // of one core
     std::wstring busiestName;   // its description, when ACE set one
     double renderPercent = -1;  // the render thread (cpu_load_render_thread), -1: not seen
     double processPercent = 0;  // every thread together, in cores x 100
     int threads = 0;
 };
-// From two snapshots of thread id -> cycles and the time-stamp counter's cycles between them.
+// From two snapshots of thread id -> cycles and the time-stamp counter's cycles between them; the threads in
+// `spinning` count in the process's total but are never the busiest.
 CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map<uint32_t, uint64_t>& after,
-                      uint64_t elapsedCycles, uint32_t renderThread);
+                      uint64_t elapsedCycles, uint32_t renderThread, const std::set<uint32_t>& spinning = {});
+// A thread that spins while it waits, by its description: ACE's Physics (on QueryPerformanceCounter, for its
+// next step) and the Pimax eye tracker's client (polling the tracker).
+bool cpu_load_spins(const std::wstring& name);
 
 bool cpu_load_start();
 void cpu_load_stop();
