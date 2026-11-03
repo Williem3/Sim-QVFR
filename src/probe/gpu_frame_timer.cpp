@@ -19,7 +19,7 @@ constexpr int kSlots = 16;  // frames in flight that can be timed
 constexpr int kMarks = 3;   // GpuMark values
 constexpr size_t kWindowMax = 20000;  // samples a window keeps when nobody collects it (the overlay off)
 
-// Samples since a reader last collected them: 0 the performance overlay's, 1 the log's.
+// Samples since a reader last collected them: 0 the performance overlay's, 1 the log's, 2 the QVFR optimizer's.
 struct Window {
     std::vector<float> render, interval, compose;
     uint64_t skipped = 0;
@@ -58,7 +58,7 @@ struct Timer {
     uint64_t frame = 0;
     int current = -1;  // the slot of the frame being marked, -1 when it is not timed
     uint64_t lastRenderedFrame = 0, lastRenderedTicks = 0;
-    Window windows[2];
+    Window windows[3];
     bool started = false;
 };
 Timer timer;
@@ -259,6 +259,8 @@ GpuFrameStats collect(Window& w) {
 }  // namespace
 
 GpuFrameStats gpu_frame_timer_collect() { return collect(timer.windows[0]); }
+
+GpuFrameStats gpu_frame_timer_collect_optimizer() { return collect(timer.windows[2]); }
 
 void gpu_frame_timer_report() {
     if (!timer.started)

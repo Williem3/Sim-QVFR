@@ -29,11 +29,30 @@ int main() {
     check(menu_items(true).size() == 9 && menu_items(false).size() == 7 &&
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
-    check(menu_page_items(m).size() == 10 && menu_page_items(m).front() == MenuItem::Page && menu_pages(m).size() == 4,
-          "the first page: the page switch, then the method's items; four pages without Cheeky (QVFR: View crop, Helmet)");
+    check(menu_page_items(m).size() == 11 && menu_page_items(m).front() == MenuItem::Page &&
+              menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 4,
+          "the first page: the page switch, the method's items, then Optimize; four pages without Cheeky (QVFR: View crop, Helmet)");
+    {
+        SettingsMenu loop;
+        loop.launch.qvfr = false;
+        check(menu_page_items(loop).back() == MenuItem::FocusOffset, "Two-loop: no Optimize");
+    }
 
     menu_key(m, MenuKey::Up);
-    check(m.selected == 9, "Up from the first item wraps to the last");
+    check(m.selected == 10, "Up from the first item wraps to the last (Optimize)");
+    {
+        SettingsMenu o = m;
+        const MenuValues before = o.values;
+        check(!menu_key(o, MenuKey::Right) && o.optimizeRequest == 1 && o.values.periphery == before.periphery,
+              "Optimize: Right asks the layer to run it, no value changes");
+        check(!menu_key(o, MenuKey::Left) && o.optimizeRequest == -1, "Optimize: Left asks to undo");
+        check(menu_lines(o).back().label == L"Optimize for frame rate" && !menu_lines(o).back().value.empty(),
+              "Optimize's line before a run: how to use it");
+        o.optimizeStatus = L"Running…";
+        o.optimizeDetail = L"Measuring… keep driving";
+        check(menu_lines(o).back().value == L"Running…" && menu_subtitle(o) == L"Measuring… keep driving",
+              "Optimize's status on its line, its detail under the title");
+    }
     menu_key(m, MenuKey::Down);
     check(m.selected == 0, "Down from the last wraps to the first");
     m.selected = 1;  // periphery
@@ -172,7 +191,7 @@ int main() {
     SettingsMenu shown;
     shown.selected = 2;
     const std::vector<MenuLine> lines = menu_lines(shown);
-    check(lines.size() == 10 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
+    check(lines.size() == 11 && lines[0].label == L"Page" && lines[0].value == L"QVFR" && lines[2].selected &&
               lines[2].label == L"Focus density" && lines[2].value == L"100%" && lines[8].value == L"On" &&
               lines[9].label == L"Focus up / down" && lines[9].value == L"0°",
           "lines carry labels, values and the selection");
@@ -287,7 +306,7 @@ int main() {
         c.launch = {true, 50, 39, 39};
         check(menu_pages(c).size() == 4 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
-        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 10 && menu_page_items(c).front() == MenuItem::Page &&
+        check(menu_pages(c).size() == 6 && menu_page_items(c).size() == 11 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
               "with Cheeky: six pages, the first the QVFR items under the page switch");
         check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"View crop", "then the View crop page");

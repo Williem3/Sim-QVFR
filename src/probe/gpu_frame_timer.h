@@ -30,6 +30,8 @@ void gpu_frame_timer_stop();
 void gpu_frame_timer_mark(GpuMark mark);
 // The frames timed since the last call (finished ones only), and resets (the performance overlay's).
 GpuFrameStats gpu_frame_timer_collect();
+// The same for the settings menu's QVFR optimizer (quad/qvfr_optimizer.h): its own window of samples.
+GpuFrameStats gpu_frame_timer_collect_optimizer();
 // Logs the frames timed since its last call as a "views4 gpu:" line: its own window of samples, so it
 // logs while the overlay collects too.
 void gpu_frame_timer_report();

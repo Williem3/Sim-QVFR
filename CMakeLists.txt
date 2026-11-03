@@ -26,7 +26,7 @@ add_library(ace_quadview SHARED
   src/probe/d3d12_vtable_index.c
   src/experiment/double_render.cpp src/experiment/views3.cpp src/experiment/views4.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
-  src/quad/osd.cpp src/quad/osd_panel.cpp src/cheeky/cheeky_host.cpp)
+  src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp)
 target_include_directories(ace_quadview PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(ace_quadview PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ace_quadview PRIVATE /W4 /permissive- /utf-8)
@@ -59,7 +59,7 @@ target_link_libraries(compositor_test PRIVATE d3d12 dxgi d3dcompiler windowscode
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
 add_executable(two_loops_test tests/two_loops_test.cpp src/log.cpp src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp
   src/probe/d3d12_vtable_index.c src/experiment/double_render.cpp src/experiment/views3.cpp src/experiment/views4.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
-  src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/cheeky/cheeky_host.cpp)
+  src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(two_loops_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh)
@@ -67,7 +67,7 @@ target_link_libraries(two_loops_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompil
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
 add_executable(quad_flow_test tests/quad_flow_test.cpp src/log.cpp src/probe/probe.cpp src/probe/batch_watch.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp
   src/probe/d3d12_vtable_index.c src/experiment/double_render.cpp src/experiment/views3.cpp src/experiment/views4.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
-  src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/cheeky/cheeky_host.cpp)
+  src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(quad_flow_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh)
@@ -112,6 +112,12 @@ add_executable(osd_test tests/osd_test.cpp src/quad/osd.cpp src/quad/osd_panel.c
 target_include_directories(osd_test PRIVATE src)
 target_compile_definitions(osd_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(osd_test PRIVATE /utf-8)
+
+# Offline check of the settings menu's QVFR optimizer against a simulated GPU (tests/qvfr_optimizer_test.cpp).
+add_executable(qvfr_optimizer_test tests/qvfr_optimizer_test.cpp src/quad/qvfr_optimizer.cpp)
+target_include_directories(qvfr_optimizer_test PRIVATE src)
+target_compile_definitions(qvfr_optimizer_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(qvfr_optimizer_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of the focus-view cull planes and tests (tests/focus_cull_test.cpp).
 add_executable(focus_cull_test tests/focus_cull_test.cpp)
