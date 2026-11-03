@@ -361,22 +361,70 @@ std::string utf8(const std::wstring& text) {
     return out;
 }
 
-std::wstring issue_body(const IssueReport& r) {
+std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
+    std::vector<Cause> out;
+    const SessionInfo& session = rt.session;
+    if (s.eyeTracking && rt.eyeTracker == EyeTracker::Missing)
+        out.push_back({L"Eye tracking is on, but the tracker sent nothing last session",
+                       L"The focus area stayed in the centre. Start the headset's eye tracking (and calibrate it) "
+                       L"before the game, or choose Fixed in Foveation."});
+    if (s.cheeky.load && (rt.cheekyStatus == L"missing" || rt.cheekyStatus == L"refused"))
+        out.push_back({L"Foveated DLSS did not start at the last launch (Cheeky " + rt.cheekyStatus + L")",
+                       rt.cheekyStatus == L"missing"
+                           ? L"Choose Cheeky's runtime (CheekyFoveatedDLSSRuntime.dll) in Foveated DLSS."
+                           : L"Cheeky's runtime refused to load: use the build the README lists, and check the session log."});
+    if (rt.known() && readouts(s, rt).overRuntimeLimit)
+        out.push_back({L"The view is larger than the headset runtime allows",
+                       L"Lower the outer resolution or the focus density in Resolution."});
+    if (rt.vramUsedMb > 0 && rt.vramBudgetMb > 0 && rt.vramUsedMb >= 0.9 * rt.vramBudgetMb)
+        out.push_back({formatted(L"VRAM was nearly full (%.0f%% of what Windows allows ACE)", 100 * rt.vramUsedMb / rt.vramBudgetMb),
+                       L"Stutter and hitches follow when it runs out. Lower the outer resolution or the focus density, "
+                       L"or the game's texture quality."});
+    if (!session.known())
+        return out;
+    if (session.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos)
+        out.push_back({L"OpenXR Toolkit is loaded under ace-quadview",
+                       L"It adds about 0.8 ms to every frame's submission. If you don't use it for ACE, switch it off in "
+                       L"OpenXR layers."});
+    if (session.limited == L"GPU")
+        out.push_back({formatted(L"The GPU was busy all the time (%.0f%%)", session.gpuBusy),
+                       L"This is the GPU's limit. Lower the outer resolution or the focus density, or the game's "
+                       L"graphics settings."});
+    double gameThread = 0;
+    for (const auto& [name, percent] : session.threads)
+        if (name == L"GameThread")
+            gameThread = percent;
+    if (session.limited.starts_with(L"CPU") || gameThread >= 90)
+        out.push_back({L"ACE's CPU work limited the frame rate",
+                       L"QVFR lowers the GPU's work, not the CPU's. Lower the game's CPU-heavy settings (opponents, "
+                       L"mirrors, shadows)."});
+    if (session.limited.starts_with(L"Pacing"))
+        out.push_back({formatted(L"%.0f%% of frames were late with neither the CPU nor the GPU full", session.latePercent),
+                       L"Often something else in the chain: another OpenXR layer, an overlay, or the runtime's motion "
+                       L"smoothing. Try with them off."});
+    return out;
+}
+
+std::wstring issue_title(const IssueReport& r) {
+    const std::wstring kind = L"[" + std::wstring(r.kind > 0 && r.kind < kIssueKindCount ? kIssueKinds[r.kind] : L"Problem") + L"] ";
+    std::wstring line = r.description.substr(0, r.description.find_first_of(L"\r\n"));
+    line.erase(0, line.find_first_not_of(L" \t"));
+    line.erase(line.find_last_not_of(L" \t") + 1);
+    if (line.empty())
+        return kind + L"ace-quadview " + r.version + L": ";
+    if (line.size() > 70) {  // at a word
+        const size_t space = line.find_last_of(L' ', 70);
+        line = line.substr(0, space == std::wstring::npos || space < 30 ? 70 : space) + L"…";
+    }
+    return kind + line;
+}
+
+std::wstring issue_details(const IssueReport& r) {
     const Settings& s = r.settings;
     const RuntimeInfo& rt = r.runtime;
     const bool qvfr = s.mode == RenderMode::Qvfr;
     const std::wstring unknown = L"not known";
     std::wstring b;
-    b += L"## Describe your problem\n\n";
-    b += L"**What happened?**\n<!-- What did you see, and what did you expect instead? -->\n\n\n";
-    b += L"**Steps to reproduce**\n<!-- From starting the launcher: settings changed, track and car, what you did. -->\n1. \n2. \n\n";
-    b += L"**When does it happen?**\n<!-- Every launch, after some minutes, on one track or car, since an update... -->\n\n\n";
-    b += L"**Screenshots and logs**\n";
-    b += L"Please drag in screenshots (in the headset, and the launcher's Diagnostics page)";
-    if (!r.zipName.empty())
-        b += L" and **`" + r.zipName + L"`**, the logs the launcher just zipped (the Explorer window it opened shows it)";
-    b += L".\n\n";
-    b += L"---\n### Collected by the launcher\n\n";
     b += L"- **Version:** ace-quadview " + (r.version.empty() ? unknown : r.version) + L" (launcher and layer)\n";
     const SystemInfo& sys = r.system;
     b += L"- **CPU:** " + (sys.cpu.empty() ? unknown : sys.cpu) + L"\n";
@@ -427,6 +475,42 @@ std::wstring issue_body(const IssueReport& r) {
     return b;
 }
 
+namespace {
+
+std::wstring checks_text(const std::vector<Cause>& causes) {
+    if (causes.empty())
+        return L"None found.\n";
+    std::wstring t;
+    for (const Cause& c : causes)
+        t += L"- **" + c.title + L".** " + c.fix + L"\n";
+    return t;
+}
+
+}  // namespace
+
+std::wstring issue_body(const IssueReport& r) {
+    std::wstring b;
+    b += L"### What happened?\n\n";
+    b += r.description.empty() ? L"<!-- What did you see, and what did you expect instead? -->\n\n\n" : r.description + L"\n\n";
+    b += L"### Steps to reproduce\n\n<!-- From starting the launcher: the settings you changed, the track and car, what "
+         L"you did. -->\n1. \n2. \n\n";
+    b += L"### When does it happen?\n\n<!-- Every launch, after some minutes, on one track or car, since an update... "
+         L"-->\n\n\n";
+    b += L"### Screenshots and logs\n\nPlease drag in screenshots (in the headset, and the launcher's Diagnostics page)";
+    if (!r.zipName.empty())
+        b += L" and **`" + r.zipName + L"`**, the logs the launcher just zipped (the Explorer window it opened shows it)";
+    b += L".\n\n---\n\n";
+    b += L"### Launcher checks\n\n" + checks_text(r.causes) + L"\n";
+    b += L"### Collected by the launcher\n\n" + issue_details(r);
+    return b;
+}
+
+std::vector<IssueField> issue_fields(const IssueReport& r) {
+    const std::wstring files =
+        r.zipName.empty() ? L"" : L"Drag in `" + r.zipName + L"` (the launcher showed it in Explorer) and any screenshots.\n";
+    return {{"what", r.description}, {"files", files}, {"checks", checks_text(r.causes)}, {"details", issue_details(r)}};
+}
+
 std::string url_encode(const std::wstring& text) {
     static const char hex[] = "0123456789ABCDEF";
     std::string out;
@@ -443,27 +527,39 @@ std::string url_encode(const std::wstring& text) {
     return out;
 }
 
-std::string issue_url(const std::wstring& repo, const std::wstring& title, const std::wstring& body, size_t max) {
-    const std::string head = "https://github.com/" + utf8(repo) + "/issues/new?title=" + url_encode(title) + "&body=";
-    std::string url = head + url_encode(body);
-    if (url.size() <= max)
+std::string issue_url(const std::wstring& repo, const char* form, const std::wstring& title,
+                      const std::vector<IssueField>& fields, size_t max) {
+    const std::string head =
+        "https://github.com/" + utf8(repo) + "/issues/new?template=" + form + "&title=" + url_encode(title);
+    const auto build = [&](const std::vector<IssueField>& f) {
+        std::string url = head;
+        for (const IssueField& field : f)
+            if (!field.value.empty())
+                url += "&" + field.id + "=" + url_encode(field.value);
         return url;
-    // Drop whole lines from the end (the collected part; the zip's issue.md has it all), keeping a closed fence.
+    };
+    std::vector<IssueField> kept = fields;
+    std::string url = build(kept);
+    // Too long: drop whole lines from the end of the last field (the zip's issue.md has it all), keeping a
+    // ``` block closed, then from the field before it.
     const std::wstring note = L"\n_(Trimmed to fit the link: the zip's issue.md has all of it.)_\n";
-    std::wstring kept = body;
-    while (!kept.empty()) {
-        const size_t nl = kept.find_last_of(L'\n', kept.size() >= 2 ? kept.size() - 2 : 0);
-        kept.resize(nl == std::wstring::npos ? 0 : nl + 1);
-        size_t fences = 0;  // an odd count: the cut is inside a ``` block
-        for (size_t at = kept.find(L"```"); at != std::wstring::npos; at = kept.find(L"```", at + 3))
-            ++fences;
-        const bool open = fences % 2 == 1;
-        const std::wstring candidate = kept + (open ? L"```\n" : L"") + note;
-        url = head + url_encode(candidate);
-        if (url.size() <= max)
-            return url;
+    for (size_t i = kept.size(); url.size() > max && i-- > 0;) {
+        std::wstring text = fields[i].value;
+        while (url.size() > max && !text.empty()) {
+            const size_t nl = text.find_last_of(L'\n', text.size() >= 2 ? text.size() - 2 : 0);
+            text.resize(nl == std::wstring::npos ? 0 : nl + 1);
+            size_t fences = 0;  // an odd count: the cut is inside a ``` block
+            for (size_t at = text.find(L"```"); at != std::wstring::npos; at = text.find(L"```", at + 3))
+                ++fences;
+            kept[i].value = text + (fences % 2 == 1 ? L"```\n" : L"") + note;
+            url = build(kept);
+        }
+        if (url.size() > max) {
+            kept[i].value.clear();
+            url = build(kept);
+        }
     }
-    return head.substr(0, std::min(head.size(), max));
+    return url.size() <= max ? url : head.substr(0, std::min(head.size(), max));
 }
 
 }  // namespace aceqv::launcher

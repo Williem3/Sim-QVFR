@@ -718,30 +718,136 @@ int main() {
         session.limited = L"GPU";
         session.log = L"C:\\Users\\someone\\ace\\logs\\ace-20261103-120000.log";
         session.threads = {{L"GameThread", 71}, {L"RHIThread", 40}};
-        const std::wstring body = issue_body(report);
-        const auto has = [&](const wchar_t* text) { return body.find(text) != std::wstring::npos; };
-        check(body.starts_with(L"## Describe your problem") && has(report.zipName.c_str()) && has(L"screenshots") &&
-                  has(L"RTX 5090") && has(L"581.57") && has(L"Pimax OpenXR") && has(L"64 GB") && has(L"2584\u00d72160") &&
+        const std::wstring details = issue_details(report);
+        const auto has = [&](const wchar_t* text) { return details.find(text) != std::wstring::npos; };
+        check(has(L"RTX 5090") && has(L"581.57") && has(L"Pimax OpenXR") && has(L"64 GB") && has(L"2584×2160") &&
                   has(L"eye tracked") && has(L"89.9 fps") && has(L"GameThread 71%") && has(L"Limited by: GPU") &&
                   has(L"detected") && has(L"ace-quadview 1.2.3"),
-              "report: the body asks first, then lists version, hardware, headset, settings and the last session");
+              "report: the details list version, hardware, headset, settings and the last session");
         check(!has(L"someone") && has(L"Log: ace-20261103-120000.log"),
               "report: the session log by name, not by a path with the user's name");
 
-        const std::string url = issue_url(kIssueRepo, L"ace-quadview 1.2.3: ", body);
-        check(url.starts_with("https://github.com/Williem3/Sim-QVFR/issues/new?title=ace-quadview%201.2.3%3A%20&body=%23%23%20Describe") &&
+        // The likely causes: none for a healthy session, each known one when its sign shows.
+        Settings healthy;
+        RuntimeInfo fine = report.runtime;
+        fine.session.limited = L"Neither (headroom)";
+        check(likely_causes(healthy, fine).empty() && likely_causes(healthy, RuntimeInfo{}).empty(),
+              "causes: none for a session with headroom, or before any session");
+        const auto titles = [](const std::vector<Cause>& causes) {
+            std::wstring all;
+            for (const Cause& c : causes)
+                all += c.title + L"|";
+            return all;
+        };
+        RuntimeInfo troubled = fine;
+        troubled.eyeTracker = EyeTracker::Missing;
+        troubled.vramUsedMb = 11000;
+        troubled.vramBudgetMb = 11600;
+        troubled.cheekyStatus = L"missing";
+        troubled.session.layersBelow = L"XR_APILAYER_MBUCCHIA_toolkit";
+        troubled.session.limited = L"Pacing (frames late, neither saturated)";
+        troubled.session.latePercent = 25;
+        Settings dlss;
+        dlss.cheeky.load = true;
+        const std::wstring found = titles(likely_causes(dlss, troubled));
+        check(found.find(L"tracker sent nothing") != std::wstring::npos && found.find(L"Cheeky missing") != std::wstring::npos &&
+                  found.find(L"VRAM was nearly full (95%") != std::wstring::npos &&
+                  found.find(L"OpenXR Toolkit") != std::wstring::npos && found.find(L"25% of frames were late") != std::wstring::npos,
+              "causes: no eye tracker samples, Cheeky missing, VRAM near full, OpenXR Toolkit, late frames");
+        Settings fixed;
+        fixed.eyeTracking = false;
+        check(titles(likely_causes(fixed, troubled)).find(L"tracker") == std::wstring::npos &&
+                  titles(likely_causes(healthy, troubled)).find(L"Cheeky") == std::wstring::npos,
+              "causes: no tracker warning in Fixed, no Cheeky one with Foveated DLSS off");
+        RuntimeInfo gpu = fine, cpu = fine;
+        gpu.session.limited = L"GPU";
+        gpu.session.gpuBusy = 98;
+        cpu.session.threads = {{L"GameThread", 97}};
+        check(titles(likely_causes(healthy, gpu)).find(L"GPU was busy all the time (98%)") != std::wstring::npos &&
+                  titles(likely_causes(healthy, cpu)).find(L"CPU work limited") != std::wstring::npos,
+              "causes: a busy GPU, and ACE's game thread near a whole core");
+
+        // The title: the kind, then the description's first line, cut at a word.
+        report.kind = 2;  // Performance
+        report.description = L"  Stutters every few seconds on Monza  \nSecond line";
+        check(issue_title(report) == L"[Performance] Stutters every few seconds on Monza", "title: kind and first line");
+        report.description = L"The focus area jumps around whenever I look at the left mirror in the hairpin at Monza";
+        check(issue_title(report) == L"[Performance] The focus area jumps around whenever I look at the left mirror in the…",
+              "title: a long line cut at a word");
+        report.kind = 0;
+        report.description.clear();
+        check(issue_title(report) == L"[Problem] ace-quadview 1.2.3: ", "title: Not sure and no description: Problem, the version");
+
+        report.description = L"The focus area jumps & flickers.";
+        report.causes = likely_causes(dlss, troubled);
+        const std::wstring body = issue_body(report);
+        const auto at = [&](const wchar_t* text) { return body.find(text); };
+        check(body.starts_with(L"### What happened?\n\nThe focus area jumps & flickers.") &&
+                  at(L"### Steps to reproduce") < at(L"### When does it happen?") &&
+                  at(L"### When does it happen?") < at(L"### Screenshots and logs") &&
+                  at(report.zipName.c_str()) < at(L"### Launcher checks") &&
+                  at(L"### Launcher checks") < at(L"OpenXR Toolkit") && at(L"OpenXR Toolkit") < at(L"### Collected by the launcher") &&
+                  at(L"### Collected by the launcher") < at(L"RTX 5090") && at(L"RTX 5090") != std::wstring::npos,
+              "body: the description, the form's prompts, the zip, the checks, then the collected details");
+        IssueReport bare = report;
+        bare.description.clear();
+        bare.causes.clear();
+        const std::wstring bareBody = issue_body(bare);
+        check(bareBody.starts_with(L"### What happened?\n\n<!--") && bareBody.find(L"None found.") != std::wstring::npos,
+              "body: a prompt without a description, and no checks found");
+
+        const std::vector<IssueField> fields = issue_fields(report);
+        check(fields.size() == 4 && fields[0].id == "what" && fields[0].value == report.description && fields[1].id == "files" &&
+                  fields[1].value.find(report.zipName) != std::wstring::npos && fields[2].id == "checks" &&
+                  fields[2].value.find(L"OpenXR Toolkit") != std::wstring::npos && fields[3].id == "details" &&
+                  fields[3].value == issue_details(report),
+              "fields: what, files (the zip), checks and details, by the forms' ids");
+        check(std::string(kIssueTemplates[0]) == "bug.yml" && std::string(kIssueTemplates[2]) == "performance.yml" &&
+                  std::wstring(kIssueKinds[2]) == L"Performance",
+              "forms: Not sure is bug.yml, each kind its own form");
+        // Every form in .github/ISSUE_TEMPLATE exists and has the fields the launcher fills.
+        const fs::path forms = fs::path(__FILE__).parent_path().parent_path() / L".github" / L"ISSUE_TEMPLATE";
+        bool formsOk = true;
+        for (const char* form : kIssueTemplates) {
+            std::string yml;
+            if (FILE* f = nullptr; _wfopen_s(&f, (forms / form).c_str(), L"rb") == 0 && f) {
+                char buffer[4096];
+                for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                    yml.append(buffer, n);
+                std::fclose(f);
+            }
+            for (const IssueField& field : fields) {  // "id: what" ending its line (LF or CRLF)
+                const size_t idAt = yml.find("id: " + field.id);
+                const size_t end = idAt == std::string::npos ? yml.size() : idAt + 4 + field.id.size();
+                formsOk = formsOk && end < yml.size() && (yml[end] == '\n' || yml[end] == '\r');
+            }
+        }
+        check(formsOk, "forms: each kind's form exists with what, files, checks and details");
+
+        const std::string url = issue_url(kIssueRepo, kIssueTemplates[0], L"[Problem] ace-quadview 1.2.3: ", fields);
+        check(url.starts_with("https://github.com/Williem3/Sim-QVFR/issues/new?template=bug.yml&title=%5BProblem%5D%20ace-quadview%201.2.3%3A%20&what=The%20focus%20area%20jumps%20%26%20flickers.&files=") &&
+                  url.find("&checks=") != std::string::npos && url.find("&details=") != std::string::npos &&
                   url.size() <= kIssueUrlMax && url.find("Trimmed") == std::string::npos,
-              "report: the issue link, whole when it fits");
-        std::wstring longBody = body;
+              "report: the form's link with each field, whole when it fits");
+        std::vector<IssueField> empty = fields;
+        empty[0].value.clear();
+        check(issue_url(L"someone/test", "crash.yml", L"t", empty).starts_with("https://github.com/someone/test/issues/new?template=crash.yml&") &&
+                  issue_url(kIssueRepo, "bug.yml", L"t", empty).find("&what=") == std::string::npos,
+              "report: another repository and form; empty fields left out");
+        std::vector<IssueField> longFields = fields;
         for (int i = 0; i < 400; ++i)  // inside the session's ``` block, before its closing fence
-            longBody.insert(longBody.size() - 4, L"Busiest thread line " + std::to_wstring(i) + L"\n");
-        const std::string trimmed = issue_url(kIssueRepo, L"t", longBody, 4000);
+            longFields[3].value.insert(longFields[3].value.size() - 4, L"Busiest thread line " + std::to_wstring(i) + L"\n");
+        const std::string trimmed = issue_url(kIssueRepo, "bug.yml", L"t", longFields, 4000);
         size_t fences = 0;
-        for (size_t at = trimmed.find("%60%60%60"); at != std::string::npos; at = trimmed.find("%60%60%60", at + 9))
+        for (size_t f = trimmed.find("%60%60%60"); f != std::string::npos; f = trimmed.find("%60%60%60", f + 9))
             ++fences;
-        check(trimmed.size() <= 4000 && trimmed.find("Describe%20your%20problem") != std::string::npos &&
-                  trimmed.find("Trimmed") != std::string::npos && fences % 2 == 0,
-              "report: a long body is cut from its end to fit, its code block closed, with a note");
+        check(trimmed.size() <= 4000 && trimmed.find("&what=The%20focus") != std::string::npos &&
+                  trimmed.find("OpenXR%20Toolkit") != std::string::npos && trimmed.find("Trimmed") != std::string::npos &&
+                  fences % 2 == 0,
+              "report: long details are cut from their end to fit, their code block closed, with a note");
+        const std::string tiny = issue_url(kIssueRepo, "bug.yml", L"t", longFields, 1500);
+        check(tiny.size() <= 1500 && tiny.find("&what=The%20focus") != std::string::npos && tiny.find("&details=") == std::string::npos,
+              "report: with less room the details go, then the checks, the description last");
     }
 
     fs::remove_all(folder, ec);

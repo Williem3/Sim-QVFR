@@ -1,0 +1,65 @@
+# Eye tracking and the focus area following the gaze.
+# The launcher's Report an issue (Diagnostics pane) opens this form for "Eye tracking" and fills the fields
+# what, files, checks and details by id (src/launcher/report.cpp's issue_fields; kIssueTemplates maps the
+# kinds to these files): every template keeps those ids.
+name: Eye tracking
+description: The focus area doesn't follow your eyes, lags, jumps or sits in the wrong place.
+title: "[Eye tracking] "
+labels: ["eye-tracking"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The quickest way here is the launcher: **Diagnostics → Report an issue** zips your logs and fills in
+        your settings, the last session and your PC below.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What does the focus area do, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From starting the launcher, the settings you changed, the track and car, and what you did.
+      placeholder: |
+        1.
+        2.
+  - type: textarea
+    id: when
+    attributes:
+      label: When does it happen?
+      description: Every launch, after some minutes, on one track or car, since an update...
+  - type: input
+    id: tracker
+    attributes:
+      label: Headset and eye tracking software
+      description: The headset and the software running its tracker.
+      placeholder: e.g. Pimax Crystal, Pimax Play 1.40, eye tracking on
+  - type: dropdown
+    id: calibrated
+    attributes:
+      label: Did you calibrate the eye tracker before the session?
+      options:
+        - Yes
+        - No
+        - Not sure
+  - type: textarea
+    id: files
+    attributes:
+      label: Screenshots and logs
+      description: |
+        Drag in screenshots (in the headset, and the launcher's Diagnostics page) and the report zip from
+        the launcher's logs folder (ace-quadview-report-*.zip).
+  - type: textarea
+    id: checks
+    attributes:
+      label: Launcher checks
+      description: What the launcher noticed about the last session (filled in by the launcher).
+  - type: textarea
+    id: details
+    attributes:
+      label: Collected by the launcher
+      description: Version, PC, headset, settings and the last session's numbers (filled in by the launcher).

@@ -1,0 +1,50 @@
+# The launcher window itself.
+# The launcher's Report an issue (Diagnostics pane) opens this form for "Launcher" and fills the fields
+# what, files, checks and details by id (src/launcher/report.cpp's issue_fields; kIssueTemplates maps the
+# kinds to these files): every template keeps those ids.
+name: Launcher
+description: The launcher doesn't start the game, shows something wrong, or a setting doesn't stick.
+title: "[Launcher] "
+labels: ["launcher"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The quickest way here is the launcher: **Diagnostics → Report an issue** zips your logs and fills in
+        your settings, the last session and your PC below.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did the launcher do, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: From starting the launcher, the settings you changed, the track and car, and what you did.
+      placeholder: |
+        1.
+        2.
+  - type: textarea
+    id: when
+    attributes:
+      label: When does it happen?
+      description: Every launch, after some minutes, on one track or car, since an update...
+  - type: textarea
+    id: files
+    attributes:
+      label: Screenshots and logs
+      description: |
+        Drag in a screenshot of the launcher and the report zip from its logs folder (ace-quadview-report-*.zip).
+  - type: textarea
+    id: checks
+    attributes:
+      label: Launcher checks
+      description: What the launcher noticed about the last session (filled in by the launcher).
+  - type: textarea
+    id: details
+    attributes:
+      label: Collected by the launcher
+      description: Version, PC, headset, settings and the last session's numbers (filled in by the launcher).
