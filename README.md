@@ -155,6 +155,14 @@ did). The layer's log for that launch is `logs/ace-<time>.log`. The window has t
 method (QVFR or Two-Loop), eye-tracked or fixed foveation, outer and inner resolution, foveated
 width and height, corner radius, feather, and a focus outline in teal, magenta or green.
 
+**Launch checks.** The first pane lists what would stop the layer working at the next launch, each with a
+fix (`src/launcher/preflight.h`): whether `AssettoCorsaEVO.exe` is the build the layer supports (its SHA-256,
+hashed in the background), Steam running and ACE closed, Cheeky's `dxgi.dll` or `version.dll` loader in the
+game folder, and with Cheeky on its runtime, its OpenXR layer, OpenXR Toolkit's place above Cheeky's layer and
+Toolkit's Turbo mode with frame generation. The action bar shows the first problem; Launch asks before
+starting a game that would crash or run without the layer. After a game update the layer refuses to patch,
+ACE runs unchanged, and the headset shows a notice for the first 30 seconds saying so.
+
 OpenXR layer order: the layer is loaded nearest the game. Every enabled implicit layer that can be
 switched off per launch (OpenXR Toolkit, VectorXR, ...) is loaded below it instead, in registry
 order, so nothing can change what ACE renders behind the layer's back. VectorXR frame generation is

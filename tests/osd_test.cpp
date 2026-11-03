@@ -38,6 +38,26 @@ const OsdRow* row(const std::vector<OsdRow>& rows, const wchar_t* label) {
     return nullptr;
 }
 
+// A card's pixels as a bitmap to look at: RGBA over a dark grey (the card is see-through).
+void save_card(const wchar_t* path, const std::vector<uint32_t>& pixels) {
+    FILE* f = _wfopen(path, L"wb");
+    if (!f)
+        return;
+    const int w = kOsdWidth, h = kOsdHeight;
+    BITMAPFILEHEADER file{0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + w * h * 4), 0, 0,
+                          sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)};
+    BITMAPINFOHEADER info{sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
+    fwrite(&file, sizeof(file), 1, f);
+    fwrite(&info, sizeof(info), 1, f);
+    for (const uint32_t p : pixels) {
+        const double a = (p >> 24) / 255.0;
+        const auto over = [a](uint32_t c) { return static_cast<uint8_t>(c * a + 40 * (1 - a)); };
+        const uint8_t bgra[4] = {over((p >> 16) & 0xff), over((p >> 8) & 0xff), over(p & 0xff), 255};
+        fwrite(bgra, 4, 1, f);
+    }
+    fclose(f);
+}
+
 }  // namespace
 
 int main() {
@@ -232,21 +252,7 @@ int main() {
         const OsdSummary s = osd_summary(full);
         std::vector<double> history(150, 24.6);
         const std::vector<uint32_t> pixels = draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s));
-        if (FILE* f = _wfopen(path, L"wb")) {
-            const int w = kOsdWidth, h = kOsdHeight;
-            BITMAPFILEHEADER file{0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + w * h * 4), 0, 0,
-                                  sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)};
-            BITMAPINFOHEADER info{sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
-            fwrite(&file, sizeof(file), 1, f);
-            fwrite(&info, sizeof(info), 1, f);
-            for (const uint32_t p : pixels) {  // RGBA -> BGRA over a dark grey (the card is see-through)
-                const double a = (p >> 24) / 255.0;
-                const auto over = [a](uint32_t c) { return static_cast<uint8_t>(c * a + 40 * (1 - a)); };
-                const uint8_t bgra[4] = {over((p >> 16) & 0xff), over((p >> 8) & 0xff), over(p & 0xff), 255};
-                fwrite(bgra, 4, 1, f);
-            }
-            fclose(f);
-        }
+        save_card(path, pixels);
     }
     {
         OsdInput in = steady(11.111, 5, 7);
@@ -262,6 +268,25 @@ int main() {
         check(pixels.size() == static_cast<size_t>(kOsdWidth) * kOsdHeight && alpha(0, 0) == 0 &&
                   alpha(kOsdWidth - 1, kOsdHeight - 1) == 0 && alpha(kOsdWidth / 2, kOsdHeight / 2) > 0xc0 && text,
               "the card: rounded transparent corners, translucent body, the frame rate drawn");
+    }
+    {
+        const std::vector<uint32_t> pixels =
+            draw_notice_panel(L"ace-quadview is off", {L"This Assetto Corsa EVO build isn’t one ace-quadview supports, so the "
+                                                       L"game runs as normal, without foveated rendering.",
+                                                       L"Look for an ace-quadview release for the new build."});
+        bool yellow = false, white = false;
+        for (int y = 40; y < 104; ++y)  // the title: yellow (red and green high, blue low)
+            for (int x = 64; x < 400; ++x) {
+                const uint32_t p = pixels[static_cast<size_t>(y) * kOsdWidth + x];
+                yellow |= (p & 0xff) > 0xc0 && ((p >> 8) & 0xff) > 0xb0 && ((p >> 16) & 0xff) < 0x60;
+            }
+        for (int y = 132; y < 220; ++y)  // the first paragraph: white
+            for (int x = 64; x < 600; ++x)
+                white |= (pixels[static_cast<size_t>(y) * kOsdWidth + x] & 0xffffff) == 0xf7f5f5;
+        check(pixels.size() == static_cast<size_t>(kOsdWidth) * kOsdHeight && (pixels[0] >> 24) == 0 && yellow && white,
+              "the notice card: a yellow title, the first paragraph in white, rounded corners");
+        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"ACEQV_NOTICE_SAVE", path, MAX_PATH))
+            save_card(path, pixels);
     }
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
     return failures ? 1 : 0;

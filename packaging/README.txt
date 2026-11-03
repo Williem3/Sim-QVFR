@@ -27,6 +27,13 @@ Start
 The window
 ----------
 Settings save as you change them and apply at the next launch.
+- Launch checks: what would stop ace-quadview at the next launch, each with a fix: a game update
+  (ace-quadview supports one AssettoCorsaEVO.exe build; after an update it stays off and the game runs
+  as normal, and the headset says so for the first 30 seconds), Steam not running, the game already
+  running, Cheeky's dxgi.dll or version.dll loader in the game folder, and with Cheeky Foveated DLSS on:
+  its runtime and OpenXR layer, OpenXR Toolkit's place above Cheeky's layer, and Toolkit's Turbo mode
+  with frame generation. The bar at the bottom shows the first problem (click it for the list), and
+  Launch asks before starting a game that would crash or run without ace-quadview.
 - Rendering: Rendering method (Quad View Foveated Rendering, or Two-loop Foveated Interlaced: two
   game frames per headset frame; turn frame generation off) and Foveated mode (Eye tracked or Fixed).
 - Resolution: Outer resolution (the full view) and Inner resolution (pixel density in the focus

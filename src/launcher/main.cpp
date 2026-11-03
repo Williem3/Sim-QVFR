@@ -25,6 +25,8 @@
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
+#include "preflight.h"
+#include "settings.h"
 
 using namespace aceqv::launcher;
 namespace fs = std::filesystem;
@@ -117,6 +119,12 @@ std::wstring find_game_folder() {
     return {};
 }
 
+// [launcher] game_dir, else the game's folder in Steam's libraries.
+std::wstring game_folder(const std::wstring& ini) {
+    const std::wstring set = ini_string(ini, L"launcher", L"game_dir");
+    return set.empty() ? find_game_folder() : set;
+}
+
 std::vector<std::wstring> current_environment() {
     std::vector<std::wstring> out;
     wchar_t* block = GetEnvironmentStringsW();
@@ -192,9 +200,7 @@ int run(bool dryRun) {
     if (!fs::exists(ini, ec))
         return fail(L"ace-quadview.ini not found next to the launcher (" + ini.wstring() + L")");
 
-    std::wstring game = ini_string(ini.wstring(), L"launcher", L"game_dir");
-    if (game.empty())
-        game = find_game_folder();
+    const std::wstring game = game_folder(ini.wstring());
     const fs::path exe = fs::path(game) / L"AssettoCorsaEVO.exe";
     if (game.empty() || !fs::exists(exe, ec))
         return fail(L"Assetto Corsa EVO not found through Steam; set game_dir in [launcher] of ace-quadview.ini");
@@ -327,6 +333,38 @@ std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& wan
     DeleteFileW(request.c_str());
     DeleteFileW((request + L".error").c_str());
     return code == 0 ? std::wstring() : why.empty() ? L"writing the machine-wide layers failed" : widen(why);
+}
+
+std::wstring launcher_game_exe() {
+    const std::wstring game = game_folder(settings_path());
+    const fs::path exe = fs::path(game) / L"AssettoCorsaEVO.exe";
+    std::error_code ec;
+    return !game.empty() && fs::exists(exe, ec) ? exe.wstring() : std::wstring();
+}
+
+PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
+    const std::wstring ini = settings_path();
+    PreflightInput in;
+    in.gameExe = exe;
+    in.build = build;
+    const std::wstring mode = ini_string(ini, L"experiment", L"mode");
+    in.mode = mode.empty() || _wcsicmp(mode.c_str(), L"off") == 0                              ? LaunchMode::Off
+              : _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0 ? LaunchMode::TwoLoop
+                                                                                                 : LaunchMode::Qvfr;
+    in.steamRunning = process_running(L"steam.exe");
+    in.aceRunning = process_running(L"AssettoCorsaEVO.exe");
+    if (!exe.empty())
+        in.cheekyLoaders = cheeky_loaders(fs::path(exe).parent_path().wstring());
+    const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
+    in.cheekyLoad = cheeky.load;
+    in.cheekyFg = cheeky.fg;
+    in.cheekyRuntimeFound = GetFileAttributesW(cheeky_runtime_path(ini, layer_folder()).c_str()) != INVALID_FILE_ATTRIBUTES;
+    in.cheekyLayer = cheeky_layer_state();
+    in.layers = launcher_layer_plan();
+    in.toolkitTurbo = exe.empty() ? -1 : toolkit_turbo(exe);
+    in.eyeTracked = load_settings(ini).eyeTracking;
+    in.eyeTracker = load_runtime_info(runtime_info_path()).eyeTracker;
+    return in;
 }
 
 int launch_ace(bool dryRun, std::wstring& out) {

@@ -3231,6 +3231,7 @@ void menu_render() {
 
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);  // the overlay's card (below)
 void optimize_tick(int64_t now);  // the QVFR optimizer (below)
+bool notice_pending();            // a notice for the start of the session (below)
 
 // This frame's layers with the performance overlay and the menu panel on top while they are shown;
 // `info` itself otherwise.
@@ -3239,7 +3240,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     // The performance overlay also while measuring without QVFR (baseline=1), to compare the two; the settings
     // menu only with a method of the layer's (its settings would change nothing in mode=off).
     const bool method = experiment.views4 || experiment.quad;
-    if (live.ini.empty() || (!method && !experiment.measure))
+    if (live.ini.empty() || (!method && !experiment.measure && !notice_pending()))
         return info;
     // For the launcher's Center PPD: once, when ACE has rendered.
     static bool ppdReported = false;
@@ -3336,6 +3337,26 @@ struct Osd {
 };
 Osd osd;
 constexpr int64_t kOsdDrawMs = 500, kOsdCheekyMs = 1000;
+
+// A notice in the performance overlay's card, for the first kNoticeMs of the session's frames, when the layer
+// could not do what it was asked: views4 refused, an ACE build it does not know (the game updated). Without
+// it the game would just look as it always does, and nothing would say why. Straight ahead, a little low.
+struct Notice {
+    std::wstring title;
+    std::vector<std::wstring> lines;
+    int64_t until = 0;  // set at its first frame
+    bool uploaded = false;
+};
+Notice notice;
+constexpr int64_t kNoticeMs = 30000;
+constexpr OsdPlacement kNoticePlacement{true, 0, -6, 34};
+
+void notice_set(std::wstring title, std::vector<std::wstring> lines) {
+    notice.title = std::move(title);
+    notice.lines = std::move(lines);
+}
+
+bool notice_pending() { return !notice.title.empty(); }
 constexpr size_t kOsdHistory = 150;
 
 
@@ -3401,7 +3422,7 @@ void osd_measure() {
 }
 
 void osd_place() {
-    const OsdPlacement& p = osd.placement;
+    const OsdPlacement& p = notice_pending() ? kNoticePlacement : osd.placement;
     const MenuPose pose = menu_pose({p.yaw, p.pitch, p.width}, static_cast<float>(kOsdHeight) / kOsdWidth);
     osd.layer.pose.position = {pose.position[0], pose.position[1], pose.position[2]};
     osd.layer.pose.orientation = {pose.orientation[0], pose.orientation[1], pose.orientation[2], pose.orientation[3]};
@@ -3599,7 +3620,41 @@ OsdInput osd_input(int64_t now) {
     return in;
 }
 
+// The notice's card while it lasts (null once it is over, or if the card cannot be made); the overlay's card
+// afterwards, redrawn before it shows again.
+const XrCompositionLayerBaseHeader* notice_frame(XrSession session, int64_t now) {
+    if (!notice_pending())
+        return nullptr;
+    if (!notice.until)
+        notice.until = now + qpc_ms(kNoticeMs);
+    if (now >= notice.until || !osd_resources(session)) {
+        notice = {};
+        osd.uploaded = false;  // the card holds the notice's pixels
+        osd.nextDraw = 0;
+        osd_place();
+        log_line("notice: hidden");
+        return nullptr;
+    }
+    if (!notice.uploaded) {
+        osd_place();
+        const std::vector<uint32_t> pixels = draw_notice_panel(notice.title, notice.lines);  // once: a few ms
+        uint32_t index = 0;
+        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+        wait.timeout = 100'000'000;
+        if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
+            notice.uploaded = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() &&
+                              osd.upload.upload(osd.images[index], pixels);
+            next.ReleaseSwapchainImage(osd.chain, nullptr);
+        }
+        if (notice.uploaded)
+            log_line("notice: shown");
+    }
+    return notice.uploaded ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&osd.layer) : nullptr;
+}
+
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
+    if (const XrCompositionLayerBaseHeader* card = notice_frame(session, now))
+        return card;
     if (!osd.read)
         osd_placement_changed();
     osd_hotkey();
@@ -4095,8 +4150,14 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     }
     if (experiment.views4 &&
         !views4_start(experiment.views4Callers, experiment.views4EyesOnlyAdvance,
-                      experiment.views4EyeCamera ? 0.0 : experiment.box_x(), experiment.box_y()))
+                      experiment.views4EyeCamera ? 0.0 : experiment.box_x(), experiment.box_y())) {
         experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
+        notice_set(L"ace-quadview is off",
+                   {L"This Assetto Corsa EVO build isn’t one ace-quadview supports, so the game runs as normal, "
+                    L"without foveated rendering. The game has probably been updated.",
+                    L"Look for an ace-quadview release for the new build. The launcher’s Launch checks say the same "
+                    L"before a launch."});
+    }
     if (experiment.views4 && experiment.views4ShadowView1Plain)
         views4_shadow_view1_plain();
     Dispatch d;

@@ -11,10 +11,13 @@
 
 #include <windows.h>
 
+#include "engine/ace_abi.h"
 #include "launcher/launch_plan.h"
 #include "launcher/layer_order.h"
+#include "launcher/preflight.h"
 #include "launcher/report.h"
 #include "launcher/settings.h"
+#include "sha256_file.h"
 
 using namespace aceqv::launcher;
 namespace fs = std::filesystem;
@@ -848,6 +851,120 @@ int main() {
         const std::string tiny = issue_url(kIssueRepo, "bug.yml", L"t", longFields, 1500);
         check(tiny.size() <= 1500 && tiny.find("&what=The%20focus") != std::string::npos && tiny.find("&details=") == std::string::npos,
               "report: with less room the details go, then the checks, the description last");
+    }
+
+    // Launch checks (preflight.h): the game build, Steam and ACE, Cheeky's loader, Cheeky's runtime and layer,
+    // OpenXR Toolkit's place and Turbo mode, eye tracking.
+    {
+        const auto find = [](const std::vector<Check>& checks, const char* id) -> const Check* {
+            for (const Check& c : checks)
+                if (c.id == id)
+                    return &c;
+            return nullptr;
+        };
+        PreflightInput in;
+        in.gameExe = L"K:\\Steam\\steamapps\\common\\Assetto Corsa EVO\\AssettoCorsaEVO.exe";
+        in.build = BuildState::Supported;
+        std::vector<Check> checks = preflight_checks(in);
+        check(worst_tone(checks) == CheckTone::Ok && find(checks, "build") && find(checks, "steam") &&
+                  find(checks, "cheeky_loader") && !find(checks, "ace_running") && !find(checks, "cheeky"),
+              "preflight: all clear: build, Steam and the game folder pass; nothing about Cheeky while it is off");
+
+        in.build = BuildState::Unsupported;
+        checks = preflight_checks(in);
+        const Check* build = find(checks, "build");
+        check(build && build->tone == CheckTone::Bad && build->confirm && build->fix == CheckFix::OpenReleases &&
+                  worst_tone(checks) == CheckTone::Bad && first_with(checks, CheckTone::Bad) == build,
+              "preflight: an updated game holds the launch back and points at the releases");
+        in.mode = LaunchMode::Off;
+        checks = preflight_checks(in);
+        build = find(checks, "build");
+        check(build && build->tone == CheckTone::Warn && !build->confirm, "preflight: mode=off patches nothing: only a warning");
+        in.mode = LaunchMode::Qvfr;
+        in.build = BuildState::Hashing;
+        checks = preflight_checks(in);
+        check(find(checks, "build")->tone == CheckTone::Pending && worst_tone(checks) == CheckTone::Ok,
+              "preflight: still hashing holds nothing back");
+        check(build_state("", true) == BuildState::Hashing && build_state("", false) == BuildState::Unknown &&
+                  build_state("00", false) == BuildState::Unsupported &&
+                  build_state(ace::kExecutableSha256, false) == BuildState::Supported,
+              "preflight: build_state from the exe's hash");
+        in.build = BuildState::Supported;
+
+        in.steamRunning = false;
+        in.aceRunning = true;
+        checks = preflight_checks(in);
+        check(find(checks, "steam")->tone == CheckTone::Bad && find(checks, "steam")->fix == CheckFix::StartSteam &&
+                  find(checks, "ace_running") && find(checks, "ace_running")->tone == CheckTone::Bad,
+              "preflight: Steam not running and ACE already running");
+        in.steamRunning = true;
+        in.aceRunning = false;
+        in.gameExe.clear();
+        checks = preflight_checks(in);
+        check(find(checks, "game") && find(checks, "game")->tone == CheckTone::Bad && !find(checks, "build") &&
+                  !find(checks, "cheeky_loader"),
+              "preflight: no game: no build or game folder check");
+        in.gameExe = L"K:\\Steam\\steamapps\\common\\Assetto Corsa EVO\\AssettoCorsaEVO.exe";
+
+        // Cheeky's loader: found by its name in the DLL, a different dxgi.dll left alone.
+        const fs::path game = folder / "game";
+        fs::create_directories(game);
+        write_file((game / "dxgi.dll").wstring(), std::string("MZ\0\0CheekyFoveatedDLSS loader", 30));
+        write_file((game / "version.dll").wstring(), "MZ some other proxy");
+        in.cheekyLoaders = cheeky_loaders(game.wstring());
+        checks = preflight_checks(in);
+        const Check* loader = find(checks, "cheeky_loader");
+        check(in.cheekyLoaders.size() == 1 && in.cheekyLoaders[0].ends_with(L"dxgi.dll") && loader &&
+                  loader->tone == CheckTone::Bad && loader->fix == CheckFix::ShowFile && loader->fixTarget == in.cheekyLoaders[0],
+              "preflight: Cheeky's dxgi.dll in the game folder; another version.dll left alone");
+        check(cheeky_loaders((folder / "nowhere").wstring()).empty(), "preflight: no game folder files, no loaders");
+        in.cheekyLoaders.clear();
+
+        // Cheeky on: its runtime and layer, then Toolkit's place against its layer and Turbo mode.
+        in.cheekyLoad = true;
+        checks = preflight_checks(in);
+        check(find(checks, "cheeky_runtime") && find(checks, "cheeky_layer") && !find(checks, "cheeky"),
+              "preflight: Cheeky on without its runtime or layer");
+        in.cheekyRuntimeFound = true;
+        in.cheekyLayer = CheekyLayer::Enabled;
+        const auto moved = [](const char* name) {
+            MovedLayer m;
+            m.name = name;
+            return m;
+        };
+        in.layers.below = {moved(kCheekyLayer), moved(kToolkitLayer)};
+        checks = preflight_checks(in);
+        check(find(checks, "cheeky") && find(checks, "toolkit_order") && find(checks, "toolkit_order")->fix == CheckFix::OpenLayers,
+              "preflight: Toolkit below Cheeky's layer");
+        in.layers.below = {moved(kToolkitLayer), moved(kCheekyLayer)};
+        check(!find(preflight_checks(in), "toolkit_order"), "preflight: Toolkit above Cheeky's layer");
+        in.layers.below = {moved(kCheekyLayer)};
+        in.layers.above = {kToolkitLayer};
+        check(!find(preflight_checks(in), "toolkit_order"), "preflight: Toolkit above the ACE layer is above Cheeky's");
+        in.layers.above.clear();
+        in.toolkitTurbo = 1;
+        in.cheekyFg = true;
+        check(!find(preflight_checks(in), "toolkit_turbo"), "preflight: Turbo mode does not matter while Toolkit is not loaded");
+        in.layers.below = {moved(kToolkitLayer), moved(kCheekyLayer)};
+        checks = preflight_checks(in);
+        const Check* turbo = find(checks, "toolkit_turbo");
+        check(turbo && turbo->tone == CheckTone::Bad && turbo->fix == CheckFix::TurboOff, "preflight: Turbo mode with Cheeky's frame generation");
+        in.cheekyFg = false;
+        check(!find(preflight_checks(in), "toolkit_turbo"), "preflight: Turbo mode without frame generation");
+        in.cheekyLoad = false;
+
+        in.eyeTracker = EyeTracker::Missing;
+        checks = preflight_checks(in);
+        const Check* eye = find(checks, "eye_tracking");
+        check(eye && eye->tone == CheckTone::Warn && worst_tone(checks) == CheckTone::Warn, "preflight: no eye tracking last time");
+        in.eyeTracked = false;
+        check(!find(preflight_checks(in), "eye_tracking"), "preflight: fixed foveation needs no eye tracker");
+
+        const fs::path hashed = folder / "hash.txt";
+        write_file(hashed.wstring(), "abc");
+        check(aceqv::sha256_file(hashed.c_str()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+                  aceqv::sha256_file((folder / "missing").c_str()).empty(),
+              "sha256_file: a known digest; empty for a missing file");
     }
 
     fs::remove_all(folder, ec);
