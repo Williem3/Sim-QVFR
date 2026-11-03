@@ -239,7 +239,7 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
         const uint64_t rva = start - base;
         for (const Label& l : kAceLabels)
             if (l.rva == rva) {
-                swprintf_s(text, L"%ls+0x%llx (%hs)", module.c_str(), static_cast<unsigned long long>(rva), l.name);
+                _snwprintf_s(text, _TRUNCATE, L"%ls+0x%llx (%hs)", module.c_str(), static_cast<unsigned long long>(rva), l.name);
                 return text;
             }
     }
@@ -252,9 +252,9 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
         // Export-only modules name the nearest export, which can be far off: trust a symbol only near its start.
         if (symbols.fromAddr(GetCurrentProcess(), start, &displacement, info) && displacement < 0x1000) {
             if (displacement)
-                swprintf_s(text, L"%ls!%ls+0x%llx", module.c_str(), info->Name, static_cast<unsigned long long>(displacement));
+                _snwprintf_s(text, _TRUNCATE, L"%ls!%ls+0x%llx", module.c_str(), info->Name, static_cast<unsigned long long>(displacement));
             else
-                swprintf_s(text, L"%ls!%ls", module.c_str(), info->Name);
+                _snwprintf_s(text, _TRUNCATE, L"%ls!%ls", module.c_str(), info->Name);
             return text;
         }
     }
@@ -266,12 +266,12 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
     if (after != e.begin() && !(after - 1)->second.empty() && rva - (after - 1)->first < 0x100) {
         const uint32_t displacement = rva - (after - 1)->first;
         if (displacement)
-            swprintf_s(text, L"%ls!%hs+0x%x", module.c_str(), (after - 1)->second.c_str(), displacement);
+            _snwprintf_s(text, _TRUNCATE, L"%ls!%hs+0x%x", module.c_str(), (after - 1)->second.c_str(), displacement);
         else
-            swprintf_s(text, L"%ls!%hs", module.c_str(), (after - 1)->second.c_str());
+            _snwprintf_s(text, _TRUNCATE, L"%ls!%hs", module.c_str(), (after - 1)->second.c_str());
         return text;
     }
-    swprintf_s(text, L"%ls+0x%llx", module.c_str(), static_cast<unsigned long long>(start - base));
+    _snwprintf_s(text, _TRUNCATE, L"%ls+0x%llx", module.c_str(), static_cast<unsigned long long>(start - base));
     return text;
 }
 
@@ -317,7 +317,7 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         const std::wstring name = thread_name(t.id);
         const double load = elapsedTsc ? 100.0 * static_cast<double>(t.cycles) / static_cast<double>(elapsedTsc) : 0;
         wchar_t head[256];
-        swprintf_s(head, L"\nThread %u%ls%ls%ls: %.0f%% of a core (%llu samples: %llu running, %llu blocked in a wait, "
+        _snwprintf_s(head, _TRUNCATE, L"\nThread %u%ls%ls%ls: %.0f%% of a core (%llu samples: %llu running, %llu blocked in a wait, "
                          L"%llu idle, %llu unreadable)",
                    t.id, name.empty() ? L"" : L" \"", name.c_str(), name.empty() ? L"" : L"\"", load,
                    static_cast<unsigned long long>(t.samples), static_cast<unsigned long long>(t.running),
@@ -343,7 +343,7 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         std::wstring mods = L"  By module (self):";
         for (size_t i = 0; i < byModule.size() && i < 8; ++i) {
             wchar_t item[160];
-            swprintf_s(item, L"%ls %ls %.1f%%", i ? L"," : L"", moduleNames[byModule[i].first].c_str(), percent(byModule[i].second));
+            _snwprintf_s(item, _TRUNCATE, L"%ls %ls %.1f%%", i ? L"," : L"", moduleNames[byModule[i].first].c_str(), percent(byModule[i].second));
             mods += item;
         }
         line(mods);
@@ -351,20 +351,20 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         line(L"  Self time:");
         for (size_t i = 0; i < self.size() && i < kTop; ++i) {
             wchar_t item[600];
-            swprintf_s(item, L"    %5.1f%%  %ls", percent(self[i].second), function_name(symbols, self[i].first).c_str());
+            _snwprintf_s(item, _TRUNCATE, L"    %5.1f%%  %ls", percent(self[i].second), function_name(symbols, self[i].first).c_str());
             line(item);
         }
         line(L"  Total time:");
         for (size_t i = 0; i < total.size() && i < kTop; ++i) {
             wchar_t item[600];
-            swprintf_s(item, L"    %5.1f%%  %ls", percent(total[i].second), function_name(symbols, total[i].first).c_str());
+            _snwprintf_s(item, _TRUNCATE, L"    %5.1f%%  %ls", percent(total[i].second), function_name(symbols, total[i].first).c_str());
             line(item);
         }
         // The log: the thread and its top three by self time.
         std::wstring summary;
         for (size_t i = 0; i < self.size() && i < 3; ++i) {
             wchar_t item[600];
-            swprintf_s(item, L"%ls%.0f%% %ls", i ? L", " : L"", percent(self[i].second), function_name(symbols, self[i].first).c_str());
+            _snwprintf_s(item, _TRUNCATE, L"%ls%.0f%% %ls", i ? L", " : L"", percent(self[i].second), function_name(symbols, self[i].first).c_str());
             summary += item;
         }
         logf("cpu profile: thread %u%s%ls%s %.0f%% of a core; self: %ls", t.id, name.empty() ? "" : " \"", name.c_str(),

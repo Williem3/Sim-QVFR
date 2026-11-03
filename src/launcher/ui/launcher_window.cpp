@@ -889,9 +889,14 @@ Row value_row(const std::wstring& label, const std::wstring& desc, const std::ws
     return row;
 }
 
+// `format` with one number, at whatever length it comes to (a fixed buffer too short for a description made
+// swprintf_s end the launcher: the Diagnostics pane's first version).
 std::wstring formatted(const wchar_t* format, double v) {
-    wchar_t text[64];
-    swprintf_s(text, format, v);
+    const int n = _scwprintf(format, v);
+    if (n <= 0)
+        return {};
+    std::wstring text(static_cast<size_t>(n), L'\0');
+    swprintf_s(text.data(), static_cast<size_t>(n) + 1, format, v);
     return text;
 }
 
@@ -906,6 +911,24 @@ std::wstring thread_note(const std::wstring& name) {
     if (name.find(L"Cheeky") != std::wstring::npos)
         return L"Cheeky Foveated DLSS's frame generation.";
     return L"";
+}
+
+// The layers below ace-quadview as people know them: "XR_APILAYER_MBUCCHIA_toolkit, ..." -> "OpenXR Toolkit, ...".
+std::wstring friendly_layers(const std::wstring& names) {
+    std::wstring out;
+    for (size_t at = 0; at < names.size();) {
+        const size_t comma = names.find(L',', at), end = comma == std::wstring::npos ? names.size() : comma;
+        std::wstring name = names.substr(at, end - at);
+        name.erase(0, name.find_first_not_of(L' '));
+        if (!name.empty()) {
+            std::string ascii;  // layer names are ASCII
+            for (const wchar_t c : name)
+                ascii += static_cast<char>(c);
+            out += (out.empty() ? L"" : L", ") + friendly_layer(ascii);
+        }
+        at = end + 1;
+    }
+    return out;
 }
 
 std::wstring logs_folder() {
@@ -987,7 +1010,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
                                                              L"0.8 ms measured): switch it off for ACE in OpenXR layers if you "
                                                              L"don't use it."
                                                            : L"",
-                                  s.layersBelow.empty() ? L"None" : s.layersBelow));
+                                  s.layersBelow.empty() ? L"None" : friendly_layers(s.layersBelow)));
         if (app.runtime.vramUsedMb > 0)
             layer.push_back(value_row(L"VRAM", L"ACE's use against what Windows allows it.",
                                       formatted(L"%.1f GB", app.runtime.vramUsedMb / 1024) +

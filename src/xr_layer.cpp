@@ -1259,7 +1259,7 @@ void write_session_summary(double layerMs) {
         if (t.percent < 5)
             break;
         wchar_t item[160];
-        swprintf_s(item, L"%ls%ls=%.0f", threads.empty() ? L"" : L"|",
+        _snwprintf_s(item, _TRUNCATE, L"%ls%ls=%.0f", threads.empty() ? L"" : L"|",
                    t.name.empty() ? (L"thread " + std::to_wstring(t.id)).c_str() : t.name.c_str(), t.percent);
         threads += item;
     }

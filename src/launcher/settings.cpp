@@ -314,10 +314,13 @@ std::wstring session_summary_text(const RuntimeInfo& r) {
     const SessionInfo& s = r.session;
     if (!s.known())
         return L"ace-quadview: no session measured yet.";
-    const auto f = [](const wchar_t* format, double v) {
-        wchar_t text[64];
-        swprintf_s(text, format, v);
-        return std::wstring(text);
+    const auto f = [](const wchar_t* format, double v) {  // at whatever length it comes to
+        const int n = _scwprintf(format, v);
+        if (n <= 0)
+            return std::wstring();
+        std::wstring text(static_cast<size_t>(n), L'\0');
+        swprintf_s(text.data(), static_cast<size_t>(n) + 1, format, v);
+        return text;
     };
     std::wstring t = L"ace-quadview session " + s.time + L" · " + s.mode;
     if (s.refreshHz > 0)
