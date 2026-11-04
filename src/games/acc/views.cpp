@@ -209,6 +209,8 @@ bool counts_match() {
            aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
            aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
            right_eye_picks_match() &&
+           aceqv::code_matches(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor)) &&
+           aceqv::code_matches(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor)) &&
            aceqv::code_matches(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor)) &&
            aceqv::code_matches(kFoliageRightViewRead, kFoliageRightViewReadAnchor, sizeof(kFoliageRightViewReadAnchor));
 }
@@ -232,11 +234,23 @@ bool pairs_per_draw() {
     ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
                               pairEye, sizeof(pairEye)) && ok;
     ok = pair_right_views() && ok;
-    const std::uint8_t rightEye[4] = {0x6a, 0x02, 0x58, 0x90};  // push 2; pop rax; nop: foliage culls with Views[1]
-    ok = aceqv::code_write(kFoliageRightView, rightEye, sizeof(rightEye)) && ok;
+    // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
+    const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
+    const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
+                                 0x48, 0x8b, 0x04, 0xc1,        // mov rax, [rcx + rax*8]
+                                 0x41, 0x0f, 0x28, 0xe7};       // movaps xmm4, xmm15
+    const std::uint8_t right[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
+                                  0x48, 0x83, 0xc0, 0x02,        // add rax, 2
+                                  0x0f, 0x59, 0xc7};             // mulps xmm0, xmm7
+    ok = aceqv::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
+                              sizeof(gate)) && ok;
+    ok = aceqv::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
+                              sizeof(left)) && ok;
+    ok = aceqv::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
+                              sizeof(right)) && ok;
     aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
                                       "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
-                                      "foliage culled with the right eye)"
+                                      "foliage culled per pair)"
                                     : "a views-per-draw patch failed");
     return ok;
 }

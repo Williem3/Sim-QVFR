@@ -117,11 +117,21 @@ inline constexpr std::uintptr_t kGetStereoEyeView = 0x2cf8140;
 // culls view 0 with its own frustum but the right plane of `Views[1]` (`check(Views.Num() == 2)`), so trees seen
 // only by the right eye survive. Kunos made it `Views.Last()` (the right triple screen): with four views, view 3,
 // the right focus view, so the eyes culled foliage past the focus box's right edge, in both eyes, and only on that
-// side (README.md). `movsxd rax, [rsi + 8]` (Views.Num) here feeds `mov rcx, [rcx + rax*8 - 8]` at 0x2a43737;
-// views.cpp writes `push 2; pop rax; nop` over it: Views[1], the right eye. Found through foliage.DitheredLOD's
-// reader (0x2a42ff1) and the IsInstancedStereoPass call (0x2a435c3) in the same function.
+// side (README.md). And only view 0 gets the union, so the focus pair (view 2 primary) culled with view 2 alone.
+// Found through foliage.DitheredLOD's reader (0x2a42ff1) and the IsInstancedStereoPass call (0x2a435c3) in the
+// same function; `[rsp + 0x38]` is the loop's ViewIndex (0 at 0x2a43033, compared with Views.Num). views.cpp
+// redirects three spots so each pair's primary (view 0 or 2) culls with its own left plane and its partner's right:
+//  - the union's gate, `cmp dword [rsp + 0x38], 0` (then jne): `test dword [rsp + 0x38], ~2`, views 0 and 2;
+//  - the left view, `mov rax, [rcx]` (Views[0]; rcx = Views.Data) and the next `movaps xmm4, xmm15`:
+//    `rax = Views[ViewIndex]`;
+//  - the right view's index, `movsxd rax, [rsi + 8]` (Views.Num, for `mov rcx, [rcx + rax*8 - 8]` at 0x2a43737)
+//    and the next `mulps xmm0, xmm7`: `rax = ViewIndex + 2`, so Views[ViewIndex + 1].
+inline constexpr std::uintptr_t kFoliageUnionGate = 0x2a435f2;
+inline constexpr std::uint8_t kFoliageUnionGateAnchor[5] = {0x83, 0x7c, 0x24, 0x38, 0x00};
+inline constexpr std::uintptr_t kFoliageLeftView = 0x2a43637;
+inline constexpr std::uint8_t kFoliageLeftViewAnchor[7] = {0x48, 0x8b, 0x01, 0x41, 0x0f, 0x28, 0xe7};
 inline constexpr std::uintptr_t kFoliageRightView = 0x2a4366a;
-inline constexpr std::uint8_t kFoliageRightViewAnchor[4] = {0x48, 0x63, 0x46, 0x08};
+inline constexpr std::uint8_t kFoliageRightViewAnchor[7] = {0x48, 0x63, 0x46, 0x08, 0x0f, 0x59, 0xc7};
 inline constexpr std::uintptr_t kFoliageRightViewRead = 0x2a43737;
 inline constexpr std::uint8_t kFoliageRightViewReadAnchor[5] = {0x48, 0x8b, 0x4c, 0xc1, 0xf8};
 

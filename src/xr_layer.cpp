@@ -2680,6 +2680,7 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
     v4d3d11.outChain = chain;
     for (const auto& image : images)
         v4d3d11.outImages.push_back(image.texture);
+    d3d11_capture_images(chain, images.data(), count);  // d3d11_capture_frame saves the composed output too
     v4d3d11.outW = nativeW;
     v4d3d11.outH = nativeH;
     v4d3d11.failed = false;
@@ -2747,6 +2748,10 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         return fallback("output acquire failed");
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.outChain, &wait)) &&
                     v4d3d11.compositor.compose(views, v4d3d11.outImages[outIndex], eyes);
+    if (ok && experiment.d3d11CaptureFrame) {
+        d3d11_capture_acquired(v4d3d11.outChain, outIndex);
+        d3d11_capture_release(v4d3d11.outChain, endFrames);
+    }
     next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
     if (!ok)
         return fallback("compose failed");
