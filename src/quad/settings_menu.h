@@ -36,7 +36,9 @@ enum class MenuItem {
     // QVFR: finds the resolution that holds the frame rate (qvfr_optimizer.h). Right runs (or stops) it, Left undoes.
     Optimize,
     // The settings page's first line: the profiles (profile/profiles.h), stepped through and used at once.
-    Profile
+    Profile,
+    // The Overlay and menu page: the hotkeys' line under the panel ([menu] hotkey_footer).
+    HotkeyFooter
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -66,6 +68,7 @@ struct MenuValues {
     FocusShape shape;         // [quad] focus_shape and its corners
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
+    bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys listed under the panel
     bool crop = false;        // [crop] enabled (QVFR)
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)

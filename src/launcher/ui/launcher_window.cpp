@@ -29,6 +29,8 @@
 #include "../preflight.h"
 #include "../report.h"
 #include "../settings.h"
+#include "../install.h"
+#include "../update_check.h"
 #include "../../input/pad_input.h"
 #include "../../sha256_file.h"
 #include "canvas.h"
@@ -73,7 +75,13 @@ enum Ctl {
     kHotkeyKey, kHotkeyPad, kHotkeysReset,
     // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete (option: its index in
     // app.profileNames), saving the settings as one, adding a shared one from the clipboard.
-    kProfileUse, kProfileShare, kProfileDelete, kProfileSave, kProfilePaste
+    kProfileUse, kProfileShare, kProfileDelete, kProfileSave, kProfilePaste,
+    // The Headset menu pane: the hotkeys footer ([menu] hotkey_footer).
+    kHotkeyFooter,
+    // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
+    kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
+    // A setting's ⓘ: its help shows while the pointer is over it (option: its index in kHelp).
+    kHelpIcon
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -84,6 +92,18 @@ constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
 // The exe's hash, done on a worker: its message carries a new std::string (the hex digest).
 constexpr UINT kHashedMessage = WM_APP + 1;
+// The update check, done on a worker: its message carries a new UpdateResult.
+constexpr UINT kUpdateMessage = WM_APP + 2;
+// Dev: a development build (no version to compare): the newest release is shown, not offered as an update.
+enum class Update { Off, Checking, UpToDate, Available, Dev, Failed };
+struct UpdateResult {
+    bool ok = false;
+    Release release;
+    std::wstring error;
+};
+// An install (install.h), done on a worker: its progress and its outcome, each message a new InstallProgress or
+// InstallResult.
+constexpr UINT kInstallProgressMessage = WM_APP + 3, kInstallDoneMessage = WM_APP + 4;
 // The Hotkeys pane catching a wheel or controller button: polled this often.
 constexpr UINT_PTR kCaptureTimer = 2;
 constexpr UINT kCaptureMs = 30;
@@ -187,6 +207,17 @@ struct App {
     std::wstring profileCurrent;
     bool profileMatches = false;
     std::wstring profileMessage;
+    // The update check: where it stands, the newest release found and why a check failed.
+    Update update = Update::Off;
+    Release release;
+    std::wstring updateError;
+    // An install of `release`: running (its step and share), or how the last one failed.
+    bool installing = false;
+    InstallProgress installProgress;
+    std::wstring installError;
+    // The help under the pointer (kHelp's index, -1: none) and the ⓘ it belongs to, as last drawn.
+    int tip = -1;
+    Rect tipAnchor;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -255,6 +286,124 @@ void changed(bool save = true) {
         push_live();
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// Asks GitHub for the newest release on a worker (update_check.h); the window gets kUpdateMessage.
+void start_update_check() {
+    if (app.update == Update::Checking)
+        return;
+    app.update = Update::Checking;
+    std::thread([hwnd = app.hwnd] {
+        auto* result = new UpdateResult;
+        std::string body;
+        if (fetch_releases(body, result->error)) {
+            result->ok = newest_release(body, result->release);
+            if (!result->ok)
+                result->error = L"GitHub lists no release";
+        }
+        if (!PostMessageW(hwnd, kUpdateMessage, 0, reinterpret_cast<LPARAM>(result)))
+            delete result;
+    }).detach();
+}
+
+void update_done(UpdateResult* r) {
+    const std::unique_ptr<UpdateResult> result(r);
+    if (!result->ok) {
+        app.update = Update::Failed;
+        app.updateError = result->error;
+        return;
+    }
+    app.release = result->release;
+    const std::wstring mine = widen(ACE_QV_VERSION);
+    app.update = !known_version(mine)                              ? Update::Dev
+                 : compare_versions(result->release.tag, mine) <= 0 ? Update::UpToDate
+                                                                    : Update::Available;
+}
+
+std::wstring launcher_folder() { return std::filesystem::path(app.ini).parent_path().wstring(); }
+
+// Install is offered for a newer release with a zip GitHub gives a SHA-256 for, in a packaged install.
+bool installable() {
+    return app.update == Update::Available && !app.release.zipSha256.empty() && trusted_download(app.release.zipUrl) &&
+           packaged_install(launcher_folder());
+}
+
+bool ace_running() {
+    for (const Check& c : app.checks)
+        if (c.id == "ace_running")
+            return true;
+    return false;
+}
+
+void refresh_checks();  // the launch checks (below)
+
+void start_install() {
+    if (app.installing || !installable())
+        return;
+    refresh_checks();
+    if (ace_running()) {
+        MessageBoxW(app.hwnd, L"Close Assetto Corsa EVO first: ace-quadview’s layer is in use while it runs.", L"QVFR Launcher",
+                    MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
+    if (MessageBoxW(app.hwnd,
+                    (L"Install ace-quadview " + app.release.tag + L"?\n\nThe launcher downloads it from GitHub (" + mb +
+                     L" MB), checks it, replaces its program files and restarts. Your settings, profiles, logs and any file "
+                     L"you changed (your own helmet images) stay. The version you have now is kept in the update folder.")
+                        .c_str(),
+                    L"QVFR Launcher", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+        return;
+    app.installing = true;
+    app.installError.clear();
+    app.installProgress = {L"Starting", 0};
+    std::thread([hwnd = app.hwnd, folder = launcher_folder(), release = app.release, version = widen(ACE_QV_VERSION)] {
+        // Progress as messages, at most one per percent or step.
+        std::wstring lastStep;
+        int lastPercent = -1;
+        auto* result = new InstallResult(install_release(folder, release.zipUrl, release.zipSha256, release.zipSize, version,
+                                                         [&](const InstallProgress& p) {
+                                                             const int percent = static_cast<int>(p.share * 100);
+                                                             if (p.step == lastStep && percent == lastPercent)
+                                                                 return;
+                                                             lastStep = p.step;
+                                                             lastPercent = percent;
+                                                             auto* copy = new InstallProgress(p);
+                                                             if (!PostMessageW(hwnd, kInstallProgressMessage, 0,
+                                                                               reinterpret_cast<LPARAM>(copy)))
+                                                                 delete copy;
+                                                         }));
+        if (!PostMessageW(hwnd, kInstallDoneMessage, 0, reinterpret_cast<LPARAM>(result)))
+            delete result;
+    }).detach();
+}
+
+// The install's outcome: on success the new launcher starts and this one closes.
+void install_done(InstallResult* r) {
+    const std::unique_ptr<InstallResult> result(r);
+    app.installing = false;
+    if (!result->ok) {
+        app.installError = result->error;
+        return;
+    }
+    wchar_t exe[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);  // the new launcher now: the old one moved into the backup
+    MessageBoxW(app.hwnd,
+                (L"ace-quadview " + app.release.tag + L" is installed (" + std::to_wstring(result->replaced + result->added) +
+                 L" files; " + std::to_wstring(result->kept) + L" of yours kept). The launcher restarts now.\n\nThe version you had "
+                 L"is in " + result->backup + L".")
+                    .c_str(),
+                L"QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    std::wstring command = L"\"" + std::wstring(exe) + L"\"";
+    if (CreateProcessW(exe, command.data(), nullptr, nullptr, FALSE, 0, nullptr, launcher_folder().c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        DestroyWindow(app.hwnd);
+    } else {
+        app.installError = L"installed; start the launcher again to use it";
+    }
 }
 
 void refresh_profiles() {
@@ -438,7 +587,7 @@ std::vector<Ctl> focus_order() {
             order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder});
         break;
     case Pane::Menu:
-        order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kOsdOn});
+        order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kHotkeyFooter, kOsdOn});
         if (app.s.osd.enabled)
             order.insert(order.end(), {kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel});
         break;
@@ -451,7 +600,7 @@ std::vector<Ctl> focus_order() {
         break;
     case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::Report: order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport}); break;
-    case Pane::About: order.push_back(kSupport); break;
+    case Pane::About: order.insert(order.end(), {kUpdateCheck, kUpdateNow, kSupport}); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
     return order;
@@ -578,6 +727,115 @@ float checkbox_height(const std::wstring& desc, float width) {
     return t::kBody.lineHeight + (desc.empty() ? 0 : 2 + app.canvas.measure_height(desc, t::kCallout, width - 22));
 }
 
+// ---- Help --------------------------------------------------------------------------------------
+// What a setting does and what it costs, by its label: an ⓘ after the label shows it under the pointer.
+struct Help {
+    const wchar_t* label;
+    const wchar_t* text;
+};
+constexpr Help kHelp[] = {
+    {L"Rendering method",
+     L"Quad View Foveated Rendering draws the outer and focus views in one ACE frame: the lightest on the CPU, and the one "
+     L"with every feature. Two-loop draws two whole ACE frames per headset frame: about twice the CPU work per frame, and no "
+     L"frame generation."},
+    {L"Foveated mode",
+     L"Eye tracked: the sharp area follows your eyes, so it can be small and dense; it needs a headset with eye tracking. "
+     L"Fixed: the area stays in the centre, so make it larger, since your eyes move off it."},
+    {L"Outer resolution",
+     L"The wide view around the focus area, a share of the headset’s recommended resolution. It covers most of the view but "
+     L"you see it with your side vision, so it is the first to lower: it saves GPU time and VRAM roughly with its pixels. "
+     L"The preview’s Pixels per frame shows the total."},
+    {L"Inner resolution",
+     L"Pixel density inside the focus area, a share of the headset’s native density. Above 100% it renders more pixels than "
+     L"the headset shows where you look: sharper text and edges. Its cost grows with the area’s size, so a small area can "
+     L"take a high density cheaply."},
+    {L"Foveated width",
+     L"The focus area’s width, a share of the view. Wider hides the edge between sharp and soft better; its pixels cost "
+     L"density × width × height, so a wide area at a high density costs the most."},
+    {L"Foveated height",
+     L"The focus area’s height, a share of the view. Taller covers more of the dash and mirrors; it costs pixels as the "
+     L"width does."},
+    {L"Corner radius", L"Rounds the focus area’s corners, so its edge is harder to spot. No cost: the area renders as a rectangle "
+                       L"either way."},
+    {L"Feather", L"The band where the focus area blends into the outer view. Wider hides the edge better; no measurable cost."},
+    {L"Gaze dead-zone",
+     L"How far your eyes move before the focus area follows. A little keeps it still against eye-tracker noise; too much "
+     L"makes it lag when you look around. No GPU cost."},
+    {L"Gaze offset", L"Moves the eye-tracked focus area up or down, in degrees, for a tracker that sits a little off. No cost."},
+    {L"Vertical position", L"Moves the fixed focus area up or down, in degrees: towards the dash and mirrors, or the road. No cost."},
+    {L"Crop the view",
+     L"Cuts the edges a helmet or the lens hides before ACE renders them. It saves GPU time and VRAM with the pixels cut; the "
+     L"headset shows black there."},
+    {L"Top", L"How much of the top of each eye’s view ACE doesn’t render. Saves pixels in proportion."},
+    {L"Bottom", L"How much of the bottom of each eye’s view ACE doesn’t render. Saves pixels in proportion."},
+    {L"Outer side", L"How much of each eye’s temple side ACE doesn’t render. Saves pixels in proportion."},
+    {L"Inner side", L"How much of each eye’s nose side ACE doesn’t render; the other eye still sees most of it. Saves pixels in "
+                    L"proportion."},
+    {L"Show a helmet",
+     L"Draws a helmet’s visor opening round the view, lit by the scene, in a layer of its own. It costs the headset a layer "
+     L"to composite; nothing for ACE."},
+    {L"Show focus outline", L"Draws the focus area’s edge, to see where it is and how it follows your eyes. For setting up; "
+                            L"turn it off to drive."},
+    {L"Use Cheeky Foveated DLSS",
+     L"Runs Cheeky Foveated DLSS inside ACE, for the DLSS options below. Needs an NVIDIA RTX GPU, DLSS on in ACE, and Cheeky’s "
+     L"download. Applies at the next launch."},
+    {L"Cheaper outer views",
+     L"The outer views get Cheeky’s DLAA at a lower resolution instead of ACE’s DLSS: GPU time saved on the views you see "
+     L"least."},
+    {L"Outer DLAA scale", L"The resolution of that cheaper pass. Lower saves more GPU time and softens the side view."},
+    {L"Focus supersampling", L"Renders the focus views above their size before DLSS: a sharper centre, for more GPU time."},
+    {L"Frame generation",
+     L"Cheeky’s DLSS frame generation adds frames between ACE’s: smoother motion when ACE can’t hold the refresh rate, for some "
+     L"GPU time and latency. Turn OpenXR Toolkit’s Turbo mode off with it, and run no other frame generator."},
+    {L"Center region", L"The part of the view frame generation makes at full quality (it follows your eyes when eye tracked). "
+                       L"Larger looks better and costs more GPU time."},
+    {L"Show the overlay",
+     L"The performance overlay in the headset: frame rate, CPU and GPU time and what limits the frame. A little CPU time while "
+     L"it shows."},
+};
+
+const wchar_t* help_for(const std::wstring& label) {
+    for (const Help& h : kHelp)
+        if (label == h.label)
+            return h.text;
+    return nullptr;
+}
+
+// The ⓘ for `label` at (x, y) (a 13-point circle, vertically centred on a body line); nothing without help.
+void help_icon(const std::wstring& label, float x, float y) {
+    if (!help_for(label))
+        return;
+    const Rect r{x, y + (t::kBody.lineHeight - 13) / 2, 13, 13};
+    int index = 0;
+    while (label != kHelp[index].label)
+        ++index;
+    const Color c = col(app.tip == index ? app.c->accent : app.c->label_tertiary);
+    app.canvas.circle(r.x + 6.5f, r.y + 6.5f, 5.75f, c, false, 1.2f);
+    app.canvas.line(r.x + 6.5f, r.y + 5.75f, r.x + 6.5f, r.y + 9.5f, c, 1.3f);
+    app.canvas.circle(r.x + 6.5f, r.y + 3.9f, 0.8f, c, true);
+    app.hits.push_back({kHelpIcon, {r.x - 3, r.y - 3, r.w + 6, r.h + 6}, index});
+    if (app.tip == index)
+        app.tipAnchor = r;
+}
+
+// The help under the pointer: a card under its ⓘ, kept inside the window, over everything but a pop-up menu.
+void help_tip() {
+    if (app.tip < 0 || app.tip >= static_cast<int>(std::size(kHelp)) || app.tipAnchor.w <= 0)
+        return;
+    const float w = 300, pad = t::kSpace3;
+    const std::wstring text = kHelp[app.tip].text;
+    const float th = app.canvas.measure_height(text, t::kCallout, w - 2 * pad);
+    Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 6, w, th + 2 * pad};
+    card.x = std::clamp(card.x, 8.0f, app.canvas.width() - w - 8);
+    if (card.bottom() > app.canvas.height() - 8)  // no room under it: above
+        card.y = app.tipAnchor.y - 6 - card.h;
+    app.canvas.fill({card.x, card.y + 2, card.w, card.h}, {0, app.dark ? 0.5f : 0.18f}, t::kRadiusControl + 2);
+    app.canvas.fill(card, col(app.c->control_bg), t::kRadiusControl + 2);
+    app.canvas.stroke(card, col(app.c->control_border), 1, t::kRadiusControl + 2);
+    app.canvas.text(text, t::kCallout, {card.x + pad, card.y + pad, w - 2 * pad, th + 2}, col(app.c->label), Align::Leading, false,
+                    true);
+}
+
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc) {
     const Rect box{r.x, r.y + 1, 14, 14};
     if (checked) {
@@ -596,6 +854,7 @@ void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, co
         app.canvas.text(desc, t::kCallout, {tx, r.y + t::kBody.lineHeight + 2, tw, 200}, col(app.c->label_secondary),
                         Align::Leading, false, true);
     app.hits.push_back({id, {r.x, r.y, 14 + t::kSpace2 + app.canvas.measure(label, t::kBody), t::kBody.lineHeight + 2}});
+    help_icon(label, tx + std::ceil(app.canvas.measure(label, t::kBody)) + 6, r.y);
 }
 
 float segmented_width() {
@@ -715,6 +974,7 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
                 const float ty = inner.y + (inner.h - textH) / 2;
                 const Color labelColor = col(row.disabled ? app.c->label_tertiary : app.c->label);
                 app.canvas.text(row.label, t::kBody, {inner.x, ty, textW, t::kBody.lineHeight}, labelColor);
+                help_icon(row.label, inner.x + std::min(textW - 13, std::ceil(app.canvas.measure(row.label, t::kBody)) + 6), ty);
                 if (!row.desc.empty())
                     app.canvas.text(row.desc, t::kCallout, {inner.x, ty + t::kBody.lineHeight + 2, textW, descH + 2},
                                     col(row.disabled ? app.c->label_tertiary : app.c->label_secondary), Align::Leading, false, true);
@@ -1861,8 +2121,9 @@ float pane_content(float x, float y, float w, bool draw) {
                      L"The settings menu stays 0.8 m in front of your head, wherever you look. Drag it in the preview, "
                      L"or move it from the menu itself in the headset. While the game runs, it moves at once.",
                      draw);
-        const std::wstring open = L"Ctrl+Alt+arrows while the game has focus, or click the left controller stick. The right "
-                                  L"stick selects and changes values; the menu hides after a few seconds.";
+        const std::wstring open = L"Ctrl+Alt+arrows while the game has focus (or the keys and wheel buttons set in the Hotkeys "
+                                  L"pane), or click the left controller stick. The right stick selects and changes values; "
+                                  L"the menu hides after a few seconds.";
         const float oh = app.canvas.measure_height(open, t::kCallout, w - 2 * t::kSpace3);
         if (draw) {
             app.canvas.text(L"Opening the menu", t::kHeadline, {x + t::kSpace3, y + h + t::kSpace6, w - t::kSpace3, 16},
@@ -1872,6 +2133,14 @@ float pane_content(float x, float y, float w, bool draw) {
         }
         h += t::kSpace6 + 16 + 6 + oh;
         h += t::kSpace6;
+        Row footer;
+        const std::wstring footerDesc = L"A line under the menu with the in-game hotkeys (overlay, visor, CPU capture) and their "
+                                        L"wheel buttons, as set in the Hotkeys pane. Also on the menu’s Overlay and menu page.";
+        footer.fullHeight = [footerDesc](float width) { return checkbox_height(footerDesc, width); };
+        footer.full = [footerDesc](const Rect& r) {
+            checkbox(kHotkeyFooter, r, app.s.hotkeyFooter, L"Show the hotkeys under the menu", footerDesc);
+        };
+        h += section(x, y + h, w, L"", {footer}, L"", draw) + t::kSpace6;
         Row osdOn;
         const std::wstring osdDesc = L"Frame rate and pacing, CPU and GPU time with their headroom and which one limits the "
                                      L"frame, VRAM, frame generation and eye tracking, floating in your view.";
@@ -1902,7 +2171,68 @@ float pane_content(float x, float y, float w, bool draw) {
             app.canvas.text(L"Version " + widen(ACE_QV_VERSION), t::kBody, {x, y + 26 + 8 + 16 + 8, w, 16},
                             col(app.c->label_secondary));
         }
-        h += 26 + 8 + 16 + 8 + 16;
+        h += 26 + 8 + 16 + 8 + 16 + t::kSpace6;
+        // Updates (update_check.h): the start-up switch, then where the last check stands with Check now and Download.
+        Row autoCheck;
+        const std::wstring autoDesc = L"Asks GitHub for the newest ace-quadview release when the launcher starts. Nothing else "
+                                      L"is sent, and nothing downloads by itself.";
+        autoCheck.fullHeight = [autoDesc](float width) { return checkbox_height(autoDesc, width); };
+        autoCheck.full = [autoDesc](const Rect& r) {
+            checkbox(kUpdateCheck, r, app.s.updateCheck, L"Check for updates when the launcher starts", autoDesc);
+        };
+        Row status;
+        const std::wstring mine = widen(ACE_QV_VERSION);
+        switch (app.update) {
+        case Update::Off: status.label = L"Not checked"; break;
+        case Update::Checking: status.label = L"Checking…"; break;
+        case Update::UpToDate: status.label = L"Up to date"; status.desc = L"The newest release is " + app.release.tag + L"."; break;
+        case Update::Available:
+            status.label = app.release.tag + L" is available";
+            status.desc = L"You have " + mine + L".";
+            if (app.installing)
+                status.desc = app.installProgress.step + L"… " + std::to_wstring(static_cast<int>(app.installProgress.share * 100)) + L"%";
+            else if (!app.installError.empty())
+                status.desc = L"The install stopped: " + app.installError + L". Nothing was changed.";
+            else if (!installable())
+                status.desc += L" Download it by hand: this copy can’t install it itself (a development build, or the release "
+                               L"has no checked zip).";
+            break;
+        case Update::Dev:
+            status.label = L"Newest release: " + app.release.tag;
+            status.desc = L"This is a development build (" + mine + L").";
+            break;
+        case Update::Failed: status.label = L"Couldn’t check"; status.desc = app.updateError + L"."; break;
+        }
+        // The buttons in a row of their own under it (the status's text keeps the row's width): Install (primary) where
+        // this copy can install the release, Download (its page; the primary without Install), Check now. None while
+        // installing.
+        std::vector<Row> updateRows = {autoCheck, status};
+        if (!app.installing) {
+            const bool install = installable();
+            const bool download = (app.update == Update::Available || app.update == Update::Dev) && !app.release.url.empty();
+            const std::wstring installLabel = app.installError.empty() ? L"Install " + app.release.tag : L"Try again";
+            Row actions;
+            actions.fullHeight = [](float) { return t::kControlHeight; };
+            actions.full = [install, download, installLabel](const Rect& r) {
+                float bx = r.x;
+                const auto add = [&bx, &r](Ctl id, const std::wstring& label, bool primary) {
+                    const float bw = std::ceil(app.canvas.measure(label, primary ? kPrimaryLabel : t::kBody)) + 2 * t::kSpace3;
+                    button(id, {bx, r.y, bw, t::kControlHeight}, label, primary);
+                    bx += bw + t::kSpace2;
+                };
+                if (install)
+                    add(kUpdateInstall, installLabel, true);
+                if (download)
+                    add(kUpdateDownload, L"Download", !install);
+                add(kUpdateNow, L"Check now", false);
+            };
+            updateRows.push_back(actions);
+        }
+        h += section(x, y + h, w, L"Updates", updateRows,
+                     L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the "
+                     L"program files and restarts the launcher; your settings, profiles and changed files stay, and the version "
+                     L"you had is kept in the update folder. Download opens the release’s page instead.",
+                     draw);
         // The same notice as the README's: unofficial, at the user's own risk.
         const std::wstring notice =
             L"ace-quadview is not made, approved or sanctioned by Kunos Simulazioni or the Assetto Corsa EVO "
@@ -2472,10 +2802,18 @@ void paint() {
               badgeMax);
     else if (app.live == Live::Applied)
         badge(t::kSpace5, by, 0, L"Applied to the running game", badgeMax);
-    else
+    else if (app.update == Update::Available) {
+        const float bw = badge(t::kSpace5, by, 3,
+                               app.installing ? L"Installing ace-quadview " + app.release.tag + L"…"
+                                              : L"ace-quadview " + app.release.tag + L" is available" + (installable() ? L" · Install" : L""),
+                               badgeMax);
+        app.hits.push_back({kUpdateBadge, {t::kSpace5, by, bw, 20}});
+    } else
         badge(t::kSpace5, by, 0, L"Ready", badgeMax);
     button(kRestore, restoreR, L"Restore Defaults", false);
     button(kLaunch, launchR, L"Launch Assetto Corsa EVO", true);
+
+    help_tip();
 
     // An open pop-up menu, over everything.
     if (app.popup.open) {
@@ -3025,6 +3363,20 @@ void activate(Ctl id, int option) {
     case kHelmetDetail: open_popup(id); return;
     case kFgOn: app.s.cheeky.fg = !app.s.cheeky.fg; changed(); return;
     case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
+    case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
+    case kUpdateCheck:
+        app.s.updateCheck = !app.s.updateCheck;
+        changed();
+        if (app.s.updateCheck && app.update == Update::Off)
+            start_update_check();
+        return;
+    case kUpdateNow: start_update_check(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
+    case kUpdateDownload:
+        if (!app.release.url.empty() && app.release.url.rfind(L"https://github.com/", 0) == 0)
+            ShellExecuteW(app.hwnd, L"open", app.release.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return;
+    case kUpdateBadge: activate(kSidebar, static_cast<int>(Pane::About)); return;
+    case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kCropOn:
         if (app.s.mode == RenderMode::Qvfr) {
             app.s.crop = !app.s.crop;
@@ -3176,6 +3528,9 @@ void on_key(WPARAM key) {
     case kFgPeriphery:
     case kFgRelease:
     case kOsdOn:
+    case kHotkeyFooter:
+    case kUpdateCheck:
+    case kUpdateNow:
     case kCropOn:
     case kHelmetOn:
     case kVisor:
@@ -3206,6 +3561,22 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         create_report_edit();
         refresh_checks();
+        if (app.s.updateCheck)
+            start_update_check();
+        return 0;
+    case kUpdateMessage:
+        update_done(reinterpret_cast<UpdateResult*>(lParam));
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case kInstallProgressMessage: {
+        const std::unique_ptr<InstallProgress> p(reinterpret_cast<InstallProgress*>(lParam));
+        app.installProgress = *p;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case kInstallDoneMessage:
+        install_done(reinterpret_cast<InstallResult*>(lParam));
+        InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case kHashedMessage: {
         const std::unique_ptr<std::string> sha(reinterpret_cast<std::string*>(lParam));
@@ -3345,9 +3716,26 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                 app.popup.hover = hover;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
+        } else {
+            const Hit* h = hit_at(x, y);
+            const int tip = h && h->id == kHelpIcon ? h->option : -1;
+            if (tip != app.tip) {
+                app.tip = tip;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            if (tip >= 0) {  // a WM_MOUSELEAVE when the pointer leaves the window, to hide it
+                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
+                TrackMouseEvent(&track);
+            }
         }
         return 0;
     }
+    case WM_MOUSELEAVE:
+        if (app.tip >= 0) {
+            app.tip = -1;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
     case WM_CAPTURECHANGED:  // a drag that lost the mouse (no button-up): end it, or follow_ini stays off
         if (app.dragging != kNone) {
             app.dragging = kNone;
@@ -3371,6 +3759,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_MOUSEWHEEL:
+        app.tip = -1;  // its ⓘ moves away
         if (app.scrollMax > 0) {
             app.scroll = std::clamp(app.scroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f, app.scrollMax);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -3406,6 +3795,7 @@ int run_window(HINSTANCE instance, int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     app.ini = settings_path();
     app.iniFound = GetFileAttributesW(app.ini.c_str()) != INVALID_FILE_ATTRIBUTES;
+    clean_update_folder(std::filesystem::path(app.ini).parent_path().wstring());  // what an install left but its backup
     if (app.iniFound)
         app.s = load_settings(app.ini);
     app.runtime = load_runtime_info(runtime_info_path());

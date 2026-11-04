@@ -68,6 +68,7 @@ Settings load_settings(const std::wstring& ini) {
     s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
+    s.updateCheck = read_int(ini, L"launcher", L"update_check", 0) != 0;
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
     s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
               : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
@@ -75,6 +76,7 @@ Settings load_settings(const std::wstring& ini) {
     s.menuYaw = clamp_to(read_signed(ini, L"menu", L"yaw", s.menuYaw), kMenuYawRange);
     s.menuPitch = clamp_to(read_signed(ini, L"menu", L"pitch", s.menuPitch), kMenuPitchRange);
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
+    s.hotkeyFooter = read_int(ini, L"menu", L"hotkey_footer", 1) != 0;
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
     s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
@@ -125,6 +127,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
+    ok &= write(ini, L"launcher", L"update_check", s.updateCheck ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
     return save_live_settings(ini, s) && ok;
 }
@@ -160,6 +163,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));
     ok &= write(ini, L"menu", L"pitch", n(clamp_to(s.menuPitch, kMenuPitchRange)));
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
+    ok &= write(ini, L"menu", L"hotkey_footer", s.hotkeyFooter ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_osd_placement(ini.c_str(), s.osd);
     ok &= write_hotkeys(ini.c_str(), s.hotkeys);

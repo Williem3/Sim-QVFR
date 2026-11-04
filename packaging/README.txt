@@ -26,7 +26,8 @@ Start
 
 The window
 ----------
-Settings save as you change them and apply at the next launch.
+Settings save as you change them and apply at the next launch; while the game runs, most apply at once.
+An (i) after a setting's name shows, under the pointer, what it does and what it costs.
 - Profiles: the presets Performance, Balanced and Quality (they set the resolution only: the outer
   views, the focus density and the focus area's size, with low outer views and a dense centre; one set for
   eye tracked foveation, with a small area that follows your eyes, and one for fixed, with a larger area)
@@ -68,7 +69,10 @@ Settings save as you change them and apply at the next launch.
   (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096, sharper); the Visor is Closed, Half or Open (its hotkey, Ctrl+Alt+V). The
   headset menu's Helmet page has them all. The log suggests the crop that matches their opening.
 - Foveation: Foveated width and Foveated height, each a share of the outer view, and Corner radius
-  (rounds the focus region's corners; 0 = square, 100% = fully round ends).
+  (rounds the focus region's corners; 0 = square, 100% = fully round ends). Vertical position (fixed) or
+  Gaze offset (eye tracked) moves the region up or down; Gaze dead-zone is how far your eyes move before
+  it follows (it keeps still against eye-tracker noise). Focus shape: Box, or Corners, each corner pulled
+  in on its own (a trapezoid, say, for more of the dash and less of the sky).
 - Focus overlay: Show focus outline, its color (teal, magenta, green) and Feather (the blend band).
 - Foveated DLSS: optional Cheeky Foveated DLSS (see below), its runtime and OpenXR layer status, and
   its settings (cheaper outer views, their DLAA scale and preset, the focus preset). The settings
@@ -77,9 +81,37 @@ Settings save as you change them and apply at the next launch.
   where it floats and its size; drag either in the preview): frame rate and pacing, CPU and GPU time
   with their headroom and which one limits the frame, VRAM, frame generation and eye tracking.
   Its hotkey (Ctrl+Alt+P) turns it on and off in the game; the headset menu's Overlay and menu page moves both.
+  Show the hotkeys under the menu (on by default) lists the in-game hotkeys and their wheel buttons in a
+  line under the headset menu; the menu's Overlay and menu page turns it on and off too.
+- OpenXR layers: the OpenXR layers (OpenXR Toolkit, VectorXR, Cheeky's...) in the order the game loads
+  them below ace-quadview, each on or off for the game. With the launcher changes them for its launches
+  only; Without the launcher (Windows) edits Windows' own list, which a game started from Steam uses.
+- Diagnostics: the last session's numbers (frame rate, frame time, CPU and GPU time, what limited the
+  frame, ACE's busiest threads), to compare settings or to ask for help: Copy summary, Open logs folder.
+  Next launch without QVFR runs the game once with its own two views, still measuring, so the page can
+  compare the same race with and without QVFR. CPU capture: at the next launch, its hotkey (Ctrl+Alt+C)
+  while driving records for 20 seconds where ACE's busiest threads spend their time, into the logs folder.
+- Report an issue: pick the kind of problem and describe it; Report an issue zips the newest logs, the
+  settings, CPU captures and hang dumps, and opens a GitHub issue with the details filled in, for you to
+  attach the zip and send.
+- About: the version, and Check for updates when the launcher starts (off by default): it asks GitHub
+  for the newest release, nothing else, and the bar at the bottom says when one is available; Check now
+  is there too. Install puts a newer release in place for you (close the game first): the launcher
+  downloads it from GitHub, checks it, replaces its own files and restarts. Your settings, profiles, logs,
+  Cheeky's folder and any file you changed (your own helmet images) stay; the version you had is kept in
+  the update folder, to copy back by hand if you ever need it. Download opens the release's page instead.
 - The preview shows the focus region and the resulting view sizes. Pixel sizes appear after the
   first launch, once the headset has reported its recommended resolution (runtime.ini).
-- Restore Defaults returns to the kit's defaults. Return launches the game.
+- Restore Defaults returns to the kit's defaults (not the hotkeys). Return launches the game.
+
+The headset menu
+----------------
+Ctrl+Alt+arrows (or your hotkeys) while the game has focus, or a click of the left controller stick,
+opens it; up and down select, left and right change the value; it hides after a few seconds. Its pages:
+the method's settings (with Profile first and, for Quad View Foveated Rendering, Optimize for frame rate
+last: Right measures while you drive and finds the resolution that holds the frame rate, Left undoes it),
+Focus shape, View crop, Helmet, Foveated DLSS and Frame generation (with Cheeky running), and Overlay and
+menu. Changes apply at once and save to the launcher's settings.
 
 Settings (ace-quadview.ini, read when the game starts; the window writes them)
 -------------------------------------------------------------------------------

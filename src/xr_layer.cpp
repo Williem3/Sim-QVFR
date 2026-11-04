@@ -3063,6 +3063,30 @@ std::wstring menu_hint() {
     return hint;
 }
 
+// The menu's hotkeys footer ([menu] hotkey_footer): the in-game actions' keys and wheel buttons, those that apply
+// (the visor with the helmet on, the CPU capture with cpu_profile); empty when none is bound.
+std::wstring hotkey_footer(bool helmetOn) {
+    struct Entry {
+        HotkeyAction action;
+        const wchar_t* name;
+        bool shown;
+    };
+    const Entry entries[] = {{HotkeyAction::Overlay, L"Overlay", true},
+                             {HotkeyAction::Visor, L"Visor", helmetOn},
+                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile}};
+    std::wstring out;
+    for (const Entry& e : entries) {
+        const Hotkey& h = hotkeys[static_cast<int>(e.action)];
+        if (!e.shown || (!h.key.set() && !h.pad.set()))
+            continue;
+        std::wstring binding = key_text(h.key);
+        if (h.pad.set())
+            binding += (binding.empty() ? L"" : L" / ") + std::wstring(L"wheel ") + control_text(h.pad.control);
+        out += (out.empty() ? L"" : L"  \u00b7  ") + std::wstring(e.name) + L" " + binding;
+    }
+    return out;
+}
+
 // ---- Settings menu ---------------------------------------------------------------------------
 // In the headset (settings_menu.h): its hotkeys (above; Ctrl+Alt+arrows by default), or a controller's left
 // stick click (open, close) and right stick (select, change). Changes are written to the ini the
@@ -3446,7 +3470,10 @@ void menu_render() {
     menu.model.launch.dlssHeld = experiment.views4 && views4_dlss_held();
     const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
                                                          menu_lines(menu.model),
-                                                         menu_notes(menu.model), hint, menu_subtitle(menu.model));
+                                                         menu_notes(menu.model), hint, menu_subtitle(menu.model),
+                                                         menu.model.values.hotkeyFooter
+                                                             ? hotkey_footer(menu.model.values.helmet.on && experiment.views4Compose)
+                                                             : L"");
     uint32_t index = 0;
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     wait.timeout = 100'000'000;

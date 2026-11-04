@@ -173,6 +173,19 @@ OpenXR layers are not in one. Share copies a profile as a line of text (`QVFR1:`
 from the defaults); Paste adds one, taking in only a profile's keys. The headset menu's settings page starts
 with a Profile line that switches between them live, and both show when the settings have changed since.
 
+**Updates, help and the hotkeys footer.** The About pane's update check (`[launcher] update_check`, off by
+default) asks GitHub's API for the newest release when the launcher starts, or with Check now, and the action bar
+says when one is available (`src/launcher/update_check.h`); nothing else is sent and nothing downloads by itself.
+Install puts it in place (`src/launcher/install.h`, packaged installs only, not while ACE runs): it downloads the
+release's zip from the repository's release downloads, checks it against the SHA-256 GitHub gives, unpacks it with
+Windows' `tar.exe`, checks every file against its `SHA256.txt`, then replaces the program files, keeping
+`ace-quadview.ini`, anything the release doesn't have and any file of the old release the user changed (their own
+helmet images). The files replaced go to `update\backup-<old version>\` first, everything goes back if a step fails,
+and the launcher restarts as the new one.
+An ⓘ after a setting's name shows what it does and what it costs. The headset menu can list the in-game hotkeys
+and their wheel buttons in a line under it (`[menu] hotkey_footer`, on by default; the Headset menu pane and the
+menu's Overlay and menu page switch it).
+
 **Hotkeys (`[hotkeys]`).** The launcher's Hotkeys pane sets a keyboard combination and a wheel, button box or
 controller button for each of the layer's actions in the game: the headset menu's open/close and its four
 directions, the performance overlay, the helmet's visor and a CPU capture (`src/input/hotkeys.h`). Click a
