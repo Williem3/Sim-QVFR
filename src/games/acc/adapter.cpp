@@ -22,9 +22,9 @@ public:
     bool qvfr_start(const aceqv::games::QvfrStart& s) override {
         return views_start(s.layout, s.focusFraction, s.focusFractionY);
     }
-    // No focus cull or live resolution yet.
+    // No focus cull yet. Live resolution: the views laid out again in the launch target (views.cpp).
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override { views_set_gaze(tan, valid); }
-    void qvfr_set_live_layout(const Views4Layout&) override {}
+    void qvfr_set_live_layout(const Views4Layout& live) override { views_set_live_layout(live); }
     void qvfr_set_live(double focus, double focusY, double, bool) override { views_set_focus(focus, focusY); }
     bool qvfr_dlss_held() override { return false; }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {

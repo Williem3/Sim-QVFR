@@ -137,9 +137,10 @@ ACC's VR has to run through OpenComposite: [Assetto Corsa Competizione in VR thr
 OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Launch checks** tells you
 if it's missing.
 
-Not in ACC yet, so greyed out in the launcher and left out of the headset menu: Foveated DLSS (Cheeky)
-and resolution changes while the game runs (in ACC they apply at the next launch). The field of view crop
-and the helmet overlay work in ACC. Turn DLSS off in ACC's settings.
+Not in ACC yet, so greyed out in the launcher and left out of the headset menu: Foveated DLSS (Cheeky).
+The field of view crop, the helmet overlay and resolution changes while the game runs work in ACC. In ACC
+the focus area's sharpness across follows the periphery's, so a sharper focus area needs a higher periphery
+there. Turn DLSS off in ACC's settings.
 
 ## Getting help
 

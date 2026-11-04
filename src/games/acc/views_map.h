@@ -36,6 +36,57 @@ inline PassRect pass_rect(const aceqv::Views4Layout& layout, int pass, int targe
     return {r.left, r.top, r.width, r.height};
 }
 
+// Live resolution: a layout AdjustViewRect handed out (the launch one, or a live one), with its views' sizes in the
+// target it was handed out for. The render thread finds which one a frame was rendered with from that frame's final
+// rects (match_layout), so the composition reads each frame where it was drawn, whatever the game thread chose since.
+struct HandedLayout {
+    aceqv::Views4Layout layout;
+    int size[kViews][2] = {};  // each view's width, height
+};
+inline HandedLayout handed_layout(const aceqv::Views4Layout& layout, int targetWidth, int targetHeight) {
+    HandedLayout h;
+    h.layout = layout;
+    for (int v = 0; v < kViews; ++v) {
+        const PassRect r = pass_rect(layout, kPassLeft + v, targetWidth, targetHeight);
+        h.size[v][0] = r.width;
+        h.size[v][1] = r.height;
+    }
+    return h;
+}
+inline bool same_sizes(const HandedLayout& a, const HandedLayout& b) {
+    for (int v = 0; v < kViews; ++v)
+        if (a.size[v][0] != b.size[v][0] || a.size[v][1] != b.size[v][1])
+            return false;
+    return true;
+}
+// The newest of `layouts` (oldest first, `count` of them) whose sizes the frame's final rects (min x, min y, max x,
+// max y per view, as SetFinalViewRect gives them) have, at one scale (the renderer's resolution fraction: the final
+// rects are the handed-out ones scaled, their places rounded); -1 for none.
+inline int match_layout(const HandedLayout* layouts, int count, const int (&finalRects)[kViews][4]) {
+    double w[kViews], h[kViews];
+    for (int v = 0; v < kViews; ++v) {
+        w[v] = finalRects[v][2] - finalRects[v][0];
+        h[v] = finalRects[v][3] - finalRects[v][1];
+        if (!(w[v] > 0 && h[v] > 0))
+            return -1;
+    }
+    for (int i = count - 1; i >= 0; --i) {
+        const HandedLayout& l = layouts[i];
+        if (l.size[0][0] <= 0)
+            continue;
+        const double scale = w[0] / l.size[0][0];
+        bool match = scale > 0.2;
+        for (int v = 0; v < kViews && match; ++v)
+            for (int axis = 0; axis < 2 && match; ++axis) {
+                const double want = scale * l.size[v][axis], got = axis ? h[v] : w[v];
+                match = std::fabs(got - want) <= std::max(2.0, 0.01 * want);
+            }
+        if (match)
+            return i;
+    }
+    return -1;
+}
+
 // The view tangents (left, right, up, down; OpenXR's: x right, y up) a UE 4.26 projection renders. UE's FMatrix is
 // row-major for row vectors, as SteamVR's GetStereoProjectionMatrix fills it from GetProjectionRaw (OpenComposite:
 // the located FOV): [0] = 2 / (r - l), [8] = -(r + l) / (r - l) (it passes Right and Left swapped, then negates

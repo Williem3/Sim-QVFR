@@ -3058,8 +3058,12 @@ void live_resolution(const LiveSettings& l) {
     const Views4Layout& launch = experiment.views4Layout;
     const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
     const double cw = l.crop.kept_width(), ch = l.crop.kept_height();  // the outer views take the live crop
-    game->qvfr_set_live_layout(views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
-    const Views4Fit fit = views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
+    // Eye columns (ACC): one width for all four views, the outer and focus rows sharing the height.
+    const bool columns = game->qvfr_eye_columns();
+    game->qvfr_set_live_layout(columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
+                                       : views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
+    const Views4Fit fit = columns ? views4_fit_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
+                                  : views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
     logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
          "eye; launch %.0f%%, %.0f%% x %.0f%%)%s%s",
          fit.outer * 100, fit.focus / l.focusFraction * 100, fit.focusHeight / experiment.focus_y() * 100,

@@ -17,6 +17,9 @@ namespace acc {
 bool views_start(const aceqv::Views4Layout& layout, double focusX, double focusY);
 // A live focus box, from the next projection UE asks for.
 void views_set_focus(double focusX, double focusY);
+// Live resolution: the views laid out again inside the launch target (views4_live_eye_columns), from the next frame
+// UE sets up. Each frame's record carries the layout it was rendered with.
+void views_set_live_layout(const aceqv::Views4Layout& layout);
 // Where each eye looks, as tangents of its view (`valid[e]` false: no turn), at every xrLocateViews. The focus
 // views turn towards it (focus_turn.h, clamped so the box stays in the eye's view), from the next frame UE sets up.
 void views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);

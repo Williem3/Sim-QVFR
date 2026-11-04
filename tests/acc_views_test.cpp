@@ -176,6 +176,77 @@ int main() {
                   std::fabs(t[3] - cd) < 1e-4f,
               "a top crop narrows the top of UE's projection, not its bottom");
     }
+
+    {
+        // Live resolution in eye columns: launch periphery 0.5, focus 0.3 x 0.3, no crop: the target two 0.5 wide,
+        // 0.8 high (2000 x 1600 for a 2000 x 2000 native eye); the launch eyes 1000 x 1000, the focus views
+        // 1000 x 600 under them.
+        const aceqv::Views4Layout launch = aceqv::views4_layout(0.5, 0.3, 0.3);
+        constexpr int W = 2000, H = 1600;
+        const auto rect = [&](const aceqv::Views4Layout& lay, int pass) { return pass_rect(lay, pass, W, H); };
+        const aceqv::Views4Layout atLaunch = aceqv::views4_live_eye_columns(launch, 0.5, 0.3);
+        bool unchanged = atLaunch.live;
+        for (int pass = kPassLeft; pass <= kPassRightSide; ++pass) {
+            const PassRect a = rect(launch, pass), b = rect(atLaunch, pass);
+            unchanged &= a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+        }
+        check(unchanged, "live layout at the launch sizes: the launch rects");
+        // A lower periphery: every view narrower (one width: instanced stereo), the outer rows lower, the focus rows
+        // as tall as before, right under them; each pair side by side from x = 0.
+        const aceqv::Views4Layout low = aceqv::views4_live_eye_columns(launch, 0.25, 0.3);
+        const PassRect lo = rect(low, kPassLeft), ro = rect(low, kPassRight), lf = rect(low, kPassLeftSide),
+                       rf = rect(low, kPassRightSide);
+        check(lo.x == 0 && lo.width == 500 && lo.height == 500 && ro.x == 500 && ro.width == 500 && lf.x == 0 &&
+                  lf.y == 500 && lf.width == 500 && lf.height == 600 && rf.x == 500 && rf.y == 500,
+              "live periphery 25%: every view 500 wide, eyes 500 high, the focus views 600 high under them");
+        // Caps: the periphery no wider than half the target; a taller focus takes the height first.
+        const aceqv::Views4Fit wide = aceqv::views4_fit_eye_columns(launch, 1.0, 0.3);
+        check(wide.outerCapped && !wide.outerByRoom && std::fabs(wide.outer - 0.5) < 1e-9,
+              "live periphery above the target's half: capped at it");
+        const aceqv::Views4Fit tall = aceqv::views4_fit_eye_columns(launch, 0.5, 0.7);
+        check(!tall.focusCapped && std::fabs(tall.focusHeight - 0.7) < 1e-9 && tall.outerByRoom &&
+                  std::fabs(tall.outer - 0.1) < 1e-9,
+              "a taller focus view first: the periphery takes the height left (held by room)");
+        const aceqv::Views4Layout tallLayout = aceqv::views4_live_eye_columns(launch, 0.5, 0.7);
+        const PassRect tf = rect(tallLayout, kPassLeftSide);
+        check(tf.y + tf.height <= H && rect(tallLayout, kPassLeft).height + tf.height <= H,
+              "the outer and focus rows fit the target");
+        // A frame's record (width, height) gives the compositor the same rects.
+        const aceqv::Views4Layout recorded = aceqv::views4_with_live(launch, true, low.width, low.height);
+        bool sameRects = recorded.live;
+        for (int pass = kPassLeft; pass <= kPassRightSide; ++pass) {
+            const PassRect a = rect(low, pass), b = rect(recorded, pass);
+            sameRects &= a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+        }
+        check(sameRects, "a record's live layout: the rects the views were rendered in");
+        // Which layout a frame was rendered with, from its final rects: the newest with their sizes at one scale (the
+        // renderer's resolution fraction, its places rounded to 4); none for sizes of no layout.
+        const HandedLayout handed[2] = {handed_layout(launch, W, H), handed_layout(low, W, H)};
+        const auto finals = [&](const aceqv::Views4Layout& lay, double scale, int (&out)[kViews][4]) {
+            for (int v = 0; v < kViews; ++v) {
+                const PassRect p = rect(lay, kPassLeft + v);
+                const int x = static_cast<int>(p.x * scale) / 4 * 4, y = static_cast<int>(p.y * scale) / 4 * 4;
+                out[v][0] = x;
+                out[v][1] = y;
+                out[v][2] = x + static_cast<int>(std::lround(p.width * scale));
+                out[v][3] = y + static_cast<int>(std::lround(p.height * scale));
+            }
+        };
+        int lowFinals[kViews][4], launchFinals[kViews][4], scaledFinals[kViews][4];
+        finals(low, 1.0, lowFinals);
+        finals(launch, 1.0, launchFinals);
+        finals(low, 0.7, scaledFinals);
+        int odd[kViews][4];
+        std::memcpy(odd, launchFinals, sizeof(odd));
+        odd[2][3] -= 200;  // the focus views 200 shorter: no layout handed out
+        odd[3][3] -= 200;
+        check(match_layout(handed, 2, lowFinals) == 1 && match_layout(handed, 2, launchFinals) == 0 &&
+                  match_layout(handed, 2, scaledFinals) == 1 && match_layout(handed, 2, odd) == -1 &&
+                  match_layout(handed, 0, lowFinals) == -1,
+              "a frame's final rects find the layout it was rendered with, at any resolution fraction");
+        check(same_sizes(handed_layout(launch, W, H), handed_layout(atLaunch, W, H)) && !same_sizes(handed[0], handed[1]),
+              "handed-out layouts compare by their views' sizes");
+    }
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;
 }
