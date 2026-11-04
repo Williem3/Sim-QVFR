@@ -912,10 +912,10 @@ int main() {
               "games: the launcher's list, found by id in any case");
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
-                  !acc::kGame.features.foveatedDlss && acc::kGame.features.helmet &&
+                  acc::kGame.features.foveatedDlss && acc::kGame.features.helmet &&
                   acc::kGame.features.liveResolution && acc::kGame.features.fovCrop && ace::kGame.features.foveatedDlss &&
                   ace::kGame.features.helmet && ace::kGame.features.liveResolution && ace::kGame.features.fovCrop,
-              "games: ACC through OpenComposite, its exe in a subfolder, the crop, helmet and live resolution; no Foveated DLSS yet");
+              "games: ACC through OpenComposite, its exe in a subfolder, with every feature ACE has");
         check(!find(checks, "opencomposite"), "preflight: ACE needs no OpenComposite");
         aceqv::games::set_launcher_game(acc::kGame);
         in.openComposite = OpenComposite::Valve;
