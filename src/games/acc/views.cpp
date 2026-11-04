@@ -1,6 +1,7 @@
 #include "views.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -191,6 +192,7 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
 // the game thread chose meanwhile. Only a family of four views is the main one (captures and reflections have one
 // or two); a mirrored or unreadable one is skipped (rendered_frame).
 std::atomic<std::uint64_t> renderedRecords{0}, renderedSkipped{0};
+std::atomic<bool> familyOrderLogged{false};
 void record_rendered(const unsigned char* view) {
     const auto* family = *reinterpret_cast<const unsigned char* const*>(view);  // FSceneView::Family
     if (!family)
@@ -200,11 +202,25 @@ void record_rendered(const unsigned char* view) {
         return;
     if (!recordArmed.exchange(false, std::memory_order_acq_rel))
         return;
+    // Each view by its own StereoPass, not by its place in the family: view v is pass kPassLeft + v.
     float matrices[4][16], projections[4][16];
-    for (int v = 0; v < 4; ++v) {
-        std::memcpy(matrices[v], views[v] + kViewMatrix, sizeof(matrices[v]));
-        std::memcpy(projections[v], views[v] + kViewProjectionNoAA, sizeof(projections[v]));
+    int order[4] = {};
+    bool seen[4] = {};
+    for (int i = 0; i < 4; ++i) {
+        const int pass = *reinterpret_cast<const int*>(views[i] + kViewStereoPass);
+        order[i] = pass;
+        const int v = pass - kPassLeft;
+        if (v < 0 || v > 3 || seen[v]) {
+            renderedSkipped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        seen[v] = true;
+        std::memcpy(matrices[v], views[i] + kViewMatrix, sizeof(matrices[v]));
+        std::memcpy(projections[v], views[i] + kViewProjectionNoAA, sizeof(projections[v]));
     }
+    if (!familyOrderLogged.exchange(true))
+        aceqv::logf("acc views: the rendered family's views are passes %d, %d, %d, %d", order[0], order[1], order[2],
+                    order[3]);
     aceqv::Views4Frame frame{};
     if (rendered_frame(matrices, projections, frame)) {
         records.push(frame);
@@ -500,6 +516,27 @@ void views_frame_end() {
     const auto n = records.counts();
     aceqv::Views4Frame last{};
     records.latest(last);
+    // The latest rendered turns against what the game thread chose, as yaw / pitch in degrees (OpenXR: yaw left +).
+    aceqv::Views4Frame chosen{};
+    {
+        std::lock_guard guard(focusFrame.mutex);
+        chosen = focusFrame.frame;
+    }
+    const auto yaw_pitch = [](const XrQuaternionf& q, double& yaw, double& pitch) {
+        float m[9];
+        aceqv::to_matrix(q, m);  // the turned camera's forward is -column 2
+        const double fx = -m[2], fy = -m[5], fz = -m[8];
+        yaw = std::atan2(-fx, -fz) * 57.29577951;
+        pitch = std::atan2(fy, std::sqrt(fx * fx + fz * fz)) * 57.29577951;
+    };
+    double ry[2], rp[2], cy[2], cp[2];
+    for (int e = 0; e < 2; ++e) {
+        yaw_pitch(last.turn[e], ry[e], rp[e]);
+        yaw_pitch(chosen.turn[e], cy[e], cp[e]);
+    }
+    aceqv::logf("acc views: focus turns, yaw/pitch deg: rendered left %.1f/%.1f right %.1f/%.1f; chosen left %.1f/%.1f "
+                "right %.1f/%.1f",
+                ry[0], rp[0], ry[1], rp[1], cy[0], cp[0], cy[1], cp[1]);
     aceqv::logf("acc views: rendered frames recorded %llu (skipped %llu); render thread %lu, composing thread %lu",
                 static_cast<unsigned long long>(renderedRecords.exchange(0)),
                 static_cast<unsigned long long>(renderedSkipped.exchange(0)), renderThread.load(), composeThread.load());
