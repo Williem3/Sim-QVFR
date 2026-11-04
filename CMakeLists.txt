@@ -25,8 +25,8 @@ add_library(ace_qv_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/adapters.cpp src/engine/code_patch.cpp
-  src/quad/compositor.cpp src/quad/d3d11_compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/adapters.cpp src/engine/code_patch.cpp
+  src/quad/compositor.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
 target_include_directories(ace_qv_core PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -65,6 +65,12 @@ add_executable(compositor_test tests/compositor_test.cpp)
 target_include_directories(compositor_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(compositor_test PRIVATE ace_qv_core)
+
+# Offline check of the SSR resample on a WARP device, and ACC's viewport matching (tests/view_resample_test.cpp).
+add_executable(view_resample_test tests/view_resample_test.cpp)
+target_include_directories(view_resample_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(view_resample_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(view_resample_test PRIVATE ace_qv_core d3d11)
 
 # Offline check of the D3D11 compositor on a WARP device (tests/d3d11_compositor_test.cpp).
 add_executable(d3d11_compositor_test tests/d3d11_compositor_test.cpp)

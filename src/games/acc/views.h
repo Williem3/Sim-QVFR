@@ -26,6 +26,11 @@ bool views_take_frame(aceqv::Views4Frame& frame);
 bool views_latest_frame(aceqv::Views4Frame& frame);
 // The game's target (width, height) as AdjustViewRect last saw it (0 before the first frame).
 void views_target(int (&size)[2]);
+// View v's rect in the target (x, y, width, height) as the renderer last reported it (SetFinalViewRect); false
+// before it did.
+bool views_view_rect(int view, int (&rect)[4]);
+// The four views are patched in and views 2-3 narrowed to a focus box (not copies of the eyes).
+bool views_focused();
 // Every xrEndFrame: which passes UE asked for, logged every 900 frames.
 void views_frame_end();
 // Whether OpenXR's session runs (xrBeginSession until it is destroyed or another is created). Until it does,
