@@ -113,4 +113,16 @@ inline constexpr RightEyePick kRightEyePicks[] = {
 };
 inline constexpr std::uintptr_t kGetStereoEyeView = 0x2cf8140;
 
+// Foliage (HISM) culling for an instanced eye pair: 4.26 FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements
+// culls view 0 with its own frustum but the right plane of `Views[1]` (`check(Views.Num() == 2)`), so trees seen
+// only by the right eye survive. Kunos made it `Views.Last()` (the right triple screen): with four views, view 3,
+// the right focus view, so the eyes culled foliage past the focus box's right edge, in both eyes, and only on that
+// side (README.md). `movsxd rax, [rsi + 8]` (Views.Num) here feeds `mov rcx, [rcx + rax*8 - 8]` at 0x2a43737;
+// views.cpp writes `push 2; pop rax; nop` over it: Views[1], the right eye. Found through foliage.DitheredLOD's
+// reader (0x2a42ff1) and the IsInstancedStereoPass call (0x2a435c3) in the same function.
+inline constexpr std::uintptr_t kFoliageRightView = 0x2a4366a;
+inline constexpr std::uint8_t kFoliageRightViewAnchor[4] = {0x48, 0x63, 0x46, 0x08};
+inline constexpr std::uintptr_t kFoliageRightViewRead = 0x2a43737;
+inline constexpr std::uint8_t kFoliageRightViewReadAnchor[5] = {0x48, 0x8b, 0x4c, 0xc1, 0xf8};
+
 }  // namespace acc

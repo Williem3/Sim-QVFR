@@ -208,7 +208,9 @@ bool counts_match() {
     return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
            aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
            aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
-           right_eye_picks_match();
+           right_eye_picks_match() &&
+           aceqv::code_matches(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor)) &&
+           aceqv::code_matches(kFoliageRightViewRead, kFoliageRightViewReadAnchor, sizeof(kFoliageRightViewReadAnchor));
 }
 
 // Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
@@ -230,8 +232,11 @@ bool pairs_per_draw() {
     ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
                               pairEye, sizeof(pairEye)) && ok;
     ok = pair_right_views() && ok;
+    const std::uint8_t rightEye[4] = {0x6a, 0x02, 0x58, 0x90};  // push 2; pop rax; nop: foliage culls with Views[1]
+    ok = aceqv::code_write(kFoliageRightView, rightEye, sizeof(rightEye)) && ok;
     aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
-                                      "StereoPassIndex the eye within its pair, 12 right-eye picks per pair)"
+                                      "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
+                                      "foliage culled with the right eye)"
                                     : "a views-per-draw patch failed");
     return ok;
 }
