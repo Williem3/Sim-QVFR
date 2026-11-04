@@ -23,6 +23,7 @@
 #include "cheeky/cheeky_settings.h"
 #include "games/adapter.h"
 #include "log.h"
+#include "probe/d3d11_capture.h"
 #include "probe/d3d12_trace.h"
 #include "probe/cpu_load.h"
 #include "probe/cpu_profile.h"
@@ -113,6 +114,7 @@ struct Experiment {
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
+    UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
@@ -373,6 +375,7 @@ void load_experiment() {
     experiment.d3d12Debug = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) != 0;
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
+    experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
     experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
@@ -1471,6 +1474,9 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
         if (!experiment.probes)
             log_line(experiment.views3 ? "engine probes and D3D12 trace off (probes=0); views3 cannot report the view mode"
                                        : "engine probes and D3D12 trace off (probes=0)");
+        if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR)
+            d3d11_capture_start(reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(binding)->device,
+                                experiment.d3d11CaptureFrame);
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
             if (experiment.probes)
@@ -1522,6 +1528,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     probe_stop();
     game->session_destroyed();
     dred_stop();
+    d3d11_capture_stop();
     {
         std::lock_guard guard(gaze.mutex);
         if (gaze.queries > 900 && gaze.tracked == 0)  // asked for ~10 s, never tracked
@@ -1739,6 +1746,10 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
 XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_t capacity, uint32_t* countOutput,
                                                   XrSwapchainImageBaseHeader* images) {
     XrResult r = next.EnumerateSwapchainImages(swapchain, capacity, countOutput, images);
+    if (XR_SUCCEEDED(r) && capacity > 0 && images && images->type == XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR &&
+        experiment.d3d11CaptureFrame)
+        d3d11_capture_images(swapchain, reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images),
+                             std::min(*countOutput, capacity));
     if (XR_FAILED(r) || capacity == 0 || !images || images->type != XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR)
         return r;
     std::pair<uint32_t, uint32_t> size{0, 0};
@@ -1773,6 +1784,8 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
 XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo* info,
                                                uint32_t* index) {
     const XrResult r = next.AcquireSwapchainImage(swapchain, info, index);
+    if (XR_SUCCEEDED(r) && experiment.d3d11CaptureFrame)
+        d3d11_capture_acquired(swapchain, *index);
     if (XR_SUCCEEDED(r) && views4_outline_on()) {
         std::lock_guard guard(v4outline.mutex);
         v4outline.acquired[swapchain] = *index;
@@ -2187,6 +2200,8 @@ void views4_compose() {
 // Frame A's image is copied before the runtime gets it back; frame B's stays acquired (so this
 // layer may still read it) until B's xrEndFrame has composed it.
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info) {
+    if (experiment.d3d11CaptureFrame)
+        d3d11_capture_release(swapchain, endFrames);
     if (views4_outline_on())
         views4_outline_draw(swapchain);  // on ACE's queue, after its frame, before the runtime reads it
     if (experiment.views4Compose) {
