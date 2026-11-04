@@ -217,10 +217,19 @@ FovCrop read_crop(const wchar_t* ini) {
     return fov_crop(side(L"top"), side(L"bottom"), side(L"outer"), side(L"inner"));
 }
 
+// What the game has beyond QVFR (games/game.h GameFeatures); anything else stays off whatever the ini says.
+games::GameFeatures game_features() {
+    const games::GameInfo* g = games::current_game();
+    return g ? g->features : games::GameFeatures{};
+}
+
 LiveSettings read_live(const wchar_t* ini) {
     LiveSettings l;
-    l.crop = read_crop(ini);
+    const games::GameFeatures features = game_features();
+    if (features.fovCrop)
+        l.crop = read_crop(ini);
     l.helmet = read_helmet_settings(ini);
+    l.helmet.on = l.helmet.on && features.helmet;
     l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
     const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
     l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
@@ -2978,8 +2987,10 @@ void live_apply(const LiveSettings& l) {
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
-    if (experiment.views4)
+    if (experiment.views4 && game_features().liveResolution)
         live_resolution(l);
+    else if (experiment.views4)
+        logf("live: %ls resizes its views at the next launch (no live resolution yet)", game->info()->shortName);
     if (l.gaze && !gazeAvailable && (experiment.quad || experiment.composing()))
         log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
     if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.composing())
@@ -3490,6 +3501,10 @@ void menu_open(int64_t now) {
         }
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
         menu.model.launch.cropHeight = l.cropHeight * 100;
+        const games::GameFeatures features = game_features();  // what the game has: the rest is left out
+        menu.model.launch.cropPage = features.fovCrop;
+        menu.model.launch.helmetPage = features.helmet;
+        menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
             menu.model.launch.helmetPieces = quad.compositor.has_helmet_pieces();

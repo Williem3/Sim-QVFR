@@ -1,5 +1,6 @@
 #include "preflight.h"
 
+#include <cstring>
 #include <filesystem>
 
 #include <windows.h>
@@ -76,8 +77,9 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     // The game and its build.
     if (in.gameExe.empty()) {
         add("game", CheckTone::Bad, name + L" not found",
-            L"Steam doesn’t list it in any of its libraries. Set game_dir in the [launcher] section of ace-quadview.ini "
-            L"to the folder that holds " + exe + L".");
+            L"Steam doesn’t list it in any of its libraries. Set game_dir_" +
+                std::wstring(game.id, game.id + std::strlen(game.id)) + L" in the [launcher] section of ace-quadview.ini "
+            L"to its folder (the one Steam’s Browse local files opens).");
     } else {
         switch (in.build) {
         case BuildState::Supported:
@@ -116,6 +118,22 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     if (in.gameRunning)
         add("ace_running", CheckTone::Bad, name + L" is already running",
             L"Close it first: the launch starts a new copy of the game with ace-quadview.");
+
+    // OpenComposite, for a game that reaches OpenXR through it.
+    if (game.openComposite && in.openComposite != OpenComposite::Unknown) {
+        if (in.openComposite == OpenComposite::Installed) {
+            add("opencomposite", CheckTone::Ok, L"OpenComposite installed",
+                shortName + L" reaches your headset’s OpenXR runtime through it.");
+        } else {
+            Check& c = add("opencomposite", CheckTone::Bad, L"OpenComposite isn’t installed",
+                           shortName + L" uses SteamVR’s OpenVR; ace-quadview needs it on OpenXR, through OpenComposite. "
+                           L"Without it the game starts without foveated rendering. The guide shows the one file to copy.");
+            c.fix = CheckFix::OpenGuide;
+            c.fixLabel = L"Open the guide";
+            c.fixTarget = kOpenCompositeGuideUrl;
+            c.confirm = method;
+        }
+    }
 
     // Cheeky's loader in the game folder.
     if (!in.cheekyLoaders.empty()) {
@@ -198,6 +216,13 @@ const Check* first_with(const std::vector<Check>& checks, CheckTone tone) {
         if (c.tone == tone)
             return &c;
     return nullptr;
+}
+
+OpenComposite open_composite(const std::wstring& path) {
+    std::string bytes;
+    if (!read_file(path, bytes))
+        return OpenComposite::Missing;
+    return bytes.find("OpenComposite") != std::string::npos ? OpenComposite::Installed : OpenComposite::Valve;
 }
 
 std::vector<std::wstring> cheeky_loaders(const std::wstring& gameFolder) {

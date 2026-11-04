@@ -127,11 +127,19 @@ Once an official Cheeky release includes the fixes, its own download will replac
 - **Show the center region** draws an outline around the full-quality area, so you can check it
   follows your eyes.
 
-## Assetto Corsa Competizione (in development)
+## Assetto Corsa Competizione (alpha)
 
-Sim-QuadView doesn't support ACC yet. ACC's VR will need to run through OpenComposite first:
-[Assetto Corsa Competizione in VR through OpenComposite](docs/acc-opencomposite.md) explains how to set
-that up today.
+Sim-QuadView runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution
+periphery, the headset menu and the performance overlay. Choose **Assetto Corsa Competizione** under
+**Game** on the launcher's **Rendering** page, then **Launch**.
+
+ACC's VR has to run through OpenComposite: [Assetto Corsa Competizione in VR through
+OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Launch checks** tells you
+if it's missing.
+
+Not in ACC yet, so greyed out in the launcher and left out of the headset menu: Foveated DLSS (Cheeky),
+the helmet overlay, the field of view crop, and resolution changes while the game runs (in ACC they
+apply at the next launch). Turn DLSS off in ACC's settings.
 
 ## Getting help
 

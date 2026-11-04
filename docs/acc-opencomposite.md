@@ -1,8 +1,8 @@
 # Assetto Corsa Competizione in VR through OpenComposite
 
-> **Sim-QuadView doesn't support Assetto Corsa Competizione yet.** Support is in development. This guide
-> covers the first step it will need: running ACC's VR through OpenXR. Many players run ACC this way
-> anyway, because it often runs smoother than through SteamVR.
+> **Sim-QuadView's ACC support is an alpha.** This guide covers the one-time setup it needs: running
+> ACC's VR through OpenXR. Many players run ACC this way anyway, because it often runs smoother than
+> through SteamVR.
 
 ## Why this is needed
 
@@ -40,9 +40,11 @@ This changes one file in ACC's folder. Your other SteamVR games aren't affected.
 ## Start ACC in VR
 
 1. **Start Steam and your headset's software.** You don't need to start SteamVR.
-2. **Start ACC in SteamVR mode:** double-click `acc_steamvr.bat` in ACC's main folder (the one Steam
-   opened in step 3). It runs `acc.exe -vr hmd=SteamVR`.
-   Don't use `acc_vr.bat`: that's Oculus mode, which goes around OpenComposite.
+2. **With Sim-QuadView:** in the launcher, choose **Assetto Corsa Competizione** under **Game** on the
+   **Rendering** page, then **Launch**. Its **Launch checks** say whether OpenComposite is installed.
+3. **Without Sim-QuadView:** double-click `acc_steamvr.bat` in ACC's main folder (the one Steam opened in
+   step 3). It runs `acc.exe -vr hmd=SteamVR`. Don't use `acc_vr.bat`: that's Oculus mode, which goes
+   around OpenComposite.
 
 **To check OpenComposite is in use,** look for its log, `%LOCALAPPDATA%\OpenComposite\logs\opencomposite.log`
 (paste that path into File Explorer's address bar): it's written each time a game starts through

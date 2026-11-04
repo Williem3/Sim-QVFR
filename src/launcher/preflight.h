@@ -10,6 +10,7 @@
 // - With Cheeky on: its runtime and OpenXR layer found; OpenXR Toolkit nearer ACE than Cheeky's layer
 //   (ACE crashes at start otherwise); with its frame generation, Toolkit's Turbo mode off (ACE crashes).
 // - Eye tracked foveation without eye tracking at the last launch.
+// - A game that reaches OpenXR through OpenComposite (ACC): OpenComposite's openvr_api.dll in its folder.
 #pragma once
 
 #include <string>
@@ -26,7 +27,9 @@ inline constexpr wchar_t kReleasesUrl[] = L"https://github.com/Williem3/Sim-QVFR
 // Pending: still being found out (the exe's hash). Ok and Pending never hold a launch back.
 enum class CheckTone { Ok, Warn, Bad, Pending };
 // What a check's button does (the window carries it out).
-enum class CheckFix { None, OpenReleases, StartSteam, ShowFile, OpenLayers, TurboOff, OpenDlss, OpenRendering };
+enum class CheckFix { None, OpenReleases, StartSteam, ShowFile, OpenLayers, TurboOff, OpenDlss, OpenRendering, OpenGuide };
+inline constexpr wchar_t kOpenCompositeGuideUrl[] =
+    L"https://github.com/Williem3/Sim-QVFR/blob/main/docs/acc-opencomposite.md";
 
 struct Check {
     std::string id;  // stable: the tests' and the log's name for it
@@ -38,6 +41,8 @@ struct Check {
 };
 
 enum class BuildState { Unknown, Hashing, Supported, Unsupported };
+// The game's openvr_api.dll (GameInfo::openComposite): OpenComposite's, Valve's, missing, or not looked at.
+enum class OpenComposite { Unknown, Installed, Valve, Missing };
 enum class LaunchMode { Off, Qvfr, TwoLoop };
 
 struct PreflightInput {
@@ -52,6 +57,7 @@ struct PreflightInput {
     int toolkitTurbo = -1; // OpenXR Toolkit's Turbo mode for ACE: 1 on, 0 off, -1 not set (or no Toolkit)
     bool eyeTracked = true;
     EyeTracker eyeTracker = EyeTracker::Unknown;
+    OpenComposite openComposite = OpenComposite::Unknown;  // only for a game that needs it
 };
 
 std::vector<Check> preflight_checks(const PreflightInput& in);
@@ -63,6 +69,8 @@ const Check* first_with(const std::vector<Check>& checks, CheckTone tone);
 // The build an exe hash is: Hashing while `sha` is empty and `hashing`, Unknown if it is empty otherwise.
 BuildState build_state(const std::string& sha, bool hashing);
 
+// Whose openvr_api.dll `path` is: Valve's has its version information, OpenComposite's names itself.
+OpenComposite open_composite(const std::wstring& path);
 // dxgi.dll and version.dll in `gameFolder` that are Cheeky Foveated DLSS's loader (they name Cheeky).
 std::vector<std::wstring> cheeky_loaders(const std::wstring& gameFolder);
 // OpenXR Toolkit's per-app settings (HKCU\SOFTWARE\OpenXR_Toolkit\<app>) for the app whose "module" is

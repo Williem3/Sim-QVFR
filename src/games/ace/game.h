@@ -10,7 +10,9 @@ namespace ace {
 inline constexpr const char* kBuilds[] = {"ab11fc2a35ef9c2c61c6e0bcbdeb755b0d7787d101c3fdebfee12df3eadedbcb"};
 
 inline constexpr aceqv::games::GameInfo kGame = {
-    "ace", L"Assetto Corsa EVO", L"ACE", L"AssettoCorsaEVO.exe", L"Assetto Corsa EVO", L"3058630", L"-vr",
+    "ace", L"Assetto Corsa EVO", L"ACE", L"AssettoCorsaEVO.exe", L"Assetto Corsa EVO", L"", L"3058630", L"-vr",
+    nullptr,                   // OpenXR of its own
+    {true, true, true, true},  // everything
     kBuilds, std::size(kBuilds),
 };
 

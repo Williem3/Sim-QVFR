@@ -15,7 +15,12 @@ headers here.
 
 - **Its identity** (`<id>/game.h`): a `GameInfo`, with the SHA-256 of every exe build its addresses were
   taken from. The launcher's launch checks and the layer refuse other builds, so a game update leaves the
-  game running as normal instead of patching the wrong code.
+  game running as normal instead of patching the wrong code. It also says how the launcher starts the game
+  (its Steam folder, the exe's subfolder, the VR arguments, and an `openvr_api.dll` to check for a game
+  that reaches OpenXR through OpenComposite), and which features beyond QVFR it has so far
+  (`GameFeatures`: Foveated DLSS, the helmet, live resolution, the FOV crop). The launcher greys the rest
+  out, the headset menu leaves it out, and the layer keeps it off whatever the ini says. The launcher's
+  **Game** choice (`[launcher] game`) picks which game a launch starts.
 - **Its QVFR** (`<id>/adapter.cpp`): an implementation of `GameAdapter`. QVFR (Quad View Foveated
   Rendering) means the game renders four views in one frame: two outer views at low resolution and two
   focus views at high density, which the layer then composes. Getting there is engine work: finding how
@@ -67,4 +72,4 @@ The log-only engine probes (`src/probe/probe.cpp`) hook ACE's `kProbeTargets`, a
 (`src/probe/cpu_profile.cpp`) names ACE's functions. Both check the game first and stay off anywhere
 else. Moving their targets and labels into the adapter is the next step for them.
 
-The launcher starts one game per release (`launcher_game()`).
+The launcher starts the game chosen under **Game** (`launcher_game()`, `[launcher] game`).
