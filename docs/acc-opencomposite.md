@@ -17,9 +17,10 @@ Sim-QuadView doesn't include it, and isn't made by its authors.
 ## What you need
 
 - **Assetto Corsa Competizione** on Steam.
-- **Your headset's own software set as the active OpenXR runtime.** Most headset apps have a setting
-  for this (Pimax Play, Meta Quest Link, Virtual Desktop, Varjo Base). SteamVR can also be the OpenXR
-  runtime, but then you lose most of the benefit.
+- **An active OpenXR runtime.** That's your headset's own software (most have a setting for it: Pimax
+  Play, Meta Quest Link, Virtual Desktop, Varjo Base) or SteamVR. Both work. SteamVR is the one to use
+  if you rely on it for base-station tracking or trackers; your headset's own software usually runs a
+  little lighter.
 
 ## Set it up (for ACC only)
 
@@ -43,12 +44,15 @@ This changes one file in ACC's folder. Your other SteamVR games aren't affected.
    opened in step 3). It runs `acc.exe -vr hmd=SteamVR`.
    Don't use `acc_vr.bat`: that's Oculus mode, which goes around OpenComposite.
 
-If it worked, the game appears in your headset and SteamVR doesn't open.
+**To check OpenComposite is in use,** look for its log, `%LOCALAPPDATA%\OpenComposite\logs\opencomposite.log`
+(paste that path into File Explorer's address bar): it's written each time a game starts through
+OpenComposite. If your headset's own software is the OpenXR runtime, SteamVR also stays closed. If
+SteamVR is your OpenXR runtime, SteamVR opens as usual: that's expected.
 
 ## After an ACC update
 
-Updates can put the original `openvr_api.dll` back. If SteamVR starts with the game again, repeat steps
-4 to 6 (rename the new original first).
+Updates can put the original `openvr_api.dll` back. If the log above stops being updated when you start
+the game, repeat steps 4 to 6 (rename the new original first).
 
 ## Undo it
 
