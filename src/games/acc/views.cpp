@@ -56,6 +56,7 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     targetHeight.store(static_cast<int>(height), std::memory_order_relaxed);
     const PassRect r = pass_rect(layout, pass, width, static_cast<int>(height));
     *x += r.x;
+    *y += r.y;
     *sizeX = static_cast<unsigned>(r.width);
     *sizeY = static_cast<unsigned>(r.height);
 }

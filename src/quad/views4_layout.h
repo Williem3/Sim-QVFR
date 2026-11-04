@@ -30,6 +30,9 @@ struct Views4Layout {
     // The outer views' size, in native eye widths and heights.
     double outer_width() const { return outer * cropWidth; }
     double outer_height() const { return outer * cropHeight; }
+    // The eye size in eye columns (views4_rect_eye_columns): the outer view's width, outer over focus height.
+    double column_eye_width() const { return outer_width(); }
+    double column_eye_height() const { return outer_height() + focusHeight; }
     // Equal quarters of the target (the old layout, also after a live change).
     bool equal() const {
         for (int v = 0; v < 4; ++v)
@@ -119,6 +122,7 @@ inline Views4Layout views4_with_live(Views4Layout l, bool live, const double (&w
 // equal quarters reproduce the old `quarter = width / 4, left = view * quarter` exactly.
 struct ViewRect {
     int left = 0, width = 0, height = 0;
+    int top = 0;  // 0 but in eye columns (views4_rect_eye_columns)
 };
 
 inline ViewRect views4_rect(const Views4Layout& l, int view, int targetWidth, int targetHeight) {
@@ -128,6 +132,28 @@ inline ViewRect views4_rect(const Views4Layout& l, int view, int targetWidth, in
         r.left += pixels(l.width[v], targetWidth);
     r.width = std::max(1, pixels(l.width[view], targetWidth));
     r.height = std::max(1, pixels(l.height[view], targetHeight));
+    return r;
+}
+
+// The same views in eye columns: each eye's half of the target holds its outer view across the top and its focus
+// view below, 0 | 1 over 2 | 3. For a game that renders the eyes with instanced stereo (one viewport from x = 0,
+// halved: the eyes must meet in the middle) and whose runtime copies each eye's half on its own (ACC through
+// OpenComposite). The target is two column_eye_width() wide and column_eye_height() high; a focus view wider
+// than the outer view is cut to it.
+inline ViewRect views4_rect_eye_columns(const Views4Layout& l, int view, int targetWidth, int targetHeight) {
+    const auto pixels = [](double fraction, int size) { return static_cast<int>(std::floor(fraction * size + 1e-6)); };
+    const int half = targetWidth / 2;
+    const double outerRows = l.outer_height() / l.column_eye_height();
+    ViewRect r;
+    r.left = (view & 1) * half;
+    if (view < 2) {
+        r.width = half;
+        r.height = std::max(1, pixels(outerRows, targetHeight));
+    } else {
+        r.top = pixels(outerRows, targetHeight);
+        r.width = std::max(1, std::min(half, pixels(l.focus / l.outer_width(), half)));
+        r.height = std::max(1, targetHeight - r.top);
+    }
     return r;
 }
 

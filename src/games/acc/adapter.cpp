@@ -14,6 +14,7 @@ public:
     const aceqv::games::GameInfo* info() const override { return &kGame; }
     bool qvfr_composable() const override { return false; }  // D3D11: no composition yet
     bool loads_cheeky() const override { return false; }
+    bool qvfr_eye_columns() const override { return true; }  // instanced stereo; OpenComposite copies each half
 
     bool qvfr_start(const aceqv::games::QvfrStart& s) override { return views_start(s.layout); }
     // Stage gate: the focus views copy the eyes, so no gaze, focus box or live resolution yet.

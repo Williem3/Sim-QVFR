@@ -1430,8 +1430,11 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     // views4: ACE's "eye" holds one outer and one focus view side by side (views4_layout.h), so its
     // double-wide target holds all four.
     const Views4Layout& layout = experiment.views4Layout;
-    const double widthScale = experiment.views4 ? layout.eye_width() : experiment.eyeScale;
-    const double heightScale = experiment.views4 ? layout.eye_height() : experiment.eyeScale;
+    const bool columns = experiment.views4 && game->qvfr_eye_columns();  // eye columns: views4_rect_eye_columns
+    const double widthScale =
+        experiment.views4 ? (columns ? layout.column_eye_width() : layout.eye_width()) : experiment.eyeScale;
+    const double heightScale =
+        experiment.views4 ? (columns ? layout.column_eye_height() : layout.eye_height()) : experiment.eyeScale;
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum.
@@ -2605,11 +2608,19 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         if (!aceLayout)
             continue;
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
-            // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2).
+            // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2). A game in eye
+            // columns (ACC) has eye v's views in its half: keep the offset, move and cut to the view.
             XrRect2Di& rect = copy[v].subImage.imageRect;
-            const ViewRect view = views4_rect(layout, static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0)),
-                                              2 * rect.extent.width, rect.extent.height);
-            rect.offset.x = view.left;
+            const int shown = static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0));
+            const ViewRect view = game->qvfr_eye_columns()
+                                      ? views4_rect_eye_columns(layout, shown, 2 * rect.extent.width, rect.extent.height)
+                                      : views4_rect(layout, shown, 2 * rect.extent.width, rect.extent.height);
+            if (game->qvfr_eye_columns()) {
+                rect.offset.x += view.left - static_cast<int>(v) * rect.extent.width;
+                rect.offset.y += view.top;
+            } else {
+                rect.offset.x = view.left;
+            }
             rect.extent.width = view.width;
             rect.extent.height = view.height;
             if (!views4RectsLogged)
