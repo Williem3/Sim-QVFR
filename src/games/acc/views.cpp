@@ -69,8 +69,36 @@ bool primary_view(void*, const unsigned char* view) {
 int view_pass(const void*, bool stereo, unsigned view) { return pass_for_view(stereo, view); }
 unsigned pass_view(const void*, int pass) { return view_for_pass(pass); }
 
+// Live resolution (views_set_live_layout): the layout asked for, the one this frame's views get (the game thread
+// latches it at the left eye's rect, the first of a frame's), and the last layouts handed out, for the render thread
+// to tell which one each frame it records was rendered with (match_layout).
+struct LiveLayouts {
+    std::mutex mutex;
+    aceqv::Views4Layout pending, frame;
+    bool pendingSet = false;
+    static constexpr int kKept = 8;
+    HandedLayout handed[kKept];  // oldest first
+    int count = 0;
+    std::uint64_t matched = 0, unmatched = 0;  // records, since the last report
+};
+LiveLayouts liveLayouts;
+
+// Under liveLayouts.mutex: `h` handed out from now on, unless its sizes are the newest's.
+void remember_layout(const HandedLayout& h) {
+    LiveLayouts& l = liveLayouts;
+    if (l.count > 0 && same_sizes(l.handed[l.count - 1], h))
+        return;
+    if (l.count == LiveLayouts::kKept) {
+        for (int i = 1; i < l.count; ++i)
+            l.handed[i - 1] = l.handed[i];
+        --l.count;
+    }
+    l.handed[l.count++] = h;
+}
+
 // The target's size from the engine's own code: it gives the left eye half of it (CeilToInt(ideal size x
-// pixel density)); then the pass's view in the four-view layout.
+// pixel density)); then the pass's view in the four-view layout (the launch one, or a live one from the frame's
+// left eye on).
 void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, unsigned* sizeY) {
     count(adjustCalls, pass);
     if (pass == kPassFull) {
@@ -83,7 +111,19 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     const int width = static_cast<int>(2 * half);
     targetWidth.store(width, std::memory_order_relaxed);
     targetHeight.store(static_cast<int>(height), std::memory_order_relaxed);
-    const PassRect r = pass_rect(layout, pass, width, static_cast<int>(height));
+    aceqv::Views4Layout frameLayout;
+    {
+        std::lock_guard guard(liveLayouts.mutex);
+        if (pass == kPassLeft) {
+            if (liveLayouts.pendingSet) {
+                liveLayouts.frame = liveLayouts.pending;
+                liveLayouts.pendingSet = false;
+            }
+            remember_layout(handed_layout(liveLayouts.frame, width, static_cast<int>(height)));
+        }
+        frameLayout = liveLayouts.frame;
+    }
+    const PassRect r = pass_rect(frameLayout, pass, width, static_cast<int>(height));
     *x += r.x;
     *y += r.y;
     *sizeX = static_cast<unsigned>(r.width);
@@ -239,6 +279,30 @@ void record_rendered(const unsigned char* view) {
                     order[3]);
     aceqv::Views4Frame frame{};
     if (rendered_frame(matrices, projections, frame)) {
+        // The layout it was rendered with, from its final rects (stored by this frame's SetFinalViewRect calls, on
+        // this thread): a live one goes into the record, so the composition reads its views where they were drawn.
+        int finals[kViews][4];
+        for (int v = 0; v < kViews; ++v)
+            for (int i = 0; i < 4; ++i)
+                finals[v][i] = finalRect[kPassLeft + v][i].load(std::memory_order_relaxed);
+        {
+            std::lock_guard guard(liveLayouts.mutex);
+            int found = match_layout(liveLayouts.handed, liveLayouts.count, finals);
+            if (found >= 0)
+                ++liveLayouts.matched;
+            else
+                ++liveLayouts.unmatched;
+            if (found < 0)
+                found = liveLayouts.count - 1;  // none (a frame of two layouts): the newest
+            if (found >= 0 && liveLayouts.handed[found].layout.live) {
+                const aceqv::Views4Layout& l = liveLayouts.handed[found].layout;
+                frame.live = true;
+                std::memcpy(frame.width, l.width, sizeof(frame.width));
+                std::memcpy(frame.height, l.height, sizeof(frame.height));
+                std::memcpy(frame.renderWidth, l.width, sizeof(frame.renderWidth));
+                std::memcpy(frame.renderHeight, l.height, sizeof(frame.renderHeight));
+            }
+        }
         records.push(frame);
         renderedRecords.fetch_add(1, std::memory_order_relaxed);
     } else {
@@ -504,6 +568,12 @@ bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
                 static_cast<int>(*subPrimitiveQueries));
     *subPrimitiveQueries = 0;
     layout = l;
+    {
+        std::lock_guard guard(liveLayouts.mutex);
+        liveLayouts.frame = l;
+        liveLayouts.pendingSet = false;
+        liveLayouts.count = 0;
+    }
     views_set_focus(boxX, boxY);
     originalAdjust = reinterpret_cast<AdjustViewRectFn>(base + kAdjustViewRect.function);
     originalProjection = reinterpret_cast<ProjectionFn>(base + kGetStereoProjectionMatrix.function);
@@ -564,6 +634,17 @@ void views_set_focus(double boxX, double boxY) {
         return;  // the layer passes the live box again now and then
     aceqv::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
                 y * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
+}
+
+void views_set_live_layout(const aceqv::Views4Layout& l) {
+    {
+        std::lock_guard guard(liveLayouts.mutex);
+        liveLayouts.pending = l;
+        liveLayouts.pendingSet = true;
+    }
+    aceqv::logf("acc views: live layout: every view %.3f of the target wide, outer %.3f and focus %.3f of its height "
+                "(from the next frame UE sets up)",
+                l.width[0], l.height[0], l.height[2]);
 }
 
 void views_session_running(bool running) {
@@ -633,6 +714,15 @@ void views_frame_end() {
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
     aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box, %llu side poses turned",
                 static_cast<unsigned long long>(focused.exchange(0)), static_cast<unsigned long long>(turned.exchange(0)));
+    {
+        std::lock_guard guard(liveLayouts.mutex);
+        if (liveLayouts.count > 1 || liveLayouts.unmatched)
+            aceqv::logf("acc views: records matched to the layout they were rendered with: %llu, unmatched %llu "
+                        "(given the newest); %d layouts kept",
+                        static_cast<unsigned long long>(liveLayouts.matched),
+                        static_cast<unsigned long long>(liveLayouts.unmatched), liveLayouts.count);
+        liveLayouts.matched = liveLayouts.unmatched = 0;
+    }
     const auto n = records.counts();
     aceqv::Views4Frame last{};
     records.latest(last);
