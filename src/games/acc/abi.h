@@ -90,4 +90,27 @@ inline constexpr std::uint8_t kStereoPassIndexCallAnchor[15] = {0x41, 0x8b, 0x96
 inline constexpr std::uintptr_t kStereoPassIndexStore = 0x1c11f38;
 inline constexpr std::uint8_t kStereoPassIndexStoreAnchor[6] = {0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
 
+// The instanced view's constants (shaders' second view of a pair, cb2 in ACC's): 4.26 has two ways to pick it.
+// Scene->UniformBuffers.GetInstancedView and the base pass take `View.StereoPass + 1` (right for both pairs); 12
+// other places (custom depth in SceneRendering.cpp, and Kunos's, the translucent base pass among them) take
+// `IStereoRendering::IsStereoEyeView(View) ? eSSP_RIGHT_EYE : eSSP_FULL`, so the focus pair's second view got the
+// right eye's constants: the windscreen drew into view 3 with the right eye's camera, a faint, larger copy of the
+// dash's reflection in it (RenderDoc, README.md: event 26464's cb2 held the right eye's projection). Each is
+// `neg al; sbb edx, edx; and edx, 2` (al: IsStereoEyeView), then `call GetStereoEyeView (0x2cf8140)` with rcx the
+// family; views.cpp redirects those 7 bytes to `edx = al ? (View.StereoPass + 1) & ~1 : 0`: pass 2 for the eyes
+// as before, 4 for the focus views. `view` is the register holding the view there (x64 number: rsi 6, rbx 3,
+// r14 14, r15 15; rcx 1 at 0x1bfa6b8, loaded from [rdi + 8] just before); 0x1ccc9eb tests the pass in eax instead
+// (`neg eax`). Found by walking GetStereoEyeView's 26 callers.
+struct RightEyePick {
+    std::uintptr_t rva;
+    std::uint8_t view;
+    bool passInEax;
+};
+inline constexpr RightEyePick kRightEyePicks[] = {
+    {0x18d20d8, 6, false},  {0x18f6a99, 14, false}, {0x1916f2f, 3, false},  {0x19d15f4, 15, false},
+    {0x19d2133, 6, false},  {0x1bfa6b8, 1, false},  {0x1cc4f01, 14, false}, {0x1cc5b51, 14, false},
+    {0x1ccc9eb, 6, true},   {0x1d0236b, 14, false}, {0x24fc2df, 14, false}, {0x24fd2e1, 15, false},
+};
+inline constexpr std::uintptr_t kGetStereoEyeView = 0x2cf8140;
+
 }  // namespace acc

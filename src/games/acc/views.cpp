@@ -144,6 +144,61 @@ bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* posit
 
 std::atomic<bool> started{false};
 
+// The 7 bytes at a kRightEyePicks site, and that GetStereoEyeView is called right after (directly, or after
+// `mov rcx, [rcx]`).
+bool right_eye_picks_match() {
+    const std::uintptr_t base = aceqv::module_base();
+    for (const RightEyePick& p : kRightEyePicks) {
+        const std::uint8_t pick[7] = {0xf6, 0xd8, 0x1b, 0xd2, 0x83, 0xe2, 0x02};
+        std::uint8_t anchor[7];
+        std::memcpy(anchor, pick, sizeof(anchor));
+        if (p.passInEax)
+            anchor[0] = 0xf7;  // neg eax
+        const std::uint8_t loadFamily[3] = {0x48, 0x8b, 0x09};
+        const std::uintptr_t call = p.rva + 7 + (aceqv::code_matches(p.rva + 7, loadFamily, 3) ? 3 : 0);
+        std::int32_t rel = 0;
+        const bool ok = aceqv::code_matches(p.rva, anchor, sizeof(anchor)) &&
+                        *reinterpret_cast<const std::uint8_t*>(base + call) == 0xe8 &&
+                        (std::memcpy(&rel, reinterpret_cast<const void*>(base + call + 1), 4), call + 5 + rel == kGetStereoEyeView);
+        if (!ok) {
+            aceqv::logf("acc views: no right-eye pick at 0x%llx", static_cast<unsigned long long>(p.rva));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Each kRightEyePicks site: edx = (al, or eax) ? (View.StereoPass + 1) & ~1 : 0.
+bool pair_right_views() {
+    bool ok = true;
+    for (const RightEyePick& p : kRightEyePicks) {
+        std::uint8_t anchor[7] = {0xf6, 0xd8, 0x1b, 0xd2, 0x83, 0xe2, 0x02};
+        if (p.passInEax)
+            anchor[0] = 0xf7;
+        std::uint8_t stub[24];
+        std::size_t n = 0;
+        stub[n++] = p.passInEax ? 0x85 : 0x84;  // test eax, eax / test al, al
+        stub[n++] = 0xc0;
+        stub[n++] = 0x74;  // jz zero (offset below)
+        const std::size_t jz = n++;
+        if (p.view >= 8)
+            stub[n++] = 0x41;
+        stub[n++] = 0x8b;  // mov edx, [view + 0xad0]
+        stub[n++] = static_cast<std::uint8_t>(0x90 | (p.view & 7));
+        const std::uint32_t disp = static_cast<std::uint32_t>(kViewStereoPass);
+        std::memcpy(stub + n, &disp, 4);
+        n += 4;
+        const std::uint8_t pairRight[] = {0xff, 0xc2, 0x83, 0xe2, 0xfe, 0xeb, 0x02};  // inc edx; and edx, -2; jmp done
+        std::memcpy(stub + n, pairRight, sizeof(pairRight));
+        n += sizeof(pairRight);
+        stub[jz] = static_cast<std::uint8_t>(n - (jz + 1));
+        stub[n++] = 0x33;  // zero: xor edx, edx
+        stub[n++] = 0xd2;
+        ok = aceqv::code_redirect(p.rva, anchor, sizeof(anchor), stub, n) && ok;
+    }
+    return ok;
+}
+
 bool counts_match() {
     for (const CountRead& r : kInstancedViewCounts)
         if (!aceqv::code_matches(r.rva, r.bytes, r.size)) {
@@ -152,7 +207,8 @@ bool counts_match() {
         }
     return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
            aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
-           aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor));
+           aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
+           right_eye_picks_match();
 }
 
 // Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
@@ -173,8 +229,9 @@ bool pairs_per_draw() {
     const std::uint8_t pairEye[] = {0x83, 0xe0, 0x01, 0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
     ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
                               pairEye, sizeof(pairEye)) && ok;
+    ok = pair_right_views() && ok;
     aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
-                                      "StereoPassIndex the eye within its pair)"
+                                      "StereoPassIndex the eye within its pair, 12 right-eye picks per pair)"
                                     : "a views-per-draw patch failed");
     return ok;
 }
