@@ -34,7 +34,11 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
 ## Adding a game
 
 1. Make `src/games/<id>/` with `game.h` (its `GameInfo`, in a namespace named after the game).
-2. Add it to `kGames` in `games.cpp`.
+2. Add it to `kGames` in `games.cpp`, and give it the identity-only adapter in `adapters.cpp` (`NoQvfr`).
+   The layer now switches on in the game but **only logs**: it runs as `mode=off` whatever the ini says,
+   turns the session and swapchain logging on, and adds nothing to the game or the headset (no Cheeky,
+   menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
+   swapchain sizes and formats, frame submission. `acc/` is at this stage.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
 4. Add the new `.cpp` files to the layer targets in `CMakeLists.txt` (`ace_quadview`, `two_loops_test`,
    `quad_flow_test`).

@@ -5,13 +5,14 @@
 #include <cwchar>
 
 #include "ace/game.h"
+#include "acc/game.h"
 
 namespace aceqv::games {
 
 namespace {
 
 // Every game ace-quadview supports. A new game adds its game.h here (src/games/README.md).
-constexpr const GameInfo* kGames[] = {&::ace::kGame};
+constexpr const GameInfo* kGames[] = {&::ace::kGame, &::acc::kGame};
 
 }  // namespace
 
