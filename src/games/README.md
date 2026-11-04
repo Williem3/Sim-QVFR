@@ -55,7 +55,7 @@ without knowing which:
 
 - **In-headset menu and performance overlay:** drawn with GDI into pixels, uploaded by
   `make_panel_upload` (`src/quad/menu_panel.h`: D3D12 on the game's queue, D3D11 on its immediate
-  context). Both APIs.
+  context). Both APIs; in ACC, both open and draw in the headset (2026-11-03).
 - **Composition:** one shader (`src/quad/compose_shader.h`). D3D12: `QuadCompositor` (ACE's frames).
   D3D11: `D3D11Compositor`, when the adapter says `qvfr_compose_d3d11` (one image holding all four views).
 - **D3D12 only for now:** the helmet overlay (in `QuadCompositor`), the GPU frame timer (the overlay
