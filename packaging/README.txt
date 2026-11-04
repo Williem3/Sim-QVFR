@@ -1,12 +1,12 @@
-ace-quadview for Assetto Corsa EVO
+Sim-QuadView for Assetto Corsa EVO
 ==================================
 
 Quad views with eye-tracked foveated rendering for Assetto Corsa EVO in VR: the game renders a
-lower-resolution full view plus a sharp focus view where you look, and ace-quadview blends them
-into the headset image. Nothing is installed: the launcher starts the game with ace-quadview for
+lower-resolution full view plus a sharp focus view where you look, and Sim-QuadView blends them
+into the headset image. Nothing is installed: the launcher starts the game with Sim-QuadView for
 that launch only.
 
-OFFLINE ONLY. ace-quadview changes how the game renders by patching it in memory. Do not use it
+OFFLINE ONLY. Sim-QuadView changes how the game renders by patching it in memory. Do not use it
 in online sessions.
 
 Requirements
@@ -14,15 +14,15 @@ Requirements
 - Assetto Corsa EVO (Steam), a PC VR headset with an OpenXR runtime, Steam running.
 - Eye tracking (XR_EXT_eye_gaze_interaction) for the focus area to follow your eyes; without it
   the focus area stays in the centre.
-- Turn the game's own foveated rendering off; ace-quadview replaces it.
+- Turn the game's own foveated rendering off; Sim-QuadView replaces it.
 
 Start
 -----
 1. Unzip anywhere (a folder you can write to; logs go to logs\ next to the launcher).
 2. Start Steam and your VR runtime.
 3. Run ace-quadview-launcher.exe. Its window holds the settings below; Launch ACE saves them and
-   starts the game in VR. If it cannot find the game, set game_dir in the [launcher] section of
-   ace-quadview.ini.
+   starts the game in VR. If it cannot find the game, check that Assetto Corsa EVO is installed
+   through Steam and Steam is running, or use Report an issue.
 
 The window
 ----------
@@ -42,13 +42,13 @@ An (i) after a setting's name shows, under the pointer, what it does and what it
   lists the wheels and controllers it finds. Keys work while the game window has focus, wheel buttons
   whenever the game runs; a wheel's menu buttons act only while the menu shows, so bind Open or close too.
   Changes apply to a running game at once. Defaults: Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C.
-- Launch checks: what would stop ace-quadview at the next launch, each with a fix: a game update
-  (ace-quadview supports one AssettoCorsaEVO.exe build; after an update it stays off and the game runs
+- Launch checks: what would stop Sim-QuadView at the next launch, each with a fix: a game update
+  (Sim-QuadView supports one AssettoCorsaEVO.exe build; after an update it stays off and the game runs
   as normal, and the headset says so for the first 30 seconds), Steam not running, the game already
   running, Cheeky's dxgi.dll or version.dll loader in the game folder, and with Cheeky Foveated DLSS on:
   its runtime and OpenXR layer, OpenXR Toolkit's place above Cheeky's layer, and Toolkit's Turbo mode
   with frame generation. The bar at the bottom shows the first problem (click it for the list), and
-  Launch asks before starting a game that would crash or run without ace-quadview.
+  Launch asks before starting a game that would crash or run without Sim-QuadView.
 - Rendering: Rendering method (Quad View Foveated Rendering, or Two-loop Foveated Interlaced: two
   game frames per headset frame; turn frame generation off) and Foveated mode (Eye tracked or Fixed).
 - Resolution: Outer resolution (the full view) and Inner resolution (pixel density in the focus
@@ -84,7 +84,7 @@ An (i) after a setting's name shows, under the pointer, what it does and what it
   Show the hotkeys under the menu (on by default) lists the in-game hotkeys and their wheel buttons in a
   line under the headset menu; the menu's Overlay and menu page turns it on and off too.
 - OpenXR layers: the OpenXR layers (OpenXR Toolkit, VectorXR, Cheeky's...) in the order the game loads
-  them below ace-quadview, each on or off for the game. With the launcher changes them for its launches
+  them below Sim-QuadView, each on or off for the game. With the launcher changes them for its launches
   only; Without the launcher (Windows) edits Windows' own list, which a game started from Steam uses.
 - Diagnostics: the last session's numbers (frame rate, frame time, CPU and GPU time, what limited the
   frame, ACE's busiest threads), to compare settings or to ask for help: Copy summary, Open logs folder.
@@ -113,34 +113,6 @@ last: Right measures while you drive and finds the resolution that holds the fra
 Focus shape, View crop, Helmet, Foveated DLSS and Frame generation (with Cheeky running), and Overlay and
 menu. Changes apply at once and save to the launcher's settings.
 
-Settings (ace-quadview.ini, read when the game starts; the window writes them)
--------------------------------------------------------------------------------
-[experiment]
-  periphery_scale=40   resolution of the outer (full) view, percent of the headset's native.
-  focus_density=100    sharpness of the focus area, percent of native pixel density.
-  focus_percent=31     width of the focus area, percent of the field of view.
-  focus_height_percent=31  its height (default: the same as the width).
-  The three are independent. Unset, periphery and focus density follow eye_scale
-  (periphery = eye_scale, focus density = eye_scale / focus_percent).
-  periphery_scale + focus_density x focus_percent must stay under about 1.0 on a ~4000-pixel-wide
-  headset (the runtime's 8192-pixel limit).
-[quad]
-  feather_percent=20   blend band at the edge of the focus area.
-  corner_radius_percent=0  rounds its corners (percent of half the shorter side).
-  focus_shape=box      box, or corners: each corner of the focus area pulled in on its own, e.g. a
-                       trapezoid (top corners in) for more of the dash and less of the far field.
-  shape_top_left_in=0, shape_top_left_down=0, shape_top_right_in=0, shape_top_right_down=0,
-  shape_bottom_left_in=0, shape_bottom_left_up=0, shape_bottom_right_in=0, shape_bottom_right_up=0
-                       with focus_shape=corners: how far each corner moves toward the middle,
-                       percent of the area's width (in) or height (down, up), 0..45.
-  gaze=1               focus area follows your eyes (0 = fixed in the centre).
-  debug_border=1       outlines the focus area (to check where it is).
-  debug_border_color=  green, magenta or teal.
-[launcher]
-  game_dir=            folder holding AssettoCorsaEVO.exe (default: found through Steam).
-  off_layers=          OpenXR layers to turn off for the game, comma-separated,
-                       e.g. XR_APILAYER_MBUCCHIA_toolkit.
-
 Foveated DLSS (Cheeky Foveated DLSS, optional)
 ----------------------------------------------
 The DLSS features come from Cheeky Foveated DLSS by ClarkCheekyKent, integrated with his permission.
@@ -162,7 +134,7 @@ Steps:
    you have ace\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll. You can also keep it elsewhere and
    pick the DLL with Choose... in the pane.
 3. Don't put Cheeky's dxgi.dll or version.dll in the game folder (remove them if they are there).
-   ace-quadview loads Cheeky itself.
+   Sim-QuadView loads Cheeky itself.
 4. If you use OpenXR Toolkit, it must be above Cheeky's layer in the OpenXR layer order (earlier in
    the list, e.g. in OpenXR API Layers GUI). Otherwise the game crashes at start.
 5. In the Foveated DLSS pane, tick Use Cheeky Foveated DLSS and launch. The pane shows whether it
@@ -176,9 +148,9 @@ set them too.
 
 Other OpenXR layers (OpenXR Toolkit, VectorXR, ...)
 ---------------------------------------------------
-The launcher loads ace-quadview nearest the game and moves every other installed OpenXR layer
+The launcher loads Sim-QuadView nearest the game and moves every other installed OpenXR layer
 below it for that launch, so tools like OpenXR Toolkit cannot change what the game renders behind
-its back. Turn OpenXR Toolkit's upscaling and foveated rendering off for this game (ace-quadview
+its back. Turn OpenXR Toolkit's upscaling and foveated rendering off for this game (Sim-QuadView
 does the foveation); its other features are fine. VectorXR frame generation works below it.
 
 Problems
