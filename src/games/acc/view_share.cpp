@@ -1,5 +1,6 @@
 #include "view_share.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -48,6 +49,41 @@ const Hooked* hooked_for_vtable(void** vtable) {
 }
 const Hooked* hooked_for(ID3D11DeviceContext* ctx) { return hooked_for_vtable(*reinterpret_cast<void***>(ctx)); }
 
+// D3D11's own immediate context keeps its vtable per context, on the heap beside it, and rewrites its draw and
+// dispatch slots itself as state changes (a log, 2026-11-04: those two hooks never ran without RenderDoc, whose
+// wrapper has a fixed vtable; OMSetRenderTargets, not rewritten, ran 400k times per 900 frames). So the target-set
+// hooks, which run before every pass, put those two back on the session's context, keeping what D3D11 last wrote
+// as the original to call. Same thread as D3D11's rewrites (the immediate context's), so no race.
+std::atomic<std::uint64_t> rearms{0};
+template <typename Fn>
+void rearm_slot(void** vtable, std::size_t slot, void* hook, Fn& original) {
+    void* now = vtable[slot];
+    if (now == hook)
+        return;
+    // D3D11's per-context vtable is heap memory it writes itself: writable, no VirtualProtect per rearm.
+    MEMORY_BASIC_INFORMATION info{};
+    const bool writable = VirtualQuery(&vtable[slot], &info, sizeof(info)) &&
+                          (info.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) != 0;
+    DWORD old = 0;
+    if (!writable && !VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old))
+        return;
+    original = reinterpret_cast<Fn>(now);
+    vtable[slot] = hook;
+    if (!writable)
+        VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
+    rearms.fetch_add(1, std::memory_order_relaxed);
+}
+void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base);
+void STDMETHODCALLTYPE dispatch_hook(ID3D11DeviceContext* ctx, UINT x, UINT y, UINT z);
+void rearm(ID3D11DeviceContext* ctx) {
+    void** vtable = *reinterpret_cast<void***>(ctx);
+    Hooked* h = const_cast<Hooked*>(hooked_for_vtable(vtable));
+    if (!h)
+        return;
+    rearm_slot(vtable, kSlotDrawIndexed, reinterpret_cast<void*>(&draw_indexed_hook), h->drawIndexed);
+    rearm_slot(vtable, kSlotDispatch, reinterpret_cast<void*>(&dispatch_hook), h->dispatch);
+}
+
 std::atomic<bool> shareSsr{true}, shareAo{true};
 std::atomic<bool> active{false};
 std::atomic<ID3D11DeviceContext*> immediate{nullptr};
@@ -70,6 +106,14 @@ struct Counts {
 Counts ssrCounts, aoCounts;
 std::uint64_t frames = 0;
 
+// Whether the hooks run at all, for the report: calls of each, and how many came on the session's context. The
+// share worked only under RenderDoc (its own context wrapper) and saw nothing without it (2026-11-04).
+struct HookCalls {
+    std::atomic<std::uint64_t> draws{0}, drawsMine{0}, dispatches{0}, dispatchesMine{0}, targets{0}, targetsMine{0};
+};
+HookCalls hookCalls;
+void** sessionVtable = nullptr;  // the session's context's vtable (view_share_start), under `mutex`
+
 bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
     D3D11_RESOURCE_DIMENSION dim;
     r->GetType(&dim);
@@ -81,8 +125,28 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
         return false;
     int target[2];
     views_target(target);
-    // The scene textures are the target's width (their height rounded up a little).
-    return static_cast<int>(d.Width) == target[0] && static_cast<int>(d.Height) >= target[1];
+    // The scene textures span the views, rounded up to 4 (README.md). The views can reach past the target: with
+    // an odd eye width (1614) UE starts the right eye at an even x (1616), so its views end at 3230 and its
+    // scene textures are 3232 wide against a 3228 target (2026-11-04: none matched, nothing was shared).
+    int extent[2] = {target[0], target[1]};
+    for (int v = 0; v < 4; ++v) {
+        int rect[4];
+        if (views_view_rect(v, rect)) {
+            extent[0] = std::max(extent[0], rect[0] + rect[2]);
+            extent[1] = std::max(extent[1], rect[1] + rect[3]);
+        }
+    }
+    const int w = static_cast<int>(d.Width), h = static_cast<int>(d.Height);
+    const bool match = w >= extent[0] && w < extent[0] + 8 && h >= extent[1] - 2;
+    if (!match) {  // the first few turned down, per format: what the scene textures really are
+        static std::atomic<int> rejectedLogged{0};
+        if (rejectedLogged.fetch_add(1, std::memory_order_relaxed) < 12)
+            aceqv::logf("acc view share: format %d texture %dx%d (mips %u, array %u, bind 0x%x) is not a scene texture "
+                        "(views reach %dx%d, target %dx%d)",
+                        static_cast<int>(d.Format), w, h, d.MipLevels, d.ArraySize, d.BindFlags, extent[0], extent[1],
+                        target[0], target[1]);
+    }
+    return match;
 }
 
 bool on_immediate(ID3D11DeviceContext* ctx) {
@@ -138,8 +202,10 @@ void note_shared(Counts& counts, const char* what, int view, const aceqv::ViewRe
 
 void STDMETHODCALLTYPE dispatch_hook(ID3D11DeviceContext* ctx, UINT x, UINT y, UINT z) {
     hooked_for(ctx)->dispatch(ctx, x, y, z);
+    hookCalls.dispatches.fetch_add(1, std::memory_order_relaxed);
     if (!on_immediate(ctx))
         return;
+    hookCalls.dispatchesMine.fetch_add(1, std::memory_order_relaxed);
     armed = nullptr;
     if (!shareSsr.load(std::memory_order_relaxed))
         return;
@@ -205,8 +271,11 @@ void on_composite(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
 // ---- AO ----
 
 void follow_target(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs) {
+    hookCalls.targets.fetch_add(1, std::memory_order_relaxed);
     if (!on_immediate(ctx))
         return;
+    hookCalls.targetsMine.fetch_add(1, std::memory_order_relaxed);
+    rearm(ctx);
     aoTarget = nullptr;
     if (!shareAo.load(std::memory_order_relaxed) || count == 0 || !rtvs || !rtvs[0])
         return;
@@ -263,6 +332,9 @@ void on_ao_drawn(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base) {
     // Deferred contexts share the vtable: only the immediate one (the render thread's) touches `armed`, `aoTarget`.
     const bool mine = ctx == immediate.load(std::memory_order_relaxed);
+    hookCalls.draws.fetch_add(1, std::memory_order_relaxed);
+    if (mine)
+        hookCalls.drawsMine.fetch_add(1, std::memory_order_relaxed);
     if (mine && armed) {
         ID3D11Resource* written = armed;
         armed = nullptr;
@@ -342,6 +414,19 @@ void view_share_start(ID3D11Device* device) {
     if (hookedCount.load() != before && before > 0)
         aceqv::logf("acc view share: this session's context has another vtable (%p): hooked too", static_cast<void*>(vtable));
     immediate.store(context.Get());  // the device holds it as long as the session's
+    sessionVtable = vtable;
+    aceqv::logf("acc view share: the session's immediate context %p, vtable %p (in %s)",
+                static_cast<void*>(context.Get()), static_cast<void*>(vtable),
+                [&] {
+                    HMODULE owner = nullptr;
+                    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCWSTR>(vtable), &owner);
+                    wchar_t name[MAX_PATH] = {};
+                    GetModuleFileNameW(owner, name, MAX_PATH);
+                    static char narrow[MAX_PATH];
+                    WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, MAX_PATH, nullptr, nullptr);
+                    return narrow;
+                }());
     active.store(true);
     aceqv::logf("acc view share: on (the focus views take their eyes' %s)",
                 shareSsr.load() && shareAo.load() ? "reflections and ambient occlusion"
@@ -363,6 +448,27 @@ void view_share_stop() {
 void view_share_frame_end() {
     if (!active.load(std::memory_order_relaxed) || ++frames % 900 != 0)
         return;
+    {
+        std::lock_guard guard(mutex);
+        void** vtable = nullptr;
+        if (ID3D11DeviceContext* ctx = immediate.load(std::memory_order_relaxed))
+            vtable = *reinterpret_cast<void***>(ctx);
+        const bool ours = sessionVtable && sessionVtable[kSlotDrawIndexed] == reinterpret_cast<void*>(&draw_indexed_hook) &&
+                          sessionVtable[kSlotDispatch] == reinterpret_cast<void*>(&dispatch_hook) &&
+                          sessionVtable[kSlotOMSetRenderTargets] == reinterpret_cast<void*>(&set_targets_hook);
+        aceqv::logf("acc view share: hooks over the last 900 frames: draws %llu (on the session's context %llu), "
+                    "dispatches %llu (%llu), target sets %llu (%llu), draw/dispatch slots put back %llu times; the "
+                    "context's vtable %p %s the hooked one %p, whose slots are %s",
+                    static_cast<unsigned long long>(hookCalls.draws.exchange(0)),
+                    static_cast<unsigned long long>(hookCalls.drawsMine.exchange(0)),
+                    static_cast<unsigned long long>(hookCalls.dispatches.exchange(0)),
+                    static_cast<unsigned long long>(hookCalls.dispatchesMine.exchange(0)),
+                    static_cast<unsigned long long>(hookCalls.targets.exchange(0)),
+                    static_cast<unsigned long long>(hookCalls.targetsMine.exchange(0)),
+                    static_cast<unsigned long long>(rearms.exchange(0)), static_cast<void*>(vtable),
+                    vtable == sessionVtable ? "is" : "is NOT", static_cast<void*>(sessionVtable),
+                    ours ? "still the hooks" : "NO LONGER the hooks (replaced)");
+    }
     if (shareSsr.load(std::memory_order_relaxed))
         report(ssrCounts, "reflections");
     if (shareAo.load(std::memory_order_relaxed))
