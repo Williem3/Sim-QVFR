@@ -12,6 +12,12 @@
 #include "xr.h"
 
 int main() {
+    // The log goes to a file of the test's own (opened at its first line), read back at the end.
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring ownLog = std::wstring(temp) + L"aceqv-dred-test.log";
+    DeleteFileW(ownLog.c_str());
+    SetEnvironmentVariableW(L"ACE_QV_LOG", ownLog.c_str());
     char logPath[MAX_PATH] = {};
     GetEnvironmentVariableA("ACE_QV_LOG", logPath, MAX_PATH);
     if (!aceqv::dred_enable()) {
