@@ -357,6 +357,10 @@ bool counts_match() {
         if (!aceqv::code_matches(c.ref, c.refAnchor, sizeof(c.refAnchor)) ||
             !aceqv::code_matches(c.store, c.storeAnchor, sizeof(c.storeAnchor)))
             return false;
+    if (!aceqv::code_matches(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor)) ||
+        !aceqv::code_matches(kPreExposurePrimary[0], kPreExposurePrimaryAnchor[0], sizeof(kPreExposurePrimaryAnchor[0])) ||
+        !aceqv::code_matches(kPreExposurePrimary[1], kPreExposurePrimaryAnchor[1], sizeof(kPreExposurePrimaryAnchor[1])))
+        return false;
     if (!aceqv::code_matches(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor)) ||
         !aceqv::code_matches(kExposurePrimary[0], kExposurePrimaryAnchor[0], sizeof(kExposurePrimaryAnchor[0])) ||
         !aceqv::code_matches(kExposurePrimary[1], kExposurePrimaryAnchor[1], sizeof(kExposurePrimaryAnchor[1])))
@@ -398,6 +402,12 @@ bool pairs_per_draw() {
     for (int i = 0; i < 2; ++i)
         ok = aceqv::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]), primary,
                                   sizeof(primary)) && ok;
+    // Pre-exposure (abi.h): the left eye's reaches every other view.
+    ok = aceqv::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
+                              secondary, sizeof(secondary)) && ok;
+    for (int i = 0; i < 2; ++i)
+        ok = aceqv::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i], sizeof(kPreExposurePrimaryAnchor[i]),
+                                  primary, sizeof(primary)) && ok;
     // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
     const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
     const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]

@@ -84,6 +84,18 @@ inline constexpr std::uintptr_t kExposureSecondary = 0x2cebde5;  // FSceneView::
 inline constexpr std::uint8_t kExposureSecondaryAnchor[5] = {0xe8, 0x96, 0x2e, 0x0c, 0x00};
 inline constexpr std::uintptr_t kExposurePrimary[2] = {0x1ad45e2, 0x1ad7d2b};
 inline constexpr std::uint8_t kExposurePrimaryAnchor[2][5] = {{0xe8, 0x39, 0xa6, 0x2d, 0x01}, {0xe8, 0xf0, 0x6e, 0x2d, 0x01}};
+// Pre-exposure (the factor scene colour is scaled by before tonemapping, from the exposure): a loop over the views
+// (fn 0x1c5ddc9; FViewInfo stride 0x5920) computes it for each primary view and copies it to the secondary views that
+// follow, stopping at the next primary. With the left focus view primary, it kept a pre-exposure of its own, stale
+// once it no longer computed exposure, and its box stayed darker than the eye round it (twenty-seventh run). The
+// three calls, rcx the view each time: IsAPrimaryView of the view (0x1c5df37), IsASecondaryView of the next one
+// (0x1c5df6f), IsAPrimaryView of the next one (0x1c5df9f): redirected as above, so the left eye's pre-exposure
+// reaches all three other views.
+inline constexpr std::uintptr_t kPreExposurePrimary[2] = {0x1c5df37, 0x1c5df9f};
+inline constexpr std::uint8_t kPreExposurePrimaryAnchor[2][5] = {{0xe8, 0xe4, 0x0c, 0x15, 0x01},
+                                                                 {0xe8, 0x7c, 0x0c, 0x15, 0x01}};
+inline constexpr std::uintptr_t kPreExposureSecondary = 0x1c5df6f;
+inline constexpr std::uint8_t kPreExposureSecondaryAnchor[5] = {0xe8, 0x0c, 0x0d, 0x15, 0x01};
 
 // Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
 // (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
