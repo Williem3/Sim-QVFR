@@ -238,10 +238,13 @@ bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
 }
 
 void views_set_focus(double boxX, double boxY) {
-    focusX.store(boxX, std::memory_order_relaxed);
-    focusY.store(boxY > 0 ? boxY : boxX, std::memory_order_relaxed);
+    const double y = boxY > 0 ? boxY : boxX;
+    const double oldX = focusX.exchange(boxX, std::memory_order_relaxed);
+    const double oldY = focusY.exchange(y, std::memory_order_relaxed);
+    if (oldX == boxX && oldY == y)
+        return;  // the layer passes the live box again now and then
     aceqv::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
-                (boxY > 0 ? boxY : boxX) * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
+                y * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
 }
 
 void views_session_running(bool running) {
