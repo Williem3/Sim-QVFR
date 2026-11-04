@@ -146,6 +146,16 @@ With DLSS on, resolution changes apply at the next launch (DLSS sizes its views 
 The pane's other settings apply live. The headset menu's Foveated DLSS and Frame generation pages
 set them too.
 
+Assetto Corsa Competizione (alpha)
+----------------------------------
+Choose Assetto Corsa Competizione under Game on the Rendering page, then Launch. ACC's VR has to run
+through OpenComposite (one-time setup: docs/acc-opencomposite.md on the project page,
+https://github.com/Williem3/Sim-QVFR); Launch checks tells you if it's missing. Turn DLSS off in ACC.
+Not in ACC yet, so greyed out: Foveated DLSS, the helmet, the field of view crop, and resolution
+changes while the game runs (in ACC they apply at the next launch).
+Known issue: a faint darker rim can show round the focus area, most in dark scenes. A Feather of
+10-20% (Focus overlay, or the headset menu) blends it out.
+
 Other OpenXR layers (OpenXR Toolkit, VectorXR, ...)
 ---------------------------------------------------
 The launcher loads Sim-QuadView nearest the game and moves every other installed OpenXR layer

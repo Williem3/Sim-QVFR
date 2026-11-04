@@ -141,6 +141,9 @@ Not in ACC yet, so greyed out in the launcher and left out of the headset menu: 
 the helmet overlay, the field of view crop, and resolution changes while the game runs (in ACC they
 apply at the next launch). Turn DLSS off in ACC's settings.
 
+**Known issue:** a faint darker rim can show round the focus area, most in dark scenes. A **Feather**
+of 10-20% (launcher: **Focus overlay**; or the headset menu) blends it out.
+
 ## Getting help
 
 - **Something not working?** Open the launcher's **Launch checks** first: it explains most problems
