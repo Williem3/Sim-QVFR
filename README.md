@@ -140,7 +140,8 @@ if it's missing.
 Not in ACC yet, so greyed out in the launcher and left out of the headset menu: Foveated DLSS (Cheeky).
 The field of view crop, the helmet overlay and resolution changes while the game runs work in ACC. In ACC
 the focus area's sharpness across follows the periphery's, so a sharper focus area needs a higher periphery
-there. Turn DLSS off in ACC's settings.
+there. Turn DLSS off in ACC's settings: with ACC's own DLSS the sharp area can look slightly darker or lighter
+than the rest of the view.
 
 ## Getting help
 
