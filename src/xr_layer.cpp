@@ -539,6 +539,58 @@ struct Gaze {
 Gaze gaze;
 constexpr XrDuration kGazeHoldNs = 500'000'000;  // keep the last gaze this long, then recentre
 
+// The game's head-locked reference spaces (XR_REFERENCE_SPACE_TYPE_VIEW, from its xrCreateReferenceSpace).
+// OpenComposite (ACC) locates its views twice a frame: in the scene's space for rendering and in its VIEW
+// space for the eyes-to-head transforms. The gaze is looked up in the space a call locates in and held there
+// (steady_gaze), so taking it from both mixed two frames: the gaze thread's result from one space was used
+// for the other, and the box jumped by the head's turn whenever the two came apart (every few seconds,
+// whatever the dead-zone; 2026-11-04). The gaze now follows only the calls in a scene space while there
+// are any; a game that locates only in VIEW space still gets its gaze there.
+struct HeadSpaces {
+    std::mutex mutex;
+    std::vector<XrSpace> view;
+    XrTime sceneLocated = 0;  // display time of the last xrLocateViews in a space that is not head-locked
+    bool skipLogged = false;
+};
+HeadSpaces headSpaces;
+constexpr XrDuration kSceneLocateRecentNs = 1'000'000'000;
+
+// True when the gaze is not taken from this xrLocateViews: it locates in a head-locked space while the
+// game also locates in a scene space.
+bool gaze_skips_space(XrSpace space, XrTime time) {
+    std::lock_guard guard(headSpaces.mutex);
+    const bool headLocked = std::find(headSpaces.view.begin(), headSpaces.view.end(), space) != headSpaces.view.end();
+    if (!headLocked) {
+        headSpaces.sceneLocated = time;
+        return false;
+    }
+    const XrDuration since = time - headSpaces.sceneLocated;
+    const bool skip = headSpaces.sceneLocated != 0 && since > -kSceneLocateRecentNs && since < kSceneLocateRecentNs;
+    if (skip && !headSpaces.skipLogged) {
+        headSpaces.skipLogged = true;
+        log_line("gaze: the game also locates its views in a head-locked (VIEW) space; the gaze follows only its "
+                 "scene-space calls");
+    }
+    return skip;
+}
+
+XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space) {
+    const XrResult r = next.CreateReferenceSpace(session, info, space);
+    if (XR_SUCCEEDED(r) && info && space && info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW) {
+        std::lock_guard guard(headSpaces.mutex);
+        headSpaces.view.push_back(*space);
+    }
+    return r;
+}
+
+XrResult XRAPI_CALL layerDestroySpace(XrSpace space) {
+    {
+        std::lock_guard guard(headSpaces.mutex);
+        std::erase(headSpaces.view, space);
+    }
+    return next.DestroySpace(space);
+}
+
 XrVector3f rotate(const XrQuaternionf& q, const XrVector3f& v) {
     // v + 2w(u x v) + 2u x (u x v), u = q.xyz
     const XrVector3f u{q.x, q.y, q.z};
@@ -2596,27 +2648,31 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             // tangents; the focus cameras turn towards it, clamped against the FOV ACE renders with
             // (fill_focus_cameras). Untracked gaze recentres after kGazeHoldNs. The vertical offset
             // (focus_offset.h) moves the tracked gaze, or the fixed box off each eye's forward axis.
-            float tan[2][2] = {};
-            bool valid[2] = {};
-            XrVector3f direction{0, 0, -1};
-            const bool gazing = experiment.gaze && gaze_now(session, info->space, info->displayTime, direction);
-            steady_gaze(gazing, direction);
-            const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
-            for (int e = 0; e < 2; ++e) {
-                if (gazing) {
-                    const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
-                    valid[e] = d.z < -0.1f;
-                    if (valid[e]) {
-                        tan[e][0] = d.x / -d.z;
-                        tan[e][1] = d.y / -d.z;
+            // A head-locked call (OpenComposite's eyes-to-head query) leaves the gaze to the scene-space one
+            // (gaze_skips_space).
+            if (!(experiment.gaze && gaze_skips_space(info->space, info->displayTime))) {
+                float tan[2][2] = {};
+                bool valid[2] = {};
+                XrVector3f direction{0, 0, -1};
+                const bool gazing = experiment.gaze && gaze_now(session, info->space, info->displayTime, direction);
+                steady_gaze(gazing, direction);
+                const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
+                for (int e = 0; e < 2; ++e) {
+                    if (gazing) {
+                        const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
+                        valid[e] = d.z < -0.1f;
+                        if (valid[e]) {
+                            tan[e][0] = d.x / -d.z;
+                            tan[e][1] = d.y / -d.z;
+                        }
+                    } else {
+                        valid[e] = offset != 0;
                     }
-                } else {
-                    valid[e] = offset != 0;
+                    if (valid[e] && offset != 0)
+                        tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
                 }
-                if (valid[e] && offset != 0)
-                    tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
+                game->qvfr_set_gaze(tan, valid, gazing);
             }
-            game->qvfr_set_gaze(tan, valid, gazing);
         }
     }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
@@ -4582,6 +4638,8 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
         ACEQV_INTERCEPT(CreateSwapchain)
         ACEQV_INTERCEPT(EnumerateSwapchainImages)
         ACEQV_INTERCEPT(LocateViews)
+        ACEQV_INTERCEPT(CreateReferenceSpace)
+        ACEQV_INTERCEPT(DestroySpace)
         ACEQV_INTERCEPT(EndFrame)
         ACEQV_INTERCEPT(AcquireSwapchainImage)
         ACEQV_INTERCEPT(ReleaseSwapchainImage)
