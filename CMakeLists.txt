@@ -72,6 +72,12 @@ target_include_directories(d3d11_compositor_test PRIVATE src ${THIRD_PARTY}/open
 target_compile_definitions(d3d11_compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(d3d11_compositor_test PRIVATE ace_qv_core d3d11)
 
+# Offline check of the panels' D3D11 upload on a WARP device (tests/panel_upload_test.cpp).
+add_executable(panel_upload_test tests/panel_upload_test.cpp)
+target_include_directories(panel_upload_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(panel_upload_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(panel_upload_test PRIVATE ace_qv_core d3d11)
+
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
 add_executable(two_loops_test tests/two_loops_test.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)

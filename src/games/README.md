@@ -40,11 +40,26 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
    menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
    swapchain sizes and formats, frame submission. `acc/` started this way.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
-4. Add the new `.cpp` files to the layer targets in `CMakeLists.txt` (`ace_quadview`, `two_loops_test`,
-   `quad_flow_test`).
+4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`ace_qv_core`: the layer and the
+   tests link it).
 5. Write `<id>/README.md`: the build the addresses are from, what is patched, and the open questions.
 
 `ace/` is the worked example.
+
+## Graphics APIs
+
+The layer's own drawing works on the game's API, D3D12 (ACE) or D3D11 (ACC). `SessionGraphics`
+(`src/quad/session_graphics.h`) holds the session's API and devices from `xrCreateSession`, and
+`swapchain_textures` returns any swapchain's images as that API's textures, so a feature works on either
+without knowing which:
+
+- **In-headset menu and performance overlay:** drawn with GDI into pixels, uploaded by
+  `make_panel_upload` (`src/quad/menu_panel.h`: D3D12 on the game's queue, D3D11 on its immediate
+  context). Both APIs.
+- **Composition:** one shader (`src/quad/compose_shader.h`). D3D12: `QuadCompositor` (ACE's frames).
+  D3D11: `D3D11Compositor`, when the adapter says `qvfr_compose_d3d11` (one image holding all four views).
+- **D3D12 only for now:** the helmet overlay (in `QuadCompositor`), the GPU frame timer (the overlay
+  shows no GPU times on D3D11), the focus outline drawn on uncomposed views, Cheeky Foveated DLSS.
 
 ## Still tied to ACE
 
