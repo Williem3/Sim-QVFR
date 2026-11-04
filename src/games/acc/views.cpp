@@ -363,6 +363,11 @@ bool counts_match() {
         return false;
     if (!aceqv::code_matches(kTonemapperVignette, kTonemapperVignetteAnchor, sizeof(kTonemapperVignetteAnchor)))
         return false;
+    if (!aceqv::code_matches(kShadowCascadesCreate, kShadowCascadesCreateAnchor, sizeof(kShadowCascadesCreateAnchor)) ||
+        !aceqv::code_matches(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
+                             sizeof(kShadowVisibilitySecondaryAnchor)) ||
+        !aceqv::code_matches(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor)))
+        return false;
     if (!aceqv::code_matches(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor)) ||
         !aceqv::code_matches(kExposurePrimary[0], kExposurePrimaryAnchor[0], sizeof(kExposurePrimaryAnchor[0])) ||
         !aceqv::code_matches(kExposurePrimary[1], kExposurePrimaryAnchor[1], sizeof(kExposurePrimaryAnchor[1])))
@@ -413,6 +418,13 @@ bool pairs_per_draw() {
     for (int i = 0; i < 2; ++i)
         ok = aceqv::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i], sizeof(kPreExposurePrimaryAnchor[i]),
                                   primary, sizeof(primary)) && ok;
+    // The sun's cascades (abi.h): only the left eye creates them, and every view projects them.
+    const std::uint8_t leftEyeCascades[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x96, 0xc0};
+    ok = aceqv::code_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
+    ok = aceqv::code_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
+                              sizeof(kShadowVisibilitySecondaryAnchor), secondary, sizeof(secondary)) && ok;
+    ok = aceqv::code_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor),
+                              primary, sizeof(primary)) && ok;
     // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
     const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
     const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
@@ -429,7 +441,7 @@ bool pairs_per_draw() {
                               sizeof(right)) && ok;
     aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
                                       "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
-                                      "foliage culled per pair)"
+                                      "foliage culled per pair, the sun's shadow cascades the left eye's in every view)"
                                     : "a views-per-draw patch failed");
     return ok;
 }
