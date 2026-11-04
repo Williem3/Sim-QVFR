@@ -1,5 +1,5 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Launch checks, Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, Hotkeys, OpenXR layers, Diagnostics,
+// of panes (Launch checks, Profiles, Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, Hotkeys, OpenXR layers, Diagnostics,
 // Report an issue, About), grouped forms with
 // the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
 // to drag the in-headset settings menu around), and an action bar with the status badge,
@@ -43,8 +43,8 @@ namespace {
 
 namespace t = tokens;
 
-enum class Pane { Checks, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
-constexpr int kPanes = 12;
+enum class Pane { Checks, Profiles, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
+constexpr int kPanes = 13;
 enum Ctl {
     kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -70,7 +70,10 @@ enum Ctl {
     // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
-    kHotkeyKey, kHotkeyPad, kHotkeysReset
+    kHotkeyKey, kHotkeyPad, kHotkeysReset,
+    // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete (option: its index in
+    // app.profileNames), saving the settings as one, adding a shared one from the clipboard.
+    kProfileUse, kProfileShare, kProfileDelete, kProfileSave, kProfilePaste
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -178,6 +181,12 @@ struct App {
     PadInput pads;
     bool padsOpen = false;
     std::vector<PadHeld> captureHeld;
+    // The Profiles pane: the presets and saved profiles, the one in use and whether the ini still matches it
+    // (refresh_profiles: when the pane shows, after its actions and when the ini changes), and its last message.
+    std::vector<std::wstring> profileNames;
+    std::wstring profileCurrent;
+    bool profileMatches = false;
+    std::wstring profileMessage;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -248,6 +257,14 @@ void changed(bool save = true) {
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+void refresh_profiles() {
+    app.profileNames = profile_names(profiles_folder(app.ini));
+    app.profileCurrent = current_profile(app.ini.c_str());
+    Profile p;
+    app.profileMatches = !app.profileCurrent.empty() && load_profile(profiles_folder(app.ini), app.profileCurrent, p, app.s.eyeTracking) &&
+                         profile_matches(app.ini.c_str(), p);
+}
+
 // The in-headset settings menu saves into the same ini: show what it set (not while a knob is held). A
 // read halfway through the menu's writes is read again on the next tick (the bytes differ by then).
 constexpr UINT_PTR kFollowTimer = 1;
@@ -259,6 +276,8 @@ void follow_ini() {
         return;
     app.iniText = std::move(text);
     app.s = load_settings(app.ini);
+    if (app.pane == Pane::Profiles)  // the headset menu may have switched profiles
+        refresh_profiles();
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -376,7 +395,8 @@ std::vector<Ctl> focus_order() {
     std::vector<Ctl> order = {kSidebar};
     switch (app.pane) {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
-    case Pane::Hotkeys: order.push_back(kHotkeysReset); break;  // the bindings are the mouse's, as the fix buttons
+    case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
+    case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
     case Pane::Rendering: order.insert(order.end(), {kMethod, kMode}); break;
     case Pane::Resolution:
         order.push_back(kOuter);
@@ -698,7 +718,8 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
                 if (!row.desc.empty())
                     app.canvas.text(row.desc, t::kCallout, {inner.x, ty + t::kBody.lineHeight + 2, textW, descH + 2},
                                     col(row.disabled ? app.c->label_tertiary : app.c->label_secondary), Align::Leading, false, true);
-                row.control({inner.right() - row.controlW, inner.y + (inner.h - row.controlH) / 2, row.controlW, row.controlH});
+                if (row.control)  // a row of text alone has none
+                    row.control({inner.right() - row.controlW, inner.y + (inner.h - row.controlH) / 2, row.controlW, row.controlH});
             }
             ry += rh;
         }
@@ -1064,19 +1085,39 @@ std::wstring logs_folder() {
     return (slash == std::wstring::npos ? std::wstring(L".") : runtime.substr(0, slash)) + L"\\logs";
 }
 
-void copy_summary() {
-    const std::wstring text = session_summary_text(app.runtime);
+bool copy_text(const std::wstring& text) {
     if (!OpenClipboard(app.hwnd))
-        return;
+        return false;
     EmptyClipboard();
     const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
     if (HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
         std::memcpy(GlobalLock(memory), text.c_str(), bytes);
         GlobalUnlock(memory);
-        if (!SetClipboardData(CF_UNICODETEXT, memory))
+        if (!SetClipboardData(CF_UNICODETEXT, memory)) {
             GlobalFree(memory);
+            memory = nullptr;
+        }
+        CloseClipboard();
+        return memory != nullptr;
     }
     CloseClipboard();
+    return false;
+}
+
+void copy_summary() { copy_text(session_summary_text(app.runtime)); }
+
+std::wstring clipboard_text() {
+    std::wstring text;
+    if (!OpenClipboard(app.hwnd))
+        return text;
+    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* p = static_cast<const wchar_t*>(GlobalLock(data))) {
+            text = p;
+            GlobalUnlock(data);
+        }
+    }
+    CloseClipboard();
+    return text;
 }
 
 // Whether the description box's field is wholly inside the scrolling area: only then is the native edit
@@ -1287,6 +1328,92 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     return h;
 }
 
+// Profiles (profile/profiles.h): the presets, then the saved profiles, each with what it does and its buttons.
+float profiles_pane(float x, float y, float w, bool draw) {
+    static const wchar_t* const kPresetNotes[] = {L"The lightest load, for a steady frame rate.", L"Between the two.",
+                                                  L"The sharpest centre, for a fast GPU."};
+    const std::vector<Profile> presets = builtin_profiles(app.s.eyeTracking);
+    // A row's buttons, right-aligned in its control rect: (id, label), each the profile's index as its option;
+    // kNone: a green badge with the label instead ("In use").
+    const auto buttons_row = [](size_t i, std::vector<std::pair<Ctl, std::wstring>> list) {
+        float width = 0;
+        std::vector<float> widths;
+        for (const auto& [id, label] : list) {
+            widths.push_back(id == kNone ? 7 + 12 + 5 + std::ceil(app.canvas.measure(label, {11, 14, 500, false})) + 9
+                                         : std::ceil(app.canvas.measure(label, t::kBody)) + 2 * t::kSpace3);
+            width += widths.back();
+        }
+        width += t::kSpace2 * (list.size() - 1);
+        Row r;
+        r.controlW = width;
+        r.controlH = t::kControlHeight;
+        r.control = [i, list, widths](const Rect& rect) {
+            float bx = rect.x;
+            for (size_t b = 0; b < list.size(); ++b) {
+                if (list[b].first == kNone) {
+                    badge(bx, rect.y + (rect.h - 20) / 2, 0, list[b].second);
+                } else {
+                    button(list[b].first, {bx, rect.y, widths[b], rect.h}, list[b].second, false);
+                    app.hits.back().option = static_cast<int>(i);
+                }
+                bx += widths[b] + t::kSpace2;
+            }
+        };
+        return r;
+    };
+    // The one in use shows a badge for its Use button while the settings still match it; changed since, it says so.
+    std::vector<Row> presetRows, savedRows;
+    for (size_t i = 0; i < app.profileNames.size(); ++i) {
+        const std::wstring& name = app.profileNames[i];
+        const bool current = _wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0;
+        const std::pair<Ctl, std::wstring> use =
+            current && app.profileMatches ? std::pair<Ctl, std::wstring>{kNone, L"In use"} : std::pair<Ctl, std::wstring>{kProfileUse, L"Use"};
+        const std::wstring changedNote = current && !app.profileMatches ? L"In use, changed since." : L"";
+        if (i < presets.size()) {
+            Row r = buttons_row(i, {use});
+            r.label = name;
+            r.desc = preset_summary(presets[i]) + L". " + kPresetNotes[i] + (changedNote.empty() ? L"" : L" " + changedNote);
+            presetRows.push_back(r);
+        } else {
+            Row r = buttons_row(i, {use, {kProfileShare, L"Share"}, {kProfileDelete, L"Delete"}});
+            r.label = name;
+            r.desc = changedNote;
+            savedRows.push_back(r);
+        }
+    }
+    float h = 0;
+    h += section(x, y + h, w, app.s.eyeTracking ? L"Presets for eye tracked foveation" : L"Presets for fixed foveation", presetRows,
+                 std::wstring(L"Starting points that put the pixels in the centre: low outer views and a dense focus area. ") +
+                     (app.s.eyeTracking ? L"Eye tracked, the area follows your eyes, so it can be small and very sharp. "
+                                        : L"Fixed, your eyes move off the centre, so the area is larger and a little less dense. ") +
+                     L"They set the resolution only and keep everything else; the Foveated mode (Rendering) picks the set.",
+                 draw) +
+         t::kSpace6;
+    if (savedRows.empty()) {
+        Row none;
+        none.label = L"None yet";
+        none.desc = L"Save the settings you have as a profile, or paste one someone shared with you.";
+        savedRows.push_back(none);
+    }
+    Row actions;
+    actions.fullHeight = [](float) { return t::kControlHeight; };
+    actions.full = [](const Rect& r) {
+        const float saveW = std::ceil(app.canvas.measure(L"Save current settings…", t::kBody)) + 2 * t::kSpace3;
+        const float pasteW = std::ceil(app.canvas.measure(L"Paste a shared profile", t::kBody)) + 2 * t::kSpace3;
+        button(kProfileSave, {r.x, r.y, saveW, t::kControlHeight}, L"Save current settings…", false);
+        button(kProfilePaste, {r.x + saveW + t::kSpace3, r.y, pasteW, t::kControlHeight}, L"Paste a shared profile", false);
+    };
+    savedRows.push_back(actions);
+    h += section(x, y + h, w, L"Your profiles", savedRows,
+                 (app.profileMessage.empty() ? L"" : app.profileMessage + L" ") +
+                     L"A profile holds every setting of the picture: resolution, foveation, the focus overlay, the view "
+                     L"crop and helmet, and Foveated DLSS. Not the menu’s and overlay’s places, the hotkeys or the OpenXR "
+                     L"layers. Share copies one as a line of text to paste in a chat; Paste adds one from the clipboard. "
+                     L"The headset menu’s Profile line switches between them while you drive.",
+                 draw);
+    return h;
+}
+
 // The wheels and controllers DirectInput finds (opened when the Hotkeys pane shows), for the pane's note.
 void open_pads() {
     if (!app.padsOpen)
@@ -1416,6 +1543,7 @@ float pane_content(float x, float y, float w, bool draw) {
     switch (app.pane) {
     case Pane::Checks: h += checks_pane(x, y, w, draw); break;
     case Pane::Hotkeys: h += hotkeys_pane(x, y, w, draw); break;
+    case Pane::Profiles: h += profiles_pane(x, y, w, draw); break;
     case Pane::Rendering: {
         Row method, mode;
         method.label = L"Rendering method";
@@ -2122,6 +2250,7 @@ struct Item {
 // The kit's sidebar glyphs (16 x 16, 1.5 stroke); circles and rects are drawn as paths.
 const Item kItems[] = {
     {L"Launch checks", {"M2 4.25l1.5 1.5 2.75-3", "M2 10.75l1.5 1.5 2.75-3", "M8.75 4.5H14M8.75 11H14"}},
+    {L"Profiles", {"M3 3.25H10.5V12.75H3Z", "M10.5 5.25H13V14.75H5.5V12.75", "M5 6.25H8.5M5 8.75H8.5"}},
     {L"Rendering", {"M8 2l6 3-6 3-6-3 6-3z", "M2 8.5l6 3 6-3", "M2 11.5l6 3 6-3"}},
     {L"Resolution", {"M3.25 2.75H12.75C13.6 2.75 14.25 3.4 14.25 4.25V9.75C14.25 10.6 13.6 11.25 12.75 11.25H3.25C2.4 11.25 1.75 10.6 1.75 9.75V4.25C1.75 3.4 2.4 2.75 3.25 2.75Z", "M5.5 14h5M8 11.25V14", nullptr}},
     {L"Foveation", {"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", nullptr, nullptr}},
@@ -2630,6 +2759,145 @@ void capture_poll() {
     app.captureHeld = std::move(still);
 }
 
+// A name asked for in a small dialog of its own (built in memory): `text` holds the first value and, on OK,
+// what was typed. False on Cancel.
+INT_PTR CALLBACK prompt_proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
+    constexpr int kEdit = 100;
+    switch (message) {
+    case WM_INITDIALOG: {
+        SetWindowLongPtrW(dialog, DWLP_USER, lParam);
+        SetDlgItemTextW(dialog, kEdit, reinterpret_cast<std::wstring*>(lParam)->c_str());
+        SendDlgItemMessageW(dialog, kEdit, EM_SETLIMITTEXT, 40, 0);
+        SendDlgItemMessageW(dialog, kEdit, EM_SETSEL, 0, -1);
+        SetFocus(GetDlgItem(dialog, kEdit));
+        return FALSE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            wchar_t text[64] = {};
+            GetDlgItemTextW(dialog, kEdit, text, static_cast<int>(std::size(text)));
+            *reinterpret_cast<std::wstring*>(GetWindowLongPtrW(dialog, DWLP_USER)) = text;
+            EndDialog(dialog, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL) {
+            EndDialog(dialog, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+bool prompt_name(const std::wstring& title, const std::wstring& label, std::wstring& text) {
+    std::vector<WORD> t;  // DLGTEMPLATE, then its items, each DWORD-aligned
+    const auto words = [&t](const void* data, size_t bytes) {
+        const auto* w = static_cast<const WORD*>(data);
+        t.insert(t.end(), w, w + bytes / 2);
+    };
+    const auto string = [&t](const std::wstring& s) {
+        t.insert(t.end(), s.begin(), s.end());
+        t.push_back(0);
+    };
+    const auto align = [&t] {
+        if (t.size() % 2)
+            t.push_back(0);
+    };
+    DLGTEMPLATE dlg{DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 4, 0, 0, 220, 70};
+    words(&dlg, sizeof(dlg));
+    t.push_back(0);  // no menu
+    t.push_back(0);  // the default class
+    string(title);
+    t.push_back(9);  // the font: 9 pt Segoe UI
+    string(L"Segoe UI");
+    const auto item = [&](DWORD style, short x, short y, short cx, short cy, WORD id, WORD atom, const std::wstring& caption) {
+        align();
+        DLGITEMTEMPLATE it{style | WS_CHILD | WS_VISIBLE, 0, x, y, cx, cy, id};
+        words(&it, sizeof(it));
+        t.push_back(0xFFFF);
+        t.push_back(atom);
+        string(caption);
+        t.push_back(0);  // no creation data
+    };
+    item(SS_LEFT, 8, 8, 204, 10, static_cast<WORD>(-1), 0x0082, label);
+    item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 8, 22, 204, 13, 100, 0x0081, L"");
+    item(BS_DEFPUSHBUTTON | WS_TABSTOP, 106, 46, 50, 14, IDOK, 0x0080, L"Save");
+    item(BS_PUSHBUTTON | WS_TABSTOP, 162, 46, 50, 14, IDCANCEL, 0x0080, L"Cancel");
+    align();
+    std::wstring value = text;
+    const INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<LPCDLGTEMPLATEW>(t.data()), app.hwnd,
+                                                   prompt_proc, reinterpret_cast<LPARAM>(&value));
+    if (result != IDOK)
+        return false;
+    text = value;
+    return true;
+}
+
+void use_profile(const std::wstring& name) {
+    Profile p;
+    if (!load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking) || !apply_profile(app.ini.c_str(), p)) {
+        app.profileMessage = L"Couldn’t use " + name + L".";
+        return;
+    }
+    set_current_profile(app.ini.c_str(), p.name);
+    app.s = load_settings(app.ini);
+    changed();  // saved as the launcher saves, and to a running game
+    app.profileMessage = L"Using " + p.name + L".";
+    refresh_profiles();
+}
+
+// Saves `p` under its name, asking first when one of that name exists. False if not saved.
+bool store_profile(const Profile& p) {
+    const std::wstring folder = profiles_folder(app.ini);
+    Profile existing;
+    if (load_profile(folder, p.name, existing, app.s.eyeTracking) &&
+        MessageBoxW(app.hwnd, (L"A profile named " + p.name + L" exists. Replace it?").c_str(), L"QVFR Launcher",
+                    MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
+        return false;
+    if (!save_profile(folder, p)) {
+        MessageBoxW(app.hwnd, (L"The profile couldn’t be saved in " + folder + L".").c_str(), L"QVFR Launcher", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+    return true;
+}
+
+void save_current_profile() {
+    std::wstring name = is_preset_name(app.profileCurrent) ? L"" : app.profileCurrent;
+    while (prompt_name(L"Save profile", L"A name for the settings you have now:", name)) {
+        if (!valid_profile_name(name)) {
+            MessageBoxW(app.hwnd,
+                        L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
+                        L"QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+            continue;
+        }
+        if (store_profile(settings_profile(app.s, name))) {
+            set_current_profile(app.ini.c_str(), name);
+            app.profileMessage = L"Saved " + name + L".";
+        }
+        break;
+    }
+    refresh_profiles();
+}
+
+void paste_profile() {
+    std::string text;
+    for (const wchar_t c : clipboard_text())  // a shared profile is ASCII
+        text += c < 128 ? static_cast<char>(c) : '?';
+    Profile p;
+    if (!shared_profile(text, p)) {
+        MessageBoxW(app.hwnd, L"The clipboard holds no shared profile. Copy the whole line that starts with QVFR1:, then try again.",
+                    L"QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (!store_profile(p))
+        return;
+    refresh_profiles();
+    app.profileMessage = L"Added " + p.name + L".";
+    if (MessageBoxW(app.hwnd, (L"Added the profile " + p.name + L". Use it now?").c_str(), L"QVFR Launcher",
+                    MB_YESNO | MB_ICONQUESTION) == IDYES)
+        use_profile(p.name);
+}
+
 // A launch check's button (preflight.h's CheckFix).
 void fix_check(const Check& c) {
     switch (c.fix) {
@@ -2664,6 +2932,10 @@ void activate(Ctl id, int option) {
             refresh_layers();
         if (app.pane == Pane::Hotkeys)
             open_pads();
+        if (app.pane == Pane::Profiles) {
+            app.profileMessage.clear();
+            refresh_profiles();
+        }
         if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
             app.runtime = load_runtime_info(runtime_info_path());
         break;
@@ -2677,6 +2949,33 @@ void activate(Ctl id, int option) {
         app.s.hotkeys = default_hotkeys();
         changed();
         return;
+    case kProfileUse:
+    case kProfileShare:
+    case kProfileDelete: {
+        if (option < 0 || option >= static_cast<int>(app.profileNames.size()))
+            return;
+        const std::wstring name = app.profileNames[option];
+        Profile p;
+        if (id == kProfileUse) {
+            use_profile(name);
+        } else if (id == kProfileShare && load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking)) {
+            app.profileMessage = copy_text(widen(share_profile(p)))
+                                     ? L"Copied " + name + L" to the clipboard: paste it in a chat or a post."
+                                     : L"Couldn’t copy to the clipboard.";
+        } else if (id == kProfileDelete &&
+                   MessageBoxW(app.hwnd, (L"Delete the profile " + name + L"?").c_str(), L"QVFR Launcher",
+                               MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK) {
+            delete_profile(profiles_folder(app.ini), name);
+            if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
+                set_current_profile(app.ini.c_str(), L"");
+            app.profileMessage = L"Deleted " + name + L".";
+            refresh_profiles();
+        }
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
+    case kProfileSave: save_current_profile(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
+    case kProfilePaste: paste_profile(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kCheckFix:
         if (option >= 0 && option < static_cast<int>(app.checks.size()))
             fix_check(app.checks[option]);

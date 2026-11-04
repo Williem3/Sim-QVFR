@@ -166,6 +166,58 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     return ok;
 }
 
+Profile settings_profile(const Settings& settings, const std::wstring& name) {
+    // Written by save_settings into a scratch profiles folder, then read back as a profile of it.
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const std::filesystem::path folder =
+        std::filesystem::path(temp) / (L"aceqv-profile-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    save_settings((folder / L"scratch.ini").wstring(), settings);
+    Profile written;
+    load_profile(folder.wstring(), L"scratch", written, true);
+    std::filesystem::remove_all(folder, ec);
+    Profile p;
+    p.name = name;
+    for (const ProfileKey& k : written.keys) {
+        const bool skip = k.section == L"menu" || k.section == L"osd" || k.section == L"hotkeys" || k.section == L"launcher" ||
+                          k.section == L"profiles" || (k.section == L"experiment" && k.key == L"cpu_profile") ||
+                          (k.section == L"cheeky" && (k.key == L"runtime" || k.key == L"config_dir"));
+        if (!skip)
+            p.keys.push_back(k);
+    }
+    return p;
+}
+
+std::string share_profile(const Profile& profile) {
+    const Profile defaults = settings_profile(Settings{}, profile.name);
+    Profile diff;
+    diff.name = profile.name;
+    for (const ProfileKey& k : profile.keys)
+        if (std::find(defaults.keys.begin(), defaults.keys.end(), k) == defaults.keys.end())
+            diff.keys.push_back(k);
+    if (diff.keys.empty())  // the defaults themselves: one key, so the text is a profile
+        diff.keys.push_back(defaults.keys.front());
+    return export_profile(diff);
+}
+
+bool shared_profile(const std::string& text, Profile& profile) {
+    Profile in;
+    if (!import_profile(text, in))
+        return false;
+    Profile p = settings_profile(Settings{}, in.name);
+    for (const ProfileKey& k : in.keys) {
+        if (k.section == L"experiment" && k.key == L"mode" && k.value != L"views4" && k.value != L"quad")
+            continue;
+        for (ProfileKey& mine : p.keys)
+            if (_wcsicmp(mine.section.c_str(), k.section.c_str()) == 0 && _wcsicmp(mine.key.c_str(), k.key.c_str()) == 0)
+                mine.value = k.value;
+    }
+    profile = std::move(p);
+    return true;
+}
+
 std::wstring cheeky_runtime_path(const std::wstring& ini, const std::wstring& layerFolder) {
     const auto absolute = [&](const std::wstring& path) {
         const std::filesystem::path p(path);

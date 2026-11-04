@@ -27,6 +27,14 @@ Start
 The window
 ----------
 Settings save as you change them and apply at the next launch.
+- Profiles: the presets Performance, Balanced and Quality (they set the resolution only: the outer
+  views, the focus density and the focus area's size, with low outer views and a dense centre; one set for
+  eye tracked foveation, with a small area that follows your eyes, and one for fixed, with a larger area)
+  and your own profiles, which hold every setting of
+  the picture (resolution, foveation, the focus overlay, the view crop and helmet, Foveated DLSS) but not
+  the menu's and overlay's places, the hotkeys or the OpenXR layers. Use one, save the settings you have as
+  one (in the profiles folder next to the launcher), Share one as a line of text to paste in a chat, or
+  Paste one someone shared. The headset menu's first line, Profile, switches between them while you drive.
 - Hotkeys: a key and a wheel, button box or controller button for opening and closing the headset
   menu, moving through it (up, down, lower, raise), the performance overlay, the helmet's visor and a CPU
   capture. Click a binding, then press the keys or the wheel button (Esc cancels, Delete clears); the pane

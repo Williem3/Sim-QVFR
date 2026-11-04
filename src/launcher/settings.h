@@ -11,6 +11,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "../input/hotkeys.h"
+#include "../profile/profiles.h"
 #include "../quad/focus_offset.h"
 #include "../quad/focus_shape.h"
 #include "../quad/gaze_deadzone.h"
@@ -76,6 +77,15 @@ bool save_settings(const std::wstring& ini, const Settings& settings);
 // and the FOV crop. The method and
 // Two-loop's resolution apply at the next launch.
 bool save_live_settings(const std::wstring& ini, const Settings& settings);
+// A profile of `settings` (profile/profiles.h): the keys save_settings writes for the picture, without the
+// panels' places ([menu], [osd]), the hotkeys, the launcher's own keys and the CPU capture switch.
+Profile settings_profile(const Settings& settings, const std::wstring& name);
+// A profile as text to share: only its keys that differ from the defaults' profile.
+std::string share_profile(const Profile& profile);
+// A shared profile back: the defaults' profile with the text's keys over it, only keys a profile has (and the
+// method only as views4 or quad), so a shared text can't set anything else. False if it isn't one.
+bool shared_profile(const std::string& text, Profile& profile);
+
 // The ini a running ACE reads (runtime.ini's live_ini, while its live_pid is still ACE), or empty.
 std::wstring running_live_ini(const std::wstring& runtimeInfo);
 
