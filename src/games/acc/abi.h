@@ -221,4 +221,23 @@ inline constexpr std::uint8_t kFoliageRightViewAnchor[7] = {0x48, 0x63, 0x46, 0x
 inline constexpr std::uintptr_t kFoliageRightViewRead = 0x2a43737;
 inline constexpr std::uint8_t kFoliageRightViewReadAnchor[5] = {0x48, 0x8b, 0x4c, 0xc1, 0xf8};
 
+// Foliage LOD. Static meshes pick their LOD through GetLODView (ComputeStaticMeshLOD 0x2cf26a0: a stereo view uses
+// Family->Views[GetLODViewIndex()], the left eye); foliage takes every LOD distance from the drawing view's own
+// projection (ComputeBoundsDrawDistance 0x2cf1cb0, r8 the matrix), so the focus pair's narrow projection put each
+// LOD several times farther out and drew the same trees at higher LODs (a capture: 2286 indices against 3690/7224).
+// The distances are computed twice, and both must agree (RenderDoc, README.md):
+//  - on the CPU, the HISM function above: the minimum-screen-size cull and the LOD planes its cluster traversal
+//    picks each instance's LOD with, `lea r8, [r15 + 0x280]` (r15 the view) at four sites, two code paths of two;
+//  - in the vertex shader: FInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings builds each
+//    LOD batch's InstancingViewZCompare (its distance window, by which the shader drops or dithers out instances
+//    outside it) from the same calls, `add r14, 0x280` (r14 the view) feeding three of them.
+// Moving the CPU side alone put near trees in a lower LOD whose shader window, still the focus view's, began
+// farther out: the shader dropped them and near trees vanished from the focus box. views.cpp passes Views[0]'s
+// projection at all five sites (View->Family at +0, Family->Views at +0), only for the focus views (StereoPass >= 3):
+// the eyes, shadow depth views and mono views keep their own.
+inline constexpr std::uintptr_t kFoliageLodProjection[4] = {0x2a446fb, 0x2a44791, 0x2a44f7d, 0x2a45007};
+inline constexpr std::uint8_t kFoliageLodProjectionAnchor[7] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00};
+inline constexpr std::uintptr_t kFoliageShaderLodProjection = 0x2a7e01f;
+inline constexpr std::uint8_t kFoliageShaderLodProjectionAnchor[7] = {0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};
+
 }  // namespace acc
