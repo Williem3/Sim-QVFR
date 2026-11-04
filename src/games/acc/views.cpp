@@ -150,7 +150,9 @@ bool counts_match() {
             aceqv::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
             return false;
         }
-    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor));
+    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
+           aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
+           aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor));
 }
 
 // Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
@@ -167,7 +169,12 @@ bool pairs_per_draw() {
                                   0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
     ok = aceqv::code_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
                               sizeof(clamp)) && ok;
-    aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped)"
+    // StereoPassIndex: the eye within its pair (and eax, 1; then the moved store).
+    const std::uint8_t pairEye[] = {0x83, 0xe0, 0x01, 0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
+    ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
+                              pairEye, sizeof(pairEye)) && ok;
+    aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
+                                      "StereoPassIndex the eye within its pair)"
                                     : "a views-per-draw patch failed");
     return ok;
 }

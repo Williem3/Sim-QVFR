@@ -76,4 +76,18 @@ inline constexpr CountRead kInstancedViewCounts[] = {
 inline constexpr std::uintptr_t kViewInstancedCount = 0x2d085ab;
 inline constexpr std::uint8_t kViewInstancedCountAnchor[7] = {0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
 
+// The view constants' StereoPassIndex: 4.26 FViewInfo::SetupUniformBufferParameters (SceneRendering.cpp) stores
+// `StereoRenderingDevice->GetViewIndexForPass(StereoPass)` there, so the focus views got 2 and 3. Shaders index
+// two-entry tables with it as the eye within an instanced pair: planar reflections' ProjectionWithExtraFOV[2] and
+// PlanarReflectionScreenScaleBias[2] (PlanarReflectionShared.ush) read past the end for 2 and 3, and view 3 drew
+// the dash's windscreen reflection from the wrong place (README.md). GetViewIndexForPass must stay 0-3 (each view's
+// own FSceneViewState in ULocalPlayer), so views.cpp redirects this store, `mov [rsi + 0xc5c], eax`, through
+// `and eax, 1`: 0, 1, 0, 1. Before it: `mov edx, [r14 + 0xad0]; call [rax + 0x30]; jmp; mov eax, r13d` (no
+// device: 0), both paths meeting here.
+inline constexpr std::uintptr_t kStereoPassIndexCall = 0x1c11f29;
+inline constexpr std::uint8_t kStereoPassIndexCallAnchor[15] = {0x41, 0x8b, 0x96, 0xd0, 0x0a, 0x00, 0x00, 0xff,
+                                                                0x50, 0x30, 0xeb, 0x03, 0x41, 0x8b, 0xc5};
+inline constexpr std::uintptr_t kStereoPassIndexStore = 0x1c11f38;
+inline constexpr std::uint8_t kStereoPassIndexStoreAnchor[6] = {0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
+
 }  // namespace acc
