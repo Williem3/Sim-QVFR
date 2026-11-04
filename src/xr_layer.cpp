@@ -440,7 +440,7 @@ void load_experiment() {
     const Views4Sizes sizes = views4_sizes(ini.c_str(), experiment.focusFraction, experiment.focusFractionY);
     const FovCrop launchCrop = experiment.views4 ? settings.crop : FovCrop{};
     experiment.set_crop(launchCrop);
-    helmetSettings = experiment.views4Compose ? settings.helmet : HelmetSettings{};  // before any session
+    helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),
                                             launchCrop.kept_height());
     // For the launcher: what live sizes can reach (percent of the native eye).
@@ -3072,7 +3072,7 @@ void live_resolution(const LiveSettings& l) {
 
 // Live settings: applies the ini's live keys (LiveSettings). Called between display frames.
 void live_apply(const LiveSettings& l) {
-    if (experiment.views4Compose) {
+    if (experiment.composing()) {  // the helmet: either compositor
         std::lock_guard guard(quad.mutex);
         if (!(helmetSettings == l.helmet))
             logf("live: helmet %d, rim %d%%, corners %d%%, light %d%%, size %d deg, height %d deg, depth %d cm, visor %ls%s",
@@ -3864,7 +3864,7 @@ void menu_render() {
                                                          menu_lines(menu.model),
                                                          menu_notes(menu.model), hint, menu_subtitle(menu.model),
                                                          menu.model.values.hotkeyFooter
-                                                             ? hotkey_footer(menu.model.values.helmet.on && experiment.views4Compose)
+                                                             ? hotkey_footer(menu.model.values.helmet.on && experiment.composing())
                                                              : L"");
     uint32_t index = 0;
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
@@ -4107,7 +4107,7 @@ void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& 
 bool visorHotkeyHeld = false;
 void visor_hotkey() {
     const bool held = hotkey_held(HotkeyAction::Visor);
-    if (held && !visorHotkeyHeld && experiment.views4Compose) {
+    if (held && !visorHotkeyHeld && experiment.composing()) {
         HelmetSettings h;
         {
             std::lock_guard guard(quad.mutex);  // at once; the ini on the worker
