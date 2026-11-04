@@ -1,8 +1,7 @@
 // D3D11 quad-view compositor, for a D3D11 game whose one image holds all four views (ACC: OpenComposite copies
 // the game's whole target into each eye's swapchain). Draws each eye's outer view upscaled over its tangents
 // with its focus view blended into the focus box, both eyes side by side into a double-wide output: the same
-// shader and constants as the D3D12 compositor (compose_shader.h), without the helmet. Before composing, it
-// measures each focus view's brightness against the outer view's (compose_shader.h GainPS) and matches it.
+// shader and constants as the D3D12 compositor (compose_shader.h), without the helmet.
 //
 // It records into a deferred context and executes that on the immediate one with the game's state restored,
 // so it can run inside the game's own frame (xrEndFrame, on its render thread) without disturbing it.
@@ -36,12 +35,7 @@ private:
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> immediate_, deferred_;
     Com<ID3D11VertexShader> vs_;
-    Com<ID3D11PixelShader> ps_, gainPs_;
-    // The focus views' gain, kGainCells square per eye side by side, eased towards each frame's measure.
-    Com<ID3D11Texture2D> gain_;
-    Com<ID3D11RenderTargetView> gainTarget_;
-    Com<ID3D11ShaderResourceView> gainSource_;
-    Com<ID3D11BlendState> ease_;
+    Com<ID3D11PixelShader> ps_;
     Com<ID3D11Buffer> constants_[2];  // one per eye
     Com<ID3D11SamplerState> sampler_;
     // Views of the swapchain images, made once each (the images live as long as their swapchains, and the
