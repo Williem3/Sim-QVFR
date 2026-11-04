@@ -70,7 +70,7 @@ int main() {
         // depth, near 10.
         const float tl = -1.2f, tr = 0.9f, tu = 1.1f, td = -1.0f;
         const float eye[16] = {2 / (tr - tl), 0, 0, 0, 0, 2 / (tu - td), 0, 0,
-                               (tr + tl) / (tr - tl), (tu + td) / (tu - td), 0, 1, 0, 0, 10, 0};
+                               -(tr + tl) / (tr - tl), (tu + td) / (tu - td), 0, 1, 0, 0, 10, 0};
         float m[16];
         std::memcpy(m, eye, sizeof(m));
         const bool narrowed = focus_projection(m, 0.4, 0.3);
@@ -126,7 +126,7 @@ int main() {
             view_matrix(ue_mul(eyes[e], ue_quat(turn[e])), views[e + 2]);
             const float* t = eyeTan[e];
             const float eyeProjection[16] = {2 / (t[1] - t[0]), 0, 0, 0, 0, 2 / (t[2] - t[3]), 0, 0,
-                                             (t[1] + t[0]) / (t[1] - t[0]), (t[2] + t[3]) / (t[2] - t[3]), 0, 1,
+                                             -(t[1] + t[0]) / (t[1] - t[0]), (t[2] + t[3]) / (t[2] - t[3]), 0, 1,
                                              0, 0, 10, 0};
             std::memcpy(projections[e], eyeProjection, sizeof(eyeProjection));
             std::memcpy(projections[e + 2], eyeProjection, sizeof(eyeProjection));
@@ -153,6 +153,19 @@ int main() {
               "a mirrored view: no record");
     }
 
+    {
+        // The left eye as UE's SteamVR plugin builds it from OpenComposite (this headset, 2026-11-04): the located FOV's
+        // tangents l, r, u, d = -1.4019, 1.2131, 1.0913, -1.0913; GetProjectionRaw gives left, right, top, bottom
+        // (top negative: y down); UE passes &Right, &Left, &Top, &Bottom, negates them, and fills its matrix.
+        const float pfLeft = -1.4019f, pfRight = 1.2131f, pfTop = -1.0913f, pfBottom = 1.0913f;
+        const float Right = -pfLeft, Left = -pfRight, Top = -pfTop, Bottom = -pfBottom;
+        const float ue[16] = {2 / (Right - Left), 0, 0, 0, 0, 2 / (Top - Bottom), 0, 0,
+                              (Right + Left) / (Right - Left), (Top + Bottom) / (Top - Bottom), 0, 1, 0, 0, 10, 0};
+        float t[4];
+        check(ue_projection_tangents(ue, t) && std::fabs(t[0] + 1.4019f) < 1e-4f && std::fabs(t[1] - 1.2131f) < 1e-4f &&
+                  std::fabs(t[2] - 1.0913f) < 1e-4f && std::fabs(t[3] + 1.0913f) < 1e-4f,
+              "UE's eye projection reads back as the located FOV, not mirrored");
+    }
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;
 }

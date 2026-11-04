@@ -36,15 +36,29 @@ inline PassRect pass_rect(const aceqv::Views4Layout& layout, int pass, int targe
     return {r.left, r.top, r.width, r.height};
 }
 
-// A focus view's projection: its eye's, narrowed to the focus box (`fractionX` of the eye's tangent width,
-// `fractionY` of its height), centred on the eye's forward axis. UE 4.26's FMatrix is row-major for row vectors,
-// as SteamVR's GetStereoProjectionMatrix fills it: [0] = 2 / (r - l), [8] = (r + l) / (r - l), [5] = 2 / (u - d),
-// [9] = (u + d) / (u - d), reversed infinite depth in [11] and [14] (kept). The same box ACE's focus views get
-// (focus_extents). False, `m` unchanged: no box (`fractionX` <= 0, the focus views copy the eyes) or not such a
-// projection.
+// The view tangents (left, right, up, down; OpenXR's: x right, y up) a UE 4.26 projection renders. UE's FMatrix is
+// row-major for row vectors, as SteamVR's GetStereoProjectionMatrix fills it from GetProjectionRaw (OpenComposite:
+// the located FOV): [0] = 2 / (r - l), [8] = -(r + l) / (r - l) (it passes Right and Left swapped, then negates
+// them), [5] = 2 / (u - d), [9] = (u + d) / (u - d), reversed infinite depth in [11] and [14]. The horizontal term
+// has the opposite sign of ACE's projections (focus_turn.h projection_tangents), so reading UE's with that one
+// mirrors every eye left to right (README.md, twenty-fourth run). False for anything that is not such a projection.
+inline bool ue_projection_tangents(const float (&m)[16], float (&tan)[4]) {
+    if (!(m[0] > 0.01f && m[5] > 0.01f && std::isfinite(m[8]) && std::isfinite(m[9])))
+        return false;
+    tan[0] = (-1 - m[8]) / m[0];
+    tan[1] = (1 - m[8]) / m[0];
+    tan[2] = (m[9] + 1) / m[5];
+    tan[3] = (m[9] - 1) / m[5];
+    return true;
+}
+
+// A focus view's projection: its eye's (ue_projection_tangents), narrowed to the focus box (`fractionX` of the eye's
+// tangent width, `fractionY` of its height), centred on the eye's forward axis, depth kept. The same box ACE's
+// focus views get (focus_extents). False, `m` unchanged: no box (`fractionX` <= 0, the focus views copy the eyes)
+// or not such a projection.
 inline bool focus_projection(float (&m)[16], double fractionX, double fractionY) {
     float tan[4];
-    if (!(fractionX > 0) || !aceqv::projection_tangents(m, tan))
+    if (!(fractionX > 0) || !ue_projection_tangents(m, tan))
         return false;
     double hw = 0, hh = 0;
     aceqv::focus_extents(tan, fractionX, fractionY > 0 ? fractionY : fractionX, hw, hh);
@@ -96,8 +110,8 @@ inline bool rendered_frame(const float (&view)[4][16], const float (&projection)
             return false;
     }
     for (int e = 0; e < 2; ++e) {
-        if (!aceqv::projection_tangents(projection[e], out.outerTan[e]) ||
-            !aceqv::projection_tangents(projection[e + 2], out.focusTan[e]))
+        if (!ue_projection_tangents(projection[e], out.outerTan[e]) ||
+            !ue_projection_tangents(projection[e + 2], out.focusTan[e]))
             return false;
         // Eye view direction d_e = Re^T w, focus d_f = Rf^T w, so d_f = Rf^T Re d_e; then z flipped both sides.
         const float* re = rotation[e];

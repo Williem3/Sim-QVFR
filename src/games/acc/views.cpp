@@ -140,7 +140,7 @@ void latch_frame() {
     const double boxX = focusX.load(std::memory_order_relaxed), boxY = focusY.load(std::memory_order_relaxed);
     for (int e = 0; e < 2; ++e) {
         f.turn[e] = {0, 0, 0, 1};
-        if (!have[e] || !aceqv::projection_tangents(matrix[e], f.outerTan[e]))
+        if (!have[e] || !ue_projection_tangents(matrix[e], f.outerTan[e]))
             continue;  // no projection yet: an empty record (the composition uses the submitted FOV)
         if (boxX <= 0) {
             std::memcpy(f.focusTan[e], f.outerTan[e], sizeof(f.focusTan[e]));
@@ -557,7 +557,7 @@ void views_frame_end() {
         std::lock_guard guard(projectionLog.mutex);
         const auto tangents = [](const float (&m)[16], char* text, size_t size) {
             float t[4] = {};
-            if (aceqv::projection_tangents(m, t))
+            if (ue_projection_tangents(m, t))
                 std::snprintf(text, size, "%.4f/%.4f/%.4f/%.4f", t[0], t[1], t[2], t[3]);
             else
                 std::snprintf(text, size, "none");
