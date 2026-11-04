@@ -83,6 +83,22 @@ int main() {
         std::memcpy(m, eye, sizeof(m));
         check(!focus_projection(m, 0, 0) && std::memcmp(m, eye, sizeof(m)) == 0, "no focus box: the eye's own projection");
     }
+    {
+        // The focus turn in UE's frame (X forward, Y right, Z up): a gaze right of centre turns the forward axis
+        // right, a gaze above it turns it up; applied in the eye's own frame (on the right of its orientation).
+        const float eye[4] = {-1.2f, 1.0f, 1.0f, -1.1f};
+        const float forward[3] = {1, 0, 0};
+        float f[3];
+        ue_rotate(ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.3, 0.0)), forward, f);
+        check(f[1] > 0.25f && std::fabs(f[2]) < 1e-5f && f[0] > 0.9f, "a gaze to the right turns the focus view right");
+        ue_rotate(ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.0, 0.3)), forward, f);
+        check(f[2] > 0.25f && std::fabs(f[1]) < 1e-5f, "a gaze upwards turns the focus view up");
+        // An eye yawed 90 degrees right (forward = +Y): the same right turn moves forward from +Y towards -X.
+        const float s = std::sqrt(0.5f);
+        const UeQuat yawed{0, 0, s, s};
+        ue_rotate(ue_mul(yawed, ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.3, 0.0))), forward, f);
+        check(f[1] > 0.9f && f[0] < -0.25f, "the turn applies in the eye's own frame");
+    }
 
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;

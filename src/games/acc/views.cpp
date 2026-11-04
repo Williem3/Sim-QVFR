@@ -7,6 +7,7 @@
 
 #include "../../engine/code_patch.h"
 #include "../../log.h"
+#include "../../quad/frame_records.h"
 #include "abi.h"
 #include "views_map.h"
 
@@ -89,6 +90,57 @@ EyeCache cache;
 std::atomic<bool> sessionRunning{false};
 std::atomic<std::uint64_t> served{0};  // answers from the cache while no session ran
 
+// The focus turn (focus_turn.h, as ACE's): each frame's chosen at its first side-pass pose (UE asks for a view's
+// eye pose, then its projection, on the game thread: ULocalPlayer::GetProjectionData), applied to both side passes'
+// poses, and recorded at the right side pass's projection (once per frame, after its pose) for the composition,
+// which runs a frame or so later (frame_records.h). The late update on the render thread only adds the head's
+// movement since (DefaultXRCamera.cpp), so the turn chosen here is the one rendered. A side pose asked for after
+// the record (a second caller) chooses the next frame's turn early; record and render still agree.
+struct FocusFrame {
+    std::mutex mutex;
+    float gaze[2][2] = {};  // tangents of each eye's view, the latest from xrLocateViews (views_set_gaze)
+    bool gazeValid[2] = {};
+    bool latched = false;
+    aceqv::Views4Frame frame{};
+};
+FocusFrame focusFrame;
+std::atomic<std::uint64_t> turned{0};  // side poses turned
+// Up to 2 records in flight at a composition (the game thread a frame or two ahead), at most 4 before resyncing.
+aceqv::FrameRecords<aceqv::Views4Frame> records{2, 4};
+
+// This frame's tangents and turns (under focusFrame.mutex): the eyes' cached projections, the focus box, the gaze.
+void latch_frame() {
+    float matrix[2][16] = {};
+    bool have[2] = {};
+    {
+        std::lock_guard guard(cache.mutex);
+        for (int e = 0; e < 2; ++e) {
+            have[e] = cache.projection[kPassLeft + e];
+            std::memcpy(matrix[e], cache.matrix[kPassLeft + e].m, sizeof(matrix[e]));
+        }
+    }
+    aceqv::Views4Frame& f = focusFrame.frame;
+    f = {};
+    const double boxX = focusX.load(std::memory_order_relaxed), boxY = focusY.load(std::memory_order_relaxed);
+    for (int e = 0; e < 2; ++e) {
+        f.turn[e] = {0, 0, 0, 1};
+        if (!have[e] || !aceqv::projection_tangents(matrix[e], f.outerTan[e]))
+            continue;  // no projection yet: an empty record (the composition uses the submitted FOV)
+        if (boxX <= 0) {
+            std::memcpy(f.focusTan[e], f.outerTan[e], sizeof(f.focusTan[e]));
+            continue;
+        }
+        double hw = 0, hh = 0;
+        aceqv::focus_extents(f.outerTan[e], boxX, boxY, hw, hh);
+        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                   static_cast<float>(-hh)};
+        std::memcpy(f.focusTan[e], focusTan, sizeof(focusTan));
+        if (focusFrame.gazeValid[e])
+            f.turn[e] = aceqv::focus_turn(f.outerTan[e], boxX, boxY, focusFrame.gaze[e][0], focusFrame.gaze[e][1]);
+    }
+    focusFrame.latched = true;
+}
+
 void eye_projection(const void* self, FMatrix* out, int pass, int eye) {
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
     if ((pass != eye || idle) && (eye == kPassLeft || eye == kPassRight)) {
@@ -114,6 +166,17 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
     if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
                                         focusY.load(std::memory_order_relaxed)))
         focused.fetch_add(1, std::memory_order_relaxed);
+    if (pass == kPassRightSide) {  // the frame's last view: its record
+        aceqv::Views4Frame frame;
+        {
+            std::lock_guard guard(focusFrame.mutex);
+            if (!focusFrame.latched)
+                latch_frame();
+            frame = focusFrame.frame;
+            focusFrame.latched = false;
+        }
+        records.push(frame);
+    }
     return out;
 }
 bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* position) {
@@ -121,23 +184,41 @@ bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* posit
     const int eye = eye_pass(pass);
     const bool hmdEye = deviceId == 0 && (eye == kPassLeft || eye == kPassRight);
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
+    bool ok = false, cached = false;
     if (hmdEye && (pass != eye || idle)) {
         std::lock_guard guard(cache.mutex);
         if (cache.pose[eye]) {
             std::memcpy(orientation, cache.orientation[eye], sizeof(cache.orientation[eye]));
             std::memcpy(position, cache.position[eye], sizeof(cache.position[eye]));
             served.fetch_add(idle ? 1 : 0, std::memory_order_relaxed);
-            return cache.poseOk[eye];
+            ok = cache.poseOk[eye];
+            cached = true;
         }
     }
-    steamPoses.fetch_add(1, std::memory_order_relaxed);
-    const bool ok = originalEyePose(self, deviceId, eye, orientation, position);
-    if (hmdEye) {
-        std::lock_guard guard(cache.mutex);
-        std::memcpy(cache.orientation[eye], orientation, sizeof(cache.orientation[eye]));
-        std::memcpy(cache.position[eye], position, sizeof(cache.position[eye]));
-        cache.poseOk[eye] = ok;
-        cache.pose[eye] = true;
+    if (!cached) {
+        steamPoses.fetch_add(1, std::memory_order_relaxed);
+        ok = originalEyePose(self, deviceId, eye, orientation, position);
+        if (hmdEye) {
+            std::lock_guard guard(cache.mutex);
+            std::memcpy(cache.orientation[eye], orientation, sizeof(cache.orientation[eye]));
+            std::memcpy(cache.position[eye], position, sizeof(cache.position[eye]));
+            cache.poseOk[eye] = ok;
+            cache.pose[eye] = true;
+        }
+    }
+    if (hmdEye && pass != eye && ok && focusX.load(std::memory_order_relaxed) > 0) {
+        UeQuat turn;
+        {
+            std::lock_guard guard(focusFrame.mutex);
+            if (!focusFrame.latched)
+                latch_frame();
+            turn = ue_quat(focusFrame.frame.turn[eye - kPassLeft]);
+        }
+        UeQuat o;
+        std::memcpy(&o, orientation, sizeof(o));
+        o = ue_mul(o, turn);  // turned in the eye's own frame
+        std::memcpy(orientation, &o, sizeof(o));
+        turned.fetch_add(1, std::memory_order_relaxed);
     }
     return ok;
 }
@@ -320,6 +401,24 @@ bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
     return ok;
 }
 
+void views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
+    std::lock_guard guard(focusFrame.mutex);
+    std::memcpy(focusFrame.gaze, tan, sizeof(focusFrame.gaze));
+    std::memcpy(focusFrame.gazeValid, valid, sizeof(focusFrame.gazeValid));
+}
+
+bool views_take_frame(aceqv::Views4Frame& frame) {
+    bool drifted = false;
+    std::uint64_t behind = 0;
+    const bool any = records.take(frame, &drifted, &behind);
+    if (drifted)
+        aceqv::logf("acc views: frame records stayed %llu behind the compositions: resynced",
+                    static_cast<unsigned long long>(behind));
+    return any;
+}
+
+bool views_latest_frame(aceqv::Views4Frame& frame) { return records.latest(frame); }
+
 void views_set_focus(double boxX, double boxY) {
     const double y = boxY > 0 ? boxY : boxX;
     const double oldX = focusX.exchange(boxX, std::memory_order_relaxed);
@@ -360,8 +459,17 @@ void views_frame_end() {
     aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
-    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box",
-                static_cast<unsigned long long>(focused.exchange(0)));
+    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box, %llu side poses turned",
+                static_cast<unsigned long long>(focused.exchange(0)), static_cast<unsigned long long>(turned.exchange(0)));
+    const auto n = records.counts();
+    aceqv::Views4Frame last{};
+    records.latest(last);
+    aceqv::logf("acc views: frames recorded %llu, composed %llu (backlog %llu, resyncs %llu, composed before "
+                "recording %llu); eye 0 turn %.3f,%.3f,%.3f,%.3f",
+                static_cast<unsigned long long>(n.pushed), static_cast<unsigned long long>(n.taken),
+                static_cast<unsigned long long>(n.pushed - n.taken), static_cast<unsigned long long>(n.resyncs),
+                static_cast<unsigned long long>(n.emptyTakes), last.turn[0].x, last.turn[0].y, last.turn[0].z,
+                last.turn[0].w);
 }
 
 }  // namespace acc

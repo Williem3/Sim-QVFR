@@ -164,6 +164,8 @@ struct Experiment {
     double box_y(double fraction) const { return cropped_share(fraction, crop().kept_height()); }
     double box_x() const { return box_x(focusFraction); }
     double box_y() const { return box_y(focus_y()); }
+    // QVFR composes the views itself, by either compositor (views4_compose: ACE's D3D12 one; views4ComposeD3D11).
+    bool composing() const { return views4Compose || views4ComposeD3D11; }
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
@@ -576,7 +578,7 @@ void gaze_init(XrInstance instance) {
         gaze.appSyncs = 0;
         gaze.space = XR_NULL_HANDLE;
     }
-    if ((!experiment.quad && !experiment.views4Compose) || !next.CreateActionSet)
+    if ((!experiment.quad && !experiment.composing()) || !next.CreateActionSet)
         return;
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
     strcpy_s(setInfo.actionSetName, "acequadview_gaze");
@@ -1050,7 +1052,7 @@ Views4Outline v4outline;
 
 // Without composition the outline goes on ACE's outer views; with it, on the composed output.
 bool views4_outline_on() {
-    return experiment.views4 && experiment.borderAtLaunch && !experiment.views4ShowCopies && !experiment.views4Compose;
+    return experiment.views4 && experiment.borderAtLaunch && !experiment.views4ShowCopies && !experiment.composing();
 }
 
 void views4_outline_draw(XrSwapchain swapchain) {
@@ -2128,6 +2130,55 @@ void log_helmet_light() {
     }
 }
 
+// A frame record for a frame the game recorded nothing for (before its first, or its projection unknown): the
+// eyes' FOVs, the focus box centred on each, unturned.
+Views4Frame views4_unrecorded_frame(const XrFovf (&fov)[2]) {
+    Views4Frame frame{};
+    for (int e = 0; e < 2; ++e) {
+        fov_tangents(fov[e], frame.outerTan[e]);
+        double hw, hh;
+        focus_extents(frame.outerTan[e], experiment.box_x(), experiment.box_y(), hw, hh);
+        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                   static_cast<float>(-hh)};
+        std::memcpy(frame.focusTan[e], focusTan, sizeof(focusTan));
+        frame.turn[e] = {0, 0, 0, 1};
+    }
+    return frame;
+}
+
+// Where view `view` sits in the game's image: its rect in the game's target (targetW x targetH, at `origin` in a
+// texture of textureW x textureH), as a texture region (u0, v0, du, dv).
+void views4_source(const Views4Layout& layout, int view, bool eyeColumns, int targetW, int targetH, XrOffset2Di origin,
+                   int textureW, int textureH, float (&uv)[4]) {
+    const ViewRect r = eyeColumns ? views4_rect_eye_columns(layout, view, targetW, targetH)
+                                  : views4_rect(layout, view, targetW, targetH);
+    uv[0] = static_cast<float>(origin.x + r.left) / static_cast<float>(textureW);
+    uv[1] = static_cast<float>(origin.y + r.top) / static_cast<float>(textureH);
+    uv[2] = static_cast<float>(r.width) / static_cast<float>(textureW);
+    uv[3] = static_cast<float>(r.height) / static_cast<float>(textureH);
+}
+
+// One eye's composition, for either compositor: what its views were rendered with (the frame's record: outer and
+// focus tangents, the focus turn), where they sit in the game's image (`source`: the outer view e, the focus view
+// e + 2), and the look from the live settings (feather, outline, corners, shape).
+template <class Source>
+void views4_eye(const Views4Frame& frame, int e, const Source& source, EyeComposition& c) {
+    std::memcpy(c.outerTan, frame.outerTan[e], sizeof(c.outerTan));
+    std::memcpy(c.focusTan, frame.focusTan[e], sizeof(c.focusTan));
+    // The focus camera is the eye's turned by turn[e] (in the eye's frame): a direction in the outer view's
+    // frame is in the focus view's frame after the inverse turn.
+    to_matrix(qconj(frame.turn[e]), c.rotation);
+    source(e, c.outerSource);
+    source(e + 2, c.focusSource);
+    c.feather = static_cast<float>(experiment.feather);
+    // The outline (debug_border) is drawn by the compositor along the focus area's exact edge, turned and
+    // rounded as it is.
+    c.border = experiment.border ? 0.008f : 0.0f;
+    std::memcpy(c.borderColor, experiment.borderColor, sizeof(c.borderColor));
+    c.cornerRadius = static_cast<float>(experiment.cornerRadius);
+    focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
+}
+
 // views4: ACE's eye image holds the outer views as views 0-1 and the focus views as views 2-3 of the
 // layout (the focus cameras: focus_percent of each eye's tangent extent around its forward axis). Composes
 // both eyes into the output chain at native size, on ACE's queue, before ACE releases the image.
@@ -2141,8 +2192,9 @@ void views4_compose() {
     const bool recorded = game->qvfr_take_frame(frame);
     if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
         return;
+    if (!recorded)
+        frame = views4_unrecorded_frame(quad.v4Fov);
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
-    XrQuaternionf turns[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
     if (helmet.on)
@@ -2153,37 +2205,15 @@ void views4_compose() {
     const bool pieces = helmet.on && quad.compositor.has_helmet_pieces();
     const bool piecesInScene = pieces && quad.helmetLayerFailed;
     float fullView[2][4] = {};
+    // Outer source = view e, focus source = view e + 2, wherever the layout puts them, at the sizes this frame was
+    // rendered with (live resolution); launch sizes until the first record.
+    const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
+    const int w = static_cast<int>(quad.appW), h = static_cast<int>(quad.appH);
+    const auto source = [&](int view, float (&uv)[4]) { views4_source(layout, view, false, w, h, {0, 0}, w, h, uv); };
     for (int e = 0; e < 2; ++e) {
-        if (recorded) {
-            std::memcpy(eyes[e].outerTan, frame.outerTan[e], sizeof(eyes[e].outerTan));
-            std::memcpy(eyes[e].focusTan, frame.focusTan[e], sizeof(eyes[e].focusTan));
-            turns[e] = frame.turn[e];
-        } else {
-            fov_tangents(quad.v4Fov[e], eyes[e].outerTan);
-            double hw, hh;
-            focus_extents(eyes[e].outerTan, experiment.box_x(), experiment.box_y(), hw, hh);
-            const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
-                                       static_cast<float>(-hh)};
-            std::memcpy(eyes[e].focusTan, focusTan, sizeof(focusTan));
-        }
+        views4_eye(frame, e, source, eyes[e]);
         // The output covers the outer view's tangents, so that is the FOV it is submitted with.
         quad.v4SubmitFov[e] = tangents_fov(eyes[e].outerTan);
-        // The focus camera is the eye's turned by turns[e] (in the eye's frame): a direction in the
-        // outer view's frame is in the focus view's frame after the inverse turn.
-        to_matrix(qconj(turns[e]), eyes[e].rotation);
-        // Outer source = view e, focus source = view e + 2, wherever the layout puts them.
-        const int w = static_cast<int>(quad.appW), h = static_cast<int>(quad.appH);
-        // At the sizes this frame was rendered with (live resolution); launch sizes until the first record.
-        const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
-        views4_uv(layout, e, w, h, eyes[e].outerSource);
-        views4_uv(layout, e + 2, w, h, eyes[e].focusSource);
-        eyes[e].feather = static_cast<float>(experiment.feather);
-        // The outline (debug_border) is drawn by the compositor along the focus area's exact edge,
-        // turned and rounded as it is.
-        eyes[e].border = experiment.border ? 0.008f : 0.0f;
-        std::memcpy(eyes[e].borderColor, experiment.borderColor, sizeof(eyes[e].borderColor));
-        eyes[e].cornerRadius = static_cast<float>(experiment.cornerRadius);
-        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), eyes[e].cornerInset);
         float full[4];
         uncrop_tangents(eyes[e].outerTan, quad.v4Crop, e, full);
         std::memcpy(fullView[e], full, sizeof(full));
@@ -2522,7 +2552,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             v4outline.fov[1] = views[1].fov;
             v4outline.fovValid = true;
         }
-        if (experiment.views4Compose && *countOutput >= 2 && capacity >= 2) {
+        if (experiment.composing() && *countOutput >= 2 && capacity >= 2) {
             {
                 std::lock_guard guard(quad.mutex);
                 quad.v4Fov[0] = views[0].fov;
@@ -2699,8 +2729,12 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
 
 // Composes both eyes of `proj` (the game's two eye views, eye columns of `layout`) into the output chain and
 // points `copy` (its views) at it. False: nothing changed, the caller submits views 0-1 as they are.
-bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj, const Views4Layout& layout,
+bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
                      std::vector<XrCompositionLayerProjectionView>& copy) {
+    // What this frame's views were rendered with (the game's record, frame_records.h), taken before anything can
+    // skip the frame, so later compositions stay in step with the frames rendered.
+    Views4Frame frame{};
+    const bool recorded = game->qvfr_take_frame(frame);
     std::lock_guard guard(v4d3d11.mutex);
     const auto fallback = [](const char* why) {
         ++v4d3d11.fallbacks;
@@ -2718,34 +2752,20 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     D3D11_TEXTURE2D_DESC desc;
     views->GetDesc(&desc);
     const float texW = static_cast<float>(desc.Width), texH = static_cast<float>(desc.Height);
+    // Before the game's first record (or with no projection in it), the submitted FOVs, centred and unturned.
+    if (!recorded || !(frame.outerTan[0][1] > frame.outerTan[0][0]) || !(frame.outerTan[1][1] > frame.outerTan[1][0]))
+        frame = views4_unrecorded_frame({proj->views[0].fov, proj->views[1].fov});
     // The game's target as the eyes' rects give it (eye e: the half from e x W), as views4_submit reads it.
     const XrExtent2Di eye = proj->views[0].subImage.imageRect.extent;
     const XrOffset2Di origin = proj->views[0].subImage.imageRect.offset;
-    const double boxX = experiment.box_x(), boxY = experiment.box_y();
+    const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
+    const auto source = [&](int view, float (&uv)[4]) {
+        views4_source(layout, view, true, 2 * eye.width, eye.height, origin, static_cast<int>(desc.Width),
+                      static_cast<int>(desc.Height), uv);
+    };
     EyeComposition eyes[2] = {};
-    for (int e = 0; e < 2; ++e) {
-        EyeComposition& c = eyes[e];
-        fov_tangents(proj->views[e].fov, c.outerTan);
-        double hw, hh;
-        focus_extents(c.outerTan, boxX, boxY, hw, hh);  // the box views.cpp narrowed the focus view to, centred
-        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
-                                   static_cast<float>(-hh)};
-        std::memcpy(c.focusTan, focusTan, sizeof(focusTan));
-        c.rotation[0] = c.rotation[4] = c.rotation[8] = 1;
-        const ViewRect outer = views4_rect_eye_columns(layout, e, 2 * eye.width, eye.height);
-        const ViewRect focus = views4_rect_eye_columns(layout, e + 2, 2 * eye.width, eye.height);
-        const float outerSrc[4] = {(origin.x + outer.left) / texW, (origin.y + outer.top) / texH, outer.width / texW,
-                                   outer.height / texH};
-        const float focusSrc[4] = {(origin.x + focus.left) / texW, (origin.y + focus.top) / texH, focus.width / texW,
-                                   focus.height / texH};
-        std::memcpy(c.outerSource, outerSrc, sizeof(outerSrc));
-        std::memcpy(c.focusSource, focusSrc, sizeof(focusSrc));
-        c.feather = static_cast<float>(experiment.feather);
-        c.border = experiment.border ? 0.008f : 0.0f;
-        std::memcpy(c.borderColor, experiment.borderColor, sizeof(c.borderColor));
-        c.cornerRadius = static_cast<float>(experiment.cornerRadius);
-        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
-    }
+    for (int e = 0; e < 2; ++e)
+        views4_eye(frame, e, source, eyes[e]);
     uint32_t outIndex = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
@@ -2772,7 +2792,9 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         v4d3d11.lastFallback = nullptr;
     }
     for (uint32_t v = 0; v < 2; ++v) {
-        // The game's own pose and FOV: the output covers its eye view (view v) exactly.
+        // The game's own pose; the FOV the output was composed over (the game's rendered projection, which the
+        // runtime must display it with, whatever the submitted view says).
+        copy[v].fov = tangents_fov(eyes[v].outerTan);
         copy[v].next = nullptr;  // depth info would describe the game's views, not the output
         copy[v].subImage.swapchain = v4d3d11.outChain;
         copy[v].subImage.imageRect = {{static_cast<int32_t>(v * v4d3d11.outW), 0},
@@ -2840,7 +2862,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         if (!aceLayout)
             continue;
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_eye_columns() &&
-            v4d3d11_compose(session, proj, layout, copy)) {
+            v4d3d11_compose(session, proj, copy)) {
             projections.push_back(*proj);
             projections.back().views = copy.data();
             layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
@@ -2950,7 +2972,7 @@ void live_apply(const LiveSettings& l) {
         game->qvfr_set_live(experiment.box_x(l.focusFraction),
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
-                        l.gaze && experiment.views4Compose);
+                        l.gaze && experiment.composing());
     logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
          "gaze %d deg, gaze dead-zone %.1f deg",
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
@@ -2958,9 +2980,9 @@ void live_apply(const LiveSettings& l) {
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
     if (experiment.views4)
         live_resolution(l);
-    if (l.gaze && !gazeAvailable && (experiment.quad || experiment.views4Compose))
+    if (l.gaze && !gazeAvailable && (experiment.quad || experiment.composing()))
         log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
-    if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.views4Compose)
+    if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.composing())
         log_line("live: debug_border without views4_compose starts at the next launch");
 }
 
@@ -4627,7 +4649,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         // The cull box: the focus box plus its feather band plus a gaze-latency allowance.
         start.focusCull = experiment.views4FocusCull;
         start.focusCullScale = 1.0 + experiment.feather + experiment.views4FocusCullMargin;
-        start.focusCullGaze = experiment.gaze && experiment.views4Compose;  // gaze turns only when composing
+        start.focusCullGaze = experiment.gaze && experiment.composing();  // gaze turns only when composing
         start.ini = live.ini.c_str();
         if (!game->qvfr_start(start)) {
             experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side

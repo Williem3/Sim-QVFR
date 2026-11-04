@@ -20,8 +20,8 @@ public:
     bool qvfr_start(const aceqv::games::QvfrStart& s) override {
         return views_start(s.layout, s.focusFraction, s.focusFractionY);
     }
-    // The focus views are centred: no gaze turn, focus cull or live resolution yet.
-    void qvfr_set_gaze(const float (&)[2][2], const bool (&)[2], bool) override {}
+    // No focus cull or live resolution yet.
+    void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override { views_set_gaze(tan, valid); }
     void qvfr_set_live_layout(const Views4Layout&) override {}
     void qvfr_set_live(double focus, double focusY, double, bool) override { views_set_focus(focus, focusY); }
     bool qvfr_dlss_held() override { return false; }
@@ -30,8 +30,8 @@ public:
         output[0] = render[0];
         output[1] = render[1];
     }
-    bool qvfr_take_frame(Views4Frame&) override { return false; }
-    bool qvfr_latest_frame(Views4Frame&) override { return false; }
+    bool qvfr_take_frame(Views4Frame& frame) override { return views_take_frame(frame); }
+    bool qvfr_latest_frame(Views4Frame& frame) override { return views_latest_frame(frame); }
     void qvfr_note_views(const XrView*, uint32_t) override {}
     void qvfr_frame_end() override { views_frame_end(); }
     void session_running(bool running) override { views_session_running(running); }

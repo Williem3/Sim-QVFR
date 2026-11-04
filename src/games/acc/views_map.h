@@ -54,4 +54,25 @@ inline bool focus_projection(float (&m)[16], double fractionX, double fractionY)
     return true;
 }
 
+// UE 4.26's FQuat (X, Y, Z, W as floats; left-handed, X forward, Y right, Z up) of an OpenXR rotation (right-handed,
+// x right, y up, looking down -z), as Epic's OpenXR plugin converts it (ToFQuat: -z, x, y, -w).
+struct UeQuat {
+    float x = 0, y = 0, z = 0, w = 1;
+};
+inline UeQuat ue_quat(const XrQuaternionf& q) { return {-q.z, q.x, q.y, -q.w}; }
+// a * b: b first, then a (FQuat's operator*). A rotation in an orientation's own frame goes on the right.
+inline UeQuat ue_mul(const UeQuat& a, const UeQuat& b) {
+    return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+// A vector rotated by q.
+inline void ue_rotate(const UeQuat& q, const float (&v)[3], float (&out)[3]) {
+    const UeQuat p{v[0], v[1], v[2], 0};
+    const UeQuat c{-q.x, -q.y, -q.z, q.w};
+    const UeQuat r = ue_mul(ue_mul(q, p), c);
+    out[0] = r.x;
+    out[1] = r.y;
+    out[2] = r.z;
+}
+
 }  // namespace acc

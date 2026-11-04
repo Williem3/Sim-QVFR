@@ -78,6 +78,11 @@ target_include_directories(panel_upload_test PRIVATE src ${THIRD_PARTY}/openxr/i
 target_compile_definitions(panel_upload_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(panel_upload_test PRIVATE ace_qv_core d3d11)
 
+# Offline check of the frame records carried to the composition (tests/frame_records_test.cpp).
+add_executable(frame_records_test tests/frame_records_test.cpp)
+target_include_directories(frame_records_test PRIVATE src)
+target_compile_options(frame_records_test PRIVATE /W4 /permissive- /utf-8)
+
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
 add_executable(two_loops_test tests/two_loops_test.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
