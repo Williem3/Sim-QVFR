@@ -24,4 +24,13 @@ inline constexpr Slot kGetStereoProjectionMatrix = {kStereoVtable + 20 * 8, 0x7b
 inline constexpr std::uintptr_t kTrackingVtable = 0x3a4ecc0;
 inline constexpr Slot kGetRelativeEyePose = {kTrackingVtable + 12 * 8, 0x7b7290};
 
+// r.AllowSubPrimitiveQueries (4.26 SceneVisibility.cpp: "currently only used by hierarchical instanced static
+// meshes"): the static int32 the cvar wraps. Foliage's per-cluster occlusion results crash with the side views
+// on track (README.md, stage gate runs), so views.cpp sets it to 0: one query per foliage proxy instead.
+inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;  // .data, 1 at load
+// Its registration (static init 0x686c10): `lea r8, [rip + 0x45c5057]`, the int passed to
+// IConsoleManager::RegisterConsoleVariableRef, next to `lea rdx, u"r.AllowSubPrimitiveQueries"` (0x3e70308).
+inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
+inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
+
 }  // namespace acc

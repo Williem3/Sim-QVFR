@@ -84,7 +84,17 @@ bool views_start(const aceqv::Views4Layout& l) {
                         static_cast<unsigned long long>(s.function));
             return false;
         }
+    if (!aceqv::code_matches(kAllowSubPrimitiveQueriesRef, kAllowSubPrimitiveQueriesRefAnchor,
+                             sizeof(kAllowSubPrimitiveQueriesRefAnchor))) {
+        aceqv::log_line("acc views: r.AllowSubPrimitiveQueries' registration isn't this build's; nothing patched");
+        return false;
+    }
     const std::uintptr_t base = aceqv::module_base();
+    // Foliage's per-cluster occlusion results crash with the side views on track (abi.h): one query per proxy.
+    auto* subPrimitiveQueries = reinterpret_cast<volatile std::int32_t*>(base + kAllowSubPrimitiveQueries);
+    aceqv::logf("acc views: r.AllowSubPrimitiveQueries %d -> 0 (foliage occlusion per proxy, not per cluster)",
+                static_cast<int>(*subPrimitiveQueries));
+    *subPrimitiveQueries = 0;
     layout = l;
     originalAdjust = reinterpret_cast<AdjustViewRectFn>(base + kAdjustViewRect.function);
     originalProjection = reinterpret_cast<ProjectionFn>(base + kGetStereoProjectionMatrix.function);
