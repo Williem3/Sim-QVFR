@@ -33,6 +33,8 @@ target_compile_definitions(ace_quadview PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_
 target_compile_options(ace_quadview PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(ace_quadview PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 set_target_properties(ace_quadview PROPERTIES OUTPUT_NAME ace-quadview)
+# A linker map next to the DLL, to name the layer's frames in a game's crash call stack (no effect on the code).
+target_link_options(ace_quadview PRIVATE /MAP)
 
 add_custom_command(TARGET ace_quadview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
