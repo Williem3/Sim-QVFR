@@ -1594,6 +1594,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             d3d11_capture_start(device, experiment.d3d11CaptureFrame);
             if (experiment.views4ComposeD3D11)
                 game->d3d11_session(device);
+            cheeky_session_d3d11(device);  // when Cheeky runs in this game (loads_cheeky)
         }
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);

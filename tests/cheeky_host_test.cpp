@@ -135,6 +135,17 @@ int main(int argc, char** argv) {
            "a view new since the last report counts from zero");
     expect(cheeky_views("{\"settings\":{}}").empty(), "a snapshot without view_details has no views");
 
+    // A D3D11 session (ACC): renderer 0, its device, no queue; each frame ticks the same.
+    auto* device11 = reinterpret_cast<ID3D11Device*>(0x3000);
+    const uint32_t ticksBefore = state->ticks;
+    cheeky_session_d3d11(device11);
+    cheeky_frame();
+    expect(state->ticks == ticksBefore + 2 && state->lastRenderer == 0 && state->lastDevice == device11 &&
+               state->lastQueue == nullptr,
+           "a D3D11 session hands over its device as renderer 0, no queue, and each frame ticks it");
+    cheeky_session(nullptr, nullptr);
+    expect(state->lastDevice == nullptr, "and its end pauses as a D3D12 one does");
+
     if (realLength) {  // its own process: a real runtime hooks NGX and cannot share this one with the fake
         STARTUPINFOW si{sizeof(si)};
         PROCESS_INFORMATION pi{};

@@ -18,7 +18,7 @@ namespace {
 // Cheeky's runtime ABI v1 (its shared/runtime_host_api.hpp). The runtime rejects a Start whose size
 // or abi differ, so a Cheeky build with another ABI refuses to start rather than misreading this.
 constexpr uint32_t kRuntimeAbi = 1;
-constexpr uint32_t kRendererD3D12 = 1;
+constexpr uint32_t kRendererD3D11 = 0, kRendererD3D12 = 1;
 // Cheeky's host ids are uevr 0, standalone 1, optiscaler 2, and it accepts no others yet: the layer
 // presents as standalone (Cheeky then names its log CheekyFoveatedDLSS-Standalone.log).
 constexpr uint32_t kHostStandalone = 1;
@@ -52,8 +52,9 @@ struct Host {
     CommandFn command = nullptr;
     SnapshotFn snapshot = nullptr;
     DetachFn detach = nullptr;
-    ID3D12Device* device = nullptr;
-    ID3D12CommandQueue* queue = nullptr;
+    void* device = nullptr;  // the session's: ID3D12Device (renderer 1) or ID3D11Device (renderer 0)
+    void* queue = nullptr;   // D3D12 only
+    uint32_t renderer = kRendererD3D12;
     uint64_t requests = 0;  // Command request ids
     // The view report.
     unsigned reportSeconds = 10;
@@ -173,7 +174,7 @@ bool cheeky_start(const CheekyConfig& config) {
         const size_t begin = at + 11, end = json.find('"', begin);
         host.version = json.substr(begin, end == std::string::npos ? 0 : end - begin);
     }
-    logf("cheeky: runtime %ls started (attachment %llu, settings in %ls); waiting for the session's D3D12 device",
+    logf("cheeky: runtime %ls started (attachment %llu, settings in %ls); waiting for the session's device",
          config.runtime.c_str(), static_cast<unsigned long long>(host.attachment), config.configDir.c_str());
     return true;
 }
@@ -196,17 +197,35 @@ bool cheeky_apply(const std::string& lines) {
     return ok;
 }
 
+namespace {
+
+void session_locked(uint32_t renderer, void* device, void* queue) {
+    if (!device && host.reportSeconds)
+        report_locked();  // the session's last numbers
+    host.renderer = renderer;
+    host.device = device;
+    host.queue = queue;
+    // A null device pauses processing until a later tick brings graphics again.
+    host.tick(host.attachment, renderer, device, queue);
+    logf("cheeky: %s", !device                        ? "session ended; processing paused"
+                       : renderer == kRendererD3D11 ? "D3D11 device handed over"
+                                                    : "D3D12 device and queue handed over");
+}
+
+}  // namespace
+
 void cheeky_session(ID3D12Device* device, ID3D12CommandQueue* queue) {
     if (!host.running)
         return;
     std::lock_guard lock(host.mutex);
-    if (!device && host.reportSeconds)
-        report_locked();  // the session's last numbers
-    host.device = device;
-    host.queue = queue;
-    // A null device pauses processing until a later tick brings graphics again.
-    host.tick(host.attachment, kRendererD3D12, device, queue);
-    logf("cheeky: %s", device ? "D3D12 device and queue handed over" : "session ended; processing paused");
+    session_locked(kRendererD3D12, device, queue);
+}
+
+void cheeky_session_d3d11(ID3D11Device* device) {
+    if (!host.running)
+        return;
+    std::lock_guard lock(host.mutex);
+    session_locked(kRendererD3D11, device, nullptr);
 }
 
 void cheeky_frame() {
@@ -215,7 +234,7 @@ void cheeky_frame() {
     std::lock_guard lock(host.mutex);
     if (!host.device)
         return;
-    host.tick(host.attachment, kRendererD3D12, host.device, host.queue);
+    host.tick(host.attachment, host.renderer, host.device, host.queue);
     ++host.frames;
     if (!host.reportSeconds)
         return;
