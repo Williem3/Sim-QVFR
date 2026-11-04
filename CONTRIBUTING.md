@@ -30,6 +30,13 @@ puts log-only hooks on ACE's VR functions, which log call stacks and per-frame c
 a D3D12 trace. The launcher's QVFR setup writes `probes=0`. See [docs/recon.md](docs/recon.md) for
 the reverse-engineering notes.
 
+### Games
+
+Everything specific to one game is in `src/games/<id>/`: its identity (exe, builds, Steam id), its
+addresses, and its QVFR engine code behind `GameAdapter`. The layer and the launcher only use
+`src/games/game.h` and `src/games/adapter.h`. To add a game, start with
+[src/games/README.md](src/games/README.md); `src/games/ace/` is the worked example.
+
 ### Features
 
 **Cheeky Foveated DLSS (`[cheeky]`, off by default).** The layer loads Cheeky's runtime
