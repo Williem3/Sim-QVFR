@@ -1,7 +1,9 @@
-// ace-quadview-launcher: starts Assetto Corsa EVO in VR with the ace-quadview layer for this launch
+// ace-quadview-launcher: starts the chosen game (src/games) in VR with the ace-quadview layer for this launch
 // only, nearest the game and above every implicit layer it can move (launch_plan.h). Settings come
 // from ace-quadview.ini next to the launcher; [launcher] holds the launcher's own:
-//   game_dir=   the folder holding AssettoCorsaEVO.exe (default: found through Steam)
+//   game=       the game to launch: ace (default) or acc (games/<id>/game.h)
+//   game_dir_<id>= that game's folder in Steam's libraries (default: found through Steam; ACE also reads the older
+//               game_dir)
 //   off_layers= comma-separated OpenXR layer names to turn off for ACE (e.g. XR_APILAYER_MBUCCHIA_toolkit)
 //   on_layers=  layers switched off in Windows to load for ACE all the same
 //   layer_order= the layers' order below the ACE layer (the OpenXR layers pane; layer_order.h)
@@ -15,6 +17,7 @@
 #include <ctime>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
@@ -112,19 +115,29 @@ std::wstring find_game_folder() {
     if (read_file((fs::path(steam) / L"steamapps" / L"libraryfolders.vdf").wstring(), vdf))
         for (const std::wstring& library : steam_libraries(vdf))
             libraries.push_back(library);
+    const games::GameInfo& game = games::launcher_game();
     for (const std::wstring& library : libraries) {
-        const fs::path folder = fs::path(library) / L"steamapps" / L"common" / games::launcher_game().steamFolder;
+        const fs::path folder = fs::path(library) / L"steamapps" / L"common" / game.steamFolder;
         std::error_code ec;
-        if (fs::exists(folder / games::launcher_game().exeName, ec))
+        if (fs::exists(folder / game.exeFolder / game.exeName, ec))
             return folder.wstring();
     }
     return {};
 }
 
-// [launcher] game_dir, else the game's folder in Steam's libraries.
+// The chosen game's folder: [launcher] game_dir_<id> (ACE: also game_dir), else its folder in Steam's libraries.
 std::wstring game_folder(const std::wstring& ini) {
-    const std::wstring set = ini_string(ini, L"launcher", L"game_dir");
+    const games::GameInfo& game = games::launcher_game();
+    std::wstring set = ini_string(ini, L"launcher", (L"game_dir_" + widen(game.id)).c_str());
+    if (set.empty() && game.id == std::string_view("ace"))
+        set = ini_string(ini, L"launcher", L"game_dir");
     return set.empty() ? find_game_folder() : set;
+}
+
+// The chosen game's exe under `folder`.
+fs::path game_exe(const std::wstring& folder) {
+    const games::GameInfo& game = games::launcher_game();
+    return fs::path(folder) / game.exeFolder / game.exeName;
 }
 
 std::vector<std::wstring> current_environment() {
@@ -148,9 +161,10 @@ std::vector<std::wstring> variable_names(const std::vector<std::wstring>& enviro
 Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstring>& environment) {
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
     const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
+    const bool dlss = games::launcher_game().features.foveatedDlss;  // Cheeky only in a game that has it
     return launch_options(read_launcher_layers(ini),
-                          _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0, cheeky.load,
-                          cheeky.fg, variable_names(environment));
+                          _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0,
+                          dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment));
 }
 
 std::wstring stamp_now() {
@@ -204,9 +218,10 @@ int run(bool dryRun) {
 
     const std::wstring game = game_folder(ini.wstring());
     const games::GameInfo& info = games::launcher_game();
-    const fs::path exe = fs::path(game) / info.exeName;
+    const fs::path exe = game_exe(game);
     if (game.empty() || !fs::exists(exe, ec))
-        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir in [launcher] of ace-quadview.ini");
+        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + widen(info.id) +
+                    L" in [launcher] of ace-quadview.ini");
 
     const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
@@ -236,7 +251,7 @@ int run(bool dryRun) {
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
     say(L"  run:       " + runFolder.wstring());
     say(L"  layer log: " + log.wstring());
-    std::wstring order = L"ACE -> " + widen(kLayerName);
+    std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);
     for (const MovedLayer& m : plan.below)
         order += L" -> " + widen(m.name);
     say(L"  OpenXR:    " + order + L" -> runtime");
@@ -269,8 +284,9 @@ int run(bool dryRun) {
     std::wstring command = L"\"" + exe.wstring() + L"\" " + info.launchArgs;  // the game's OpenXR start
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
+    const std::wstring workingFolder = exe.parent_path().wstring();
     if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, block.data(),
-                        game.c_str(), &si, &pi))
+                        workingFolder.c_str(), &si, &pi))
         return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(GetLastError()) + L")");
     say(L"Started " + std::wstring(info.name) + L" (pid " + std::to_wstring(pi.dwProcessId) + L").");
     if (baseline)  // one launch only
@@ -340,9 +356,16 @@ std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& wan
 
 std::wstring launcher_game_exe() {
     const std::wstring game = game_folder(settings_path());
-    const fs::path exe = fs::path(game) / games::launcher_game().exeName;
+    const fs::path exe = game_exe(game);
     std::error_code ec;
     return !game.empty() && fs::exists(exe, ec) ? exe.wstring() : std::wstring();
+}
+
+void choose_launcher_game() {
+    wchar_t id[32] = {};
+    GetPrivateProfileStringW(L"launcher", L"game", L"ace", id, static_cast<DWORD>(std::size(id)), settings_path().c_str());
+    if (const games::GameInfo* game = games::game_by_id(narrow(id).c_str()))
+        games::set_launcher_game(*game);
 }
 
 PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
@@ -356,11 +379,16 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
                                                                                                  : LaunchMode::Qvfr;
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
-    if (!exe.empty())
+    if (const wchar_t* openvr = games::launcher_game().openComposite) {
+        const std::wstring folder = game_folder(ini);
+        in.openComposite = folder.empty() ? OpenComposite::Unknown : open_composite((fs::path(folder) / openvr).wstring());
+    }
+    if (!exe.empty() && games::launcher_game().features.foveatedDlss)
         in.cheekyLoaders = cheeky_loaders(fs::path(exe).parent_path().wstring());
     const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
-    in.cheekyLoad = cheeky.load;
-    in.cheekyFg = cheeky.fg;
+    const bool dlss = games::launcher_game().features.foveatedDlss;
+    in.cheekyLoad = dlss && cheeky.load;
+    in.cheekyFg = dlss && cheeky.fg;
     in.cheekyRuntimeFound = GetFileAttributesW(cheeky_runtime_path(ini, layer_folder()).c_str()) != INVALID_FILE_ATTRIBUTES;
     in.cheekyLayer = cheeky_layer_state();
     in.layers = launcher_layer_plan();
@@ -393,6 +421,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     LocalFree(argv);
     if (!request.empty())
         return apply_request(request);
+    choose_launcher_game();
     if (!dryRun && !launchNow)
         return run_window(instance, show);
     // Command line: report to the console (or pipe) the launcher was started from, if any.

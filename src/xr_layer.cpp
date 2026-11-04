@@ -217,10 +217,19 @@ FovCrop read_crop(const wchar_t* ini) {
     return fov_crop(side(L"top"), side(L"bottom"), side(L"outer"), side(L"inner"));
 }
 
+// What the game has beyond QVFR (games/game.h GameFeatures); anything else stays off whatever the ini says.
+games::GameFeatures game_features() {
+    const games::GameInfo* g = games::current_game();
+    return g ? g->features : games::GameFeatures{};
+}
+
 LiveSettings read_live(const wchar_t* ini) {
     LiveSettings l;
-    l.crop = read_crop(ini);
+    const games::GameFeatures features = game_features();
+    if (features.fovCrop)
+        l.crop = read_crop(ini);
     l.helmet = read_helmet_settings(ini);
+    l.helmet.on = l.helmet.on && features.helmet;
     l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
     const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
     l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
@@ -356,7 +365,7 @@ void load_experiment() {
     }
     experiment.views4NoMask =
         experiment.views4 &&
-        GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.views4Compose ? 0 : 1, ini.c_str()) == 0;
+        GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.composing() ? 0 : 1, ini.c_str()) == 0;
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
@@ -2509,8 +2518,9 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
     return next.EndFrame(session, &end);
 }
 
-// views4 composing: ACE draws each eye's hidden-area mesh into every view, so the focus views got the
-// lens mask's black corners in their own frame (composition run 2). views4_mask=0 answers the hidden
+// views4 composing: the game draws each eye's hidden-area mesh into every view, so the focus views got the
+// lens mask's black corners in their own frame (ACE: composition run 2; ACC through OpenComposite: a dark rim
+// round the focus area, 2026-11-04). views4_mask=0 answers the hidden
 // mesh with one zero-area triangle: nothing is masked in any view (the lenses hide those pixels anyway).
 bool visibilityMaskLogged = false;
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
@@ -2978,8 +2988,10 @@ void live_apply(const LiveSettings& l) {
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
-    if (experiment.views4)
+    if (experiment.views4 && game_features().liveResolution)
         live_resolution(l);
+    else if (experiment.views4)
+        logf("live: %ls resizes its views at the next launch (no live resolution yet)", game->info()->shortName);
     if (l.gaze && !gazeAvailable && (experiment.quad || experiment.composing()))
         log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
     if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.composing())
@@ -3490,6 +3502,10 @@ void menu_open(int64_t now) {
         }
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
         menu.model.launch.cropHeight = l.cropHeight * 100;
+        const games::GameFeatures features = game_features();  // what the game has: the rest is left out
+        menu.model.launch.cropPage = features.fovCrop;
+        menu.model.launch.helmetPage = features.helmet;
+        menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
             menu.model.launch.helmetPieces = quad.compositor.has_helmet_pieces();

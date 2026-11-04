@@ -48,11 +48,14 @@ namespace t = tokens;
 
 // The game the launcher starts, by name (games/game.h).
 std::wstring game_name() { return games::launcher_game().name; }
+// The chosen game has `feature` (games::GameFeatures); without it the window greys it out.
+bool game_has(bool games::GameFeatures::*feature) { return games::launcher_game().features.*feature; }
+std::wstring not_yet() { return L"Not available for " + std::wstring(games::launcher_game().shortName) + L" yet."; }
 
 enum class Pane { Checks, Profiles, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
 constexpr int kPanes = 13;
 enum Ctl {
-    kNone, kSidebar, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
+    kNone, kSidebar, kGame, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
     // (FocusCorner's order, across then up or down).
@@ -346,7 +349,7 @@ void start_install() {
         return;
     refresh_checks();
     if (ace_running()) {
-        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: ace-quadview’s layer is in use while it runs.").c_str(), L"QVFR Launcher",
+        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: ace-quadview’s layer is in use while it runs.").c_str(), L"Sim QVFR Launcher",
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
@@ -356,7 +359,7 @@ void start_install() {
                      L" MB), checks it, replaces its program files and restarts. Your settings, profiles, logs and any file "
                      L"you changed (your own helmet images) stay. The version you have now is kept in the update folder.")
                         .c_str(),
-                    L"QVFR Launcher", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
+                    L"Sim QVFR Launcher", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
         return;
     app.installing = true;
     app.installError.clear();
@@ -397,7 +400,7 @@ void install_done(InstallResult* r) {
                  L" files; " + std::to_wstring(result->kept) + L" of yours kept). The launcher restarts now.\n\nThe version you had "
                  L"is in " + result->backup + L".")
                     .c_str(),
-                L"QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+                L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     std::wstring command = L"\"" + std::wstring(exe) + L"\"";
@@ -553,6 +556,7 @@ std::vector<Ctl> focus_order() {
     case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
     case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
     case Pane::Rendering:
+        order.push_back(kGame);
         if (method_shown())
             order.push_back(kMethod);
         order.push_back(kMode);
@@ -560,11 +564,14 @@ std::vector<Ctl> focus_order() {
     case Pane::Resolution:
         order.push_back(kOuter);
         if (!inner_disabled()) {
-            order.insert(order.end(), {kInner, kCropOn});
-            if (app.s.crop)
+            order.push_back(kInner);
+            if (game_has(&games::GameFeatures::fovCrop))
+                order.push_back(kCropOn);
+            if (app.s.crop && game_has(&games::GameFeatures::fovCrop))
                 order.insert(order.end(), {kCropTop, kCropBottom, kCropOuter, kCropInner});
-            order.push_back(kHelmetOn);
-            if (app.s.helmet.on)
+            if (game_has(&games::GameFeatures::helmet))
+                order.push_back(kHelmetOn);
+            if (app.s.helmet.on && game_has(&games::GameFeatures::helmet))
                 order.insert(order.end(), {kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight,
                                            kHelmetDepth, kHelmetDetail});
         }
@@ -588,6 +595,8 @@ std::vector<Ctl> focus_order() {
         order.push_back(kFeather);
         break;
     case Pane::Dlss:
+        if (!game_has(&games::GameFeatures::foveatedDlss))
+            break;
         order.insert(order.end(), {kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset,
                                    kCheekyFocusPreset, kCheekySupersampling, kCheekyMotionFix, kCheekyNr});
         if (app.s.cheeky.nr)
@@ -636,7 +645,7 @@ void launch() {
             problems += L"\u2022 " + c.title + L"\n";
     if (!problems.empty() &&
         MessageBoxW(app.hwnd, (L"The launch checks found:\n\n" + problems + L"\nLaunch " + game_name() + L" anyway?").c_str(),
-                    L"QVFR Launcher", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+                    L"Sim QVFR Launcher", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
         app.pane = Pane::Checks;
         app.scroll = 0;
         InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -846,8 +855,18 @@ void help_tip() {
                     true);
 }
 
-void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc) {
+void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,
+              bool disabled = false) {
     const Rect box{r.x, r.y + 1, 14, 14};
+    if (disabled) {
+        app.canvas.stroke(box, col(app.c->separator), 1, t::kRadiusCheck);
+        const float tx = r.x + 14 + t::kSpace2, tw = r.w - 14 - t::kSpace2;
+        app.canvas.text(label, t::kBody, {tx, r.y, tw, t::kBody.lineHeight}, col(app.c->label_tertiary));
+        if (!desc.empty())
+            app.canvas.text(desc, t::kCallout, {tx, r.y + t::kBody.lineHeight + 2, tw, 200}, col(app.c->label_tertiary),
+                            Align::Leading, false, true);
+        return;  // no hit: it does nothing
+    }
     if (checked) {
         app.canvas.fill(box, col(app.c->accent_fill), t::kRadiusCheck);
         app.canvas.path("M4 7.2l2.1 2.1L10.2 4.6", box, 14, col(app.c->on_accent), 2);
@@ -1831,7 +1850,22 @@ float pane_content(float x, float y, float w, bool draw) {
         }
         mode.controlH = t::kControlHeight;
         mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
-        h += section(x, y, w, L"Rendering", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
+        Row game;
+        game.label = L"Game";
+        game.desc = games::launcher_game().openComposite ? L"Reaches your headset through OpenComposite (Launch checks)."
+                                                         : L"Launch starts it in VR with ace-quadview.";
+        {
+            std::size_t count = 0;
+            const games::GameInfo* const* all = games::all_games(count);
+            std::vector<std::wstring> names;
+            for (std::size_t i = 0; i < count; ++i)
+                names.push_back(all[i]->name);
+            game.controlW = popup_width(names.data(), static_cast<int>(names.size()), 220);
+        }
+        game.controlH = t::kControlHeight;
+        game.control = [](const Rect& r) { popup_button(kGame, r, games::launcher_game().name, false); };
+        h += section(x, y, w, L"Game", {game}, L"", draw) + t::kSpace6;
+        h += section(x, y + h, w, L"Rendering", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
                      qvfr ? L"Quad View Foveated Rendering draws a sharp focus view inside a lower-resolution outer view for each eye."
                           : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
                             L"Foveated Rendering; Two-loop won't be offered again.",
@@ -1858,11 +1892,15 @@ float pane_content(float x, float y, float w, bool draw) {
         h += t::kSpace6;
         // The FOV crop: each side on its own, QVFR only.
         Row cropOn;
-        const std::wstring cropDesc = qvfr ? L"Skips the edges of each eye that a helmet covers, so they are never rendered."
-                                           : L"Available in Quad View Foveated Rendering.";
+        const bool cropHere = game_has(&games::GameFeatures::fovCrop);
+        const std::wstring cropDesc = !cropHere ? not_yet()
+                                      : qvfr    ? L"Skips the edges of each eye that a helmet covers, so they are never rendered."
+                                                : L"Available in Quad View Foveated Rendering.";
         cropOn.fullHeight = [cropDesc](float width) { return checkbox_height(cropDesc, width); };
-        cropOn.full = [cropDesc](const Rect& r) { checkbox(kCropOn, r, app.s.crop, L"Crop the view", cropDesc); };
-        const bool cropOff = !qvfr || !app.s.crop;
+        cropOn.full = [cropDesc, cropHere](const Rect& r) {
+            checkbox(kCropOn, r, app.s.crop && cropHere, L"Crop the view", cropDesc, !cropHere);
+        };
+        const bool cropOff = !qvfr || !app.s.crop || !cropHere;
         h += section(x, y + h, w, L"Field of view crop",
                      {cropOn, slider_row(kCropTop, L"Top", L"", app.s.cropTop, L"", cropOff),
                       slider_row(kCropBottom, L"Bottom", L"", app.s.cropBottom, L"", cropOff),
@@ -1875,11 +1913,15 @@ float pane_content(float x, float y, float w, bool draw) {
                      draw);
         h += t::kSpace6;
         Row helmetOn;
-        const std::wstring helmetDesc = qvfr ? L"Draws a helmet’s visor opening around the view, lit by the scene."
-                                             : L"Available in Quad View Foveated Rendering.";
+        const bool helmetHere = game_has(&games::GameFeatures::helmet);
+        const std::wstring helmetDesc = !helmetHere ? not_yet()
+                                        : qvfr      ? L"Draws a helmet’s visor opening around the view, lit by the scene."
+                                                    : L"Available in Quad View Foveated Rendering.";
         helmetOn.fullHeight = [helmetDesc](float width) { return checkbox_height(helmetDesc, width); };
-        helmetOn.full = [helmetDesc](const Rect& r) { checkbox(kHelmetOn, r, app.s.helmet.on, L"Show a helmet", helmetDesc); };
-        const bool helmetOff = !qvfr || !app.s.helmet.on;
+        helmetOn.full = [helmetDesc, helmetHere](const Rect& r) {
+            checkbox(kHelmetOn, r, app.s.helmet.on && helmetHere, L"Show a helmet", helmetDesc, !helmetHere);
+        };
+        const bool helmetOff = !qvfr || !app.s.helmet.on || !helmetHere;
         h += section(x, y + h, w, L"Helmet overlay",
                      {helmetOn,
                       slider_row(kHelmetRim, L"Rim", L"How far the padding reaches into the view.", app.s.helmet.rim, L"",
@@ -1979,6 +2021,14 @@ float pane_content(float x, float y, float w, bool draw) {
         break;
     }
     case Pane::Dlss: {
+        if (!game_has(&games::GameFeatures::foveatedDlss)) {
+            Row note;
+            note.label = L"Cheeky Foveated DLSS";
+            note.desc = not_yet() + L" The launch leaves it off for this game.";
+            note.disabled = true;
+            h += section(x, y, w, L"Foveated DLSS", {note}, L"", draw);
+            break;
+        }
         // Cheeky's author asked for this credit, with the version, wherever the UI controls Cheeky.
         const std::wstring credit = cheeky_version_label(app.runtime.cheekyVersion) +
                                     (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L"");
@@ -2176,7 +2226,7 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::Report: h += report_pane(x, y, w, draw); break;
     case Pane::About: {
         if (draw) {
-            app.canvas.text(L"QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
+            app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
             app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody, {x, y + 26 + 8, w, 16},
                             col(app.c->label_secondary));
             app.canvas.text(L"Version " + widen(ACE_QV_VERSION), t::kBody, {x, y + 26 + 8 + 16 + 8, w, 16},
@@ -2941,6 +2991,16 @@ void open_popup(Ctl owner) {
     } else if (owner == kCheekyNrPasses) {
         app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
         app.popup.selected = app.s.cheeky.nrPasses - 1;
+    } else if (owner == kGame) {
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        app.popup.items.clear();
+        app.popup.selected = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (all[i] == &games::launcher_game())
+                app.popup.selected = static_cast<int>(i);
+            app.popup.items.push_back(all[i]->name);
+        }
     } else {
         app.popup.items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
                                            : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
@@ -2954,6 +3014,17 @@ void open_popup(Ctl owner) {
 void choose(Ctl owner, int option) {
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
+        return;
+    }
+    if (owner == kGame) {  // the launcher's own: [launcher] game, then everything that follows the game
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        if (option >= 0 && static_cast<std::size_t>(option) < count && all[option] != &games::launcher_game()) {
+            WritePrivateProfileStringW(L"launcher", L"game", widen(all[option]->id).c_str(), app.ini.c_str());
+            choose_launcher_game();
+            refresh_checks();
+        }
+        InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
     if (owner == kMethod)
@@ -3043,7 +3114,7 @@ void start_capture(int action, bool pad) {
     if (pad) {
         open_pads();
         if (!app.padsOpen) {
-            MessageBoxW(app.hwnd, L"DirectInput isn’t available, so wheel and controller buttons can’t be read.", L"QVFR Launcher",
+            MessageBoxW(app.hwnd, L"DirectInput isn’t available, so wheel and controller buttons can’t be read.", L"Sim QVFR Launcher",
                         MB_OK | MB_ICONWARNING);
             return;
         }
@@ -3200,11 +3271,11 @@ bool store_profile(const Profile& p) {
     const std::wstring folder = profiles_folder(app.ini);
     Profile existing;
     if (load_profile(folder, p.name, existing, app.s.eyeTracking) &&
-        MessageBoxW(app.hwnd, (L"A profile named " + p.name + L" exists. Replace it?").c_str(), L"QVFR Launcher",
+        MessageBoxW(app.hwnd, (L"A profile named " + p.name + L" exists. Replace it?").c_str(), L"Sim QVFR Launcher",
                     MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
         return false;
     if (!save_profile(folder, p)) {
-        MessageBoxW(app.hwnd, (L"The profile couldn’t be saved in " + folder + L".").c_str(), L"QVFR Launcher", MB_OK | MB_ICONWARNING);
+        MessageBoxW(app.hwnd, (L"The profile couldn’t be saved in " + folder + L".").c_str(), L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
         return false;
     }
     return true;
@@ -3216,7 +3287,7 @@ void save_current_profile() {
         if (!valid_profile_name(name)) {
             MessageBoxW(app.hwnd,
                         L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
-                        L"QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+                        L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
             continue;
         }
         if (store_profile(settings_profile(app.s, name))) {
@@ -3235,14 +3306,14 @@ void paste_profile() {
     Profile p;
     if (!shared_profile(text, p)) {
         MessageBoxW(app.hwnd, L"The clipboard holds no shared profile. Copy the whole line that starts with QVFR1:, then try again.",
-                    L"QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+                    L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
         return;
     }
     if (!store_profile(p))
         return;
     refresh_profiles();
     app.profileMessage = L"Added " + p.name + L".";
-    if (MessageBoxW(app.hwnd, (L"Added the profile " + p.name + L". Use it now?").c_str(), L"QVFR Launcher",
+    if (MessageBoxW(app.hwnd, (L"Added the profile " + p.name + L". Use it now?").c_str(), L"Sim QVFR Launcher",
                     MB_YESNO | MB_ICONQUESTION) == IDYES)
         use_profile(p.name);
 }
@@ -3251,6 +3322,9 @@ void paste_profile() {
 void fix_check(const Check& c) {
     switch (c.fix) {
     case CheckFix::OpenReleases: ShellExecuteW(app.hwnd, L"open", kReleasesUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
+    case CheckFix::OpenGuide:
+        ShellExecuteW(app.hwnd, L"open", c.fixTarget.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return;
     case CheckFix::StartSteam: ShellExecuteW(app.hwnd, L"open", L"steam://open/main", nullptr, nullptr, SW_SHOWNORMAL); break;
     case CheckFix::ShowFile: {
         const std::wstring select = L"/select,\"" + c.fixTarget + L"\"";
@@ -3263,7 +3337,7 @@ void fix_check(const Check& c) {
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
             MessageBoxW(app.hwnd, L"OpenXR Toolkit’s settings for ACE could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.",
-                        L"QVFR Launcher", MB_OK | MB_ICONWARNING);
+                        L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
         break;
     case CheckFix::None: return;
     }
@@ -3312,7 +3386,7 @@ void activate(Ctl id, int option) {
                                      ? L"Copied " + name + L" to the clipboard: paste it in a chat or a post."
                                      : L"Couldn’t copy to the clipboard.";
         } else if (id == kProfileDelete &&
-                   MessageBoxW(app.hwnd, (L"Delete the profile " + name + L"?").c_str(), L"QVFR Launcher",
+                   MessageBoxW(app.hwnd, (L"Delete the profile " + name + L"?").c_str(), L"Sim QVFR Launcher",
                                MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK) {
             delete_profile(profiles_folder(app.ini), name);
             if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
@@ -3359,6 +3433,7 @@ void activate(Ctl id, int option) {
         edit_launcher_layers([](LauncherLayers& p) { p = {}; });
         app.layerMessage.clear();
         break;
+    case kGame:
     case kMethod:
     case kMode:
     case kCheekyOuterPreset:
@@ -3389,13 +3464,13 @@ void activate(Ctl id, int option) {
     case kUpdateBadge: activate(kSidebar, static_cast<int>(Pane::About)); return;
     case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kCropOn:
-        if (app.s.mode == RenderMode::Qvfr) {
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::fovCrop)) {
             app.s.crop = !app.s.crop;
             changed();
         }
         return;
     case kHelmetOn:
-        if (app.s.mode == RenderMode::Qvfr) {
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::helmet)) {
             app.s.helmet.on = !app.s.helmet.on;
             changed();
         }
@@ -3826,7 +3901,7 @@ int run_window(HINSTANCE instance, int show) {
     const UINT dpi = GetDpiForSystem();
     RECT r{0, 0, MulDiv(static_cast<int>(kDefaultWidth), dpi, 96), MulDiv(static_cast<int>(kDefaultHeight - kTitlebar), dpi, 96)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
-    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
+    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"Sim QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                 r.right - r.left, r.bottom - r.top, nullptr, nullptr, instance, nullptr);
     if (!hwnd)
         return 1;

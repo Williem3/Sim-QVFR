@@ -1,5 +1,5 @@
-// Assetto Corsa Competizione's identity (../game.h). Identity only for now: the layer logs in ACC and
-// changes nothing (adapters.cpp, README.md). VR reaches OpenXR through OpenComposite.
+// Assetto Corsa Competizione's identity (../game.h): QVFR through its adapter (adapter.cpp, README.md). VR
+// reaches OpenXR through OpenComposite.
 #pragma once
 
 #include <iterator>
@@ -13,7 +13,11 @@ inline constexpr const char* kBuilds[] = {"2b2679c269ad710f61ac5c0fe84439799f770
 
 inline constexpr aceqv::games::GameInfo kGame = {
     "acc", L"Assetto Corsa Competizione", L"ACC", L"AC2-Win64-Shipping.exe", L"Assetto Corsa Competizione",
-    L"805550", L"-vr hmd=SteamVR", kBuilds, std::size(kBuilds),
+    L"AC2\\Binaries\\Win64", L"805550", L"-vr hmd=SteamVR",
+    L"Engine\\Binaries\\ThirdParty\\OpenVR\\OpenVRv1_5_17\\Win64\\openvr_api.dll",  // VR through OpenComposite
+    // QVFR, gaze, the headset menu and overlay; Foveated DLSS, the helmet, live resolution and the FOV crop not yet.
+    {false, false, false, false},
+    kBuilds, std::size(kBuilds),
 };
 
 }  // namespace acc

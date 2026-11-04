@@ -2,7 +2,9 @@
 
 #include <windows.h>
 
+#include <cstring>
 #include <cwchar>
+#include <iterator>
 
 #include "ace/game.h"
 #include "acc/game.h"
@@ -14,9 +16,25 @@ namespace {
 // Every game ace-quadview supports. A new game adds its game.h here (src/games/README.md).
 constexpr const GameInfo* kGames[] = {&::ace::kGame, &::acc::kGame};
 
+const GameInfo* chosen = &::ace::kGame;
+
 }  // namespace
 
-const GameInfo& launcher_game() { return ::ace::kGame; }
+const GameInfo* const* all_games(std::size_t& count) {
+    count = std::size(kGames);
+    return kGames;
+}
+
+const GameInfo* game_by_id(const char* id) {
+    for (const GameInfo* g : kGames)
+        if (id && _stricmp(id, g->id) == 0)
+            return g;
+    return nullptr;
+}
+
+const GameInfo& launcher_game() { return *chosen; }
+
+void set_launcher_game(const GameInfo& game) { chosen = &game; }
 
 const GameInfo* game_for_exe(const wchar_t* fileName) {
     for (const GameInfo* g : kGames)
