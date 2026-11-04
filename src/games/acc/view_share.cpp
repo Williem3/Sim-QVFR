@@ -3,7 +3,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <iterator>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -93,14 +97,44 @@ std::mutex mutex;
 aceqv::D3D11ViewResample resampler;
 ComPtr<ID3D11Texture2D> eyeSsr[2];
 aceqv::ViewRegion eyeSsrRegion[2];
-bool eyeSsrFresh[2] = {}, eyeAoFresh[2] = {};
+bool eyeSsrFresh[2] = {};
+// The texture each eye last drew its AO into this frame (compared, never dereferenced): a focus view's draw is
+// refilled only from the same texture's eye region. Under DLSS several single-channel textures share the scene
+// textures' size (2026-11-04), so a focus view's draw into one must not take an eye's draw into another.
+ID3D11Resource* eyeAo[2] = {};
+// A focus view's refill, waiting for ACC to leave the AO texture: on track each view draws its AO several times a
+// frame into the same texture (2026-11-04: 3-4 draws per eye), so a refill after a focus view's first draw was drawn
+// over by its next ones. Done when the render target moves off that texture (or at the frame's end), from its eye's
+// finished region.
+struct AoPending {
+    ComPtr<ID3D11Texture2D> texture;
+    aceqv::ViewRegion eye, focus;
+    bool set = false;
+};
+AoPending aoPending[2];  // under `mutex`
+
+// One frame's AO-candidate draws now and then (the first few reports), to see which textures each view draws into.
+struct AoTrace {
+    bool recording = false;
+    int reports = 0;
+    struct Entry {
+        int view;
+        const void* texture;
+        unsigned width, height;
+        char action;  // e: an eye's; p: a focus view's, refill pending; r: refilled; o: into another texture than its
+                      // eye's; n: no eye yet
+    };
+    Entry entries[64];
+    int count = 0, dropped = 0, trackReports = 0;
+};
+AoTrace aoTrace;  // under `mutex`
 // Render thread only: the texture the last dispatch wrote, if it looked like the SSR denoiser's output; the bound
 // render target 0, if it looks like the AO texture. Compared, never dereferenced.
 ID3D11Resource* armed = nullptr;
 ID3D11Resource* aoTarget = nullptr;
 
 struct Counts {
-    std::atomic<std::uint64_t> shared[2], eyes{0}, noEye{0}, failed{0}, unplaced{0};
+    std::atomic<std::uint64_t> shared[2], eyes{0}, noEye{0}, failed{0}, unplaced{0}, otherTexture{0};
     std::atomic<bool> unplacedLogged{false}, firstLogged{false};
 };
 Counts ssrCounts, aoCounts;
@@ -127,8 +161,11 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
     views_target(target);
     // The scene textures span the views, rounded up to 4 (README.md). The views can reach past the target: with
     // an odd eye width (1614) UE starts the right eye at an even x (1616), so its views end at 3230 and its
-    // scene textures are 3232 wide against a 3228 target (2026-11-04: none matched, nothing was shared).
-    int extent[2] = {target[0], target[1]};
+    // scene textures are 3232 wide against a 3228 target (2026-11-04: none matched, nothing was shared). Under
+    // DLSS (or any screen percentage) the views render smaller than the target and the scene textures with them
+    // (2026-11-04, Quality: views reach 1941x892, scene textures 1944x892 in a 2904x1336 target): so the views'
+    // final rects alone size them, the target only before the renderer first reported them.
+    int extent[2] = {0, 0};
     for (int v = 0; v < 4; ++v) {
         int rect[4];
         if (views_view_rect(v, rect)) {
@@ -136,15 +173,29 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
             extent[1] = std::max(extent[1], rect[1] + rect[3]);
         }
     }
+    if (extent[0] <= 0 || extent[1] <= 0) {
+        extent[0] = target[0];
+        extent[1] = target[1];
+    }
+    // At least the views on both axes, but no bound above: UE keeps its scene textures at the largest size any
+    // render asked for (on track a 2048x2048 one: 2904x2048 with DLSS off, 2048x2048 under DLSS, whose views reach
+    // only 1941 across; 2026-11-04). The passes that use them are told apart by more than size: AO by its draws at
+    // the views' viewports, the reflections by the composite that reads them with a cube array bound.
     const int w = static_cast<int>(d.Width), h = static_cast<int>(d.Height);
-    const bool match = w >= extent[0] && w < extent[0] + 8 && h >= extent[1] - 2;
-    if (!match) {  // the first few turned down, per format: what the scene textures really are
-        static std::atomic<int> rejectedLogged{0};
-        if (rejectedLogged.fetch_add(1, std::memory_order_relaxed) < 12)
+    const bool match = w >= extent[0] - 2 && h >= extent[1] - 2;
+    if (!match) {  // each kind turned down once (format and size): what the scene textures really are
+        static std::mutex loggedMutex;
+        static std::vector<std::uint64_t> logged;
+        const std::uint64_t key = (static_cast<std::uint64_t>(d.Format) << 40) | (static_cast<std::uint64_t>(w) << 20) |
+                                  static_cast<std::uint64_t>(h);
+        std::lock_guard guard(loggedMutex);
+        if (logged.size() < 32 && std::find(logged.begin(), logged.end(), key) == logged.end()) {
+            logged.push_back(key);
             aceqv::logf("acc view share: format %d texture %dx%d (mips %u, array %u, bind 0x%x) is not a scene texture "
                         "(views reach %dx%d, target %dx%d)",
                         static_cast<int>(d.Format), w, h, d.MipLevels, d.ArraySize, d.BindFlags, extent[0], extent[1],
                         target[0], target[1]);
+        }
     }
     return match;
 }
@@ -270,12 +321,19 @@ void on_composite(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
 
 // ---- AO ----
 
+void flush_ao();
+
 void follow_target(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs) {
     hookCalls.targets.fetch_add(1, std::memory_order_relaxed);
     if (!on_immediate(ctx))
         return;
     hookCalls.targetsMine.fetch_add(1, std::memory_order_relaxed);
     rearm(ctx);
+    if (aoTarget && (aoPending[0].set || aoPending[1].set)) {  // ACC leaves the AO texture: its views are drawn
+        std::lock_guard guard(mutex);
+        if (active.load(std::memory_order_relaxed))
+            flush_ao();
+    }
     aoTarget = nullptr;
     if (!shareAo.load(std::memory_order_relaxed) || count == 0 || !rtvs || !rtvs[0])
         return;
@@ -301,32 +359,70 @@ void STDMETHODCALLTYPE set_targets_and_uavs_hook(ID3D11DeviceContext* ctx, UINT 
         follow_target(ctx, count, rtvs);
 }
 
-// A draw into the AO texture (the view's AO, just drawn): after a focus view's, its region from its eye's.
+// A draw into the AO texture (the view's AO, just drawn): after a focus view's, its region from its eye's once ACC
+// leaves the texture (flush_ao).
 void on_ao_drawn(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
     aceqv::ViewRegion region;
     const int view = bound_view(ctx, aoCounts, "a draw into the AO texture", region);
     if (view < 0)
         return;
+    const auto trace = [&](char action) {
+        if (!aoTrace.recording)
+            return;
+        if (aoTrace.count == static_cast<int>(std::size(aoTrace.entries))) {
+            ++aoTrace.dropped;
+            return;
+        }
+        D3D11_TEXTURE2D_DESC d{};
+        static_cast<ID3D11Texture2D*>(written)->GetDesc(&d);
+        aoTrace.entries[aoTrace.count++] = {view, written, d.Width, d.Height, action};
+    };
     if (view < 2) {
-        eyeAoFresh[view] = true;
+        eyeAo[view] = written;
         aoCounts.eyes.fetch_add(1, std::memory_order_relaxed);
+        trace('e');
         return;
     }
     const int e = view - 2;
     int eyeRect[4];
-    if (!eyeAoFresh[e] || !views_view_rect(e, eyeRect)) {
+    if (!eyeAo[e] || !views_view_rect(e, eyeRect)) {
         aoCounts.noEye.fetch_add(1, std::memory_order_relaxed);
+        trace('n');
         return;
     }
-    eyeAoFresh[e] = false;
-    const aceqv::ViewRegion eye{eyeRect[0], eyeRect[1], eyeRect[2], eyeRect[3]};
-    auto* ao = static_cast<ID3D11Texture2D*>(written);  // scene_texture: a Texture2D
-    aceqv::ViewMapping m{};
-    if (!focus_mapping(e, m) || !resampler.resample_target(ao, eye, ao, region, m)) {
-        aoCounts.failed.fetch_add(1, std::memory_order_relaxed);
+    if (eyeAo[e] != written) {
+        aoCounts.otherTexture.fetch_add(1, std::memory_order_relaxed);
+        trace('o');
         return;
     }
-    note_shared(aoCounts, "ambient occlusion", view, eye, region);
+    AoPending& pending = aoPending[e];
+    pending.texture = static_cast<ID3D11Texture2D*>(written);  // scene_texture: a Texture2D
+    pending.eye = {eyeRect[0], eyeRect[1], eyeRect[2], eyeRect[3]};
+    pending.focus = region;
+    pending.set = true;
+    trace('p');
+}
+
+// The focus views' pending refills (under `mutex`), now that ACC has finished drawing into the AO texture.
+void flush_ao() {
+    for (int e = 0; e < 2; ++e) {
+        AoPending& pending = aoPending[e];
+        if (!pending.set)
+            continue;
+        pending.set = false;
+        ComPtr<ID3D11Texture2D> ao = std::move(pending.texture);
+        aceqv::ViewMapping m{};
+        if (!focus_mapping(e, m) || !resampler.resample_target(ao.Get(), pending.eye, ao.Get(), pending.focus, m)) {
+            aoCounts.failed.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        if (aoTrace.recording && aoTrace.count < static_cast<int>(std::size(aoTrace.entries))) {
+            D3D11_TEXTURE2D_DESC d{};
+            ao->GetDesc(&d);
+            aoTrace.entries[aoTrace.count++] = {e + 2, ao.Get(), d.Width, d.Height, 'r'};
+        }
+        note_shared(aoCounts, "ambient occlusion", e + 2, pending.eye, pending.focus);
+    }
 }
 
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base) {
@@ -376,11 +472,12 @@ bool hook_vtable(void** vtable) {
 
 void report(Counts& c, const char* what) {
     aceqv::logf("acc view share: %s over the last 900 frames: focus views given their eye's left %llu right %llu; eye "
-                "passes %llu, focus passes without an eye's %llu, failed %llu, at no view's viewport %llu",
+                "passes %llu, focus passes without an eye's %llu, into another texture than their eye's %llu, failed %llu, "
+                "at no view's viewport %llu",
                 what, static_cast<unsigned long long>(c.shared[0].exchange(0)),
                 static_cast<unsigned long long>(c.shared[1].exchange(0)), static_cast<unsigned long long>(c.eyes.exchange(0)),
-                static_cast<unsigned long long>(c.noEye.exchange(0)), static_cast<unsigned long long>(c.failed.exchange(0)),
-                static_cast<unsigned long long>(c.unplaced.exchange(0)));
+                static_cast<unsigned long long>(c.noEye.exchange(0)), static_cast<unsigned long long>(c.otherTexture.exchange(0)),
+                static_cast<unsigned long long>(c.failed.exchange(0)), static_cast<unsigned long long>(c.unplaced.exchange(0)));
 }
 
 }  // namespace
@@ -440,14 +537,50 @@ void view_share_stop() {
     immediate.store(nullptr);
     for (int e = 0; e < 2; ++e) {
         eyeSsr[e].Reset();
-        eyeSsrFresh[e] = eyeAoFresh[e] = false;
+        eyeSsrFresh[e] = false;
+        eyeAo[e] = nullptr;
+        aoPending[e] = AoPending{};
     }
     resampler.shutdown();
 }
 
 void view_share_frame_end() {
-    if (!active.load(std::memory_order_relaxed) || ++frames % 900 != 0)
+    if (!active.load(std::memory_order_relaxed))
         return;
+    {
+        std::lock_guard guard(mutex);
+        flush_ao();  // any refill still pending (ACC never left the AO texture this frame)
+        if (aoTrace.recording) {  // the frame just ended
+            aoTrace.recording = false;
+            char line[2048];
+            int n = std::snprintf(line, sizeof(line), "acc view share: one frame's AO-candidate draws (view:texture "
+                                                      "size action; e eye, p refill pending, r refilled, o other "
+                                                      "texture, n no eye):");
+            for (int i = 0; i < aoTrace.count && n < static_cast<int>(sizeof(line)) - 64; ++i) {
+                const AoTrace::Entry& t = aoTrace.entries[i];
+                n += std::snprintf(line + n, sizeof(line) - n, " %d:%p %ux%u %c", t.view, t.texture, t.width, t.height,
+                                   t.action);
+            }
+            if (aoTrace.dropped)
+                std::snprintf(line + n, sizeof(line) - n, " (+%d more)", aoTrace.dropped);
+            aceqv::log_line(line);
+        }
+        for (int e = 0; e < 2; ++e)
+            eyeAo[e] = nullptr;  // an eye's AO is this frame's only
+    }
+    if (++frames % 900 != 0)
+        return;
+    {
+        // The next frame, traced: at the first three reports, and at three where the views drew their AO more than once a
+        // frame (on track).
+        const bool many = aoCounts.eyes.load(std::memory_order_relaxed) > 2 * 900 + 200;
+        std::lock_guard guard(mutex);
+        if (aoTrace.reports < 3 || (many && aoTrace.trackReports < 3)) {
+            ++(aoTrace.reports < 3 ? aoTrace.reports : aoTrace.trackReports);
+            aoTrace.recording = true;
+            aoTrace.count = aoTrace.dropped = 0;
+        }
+    }
     {
         std::lock_guard guard(mutex);
         void** vtable = nullptr;
