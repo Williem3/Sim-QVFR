@@ -138,8 +138,8 @@ OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Lau
 if it's missing.
 
 Not in ACC yet, so greyed out in the launcher and left out of the headset menu: Foveated DLSS (Cheeky),
-the helmet overlay, the field of view crop, and resolution changes while the game runs (in ACC they
-apply at the next launch). Turn DLSS off in ACC's settings.
+the helmet overlay, and resolution changes while the game runs (in ACC they apply at the next launch).
+The field of view crop works in ACC. Turn DLSS off in ACC's settings.
 
 ## Getting help
 

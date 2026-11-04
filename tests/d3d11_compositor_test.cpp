@@ -1,7 +1,8 @@
 // Offline check of the D3D11 compositor (quad/d3d11_compositor.h) on a WARP device: one image holding four views
 // in eye columns (outer views on top, focus views below), each eye's outer and focus view a colour of its own,
 // composed into a double-wide output. Each eye must show its own outer view at its edges and its own focus view
-// in the middle (the focus box, centred), and the game's pipeline state must be as it was.
+// in the middle (the focus box, centred), and the game's pipeline state must be as it was. With the FOV crop
+// (outputSize) each eye is drawn into the top left of its half only.
 #include <cstdio>
 #include <cstring>
 
@@ -95,6 +96,34 @@ int main() {
         std::snprintf(what, sizeof(what), "eye %d: the outer view just outside the box (0x%08x)", e,
                       at(x0 + kOutW / 2 * 27 / 100, kOutH / 2));
         check(at(x0 + kOutW / 2 * 27 / 100, kOutH / 2) == kOuter[e], what);
+    }
+    context->Unmap(readback.Get(), 0);
+
+    // The FOV crop: each eye drawn into the top left of its half (outputSize, 75% x 50%); the rest of the half is
+    // left as it was (cleared here to black), the drawn part as before.
+    const float black[4] = {0, 0, 0, 0};
+    ComPtr<ID3D11RenderTargetView> rtv;
+    device->CreateRenderTargetView(output.Get(), nullptr, &rtv);
+    context->ClearRenderTargetView(rtv.Get(), black);
+    for (int e = 0; e < 2; ++e) {
+        eyes[e].outputSize[0] = 0.75f;
+        eyes[e].outputSize[1] = 0.5f;
+    }
+    check(compositor.compose(views.Get(), output.Get(), eyes), "compose, cropped");
+    context->CopyResource(readback.Get(), output.Get());
+    context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    for (int e = 0; e < 2; ++e) {
+        const UINT x0 = e * kOutW / 2, w = kOutW / 2 * 3 / 4, h = kOutH / 2;
+        char what[128];
+        std::snprintf(what, sizeof(what), "eye %d cropped: drawn in its top left (0x%08x, 0x%08x)", e, at(x0 + 2, 2),
+                      at(x0 + w - 2, h - 2));
+        check(at(x0 + 2, 2) == kOuter[e] && at(x0 + w - 2, h - 2) == kOuter[e], what);
+        std::snprintf(what, sizeof(what), "eye %d cropped: its focus view in the drawn part's middle (0x%08x)", e,
+                      at(x0 + w / 2, h / 2));
+        check(at(x0 + w / 2, h / 2) == kFocus[e], what);
+        std::snprintf(what, sizeof(what), "eye %d cropped: nothing right of or below it (0x%08x, 0x%08x)", e,
+                      at(x0 + w + 1, 2), at(x0 + 2, h + 1));
+        check(at(x0 + w + 1, 2) == 0 && at(x0 + 2, h + 1) == 0, what);
     }
     context->Unmap(readback.Get(), 0);
     compositor.shutdown();

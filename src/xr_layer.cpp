@@ -2832,9 +2832,19 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         views4_source(layout, view, true, 2 * eye.width, eye.height, origin, static_cast<int>(desc.Width),
                       static_cast<int>(desc.Height), uv);
     };
+    // The FOV crop: the output keeps native density over the cropped FOV, from the top left of each eye's half
+    // (views4_output_extent, as the D3D12 path).
+    XrExtent2Di extent;
+    {
+        std::lock_guard quadGuard(quad.mutex);
+        extent = views4_output_extent();
+    }
     EyeComposition eyes[2] = {};
-    for (int e = 0; e < 2; ++e)
+    for (int e = 0; e < 2; ++e) {
         views4_eye(frame, e, source, eyes[e]);
+        eyes[e].outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(v4d3d11.outW);
+        eyes[e].outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(v4d3d11.outH);
+    }
     uint32_t outIndex = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
@@ -2866,8 +2876,7 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         copy[v].fov = tangents_fov(eyes[v].outerTan);
         copy[v].next = nullptr;  // depth info would describe the game's views, not the output
         copy[v].subImage.swapchain = v4d3d11.outChain;
-        copy[v].subImage.imageRect = {{static_cast<int32_t>(v * v4d3d11.outW), 0},
-                                      {static_cast<int32_t>(v4d3d11.outW), static_cast<int32_t>(v4d3d11.outH)}};
+        copy[v].subImage.imageRect = {{static_cast<int32_t>(v * v4d3d11.outW), 0}, extent};
         copy[v].subImage.imageArrayIndex = 0;
     }
     return true;
