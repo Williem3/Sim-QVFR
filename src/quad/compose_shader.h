@@ -1,9 +1,9 @@
 // The quad-view compose shader, shared by the D3D12 compositor (compositor.h) and the D3D11 one
 // (d3d11_compositor.h): a full-screen triangle per eye, the outer view upscaled over the eye's tangents
-// with the focus view blended into the focus box, and the helmet overlay (D3D12 only). Its constants,
-// cbuffer b0: kComposeConstants floats, compose_constants filling all but the helmet's (40-59, left 0).
+// with the focus view blended into the focus box, and the helmet overlay. Its constants, cbuffer b0:
+// kComposeConstants floats, compose_constants filling all but the helmet's (40-59), helmet_constants those.
 // Sources: t0 the outer view's texture, t1 the focus view's (the same texture when one image holds both),
-// t2-t5 the helmet's (D3D12); s0 a linear clamp sampler.
+// t2 the helmet's light, t3-t5 its pieces (helmet_pieces.h); s0 a linear clamp sampler.
 #pragma once
 
 #include <algorithm>
@@ -44,6 +44,71 @@ inline void compose_constants(const EyeComposition& c, int eye, float (&constant
         constants[32 + i] = c.borderColor[i];
         constants[36 + i] = c.viewTan[i];
     }
+}
+
+// The helmet's constants (40-59) for eye `c`, with the compositor's loaded pieces (`pieceMask`, 1 << HelmetPiece)
+// and its visor drawn as a tint or not (HelmetPieceSet::visor_tints, visor_white_point). Without pieces the pieces'
+// look falls back to the built-in one; with them, the light diagnostic keeps their shapes.
+inline void helmet_constants(const EyeComposition& c, unsigned pieceMask, bool visorTint, double visorWhitePoint,
+                             float (&constants)[kComposeConstants]) {
+    for (int i = 0; i < 4; ++i)
+        constants[40 + i] = c.helmetOpening[i];
+    const int look = c.helmet == 2 && !pieceMask ? 1 : c.helmet == 3 && pieceMask ? 4 : c.helmet;
+    const bool pieceLook = look == 2 || look == 4;
+    constants[44] = pieceLook ? static_cast<float>(pieceMask | (visorTint ? 8u : 0u)) : c.helmetRim;
+    constants[45] = pieceLook ? static_cast<float>(visorWhitePoint) : c.helmetRadius;
+    if (pieceLook) {  // the pieces' looks: the depth shift in place of the opening
+        constants[40] = c.helmetShift[0];
+        constants[41] = c.helmetShift[1];
+    }
+    constants[46] = c.helmetLight;
+    constants[47] = static_cast<float>(look);
+    for (int row = 0; row < 3; ++row)
+        for (int col = 0; col < 3; ++col)
+            constants[48 + row * 4 + col] = c.helmetRotation[row * 3 + col];
+    constants[51] = c.helmetTanHalf[0];
+    constants[55] = c.helmetTanHalf[1];
+    constants[59] = c.visorOffset;
+}
+
+// HelmetLayerPS's constants for the helmet's own layer `d`, with the loaded pieces (as helmet_constants).
+inline void helmet_layer_constants(const HelmetLayerDraw& d, unsigned pieceMask, bool visorTint, double visorWhitePoint,
+                                   float (&constants)[kComposeConstants]) {
+    constants[0] = d.coverTan[0];
+    constants[1] = d.coverTan[1];
+    constants[2] = d.imageTan[0];
+    constants[3] = d.imageTan[1];
+    constants[4] = d.visorOffset;
+    constants[44] = static_cast<float>(pieceMask | (visorTint ? 8u : 0u));
+    constants[45] = static_cast<float>(visorWhitePoint);
+    constants[46] = d.light;
+    constants[47] = d.checkLight ? 4.0f : 2.0f;
+}
+
+// LightPS's constants: each eye's outer view in the image it samples (eye 0's as outerSrc, eye 1's as focusSrc).
+inline void light_constants(const float (&source0)[4], const float (&source1)[4], float (&constants)[kComposeConstants]) {
+    std::memcpy(&constants[20], source0, sizeof(source0));
+    std::memcpy(&constants[24], source1, sizeof(source1));
+}
+
+// The helmet's light texture: one texel per eye side (4 x 2), blended over composed frames by kLightBlend
+// (it settles within about half a second).
+inline constexpr DXGI_FORMAT kLightFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+inline constexpr float kLightBlend = 0.08f;
+
+// IEEE half to float (the light texture is R16G16B16A16_FLOAT, for read_light).
+inline float half_to_float(uint16_t h) {
+    const uint32_t sign = (h & 0x8000u) << 16, exponent = (h >> 10) & 0x1f, mantissa = h & 0x3ffu;
+    uint32_t bits;
+    if (exponent == 0)
+        return (sign ? -1.0f : 1.0f) * std::ldexp(static_cast<float>(mantissa), -24);
+    if (exponent == 31)
+        bits = sign | 0x7f800000u | (mantissa << 13);
+    else
+        bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
 }
 
 inline constexpr char kComposeShader[] = R"(

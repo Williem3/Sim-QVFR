@@ -14,6 +14,7 @@
 
 #include "../xr.h"
 #include "helmet.h"
+#include "helmet_pieces.h"
 
 namespace aceqv {
 
@@ -55,9 +56,6 @@ struct EyeComposition {
     int visorBlend;
 };
 
-// The helmet's pieces (helmet.h), drawn over the scene in this order.
-enum class HelmetPiece { Visor, Bottom, Top };
-
 // The helmet as its own layer (helmet.h): the pieces, lit by the frame, drawn into a head-locked quad that
 // the runtime composites over the scene, after any frame generation. The quad spans tangents
 // +-coverTan of the images' plane; the images +-imageTan of it.
@@ -74,7 +72,7 @@ struct HelmetLayerDraw {
 // The helmet layer's format (premultiplied alpha, sRGB-encoded).
 inline constexpr DXGI_FORMAT kHelmetLayerFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 
-class QuadCompositor {
+class QuadCompositor : public HelmetPieceSet {
 public:
     // viewFormat is the swapchain's colour format (e.g. R8G8B8A8_UNORM_SRGB); views use it so
     // filtering happens in linear space and the output is re-encoded exactly like ACE's own.
@@ -90,23 +88,10 @@ public:
     // the frame's light (from the outer copy capture_outer made), then the pieces, premultiplied, with alpha
     // = how much of the scene they hide. False without pieces.
     bool draw_helmet_layer(ID3D12Resource* target, const HelmetLayerDraw& draw);
-    // A helmet piece's image (a PNG with alpha), loaded into a texture; an empty path, or one that cannot be
-    // read, drops it. Stalls the GPU once. False if it cannot be read.
-    bool load_helmet_piece(HelmetPiece piece, const std::wstring& path);
-    bool has_helmet_pieces() const { return pieces_[0].texture || pieces_[1].texture || pieces_[2].texture; }
-    // The first loaded piece's height per width (1 without one), and where a piece's opaque part ends down
-    // its middle column, in image heights: the top piece's from its top, the bottom piece's from its bottom
-    // (-1: not loaded, or not opaque there).
-    double helmet_aspect() const;
-    double helmet_edge(HelmetPiece piece) const { return pieces_[static_cast<int>(piece)].edge; }
-    // The images' rows the pieces draw on (kHelmetRows bins, helmet.h's helmet_bands), with the visor slid up
-    // `visorOffset` image heights; a glass visor (visorBlend as EyeComposition's) only where it tints.
-    std::vector<bool> helmet_rows(double visorOffset, int visorBlend) const;
-    // The helmet's light estimate (linear RGB per eye, per side: left, right, top, bottom of the eye's
-    // view), for the log. request_light copies it at the next composition with the helmet on, without
-    // stalling; read_light returns that copy once the GPU has made it (false until then, or none asked).
-    void request_light() { lightWanted_ = true; }
-    bool read_light(float (&rgb)[2][4][3]);
+    // The helmet's pieces: HelmetPieceSet (helmet_pieces.h); a load stalls the GPU once.
+    // The helmet's light for the log (HelmetPieceSet): copied at the next composition with the helmet on.
+    void request_light() override { lightWanted_ = true; }
+    bool read_light(float (&rgb)[2][4][3]) override;
     // Debug: saves the left eye of the outer copy, the focus image and the output (both in
     // RENDER_TARGET state) as <prefix>-outer.png, -focus.png, -output.png. Stalls the GPU.
     bool save_captures(ID3D12Resource* focusImage, ID3D12Resource* output, const std::wstring& prefix);
@@ -114,6 +99,11 @@ public:
     // as <prefix>-output.png (both in RENDER_TARGET state). Stalls the GPU.
     bool save_views4_captures(ID3D12Resource* views, ID3D12Resource* output, const std::wstring& prefix);
     void shutdown();
+
+protected:
+    bool pieces_ready() const override { return ready_; }
+    bool upload_piece(int piece, const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) override;
+    void drop_piece(int piece) override { pieces_[piece].Reset(); }
 
 private:
     template <class T> using Com = Microsoft::WRL::ComPtr<T>;
@@ -154,14 +144,7 @@ private:
     // eye, blended over frames by lightPipeline_) and the optional image.
     Com<ID3D12PipelineState> lightPipeline_, helmetLayerPipeline_;
     Com<ID3D12Resource> light_;
-    struct Piece {
-        Com<ID3D12Resource> texture;
-        double aspect = 1, edge = -1;
-        bool opaque = false;      // (almost) no transparency
-        double whitePoint = 1;    // the linear brightness of its brightest 1%
-        std::vector<bool> rows, tintRows;  // kHelmetRows bins: where it draws; where, as glass, it tints
-    };
-    Piece pieces_[3];  // HelmetPiece order
+    Com<ID3D12Resource> pieces_[3];  // the pieces' textures, HelmetPiece order
     bool lightFresh_ = true;
     Com<ID3D12Resource> lightReadback_;  // read_light's copy of light_
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT lightFootprint_ = {};

@@ -357,7 +357,7 @@ void load_experiment() {
     if (experiment.views4Compose && !game->qvfr_composable()) {
         experiment.views4ComposeD3D11 = game->qvfr_compose_d3d11();
         if (experiment.views4ComposeD3D11)
-            logf("experiment: %ls is composed by the D3D11 compositor (centred focus box, no gaze or helmet yet)",
+            logf("experiment: %ls is composed by the D3D11 compositor",
                  game->info()->name);
         else
             logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
@@ -1047,6 +1047,8 @@ struct Quad {
     XrSwapchain helmetChain = XR_NULL_HANDLE;
     XrSpace helmetSpace = XR_NULL_HANDLE;
     std::vector<ID3D12Resource*> helmetImages;
+    std::vector<ID3D11Texture2D*> helmetImages11;  // the same, for a D3D11 session (ACC)
+    bool helmetPiecesLoaded = false;  // the composing compositor holds pieces (helmet_pieces), for the menu and submit
     bool helmetLayerFailed = false, helmetDrawn = false;
     // Its quads this frame: the bands the pieces draw on (helmet_bands), one or two, from the same image.
     XrCompositionLayerQuad helmetQuads[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
@@ -1094,6 +1096,14 @@ struct V4D3D11 {
     const char* lastFallback = nullptr;
 };
 V4D3D11 v4d3d11;
+
+// The compositor that holds the helmet's pieces and light: the D3D11 one for a D3D11 game (ACC; under
+// v4d3d11.mutex), else ACE's D3D12 one (under quad.mutex).
+HelmetPieceSet& helmet_set() {
+    if (experiment.views4ComposeD3D11)
+        return v4d3d11.compositor;
+    return quad.compositor;
+}
 
 // views4 debug: the focus region's outline drawn into each outer view (debug_border), on ACE's eye
 // image just before ACE releases it. The chain is the one ACE's projection layer submits.
@@ -1683,6 +1693,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
             quad.helmetPiecesWritten[p] = {};
         }
         quad.helmetHinted.clear();
+        quad.helmetPiecesLoaded = false;
     }
     gpu_frame_timer_stop();
     gpu_load_stop();
@@ -1972,10 +1983,11 @@ void helmet_pieces(const HelmetSettings& h) {
         quad.helmetPiecesTried[p] = *paths[p];
         quad.helmetPiecesWritten[p] = written;
         const bool exists = written != std::filesystem::file_time_type::min();
-        quad.compositor.load_helmet_piece(static_cast<HelmetPiece>(p), exists ? full.wstring() : std::wstring());
+        helmet_set().load_helmet_piece(static_cast<HelmetPiece>(p), exists ? full.wstring() : std::wstring());
         if (!paths[p]->empty() && !exists && first)
             logf("helmet: no %ls (that piece is left out until it appears)", full.c_str());
     }
+    quad.helmetPiecesLoaded = helmet_set().has_helmet_pieces();
 }
 
 // The visor's slide this frame (under quad.mutex): it moves towards the asked position, all the way
@@ -2020,10 +2032,13 @@ bool helmet_layer_resources(XrSession session) {
         r = next.CreateSwapchain(session, &chainInfo, &quad.helmetChain);
     if (XR_SUCCEEDED(r))
         r = next.EnumerateSwapchainImages(quad.helmetChain, 0, &count, nullptr);
-    std::vector<XrSwapchainImageD3D12KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
+    const bool d3d11 = experiment.views4ComposeD3D11;
+    std::vector<XrSwapchainImageD3D12KHR> images(d3d11 ? 0 : count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
+    std::vector<XrSwapchainImageD3D11KHR> images11(d3d11 ? count : 0, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
     if (XR_SUCCEEDED(r) && count)
         r = next.EnumerateSwapchainImages(quad.helmetChain, count, &count,
-                                          reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+                                          d3d11 ? reinterpret_cast<XrSwapchainImageBaseHeader*>(images11.data())
+                                                : reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
     if (XR_FAILED(r) || !count) {
         logf("helmet: its own layer failed (%d); the pieces are drawn into the scene image instead (frame "
              "generation may then smear)", r);
@@ -2037,8 +2052,11 @@ bool helmet_layer_resources(XrSession session) {
         return false;
     }
     quad.helmetImages.clear();
+    quad.helmetImages11.clear();
     for (const auto& image : images)
         quad.helmetImages.push_back(image.texture);
+    for (const auto& image : images11)
+        quad.helmetImages11.push_back(image.texture);
     for (XrCompositionLayerQuad& l : quad.helmetQuads) {
         l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied
         l.space = quad.helmetSpace;
@@ -2060,6 +2078,7 @@ void helmet_layer_release() {
     quad.helmetChain = XR_NULL_HANDLE;
     quad.helmetSpace = XR_NULL_HANDLE;
     quad.helmetImages.clear();
+    quad.helmetImages11.clear();
     quad.helmetSide = 0;
     quad.helmetQuadCount = 0;
     quad.helmetDrawn = quad.helmetResize = false;
@@ -2067,14 +2086,16 @@ void helmet_layer_release() {
 
 // The helmet layer for this frame (under quad.mutex, on ACE's queue after the composition): the quad
 // placed at the helmet's distance and height, sized to cover both eyes' uncropped views (`full`), and the
-// pieces drawn into it. False if it was not drawn (nothing is submitted then).
+// pieces drawn into it. False if it was not drawn (nothing is submitted then). `views11`: a D3D11 game's image
+// of its views (the D3D11 compositor draws it, the frame's light from it); null: ACE's D3D12 compositor.
 bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2], const float (&full)[2][4],
-                       double visorOffset) {
+                       double visorOffset, ID3D11Texture2D* views11) {
     uint32_t index = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(quad.helmetChain, &acquire, &index)) || index >= quad.helmetImages.size())
+    const size_t images = views11 ? quad.helmetImages11.size() : quad.helmetImages.size();
+    if (XR_FAILED(next.AcquireSwapchainImage(quad.helmetChain, &acquire, &index)) || index >= images)
         return false;
     const double tilt = h.height * kHelmetDegrees, distance = helmet_distance(h);
     const XrQuaternionf up{static_cast<float>(std::sin(tilt / 2)), 0, 0, static_cast<float>(std::cos(tilt / 2))};
@@ -2088,10 +2109,10 @@ bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2],
     }
     double coverX, coverY, imageX, imageY;
     helmet_cover(rotation, offset, full, distance, coverX, coverY);
-    helmet_tan_half(h, quad.compositor.helmet_aspect(), imageX, imageY);
+    helmet_tan_half(h, helmet_set().helmet_aspect(), imageX, imageY);
     // Only the bands the pieces draw on, with the visor where it is now.
     const std::vector<HelmetBand> bands =
-        helmet_bands(quad.compositor.helmet_rows(visorOffset, h.visorBlend), imageY, coverY);
+        helmet_bands(helmet_set().helmet_rows(visorOffset, h.visorBlend), imageY, coverY);
     HelmetLayerDraw draw{};
     draw.coverTan[0] = static_cast<float>(coverX);
     draw.coverTan[1] = static_cast<float>(coverY);
@@ -2105,7 +2126,8 @@ bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2],
     std::memcpy(draw.outerSource[1], eyes[1].outerSource, sizeof(draw.outerSource[1]));
     draw.bands = bands;
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.helmetChain, &wait)) &&
-                    quad.compositor.draw_helmet_layer(quad.helmetImages[index], draw);
+                    (views11 ? v4d3d11.compositor.draw_helmet_layer(views11, quad.helmetImages11[index], draw)
+                             : quad.compositor.draw_helmet_layer(quad.helmetImages[index], draw));
     next.ReleaseSwapchainImage(quad.helmetChain, &release);
     // The quads, in VIEW space: the whole quad centred `height` above straight ahead, `distance` away, facing
     // the eyes; each band its slice of it (along the quad's own up) and of the image.
@@ -2145,7 +2167,7 @@ bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2],
 // Once per change of the pieces or their size and height (under quad.mutex): the crop that meets the
 // pieces' opening straight ahead, for the log (`full`: eye 0's uncropped view).
 void helmet_crop_log(const HelmetSettings& h, const float (&full)[4]) {
-    const double top = quad.compositor.helmet_edge(HelmetPiece::Top), bottom = quad.compositor.helmet_edge(HelmetPiece::Bottom);
+    const double top = helmet_set().helmet_edge(HelmetPiece::Top), bottom = helmet_set().helmet_edge(HelmetPiece::Bottom);
     const std::wstring key = quad.helmetPiecesTried[1] + L"|" + quad.helmetPiecesTried[2] + L"|" +
                              std::to_wstring(quad.helmetPiecesWritten[1].time_since_epoch().count()) + L"|" +
                              std::to_wstring(quad.helmetPiecesWritten[2].time_since_epoch().count()) + L"|" +
@@ -2154,7 +2176,7 @@ void helmet_crop_log(const HelmetSettings& h, const float (&full)[4]) {
         return;
     quad.helmetHinted = key;
     int cropTop = 0, cropBottom = 0;
-    helmet_crop_hint(h, quad.compositor.helmet_aspect(), top, bottom < 0 ? -1 : 1 - bottom, full[2], full[3], cropTop,
+    helmet_crop_hint(h, helmet_set().helmet_aspect(), top, bottom < 0 ? -1 : 1 - bottom, full[2], full[3], cropTop,
                      cropBottom);
     logf("helmet: pieces at size %d deg, height %d deg: their opening straight ahead meets [crop] top=%d bottom=%d",
          h.size, h.height, cropTop, cropBottom);
@@ -2175,7 +2197,7 @@ XrExtent2Di views4_output_extent() {
 // asked for here and logged at a later composition, once the GPU has made it.
 void log_helmet_light() {
     float rgb[2][4][3];
-    if (quad.compositor.read_light(rgb)) {
+    if (helmet_set().read_light(rgb)) {
         char text[512];
         int n = 0;
         static const char* const kSides[4] = {"left", "right", "top", "bottom"};
@@ -2189,7 +2211,7 @@ void log_helmet_light() {
     }
     const ULONGLONG now = GetTickCount64();
     if (now >= quad.helmetLightLogAt) {
-        quad.compositor.request_light();
+        helmet_set().request_light();
         quad.helmetLightLogAt = now + 10000;
     }
 }
@@ -2243,6 +2265,113 @@ void views4_eye(const Views4Frame& frame, int e, const Source& source, EyeCompos
     focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
 }
 
+// The helmet's part of one composition (under quad.mutex; for the D3D11 compositor, under v4d3d11.mutex too), for
+// either compositor: its pieces looked at, the visor's slide, and whether the pieces go into their own layer or
+// (that layer failed) into the scene image over the whole eye. The built-in look draws its lip inside the
+// rendered view.
+struct V4Helmet {
+    bool pieces = false, piecesInScene = false;
+    double visorOffset = 0;
+    float fullView[2][4] = {};  // each eye's uncropped view (the helmet layer covers both)
+};
+V4Helmet views4_helmet_start(const HelmetSettings& helmet) {
+    V4Helmet h;
+    if (helmet.on)
+        helmet_pieces(helmet);
+    h.visorOffset = helmet.on ? visor_offset(helmet, visor_step(helmet)) : 0;
+    h.pieces = helmet.on && helmet_set().has_helmet_pieces();
+    h.piecesInScene = h.pieces && quad.helmetLayerFailed;
+    return h;
+}
+
+// Eye e's helmet and output (as views4_helmet_start), once views4_eye has filled `c` from the frame: the FOV the
+// output is submitted with, and the eye's size in the output from the top left of its half (native, or with the
+// FOV crop its kept share; with the pieces in the scene, the whole uncropped eye at native size).
+void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComposition& c, XrFovf& submitFov,
+                       XrExtent2Di& extent) {
+    // The output covers the outer view's tangents, so that is the FOV it is submitted with.
+    submitFov = tangents_fov(c.outerTan);
+    float full[4];
+    uncrop_tangents(c.outerTan, quad.v4Crop, e, full);
+    std::memcpy(h.fullView[e], full, sizeof(full));
+    if (h.pieces) {
+        // The crop hint once the game renders the located view (not its own projection on the loading screens).
+        float located[4];
+        fov_tangents(quad.v4Fov[e], located);
+        bool rendersLocated = true;
+        for (int i = 0; i < 4; ++i)
+            rendersLocated &= std::fabs(c.outerTan[i] - located[i]) < 0.01f * std::max(1.0f, std::fabs(located[i]));
+        if (e == 0 && rendersLocated)
+            helmet_crop_log(helmet, full);
+    }
+    if (helmet.on && !h.pieces) {
+        // The built-in look, inside the rendered view: its lip reaches in from the opening's edge.
+        const HelmetShape shape = helmet_shape(helmet, full, c.outerTan);
+        std::memcpy(c.helmetOpening, shape.opening, sizeof(shape.opening));
+        c.helmetRim = shape.rim;
+        c.helmetRadius = shape.radius;
+        c.helmetLight = static_cast<float>(helmet.light) / 100.0f;
+        c.helmet = helmet.debugLight ? 3 : 1;
+    }
+    if (h.piecesInScene) {
+        // Fallback (no layer of their own): the output covers the whole uncropped eye at native size;
+        // the pieces fill what the game did not render.
+        std::memcpy(c.viewTan, full, sizeof(full));
+        submitFov = tangents_fov(full);
+        extent = {static_cast<int32_t>(quad.nativeW), static_cast<int32_t>(quad.nativeH)};
+        const HelmetShape shape = helmet_shape(helmet, full, c.outerTan);
+        std::memcpy(c.helmetOpening, shape.opening, sizeof(shape.opening));
+        c.helmetRim = shape.rim;
+        c.helmetRadius = shape.radius;
+        c.helmetLight = static_cast<float>(helmet.light) / 100.0f;
+        c.helmet = helmet.debugLight ? 3 : 2;
+        // The pieces, fixed to the head: the eye's turn against the head, then the images' height.
+        const double tilt = helmet.height * kHelmetDegrees;
+        const XrQuaternionf up{static_cast<float>(std::sin(tilt / 2)), 0, 0, static_cast<float>(std::cos(tilt / 2))};
+        to_matrix(qmul(qconj(up), quad.v4EyeTurn[e]), c.helmetRotation);
+        double tx, ty;
+        helmet_tan_half(helmet, helmet_set().helmet_aspect(), tx, ty);
+        c.helmetTanHalf[0] = static_cast<float>(tx);
+        c.helmetTanHalf[1] = static_cast<float>(ty);
+        const XrVector3f offset = rotate(qconj(up), quad.v4EyeOffset[e]);  // in the images' frame
+        const float eyeOffset[3] = {offset.x, offset.y, offset.z};
+        helmet_parallax(helmet, eyeOffset, c.helmetShift);
+        c.visorOffset = static_cast<float>(h.visorOffset);
+        c.visorBlend = helmet.visorBlend;
+        return;
+    }
+    // The FOV crop: the output keeps native density over the cropped FOV (views4_output_extent).
+    extent = views4_output_extent();
+    c.outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(quad.nativeW);
+    c.outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(quad.nativeH);
+}
+
+// After a composition (as views4_helmet_start): the helmet's own layer drawn for it, unless its size changed
+// ([helmet] detail: the next submission makes it again). `views11`: as helmet_layer_draw's.
+void views4_helmet_layer(const HelmetSettings& helmet, const V4Helmet& h, const EyeComposition (&eyes)[2],
+                         ID3D11Texture2D* views11) {
+    if (quad.helmetChain && helmet_layer_side(helmet) != quad.helmetSide)
+        quad.helmetResize = true;
+    quad.helmetDrawn = h.pieces && !h.piecesInScene && quad.helmetChain && !quad.helmetResize &&
+                       helmet_layer_draw(helmet, eyes, h.fullView, h.visorOffset, views11);
+}
+
+// At the submission of composed projection layer `layer` (under quad.mutex): the helmet layer drawn for it goes
+// over it (`quads`, `count`, `after`); its swapchain goes when its size changed, and is made once there are pieces
+// (drawn from the next composition on).
+void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[2], int& count, int& after) {
+    if (quad.helmetDrawn) {
+        count = quad.helmetQuadCount;
+        std::copy(quad.helmetQuads, quad.helmetQuads + count, quads);
+        after = layer;
+    }
+    quad.helmetDrawn = false;
+    if (quad.helmetResize)
+        helmet_layer_release();  // nothing of it submitted this frame
+    if (helmetSettings.on && quad.helmetPiecesLoaded)
+        helmet_layer_resources(session);
+}
+
 // views4: ACE's eye image holds the outer views as views 0-1 and the focus views as views 2-3 of the
 // layout (the focus cameras: focus_percent of each eye's tangent extent around its forward axis). Composes
 // both eyes into the output chain at native size, on ACE's queue, before ACE releases the image.
@@ -2261,14 +2390,7 @@ void views4_compose() {
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
-    if (helmet.on)
-        helmet_pieces(helmet);
-    const double visorOffset = helmet.on ? visor_offset(helmet, visor_step(helmet)) : 0;
-    // The pieces go into their own layer (the scene keeps ACE's FOV); only if that layer failed, into the
-    // scene image over the whole eye. The built-in look draws its lip inside the rendered view.
-    const bool pieces = helmet.on && quad.compositor.has_helmet_pieces();
-    const bool piecesInScene = pieces && quad.helmetLayerFailed;
-    float fullView[2][4] = {};
+    V4Helmet helmetFrame = views4_helmet_start(helmet);
     // Outer source = view e, focus source = view e + 2, wherever the layout puts them, at the sizes this frame was
     // rendered with (live resolution); launch sizes until the first record.
     const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
@@ -2276,61 +2398,7 @@ void views4_compose() {
     const auto source = [&](int view, float (&uv)[4]) { views4_source(layout, view, false, w, h, {0, 0}, w, h, uv); };
     for (int e = 0; e < 2; ++e) {
         views4_eye(frame, e, source, eyes[e]);
-        // The output covers the outer view's tangents, so that is the FOV it is submitted with.
-        quad.v4SubmitFov[e] = tangents_fov(eyes[e].outerTan);
-        float full[4];
-        uncrop_tangents(eyes[e].outerTan, quad.v4Crop, e, full);
-        std::memcpy(fullView[e], full, sizeof(full));
-        if (pieces) {
-            // The crop hint once ACE renders the located view (not its own projection on the loading screens).
-            float located[4];
-            fov_tangents(quad.v4Fov[e], located);
-            bool rendersLocated = true;
-            for (int i = 0; i < 4; ++i)
-                rendersLocated &= std::fabs(eyes[e].outerTan[i] - located[i]) < 0.01f * std::max(1.0f, std::fabs(located[i]));
-            if (e == 0 && rendersLocated)
-                helmet_crop_log(helmet, full);
-        }
-        if (helmet.on && !pieces) {
-            // The built-in look, inside the rendered view: its lip reaches in from the opening's edge.
-            const HelmetShape shape = helmet_shape(helmet, full, eyes[e].outerTan);
-            std::memcpy(eyes[e].helmetOpening, shape.opening, sizeof(shape.opening));
-            eyes[e].helmetRim = shape.rim;
-            eyes[e].helmetRadius = shape.radius;
-            eyes[e].helmetLight = static_cast<float>(helmet.light) / 100.0f;
-            eyes[e].helmet = helmet.debugLight ? 3 : 1;
-        }
-        if (piecesInScene) {
-            // Fallback (no layer of their own): the output covers the whole uncropped eye at native size;
-            // the pieces fill what ACE did not render.
-            std::memcpy(eyes[e].viewTan, full, sizeof(full));
-            quad.v4SubmitFov[e] = tangents_fov(full);
-            quad.v4Extent[e] = {static_cast<int32_t>(quad.nativeW), static_cast<int32_t>(quad.nativeH)};
-            const HelmetShape shape = helmet_shape(helmet, full, eyes[e].outerTan);
-            std::memcpy(eyes[e].helmetOpening, shape.opening, sizeof(shape.opening));
-            eyes[e].helmetRim = shape.rim;
-            eyes[e].helmetRadius = shape.radius;
-            eyes[e].helmetLight = static_cast<float>(helmet.light) / 100.0f;
-            eyes[e].helmet = helmet.debugLight ? 3 : 2;
-            // The pieces, fixed to the head: the eye's turn against the head, then the images' height.
-            const double tilt = helmet.height * kHelmetDegrees;
-            const XrQuaternionf up{static_cast<float>(std::sin(tilt / 2)), 0, 0, static_cast<float>(std::cos(tilt / 2))};
-            to_matrix(qmul(qconj(up), quad.v4EyeTurn[e]), eyes[e].helmetRotation);
-            double tx, ty;
-            helmet_tan_half(helmet, quad.compositor.helmet_aspect(), tx, ty);
-            eyes[e].helmetTanHalf[0] = static_cast<float>(tx);
-            eyes[e].helmetTanHalf[1] = static_cast<float>(ty);
-            const XrVector3f offset = rotate(qconj(up), quad.v4EyeOffset[e]);  // in the images' frame
-            const float eyeOffset[3] = {offset.x, offset.y, offset.z};
-            helmet_parallax(helmet, eyeOffset, eyes[e].helmetShift);
-            eyes[e].visorOffset = static_cast<float>(visorOffset);
-            eyes[e].visorBlend = helmet.visorBlend;
-            continue;
-        }
-        // The FOV crop: the output keeps native density over the cropped FOV (views4_output_extent).
-        const XrExtent2Di extent = quad.v4Extent[e] = views4_output_extent();
-        eyes[e].outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(quad.nativeW);
-        eyes[e].outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(quad.nativeH);
+        views4_helmet_eye(helmet, helmetFrame, e, eyes[e], quad.v4SubmitFov[e], quad.v4Extent[e]);
     }
     if (helmet.on)
         log_helmet_light();
@@ -2354,10 +2422,7 @@ void views4_compose() {
     }
     quad.v4Composed = true;
     quad.fallbackRun = 0;
-    if (quad.helmetChain && helmet_layer_side(helmet) != quad.helmetSide)
-        quad.helmetResize = true;  // [helmet] detail changed: the next submission makes it again
-    quad.helmetDrawn = pieces && !piecesInScene && quad.helmetChain && !quad.helmetResize &&
-                       helmet_layer_draw(helmet, eyes, fullView, visorOffset);
+    views4_helmet_layer(helmet, helmetFrame, eyes, nullptr);
     if (quad.composed++ == 0)
         logf("views4: first composed frame: eye 0 outer tangents %.3f/%.3f/%.3f/%.3f, focus +-%.3f x +-%.3f, output "
              "%ux%u per eye",
@@ -2832,19 +2897,20 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         views4_source(layout, view, true, 2 * eye.width, eye.height, origin, static_cast<int>(desc.Width),
                       static_cast<int>(desc.Height), uv);
     };
-    // The FOV crop: the output keeps native density over the cropped FOV, from the top left of each eye's half
-    // (views4_output_extent, as the D3D12 path).
-    XrExtent2Di extent;
-    {
-        std::lock_guard quadGuard(quad.mutex);
-        extent = views4_output_extent();
-    }
+    // The helmet and the FOV crop, as the D3D12 path (views4_helmet_eye): each eye's submitted FOV and its size in
+    // the output, from the top left of its half.
+    std::lock_guard quadGuard(quad.mutex);
+    const HelmetSettings& helmet = helmetSettings;
+    V4Helmet helmetFrame = views4_helmet_start(helmet);
     EyeComposition eyes[2] = {};
+    XrFovf submitFov[2];
+    XrExtent2Di extent[2];
     for (int e = 0; e < 2; ++e) {
         views4_eye(frame, e, source, eyes[e]);
-        eyes[e].outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(v4d3d11.outW);
-        eyes[e].outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(v4d3d11.outH);
+        views4_helmet_eye(helmet, helmetFrame, e, eyes[e], submitFov[e], extent[e]);
     }
+    if (helmet.on)
+        log_helmet_light();
     uint32_t outIndex = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
@@ -2861,6 +2927,7 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
     if (!ok)
         return fallback("compose failed");
+    views4_helmet_layer(helmet, helmetFrame, eyes, views);
     if (v4d3d11.composed++ == 0 || v4d3d11.lastFallback) {
         logf("views4 d3d11: composing (eye 0: outer %.0f,%.0f %.0fx%.0f, focus %.0f,%.0f %.0fx%.0f of the game's "
              "%ux%u image; focus tangents +-%.3f x +-%.3f)",
@@ -2871,12 +2938,12 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         v4d3d11.lastFallback = nullptr;
     }
     for (uint32_t v = 0; v < 2; ++v) {
-        // The game's own pose; the FOV the output was composed over (the game's rendered projection, which the
-        // runtime must display it with, whatever the submitted view says).
-        copy[v].fov = tangents_fov(eyes[v].outerTan);
+        // The game's own pose; the FOV the output was composed over (the game's rendered projection, or with the
+        // helmet's pieces in the scene the uncropped eye), which the runtime must display it with.
+        copy[v].fov = submitFov[v];
         copy[v].next = nullptr;  // depth info would describe the game's views, not the output
         copy[v].subImage.swapchain = v4d3d11.outChain;
-        copy[v].subImage.imageRect = {{static_cast<int32_t>(v * v4d3d11.outW), 0}, extent};
+        copy[v].subImage.imageRect = {{static_cast<int32_t>(v * v4d3d11.outW), 0}, extent[v]};
         copy[v].subImage.imageArrayIndex = 0;
     }
     return true;
@@ -2918,16 +2985,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 projections.push_back(*proj);
                 projections.back().views = copy.data();
                 layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
-                if (quad.helmetDrawn) {
-                    helmetCount = quad.helmetQuadCount;
-                    std::copy(quad.helmetQuads, quad.helmetQuads + helmetCount, helmetLayers);
-                    helmetAfter = static_cast<int>(i);
-                }
-                quad.helmetDrawn = false;
-                if (quad.helmetResize)
-                    helmet_layer_release();  // nothing of it submitted this frame
-                if (helmetSettings.on && quad.compositor.has_helmet_pieces())
-                    helmet_layer_resources(session);  // drawn from the next composition on
+                views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
                 continue;
             }
         }
@@ -2944,6 +3002,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
             projections.push_back(*proj);
             projections.back().views = copy.data();
             layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
+            std::lock_guard guard(quad.mutex);
+            views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
             continue;
         }
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
@@ -3576,7 +3636,7 @@ void menu_open(int64_t now) {
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
-            menu.model.launch.helmetPieces = quad.compositor.has_helmet_pieces();
+            menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
         }
         menu.model.launch.nativePpd = native_center_ppd();  // takes quad.mutex itself
         if (!optimize.optimizer.running()) {  // a finished run's detail is not kept over a reopen

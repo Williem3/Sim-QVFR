@@ -15,8 +15,8 @@ inline constexpr aceqv::games::GameInfo kGame = {
     "acc", L"Assetto Corsa Competizione", L"ACC", L"AC2-Win64-Shipping.exe", L"Assetto Corsa Competizione",
     L"AC2\\Binaries\\Win64", L"805550", L"-vr hmd=SteamVR",
     L"Engine\\Binaries\\ThirdParty\\OpenVR\\OpenVRv1_5_17\\Win64\\openvr_api.dll",  // VR through OpenComposite
-    // QVFR, gaze, the headset menu and overlay, the FOV crop; Foveated DLSS, the helmet and live resolution not yet.
-    {false, false, false, true},
+    // QVFR, gaze, the headset menu and overlay, the FOV crop, the helmet; Foveated DLSS and live resolution not yet.
+    {false, true, false, true},
     kBuilds, std::size(kBuilds),
 };
 
