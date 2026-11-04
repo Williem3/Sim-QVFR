@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include "games/ace/game.h"
+#include "games/acc/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/install.h"
@@ -893,6 +894,14 @@ int main() {
                   build_state("00", false) == BuildState::Unsupported &&
                   build_state(ace::kBuilds[0], false) == BuildState::Supported,
               "preflight: build_state from the exe's hash");
+        // The games: found by exe name in any case; the launcher starts ACE; ACC's build isn't ACE's.
+        check(aceqv::games::game_for_exe(L"AssettoCorsaEVO.exe") == &ace::kGame &&
+                  aceqv::games::game_for_exe(L"ac2-win64-shipping.EXE") == &acc::kGame &&
+                  aceqv::games::game_for_exe(L"acc.exe") == nullptr && aceqv::games::game_for_exe(nullptr) == nullptr &&
+                  &aceqv::games::launcher_game() == &ace::kGame &&
+                  aceqv::games::supported_build(acc::kGame, acc::kBuilds[0]) &&
+                  !aceqv::games::supported_build(ace::kGame, acc::kBuilds[0]),
+              "games: lookup by exe, the launcher's game, builds per game");
         in.build = BuildState::Supported;
 
         in.steamRunning = false;

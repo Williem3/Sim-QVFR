@@ -323,6 +323,13 @@ void load_experiment() {
         logf("experiment: baseline=1: running as mode=off (ini mode=%ls), measuring", mode);
         wcscpy_s(mode, L"off");
     }
+    // A game known by its identity alone (no QVFR yet, games/adapter.h): log only, whatever the ini says.
+    // mode=off, the session and swapchain logging on (probes), and nothing that changes what it renders.
+    const bool logOnly = !game->has_qvfr();
+    if (logOnly)
+        logf("experiment: %ls has no QVFR yet: log only, running as mode=off (ini mode=%ls)", game->info()->name, mode);
+    if (logOnly)
+        wcscpy_s(mode, L"off");
     experiment.focusOnly = _wcsicmp(mode, L"focus_only") == 0;
     experiment.doubleRender = _wcsicmp(mode, L"double_render") == 0;
     experiment.views3 = _wcsicmp(mode, L"views3") == 0;
@@ -389,7 +396,7 @@ void load_experiment() {
     if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
-    experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
+    experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", 30, ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
@@ -3362,6 +3369,8 @@ void menu_controllers(XrSession session, int64_t now) {
 }
 
 bool menu_resources(XrSession session) {
+    if (!game->has_qvfr())  // log only: nothing of ours in the headset
+        return false;
     if (menu.chain)
         return true;
     if (menu.failed)
@@ -3729,6 +3738,8 @@ void osd_hotkey() {
 }
 
 bool osd_resources(XrSession session) {
+    if (!game->has_qvfr())  // log only: nothing of ours in the headset
+        return false;
     if (osd.chain)
         return true;
     if (osd.failed)
@@ -4354,15 +4365,18 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         logf("  extension %s", info->enabledExtensionNames[i]);
     if (XR_FAILED(r))
         return r;
-    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created.
-    cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
-    {  // for the launcher's Foveated DLSS pane
-        static const wchar_t* const kStatus[] = {L"off", L"missing", L"refused", L"running"};
-        runtime_info(L"cheeky_status", kStatus[static_cast<int>(cheeky_status())]);
-        if (cheeky_running())
-            runtime_info(L"cheeky_version", cheeky_version());
+    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Not in a game
+    // without QVFR (log only).
+    if (game->has_qvfr()) {
+        cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
+        {  // for the launcher's Foveated DLSS pane
+            static const wchar_t* const kStatus[] = {L"off", L"missing", L"refused", L"running"};
+            runtime_info(L"cheeky_status", kStatus[static_cast<int>(cheeky_status())]);
+            if (cheeky_running())
+                runtime_info(L"cheeky_version", cheeky_version());
+        }
+        cheeky_apply_ini();
     }
-    cheeky_apply_ini();
     // Before ACE creates its D3D12 device and renderer, so renderer init sees the patched mode.
     if (experiment.dred)
         dred_enable();

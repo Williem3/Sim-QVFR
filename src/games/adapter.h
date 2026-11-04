@@ -43,6 +43,9 @@ class GameAdapter {
 public:
     virtual ~GameAdapter() = default;
     virtual const GameInfo* info() const = 0;  // null: not a supported game
+    // False for a game known by its identity alone (being reverse engineered): the layer only logs there,
+    // as mode=off, and puts nothing of its own into the game or the headset.
+    virtual bool has_qvfr() const { return true; }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the
