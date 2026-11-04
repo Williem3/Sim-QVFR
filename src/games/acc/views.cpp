@@ -353,10 +353,15 @@ bool counts_match() {
             aceqv::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
             return false;
         }
-    return aceqv::code_matches(kTonemapperQualityRef, kTonemapperQualityRefAnchor, sizeof(kTonemapperQualityRefAnchor)) &&
-           aceqv::code_matches(kTonemapperQualityStore, kTonemapperQualityStoreAnchor,
-                               sizeof(kTonemapperQualityStoreAnchor)) &&
-           aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
+    for (const HeldCvar& c : kHeldCvars)
+        if (!aceqv::code_matches(c.ref, c.refAnchor, sizeof(c.refAnchor)) ||
+            !aceqv::code_matches(c.store, c.storeAnchor, sizeof(c.storeAnchor)))
+            return false;
+    if (!aceqv::code_matches(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor)) ||
+        !aceqv::code_matches(kExposurePrimary[0], kExposurePrimaryAnchor[0], sizeof(kExposurePrimaryAnchor[0])) ||
+        !aceqv::code_matches(kExposurePrimary[1], kExposurePrimaryAnchor[1], sizeof(kExposurePrimaryAnchor[1])))
+        return false;
+    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
            aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
            aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
            right_eye_picks_match() &&
@@ -385,6 +390,14 @@ bool pairs_per_draw() {
     ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
                               pairEye, sizeof(pairEye)) && ok;
     ok = pair_right_views() && ok;
+    // Exposure (abi.h): every view but the left eye takes its exposure, and only the left eye computes it.
+    const std::uint8_t secondary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x02, 0x0f, 0x9d, 0xc0};  // cmp [rcx+ad0],2; setge al
+    const std::uint8_t primary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x9e, 0xc0};    // cmp [rcx+ad0],1; setle al
+    ok = aceqv::code_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor), secondary,
+                              sizeof(secondary)) && ok;
+    for (int i = 0; i < 2; ++i)
+        ok = aceqv::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]), primary,
+                                  sizeof(primary)) && ok;
     // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
     const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
     const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
@@ -512,23 +525,25 @@ void views_target(int (&size)[2]) {
     size[1] = targetHeight.load(std::memory_order_relaxed);
 }
 
-// No vignette (abi.h kTonemapperQualityData): r.Tonemapper.Quality held at 1. ACC sets it from its graphics settings
-// (scalability) whenever they apply, so it is looked at every frame; both threads' values are written.
-std::atomic<std::uint64_t> vignetteResets{0};
-void no_vignette() {
+// abi.h kHeldCvars: each held at its value, both threads' copies, looked at every frame since ACC's graphics settings
+// set them whenever they apply. The first change of each is logged.
+std::atomic<bool> cvarLogged[std::size(kHeldCvars)];
+void hold_cvars() {
     if (!started.load(std::memory_order_relaxed))
         return;
-    auto* data = *reinterpret_cast<int* const*>(aceqv::module_base() + kTonemapperQualityData);
-    if (!data || (data[0] <= kTonemapperNoVignette && data[1] <= kTonemapperNoVignette))
-        return;
-    if (vignetteResets.fetch_add(1, std::memory_order_relaxed) == 0)
-        aceqv::logf("acc views: r.Tonemapper.Quality %d -> %d: no vignette (it darkened the focus views' edges)", data[1],
-                    kTonemapperNoVignette);
-    data[0] = data[1] = kTonemapperNoVignette;
+    for (std::size_t i = 0; i < std::size(kHeldCvars); ++i) {
+        const HeldCvar& c = kHeldCvars[i];
+        auto* data = *reinterpret_cast<int* const*>(aceqv::module_base() + c.data);
+        if (!data || (data[0] == c.value && data[1] == c.value))
+            continue;
+        if (!cvarLogged[i].exchange(true))
+            aceqv::logf("acc views: %s %d -> %d (screen-space lens effects off while QVFR runs)", c.name, data[1], c.value);
+        data[0] = data[1] = c.value;
+    }
 }
 
 void views_frame_end() {
-    no_vignette();
+    hold_cvars();
     if (!started.load() || ++frames % 900 != 0)
         return;
     const auto line = [](const char* what, std::atomic<std::uint64_t> (&calls)[5]) {

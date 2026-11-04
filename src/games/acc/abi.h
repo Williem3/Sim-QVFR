@@ -49,17 +49,41 @@ inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;  // .data
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
 inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
 
-// r.Tonemapper.Quality (4.26: 0 basic, 1 + film contrast, 2 + vignette, 3 + shadow tint, 4 + grain, 5 + grain jitter;
-// default 5): the vignette darkens each view towards its edges whatever its FOV, so a focus view's edges, in the
-// middle of the eye, showed as a dark rim round the focus area (README.md). views.cpp holds it at 1. Its
-// registration (static init 0x7140d0): `lea rdx, u"r.Tonemapper.Quality"` here, then AsVariableInt()'s result, the
-// TConsoleVariableData<int32> (game thread's value at +0, render thread's at +4), stored at 0x51b34a8 (0x714133).
-inline constexpr std::uintptr_t kTonemapperQualityRef = 0x714104;
-inline constexpr std::uint8_t kTonemapperQualityRefAnchor[7] = {0x48, 0x8d, 0x15, 0xd5, 0xd5, 0xb9, 0x03};
-inline constexpr std::uintptr_t kTonemapperQualityStore = 0x714133;
-inline constexpr std::uint8_t kTonemapperQualityStoreAnchor[7] = {0x48, 0x89, 0x05, 0x6e, 0xf3, 0xa9, 0x04};
-inline constexpr std::uintptr_t kTonemapperQualityData = 0x51b34a8;  // TConsoleVariableData<int32>*
-inline constexpr int kTonemapperNoVignette = 1;
+// Console variables views.cpp holds at a value while QVFR runs. Screen-space lens effects are drawn in each view's own
+// frame, so the focus view showed the bloom's dirt mask (and lens flares) at a different size and place than the
+// periphery round it (README.md): bloom and lens flares off for now, until they are left out of the focus views
+// alone. Each cvar's registration (static init) has `lea rdx, u"<name>"` (`ref`) and, last, the store of
+// AsVariableInt()'s result (`store`): the TConsoleVariableData<int32>* at `data` (game thread's value at +0, render
+// thread's at +4). ACC sets them from its graphics settings whenever they apply, so they are held every frame.
+struct HeldCvar {
+    const char* name;
+    std::uintptr_t ref;
+    std::uint8_t refAnchor[7];
+    std::uintptr_t store;
+    std::uint8_t storeAnchor[7];
+    std::uintptr_t data;
+    int value;
+};
+inline constexpr HeldCvar kHeldCvars[] = {
+    {"r.BloomQuality", 0x617514, {0x48, 0x8d, 0x15, 0x9d, 0x51, 0x60, 0x03}, 0x617543,
+     {0x48, 0x89, 0x05, 0x86, 0xb0, 0x9f, 0x04}, 0x50125d0, 0},  // default 5 (static init 0x6174e0)
+    {"r.LensFlareQuality", 0x672e94, {0x48, 0x8d, 0x15, 0x4d, 0xbd, 0x7c, 0x03}, 0x672ec3,
+     {0x48, 0x89, 0x05, 0xae, 0x10, 0xa9, 0x04}, 0x5103f78, 0},  // default 2 (static init 0x672e60)
+};
+
+// Auto exposure (eye adaptation): 4.26 gives a secondary stereo view the left eye's exposure (FSceneView's
+// constructor: EyeAdaptationViewState = Views[0]->State when IsASecondaryView), and computes exposure and the colour
+// grading LUT only in primary views (AddPostProcessingPasses: bPrimaryView). The left focus view leads its instanced
+// pair, so it is primary: it measured its own exposure from its narrow view and came out darker than its eye (a
+// capture: 43 against 51; the right focus view, secondary, matched). views.cpp redirects the three calls deciding
+// it, rcx the view each time: the constructor's IsASecondaryView (0x2daec80) answers StereoPass >= 2, so every
+// view but the left eye takes Views[0]'s state; the two AddPostProcessingPasses copies' IsAPrimaryView (0x2daec20,
+// followed by ViewState at + 0x15f0, DiaphragmDOF::IsEnabled, GetAutoExposureMethod) answer StereoPass <= 1, so
+// only the left eye computes exposure and the LUT, which the other views reuse through that state.
+inline constexpr std::uintptr_t kExposureSecondary = 0x2cebde5;  // FSceneView::EyeAdaptationViewState at + 0x15d8
+inline constexpr std::uint8_t kExposureSecondaryAnchor[5] = {0xe8, 0x96, 0x2e, 0x0c, 0x00};
+inline constexpr std::uintptr_t kExposurePrimary[2] = {0x1ad45e2, 0x1ad7d2b};
+inline constexpr std::uint8_t kExposurePrimaryAnchor[2][5] = {{0xe8, 0x39, 0xa6, 0x2d, 0x01}, {0xe8, 0xf0, 0x6e, 0x2d, 0x01}};
 
 // Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
 // (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
