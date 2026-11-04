@@ -130,7 +130,9 @@ int main() {
         const int64_t now = qpc_now();
         menu_press(MenuKey::Right, now);  // opens
         const bool opened = menu.visible && menu.model.launch.nativeWidth == 5190 && menu.model.values.periphery == 30;
-        menu_press(MenuKey::Down, now);  // past the page switch to periphery
+        // Past the page switch (and the Profile line, when there are profiles) to periphery.
+        for (int i = 0; i < 8 && menu_page_items(menu.model)[menu.model.selected] != MenuItem::Periphery; ++i)
+            menu_press(MenuKey::Down, now);
         menu_press(MenuKey::Left, now);  // periphery 30 -> 25
         ini_worker_sync();  // written on the ini worker
         const bool stepped = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()) == 25;
