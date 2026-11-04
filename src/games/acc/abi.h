@@ -76,4 +76,63 @@ inline constexpr CountRead kInstancedViewCounts[] = {
 inline constexpr std::uintptr_t kViewInstancedCount = 0x2d085ab;
 inline constexpr std::uint8_t kViewInstancedCountAnchor[7] = {0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
 
+// The view constants' StereoPassIndex: 4.26 FViewInfo::SetupUniformBufferParameters (SceneRendering.cpp) stores
+// `StereoRenderingDevice->GetViewIndexForPass(StereoPass)` there, so the focus views got 2 and 3. Shaders index
+// two-entry tables with it as the eye within an instanced pair: planar reflections' ProjectionWithExtraFOV[2] and
+// PlanarReflectionScreenScaleBias[2] (PlanarReflectionShared.ush) read past the end for 2 and 3, and view 3 drew
+// the dash's windscreen reflection from the wrong place (README.md). GetViewIndexForPass must stay 0-3 (each view's
+// own FSceneViewState in ULocalPlayer), so views.cpp redirects this store, `mov [rsi + 0xc5c], eax`, through
+// `and eax, 1`: 0, 1, 0, 1. Before it: `mov edx, [r14 + 0xad0]; call [rax + 0x30]; jmp; mov eax, r13d` (no
+// device: 0), both paths meeting here.
+inline constexpr std::uintptr_t kStereoPassIndexCall = 0x1c11f29;
+inline constexpr std::uint8_t kStereoPassIndexCallAnchor[15] = {0x41, 0x8b, 0x96, 0xd0, 0x0a, 0x00, 0x00, 0xff,
+                                                                0x50, 0x30, 0xeb, 0x03, 0x41, 0x8b, 0xc5};
+inline constexpr std::uintptr_t kStereoPassIndexStore = 0x1c11f38;
+inline constexpr std::uint8_t kStereoPassIndexStoreAnchor[6] = {0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
+
+// The instanced view's constants (shaders' second view of a pair, cb2 in ACC's): 4.26 has two ways to pick it.
+// Scene->UniformBuffers.GetInstancedView and the base pass take `View.StereoPass + 1` (right for both pairs); 12
+// other places (custom depth in SceneRendering.cpp, and Kunos's, the translucent base pass among them) take
+// `IStereoRendering::IsStereoEyeView(View) ? eSSP_RIGHT_EYE : eSSP_FULL`, so the focus pair's second view got the
+// right eye's constants: the windscreen drew into view 3 with the right eye's camera, a faint, larger copy of the
+// dash's reflection in it (RenderDoc, README.md: event 26464's cb2 held the right eye's projection). Each is
+// `neg al; sbb edx, edx; and edx, 2` (al: IsStereoEyeView), then `call GetStereoEyeView (0x2cf8140)` with rcx the
+// family; views.cpp redirects those 7 bytes to `edx = al ? (View.StereoPass + 1) & ~1 : 0`: pass 2 for the eyes
+// as before, 4 for the focus views. `view` is the register holding the view there (x64 number: rsi 6, rbx 3,
+// r14 14, r15 15; rcx 1 at 0x1bfa6b8, loaded from [rdi + 8] just before); 0x1ccc9eb tests the pass in eax instead
+// (`neg eax`). Found by walking GetStereoEyeView's 26 callers.
+struct RightEyePick {
+    std::uintptr_t rva;
+    std::uint8_t view;
+    bool passInEax;
+};
+inline constexpr RightEyePick kRightEyePicks[] = {
+    {0x18d20d8, 6, false},  {0x18f6a99, 14, false}, {0x1916f2f, 3, false},  {0x19d15f4, 15, false},
+    {0x19d2133, 6, false},  {0x1bfa6b8, 1, false},  {0x1cc4f01, 14, false}, {0x1cc5b51, 14, false},
+    {0x1ccc9eb, 6, true},   {0x1d0236b, 14, false}, {0x24fc2df, 14, false}, {0x24fd2e1, 15, false},
+};
+inline constexpr std::uintptr_t kGetStereoEyeView = 0x2cf8140;
+
+// Foliage (HISM) culling for an instanced eye pair: 4.26 FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements
+// culls view 0 with its own frustum but the right plane of `Views[1]` (`check(Views.Num() == 2)`), so trees seen
+// only by the right eye survive. Kunos made it `Views.Last()` (the right triple screen): with four views, view 3,
+// the right focus view, so the eyes culled foliage past the focus box's right edge, in both eyes, and only on that
+// side (README.md). And only view 0 gets the union, so the focus pair (view 2 primary) culled with view 2 alone.
+// Found through foliage.DitheredLOD's reader (0x2a42ff1) and the IsInstancedStereoPass call (0x2a435c3) in the
+// same function; `[rsp + 0x38]` is the loop's ViewIndex (0 at 0x2a43033, compared with Views.Num). views.cpp
+// redirects three spots so each pair's primary (view 0 or 2) culls with its own left plane and its partner's right:
+//  - the union's gate, `cmp dword [rsp + 0x38], 0` (then jne): `test dword [rsp + 0x38], ~2`, views 0 and 2;
+//  - the left view, `mov rax, [rcx]` (Views[0]; rcx = Views.Data) and the next `movaps xmm4, xmm15`:
+//    `rax = Views[ViewIndex]`;
+//  - the right view's index, `movsxd rax, [rsi + 8]` (Views.Num, for `mov rcx, [rcx + rax*8 - 8]` at 0x2a43737)
+//    and the next `mulps xmm0, xmm7`: `rax = ViewIndex + 2`, so Views[ViewIndex + 1].
+inline constexpr std::uintptr_t kFoliageUnionGate = 0x2a435f2;
+inline constexpr std::uint8_t kFoliageUnionGateAnchor[5] = {0x83, 0x7c, 0x24, 0x38, 0x00};
+inline constexpr std::uintptr_t kFoliageLeftView = 0x2a43637;
+inline constexpr std::uint8_t kFoliageLeftViewAnchor[7] = {0x48, 0x8b, 0x01, 0x41, 0x0f, 0x28, 0xe7};
+inline constexpr std::uintptr_t kFoliageRightView = 0x2a4366a;
+inline constexpr std::uint8_t kFoliageRightViewAnchor[7] = {0x48, 0x63, 0x46, 0x08, 0x0f, 0x59, 0xc7};
+inline constexpr std::uintptr_t kFoliageRightViewRead = 0x2a43737;
+inline constexpr std::uint8_t kFoliageRightViewReadAnchor[5] = {0x48, 0x8b, 0x4c, 0xc1, 0xf8};
+
 }  // namespace acc

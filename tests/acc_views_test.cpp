@@ -1,7 +1,9 @@
 // Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (src/games/acc/views_map.h): views,
 // passes and eyes; the eye-column layout instanced stereo and OpenComposite need; and that each eye the layer
-// submits is the view UE rendered for it.
+// submits is the view UE rendered for it; and the focus views' projection.
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "games/acc/views_map.h"
 
@@ -62,6 +64,25 @@ int main() {
                 view.height == rendered.height;
     }
     check(same, "each eye is submitted as the view UE rendered for it");
+
+    {
+        // SteamVR's eye projection (GetStereoProjectionMatrix): tangents left, right, up, down; reversed infinite
+        // depth, near 10.
+        const float tl = -1.2f, tr = 0.9f, tu = 1.1f, td = -1.0f;
+        const float eye[16] = {2 / (tr - tl), 0, 0, 0, 0, 2 / (tu - td), 0, 0,
+                               (tr + tl) / (tr - tl), (tu + td) / (tu - td), 0, 1, 0, 0, 10, 0};
+        float m[16];
+        std::memcpy(m, eye, sizeof(m));
+        const bool narrowed = focus_projection(m, 0.4, 0.3);
+        const auto close = [](float a, double b) { return std::fabs(a - b) < 1e-5; };
+        check(narrowed && close(m[0], 1 / (2.1 * 0.4 / 2)) && close(m[5], 1 / (2.1 * 0.3 / 2)) && m[8] == 0 && m[9] == 0,
+              "a focus view's projection: the box's share of its eye's tangent extent, centred");
+        check(m[11] == 1 && m[14] == 10 && m[10] == 0 && m[15] == 0, "the focus view keeps its eye's depth");
+        std::memcpy(m, eye, sizeof(m));
+        check(focus_projection(m, 0.4, 0) && close(m[5], 1 / (2.1 * 0.4 / 2)), "no focus height: the box's width share");
+        std::memcpy(m, eye, sizeof(m));
+        check(!focus_projection(m, 0, 0) && std::memcmp(m, eye, sizeof(m)) == 0, "no focus box: the eye's own projection");
+    }
 
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;

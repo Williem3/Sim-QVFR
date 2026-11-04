@@ -40,6 +40,8 @@
 #include "probe/probe.h"
 #include "probe/vram_census.h"
 #include "quad/compositor.h"
+#include "quad/d3d11_compositor.h"
+#include "quad/session_graphics.h"
 #include "quad/focus_offset.h"
 #include "quad/focus_shape.h"
 #include "quad/gaze_deadzone.h"
@@ -111,6 +113,7 @@ struct Experiment {
     wchar_t mode[32] = L"off";    // [experiment] mode in effect (baseline=1: off), for the game's adapter
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
+    bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
@@ -341,7 +344,12 @@ void load_experiment() {
     experiment.views4Compose = experiment.views4 && !experiment.views4ShowCopies &&
                                GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini.c_str()) != 0;
     if (experiment.views4Compose && !game->qvfr_composable()) {
-        logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
+        experiment.views4ComposeD3D11 = game->qvfr_compose_d3d11();
+        if (experiment.views4ComposeD3D11)
+            logf("experiment: %ls is composed by the D3D11 compositor (centred focus box, no gaze or helmet yet)",
+                 game->info()->name);
+        else
+            logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
         experiment.views4Compose = false;
     }
     experiment.views4NoMask =
@@ -994,6 +1002,35 @@ struct Quad {
     bool failureLogged = false;
 };
 Quad quad;
+// The session's graphics API and devices (session_graphics.h), under quad.mutex: the panels and compositors draw with it.
+SessionGraphics sessionGraphics;
+SessionGraphics session_graphics_now() {
+    std::lock_guard guard(quad.mutex);
+    return sessionGraphics;
+}
+
+// views4 composition for a D3D11 game (experiment.views4ComposeD3D11; ACC): its eye swapchains each hold its whole
+// target, all four views in eye columns, so at xrEndFrame the layer composes both eyes from the image the
+// projection layer's first view shows into a double-wide output of its own, at the runtime's native eye size,
+// and submits that in its place. The game's image was released before xrEndFrame; the runtime reads it only
+// after, as the layer does.
+struct V4D3D11 {
+    std::mutex mutex;
+    D3D11Compositor compositor;  // on the session's device (sessionGraphics)
+    struct Chain {
+        int64_t format = 0;
+        std::vector<ID3D11Texture2D*> images;
+        uint32_t acquired = 0;  // the image last acquired (released by the time of xrEndFrame)
+    };
+    std::map<XrSwapchain, Chain> chains;  // the game's
+    XrSwapchain outChain = XR_NULL_HANDLE;
+    std::vector<ID3D11Texture2D*> outImages;
+    uint32_t outW = 0, outH = 0;  // one eye's size in it
+    bool failed = false;          // no compositor or output chain: views 0-1 as they are
+    uint64_t composed = 0, fallbacks = 0;
+    const char* lastFallback = nullptr;
+};
+V4D3D11 v4d3d11;
 
 // views4 debug: the focus region's outline drawn into each outer view (debug_border), on ACE's eye
 // image just before ACE releases it. The chain is the one ACE's projection layer submits.
@@ -1470,6 +1507,10 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     XrResult r = next.CreateSession(instance, info, session);
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
     if (XR_SUCCEEDED(r)) {
+        {
+            std::lock_guard guard(quad.mutex);
+            sessionGraphics = session_graphics(binding);
+        }
         hang_watch_arm(experiment.hangWatchSeconds);
         game->session_created(experiment.probes && probe_start());
         if (!experiment.probes)
@@ -1533,6 +1574,14 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     dred_stop();
     d3d11_capture_stop();
     {
+        std::lock_guard guard(v4d3d11.mutex);
+        v4d3d11.compositor.shutdown();
+        v4d3d11.chains.clear();
+        v4d3d11.outChain = XR_NULL_HANDLE;  // the session's: destroyed with it
+        v4d3d11.outImages.clear();
+        v4d3d11.failed = false;
+    }
+    {
         std::lock_guard guard(gaze.mutex);
         if (gaze.queries > 900 && gaze.tracked == 0)  // asked for ~10 s, never tracked
             runtime_info(L"eye_tracking", L"0");
@@ -1558,6 +1607,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.outerCaptured = quad.aViewsValid = quad.releaseHeld = false;
         quad.device = nullptr;
         quad.queue = nullptr;
+        sessionGraphics = {};
         // The helmet's layer goes with the session; its pieces load again into the next one's compositor.
         helmet_layer_release();
         quad.helmetLayerFailed = false;
@@ -1742,6 +1792,10 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
         std::lock_guard guard(v4outline.mutex);
         v4outline.formats[*swapchain] = info->format;
     }
+    if (XR_SUCCEEDED(r) && experiment.views4ComposeD3D11) {
+        std::lock_guard guard(v4d3d11.mutex);
+        v4d3d11.chains[*swapchain].format = info->format;
+    }
     if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose) &&
         (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
         quad_adopt_chain(session, info, *swapchain);
@@ -1755,6 +1809,16 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
         experiment.d3d11CaptureFrame)
         d3d11_capture_images(swapchain, reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images),
                              std::min(*countOutput, capacity));
+    if (XR_SUCCEEDED(r) && capacity > 0 && images && images->type == XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR &&
+        experiment.views4ComposeD3D11) {
+        std::lock_guard guard(v4d3d11.mutex);
+        if (auto it = v4d3d11.chains.find(swapchain); it != v4d3d11.chains.end()) {
+            const auto* d3d11Images = reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images);
+            it->second.images.clear();
+            for (uint32_t i = 0; i < *countOutput && i < capacity; ++i)
+                it->second.images.push_back(d3d11Images[i].texture);
+        }
+    }
     if (XR_FAILED(r) || capacity == 0 || !images || images->type != XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR)
         return r;
     std::pair<uint32_t, uint32_t> size{0, 0};
@@ -1791,6 +1855,11 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
     const XrResult r = next.AcquireSwapchainImage(swapchain, info, index);
     if (XR_SUCCEEDED(r) && experiment.d3d11CaptureFrame)
         d3d11_capture_acquired(swapchain, *index);
+    if (XR_SUCCEEDED(r) && experiment.views4ComposeD3D11) {
+        std::lock_guard guard(v4d3d11.mutex);
+        if (auto it = v4d3d11.chains.find(swapchain); it != v4d3d11.chains.end())
+            it->second.acquired = *index;
+    }
     if (XR_SUCCEEDED(r) && views4_outline_on()) {
         std::lock_guard guard(v4outline.mutex);
         v4outline.acquired[swapchain] = *index;
@@ -2570,6 +2639,149 @@ void log_submitted_fov(uint32_t eye, const XrFovf& ace, const XrFovf& composed) 
          composed.angleUp, composed.angleDown, same(ace, composed, 0.002f) ? "" : "  <-- DIFFERENT");
 }
 
+// The D3D11 output chain and compositor, made at the first composition (the game's format, the native eye size,
+// double wide). False: v4d3d11.failed, with the reason logged once.
+bool v4d3d11_resources(XrSession session, int64_t format) {
+    if (v4d3d11.outChain)
+        return true;
+    if (v4d3d11.failed)
+        return false;
+    v4d3d11.failed = true;  // until everything below is made
+    uint32_t nativeW, nativeH;
+    ID3D11Device* device;
+    {
+        std::lock_guard guard(quad.mutex);
+        nativeW = quad.nativeW;
+        nativeH = quad.nativeH;
+        device = sessionGraphics.d3d11;
+    }
+    if (!device || !nativeW || !nativeH) {
+        log_line("views4 d3d11: no D3D11 device or native eye size; the headset shows views 0-1");
+        return false;
+    }
+    if (!v4d3d11.compositor.initialize(device, static_cast<DXGI_FORMAT>(format))) {
+        log_line("views4 d3d11: compositor unavailable; the headset shows views 0-1");
+        return false;
+    }
+    XrSwapchainCreateInfo out{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    out.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    out.format = format;
+    out.sampleCount = out.faceCount = out.arraySize = out.mipCount = 1;
+    out.width = 2 * nativeW;
+    out.height = nativeH;
+    XrSwapchain chain = XR_NULL_HANDLE;
+    XrResult r = next.CreateSwapchain(session, &out, &chain);
+    uint32_t count = 0;
+    if (XR_SUCCEEDED(r))
+        r = next.EnumerateSwapchainImages(chain, 0, &count, nullptr);
+    std::vector<XrSwapchainImageD3D11KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+    if (XR_SUCCEEDED(r))
+        r = next.EnumerateSwapchainImages(chain, count, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(r)) {
+        logf("views4 d3d11: output swapchain %ux%u failed (%d); the headset shows views 0-1", out.width, out.height, r);
+        if (chain)
+            next.DestroySwapchain(chain);
+        v4d3d11.compositor.shutdown();
+        return false;
+    }
+    v4d3d11.outChain = chain;
+    for (const auto& image : images)
+        v4d3d11.outImages.push_back(image.texture);
+    d3d11_capture_images(chain, images.data(), count);  // d3d11_capture_frame saves the composed output too
+    v4d3d11.outW = nativeW;
+    v4d3d11.outH = nativeH;
+    v4d3d11.failed = false;
+    logf("views4 d3d11: output chain %p %ux%u (%u images, format %lld), focus box %.0f%% x %.0f%%, feather %.0f%%",
+         static_cast<void*>(chain), out.width, out.height, count, static_cast<long long>(format),
+         experiment.box_x() * 100, experiment.box_y() * 100, experiment.feather * 100);
+    return true;
+}
+
+// Composes both eyes of `proj` (the game's two eye views, eye columns of `layout`) into the output chain and
+// points `copy` (its views) at it. False: nothing changed, the caller submits views 0-1 as they are.
+bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj, const Views4Layout& layout,
+                     std::vector<XrCompositionLayerProjectionView>& copy) {
+    std::lock_guard guard(v4d3d11.mutex);
+    const auto fallback = [](const char* why) {
+        ++v4d3d11.fallbacks;
+        if (v4d3d11.lastFallback != why)
+            logf("views4 d3d11: not composed (%s); the headset shows views 0-1", why);
+        v4d3d11.lastFallback = why;
+        return false;
+    };
+    const auto it = v4d3d11.chains.find(proj->views[0].subImage.swapchain);
+    if (it == v4d3d11.chains.end() || it->second.acquired >= it->second.images.size())
+        return fallback("the game's eye image is unknown");
+    if (!v4d3d11_resources(session, it->second.format))
+        return false;
+    ID3D11Texture2D* views = it->second.images[it->second.acquired];
+    D3D11_TEXTURE2D_DESC desc;
+    views->GetDesc(&desc);
+    const float texW = static_cast<float>(desc.Width), texH = static_cast<float>(desc.Height);
+    // The game's target as the eyes' rects give it (eye e: the half from e x W), as views4_submit reads it.
+    const XrExtent2Di eye = proj->views[0].subImage.imageRect.extent;
+    const XrOffset2Di origin = proj->views[0].subImage.imageRect.offset;
+    const double boxX = experiment.box_x(), boxY = experiment.box_y();
+    EyeComposition eyes[2] = {};
+    for (int e = 0; e < 2; ++e) {
+        EyeComposition& c = eyes[e];
+        fov_tangents(proj->views[e].fov, c.outerTan);
+        double hw, hh;
+        focus_extents(c.outerTan, boxX, boxY, hw, hh);  // the box views.cpp narrowed the focus view to, centred
+        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                   static_cast<float>(-hh)};
+        std::memcpy(c.focusTan, focusTan, sizeof(focusTan));
+        c.rotation[0] = c.rotation[4] = c.rotation[8] = 1;
+        const ViewRect outer = views4_rect_eye_columns(layout, e, 2 * eye.width, eye.height);
+        const ViewRect focus = views4_rect_eye_columns(layout, e + 2, 2 * eye.width, eye.height);
+        const float outerSrc[4] = {(origin.x + outer.left) / texW, (origin.y + outer.top) / texH, outer.width / texW,
+                                   outer.height / texH};
+        const float focusSrc[4] = {(origin.x + focus.left) / texW, (origin.y + focus.top) / texH, focus.width / texW,
+                                   focus.height / texH};
+        std::memcpy(c.outerSource, outerSrc, sizeof(outerSrc));
+        std::memcpy(c.focusSource, focusSrc, sizeof(focusSrc));
+        c.feather = static_cast<float>(experiment.feather);
+        c.border = experiment.border ? 0.008f : 0.0f;
+        std::memcpy(c.borderColor, experiment.borderColor, sizeof(c.borderColor));
+        c.cornerRadius = static_cast<float>(experiment.cornerRadius);
+        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
+    }
+    uint32_t outIndex = 0;
+    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.outChain, &acquire, &outIndex)) ||
+        outIndex >= v4d3d11.outImages.size())
+        return fallback("output acquire failed");
+    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.outChain, &wait)) &&
+                    v4d3d11.compositor.compose(views, v4d3d11.outImages[outIndex], eyes);
+    if (ok && experiment.d3d11CaptureFrame) {
+        d3d11_capture_acquired(v4d3d11.outChain, outIndex);
+        d3d11_capture_release(v4d3d11.outChain, endFrames);
+    }
+    next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
+    if (!ok)
+        return fallback("compose failed");
+    if (v4d3d11.composed++ == 0 || v4d3d11.lastFallback) {
+        logf("views4 d3d11: composing (eye 0: outer %.0f,%.0f %.0fx%.0f, focus %.0f,%.0f %.0fx%.0f of the game's "
+             "%ux%u image; focus tangents +-%.3f x +-%.3f)",
+             eyes[0].outerSource[0] * texW, eyes[0].outerSource[1] * texH, eyes[0].outerSource[2] * texW,
+             eyes[0].outerSource[3] * texH, eyes[0].focusSource[0] * texW, eyes[0].focusSource[1] * texH,
+             eyes[0].focusSource[2] * texW, eyes[0].focusSource[3] * texH, desc.Width, desc.Height, eyes[0].focusTan[1],
+             eyes[0].focusTan[2]);
+        v4d3d11.lastFallback = nullptr;
+    }
+    for (uint32_t v = 0; v < 2; ++v) {
+        // The game's own pose and FOV: the output covers its eye view (view v) exactly.
+        copy[v].next = nullptr;  // depth info would describe the game's views, not the output
+        copy[v].subImage.swapchain = v4d3d11.outChain;
+        copy[v].subImage.imageRect = {{static_cast<int32_t>(v * v4d3d11.outW), 0},
+                                      {static_cast<int32_t>(v4d3d11.outW), static_cast<int32_t>(v4d3d11.outH)}};
+        copy[v].subImage.imageArrayIndex = 0;
+    }
+    return true;
+}
+
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
     XrCompositionLayerQuad helmetLayers[2] = {};  // the helmet's own layer (its bands), over the composed scene
@@ -2627,6 +2839,13 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
             aceLayout &= copy[v].subImage.imageRect.offset.x == static_cast<int32_t>(v) * copy[v].subImage.imageRect.extent.width;
         if (!aceLayout)
             continue;
+        if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_eye_columns() &&
+            v4d3d11_compose(session, proj, layout, copy)) {
+            projections.push_back(*proj);
+            projections.back().views = copy.data();
+            layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
+            continue;
+        }
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
             // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2). A game in eye
             // columns (ACC) has eye v's views in its half: keep the offset, move and cut to the view.
@@ -3116,8 +3335,8 @@ struct Menu {
     std::wstring settingsIni;
     XrSpace view = XR_NULL_HANDLE;
     XrSwapchain chain = XR_NULL_HANDLE;
-    std::vector<ID3D12Resource*> images;
-    PanelUpload upload;
+    std::vector<void*> images;  // the session API's textures
+    std::unique_ptr<PanelUpload> upload;
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     int heldKey = -1;  // keyboard repeat: the held arrow (index into kMenuKeys)
     int64_t keyRepeat = 0;
@@ -3410,15 +3629,9 @@ bool menu_resources(XrSession session) {
         return true;
     if (menu.failed)
         return false;
-    ID3D12Device* device;
-    ID3D12CommandQueue* queue;
-    {
-        std::lock_guard guard(quad.mutex);
-        device = quad.device;
-        queue = quad.queue;
-    }
-    if (!device || !queue)
-        return false;  // not a D3D12 session (yet)
+    const SessionGraphics graphics = session_graphics_now();
+    if (!graphics.valid())
+        return false;  // no D3D11 or D3D12 session (yet)
     XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     spaceInfo.poseInReferenceSpace.orientation.w = 1;
@@ -3431,23 +3644,18 @@ bool menu_resources(XrSession session) {
     chainInfo.faceCount = 1;
     chainInfo.arraySize = 1;
     chainInfo.mipCount = 1;
-    uint32_t count = 0;
     XrResult r = next.CreateReferenceSpace(session, &spaceInfo, &menu.view);
     if (XR_SUCCEEDED(r))
         r = next.CreateSwapchain(session, &chainInfo, &menu.chain);
     if (XR_SUCCEEDED(r))
-        r = next.EnumerateSwapchainImages(menu.chain, 0, &count, nullptr);
-    std::vector<XrSwapchainImageD3D12KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
-    if (XR_SUCCEEDED(r) && count)
-        r = next.EnumerateSwapchainImages(menu.chain, count, &count,
-                                          reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
-    if (XR_FAILED(r) || !count || !menu.upload.initialize(device, queue)) {
-        logf("settings menu: panel setup failed (%d); the menu still changes settings", r);
+        r = swapchain_textures(graphics, next.EnumerateSwapchainImages, menu.chain, menu.images);
+    if (XR_SUCCEEDED(r) && !menu.images.empty())
+        menu.upload = make_panel_upload(graphics);
+    if (XR_FAILED(r) || menu.images.empty() || !menu.upload) {
+        logf("settings menu: panel setup failed (%d, %s); the menu still changes settings", r, graphics.name());
         menu.failed = true;
         return false;
     }
-    for (const auto& image : images)
-        menu.images.push_back(image.texture);
     XrCompositionLayerQuad& l = menu.layer;
     l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
     l.space = menu.view;
@@ -3498,7 +3706,7 @@ void menu_render() {
     if (XR_FAILED(next.AcquireSwapchainImage(menu.chain, nullptr, &index)))
         return;
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() &&
-                    menu.upload.upload(menu.images[index], pixels);
+                    menu.upload && menu.upload->upload(menu.images[index], pixels);
     next.ReleaseSwapchainImage(menu.chain, nullptr);
     if (ok) {
         menu.uploaded = true;
@@ -3559,7 +3767,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
 }
 
 void menu_shutdown() {
-    menu.upload.shutdown();
+    menu.upload.reset();
     if (menu.chain)
         next.DestroySwapchain(menu.chain);
     if (menu.view)
@@ -3584,8 +3792,8 @@ struct Osd {
     bool read = false, failed = false, uploaded = false, hotkeyHeld = false;
     XrSpace view = XR_NULL_HANDLE;
     XrSwapchain chain = XR_NULL_HANDLE;
-    std::vector<ID3D12Resource*> images;
-    PanelUpload upload;
+    std::vector<void*> images;  // the session API's textures
+    std::unique_ptr<PanelUpload> upload;
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     std::atomic<int64_t> periodNs{0};  // the display's, from xrWaitFrame (any thread)
     // On the thread calling xrEndFrame.
@@ -3779,14 +3987,8 @@ bool osd_resources(XrSession session) {
         return true;
     if (osd.failed)
         return false;
-    ID3D12Device* device;
-    ID3D12CommandQueue* queue;
-    {
-        std::lock_guard guard(quad.mutex);
-        device = quad.device;
-        queue = quad.queue;
-    }
-    if (!device || !queue)
+    const SessionGraphics graphics = session_graphics_now();
+    if (!graphics.valid())
         return false;
     XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
@@ -3800,23 +4002,18 @@ bool osd_resources(XrSession session) {
     chainInfo.faceCount = 1;
     chainInfo.arraySize = 1;
     chainInfo.mipCount = 1;
-    uint32_t count = 0;
     XrResult r = next.CreateReferenceSpace(session, &spaceInfo, &osd.view);
     if (XR_SUCCEEDED(r))
         r = next.CreateSwapchain(session, &chainInfo, &osd.chain);
     if (XR_SUCCEEDED(r))
-        r = next.EnumerateSwapchainImages(osd.chain, 0, &count, nullptr);
-    std::vector<XrSwapchainImageD3D12KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
-    if (XR_SUCCEEDED(r) && count)
-        r = next.EnumerateSwapchainImages(osd.chain, count, &count,
-                                          reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
-    if (XR_FAILED(r) || !count || !osd.upload.initialize(device, queue, kOsdWidth, kOsdHeight)) {
-        logf("performance overlay: card setup failed (%d)", r);
+        r = swapchain_textures(graphics, next.EnumerateSwapchainImages, osd.chain, osd.images);
+    if (XR_SUCCEEDED(r) && !osd.images.empty())
+        osd.upload = make_panel_upload(graphics, kOsdWidth, kOsdHeight);
+    if (XR_FAILED(r) || osd.images.empty() || !osd.upload) {
+        logf("performance overlay: card setup failed (%d, %s)", r, graphics.name());
         osd.failed = true;
         return false;
     }
-    for (const auto& image : images)
-        osd.images.push_back(image.texture);
     XrCompositionLayerQuad& l = osd.layer;
     l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
     l.space = osd.view;
@@ -3824,12 +4021,13 @@ bool osd_resources(XrSession session) {
     l.subImage.swapchain = osd.chain;
     l.subImage.imageRect = {{0, 0}, {kOsdWidth, kOsdHeight}};
     osd_place();
-    if (experiment.views4)
-        gpu_frame_timer_start(device, queue);
+    if (experiment.views4 && graphics.d3d12)  // the GPU frame timer reads D3D12 timestamps (D3D11: no GPU times)
+        gpu_frame_timer_start(graphics.d3d12, graphics.queue);
     // VRAM: this process's use of the adapter's local memory against the budget Windows gives it.
     IDXGIFactory4* factory = nullptr;
-    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
-        if (FAILED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&osd.adapter))))
+    LUID luid{};
+    if (graphics.adapter_luid(luid) && SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        if (FAILED(factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&osd.adapter))))
             osd.adapter = nullptr;
         factory->Release();
     }
@@ -3921,7 +4119,7 @@ const XrCompositionLayerBaseHeader* notice_frame(XrSession session, int64_t now)
         wait.timeout = 100'000'000;
         if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
             notice.uploaded = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() &&
-                              osd.upload.upload(osd.images[index], pixels);
+                              osd.upload && osd.upload->upload(osd.images[index], pixels);
             next.ReleaseSwapchainImage(osd.chain, nullptr);
         }
         if (notice.uploaded)
@@ -3956,7 +4154,7 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         wait.timeout = 100'000'000;
         if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
             const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() &&
-                            osd.upload.upload(osd.images[index], pixels);
+                            osd.upload && osd.upload->upload(osd.images[index], pixels);
             next.ReleaseSwapchainImage(osd.chain, nullptr);
             osd.uploaded = osd.uploaded || ok;
         }
@@ -3968,7 +4166,7 @@ void osd_shutdown() {
     if (osd.drawing.valid())
         osd.drawing.wait();
     osd.drawing = {};
-    osd.upload.shutdown();
+    osd.upload.reset();
     if (osd.chain)
         next.DestroySwapchain(osd.chain);
     if (osd.view)

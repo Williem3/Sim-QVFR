@@ -117,7 +117,59 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
     return out;
 }
 
-bool PanelUpload::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, int width, int height) {
+namespace {
+
+class PanelUploadD3D12 final : public PanelUpload {
+public:
+    ~PanelUploadD3D12() override { shutdown(); }
+    bool initialize(ID3D12Device* device, ID3D12CommandQueue* queue, int width, int height);
+    bool upload(void* image, const std::vector<uint32_t>& pixels) override {
+        return copy(static_cast<ID3D12Resource*>(image), pixels);
+    }
+
+private:
+    bool copy(ID3D12Resource* image, const std::vector<uint32_t>& pixels);
+    void shutdown();
+    void wait();
+    int width_ = kPanelWidth, height_ = kPanelHeight;
+    ID3D12Device* device_ = nullptr;
+    ID3D12CommandQueue* queue_ = nullptr;
+    ID3D12Resource* buffer_ = nullptr;  // upload heap, persistently mapped
+    void* mapped_ = nullptr;
+    ID3D12CommandAllocator* allocator_ = nullptr;
+    ID3D12GraphicsCommandList* list_ = nullptr;
+    ID3D12Fence* fence_ = nullptr;
+    HANDLE event_ = nullptr;
+    uint64_t value_ = 0;
+};
+
+// D3D11: UpdateSubresource on the immediate context, which keeps no pipeline state of the game's.
+class PanelUploadD3D11 final : public PanelUpload {
+public:
+    PanelUploadD3D11(ID3D11Device* device, int width, int height) : width_(width), height_(height) {
+        device->GetImmediateContext(&context_);
+    }
+    ~PanelUploadD3D11() override {
+        if (context_)
+            context_->Release();
+    }
+    bool upload(void* image, const std::vector<uint32_t>& pixels) override {
+        if (!context_ || !image || pixels.size() != static_cast<size_t>(width_) * height_)
+            return false;
+        const D3D11_BOX box{0, 0, 0, static_cast<UINT>(width_), static_cast<UINT>(height_), 1};
+        context_->UpdateSubresource(static_cast<ID3D11Texture2D*>(image), 0, &box, pixels.data(),
+                                    static_cast<UINT>(width_) * 4, 0);
+        return true;
+    }
+
+private:
+    int width_, height_;
+    ID3D11DeviceContext* context_ = nullptr;
+};
+
+}  // namespace
+
+bool PanelUploadD3D12::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, int width, int height) {
     shutdown();
     if (width <= 0 || height <= 0 || (width * 4) % 256 != 0)
         return false;
@@ -152,12 +204,12 @@ bool PanelUpload::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, in
     return true;
 }
 
-void PanelUpload::wait() {
+void PanelUploadD3D12::wait() {
     if (fence_ && event_ && fence_->GetCompletedValue() < value_ && SUCCEEDED(fence_->SetEventOnCompletion(value_, event_)))
         WaitForSingleObject(event_, 1000);
 }
 
-void PanelUpload::shutdown() {
+void PanelUploadD3D12::shutdown() {
     wait();  // the last copy reads the buffer
     if (list_)
         list_->Release();
@@ -179,7 +231,7 @@ void PanelUpload::shutdown() {
     queue_ = nullptr;
 }
 
-bool PanelUpload::upload(ID3D12Resource* image, const std::vector<uint32_t>& pixels) {
+bool PanelUploadD3D12::copy(ID3D12Resource* image, const std::vector<uint32_t>& pixels) {
     if (!list_ || !image || pixels.size() != static_cast<size_t>(width_) * height_)
         return false;
     wait();  // the previous copy is done with the buffer and the allocator
@@ -208,6 +260,17 @@ bool PanelUpload::upload(ID3D12Resource* image, const std::vector<uint32_t>& pix
     queue_->ExecuteCommandLists(1, lists);
     queue_->Signal(fence_, ++value_);
     return true;
+}
+
+
+std::unique_ptr<PanelUpload> make_panel_upload(const SessionGraphics& graphics, int width, int height) {
+    if (graphics.d3d12 && graphics.queue) {
+        auto upload = std::make_unique<PanelUploadD3D12>();
+        return upload->initialize(graphics.d3d12, graphics.queue, width, height) ? std::move(upload) : nullptr;
+    }
+    if (graphics.d3d11 && width > 0 && height > 0)
+        return std::make_unique<PanelUploadD3D11>(graphics.d3d11, width, height);
+    return nullptr;
 }
 
 }  // namespace aceqv

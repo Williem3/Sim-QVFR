@@ -26,7 +26,7 @@ add_library(ace_qv_core STATIC
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
   src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/adapters.cpp src/engine/code_patch.cpp
-  src/quad/compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
+  src/quad/compositor.cpp src/quad/d3d11_compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
 target_include_directories(ace_qv_core PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -65,6 +65,18 @@ add_executable(compositor_test tests/compositor_test.cpp)
 target_include_directories(compositor_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(compositor_test PRIVATE ace_qv_core)
+
+# Offline check of the D3D11 compositor on a WARP device (tests/d3d11_compositor_test.cpp).
+add_executable(d3d11_compositor_test tests/d3d11_compositor_test.cpp)
+target_include_directories(d3d11_compositor_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(d3d11_compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(d3d11_compositor_test PRIVATE ace_qv_core d3d11)
+
+# Offline check of the panels' D3D11 upload on a WARP device (tests/panel_upload_test.cpp).
+add_executable(panel_upload_test tests/panel_upload_test.cpp)
+target_include_directories(panel_upload_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(panel_upload_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(panel_upload_test PRIVATE ace_qv_core d3d11)
 
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
 add_executable(two_loops_test tests/two_loops_test.cpp)
@@ -198,6 +210,6 @@ target_link_libraries(cpu_profile_test PRIVATE ace_qv_core)
 
 # Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
 add_executable(acc_views_test tests/acc_views_test.cpp)
-target_include_directories(acc_views_test PRIVATE src)
+target_include_directories(acc_views_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(acc_views_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)

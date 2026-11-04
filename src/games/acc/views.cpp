@@ -26,6 +26,8 @@ AdjustViewRectFn originalAdjust = nullptr;
 ProjectionFn originalProjection = nullptr;
 EyePoseFn originalEyePose = nullptr;
 aceqv::Views4Layout layout;
+std::atomic<double> focusX{0}, focusY{0};  // the focus box (views_set_focus); 0: the focus views copy the eyes
+std::atomic<std::uint64_t> focused{0};      // side-pass projections narrowed to it
 std::atomic<int> targetWidth{0}, targetHeight{0};
 std::atomic<std::uint64_t> adjustCalls[5], projectionCalls[5], poseCalls[5];
 std::atomic<std::uint64_t> steamProjections{0}, steamPoses{0};  // calls that reached SteamVR (OpenComposite)
@@ -72,9 +74,10 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     *sizeY = static_cast<unsigned>(r.height);
 }
 
-// Stage gate: a side pass is a copy of its eye. It takes what its eye got last (the eyes come first in every
-// frame) instead of asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no
-// cached views; README.md), so the side views keep its calls to what ACC makes without them.
+// A side pass starts from its eye: it takes what its eye got last (the eyes come first in every frame) instead of
+// asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no cached views; README.md),
+// so the side views keep its calls to what ACC makes without them. Its projection is then narrowed to the focus
+// box; its pose stays its eye's.
 struct EyeCache {
     std::mutex mutex;
     bool projection[3] = {}, pose[3] = {}, poseOk[3] = {};
@@ -86,16 +89,14 @@ EyeCache cache;
 std::atomic<bool> sessionRunning{false};
 std::atomic<std::uint64_t> served{0};  // answers from the cache while no session ran
 
-FMatrix* projection(const void* self, FMatrix* out, int pass) {
-    count(projectionCalls, pass);
-    const int eye = eye_pass(pass);
+void eye_projection(const void* self, FMatrix* out, int pass, int eye) {
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
     if ((pass != eye || idle) && (eye == kPassLeft || eye == kPassRight)) {
         std::lock_guard guard(cache.mutex);
         if (cache.projection[eye]) {
             *out = cache.matrix[eye];
             served.fetch_add(idle ? 1 : 0, std::memory_order_relaxed);
-            return out;
+            return;
         }
     }
     steamProjections.fetch_add(1, std::memory_order_relaxed);
@@ -105,6 +106,14 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
         cache.matrix[eye] = *out;
         cache.projection[eye] = true;
     }
+}
+FMatrix* projection(const void* self, FMatrix* out, int pass) {
+    count(projectionCalls, pass);
+    const int eye = eye_pass(pass);
+    eye_projection(self, out, pass, eye);
+    if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
+                                        focusY.load(std::memory_order_relaxed)))
+        focused.fetch_add(1, std::memory_order_relaxed);
     return out;
 }
 bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* position) {
@@ -135,13 +144,75 @@ bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* posit
 
 std::atomic<bool> started{false};
 
+// The 7 bytes at a kRightEyePicks site, and that GetStereoEyeView is called right after (directly, or after
+// `mov rcx, [rcx]`).
+bool right_eye_picks_match() {
+    const std::uintptr_t base = aceqv::module_base();
+    for (const RightEyePick& p : kRightEyePicks) {
+        const std::uint8_t pick[7] = {0xf6, 0xd8, 0x1b, 0xd2, 0x83, 0xe2, 0x02};
+        std::uint8_t anchor[7];
+        std::memcpy(anchor, pick, sizeof(anchor));
+        if (p.passInEax)
+            anchor[0] = 0xf7;  // neg eax
+        const std::uint8_t loadFamily[3] = {0x48, 0x8b, 0x09};
+        const std::uintptr_t call = p.rva + 7 + (aceqv::code_matches(p.rva + 7, loadFamily, 3) ? 3 : 0);
+        std::int32_t rel = 0;
+        const bool ok = aceqv::code_matches(p.rva, anchor, sizeof(anchor)) &&
+                        *reinterpret_cast<const std::uint8_t*>(base + call) == 0xe8 &&
+                        (std::memcpy(&rel, reinterpret_cast<const void*>(base + call + 1), 4), call + 5 + rel == kGetStereoEyeView);
+        if (!ok) {
+            aceqv::logf("acc views: no right-eye pick at 0x%llx", static_cast<unsigned long long>(p.rva));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Each kRightEyePicks site: edx = (al, or eax) ? (View.StereoPass + 1) & ~1 : 0.
+bool pair_right_views() {
+    bool ok = true;
+    for (const RightEyePick& p : kRightEyePicks) {
+        std::uint8_t anchor[7] = {0xf6, 0xd8, 0x1b, 0xd2, 0x83, 0xe2, 0x02};
+        if (p.passInEax)
+            anchor[0] = 0xf7;
+        std::uint8_t stub[24];
+        std::size_t n = 0;
+        stub[n++] = p.passInEax ? 0x85 : 0x84;  // test eax, eax / test al, al
+        stub[n++] = 0xc0;
+        stub[n++] = 0x74;  // jz zero (offset below)
+        const std::size_t jz = n++;
+        if (p.view >= 8)
+            stub[n++] = 0x41;
+        stub[n++] = 0x8b;  // mov edx, [view + 0xad0]
+        stub[n++] = static_cast<std::uint8_t>(0x90 | (p.view & 7));
+        const std::uint32_t disp = static_cast<std::uint32_t>(kViewStereoPass);
+        std::memcpy(stub + n, &disp, 4);
+        n += 4;
+        const std::uint8_t pairRight[] = {0xff, 0xc2, 0x83, 0xe2, 0xfe, 0xeb, 0x02};  // inc edx; and edx, -2; jmp done
+        std::memcpy(stub + n, pairRight, sizeof(pairRight));
+        n += sizeof(pairRight);
+        stub[jz] = static_cast<std::uint8_t>(n - (jz + 1));
+        stub[n++] = 0x33;  // zero: xor edx, edx
+        stub[n++] = 0xd2;
+        ok = aceqv::code_redirect(p.rva, anchor, sizeof(anchor), stub, n) && ok;
+    }
+    return ok;
+}
+
 bool counts_match() {
     for (const CountRead& r : kInstancedViewCounts)
         if (!aceqv::code_matches(r.rva, r.bytes, r.size)) {
             aceqv::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
             return false;
         }
-    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor));
+    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
+           aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
+           aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
+           right_eye_picks_match() &&
+           aceqv::code_matches(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor)) &&
+           aceqv::code_matches(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor)) &&
+           aceqv::code_matches(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor)) &&
+           aceqv::code_matches(kFoliageRightViewRead, kFoliageRightViewReadAnchor, sizeof(kFoliageRightViewReadAnchor));
 }
 
 // Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
@@ -158,14 +229,35 @@ bool pairs_per_draw() {
                                   0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
     ok = aceqv::code_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
                               sizeof(clamp)) && ok;
-    aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped)"
+    // StereoPassIndex: the eye within its pair (and eax, 1; then the moved store).
+    const std::uint8_t pairEye[] = {0x83, 0xe0, 0x01, 0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
+    ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
+                              pairEye, sizeof(pairEye)) && ok;
+    ok = pair_right_views() && ok;
+    // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
+    const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
+    const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
+                                 0x48, 0x8b, 0x04, 0xc1,        // mov rax, [rcx + rax*8]
+                                 0x41, 0x0f, 0x28, 0xe7};       // movaps xmm4, xmm15
+    const std::uint8_t right[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
+                                  0x48, 0x83, 0xc0, 0x02,        // add rax, 2
+                                  0x0f, 0x59, 0xc7};             // mulps xmm0, xmm7
+    ok = aceqv::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
+                              sizeof(gate)) && ok;
+    ok = aceqv::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
+                              sizeof(left)) && ok;
+    ok = aceqv::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
+                              sizeof(right)) && ok;
+    aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
+                                      "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
+                                      "foliage culled per pair)"
                                     : "a views-per-draw patch failed");
     return ok;
 }
 
 }  // namespace
 
-bool views_start(const aceqv::Views4Layout& l) {
+bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
     if (started.load())
         return true;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
@@ -195,6 +287,7 @@ bool views_start(const aceqv::Views4Layout& l) {
                 static_cast<int>(*subPrimitiveQueries));
     *subPrimitiveQueries = 0;
     layout = l;
+    views_set_focus(boxX, boxY);
     originalAdjust = reinterpret_cast<AdjustViewRectFn>(base + kAdjustViewRect.function);
     originalProjection = reinterpret_cast<ProjectionFn>(base + kGetStereoProjectionMatrix.function);
     originalEyePose = reinterpret_cast<EyePoseFn>(base + kGetRelativeEyePose.function);
@@ -219,10 +312,22 @@ bool views_start(const aceqv::Views4Layout& l) {
     ok = ok && aceqv::vtable_slot_replace(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
                                           reinterpret_cast<void*>(&desired_views));
     aceqv::logf("acc views: %s; layout widths %.3f %.3f %.3f %.3f heights %.3f %.3f %.3f %.3f of the target",
-                ok ? "four views patched in (views 2-3 copy the eyes)" : "a slot write failed",
+                ok ? (boxX > 0 ? "four views patched in (views 2-3 focus views, centred)"
+                               : "four views patched in (views 2-3 copy the eyes)")
+                   : "a slot write failed",
                 l.width[0], l.width[1], l.width[2], l.width[3], l.height[0], l.height[1], l.height[2], l.height[3]);
     started.store(ok);
     return ok;
+}
+
+void views_set_focus(double boxX, double boxY) {
+    const double y = boxY > 0 ? boxY : boxX;
+    const double oldX = focusX.exchange(boxX, std::memory_order_relaxed);
+    const double oldY = focusY.exchange(y, std::memory_order_relaxed);
+    if (oldX == boxX && oldY == y)
+        return;  // the layer passes the live box again now and then
+    aceqv::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
+                y * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
 }
 
 void views_session_running(bool running) {
@@ -255,6 +360,8 @@ void views_frame_end() {
     aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
+    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box",
+                static_cast<unsigned long long>(focused.exchange(0)));
 }
 
 }  // namespace acc

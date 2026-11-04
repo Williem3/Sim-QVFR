@@ -6,6 +6,7 @@
 // as Epic's 4.26 OpenXR plugin maps them for quad views (pass = eSSP_LEFT_EYE + view).
 #pragma once
 
+#include "../../quad/focus_turn.h"
 #include "../../quad/views4_layout.h"
 
 namespace acc {
@@ -32,6 +33,25 @@ inline PassRect pass_rect(const aceqv::Views4Layout& layout, int pass, int targe
     const aceqv::ViewRect r =
         aceqv::views4_rect_eye_columns(layout, static_cast<int>(view_for_pass(pass)), targetWidth, targetHeight);
     return {r.left, r.top, r.width, r.height};
+}
+
+// A focus view's projection: its eye's, narrowed to the focus box (`fractionX` of the eye's tangent width,
+// `fractionY` of its height), centred on the eye's forward axis. UE 4.26's FMatrix is row-major for row vectors,
+// as SteamVR's GetStereoProjectionMatrix fills it: [0] = 2 / (r - l), [8] = (r + l) / (r - l), [5] = 2 / (u - d),
+// [9] = (u + d) / (u - d), reversed infinite depth in [11] and [14] (kept). The same box ACE's focus views get
+// (focus_extents). False, `m` unchanged: no box (`fractionX` <= 0, the focus views copy the eyes) or not such a
+// projection.
+inline bool focus_projection(float (&m)[16], double fractionX, double fractionY) {
+    float tan[4];
+    if (!(fractionX > 0) || !aceqv::projection_tangents(m, tan))
+        return false;
+    double hw = 0, hh = 0;
+    aceqv::focus_extents(tan, fractionX, fractionY > 0 ? fractionY : fractionX, hw, hh);
+    m[0] = static_cast<float>(1.0 / hw);  // 2 / (r - l) with r = -l = hw
+    m[5] = static_cast<float>(1.0 / hh);
+    m[8] = 0.0f;
+    m[9] = 0.0f;
+    return true;
 }
 
 }  // namespace acc

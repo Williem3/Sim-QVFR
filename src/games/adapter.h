@@ -49,6 +49,9 @@ public:
     // False while the layer can't compose this game's views (its graphics API isn't supported yet): QVFR then
     // runs uncomposed, the headset showing views 0-1.
     virtual bool qvfr_composable() const { return has_qvfr(); }
+    // The layer composes this game's views with its D3D11 compositor instead (d3d11_compositor.h): one image
+    // holds all four views in eye columns (qvfr_eye_columns), each focus view centred on its eye (no gaze turn).
+    virtual bool qvfr_compose_d3d11() const { return false; }
     // Cheeky Foveated DLSS is made for this game.
     virtual bool loads_cheeky() const { return has_qvfr(); }
     // The game lays its views out in eye columns (views4_rect_eye_columns) and submits each eye as its half of
