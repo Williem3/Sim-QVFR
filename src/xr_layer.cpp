@@ -365,7 +365,7 @@ void load_experiment() {
     }
     experiment.views4NoMask =
         experiment.views4 &&
-        GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.views4Compose ? 0 : 1, ini.c_str()) == 0;
+        GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.composing() ? 0 : 1, ini.c_str()) == 0;
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
@@ -2518,8 +2518,9 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
     return next.EndFrame(session, &end);
 }
 
-// views4 composing: ACE draws each eye's hidden-area mesh into every view, so the focus views got the
-// lens mask's black corners in their own frame (composition run 2). views4_mask=0 answers the hidden
+// views4 composing: the game draws each eye's hidden-area mesh into every view, so the focus views got the
+// lens mask's black corners in their own frame (ACE: composition run 2; ACC through OpenComposite: a dark rim
+// round the focus area, 2026-11-04). views4_mask=0 answers the hidden
 // mesh with one zero-area triangle: nothing is masked in any view (the lenses hide those pixels anyway).
 bool visibilityMaskLogged = false;
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
