@@ -22,6 +22,7 @@
 #include <tlhelp32.h>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../games/game.h"
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
@@ -30,6 +31,7 @@
 
 using namespace aceqv::launcher;
 namespace fs = std::filesystem;
+namespace games = aceqv::games;
 
 namespace {
 
@@ -111,9 +113,9 @@ std::wstring find_game_folder() {
         for (const std::wstring& library : steam_libraries(vdf))
             libraries.push_back(library);
     for (const std::wstring& library : libraries) {
-        const fs::path folder = fs::path(library) / L"steamapps" / L"common" / L"Assetto Corsa EVO";
+        const fs::path folder = fs::path(library) / L"steamapps" / L"common" / games::launcher_game().steamFolder;
         std::error_code ec;
-        if (fs::exists(folder / L"AssettoCorsaEVO.exe", ec))
+        if (fs::exists(folder / games::launcher_game().exeName, ec))
             return folder.wstring();
     }
     return {};
@@ -201,9 +203,10 @@ int run(bool dryRun) {
         return fail(L"ace-quadview.ini not found next to the launcher (" + ini.wstring() + L")");
 
     const std::wstring game = game_folder(ini.wstring());
-    const fs::path exe = fs::path(game) / L"AssettoCorsaEVO.exe";
+    const games::GameInfo& info = games::launcher_game();
+    const fs::path exe = fs::path(game) / info.exeName;
     if (game.empty() || !fs::exists(exe, ec))
-        return fail(L"Assetto Corsa EVO not found through Steam; set game_dir in [launcher] of ace-quadview.ini");
+        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir in [launcher] of ace-quadview.ini");
 
     const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
@@ -248,28 +251,28 @@ int run(bool dryRun) {
     for (const auto& [name, value] : variables)
         say(L"  set " + name + L"=" + value);
 
-    const bool aceRunning = process_running(L"AssettoCorsaEVO.exe"), steamRunning = process_running(L"steam.exe");
+    const bool gameRunning = process_running(info.exeName), steamRunning = process_running(L"steam.exe");
     if (dryRun) {
-        if (aceRunning)
-            say(L"  (ACE is running: a real launch would refuse)");
+        if (gameRunning)
+            say(L"  (" + std::wstring(info.shortName) + L" is running: a real launch would refuse)");
         if (!steamRunning)
             say(L"  (Steam is not running: a real launch would refuse)");
         write_file((runFolder / L"launch.txt").wstring(), narrow(report));
         return 0;
     }
-    if (aceRunning)
-        return fail(L"Assetto Corsa EVO is already running; close it first");
+    if (gameRunning)
+        return fail(std::wstring(info.name) + L" is already running; close it first");
     if (!steamRunning)
-        return fail(L"Steam is not running; start it first (ACE needs it)");
+        return fail(L"Steam is not running; start it first (" + std::wstring(info.shortName) + L" needs it)");
 
     std::wstring block = environment_block(environment, variables);
-    std::wstring command = L"\"" + exe.wstring() + L"\" -vr";  // -vr: ACE's OpenXR start
+    std::wstring command = L"\"" + exe.wstring() + L"\" " + info.launchArgs;  // the game's OpenXR start
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, block.data(),
                         game.c_str(), &si, &pi))
-        return fail(L"starting Assetto Corsa EVO failed (error " + std::to_wstring(GetLastError()) + L")");
-    say(L"Started Assetto Corsa EVO (pid " + std::to_wstring(pi.dwProcessId) + L").");
+        return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(GetLastError()) + L")");
+    say(L"Started " + std::wstring(info.name) + L" (pid " + std::to_wstring(pi.dwProcessId) + L").");
     if (baseline)  // one launch only
         WritePrivateProfileStringW(L"launcher", L"baseline_next", L"0", ini.c_str());
     CloseHandle(pi.hThread);
@@ -337,7 +340,7 @@ std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& wan
 
 std::wstring launcher_game_exe() {
     const std::wstring game = game_folder(settings_path());
-    const fs::path exe = fs::path(game) / L"AssettoCorsaEVO.exe";
+    const fs::path exe = fs::path(game) / games::launcher_game().exeName;
     std::error_code ec;
     return !game.empty() && fs::exists(exe, ec) ? exe.wstring() : std::wstring();
 }
@@ -352,7 +355,7 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
               : _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0 ? LaunchMode::TwoLoop
                                                                                                  : LaunchMode::Qvfr;
     in.steamRunning = process_running(L"steam.exe");
-    in.aceRunning = process_running(L"AssettoCorsaEVO.exe");
+    in.gameRunning = process_running(games::launcher_game().exeName);
     if (!exe.empty())
         in.cheekyLoaders = cheeky_loaders(fs::path(exe).parent_path().wstring());
     const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());

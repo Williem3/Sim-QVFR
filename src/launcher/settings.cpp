@@ -9,6 +9,8 @@
 
 #include <windows.h>
 
+#include "../games/game.h"
+
 namespace aceqv::launcher {
 namespace {
 
@@ -284,7 +286,7 @@ std::wstring running_live_ini(const std::wstring& runtimeInfo) {
                          QueryFullProcessImageNameW(process, 0, path, &length);
     CloseHandle(process);
     const std::wstring exe = path;
-    const std::wstring ace = L"\\AssettoCorsaEVO.exe";
+    const std::wstring ace = L"\\" + std::wstring(games::launcher_game().exeName);
     if (!running || exe.size() < ace.size() || _wcsicmp(exe.c_str() + exe.size() - ace.size(), ace.c_str()) != 0)
         return {};
     return ini;

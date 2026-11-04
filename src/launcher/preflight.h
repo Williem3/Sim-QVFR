@@ -3,7 +3,7 @@
 // pure (preflight_checks); the scans that gather their input are the small Windows functions below
 // and launcher_preflight (main.cpp).
 //
-// - The game build: ace-quadview patches one AssettoCorsaEVO.exe build (games/ace/abi.h's SHA-256).
+// - The game build: ace-quadview patches the game builds its addresses were taken from (games/<id>/game.h).
 //   After a game update the layer refuses to patch and ACE runs unchanged; the launcher says so first.
 // - Steam running and ACE closed (the launch refuses otherwise).
 // - Cheeky Foveated DLSS's loader (dxgi.dll, version.dll) in the game folder: ACE fails to start with it.
@@ -44,7 +44,7 @@ struct PreflightInput {
     std::wstring gameExe;  // empty: not found
     BuildState build = BuildState::Unknown;
     LaunchMode mode = LaunchMode::Qvfr;
-    bool steamRunning = true, aceRunning = false;
+    bool steamRunning = true, gameRunning = false;
     std::vector<std::wstring> cheekyLoaders;  // Cheeky's loader DLLs in the game folder
     bool cheekyLoad = false, cheekyFg = false, cheekyRuntimeFound = false;
     CheekyLayer cheekyLayer = CheekyLayer::Missing;

@@ -37,6 +37,7 @@
 #include "quad/helmet.h"
 #include "probe/dred.h"
 #include "games/ace/batch_watch.h"
+#include "games/game.h"
 #include "probe/hang_watch.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
@@ -1413,12 +1414,8 @@ void report_cpu_times() {
     gaze_hold_report();
 }
 
-bool is_ace_process() {
-    wchar_t path[MAX_PATH] = {};
-    const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
-    const wchar_t* name = wcsrchr(path, L'\\');
-    return n > 0 && n < MAX_PATH && _wcsicmp(name ? name + 1 : path, L"AssettoCorsaEVO.exe") == 0;
-}
+// A game in src/games, by its exe: anywhere else the layer passes through.
+bool is_game_process() { return games::current_game() != nullptr; }
 
 XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system,
                                                          XrViewConfigurationType type, uint32_t capacity,
@@ -4362,8 +4359,8 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     PFN_xrGetInstanceProcAddr gipa = layerInfo->nextInfo->nextGetInstanceProcAddr;
     XrResult r = layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     // Registered as an implicit layer, so it loads into every OpenXR app: stay silent and
-    // pass-through everywhere except Assetto Corsa EVO.
-    if (!is_ace_process()) {
+    // pass-through everywhere except a supported game (src/games).
+    if (!is_game_process()) {
         next = Dispatch{gipa};
         return r;
     }
@@ -4484,7 +4481,7 @@ xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, cons
     request->layerApiVersion = XR_API_VERSION_1_0;
     request->getInstanceProcAddr = aceqv::layerGetInstanceProcAddr;
     request->createApiLayerInstance = aceqv::layerCreateApiLayerInstance;
-    if (aceqv::is_ace_process())
+    if (aceqv::is_game_process())
         aceqv::log_line("Loader negotiated API layer interface v1 (ace-quadview probe build)");
     return XR_SUCCESS;
 }

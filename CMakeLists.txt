@@ -19,7 +19,7 @@ add_library(minhook STATIC
 target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 
 add_library(ace_quadview SHARED
-  src/xr_layer.cpp
+  src/xr_layer.cpp src/games/games.cpp
   src/log.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
@@ -40,7 +40,7 @@ add_custom_command(TARGET ace_quadview POST_BUILD
           $<TARGET_FILE_DIR:ace_quadview>/XR_APILAYER_ACE_quadview.json)
 
 # Offline check of the hand-assembled probe stub (tests/stub_test.cpp).
-add_executable(stub_test tests/stub_test.cpp src/log.cpp)
+add_executable(stub_test tests/stub_test.cpp src/games/games.cpp src/log.cpp)
 target_include_directories(stub_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(stub_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(stub_test PRIVATE minhook bcrypt)
@@ -58,7 +58,7 @@ target_compile_definitions(compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 target_link_libraries(compositor_test PRIVATE d3d12 dxgi d3dcompiler windowscodecs ole32)
 
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
-add_executable(two_loops_test tests/two_loops_test.cpp src/log.cpp src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
+add_executable(two_loops_test tests/two_loops_test.cpp src/games/games.cpp src/log.cpp src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
   src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -67,7 +67,7 @@ target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AN
 target_link_libraries(two_loops_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
-add_executable(quad_flow_test tests/quad_flow_test.cpp src/log.cpp src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
+add_executable(quad_flow_test tests/quad_flow_test.cpp src/games/games.cpp src/log.cpp src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
   src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -157,7 +157,7 @@ target_compile_definitions(hang_watch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
 set(ACE_QV_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
-add_executable(ace_launcher WIN32 src/launcher/main.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
+add_executable(ace_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
   src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/launcher/launcher.rc)
 target_include_directories(ace_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -167,7 +167,7 @@ target_link_libraries(ace_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 b
 set_target_properties(ace_launcher PROPERTIES OUTPUT_NAME ace-quadview-launcher)
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
-add_executable(launcher_test tests/launcher_test.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/settings.cpp src/launcher/report.cpp src/quad/osd.cpp
+add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/settings.cpp src/launcher/report.cpp src/quad/osd.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp)
 target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)

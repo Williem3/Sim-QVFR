@@ -8,6 +8,8 @@
 
 #include <windows.h>
 
+#include "../games/game.h"
+
 namespace aceqv::launcher {
 namespace {
 
@@ -229,8 +231,8 @@ std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerP
         {L"ACE_QV_INI", ini},
         {L"ACE_QV_LOG", log},
         {L"ACE_QV_RUNTIME_INFO", runtimeInfo},
-        {L"SteamAppId", kAceAppId},
-        {L"SteamGameId", kAceAppId},
+        {L"SteamAppId", games::launcher_game().steamAppId},
+        {L"SteamGameId", games::launcher_game().steamAppId},
     };
     if (!settings.empty())
         v.emplace_back(L"ACE_QV_SETTINGS", settings);
