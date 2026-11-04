@@ -127,6 +127,12 @@ Once an official Cheeky release includes the fixes, its own download will replac
 - **Show the center region** draws an outline around the full-quality area, so you can check it
   follows your eyes.
 
+## Assetto Corsa Competizione (in development)
+
+Sim-QuadView doesn't support ACC yet. ACC's VR will need to run through OpenComposite first:
+[Assetto Corsa Competizione in VR through OpenComposite](docs/acc-opencomposite.md) explains how to set
+that up today.
+
 ## Getting help
 
 - **Something not working?** Open the launcher's **Launch checks** first: it explains most problems
