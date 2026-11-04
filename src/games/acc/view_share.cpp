@@ -127,14 +127,21 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
     views_target(target);
     // The scene textures span the views, rounded up to 4 (README.md). The views can reach past the target: with
     // an odd eye width (1614) UE starts the right eye at an even x (1616), so its views end at 3230 and its
-    // scene textures are 3232 wide against a 3228 target (2026-11-04: none matched, nothing was shared).
-    int extent[2] = {target[0], target[1]};
+    // scene textures are 3232 wide against a 3228 target (2026-11-04: none matched, nothing was shared). Under
+    // DLSS (or any screen percentage) the views render smaller than the target and the scene textures with them
+    // (2026-11-04, Quality: views reach 1941x892, scene textures 1944x892 in a 2904x1336 target): so the views'
+    // final rects alone size them, the target only before the renderer first reported them.
+    int extent[2] = {0, 0};
     for (int v = 0; v < 4; ++v) {
         int rect[4];
         if (views_view_rect(v, rect)) {
             extent[0] = std::max(extent[0], rect[0] + rect[2]);
             extent[1] = std::max(extent[1], rect[1] + rect[3]);
         }
+    }
+    if (extent[0] <= 0 || extent[1] <= 0) {
+        extent[0] = target[0];
+        extent[1] = target[1];
     }
     const int w = static_cast<int>(d.Width), h = static_cast<int>(d.Height);
     const bool match = w >= extent[0] && w < extent[0] + 8 && h >= extent[1] - 2;
