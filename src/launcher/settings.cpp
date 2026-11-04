@@ -212,7 +212,7 @@ bool shared_profile(const std::string& text, Profile& profile) {
         return false;
     Profile p = settings_profile(Settings{}, in.name);
     for (const ProfileKey& k : in.keys) {
-        if (k.section == L"experiment" && k.key == L"mode" && k.value != L"views4" && k.value != L"quad")
+        if (k.section == L"experiment" && k.key == L"mode" && k.value != L"views4")  // Two-loop (quad) is legacy: not shared
             continue;
         for (ProfileKey& mine : p.keys)
             if (_wcsicmp(mine.section.c_str(), k.section.c_str()) == 0 && _wcsicmp(mine.key.c_str(), k.key.c_str()) == 0)

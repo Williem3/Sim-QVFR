@@ -17,8 +17,10 @@ SHA-256 and code anchors. `[experiment] mode` in `ace-quadview.ini` picks the re
   outer eye views at `periphery_scale` and two focus views at `focus_density` over `focus_percent`
   of the FOV). The layer blends each focus view into its eye at the headset's native size, following
   the eyes when eye tracking is available. This is the launcher's default.
-- `quad`, **Two-Loop**: ACE runs two full frames per headset frame (A for the full view, B for the
-  focus box), and the layer blends B into A. Frame generation (VectorXR) has to be off.
+- `quad`, **Two-Loop** (legacy): ACE runs two full frames per headset frame (A for the full view, B for the
+  focus box), and the layer blends B into A. Frame generation (VectorXR) has to be off. The launcher
+  no longer offers it (its method picker shows only to switch an ini still set to `quad` over to
+  QVFR) and shared profiles can't select it; the code stays, but new work targets QVFR only.
 - `off`: rendering unchanged. Only the log-only probes run.
 - Experiments for diagnosis, not for driving: `focus_only`, `two_loops`, `views3`, and
   `double_render`, which crashes ACE. The comments in `manifest/ace-quadview.ini` describe each one.

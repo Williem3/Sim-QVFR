@@ -131,7 +131,7 @@ struct Popup {
     int selected = 0, hover = -1;
 };
 
-constexpr wchar_t kMethodNames[2][32] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced"};
+constexpr wchar_t kMethodNames[2][40] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced (legacy)"};
 constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
 constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
@@ -539,6 +539,8 @@ Range slider_range(Ctl id) {
 }
 
 bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
+// Two-loop is legacy (ini mode=quad still runs it): the method picker shows only while it is chosen, to leave it.
+bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
 std::vector<Ctl> focus_order() {
     std::vector<Ctl> order = {kSidebar};
@@ -546,7 +548,11 @@ std::vector<Ctl> focus_order() {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
     case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
     case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
-    case Pane::Rendering: order.insert(order.end(), {kMethod, kMode}); break;
+    case Pane::Rendering:
+        if (method_shown())
+            order.push_back(kMethod);
+        order.push_back(kMode);
+        break;
     case Pane::Resolution:
         order.push_back(kOuter);
         if (!inner_disabled()) {
@@ -736,8 +742,8 @@ struct Help {
 constexpr Help kHelp[] = {
     {L"Rendering method",
      L"Quad View Foveated Rendering draws the outer and focus views in one ACE frame: the lightest on the CPU, and the one "
-     L"with every feature. Two-loop draws two whole ACE frames per headset frame: about twice the CPU work per frame, and no "
-     L"frame generation."},
+     L"with every feature. Two-loop (legacy) draws two whole ACE frames per headset frame: about twice the CPU work per frame, "
+     L"and no frame generation."},
     {L"Foveated mode",
      L"Eye tracked: the sharp area follows your eyes, so it can be small and dense; it needs a headset with eye tracking. "
      L"Fixed: the area stays in the centre, so make it larger, since your eyes move off it."},
@@ -1821,9 +1827,10 @@ float pane_content(float x, float y, float w, bool draw) {
         }
         mode.controlH = t::kControlHeight;
         mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
-        h += section(x, y, w, L"Rendering", {method, mode},
+        h += section(x, y, w, L"Rendering", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
                      qvfr ? L"Quad View Foveated Rendering draws a sharp focus view inside a lower-resolution outer view for each eye."
-                          : L"Two-loop Foveated Interlaced renders each headset frame twice: the full view, then the focus view.",
+                          : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
+                            L"Foveated Rendering; Two-loop won't be offered again.",
                      draw);
         break;
     }
