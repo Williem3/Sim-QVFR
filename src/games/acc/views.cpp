@@ -363,6 +363,12 @@ bool counts_match() {
         return false;
     if (!aceqv::code_matches(kTonemapperVignette, kTonemapperVignetteAnchor, sizeof(kTonemapperVignetteAnchor)))
         return false;
+    for (std::uintptr_t rva : kFoliageLodProjection)
+        if (!aceqv::code_matches(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor)))
+            return false;
+    if (!aceqv::code_matches(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
+                             sizeof(kFoliageShaderLodProjectionAnchor)))
+        return false;
     if (!aceqv::code_matches(kShadowCascadesCreate, kShadowCascadesCreateAnchor, sizeof(kShadowCascadesCreateAnchor)) ||
         !aceqv::code_matches(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
                              sizeof(kShadowVisibilitySecondaryAnchor)) ||
@@ -439,9 +445,29 @@ bool pairs_per_draw() {
                               sizeof(left)) && ok;
     ok = aceqv::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
                               sizeof(right)) && ok;
+    // Foliage LOD distances from the left eye's projection in the focus views, on the CPU and in the shader (abi.h).
+    const std::uint8_t cpuLod[] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00,        // lea r8, [r15 + 0x280]
+                                   0x41, 0x83, 0xbf, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r15 + 0xad0], 3
+                                   0x72, 0x10,                                      // jb done
+                                   0x4d, 0x8b, 0x07,                                // mov r8, [r15]  (Family)
+                                   0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views.Data)
+                                   0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views[0])
+                                   0x49, 0x81, 0xc0, 0x80, 0x02, 0x00, 0x00};       // add r8, 0x280
+    for (std::uintptr_t rva : kFoliageLodProjection)
+        ok = aceqv::code_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
+                                  sizeof(cpuLod)) && ok;
+    const std::uint8_t shaderLod[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r14 + 0xad0], 3
+                                      0x72, 0x09,                                      // jb own
+                                      0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Family)
+                                      0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views.Data)
+                                      0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views[0])
+                                      0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};       // own: add r14, 0x280
+    ok = aceqv::code_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
+                              sizeof(kFoliageShaderLodProjectionAnchor), shaderLod, sizeof(shaderLod)) && ok;
     aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
                                       "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
-                                      "foliage culled per pair, the sun's shadow cascades the left eye's in every view)"
+                                      "foliage culled per pair and its LOD the left eye's in the focus views, "
+                                      "the sun's shadow cascades the left eye's in every view)"
                                     : "a views-per-draw patch failed");
     return ok;
 }
