@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <iterator>
 #include <mutex>
 #include <vector>
 
@@ -94,14 +96,33 @@ std::mutex mutex;
 aceqv::D3D11ViewResample resampler;
 ComPtr<ID3D11Texture2D> eyeSsr[2];
 aceqv::ViewRegion eyeSsrRegion[2];
-bool eyeSsrFresh[2] = {}, eyeAoFresh[2] = {};
+bool eyeSsrFresh[2] = {};
+// The texture each eye last drew its AO into this frame (compared, never dereferenced): a focus view's draw is
+// refilled only from the same texture's eye region. Under DLSS several single-channel textures share the scene
+// textures' size (2026-11-04), so a focus view's draw into one must not take an eye's draw into another.
+ID3D11Resource* eyeAo[2] = {};
+
+// One frame's AO-candidate draws now and then (the first few reports), to see which textures each view draws into.
+struct AoTrace {
+    bool recording = false;
+    int reports = 0;
+    struct Entry {
+        int view;
+        const void* texture;
+        unsigned width, height;
+        char action;  // e: an eye's; r: refilled; o: a focus view's into another texture than its eye's; n: no eye yet
+    };
+    Entry entries[64];
+    int count = 0, dropped = 0;
+};
+AoTrace aoTrace;  // under `mutex`
 // Render thread only: the texture the last dispatch wrote, if it looked like the SSR denoiser's output; the bound
 // render target 0, if it looks like the AO texture. Compared, never dereferenced.
 ID3D11Resource* armed = nullptr;
 ID3D11Resource* aoTarget = nullptr;
 
 struct Counts {
-    std::atomic<std::uint64_t> shared[2], eyes{0}, noEye{0}, failed{0}, unplaced{0};
+    std::atomic<std::uint64_t> shared[2], eyes{0}, noEye{0}, failed{0}, unplaced{0}, otherTexture{0};
     std::atomic<bool> unplacedLogged{false}, firstLogged{false};
 };
 Counts ssrCounts, aoCounts;
@@ -325,18 +346,37 @@ void on_ao_drawn(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
     const int view = bound_view(ctx, aoCounts, "a draw into the AO texture", region);
     if (view < 0)
         return;
+    const auto trace = [&](char action) {
+        if (!aoTrace.recording)
+            return;
+        if (aoTrace.count == static_cast<int>(std::size(aoTrace.entries))) {
+            ++aoTrace.dropped;
+            return;
+        }
+        D3D11_TEXTURE2D_DESC d{};
+        static_cast<ID3D11Texture2D*>(written)->GetDesc(&d);
+        aoTrace.entries[aoTrace.count++] = {view, written, d.Width, d.Height, action};
+    };
     if (view < 2) {
-        eyeAoFresh[view] = true;
+        eyeAo[view] = written;
         aoCounts.eyes.fetch_add(1, std::memory_order_relaxed);
+        trace('e');
         return;
     }
     const int e = view - 2;
     int eyeRect[4];
-    if (!eyeAoFresh[e] || !views_view_rect(e, eyeRect)) {
+    if (!eyeAo[e] || !views_view_rect(e, eyeRect)) {
         aoCounts.noEye.fetch_add(1, std::memory_order_relaxed);
+        trace('n');
         return;
     }
-    eyeAoFresh[e] = false;
+    if (eyeAo[e] != written) {
+        aoCounts.otherTexture.fetch_add(1, std::memory_order_relaxed);
+        trace('o');
+        return;
+    }
+    eyeAo[e] = nullptr;
+    trace('r');
     const aceqv::ViewRegion eye{eyeRect[0], eyeRect[1], eyeRect[2], eyeRect[3]};
     auto* ao = static_cast<ID3D11Texture2D*>(written);  // scene_texture: a Texture2D
     aceqv::ViewMapping m{};
@@ -394,11 +434,12 @@ bool hook_vtable(void** vtable) {
 
 void report(Counts& c, const char* what) {
     aceqv::logf("acc view share: %s over the last 900 frames: focus views given their eye's left %llu right %llu; eye "
-                "passes %llu, focus passes without an eye's %llu, failed %llu, at no view's viewport %llu",
+                "passes %llu, focus passes without an eye's %llu, into another texture than their eye's %llu, failed %llu, "
+                "at no view's viewport %llu",
                 what, static_cast<unsigned long long>(c.shared[0].exchange(0)),
                 static_cast<unsigned long long>(c.shared[1].exchange(0)), static_cast<unsigned long long>(c.eyes.exchange(0)),
-                static_cast<unsigned long long>(c.noEye.exchange(0)), static_cast<unsigned long long>(c.failed.exchange(0)),
-                static_cast<unsigned long long>(c.unplaced.exchange(0)));
+                static_cast<unsigned long long>(c.noEye.exchange(0)), static_cast<unsigned long long>(c.otherTexture.exchange(0)),
+                static_cast<unsigned long long>(c.failed.exchange(0)), static_cast<unsigned long long>(c.unplaced.exchange(0)));
 }
 
 }  // namespace
@@ -458,14 +499,44 @@ void view_share_stop() {
     immediate.store(nullptr);
     for (int e = 0; e < 2; ++e) {
         eyeSsr[e].Reset();
-        eyeSsrFresh[e] = eyeAoFresh[e] = false;
+        eyeSsrFresh[e] = false;
+        eyeAo[e] = nullptr;
     }
     resampler.shutdown();
 }
 
 void view_share_frame_end() {
-    if (!active.load(std::memory_order_relaxed) || ++frames % 900 != 0)
+    if (!active.load(std::memory_order_relaxed))
         return;
+    {
+        std::lock_guard guard(mutex);
+        if (aoTrace.recording) {  // the frame just ended
+            aoTrace.recording = false;
+            char line[2048];
+            int n = std::snprintf(line, sizeof(line), "acc view share: one frame's AO-candidate draws (view:texture "
+                                                      "size action; e eye, r refilled, o other texture, n no eye):");
+            for (int i = 0; i < aoTrace.count && n < static_cast<int>(sizeof(line)) - 64; ++i) {
+                const AoTrace::Entry& t = aoTrace.entries[i];
+                n += std::snprintf(line + n, sizeof(line) - n, " %d:%p %ux%u %c", t.view, t.texture, t.width, t.height,
+                                   t.action);
+            }
+            if (aoTrace.dropped)
+                std::snprintf(line + n, sizeof(line) - n, " (+%d more)", aoTrace.dropped);
+            aceqv::log_line(line);
+        }
+        for (int e = 0; e < 2; ++e)
+            eyeAo[e] = nullptr;  // an eye's AO is this frame's only
+    }
+    if (++frames % 900 != 0)
+        return;
+    {
+        std::lock_guard guard(mutex);
+        if (aoTrace.reports < 3) {  // the next frame, traced
+            ++aoTrace.reports;
+            aoTrace.recording = true;
+            aoTrace.count = aoTrace.dropped = 0;
+        }
+    }
     {
         std::lock_guard guard(mutex);
         void** vtable = nullptr;
