@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -156,6 +157,14 @@ void latch_frame() {
     focusFrame.latched = true;
 }
 
+// Diagnostics: each view's projection as projection() handed it to UE, and as the rendered view holds it (with and
+// without the temporal jitter), as tangents (left, right, up, down), logged every kReportFrames.
+struct ProjectionLog {
+    std::mutex mutex;
+    float handed[4][16] = {}, stored[4][16] = {}, jittered[4][16] = {};
+};
+ProjectionLog projectionLog;
+
 void eye_projection(const void* self, FMatrix* out, int pass, int eye) {
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
     if ((pass != eye || idle) && (eye == kPassLeft || eye == kPassRight)) {
@@ -181,6 +190,10 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
     if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
                                         focusY.load(std::memory_order_relaxed)))
         focused.fetch_add(1, std::memory_order_relaxed);
+    if (pass >= kPassLeft && pass <= kPassRightSide) {
+        std::lock_guard guard(projectionLog.mutex);
+        std::memcpy(projectionLog.handed[pass - kPassLeft], out->m, sizeof(projectionLog.handed[0]));
+    }
     if (pass == kPassRightSide) {  // the frame's last view: the next side pose chooses the next frame's turn
         std::lock_guard guard(focusFrame.mutex);
         focusFrame.latched = false;
@@ -217,6 +230,9 @@ void record_rendered(const unsigned char* view) {
         seen[v] = true;
         std::memcpy(matrices[v], views[i] + kViewMatrix, sizeof(matrices[v]));
         std::memcpy(projections[v], views[i] + kViewProjectionNoAA, sizeof(projections[v]));
+        std::lock_guard guard(projectionLog.mutex);
+        std::memcpy(projectionLog.stored[v], projections[v], sizeof(projectionLog.stored[v]));
+        std::memcpy(projectionLog.jittered[v], views[i] + kViewProjection, sizeof(projectionLog.jittered[v]));
     }
     if (!familyOrderLogged.exchange(true))
         aceqv::logf("acc views: the rendered family's views are passes %d, %d, %d, %d", order[0], order[1], order[2],
@@ -537,6 +553,24 @@ void views_frame_end() {
     aceqv::logf("acc views: focus turns, yaw/pitch deg: rendered left %.1f/%.1f right %.1f/%.1f; chosen left %.1f/%.1f "
                 "right %.1f/%.1f",
                 ry[0], rp[0], ry[1], rp[1], cy[0], cp[0], cy[1], cp[1]);
+    {
+        std::lock_guard guard(projectionLog.mutex);
+        const auto tangents = [](const float (&m)[16], char* text, size_t size) {
+            float t[4] = {};
+            if (aceqv::projection_tangents(m, t))
+                std::snprintf(text, size, "%.4f/%.4f/%.4f/%.4f", t[0], t[1], t[2], t[3]);
+            else
+                std::snprintf(text, size, "none");
+        };
+        for (int v = 0; v < 4; ++v) {
+            char handed[64], stored[64], jittered[64];
+            tangents(projectionLog.handed[v], handed, sizeof(handed));
+            tangents(projectionLog.stored[v], stored, sizeof(stored));
+            tangents(projectionLog.jittered[v], jittered, sizeof(jittered));
+            aceqv::logf("acc views: view %d projection tangents l/r/u/d: handed to UE %s; rendered view's %s, jittered %s",
+                        v, handed, stored, jittered);
+        }
+    }
     aceqv::logf("acc views: rendered frames recorded %llu (skipped %llu); render thread %lu, composing thread %lu",
                 static_cast<unsigned long long>(renderedRecords.exchange(0)),
                 static_cast<unsigned long long>(renderedSkipped.exchange(0)), renderThread.load(), composeThread.load());

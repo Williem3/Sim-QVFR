@@ -28,6 +28,7 @@ inline constexpr std::ptrdiff_t kViewStereoPass = 0xad0;  // FSceneView::StereoP
 // InvProjectionMatrix, ViewMatrix, InvViewMatrix, ViewProjectionMatrix, ... 64 bytes each) at 0x280: the foliage
 // culling reads Views[0]->ViewMatrices.GetViewProjectionMatrix() at 0x3c0 (HISM, below), and DispatchPassSetup
 // copies 64 bytes from 0x340 (the view matrix, for translucency sorting). FSceneView::Family is at 0.
+inline constexpr std::ptrdiff_t kViewProjection = 0x280;  // with the temporal jitter
 inline constexpr std::ptrdiff_t kViewProjectionNoAA = 0x2c0;
 inline constexpr std::ptrdiff_t kViewMatrix = 0x340;
 inline constexpr Slot kAdjustViewRect = {kStereoVtable + 16 * 8, 0x7ae650};          // halves of the target
