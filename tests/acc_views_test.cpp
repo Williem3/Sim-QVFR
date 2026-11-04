@@ -99,6 +99,59 @@ int main() {
         ue_rotate(ue_mul(yawed, ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.3, 0.0))), forward, f);
         check(f[1] > 0.9f && f[0] < -0.25f, "the turn applies in the eye's own frame");
     }
+    {
+        // A frame's record from its views as rendered: each eye's view matrix from its orientation (UE: local to
+        // world), each focus view's from the eye's turned in its own frame; the record's turns are the ones applied.
+        const auto view_matrix = [](const UeQuat& q, float (&v)[16]) {
+            float c[9];  // column form: world = C local
+            aceqv::to_matrix(XrQuaternionf{q.x, q.y, q.z, q.w}, c);
+            // Row vectors: local = world C; then UE's view axes (x right = local Y, y up = local Z, z forward = X).
+            for (int r = 0; r < 3; ++r) {
+                v[r * 4 + 0] = c[r * 3 + 1];
+                v[r * 4 + 1] = c[r * 3 + 2];
+                v[r * 4 + 2] = c[r * 3 + 0];
+                v[r * 4 + 3] = 0;
+            }
+            v[12] = v[13] = v[14] = 0;
+            v[15] = 1;
+        };
+        const float eyeTan[2][4] = {{-1.2f, 1.0f, 1.0f, -1.1f}, {-1.0f, 1.2f, 1.0f, -1.1f}};
+        const XrQuaternionf turn[2] = {aceqv::focus_turn(eyeTan[0], 0.4, 0.4, 0.3, -0.2),
+                                       aceqv::focus_turn(eyeTan[1], 0.4, 0.4, -0.25, 0.1)};
+        const UeQuat head = ue_mul(UeQuat{0, 0, std::sin(0.3f), std::cos(0.3f)}, UeQuat{0, std::sin(-0.1f), 0, std::cos(-0.1f)});
+        const UeQuat eyes[2] = {ue_mul(head, UeQuat{0, 0, std::sin(-0.02f), std::cos(-0.02f)}), head};
+        float views[4][16], projections[4][16];
+        for (int e = 0; e < 2; ++e) {
+            view_matrix(eyes[e], views[e]);
+            view_matrix(ue_mul(eyes[e], ue_quat(turn[e])), views[e + 2]);
+            const float* t = eyeTan[e];
+            const float eyeProjection[16] = {2 / (t[1] - t[0]), 0, 0, 0, 0, 2 / (t[2] - t[3]), 0, 0,
+                                             (t[1] + t[0]) / (t[1] - t[0]), (t[2] + t[3]) / (t[2] - t[3]), 0, 1,
+                                             0, 0, 10, 0};
+            std::memcpy(projections[e], eyeProjection, sizeof(eyeProjection));
+            std::memcpy(projections[e + 2], eyeProjection, sizeof(eyeProjection));
+            focus_projection(projections[e + 2], 0.4, 0.4);
+        }
+        aceqv::Views4Frame frame{};
+        const bool ok = rendered_frame(views, projections, frame);
+        bool match = ok;
+        for (int e = 0; e < 2 && ok; ++e) {
+            float want[9], got[9];
+            aceqv::to_matrix(aceqv::qconj(turn[e]), want);
+            aceqv::to_matrix(aceqv::qconj(frame.turn[e]), got);
+            for (int i = 0; i < 9; ++i)
+                match &= std::fabs(want[i] - got[i]) < 1e-4f;
+            match &= std::fabs(frame.outerTan[e][0] - eyeTan[e][0]) < 1e-4f &&
+                    std::fabs(frame.focusTan[e][1] - 0.4f * (eyeTan[e][1] - eyeTan[e][0]) / 2) < 1e-4f;
+        }
+        check(match, "a frame's record from its rendered views: the turns and tangents applied");
+        views[1][0] = -views[1][0];  // a mirrored view (a planar reflection's)
+        views[1][1] = -views[1][1];
+        views[1][2] = -views[1][2];
+        aceqv::Views4Frame kept = frame;
+        check(!rendered_frame(views, projections, kept) && std::memcmp(&kept, &frame, sizeof(kept)) == 0,
+              "a mirrored view: no record");
+    }
 
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;

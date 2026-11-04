@@ -42,13 +42,26 @@ void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
 int desired_views(void*, bool stereo) { return views_for(stereo); }
 // The renderer's final rect per pass (FIntRect: min x, min y, max x, max y), for the log.
 std::atomic<int> finalRect[5][4];
+// The render thread's frame boundary: SetFinalViewRect for the right side pass, once per frame, from the main
+// renderer only (FSceneRenderer::PrepareViewRectsForRendering, after the late update; planar reflections render
+// views 0-1 alone). The next view the render thread hands over (primary_view) records the frame.
+std::atomic<bool> recordArmed{false};
+std::atomic<unsigned long> renderThread{0}, composeThread{0};
 void final_view_rect(void*, int pass, const int* rect) {
     if (pass >= 0 && pass < 5)
         for (int i = 0; i < 4; ++i)
             finalRect[pass][i].store(rect[i], std::memory_order_relaxed);
+    if (pass == kPassRightSide) {
+        renderThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
+        recordArmed.store(true, std::memory_order_release);
+    }
 }
 bool primary(void*, int pass) { return primary_pass(pass); }
+void record_rendered(const unsigned char* view);
 bool primary_view(void*, const unsigned char* view) {
+    if (recordArmed.load(std::memory_order_acquire) &&
+        GetCurrentThreadId() == renderThread.load(std::memory_order_relaxed))
+        record_rendered(view);
     return primary_pass(*reinterpret_cast<const int*>(view + kViewStereoPass));
 }
 int view_pass(const void*, bool stereo, unsigned view) { return pass_for_view(stereo, view); }
@@ -92,10 +105,10 @@ std::atomic<std::uint64_t> served{0};  // answers from the cache while no sessio
 
 // The focus turn (focus_turn.h, as ACE's): each frame's chosen at its first side-pass pose (UE asks for a view's
 // eye pose, then its projection, on the game thread: ULocalPlayer::GetProjectionData), applied to both side passes'
-// poses, and recorded at the right side pass's projection (once per frame, after its pose) for the composition,
-// which runs a frame or so later (frame_records.h). The late update on the render thread only adds the head's
-// movement since (DefaultXRCamera.cpp), so the turn chosen here is the one rendered. A side pose asked for after
-// the record (a second caller) chooses the next frame's turn early; record and render still agree.
+// poses, until the right side pass's projection (once per frame, after its pose). The late update on the render
+// thread only adds the head's movement since (DefaultXRCamera.cpp), so the turn chosen here is the one rendered;
+// the composition takes it from the rendered views (record_rendered), not from here: the game thread runs a frame
+// or two ahead of the composition by an amount no count tells.
 struct FocusFrame {
     std::mutex mutex;
     float gaze[2][2] = {};  // tangents of each eye's view, the latest from xrLocateViews (views_set_gaze)
@@ -105,8 +118,9 @@ struct FocusFrame {
 };
 FocusFrame focusFrame;
 std::atomic<std::uint64_t> turned{0};  // side poses turned
-// Up to 2 records in flight at a composition (the game thread a frame or two ahead), at most 4 before resyncing.
-aceqv::FrameRecords<aceqv::Views4Frame> records{2, 4};
+// Recorded by the render thread as it renders a frame (record_rendered), taken at that frame's xrEndFrame on the
+// same thread (D3D11 has no RHI thread here): none in flight at a composition.
+aceqv::FrameRecords<aceqv::Views4Frame> records{0, 3};
 
 // This frame's tangents and turns (under focusFrame.mutex): the eyes' cached projections, the focus box, the gaze.
 void latch_frame() {
@@ -166,19 +180,40 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
     if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
                                         focusY.load(std::memory_order_relaxed)))
         focused.fetch_add(1, std::memory_order_relaxed);
-    if (pass == kPassRightSide) {  // the frame's last view: its record
-        aceqv::Views4Frame frame;
-        {
-            std::lock_guard guard(focusFrame.mutex);
-            if (!focusFrame.latched)
-                latch_frame();
-            frame = focusFrame.frame;
-            focusFrame.latched = false;
-        }
-        records.push(frame);
+    if (pass == kPassRightSide) {  // the frame's last view: the next side pose chooses the next frame's turn
+        std::lock_guard guard(focusFrame.mutex);
+        focusFrame.latched = false;
     }
     return out;
 }
+// The frame being rendered, recorded from its views as they are drawn (the render thread, after the late update):
+// the composition, at the same frame's xrEndFrame, places the focus views exactly where they were rendered whatever
+// the game thread chose meanwhile. Only a family of four views is the main one (captures and reflections have one
+// or two); a mirrored or unreadable one is skipped (rendered_frame).
+std::atomic<std::uint64_t> renderedRecords{0}, renderedSkipped{0};
+void record_rendered(const unsigned char* view) {
+    const auto* family = *reinterpret_cast<const unsigned char* const*>(view);  // FSceneView::Family
+    if (!family)
+        return;
+    const auto* const* views = *reinterpret_cast<const unsigned char* const* const*>(family);  // Views.Data
+    if (*reinterpret_cast<const int*>(family + 8) != kViews || !views)  // Views.Num
+        return;
+    if (!recordArmed.exchange(false, std::memory_order_acq_rel))
+        return;
+    float matrices[4][16], projections[4][16];
+    for (int v = 0; v < 4; ++v) {
+        std::memcpy(matrices[v], views[v] + kViewMatrix, sizeof(matrices[v]));
+        std::memcpy(projections[v], views[v] + kViewProjectionNoAA, sizeof(projections[v]));
+    }
+    aceqv::Views4Frame frame{};
+    if (rendered_frame(matrices, projections, frame)) {
+        records.push(frame);
+        renderedRecords.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        renderedSkipped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* position) {
     count(poseCalls, pass);
     const int eye = eye_pass(pass);
@@ -408,6 +443,7 @@ void views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
 }
 
 bool views_take_frame(aceqv::Views4Frame& frame) {
+    composeThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     bool drifted = false;
     std::uint64_t behind = 0;
     const bool any = records.take(frame, &drifted, &behind);
@@ -464,6 +500,9 @@ void views_frame_end() {
     const auto n = records.counts();
     aceqv::Views4Frame last{};
     records.latest(last);
+    aceqv::logf("acc views: rendered frames recorded %llu (skipped %llu); render thread %lu, composing thread %lu",
+                static_cast<unsigned long long>(renderedRecords.exchange(0)),
+                static_cast<unsigned long long>(renderedSkipped.exchange(0)), renderThread.load(), composeThread.load());
     aceqv::logf("acc views: frames recorded %llu, composed %llu (backlog %llu, resyncs %llu, composed before "
                 "recording %llu); eye 0 turn %.3f,%.3f,%.3f,%.3f",
                 static_cast<unsigned long long>(n.pushed), static_cast<unsigned long long>(n.taken),

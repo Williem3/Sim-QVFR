@@ -8,6 +8,7 @@
 
 #include "../../quad/focus_turn.h"
 #include "../../quad/views4_layout.h"
+#include "../adapter.h"
 
 namespace acc {
 
@@ -73,6 +74,46 @@ inline void ue_rotate(const UeQuat& q, const float (&v)[3], float (&out)[3]) {
     out[0] = r.x;
     out[1] = r.y;
     out[2] = r.z;
+}
+
+// A frame's record from its four views as rendered (the render thread, after the late update): each view's
+// ViewMatrix (row-major, row vectors, world to UE view space: x right, y up, z forward) and its ProjectionNoAAMatrix
+// (no temporal jitter). The outer and focus tangents from the projections; each focus view's turn against its eye
+// from the two view matrices' rotations, as the composition takes it (to_matrix(qconj(turn)) takes a direction in
+// the eye's frame into the focus view's, OpenXR's axes: x right, y up, -z forward). False: a projection unreadable
+// or a view rotation not proper (a mirrored capture), the record left as it was.
+inline bool rendered_frame(const float (&view)[4][16], const float (&projection)[4][16], aceqv::Views4Frame& f) {
+    aceqv::Views4Frame out{};
+    float rotation[4][9];
+    for (int v = 0; v < 4; ++v) {
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                rotation[v][r * 3 + c] = view[v][r * 4 + c];
+        const float* m = rotation[v];
+        const float det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
+                          m[2] * (m[3] * m[7] - m[4] * m[6]);
+        if (!(det > 0.98f && det < 1.02f))
+            return false;
+    }
+    for (int e = 0; e < 2; ++e) {
+        if (!aceqv::projection_tangents(projection[e], out.outerTan[e]) ||
+            !aceqv::projection_tangents(projection[e + 2], out.focusTan[e]))
+            return false;
+        // Eye view direction d_e = Re^T w, focus d_f = Rf^T w, so d_f = Rf^T Re d_e; then z flipped both sides.
+        const float* re = rotation[e];
+        const float* rf = rotation[e + 2];
+        float m[9];
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                float sum = 0;
+                for (int k = 0; k < 3; ++k)
+                    sum += rf[k * 3 + i] * re[k * 3 + j];
+                m[i * 3 + j] = ((i == 2) != (j == 2)) ? -sum : sum;
+            }
+        out.turn[e] = aceqv::qconj(aceqv::from_matrix(m));
+    }
+    f = out;
+    return true;
 }
 
 }  // namespace acc
