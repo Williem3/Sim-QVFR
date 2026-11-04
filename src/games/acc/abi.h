@@ -49,6 +49,18 @@ inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;  // .data
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
 inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
 
+// r.Tonemapper.Quality (4.26: 0 basic, 1 + film contrast, 2 + vignette, 3 + shadow tint, 4 + grain, 5 + grain jitter;
+// default 5): the vignette darkens each view towards its edges whatever its FOV, so a focus view's edges, in the
+// middle of the eye, showed as a dark rim round the focus area (README.md). views.cpp holds it at 1. Its
+// registration (static init 0x7140d0): `lea rdx, u"r.Tonemapper.Quality"` here, then AsVariableInt()'s result, the
+// TConsoleVariableData<int32> (game thread's value at +0, render thread's at +4), stored at 0x51b34a8 (0x714133).
+inline constexpr std::uintptr_t kTonemapperQualityRef = 0x714104;
+inline constexpr std::uint8_t kTonemapperQualityRefAnchor[7] = {0x48, 0x8d, 0x15, 0xd5, 0xd5, 0xb9, 0x03};
+inline constexpr std::uintptr_t kTonemapperQualityStore = 0x714133;
+inline constexpr std::uint8_t kTonemapperQualityStoreAnchor[7] = {0x48, 0x89, 0x05, 0x6e, 0xf3, 0xa9, 0x04};
+inline constexpr std::uintptr_t kTonemapperQualityData = 0x51b34a8;  // TConsoleVariableData<int32>*
+inline constexpr int kTonemapperNoVignette = 1;
+
 // Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
 // (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
 // Views.Num sits at +8), and its vertex shaders take eye = SV_InstanceID % N, N in the view constants. With our four

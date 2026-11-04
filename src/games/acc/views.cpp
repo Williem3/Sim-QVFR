@@ -353,7 +353,10 @@ bool counts_match() {
             aceqv::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
             return false;
         }
-    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
+    return aceqv::code_matches(kTonemapperQualityRef, kTonemapperQualityRefAnchor, sizeof(kTonemapperQualityRefAnchor)) &&
+           aceqv::code_matches(kTonemapperQualityStore, kTonemapperQualityStoreAnchor,
+                               sizeof(kTonemapperQualityStoreAnchor)) &&
+           aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
            aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
            aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
            right_eye_picks_match() &&
@@ -509,7 +512,23 @@ void views_target(int (&size)[2]) {
     size[1] = targetHeight.load(std::memory_order_relaxed);
 }
 
+// No vignette (abi.h kTonemapperQualityData): r.Tonemapper.Quality held at 1. ACC sets it from its graphics settings
+// (scalability) whenever they apply, so it is looked at every frame; both threads' values are written.
+std::atomic<std::uint64_t> vignetteResets{0};
+void no_vignette() {
+    if (!started.load(std::memory_order_relaxed))
+        return;
+    auto* data = *reinterpret_cast<int* const*>(aceqv::module_base() + kTonemapperQualityData);
+    if (!data || (data[0] <= kTonemapperNoVignette && data[1] <= kTonemapperNoVignette))
+        return;
+    if (vignetteResets.fetch_add(1, std::memory_order_relaxed) == 0)
+        aceqv::logf("acc views: r.Tonemapper.Quality %d -> %d: no vignette (it darkened the focus views' edges)", data[1],
+                    kTonemapperNoVignette);
+    data[0] = data[1] = kTonemapperNoVignette;
+}
+
 void views_frame_end() {
+    no_vignette();
     if (!started.load() || ++frames % 900 != 0)
         return;
     const auto line = [](const char* what, std::atomic<std::uint64_t> (&calls)[5]) {
