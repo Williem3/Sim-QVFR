@@ -26,6 +26,8 @@ AdjustViewRectFn originalAdjust = nullptr;
 ProjectionFn originalProjection = nullptr;
 EyePoseFn originalEyePose = nullptr;
 aceqv::Views4Layout layout;
+std::atomic<double> focusX{0}, focusY{0};  // the focus box (views_set_focus); 0: the focus views copy the eyes
+std::atomic<std::uint64_t> focused{0};      // side-pass projections narrowed to it
 std::atomic<int> targetWidth{0}, targetHeight{0};
 std::atomic<std::uint64_t> adjustCalls[5], projectionCalls[5], poseCalls[5];
 std::atomic<std::uint64_t> steamProjections{0}, steamPoses{0};  // calls that reached SteamVR (OpenComposite)
@@ -72,9 +74,10 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     *sizeY = static_cast<unsigned>(r.height);
 }
 
-// Stage gate: a side pass is a copy of its eye. It takes what its eye got last (the eyes come first in every
-// frame) instead of asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no
-// cached views; README.md), so the side views keep its calls to what ACC makes without them.
+// A side pass starts from its eye: it takes what its eye got last (the eyes come first in every frame) instead of
+// asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no cached views; README.md),
+// so the side views keep its calls to what ACC makes without them. Its projection is then narrowed to the focus
+// box; its pose stays its eye's.
 struct EyeCache {
     std::mutex mutex;
     bool projection[3] = {}, pose[3] = {}, poseOk[3] = {};
@@ -86,16 +89,14 @@ EyeCache cache;
 std::atomic<bool> sessionRunning{false};
 std::atomic<std::uint64_t> served{0};  // answers from the cache while no session ran
 
-FMatrix* projection(const void* self, FMatrix* out, int pass) {
-    count(projectionCalls, pass);
-    const int eye = eye_pass(pass);
+void eye_projection(const void* self, FMatrix* out, int pass, int eye) {
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
     if ((pass != eye || idle) && (eye == kPassLeft || eye == kPassRight)) {
         std::lock_guard guard(cache.mutex);
         if (cache.projection[eye]) {
             *out = cache.matrix[eye];
             served.fetch_add(idle ? 1 : 0, std::memory_order_relaxed);
-            return out;
+            return;
         }
     }
     steamProjections.fetch_add(1, std::memory_order_relaxed);
@@ -105,6 +106,14 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
         cache.matrix[eye] = *out;
         cache.projection[eye] = true;
     }
+}
+FMatrix* projection(const void* self, FMatrix* out, int pass) {
+    count(projectionCalls, pass);
+    const int eye = eye_pass(pass);
+    eye_projection(self, out, pass, eye);
+    if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
+                                        focusY.load(std::memory_order_relaxed)))
+        focused.fetch_add(1, std::memory_order_relaxed);
     return out;
 }
 bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* position) {
@@ -165,7 +174,7 @@ bool pairs_per_draw() {
 
 }  // namespace
 
-bool views_start(const aceqv::Views4Layout& l) {
+bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
     if (started.load())
         return true;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
@@ -195,6 +204,7 @@ bool views_start(const aceqv::Views4Layout& l) {
                 static_cast<int>(*subPrimitiveQueries));
     *subPrimitiveQueries = 0;
     layout = l;
+    views_set_focus(boxX, boxY);
     originalAdjust = reinterpret_cast<AdjustViewRectFn>(base + kAdjustViewRect.function);
     originalProjection = reinterpret_cast<ProjectionFn>(base + kGetStereoProjectionMatrix.function);
     originalEyePose = reinterpret_cast<EyePoseFn>(base + kGetRelativeEyePose.function);
@@ -219,10 +229,19 @@ bool views_start(const aceqv::Views4Layout& l) {
     ok = ok && aceqv::vtable_slot_replace(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
                                           reinterpret_cast<void*>(&desired_views));
     aceqv::logf("acc views: %s; layout widths %.3f %.3f %.3f %.3f heights %.3f %.3f %.3f %.3f of the target",
-                ok ? "four views patched in (views 2-3 copy the eyes)" : "a slot write failed",
+                ok ? (boxX > 0 ? "four views patched in (views 2-3 focus views, centred)"
+                               : "four views patched in (views 2-3 copy the eyes)")
+                   : "a slot write failed",
                 l.width[0], l.width[1], l.width[2], l.width[3], l.height[0], l.height[1], l.height[2], l.height[3]);
     started.store(ok);
     return ok;
+}
+
+void views_set_focus(double boxX, double boxY) {
+    focusX.store(boxX, std::memory_order_relaxed);
+    focusY.store(boxY > 0 ? boxY : boxX, std::memory_order_relaxed);
+    aceqv::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
+                (boxY > 0 ? boxY : boxX) * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
 }
 
 void views_session_running(bool running) {
@@ -255,6 +274,8 @@ void views_frame_end() {
     aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
+    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box",
+                static_cast<unsigned long long>(focused.exchange(0)));
 }
 
 }  // namespace acc

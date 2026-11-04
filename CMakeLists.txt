@@ -198,6 +198,6 @@ target_link_libraries(cpu_profile_test PRIVATE ace_qv_core)
 
 # Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
 add_executable(acc_views_test tests/acc_views_test.cpp)
-target_include_directories(acc_views_test PRIVATE src)
+target_include_directories(acc_views_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(acc_views_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)
