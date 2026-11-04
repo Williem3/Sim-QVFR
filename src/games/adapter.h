@@ -87,6 +87,9 @@ public:
     }
     // xrCreateSession; `probed`: the engine probes started (probe.h).
     virtual void session_created(bool probed) { (void)probed; }
+    // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
+    // it begins, the runtime may have no views to answer with.
+    virtual void session_running(bool running) { (void)running; }
     virtual void session_destroyed() {}
     // Every xrEndFrame.
     virtual void frame_end() {}

@@ -31,6 +31,7 @@ public:
     bool qvfr_latest_frame(Views4Frame&) override { return false; }
     void qvfr_note_views(const XrView*, uint32_t) override {}
     void qvfr_frame_end() override { views_frame_end(); }
+    void session_running(bool running) override { views_session_running(running); }
 };
 
 }  // namespace

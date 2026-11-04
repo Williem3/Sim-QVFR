@@ -71,14 +71,19 @@ struct EyeCache {
     unsigned char orientation[3][16] = {}, position[3][12] = {};  // FQuat, FVector
 };
 EyeCache cache;
+// OpenXR's session runs (views_session_running): only then is SteamVR (OpenComposite) asked.
+std::atomic<bool> sessionRunning{false};
+std::atomic<std::uint64_t> served{0};  // answers from the cache while no session ran
 
 FMatrix* projection(const void* self, FMatrix* out, int pass) {
     count(projectionCalls, pass);
     const int eye = eye_pass(pass);
-    if (pass != eye && (eye == kPassLeft || eye == kPassRight)) {
+    const bool idle = !sessionRunning.load(std::memory_order_acquire);
+    if ((pass != eye || idle) && (eye == kPassLeft || eye == kPassRight)) {
         std::lock_guard guard(cache.mutex);
         if (cache.projection[eye]) {
             *out = cache.matrix[eye];
+            served.fetch_add(idle ? 1 : 0, std::memory_order_relaxed);
             return out;
         }
     }
@@ -95,11 +100,13 @@ bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* posit
     count(poseCalls, pass);
     const int eye = eye_pass(pass);
     const bool hmdEye = deviceId == 0 && (eye == kPassLeft || eye == kPassRight);
-    if (hmdEye && pass != eye) {
+    const bool idle = !sessionRunning.load(std::memory_order_acquire);
+    if (hmdEye && (pass != eye || idle)) {
         std::lock_guard guard(cache.mutex);
         if (cache.pose[eye]) {
             std::memcpy(orientation, cache.orientation[eye], sizeof(cache.orientation[eye]));
             std::memcpy(position, cache.position[eye], sizeof(cache.position[eye]));
+            served.fetch_add(idle ? 1 : 0, std::memory_order_relaxed);
             return cache.poseOk[eye];
         }
     }
@@ -165,6 +172,13 @@ bool views_start(const aceqv::Views4Layout& l) {
                 l.width[0], l.width[1], l.width[2], l.width[3], l.height[0], l.height[1], l.height[2], l.height[3]);
     started.store(ok);
     return ok;
+}
+
+void views_session_running(bool running) {
+    sessionRunning.store(running, std::memory_order_release);
+    aceqv::logf("acc views: OpenXR session %s; %llu projection/pose answers came from the cache while none ran",
+                running ? "running: SteamVR answers again" : "not running: answers from the cache",
+                static_cast<unsigned long long>(served.exchange(0)));
 }
 
 void views_target(int (&size)[2]) {

@@ -15,5 +15,9 @@ bool views_start(const aceqv::Views4Layout& layout);
 void views_target(int (&size)[2]);
 // Every xrEndFrame: which passes UE asked for, logged every 900 frames.
 void views_frame_end();
+// Whether OpenXR's session runs (xrBeginSession until it is destroyed or another is created). Until it does,
+// projections and eye poses come from the last ones SteamVR gave: OpenComposite aborts when asked without
+// views (README.md).
+void views_session_running(bool running);
 
 }  // namespace acc

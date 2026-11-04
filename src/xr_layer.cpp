@@ -1466,6 +1466,7 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
 
 XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreateInfo* info, XrSession* session) {
     const auto* binding = static_cast<const XrBaseInStructure*>(info->next);
+    game->session_running(false);  // no views until it begins
     XrResult r = next.CreateSession(instance, info, session);
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
     if (XR_SUCCEEDED(r)) {
@@ -1522,6 +1523,7 @@ void ini_worker_sync();  // (below)
 void helmet_layer_release();  // (below)
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
+    game->session_running(false);
     ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
     menu_shutdown();  // its swapchain and space belong to the session
     osd_shutdown();
@@ -1663,6 +1665,8 @@ XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* i
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info) {
     XrResult r = next.BeginSession(session, info);
     logf("xrBeginSession viewConfig=%d result=%d", info->primaryViewConfigurationType, r);
+    if (XR_SUCCEEDED(r))
+        game->session_running(true);
     return r;
 }
 
