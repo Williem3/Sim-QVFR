@@ -9,9 +9,9 @@
 
 #include <MinHook.h>
 
-#include "../engine/ace_abi.h"
-#include "../engine/code_patch.h"
-#include "../log.h"
+#include "abi.h"
+#include "../../engine/code_patch.h"
+#include "../../log.h"
 
 namespace aceqv {
 namespace {
@@ -180,7 +180,7 @@ bool batch_watch_start() {
         log_line("batch: MH_Initialize failed; batch watch off");
         return false;
     }
-    void* target = reinterpret_cast<void*>(ace_base() + ace::kBatchMergeRva);
+    void* target = reinterpret_cast<void*>(module_base() + ace::kBatchMergeRva);
     MH_STATUS s = MH_CreateHook(target, reinterpret_cast<void*>(&mergeHook), reinterpret_cast<void**>(&mergeOriginal));
     if (s == MH_OK)
         s = MH_EnableHook(target);
@@ -197,7 +197,7 @@ bool batch_watch_start() {
 void batch_watch_stop() {
     if (!installed)
         return;
-    void* target = reinterpret_cast<void*>(ace_base() + ace::kBatchMergeRva);
+    void* target = reinterpret_cast<void*>(module_base() + ace::kBatchMergeRva);
     MH_DisableHook(target);
     MH_RemoveHook(target);
     installed = false;

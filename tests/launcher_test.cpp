@@ -11,7 +11,7 @@
 
 #include <windows.h>
 
-#include "engine/ace_abi.h"
+#include "games/ace/abi.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/install.h"

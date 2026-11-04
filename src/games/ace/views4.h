@@ -9,9 +9,9 @@
 //    and points the submitted projection views at the first two quarters.
 #pragma once
 
-#include "../quad/focus_cull.h"
-#include "../quad/views4_layout.h"
-#include "../xr.h"
+#include "../../quad/focus_cull.h"
+#include "../../quad/views4_layout.h"
+#include "../../xr.h"
 
 namespace aceqv {
 
@@ -62,7 +62,7 @@ void views4_set_live_layout(const Views4Layout& live);
 void views4_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze);
 // views4_dlss_live (on by default): with DLSS, live resolution resizes the views ACE renders (DLSS's input)
 // and keeps the layout DLSS writes (its output, fixed when the features were made) at the launch sizes:
-// DLSS dynamic resolution (ace_abi.h). Passes on a target of the output's size (or a half or quarter of
+// DLSS dynamic resolution (abi.h). Passes on a target of the output's size (or a half or quarter of
 // it) take the output layout. Off: with DLSS the views keep their launch sizes. Call before views4_start.
 void views4_set_dlss_live(bool on);
 // Whether ACE's renderer upscales with DLSS and the views keep their launch sizes (live resolution waits

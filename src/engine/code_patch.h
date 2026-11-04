@@ -7,7 +7,7 @@
 
 namespace aceqv {
 
-std::uintptr_t ace_base();
+std::uintptr_t module_base();
 // True when the code at `rva` starts with `anchor` (and is readable).
 bool code_matches(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size);
 // Overwrites code at `rva` (protection switched temporarily, instruction cache flushed).

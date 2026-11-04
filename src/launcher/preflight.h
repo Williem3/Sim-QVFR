@@ -3,7 +3,7 @@
 // pure (preflight_checks); the scans that gather their input are the small Windows functions below
 // and launcher_preflight (main.cpp).
 //
-// - The game build: ace-quadview patches one AssettoCorsaEVO.exe build (engine/ace_abi.h's SHA-256).
+// - The game build: ace-quadview patches one AssettoCorsaEVO.exe build (games/ace/abi.h's SHA-256).
 //   After a game update the layer refuses to patch and ACE runs unchanged; the launcher says so first.
 // - Steam running and ACE closed (the launch refuses otherwise).
 // - Cheeky Foveated DLSS's loader (dxgi.dll, version.dll) in the game folder: ACE fails to start with it.

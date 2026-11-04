@@ -21,9 +21,9 @@
 
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
-#include "experiment/double_render.h"
-#include "experiment/views3.h"
-#include "experiment/views4.h"
+#include "games/ace/double_render.h"
+#include "games/ace/views3.h"
+#include "games/ace/views4.h"
 #include "log.h"
 #include "probe/d3d12_trace.h"
 #include "probe/cpu_load.h"
@@ -36,7 +36,7 @@
 #include "quad/fov_crop.h"
 #include "quad/helmet.h"
 #include "probe/dred.h"
-#include "probe/batch_watch.h"
+#include "games/ace/batch_watch.h"
 #include "probe/hang_watch.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
@@ -184,7 +184,7 @@ struct Experiment {
     std::atomic<double> gazeDeadzone = 1.5;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
-    bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (probe/batch_watch.h)
+    bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (games/ace/batch_watch.h)
     UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h)
 };
 Experiment experiment;

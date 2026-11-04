@@ -4,7 +4,7 @@
 
 #include <windows.h>
 
-#include "../engine/ace_abi.h"
+#include "../games/ace/abi.h"
 
 namespace aceqv::launcher {
 namespace {

@@ -1,6 +1,6 @@
 // Stub code for views4 "slots" and "cameras": the focus views' per-view slots live at phantom
 // renderers in layer memory (view 2 at P2, view 3 at P3: P + array offset = that view's slot; see
-// ace_abi.h). Each builder returns position-independent code for code_redirect, which appends the
+// abi.h). Each builder returns position-independent code for code_redirect, which appends the
 // jump back. The renderer is in r13 at every history and creator site. Registers use x64 numbering
 // (rax = 0, rsi = 6, rdi = 7, r12 = 12, ...).
 #pragma once

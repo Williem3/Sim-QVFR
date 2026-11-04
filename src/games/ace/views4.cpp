@@ -11,14 +11,14 @@
 #include <MinHook.h>
 #include <intrin.h>
 
-#include "../engine/ace_abi.h"
-#include "../engine/code_patch.h"
-#include "../engine/view3_stubs.h"
-#include "../log.h"
-#include "../probe/pass_census.h"
-#include "../quad/focus_cull.h"
-#include "../quad/focus_turn.h"
-#include "../xr.h"
+#include "abi.h"
+#include "../../engine/code_patch.h"
+#include "stubs.h"
+#include "../../log.h"
+#include "../../probe/pass_census.h"
+#include "../../quad/focus_cull.h"
+#include "../../quad/focus_turn.h"
+#include "../../xr.h"
 
 namespace aceqv {
 namespace {
@@ -52,7 +52,7 @@ Views4Layout layout;       // where the four views sit in the target (views4_set
 // writes; else `layout`). Set with `layout`, each filled frame.
 Views4Layout outputLayout;
 bool dlssLive = false;  // views4_dlss_live
-// The render and output sizes the builder last laid the views out at (its two viewport calls, ace_abi.h).
+// The render and output sizes the builder last laid the views out at (its two viewport calls, abi.h).
 std::atomic<int> renderW{0}, renderH{0}, outputW{0}, outputH{0};
 Views4Layout launchLayout;  // the layout at launch (the tile grid and volumetrics are sized for its largest view)
 Views4Layout pendingLive;  // the view layout for the next filled frame (views4_set_live_layout), under turnLock
@@ -117,7 +117,7 @@ std::atomic<bool> layoutLogged{false}, outputLogged{true};  // outputLogged: unt
 // Camera dump (to identify the slot matrices): the renderer, and the views ACE last located.
 std::atomic<void*> lastRenderer{nullptr};
 
-// Whether this renderer upscales with DLSS (it made DLSS features, ace_abi.h).
+// Whether this renderer upscales with DLSS (it made DLSS features, abi.h).
 bool dlss_upscaling(const uint8_t* renderer) {
     const auto* features = reinterpret_cast<void* const*>(renderer + ace::kRendererDlssFeatures);
     return renderer[ace::kRendererDlssReady] != 0 && features[0] != features[1];
@@ -494,7 +494,7 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
     put_f(o, 0x44, h / static_cast<float>(height));
     put_f(o, 0x48, static_cast<float>(left) / static_cast<float>(width));  // UV offset
     put_f(o, 0x4c, 0.0f);
-    // The tile grid and the volumetrics are sized once from view 0 for every view (ace_abi.h): they
+    // The tile grid and the volumetrics are sized once from view 0 for every view (abi.h): they
     // get the largest view's size. Equal views leave this unchanged.
     if (!launchLayout.equal() && view == 0 &&
         (returnRva == ace::kTileGridViewportCallSite + 5 || returnRva == ace::kFogViewportCallSite + 5)) {
@@ -619,7 +619,7 @@ void* viewRecordHook(void* renderer, int view) {
 }
 
 // normalReconstructionViewSpace picks one of two view records per pixel by a split x; with four
-// quarters it needs two passes (ace_abi.h). First the focus views (records 2 and 3, split 3/4 of the
+// quarters it needs two passes (abi.h). First the focus views (records 2 and 3, split 3/4 of the
 // width) over the whole target, a UAV barrier, then the eyes (the caller's records 0 and 1, split
 // 1/4) over the first half only, so each quarter ends up reconstructed with its own view.
 using NormalReconstructFn = void (*)(void* params);
@@ -799,7 +799,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         return true;
     focusFraction = focus;
     focusFractionY = focusY > 0 ? focusY : focus;
-    base = ace_base();
+    base = module_base();
     if (!code_matches(ace::kViewCountRva, ace::kViewCountAnchor, sizeof(ace::kViewCountAnchor)) ||
         !code_matches(ace::kViewportRva, ace::kViewportAnchor, sizeof(ace::kViewportAnchor)) ||
         !code_matches(ace::kViewRecordRva, ace::kViewRecordAnchor, sizeof(ace::kViewRecordAnchor)) ||
@@ -893,7 +893,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
                 return false;
             }
         }
-        const auto branch = stub_eye_branch(ace_base() + ace::kPassEyeBranchTarget, cameraPhantom2);
+        const auto branch = stub_eye_branch(module_base() + ace::kPassEyeBranchTarget, cameraPhantom2);
         const auto rejoin = stub_pass_rejoin(ace::kPassRejoinAnchor, static_cast<uint8_t>(ace::kPhantomRenderer));
         const bool patched =
             code_redirect(ace::kPassEyeBranchRva, ace::kPassEyeBranchAnchor, sizeof(ace::kPassEyeBranchAnchor),
@@ -1000,7 +1000,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         logf("views4: focus cull: focus frusta built every frame at %.0f%% of the focus extent%s; the draw-loop hook is "
              "not located yet, so no draws are skipped",
              cullScale * 100, gazeExpected ? " (from the first gaze sample)" : "");
-    // The instance visibility batch limits (ace_abi.h kBatchLimitStoresRva): without this a 20+ car
+    // The instance visibility batch limits (abi.h kBatchLimitStoresRva): without this a 20+ car
     // grid throws "Instance visibility batch is too large". Applied before ACE creates its renderer,
     // which sizes the batch buffers from them.
     if (code_matches(ace::kBatchLimitStoresRva, ace::kBatchLimitStoresAnchor, sizeof(ace::kBatchLimitStoresAnchor)) &&

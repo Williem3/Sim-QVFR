@@ -8,7 +8,7 @@
 
 #include <MinHook.h>
 
-#include "../engine/ace_abi.h"
+#include "../games/ace/abi.h"
 #include "../sha256_file.h"
 #include "../log.h"
 #include "../xr.h"
