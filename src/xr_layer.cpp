@@ -48,6 +48,7 @@
 #include "quad/menu_panel.h"
 #include "input/hotkeys.h"
 #include "input/pad_input.h"
+#include "profile/profiles.h"
 #include "quad/osd.h"
 #include "quad/qvfr_optimizer.h"
 #include "quad/settings_menu.h"
@@ -3139,6 +3140,49 @@ void menu_placement_changed(const MenuPlacement& placement) {
         menu_open(qpc_now());
 }
 
+// Profiles (profile/profiles.h) in the launcher's folder (ACE_QV_SETTINGS), else next to the ini the layer reads.
+std::wstring menu_profiles_ini() { return menu.settingsIni.empty() ? live.ini : menu.settingsIni; }
+
+void menu_profiles_read() {
+    const std::wstring ini = menu_profiles_ini();
+    menu.model.profiles = profile_names(profiles_folder(ini));
+    const std::wstring current = current_profile(ini.c_str());
+    menu.model.profile = -1;
+    for (size_t i = 0; i < menu.model.profiles.size(); ++i)
+        if (_wcsicmp(menu.model.profiles[i].c_str(), current.c_str()) == 0)
+            menu.model.profile = static_cast<int>(i);
+    Profile p;
+    menu.model.profileChanged = menu.model.profile >= 0 && load_profile(profiles_folder(ini), current, p, menu.model.values.eyeTracking) &&
+                                !profile_matches(live.ini.c_str(), p);
+}
+
+// The profile the Profile line stepped to: its keys written to the ini the layer reloads and the launcher's, as
+// the menu's own steps are; the menu shows its values once the live reload has them.
+void menu_profile_use() {
+    const int request = std::exchange(menu.model.profileRequest, -1);
+    if (request < 0 || request >= static_cast<int>(menu.model.profiles.size()))
+        return;
+    const std::wstring ini = menu_profiles_ini();
+    Profile p;
+    if (!load_profile(profiles_folder(ini), menu.model.profiles[request], p, menu.model.values.eyeTracking)) {
+        logf("settings menu: profile %ls not found", menu.model.profiles[request].c_str());
+        return;
+    }
+    if (optimize.optimizer.running()) {
+        optimize.optimizer.cancel();
+        log_line("optimize: stopped (a profile was used)");
+    }
+    menu.lastWrite = ini_write_later([live = live.ini, settings = menu.settingsIni, p] {
+        apply_profile(live.c_str(), p);
+        set_current_profile(live.c_str(), p.name);
+        if (!settings.empty()) {
+            apply_profile(settings.c_str(), p);
+            set_current_profile(settings.c_str(), p.name);
+        }
+    });
+    logf("settings menu: profile %ls (%zu keys)", p.name.c_str(), p.keys.size());
+}
+
 void menu_open(int64_t now) {
     if (menu.settingsIni.empty()) {  // the launcher's own ini, where the next launch reads them
         wchar_t path[MAX_PATH] = {};
@@ -3174,6 +3218,8 @@ void menu_open(int64_t now) {
             optimize.shown = false;
             optimize.note.clear();
         }
+        if (!stepPending)  // the profiles, and the one in use unless a step of the menu's is on its way
+            menu_profiles_read();
         menu.visible = menu.dirty = true;
         log_line("settings menu: open");
     }
@@ -3187,8 +3233,11 @@ void menu_press(MenuKey key, int64_t now) {
     }
     menu.hideAt = now + qpc_ms(kMenuHideMs);
     menu.dirty = true;
-    if (!menu_key(menu.model, key))
+    if (!menu_key(menu.model, key)) {
+        menu_profile_use();
         return;
+    }
+    menu.model.profileChanged = menu.model.profile >= 0;
     if (optimize.optimizer.running()) {  // a value changed by hand: the optimizer's measurements no longer hold
         optimize.optimizer.cancel();
         log_line("optimize: stopped (a setting was changed)");

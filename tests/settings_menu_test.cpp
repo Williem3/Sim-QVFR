@@ -629,6 +629,28 @@ int main() {
         check(menu_key(f, MenuKey::Left) && f.values.shape.corners && f.values.shape.in[0] == kFocusCornerMax,
               "Focus shape: back to Corners keeps the corners set before");
     }
+    {  // The Profile line (profile/profiles.h): first on the settings page, stepping through and asking the layer.
+        SettingsMenu p;
+        p.launch = {true, 50, 39, 39};
+        check(menu_page_items(p)[1] != MenuItem::Profile, "Profile: no line without profiles");
+        p.profiles = {L"Performance", L"Balanced", L"Quality", L"Night"};
+        p.selected = 1;
+        check(menu_page_items(p)[1] == MenuItem::Profile && menu_lines(p)[1].label == L"Profile" &&
+                  menu_lines(p)[1].value == L"Your own",
+              "Profile: the settings page's first line; none in use shows as your own");
+        const MenuValues before = p.values;
+        check(!menu_key(p, MenuKey::Right) && p.profile == 0 && p.profileRequest == 0 && p.values.periphery == before.periphery &&
+                  menu_lines(p)[1].value == L"Performance",
+              "Profile: Right from none takes the first, asks the layer to use it, changes no value itself");
+        p.profileRequest = -1;
+        check(!menu_key(p, MenuKey::Left) && p.profile == 3 && p.profileRequest == 3, "Profile: Left wraps to the last");
+        check(!menu_key(p, MenuKey::Right) && p.profile == 0, "Profile: Right wraps to the first");
+        p.profileChanged = true;
+        check(menu_lines(p)[1].value == L"Performance (changed)", "Profile: changed since it was used");
+        SettingsMenu none = p;
+        none.profile = -1;
+        check(!menu_key(none, MenuKey::Left) && none.profile == 3, "Profile: Left from none takes the last");
+    }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;

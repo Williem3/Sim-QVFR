@@ -81,6 +81,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HelmetDepth, L"Helmet depth", 0, kHelmetDepthMax, 1},
     {MenuItem::HelmetDetail, L"Helmet detail", 0, 1, 1},
     {MenuItem::Optimize, L"Optimize for frame rate", 0, 0, 1},
+    {MenuItem::Profile, L"Profile", 0, 0, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -193,6 +194,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
                                    MenuItem::CheekyMotionFix, MenuItem::CheekyNr, MenuItem::CheekyNrPreset,
                                    MenuItem::CheekyNrPasses});
     } else {
+        if (!menu.profiles.empty())
+            items.push_back(MenuItem::Profile);
         const std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
         items.insert(items.end(), method.begin(), method.end());
         if (menu.launch.qvfr)  // last: Up from the page switch reaches it
@@ -244,6 +247,14 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     const MenuItem item = items[menu.selected];
     if (item == MenuItem::Optimize) {  // the layer runs it; no value of the menu's changes
         menu.optimizeRequest = key == MenuKey::Right ? 1 : -1;
+        return false;
+    }
+    if (item == MenuItem::Profile) {  // the next or previous profile; the layer uses it (its values follow from the ini)
+        const int count = static_cast<int>(menu.profiles.size());
+        menu.profile = menu.profile < 0 ? (key == MenuKey::Right ? 0 : count - 1)
+                                        : (menu.profile + (key == MenuKey::Right ? 1 : count - 1)) % count;
+        menu.profileChanged = false;
+        menu.profileRequest = menu.profile;
         return false;
     }
     if (item == MenuItem::Page) {  // the next or previous page, with the switch still selected
@@ -568,6 +579,10 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = page_name(menu, menu_page(menu));
         else if (items[i] == MenuItem::Optimize)
             line.value = menu.optimizeStatus.empty() ? L"Right: run · Left: undo" : menu.optimizeStatus;
+        else if (items[i] == MenuItem::Profile)
+            line.value = menu.profile < 0 || menu.profile >= static_cast<int>(menu.profiles.size())
+                             ? L"Your own"
+                             : menu.profiles[menu.profile] + (menu.profileChanged ? L" (changed)" : L"");
         else if (items[i] == MenuItem::FgOn)
             line.value = c.fg ? L"On" : L"Off";
         else if (items[i] == MenuItem::FgMultiplier)

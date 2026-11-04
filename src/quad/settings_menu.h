@@ -34,7 +34,9 @@ enum class MenuItem {
     Crop, CropTop, CropBottom, CropOuter, CropInner, Helmet, HelmetRim, HelmetCorners, HelmetLight, HelmetDebug,
     Visor, HelmetSize, HelmetHeight, HelmetDepth, HelmetDetail,
     // QVFR: finds the resolution that holds the frame rate (qvfr_optimizer.h). Right runs (or stops) it, Left undoes.
-    Optimize
+    Optimize,
+    // The settings page's first line: the profiles (profile/profiles.h), stepped through and used at once.
+    Profile
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -103,6 +105,12 @@ struct SettingsMenu {
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
     std::wstring notice;  // a passing message under the title of any page (a CPU capture running or done; empty: none)
     int optimizeRequest = 0;      // set by menu_key on Optimize: 1 run or stop, -1 undo; the layer takes it
+    // The profiles' names (the presets first), the one in use (-1: none) and whether a value changed since, and
+    // the one Left/Right stepped to, for the layer to use (-1: none; it takes it, as optimizeRequest).
+    std::vector<std::wstring> profiles;
+    int profile = -1;
+    bool profileChanged = false;
+    int profileRequest = -1;
 };
 
 // The menu's pages: the method's settings, the focus area's shape, for QVFR the view crop and the helmet, with

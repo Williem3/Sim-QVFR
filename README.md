@@ -163,6 +163,16 @@ Toolkit's Turbo mode with frame generation. The action bar shows the first probl
 starting a game that would crash or run without the layer. After a game update the layer refuses to patch,
 ACE runs unchanged, and the headset shows a notice for the first 30 seconds saying so.
 
+**Profiles (`profiles\`, `[profiles]`).** The launcher's Profiles pane switches between the presets
+(Performance, Balanced and Quality, which set only the resolution: the outer views, the focus density and
+the focus area's size) and profiles you save. The presets put the pixels in the centre (outer views at 20-25%,
+the focus area at 120-180%), with a set for each foveated mode: eye tracked, a small area that follows the eyes;
+fixed, a larger one, a little less dense. A saved profile is every key the launcher writes for the picture, in
+`profiles\<name>.ini` next to its ini (`src/profile/profiles.h`). The panels' places, the hotkeys and the
+OpenXR layers are not in one. Share copies a profile as a line of text (`QVFR1:` and base64, only what differs
+from the defaults); Paste adds one, taking in only a profile's keys. The headset menu's settings page starts
+with a Profile line that switches between them live, and both show when the settings have changed since.
+
 **Hotkeys (`[hotkeys]`).** The launcher's Hotkeys pane sets a keyboard combination and a wheel, button box or
 controller button for each of the layer's actions in the game: the headset menu's open/close and its four
 directions, the performance overlay, the helmet's visor and a CPU capture (`src/input/hotkeys.h`). Click a
