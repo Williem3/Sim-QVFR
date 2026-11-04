@@ -16,8 +16,6 @@ namespace {
 
 constexpr UINT kConstants = kComposeConstants;
 constexpr UINT kSrvsPerSlot = 6;  // outer, focus, light, the helmet's visor, bottom and top
-constexpr DXGI_FORMAT kLightFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-constexpr float kLightBlend = 0.08f;  // per composed frame: the light settles within about half a second
 
 bool is_typeless(DXGI_FORMAT f) {
     switch (f) {
@@ -285,27 +283,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
         list->RSSetScissorRects(1, &scissor);
         float constants[kConstants] = {};
         compose_constants(c, eye, constants);
-        for (int i = 0; i < 4; ++i)
-            constants[40 + i] = c.helmetOpening[i];  // the pieces' looks: the depth shift (below)
-        // Without pieces, the built-in look (and its light diagnostic); with them, the diagnostic keeps their shapes.
-        const int look = c.helmet == 2 && !pieceMask ? 1 : c.helmet == 3 && pieceMask ? 4 : c.helmet;
-        const bool pieceLook = look == 2 || look == 4;
-        const Piece& visor = pieces_[static_cast<int>(HelmetPiece::Visor)];
-        const bool tint = visor.texture && (c.visorBlend == 1 || (c.visorBlend == 0 && visor.opaque));
-        constants[44] = pieceLook ? static_cast<float>(pieceMask | (tint ? 8u : 0u)) : c.helmetRim;
-        constants[45] = pieceLook ? static_cast<float>(visor.whitePoint) : c.helmetRadius;
-        if (pieceLook) {
-            constants[40] = c.helmetShift[0];
-            constants[41] = c.helmetShift[1];
-        }
-        constants[46] = c.helmetLight;
-        constants[47] = static_cast<float>(look);
-        for (int row = 0; row < 3; ++row)
-            for (int col = 0; col < 3; ++col)
-                constants[48 + row * 4 + col] = c.helmetRotation[row * 3 + col];
-        constants[51] = c.helmetTanHalf[0];
-        constants[55] = c.helmetTanHalf[1];
-        constants[59] = c.visorOffset;
+        helmet_constants(c, pieceMask, visor_tints(c.visorBlend), visor_white_point(), constants);
         list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
     }
@@ -333,8 +311,8 @@ UINT QuadCompositor::bind_sources(UINT slotIndex, ID3D12Resource* focus) {
     srv(light_.Get(), slotIndex * kSrvsPerSlot + 2);
     UINT pieceMask = 0;
     for (UINT p = 0; p < 3; ++p) {
-        if (pieces_[p].texture) {
-            srv(pieces_[p].texture.Get(), slotIndex * kSrvsPerSlot + 3 + p);
+        if (pieces_[p]) {
+            srv(pieces_[p].Get(), slotIndex * kSrvsPerSlot + 3 + p);
             pieceMask |= 1u << p;
         } else {  // a null view: reads 0, never sampled without the piece
             D3D12_SHADER_RESOURCE_VIEW_DESC none = {};
@@ -366,8 +344,7 @@ bool QuadCompositor::record_light(ID3D12GraphicsCommandList* list, const float (
         list->RSSetViewports(1, &lightVp);
         list->RSSetScissorRects(1, &lightScissor);
         float constants[kConstants] = {};
-        std::memcpy(&constants[20], source0, sizeof(source0));
-        std::memcpy(&constants[24], source1, sizeof(source1));
+        light_constants(source0, source1, constants);
         list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
         if (lightWanted_ && lightReadback_ && !lightCopyFence_) {  // for read_light
@@ -419,18 +396,8 @@ bool QuadCompositor::draw_helmet_layer(ID3D12Resource* target, const HelmetLayer
     const D3D12_RESOURCE_DESC desc = target->GetDesc();
     const D3D12_VIEWPORT vp{0, 0, static_cast<float>(desc.Width), static_cast<float>(desc.Height), 0, 1};
     list->RSSetViewports(1, &vp);
-    const Piece& visor = pieces_[static_cast<int>(HelmetPiece::Visor)];
-    const bool tint = visor.texture && (d.visorBlend == 1 || (d.visorBlend == 0 && visor.opaque));
     float constants[kConstants] = {};
-    constants[0] = d.coverTan[0];
-    constants[1] = d.coverTan[1];
-    constants[2] = d.imageTan[0];
-    constants[3] = d.imageTan[1];
-    constants[4] = d.visorOffset;
-    constants[44] = static_cast<float>(pieceMask | (tint ? 8u : 0u));
-    constants[45] = static_cast<float>(visor.whitePoint);
-    constants[46] = d.light;
-    constants[47] = d.checkLight ? 4.0f : 2.0f;
+    helmet_layer_constants(d, pieceMask, visor_tints(d.visorBlend), visor_white_point(), constants);
     list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
     // Only the bands the pieces draw on (the rest of the image is never submitted).
     const std::vector<HelmetBand> whole = {{0, 1}};
@@ -445,25 +412,6 @@ bool QuadCompositor::draw_helmet_layer(ID3D12Resource* target, const HelmetLayer
         lightCopyFence_ = slot->fenceValue;
     return ok;
 }
-
-namespace {
-
-// IEEE half to float (the light texture is R16G16B16A16_FLOAT).
-float half_to_float(uint16_t h) {
-    const uint32_t sign = (h & 0x8000u) << 16, exponent = (h >> 10) & 0x1f, mantissa = h & 0x3ffu;
-    uint32_t bits;
-    if (exponent == 0)
-        return (sign ? -1.0f : 1.0f) * std::ldexp(static_cast<float>(mantissa), -24);
-    if (exponent == 31)
-        bits = sign | 0x7f800000u | (mantissa << 13);
-    else
-        bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
-    float f;
-    std::memcpy(&f, &bits, sizeof(f));
-    return f;
-}
-
-}  // namespace
 
 bool QuadCompositor::read_light(float (&rgb)[2][4][3]) {
     if (!lightCopyFence_ || !fence_ || fence_->GetCompletedValue() < lightCopyFence_)
@@ -486,138 +434,7 @@ bool QuadCompositor::read_light(float (&rgb)[2][4][3]) {
     return true;
 }
 
-std::vector<bool> QuadCompositor::helmet_rows(double visorOffset, int visorBlend) const {
-    std::vector<bool> rows(kHelmetRows, false);
-    for (const HelmetPiece p : {HelmetPiece::Top, HelmetPiece::Bottom}) {
-        const Piece& piece = pieces_[static_cast<int>(p)];
-        if (piece.texture)
-            for (int i = 0; i < kHelmetRows; ++i)
-                rows[i] = rows[i] || piece.rows[i];
-    }
-    const Piece& visor = pieces_[static_cast<int>(HelmetPiece::Visor)];
-    if (visor.texture) {
-        const bool tint = visorBlend == 1 || (visorBlend == 0 && visor.opaque);
-        const std::vector<bool>& drawn = tint ? visor.tintRows : visor.rows;
-        for (int i = 0; i < kHelmetRows; ++i) {  // image row v shows the visor's row v + offset (none past its ends)
-            const double v = (i + 0.5) / kHelmetRows + visorOffset;
-            if (v >= 0 && v < 1)
-                rows[i] = rows[i] || drawn[static_cast<size_t>(v * kHelmetRows)];
-        }
-    }
-    return rows;
-}
-
-double QuadCompositor::helmet_aspect() const {
-    for (const Piece& p : pieces_)
-        if (p.texture)
-            return p.aspect;
-    return 1;
-}
-
-bool QuadCompositor::load_helmet_piece(HelmetPiece which, const std::wstring& path) {
-    if (!ready_)
-        return false;
-    Piece& piece = pieces_[static_cast<int>(which)];
-    piece = Piece{};
-    if (path.empty())
-        return true;
-    // Decode with WIC as straight-alpha RGBA.
-    std::vector<uint8_t> pixels;
-    UINT width = 0, height = 0;
-    const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    {
-        Com<IWICImagingFactory> wic;
-        Com<IWICBitmapDecoder> decoder;
-        Com<IWICBitmapFrameDecode> frame;
-        Com<IWICFormatConverter> converter;
-        if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
-            SUCCEEDED(wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
-                                                     &decoder)) &&
-            SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
-            SUCCEEDED(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr,
-                                            0, WICBitmapPaletteTypeCustom)) &&
-            SUCCEEDED(converter->GetSize(&width, &height)) && width > 0 && height > 0 && width <= 8192 && height <= 8192) {
-            pixels.resize(static_cast<size_t>(width) * height * 4);
-            if (FAILED(converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(pixels.size()), pixels.data())))
-                pixels.clear();
-        }
-    }
-    if (SUCCEEDED(co))
-        CoUninitialize();
-    if (pixels.empty()) {
-        logf("compositor: helmet image %ls could not be read", path.c_str());
-        return false;
-    }
-    // Where the piece's opaque part ends down its middle column: the top piece from its top row, the
-    // bottom piece from its bottom row (for the crop hint).
-    if (which != HelmetPiece::Visor) {
-        const bool fromTop = which == HelmetPiece::Top;
-        UINT rows = 0;
-        while (rows < height) {
-            const UINT y = fromTop ? rows : height - 1 - rows;
-            if (pixels[(static_cast<size_t>(y) * width + width / 2) * 4 + 3] < 128)
-                break;
-            ++rows;
-        }
-        piece.edge = rows ? static_cast<double>(rows) / height : -1;
-    }
-    piece.aspect = static_cast<double>(height) / width;
-    // Whether it has (almost) no transparency, and its white point: the linear brightness its brightest
-    // 1% reach (for a visor drawn as a tint, that counts as clear).
-    {
-        size_t seeThrough = 0;
-        size_t histogram[256] = {};
-        for (size_t i = 0; i < pixels.size(); i += 4) {
-            seeThrough += pixels[i + 3] < 250;
-            ++histogram[std::max({pixels[i], pixels[i + 1], pixels[i + 2]})];
-        }
-        const size_t count = pixels.size() / 4;
-        piece.opaque = seeThrough * 200 < count;
-        size_t above = 0;
-        int level = 255;
-        for (; level > 0; --level) {
-            above += histogram[level];
-            if (above * 100 >= count)
-                break;
-        }
-        const double encoded = level / 255.0;
-        const double linear = encoded <= 0.04045 ? encoded / 12.92 : std::pow((encoded + 0.055) / 1.055, 2.4);
-        piece.whitePoint = std::max(0.05, linear);
-    }
-    // The rows it draws on (any pixel more than faintly opaque) and, as glass, the rows it tints (any pixel
-    // passing less than 98.5% of the scene): the helmet layer leaves the clear ones out (helmet_bands).
-    {
-        double linearOf[256];  // sRGB to linear, once per value
-        for (int c = 0; c < 256; ++c) {
-            const double e = c / 255.0;
-            linearOf[c] = e <= 0.04045 ? e / 12.92 : std::pow((e + 0.055) / 1.055, 2.4);
-        }
-        const auto linear = [&linearOf](uint8_t c) { return linearOf[c]; };
-        piece.rows.assign(kHelmetRows, false);
-        piece.tintRows.assign(kHelmetRows, false);
-        for (UINT y = 0; y < height; ++y) {
-            bool drawn = false, tints = false;
-            for (UINT x = 0; x < width && !(drawn && tints); ++x) {
-                const uint8_t* px = &pixels[(static_cast<size_t>(y) * width + x) * 4];
-                if (px[3] <= 2)
-                    continue;
-                drawn = true;
-                const double lum = 0.2126 * linear(px[0]) + 0.7152 * linear(px[1]) + 0.0722 * linear(px[2]);
-                tints = tints || lum / piece.whitePoint < 0.985;
-            }
-            // Every bin the image row spans (several for an image shorter than kHelmetRows).
-            const size_t first = static_cast<size_t>(y) * kHelmetRows / height,
-                         last = std::max(first, static_cast<size_t>(y + 1) * kHelmetRows / height - 1);
-            for (size_t bin = first; bin <= last && bin < kHelmetRows; ++bin) {
-                piece.rows[bin] = piece.rows[bin] || drawn;
-                piece.tintRows[bin] = piece.tintRows[bin] || tints;
-            }
-        }
-    }
-    // Premultiplied, so filtering never blends in the colour of transparent pixels (no fringes at the edges).
-    for (size_t i = 0; i < pixels.size(); i += 4)
-        for (size_t c = 0; c < 3; ++c)
-            pixels[i + c] = static_cast<uint8_t>((pixels[i + c] * pixels[i + 3] + 127) / 255);
+bool QuadCompositor::upload_piece(int which, const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) {
     D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT}, upload{D3D12_HEAP_TYPE_UPLOAD};
     D3D12_RESOURCE_DESC desc{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, width, height, 1, 1,
                              DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_NONE};
@@ -656,9 +473,7 @@ bool QuadCompositor::load_helmet_piece(HelmetPiece which, const std::wstring& pa
         return false;
     fence_->SetEventOnCompletion(slot->fenceValue, fenceEvent_);  // the upload buffer must outlive the copy
     WaitForSingleObject(fenceEvent_, 5000);
-    piece.texture = texture;
-    logf("compositor: helmet image %ls, %ux%u%s, white point %.2f", path.c_str(), width, height,
-         piece.opaque ? ", opaque" : "", piece.whitePoint);
+    pieces_[which] = texture;
     return true;
 }
 
@@ -765,8 +580,9 @@ void QuadCompositor::shutdown() {
     lightReadback_.Reset();
     lightCopyFence_ = 0;
     lightWanted_ = false;
-    for (Piece& p : pieces_)
-        p = Piece{};
+    for (auto& p : pieces_)
+        p.Reset();
+    clear_pieces();
     lightPipeline_.Reset();
     helmetLayerPipeline_.Reset();
     lightFresh_ = true;
