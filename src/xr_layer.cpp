@@ -1527,9 +1527,12 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
         if (!experiment.probes)
             log_line(experiment.views3 ? "engine probes and D3D12 trace off (probes=0); views3 cannot report the view mode"
                                        : "engine probes and D3D12 trace off (probes=0)");
-        if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR)
-            d3d11_capture_start(reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(binding)->device,
-                                experiment.d3d11CaptureFrame);
+        if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR) {
+            ID3D11Device* device = reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(binding)->device;
+            d3d11_capture_start(device, experiment.d3d11CaptureFrame);
+            if (experiment.views4ComposeD3D11)
+                game->d3d11_session(device);
+        }
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
             if (experiment.probes)

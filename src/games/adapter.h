@@ -10,6 +10,8 @@
 #include "../xr.h"
 #include "game.h"
 
+struct ID3D11Device;
+
 namespace aceqv {
 
 // What one game frame's views were rendered with, recorded when the game fills the focus cameras: per
@@ -90,6 +92,8 @@ public:
     }
     // xrCreateSession; `probed`: the engine probes started (probe.h).
     virtual void session_created(bool probed) { (void)probed; }
+    // xrCreateSession with a D3D11 binding: the game's device.
+    virtual void d3d11_session(ID3D11Device* device) { (void)device; }
     // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
     // it begins, the runtime may have no views to answer with.
     virtual void session_running(bool running) { (void)running; }

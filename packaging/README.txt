@@ -153,8 +153,6 @@ through OpenComposite (one-time setup: docs/acc-opencomposite.md on the project 
 https://github.com/Williem3/Sim-QVFR); Launch checks tells you if it's missing. Turn DLSS off in ACC.
 Not in ACC yet, so greyed out: Foveated DLSS, the helmet, the field of view crop, and resolution
 changes while the game runs (in ACC they apply at the next launch).
-Known issue: a faint darker rim can show round the focus area, most in dark scenes. A Feather of
-10-20% (Focus overlay, or the headset menu) blends it out.
 
 Other OpenXR layers (OpenXR Toolkit, VectorXR, ...)
 ---------------------------------------------------

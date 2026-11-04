@@ -540,6 +540,23 @@ void views_target(int (&size)[2]) {
     size[1] = targetHeight.load(std::memory_order_relaxed);
 }
 
+bool views_view_rect(int view, int (&rect)[4]) {
+    if (view < 0 || view >= kViews)
+        return false;
+    const auto& r = finalRect[kPassLeft + view];
+    const int x0 = r[0].load(std::memory_order_relaxed), y0 = r[1].load(std::memory_order_relaxed);
+    const int x1 = r[2].load(std::memory_order_relaxed), y1 = r[3].load(std::memory_order_relaxed);
+    if (x1 <= x0 || y1 <= y0)
+        return false;
+    rect[0] = x0;
+    rect[1] = y0;
+    rect[2] = x1 - x0;
+    rect[3] = y1 - y0;
+    return true;
+}
+
+bool views_focused() { return started.load(std::memory_order_relaxed) && focusX.load(std::memory_order_relaxed) > 0; }
+
 // abi.h kHeldCvars: each held at its value, both threads' copies, looked at every frame since ACC's graphics settings
 // set them whenever they apply. The first change of each is logged.
 std::atomic<bool> cvarLogged[std::size(kHeldCvars)];
