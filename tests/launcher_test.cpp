@@ -1144,6 +1144,14 @@ int main() {
             modeKept |= k.key == L"mode" && k.value == L"views4";
         }
         check(!leaked && outer20 && modeKept, "profiles: a shared text sets only a profile's keys, and the method only to a method");
+        Profile legacy, fromLegacy;
+        legacy.name = L"Legacy";
+        legacy.keys = {{L"experiment", L"mode", L"quad"}};
+        bool legacyKept = true;
+        check(shared_profile(export_profile(legacy), fromLegacy), "profiles: a Two-loop shared text still reads");
+        for (const ProfileKey& k : fromLegacy.keys)
+            legacyKept &= !(k.key == L"mode" && k.value != L"views4");
+        check(legacyKept, "profiles: a shared text can't switch to Two-loop (legacy)");
         Profile junk;
         check(!shared_profile("hello", junk) && !shared_profile("QVFR1:!!!", junk) && !import_profile("QVFR1:", junk) &&
                   !import_profile(export_profile(Profile{L"", {{L"quad", L"gaze", L"1"}}}), junk) &&
