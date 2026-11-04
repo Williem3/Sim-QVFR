@@ -97,6 +97,28 @@ inline constexpr std::uint8_t kPreExposurePrimaryAnchor[2][5] = {{0xe8, 0xe4, 0x
 inline constexpr std::uintptr_t kPreExposureSecondary = 0x1c5df6f;
 inline constexpr std::uint8_t kPreExposureSecondaryAnchor[5] = {0xe8, 0x0c, 0x0d, 0x15, 0x01};
 
+// The sun's cascaded shadows. 0x1c5ddc9 is 4.26's FSceneRenderer::AddViewDependentWholeSceneShadowsForView: per view, the
+// FadeAlphas loop above (the three calls redirected there, so the left eye's cascades get a fade of 1 in every view),
+// then GetNumViewDependentWholeSceneShadows (proxy + 0xa0) and one FProjectedShadowInfo (0x900 bytes, constructor
+// 0x1c5a110) per cascade from GetViewDependentWholeSceneProjectedShadowInitializer (+ 0xa8). ACC creates a view's cascades
+// when `View.StereoPass != eSSP_RIGHT_EYE` (`cmp dword [r14 + 0xad0], 2; setne al` here), so each focus view fitted four
+// of its own to its narrow frustum: a capture (2026-11-04) had 12 4088x4088 tiles in the 16384x12288 atlas, rows 0-2 the
+// left eye's, the left and the right focus view's, and trees and their shadows changed across the box edge.
+// views.cpp makes it `cmp dword [r14 + 0xad0], 1; setbe al` (same length): only the left eye (or a mono view) creates them.
+inline constexpr std::uintptr_t kShadowCascadesCreate = 0x1c5dfb9;
+inline constexpr std::uint8_t kShadowCascadesCreateAnchor[11] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00,
+                                                                  0x00, 0x02, 0x0f, 0x95, 0xc0};
+// 0x1c71080 is InitProjectedShadowVisibility: a view projects a shadow made for another view only when
+// `IsASecondaryView(View) && IsAPrimaryView(*DependentView) && FadeAlphas[ViewIndex] == 1` (ACC's triple screens
+// skip the first two). The left focus view leads its instanced pair, so the stereo device counts it primary and it
+// refused the left eye's cascades. views.cpp redirects both calls as for the exposure: IsASecondaryView(View)
+// (0x1c71363, rcx the view) answers StereoPass >= 2 and IsAPrimaryView(DependentView) (0x1c71370) StereoPass <= 1,
+// so all four views project the left eye's cascades.
+inline constexpr std::uintptr_t kShadowVisibilitySecondary = 0x1c71363;
+inline constexpr std::uint8_t kShadowVisibilitySecondaryAnchor[5] = {0xe8, 0x18, 0xd9, 0x13, 0x01};
+inline constexpr std::uintptr_t kShadowVisibilityPrimary = 0x1c71370;
+inline constexpr std::uint8_t kShadowVisibilityPrimaryAnchor[5] = {0xe8, 0xab, 0xd8, 0x13, 0x01};
+
 // The tonemapper's vignette darkens each view towards its own edges (a capture: at equal scene brightness, 0.70 at
 // the corners of the outer and the focus views alike), so a focus view, in the middle of the eye, showed a dark rim
 // round the focus area. In 4.26 it's on when FinalPostProcessSettings.VignetteIntensity > 0 (FSceneView + 0x11f0),
