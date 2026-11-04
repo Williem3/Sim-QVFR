@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <vector>
 
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -143,15 +144,25 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
         extent[0] = target[0];
         extent[1] = target[1];
     }
+    // At least the views on both axes, but no bound above: UE keeps its scene textures at the largest size any
+    // render asked for (on track a 2048x2048 one: 2904x2048 with DLSS off, 2048x2048 under DLSS, whose views reach
+    // only 1941 across; 2026-11-04). The passes that use them are told apart by more than size: AO by its draws at
+    // the views' viewports, the reflections by the composite that reads them with a cube array bound.
     const int w = static_cast<int>(d.Width), h = static_cast<int>(d.Height);
-    const bool match = w >= extent[0] && w < extent[0] + 8 && h >= extent[1] - 2;
-    if (!match) {  // the first few turned down, per format: what the scene textures really are
-        static std::atomic<int> rejectedLogged{0};
-        if (rejectedLogged.fetch_add(1, std::memory_order_relaxed) < 12)
+    const bool match = w >= extent[0] - 2 && h >= extent[1] - 2;
+    if (!match) {  // each kind turned down once (format and size): what the scene textures really are
+        static std::mutex loggedMutex;
+        static std::vector<std::uint64_t> logged;
+        const std::uint64_t key = (static_cast<std::uint64_t>(d.Format) << 40) | (static_cast<std::uint64_t>(w) << 20) |
+                                  static_cast<std::uint64_t>(h);
+        std::lock_guard guard(loggedMutex);
+        if (logged.size() < 32 && std::find(logged.begin(), logged.end(), key) == logged.end()) {
+            logged.push_back(key);
             aceqv::logf("acc view share: format %d texture %dx%d (mips %u, array %u, bind 0x%x) is not a scene texture "
                         "(views reach %dx%d, target %dx%d)",
                         static_cast<int>(d.Format), w, h, d.MipLevels, d.ArraySize, d.BindFlags, extent[0], extent[1],
                         target[0], target[1]);
+        }
     }
     return match;
 }
