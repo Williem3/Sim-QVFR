@@ -24,6 +24,13 @@ inline constexpr Slot kGetViewIndexForPass = {kStereoVtable + 6 * 8, 0x7b7f90}; 
 inline constexpr Slot kDeviceIsAPrimaryPass = {kStereoVtable + 9 * 8, 0x7b1c90};   // `cmp edx, 1; setbe al`
 inline constexpr Slot kDeviceIsAPrimaryView = {kStereoVtable + 10 * 8, 0x2da8900};  // engine's, inlined: below
 inline constexpr std::ptrdiff_t kViewStereoPass = 0xad0;  // FSceneView::StereoPass (`cmp [rdx + 0xad0], 1`)
+// FSceneView::ViewMatrices (FViewMatrices, 4.26 SceneView.h: ProjectionMatrix, ProjectionNoAAMatrix,
+// InvProjectionMatrix, ViewMatrix, InvViewMatrix, ViewProjectionMatrix, ... 64 bytes each) at 0x280: the foliage
+// culling reads Views[0]->ViewMatrices.GetViewProjectionMatrix() at 0x3c0 (HISM, below), and DispatchPassSetup
+// copies 64 bytes from 0x340 (the view matrix, for translucency sorting). FSceneView::Family is at 0.
+inline constexpr std::ptrdiff_t kViewProjection = 0x280;  // with the temporal jitter
+inline constexpr std::ptrdiff_t kViewProjectionNoAA = 0x2c0;
+inline constexpr std::ptrdiff_t kViewMatrix = 0x340;
 inline constexpr Slot kAdjustViewRect = {kStereoVtable + 16 * 8, 0x7ae650};          // halves of the target
 // SetFinalViewRect(pass, const FIntRect&): the renderer reports each view's final rect (screen percentage applied)
 // every frame (4.26 FSceneRenderer::PrepareViewRectsForRendering). FSteamVRHMD's is empty, shared with others.

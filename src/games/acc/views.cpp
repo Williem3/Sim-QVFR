@@ -1,12 +1,15 @@
 #include "views.h"
 
 #include <atomic>
+#include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 
 #include "../../engine/code_patch.h"
 #include "../../log.h"
+#include "../../quad/frame_records.h"
 #include "abi.h"
 #include "views_map.h"
 
@@ -41,13 +44,26 @@ void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
 int desired_views(void*, bool stereo) { return views_for(stereo); }
 // The renderer's final rect per pass (FIntRect: min x, min y, max x, max y), for the log.
 std::atomic<int> finalRect[5][4];
+// The render thread's frame boundary: SetFinalViewRect for the right side pass, once per frame, from the main
+// renderer only (FSceneRenderer::PrepareViewRectsForRendering, after the late update; planar reflections render
+// views 0-1 alone). The next view the render thread hands over (primary_view) records the frame.
+std::atomic<bool> recordArmed{false};
+std::atomic<unsigned long> renderThread{0}, composeThread{0};
 void final_view_rect(void*, int pass, const int* rect) {
     if (pass >= 0 && pass < 5)
         for (int i = 0; i < 4; ++i)
             finalRect[pass][i].store(rect[i], std::memory_order_relaxed);
+    if (pass == kPassRightSide) {
+        renderThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
+        recordArmed.store(true, std::memory_order_release);
+    }
 }
 bool primary(void*, int pass) { return primary_pass(pass); }
+void record_rendered(const unsigned char* view);
 bool primary_view(void*, const unsigned char* view) {
+    if (recordArmed.load(std::memory_order_acquire) &&
+        GetCurrentThreadId() == renderThread.load(std::memory_order_relaxed))
+        record_rendered(view);
     return primary_pass(*reinterpret_cast<const int*>(view + kViewStereoPass));
 }
 int view_pass(const void*, bool stereo, unsigned view) { return pass_for_view(stereo, view); }
@@ -89,6 +105,66 @@ EyeCache cache;
 std::atomic<bool> sessionRunning{false};
 std::atomic<std::uint64_t> served{0};  // answers from the cache while no session ran
 
+// The focus turn (focus_turn.h, as ACE's): each frame's chosen at its first side-pass pose (UE asks for a view's
+// eye pose, then its projection, on the game thread: ULocalPlayer::GetProjectionData), applied to both side passes'
+// poses, until the right side pass's projection (once per frame, after its pose). The late update on the render
+// thread only adds the head's movement since (DefaultXRCamera.cpp), so the turn chosen here is the one rendered;
+// the composition takes it from the rendered views (record_rendered), not from here: the game thread runs a frame
+// or two ahead of the composition by an amount no count tells.
+struct FocusFrame {
+    std::mutex mutex;
+    float gaze[2][2] = {};  // tangents of each eye's view, the latest from xrLocateViews (views_set_gaze)
+    bool gazeValid[2] = {};
+    bool latched = false;
+    aceqv::Views4Frame frame{};
+};
+FocusFrame focusFrame;
+std::atomic<std::uint64_t> turned{0};  // side poses turned
+// Recorded by the render thread as it renders a frame (record_rendered), taken at that frame's xrEndFrame on the
+// same thread (D3D11 has no RHI thread here): none in flight at a composition.
+aceqv::FrameRecords<aceqv::Views4Frame> records{0, 3};
+
+// This frame's tangents and turns (under focusFrame.mutex): the eyes' cached projections, the focus box, the gaze.
+void latch_frame() {
+    float matrix[2][16] = {};
+    bool have[2] = {};
+    {
+        std::lock_guard guard(cache.mutex);
+        for (int e = 0; e < 2; ++e) {
+            have[e] = cache.projection[kPassLeft + e];
+            std::memcpy(matrix[e], cache.matrix[kPassLeft + e].m, sizeof(matrix[e]));
+        }
+    }
+    aceqv::Views4Frame& f = focusFrame.frame;
+    f = {};
+    const double boxX = focusX.load(std::memory_order_relaxed), boxY = focusY.load(std::memory_order_relaxed);
+    for (int e = 0; e < 2; ++e) {
+        f.turn[e] = {0, 0, 0, 1};
+        if (!have[e] || !ue_projection_tangents(matrix[e], f.outerTan[e]))
+            continue;  // no projection yet: an empty record (the composition uses the submitted FOV)
+        if (boxX <= 0) {
+            std::memcpy(f.focusTan[e], f.outerTan[e], sizeof(f.focusTan[e]));
+            continue;
+        }
+        double hw = 0, hh = 0;
+        aceqv::focus_extents(f.outerTan[e], boxX, boxY, hw, hh);
+        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                   static_cast<float>(-hh)};
+        std::memcpy(f.focusTan[e], focusTan, sizeof(focusTan));
+        if (focusFrame.gazeValid[e])
+            f.turn[e] = aceqv::focus_turn(f.outerTan[e], boxX, boxY, focusFrame.gaze[e][0], focusFrame.gaze[e][1]);
+    }
+    focusFrame.latched = true;
+}
+
+// Diagnostics: each view's projection as projection() handed it to UE, and as the rendered view holds it (with and
+// without the temporal jitter), as tangents (left, right, up, down), logged every kReportFrames.
+struct ProjectionLog {
+    std::mutex mutex;
+    float handed[4][16] = {}, stored[4][16] = {}, jittered[4][16] = {};
+};
+ProjectionLog projectionLog;
+
 void eye_projection(const void* self, FMatrix* out, int pass, int eye) {
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
     if ((pass != eye || idle) && (eye == kPassLeft || eye == kPassRight)) {
@@ -114,30 +190,102 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
     if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
                                         focusY.load(std::memory_order_relaxed)))
         focused.fetch_add(1, std::memory_order_relaxed);
+    if (pass >= kPassLeft && pass <= kPassRightSide) {
+        std::lock_guard guard(projectionLog.mutex);
+        std::memcpy(projectionLog.handed[pass - kPassLeft], out->m, sizeof(projectionLog.handed[0]));
+    }
+    if (pass == kPassRightSide) {  // the frame's last view: the next side pose chooses the next frame's turn
+        std::lock_guard guard(focusFrame.mutex);
+        focusFrame.latched = false;
+    }
     return out;
 }
+// The frame being rendered, recorded from its views as they are drawn (the render thread, after the late update):
+// the composition, at the same frame's xrEndFrame, places the focus views exactly where they were rendered whatever
+// the game thread chose meanwhile. Only a family of four views is the main one (captures and reflections have one
+// or two); a mirrored or unreadable one is skipped (rendered_frame).
+std::atomic<std::uint64_t> renderedRecords{0}, renderedSkipped{0};
+std::atomic<bool> familyOrderLogged{false};
+void record_rendered(const unsigned char* view) {
+    const auto* family = *reinterpret_cast<const unsigned char* const*>(view);  // FSceneView::Family
+    if (!family)
+        return;
+    const auto* const* views = *reinterpret_cast<const unsigned char* const* const*>(family);  // Views.Data
+    if (*reinterpret_cast<const int*>(family + 8) != kViews || !views)  // Views.Num
+        return;
+    if (!recordArmed.exchange(false, std::memory_order_acq_rel))
+        return;
+    // Each view by its own StereoPass, not by its place in the family: view v is pass kPassLeft + v.
+    float matrices[4][16], projections[4][16];
+    int order[4] = {};
+    bool seen[4] = {};
+    for (int i = 0; i < 4; ++i) {
+        const int pass = *reinterpret_cast<const int*>(views[i] + kViewStereoPass);
+        order[i] = pass;
+        const int v = pass - kPassLeft;
+        if (v < 0 || v > 3 || seen[v]) {
+            renderedSkipped.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        seen[v] = true;
+        std::memcpy(matrices[v], views[i] + kViewMatrix, sizeof(matrices[v]));
+        std::memcpy(projections[v], views[i] + kViewProjectionNoAA, sizeof(projections[v]));
+        std::lock_guard guard(projectionLog.mutex);
+        std::memcpy(projectionLog.stored[v], projections[v], sizeof(projectionLog.stored[v]));
+        std::memcpy(projectionLog.jittered[v], views[i] + kViewProjection, sizeof(projectionLog.jittered[v]));
+    }
+    if (!familyOrderLogged.exchange(true))
+        aceqv::logf("acc views: the rendered family's views are passes %d, %d, %d, %d", order[0], order[1], order[2],
+                    order[3]);
+    aceqv::Views4Frame frame{};
+    if (rendered_frame(matrices, projections, frame)) {
+        records.push(frame);
+        renderedRecords.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        renderedSkipped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* position) {
     count(poseCalls, pass);
     const int eye = eye_pass(pass);
     const bool hmdEye = deviceId == 0 && (eye == kPassLeft || eye == kPassRight);
     const bool idle = !sessionRunning.load(std::memory_order_acquire);
+    bool ok = false, cached = false;
     if (hmdEye && (pass != eye || idle)) {
         std::lock_guard guard(cache.mutex);
         if (cache.pose[eye]) {
             std::memcpy(orientation, cache.orientation[eye], sizeof(cache.orientation[eye]));
             std::memcpy(position, cache.position[eye], sizeof(cache.position[eye]));
             served.fetch_add(idle ? 1 : 0, std::memory_order_relaxed);
-            return cache.poseOk[eye];
+            ok = cache.poseOk[eye];
+            cached = true;
         }
     }
-    steamPoses.fetch_add(1, std::memory_order_relaxed);
-    const bool ok = originalEyePose(self, deviceId, eye, orientation, position);
-    if (hmdEye) {
-        std::lock_guard guard(cache.mutex);
-        std::memcpy(cache.orientation[eye], orientation, sizeof(cache.orientation[eye]));
-        std::memcpy(cache.position[eye], position, sizeof(cache.position[eye]));
-        cache.poseOk[eye] = ok;
-        cache.pose[eye] = true;
+    if (!cached) {
+        steamPoses.fetch_add(1, std::memory_order_relaxed);
+        ok = originalEyePose(self, deviceId, eye, orientation, position);
+        if (hmdEye) {
+            std::lock_guard guard(cache.mutex);
+            std::memcpy(cache.orientation[eye], orientation, sizeof(cache.orientation[eye]));
+            std::memcpy(cache.position[eye], position, sizeof(cache.position[eye]));
+            cache.poseOk[eye] = ok;
+            cache.pose[eye] = true;
+        }
+    }
+    if (hmdEye && pass != eye && ok && focusX.load(std::memory_order_relaxed) > 0) {
+        UeQuat turn;
+        {
+            std::lock_guard guard(focusFrame.mutex);
+            if (!focusFrame.latched)
+                latch_frame();
+            turn = ue_quat(focusFrame.frame.turn[eye - kPassLeft]);
+        }
+        UeQuat o;
+        std::memcpy(&o, orientation, sizeof(o));
+        o = ue_mul(o, turn);  // turned in the eye's own frame
+        std::memcpy(orientation, &o, sizeof(o));
+        turned.fetch_add(1, std::memory_order_relaxed);
     }
     return ok;
 }
@@ -320,6 +468,25 @@ bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
     return ok;
 }
 
+void views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
+    std::lock_guard guard(focusFrame.mutex);
+    std::memcpy(focusFrame.gaze, tan, sizeof(focusFrame.gaze));
+    std::memcpy(focusFrame.gazeValid, valid, sizeof(focusFrame.gazeValid));
+}
+
+bool views_take_frame(aceqv::Views4Frame& frame) {
+    composeThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
+    bool drifted = false;
+    std::uint64_t behind = 0;
+    const bool any = records.take(frame, &drifted, &behind);
+    if (drifted)
+        aceqv::logf("acc views: frame records stayed %llu behind the compositions: resynced",
+                    static_cast<unsigned long long>(behind));
+    return any;
+}
+
+bool views_latest_frame(aceqv::Views4Frame& frame) { return records.latest(frame); }
+
 void views_set_focus(double boxX, double boxY) {
     const double y = boxY > 0 ? boxY : boxX;
     const double oldX = focusX.exchange(boxX, std::memory_order_relaxed);
@@ -360,8 +527,59 @@ void views_frame_end() {
     aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
-    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box",
-                static_cast<unsigned long long>(focused.exchange(0)));
+    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box, %llu side poses turned",
+                static_cast<unsigned long long>(focused.exchange(0)), static_cast<unsigned long long>(turned.exchange(0)));
+    const auto n = records.counts();
+    aceqv::Views4Frame last{};
+    records.latest(last);
+    // The latest rendered turns against what the game thread chose, as yaw / pitch in degrees (OpenXR: yaw left +).
+    aceqv::Views4Frame chosen{};
+    {
+        std::lock_guard guard(focusFrame.mutex);
+        chosen = focusFrame.frame;
+    }
+    const auto yaw_pitch = [](const XrQuaternionf& q, double& yaw, double& pitch) {
+        float m[9];
+        aceqv::to_matrix(q, m);  // the turned camera's forward is -column 2
+        const double fx = -m[2], fy = -m[5], fz = -m[8];
+        yaw = std::atan2(-fx, -fz) * 57.29577951;
+        pitch = std::atan2(fy, std::sqrt(fx * fx + fz * fz)) * 57.29577951;
+    };
+    double ry[2], rp[2], cy[2], cp[2];
+    for (int e = 0; e < 2; ++e) {
+        yaw_pitch(last.turn[e], ry[e], rp[e]);
+        yaw_pitch(chosen.turn[e], cy[e], cp[e]);
+    }
+    aceqv::logf("acc views: focus turns, yaw/pitch deg: rendered left %.1f/%.1f right %.1f/%.1f; chosen left %.1f/%.1f "
+                "right %.1f/%.1f",
+                ry[0], rp[0], ry[1], rp[1], cy[0], cp[0], cy[1], cp[1]);
+    {
+        std::lock_guard guard(projectionLog.mutex);
+        const auto tangents = [](const float (&m)[16], char* text, size_t size) {
+            float t[4] = {};
+            if (ue_projection_tangents(m, t))
+                std::snprintf(text, size, "%.4f/%.4f/%.4f/%.4f", t[0], t[1], t[2], t[3]);
+            else
+                std::snprintf(text, size, "none");
+        };
+        for (int v = 0; v < 4; ++v) {
+            char handed[64], stored[64], jittered[64];
+            tangents(projectionLog.handed[v], handed, sizeof(handed));
+            tangents(projectionLog.stored[v], stored, sizeof(stored));
+            tangents(projectionLog.jittered[v], jittered, sizeof(jittered));
+            aceqv::logf("acc views: view %d projection tangents l/r/u/d: handed to UE %s; rendered view's %s, jittered %s",
+                        v, handed, stored, jittered);
+        }
+    }
+    aceqv::logf("acc views: rendered frames recorded %llu (skipped %llu); render thread %lu, composing thread %lu",
+                static_cast<unsigned long long>(renderedRecords.exchange(0)),
+                static_cast<unsigned long long>(renderedSkipped.exchange(0)), renderThread.load(), composeThread.load());
+    aceqv::logf("acc views: frames recorded %llu, composed %llu (backlog %llu, resyncs %llu, composed before "
+                "recording %llu); eye 0 turn %.3f,%.3f,%.3f,%.3f",
+                static_cast<unsigned long long>(n.pushed), static_cast<unsigned long long>(n.taken),
+                static_cast<unsigned long long>(n.pushed - n.taken), static_cast<unsigned long long>(n.resyncs),
+                static_cast<unsigned long long>(n.emptyTakes), last.turn[0].x, last.turn[0].y, last.turn[0].z,
+                last.turn[0].w);
 }
 
 }  // namespace acc
