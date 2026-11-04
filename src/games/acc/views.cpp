@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
 
 #include "../../engine/code_patch.h"
 #include "../../log.h"
@@ -26,6 +28,7 @@ EyePoseFn originalEyePose = nullptr;
 aceqv::Views4Layout layout;
 std::atomic<int> targetWidth{0}, targetHeight{0};
 std::atomic<std::uint64_t> adjustCalls[5], projectionCalls[5], poseCalls[5];
+std::atomic<std::uint64_t> steamProjections{0}, steamPoses{0};  // calls that reached SteamVR (OpenComposite)
 std::uint64_t frames = 0;
 
 void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
@@ -57,14 +60,58 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     *sizeY = static_cast<unsigned>(r.height);
 }
 
-// Stage gate: a side pass is a copy of its eye.
+// Stage gate: a side pass is a copy of its eye. It takes what its eye got last (the eyes come first in every
+// frame) instead of asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no
+// cached views; README.md), so the side views keep its calls to what ACC makes without them.
+struct EyeCache {
+    std::mutex mutex;
+    bool projection[3] = {}, pose[3] = {}, poseOk[3] = {};
+    FMatrix matrix[3] = {};
+    unsigned char orientation[3][16] = {}, position[3][12] = {};  // FQuat, FVector
+};
+EyeCache cache;
+
 FMatrix* projection(const void* self, FMatrix* out, int pass) {
     count(projectionCalls, pass);
-    return originalProjection(self, out, eye_pass(pass));
+    const int eye = eye_pass(pass);
+    if (pass != eye && (eye == kPassLeft || eye == kPassRight)) {
+        std::lock_guard guard(cache.mutex);
+        if (cache.projection[eye]) {
+            *out = cache.matrix[eye];
+            return out;
+        }
+    }
+    steamProjections.fetch_add(1, std::memory_order_relaxed);
+    originalProjection(self, out, eye);
+    if (eye == kPassLeft || eye == kPassRight) {
+        std::lock_guard guard(cache.mutex);
+        cache.matrix[eye] = *out;
+        cache.projection[eye] = true;
+    }
+    return out;
 }
 bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* position) {
     count(poseCalls, pass);
-    return originalEyePose(self, deviceId, eye_pass(pass), orientation, position);
+    const int eye = eye_pass(pass);
+    const bool hmdEye = deviceId == 0 && (eye == kPassLeft || eye == kPassRight);
+    if (hmdEye && pass != eye) {
+        std::lock_guard guard(cache.mutex);
+        if (cache.pose[eye]) {
+            std::memcpy(orientation, cache.orientation[eye], sizeof(cache.orientation[eye]));
+            std::memcpy(position, cache.position[eye], sizeof(cache.position[eye]));
+            return cache.poseOk[eye];
+        }
+    }
+    steamPoses.fetch_add(1, std::memory_order_relaxed);
+    const bool ok = originalEyePose(self, deviceId, eye, orientation, position);
+    if (hmdEye) {
+        std::lock_guard guard(cache.mutex);
+        std::memcpy(cache.orientation[eye], orientation, sizeof(cache.orientation[eye]));
+        std::memcpy(cache.position[eye], position, sizeof(cache.position[eye]));
+        cache.poseOk[eye] = ok;
+        cache.pose[eye] = true;
+    }
+    return ok;
 }
 
 std::atomic<bool> started{false};
@@ -136,7 +183,9 @@ void views_frame_end() {
     line("AdjustViewRect", adjustCalls);
     line("projection", projectionCalls);
     line("eye pose", poseCalls);
-    aceqv::logf("acc views: target %dx%d over the last 900 frames", targetWidth.load(), targetHeight.load());
+    aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
+                "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
+                static_cast<unsigned long long>(steamPoses.exchange(0)));
 }
 
 }  // namespace acc
