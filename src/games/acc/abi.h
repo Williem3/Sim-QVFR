@@ -97,6 +97,15 @@ inline constexpr std::uint8_t kPreExposurePrimaryAnchor[2][5] = {{0xe8, 0xe4, 0x
 inline constexpr std::uintptr_t kPreExposureSecondary = 0x1c5df6f;
 inline constexpr std::uint8_t kPreExposureSecondaryAnchor[5] = {0xe8, 0x0c, 0x0d, 0x15, 0x01};
 
+// The tonemapper's vignette darkens each view towards its own edges (a capture: at equal scene brightness, 0.70 at
+// the corners of the outer and the focus views alike), so a focus view, in the middle of the eye, showed a dark rim
+// round the focus area. In 4.26 it's on when FinalPostProcessSettings.VignetteIntensity > 0 (FSceneView + 0x11f0),
+// not by r.Tonemapper.Quality: TonemapperPermutation::BuildCommonPermutationDomain (0x1b317e0), shared by the
+// tonemapper's pixel and compute shaders, sets FTonemapperVignetteDim from `comiss xmm0, [rdi + 0x11f0]; setb al`
+// here. views.cpp makes it `xor al, al`: no vignette in any view while QVFR runs.
+inline constexpr std::uintptr_t kTonemapperVignette = 0x1b31875;
+inline constexpr std::uint8_t kTonemapperVignetteAnchor[10] = {0x0f, 0x2f, 0x87, 0xf0, 0x11, 0x00, 0x00, 0x0f, 0x92, 0xc0};
+
 // Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
 // (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
 // Views.Num sits at +8), and its vertex shaders take eye = SV_InstanceID % N, N in the view constants. With our four

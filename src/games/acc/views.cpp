@@ -361,6 +361,8 @@ bool counts_match() {
         !aceqv::code_matches(kPreExposurePrimary[0], kPreExposurePrimaryAnchor[0], sizeof(kPreExposurePrimaryAnchor[0])) ||
         !aceqv::code_matches(kPreExposurePrimary[1], kPreExposurePrimaryAnchor[1], sizeof(kPreExposurePrimaryAnchor[1])))
         return false;
+    if (!aceqv::code_matches(kTonemapperVignette, kTonemapperVignetteAnchor, sizeof(kTonemapperVignetteAnchor)))
+        return false;
     if (!aceqv::code_matches(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor)) ||
         !aceqv::code_matches(kExposurePrimary[0], kExposurePrimaryAnchor[0], sizeof(kExposurePrimaryAnchor[0])) ||
         !aceqv::code_matches(kExposurePrimary[1], kExposurePrimaryAnchor[1], sizeof(kExposurePrimaryAnchor[1])))
@@ -402,6 +404,9 @@ bool pairs_per_draw() {
     for (int i = 0; i < 2; ++i)
         ok = aceqv::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]), primary,
                                   sizeof(primary)) && ok;
+    // No tonemapper vignette (abi.h): `xor al, al` and an 8-byte nop in place of the test.
+    const std::uint8_t noVignette[] = {0x32, 0xc0, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
+    ok = aceqv::code_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
     // Pre-exposure (abi.h): the left eye's reaches every other view.
     ok = aceqv::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
                               secondary, sizeof(secondary)) && ok;
