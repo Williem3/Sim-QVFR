@@ -4,6 +4,8 @@
 // narrowed focus FOV. After arming, every submitted frame must be this layer's native-size output
 // with ACE's full FOV, showing red around a green focus box placed where the focus FOV lies.
 #include "../src/xr_layer.cpp"
+#include "../src/games/ace/game.h"
+#include "../src/games/ace/views4.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -515,6 +517,7 @@ std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
 
 int main() {
     using namespace aceqv;
+    game = &games::adapter_for(&ace::kGame);  // views4 below is ACE's
     // The log goes to a file of the test's own (opened at its first line); the pacing check reads it back.
     wchar_t logDir[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, logDir);

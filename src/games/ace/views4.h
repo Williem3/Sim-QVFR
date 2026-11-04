@@ -12,6 +12,7 @@
 #include "../../quad/focus_cull.h"
 #include "../../quad/views4_layout.h"
 #include "../../xr.h"
+#include "../adapter.h"  // Views4Frame
 
 namespace aceqv {
 
@@ -35,18 +36,6 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
 // the latest (focus_turn.h), clamped against the FOV ACE actually rendered. `gazeSample`: from a
 // gaze sample (not the untracked default).
 void views4_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample);
-// What one ACE frame's views were rendered with, recorded when the builder fills the focus cameras:
-// per eye the outer view's tangents (left, right, up, down; read back from ACE's own eye projection,
-// so they hold whatever FOV ACE used), the focus view's tangents, and the focus camera's turn (in the
-// eye's frame). The composition maps the views with exactly these, on any headset.
-struct Views4Frame {
-    float outerTan[2][4];
-    float focusTan[2][4];
-    XrQuaternionf turn[2];
-    bool live = false;  // `width`/`height`: the view layout in ACE's output (live resolution, views4_layout.h)
-    double width[4] = {}, height[4] = {};  // what the composition reads; with DLSS, its output layout
-    double renderWidth[4] = {}, renderHeight[4] = {};  // the views rendered (DLSS's input; else the same)
-};
 // Queues a frame record for the composition (fill_focus_cameras; tests feed it directly).
 void views4_push_frame(const Views4Frame& frame);
 // Focus cull (views4_focus_cull, needs "cameras"): every filled frame also builds the focus views'

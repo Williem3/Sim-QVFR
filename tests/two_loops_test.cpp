@@ -2,6 +2,7 @@
 // rules (wait before begin, begin/end strictly alternating), for ACE's normal call order and for a
 // frame generator above the layer (two ends per begin), which must never arm.
 #include "../src/xr_layer.cpp"
+#include "../src/games/ace/game.h"
 
 #include <cstdio>
 
@@ -61,6 +62,7 @@ int run(int appFrames, bool frameGenerator) {
 }  // namespace
 
 int main() {
+    aceqv::game = &aceqv::games::adapter_for(&ace::kGame);  // views4 below is ACE's
     const int errors = run(130, false);
     std::printf("ACE order: runtime waits=%d begins=%d ends=%d violations=%d endErrors=%d active=%d\n", rt.waits,
                 rt.begins, rt.ends, rt.violations, errors, aceqv::loops.active ? 1 : 0);

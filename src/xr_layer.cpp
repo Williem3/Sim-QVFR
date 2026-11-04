@@ -21,9 +21,7 @@
 
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
-#include "games/ace/double_render.h"
-#include "games/ace/views3.h"
-#include "games/ace/views4.h"
+#include "games/adapter.h"
 #include "log.h"
 #include "probe/d3d12_trace.h"
 #include "probe/cpu_load.h"
@@ -36,7 +34,6 @@
 #include "quad/fov_crop.h"
 #include "quad/helmet.h"
 #include "probe/dred.h"
-#include "games/ace/batch_watch.h"
 #include "games/game.h"
 #include "probe/hang_watch.h"
 #include "probe/probe.h"
@@ -109,19 +106,15 @@ struct Experiment {
     bool focusOnly = false;
     bool doubleRender = false;    // round 6: render_frame runs twice per frame, identical cameras
     bool views3 = false;          // single-frame quad views step 1: VR runs the renderer's 3-view mode
-    bool views4 = false;          // stage gate: 4 views in one VR frame (views 2-3 copy the eyes)
-    wchar_t views4Callers[512] = L"init";  // viewCount call sites that get 4 views (views4.h)
-    wchar_t views4Borrow[256] = L"";     // lighting-pass offsets views 2-3 take from their eye (views4.h)
+    bool views4 = false;          // QVFR: 4 views in one game frame (the game's adapter, games/adapter.h)
+    wchar_t mode[32] = L"off";    // [experiment] mode in effect (baseline=1: off), for the game's adapter
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
-    bool views4EyesOnlyAdvance = false;    // views4: skip the history-slot advance for views 2-3 (views4.h)
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
-    bool views4ShadowView1Plain = false;   // diagnostic: no view-1 shortcut in deferredShadows (views4.h)
-    bool views4ScreenSizeLegacy = false;   // diagnostic: screenSizeDiv keeps the stereo ratio (views4.h)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
@@ -185,10 +178,11 @@ struct Experiment {
     std::atomic<double> gazeDeadzone = 1.5;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
-    bool batchWatch = true;       // logs ACE's instance visibility batch against its limits (games/ace/batch_watch.h)
     UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h)
 };
 Experiment experiment;
+// The game this process is (games/adapter.h): its QVFR and its own experiments. Elsewhere one that does nothing.
+games::GameAdapter* game = &games::adapter_for(nullptr);
 bool focusLogged = false;
 // The helmet overlay ([helmet], views4 composing; helmet.h): set at launch, then live under quad.mutex.
 HelmetSettings helmetSettings;
@@ -333,13 +327,8 @@ void load_experiment() {
     experiment.doubleRender = _wcsicmp(mode, L"double_render") == 0;
     experiment.views3 = _wcsicmp(mode, L"views3") == 0;
     experiment.views4 = _wcsicmp(mode, L"views4") == 0;
-    GetPrivateProfileStringW(L"experiment", L"views4_callers", L"init", experiment.views4Callers,
-                             static_cast<DWORD>(std::size(experiment.views4Callers)), ini.c_str());
-    GetPrivateProfileStringW(L"experiment", L"views4_borrow", L"", experiment.views4Borrow,
-                             static_cast<DWORD>(std::size(experiment.views4Borrow)), ini.c_str());
+    wcscpy_s(experiment.mode, mode);
     experiment.views4ShowCopies = GetPrivateProfileIntW(L"experiment", L"views4_show_copies", 0, ini.c_str()) != 0;
-    experiment.views4EyesOnlyAdvance =
-        GetPrivateProfileIntW(L"experiment", L"views4_eyes_only_advance", 0, ini.c_str()) != 0;
     experiment.views4Compose = experiment.views4 && !experiment.views4ShowCopies &&
                                GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini.c_str()) != 0;
     experiment.views4NoMask =
@@ -363,10 +352,6 @@ void load_experiment() {
         std::clamp(GetPrivateProfileIntW(L"experiment", L"views4_focus_cull_margin_percent", 25, ini.c_str()), 0u, 200u) /
         100.0;
     experiment.uavBarriers = GetPrivateProfileIntW(L"experiment", L"pass_census_uav_barriers", 0, ini.c_str()) != 0;
-    experiment.views4ShadowView1Plain =
-        GetPrivateProfileIntW(L"experiment", L"views4_shadow_view1_plain", 0, ini.c_str()) != 0;
-    experiment.views4ScreenSizeLegacy =
-        GetPrivateProfileIntW(L"experiment", L"views4_screen_size_legacy", 0, ini.c_str()) != 0;
     experiment.views4DlssLive = GetPrivateProfileIntW(L"experiment", L"views4_dlss_live", 1, ini.c_str()) != 0;
     {
         wchar_t watch[512] = {};
@@ -405,7 +390,6 @@ void load_experiment() {
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
-    experiment.batchWatch = GetPrivateProfileIntW(L"experiment", L"batch_watch", 1, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", 30, ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
@@ -1047,7 +1031,7 @@ void views4_outline_draw(XrSwapchain swapchain) {
     std::vector<OutlineBox> boxes;
     int thickness = 2;
     Views4Frame frame{};
-    const bool recorded = views4_latest_frame(frame);  // ACE's rendered FOV, else the located one
+    const bool recorded = game->qvfr_latest_frame(frame);  // ACE's rendered FOV, else the located one
     const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
     for (int e = 0; e < 2; ++e) {
         const ViewRect v = views4_rect(layout, e, static_cast<int>(desc.Width), static_cast<int>(desc.Height));
@@ -1276,7 +1260,7 @@ uint64_t ini_write_later(std::function<void()> write);  // (below)
 IDXGIAdapter3* vramAdapter = nullptr;
 void report_vram() {
     int render[2], output[2];
-    views4_target_sizes(render, output);
+    game->qvfr_target_sizes(render, output);
     if (output[0] <= 0 || !quad.device)
         return;
     if (!vramAdapter) {
@@ -1469,14 +1453,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
     if (XR_SUCCEEDED(r)) {
         hang_watch_arm(experiment.hangWatchSeconds);
-        if (experiment.probes && probe_start()) {
-            if (experiment.doubleRender)
-                double_render_start();
-            if (experiment.views3)
-                views3_watch();
-        }
-        if (experiment.batchWatch)
-            batch_watch_start();
+        game->session_created(experiment.probes && probe_start());
         if (!experiment.probes)
             log_line(experiment.views3 ? "engine probes and D3D12 trace off (probes=0); views3 cannot report the view mode"
                                        : "engine probes and D3D12 trace off (probes=0)");
@@ -1529,7 +1506,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     menu_shutdown();  // its swapchain and space belong to the session
     osd_shutdown();
     probe_stop();
-    batch_watch_stop();
+    game->session_destroyed();
     dred_stop();
     {
         std::lock_guard guard(gaze.mutex);
@@ -2060,7 +2037,7 @@ void views4_compose() {
     // Taken before anything can skip this frame: a frame filled but not taken would leave every later
     // composition a frame behind, its focus placed by an older gaze (focus lagging the eyes, 2026-11-02).
     Views4Frame frame{};
-    const bool recorded = views4_take_frame(frame);
+    const bool recorded = game->qvfr_take_frame(frame);
     if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
         return;
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
@@ -2435,7 +2412,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
         for (int i = 0; i < 2; ++i)
             views[i].fov = crop_fov(views[i].fov, crop, i);
     if (experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) {
-        views4_note_views(views, std::min(*countOutput, capacity));
+        game->qvfr_note_views(views, std::min(*countOutput, capacity));
         if (views4_outline_on() && *countOutput >= 2 && capacity >= 2) {
             std::lock_guard guard(v4outline.mutex);
             v4outline.fov[0] = views[0].fov;
@@ -2493,7 +2470,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                 if (valid[e] && offset != 0)
                     tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
             }
-            views4_set_gaze(tan, valid, gazing);
+            game->qvfr_set_gaze(tan, valid, gazing);
         }
     }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
@@ -2609,7 +2586,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
             }
         }
         Views4Frame latest{};
-        views4_latest_frame(latest);  // the rendered sizes (live resolution)
+        game->qvfr_latest_frame(latest);  // the rendered sizes (live resolution)
         const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.live, latest.width, latest.height);
         bool aceLayout = true;
         for (uint32_t v = 0; v < proj->viewCount; ++v)
@@ -2660,7 +2637,7 @@ void live_resolution(const LiveSettings& l) {
     const Views4Layout& launch = experiment.views4Layout;
     const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
     const double cw = l.crop.kept_width(), ch = l.crop.kept_height();  // the outer views take the live crop
-    views4_set_live_layout(views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
+    game->qvfr_set_live_layout(views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
     const Views4Fit fit = views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
     logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
          "eye; launch %.0f%%, %.0f%% x %.0f%%)%s%s",
@@ -2690,7 +2667,7 @@ void live_apply(const LiveSettings& l) {
             before.inner != l.crop.inner)
             logf("live: FOV crop top %.0f%%, bottom %.0f%%, outer %.0f%%, inner %.0f%%%s", l.crop.top * 100,
                  l.crop.bottom * 100, l.crop.outer * 100, l.crop.inner * 100,
-                 views4_dlss_held() ? " (DLSS is on: the views keep their launch sizes until the next launch)" : "");
+                 game->qvfr_dlss_held() ? " (DLSS is on: the views keep their launch sizes until the next launch)" : "");
     }
     experiment.focusFraction = l.focusFraction;
     experiment.focusFractionY = l.focusFractionY;
@@ -2709,7 +2686,7 @@ void live_apply(const LiveSettings& l) {
         gazeAvailable = gaze.set != XR_NULL_HANDLE;
     }
     if (experiment.views4 && !experiment.views4EyeCamera)
-        views4_set_live(experiment.box_x(l.focusFraction),
+        game->qvfr_set_live(experiment.box_x(l.focusFraction),
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.views4Compose);
@@ -3445,7 +3422,7 @@ bool menu_resources(XrSession session) {
 double native_center_ppd() {
     float tan[4] = {};
     Views4Frame frame{};
-    if (experiment.views4 && views4_latest_frame(frame))
+    if (experiment.views4 && game->qvfr_latest_frame(frame))
         std::memcpy(tan, frame.outerTan[0], sizeof(tan));
     std::lock_guard guard(quad.mutex);
     if (!(tan[1] > tan[0])) {
@@ -3464,7 +3441,7 @@ void menu_render() {
     const std::wstring hint = menu_hint();
     if (menu.model.launch.nativePpd <= 0)  // known once ACE has rendered a frame
         menu.model.launch.nativePpd = native_center_ppd();
-    menu.model.launch.dlssHeld = experiment.views4 && views4_dlss_held();
+    menu.model.launch.dlssHeld = experiment.views4 && game->qvfr_dlss_held();
     const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
                                                          menu_lines(menu.model),
                                                          menu_notes(menu.model), hint, menu_subtitle(menu.model),
@@ -3988,7 +3965,7 @@ void optimize_apply(const QvfrValues& q) {
 void optimize_start(int64_t now) {
     optimize.note.clear();
     // It measures what each step does, so the views must resize live (with DLSS: views4_dlss_live).
-    if (views4_dlss_held()) {
+    if (game->qvfr_dlss_held()) {
         optimize.note = L"DLSS holds the view sizes until the next launch (DLAA, or views4_dlss_live=0): it can't measure live";
         return;
     }
@@ -4236,9 +4213,9 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     }
     if (experiment.passCensus)
         pass_census_frame_end();
-    batch_watch_frame_end();
+    game->frame_end();
     if (experiment.views4) {
-        views4_frame_end();
+        game->qvfr_frame_end();
         return views4_submit(session, info);
     }
     if (!experiment.twoLoops)
@@ -4360,10 +4337,12 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     XrResult r = layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     // Registered as an implicit layer, so it loads into every OpenXR app: stay silent and
     // pass-through everywhere except a supported game (src/games).
-    if (!is_game_process()) {
+    const games::GameInfo* thisGame = games::current_game();
+    if (!thisGame) {
         next = Dispatch{gipa};
         return r;
     }
+    game = &games::adapter_for(thisGame);
     load_experiment();
     // Where the launcher writes live settings while this ACE runs (live_reload).
     runtime_info(L"live_ini", live.ini);
@@ -4391,29 +4370,28 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         d3d12_debug_enable(experiment.gpuValidation);
     if (experiment.pixCaptureFrame)  // before ACE creates its D3D12 device
         pix_capture_load(experiment.pixCaptureFrame);
-    if (experiment.views3)
-        views3_patch();
+    game->instance_created(live.ini.c_str(), experiment.mode);
     if (experiment.views4) {
-        views4_set_borrow(experiment.views4Borrow);
-        views4_set_layout(experiment.views4Layout);
-        views4_set_screen_size_legacy(experiment.views4ScreenSizeLegacy);
-        views4_set_dlss_live(experiment.views4DlssLive);
+        games::QvfrStart start;
+        start.layout = experiment.views4Layout;
+        start.focusFraction = experiment.views4EyeCamera ? 0.0 : experiment.box_x();
+        start.focusFractionY = experiment.box_y();
+        start.dlssLive = experiment.views4DlssLive;
         // The cull box: the focus box plus its feather band plus a gaze-latency allowance.
-        views4_set_focus_cull(experiment.views4FocusCull, 1.0 + experiment.feather + experiment.views4FocusCullMargin,
-                              experiment.gaze && experiment.views4Compose);  // gaze turns only when composing
+        start.focusCull = experiment.views4FocusCull;
+        start.focusCullScale = 1.0 + experiment.feather + experiment.views4FocusCullMargin;
+        start.focusCullGaze = experiment.gaze && experiment.views4Compose;  // gaze turns only when composing
+        start.ini = live.ini.c_str();
+        if (!game->qvfr_start(start)) {
+            experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
+            notice_set(L"ace-quadview is off",
+                       {L"This " + std::wstring(thisGame->name) +
+                            L" build isn’t one ace-quadview supports, so the game runs as normal, "
+                            L"without foveated rendering. The game has probably been updated.",
+                        L"Look for an ace-quadview release for the new build. The launcher’s Launch checks say the same "
+                        L"before a launch."});
+        }
     }
-    if (experiment.views4 &&
-        !views4_start(experiment.views4Callers, experiment.views4EyesOnlyAdvance,
-                      experiment.views4EyeCamera ? 0.0 : experiment.box_x(), experiment.box_y())) {
-        experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
-        notice_set(L"ace-quadview is off",
-                   {L"This Assetto Corsa EVO build isn’t one ace-quadview supports, so the game runs as normal, "
-                    L"without foveated rendering. The game has probably been updated.",
-                    L"Look for an ace-quadview release for the new build. The launcher’s Launch checks say the same "
-                    L"before a launch."});
-    }
-    if (experiment.views4 && experiment.views4ShadowView1Plain)
-        views4_shadow_view1_plain();
     Dispatch d;
     d.GetInstanceProcAddr = gipa;
     bool ok = true;
