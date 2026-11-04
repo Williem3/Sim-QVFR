@@ -1524,6 +1524,7 @@ void helmet_layer_release();  // (below)
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     game->session_running(false);
+    hang_watch_disarm();
     ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
     menu_shutdown();  // its swapchain and space belong to the session
     osd_shutdown();
