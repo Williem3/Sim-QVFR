@@ -42,6 +42,7 @@ struct Settings {
     int menuYaw = 0;          // [menu] yaw
     int menuPitch = -4;       // [menu] pitch
     int menuWidth = 33;       // [menu] width
+    bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys under the headset menu
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
     // layer's fov_crop.h): outer is the temple side, inner the nose side. Applies at the next launch.
@@ -57,6 +58,8 @@ struct Settings {
     Hotkeys hotkeys = default_hotkeys();  // [hotkeys] (input/hotkeys.h; the Hotkeys pane): live
     // [launcher] baseline_next: the next launch runs without QVFR (ACE's own two views, measured), once.
     bool baselineNext = false;
+    // [launcher] update_check: ask GitHub for the newest release when the launcher starts (About pane; off by default).
+    bool updateCheck = false;
 };
 
 struct Range {

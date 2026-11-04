@@ -14,10 +14,12 @@
 #include "engine/ace_abi.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
+#include "launcher/install.h"
 #include "launcher/layer_order.h"
 #include "launcher/preflight.h"
 #include "launcher/report.h"
 #include "launcher/settings.h"
+#include "launcher/update_check.h"
 #include "sha256_file.h"
 
 using namespace aceqv;
@@ -1150,6 +1152,180 @@ int main() {
         check(delete_profile(profileFolder.wstring(), L"Night") &&
                   profile_names(profileFolder.wstring()).size() == 3 && !delete_profile(profileFolder.wstring(), L"Balanced"),
               "profiles: deleted; a preset can't be");
+    }
+
+    // The update check (update_check.h): versions compared by their numbers, the newest release in GitHub's list.
+    {
+        check(compare_versions(L"v2026.11.3.3-alpha", L"2026.11.3.3-alpha (1a2b3c4)") == 0 &&
+                  compare_versions(L"v2026.11.4.1-alpha", L"2026.11.3.3-alpha (1a2b3c4)") > 0 &&
+                  compare_versions(L"v2026.11.3.10-alpha", L"v2026.11.3.9-alpha") > 0 &&
+                  compare_versions(L"v2026.11.3", L"2026.11.3.1") < 0 && compare_versions(L"v2027.1.1.1", L"dev") == 0,
+              "update: versions by their numbers, a suffix or commit ignored, 10 after 9");
+        check(known_version(L"2026.11.3.3-alpha (abc)") && !known_version(L"dev") && !known_version(L""),
+              "update: a development build has no version to compare");
+        const std::string releases = R"([
+            {"tag_name": "v2026.12.1.1-alpha", "html_url": "https://github.com/Williem3/Sim-QVFR/releases/tag/draft", "draft": true},
+            {"tag_name": "v2026.11.3.3-alpha", "html_url": "https://github.com/Williem3/Sim-QVFR/releases/tag/v2026.11.3.3-alpha",
+             "draft": false, "prerelease": true},
+            {"tag_name": "v2026.11.4.1-alpha", "html_url": "https://github.com/Williem3/Sim-QVFR/releases/tag/v2026.11.4.1-alpha",
+             "draft": false, "prerelease": true},
+            {"tag_name": "v2026.11.2.4-alpha", "html_url": "x", "draft": false}
+        ])";
+        Release release;
+        check(newest_release(releases, release) && release.tag == L"v2026.11.4.1-alpha" &&
+                  release.url == L"https://github.com/Williem3/Sim-QVFR/releases/tag/v2026.11.4.1-alpha",
+              "update: the highest release that isn't a draft, pre-releases counted");
+        check(!newest_release("[]", release) && !newest_release("{\"message\": \"rate limited\"}", release) &&
+                  !newest_release("not json", release) && !newest_release(R"([{"tag_name": "v1", "draft": true}])", release),
+              "update: no release in an empty list, an error answer, garbage or drafts only");
+    }
+
+    // Install (install.h): the hash lists, what to replace and keep, the downloads trusted, a staged release
+    // installed into a folder (the user's settings and changed files kept, a backup), and put back on a failure.
+    {
+        const std::string hexA(64, 'a'), hexB(64, 'b'), hexC(64, 'c');
+        const auto list = parse_sha256_list(std::string(64, 'A') + "  ace/ace-quadview.dll\r\n" + hexB + "  README.txt\n" +
+                                            hexC + "  ../evil.dll\n" + hexC + "  C:/evil.dll\n" + "nothex  x\n" + hexC +
+                                            "  /root.dll\n");
+        check(list.size() == 2 && list.at(L"ace\\ace-quadview.dll") == hexA && list.at(L"README.txt") == hexB,
+              "install: SHA256.txt read, lowercase, backslashes; no path out of the folder");
+
+        const std::map<std::wstring, std::string> release = {
+            {L"ace-quadview-launcher.exe", hexA}, {L"ace-quadview.ini", hexA}, {L"ace\\helmet\\top.png", hexB},
+            {L"ace\\helmet\\visor.png", hexB},     {L"README.txt", hexC},       {L"NEW.txt", hexA}};
+        const std::map<std::wstring, std::string> oldRelease = {
+            {L"ace-quadview-launcher.exe", hexC}, {L"ace\\helmet\\top.png", hexC}, {L"ace\\helmet\\visor.png", hexC}};
+        const std::map<std::wstring, std::string> installed = {
+            {L"ace-quadview-launcher.exe", hexC}, {L"ace-quadview.ini", hexB},  // the user's settings
+            {L"ace\\helmet\\top.png", hexC},                                   // as the old release had it
+            {L"ace\\helmet\\visor.png", hexA},                                 // the user's own image
+            {L"README.txt", hexC}};                                            // already the new one
+        const auto steps = plan_install(release, oldRelease, [&](const std::wstring& p) {
+            const auto it = installed.find(p);
+            return it == installed.end() ? std::string() : it->second;
+        });
+        const auto action = [&](const wchar_t* p) {
+            for (const InstallStep& s : steps)
+                if (s.path == p)
+                    return s.action;
+            return InstallAction::Same;
+        };
+        check(action(L"ace-quadview-launcher.exe") == InstallAction::Replace && action(L"ace-quadview.ini") == InstallAction::KeepSettings &&
+                  action(L"ace\\helmet\\top.png") == InstallAction::Replace && action(L"ace\\helmet\\visor.png") == InstallAction::KeepChanged &&
+                  action(L"README.txt") == InstallAction::Same && action(L"NEW.txt") == InstallAction::Add,
+              "install: replace the old release's files, keep the settings and the user's own, add new ones");
+        const auto noList = plan_install(release, {}, [&](const std::wstring& p) {
+            const auto it = installed.find(p);
+            return it == installed.end() ? std::string() : it->second;
+        });
+        bool helmetKept = false, exeReplaced = false;
+        for (const InstallStep& s : noList) {
+            helmetKept |= s.path == L"ace\\helmet\\top.png" && s.action == InstallAction::KeepChanged;
+            exeReplaced |= s.path == L"ace-quadview-launcher.exe" && s.action == InstallAction::Replace;
+        }
+        check(helmetKept && exeReplaced, "install: without the old release's list, helmet images stay and program files go");
+
+        check(trusted_download("https://github.com/Williem3/Sim-QVFR/releases/download/v2026.11.4.1-alpha/ace-quadview-2026.11.4.1-alpha.zip") &&
+                  !trusted_download("http://github.com/Williem3/Sim-QVFR/releases/download/v1/a.zip") &&
+                  !trusted_download("https://github.com/someone/else/releases/download/v1/a.zip") &&
+                  !trusted_download("https://github.com/Williem3/Sim-QVFR/releases/download/../../evil.zip") &&
+                  !trusted_download("https://github.com/Williem3/Sim-QVFR/releases/download/"),
+              "install: only the repository's release downloads, over HTTPS");
+
+        const std::string withAsset = R"([{"tag_name": "v2026.11.4.1-alpha", "html_url": "https://github.com/x", "draft": false,
+            "assets": [{"name": "notes.txt", "size": 5, "digest": "sha256:00"},
+                       {"name": "ace-quadview-2026.11.4.1-alpha.zip", "size": 12066130,
+                        "digest": "sha256:6306eb9b219a7d78685f96fc82da6180c6bb53f88be44fea5b7400f1e482c11e",
+                        "browser_download_url": "https://github.com/Williem3/Sim-QVFR/releases/download/v2026.11.4.1-alpha/ace-quadview-2026.11.4.1-alpha.zip"}]}])";
+        Release r;
+        check(newest_release(withAsset, r) && r.zipSize == 12066130 &&
+                  r.zipSha256 == "6306eb9b219a7d78685f96fc82da6180c6bb53f88be44fea5b7400f1e482c11e" && trusted_download(r.zipUrl),
+              "install: the release's zip, its size and SHA-256 from GitHub's list");
+        Release noDigest;
+        check(newest_release(R"([{"tag_name": "v1", "assets": [{"name": "ace-quadview-1.zip", "size": 3, "browser_download_url": "u"}]}])",
+                             noDigest) &&
+                  noDigest.zipUrl.empty(),
+              "install: a zip without a digest isn't offered to install");
+
+        // A staged release over an installed one, on disk.
+        const fs::path root = folder / "install", app = root / "app", staged = root / "staged";
+        const auto put = [](const fs::path& p, const std::string& text) {
+            fs::create_directories(p.parent_path());
+            write_file(p.wstring(), text);
+        };
+        const auto hash_of = [](const fs::path& p) { return aceqv::sha256_file(p.c_str()); };
+        const auto list_of = [&](const fs::path& dir, std::vector<const char*> files) {
+            std::string text;
+            for (const char* f : files)
+                text += hash_of(dir / f) + "  " + std::string(f) + "\r\n";
+            write_file((dir / "SHA256.txt").wstring(), text);
+        };
+        put(app / "ace-quadview-launcher.exe", "old launcher");
+        put(app / "ace/ace-quadview.dll", "old layer");
+        put(app / "ace/helmet/top.png", "old top");
+        put(app / "ace/helmet/visor.png", "old visor");
+        put(app / "ace-quadview.ini", "[shipped]");
+        put(app / "VERSION.txt", "ace-quadview 1");
+        list_of(app, {"ace-quadview-launcher.exe", "ace/ace-quadview.dll", "ace/helmet/top.png", "ace/helmet/visor.png",
+                      "ace-quadview.ini", "VERSION.txt"});
+        put(app / "ace-quadview.ini", "[mine]");          // the user's settings since
+        put(app / "ace/helmet/visor.png", "my visor");    // and their own image
+        put(app / "profiles/Night.ini", "[profile]");      // not in any release
+        put(staged / "ace-quadview-launcher.exe", "new launcher");
+        put(staged / "ace/ace-quadview.dll", "new layer");
+        put(staged / "ace/helmet/top.png", "new top");
+        put(staged / "ace/helmet/visor.png", "new visor");
+        put(staged / "ace-quadview.ini", "[shipped 2]");
+        put(staged / "VERSION.txt", "ace-quadview 2");
+        put(staged / "README.txt", "new readme");
+        list_of(staged, {"ace-quadview-launcher.exe", "ace/ace-quadview.dll", "ace/helmet/top.png", "ace/helmet/visor.png",
+                         "ace-quadview.ini", "VERSION.txt", "README.txt"});
+        check(packaged_install(app.wstring()) && !packaged_install(staged.parent_path().wstring()),
+              "install: a packaged install has VERSION.txt and SHA256.txt");
+
+        // A file in use (opened without sharing) can't be moved aside: nothing changes.
+        std::string readBack;
+        HANDLE locked = CreateFileW((app / "ace/ace-quadview.dll").c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        const InstallResult failed = install_staged(app.wstring(), staged.wstring(), L"1 (abc)", [](const InstallProgress&) {});
+        CloseHandle(locked);
+        check(!failed.ok && failed.error.find(L"ace-quadview.dll") != std::wstring::npos &&
+                  read_file((app / "ace-quadview-launcher.exe").wstring(), readBack) && readBack == "old launcher" &&
+                  read_file((app / "ace/ace-quadview.dll").wstring(), readBack) && readBack == "old layer" &&
+                  !fs::exists(app / "README.txt"),
+              "install: a file in use stops it, and the files already replaced go back");
+
+        int steps2 = 0;
+        const InstallResult done = install_staged(app.wstring(), staged.wstring(), L"1 (abc)", [&](const InstallProgress&) { ++steps2; });
+        std::string launcher, layer, visor, ini, top, backupLauncher, readme;
+        read_file((app / "ace-quadview-launcher.exe").wstring(), launcher);
+        read_file((app / "ace/ace-quadview.dll").wstring(), layer);
+        read_file((app / "ace/helmet/visor.png").wstring(), visor);
+        read_file((app / "ace/helmet/top.png").wstring(), top);
+        read_file((app / "ace-quadview.ini").wstring(), ini);
+        read_file((app / "README.txt").wstring(), readme);
+        read_file((app / "update/backup-1/ace-quadview-launcher.exe").wstring(), backupLauncher);
+        check(done.ok && launcher == "new launcher" && layer == "new layer" && top == "new top" && readme == "new readme" &&
+                  steps2 > 0,
+              "install: the new release's program files in place, new ones added");
+        check(ini == "[mine]" && visor == "my visor" && fs::exists(app / "profiles/Night.ini") && done.kept == 2,
+              "install: the user's settings, own helmet image and profiles kept");
+        check(backupLauncher == "old launcher" && done.backup == (app / "update" / "backup-1").wstring() &&
+                  parse_sha256_list((read_file((app / "SHA256.txt").wstring(), readBack), readBack)).count(L"README.txt"),
+              "install: the old files in update\\backup-<version>, the new SHA256.txt in place");
+
+        fs::create_directories(app / "update/staged");
+        write_file((app / "update/release.zip").wstring(), "zip");
+        fs::create_directories(app / "update/backup-0");
+        Sleep(20);
+        fs::last_write_time(app / "update/backup-1", fs::file_time_type::clock::now());
+        clean_update_folder(app.wstring());
+        check(!fs::exists(app / "update/staged") && !fs::exists(app / "update/release.zip") && fs::exists(app / "update/backup-1") &&
+                  !fs::exists(app / "update/backup-0"),
+              "install: the next start clears update\\ but the newest backup");
+
+        put(staged / "ace/ace-quadview.dll", "tampered");
+        const InstallResult tampered = install_staged(app.wstring(), staged.wstring(), L"2", [](const InstallProgress&) {});
+        check(!tampered.ok && tampered.error.find(L"SHA256") != std::wstring::npos, "install: a file that doesn't match its list stops it");
     }
 
     fs::remove_all(folder, ec);

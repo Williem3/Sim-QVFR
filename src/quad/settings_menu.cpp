@@ -82,6 +82,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HelmetDetail, L"Helmet detail", 0, 1, 1},
     {MenuItem::Optimize, L"Optimize for frame rate", 0, 0, 1},
     {MenuItem::Profile, L"Profile", 0, 0, 1},
+    {MenuItem::HotkeyFooter, L"Hotkeys footer", 0, 1, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -167,7 +168,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     const MenuPage page = menu_page(menu);
     if (page == MenuPage::Headset) {
         items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
-                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth});
+                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
     } else if (page == MenuPage::Fg) {
         items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
                                    MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
@@ -328,8 +329,9 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     }
     if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
-        item == MenuItem::Shape) {
+        item == MenuItem::Shape || item == MenuItem::HotkeyFooter) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
+                     : item == MenuItem::HotkeyFooter ? menu.values.hotkeyFooter
                      : item == MenuItem::Shape       ? menu.values.shape.corners
                      : item == MenuItem::EyeTracking ? menu.values.eyeTracking
                      : item == MenuItem::Crop        ? menu.values.crop
@@ -365,6 +367,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.shape = read_focus_shape(ini);
     v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
+    v.hotkeyFooter = GetPrivateProfileIntW(L"menu", L"hotkey_footer", 1, ini) != 0;
     const int cropMax = static_cast<int>(kCropMax * 100);
     v.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
     v.cropTop = std::clamp(read_int(ini, L"crop", L"top", 0), 0, cropMax);
@@ -400,6 +403,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
     ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
     ok &= write(ini, L"menu", L"width", v.placement.width);
+    ok &= write(ini, L"menu", L"hotkey_footer", v.hotkeyFooter ? 1 : 0);
     return ok;
 }
 
@@ -627,6 +631,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = v.eyeTracking ? L"On" : L"Off";
         else if (items[i] == MenuItem::Overlay)
             line.value = v.overlay.enabled ? L"On" : L"Off";
+        else if (items[i] == MenuItem::HotkeyFooter)
+            line.value = v.hotkeyFooter ? L"On" : L"Off";
         else if (items[i] == MenuItem::Crop)
             line.value = v.crop ? L"On" : L"Off";
         else if (items[i] == MenuItem::Helmet)

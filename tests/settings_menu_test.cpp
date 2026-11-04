@@ -249,10 +249,10 @@ int main() {
     }
 
     // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
-    // [menu] for the layer to move them.
+    // [menu] for the layer to move them, then the hotkeys footer.
     SettingsMenu moving;
     moving.page = 4;
-    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 8,
+    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 9,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
     check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
@@ -650,6 +650,66 @@ int main() {
         SettingsMenu none = p;
         none.profile = -1;
         check(!menu_key(none, MenuKey::Left) && none.profile == 3, "Profile: Left from none takes the last");
+    }
+    {  // The fullest page fits: 13 lines (the Profile line too), three notes, the footer and the hint, none over another.
+        SettingsMenu full;
+        full.launch = {true, 50, 39, 39, 4000, 3400};
+        full.profiles = {L"Performance", L"Balanced", L"Quality"};
+        const std::vector<MenuLine> lines = menu_lines(full);
+        const std::vector<std::wstring> notes = {L"note one", L"note two", L"note three"};
+        const std::vector<uint32_t> page = draw_menu_panel(menu_title(full), menu_resolution(full), menu_stats(full), lines, notes,
+                                                           L"hint", L"", L"Overlay Ctrl+Alt+P  ·  Visor Ctrl+Alt+V");
+        // Rows with text: any pixel brighter than the background. The notes end above the footer's band, which has text.
+        const auto row_has_text = [&page](int y) {
+            for (int x = 36; x < kPanelWidth - 36; ++x)
+                if ((page[static_cast<size_t>(y) * kPanelWidth + x] & 0xff) > 0x60)
+                    return true;
+            return false;
+        };
+        int lastNoteRow = 0;
+        for (int y = 0; y < kPanelHeight - 100; ++y)
+            if (row_has_text(y))
+                lastNoteRow = y;
+        bool footerText = false;
+        for (int y = kPanelHeight - 96; y < kPanelHeight - 56; ++y)
+            footerText |= row_has_text(y);
+        check(lines.size() == 13 && lastNoteRow < kPanelHeight - 100 && footerText,
+              "the panel: 13 lines and three notes end above the footer, which shows");
+        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"ACEQV_MENU_SAVE", path, MAX_PATH)) {
+            if (FILE* f = _wfopen(path, L"wb")) {
+                const int w = kPanelWidth, h = kPanelHeight;
+                BITMAPFILEHEADER file{0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + w * h * 4), 0, 0,
+                                      sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER)};
+                BITMAPINFOHEADER info{sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
+                fwrite(&file, sizeof(file), 1, f);
+                fwrite(&info, sizeof(info), 1, f);
+                for (const uint32_t p : page) {
+                    const uint8_t bgra[4] = {static_cast<uint8_t>(p >> 16), static_cast<uint8_t>(p >> 8), static_cast<uint8_t>(p), 255};
+                    fwrite(bgra, 4, 1, f);
+                }
+                fclose(f);
+            }
+        }
+    }
+    {  // The hotkeys footer ([menu] hotkey_footer): on by default, the Overlay and menu page's last line, read and written.
+        SettingsMenu f;
+        f.launch = {true, 50, 39, 39};
+        f.page = static_cast<int>(menu_pages(f).size()) - 1;  // Overlay and menu, the last page
+        const std::vector<MenuItem> items = menu_page_items(f);
+        f.selected = static_cast<int>(items.size()) - 1;
+        check(menu_page(f) == MenuPage::Headset && items.back() == MenuItem::HotkeyFooter && f.values.hotkeyFooter &&
+                  menu_lines(f).back().label == L"Hotkeys footer" && menu_lines(f).back().value == L"On",
+              "Hotkeys footer: on by default, the Overlay and menu page's last line");
+        check(menu_key(f, MenuKey::Right) && !f.values.hotkeyFooter && menu_lines(f).back().value == L"Off",
+              "Hotkeys footer: Right or Left turns it off and on");
+        wchar_t temp[MAX_PATH];
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"aceqv-menu-footer.ini";
+        DeleteFileW(ini.c_str());
+        check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
+                  !read_menu_values(ini.c_str()).hotkeyFooter,
+              "Hotkeys footer: unset is on; written and read back");
+        DeleteFileW(ini.c_str());
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

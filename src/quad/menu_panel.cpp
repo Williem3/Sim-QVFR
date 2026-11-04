@@ -35,7 +35,7 @@ void text(HDC dc, HFONT font, const std::wstring& s, int left, int top, int righ
 std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResolution& resolution,
                                       const MenuStats& stats, const std::vector<MenuLine>& lines,
                                       const std::vector<std::wstring>& notes, const std::wstring& hint,
-                                      const std::wstring& subtitle) {
+                                      const std::wstring& subtitle, const std::wstring& footer) {
     std::vector<uint32_t> out(static_cast<size_t>(kPanelWidth) * kPanelHeight, 0);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -98,6 +98,9 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
     red.insert(red.end(), notes.begin(), notes.end());
     for (size_t i = 0; i < red.size() && i < 3; ++i, y += 34)
         text(dc, smallFont, red[i], kMargin, y, kPanelWidth - kMargin, y + 34, kCapped, DT_LEFT | DT_END_ELLIPSIS);
+    if (!footer.empty())  // the in-game hotkeys, over the menu's own hint
+        text(dc, smallFont, footer, kMargin, kPanelHeight - 96, kPanelWidth - kMargin, kPanelHeight - 56, kDim,
+             DT_LEFT | DT_END_ELLIPSIS);
     text(dc, smallFont, hint, kMargin, kPanelHeight - 56, kPanelWidth - kMargin, kPanelHeight - 16, kDim, DT_LEFT);
     GdiFlush();
     // GDI writes BGRx; the swapchain wants RGBA with the panel's alpha.
