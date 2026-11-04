@@ -2,7 +2,8 @@
 
 Usage: python xrefs.py <exe> <out.tsv> <regex> [<regex> ...]
 Scans .text for RIP-relative LEA/MOV operands (7-byte encodings) whose target is the start of a
-string matching any regex. Function bounds come from .pdata (x64 unwind table).
+string matching any regex. Strings are ASCII or UTF-16LE (Unreal's TEXT(); shown as u"..."). Function
+bounds come from .pdata (x64 unwind table).
 Output: string_rva, string, ref_rva, function_start, function_end.
 """
 import bisect
@@ -29,6 +30,12 @@ def main(exe, out, patterns):
             txt = m.group()[:-1]
             if any(r.search(txt) for r in regexes):
                 wanted[s.VirtualAddress + m.start()] = txt.decode()
+        for m in re.finditer(rb"(?:[\x20-\x7e]\x00){4,}\x00\x00", raw):
+            if m.start() % 2:
+                continue
+            txt = m.group()[:-2].decode("utf-16-le").encode()
+            if any(r.search(txt) for r in regexes):
+                wanted[s.VirtualAddress + m.start()] = 'u"' + txt.decode() + '"'
 
     funcs = []
     pdata = next((s for s in pe.sections if s.Name.startswith(b".pdata")), None)

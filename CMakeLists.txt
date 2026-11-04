@@ -23,9 +23,9 @@ target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 add_library(ace_qv_core STATIC
   src/games/games.cpp src/log.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
-  src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
+  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/adapters.cpp src/engine/code_patch.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/adapters.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -40,6 +40,8 @@ target_compile_definitions(ace_quadview PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_
 target_compile_options(ace_quadview PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(ace_quadview PRIVATE ace_qv_core)
 set_target_properties(ace_quadview PROPERTIES OUTPUT_NAME ace-quadview)
+# A linker map next to the DLL, to name the layer's frames in a game's crash call stack (no effect on the code).
+target_link_options(ace_quadview PRIVATE /MAP)
 
 add_custom_command(TARGET ace_quadview POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -193,3 +195,9 @@ target_include_directories(cpu_profile_test PRIVATE src ${THIRD_PARTY}/openxr/in
 target_compile_definitions(cpu_profile_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(cpu_profile_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cpu_profile_test PRIVATE ace_qv_core)
+
+# Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
+add_executable(acc_views_test tests/acc_views_test.cpp)
+target_include_directories(acc_views_test PRIVATE src)
+target_compile_definitions(acc_views_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)

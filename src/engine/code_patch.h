@@ -1,5 +1,5 @@
-// Small in-place code patches on the pinned ACE exe: anchor checks, executable memory within rel32
-// reach of the module, and trampolines that replace one instruction.
+// Small in-place patches on a pinned game exe: anchor checks, executable memory within rel32 reach of
+// the module, trampolines that replace one instruction, and vtable slots.
 #pragma once
 
 #include <cstddef>
@@ -29,5 +29,10 @@ bool code_call_if_below(std::uintptr_t rva, const std::uint8_t (&anchor)[5], std
 // running `stub` and then jumping back to rva + size. `stub` must be position independent.
 bool code_redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
                    std::size_t stubSize);
+// The function the vtable slot at `slotRva` points to, as an RVA (0 if unreadable).
+std::uintptr_t vtable_slot(std::uintptr_t slotRva);
+// Points the vtable slot at `slotRva` at `replacement`. The slot must hold the function at `expectedRva` (the
+// build's own) or already `replacement` (a second call); otherwise nothing is written.
+bool vtable_slot_replace(std::uintptr_t slotRva, std::uintptr_t expectedRva, const void* replacement);
 
 }  // namespace aceqv

@@ -1,0 +1,79 @@
+// Assetto Corsa Competizione facts from static analysis (README.md). Pinned to the exe build in game.h.
+// ACC is UE 4.26; its stereo device is the SteamVR plugin's FSteamVRHMD (no symbols, no RTTI). Each slot
+// below holds, in this build, the function given next to it: patches check that before writing.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace acc {
+
+struct Slot {
+    std::uintptr_t rva;       // the vtable slot
+    std::uintptr_t function;  // what it holds in this build
+};
+
+// FSteamVRHMD's IStereoRendering vtable (subobject +0xA0), slots in the order of 4.26's StereoRendering.h.
+inline constexpr std::uintptr_t kStereoVtable = 0x3a4f070;
+inline constexpr Slot kGetDesiredNumberOfViews = {kStereoVtable + 4 * 8, 0x7b5e60};  // default: stereo ? 2 : 1
+inline constexpr Slot kGetViewPassForIndex = {kStereoVtable + 5 * 8, 0x7b7fb0};      // default: 1 + (index != 0)
+inline constexpr Slot kGetViewIndexForPass = {kStereoVtable + 6 * 8, 0x7b7f90};      // default: 0, 1, else -1
+// Primary passes draw their meshes; under instanced stereo a primary pass draws itself and the pass after it in
+// one instanced draw (4.26 FSceneRenderer: GetInstancedView = pass + 1), secondary passes draw none. Defaults:
+// FULL and LEFT primary. Slot 11 (secondary pass) calls slot 9 and slot 12 (secondary view) calls slot 10.
+inline constexpr Slot kDeviceIsAPrimaryPass = {kStereoVtable + 9 * 8, 0x7b1c90};   // `cmp edx, 1; setbe al`
+inline constexpr Slot kDeviceIsAPrimaryView = {kStereoVtable + 10 * 8, 0x2da8900};  // engine's, inlined: below
+inline constexpr std::ptrdiff_t kViewStereoPass = 0xad0;  // FSceneView::StereoPass (`cmp [rdx + 0xad0], 1`)
+inline constexpr Slot kAdjustViewRect = {kStereoVtable + 16 * 8, 0x7ae650};          // halves of the target
+// SetFinalViewRect(pass, const FIntRect&): the renderer reports each view's final rect (screen percentage applied)
+// every frame (4.26 FSceneRenderer::PrepareViewRectsForRendering). FSteamVRHMD's is empty, shared with others.
+inline constexpr Slot kSetFinalViewRect = {kStereoVtable + 17 * 8, 0x776df0};
+inline constexpr Slot kGetStereoProjectionMatrix = {kStereoVtable + 20 * 8, 0x7b75e0};  // non-left = right eye
+// FSteamVRHMD's IXRTrackingSystem vtable (primary, +0x00): GetRelativeEyePose answers passes 1-2 only.
+inline constexpr std::uintptr_t kTrackingVtable = 0x3a4ecc0;
+inline constexpr Slot kGetRelativeEyePose = {kTrackingVtable + 12 * 8, 0x7b7290};
+
+// r.AllowSubPrimitiveQueries (4.26 SceneVisibility.cpp: "currently only used by hierarchical instanced static
+// meshes"): the static int32 the cvar wraps. Foliage's per-cluster occlusion results crash with the side views
+// on track (README.md, stage gate runs), so views.cpp sets it to 0: one query per foliage proxy instead.
+inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;  // .data, 1 at load
+// Its registration (static init 0x686c10): `lea r8, [rip + 0x45c5057]`, the int passed to
+// IConsoleManager::RegisterConsoleVariableRef, next to `lea rdx, u"r.AllowSubPrimitiveQueries"` (0x3e70308).
+inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
+inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
+
+// Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
+// (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
+// Views.Num sits at +8), and its vertex shaders take eye = SV_InstanceID % N, N in the view constants. With our four
+// views every instanced draw went 4 wide (RenderDoc, README.md); two instanced pairs need 2.
+// Each is `mov r32, [rax + 8]` (rbx at 0x2befafa) right after `call IsInstancedStereoPass (0x2cfe700); test al, al;
+// je`, with Family in rax; views.cpp writes `push 2; pop r64` over it (same length). Found by walking that
+// function's 43 callers; the other 22 only test the count against 0, or read other fields. 0x1a094b1 is
+// TaskContext.InstanceFactor (FParallelMeshDrawCommandPass::DispatchPassSetup 0x1a09300, found through
+// r.MeshDrawCommands.ParallelPassSetup).
+struct CountRead {
+    std::uintptr_t rva;
+    std::uint8_t size;  // 3, or 4 with REX.R (r8d-r15d)
+    std::uint8_t bytes[4];
+};
+inline constexpr CountRead kInstancedViewCounts[] = {
+    {0x18648b1, 3, {0x8b, 0x48, 0x08}},       {0x1864a2a, 4, {0x44, 0x8b, 0x70, 0x08}},
+    {0x18ac4f8, 3, {0x8b, 0x48, 0x08}},       {0x18ac739, 3, {0x8b, 0x48, 0x08}},
+    {0x18ac9a8, 3, {0x8b, 0x48, 0x08}},       {0x18acbee, 3, {0x8b, 0x48, 0x08}},
+    {0x19ef921, 3, {0x8b, 0x78, 0x08}},       {0x19efb81, 3, {0x8b, 0x78, 0x08}},
+    {0x1a094b1, 3, {0x8b, 0x48, 0x08}},       {0x1b95540, 3, {0x8b, 0x48, 0x08}},
+    {0x1bc08aa, 3, {0x8b, 0x78, 0x08}},       {0x1bc0a7d, 3, {0x8b, 0x78, 0x08}},
+    {0x1bc0cd4, 3, {0x8b, 0x78, 0x08}},       {0x1bc0eb0, 3, {0x8b, 0x78, 0x08}},
+    {0x1cc3dbf, 3, {0x8b, 0x48, 0x08}},       {0x1cc3f4c, 4, {0x44, 0x8b, 0x68, 0x08}},
+    {0x1cd853f, 3, {0x8b, 0x48, 0x08}},       {0x1cd876c, 3, {0x8b, 0x48, 0x08}},
+    {0x1cf35a8, 3, {0x8b, 0x48, 0x08}},       {0x2bef0f6, 4, {0x44, 0x8b, 0x78, 0x08}},
+    {0x2befafa, 3, {0x8b, 0x43, 0x08}},
+};
+// The view constants' N (cb0[135].y, byte 0x874 of the view uniform struct), in what looks like
+// FSceneView::SetupCommonViewUniformBufferParameters (0x2d08510): `ecx = Family ? Family->Views.Num() : 0`, then
+// this `mov rdi, [rbp + 0xe8]`, then `mov [rdx + 0x874], ecx`. Written for every view, mono families too, so
+// views.cpp clamps it to 2 in a stub here instead of writing 2: a capture or mirror family keeps N = 1.
+inline constexpr std::uintptr_t kViewInstancedCount = 0x2d085ab;
+inline constexpr std::uint8_t kViewInstancedCountAnchor[7] = {0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
+
+}  // namespace acc

@@ -201,4 +201,25 @@ bool code_mask_imul_index(uintptr_t rva, const uint8_t (&anchor)[7], uint8_t mas
     return code_redirect(rva, anchor, sizeof(anchor), code, n);
 }
 
+uintptr_t vtable_slot(uintptr_t slotRva) {
+    const void* p = reinterpret_cast<const void*>(module_base() + slotRva);
+    if (!readable(p, sizeof(uintptr_t)))
+        return 0;
+    uintptr_t fn = 0;
+    std::memcpy(&fn, p, sizeof(fn));
+    return fn - module_base();
+}
+
+bool vtable_slot_replace(uintptr_t slotRva, uintptr_t expectedRva, const void* replacement) {
+    const uintptr_t now = vtable_slot(slotRva), wanted = reinterpret_cast<uintptr_t>(replacement);
+    if (now + module_base() == wanted)
+        return true;
+    if (now != expectedRva) {
+        logf("code_patch: vtable slot 0x%llx holds 0x%llx, expected 0x%llx", static_cast<unsigned long long>(slotRva),
+             static_cast<unsigned long long>(now), static_cast<unsigned long long>(expectedRva));
+        return false;
+    }
+    return code_write(slotRva, &wanted, sizeof(wanted));
+}
+
 }  // namespace aceqv

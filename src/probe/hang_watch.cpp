@@ -14,8 +14,9 @@
 namespace aceqv {
 namespace {
 
-std::atomic<bool> armed{false}, fired{false};
-std::atomic<bool> framed{false};
+std::atomic<bool> armed{false}, started{false}, framed{false};
+std::atomic<unsigned> limit{0};          // seconds without a frame
+std::atomic<uint64_t> lastFrame{0};      // GetTickCount64 at xrCreateSession or the last xrEndFrame
 
 void write_dump() {
     SYSTEMTIME t;
@@ -42,17 +43,20 @@ void write_dump() {
     logf("hang watch: minidump %ls %s", path.c_str(), ok ? "written" : "failed");
 }
 
-DWORD WINAPI watch(void* parameter) {
-    const unsigned seconds = static_cast<unsigned>(reinterpret_cast<uintptr_t>(parameter));
-    for (unsigned waited = 0; waited < seconds * 10; ++waited) {
+DWORD WINAPI watch(void*) {
+    for (;;) {
+        Sleep(200);
+        const unsigned seconds = limit.load();
+        if (!armed || GetTickCount64() - lastFrame.load() < seconds * 1000ull)
+            continue;
         if (framed)
-            return 0;
-        Sleep(100);
+            logf("hang watch: no xrEndFrame for %u s mid-session; the game looks stuck", seconds);
+        else
+            logf("hang watch: no xrEndFrame %u s after xrCreateSession; the game looks stuck", seconds);
+        log_modules();
+        write_dump();
+        return 0;  // once per process
     }
-    logf("hang watch: no xrEndFrame %u s after xrCreateSession; ACE looks stuck", seconds);
-    log_modules();
-    write_dump();
-    return 0;
 }
 
 }  // namespace
@@ -75,18 +79,22 @@ void log_modules() {
 }
 
 void hang_watch_arm(unsigned seconds) {
-    if (!seconds || fired.exchange(true))
+    if (!seconds)
         return;
-    armed = true;
+    limit = seconds;
     framed = false;
-    if (HANDLE thread = CreateThread(nullptr, 0, watch, reinterpret_cast<void*>(static_cast<uintptr_t>(seconds)), 0,
-                                     nullptr))
-        CloseHandle(thread);
+    lastFrame = GetTickCount64();
+    armed = true;
+    if (!started.exchange(true))
+        if (HANDLE thread = CreateThread(nullptr, 0, watch, nullptr, 0, nullptr))
+            CloseHandle(thread);
 }
 
 void hang_watch_frame() {
-    if (armed && !framed)
-        framed = true;
+    lastFrame = GetTickCount64();
+    framed = true;
 }
+
+void hang_watch_disarm() { armed = false; }
 
 }  // namespace aceqv

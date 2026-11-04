@@ -23,6 +23,7 @@
 #include "cheeky/cheeky_settings.h"
 #include "games/adapter.h"
 #include "log.h"
+#include "probe/d3d11_capture.h"
 #include "probe/d3d12_trace.h"
 #include "probe/cpu_load.h"
 #include "probe/cpu_profile.h"
@@ -113,6 +114,7 @@ struct Experiment {
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
+    UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
@@ -338,6 +340,10 @@ void load_experiment() {
     experiment.views4ShowCopies = GetPrivateProfileIntW(L"experiment", L"views4_show_copies", 0, ini.c_str()) != 0;
     experiment.views4Compose = experiment.views4 && !experiment.views4ShowCopies &&
                                GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini.c_str()) != 0;
+    if (experiment.views4Compose && !game->qvfr_composable()) {
+        logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
+        experiment.views4Compose = false;
+    }
     experiment.views4NoMask =
         experiment.views4 &&
         GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.views4Compose ? 0 : 1, ini.c_str()) == 0;
@@ -369,6 +375,7 @@ void load_experiment() {
     experiment.d3d12Debug = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) != 0;
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
+    experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
     experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
@@ -1426,8 +1433,11 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     // views4: ACE's "eye" holds one outer and one focus view side by side (views4_layout.h), so its
     // double-wide target holds all four.
     const Views4Layout& layout = experiment.views4Layout;
-    const double widthScale = experiment.views4 ? layout.eye_width() : experiment.eyeScale;
-    const double heightScale = experiment.views4 ? layout.eye_height() : experiment.eyeScale;
+    const bool columns = experiment.views4 && game->qvfr_eye_columns();  // eye columns: views4_rect_eye_columns
+    const double widthScale =
+        experiment.views4 ? (columns ? layout.column_eye_width() : layout.eye_width()) : experiment.eyeScale;
+    const double heightScale =
+        experiment.views4 ? (columns ? layout.column_eye_height() : layout.eye_height()) : experiment.eyeScale;
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum.
@@ -1456,6 +1466,7 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
 
 XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreateInfo* info, XrSession* session) {
     const auto* binding = static_cast<const XrBaseInStructure*>(info->next);
+    game->session_running(false);  // no views until it begins
     XrResult r = next.CreateSession(instance, info, session);
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
     if (XR_SUCCEEDED(r)) {
@@ -1464,6 +1475,9 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
         if (!experiment.probes)
             log_line(experiment.views3 ? "engine probes and D3D12 trace off (probes=0); views3 cannot report the view mode"
                                        : "engine probes and D3D12 trace off (probes=0)");
+        if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR)
+            d3d11_capture_start(reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(binding)->device,
+                                experiment.d3d11CaptureFrame);
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
             if (experiment.probes)
@@ -1509,12 +1523,15 @@ void ini_worker_sync();  // (below)
 void helmet_layer_release();  // (below)
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
+    game->session_running(false);
+    hang_watch_disarm();
     ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
     menu_shutdown();  // its swapchain and space belong to the session
     osd_shutdown();
     probe_stop();
     game->session_destroyed();
     dred_stop();
+    d3d11_capture_stop();
     {
         std::lock_guard guard(gaze.mutex);
         if (gaze.queries > 900 && gaze.tracked == 0)  // asked for ~10 s, never tracked
@@ -1649,6 +1666,8 @@ XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* i
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info) {
     XrResult r = next.BeginSession(session, info);
     logf("xrBeginSession viewConfig=%d result=%d", info->primaryViewConfigurationType, r);
+    if (XR_SUCCEEDED(r))
+        game->session_running(true);
     return r;
 }
 
@@ -1732,6 +1751,10 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
 XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_t capacity, uint32_t* countOutput,
                                                   XrSwapchainImageBaseHeader* images) {
     XrResult r = next.EnumerateSwapchainImages(swapchain, capacity, countOutput, images);
+    if (XR_SUCCEEDED(r) && capacity > 0 && images && images->type == XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR &&
+        experiment.d3d11CaptureFrame)
+        d3d11_capture_images(swapchain, reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images),
+                             std::min(*countOutput, capacity));
     if (XR_FAILED(r) || capacity == 0 || !images || images->type != XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR)
         return r;
     std::pair<uint32_t, uint32_t> size{0, 0};
@@ -1766,6 +1789,8 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
 XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo* info,
                                                uint32_t* index) {
     const XrResult r = next.AcquireSwapchainImage(swapchain, info, index);
+    if (XR_SUCCEEDED(r) && experiment.d3d11CaptureFrame)
+        d3d11_capture_acquired(swapchain, *index);
     if (XR_SUCCEEDED(r) && views4_outline_on()) {
         std::lock_guard guard(v4outline.mutex);
         v4outline.acquired[swapchain] = *index;
@@ -2180,6 +2205,8 @@ void views4_compose() {
 // Frame A's image is copied before the runtime gets it back; frame B's stays acquired (so this
 // layer may still read it) until B's xrEndFrame has composed it.
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info) {
+    if (experiment.d3d11CaptureFrame)
+        d3d11_capture_release(swapchain, endFrames);
     if (views4_outline_on())
         views4_outline_draw(swapchain);  // on ACE's queue, after its frame, before the runtime reads it
     if (experiment.views4Compose) {
@@ -2601,11 +2628,19 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         if (!aceLayout)
             continue;
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
-            // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2).
+            // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2). A game in eye
+            // columns (ACC) has eye v's views in its half: keep the offset, move and cut to the view.
             XrRect2Di& rect = copy[v].subImage.imageRect;
-            const ViewRect view = views4_rect(layout, static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0)),
-                                              2 * rect.extent.width, rect.extent.height);
-            rect.offset.x = view.left;
+            const int shown = static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0));
+            const ViewRect view = game->qvfr_eye_columns()
+                                      ? views4_rect_eye_columns(layout, shown, 2 * rect.extent.width, rect.extent.height)
+                                      : views4_rect(layout, shown, 2 * rect.extent.width, rect.extent.height);
+            if (game->qvfr_eye_columns()) {
+                rect.offset.x += view.left - static_cast<int>(v) * rect.extent.width;
+                rect.offset.y += view.top;
+            } else {
+                rect.offset.x = view.left;
+            }
             rect.extent.width = view.width;
             rect.extent.height = view.height;
             if (!views4RectsLogged)
@@ -4365,9 +4400,9 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         logf("  extension %s", info->enabledExtensionNames[i]);
     if (XR_FAILED(r))
         return r;
-    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Not in a game
-    // without QVFR (log only).
-    if (game->has_qvfr()) {
+    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Only in a game
+    // it's made for.
+    if (game->loads_cheeky()) {
         cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
         {  // for the launcher's Foveated DLSS pane
             static const wchar_t* const kStatus[] = {L"off", L"missing", L"refused", L"running"};

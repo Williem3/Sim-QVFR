@@ -46,6 +46,14 @@ public:
     // False for a game known by its identity alone (being reverse engineered): the layer only logs there,
     // as mode=off, and puts nothing of its own into the game or the headset.
     virtual bool has_qvfr() const { return true; }
+    // False while the layer can't compose this game's views (its graphics API isn't supported yet): QVFR then
+    // runs uncomposed, the headset showing views 0-1.
+    virtual bool qvfr_composable() const { return has_qvfr(); }
+    // Cheeky Foveated DLSS is made for this game.
+    virtual bool loads_cheeky() const { return has_qvfr(); }
+    // The game lays its views out in eye columns (views4_rect_eye_columns) and submits each eye as its half of
+    // the target: the layer offers that layout's eye size, and keeps each eye's offset, cut to its outer view.
+    virtual bool qvfr_eye_columns() const { return false; }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the
@@ -79,6 +87,9 @@ public:
     }
     // xrCreateSession; `probed`: the engine probes started (probe.h).
     virtual void session_created(bool probed) { (void)probed; }
+    // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
+    // it begins, the runtime may have no views to answer with.
+    virtual void session_running(bool running) { (void)running; }
     virtual void session_destroyed() {}
     // Every xrEndFrame.
     virtual void frame_end() {}
