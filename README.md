@@ -1,278 +1,180 @@
-# ace-quadview
+# Sim-QuadView (SIM QVFR) for Assetto Corsa EVO
 
-Goal: an `lmu_quadview`-style OpenXR layer for **Assetto Corsa EVO** that makes the game render
-a wide low-resolution outer view and a sharp focus view per eye, to cut GPU and VRAM use.
+**More frames per second in VR, with a sharp picture where you're looking.**
 
-> **Experimental and unofficial. Use at your own risk.** ace-quadview is not made, approved or
-> sanctioned by Kunos Simulazioni or the Assetto Corsa EVO developers. It hooks the game's code and
-> changes how it renders, so a game update can break it, and it can crash the game. Use it in
-> offline sessions only: Kunos validates content online. Please don't report problems you see
-> while using it to the ACE developers.
+Sim-QuadView makes Assetto Corsa EVO draw the middle of your view (or wherever your eyes are looking,
+if your headset tracks your eyes) at full sharpness, and the rest of the view at a lower resolution.
+You barely notice the difference, but your graphics card does far less work, so you get smoother VR
+or room to turn the graphics up.
 
-## Status: alpha
+> **Please read first**
+> - **Unofficial and experimental.** Sim-QuadView isn't made or approved by Kunos Simulazioni, the
+>   makers of Assetto Corsa EVO. Use it at your own risk: it can crash the game, and a game update can
+>   stop it working until Sim-QuadView is updated too.
+> - **Offline only.** Use it in single-player sessions, not online.
+> - **Don't report problems to Kunos** that happen while Sim-QuadView is running. Report them here
+>   instead (see [Getting help](#getting-help)).
 
-The layer **changes how ACE renders**. It patches the game in memory, after checking the exe's
-SHA-256 and code anchors. `[experiment] mode` in `ace-quadview.ini` picks the rendering path:
+## What you need
 
-- `views4`, **Quad View Foveated Rendering (QVFR)**: one ACE frame renders four views (the two
-  outer eye views at `periphery_scale` and two focus views at `focus_density` over `focus_percent`
-  of the FOV). The layer blends each focus view into its eye at the headset's native size, following
-  the eyes when eye tracking is available. This is the launcher's default.
-- `quad`, **Two-Loop**: ACE runs two full frames per headset frame (A for the full view, B for the
-  focus box), and the layer blends B into A. Frame generation (VectorXR) has to be off.
-- `off`: rendering unchanged. Only the log-only probes run.
-- Experiments for diagnosis, not for driving: `focus_only`, `two_loops`, `views3`, and
-  `double_render`, which crashes ACE. The comments in `manifest/ace-quadview.ini` describe each one.
+- **Assetto Corsa EVO** on Steam.
+- **A PC VR headset.** Eye tracking is a bonus: with it, the sharp area follows your eyes. Without it,
+  the sharp area stays in the middle of your view.
+- **Steam** running.
 
-With `probes=1` (the default), the layer also logs the views, swapchains and frame submission. It
-puts log-only hooks on ACE's VR functions, which log call stacks and per-frame call order, and runs
-a D3D12 trace. The launcher's QVFR setup writes `probes=0`. See [docs/recon.md](docs/recon.md) for
-the reverse-engineering notes.
+## Install and play
 
-In any other OpenXR app the DLL does nothing.
+1. **Download** the newest `ace-quadview-….zip` from the
+   [Releases page](https://github.com/Williem3/Sim-QVFR/releases).
+2. **Unzip it** into any folder you like (for example `Documents\Sim-QuadView`). There's no installer.
+3. **In the game's own settings, turn off its foveated rendering.** Sim-QuadView does this job instead.
+4. **Start Steam and your VR software** (SteamVR, Virtual Desktop, Pimax Play, and so on).
+5. **Open `ace-quadview-launcher.exe`** from the folder you unzipped.
+6. **Click Launch ACE.** The game starts in VR with Sim-QuadView turned on.
 
-**Foveated DLSS with Cheeky Foveated DLSS (optional, off by default).** ace-quadview can run
+That's it. Always start the game from the launcher when you want Sim-QuadView. If you start the game
+from Steam as normal, it runs without Sim-QuadView.
+
+**To remove it**, delete the folder. Nothing else on your PC was changed.
+
+## Choosing your settings
+
+Every setting is in the launcher window, and your choices are saved for you. Hover over the **ⓘ** next
+to any setting to see what it does and what it costs.
+
+- **Not sure where to start?** Open **Profiles** and pick **Performance**, **Balanced** or **Quality**.
+- **Launch checks** lists anything that would stop Sim-QuadView working, with how to fix it. The bar at
+  the bottom of the window shows the first problem.
+- **Resolution** sets how sharp the outer view and the sharp area are. **Foveation** sets the sharp
+  area's size and shape.
+- **Profiles** also lets you save your own settings, and **Share** or **Paste** them as a line of text
+  to swap with friends.
+- **Hotkeys** lets you pick keyboard keys or wheel buttons for the in-game menu and other actions.
+
+### Changing settings while you drive
+
+Press **Ctrl+Alt+arrow keys** (or a wheel button you set in **Hotkeys**) to open the **headset menu**.
+Up and down choose a setting, left and right change it. Changes apply straight away and are saved.
+
+Other in-game hotkeys:
+
+| Keys | What it does |
+| --- | --- |
+| Ctrl+Alt+arrows | Open and use the headset menu |
+| Ctrl+Alt+P | Show or hide the performance overlay (frame rate, GPU and CPU load) |
+| Ctrl+Alt+V | Open or close the helmet visor (when the helmet overlay is on) |
+
+### Optional extras
+
+All of these are off until you turn them on in the launcher:
+
+- **Performance overlay:** a small panel in your headset showing frame rate and how hard your PC is
+  working.
+- **View crop:** stops the game drawing the edges of your view that a helmet would hide anyway, for
+  extra speed.
+- **Helmet overlay:** draws a helmet's visor around your view. You can swap in your own helmet images.
+- **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
+
+## Foveated DLSS (optional, NVIDIA RTX only)
+
+If you have an NVIDIA RTX graphics card, Sim-QuadView can use
 [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS) by
-[ClarkCheekyKent](https://github.com/ClarkCheekyKent) inside ACE, integrated with his permission. See
-[Foveated DLSS setup](#foveated-dlss-setup-cheeky-foveated-dlss) below.
+[ClarkCheekyKent](https://github.com/ClarkCheekyKent), **integrated with his permission**. It adds:
 
-**Performance overlay (`[osd]`, off by default).** A card in the headset view
-(`src/quad/osd.h`) shows ACE's frame rate and pacing, its CPU and GPU time with their headroom and
-which one limits the frame, VRAM, frame generation and eye tracking. The GPU time is the whole GPU's,
-from Windows' GPU engine counters (`src/probe/gpu_load.h`), so the runtime's compositor and frame
-generation count too, split by who used it. The CPU time includes ACE's busiest thread
-(`src/probe/cpu_load.h`) as well as the render thread. Turn it on in the
-launcher's Headset menu pane, from the headset menu, or with its hotkey in the game (Ctrl+Alt+P); the pane and the
-headset menu's Overlay and menu page also place it, as they place the menu.
+- **Foveated DLSS:** cheaper DLSS on the outer view, full-quality DLSS in the sharp area.
+- **Extra sharp-area options (experimental):** supersampling, a fix for motion blur, and DLSS-NR.
+- **Frame generation (experimental):** extra frames made between the game's own frames.
 
-**Field-of-view crop (`[crop]`, QVFR only, off by default).** Narrows each eye's field of view before
-ACE sees it, so the edges a helmet covers (a helmet mod's visor, for example) are never rendered
-(`src/quad/fov_crop.h`). Top, bottom, outer (temple) and inner (nose) sides are set independently.
-The outer views shrink with the crop at the same pixel density, the focus box keeps its size, and
-the headset shows black outside the crop. Set it in the launcher's Resolution pane or on the headset
-menu's View crop page, live: the view crops at once, and the outer views' pixels follow without DLSS
-(with DLSS on, at the next launch).
+Cheeky Foveated DLSS is a separate, free download (GNU GPL v3). It isn't included with Sim-QuadView.
 
-**Helmet overlay (`[helmet]`, QVFR only, off by default).** The layer draws a helmet's visor opening
-around each eye (`src/quad/helmet.h`). Built in, the opening is the crop's rectangle with rounded
-corners and the padded rim reaches a little into the view with a soft edge. It's lit by the frame: each side takes the light of the rendered image along it, so it darkens
-in tunnels and brightens under a bright sky. The package ships a helmet (`assets/helmet/`, installed
-to `ace\helmet`), and your own can replace it: `top.png`
-(brow), `bottom.png` (chin bar) and `visor.png` with alpha in a `helmet` folder next to the layer DLL,
-fixed to the head with a size, height and depth (how far in front of your eyes, for stereo depth).
-They're drawn into a head-locked layer of their own that the headset composites after any frame
-generation, so the scene keeps the FOV ACE rendered and Cheeky's frame generation stays aligned. Only
-the bands the pieces draw on are rendered and composited, at 2048 or, with `detail`, 4096 pixels a side.
-The visor slides closed, half or open (its hotkey, Ctrl+Alt+V), and the log suggests the crop that
-matches the images' opening. It applies live, from the launcher's Resolution pane or the headset
-menu's Helmet page.
+### What to download
 
-## Foveated DLSS setup (Cheeky Foveated DLSS)
+You need **two** downloads from the links below. In each, scroll down to **Assets** and download the
+ZIP named here:
 
-The DLSS features come from [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS)
-by [ClarkCheekyKent](https://github.com/ClarkCheekyKent), who gave permission to integrate it into
-ace-quadview. With QVFR it gives:
-
-- **Foveated DLSS:** the outer views get Cheeky's cheaper DLAA pass at a lower resolution, and the focus
-  views keep full DLSS.
-- **Focus-view options (experimental):** supersampling, a fix for motion-vector blur, and DLSS-NR.
-- **Frame generation (experimental):** Cheeky's DLSS-G between ACE's frames, guided by ACE's own depth and
-  motion. A centre region gets full quality and follows your eyes with an eye-tracked focus.
-
-Cheeky Foveated DLSS is a separate download under the GNU GPL v3. ace-quadview doesn't include it. The
-layer loads Cheeky's runtime (`CheekyFoveatedDLSSRuntime.dll`) through its runtime interface instead of
-Cheeky's `dxgi.dll` loader. Each frame it hands the runtime ACE's D3D12 device, and it sets Cheeky's
-quad view roles and the pane's settings live (`src/cheeky/`).
-
-### What you need
-
-| Download | From | Why |
+| Download | Where | What it's for |
 | --- | --- | --- |
-| `CheekyFoveatedDLSS-0.6.3-Standalone-ace.2.zip` | [Cheeky Foveated DLSS v0.6.3-ace.2](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-ace.2) | Cheeky v0.6.3 with the D3D12 output-size fixes ACE's quad views need ([pull request](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/pull/76)). Official v0.6.3 shows the outer views shrunk ("picture in picture"). |
-| `CheekyFoveatedDLSS-0.6.3-Standalone-TEST-SIGNED.zip` | [Cheeky Foveated DLSS v0.6.3](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/releases/tag/v0.6.3) (official) | Only for `OpenXR\CheekyOpenXRSetup.exe`, which installs Cheeky's OpenXR layer. The layer is unchanged in the fork build, which doesn't include it. |
+| `CheekyFoveatedDLSS-0.6.3-Standalone-ace.2.zip` | [Cheeky Foveated DLSS v0.6.3-ace.2](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-ace.2) | The DLSS files themselves. This build includes fixes Assetto Corsa EVO needs (the official build shows the outer view shrunk, like "picture in picture"). |
+| `CheekyFoveatedDLSS-0.6.3-Standalone-TEST-SIGNED.zip` | [Cheeky Foveated DLSS v0.6.3](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/releases/tag/v0.6.3) (official) | Only for its installer, `CheekyOpenXRSetup.exe`. |
 
-Once a Cheeky release includes the fixes, its own Standalone ZIP replaces both.
+Once an official Cheeky release includes the fixes, its own download will replace both.
 
-You also need an NVIDIA RTX GPU with DLSS turned on in ACE. Use the launcher's QVFR method (Rendering pane).
+### Setting it up
 
-### Steps
+1. **Turn on DLSS** in Assetto Corsa EVO's graphics settings.
+2. **Run Cheeky's installer.** In the official ZIP, open the `OpenXR` folder and run
+   `CheekyOpenXRSetup.exe`.
+3. **Copy Cheeky's folder into Sim-QuadView.** In the `ace.2` ZIP there's a folder called
+   `CheekyFoveatedDLSS`. Copy that whole folder into the `ace` folder inside your Sim-QuadView folder.
+   (If you'd rather keep it somewhere else, use **Choose…** in the launcher's **Foveated DLSS** page to
+   point to `CheekyFoveatedDLSSRuntime.dll`.)
+4. **Don't copy `dxgi.dll` or `version.dll`** from Cheeky's ZIPs into the game's folder. If they're
+   already there, delete them. Sim-QuadView starts Cheeky itself, and having both makes it fail.
+5. **If you use OpenXR Toolkit:** it has to be *above* Cheeky in the list of OpenXR layers, or the game
+   crashes when it starts. The launcher's **Launch checks** tells you if this is wrong, and you can fix
+   the order in the free [OpenXR API Layers GUI](https://github.com/fredemmott/OpenXR-API-Layers-GUI).
+6. **Turn it on.** In the launcher, open **Foveated DLSS** and tick **Use Cheeky Foveated DLSS**. The page
+   tells you whether it found everything. After you've launched once, it also shows Cheeky's version.
+7. **Click Launch ACE.**
 
-1. **Install Cheeky's OpenXR layer.** From the official v0.6.3 ZIP, run `OpenXR\CheekyOpenXRSetup.exe`.
-2. **Put Cheeky's runtime next to the layer.** From the ace.2 ZIP, copy the `CheekyFoveatedDLSS` folder into
-   the folder that holds `ace-quadview.dll` (`ace\` in the release ZIP). You should then have
-   `ace\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll`. You can also keep it anywhere and pick the DLL with
-   **Choose…** in the Foveated DLSS pane.
-3. **Don't use Cheeky's loader.** Leave `dxgi.dll` and `version.dll` from Cheeky's ZIP out of the game folder,
-   and remove them if they are there. ace-quadview loads Cheeky itself, and Cheeky refuses to run twice.
-4. **Check the OpenXR layer order** if you use OpenXR Toolkit. Toolkit must be above Cheeky's layer, that is
-   earlier in the implicit layer list (OpenXR API Layers GUI). Otherwise ACE crashes at start.
-5. **Turn it on.** In the launcher's **Foveated DLSS** pane, tick **Use Cheeky Foveated DLSS**. The pane shows
-   whether it finds the runtime and the OpenXR layer. After a launch, it also shows Cheeky's status and version
-   ("CheekyFoveatedDLSS - v0.6.3").
-6. **Launch.** The other settings in the pane apply live. The headset menu's Foveated DLSS and Frame
-   generation pages set the same options.
+**Frame generation:** tick **Frame generation** on the same page. Before you do:
+- Turn off **Turbo mode** in OpenXR Toolkit (the game crashes with it).
+- Don't use another frame generator at the same time, such as VectorXR's.
 
-**Frame generation:** turn on **Frame generation** in the same pane. Turn OpenXR Toolkit's **Turbo mode**
-off, because ACE crashes with it. Don't run another frame generator, such as VectorXR's, at the same time.
-**Show the center region** outlines the full-quality region, so you can check that it follows your eyes.
-**Release ACE** (`[cheeky] fg_release`) sets when Cheeky lets ACE start its next frame: Never (5) lets
-ACE's CPU and the GPU overlap for the most frames, Capture (8, the default) waits for the GPU to finish
-the previous frame, and Generated (3, Cheeky's own default) waits for the generated frame.
+**Good to know:**
+- Most DLSS settings change straight away, in the launcher or the headset menu. Resolution changes
+  take effect the next time you start the game.
+- **Show the center region** draws an outline around the full-quality area, so you can check it
+  follows your eyes.
 
-**Notes:**
-- With DLSS on, resolution changes apply at the next launch, because DLSS sizes its views when the game starts.
-- The settings are the `[cheeky]` keys in `manifest/ace-quadview.ini`.
-- For problems, send the newest `logs\ace-*.log`. When Cheeky runs, ace-quadview also writes
-  `logs\cheeky-snapshot.json`.
+## Getting help
 
-## Build
+- **Something not working?** Open the launcher's **Launch checks** first: it explains most problems
+  and how to fix them.
+- **Game crashing or acting strangely?** Use the launcher's **Report an issue** page. Pick the kind of
+  problem, describe what happened, and it bundles up the logs and opens a GitHub issue for you. Attach
+  the ZIP it makes, then send.
+- **Can't find the game?** Make sure Assetto Corsa EVO is installed through Steam and Steam is running.
+  If the launcher still can't find it, report an issue as above.
+- **After a game update**, Sim-QuadView turns itself off and the game runs as normal until a new version
+  comes out. Your headset shows a message for the first 30 seconds to let you know.
+- **Updates:** the launcher's **About** page can check for new versions and install them for you. Your
+  settings and profiles are kept.
 
-MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).
-Licence: PolyForm Noncommercial 1.0.0 (`LICENSE.md`); third-party notices in `THIRD_PARTY_NOTICES.md`.
-See [Licence](#licence) below.
+## Show your appreciation
 
-```bash
-cmake -S . -B build -G "Visual Studio 18 2026" -A x64
-```
-```bash
-cmake --build build --config Release
-```
-
-The offline tests are the `build/Release/*_test.exe` executables (hook stub, code patch, compositor,
-focus outline/cull/turn, launcher settings and plan, two-loop and quad flow, and others). Each one
-exits non-zero on failure.
-
-`package.ps1 -Version <version>` builds a release zip in `dist\` from a clean checkout of a commit,
-after running every test. `packaging/README.txt` is the user guide that ships in the zip.
-
-## Launch (ace-quadview-launcher)
-
-`build/Release/ace-quadview-launcher.exe` opens a settings window and starts Assetto Corsa EVO in VR with the layer for that launch only;
-nothing is installed or registered. It reads `ace-quadview.ini` next to it (the
-layer's settings, plus a `[launcher]` section), finds the game through Steam, and writes a run
-folder under `logs/` with the layer's manifest, a snapshot of the ini and `launch.txt` (what it
-did). The layer's log for that launch is `logs/ace-<time>.log`. The window has these settings: rendering
-method (QVFR or Two-Loop), eye-tracked or fixed foveation, outer and inner resolution, foveated
-width and height, corner radius, feather, and a focus outline in teal, magenta or green.
-
-**Launch checks.** The first pane lists what would stop the layer working at the next launch, each with a
-fix (`src/launcher/preflight.h`): whether `AssettoCorsaEVO.exe` is the build the layer supports (its SHA-256,
-hashed in the background), Steam running and ACE closed, Cheeky's `dxgi.dll` or `version.dll` loader in the
-game folder, and with Cheeky on its runtime, its OpenXR layer, OpenXR Toolkit's place above Cheeky's layer and
-Toolkit's Turbo mode with frame generation. The action bar shows the first problem; Launch asks before
-starting a game that would crash or run without the layer. After a game update the layer refuses to patch,
-ACE runs unchanged, and the headset shows a notice for the first 30 seconds saying so.
-
-**Profiles (`profiles\`, `[profiles]`).** The launcher's Profiles pane switches between the presets
-(Performance, Balanced and Quality, which set only the resolution: the outer views, the focus density and
-the focus area's size) and profiles you save. The presets put the pixels in the centre (outer views at 20-25%,
-the focus area at 120-180%), with a set for each foveated mode: eye tracked, a small area that follows the eyes;
-fixed, a larger one, a little less dense. A saved profile is every key the launcher writes for the picture, in
-`profiles\<name>.ini` next to its ini (`src/profile/profiles.h`). The panels' places, the hotkeys and the
-OpenXR layers are not in one. Share copies a profile as a line of text (`QVFR1:` and base64, only what differs
-from the defaults); Paste adds one, taking in only a profile's keys. The headset menu's settings page starts
-with a Profile line that switches between them live, and both show when the settings have changed since.
-
-**Updates, help and the hotkeys footer.** The About pane's update check (`[launcher] update_check`, off by
-default) asks GitHub's API for the newest release when the launcher starts, or with Check now, and the action bar
-says when one is available (`src/launcher/update_check.h`); nothing else is sent and nothing downloads by itself.
-Install puts it in place (`src/launcher/install.h`, packaged installs only, not while ACE runs): it downloads the
-release's zip from the repository's release downloads, checks it against the SHA-256 GitHub gives, unpacks it with
-Windows' `tar.exe`, checks every file against its `SHA256.txt`, then replaces the program files, keeping
-`ace-quadview.ini`, anything the release doesn't have and any file of the old release the user changed (their own
-helmet images). The files replaced go to `update\backup-<old version>\` first, everything goes back if a step fails,
-and the launcher restarts as the new one.
-An ⓘ after a setting's name shows what it does and what it costs. The headset menu can list the in-game hotkeys
-and their wheel buttons in a line under it (`[menu] hotkey_footer`, on by default; the Headset menu pane and the
-menu's Overlay and menu page switch it).
-
-**Hotkeys (`[hotkeys]`).** The launcher's Hotkeys pane sets a keyboard combination and a wheel, button box or
-controller button for each of the layer's actions in the game: the headset menu's open/close and its four
-directions, the performance overlay, the helmet's visor and a CPU capture (`src/input/hotkeys.h`). Click a
-binding, then press the keys or the wheel button. Keys act while ACE has focus; wheel buttons are read through
-DirectInput on a thread of the layer's own whenever one is bound (`src/input/pad_input.h`), whatever has focus,
-including D-pad hats. A wheel's menu directions act only while the menu shows, so a switch the game also uses
-doesn't open it. They reload live.
-
-OpenXR layer order: the layer is loaded nearest the game. Every enabled implicit layer that can be
-switched off per launch (OpenXR Toolkit, VectorXR, ...) is loaded below it instead, in registry
-order, so nothing can change what ACE renders behind the layer's back. VectorXR frame generation is
-turned off for Two-Loop (`mode=quad`, and also `mode=two_loops`); it stays on below the layer for
-QVFR. Layers that cannot be moved are listed as staying above.
-
-```ini
-[launcher]
-; game_dir=K:\SteamLibrary\steamapps\common\Assetto Corsa EVO   (default: found through Steam)
-; off_layers=XR_APILAYER_MBUCCHIA_toolkit                         (turned off for ACE)
-```
-
-`ace-quadview-launcher.exe --dry-run` writes the run folder and prints the plan without starting
-the game; `--launch` launches without the window. Steam must be running and ACE closed.
-
-## Run without the launcher (registered layer)
-
-For development you can register the layer instead, so that ACE loads it when started from Steam.
-It then runs whatever `build\Release\ace-quadview.ini` says, which may be the launcher's last
-settings. For a log-only probe session, set `mode=off` and `probes=1` in `[experiment]` first.
-
-1. Register the layer for your user (HKCU, removable):
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\Register-ProbeLayer.ps1
-   ```
-   `-Machine` registers it in HKLM instead (run as administrator). Use that to order it against
-   another machine-wide layer such as VectorXR.
-2. Start SteamVR, then ACE from Steam as usual. Load a session in VR and drive for about a minute.
-3. Quit ACE. The log is `build\Release\logs\ace-quadview.log`.
-4. Unregister when done:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\Unregister-ProbeLayer.ps1
-   ```
-
-To skip the layer for one launch, set `DISABLE_XR_APILAYER_ACE_quadview=1`. Offline sessions only:
-the layer patches game code, and Kunos validates content online.
-
-## Tools
-
-`tools/` holds Python helpers for the 101 MB exe: string cross-references (`xrefs.py`), function
-disassembly with string notes (`disfunc.py`), chunk-to-entry resolution through chained unwind
-info and incremental-link thunks (`func_entry.py`), RTTI vtable owners (`vtable_owner.py`),
-struct-field displacement search (`disp_refs.py`) and callee labelling by referenced strings
-(`label_callees.py`). `gen_launcher_theme.py` and `make_app_icon.py` generate the launcher's theme
-header and icon.
-
-## Development and Support
-
-### Show your appreciation
-
-If SIM QVFR has given you smoother VR, extra FPS, or room to turn up the resolution, please
-consider donating.
+If SIM QVFR has given you smoother VR, extra FPS, or room to turn up the resolution, please consider
+donating.
 
 [![Donate on Ko-fi](https://img.shields.io/badge/Donate-Ko--fi-FF69B4?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/williem3)
 
+## Thanks
+
+Thanks to [DSuzuki35](https://github.com/DSuzuki35) for the breakthrough in
+[LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod) and for the starter launcher,
+both of which helped the early development of Sim-QuadView.
+
+Thanks to [ClarkCheekyKent](https://github.com/ClarkCheekyKent) for
+[Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS), which provides the Foveated
+DLSS, DLSS-NR and frame generation features, and for his permission to integrate it into Sim-QuadView.
+Cheeky Foveated DLSS is free software under the GNU GPL v3. Sim-QuadView loads it as a separate download
+and doesn't include it. The launcher and the headset menu show its version wherever they control it.
+
 ## Licence
 
-ace-quadview is free to use, change and share for any **noncommercial** purpose under the
-[PolyForm Noncommercial License 1.0.0](LICENSE.md). It is source-available, not open source:
-commercial use needs the author's permission.
+Sim-QuadView is free to use, change and share for any **noncommercial** purpose under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use needs the author's permission.
 
-**Credit is required.** Anyone who shares any part of ace-quadview, changed or not, must pass on
-`LICENSE.md` (or its URL) together with its `Required Notice:` line:
+**Credit is required.** If you share any part of Sim-QuadView, changed or not, include `LICENSE.md`
+(or a link to it) and this line:
 
 ```
 Required Notice: Copyright (c) 2026 Williem3 (https://github.com/Williem3/Sim-QVFR)
 ```
 
-MinHook and the OpenXR headers keep their own licences (`THIRD_PARTY_NOTICES.md`).
+Third-party parts keep their own licences: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Acknowledgements
+## For developers
 
-Thanks to [DSuzuki35](https://github.com/DSuzuki35) for the breakthrough in
-[LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod) and for the starter launcher,
-both of which helped the preliminary ACE quadview development.
-
-Thanks to [ClarkCheekyKent](https://github.com/ClarkCheekyKent) for
-[Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS), which provides the Foveated
-DLSS, DLSS-NR and frame generation features, and for permission to integrate it into ace-quadview.
-Cheeky Foveated DLSS is free software under the GNU GPL v3. ace-quadview loads its runtime as a separate
-download and doesn't include it. The launcher and the headset menu show its version wherever they
-control it.
+Building from source, settings files, test tools and how the layer works are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
