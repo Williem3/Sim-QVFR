@@ -23,8 +23,11 @@ std::wstring layer_folder();
 int launch_ace(bool dryRun, std::wstring& report);
 // The layers a launch with the settings in that file would load, and how (the OpenXR layers pane).
 LayerPlan launcher_layer_plan();
-// AssettoCorsaEVO.exe as a launch would start it ([launcher] game_dir, else through Steam); empty if not found.
+// The chosen game's exe as a launch would start it ([launcher] game_dir_<id>, else through Steam); empty if not
+// found.
 std::wstring launcher_game_exe();
+// Makes the game in [launcher] game (ace, acc; games::game_by_id) the one the launcher starts.
+void choose_launcher_game();
 // The launch checks' input (preflight.h) for `exe` from the ini, Steam, the game folder and Windows' layers;
 // the exe's build is `build` (the window hashes the exe on a worker).
 PreflightInput launcher_preflight(const std::wstring& exe, BuildState build);

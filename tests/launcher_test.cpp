@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include "games/ace/game.h"
+#include "games/acc/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/install.h"
@@ -893,7 +894,49 @@ int main() {
                   build_state("00", false) == BuildState::Unsupported &&
                   build_state(ace::kBuilds[0], false) == BuildState::Supported,
               "preflight: build_state from the exe's hash");
+        // The games: found by exe name in any case; the launcher starts ACE; ACC's build isn't ACE's.
+        check(aceqv::games::game_for_exe(L"AssettoCorsaEVO.exe") == &ace::kGame &&
+                  aceqv::games::game_for_exe(L"ac2-win64-shipping.EXE") == &acc::kGame &&
+                  aceqv::games::game_for_exe(L"acc.exe") == nullptr && aceqv::games::game_for_exe(nullptr) == nullptr &&
+                  &aceqv::games::launcher_game() == &ace::kGame &&
+                  aceqv::games::supported_build(acc::kGame, acc::kBuilds[0]) &&
+                  !aceqv::games::supported_build(ace::kGame, acc::kBuilds[0]),
+              "games: lookup by exe, the launcher's game, builds per game");
         in.build = BuildState::Supported;
+
+        // The launcher's game ([launcher] game): by id in any case; ACC's launch and what it has so far.
+        std::size_t count = 0;
+        const aceqv::games::GameInfo* const* all = aceqv::games::all_games(count);
+        check(count == 2 && all[0] == &ace::kGame && all[1] == &acc::kGame &&
+                  aceqv::games::game_by_id("ACC") == &acc::kGame && aceqv::games::game_by_id("nope") == nullptr,
+              "games: the launcher's list, found by id in any case");
+        check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
+                  L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
+                  !acc::kGame.features.foveatedDlss && !acc::kGame.features.helmet &&
+                  !acc::kGame.features.liveResolution && !acc::kGame.features.fovCrop && ace::kGame.features.foveatedDlss &&
+                  ace::kGame.features.helmet && ace::kGame.features.liveResolution && ace::kGame.features.fovCrop,
+              "games: ACC through OpenComposite, its exe in a subfolder, no Foveated DLSS, helmet, live resolution or crop yet");
+        check(!find(checks, "opencomposite"), "preflight: ACE needs no OpenComposite");
+        aceqv::games::set_launcher_game(acc::kGame);
+        in.openComposite = OpenComposite::Valve;
+        checks = preflight_checks(in);
+        const Check* oc = find(checks, "opencomposite");
+        check(oc && oc->tone == CheckTone::Bad && oc->confirm && oc->fix == CheckFix::OpenGuide &&
+                  oc->fixTarget == kOpenCompositeGuideUrl,
+              "preflight: ACC without OpenComposite holds the launch back and points at the guide");
+        in.openComposite = OpenComposite::Installed;
+        checks = preflight_checks(in);
+        check(find(checks, "opencomposite") && find(checks, "opencomposite")->tone == CheckTone::Ok &&
+                  worst_tone(checks) == CheckTone::Ok,
+              "preflight: ACC with OpenComposite: all clear");
+        aceqv::games::set_launcher_game(ace::kGame);
+        in.openComposite = OpenComposite::Unknown;
+        write_file((folder / "valve_openvr.dll").wstring(), std::string("MZ...OpenVR Loader DLL...Valve"));
+        write_file((folder / "oc_openvr.dll").wstring(), std::string("MZ...OpenComposite...runtime"));
+        check(open_composite((folder / "valve_openvr.dll").wstring()) == OpenComposite::Valve &&
+                  open_composite((folder / "oc_openvr.dll").wstring()) == OpenComposite::Installed &&
+                  open_composite((folder / "missing_openvr.dll").wstring()) == OpenComposite::Missing,
+              "open_composite: OpenComposite's names itself, Valve's doesn't, a missing one is missing");
 
         in.steamRunning = false;
         in.gameRunning = true;

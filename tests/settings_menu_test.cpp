@@ -330,6 +330,22 @@ int main() {
         SettingsMenu c;
         c.launch = {true, 50, 39, 39};
         check(menu_pages(c).size() == 5 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
+        {
+            // A game without the FOV crop, the helmet or live resolution (ACC): no View crop or Helmet page, and a note
+            // that resolution changes apply at the next launch.
+            SettingsMenu g = c;
+            g.launch.cropPage = g.launch.helmetPage = g.launch.liveResolution = false;
+            bool crop = false, helmet = false;
+            for (const MenuPage p : menu_pages(g)) {
+                crop |= p == MenuPage::Crop;
+                helmet |= p == MenuPage::Helmet;
+            }
+            bool next = false;
+            for (const std::wstring& n : menu_notes(g))
+                next |= n.find(L"next launch") != std::wstring::npos;
+            check(menu_pages(g).size() == 3 && !crop && !helmet && next,
+                  "a game without crop, helmet or live resolution: their pages left out, resolution at the next launch");
+        }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
         check(menu_pages(c).size() == 7 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",

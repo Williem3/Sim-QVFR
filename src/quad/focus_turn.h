@@ -27,6 +27,26 @@ inline void to_matrix(const XrQuaternionf& q, float (&m)[9]) {
     std::memcpy(m, r, sizeof(r));
 }
 
+// The quaternion of a row-major rotation matrix (to_matrix's inverse).
+inline XrQuaternionf from_matrix(const float (&m)[9]) {
+    const float trace = m[0] + m[4] + m[8];
+    XrQuaternionf q;
+    if (trace > 0) {
+        const float s = std::sqrt(trace + 1) * 2;
+        q = {(m[7] - m[5]) / s, (m[2] - m[6]) / s, (m[3] - m[1]) / s, s / 4};
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        const float s = std::sqrt(1 + m[0] - m[4] - m[8]) * 2;
+        q = {s / 4, (m[1] + m[3]) / s, (m[2] + m[6]) / s, (m[7] - m[5]) / s};
+    } else if (m[4] > m[8]) {
+        const float s = std::sqrt(1 + m[4] - m[0] - m[8]) * 2;
+        q = {(m[1] + m[3]) / s, s / 4, (m[5] + m[7]) / s, (m[2] - m[6]) / s};
+    } else {
+        const float s = std::sqrt(1 + m[8] - m[0] - m[4]) * 2;
+        q = {(m[2] + m[6]) / s, (m[5] + m[7]) / s, s / 4, (m[3] - m[1]) / s};
+    }
+    return q;
+}
+
 // The turn (in the eye's own frame) that points the focus camera at tangent (tanX, tanY) of an eye
 // view given by its tangents (left, right, up, down), the centre clamped so the focus box
 // (`fractionX` of the view's tangent width, `fractionY` of its height) stays inside the view.

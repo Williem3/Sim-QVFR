@@ -89,6 +89,9 @@ struct MenuLaunch {
     bool dlssHeld = false;      // QVFR with DLSS on: the views keep their launch sizes (resolution: next launch)
     double cropWidth = 100, cropHeight = 100;  // the FOV crop launched with: the outer views' kept share of the eye, percent
     bool helmetPieces = false;  // the helmet draws its images (helmet.h): visor, size and height instead of rim and corners
+    // What the game has (games/game.h GameFeatures): the View crop and Helmet pages, and resolution changes applied
+    // while it runs (otherwise at the next launch).
+    bool cropPage = true, helmetPage = true, liveResolution = true;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

@@ -28,6 +28,12 @@ ComPtr<ID3DBlob> compile(const char* source, const char* target) {
 }  // namespace
 
 int main() {
+    // The log goes to a file of the test's own (opened at its first line), read back at the end.
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring ownLog = std::wstring(temp) + L"aceqv-pass-census-test.log";
+    DeleteFileW(ownLog.c_str());
+    SetEnvironmentVariableW(L"ACE_QV_LOG", ownLog.c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;

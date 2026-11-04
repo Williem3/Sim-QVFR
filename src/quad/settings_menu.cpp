@@ -150,8 +150,10 @@ std::vector<MenuItem> menu_items(bool qvfr) {
 
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
     std::vector<MenuPage> pages = {MenuPage::Settings, MenuPage::Shape};
-    if (menu.launch.qvfr)
-        pages.insert(pages.end(), {MenuPage::Crop, MenuPage::Helmet});
+    if (menu.launch.qvfr && menu.launch.cropPage)
+        pages.push_back(MenuPage::Crop);
+    if (menu.launch.qvfr && menu.launch.helmetPage)
+        pages.push_back(MenuPage::Helmet);
     if (menu.cheeky.available)
         pages.insert(pages.end(), {MenuPage::Dlss, MenuPage::Fg});
     pages.push_back(MenuPage::Headset);
@@ -548,6 +550,8 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     }
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
+    else if (menu.launch.qvfr && !menu.launch.liveResolution)
+        notes.push_back(L"Resolution changes apply at the next launch in this game");
     const MenuFit f = menu_fit(menu);
     const MenuLaunch& l = menu.launch;
     const bool known = l.nativeWidth > 0 && l.nativeHeight > 0;

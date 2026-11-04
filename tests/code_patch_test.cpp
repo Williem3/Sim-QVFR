@@ -14,6 +14,8 @@ namespace {
 using Fn = unsigned long long (*)(unsigned long long view);
 
 __declspec(noinline) void count_call(int* counter) { ++*counter; }
+__declspec(noinline) int slot_original() { return 1; }
+__declspec(noinline) int slot_replacement() { return 2; }
 
 unsigned char* alloc_near_module() {
     const auto base = aceqv::module_base();
@@ -485,6 +487,23 @@ int main() {
         const bool ok = before && patched && got[0] == 1 && got[1] == 4 && got[2] == 3;
         std::printf("lighting bound: before %s, after modes 0/1/2 -> %d/%d/%d %s\n", before ? "ok" : "WRONG", got[0],
                     got[1], got[2], ok ? "ok" : "WRONG");
+        failures += !ok;
+    }
+
+    {  // vtable slots (ACC): replaced only from the expected function, idempotent, refused otherwise
+        static void* vtable[2] = {reinterpret_cast<void*>(&slot_original), reinterpret_cast<void*>(&slot_original)};
+        const uintptr_t base = aceqv::module_base();
+        const uintptr_t slot0 = reinterpret_cast<uintptr_t>(&vtable[0]) - base, slot1 = slot0 + sizeof(void*);
+        const uintptr_t original = reinterpret_cast<uintptr_t>(&slot_original) - base;
+        const bool read = aceqv::vtable_slot(slot0) == original;
+        const bool replaced = aceqv::vtable_slot_replace(slot0, original, reinterpret_cast<void*>(&slot_replacement)) &&
+                              reinterpret_cast<int (*)()>(vtable[0])() == 2;
+        const bool again = aceqv::vtable_slot_replace(slot0, original, reinterpret_cast<void*>(&slot_replacement));
+        const bool refused = !aceqv::vtable_slot_replace(slot1, original + 1, reinterpret_cast<void*>(&slot_replacement)) &&
+                             vtable[1] == reinterpret_cast<void*>(&slot_original);
+        const bool ok = read && replaced && again && refused;
+        std::printf("vtable slots: read %d, replaced %d, again %d, wrong build refused %d %s\n", read, replaced, again,
+                    refused, ok ? "ok" : "WRONG");
         failures += !ok;
     }
 

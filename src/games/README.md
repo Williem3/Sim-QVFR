@@ -15,7 +15,12 @@ headers here.
 
 - **Its identity** (`<id>/game.h`): a `GameInfo`, with the SHA-256 of every exe build its addresses were
   taken from. The launcher's launch checks and the layer refuse other builds, so a game update leaves the
-  game running as normal instead of patching the wrong code.
+  game running as normal instead of patching the wrong code. It also says how the launcher starts the game
+  (its Steam folder, the exe's subfolder, the VR arguments, and an `openvr_api.dll` to check for a game
+  that reaches OpenXR through OpenComposite), and which features beyond QVFR it has so far
+  (`GameFeatures`: Foveated DLSS, the helmet, live resolution, the FOV crop). The launcher greys the rest
+  out, the headset menu leaves it out, and the layer keeps it off whatever the ini says. The launcher's
+  **Game** choice (`[launcher] game`) picks which game a launch starts.
 - **Its QVFR** (`<id>/adapter.cpp`): an implementation of `GameAdapter`. QVFR (Quad View Foveated
   Rendering) means the game renders four views in one frame: two outer views at low resolution and two
   focus views at high density, which the layer then composes. Getting there is engine work: finding how
@@ -34,13 +39,32 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
 ## Adding a game
 
 1. Make `src/games/<id>/` with `game.h` (its `GameInfo`, in a namespace named after the game).
-2. Add it to `kGames` in `games.cpp`.
+2. Add it to `kGames` in `games.cpp`, and give it the identity-only adapter in `adapters.cpp` (`NoQvfr`).
+   The layer now switches on in the game but **only logs**: it runs as `mode=off` whatever the ini says,
+   turns the session and swapchain logging on, and adds nothing to the game or the headset (no Cheeky,
+   menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
+   swapchain sizes and formats, frame submission. `acc/` started this way.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
-4. Add the new `.cpp` files to the layer targets in `CMakeLists.txt` (`ace_quadview`, `two_loops_test`,
-   `quad_flow_test`).
+4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`ace_qv_core`: the layer and the
+   tests link it).
 5. Write `<id>/README.md`: the build the addresses are from, what is patched, and the open questions.
 
 `ace/` is the worked example.
+
+## Graphics APIs
+
+The layer's own drawing works on the game's API, D3D12 (ACE) or D3D11 (ACC). `SessionGraphics`
+(`src/quad/session_graphics.h`) holds the session's API and devices from `xrCreateSession`, and
+`swapchain_textures` returns any swapchain's images as that API's textures, so a feature works on either
+without knowing which:
+
+- **In-headset menu and performance overlay:** drawn with GDI into pixels, uploaded by
+  `make_panel_upload` (`src/quad/menu_panel.h`: D3D12 on the game's queue, D3D11 on its immediate
+  context). Both APIs; in ACC, both open and draw in the headset (2026-11-03).
+- **Composition:** one shader (`src/quad/compose_shader.h`). D3D12: `QuadCompositor` (ACE's frames).
+  D3D11: `D3D11Compositor`, when the adapter says `qvfr_compose_d3d11` (one image holding all four views).
+- **D3D12 only for now:** the helmet overlay (in `QuadCompositor`), the GPU frame timer (the overlay
+  shows no GPU times on D3D11), the focus outline drawn on uncomposed views, Cheeky Foveated DLSS.
 
 ## Still tied to ACE
 
@@ -48,4 +72,4 @@ The log-only engine probes (`src/probe/probe.cpp`) hook ACE's `kProbeTargets`, a
 (`src/probe/cpu_profile.cpp`) names ACE's functions. Both check the game first and stay off anywhere
 else. Moving their targets and labels into the adapter is the next step for them.
 
-The launcher starts one game per release (`launcher_game()`).
+The launcher starts the game chosen under **Game** (`launcher_game()`, `[launcher] game`).

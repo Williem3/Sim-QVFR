@@ -18,6 +18,7 @@
 #include "../../probe/pass_census.h"
 #include "../../quad/focus_cull.h"
 #include "../../quad/focus_turn.h"
+#include "../../quad/frame_records.h"
 #include "../../xr.h"
 
 namespace aceqv {
@@ -69,19 +70,16 @@ bool lastFocusValid[2] = {};
 
 // Gaze and frame records. `gazeTan`/`gazeValid`: where each eye looks (tangents of its view), the
 // latest from xrLocateViews. `lastTurn`: what the previous focus cameras used (their previous-frame
-// matrices are turned by it). `frameRing`: what each filled frame was rendered with (Views4Frame),
-// taken in the same order by the composition.
+// matrices are turned by it). `records`: what each filled frame was rendered with (Views4Frame), taken
+// in the same order by the composition (frame_records.h). ACE fills a frame's focus cameras and composes
+// it on the same thread, one after the other, so none are in flight at a composition.
 constexpr XrQuaternionf kNoTurn{0, 0, 0, 1};
 SRWLOCK turnLock = SRWLOCK_INIT;
 float gazeTan[2][2] = {};
 bool gazeValid[2] = {};
 XrQuaternionf lastTurn[2] = {kNoTurn, kNoTurn};
-Views4Frame frameRing[8], lastTaken{}, lastPushed{};
-uint64_t turnsPushed = 0, turnsTaken = 0, turnResyncs = 0, turnEmptyTakes = 0;
 constexpr uint64_t kMaxTurnBacklog = 3;
-// Compositions in a row that left records behind before the backlog counts as an offset (views4_take_frame).
-constexpr uint64_t kDriftTakes = 90;
-uint64_t turnsBehind = 0;
+FrameRecords<Views4Frame> records{0, kMaxTurnBacklog};
 // Rendered-vs-located check: the outer tangents last logged per eye (logged again on a change).
 float loggedTan[2][4] = {};
 std::atomic<uint64_t> fovMismatchFrames{0};
@@ -94,7 +92,7 @@ double cullScale = 1.0;
 bool gazeExpected = false, gazeSampled = false;
 struct CullFrusta {
     FocusFrustum view[2];  // views 2 and 3
-    uint64_t fill = 0;     // turnsPushed when built, + 1 (0 = never)
+    uint64_t fill = 0;     // records pushed when built (0 = never)
 };
 CullFrusta cullFrusta[2];
 uint64_t cullBuilt = 0, cullWaitingForGaze = 0;
@@ -369,12 +367,13 @@ void fill_focus_cameras(uint8_t* renderer) {
             y[view] = static_cast<float>(hh);
     }
     views4_push_frame(frame);
+    const uint64_t pushed = records.counts().pushed;
     AcquireSRWLockExclusive(&turnLock);
     std::memcpy(lastTurn, turns, sizeof(turns));
     if (focusCull && boxX > 0 && (gazeSampled || !gazeExpected)) {
-        CullFrusta& c = cullFrusta[(turnsPushed - 1) % 2];
+        CullFrusta& c = cullFrusta[(pushed - 1) % 2];
         std::memcpy(c.view, frusta, sizeof(frusta));
-        c.fill = turnsPushed;
+        c.fill = pushed;
         ++cullBuilt;
     } else if (focusCull) {
         ++cullWaitingForGaze;
@@ -1203,21 +1202,9 @@ void views4_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gaze
     ReleaseSRWLockExclusive(&turnLock);
 }
 
-void views4_push_frame(const Views4Frame& frame) {
-    AcquireSRWLockExclusive(&turnLock);
-    frameRing[turnsPushed % std::size(frameRing)] = frame;
-    lastPushed = frame;
-    ++turnsPushed;
-    ReleaseSRWLockExclusive(&turnLock);
-}
+void views4_push_frame(const Views4Frame& frame) { records.push(frame); }
 
-bool views4_latest_frame(Views4Frame& frame) {
-    AcquireSRWLockShared(&turnLock);
-    const bool any = turnsPushed > 0;
-    frame = lastPushed;
-    ReleaseSRWLockShared(&turnLock);
-    return any;
-}
+bool views4_latest_frame(Views4Frame& frame) { return records.latest(frame); }
 
 void views4_set_layout(const Views4Layout& l) { layout = launchLayout = outputLayout = l; }
 
@@ -1277,41 +1264,12 @@ bool views4_focus_frustum(int view, FocusFrustum& out) {
 }
 
 bool views4_take_frame(Views4Frame& frame) {
-    AcquireSRWLockExclusive(&turnLock);
-    const bool any = turnsPushed > 0;
     bool drifted = false;
     uint64_t behind = 0;
-    if (turnsTaken < turnsPushed) {
-        // Frames filled but never composed (loading, a dropped frame) would leave every later
-        // composition using an older frame's geometry: keep at most a short backlog.
-        if (turnsPushed - turnsTaken > kMaxTurnBacklog) {
-            turnsTaken = turnsPushed - 1;
-            ++turnResyncs;
-        }
-        lastTaken = frameRing[turnsTaken % std::size(frameRing)];
-        ++turnsTaken;
-        // ACE fills a frame's focus cameras and composes it on the same thread, one after the other, so
-        // records left over after every composition for a while are not frames in flight but a lasting
-        // offset (a frame filled and never composed): each image would get an older frame's gaze turn.
-        // Then the newest record is this frame's.
-        behind = turnsPushed - turnsTaken;
-        turnsBehind = behind ? turnsBehind + 1 : 0;
-        if (turnsBehind >= kDriftTakes) {
-            lastTaken = frameRing[(turnsPushed - 1) % std::size(frameRing)];
-            turnsTaken = turnsPushed;
-            turnsBehind = 0;
-            ++turnResyncs;
-            drifted = true;
-        }
-    } else if (any) {
-        ++turnEmptyTakes;  // composed before this frame's focus cameras were filled: reuse the last record
-        turnsBehind = 0;
-    }
-    frame = lastTaken;
-    ReleaseSRWLockExclusive(&turnLock);
+    const bool any = records.take(frame, &drifted, &behind);
     if (drifted)
         logf("views4: frame records stayed %llu behind the compositions for %llu frames: resynced to the newest",
-             static_cast<unsigned long long>(behind), static_cast<unsigned long long>(kDriftTakes));
+             static_cast<unsigned long long>(behind), static_cast<unsigned long long>(FrameRecords<Views4Frame>::kDriftTakes));
     return any;
 }
 
@@ -1375,13 +1333,14 @@ void views4_frame_end() {
          static_cast<unsigned long long>(passMismatch.exchange(0)), static_cast<unsigned long long>(widened.exchange(0)),
          static_cast<unsigned long long>(recordsFolded.exchange(0)));
     if (cameraViews) {
+        const auto n = records.counts();
         AcquireSRWLockShared(&turnLock);
         const XrQuaternionf t = lastTurn[0];
         logf("views4: frames filled %llu, composed %llu (backlog %llu, resyncs %llu, composed before filling %llu); "
              "eye 0 turn %.3f,%.3f,%.3f,%.3f; frames rendered with a FOV other than the located one %llu",
-             static_cast<unsigned long long>(turnsPushed), static_cast<unsigned long long>(turnsTaken),
-             static_cast<unsigned long long>(turnsPushed - turnsTaken), static_cast<unsigned long long>(turnResyncs),
-             static_cast<unsigned long long>(turnEmptyTakes), t.x, t.y, t.z, t.w,
+             static_cast<unsigned long long>(n.pushed), static_cast<unsigned long long>(n.taken),
+             static_cast<unsigned long long>(n.pushed - n.taken), static_cast<unsigned long long>(n.resyncs),
+             static_cast<unsigned long long>(n.emptyTakes), t.x, t.y, t.z, t.w,
              static_cast<unsigned long long>(fovMismatchFrames.load()));
         if (focusCull)
             logf("views4: focus cull: frusta built %llu, frames waiting for the first gaze sample %llu",
