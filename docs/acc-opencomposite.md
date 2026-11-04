@@ -62,6 +62,12 @@ game files**, which restores the original.
 
 ## If something goes wrong
 
+- **ACC closes at start with "SECURE CRT: Invalid parameter detected":** Windows Security's ransomware
+  protection (Controlled folder access) is stopping ACC from saving its settings in your Documents
+  folder. This isn't OpenComposite: it happens without VR too. In Windows Security, open **Virus &
+  threat protection → Ransomware protection → Allow an app through Controlled folder access**, add
+  `AC2\Binaries\Win64\AC2-Win64-Shipping.exe` from ACC's folder, then start ACC again.
+
 - **The picture is upside down:** OpenComposite's `invertUsingShaders` option may fix it. It goes in a
   file called `opencomposite.ini` next to OpenComposite's `openvr_api.dll`; see its README (below) for
   how to write it. Spell options exactly: a wrong one makes the game crash at start.
