@@ -5,9 +5,9 @@
 
 #include <MinHook.h>
 
-#include "../engine/ace_abi.h"
-#include "../log.h"
-#include "../xr.h"
+#include "abi.h"
+#include "../../log.h"
+#include "../../xr.h"
 
 namespace aceqv {
 namespace {

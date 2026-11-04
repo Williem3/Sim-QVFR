@@ -109,11 +109,13 @@ std::wstring started_in(uint32_t id) {
     if (!ok || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                                    static_cast<LPCWSTR>(start), &module))
         return {};
+    if (module == GetModuleHandleW(nullptr))  // the game's own exe
+        return {};
     wchar_t path[MAX_PATH] = {};
     GetModuleFileNameW(module, path, MAX_PATH);
     const wchar_t* slash = wcsrchr(path, L'\\');
     const std::wstring file = slash ? slash + 1 : path;
-    if (file.empty() || _wcsicmp(file.c_str(), L"AssettoCorsaEVO.exe") == 0)
+    if (file.empty())
         return {};
     return L"(" + file + L")";
 }

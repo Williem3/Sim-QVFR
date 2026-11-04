@@ -25,7 +25,7 @@ uint8_t* stub_alloc(size_t size) {
         SYSTEM_INFO si;
         GetSystemInfo(&si);
         const uintptr_t granularity = si.dwAllocationGranularity;
-        const uintptr_t base = ace_base();
+        const uintptr_t base = module_base();
         for (uintptr_t offset = granularity; offset < 0x70000000 && !stubPage; offset += granularity) {
             const uintptr_t at = (base - offset) & ~(granularity - 1);
             stubPage = static_cast<uint8_t*>(VirtualAlloc(reinterpret_cast<void*>(at), kStubPageSize,
@@ -51,15 +51,15 @@ bool rel32(const void* from_end, const void* to, int32_t* out) {
 
 }  // namespace
 
-uintptr_t ace_base() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
+uintptr_t module_base() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
 
 bool code_matches(uintptr_t rva, const uint8_t* anchor, size_t size) {
-    const void* p = reinterpret_cast<const void*>(ace_base() + rva);
+    const void* p = reinterpret_cast<const void*>(module_base() + rva);
     return readable(p, size) && std::memcmp(p, anchor, size) == 0;
 }
 
 bool code_write(uintptr_t rva, const void* bytes, size_t size) {
-    void* p = reinterpret_cast<void*>(ace_base() + rva);
+    void* p = reinterpret_cast<void*>(module_base() + rva);
     DWORD protect = 0;
     if (!VirtualProtect(p, size, PAGE_EXECUTE_READWRITE, &protect))
         return false;
@@ -79,7 +79,7 @@ bool code_redirect(uintptr_t rva, const uint8_t* anchor, size_t size, const uint
         log_line("code_patch: no stub memory near the module");
         return false;
     }
-    uint8_t* site = reinterpret_cast<uint8_t*>(ace_base() + rva);
+    uint8_t* site = reinterpret_cast<uint8_t*>(module_base() + rva);
     int32_t back = 0, there = 0;
     if (!rel32(stub + stubSize + 5, site + size, &back) || !rel32(site + 5, stub, &there)) {
         log_line("code_patch: stub out of rel32 reach");

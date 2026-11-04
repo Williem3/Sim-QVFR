@@ -4,10 +4,10 @@
 #include <cstring>
 #include <iterator>
 
-#include "../engine/ace_abi.h"
-#include "../log.h"
-#include "../probe/probe.h"
-#include "../xr.h"
+#include "abi.h"
+#include "../../log.h"
+#include "../../probe/probe.h"
+#include "../../xr.h"
 
 namespace aceqv {
 namespace {

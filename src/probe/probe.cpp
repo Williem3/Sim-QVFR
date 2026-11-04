@@ -8,7 +8,8 @@
 
 #include <MinHook.h>
 
-#include "../engine/ace_abi.h"
+#include "../games/ace/abi.h"
+#include "../games/ace/game.h"
 #include "../sha256_file.h"
 #include "../log.h"
 #include "../xr.h"
@@ -174,16 +175,16 @@ bool readable(const void* address, size_t size) {
 }
 
 bool verified_build() {
-    wchar_t path[MAX_PATH] = {};
-    const DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
-    const wchar_t* name = wcsrchr(path, L'\\');
-    if (n == 0 || n >= MAX_PATH || _wcsicmp(name ? name + 1 : path, ace::kExecutableName) != 0) {
+    const games::GameInfo* game = games::current_game();
+    if (game != &ace::kGame) {
         log_line("probe: not AssettoCorsaEVO.exe; probes refused");
         return false;
     }
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
     const std::string sha = aceqv::sha256_file(path);
-    if (sha != ace::kExecutableSha256) {
-        logf("probe: unsupported exe sha256=%s (expected %s); probes refused", sha.c_str(), ace::kExecutableSha256);
+    if (!games::supported_build(*game, sha)) {
+        logf("probe: unsupported exe sha256=%s (expected %s); probes refused", sha.c_str(), game->builds[0]);
         return false;
     }
     for (const auto& t : ace::kProbeTargets) {

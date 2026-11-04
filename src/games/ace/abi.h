@@ -1,13 +1,10 @@
-// Assetto Corsa EVO facts from static analysis (see ../../docs/recon.md). Pinned to one exe build.
+// Assetto Corsa EVO facts from static analysis (see ../../docs/recon.md). Pinned to the exe build in game.h.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 
 namespace ace {
-
-inline constexpr char kExecutableSha256[] = "ab11fc2a35ef9c2c61c6e0bcbdeb755b0d7787d101c3fdebfee12df3eadedbcb";
-inline constexpr wchar_t kExecutableName[] = L"AssettoCorsaEVO.exe";
 
 // VRManager (ksRenderer\VRManager.cpp) and camera functions that the probe observes.
 struct ProbeTarget {

@@ -31,6 +31,7 @@
 #include "../settings.h"
 #include "../install.h"
 #include "../update_check.h"
+#include "../../games/game.h"
 #include "../../input/pad_input.h"
 #include "../../sha256_file.h"
 #include "canvas.h"
@@ -44,6 +45,9 @@ namespace ui {
 namespace {
 
 namespace t = tokens;
+
+// The game the launcher starts, by name (games/game.h).
+std::wstring game_name() { return games::launcher_game().name; }
 
 enum class Pane { Checks, Profiles, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
 constexpr int kPanes = 13;
@@ -342,7 +346,7 @@ void start_install() {
         return;
     refresh_checks();
     if (ace_running()) {
-        MessageBoxW(app.hwnd, L"Close Assetto Corsa EVO first: ace-quadview’s layer is in use while it runs.", L"QVFR Launcher",
+        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: ace-quadview’s layer is in use while it runs.").c_str(), L"QVFR Launcher",
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
@@ -631,7 +635,7 @@ void launch() {
         if (c.confirm)
             problems += L"\u2022 " + c.title + L"\n";
     if (!problems.empty() &&
-        MessageBoxW(app.hwnd, (L"The launch checks found:\n\n" + problems + L"\nLaunch Assetto Corsa EVO anyway?").c_str(),
+        MessageBoxW(app.hwnd, (L"The launch checks found:\n\n" + problems + L"\nLaunch " + game_name() + L" anyway?").c_str(),
                     L"QVFR Launcher", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
         app.pane = Pane::Checks;
         app.scroll = 0;
@@ -1254,7 +1258,7 @@ float layers_pane(float x, float y, float w, bool draw) {
 // The preview: the chain a frame goes through, the game at the top, the runtime at the bottom.
 float layers_preview(float x, float y, float w, bool draw) {
     std::vector<std::pair<std::wstring, int>> chain;  // tone: 0 end, 1 locked, 2 layer
-    chain.push_back({L"Assetto Corsa EVO", 0});
+    chain.push_back({game_name(), 0});
     if (app.layerProfile == 0) {
         for (const std::string& name : app.layerPlan.above)
             chain.push_back({friendly_layer(name), 2});
@@ -1994,7 +1998,7 @@ float pane_content(float x, float y, float w, bool draw) {
             return row;
         };
         Row use;
-        const std::wstring useDesc = L"Loads Cheeky’s DLSS runtime into Assetto Corsa EVO, so the outer views can use a "
+        const std::wstring useDesc = L"Loads Cheeky’s DLSS runtime into " + game_name() + L", so the outer views can use a "
                                      L"cheaper DLSS pass. Applies at the next launch.";
         use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
         use.full = [useDesc](const Rect& r) { checkbox(kCheekyUse, r, app.s.cheeky.load, L"Use Cheeky Foveated DLSS", useDesc); };
@@ -2173,7 +2177,7 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::About: {
         if (draw) {
             app.canvas.text(L"QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
-            app.canvas.text(L"Starts Assetto Corsa EVO with foveated rendering enabled.", t::kBody, {x, y + 26 + 8, w, 16},
+            app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody, {x, y + 26 + 8, w, 16},
                             col(app.c->label_secondary));
             app.canvas.text(L"Version " + widen(ACE_QV_VERSION), t::kBody, {x, y + 26 + 8 + 16 + 8, w, 16},
                             col(app.c->label_secondary));
@@ -2781,7 +2785,7 @@ void paint() {
     const Rect bar{0, bodyH, W, actionH};
     cv.fill(bar, col(app.c->titlebar_bg));
     cv.line(0, bodyH + 0.25f, W, bodyH + 0.25f, col(app.c->separator), 0.5f);
-    const float launchW = std::ceil(cv.measure(L"Launch Assetto Corsa EVO", {15, 20, 500, false})) + 36;
+    const float launchW = std::ceil(cv.measure(L"Launch " + game_name(), {15, 20, 500, false})) + 36;
     const Rect launchR{W - t::kSpace5 - launchW, bodyH + 10, launchW, t::kControlHeightLarge};
     const float restoreW = std::ceil(cv.measure(L"Restore Defaults", t::kBody)) + 2 * t::kSpace3;
     const Rect restoreR{launchR.x - t::kSpace3 - restoreW, bodyH + (actionH - t::kControlHeight) / 2, restoreW, t::kControlHeight};
@@ -2789,7 +2793,7 @@ void paint() {
     const float by = bodyH + (actionH - 20) / 2;
     const Readouts ro = readouts(app.s, app.runtime);
     if (app.status == Status::Starting)
-        badge(t::kSpace5, by, 3, L"Starting Assetto Corsa EVO…", badgeMax);
+        badge(t::kSpace5, by, 3, L"Starting " + game_name() + L"…", badgeMax);
     else if (app.status == Status::Error)
         badge(t::kSpace5, by, 2, app.error, badgeMax);
     else if (!app.iniFound)
@@ -2818,7 +2822,7 @@ void paint() {
     } else
         badge(t::kSpace5, by, 0, L"Ready", badgeMax);
     button(kRestore, restoreR, L"Restore Defaults", false);
-    button(kLaunch, launchR, L"Launch Assetto Corsa EVO", true);
+    button(kLaunch, launchR, L"Launch " + game_name(), true);
 
     help_tip();
 

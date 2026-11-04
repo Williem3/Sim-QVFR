@@ -23,7 +23,6 @@ namespace aceqv::launcher {
 inline constexpr char kLayerName[] = "XR_APILAYER_ACE_quadview";
 inline constexpr char kFrameGenerationLayer[] = "XR_APILAYER_DIENERTECH_VECTORXR";
 inline constexpr char kCheekyLayer[] = "XR_APILAYER_CHEEKY_foveated_dlss";
-inline constexpr wchar_t kAceAppId[] = L"3058630";
 
 // One implicit layer registration (HKLM then HKCU, the loader's order).
 struct Registration {

@@ -4,9 +4,9 @@
 #include <cstdio>
 #include <cstring>
 
-#include "engine/ace_abi.h"
+#include "games/ace/abi.h"
 #include "engine/code_patch.h"
-#include "engine/view3_stubs.h"
+#include "games/ace/stubs.h"
 #include "xr.h"
 
 namespace {
@@ -16,7 +16,7 @@ using Fn = unsigned long long (*)(unsigned long long view);
 __declspec(noinline) void count_call(int* counter) { ++*counter; }
 
 unsigned char* alloc_near_module() {
-    const auto base = aceqv::ace_base();
+    const auto base = aceqv::module_base();
     for (uintptr_t offset = 0x100000; offset < 0x40000000; offset += 0x10000) {
         void* p = VirtualAlloc(reinterpret_cast<void*>(base + 0x10000000 + offset), 0x1000, MEM_RESERVE | MEM_COMMIT,
                                PAGE_EXECUTE_READWRITE);
@@ -62,7 +62,7 @@ int main() {
         unsigned char* fn = page + offset;
         const size_t size = emit(fn, site.anchor);
         offset += (size + 15) & ~size_t{15};
-        const uintptr_t imulRva = reinterpret_cast<uintptr_t>(fn) + 12 + 3 - aceqv::ace_base();
+        const uintptr_t imulRva = reinterpret_cast<uintptr_t>(fn) + 12 + 3 - aceqv::module_base();
         const auto call = reinterpret_cast<Fn>(fn);
         bool before = call(3) == 3 * 0x184;
         if (!aceqv::code_mask_imul_index(imulRva, site.anchor, 1)) {
@@ -104,7 +104,7 @@ int main() {
         offset += (n + 15) & ~size_t{15};
         const auto call = reinterpret_cast<Fn>(fn);
         const bool before = call(3) == (3u << 5);
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::ace_base();
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
         if (!aceqv::code_mask_movsxd_shl_index(rva, site.anchor, 1)) {
             std::printf("history site 0x%llx: patch refused\n", static_cast<unsigned long long>(site.rva));
             ++failures;
@@ -145,7 +145,7 @@ int main() {
         const auto call = reinterpret_cast<int (*)(void*)>(fn);
         pass[0x9ac / 4] = 3;
         const bool before = call(pass) == 3;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::ace_base();
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
         const bool patched = aceqv::code_mask_load32(rva, site.anchor, 1);
         int got[4];
         bool ok = before && patched;
@@ -178,7 +178,7 @@ int main() {
         const auto call = reinterpret_cast<long long (*)(void*, void*, long long)>(fn);
         void* const rdx = reinterpret_cast<void*>(0x100);
         const bool before = call(nullptr, rdx, 3) == 3 - 0x100;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::ace_base();
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
         const bool patched = aceqv::code_redirect(rva, ace::kVelocityPassViewAnchor, sizeof(ace::kVelocityPassViewAnchor),
                                                   ace::kVelocityPassViewStub, sizeof(ace::kVelocityPassViewStub));
         long long got[4];
@@ -227,7 +227,7 @@ int main() {
         const auto run = reinterpret_cast<void (*)(long long, Slot*)>(fn);
         run(3, &slot);
         const bool before = slot.counter == 1;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::ace_base();
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
         const bool patched = aceqv::code_call_if_below(rva, call, reinterpret_cast<uintptr_t>(&count_call), reg, 2,
                                                        ace::kSlotFrameFlag);
         int calls[4], flags[4];
@@ -266,7 +266,7 @@ int main() {
         p[n++] = 0xC3;
         offset += (n + 15) & ~size_t{15};
         *fn = reinterpret_cast<Fn2>(p);
-        return reinterpret_cast<uintptr_t>(p + at) - aceqv::ace_base();
+        return reinterpret_cast<uintptr_t>(p + at) - aceqv::module_base();
     };
     bool patchedNow = false;
     const auto check = [&](const char* name, Fn2 fn, uintptr_t rva, const unsigned char* anchor, size_t size,
@@ -371,7 +371,7 @@ int main() {
         char name[80];
         std::snprintf(name, sizeof(name), "cameras slot index 0x%llx (base r%d)", static_cast<unsigned long long>(site.rva),
                       baseReg);
-        check(name, fn, reinterpret_cast<uintptr_t>(p + at) - aceqv::ace_base(), site.anchor, 7,
+        check(name, fn, reinterpret_cast<uintptr_t>(p + at) - aceqv::module_base(), site.anchor, 7,
               aceqv::stub_camera_index(site.anchor, static_cast<uint8_t>(baseReg), cameraPhantom2, cameraPhantom),
               [&](unsigned long long v, bool patched) {
                   return patched && v >= 2 ? (v == 2 ? cameraPhantom2 : cameraPhantom) - renderer : v * 0x184;
@@ -391,7 +391,7 @@ int main() {
                                     {0xB8, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x05, 0xB8, 0x01, 0x00, 0x00, 0x00,  // path
                                      0x4C, 0x39, 0xC7, 0x75, 0x03, 0x83, 0xC8, 0x02},  // cmp rdi, r8; jne; or eax, 2
                                     {0x5F, 0x41, 0x5C}, &fn);
-        const uint64_t right = aceqv::ace_base() + rva + 9 + 7;
+        const uint64_t right = aceqv::module_base() + rva + 9 + 7;
         check("cameras eye branch", fn, rva, site, 9, aceqv::stub_eye_branch(right, phantomRenderer),
               [&](unsigned long long v, bool patched) {
                   return patched ? (v & 1) | (v >= 2 ? 2ull : 0ull) : (v != 0 ? 1ull : 0ull);
@@ -474,7 +474,7 @@ int main() {
         const auto call = reinterpret_cast<int (*)(void*)>(fn);
         *mode = 1;
         const bool before = call(renderer) == 2;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::ace_base();
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
         const bool patched = aceqv::code_redirect(rva, ace::kLightingLoopBoundAnchor, sizeof(ace::kLightingLoopBoundAnchor),
                                                   ace::kLightingLoopBoundStub, sizeof(ace::kLightingLoopBoundStub));
         int got[3];

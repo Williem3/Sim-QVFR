@@ -1,0 +1,88 @@
+// What the layer asks of a game's engine code (src/games/README.md): QVFR, the game rendering two outer
+// and two focus views in one frame, and the game's own experiments. Layer only (OpenXR types); the
+// launcher needs just game.h. The layer holds the adapter for the game it runs in (adapter_for); in any
+// other process it holds one that does nothing and whose QVFR never starts.
+#pragma once
+
+#include <cstdint>
+
+#include "../quad/views4_layout.h"
+#include "../xr.h"
+#include "game.h"
+
+namespace aceqv {
+
+// What one game frame's views were rendered with, recorded when the game fills the focus cameras: per
+// eye the outer view's tangents (left, right, up, down; read back from the game's own eye projection, so
+// they hold whatever FOV it used), the focus view's tangents, and the focus camera's turn (in the eye's
+// frame). The composition maps the views with exactly these, on any headset.
+struct Views4Frame {
+    float outerTan[2][4];
+    float focusTan[2][4];
+    XrQuaternionf turn[2];
+    bool live = false;  // `width`/`height`: the view layout in the game's output (live resolution, views4_layout.h)
+    double width[4] = {}, height[4] = {};  // what the composition reads; with DLSS, its output layout
+    double renderWidth[4] = {}, renderHeight[4] = {};  // the views rendered (DLSS's input; else the same)
+};
+
+namespace games {
+
+// QVFR's launch settings, all known at xrCreateInstance.
+struct QvfrStart {
+    Views4Layout layout;           // where the four views sit in the game's target (views4_layout.h)
+    double focusFraction = 0;      // the focus box: share of each eye's tangent width (0: the eyes' own cameras)
+    double focusFractionY = 0;     // and height (<= 0: as focusFraction)
+    bool dlssLive = true;          // live resolution resizes the views below DLSS (DLSS dynamic resolution)
+    bool focusCull = false;        // the focus views skip draws outside their frustum (focus_cull.h)
+    double focusCullScale = 1;     // the cull box's extent, a multiple of the focus box
+    bool focusCullGaze = false;    // the cull box follows the gaze
+    const wchar_t* ini = nullptr;  // the game's own [experiment] diagnostics are read from here
+};
+
+class GameAdapter {
+public:
+    virtual ~GameAdapter() = default;
+    virtual const GameInfo* info() const = 0;  // null: not a supported game
+
+    // ---- QVFR ----
+    // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the
+    // adapter knows, nothing was changed, and the layer stays off (the game runs as normal).
+    virtual bool qvfr_start(const QvfrStart& start) = 0;
+    // Where each eye looks, as tangents (x, y) of that eye's view, at every xrLocateViews (`valid[e]` false:
+    // no turn). `gazeSample`: from a gaze sample, not the untracked default.
+    virtual void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample) = 0;
+    // Live resolution: `live` (views4_live) from the next frame the game fills on.
+    virtual void qvfr_set_live_layout(const Views4Layout& live) = 0;
+    // Live focus box and focus cull, from the next frame the game fills on.
+    virtual void qvfr_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze) = 0;
+    // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
+    virtual bool qvfr_dlss_held() = 0;
+    // The game's render and output target sizes (width, height) as last laid out (0 before the first frame).
+    virtual void qvfr_target_sizes(int (&render)[2], int (&output)[2]) = 0;
+    // The record of the next frame to compose, in rendering order; false before the first.
+    virtual bool qvfr_take_frame(Views4Frame& frame) = 0;
+    // The latest record, without taking it.
+    virtual bool qvfr_latest_frame(Views4Frame& frame) = 0;
+    // The views the game just located (diagnostics).
+    virtual void qvfr_note_views(const XrView* views, uint32_t count) = 0;
+    // Every xrEndFrame while QVFR runs (its counters into the log).
+    virtual void qvfr_frame_end() = 0;
+
+    // ---- The game's own experiments and watches, each reading its own ini keys ----
+    // xrCreateApiLayerInstance, before qvfr_start. `mode`: [experiment] mode in effect (baseline=1: "off").
+    virtual void instance_created(const wchar_t* ini, const wchar_t* mode) {
+        (void)ini;
+        (void)mode;
+    }
+    // xrCreateSession; `probed`: the engine probes started (probe.h).
+    virtual void session_created(bool probed) { (void)probed; }
+    virtual void session_destroyed() {}
+    // Every xrEndFrame.
+    virtual void frame_end() {}
+};
+
+// The adapter for `game` (null: the one that does nothing). Lives for the process.
+GameAdapter& adapter_for(const GameInfo* game);
+
+}  // namespace games
+}  // namespace aceqv

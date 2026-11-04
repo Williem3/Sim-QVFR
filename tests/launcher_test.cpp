@@ -11,7 +11,7 @@
 
 #include <windows.h>
 
-#include "engine/ace_abi.h"
+#include "games/ace/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/install.h"
@@ -891,18 +891,18 @@ int main() {
               "preflight: still hashing holds nothing back");
         check(build_state("", true) == BuildState::Hashing && build_state("", false) == BuildState::Unknown &&
                   build_state("00", false) == BuildState::Unsupported &&
-                  build_state(ace::kExecutableSha256, false) == BuildState::Supported,
+                  build_state(ace::kBuilds[0], false) == BuildState::Supported,
               "preflight: build_state from the exe's hash");
         in.build = BuildState::Supported;
 
         in.steamRunning = false;
-        in.aceRunning = true;
+        in.gameRunning = true;
         checks = preflight_checks(in);
         check(find(checks, "steam")->tone == CheckTone::Bad && find(checks, "steam")->fix == CheckFix::StartSteam &&
                   find(checks, "ace_running") && find(checks, "ace_running")->tone == CheckTone::Bad,
               "preflight: Steam not running and ACE already running");
         in.steamRunning = true;
-        in.aceRunning = false;
+        in.gameRunning = false;
         in.gameExe.clear();
         checks = preflight_checks(in);
         check(find(checks, "game") && find(checks, "game")->tone == CheckTone::Bad && !find(checks, "build") &&

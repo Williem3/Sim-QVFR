@@ -4,7 +4,7 @@
 
 #include <windows.h>
 
-#include "../engine/ace_abi.h"
+#include "../games/game.h"
 
 namespace aceqv::launcher {
 namespace {
@@ -56,7 +56,7 @@ std::wstring toolkit_app_key(const std::wstring& exe) {
 BuildState build_state(const std::string& sha, bool hashing) {
     if (sha.empty())
         return hashing ? BuildState::Hashing : BuildState::Unknown;
-    return sha == ace::kExecutableSha256 ? BuildState::Supported : BuildState::Unsupported;
+    return games::supported_build(games::launcher_game(), sha) ? BuildState::Supported : BuildState::Unsupported;
 }
 
 std::vector<Check> preflight_checks(const PreflightInput& in) {
@@ -70,29 +70,31 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         return out.emplace_back(std::move(c));
     };
     const bool method = in.mode != LaunchMode::Off;
+    const games::GameInfo& game = games::launcher_game();
+    const std::wstring name = game.name, exe = game.exeName, shortName = game.shortName;
 
     // The game and its build.
     if (in.gameExe.empty()) {
-        add("game", CheckTone::Bad, L"Assetto Corsa EVO not found",
+        add("game", CheckTone::Bad, name + L" not found",
             L"Steam doesn’t list it in any of its libraries. Set game_dir in the [launcher] section of ace-quadview.ini "
-            L"to the folder that holds AssettoCorsaEVO.exe.");
+            L"to the folder that holds " + exe + L".");
     } else {
         switch (in.build) {
         case BuildState::Supported:
             add("build", CheckTone::Ok, L"Game build supported",
-                L"AssettoCorsaEVO.exe is the build this version of ace-quadview was made for.");
+                exe + L" is the build this version of ace-quadview was made for.");
             break;
         case BuildState::Hashing:
             add("build", CheckTone::Pending, L"Checking the game build…",
-                L"Reading AssettoCorsaEVO.exe to compare it with the build ace-quadview supports.");
+                L"Reading " + exe + L" to compare it with the build ace-quadview supports.");
             break;
         case BuildState::Unknown:
             add("build", CheckTone::Warn, L"Game build not checked",
-                L"AssettoCorsaEVO.exe could not be read: " + in.gameExe);
+                exe + L" could not be read: " + in.gameExe);
             break;
         case BuildState::Unsupported: {
-            Check& c = add("build", method ? CheckTone::Bad : CheckTone::Warn, L"Assetto Corsa EVO was updated",
-                           L"Its AssettoCorsaEVO.exe isn’t the build this version of ace-quadview supports, so ace-quadview "
+            Check& c = add("build", method ? CheckTone::Bad : CheckTone::Warn, name + L" was updated",
+                           L"Its " + exe + L" isn’t the build this version of ace-quadview supports, so ace-quadview "
                            L"stays off and the game runs as normal, without foveated rendering. Look for an ace-quadview "
                            L"release for the new build.");
             c.fix = CheckFix::OpenReleases;
@@ -103,16 +105,16 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         }
     }
 
-    // Steam and ACE: the launch refuses without the one or with the other.
+    // Steam and the game: the launch refuses without the one or with the other.
     if (in.steamRunning) {
-        add("steam", CheckTone::Ok, L"Steam is running", L"ACE needs it to start.");
+        add("steam", CheckTone::Ok, L"Steam is running", shortName + L" needs it to start.");
     } else {
-        Check& c = add("steam", CheckTone::Bad, L"Steam isn’t running", L"ACE needs Steam. Start it, then launch.");
+        Check& c = add("steam", CheckTone::Bad, L"Steam isn’t running", shortName + L" needs Steam. Start it, then launch.");
         c.fix = CheckFix::StartSteam;
         c.fixLabel = L"Start Steam";
     }
-    if (in.aceRunning)
-        add("ace_running", CheckTone::Bad, L"Assetto Corsa EVO is already running",
+    if (in.gameRunning)
+        add("ace_running", CheckTone::Bad, name + L" is already running",
             L"Close it first: the launch starts a new copy of the game with ace-quadview.");
 
     // Cheeky's loader in the game folder.

@@ -22,7 +22,7 @@ constexpr size_t kStackCopy = 64 * 1024;  // the top of a stack copied per sampl
 constexpr int kMaxFrames = 48;
 constexpr size_t kTop = 25;
 
-// ACE's functions mapped so far (static analysis, docs/recon.md and engine/ace_abi.h), by RVA of their start.
+// ACE's functions mapped so far (static analysis, docs/recon.md and games/ace/abi.h), by RVA of their start.
 struct Label {
     uint32_t rva;
     const char* name;
