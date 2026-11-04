@@ -136,10 +136,11 @@ inline ViewRect views4_rect(const Views4Layout& l, int view, int targetWidth, in
 }
 
 // The same views in eye columns: each eye's half of the target holds its outer view across the top and its focus
-// view below, 0 | 1 over 2 | 3. For a game that renders the eyes with instanced stereo (one viewport from x = 0,
-// halved: the eyes must meet in the middle) and whose runtime copies each eye's half on its own (ACC through
-// OpenComposite). The target is two column_eye_width() wide and column_eye_height() high; a focus view wider
-// than the outer view is cut to it.
+// view below, 0 | 1 over 2 | 3. For a game that renders with instanced stereo and whose runtime copies each
+// eye's half on its own (ACC through OpenComposite). Instanced stereo draws a pair (the eyes, then the focus
+// views) in one viewport from the pair's left edge, the eyes' combined width wide, halved: so every view is half
+// the target wide, each pair meeting in the middle. The target is two column_eye_width() wide and
+// column_eye_height() high; the focus views' density comes from their narrower FOV.
 inline ViewRect views4_rect_eye_columns(const Views4Layout& l, int view, int targetWidth, int targetHeight) {
     const auto pixels = [](double fraction, int size) { return static_cast<int>(std::floor(fraction * size + 1e-6)); };
     const int half = targetWidth / 2;
@@ -151,7 +152,7 @@ inline ViewRect views4_rect_eye_columns(const Views4Layout& l, int view, int tar
         r.height = std::max(1, pixels(outerRows, targetHeight));
     } else {
         r.top = pixels(outerRows, targetHeight);
-        r.width = std::max(1, std::min(half, pixels(l.focus / l.outer_width(), half)));
+        r.width = half;
         r.height = std::max(1, targetHeight - r.top);
     }
     return r;

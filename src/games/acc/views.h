@@ -1,5 +1,6 @@
 // ACC's four views, stage gate: FSteamVRHMD (abi.h) asks UE 4.26 for four views per VR frame, laid out as
 // views4_layout.h has them in the game's target; views 2-3 are copies of the eyes (same pose and projection).
+// ACC's shaders need instanced stereo, so the focus views are a second instanced pair (the left one primary).
 // Vtable slots only, no code stubs. The layer widens the eye the runtime reports (OpenComposite passes it on
 // as SteamVR's recommended size), so the target holds all four, and points the submitted eyes at views 0-1.
 #pragma once

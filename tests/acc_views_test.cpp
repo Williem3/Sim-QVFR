@@ -26,6 +26,9 @@ int main() {
     check(eye_pass(kPassLeftSide) == kPassLeft && eye_pass(kPassRightSide) == kPassRight && eye_pass(kPassLeft) == kPassLeft &&
               eye_pass(kPassRight) == kPassRight && eye_pass(kPassFull) == kPassFull,
           "a side pass belongs to its eye");
+    check(primary_pass(kPassFull) && primary_pass(kPassLeft) && !primary_pass(kPassRight) && primary_pass(kPassLeftSide) &&
+              !primary_pass(kPassRightSide),
+          "primary passes: mono, the left eye and the left focus view (each leads an instanced pair)");
 
     // Equal outer and focus views: each eye's half holds its outer view over its focus view.
     const aceqv::Views4Layout equal;
@@ -43,10 +46,11 @@ int main() {
                    gls = pass_rect(gate, kPassLeftSide, width, height), grs = pass_rect(gate, kPassRightSide, width, height);
     check(gl.x == 0 && gr.x == gl.width && gr.width == gl.width && gl.width == width / 2,
           "instanced stereo: the eyes side by side from x = 0, meeting in the middle");
-    check(gls.x + gls.width <= width / 2 && grs.x >= width / 2 && gls.y >= gl.height && gls.y + gls.height <= height,
-          "each focus view in its eye's half, below the outer view");
-    check(gate.column_eye_width() == 0.6 && gate.column_eye_height() == 1.0 && gl.height == 2025 && gls.width == 1614,
-          "gate layout: eye 60% wide, outer 60% over focus 40% high, focus 40% of the eye wide");
+    check(gls.x == 0 && grs.x == gls.width && gls.width == width / 2 && grs.width == gls.width && gls.y == grs.y &&
+              gls.y >= gl.height && gls.y + gls.height <= height,
+          "instanced stereo, second pair: the focus views side by side from x = 0, below the eyes");
+    check(gate.column_eye_width() == 0.6 && gate.column_eye_height() == 1.0 && gl.height == 2025 && gls.height == 1351,
+          "gate layout: eye 60% wide, outer 60% over focus 40% high");
 
     // The layer submits eye e as OpenComposite's half (offset e x W/2) moved and cut to view e: the view UE drew.
     bool same = true;

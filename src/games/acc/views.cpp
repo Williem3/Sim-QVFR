@@ -37,6 +37,10 @@ void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
 }
 
 int desired_views(void*, bool stereo) { return views_for(stereo); }
+bool primary(void*, int pass) { return primary_pass(pass); }
+bool primary_view(void*, const unsigned char* view) {
+    return primary_pass(*reinterpret_cast<const int*>(view + kViewStereoPass));
+}
 int view_pass(const void*, bool stereo, unsigned view) { return pass_for_view(stereo, view); }
 unsigned pass_view(const void*, int pass) { return view_for_pass(pass); }
 
@@ -130,7 +134,7 @@ bool views_start(const aceqv::Views4Layout& l) {
     if (started.load())
         return true;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
-                          kGetStereoProjectionMatrix, kGetRelativeEyePose};
+                          kGetStereoProjectionMatrix, kGetRelativeEyePose, kDeviceIsAPrimaryPass, kDeviceIsAPrimaryView};
     for (const Slot& s : slots)
         if (aceqv::vtable_slot(s.rva) != s.function) {
             aceqv::logf("acc views: slot 0x%llx holds 0x%llx, expected 0x%llx: not the build these addresses are "
@@ -161,6 +165,10 @@ bool views_start(const aceqv::Views4Layout& l) {
                                           reinterpret_cast<void*>(&projection));
     ok = ok && aceqv::vtable_slot_replace(kAdjustViewRect.rva, kAdjustViewRect.function,
                                           reinterpret_cast<void*>(&adjust_view_rect));
+    ok = ok && aceqv::vtable_slot_replace(kDeviceIsAPrimaryView.rva, kDeviceIsAPrimaryView.function,
+                                          reinterpret_cast<void*>(&primary_view));
+    ok = ok && aceqv::vtable_slot_replace(kDeviceIsAPrimaryPass.rva, kDeviceIsAPrimaryPass.function,
+                                          reinterpret_cast<void*>(&primary));
     ok = ok && aceqv::vtable_slot_replace(kGetViewIndexForPass.rva, kGetViewIndexForPass.function,
                                           reinterpret_cast<void*>(&pass_view));
     ok = ok && aceqv::vtable_slot_replace(kGetViewPassForIndex.rva, kGetViewPassForIndex.function,

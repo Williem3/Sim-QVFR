@@ -19,6 +19,9 @@ inline int pass_for_view(bool stereo, unsigned view) { return stereo ? kPassLeft
 inline unsigned view_for_pass(int pass) { return pass <= kPassLeft ? 0u : static_cast<unsigned>(pass - kPassLeft); }
 // The eye a pass belongs to (a side pass is its eye's focus view).
 inline int eye_pass(int pass) { return pass >= kPassLeftSide ? pass - 2 : pass; }
+// Primary passes draw meshes; under instanced stereo each draws itself and the next pass (UE 4.26 pairs pass n
+// with n + 1), so the focus views are a second pair, led by the left one, as the eyes are by the left eye.
+inline bool primary_pass(int pass) { return pass == kPassFull || pass == kPassLeft || pass == kPassLeftSide; }
 
 // A stereo pass's view in the target (its width, height) the game sized for all four
 // (aceqv::views4_rect_eye_columns).
