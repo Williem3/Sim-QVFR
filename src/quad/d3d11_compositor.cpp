@@ -2,6 +2,9 @@
 
 #include <d3dcompiler.h>
 
+#include <cstdint>
+#include <vector>
+
 #include "../log.h"
 #include "compose_shader.h"
 
@@ -20,15 +23,21 @@ bool is_typeless(DXGI_FORMAT f) {
     }
 }
 
+constexpr UINT kGainCells = 64;  // compose_shader.h
+constexpr float kGainEase = 0.25f;  // each frame's share of the gain: steady over the content's flicker
+
 }  // namespace
 
 bool D3D11Compositor::initialize(ID3D11Device* device, DXGI_FORMAT viewFormat) {
     shutdown();
-    Com<ID3DBlob> vs, ps, errors;
-    if (FAILED(D3DCompile(kComposeShader, sizeof(kComposeShader) - 1, "quad-compose", nullptr, nullptr, "VS", "vs_5_0", 0, 0,
+    Com<ID3DBlob> vs, ps, gainPs, errors;
+    const D3D_SHADER_MACRO match[] = {{"MATCH_GAIN", "1"}, {nullptr, nullptr}};
+    if (FAILED(D3DCompile(kComposeShader, sizeof(kComposeShader) - 1, "quad-compose", match, nullptr, "VS", "vs_5_0", 0, 0,
                           &vs, &errors)) ||
-        FAILED(D3DCompile(kComposeShader, sizeof(kComposeShader) - 1, "quad-compose", nullptr, nullptr, "PS", "ps_5_0", 0, 0,
-                          &ps, &errors))) {
+        FAILED(D3DCompile(kComposeShader, sizeof(kComposeShader) - 1, "quad-compose", match, nullptr, "PS", "ps_5_0", 0, 0,
+                          &ps, &errors)) ||
+        FAILED(D3DCompile(kComposeShader, sizeof(kComposeShader) - 1, "quad-compose", match, nullptr, "GainPS", "ps_5_0", 0,
+                          0, &gainPs, &errors))) {
         logf("d3d11 compositor: shader compile failed: %s",
              errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return false;
@@ -38,8 +47,21 @@ bool D3D11Compositor::initialize(ID3D11Device* device, DXGI_FORMAT viewFormat) {
     D3D11_SAMPLER_DESC sampler{D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_CLAMP,
                                D3D11_TEXTURE_ADDRESS_CLAMP};
     sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    // The gain starts at 1 (unchanged) and eases towards each frame's measure.
+    D3D11_TEXTURE2D_DESC gain{2 * kGainCells, kGainCells, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+                              D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+    std::vector<std::uint16_t> ones(4 * gain.Width * gain.Height, 0x3c00);  // half 1.0
+    const D3D11_SUBRESOURCE_DATA gainData{ones.data(), 4 * gain.Width * sizeof(std::uint16_t)};
+    D3D11_BLEND_DESC ease{};
+    ease.RenderTarget[0] = {TRUE, D3D11_BLEND_BLEND_FACTOR, D3D11_BLEND_INV_BLEND_FACTOR, D3D11_BLEND_OP_ADD,
+                            D3D11_BLEND_ONE, D3D11_BLEND_ZERO, D3D11_BLEND_OP_ADD, D3D11_COLOR_WRITE_ENABLE_ALL};
     if (FAILED(device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &vs_)) ||
         FAILED(device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &ps_)) ||
+        FAILED(device->CreatePixelShader(gainPs->GetBufferPointer(), gainPs->GetBufferSize(), nullptr, &gainPs_)) ||
+        FAILED(device->CreateTexture2D(&gain, &gainData, &gain_)) ||
+        FAILED(device->CreateRenderTargetView(gain_.Get(), nullptr, &gainTarget_)) ||
+        FAILED(device->CreateShaderResourceView(gain_.Get(), nullptr, &gainSource_)) ||
+        FAILED(device->CreateBlendState(&ease, &ease_)) ||
         FAILED(device->CreateBuffer(&cb, nullptr, &constants_[0])) ||
         FAILED(device->CreateBuffer(&cb, nullptr, &constants_[1])) ||
         FAILED(device->CreateSamplerState(&sampler, &sampler_)) || FAILED(device->CreateDeferredContext(0, &deferred_))) {
@@ -94,11 +116,8 @@ bool D3D11Compositor::compose(ID3D11Texture2D* views, ID3D11Texture2D* output, c
     ID3D11SamplerState* sampler = sampler_.Get();
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->VSSetShader(vs_.Get(), nullptr, 0);
-    c->PSSetShader(ps_.Get(), nullptr, 0);
     c->PSSetShaderResources(0, 2, sources);
     c->PSSetSamplers(0, 1, &sampler);
-    c->OMSetRenderTargets(1, &rtv, nullptr);
-    const float eyeWidth = static_cast<float>(outDesc.Width) / 2.0f;
     for (int eye = 0; eye < 2; ++eye) {
         float constants[kComposeConstants] = {};
         compose_constants(eyes[eye], eye, constants);
@@ -110,6 +129,28 @@ bool D3D11Compositor::compose(ID3D11Texture2D* views, ID3D11Texture2D* output, c
         }
         std::memcpy(mapped.pData, constants, sizeof(constants));
         c->Unmap(constants_[eye].Get(), 0);
+    }
+    // Each eye's focus gain (GainPS), eased into the last frames'.
+    ID3D11RenderTargetView* gainTarget = gainTarget_.Get();
+    const float ease[4] = {kGainEase, kGainEase, kGainEase, kGainEase};
+    c->PSSetShader(gainPs_.Get(), nullptr, 0);
+    c->OMSetRenderTargets(1, &gainTarget, nullptr);
+    c->OMSetBlendState(ease_.Get(), ease, 0xffffffff);
+    for (int eye = 0; eye < 2; ++eye) {
+        ID3D11Buffer* buffer = constants_[eye].Get();
+        c->PSSetConstantBuffers(0, 1, &buffer);
+        const D3D11_VIEWPORT viewport{static_cast<float>(eye * kGainCells), 0, kGainCells, kGainCells, 0, 1};
+        c->RSSetViewports(1, &viewport);
+        c->Draw(3, 0);
+    }
+    // The eyes, the gain applied to their focus views.
+    ID3D11ShaderResourceView* gainSource = gainSource_.Get();
+    c->PSSetShader(ps_.Get(), nullptr, 0);
+    c->OMSetRenderTargets(1, &rtv, nullptr);
+    c->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    c->PSSetShaderResources(6, 1, &gainSource);
+    const float eyeWidth = static_cast<float>(outDesc.Width) / 2.0f;
+    for (int eye = 0; eye < 2; ++eye) {
         ID3D11Buffer* buffer = constants_[eye].Get();
         c->PSSetConstantBuffers(0, 1, &buffer);
         const D3D11_VIEWPORT viewport{eye * eyeWidth, 0, eyeWidth, static_cast<float>(outDesc.Height), 0, 1};
@@ -131,6 +172,11 @@ void D3D11Compositor::shutdown() {
     immediate_.Reset();
     vs_.Reset();
     ps_.Reset();
+    gainPs_.Reset();
+    gainSource_.Reset();
+    gainTarget_.Reset();
+    gain_.Reset();
+    ease_.Reset();
     constants_[0].Reset();
     constants_[1].Reset();
     sampler_.Reset();

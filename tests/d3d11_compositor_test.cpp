@@ -1,7 +1,8 @@
 // Offline check of the D3D11 compositor (quad/d3d11_compositor.h) on a WARP device: one image holding four views
-// in eye columns (outer views on top, focus views below), each eye's outer and focus view a colour of its own,
-// composed into a double-wide output. Each eye must show its own outer view at its edges and its own focus view
-// in the middle (the focus box, centred), and the game's pipeline state must be as it was.
+// in eye columns (outer views on top, focus views below), each eye a colour of its own and its focus view rendered
+// darker than its outer view, composed into a double-wide output. Each eye must show its own outer view at its
+// edges and its own focus view in the middle (the focus box, centred), brought to the outer view's brightness over
+// the frames, and the game's pipeline state must be as it was.
 #include <cstdio>
 #include <cstring>
 
@@ -24,8 +25,11 @@ void check(bool ok, const char* what) {
 
 constexpr UINT kW = 256, kH = 192;          // the views' image: two eye columns of 128, outer 128 high, focus 64
 constexpr UINT kOutW = 2 * 96, kOutH = 96;  // the output: two eyes of 96 x 96
-// RGBA8: outer left red, outer right blue, focus left green, focus right white.
-constexpr uint32_t kOuter[2] = {0xff0000ff, 0xffff0000}, kFocus[2] = {0xff00ff00, 0xffffffff};
+// RGBA8: left red, right blue, the focus views at half the outer views' brightness.
+constexpr uint32_t kOuter[2] = {0xff0000ff, 0xffff0000}, kFocus[2] = {0xff000080, 0xff800000};
+constexpr int kChannel[2] = {0, 16};  // each eye's colour channel (bit shift)
+
+int channel(uint32_t pixel, int eye) { return static_cast<int>((pixel >> kChannel[eye]) & 0xff); }
 
 }  // namespace
 
@@ -86,8 +90,12 @@ int main() {
     for (int e = 0; e < 2; ++e) {
         const UINT x0 = e * kOutW / 2, mid = x0 + kOutW / 4;
         char what[96];
-        std::snprintf(what, sizeof(what), "eye %d: its focus view in the middle (0x%08x)", e, at(mid, kOutH / 2));
-        check(at(mid, kOutH / 2) == kFocus[e], what);
+        // The first frame: the focus view, its gain only a quarter of the way to the outer view's brightness.
+        const uint32_t m = at(mid, kOutH / 2);
+        std::snprintf(what, sizeof(what), "eye %d: its focus view in the middle, brightening (0x%08x)", e, m);
+        check((m & ~(0xffu << kChannel[e])) == (kOuter[e] & ~(0xffu << kChannel[e])) && channel(m, e) > 0x80 &&
+                  channel(m, e) < 0xe0,
+              what);
         std::snprintf(what, sizeof(what), "eye %d: its outer view at the edges (0x%08x, 0x%08x)", e, at(x0 + 2, 2),
                       at(x0 + kOutW / 2 - 3, kOutH - 3));
         check(at(x0 + 2, 2) == kOuter[e] && at(x0 + kOutW / 2 - 3, kOutH - 3) == kOuter[e], what);
@@ -95,6 +103,19 @@ int main() {
         std::snprintf(what, sizeof(what), "eye %d: the outer view just outside the box (0x%08x)", e,
                       at(x0 + kOutW / 2 * 27 / 100, kOutH / 2));
         check(at(x0 + kOutW / 2 * 27 / 100, kOutH / 2) == kOuter[e], what);
+    }
+    context->Unmap(readback.Get(), 0);
+
+    // Over the frames the gain settles: the focus view at the outer view's brightness.
+    for (int frame = 0; frame < 40; ++frame)
+        compositor.compose(views.Get(), output.Get(), eyes);
+    context->CopyResource(readback.Get(), output.Get());
+    context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    for (int e = 0; e < 2; ++e) {
+        const uint32_t m = at(e * kOutW / 2 + kOutW / 4, kOutH / 2);
+        char what[96];
+        std::snprintf(what, sizeof(what), "eye %d: its focus view matched to its outer view (0x%08x)", e, m);
+        check(channel(m, e) >= 0xfa, what);
     }
     context->Unmap(readback.Get(), 0);
     compositor.shutdown();
