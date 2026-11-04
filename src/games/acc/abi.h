@@ -42,4 +42,38 @@ inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;  // .data
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
 inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
 
+// Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
+// (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
+// Views.Num sits at +8), and its vertex shaders take eye = SV_InstanceID % N, N in the view constants. With our four
+// views every instanced draw went 4 wide (RenderDoc, README.md); two instanced pairs need 2.
+// Each is `mov r32, [rax + 8]` (rbx at 0x2befafa) right after `call IsInstancedStereoPass (0x2cfe700); test al, al;
+// je`, with Family in rax; views.cpp writes `push 2; pop r64` over it (same length). Found by walking that
+// function's 43 callers; the other 22 only test the count against 0, or read other fields. 0x1a094b1 is
+// TaskContext.InstanceFactor (FParallelMeshDrawCommandPass::DispatchPassSetup 0x1a09300, found through
+// r.MeshDrawCommands.ParallelPassSetup).
+struct CountRead {
+    std::uintptr_t rva;
+    std::uint8_t size;  // 3, or 4 with REX.R (r8d-r15d)
+    std::uint8_t bytes[4];
+};
+inline constexpr CountRead kInstancedViewCounts[] = {
+    {0x18648b1, 3, {0x8b, 0x48, 0x08}},       {0x1864a2a, 4, {0x44, 0x8b, 0x70, 0x08}},
+    {0x18ac4f8, 3, {0x8b, 0x48, 0x08}},       {0x18ac739, 3, {0x8b, 0x48, 0x08}},
+    {0x18ac9a8, 3, {0x8b, 0x48, 0x08}},       {0x18acbee, 3, {0x8b, 0x48, 0x08}},
+    {0x19ef921, 3, {0x8b, 0x78, 0x08}},       {0x19efb81, 3, {0x8b, 0x78, 0x08}},
+    {0x1a094b1, 3, {0x8b, 0x48, 0x08}},       {0x1b95540, 3, {0x8b, 0x48, 0x08}},
+    {0x1bc08aa, 3, {0x8b, 0x78, 0x08}},       {0x1bc0a7d, 3, {0x8b, 0x78, 0x08}},
+    {0x1bc0cd4, 3, {0x8b, 0x78, 0x08}},       {0x1bc0eb0, 3, {0x8b, 0x78, 0x08}},
+    {0x1cc3dbf, 3, {0x8b, 0x48, 0x08}},       {0x1cc3f4c, 4, {0x44, 0x8b, 0x68, 0x08}},
+    {0x1cd853f, 3, {0x8b, 0x48, 0x08}},       {0x1cd876c, 3, {0x8b, 0x48, 0x08}},
+    {0x1cf35a8, 3, {0x8b, 0x48, 0x08}},       {0x2bef0f6, 4, {0x44, 0x8b, 0x78, 0x08}},
+    {0x2befafa, 3, {0x8b, 0x43, 0x08}},
+};
+// The view constants' N (cb0[135].y, byte 0x874 of the view uniform struct), in what looks like
+// FSceneView::SetupCommonViewUniformBufferParameters (0x2d08510): `ecx = Family ? Family->Views.Num() : 0`, then
+// this `mov rdi, [rbp + 0xe8]`, then `mov [rdx + 0x874], ecx`. Written for every view, mono families too, so
+// views.cpp clamps it to 2 in a stub here instead of writing 2: a capture or mirror family keeps N = 1.
+inline constexpr std::uintptr_t kViewInstancedCount = 0x2d085ab;
+inline constexpr std::uint8_t kViewInstancedCountAnchor[7] = {0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
+
 }  // namespace acc

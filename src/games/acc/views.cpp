@@ -135,6 +135,34 @@ bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* posit
 
 std::atomic<bool> started{false};
 
+bool counts_match() {
+    for (const CountRead& r : kInstancedViewCounts)
+        if (!aceqv::code_matches(r.rva, r.bytes, r.size)) {
+            aceqv::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
+            return false;
+        }
+    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor));
+}
+
+// Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
+bool pairs_per_draw() {
+    bool ok = true;
+    for (const CountRead& r : kInstancedViewCounts) {
+        const std::uint8_t reg = (r.bytes[r.size - 2] >> 3) & 7;  // ModRM reg
+        const std::uint8_t three[3] = {0x6a, 0x02, static_cast<std::uint8_t>(0x58 + reg)};        // push 2; pop r64
+        const std::uint8_t four[4] = {0x6a, 0x02, 0x41, static_cast<std::uint8_t>(0x58 + reg)};   // push 2; pop r8-r15
+        ok = aceqv::code_write(r.rva, r.size == 3 ? three : four, r.size) && ok;
+    }
+    // cmp ecx, 2; jle +5; mov ecx, 2; then the moved `mov rdi, [rbp + 0xe8]`.
+    const std::uint8_t clamp[] = {0x83, 0xf9, 0x02, 0x7e, 0x05, 0xb9, 0x02, 0x00, 0x00, 0x00,
+                                  0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
+    ok = aceqv::code_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
+                              sizeof(clamp)) && ok;
+    aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped)"
+                                    : "a views-per-draw patch failed");
+    return ok;
+}
+
 }  // namespace
 
 bool views_start(const aceqv::Views4Layout& l) {
@@ -156,6 +184,10 @@ bool views_start(const aceqv::Views4Layout& l) {
         aceqv::log_line("acc views: r.AllowSubPrimitiveQueries' registration isn't this build's; nothing patched");
         return false;
     }
+    if (!counts_match()) {
+        aceqv::log_line("acc views: the views-per-draw code isn't this build's; nothing patched");
+        return false;
+    }
     const std::uintptr_t base = aceqv::module_base();
     // Foliage's per-cluster occlusion results crash with the side views on track (abi.h): one query per proxy.
     auto* subPrimitiveQueries = reinterpret_cast<volatile std::int32_t*>(base + kAllowSubPrimitiveQueries);
@@ -166,8 +198,9 @@ bool views_start(const aceqv::Views4Layout& l) {
     originalAdjust = reinterpret_cast<AdjustViewRectFn>(base + kAdjustViewRect.function);
     originalProjection = reinterpret_cast<ProjectionFn>(base + kGetStereoProjectionMatrix.function);
     originalEyePose = reinterpret_cast<EyePoseFn>(base + kGetRelativeEyePose.function);
-    // Pose, projection and rects before the count, so no frame sees four views without them.
-    bool ok = aceqv::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
+    // Pose, projection, rects and pairs before the count, so no frame sees four views without them.
+    bool ok = pairs_per_draw();
+    ok = ok && aceqv::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
                                          reinterpret_cast<void*>(&eye_pose));
     ok = ok && aceqv::vtable_slot_replace(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
                                           reinterpret_cast<void*>(&projection));
