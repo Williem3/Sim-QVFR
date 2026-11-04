@@ -338,6 +338,10 @@ void load_experiment() {
     experiment.views4ShowCopies = GetPrivateProfileIntW(L"experiment", L"views4_show_copies", 0, ini.c_str()) != 0;
     experiment.views4Compose = experiment.views4 && !experiment.views4ShowCopies &&
                                GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini.c_str()) != 0;
+    if (experiment.views4Compose && !game->qvfr_composable()) {
+        logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
+        experiment.views4Compose = false;
+    }
     experiment.views4NoMask =
         experiment.views4 &&
         GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.views4Compose ? 0 : 1, ini.c_str()) == 0;
@@ -4365,9 +4369,9 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         logf("  extension %s", info->enabledExtensionNames[i]);
     if (XR_FAILED(r))
         return r;
-    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Not in a game
-    // without QVFR (log only).
-    if (game->has_qvfr()) {
+    // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Only in a game
+    // it's made for.
+    if (game->loads_cheeky()) {
         cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
         {  // for the launcher's Foveated DLSS pane
             static const wchar_t* const kStatus[] = {L"off", L"missing", L"refused", L"running"};

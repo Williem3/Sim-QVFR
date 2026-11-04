@@ -24,7 +24,7 @@ add_library(ace_quadview SHARED
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/adapters.cpp src/engine/code_patch.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/adapters.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -59,7 +59,7 @@ target_link_libraries(compositor_test PRIVATE d3d12 dxgi d3dcompiler windowscode
 
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
 add_executable(two_loops_test tests/two_loops_test.cpp src/games/games.cpp src/log.cpp src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
-  src/probe/d3d12_vtable_index.c src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
+  src/probe/d3d12_vtable_index.c src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
   src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -68,7 +68,7 @@ target_link_libraries(two_loops_test PRIVATE minhook bcrypt d3d12 dxgi d3dcompil
 
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
 add_executable(quad_flow_test tests/quad_flow_test.cpp src/games/games.cpp src/log.cpp src/probe/probe.cpp src/probe/hang_watch.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
-  src/probe/d3d12_vtable_index.c src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
+  src/probe/d3d12_vtable_index.c src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/quad/compositor.cpp src/quad/focus_outline.cpp
   src/quad/settings_menu.cpp src/quad/menu_panel.cpp src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -186,3 +186,9 @@ add_executable(cpu_profile_test tests/cpu_profile_test.cpp src/probe/cpu_profile
 target_include_directories(cpu_profile_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(cpu_profile_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(cpu_profile_test PRIVATE /W4 /permissive- /utf-8)
+
+# Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
+add_executable(acc_views_test tests/acc_views_test.cpp)
+target_include_directories(acc_views_test PRIVATE src)
+target_compile_definitions(acc_views_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)

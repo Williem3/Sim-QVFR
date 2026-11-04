@@ -46,6 +46,11 @@ public:
     // False for a game known by its identity alone (being reverse engineered): the layer only logs there,
     // as mode=off, and puts nothing of its own into the game or the headset.
     virtual bool has_qvfr() const { return true; }
+    // False while the layer can't compose this game's views (its graphics API isn't supported yet): QVFR then
+    // runs uncomposed, the headset showing views 0-1.
+    virtual bool qvfr_composable() const { return has_qvfr(); }
+    // Cheeky Foveated DLSS is made for this game.
+    virtual bool loads_cheeky() const { return has_qvfr(); }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the
