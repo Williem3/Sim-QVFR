@@ -112,7 +112,11 @@ bool D3D11Compositor::compose(ID3D11Texture2D* views, ID3D11Texture2D* output, c
         c->Unmap(constants_[eye].Get(), 0);
         ID3D11Buffer* buffer = constants_[eye].Get();
         c->PSSetConstantBuffers(0, 1, &buffer);
-        const D3D11_VIEWPORT viewport{eye * eyeWidth, 0, eyeWidth, static_cast<float>(outDesc.Height), 0, 1};
+        // The FOV crop draws the eye into the top left of its half, at the same density (as the D3D12 compositor).
+        const EyeComposition& e = eyes[eye];
+        const float w = eyeWidth * (e.outputSize[0] > 0 ? e.outputSize[0] : 1.0f),
+                    h = static_cast<float>(outDesc.Height) * (e.outputSize[1] > 0 ? e.outputSize[1] : 1.0f);
+        const D3D11_VIEWPORT viewport{eye * eyeWidth, 0, w, h, 0, 1};
         c->RSSetViewports(1, &viewport);
         c->Draw(3, 0);
     }

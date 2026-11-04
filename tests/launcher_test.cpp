@@ -913,9 +913,9 @@ int main() {
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
                   !acc::kGame.features.foveatedDlss && !acc::kGame.features.helmet &&
-                  !acc::kGame.features.liveResolution && !acc::kGame.features.fovCrop && ace::kGame.features.foveatedDlss &&
+                  !acc::kGame.features.liveResolution && acc::kGame.features.fovCrop && ace::kGame.features.foveatedDlss &&
                   ace::kGame.features.helmet && ace::kGame.features.liveResolution && ace::kGame.features.fovCrop,
-              "games: ACC through OpenComposite, its exe in a subfolder, no Foveated DLSS, helmet, live resolution or crop yet");
+              "games: ACC through OpenComposite, its exe in a subfolder, the crop; no Foveated DLSS, helmet or live resolution yet");
         check(!find(checks, "opencomposite"), "preflight: ACE needs no OpenComposite");
         aceqv::games::set_launcher_game(acc::kGame);
         in.openComposite = OpenComposite::Valve;

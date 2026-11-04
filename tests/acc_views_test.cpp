@@ -155,16 +155,26 @@ int main() {
 
     {
         // The left eye as UE's SteamVR plugin builds it from OpenComposite (this headset, 2026-11-04): the located FOV's
-        // tangents l, r, u, d = -1.4019, 1.2131, 1.0913, -1.0913; GetProjectionRaw gives left, right, top, bottom
-        // (top negative: y down); UE passes &Right, &Left, &Top, &Bottom, negates them, and fills its matrix.
-        const float pfLeft = -1.4019f, pfRight = 1.2131f, pfTop = -1.0913f, pfBottom = 1.0913f;
-        const float Right = -pfLeft, Left = -pfRight, Top = -pfTop, Bottom = -pfBottom;
-        const float ue[16] = {2 / (Right - Left), 0, 0, 0, 0, 2 / (Top - Bottom), 0, 0,
-                              (Right + Left) / (Right - Left), (Top + Bottom) / (Top - Bottom), 0, 1, 0, 0, 10, 0};
+        // tangents l, r, u, d = -1.4019, 1.2131, 1.0913, -1.0913; UE passes &Right, &Left, &Top, &Bottom to
+        // GetProjectionRaw, negates them, and fills its matrix: [8] = -(r + l) / (r - l), [9] = -(u + d) / (u - d).
+        const float l = -1.4019f, r = 1.2131f, u = 1.0913f, d = -1.0913f;
+        const float ue[16] = {2 / (r - l), 0, 0, 0, 0, 2 / (u - d), 0, 0, -(r + l) / (r - l), -(u + d) / (u - d), 0, 1,
+                              0, 0, 10, 0};
         float t[4];
-        check(ue_projection_tangents(ue, t) && std::fabs(t[0] + 1.4019f) < 1e-4f && std::fabs(t[1] - 1.2131f) < 1e-4f &&
-                  std::fabs(t[2] - 1.0913f) < 1e-4f && std::fabs(t[3] + 1.0913f) < 1e-4f,
+        check(ue_projection_tangents(ue, t) && std::fabs(t[0] - l) < 1e-4f && std::fabs(t[1] - r) < 1e-4f &&
+                  std::fabs(t[2] - u) < 1e-4f && std::fabs(t[3] - d) < 1e-4f,
               "UE's eye projection reads back as the located FOV, not mirrored");
+        // A live crop of top 21%, bottom 20%, outer and inner 5% (the run that showed the flip): the located up
+        // tangent is 1.0913 - 0.21 x 2.1826 = 0.6330, the down -0.6548. UE's vertical term from that run's log
+        // (read with the old sign as up 0.6548, down -0.6330) must read back with the short side at the top.
+        const float cu = 0.6330f, cd = -0.6548f;
+        float cropped[16];
+        std::memcpy(cropped, ue, sizeof(cropped));
+        cropped[5] = 2 / (cu - cd);
+        cropped[9] = -(cu + cd) / (cu - cd);
+        check(cropped[9] > 0 && ue_projection_tangents(cropped, t) && std::fabs(t[2] - cu) < 1e-4f &&
+                  std::fabs(t[3] - cd) < 1e-4f,
+              "a top crop narrows the top of UE's projection, not its bottom");
     }
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;
