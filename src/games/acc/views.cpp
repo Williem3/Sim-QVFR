@@ -37,6 +37,13 @@ void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
 }
 
 int desired_views(void*, bool stereo) { return views_for(stereo); }
+// The renderer's final rect per pass (FIntRect: min x, min y, max x, max y), for the log.
+std::atomic<int> finalRect[5][4];
+void final_view_rect(void*, int pass, const int* rect) {
+    if (pass >= 0 && pass < 5)
+        for (int i = 0; i < 4; ++i)
+            finalRect[pass][i].store(rect[i], std::memory_order_relaxed);
+}
 bool primary(void*, int pass) { return primary_pass(pass); }
 bool primary_view(void*, const unsigned char* view) {
     return primary_pass(*reinterpret_cast<const int*>(view + kViewStereoPass));
@@ -134,7 +141,8 @@ bool views_start(const aceqv::Views4Layout& l) {
     if (started.load())
         return true;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
-                          kGetStereoProjectionMatrix, kGetRelativeEyePose, kDeviceIsAPrimaryPass, kDeviceIsAPrimaryView};
+                          kGetStereoProjectionMatrix, kGetRelativeEyePose, kDeviceIsAPrimaryPass, kDeviceIsAPrimaryView,
+                          kSetFinalViewRect};
     for (const Slot& s : slots)
         if (aceqv::vtable_slot(s.rva) != s.function) {
             aceqv::logf("acc views: slot 0x%llx holds 0x%llx, expected 0x%llx: not the build these addresses are "
@@ -165,6 +173,8 @@ bool views_start(const aceqv::Views4Layout& l) {
                                           reinterpret_cast<void*>(&projection));
     ok = ok && aceqv::vtable_slot_replace(kAdjustViewRect.rva, kAdjustViewRect.function,
                                           reinterpret_cast<void*>(&adjust_view_rect));
+    ok = ok && aceqv::vtable_slot_replace(kSetFinalViewRect.rva, kSetFinalViewRect.function,
+                                          reinterpret_cast<void*>(&final_view_rect));
     ok = ok && aceqv::vtable_slot_replace(kDeviceIsAPrimaryView.rva, kDeviceIsAPrimaryView.function,
                                           reinterpret_cast<void*>(&primary_view));
     ok = ok && aceqv::vtable_slot_replace(kDeviceIsAPrimaryPass.rva, kDeviceIsAPrimaryPass.function,
@@ -206,6 +216,9 @@ void views_frame_end() {
     line("AdjustViewRect", adjustCalls);
     line("projection", projectionCalls);
     line("eye pose", poseCalls);
+    for (int pass = 1; pass < 5; ++pass)
+        aceqv::logf("acc views: renderer's final rect for pass %d: %d,%d - %d,%d", pass, finalRect[pass][0].load(),
+                    finalRect[pass][1].load(), finalRect[pass][2].load(), finalRect[pass][3].load());
     aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));

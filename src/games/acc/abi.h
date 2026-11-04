@@ -25,6 +25,9 @@ inline constexpr Slot kDeviceIsAPrimaryPass = {kStereoVtable + 9 * 8, 0x7b1c90};
 inline constexpr Slot kDeviceIsAPrimaryView = {kStereoVtable + 10 * 8, 0x2da8900};  // engine's, inlined: below
 inline constexpr std::ptrdiff_t kViewStereoPass = 0xad0;  // FSceneView::StereoPass (`cmp [rdx + 0xad0], 1`)
 inline constexpr Slot kAdjustViewRect = {kStereoVtable + 16 * 8, 0x7ae650};          // halves of the target
+// SetFinalViewRect(pass, const FIntRect&): the renderer reports each view's final rect (screen percentage applied)
+// every frame (4.26 FSceneRenderer::PrepareViewRectsForRendering). FSteamVRHMD's is empty, shared with others.
+inline constexpr Slot kSetFinalViewRect = {kStereoVtable + 17 * 8, 0x776df0};
 inline constexpr Slot kGetStereoProjectionMatrix = {kStereoVtable + 20 * 8, 0x7b75e0};  // non-left = right eye
 // FSteamVRHMD's IXRTrackingSystem vtable (primary, +0x00): GetRelativeEyePose answers passes 1-2 only.
 inline constexpr std::uintptr_t kTrackingVtable = 0x3a4ecc0;
