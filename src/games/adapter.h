@@ -85,6 +85,9 @@ public:
     virtual void qvfr_frame_end() = 0;
 
     // ---- The game's own experiments and watches, each reading its own ini keys ----
+    // The layer was loaded into the game before it ran (GameInfo::earlyLoad, SIM_QVFR_EARLY=1): from DllMain, under the
+    // loader lock, with the game's main thread not yet started. `ini`: SIM_QVFR_INI.
+    virtual void early_start(const wchar_t* ini) { (void)ini; }
     // xrCreateApiLayerInstance, before qvfr_start. `mode`: [experiment] mode in effect (baseline=1: "off").
     virtual void instance_created(const wchar_t* ini, const wchar_t* mode) {
         (void)ini;
@@ -104,6 +107,9 @@ public:
 
 // The adapter for `game` (null: the one that does nothing). Lives for the process.
 GameAdapter& adapter_for(const GameInfo* game);
+
+// The layer DLL was loaded early (SIM_QVFR_EARLY=1): the current game's adapter's early_start. From DllMain.
+void early_load();
 
 }  // namespace games
 }  // namespace simqvfr

@@ -100,8 +100,26 @@ public:
     void qvfr_note_views(const XrView*, uint32_t) override {}
     void qvfr_frame_end() override {}
 
+    // Loaded early (the launcher, GameInfo::earlyLoad): the patches go in before X-Plane's Vulkan startup, so the shader
+    // wrapper sees every module. xrCreateInstance then finds them in.
+    void early_start(const wchar_t* ini) override {
+        simqvfr::logf("xplane: layer loaded early (before X-Plane runs): patching now");
+        apply_all(ini);
+        patched_ = true;
+    }
     // At xrCreateInstance: X-Plane builds its render graph later, when the flight loads.
     void instance_created(const wchar_t* ini, const wchar_t*) override {
+        if (patched_) {
+            simqvfr::logf("xplane: already patched at early load");
+            return;
+        }
+        simqvfr::logf("xplane: layer loaded at xrCreateInstance (not early): shaders X-Plane made at startup are not edited");
+        apply_all(ini);
+    }
+
+private:
+    bool patched_ = false;
+    static void apply_all(const wchar_t* ini) {
         if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1) {
             apply_copies(ini);
             return;

@@ -68,7 +68,7 @@ target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND
 target_compile_options(sim_qvfr_core PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 
-add_library(sim_qvfr SHARED src/xr_layer.cpp)
+add_library(sim_qvfr SHARED src/xr_layer.cpp src/early_load.cpp)
 target_include_directories(sim_qvfr PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr PRIVATE /W4 /permissive- /utf-8)

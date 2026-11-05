@@ -1,5 +1,7 @@
 #include "adapter.h"
 
+#include <windows.h>
+
 #include "ace/adapter.h"
 #include "ace/game.h"
 #include "acc/adapter.h"
@@ -46,6 +48,16 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::xplane::adapter();
     static NoQvfr none(nullptr);
     return none;
+}
+
+void early_load() {
+    const GameInfo* game = current_game();
+    if (!game || !game->earlyLoad)
+        return;
+    wchar_t ini[MAX_PATH] = {};
+    if (!GetEnvironmentVariableW(L"SIM_QVFR_INI", ini, MAX_PATH))
+        return;
+    adapter_for(game).early_start(ini);
 }
 
 }  // namespace simqvfr::games

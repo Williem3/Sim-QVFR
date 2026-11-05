@@ -20,6 +20,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     nullptr,  // no DLSS
     {false, false, false, false, false},  // identity only: nothing beyond logging yet
     kBuilds, std::size(kBuilds),
+    true,  // early load: X-Plane creates its shader modules at startup, before OpenXR (README.md)
 };
 
 }  // namespace xplane
