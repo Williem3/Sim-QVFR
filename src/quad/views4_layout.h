@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct Views4Layout {
     double outer = 1.0, focus = 1.0, focusHeight = 1.0;  // linear scale of the native eye width / height
@@ -228,4 +228,4 @@ inline void views4_uv(const Views4Layout& l, int view, int targetWidth, int targ
     uv[3] = static_cast<float>(r.height) / static_cast<float>(targetHeight);
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

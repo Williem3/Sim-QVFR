@@ -5,7 +5,7 @@
 #include "../log.h"
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 uint8_t* stubPage = nullptr;
@@ -222,4 +222,4 @@ bool vtable_slot_replace(uintptr_t slotRva, uintptr_t expectedRva, const void* r
     return code_write(slotRva, &wanted, sizeof(wanted));
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

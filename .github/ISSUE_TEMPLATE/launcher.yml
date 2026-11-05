@@ -37,7 +37,7 @@ body:
     attributes:
       label: Screenshots and logs
       description: |
-        Drag in a screenshot of the launcher and the report zip from its logs folder (ace-quadview-report-*.zip).
+        Drag in a screenshot of the launcher and the report zip from its logs folder (sim-qvfr-report-*.zip).
   - type: textarea
     id: checks
     attributes:

@@ -11,7 +11,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 inline constexpr int kFocusOffsetMax = 20;  // degrees either way
 
@@ -47,4 +47,4 @@ inline double offset_tan_y(double tanY, double degrees) {
     return std::tan(angle);
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -11,7 +11,7 @@
 #include "probe/hang_watch.h"
 #include "xr.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir);
     const std::filesystem::path log = dir / L"test.log";
-    SetEnvironmentVariableW(L"ACE_QV_LOG", log.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", log.c_str());
 
     child(self, L"--framing");
     child(self, L"--ended");

@@ -7,7 +7,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 bool is_typeless(DXGI_FORMAT f) {
@@ -310,4 +310,4 @@ void D3D11Compositor::shutdown() {
     device_.Reset();
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -9,7 +9,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 std::atomic<bool> stopWatch{false};
@@ -214,4 +214,4 @@ void dred_stop() {
     watched = nullptr;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

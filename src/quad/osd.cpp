@@ -7,7 +7,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 OsdPlacement read_osd_placement(const wchar_t* ini) {
     // As strings: GetPrivateProfileInt reads negative values as 0.
@@ -159,13 +159,13 @@ OsdSummary osd_summary(const OsdInput& in) {
     s.cpuThreadMs = in.cpuBusiestPercent >= 0 && s.frameMs > 0 ? in.cpuBusiestPercent / 100 * s.frameMs : -1;
     s.cpuHeadroom = headroom(std::max(s.cpuMs, s.cpuThreadMs), s.budgetMs);
     // GPU: the whole GPU's time per frame when its busy share is known; ACE's queue time otherwise.
-    s.gpuAceMs = in.gpuMs;
+    s.gpuGameMs = in.gpuMs;
     s.gpuLayerMs = in.composeMs;
     s.gpuFgMs = in.fg == OsdFg::On && in.fgMs >= 0 ? in.fgMs * std::max(0, in.fgMultiplier - 1) : -1;
     if (in.gpuBusyPercent >= 0 && s.frameMs > 0) {
         s.gpuWhole = true;
         s.gpuMs = in.gpuBusyPercent / 100 * s.frameMs;
-        s.gpuRestMs = std::max(0.0, s.gpuMs - std::max(0.0, s.gpuAceMs) - std::max(0.0, s.gpuFgMs) -
+        s.gpuRestMs = std::max(0.0, s.gpuMs - std::max(0.0, s.gpuGameMs) - std::max(0.0, s.gpuFgMs) -
                                         std::max(0.0, s.gpuLayerMs));
     } else {
         s.gpuMs = in.gpuMs;
@@ -272,9 +272,9 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         // The GPU's time per ACE frame, by who used it (ms): ACE's queue, frame generation, the layer, the rest.
         const auto part = [](double ms) { return ms >= 0 ? format(L"%.1f", ms) : std::wstring(L"—"); };
         OsdRow r{L"GPU ms: ACE/FG/layer/rest"};
-        r.value = s.gpuWhole ? part(s.gpuAceMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / " +
+        r.value = s.gpuWhole ? part(s.gpuGameMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / " +
                                    part(s.gpuRestMs)
-                  : s.gpuAceMs >= 0 ? part(s.gpuAceMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / —"
+                  : s.gpuGameMs >= 0 ? part(s.gpuGameMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / —"
                                     : L"—";
         rows.push_back(r);
     }
@@ -338,4 +338,4 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     return rows;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

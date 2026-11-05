@@ -11,7 +11,7 @@
 
 #pragma comment(lib, "dxgi.lib")
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
 namespace fs = std::filesystem;
 
@@ -68,8 +68,8 @@ std::vector<Found> find(const std::wstring& folder, const wchar_t* prefix, const
     return out;
 }
 
-// The session logs, ace-<date>-<time>.log (not the older ace-quadview*.log ones).
-bool session_log(const std::wstring& name) { return name.size() > 4 && iswdigit(name[4]); }
+// The session logs, session-<date>-<time>.log.
+bool session_log(const std::wstring& name) { return name.size() > 8 && iswdigit(name[8]); }  // "session-" then the date
 
 std::wstring windows_error(DWORD code) {
     wchar_t* text = nullptr;
@@ -169,9 +169,9 @@ std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now)
             add(path, name, size);
     };
     // In order of use, so the size cap leaves out what matters least.
-    add_file(sources.settingsIni, L"ace-quadview.ini");
+    add_file(sources.settingsIni, L"sim-qvfr.ini");
     add_file(sources.runtimeIni, L"runtime.ini");
-    const std::vector<Found> logs = find(sources.logs, L"ace-", L".log", session_log);
+    const std::vector<Found> logs = find(sources.logs, L"session-", L".log", session_log);
     for (size_t i = 0; i < logs.size() && i < kReportLogs; ++i)
         if (i == 0 || logs[i].time >= since)
             add(logs[i].path, logs[i].path.filename().wstring(), logs[i].size);
@@ -383,7 +383,7 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
     if (!session.known())
         return out;
     if (session.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos)
-        out.push_back({L"OpenXR Toolkit is loaded under ace-quadview",
+        out.push_back({L"OpenXR Toolkit is loaded under Sim-QVFR",
                        L"It adds about 0.8 ms to every frame's submission. If you don't use it for ACE, switch it off in "
                        L"OpenXR layers."});
     if (session.limited == L"GPU")
@@ -411,7 +411,7 @@ std::wstring issue_title(const IssueReport& r) {
     line.erase(0, line.find_first_not_of(L" \t"));
     line.erase(line.find_last_not_of(L" \t") + 1);
     if (line.empty())
-        return kind + L"ace-quadview " + r.version + L": ";
+        return kind + L"Sim-QVFR " + r.version + L": ";
     if (line.size() > 70) {  // at a word
         const size_t space = line.find_last_of(L' ', 70);
         line = line.substr(0, space == std::wstring::npos || space < 30 ? 70 : space) + L"…";
@@ -425,7 +425,7 @@ std::wstring issue_details(const IssueReport& r) {
     const bool qvfr = s.mode == RenderMode::Qvfr;
     const std::wstring unknown = L"not known";
     std::wstring b;
-    b += L"- **Version:** ace-quadview " + (r.version.empty() ? unknown : r.version) + L" (launcher and layer)\n";
+    b += L"- **Version:** Sim-QVFR " + (r.version.empty() ? unknown : r.version) + L" (launcher and layer)\n";
     const SystemInfo& sys = r.system;
     b += L"- **CPU:** " + (sys.cpu.empty() ? unknown : sys.cpu) + L"\n";
     b += L"- **GPU:** " + (sys.gpu.empty() ? unknown : sys.gpu);
@@ -562,4 +562,4 @@ std::string issue_url(const std::wstring& repo, const char* form, const std::wst
     return url.size() <= max ? url : head.substr(0, std::min(head.size(), max));
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

@@ -1,4 +1,4 @@
-// The helmet overlay ([helmet] in ace-quadview.ini, QVFR): the layer draws a helmet round the view,
+// The helmet overlay ([helmet] in sim-qvfr.ini, QVFR): the layer draws a helmet round the view,
 // lit by the frame, shared by the layer (which composes it, live), the launcher's Resolution pane and
 // the in-headset menu's View crop page.
 //
@@ -33,7 +33,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 enum class VisorPosition { Closed, Half, Open };
 inline constexpr const wchar_t* kVisorPositionNames[] = {L"Closed", L"Half", L"Open"};
@@ -256,4 +256,4 @@ inline void helmet_crop_hint(const HelmetSettings& h, double aspect, double topE
                                          : static_cast<int>(std::lround(std::clamp((eye_tan(bottomEdge) - down) / span, 0.0, 1.0) * 100));
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

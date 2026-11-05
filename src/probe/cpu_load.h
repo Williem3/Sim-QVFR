@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 inline constexpr int kCpuLoadMs = 500;
 
@@ -56,4 +56,4 @@ std::vector<ThreadLoad> cpu_load_latest_threads(size_t count);
 std::map<uint32_t, double> cpu_load_shares(const std::map<uint32_t, uint64_t>& before,
                                            const std::map<uint32_t, uint64_t>& after, uint64_t elapsedCycles);
 
-}  // namespace aceqv
+}  // namespace simqvfr

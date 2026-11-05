@@ -9,7 +9,7 @@
 
 #include "quad/osd.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -228,7 +228,7 @@ int main() {
               "frames 6% over count as late; p90 23.5 ms; the 1% low from the slowest frame");
     }
     {
-        const std::wstring ini = (std::filesystem::temp_directory_path() / L"aceqv_osd_test.ini").wstring();
+        const std::wstring ini = (std::filesystem::temp_directory_path() / L"simqvfr_osd_test.ini").wstring();
         DeleteFileW(ini.c_str());
         check(read_osd_placement(ini.c_str()) == OsdPlacement{}, "no [osd]: off, above the centre, 26 degrees");
         const OsdPlacement p{true, -20, -8, 22};
@@ -240,8 +240,8 @@ int main() {
         check(read_osd_placement(ini.c_str()).yaw == -kOsdYawMax, "and so is the yaw");
         DeleteFileW(ini.c_str());
     }
-    // ACEQV_OSD_SAVE=<file.bmp>: the card with every cell filled, as a bitmap to look at.
-    if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"ACEQV_OSD_SAVE", path, MAX_PATH)) {
+    // SIMQVFR_OSD_SAVE=<file.bmp>: the card with every cell filled, as a bitmap to look at.
+    if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_OSD_SAVE", path, MAX_PATH)) {
         const OsdInput in = measured(24.6, 9.1, 12.5, 10.9, 97, 64);
         OsdInput full = in;
         full.vramUsed = 13ull << 30;
@@ -271,9 +271,9 @@ int main() {
     }
     {
         const std::vector<uint32_t> pixels =
-            draw_notice_panel(L"ace-quadview is off", {L"This Assetto Corsa EVO build isn’t one ace-quadview supports, so the "
+            draw_notice_panel(L"Sim-QVFR is off", {L"This Assetto Corsa EVO build isn’t one Sim-QVFR supports, so the "
                                                        L"game runs as normal, without foveated rendering.",
-                                                       L"Look for an ace-quadview release for the new build."});
+                                                       L"Look for an Sim-QVFR release for the new build."});
         bool yellow = false, white = false;
         for (int y = 40; y < 104; ++y)  // the title: yellow (red and green high, blue low)
             for (int x = 64; x < 400; ++x) {
@@ -285,7 +285,7 @@ int main() {
                 white |= (pixels[static_cast<size_t>(y) * kOsdWidth + x] & 0xffffff) == 0xf7f5f5;
         check(pixels.size() == static_cast<size_t>(kOsdWidth) * kOsdHeight && (pixels[0] >> 24) == 0 && yellow && white,
               "the notice card: a yellow title, the first paragraph in white, rounded corners");
-        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"ACEQV_NOTICE_SAVE", path, MAX_PATH))
+        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_NOTICE_SAVE", path, MAX_PATH))
             save_card(path, pixels);
     }
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);

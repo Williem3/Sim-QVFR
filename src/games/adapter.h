@@ -12,7 +12,7 @@
 
 struct ID3D11Device;
 
-namespace aceqv {
+namespace simqvfr {
 
 // What one game frame's views were rendered with, recorded when the game fills the focus cameras: per
 // eye the outer view's tangents (left, right, up, down; read back from the game's own eye projection, so
@@ -106,4 +106,4 @@ public:
 GameAdapter& adapter_for(const GameInfo* game);
 
 }  // namespace games
-}  // namespace aceqv
+}  // namespace simqvfr

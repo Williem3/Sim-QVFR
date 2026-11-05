@@ -18,7 +18,7 @@ __declspec(noinline) double caller() { return victim(1, 2.5f, 3, 4.25, 5, 6.5f, 
 }  // namespace
 
 int main() {
-    using namespace aceqv;
+    using namespace simqvfr;
     if (MH_Initialize() != MH_OK)
         return 2;
     Probe& p = probes[0];
@@ -42,6 +42,6 @@ int main() {
     // walk_stack from a synthetic entry: the stack captured inside on_probe is logged to the file.
     MH_DisableHook(p.target);
     MH_Uninitialize();
-    std::printf("RESULT: %s (see ACE_QV_LOG for the logged stacks)\n", ok ? "pass" : "FAIL");
+    std::printf("RESULT: %s (see SIM_QVFR_LOG for the logged stacks)\n", ok ? "pass" : "FAIL");
     return ok ? 0 : 1;
 }

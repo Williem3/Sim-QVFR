@@ -6,11 +6,11 @@
 
 #include <cstdint>
 
-namespace aceqv {
+namespace simqvfr {
 
 // Loads the newest installed PIX capturer; false (logged) when PIX is not installed.
 bool pix_capture_load(uint64_t frame);
 // Called at the start of every xrEndFrame with its 1-based number.
 void pix_capture_frame(uint64_t endFrame);
 
-}  // namespace aceqv
+}  // namespace simqvfr

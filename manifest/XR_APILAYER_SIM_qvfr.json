@@ -1,14 +1,14 @@
 {
   "file_format_version": "1.0.0",
   "api_layer": {
-    "name": "XR_APILAYER_ACE_quadview",
-    "library_path": ".\\ace-quadview.dll",
+    "name": "XR_APILAYER_SIM_qvfr",
+    "library_path": ".\\sim-qvfr.dll",
     "api_version": "1.0",
     "implementation_version": "1",
     "description": "Assetto Corsa EVO quad views: gaze-driven focus region composited in-layer (inert outside ACE)",
     "functions": {
       "xrNegotiateLoaderApiLayerInterface": "xrNegotiateLoaderApiLayerInterface"
     },
-    "disable_environment": "DISABLE_XR_APILAYER_ACE_quadview"
+    "disable_environment": "DISABLE_XR_APILAYER_SIM_qvfr"
   }
 }

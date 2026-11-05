@@ -2,7 +2,7 @@
 // (cheeky/cheeky_views.h): the [cheeky] keys and their defaults, a disabled or missing runtime staying
 // off, and against tests/cheeky_fake_runtime.cpp the Start the runtime accepts, ticks with and without
 // the session's device, the "set" command, and the views and per-frame evaluations read from a
-// snapshot. With ACE_QV_CHEEKY_RUNTIME naming a real CheekyFoveatedDLSSRuntime.dll, a second process
+// snapshot. With SIM_QVFR_CHEEKY_RUNTIME naming a real CheekyFoveatedDLSSRuntime.dll, a second process
 // (this exe with --real) starts that one with no graphics and reads its snapshot.
 #include <cstdio>
 #include <cstring>
@@ -14,7 +14,7 @@
 #include "cheeky/cheeky_views.h"
 #include "xr.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -56,9 +56,9 @@ int main(int argc, char** argv) {
     const std::filesystem::path scratch = exe_dir() / L"cheeky_host_test";
     std::error_code ec;
     std::filesystem::create_directories(scratch, ec);
-    SetEnvironmentVariableW(L"ACE_QV_LOG", (scratch / L"test.log").c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", (scratch / L"test.log").c_str());
     wchar_t real[MAX_PATH] = {};
-    const DWORD realLength = GetEnvironmentVariableW(L"ACE_QV_CHEEKY_RUNTIME", real, MAX_PATH);
+    const DWORD realLength = GetEnvironmentVariableW(L"SIM_QVFR_CHEEKY_RUNTIME", real, MAX_PATH);
     if (argc > 1 && std::strcmp(argv[1], "--real") == 0)
         return realLength ? real_runtime(real, scratch) : 1;
 
@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
         }
         expect(code == 0, "the real runtime check (--real) passed");
     } else {
-        std::printf("ACE_QV_CHEEKY_RUNTIME not set: real runtime not checked\n");
+        std::printf("SIM_QVFR_CHEEKY_RUNTIME not set: real runtime not checked\n");
     }
 
     std::printf(failures ? "FAILED (%d)\n" : "all ok\n", failures);

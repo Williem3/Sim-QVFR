@@ -11,7 +11,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 std::mutex mutex;
@@ -150,4 +150,4 @@ void d3d11_capture_release(XrSwapchain chain, uint64_t frame) {
     logf("d3d11 capture: %ls %s", path.c_str(), ok ? "saved" : "failed");
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

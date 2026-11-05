@@ -14,7 +14,7 @@
 #include "probe/cpu_load.h"
 #include "probe/gpu_load.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -52,12 +52,12 @@ int main() {
             {L"pid_40_luid_0x00000000_0x00001111_phys_0_eng_0_engtype_3D", 100},
         };
         const GpuLoad load = gpu_load_from(sample, 0, 0xD1B6, 10);
-        check(load.valid && close_to(load.busy, 92) && close_to(load.ace, 70) && load.engine == L"3D",
+        check(load.valid && close_to(load.busy, 92) && close_to(load.game, 70) && load.engine == L"3D",
               "the adapter's busiest render engine: every process summed (92%), ACE's share (70%)");
         const GpuLoad full = gpu_load_from({{L"pid_10_luid_0x00000000_0x0000D1B6_phys_0_eng_0_engtype_3D", 80},
                                             {L"pid_20_luid_0x00000000_0x0000D1B6_phys_0_eng_0_engtype_3D", 40}},
                                            0, 0xD1B6, 10);
-        check(close_to(full.busy, 100) && close_to(full.ace, 80), "an engine's processes sum to at most 100%");
+        check(close_to(full.busy, 100) && close_to(full.game, 80), "an engine's processes sum to at most 100%");
         check(!gpu_load_from(sample, 0, 0x9999, 10).valid, "no engine of the adapter: no load");
     }
     {

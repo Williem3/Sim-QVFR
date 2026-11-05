@@ -7,6 +7,6 @@
 
 namespace acc {
 
-aceqv::games::GameAdapter& adapter();
+simqvfr::games::GameAdapter& adapter();
 
 }  // namespace acc

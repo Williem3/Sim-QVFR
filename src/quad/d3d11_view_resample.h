@@ -15,7 +15,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct ViewRegion {
     int x = 0, y = 0, width = 0, height = 0;  // texels of the texture
@@ -68,4 +68,4 @@ private:
     bool ready_ = false;
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -1,4 +1,4 @@
-// ace-quadview launcher: what one launch of Assetto Corsa EVO needs, kept free of process and
+// Sim-QVFR launcher: what one launch of Assetto Corsa EVO needs, kept free of process and
 // registry calls so it can be tested offline.
 //
 // The layer is loaded per launch as an explicit OpenXR layer (XR_API_LAYER_PATH points at a run
@@ -18,9 +18,9 @@
 
 #include "json.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
-inline constexpr char kLayerName[] = "XR_APILAYER_ACE_quadview";
+inline constexpr char kLayerName[] = "XR_APILAYER_SIM_qvfr";
 inline constexpr char kFrameGenerationLayer[] = "XR_APILAYER_DIENERTECH_VECTORXR";
 inline constexpr char kCheekyLayer[] = "XR_APILAYER_CHEEKY_foveated_dlss";
 
@@ -40,7 +40,7 @@ struct ForcedLayer {
 struct Options {
     std::vector<std::string> offLayers;  // layer names silenced for this launch (ini: off_layers)
     std::vector<std::string> onLayers;   // switched off in Windows, loaded for ACE all the same (ini: on_layers)
-    std::vector<std::string> order;      // the order below the ACE layer (ini: layer_order); unlisted layers
+    std::vector<std::string> order;      // the order below the Sim-QVFR layer (ini: layer_order); unlisted layers
                                          // follow the listed ones, in registry order
     bool frameGenerationOff = false;     // mode=quad (two ACE frames per headset frame): VectorXR off
     std::vector<ForcedLayer> forced;     // beats offLayers and onLayers
@@ -54,7 +54,7 @@ struct MovedLayer {
     json::Value manifest;     // the explicit copy: absolute library_path, no enable/disable switches
 };
 
-// Every layer the launcher can place below the ACE layer, on or off for this launch (the layers pane's rows).
+// Every layer the launcher can place below the Sim-QVFR layer, on or off for this launch (the layers pane's rows).
 struct PlannedLayer {
     std::string name;
     std::wstring manifest;
@@ -64,11 +64,11 @@ struct PlannedLayer {
 };
 
 struct LayerPlan {
-    std::vector<MovedLayer> below;                          // loaded below the ACE layer, in this order
+    std::vector<MovedLayer> below;                          // loaded below the Sim-QVFR layer, in this order
     std::vector<std::pair<std::string, std::wstring>> off;  // silenced: name, its disable variable
     std::vector<std::string> notes;                         // one line per layer left alone, and why
     std::vector<PlannedLayer> layers;                       // below's and every movable layer off, in profile order
-    std::vector<std::string> above;  // on in Windows without a disable_environment: they stay above the ACE layer
+    std::vector<std::string> above;  // on in Windows without a disable_environment: they stay above the Sim-QVFR layer
 };
 
 // Reads each registered manifest and decides where its layer goes.
@@ -85,14 +85,14 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
                       const LayerPlan& plan, std::wstring& error);
 
 // The variables this launch sets (name, value). `runtimeInfo`: where the layer reports the headset's
-// recommended size and eye tracking for the launcher window (ACE_QV_RUNTIME_INFO). `settings`: the
-// launcher's own ini, where the in-headset menu saves its changes (ACE_QV_SETTINGS; empty: not set).
+// recommended size and eye tracking for the launcher window (SIM_QVFR_RUNTIME_INFO). `settings`: the
+// launcher's own ini, where the in-headset menu saves its changes (SIM_QVFR_SETTINGS; empty: not set).
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
                                                                     const std::wstring& ini, const std::wstring& log,
                                                                     const std::wstring& runtimeInfo,
                                                                     const std::wstring& settings = {});
 
-// A CreateProcess environment block: `current` ("NAME=value" strings) without inherited ACE_QV_*
+// A CreateProcess environment block: `current` ("NAME=value" strings) without inherited SIM_QVFR_*
 // variables, with `set` applied (case-insensitive names), sorted, double-NUL terminated.
 std::wstring environment_block(const std::vector<std::wstring>& current,
                                const std::vector<std::pair<std::wstring, std::wstring>>& set);
@@ -105,4 +105,4 @@ std::string narrow(const std::wstring& wide);
 bool read_file(const std::wstring& path, std::string& out);
 bool write_file(const std::wstring& path, const std::string& data);
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

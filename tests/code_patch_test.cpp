@@ -18,7 +18,7 @@ __declspec(noinline) int slot_original() { return 1; }
 __declspec(noinline) int slot_replacement() { return 2; }
 
 unsigned char* alloc_near_module() {
-    const auto base = aceqv::module_base();
+    const auto base = simqvfr::module_base();
     for (uintptr_t offset = 0x100000; offset < 0x40000000; offset += 0x10000) {
         void* p = VirtualAlloc(reinterpret_cast<void*>(base + 0x10000000 + offset), 0x1000, MEM_RESERVE | MEM_COMMIT,
                                PAGE_EXECUTE_READWRITE);
@@ -64,10 +64,10 @@ int main() {
         unsigned char* fn = page + offset;
         const size_t size = emit(fn, site.anchor);
         offset += (size + 15) & ~size_t{15};
-        const uintptr_t imulRva = reinterpret_cast<uintptr_t>(fn) + 12 + 3 - aceqv::module_base();
+        const uintptr_t imulRva = reinterpret_cast<uintptr_t>(fn) + 12 + 3 - simqvfr::module_base();
         const auto call = reinterpret_cast<Fn>(fn);
         bool before = call(3) == 3 * 0x184;
-        if (!aceqv::code_mask_imul_index(imulRva, site.anchor, 1)) {
+        if (!simqvfr::code_mask_imul_index(imulRva, site.anchor, 1)) {
             std::printf("site 0x%llx: patch refused\n", static_cast<unsigned long long>(site.rva));
             ++failures;
             continue;
@@ -106,8 +106,8 @@ int main() {
         offset += (n + 15) & ~size_t{15};
         const auto call = reinterpret_cast<Fn>(fn);
         const bool before = call(3) == (3u << 5);
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
-        if (!aceqv::code_mask_movsxd_shl_index(rva, site.anchor, 1)) {
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - simqvfr::module_base();
+        if (!simqvfr::code_mask_movsxd_shl_index(rva, site.anchor, 1)) {
             std::printf("history site 0x%llx: patch refused\n", static_cast<unsigned long long>(site.rva));
             ++failures;
             continue;
@@ -147,8 +147,8 @@ int main() {
         const auto call = reinterpret_cast<int (*)(void*)>(fn);
         pass[0x9ac / 4] = 3;
         const bool before = call(pass) == 3;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
-        const bool patched = aceqv::code_mask_load32(rva, site.anchor, 1);
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - simqvfr::module_base();
+        const bool patched = simqvfr::code_mask_load32(rva, site.anchor, 1);
         int got[4];
         bool ok = before && patched;
         for (int v = 0; v < 4; ++v) {
@@ -180,8 +180,8 @@ int main() {
         const auto call = reinterpret_cast<long long (*)(void*, void*, long long)>(fn);
         void* const rdx = reinterpret_cast<void*>(0x100);
         const bool before = call(nullptr, rdx, 3) == 3 - 0x100;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
-        const bool patched = aceqv::code_redirect(rva, ace::kVelocityPassViewAnchor, sizeof(ace::kVelocityPassViewAnchor),
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - simqvfr::module_base();
+        const bool patched = simqvfr::code_redirect(rva, ace::kVelocityPassViewAnchor, sizeof(ace::kVelocityPassViewAnchor),
                                                   ace::kVelocityPassViewStub, sizeof(ace::kVelocityPassViewStub));
         long long got[4];
         bool ok = before && patched;
@@ -229,8 +229,8 @@ int main() {
         const auto run = reinterpret_cast<void (*)(long long, Slot*)>(fn);
         run(3, &slot);
         const bool before = slot.counter == 1;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
-        const bool patched = aceqv::code_call_if_below(rva, call, reinterpret_cast<uintptr_t>(&count_call), reg, 2,
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - simqvfr::module_base();
+        const bool patched = simqvfr::code_call_if_below(rva, call, reinterpret_cast<uintptr_t>(&count_call), reg, 2,
                                                        ace::kSlotFrameFlag);
         int calls[4], flags[4];
         bool ok = before && patched;
@@ -268,7 +268,7 @@ int main() {
         p[n++] = 0xC3;
         offset += (n + 15) & ~size_t{15};
         *fn = reinterpret_cast<Fn2>(p);
-        return reinterpret_cast<uintptr_t>(p + at) - aceqv::module_base();
+        return reinterpret_cast<uintptr_t>(p + at) - simqvfr::module_base();
     };
     bool patchedNow = false;
     const auto check = [&](const char* name, Fn2 fn, uintptr_t rva, const unsigned char* anchor, size_t size,
@@ -277,7 +277,7 @@ int main() {
         patchedNow = false;
         for (unsigned long long v = 0; v < 3; ++v)  // before the patch: the original for every view
             ok &= fn(args(v).a, args(v).b, args(v).c) == expect(v, false);
-        ok &= aceqv::code_redirect(rva, anchor, size, stub.data(), stub.size());
+        ok &= simqvfr::code_redirect(rva, anchor, size, stub.data(), stub.size());
         patchedNow = true;
         unsigned long long got[4];
         for (unsigned long long v = 0; v < 4; ++v) {
@@ -300,7 +300,7 @@ int main() {
                                     {0x41, 0x5D, 0x5E, 0x5F, 0x5B}, &fn);
         char name[64];
         std::snprintf(name, sizeof(name), "slots history index 0x%llx", static_cast<unsigned long long>(site.rva));
-        check(name, fn, rva, site.anchor, 7, aceqv::stub_history_index(site.anchor, phantom2, phantom),
+        check(name, fn, rva, site.anchor, 7, simqvfr::stub_history_index(site.anchor, phantom2, phantom),
               [&](unsigned long long v, bool patched) { return patched && v >= 2 ? pick(v) - renderer : v << 5; },
               [&](unsigned long long v) { return Args{v, renderer, 0}; });
     }
@@ -309,7 +309,7 @@ int main() {
         const uintptr_t rva = build({0x41, 0x54, 0x41, 0x55, 0x41, 0x56}, {0x4C, 0x8B, 0xE1, 0x4C, 0x8B, 0xEA},  // r12 = rcx; r13 = rdx
                                     ace::kCreatorBaseAnchor, 10, {0x49, 0x8B, 0xC6}, {0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C}, &fn);
         check("slots creator base", fn, rva, ace::kCreatorBaseAnchor, 10,
-              aceqv::stub_creator_base(ace::kCreatorBaseAnchor, phantom2, phantom),
+              simqvfr::stub_creator_base(ace::kCreatorBaseAnchor, phantom2, phantom),
               [&](unsigned long long v, bool patched) { return patched && v >= 2 ? pick(v) : renderer + (v << 5); },
               [&](unsigned long long v) { return Args{v, renderer, 0}; });
     }
@@ -318,7 +318,7 @@ int main() {
         const uintptr_t rva = build({0x41, 0x54, 0x41, 0x55, 0x56}, {0x4C, 0x8B, 0xE1, 0x4C, 0x8B, 0xEA},
                                     ace::kCreatorIndexAnchor, 7, {0x48, 0x8B, 0xC6}, {0x5E, 0x41, 0x5D, 0x41, 0x5C}, &fn);
         check("slots creator index", fn, rva, ace::kCreatorIndexAnchor, 7,
-              aceqv::stub_creator_index(ace::kCreatorIndexAnchor, phantom2, phantom),
+              simqvfr::stub_creator_index(ace::kCreatorIndexAnchor, phantom2, phantom),
               [&](unsigned long long v, bool patched) { return patched && v >= 2 ? pick(v) - renderer : v << 5; },
               [&](unsigned long long v) { return Args{v, renderer, 0}; });
     }
@@ -330,7 +330,7 @@ int main() {
         const uintptr_t rva = build({0x56, 0x57, 0x41, 0x55}, {0x8B, 0xF1, 0x48, 0x8B, 0xFA, 0x4D, 0x8B, 0xE8},  // esi, rdi, r13
                                     ace::kImportStepAnchor, 7, {0x48, 0x8B, 0xC7}, {0x41, 0x5D, 0x5F, 0x5E}, &fn);
         check("slots import step", fn, rva, ace::kImportStepAnchor, 7,
-              aceqv::stub_import_step(ace::kImportStepAnchor, phantom2, phantom),
+              simqvfr::stub_import_step(ace::kImportStepAnchor, phantom2, phantom),
               [&](unsigned long long v, bool patched) {
                   return patched && v >= 2 ? pick(v) + field : renderer + field + v * 0x20;
               },
@@ -373,8 +373,8 @@ int main() {
         char name[80];
         std::snprintf(name, sizeof(name), "cameras slot index 0x%llx (base r%d)", static_cast<unsigned long long>(site.rva),
                       baseReg);
-        check(name, fn, reinterpret_cast<uintptr_t>(p + at) - aceqv::module_base(), site.anchor, 7,
-              aceqv::stub_camera_index(site.anchor, static_cast<uint8_t>(baseReg), cameraPhantom2, cameraPhantom),
+        check(name, fn, reinterpret_cast<uintptr_t>(p + at) - simqvfr::module_base(), site.anchor, 7,
+              simqvfr::stub_camera_index(site.anchor, static_cast<uint8_t>(baseReg), cameraPhantom2, cameraPhantom),
               [&](unsigned long long v, bool patched) {
                   return patched && v >= 2 ? (v == 2 ? cameraPhantom2 : cameraPhantom) - renderer : v * 0x184;
               },
@@ -393,8 +393,8 @@ int main() {
                                     {0xB8, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x05, 0xB8, 0x01, 0x00, 0x00, 0x00,  // path
                                      0x4C, 0x39, 0xC7, 0x75, 0x03, 0x83, 0xC8, 0x02},  // cmp rdi, r8; jne; or eax, 2
                                     {0x5F, 0x41, 0x5C}, &fn);
-        const uint64_t right = aceqv::module_base() + rva + 9 + 7;
-        check("cameras eye branch", fn, rva, site, 9, aceqv::stub_eye_branch(right, phantomRenderer),
+        const uint64_t right = simqvfr::module_base() + rva + 9 + 7;
+        check("cameras eye branch", fn, rva, site, 9, simqvfr::stub_eye_branch(right, phantomRenderer),
               [&](unsigned long long v, bool patched) {
                   return patched ? (v & 1) | (v >= 2 ? 2ull : 0ull) : (v != 0 ? 1ull : 0ull);
               },
@@ -411,7 +411,7 @@ int main() {
                                     ace::kPassRejoinAnchor, 6, {0x48, 0x8B, 0xC7}, {0x5E, 0x5F, 0x41, 0x5C}, &fn);
         const auto rdiFor = [&](unsigned long long v) { return v >= 2 ? reinterpret_cast<uint64_t>(phantom) : renderer; };
         check("cameras pass rejoin", fn, rva, ace::kPassRejoinAnchor, 6,
-              aceqv::stub_pass_rejoin(ace::kPassRejoinAnchor, static_cast<uint8_t>(ace::kPhantomRenderer)),
+              simqvfr::stub_pass_rejoin(ace::kPassRejoinAnchor, static_cast<uint8_t>(ace::kPhantomRenderer)),
               [&](unsigned long long v, bool patched) { return patched ? renderer : rdiFor(v); },
               [&](unsigned long long v) { return Args{v, rdiFor(v), reinterpret_cast<uint64_t>(pass)}; });
     }
@@ -424,10 +424,10 @@ int main() {
         const uintptr_t rva = build({0x41, 0x56}, {0x4C, 0x8B, 0xF1, 0x4C, 0x8B, 0xC2},  // r14 = rcx; r8 = rdx
                                     ace::kNormalReconstructDispatchAnchor, 11, {0x8B, 0xC2}, {0x41, 0x5E}, &fn);  // eax = edx
         bool ok = fn(6456, 1350, 0) == (6456 + 7) / 8;
-        ok &= aceqv::code_redirect(rva, ace::kNormalReconstructDispatchAnchor, 11,
-                                   aceqv::stub_dispatch_x_override(ace::kNormalReconstructDispatchAnchor,
+        ok &= simqvfr::code_redirect(rva, ace::kNormalReconstructDispatchAnchor, 11,
+                                   simqvfr::stub_dispatch_x_override(ace::kNormalReconstructDispatchAnchor,
                                                                    reinterpret_cast<uint64_t>(&groupsOverride)).data(),
-                                   aceqv::stub_dispatch_x_override(ace::kNormalReconstructDispatchAnchor,
+                                   simqvfr::stub_dispatch_x_override(ace::kNormalReconstructDispatchAnchor,
                                                                    reinterpret_cast<uint64_t>(&groupsOverride)).size());
         const unsigned long long plain = fn(6456, 1350, 0);
         groupsOverride = (2 * 1614 + 7) / 8;
@@ -445,8 +445,8 @@ int main() {
         Fn2 fn = nullptr;
         const uintptr_t rva = build({0x53, 0x57, 0x55}, {0x8B, 0xD9, 0x48, 0x8B, 0xEA},  // ebx = ecx; rbp = rdx
                                     ace::kTileCullingEyeStructAnchor, 7, {0x48, 0x8B, 0xC7}, {0x5D, 0x5F, 0x5B}, &fn);  // rax = rdi
-        const auto stub = aceqv::stub_record_rdi_by_view(ace::kTileCullingEyeStructAnchor, reinterpret_cast<uint64_t>(table));
-        bool ok = aceqv::code_redirect(rva, ace::kTileCullingEyeStructAnchor, 7, stub.data(), stub.size());
+        const auto stub = simqvfr::stub_record_rdi_by_view(ace::kTileCullingEyeStructAnchor, reinterpret_cast<uint64_t>(table));
+        bool ok = simqvfr::code_redirect(rva, ace::kTileCullingEyeStructAnchor, 7, stub.data(), stub.size());
         for (unsigned long long v = 0; v < 4; ++v) {
             frame[0x13] = 0xABC000 + v;
             ok &= fn(v, reinterpret_cast<uint64_t>(frame), 0) == 0xABC000 + v && table[v] == 0xABC000 + v;
@@ -476,8 +476,8 @@ int main() {
         const auto call = reinterpret_cast<int (*)(void*)>(fn);
         *mode = 1;
         const bool before = call(renderer) == 2;
-        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - aceqv::module_base();
-        const bool patched = aceqv::code_redirect(rva, ace::kLightingLoopBoundAnchor, sizeof(ace::kLightingLoopBoundAnchor),
+        const uintptr_t rva = reinterpret_cast<uintptr_t>(fn + siteAt) - simqvfr::module_base();
+        const bool patched = simqvfr::code_redirect(rva, ace::kLightingLoopBoundAnchor, sizeof(ace::kLightingLoopBoundAnchor),
                                                   ace::kLightingLoopBoundStub, sizeof(ace::kLightingLoopBoundStub));
         int got[3];
         for (int m = 0; m < 3; ++m) {
@@ -492,14 +492,14 @@ int main() {
 
     {  // vtable slots (ACC): replaced only from the expected function, idempotent, refused otherwise
         static void* vtable[2] = {reinterpret_cast<void*>(&slot_original), reinterpret_cast<void*>(&slot_original)};
-        const uintptr_t base = aceqv::module_base();
+        const uintptr_t base = simqvfr::module_base();
         const uintptr_t slot0 = reinterpret_cast<uintptr_t>(&vtable[0]) - base, slot1 = slot0 + sizeof(void*);
         const uintptr_t original = reinterpret_cast<uintptr_t>(&slot_original) - base;
-        const bool read = aceqv::vtable_slot(slot0) == original;
-        const bool replaced = aceqv::vtable_slot_replace(slot0, original, reinterpret_cast<void*>(&slot_replacement)) &&
+        const bool read = simqvfr::vtable_slot(slot0) == original;
+        const bool replaced = simqvfr::vtable_slot_replace(slot0, original, reinterpret_cast<void*>(&slot_replacement)) &&
                               reinterpret_cast<int (*)()>(vtable[0])() == 2;
-        const bool again = aceqv::vtable_slot_replace(slot0, original, reinterpret_cast<void*>(&slot_replacement));
-        const bool refused = !aceqv::vtable_slot_replace(slot1, original + 1, reinterpret_cast<void*>(&slot_replacement)) &&
+        const bool again = simqvfr::vtable_slot_replace(slot0, original, reinterpret_cast<void*>(&slot_replacement));
+        const bool refused = !simqvfr::vtable_slot_replace(slot1, original + 1, reinterpret_cast<void*>(&slot_replacement)) &&
                              vtable[1] == reinterpret_cast<void*>(&slot_original);
         const bool ok = read && replaced && again && refused;
         std::printf("vtable slots: read %d, replaced %d, again %d, wrong build refused %d %s\n", read, replaced, again,

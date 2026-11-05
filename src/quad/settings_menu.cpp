@@ -8,7 +8,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 struct Spec {
@@ -723,4 +723,4 @@ MenuPose menu_pose(const MenuPlacement& p, float aspect) {
     return pose;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

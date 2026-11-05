@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 double outer_pixels(int periphery, double cw, double ch) {
@@ -205,4 +205,4 @@ QvfrAction QvfrOptimizer::step(double gpu, double budget) {
     return {true, next};
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

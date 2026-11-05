@@ -5,7 +5,7 @@
 #include "acc/adapter.h"
 #include "acc/game.h"
 
-namespace aceqv::games {
+namespace simqvfr::games {
 namespace {
 
 // A game without QVFR: any other process (`game` null), or a game known by its identity alone while it is
@@ -44,4 +44,4 @@ GameAdapter& adapter_for(const GameInfo* game) {
     return none;
 }
 
-}  // namespace aceqv::games
+}  // namespace simqvfr::games

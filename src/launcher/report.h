@@ -11,9 +11,9 @@
 
 #include "settings.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
-// Where issues go; [launcher] issue_repo in ace-quadview.ini overrides it (a test repository with the forms).
+// Where issues go; [launcher] issue_repo in sim-qvfr.ini overrides it (a test repository with the forms).
 inline constexpr wchar_t kIssueRepo[] = L"Williem3/Sim-QVFR";
 // GitHub answers 414 above about 8 KB of URL; the fields are trimmed to fit (the zip has all of it).
 inline constexpr size_t kIssueUrlMax = 8000;
@@ -33,7 +33,7 @@ struct ReportFile {
 struct ReportSources {
     std::wstring logs;         // the logs folder: ace-*.log, cpu-profile-*.txt, cheeky-snapshot.json, hang-*.dmp
     std::wstring runtimeIni;   // runtime.ini
-    std::wstring settingsIni;  // the ace-quadview.ini in use
+    std::wstring settingsIni;  // the sim-qvfr.ini in use
 };
 
 // The files to zip from `sources`, as of `now` (FILETIME units): the newest kReportLogs session logs, the
@@ -86,7 +86,7 @@ struct IssueReport {
     std::wstring description;   // what happened, as typed in the launcher (may be empty)
     std::vector<Cause> causes;  // likely_causes
 };
-// "[Performance] <the description's first line, up to ~70 characters>", or "[Performance] ace-quadview
+// "[Performance] <the description's first line, up to ~70 characters>", or "[Performance] Sim-QVFR
 // <version>: " when there is no description ("[Problem]" for "Not sure", as bug.yml's title).
 std::wstring issue_title(const IssueReport& report);
 // The collected part: version, PC, headset, settings and the last session (Markdown).
@@ -113,4 +113,4 @@ std::string url_encode(const std::wstring& text);
 std::string issue_url(const std::wstring& repo, const char* form, const std::wstring& title,
                       const std::vector<IssueField>& fields, size_t max = kIssueUrlMax);
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

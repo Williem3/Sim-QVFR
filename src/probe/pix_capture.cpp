@@ -7,7 +7,7 @@
 #include "../log.h"
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 // pix3_win.h: PIXCaptureParameters' GPU member starts with the output file name.
@@ -52,7 +52,7 @@ bool pix_capture_load(uint64_t frame) {
     std::error_code ec;
     const auto dir = std::filesystem::path(log_directory()) / L"pix";
     std::filesystem::create_directories(dir, ec);
-    captureFile = (dir / (L"ace-frame-" + std::to_wstring(frame) + L".wpix")).wstring();
+    captureFile = (dir / (L"frame-" + std::to_wstring(frame) + L".wpix")).wstring();
     captureFrame = frame;
     logf("pix: capturer loaded from %ls; capturing from xrEndFrame %llu to %llu into %ls", dll.c_str(),
          static_cast<unsigned long long>(frame), static_cast<unsigned long long>(frame + 2), captureFile.c_str());
@@ -76,4 +76,4 @@ void pix_capture_frame(uint64_t endFrame) {
     }
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

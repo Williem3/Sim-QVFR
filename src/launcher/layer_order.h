@@ -1,13 +1,13 @@
 // The OpenXR layers pane's two profiles:
-//  - With the launcher: which layers each launch loads below the ACE layer, and in what order
-//    ([launcher] layer_order, off_layers, on_layers in ace-quadview.ini; launch_plan.h applies them).
+//  - With the launcher: which layers each launch loads below the Sim-QVFR layer, and in what order
+//    ([launcher] layer_order, off_layers, on_layers in sim-qvfr.ini; launch_plan.h applies them).
 //    Windows' registrations are left as they are; this profile changes ACE launched from here only.
 //  - Without the launcher: Windows' own implicit layer registrations, their order and on/off. This is
 //    what every other app loads, and ACE started from Steam. Written to the registry; HKLM needs
 //    administrator rights (the launcher runs itself elevated with --apply-system-layers).
-// Neither can break the mod or ACE's start: the ACE layer is always nearest the game, Two-loop and
+// Neither can break the mod or ACE's start: the Sim-QVFR layer is always nearest the game, Two-loop and
 // Cheeky's frame generation keep VectorXR's frame generation off, and with Cheeky loaded its layer
-// stays on (all for launches from here). In Windows' list an installed ACE layer stays first.
+// stays on (all for launches from here). In Windows' list an installed Sim-QVFR layer stays first.
 #pragma once
 
 #include <string>
@@ -17,12 +17,12 @@
 
 #include "launch_plan.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
 // ---- With the launcher --------------------------------------------------------------------------
 
 struct LauncherLayers {
-    std::vector<std::string> order;  // layer_order: below the ACE layer, nearest the game first
+    std::vector<std::string> order;  // layer_order: below the Sim-QVFR layer, nearest the game first
     std::vector<std::string> off;    // off_layers: off for ACE although on in Windows
     std::vector<std::string> on;     // on_layers: on for ACE although off in Windows
     bool operator==(const LauncherLayers&) const = default;
@@ -57,10 +57,10 @@ struct SystemLayer {
 
 // Both hives' registrations in the loader's order (HKLM, then HKCU), named from their manifests and locked.
 // `machine`/`user`: the roots to read `subkey` under (tests use a scratch key).
-// `lockMoved`: the lock moved the ACE layer up (the registry has it below another layer of its hive).
+// `lockMoved`: the lock moved the Sim-QVFR layer up (the registry has it below another layer of its hive).
 std::vector<SystemLayer> read_system_layers(HKEY machine = HKEY_LOCAL_MACHINE, HKEY user = HKEY_CURRENT_USER,
                                             const wchar_t* subkey = kImplicitLayersKey, bool* lockMoved = nullptr);
-// Locks the ACE layer first within its hive (moving it there if it is not). True if it moved.
+// Locks the Sim-QVFR layer first within its hive (moving it there if it is not). True if it moved.
 bool lock_system_layers(std::vector<SystemLayer>& layers);
 // Moves `layers[index]` one place within its hive, never above a locked layer. False if it cannot move.
 bool move_system_layer(std::vector<SystemLayer>& layers, size_t index, int step);
@@ -78,4 +78,4 @@ bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std
 std::string system_request(const std::vector<SystemLayer>& want);
 bool parse_system_request(const std::string& text, std::vector<SystemLayer>& want);
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

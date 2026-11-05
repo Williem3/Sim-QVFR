@@ -7,7 +7,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 namespace fs = std::filesystem;
@@ -304,4 +304,4 @@ bool import_profile(const std::string& in, Profile& profile) {
     return true;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

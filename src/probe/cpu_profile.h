@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 inline constexpr int kCpuProfileSampleMs = 2;
 
@@ -31,4 +31,4 @@ void cpu_profile_wait();
 // The last finished report's path (empty before the first).
 std::wstring cpu_profile_last_report();
 
-}  // namespace aceqv
+}  // namespace simqvfr

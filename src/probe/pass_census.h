@@ -8,7 +8,7 @@
 
 struct ID3D12Device;
 
-namespace aceqv {
+namespace simqvfr {
 
 bool pass_census_start(ID3D12Device* device);
 // Each view's columns (left edge, width) in ACE's full-size render target, once known (the first
@@ -27,4 +27,4 @@ void pass_census_barrier_after_next_dispatch();
 void pass_census_arm(uint64_t first, uint64_t frames);
 void pass_census_frame_end();
 
-}  // namespace aceqv
+}  // namespace simqvfr

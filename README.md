@@ -1,18 +1,18 @@
-# Sim-QuadView (SIM QVFR) for Assetto Corsa EVO
+# Sim-QVFR for Assetto Corsa EVO
 
 **More frames per second in VR, with a sharp picture where you're looking.**
 
-Sim-QuadView makes Assetto Corsa EVO draw the middle of your view (or wherever your eyes are looking,
+Sim-QVFR makes Assetto Corsa EVO draw the middle of your view (or wherever your eyes are looking,
 if your headset tracks your eyes) at full sharpness, and the rest of the view at a lower resolution.
 You barely notice the difference, but your graphics card does far less work, so you get smoother VR
 or room to turn the graphics up.
 
 > **Please read first**
-> - **Unofficial and experimental.** Sim-QuadView isn't made or approved by Kunos Simulazioni, the
+> - **Unofficial and experimental.** Sim-QVFR isn't made or approved by Kunos Simulazioni, the
 >   makers of Assetto Corsa EVO. Use it at your own risk: it can crash the game, and a game update can
->   stop it working until Sim-QuadView is updated too.
+>   stop it working until Sim-QVFR is updated too.
 > - **Offline only.** Use it in single-player sessions, not online.
-> - **Don't report problems to Kunos** that happen while Sim-QuadView is running. Report them here
+> - **Don't report problems to Kunos** that happen while Sim-QVFR is running. Report them here
 >   instead (see [Getting help](#getting-help)).
 
 ## What you need
@@ -24,18 +24,23 @@ or room to turn the graphics up.
 
 ## Install and play
 
-1. **Download** the newest `ace-quadview-….zip` from the
+1. **Download** the newest `sim-qvfr-….zip` from the
    [Releases page](https://github.com/Williem3/Sim-QVFR/releases).
-2. **Unzip it** into any folder you like (for example `Documents\Sim-QuadView`). There's no installer.
-3. **In the game's own settings, turn off its foveated rendering.** Sim-QuadView does this job instead.
+2. **Unzip it** into any folder you like (for example `Documents\Sim-QVFR`). There's no installer.
+3. **In the game's own settings, turn off its foveated rendering.** Sim-QVFR does this job instead.
 4. **Start Steam and your VR software** (SteamVR, Virtual Desktop, Pimax Play, and so on).
-5. **Open `ace-quadview-launcher.exe`** from the folder you unzipped.
-6. **Click Launch ACE.** The game starts in VR with Sim-QuadView turned on.
+5. **Open `sim-qvfr-launcher.exe`** from the folder you unzipped.
+6. **Click Launch ACE.** The game starts in VR with Sim-QVFR turned on.
 
-That's it. Always start the game from the launcher when you want Sim-QuadView. If you start the game
-from Steam as normal, it runs without Sim-QuadView.
+That's it. Always start the game from the launcher when you want Sim-QVFR. If you start the game
+from Steam as normal, it runs without Sim-QVFR.
 
 **To remove it**, delete the folder. Nothing else on your PC was changed.
+
+**Coming from the alpha (ace-quadview)?** The beta is a fresh start: unzip it into a new folder and
+set your options again in the launcher. The alpha's launcher won't offer the beta as an update, and
+the beta doesn't read the alpha's settings. When you're happy with the beta, delete the old
+ace-quadview folder.
 
 ## Choosing your settings
 
@@ -43,7 +48,7 @@ Every setting is in the launcher window, and your choices are saved for you. Hov
 to any setting to see what it does and what it costs.
 
 - **Not sure where to start?** Open **Profiles** and pick **Performance**, **Balanced** or **Quality**.
-- **Launch checks** lists anything that would stop Sim-QuadView working, with how to fix it. The bar at
+- **Launch checks** lists anything that would stop Sim-QVFR working, with how to fix it. The bar at
   the bottom of the window shows the first problem.
 - **Resolution** sets how sharp the outer view and the sharp area are. **Foveation** sets the sharp
   area's size and shape.
@@ -77,7 +82,7 @@ All of these are off until you turn them on in the launcher:
 
 ## Foveated DLSS (optional, NVIDIA RTX only)
 
-If you have an NVIDIA RTX graphics card, Sim-QuadView can use
+If you have an NVIDIA RTX graphics card, Sim-QVFR can use
 [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS) by
 [ClarkCheekyKent](https://github.com/ClarkCheekyKent), **integrated with his permission**. It adds:
 
@@ -85,7 +90,7 @@ If you have an NVIDIA RTX graphics card, Sim-QuadView can use
 - **Extra sharp-area options (experimental):** supersampling, a fix for motion blur, and DLSS-NR.
 - **Frame generation (experimental):** extra frames made between the game's own frames.
 
-Cheeky Foveated DLSS is a separate, free download (GNU GPL v3). It isn't included with Sim-QuadView.
+Cheeky Foveated DLSS is a separate, free download (GNU GPL v3). It isn't included with Sim-QVFR.
 
 ### What to download
 
@@ -105,12 +110,12 @@ Once an official Cheeky release includes the fixes, its own download will replac
    on the game's own DLSS, so it has to be on.
 2. **Run Cheeky's installer.** In the official ZIP, open the `OpenXR` folder and run
    `CheekyOpenXRSetup.exe`.
-3. **Copy Cheeky's folder into Sim-QuadView.** In the beta ZIP there's a folder called
-   `CheekyFoveatedDLSS`. Copy that whole folder into the `ace` folder inside your Sim-QuadView folder.
+3. **Copy Cheeky's folder into Sim-QVFR.** In the beta ZIP there's a folder called
+   `CheekyFoveatedDLSS`. Copy that whole folder into the `layer` folder inside your Sim-QVFR folder.
    (If you'd rather keep it somewhere else, use **Choose…** in the launcher's **Foveated DLSS** page to
    point to `CheekyFoveatedDLSSRuntime.dll`.)
 4. **Don't copy `dxgi.dll` or `version.dll`** from Cheeky's ZIPs into the game's folder. If they're
-   already there, delete them. Sim-QuadView starts Cheeky itself, and having both makes it fail.
+   already there, delete them. Sim-QVFR starts Cheeky itself, and having both makes it fail.
 5. **If you use OpenXR Toolkit:** it has to be *above* Cheeky in the list of OpenXR layers, or the game
    crashes when it starts. The launcher's **Launch checks** tells you if this is wrong, and you can fix
    the order in the free [OpenXR API Layers GUI](https://github.com/fredemmott/OpenXR-API-Layers-GUI).
@@ -139,7 +144,7 @@ Once an official Cheeky release includes the fixes, its own download will replac
 
 ## Assetto Corsa Competizione (alpha)
 
-Sim-QuadView runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution
+Sim-QVFR runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution
 periphery, the headset menu and the performance overlay. Choose **Assetto Corsa Competizione** under
 **Game** on the launcher's **Rendering** page, then **Launch**.
 
@@ -164,7 +169,7 @@ available in ACC yet.
   the ZIP it makes, then send.
 - **Can't find the game?** Make sure Assetto Corsa EVO is installed through Steam and Steam is running.
   If the launcher still can't find it, report an issue as above.
-- **After a game update**, Sim-QuadView turns itself off and the game runs as normal until a new version
+- **After a game update**, Sim-QVFR turns itself off and the game runs as normal until a new version
   comes out. Your headset shows a message for the first 30 seconds to let you know.
 - **Updates:** the launcher's **About** page can check for new versions and install them for you. Your
   settings and profiles are kept.
@@ -180,20 +185,20 @@ donating.
 
 Thanks to [DSuzuki35](https://github.com/DSuzuki35) for the breakthrough in
 [LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod) and for the starter launcher,
-both of which helped the early development of Sim-QuadView.
+both of which helped the early development of Sim-QVFR.
 
 Thanks to [ClarkCheekyKent](https://github.com/ClarkCheekyKent) for
 [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS), which provides the Foveated
-DLSS, DLSS-NR and frame generation features, and for his permission to integrate it into Sim-QuadView.
-Cheeky Foveated DLSS is free software under the GNU GPL v3. Sim-QuadView loads it as a separate download
+DLSS, DLSS-NR and frame generation features, and for his permission to integrate it into Sim-QVFR.
+Cheeky Foveated DLSS is free software under the GNU GPL v3. Sim-QVFR loads it as a separate download
 and doesn't include it. The launcher and the headset menu show its version wherever they control it.
 
 ## Licence
 
-Sim-QuadView is free to use, change and share for any **noncommercial** purpose under the
+Sim-QVFR is free to use, change and share for any **noncommercial** purpose under the
 [PolyForm Noncommercial License 1.0.0](LICENSE.md). Commercial use needs the author's permission.
 
-**Credit is required.** If you share any part of Sim-QuadView, changed or not, include `LICENSE.md`
+**Credit is required.** If you share any part of Sim-QVFR, changed or not, include `LICENSE.md`
 (or a link to it) and this line:
 
 ```

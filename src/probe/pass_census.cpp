@@ -15,14 +15,14 @@
 #include "../log.h"
 #include "../xr.h"
 
-extern "C" size_t aceqv_slot_SetPipelineState(void);
-extern "C" size_t aceqv_slot_DrawInstanced(void);
-extern "C" size_t aceqv_slot_DrawIndexedInstanced(void);
-extern "C" size_t aceqv_slot_Dispatch(void);
-extern "C" size_t aceqv_slot_ExecuteIndirect(void);
-extern "C" size_t aceqv_slot_RSSetViewports(void);
+extern "C" size_t simqvfr_slot_SetPipelineState(void);
+extern "C" size_t simqvfr_slot_DrawInstanced(void);
+extern "C" size_t simqvfr_slot_DrawIndexedInstanced(void);
+extern "C" size_t simqvfr_slot_Dispatch(void);
+extern "C" size_t simqvfr_slot_ExecuteIndirect(void);
+extern "C" size_t simqvfr_slot_RSSetViewports(void);
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 using List = ID3D12GraphicsCommandList;
@@ -387,12 +387,12 @@ bool pass_census_start(ID3D12Device* device) {
     msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);
     maxGapTicks = static_cast<int64_t>(kMaxGapMs / msPerTick);
     void** vtable = *reinterpret_cast<void***>(list.Get());
-    started = hook(vtable, aceqv_slot_SetPipelineState(), &setPsoHook, &setPsoOriginal) &&
-              hook(vtable, aceqv_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
-              hook(vtable, aceqv_slot_DrawIndexedInstanced(), &drawIndexedHook, &drawIndexedOriginal) &&
-              hook(vtable, aceqv_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
-              hook(vtable, aceqv_slot_ExecuteIndirect(), &indirectHook, &indirectOriginal) &&
-              hook(vtable, aceqv_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
+    started = hook(vtable, simqvfr_slot_SetPipelineState(), &setPsoHook, &setPsoOriginal) &&
+              hook(vtable, simqvfr_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
+              hook(vtable, simqvfr_slot_DrawIndexedInstanced(), &drawIndexedHook, &drawIndexedOriginal) &&
+              hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
+              hook(vtable, simqvfr_slot_ExecuteIndirect(), &indirectHook, &indirectOriginal) &&
+              hook(vtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
     logf("pass census: %s (list vtable %p)", started ? "installed" : "FAILED", vtable);
     return started;
 }
@@ -432,4 +432,4 @@ void pass_census_frame_end() {
     }
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

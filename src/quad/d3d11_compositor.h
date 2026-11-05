@@ -18,7 +18,7 @@
 #include "compositor.h"
 #include "helmet_pieces.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 class D3D11Compositor : public HelmetPieceSet {
 public:
@@ -79,4 +79,4 @@ private:
     bool ready_ = false;
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

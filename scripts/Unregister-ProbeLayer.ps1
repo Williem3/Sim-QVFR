@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 if (-not $Manifest) {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $Manifest = Join-Path $scriptDir "..\build\Release\XR_APILAYER_ACE_quadview.json"
+    $Manifest = Join-Path $scriptDir "..\build\Release\XR_APILAYER_SIM_qvfr.json"
 }
 
 $manifestPath = [System.IO.Path]::GetFullPath($Manifest)

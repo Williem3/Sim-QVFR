@@ -1,4 +1,4 @@
-// Cheeky Foveated DLSS, hosted by the layer ([cheeky] in ace-quadview.ini). Cheeky's processing
+// Cheeky Foveated DLSS, hosted by the layer ([cheeky] in sim-qvfr.ini). Cheeky's processing
 // lives in its resident runtime, CheekyFoveatedDLSSRuntime.dll (GPL v3, built and shipped separately
 // from Cheeky's repository), behind a versioned C ABI: Start / Tick / Command / Snapshot / Detach.
 // Cheeky's own dxgi.dll loader and desktop overlay are one host of that ABI; this layer is another,
@@ -18,7 +18,7 @@ struct ID3D11Device;
 struct ID3D12Device;
 struct ID3D12CommandQueue;
 
-namespace aceqv {
+namespace simqvfr {
 
 struct CheekyConfig {
     bool enabled = false;
@@ -56,4 +56,4 @@ bool cheeky_set(const std::string& lines);
 // Cheeky's snapshot JSON (empty on failure).
 std::string cheeky_snapshot();
 
-}  // namespace aceqv
+}  // namespace simqvfr

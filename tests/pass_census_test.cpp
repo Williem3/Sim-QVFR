@@ -31,9 +31,9 @@ int main() {
     // The log goes to a file of the test's own (opened at its first line), read back at the end.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
-    const std::wstring ownLog = std::wstring(temp) + L"aceqv-pass-census-test.log";
+    const std::wstring ownLog = std::wstring(temp) + L"simqvfr-pass-census-test.log";
     DeleteFileW(ownLog.c_str());
-    SetEnvironmentVariableW(L"ACE_QV_LOG", ownLog.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", ownLog.c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;
@@ -42,7 +42,7 @@ int main() {
         std::puts("no WARP D3D12 device");
         return 2;
     }
-    if (!aceqv::pass_census_start(device.Get()))
+    if (!simqvfr::pass_census_start(device.Get()))
         return 3;
 
     D3D12_ROOT_SIGNATURE_DESC rootDesc{0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -88,11 +88,11 @@ int main() {
     device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list));
 
     const int left[4] = {0, 64, 128, 192}, width[4] = {64, 64, 64, 64};
-    aceqv::pass_census_set_view_columns(left, width);
-    aceqv::pass_census_watch("eyes only pipeline,test compute");
-    aceqv::pass_census_set_uav_barriers(true);  // recording a UAV barrier after each dispatch must stay valid
-    aceqv::pass_census_arm(1, 1);
-    aceqv::pass_census_frame_end();  // frame 1: counting starts
+    simqvfr::pass_census_set_view_columns(left, width);
+    simqvfr::pass_census_watch("eyes only pipeline,test compute");
+    simqvfr::pass_census_set_uav_barriers(true);  // recording a UAV barrier after each dispatch must stay valid
+    simqvfr::pass_census_arm(1, 1);
+    simqvfr::pass_census_frame_end();  // frame 1: counting starts
     list->Dispatch(1, 1, 1);         // no pipeline yet: counted under (none)
     list->SetComputeRootSignature(root.Get());
     list->SetPipelineState(compute.Get());
@@ -115,10 +115,10 @@ int main() {
     list->RSSetViewports(1, &q1);
     list->DrawInstanced(3, 1, 0, 0);
     list->Close();
-    aceqv::pass_census_frame_end();  // frame 2: report
+    simqvfr::pass_census_frame_end();  // frame 2: report
 
     char logPath[MAX_PATH];
-    GetEnvironmentVariableA("ACE_QV_LOG", logPath, MAX_PATH);
+    GetEnvironmentVariableA("SIM_QVFR_LOG", logPath, MAX_PATH);
     std::ifstream log(logPath);
     std::string line;
     bool computeOk = false, allViewsOk = false, eyesOnlyOk = false, noneOk = false, falseFlag = false;

@@ -9,7 +9,7 @@
 #include "../../log.h"
 #include "../../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 using RenderFrameFn = void (*)(void* self, float a, float b, void* scene);
@@ -78,4 +78,4 @@ bool double_render_start() {
     return true;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -9,7 +9,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct PadHeld {
     std::wstring device, name;  // hotkeys.h's PadControl device ("VVVV_PPPP") and the device's name
@@ -39,4 +39,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

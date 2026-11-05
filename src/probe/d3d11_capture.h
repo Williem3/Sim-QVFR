@@ -8,7 +8,7 @@
 
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 // From xrCreateSession with a D3D11 binding; `frame` 0: off.
 void d3d11_capture_start(ID3D11Device* device, uint64_t frame);
@@ -19,4 +19,4 @@ void d3d11_capture_acquired(XrSwapchain chain, uint32_t index);
 // From xrReleaseSwapchainImage, before passing it on; `frame`: xrEndFrame calls so far.
 void d3d11_capture_release(XrSwapchain chain, uint64_t frame);
 
-}  // namespace aceqv
+}  // namespace simqvfr

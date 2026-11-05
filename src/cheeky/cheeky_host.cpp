@@ -12,7 +12,7 @@
 #include "log.h"
 #include "xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 // Cheeky's runtime ABI v1 (its shared/runtime_host_api.hpp). The runtime rejects a Start whose size
@@ -263,4 +263,4 @@ std::string cheeky_snapshot() {
     return snapshot_locked();
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

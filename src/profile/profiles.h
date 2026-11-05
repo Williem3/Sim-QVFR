@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct ProfileKey {
     std::wstring section, key, value;
@@ -62,4 +62,4 @@ bool set_current_profile(const wchar_t* ini, const std::wstring& name);
 std::string export_profile(const Profile& profile);
 bool import_profile(const std::string& text, Profile& profile);
 
-}  // namespace aceqv
+}  // namespace simqvfr

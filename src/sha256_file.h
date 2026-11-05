@@ -9,7 +9,7 @@
 #include <windows.h>
 #include <bcrypt.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 inline std::string sha256_file(const wchar_t* path) {
     HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
@@ -42,4 +42,4 @@ inline std::string sha256_file(const wchar_t* path) {
     return hex;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

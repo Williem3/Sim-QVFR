@@ -51,7 +51,7 @@ body:
       label: Screenshots and logs
       description: |
         Drag in screenshots (in the headset, and the launcher's Diagnostics page) and the report zip from
-        the launcher's logs folder (ace-quadview-report-*.zip).
+        the launcher's logs folder (sim-qvfr-report-*.zip).
   - type: textarea
     id: checks
     attributes:

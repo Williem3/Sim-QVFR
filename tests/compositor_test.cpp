@@ -20,7 +20,7 @@
 #include "quad/views4_layout.h"
 
 using Microsoft::WRL::ComPtr;
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -264,7 +264,7 @@ int main() {
     // Debug captures: three PNGs of the left eye.
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
-    const std::wstring prefix = std::wstring(temp) + L"aceqv-compositor-test";
+    const std::wstring prefix = std::wstring(temp) + L"simqvfr-compositor-test";
     const bool saved = compositor.save_captures(frameB.Get(), output.Get(), prefix);
     WIN32_FILE_ATTRIBUTE_DATA info{};
     const bool exists = GetFileAttributesExW((prefix + L"-output.png").c_str(), GetFileExInfoStandard, &info) &&
@@ -596,9 +596,9 @@ int main() {
         // quarter takes its band with it.
         wchar_t tempDir[MAX_PATH];
         GetTempPathW(MAX_PATH, tempDir);
-        const std::wstring top = std::wstring(tempDir) + L"aceqv-helmet-top.png",
-                           bottom = std::wstring(tempDir) + L"aceqv-helmet-bottom.png",
-                           visor = std::wstring(tempDir) + L"aceqv-helmet-visor.png";
+        const std::wstring top = std::wstring(tempDir) + L"simqvfr-helmet-top.png",
+                           bottom = std::wstring(tempDir) + L"simqvfr-helmet-bottom.png",
+                           visor = std::wstring(tempDir) + L"simqvfr-helmet-visor.png";
         const uint32_t clear = 0xFFFFFF00;
         const bool written =
             write_png(top, {0xFFFFFFFF, 0xFFFFFFFF, clear, clear, clear, clear, clear, clear}) &&

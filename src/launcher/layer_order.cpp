@@ -5,7 +5,7 @@
 #include <iterator>
 #include <sstream>
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace {
 
 std::wstring ini_string(const std::wstring& ini, const wchar_t* key) {
@@ -219,7 +219,7 @@ bool lock_system_layers(std::vector<SystemLayer>& layers) {
                                        [&](const SystemLayer& l) { return l.machine == machine && l.name == kLayerName; });
         if (ours == layers.end())
             continue;
-        ours->lock = "the ACE layer stays nearest the game";
+        ours->lock = "the Sim-QVFR layer stays nearest the game";
         moved |= ours != first;
         std::rotate(first, ours, ours + 1);
     }
@@ -329,4 +329,4 @@ bool parse_system_request(const std::string& text, std::vector<SystemLayer>& wan
     return !want.empty();
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

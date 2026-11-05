@@ -14,7 +14,7 @@
 #include "../../xr.h"
 #include "../adapter.h"  // Views4Frame
 
-namespace aceqv {
+namespace simqvfr {
 
 // Where the four views sit in ACE's target (views4_layout.h): equal quarters unless set. Call
 // before views4_start.
@@ -79,4 +79,4 @@ void views4_frame_end();
 // The views ACE just located (FOV and pose), for that dump.
 void views4_note_views(const XrView* views, uint32_t count);
 
-}  // namespace aceqv
+}  // namespace simqvfr

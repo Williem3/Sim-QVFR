@@ -4,7 +4,7 @@
 // per-view storage has 3 slots.
 #pragma once
 
-namespace aceqv {
+namespace simqvfr {
 
 // Patches renderer init so VR selects view mode 2. Must run before ACE creates its renderer
 // (xrCreateInstance is early enough; views3_watch confirms it). Verifies the code bytes first.
@@ -13,4 +13,4 @@ bool views3_patch();
 // probe_start() to have succeeded.
 void views3_watch();
 
-}  // namespace aceqv
+}  // namespace simqvfr

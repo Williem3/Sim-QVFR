@@ -11,7 +11,7 @@
 #include <dbghelp.h>
 #include <psapi.h>
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 std::atomic<bool> armed{false}, started{false}, framed{false};
@@ -97,4 +97,4 @@ void hang_watch_frame() {
 
 void hang_watch_disarm() { armed = false; }
 
-}  // namespace aceqv
+}  // namespace simqvfr

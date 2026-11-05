@@ -9,17 +9,17 @@
 namespace acc {
 namespace {
 
-using aceqv::Views4Frame;
-using aceqv::Views4Layout;
+using simqvfr::Views4Frame;
+using simqvfr::Views4Layout;
 
-class AccAdapter final : public aceqv::games::GameAdapter {
+class AccAdapter final : public simqvfr::games::GameAdapter {
 public:
-    const aceqv::games::GameInfo* info() const override { return &kGame; }
+    const simqvfr::games::GameInfo* info() const override { return &kGame; }
     bool qvfr_composable() const override { return false; }    // not by the D3D12 compositor:
     bool qvfr_compose_d3d11() const override { return true; }  // ACC is D3D11
     bool qvfr_eye_columns() const override { return true; }  // instanced stereo; OpenComposite copies each half
 
-    bool qvfr_start(const aceqv::games::QvfrStart& s) override {
+    bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         return views_start(s.layout, s.focusFraction, s.focusFractionY);
     }
     // No focus cull yet. Live resolution: the views laid out again in the launch target (views.cpp).
@@ -50,7 +50,7 @@ public:
 
 }  // namespace
 
-aceqv::games::GameAdapter& adapter() {
+simqvfr::games::GameAdapter& adapter() {
     static AccAdapter a;
     return a;
 }

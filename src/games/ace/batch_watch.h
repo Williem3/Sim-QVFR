@@ -3,7 +3,7 @@
 // limits, with a per-group breakdown when a total nears or passes one (ACE then throws and exits).
 #pragma once
 
-namespace aceqv {
+namespace simqvfr {
 
 // Verifies the anchors and hooks the merge. Safe to call more than once.
 bool batch_watch_start();
@@ -11,4 +11,4 @@ void batch_watch_stop();
 // Called once per xrEndFrame: the periodic summary.
 void batch_watch_frame_end();
 
-}  // namespace aceqv
+}  // namespace simqvfr

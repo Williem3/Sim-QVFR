@@ -10,7 +10,7 @@
 #include "json.h"
 #include "launch_plan.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace {
 
 // The version's leading numbers: up to the first character that is neither a digit nor a dot (after a "v").
@@ -48,40 +48,55 @@ int compare_versions(const std::wstring& a, const std::wstring& b) {
     return 0;
 }
 
+namespace {
+
+// The release's package: its "sim-qvfr-<version>.zip" asset with the SHA-256 GitHub gives it; null for none.
+const json::Value* package_zip(const json::Value& release) {
+    const json::Value* assets = release.find("assets");
+    if (!assets || assets->type != json::Value::Type::Array)
+        return nullptr;
+    for (const json::Value& a : assets->items) {
+        const std::string name = a.string_at("name"), digest = a.string_at("digest");
+        const json::Value* size = a.find("size");
+        if (name.rfind("sim-qvfr-", 0) == 0 && name.size() >= 4 && name.compare(name.size() - 4, 4, ".zip") == 0 &&
+            digest.rfind("sha256:", 0) == 0 && size && size->type == json::Value::Type::Number)
+            return &a;
+    }
+    return nullptr;
+}
+
+}  // namespace
+
 bool newest_release(const std::string& text, Release& release) {
     json::Value root;
     if (!json::parse(text, root) || root.type != json::Value::Type::Array)
         return false;
     // GitHub lists them newest first; the highest version wins all the same (a release edited later moves up).
-    const json::Value* best = nullptr;
+    // Only releases with a Sim-QVFR package count: the repository's older ace-quadview alphas (2026.11.x tags,
+    // ace-quadview-*.zip) would otherwise outrank 1.0.0 and offer a downgrade.
+    const json::Value *best = nullptr, *bestZip = nullptr;
     for (const json::Value& r : root.items) {
         const json::Value* draft = r.find("draft");
         if (r.type != json::Value::Type::Object || (draft && draft->boolean) || r.string_at("tag_name").empty())
             continue;
-        if (!best || compare_versions(widen(r.string_at("tag_name")), widen(best->string_at("tag_name"))) > 0)
+        const json::Value* zip = package_zip(r);
+        if (zip && (!best || compare_versions(widen(r.string_at("tag_name")), widen(best->string_at("tag_name"))) > 0)) {
             best = &r;
+            bestZip = zip;
+        }
     }
     if (!best)
         return false;
     release = {widen(best->string_at("tag_name")), widen(best->string_at("html_url"))};
-    if (const json::Value* assets = best->find("assets"); assets && assets->type == json::Value::Type::Array)
-        for (const json::Value& a : assets->items) {
-            const std::string name = a.string_at("name"), digest = a.string_at("digest");
-            const json::Value* size = a.find("size");
-            if (name.rfind("ace-quadview-", 0) != 0 || name.size() < 4 || name.compare(name.size() - 4, 4, ".zip") != 0 ||
-                digest.rfind("sha256:", 0) != 0 || !size || size->type != json::Value::Type::Number)
-                continue;
-            release.zipUrl = a.string_at("browser_download_url");
-            release.zipSha256 = digest.substr(7);
-            release.zipSize = std::strtoull(size->text.c_str(), nullptr, 10);
-            break;
-        }
+    release.zipUrl = bestZip->string_at("browser_download_url");
+    release.zipSha256 = bestZip->string_at("digest").substr(7);
+    release.zipSize = std::strtoull(bestZip->find("size")->text.c_str(), nullptr, 10);
     return true;
 }
 
 bool fetch_releases(std::string& body, std::wstring& error) {
     body.clear();
-    HINTERNET session = WinHttpOpen(L"ace-quadview-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+    HINTERNET session = WinHttpOpen(L"sim-qvfr-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS, 0);
     HINTERNET connect = session ? WinHttpConnect(session, kReleasesApiHost, INTERNET_DEFAULT_HTTPS_PORT, 0) : nullptr;
     HINTERNET request = connect ? WinHttpOpenRequest(connect, L"GET", kReleasesApiPath, nullptr, WINHTTP_NO_REFERER,
@@ -123,4 +138,4 @@ bool fetch_releases(std::string& body, std::wstring& error) {
     return ok;
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

@@ -6,7 +6,7 @@
 // logs\hang-<time>.dmp. Once per process.
 #pragma once
 
-namespace aceqv {
+namespace simqvfr {
 
 // At xrCreateSession. 0 seconds: off.
 void hang_watch_arm(unsigned seconds);
@@ -17,4 +17,4 @@ void hang_watch_disarm();
 // Logs the loaded modules now.
 void log_modules();
 
-}  // namespace aceqv
+}  // namespace simqvfr

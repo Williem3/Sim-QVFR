@@ -8,7 +8,7 @@
 
 #include "xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 std::mutex logMutex;
@@ -17,7 +17,7 @@ bool logOpened = false;
 
 std::filesystem::path logPath() {
     wchar_t env[32768];
-    DWORD n = GetEnvironmentVariableW(L"ACE_QV_LOG", env, static_cast<DWORD>(std::size(env)));
+    DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_LOG", env, static_cast<DWORD>(std::size(env)));
     if (n > 0 && n < std::size(env)) {
         std::filesystem::path p(env);
         if (p.has_root_name() && p.has_root_directory())
@@ -32,7 +32,7 @@ std::filesystem::path logPath() {
     // The package layout keeps the DLL in <package>/build and logs in <package>/logs.
     if (dir.filename() == L"build")
         dir = dir.parent_path();
-    return dir / L"logs" / L"ace-quadview.log";
+    return dir / L"logs" / L"sim-qvfr.log";
 }
 
 void open() {
@@ -76,4 +76,4 @@ void logf(const char* format, ...) {
     log_line(message);
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

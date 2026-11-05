@@ -14,19 +14,19 @@ namespace acc {
 // Before UE's first frame in VR (xrCreateInstance). Checks every slot first: all or nothing. Again later:
 // true, nothing changes. `focusX` / `focusY`: the focus box as a share of each eye's tangent width / height
 // (focusX <= 0: the focus views copy the eyes; focusY <= 0: as focusX).
-bool views_start(const aceqv::Views4Layout& layout, double focusX, double focusY);
+bool views_start(const simqvfr::Views4Layout& layout, double focusX, double focusY);
 // A live focus box, from the next projection UE asks for.
 void views_set_focus(double focusX, double focusY);
 // Live resolution: the views laid out again inside the launch target (views4_live_eye_columns), from the next frame
 // UE sets up. Each frame's record carries the layout it was rendered with.
-void views_set_live_layout(const aceqv::Views4Layout& layout);
+void views_set_live_layout(const simqvfr::Views4Layout& layout);
 // Where each eye looks, as tangents of its view (`valid[e]` false: no turn), at every xrLocateViews. The focus
 // views turn towards it (focus_turn.h, clamped so the box stays in the eye's view), from the next frame UE sets up.
 void views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);
 // The record of the next frame to compose (what its views were rendered with), in rendering order; false before
 // the first. Latest: the newest, without taking it.
-bool views_take_frame(aceqv::Views4Frame& frame);
-bool views_latest_frame(aceqv::Views4Frame& frame);
+bool views_take_frame(simqvfr::Views4Frame& frame);
+bool views_latest_frame(simqvfr::Views4Frame& frame);
 // The game's target (width, height) as AdjustViewRect last saw it (0 before the first frame).
 void views_target(int (&size)[2]);
 // View v's rect in the target (x, y, width, height) as the renderer last reported it (SetFinalViewRect); false

@@ -13,7 +13,7 @@
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr int kMaxGroups = 64;  // ACE's GPU visibility passes cap the group count at 64
@@ -228,4 +228,4 @@ void batch_watch_frame_end() {
     ReleaseSRWLockExclusive(&lock);
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

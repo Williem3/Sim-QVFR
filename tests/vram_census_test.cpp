@@ -9,7 +9,7 @@
 
 #include "probe/vram_census.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 using Microsoft::WRL::ComPtr;
 
 namespace {

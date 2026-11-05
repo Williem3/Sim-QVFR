@@ -8,7 +8,7 @@
 #include "quad/focus_cull.h"
 #include "quad/focus_turn.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 

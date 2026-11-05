@@ -1,17 +1,17 @@
-# Contributing to Sim-QuadView
+# Contributing to Sim-QVFR
 
-This is the technical guide for developers working on Sim-QuadView. Players should start with the
+This is the technical guide for developers working on Sim-QVFR. Players should start with the
 [README](README.md): everything a player sets is in the launcher, so the ini keys below are for
 development and diagnosis only.
 
-Sim-QuadView is an `lmu_quadview`-style OpenXR layer for **Assetto Corsa EVO** that makes the game
+Sim-QVFR is an `lmu_quadview`-style OpenXR layer for **Assetto Corsa EVO** that makes the game
 render a wide low-resolution outer view and a sharp focus view per eye, to cut GPU and VRAM use. In any
 other OpenXR app the DLL does nothing.
 
 ## How it works
 
 The layer **changes how ACE renders**. It patches the game in memory, after checking the exe's
-SHA-256 and code anchors. `[experiment] mode` in `ace-quadview.ini` picks the rendering path:
+SHA-256 and code anchors. `[experiment] mode` in `sim-qvfr.ini` picks the rendering path:
 
 - `views4`, **Quad View Foveated Rendering (QVFR)**: one ACE frame renders four views (the two
   outer eye views at `periphery_scale` and two focus views at `focus_density` over `focus_percent`
@@ -23,7 +23,7 @@ SHA-256 and code anchors. `[experiment] mode` in `ace-quadview.ini` picks the re
   QVFR) and shared profiles can't select it; the code stays, but new work targets QVFR only.
 - `off`: rendering unchanged. Only the log-only probes run.
 - Experiments for diagnosis, not for driving: `focus_only`, `two_loops`, `views3`, and
-  `double_render`, which crashes ACE. The comments in `manifest/ace-quadview.ini` describe each one.
+  `double_render`, which crashes ACE. The comments in `manifest/sim-qvfr.ini` describe each one.
 
 With `probes=1` (the default), the layer also logs the views, swapchains and frame submission. It
 puts log-only hooks on ACE's VR functions, which log call stacks and per-frame call order, and runs
@@ -63,7 +63,7 @@ outer views' pixels follow at the next launch.
 
 **Helmet overlay (`[helmet]`, QVFR only, off by default).** Draws a helmet's visor opening around each
 eye (`src/quad/helmet.h`), lit by the frame along each side. The package ships `assets/helmet/`
-(installed to `ace\helmet`): `top.png`, `bottom.png` and `visor.png` with alpha. They're drawn into a
+(installed to `layer\helmet`): `top.png`, `bottom.png` and `visor.png` with alpha. They're drawn into a
 head-locked layer of their own that the headset composites after any frame generation, so the scene keeps
 the FOV ACE rendered and Cheeky's frame generation stays aligned. Only the bands the pieces draw on are
 rendered and composited, at 2048 or, with `detail`, 4096 pixels a side. The log suggests the crop that
@@ -89,11 +89,11 @@ after running every test. `packaging/README.txt` is the user guide that ships in
 
 ## The launcher
 
-`build/Release/ace-quadview-launcher.exe` opens a settings window and starts Assetto Corsa EVO in VR with
-the layer for that launch only; nothing is installed or registered. It reads `ace-quadview.ini` next to
+`build/Release/sim-qvfr-launcher.exe` opens a settings window and starts Assetto Corsa EVO in VR with
+the layer for that launch only; nothing is installed or registered. It reads `sim-qvfr.ini` next to
 it (the layer's settings, plus a `[launcher]` section), finds the game through Steam, and writes a run
 folder under `logs/` with the layer's manifest, a snapshot of the ini and `launch.txt` (what it did). The
-layer's log for that launch is `logs/ace-<time>.log`.
+layer's log for that launch is `logs/session-<time>.log`.
 
 **Launch checks** (`src/launcher/preflight.h`): the exe build (SHA-256, hashed in the background), Steam
 running and ACE closed, Cheeky's `dxgi.dll` or `version.dll` loader in the game folder, and with Cheeky on
@@ -110,7 +110,7 @@ defaults; Paste takes in only a profile's keys.
 **Updates (`src/launcher/update_check.h`, `src/launcher/install.h`).** `[launcher] update_check` (off by
 default) asks GitHub's API for the newest release. Install (packaged installs only, not while ACE runs)
 downloads the release zip, checks it against GitHub's SHA-256, unpacks it with `tar.exe`, checks every
-file against `SHA256.txt`, then replaces the program files, keeping `ace-quadview.ini`, files the release
+file against `SHA256.txt`, then replaces the program files, keeping `sim-qvfr.ini`, files the release
 doesn't have and files the user changed. Replaced files go to `update\backup-<old version>\`, everything
 rolls back if a step fails, and the launcher restarts.
 
@@ -131,13 +131,13 @@ cannot be moved are listed as staying above.
 ; off_layers=XR_APILAYER_MBUCCHIA_toolkit                         (turned off for ACE)
 ```
 
-`ace-quadview-launcher.exe --dry-run` writes the run folder and prints the plan without starting
+`sim-qvfr-launcher.exe --dry-run` writes the run folder and prints the plan without starting
 the game; `--launch` launches without the window. Steam must be running and ACE closed.
 
 ## Run without the launcher (registered layer)
 
 For development you can register the layer instead, so that ACE loads it when started from Steam.
-It then runs whatever `build\Release\ace-quadview.ini` says, which may be the launcher's last
+It then runs whatever `build\Release\sim-qvfr.ini` says, which may be the launcher's last
 settings. For a log-only probe session, set `mode=off` and `probes=1` in `[experiment]` first.
 
 1. Register the layer for your user (HKCU, removable):
@@ -147,13 +147,13 @@ settings. For a log-only probe session, set `mode=off` and `probes=1` in `[exper
    `-Machine` registers it in HKLM instead (run as administrator). Use that to order it against
    another machine-wide layer such as VectorXR.
 2. Start SteamVR, then ACE from Steam as usual. Load a session in VR and drive for about a minute.
-3. Quit ACE. The log is `build\Release\logs\ace-quadview.log`.
+3. Quit ACE. The log is `build\Release\logs\sim-qvfr.log`.
 4. Unregister when done:
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\Unregister-ProbeLayer.ps1
    ```
 
-To skip the layer for one launch, set `DISABLE_XR_APILAYER_ACE_quadview=1`. Offline sessions only:
+To skip the layer for one launch, set `DISABLE_XR_APILAYER_SIM_qvfr=1`. Offline sessions only:
 the layer patches game code, and Kunos validates content online.
 
 ## Tools
