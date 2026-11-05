@@ -33,6 +33,15 @@ using CreateShaderModule = std::int32_t (*)(void* device, const ShaderModuleCrea
                                            std::uint64_t* module);
 
 std::atomic<int> g_finalResolveEdits{0};
+std::atomic<int> g_eyeArrayModules{0};
+
+// The uniform blocks with per-eye arrays of two (README.md, "Inventory"), by their variables' names.
+const std::vector<std::string> kEyeArrayBlocks = {
+    "u_misc_data_var",          "u_new_sky_data_var",     "u_gbuffer_data_var",       "u_dome_data_var",
+    "u_particle_data_var",      "u_ocean_shading_data_var", "u_line3d_data_var",      "u_ocean_meta_data_var",
+    "u_ssr_data_var",           "u_ogl_light_data_var",   "u_cloud_upscale_data_var", "u_volumetric_apply_data_var",
+    "u_rain_draw_info_var",
+};
 
 std::string sha256_hex(const void* data, std::size_t size) {
     std::string hex;
@@ -75,6 +84,23 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             return result;
         }
         logf("xplane: final resolve shader NOT edited: %s", why.c_str());
+    }
+    // Every shader reading X-Plane's per-eye arrays: views 2-3 read their eye's entry (index & 1).
+    if (info && info->pCode && info->codeSize >= 20) {
+        std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
+        int skipped = 0;
+        const int folded = spirv_fold_eye_arrays(words, kEyeArrayBlocks, &skipped);
+        if (folded > 0 || skipped > 0) {
+            const int n = ++g_eyeArrayModules;
+            if (skipped > 0 || n <= 3 || n % 25 == 0)
+                logf("xplane: per-eye arrays folded in shader module %d: %d accesses, %d skipped", n, folded, skipped);
+        }
+        if (folded > 0) {
+            ShaderModuleCreateInfo edited = *info;
+            edited.codeSize = words.size() * 4;
+            edited.pCode = words.data();
+            return real(device, &edited, allocator, module);
+        }
     }
     return real(device, info, allocator, module);
 }

@@ -66,6 +66,73 @@ int main() {
     check(!xplane::spirv_add_to_input(other, "v_other", 2, &why) && why == "no variable of that name",
           "another name: left alone");
 
+    {
+        // %1 int; %2 = 2; %3 = int[2]; %4 = struct { int, int[2] }; %5 Uniform ptr to %4; %6 Uniform var "u_t_var";
+        // %7 = 1 (member index); %8 Uniform ptr to int; %11 Input ptr to int; %12 Input var; %13 = OpLoad %12;
+        // %14 = OpAccessChain %8 %6 %7 %13 (an indexed access into the two-entry member).
+        std::vector<std::uint32_t> m = {0x07230203, 0x00010300, 0, 15, 0};
+        m.insert(m.end(), {op(5, 4), 6, 0x745F5F75 /* "u__t" */, 0x00726176 /* "var" */});
+        m.insert(m.end(), {op(21, 4), 1, 32, 1});
+        m.insert(m.end(), {op(43, 4), 1, 2, 2});
+        m.insert(m.end(), {op(28, 4), 3, 1, 2});
+        m.insert(m.end(), {op(30, 4), 4, 1, 3});
+        m.insert(m.end(), {op(32, 4), 5, 2, 4});
+        m.insert(m.end(), {op(59, 4), 5, 6, 2});
+        m.insert(m.end(), {op(43, 4), 1, 7, 1});
+        m.insert(m.end(), {op(32, 4), 8, 2, 1});
+        m.insert(m.end(), {op(32, 4), 11, 1, 1});
+        m.insert(m.end(), {op(59, 4), 11, 12, 1});
+        m.insert(m.end(), {op(61, 4), 1, 13, 12});
+        m.insert(m.end(), {op(65, 6), 8, 14, 6, 7, 13});
+        m.insert(m.end(), {op(65, 6), 8, 10, 6, 7, 7});  // a fixed index 1: left alone
+        std::vector<std::uint32_t> folded = m;
+        int skipped = -1;
+        const int n = xplane::spirv_fold_eye_arrays(folded, {"u__tvar"}, &skipped);
+        check(n == 1 && skipped == 0, "one indexed access into the block's two-entry member edited, the fixed one left");
+        // Expected: constant %15 = 1 right after the int type; before the access chain %16 = OpBitwiseAnd %1 %13 %15,
+        // and the chain indexes with %16; bound 17.
+        std::vector<std::uint32_t> want2 = {0x07230203, 0x00010300, 0, 17, 0};
+        want2.insert(want2.end(), {op(5, 4), 6, 0x745F5F75, 0x00726176});
+        want2.insert(want2.end(), {op(21, 4), 1, 32, 1});
+        want2.insert(want2.end(), {op(43, 4), 1, 15, 1});
+        want2.insert(want2.end(), {op(43, 4), 1, 2, 2});
+        want2.insert(want2.end(), {op(28, 4), 3, 1, 2});
+        want2.insert(want2.end(), {op(30, 4), 4, 1, 3});
+        want2.insert(want2.end(), {op(32, 4), 5, 2, 4});
+        want2.insert(want2.end(), {op(59, 4), 5, 6, 2});
+        want2.insert(want2.end(), {op(43, 4), 1, 7, 1});
+        want2.insert(want2.end(), {op(32, 4), 8, 2, 1});
+        want2.insert(want2.end(), {op(32, 4), 11, 1, 1});
+        want2.insert(want2.end(), {op(59, 4), 11, 12, 1});
+        want2.insert(want2.end(), {op(61, 4), 1, 13, 12});
+        want2.insert(want2.end(), {op(199, 5), 1, 16, 13, 15});
+        want2.insert(want2.end(), {op(65, 6), 8, 14, 6, 7, 16});
+        want2.insert(want2.end(), {op(65, 6), 8, 10, 6, 7, 7});
+        check(folded == want2, "index & 1 before the access chain, a new constant 1 after its type, bound + 2");
+        std::vector<std::uint32_t> untouched = m;
+        check(xplane::spirv_fold_eye_arrays(untouched, {"u_other_var"}, nullptr) == 0 && untouched == m,
+              "a block not named: left alone");
+    }
+
+    // SIM_QVFR_SPV_FOLD: a .spv using the per-eye blocks (from a capture); writes <file>.folded.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_FOLD")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        int skipped = 0;
+        const int n = xplane::spirv_fold_eye_arrays(
+            real,
+            {"u_misc_data_var", "u_new_sky_data_var", "u_gbuffer_data_var", "u_dome_data_var", "u_particle_data_var",
+             "u_ocean_shading_data_var", "u_line3d_data_var", "u_ocean_meta_data_var", "u_ssr_data_var",
+             "u_ogl_light_data_var", "u_cloud_upscale_data_var", "u_volumetric_apply_data_var", "u_rain_draw_info_var"},
+            &skipped);
+        std::printf("     %s: %d accesses folded, %d skipped\n", in, n, skipped);
+        check(n > 0 && skipped == 0, "folds the given shader's per-eye accesses");
+        std::ofstream o(std::string(in) + ".folded.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
     if (const char* in = std::getenv("SIM_QVFR_SPV_IN")) {
         std::ifstream file(in, std::ios::binary);
         std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
