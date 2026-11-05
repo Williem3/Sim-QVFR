@@ -62,7 +62,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::FgSize, L"Center region", kCheekyFgSizeMin, kCheekyFgSizeMax, kCheekyFgSizeStep},
     {MenuItem::FgScale, L"Center FG scale", 25, 100, 25},
     {MenuItem::FgPeriphery, L"Periphery FG scale", 25, 100, 25},
-    {MenuItem::FgRelease, L"Release ACE", 0, 2, 1},
+    {MenuItem::FgRelease, L"Release game", 0, 2, 1},
     {MenuItem::FgBorder, L"Show FG region", 0, 1, 1},
     // The View crop page: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
     {MenuItem::Crop, L"Crop the view", 0, 1, 1},

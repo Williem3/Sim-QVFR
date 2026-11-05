@@ -163,7 +163,7 @@ Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLo
     o.onLayers = layers.on;
     o.setVariables = std::move(setVariables);
     if (twoLoop)
-        o.forced.push_back({kFrameGenerationLayer, false, "Two-loop renders two ACE frames per headset frame: frame generation breaks it"});
+        o.forced.push_back({kFrameGenerationLayer, false, "Two-loop renders two game frames per headset frame: frame generation breaks it"});
     else if (cheekyLoad && cheekyFg)
         o.forced.push_back({kFrameGenerationLayer, false, "Cheeky's frame generation is on: one frame generation at a time"});
     if (cheekyLoad)

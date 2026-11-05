@@ -249,7 +249,7 @@ bool cpu_load_start() {
     worker.latest = CpuLoad{};
     worker.running = true;
     worker.thread = std::thread(run);
-    logf("cpu load: sampling ACE's threads every %d ms (the busiest leaves out Physics and the eye tracker's client: they spin)",
+    logf("cpu load: sampling the game's threads every %d ms (the busiest leaves out Physics and the eye tracker's client: they spin)",
          kCpuLoadMs);
     return true;
 }

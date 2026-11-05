@@ -488,7 +488,7 @@ int main() {
               "the FG region follows the eyes (CenterMode 1) only when QVFR's focus does");
         // When Cheeky releases ACE: Capture (8) by default, then Generated (3); Never (5) the other way; the set lines carry it.
         c.selected = 6;
-        const bool captureFirst = menu_lines(c)[6].label == L"Release ACE" && menu_lines(c)[6].value == L"Capture (8)" &&
+        const bool captureFirst = menu_lines(c)[6].label == L"Release game" && menu_lines(c)[6].value == L"Capture (8)" &&
                                   cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=8") != std::string::npos;
         menu_key(c, MenuKey::Right);
         const bool generated = c.cheeky.values.fgRelease == 3 && menu_lines(c)[6].value == L"Generated (3)" &&
@@ -497,7 +497,7 @@ int main() {
         menu_key(c, MenuKey::Left);
         check(captureFirst && generated && c.cheeky.values.fgRelease == 5 && menu_lines(c)[6].value == L"Never (5)" &&
                   cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=5") != std::string::npos,
-              "Release ACE: Capture (8), Generated (3), Never (5); Cheeky's FgReleasePoint follows");
+              "Release game: Capture (8), Generated (3), Never (5); Cheeky's FgReleasePoint follows");
         const auto releaseIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_release.ini").wstring();
         DeleteFileW(releaseIni.c_str());
         write_cheeky_settings(releaseIni.c_str(), c.cheeky.values, false);

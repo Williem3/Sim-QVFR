@@ -1,8 +1,9 @@
 # Builds a portable Sim-QVFR release from a commit: a clean checkout of it in a scratch
 # folder (so nothing uncommitted or outside the repo gets in), a Release build, every offline test,
 # then dist\sim-qvfr-<version>.zip and its folder.
-#   powershell -ExecutionPolicy Bypass -File package.ps1 -Version 2026.11.1.4-alpha [-Commit HEAD]
-param([Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Za-z.\-]+$')][string]$Version,
+#   powershell -ExecutionPolicy Bypass -File package.ps1 [-Version 1.0.0-sim-qvfr-beta] [-Commit HEAD]
+# Without -Version it packages the commit's planned release (SIM_QVFR_RELEASE in CMakeLists.txt).
+param([string]$Version = '',
       [string]$Commit = 'HEAD',
       [string]$OutputDirectory = '')
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,13 @@ $short = $hash.Substring(0, 7)
 if (Invoke-Native 'git status' { git -C $repo status --porcelain --untracked-files=no }) {
     Write-Warning "The working tree has uncommitted changes; they are NOT in this package (it is built from $short)."
 }
+if (-not $Version) {
+    $cmake = (Invoke-Native 'git show' { git -C $repo show "${hash}:CMakeLists.txt" }) -join "`n"
+    if ($cmake -notmatch 'set\(SIM_QVFR_RELEASE "([^"]+)"\)') { throw "No SIM_QVFR_RELEASE in $short's CMakeLists.txt; pass -Version" }
+    $Version = $Matches[1]
+}
+if ($Version -notmatch '^[0-9A-Za-z.\-]+$') { throw "Version '$Version' may only hold letters, digits, dots and dashes" }
+Write-Host "Packaging Sim-QVFR $Version"
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $name = "sim-qvfr-$Version"
 $stage = Join-Path $OutputDirectory $name

@@ -377,14 +377,14 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
         out.push_back({L"The view is larger than the headset runtime allows",
                        L"Lower the outer resolution or the focus density in Resolution."});
     if (rt.vramUsedMb > 0 && rt.vramBudgetMb > 0 && rt.vramUsedMb >= 0.9 * rt.vramBudgetMb)
-        out.push_back({formatted(L"VRAM was nearly full (%.0f%% of what Windows allows ACE)", 100 * rt.vramUsedMb / rt.vramBudgetMb),
+        out.push_back({formatted(L"VRAM was nearly full (%.0f%% of what Windows allows the game)", 100 * rt.vramUsedMb / rt.vramBudgetMb),
                        L"Stutter and hitches follow when it runs out. Lower the outer resolution or the focus density, "
                        L"or the game's texture quality."});
     if (!session.known())
         return out;
     if (session.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos)
         out.push_back({L"OpenXR Toolkit is loaded under Sim-QVFR",
-                       L"It adds about 0.8 ms to every frame's submission. If you don't use it for ACE, switch it off in "
+                       L"It adds about 0.8 ms to every frame's submission. If you don't use it for this game, switch it off in "
                        L"OpenXR layers."});
     if (session.limited == L"GPU")
         out.push_back({formatted(L"The GPU was busy all the time (%.0f%%)", session.gpuBusy),
@@ -395,7 +395,7 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
         if (name == L"GameThread")
             gameThread = percent;
     if (session.limited.starts_with(L"CPU") || gameThread >= 90)
-        out.push_back({L"ACE's CPU work limited the frame rate",
+        out.push_back({L"The game's CPU work limited the frame rate",
                        L"QVFR lowers the GPU's work, not the CPU's. Lower the game's CPU-heavy settings (opponents, "
                        L"mirrors, shadows)."});
     if (session.limited.starts_with(L"Pacing"))

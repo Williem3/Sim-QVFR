@@ -184,8 +184,10 @@ target_include_directories(hang_watch_test PRIVATE src ${THIRD_PARTY}/openxr/inc
 target_compile_definitions(hang_watch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(hang_watch_test PRIVATE sim_qvfr_core)
 
-# Launcher: starts ACE in VR with this layer for one launch, above every implicit layer it can move
+# Launcher: starts the chosen game in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
+# The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
+set(SIM_QVFR_RELEASE "1.0.0-sim-qvfr-beta")
 set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
