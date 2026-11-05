@@ -11,7 +11,7 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\Start-RenderDoc.ps1 [-Build Release] [-CaptureName acc]
 #       [-ExtraArgs '--gfx_validation'] [-NoRenderDoc] [-MuteVuids 'VUID-...,VUID-...'] [-ValidationLog]
 # -ValidationLog: the Vulkan loader adds the SDK's validation layer and it writes every error to
-# build\<Build>\logsk-validation-<time>.txt, with no message boxes (instead of X-Plane's --gfx_validation).
+# build\<Build>\logs\vk-validation-<time>.txt, with no message boxes (instead of X-Plane's --gfx_validation).
 # -MuteVuids: validation messages to leave out (VK_KHRONOS_VALIDATION_MESSAGE_ID_FILTER), for errors that aren't the
 # one being looked for. X-Plane stops with a message box on each validation error.
 param(
@@ -52,7 +52,7 @@ foreach ($line in $plan) {
 }
 if ($set -eq 0) { throw "no variables in the launcher's plan" }
 if ($ValidationLog) {
-    $vkLog = Join-Path $bin ("logsk-validation-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.txt')
+    $vkLog = Join-Path $bin ("logs\vk-validation-" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.txt')
     foreach ($kv in @(@('VK_LOADER_LAYERS_ENABLE', '*khronos_validation'),
                       @('VK_KHRONOS_VALIDATION_DEBUG_ACTION', 'VK_DBG_LAYER_ACTION_LOG_MSG'),
                       @('VK_KHRONOS_VALIDATION_LOG_FILENAME', $vkLog),
