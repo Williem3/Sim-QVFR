@@ -45,7 +45,7 @@ std::wstring layer(const char* sub, const char* name, const char* disable, const
     const fs::path dir = folder / sub;
     fs::create_directories(dir);
     std::string text = std::string("{\n  \"file_format_version\": \"1.0.0\",\n  \"api_layer\": {\n    \"name\": \"") + name +
-                       "\",\n    \"library_path\": \".\\\\" + name + ".dll\",\n    \"api_version\": \"1.0\"";
+                       "\",\n    \"library_path\": \".\\\\" + name + ".dll\",\n    \"api_version\": \"1.0\",\n    \"implementation_version\": \"1\"";
     if (disable)
         text += std::string(",\n    \"disable_environment\": \"") + disable + "\"";
     if (enable)
@@ -121,6 +121,30 @@ int main() {
     Options gated;
     gated.setVariables = {L"enable_gated"};
     check(names(plan_layers(registrations, gated)).back() == "XR_APILAYER_GATED", "a gated layer with its variable set is moved");
+
+    // A manifest the OpenXR loader refuses is left out: named in XR_ENABLE_API_LAYERS it would fail
+    // xrCreateInstance, and ACC (OpenComposite) would start flat.
+    {
+        const std::wstring bad = layer("bad", "XR_APILAYER_BAD_VERSION", "DISABLE_BAD");
+        std::string text;
+        read_file(bad, text);
+        text.replace(text.find("\"implementation_version\": \"1\""), 29, "\"implementation_version\": \"1.2.0\"");
+        write_file(bad, text);
+        std::vector<Registration> regs = registrations;
+        regs.push_back({bad, true});
+        const LayerPlan p = plan_layers(regs, Options{});
+        check(names(p) == expected && std::any_of(p.notes.begin(), p.notes.end(), [](const std::string& n) {
+                  return n.find("XR_APILAYER_BAD_VERSION: the OpenXR loader rejects its manifest (implementation_version") == 0;
+              }),
+              "a layer whose manifest the loader rejects is left out, with a note");
+        json::Value m;
+        check(json::parse("{\"file_format_version\":\"1.0.0\",\"api_layer\":{\"name\":\"X\",\"library_path\":\"x.dll\","
+                          "\"api_version\":\"1.1\",\"implementation_version\":\"7\"}}", m) && loader_rejects(m).empty(),
+              "a valid manifest (api_version 1.1) passes the loader's checks");
+        check(json::parse("{\"file_format_version\":\"1.0.0\",\"api_layer\":{\"name\":\"X\",\"library_path\":\"x.dll\","
+                          "\"api_version\":\"1.0\",\"implementation_version\":1}}", m) && !loader_rejects(m).empty(),
+              "a numeric implementation_version is refused, as the loader does");
+    }
 
     // mode=quad: frame generation off; off_layers: Toolkit off.
     Options quad;

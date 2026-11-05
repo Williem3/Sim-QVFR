@@ -19,6 +19,8 @@
 #include <utility>
 #include <vector>
 
+#include <MinHook.h>
+
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "games/adapter.h"
@@ -4914,11 +4916,54 @@ GazeExtension gaze_extension(const XrInstanceCreateInfo& info, PFN_xrGetInstance
     return GazeExtension::Absent;
 }
 
+// Why a game can start flat with this layer loaded: the OpenXR loader negotiates every layer, then can still
+// fail xrCreateInstance before the chain reaches this one (a layer named in XR_ENABLE_API_LAYERS whose manifest
+// it refuses, an extension nobody provides). It says why only to the debugger, through OutputDebugStringA
+// (errors only): copy those lines into the session log until the instance reaches this layer.
+std::atomic<int> loaderNegotiations{0};
+std::atomic<bool> instanceReachedLayer{false};
+using OutputDebugStringAFn = void(WINAPI*)(LPCSTR);
+OutputDebugStringAFn realOutputDebugStringA = nullptr;
+
+void WINAPI loaderDebugString(LPCSTR text) {
+    if (text && !instanceReachedLayer.load(std::memory_order_relaxed) && std::strncmp(text, "Error [", 7) == 0) {
+        std::string line(text);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
+        logf("OpenXR loader: %s", line.c_str());
+    }
+    realOutputDebugStringA(text);
+}
+
+void watch_loader_errors() {
+    const int n = ++loaderNegotiations;
+    if (n == 1) {
+        char enabled[2048] = {};
+        GetEnvironmentVariableA("XR_ENABLE_API_LAYERS", enabled, static_cast<DWORD>(std::size(enabled)));
+        logf("OpenXR layers named for this launch: %s", enabled[0] ? enabled : "(none: implicit layers only)");
+        const MH_STATUS init = MH_Initialize();
+        // KernelBase: kernel32's export only forwards there, and api-set imports go there directly.
+        HMODULE kernel = GetModuleHandleW(L"KernelBase.dll");
+        void* target = reinterpret_cast<void*>(
+            GetProcAddress(kernel ? kernel : GetModuleHandleW(L"kernel32.dll"), "OutputDebugStringA"));
+        if ((init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED) && target &&
+            MH_CreateHook(target, reinterpret_cast<void*>(&loaderDebugString),
+                          reinterpret_cast<void**>(&realOutputDebugStringA)) == MH_OK &&
+            MH_EnableHook(target) == MH_OK)
+            return;
+        log_line("OpenXR loader errors: cannot watch OutputDebugStringA");
+    } else if (!instanceReachedLayer) {
+        log_line("the game's previous xrCreateInstance failed before reaching this layer (no VR: the game starts "
+                 "flat). The OpenXR loader's reason is logged above, when it gave one");
+    }
+}
+
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
                                                 const XrApiLayerCreateInfo* layerInfo, XrInstance* instance) {
     if (!info || !layerInfo || !layerInfo->nextInfo || !instance ||
         std::strcmp(layerInfo->nextInfo->layerName, kLayerName) != 0)
         return XR_ERROR_INITIALIZATION_FAILED;
+    instanceReachedLayer = true;
     XrApiLayerCreateInfo nextLayerInfo = *layerInfo;
     nextLayerInfo.nextInfo = layerInfo->nextInfo->next;
     PFN_xrGetInstanceProcAddr gipa = layerInfo->nextInfo->nextGetInstanceProcAddr;
@@ -5079,7 +5124,9 @@ xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, cons
     request->layerApiVersion = XR_API_VERSION_1_0;
     request->getInstanceProcAddr = simqvfr::layerGetInstanceProcAddr;
     request->createApiLayerInstance = simqvfr::layerCreateApiLayerInstance;
-    if (simqvfr::is_game_process())
+    if (simqvfr::is_game_process()) {
         simqvfr::log_line("Loader negotiated API layer interface v1 (Sim-QVFR probe build)");
+        simqvfr::watch_loader_errors();
+    }
     return XR_SUCCESS;
 }

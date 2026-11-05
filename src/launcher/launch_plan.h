@@ -74,6 +74,10 @@ struct LayerPlan {
 // Reads each registered manifest and decides where its layer goes.
 LayerPlan plan_layers(const std::vector<Registration>& registrations, const Options& options);
 
+// Why the OpenXR loader would refuse `manifest` as an explicit layer (empty: it accepts it). Such a layer is
+// left out of a launch: a name in XR_ENABLE_API_LAYERS without a valid manifest fails xrCreateInstance.
+std::string loader_rejects(const json::Value& manifest);
+
 // The explicit copy of a manifest: library_path made absolute (relative paths resolve against the
 // manifest's folder), enable/disable switches removed. False if it is not a single-layer manifest.
 bool explicit_copy(const json::Value& manifest, const std::wstring& manifestPath, json::Value& copy,

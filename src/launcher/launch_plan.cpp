@@ -1,6 +1,7 @@
 #include "launch_plan.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -30,6 +31,32 @@ const json::Value* layer_of(const json::Value& manifest) {
 }
 
 }  // namespace
+
+std::string loader_rejects(const json::Value& manifest) {
+    // The OpenXR loader's ApiLayerManifestFile::CreateIfValid, for an explicit layer. As an implicit layer a
+    // rejected manifest is only skipped; named in XR_ENABLE_API_LAYERS it fails xrCreateInstance
+    // (XR_ERROR_API_LAYER_NOT_PRESENT), and a game behind OpenComposite then starts flat.
+    const json::Value* format = manifest.find("file_format_version");
+    unsigned major = 0, minor = 0, patch = 0;
+    if (!format || format->type != json::Value::Type::String ||
+        sscanf_s(format->text.c_str(), "%u.%u.%u", &major, &minor, &patch) != 3 || major != 1 || minor != 0 || patch != 0)
+        return "file_format_version is not \"1.0.0\"";
+    const json::Value* layer = layer_of(manifest);
+    if (!layer)
+        return "no api_layer object";
+    for (const char* field : {"name", "api_version", "library_path", "implementation_version"}) {
+        const json::Value* v = layer->find(field);
+        if (!v || v->type != json::Value::Type::String)
+            return std::string(field) + " is missing or not a string";
+    }
+    const std::string api = layer->string_at("api_version");
+    if (sscanf_s(api.c_str(), "%u.%u", &major, &minor) != 2 || (major == 0 && minor == 0) || major > 1)
+        return "api_version \"" + api + "\" is not 1.x";
+    const std::string implementation = layer->string_at("implementation_version");
+    if (!std::all_of(implementation.begin(), implementation.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        return "implementation_version \"" + implementation + "\" is not a whole number";
+    return {};
+}
 
 std::wstring widen(const std::string& utf8) {
     if (utf8.empty())
@@ -137,6 +164,12 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
         if (!fs::exists(c.library, ec)) {
             if (r.enabled)
                 plan.notes.push_back(name + ": library " + narrow(c.library) + " missing (the loader skips it too)");
+            continue;
+        }
+        if (const std::string why = loader_rejects(c.copy); !why.empty()) {
+            if (r.enabled)
+                plan.notes.push_back(name + ": the OpenXR loader rejects its manifest (" + why +
+                                     "), left out: listed by name it would stop the game's VR (" + where + ")");
             continue;
         }
         const std::string disable = layer.string_at("disable_environment");
