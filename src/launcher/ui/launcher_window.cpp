@@ -23,6 +23,7 @@
 #include <commdlg.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <windowsx.h>
 
 #include "../launcher.h"
@@ -76,9 +77,9 @@ enum Ctl {
     kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
-    // The Report an issue pane (its kind, the description box, the button) and the Diagnostics pane (the CPU
-    // capture switch, copying the summary, the logs folder).
-    kDiagKind, kDiagDescription, kDiagReport, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
+    // The Report an issue pane (its kind, the description box, the button, the zip it made to drag into the
+    // issue) and the Diagnostics pane (the CPU capture switch, copying the summary, the logs folder).
+    kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
     // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
@@ -193,6 +194,7 @@ struct App {
     UINT reportFontDpi = 0;
     HBRUSH reportBrush = nullptr;
     uint32_t reportBrushRgb = 0;
+    std::wstring reportZip;  // the last report's zip (full path): the pane shows it to drag into the issue
     std::vector<Hit> hits;
     // The OpenXR layers pane: 0 with the launcher (layerPlan, from the ini), 1 Windows' list (layersDraft,
     // edited until applied over layersWindows). layerRow: the keyboard's row.
@@ -644,7 +646,11 @@ std::vector<Ctl> focus_order() {
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
     case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
-    case Pane::Report: order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport}); break;
+    case Pane::Report:
+        order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});
+        if (!app.reportZip.empty())
+            order.push_back(kDiagZip);
+        break;
     case Pane::About: order.insert(order.end(), {kSupport, kUpdateCheck, kUpdateNow}); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
@@ -1560,12 +1566,15 @@ void report_issue() {
     const std::wstring zip = logs + L"\\" + name;
     const std::wstring error = write_zip(zip, files);
     if (error.empty()) {
+        app.reportZip = zip;
+        InvalidateRect(app.hwnd, nullptr, FALSE);
         const std::wstring select = L"/select,\"" + zip + L"\"";
         ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
     } else {
         app.status = Status::Error;
         app.error = L"Could not write the report's zip: " + error;
         report.zipName.clear();
+        app.reportZip.clear();
         InvalidateRect(app.hwnd, nullptr, FALSE);
     }
     // [launcher] issue_repo: another repository with the forms, to try them before they reach this one's.
@@ -1574,6 +1583,44 @@ void report_issue() {
     const std::string url = issue_url(repo, kIssueTemplates[std::clamp(report.kind, 0, kIssueKindCount - 1)],
                                       issue_title(report), issue_fields(report));
     ShellExecuteA(app.hwnd, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+// The report's zip in Explorer, selected.
+void show_report_zip() {
+    const std::wstring select = L"/select,\"" + app.reportZip + L"\"";
+    ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+// The zip tile held down: dragged, the zip itself (Explorer's data object for it, so a browser's drop takes it
+// as a file, the issue's upload); only clicked, Explorer shows it. GitHub has no API to attach it for the user.
+void drag_report_zip(int px, int py) {
+    if (GetFileAttributesW(app.reportZip.c_str()) == INVALID_FILE_ATTRIBUTES) {  // deleted meanwhile
+        app.reportZip.clear();
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
+    POINT pt{px, py};
+    ClientToScreen(app.hwnd, &pt);
+    if (!DragDetect(app.hwnd, pt)) {
+        show_report_zip();
+        return;
+    }
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(SHParseDisplayName(app.reportZip.c_str(), nullptr, &pidl, 0, nullptr)))
+        return;
+    IShellFolder* folder = nullptr;
+    PCUITEMID_CHILD child = nullptr;
+    IDataObject* data = nullptr;
+    if (SUCCEEDED(SHBindToParent(pidl, IID_PPV_ARGS(&folder), &child))) {
+        folder->GetUIObjectOf(app.hwnd, 1, &child, IID_IDataObject, nullptr, reinterpret_cast<void**>(&data));
+        folder->Release();
+    }
+    if (data) {
+        DWORD effect = 0;
+        SHDoDragDrop(app.hwnd, data, nullptr, DROPEFFECT_COPY | DROPEFFECT_LINK, &effect);
+        data->Release();
+    }
+    CoTaskMemFree(pidl);
 }
 
 // The Report an issue pane: what the last session points to, then the kind of problem, what happened and the
@@ -1630,9 +1677,40 @@ float report_pane(float x, float y, float w, bool draw) {
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Zips the logs into the logs folder and shows it in Explorer, then opens a new issue on GitHub with "
-                 L"what you wrote, your settings, the last session and your PC filled in. Add the steps there, and "
-                 L"drag in the zip and any screenshots.",
+                 L"Zips the logs into the logs folder, then opens a new issue on GitHub with what you wrote, your "
+                 L"settings, the last session and your PC filled in. Add the steps there, and drag in the zip "
+                 L"(it shows below) and any screenshots.",
+                 draw);
+    if (app.reportZip.empty())
+        return h;
+    // The zip, to drag from here onto the issue: the step reports most often miss.
+    Row zip;
+    constexpr float kTileH = 56;
+    zip.fullHeight = [](float) { return kTileH; };
+    zip.full = [](const Rect& r) {
+        const Rect tile{r.x, r.y, r.w, kTileH};
+        const bool over = pointer_in(tile);
+        app.canvas.fill(tile, col(app.c->accent_fill, over ? 0.16f : 0.1f), t::kRadiusControl);
+        app.canvas.stroke(tile, col(app.c->accent, 0.6f), 1, t::kRadiusControl);
+        if (focused(kDiagZip))
+            focus_ring(tile, t::kRadiusControl);
+        // A file with a zipper.
+        constexpr const char* kIconZip = "M4 1.75h5.5l3 3v9.5H4zM9.5 1.75v3h3M7 3h1M7 5h1M7 7h1M6.75 9h1.5v2h-1.5z";
+        const float iw = 28;
+        app.canvas.path(kIconZip, {tile.x + t::kSpace4, tile.y + (kTileH - iw) / 2, iw, iw}, 16, col(app.c->accent), 1.4f);
+        const float tx = tile.x + t::kSpace4 + iw + t::kSpace3, tw = tile.right() - t::kSpace4 - tx;
+        const size_t slash = app.reportZip.find_last_of(L'\\');
+        const std::wstring name = slash == std::wstring::npos ? app.reportZip : app.reportZip.substr(slash + 1);
+        app.canvas.text(L"Drag this onto the GitHub issue", t::kHeadline, {tx, tile.y + 9, tw, t::kHeadline.lineHeight},
+                        col(app.c->label));
+        app.canvas.text(name + L"  ·  click to show it in Explorer", t::kCallout,
+                        {tx, tile.y + 9 + t::kHeadline.lineHeight + 2, tw, t::kCallout.lineHeight}, col(app.c->label_secondary));
+        app.hits.push_back({kDiagZip, tile});
+    };
+    h += t::kSpace6;
+    h += section(x, y + h, w, L"Attach the logs", {zip},
+                 L"GitHub can't attach it for you: drop it into the issue's \"Screenshots and logs\" box (or a "
+                 L"comment). Without it most problems can't be tracked down.",
                  draw);
     return h;
 }
@@ -3804,6 +3882,7 @@ void activate(Ctl id, int option) {
         SetFocus(app.reportEdit);
         return;
     case kDiagReport: report_issue(); return;
+    case kDiagZip: show_report_zip(); return;  // the keyboard's; the mouse drags it (drag_report_zip)
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
     case kLayerProfile: open_popup(id); return;
@@ -4187,6 +4266,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.grabPitch = h->option == 1 ? *pitchOf - (kRefFovY / 2 - (y - app.placeFrame.y) / k) : 0;
             SetCapture(hwnd);
             set_panel_from(x, y);
+        } else if (h->id == kDiagZip) {
+            drag_report_zip(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport || h->id == kLayerApply ||
                    h->id == kLayerRevert || h->id == kLayerReset) {
             app.pressed = h->id;
@@ -4295,6 +4376,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 int run_window(HINSTANCE instance, int show) {
     using namespace ui;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    OleInitialize(nullptr);  // dragging the report's zip out (SHDoDragDrop)
     app.ini = settings_path();
     app.iniFound = GetFileAttributesW(app.ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     clean_update_folder(std::filesystem::path(app.ini).parent_path().wstring());  // what an install left but its backup

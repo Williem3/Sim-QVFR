@@ -1,0 +1,68 @@
+# Issues without the launcher's report zip: GitHub has no API to attach a file for the user, so this
+# workflow asks for it instead. A new issue with no sim-qvfr-report-*.zip (or any .zip) attached gets the
+# needs-logs label and one comment saying where the zip is; the label comes off once a zip is attached,
+# in the issue or in a comment.
+name: Needs logs
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    if: ${{ !github.event.issue.pull_request }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'needs-logs';
+            const marker = '<!-- sim-qvfr:needs-logs -->';
+            const issue = context.payload.issue;
+            const { owner, repo } = context.repo;
+            // An attached zip: github.com/user-attachments/files/<id>/<name>.zip (current uploads) or
+            // github.com/<owner>/<repo>/files/<id>/<name>.zip (older ones).
+            const zip = /https:\/\/github\.com\/(?:user-attachments|[^\/\s]+\/[^\/\s]+)\/files\/\d+\/[^\s)\]]+\.zip/i;
+
+            const comments = await github.paginate(github.rest.issues.listComments,
+                                                   { owner, repo, issue_number: issue.number, per_page: 100 });
+            const texts = [issue.body || '', ...comments.filter(c => c.user.type !== 'Bot').map(c => c.body || '')];
+            const hasZip = texts.some(t => zip.test(t));
+            const labelled = issue.labels.some(l => (l.name || l) === label);
+
+            if (hasZip) {
+              if (labelled)
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: label })
+                  .catch(e => { if (e.status !== 404) throw e; });
+              return;
+            }
+            // Only a new (or reopened) issue is flagged: editing a closed or already-answered issue is not.
+            if (context.eventName !== 'issues' || context.payload.action === 'edited' || labelled)
+              return;
+            if (issue.state !== 'open')
+              return;
+
+            await github.rest.issues.createLabel({ owner, repo, name: label, color: 'fbca04',
+                                                   description: 'Waiting for the launcher\'s report zip' })
+              .catch(e => { if (e.status !== 422) throw e; });  // 422: it exists
+            await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: [label] });
+
+            if (comments.some(c => (c.body || '').includes(marker)))
+              return;
+            await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: [
+              marker,
+              'Thanks for the report! It doesn\'t have the **logs zip** yet, and most problems can\'t be tracked down without it.',
+              '',
+              '1. Open the Sim-QVFR launcher → **Report an issue**. After you press the button, the pane shows the zip:',
+              '   **drag it from the launcher onto this page** (into a comment box below).',
+              '2. Or find it yourself: it is in the `logs` folder next to `sim-qvfr-launcher.exe`, named',
+              '   `sim-qvfr-report-<date>-<time>.zip`. Drag it into a comment below.',
+              '',
+              'The zip holds the session logs, the launcher\'s settings and any hang dump of the game.',
+              'This label comes off by itself once a zip is attached.',
+            ].join('\n') });

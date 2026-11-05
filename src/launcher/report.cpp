@@ -498,7 +498,7 @@ std::wstring issue_body(const IssueReport& r) {
          L"-->\n\n\n";
     b += L"### Screenshots and logs\n\nPlease drag in screenshots (in the headset, and the launcher's Diagnostics page)";
     if (!r.zipName.empty())
-        b += L" and **`" + r.zipName + L"`**, the logs the launcher just zipped (the Explorer window it opened shows it)";
+        b += L" and **`" + r.zipName + L"`**, the logs the launcher just zipped (the launcher's Report pane shows it to drag in, and Explorer shows it too)";
     b += L".\n\n---\n\n";
     b += L"### Launcher checks\n\n" + checks_text(r.causes) + L"\n";
     b += L"### Collected by the launcher\n\n" + issue_details(r);
@@ -507,7 +507,7 @@ std::wstring issue_body(const IssueReport& r) {
 
 std::vector<IssueField> issue_fields(const IssueReport& r) {
     const std::wstring files =
-        r.zipName.empty() ? L"" : L"Drag in `" + r.zipName + L"` (the launcher showed it in Explorer) and any screenshots.\n";
+        r.zipName.empty() ? L"" : L"Drag in `" + r.zipName + L"` (drag it here from the launcher's Report pane, or from its logs folder) and any screenshots.\n";
     return {{"what", r.description}, {"files", files}, {"checks", checks_text(r.causes)}, {"details", issue_details(r)}};
 }
 
