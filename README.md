@@ -142,7 +142,8 @@ The field of view crop, the helmet overlay, resolution changes while the game ru
 area needs a higher periphery there. Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own
 DLSS the sharp area can look slightly darker or lighter than the rest of the view. Foveated DLSS needs a newer
 DLSS than the one ACC comes with (2.2.15): replace ACC's `nvngx_dlss.dll` with DLSS 310 or newer (a tool such as
-DLSS Swapper does it). **Launch checks** tells you when it's too old.
+DLSS Swapper does it). **Launch checks** tells you when it's too old. Cheeky's frame generation isn't
+available in ACC yet.
 
 ## Getting help
 

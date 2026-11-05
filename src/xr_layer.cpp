@@ -3135,9 +3135,12 @@ struct IniSnapshot;
 void menu_values_changed(const IniSnapshot& s);  // the settings menu shows the ini's values (below)
 
 // Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
-void cheeky_apply_settings(const CheekySettings& c, bool gazeOn) {
-    if (cheeky_running())
-        cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn, experiment.views4ComposeD3D11));
+void cheeky_apply_settings(const CheekySettings& settings, bool gazeOn) {
+    if (!cheeky_running())
+        return;
+    CheekySettings c = settings;
+    c.fg = c.fg && game_features().frameGeneration;  // a game without it: off, whatever the ini says
+    cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn, experiment.views4ComposeD3D11));
 }
 void cheeky_apply_ini() {
     if (!live.ini.empty())
@@ -3638,6 +3641,7 @@ void menu_open(int64_t now) {
         const games::GameFeatures features = game_features();  // what the game has: the rest is left out
         menu.model.launch.cropPage = features.fovCrop;
         menu.model.launch.helmetPage = features.helmet;
+        menu.model.launch.fgPage = features.frameGeneration;
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);

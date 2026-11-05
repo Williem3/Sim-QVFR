@@ -16,6 +16,7 @@ struct GameFeatures {
     bool helmet;          // the helmet overlay ([helmet])
     bool liveResolution;  // resolution changes while the game runs (otherwise: at the next launch)
     bool fovCrop;         // the field of view crop ([crop])
+    bool frameGeneration; // Cheeky's frame generation ([cheeky] fg), within Foveated DLSS
 };
 
 struct GameInfo {

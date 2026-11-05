@@ -601,6 +601,8 @@ std::vector<Ctl> focus_order() {
                                    kCheekyFocusPreset, kCheekySupersampling, kCheekyMotionFix, kCheekyNr});
         if (app.s.cheeky.nr)
             order.insert(order.end(), {kCheekyNrPreset, kCheekyNrPasses});
+        if (!game_has(&games::GameFeatures::frameGeneration))
+            break;
         order.push_back(kFgOn);
         if (app.s.cheeky.fg)
             order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder});
@@ -2128,11 +2130,15 @@ float pane_content(float x, float y, float w, bool draw) {
                      draw);
         h += t::kSpace6;
         Row fgOn;
-        const std::wstring fgDesc = L"Cheeky’s DLSS-G adds generated frames between ACE’s, guided by its depth and motion. "
-                                    L"Turn OpenXR Toolkit’s Turbo mode and other frame generation (VectorXR’s) off.";
+        const bool fgHere = game_has(&games::GameFeatures::frameGeneration);
+        const std::wstring fgDesc = !fgHere ? not_yet()
+                                    : L"Cheeky’s DLSS-G adds generated frames between ACE’s, guided by its depth and motion. "
+                                      L"Turn OpenXR Toolkit’s Turbo mode and other frame generation (VectorXR’s) off.";
         fgOn.fullHeight = [fgDesc](float width) { return checkbox_height(fgDesc, width); };
-        fgOn.full = [fgDesc](const Rect& r) { checkbox(kFgOn, r, app.s.cheeky.fg, L"Frame generation", fgDesc); };
-        const bool fgOff = !app.s.cheeky.fg;
+        fgOn.full = [fgDesc, fgHere](const Rect& r) {
+            checkbox(kFgOn, r, app.s.cheeky.fg && fgHere, L"Frame generation", fgDesc, !fgHere);
+        };
+        const bool fgOff = !app.s.cheeky.fg || !fgHere;
         Row fgBorder;
         const std::wstring borderDesc = L"Outlines the region in the headset, to check that it follows your eyes.";
         fgBorder.fullHeight = [borderDesc](float width) { return checkbox_height(borderDesc, width); };
@@ -3447,7 +3453,12 @@ void activate(Ctl id, int option) {
     case kVisor:
     case kShape:
     case kHelmetDetail: open_popup(id); return;
-    case kFgOn: app.s.cheeky.fg = !app.s.cheeky.fg; changed(); return;
+    case kFgOn:
+        if (game_has(&games::GameFeatures::frameGeneration)) {  // greyed out for a game without it
+            app.s.cheeky.fg = !app.s.cheeky.fg;
+            changed();
+        }
+        return;
     case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
     case kUpdateCheck:

@@ -92,6 +92,7 @@ struct MenuLaunch {
     // What the game has (games/game.h GameFeatures): the View crop and Helmet pages, and resolution changes applied
     // while it runs (otherwise at the next launch).
     bool cropPage = true, helmetPage = true, liveResolution = true;
+    bool fgPage = true;  // Cheeky's frame generation page (GameFeatures::frameGeneration)
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

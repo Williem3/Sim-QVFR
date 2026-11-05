@@ -18,7 +18,9 @@ inline constexpr aceqv::games::GameInfo kGame = {
     L"AC2\\Plugins\\DLSS\\Binaries\\ThirdParty\\Win64\\nvngx_dlss.dll",  // DLSS 2.2.15 as shipped: too old for Cheeky
     // QVFR, gaze, the headset menu and overlay, the FOV crop, the helmet, live resolution, Foveated DLSS (Cheeky's
     // runtime on the session's D3D11 device; its quad roles need a Cheeky build that registers D3D11 game views).
-    {true, true, true, true},
+    // Not frame generation: Cheeky's layer can't capture our D3D11 frames for it (native passthrough), so ACC was
+    // never paced to the generated rate (README.md).
+    {true, true, true, true, false},
     kBuilds, std::size(kBuilds),
 };
 

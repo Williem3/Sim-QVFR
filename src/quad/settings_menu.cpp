@@ -154,8 +154,11 @@ std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
         pages.push_back(MenuPage::Crop);
     if (menu.launch.qvfr && menu.launch.helmetPage)
         pages.push_back(MenuPage::Helmet);
-    if (menu.cheeky.available)
-        pages.insert(pages.end(), {MenuPage::Dlss, MenuPage::Fg});
+    if (menu.cheeky.available) {
+        pages.push_back(MenuPage::Dlss);
+        if (menu.launch.fgPage)
+            pages.push_back(MenuPage::Fg);
+    }
     pages.push_back(MenuPage::Headset);
     return pages;
 }

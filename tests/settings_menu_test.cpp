@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include "games/ace/game.h"
+#include "games/acc/game.h"
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
 
@@ -347,6 +349,21 @@ int main() {
                   "a game without crop, helmet or live resolution: their pages left out, resolution at the next launch");
         }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
+        {
+            // A game without Cheeky's frame generation (ACC): its Foveated DLSS page, no Frame generation page.
+            SettingsMenu g = c;
+            g.launch.fgPage = false;
+            bool dlss = false, fg = false;
+            for (const MenuPage p : menu_pages(g)) {
+                dlss |= p == MenuPage::Dlss;
+                fg |= p == MenuPage::Fg;
+            }
+            check(dlss && !fg && menu_pages(g).size() == menu_pages(c).size() - 1,
+                  "a game without frame generation: the Foveated DLSS page, not the Frame generation one");
+        }
+        check(acc::kGame.features.foveatedDlss && !acc::kGame.features.frameGeneration &&
+                  ace::kGame.features.frameGeneration,
+              "games: ACC has Foveated DLSS but not its frame generation yet; ACE has both");
         check(menu_pages(c).size() == 7 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
               "with Cheeky: seven pages, the first the QVFR items under the page switch");
