@@ -379,6 +379,7 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
                                                                                                  : LaunchMode::Qvfr;
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
+    in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();
     if (const wchar_t* openvr = games::launcher_game().openComposite) {
         const std::wstring folder = game_folder(ini);
         in.openComposite = folder.empty() ? OpenComposite::Unknown : open_composite((fs::path(folder) / openvr).wstring());

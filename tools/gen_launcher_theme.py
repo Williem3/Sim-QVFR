@@ -53,6 +53,18 @@ def main(src=SRC, out=OUT):
         for n in names:
             lines.append(f'    0x{resolve(n, theme).lstrip("#").lower()},  // {n}')
         lines.append('};')
+    # Each game tab's palette: while it is chosen, its colours replace the same-named ones above.
+    palettes = tokens.get('games', {}).get('palettes', [])
+    accent_keys = ('accent', 'accent-fill', 'on-accent', 'focus-ring')
+    lines += ['', '// Each game tab\'s accent (tokens.json "games"): it replaces accent, accent_fill, on_accent and focus_ring.',
+              'struct Accent {', *[f'    uint32_t {ident(k)};' for k in accent_keys], '};',
+              'struct GamePalette {', '    const char* id;  // games::GameInfo::id', '    Accent light, dark;', '};',
+              'inline constexpr GamePalette kGamePalettes[] = {']
+    for p in palettes:
+        def accent(theme):
+            return '{' + ', '.join(f'0x{p[k][theme].lstrip("#").lower()}' for k in accent_keys) + '}'
+        lines.append(f'    {{"{p["id"]}", {accent("light")}, {accent("dark")}}},  // {p["name"]}')
+    lines.append('};')
     lines += ['', '// Type styles: size and line height in DIPs, weight, monospaced family.',
               'struct TypeStyle {', '    float size, lineHeight;', '    int weight;', '    bool mono;', '};']
     for group in tokens['type']['groups']:
@@ -67,6 +79,43 @@ def main(src=SRC, out=OUT):
     lines += ['', '}  // namespace aceqv::launcher::ui::tokens', '']
     os.makedirs(os.path.dirname(out), exist_ok=True)
     open(out, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines))
+    print('wrote', out)
+    write_css(tokens, resolve, os.path.join(os.path.dirname(src), 'tokens.css'))
+
+
+def write_css(tokens, resolve, out):
+    """tokens.css: the same values as CSS variables, for the kit's previews."""
+    names = [t['name'] for t in tokens['color']['tokens']]
+    shadows = tokens.get('shadow', {}).get('tokens', [])
+
+    def theme_vars(theme, indent='  '):
+        rows = []
+        for n in names:
+            raw = next(t['value'] for t in tokens['color']['tokens'] if t['name'] == n)
+            raw = raw[theme] if isinstance(raw, dict) else raw
+            m = re.fullmatch(r'\{(.+)\}', raw)
+            rows.append(f'{indent}--{n}: {"var(--" + m.group(1) + ")" if m else resolve(n, theme)};')
+        for s in shadows:
+            rows.append(f'{indent}--{s["name"]}: {s["value"][theme]};')
+        rows.append(f'{indent}color-scheme: {theme};')
+        return rows
+
+    css = ['/* QVFR Launcher — generated from tokens.json by tools/gen_launcher_theme.py */',
+           ':root, [data-theme="light"] {', *theme_vars('light'), '}',
+           '@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {', *theme_vars('dark'), '} }',
+           '[data-theme="dark"] {', *theme_vars('dark'), '}', ':root {']
+    for section in ('spacing', 'radius', 'size'):
+        css += [f'  --{t["name"]}: {t["value"]};' for t in tokens[section]['tokens']]
+    fam = tokens['type']['families']
+    css += [f'  --font-system: {fam["system"]};', f'  --font-mono: {fam["mono"]};', '}']
+    # A game tab's palette: <html data-game="acc"> (both themes).
+    for p in tokens.get('games', {}).get('palettes', []):
+        keys = [k for k in p if k not in ('id', 'name')]
+        css += [f'[data-game="{p["id"]}"] {{', *[f'  --{k}: {p[k]["light"]};' for k in keys], '}',
+                f'@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"])[data-game="{p["id"]}"] {{',
+                *[f'  --{k}: {p[k]["dark"]};' for k in keys], '} }',
+                f'[data-theme="dark"][data-game="{p["id"]}"] {{', *[f'  --{k}: {p[k]["dark"]};' for k in keys], '}']
+    open(out, 'w', encoding='utf-8', newline='\n').write('\n'.join(css) + '\n')
     print('wrote', out)
 
 
