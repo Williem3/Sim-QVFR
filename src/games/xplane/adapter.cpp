@@ -36,8 +36,8 @@ void apply_layer_count(const wchar_t* ini) {
 }
 
 // [experiment] xplane_context_layers = 3 or 4: the VR render context is made with that many layers, its stereo test
-// becomes layers >= 2 (it is layers == 2, which would turn the context mono), and the camera still takes two views'
-// tangents (its room). A measurement: a frame capture shows whether the frame graph's per-eye targets follow
+// becomes layers >= 2 (it is layers == 2, which would turn the context mono), the camera still takes two views'
+// tangents (its room), and the 3D world subgraph gives its targets that many layers. A measurement: a frame capture shows whether the frame graph's per-eye targets follow
 // the context's layer count (README.md). 0 or 2: X-Plane as it is. All three patches or none.
 void apply_context_layers(const wchar_t* ini) {
     const int layers = GetPrivateProfileIntW(L"experiment", L"xplane_context_layers", 0, ini);
@@ -50,15 +50,19 @@ void apply_context_layers(const wchar_t* ini) {
     if (!simqvfr::code_matches(kVrContextLayers, kVrContextLayersAnchor, sizeof(kVrContextLayersAnchor)) ||
         !simqvfr::code_matches(kStereoTestCmp, kStereoTestCmpAnchor, sizeof(kStereoTestCmpAnchor)) ||
         !simqvfr::code_matches(kStereoTestSet, kStereoTestSetAnchor, sizeof(kStereoTestSetAnchor)) ||
-        !simqvfr::code_matches(kTangentCopyBound, kTangentCopyBoundAnchor, sizeof(kTangentCopyBoundAnchor))) {
+        !simqvfr::code_matches(kTangentCopyBound, kTangentCopyBoundAnchor, sizeof(kTangentCopyBoundAnchor)) ||
+        !simqvfr::code_matches(kWorldSubgraphLayers, kWorldSubgraphLayersAnchor, sizeof(kWorldSubgraphLayersAnchor))) {
         simqvfr::logf("xplane: xplane_context_layers=%d not applied: the VR context code isn't this build's", layers);
         return;
     }
     const auto value = static_cast<std::uint8_t>(layers);
     const bool ok = simqvfr::code_write(kTangentCopyBound, kTangentCopyBoundTwo, sizeof(kTangentCopyBoundTwo)) &&
                     simqvfr::code_write(kStereoTestSet, kStereoTestSetGe, sizeof(kStereoTestSetGe)) &&
-                    simqvfr::code_write(kVrContextLayers + kVrContextLayersImm, &value, 1);
-    simqvfr::logf("xplane: VR context layers 2 -> %d, stereo test layers >= 2, camera tangents kept at 2: %s", layers,
+                    simqvfr::code_write(kVrContextLayers + kVrContextLayersImm, &value, 1) &&
+                    simqvfr::code_write(kWorldSubgraphLayers + kWorldSubgraphLayersImm, &value, 1);
+    simqvfr::logf("xplane: VR context and world subgraph layers 2 -> %d, stereo test layers >= 2, camera tangents kept "
+                  "at 2: %s",
+                  layers,
                   ok ? "patched" : "FAILED");
 }
 

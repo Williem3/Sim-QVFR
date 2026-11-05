@@ -33,4 +33,11 @@ inline constexpr std::uintptr_t kTangentCopyBound = 0x196cafe;
 inline constexpr std::uint8_t kTangentCopyBoundAnchor[4] = {0x45, 0x3B, 0x47, 0x0C};
 inline constexpr std::uint8_t kTangentCopyBoundTwo[4] = {0x41, 0x83, 0xF8, 0x02};
 
+// REN_build_render_graph_3d_world_subgraph (0x198f270) rewrites its REN_graph_info for the VR window: width = the
+// stereo image's width / 2, its height, and layers from `mov esi, 2` (the G-buffer and the main per-eye targets read
+// REN_graph_info+0x10). Immediate at +1.
+inline constexpr std::uintptr_t kWorldSubgraphLayers = 0x198f33c;
+inline constexpr std::uint8_t kWorldSubgraphLayersAnchor[5] = {0xBE, 0x02, 0x00, 0x00, 0x00};
+inline constexpr std::size_t kWorldSubgraphLayersImm = 1;
+
 }  // namespace xplane
