@@ -1,0 +1,31 @@
+// Windows version info (Properties > Details) for the launcher and the layer DLL. CMake configures one
+// copy per binary from this file: the version comes from SIM_QVFR_VERSION, or SIM_QVFR_RELEASE in a "dev" build.
+#include <winver.h>
+
+1 VERSIONINFO
+ FILEVERSION @SIM_QVFR_VERSION_COMMAS@
+ PRODUCTVERSION @SIM_QVFR_VERSION_COMMAS@
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS @SIM_QVFR_VERSION_FLAGS@
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE @SIM_QVFR_FILE_TYPE@
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "ProductName", "Sim-QVFR"
+            VALUE "FileDescription", "@SIM_QVFR_FILE_DESCRIPTION@"
+            VALUE "FileVersion", "@SIM_QVFR_VERSION_TEXT@"
+            VALUE "ProductVersion", "@SIM_QVFR_VERSION_TEXT@"
+            VALUE "InternalName", "@SIM_QVFR_FILE_NAME@"
+            VALUE "OriginalFilename", "@SIM_QVFR_FILE_NAME@"
+            VALUE "LegalCopyright", "PolyForm Noncommercial License 1.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

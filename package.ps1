@@ -1,12 +1,32 @@
 # Builds a portable Sim-QVFR release from a commit: a clean checkout of it in a scratch
 # folder (so nothing uncommitted or outside the repo gets in), a Release build, every offline test,
 # then dist\sim-qvfr-<version>.zip and its folder.
-#   powershell -ExecutionPolicy Bypass -File package.ps1 [-Version 1.0.0-sim-qvfr-beta] [-Commit HEAD]
+#   powershell -ExecutionPolicy Bypass -File package.ps1 [-Version 1.0.0-beta] [-Commit HEAD] [-Sign]
 # Without -Version it packages the commit's planned release (SIM_QVFR_RELEASE in CMakeLists.txt).
+# -Sign Authenticode-signs the launcher and the layer DLL before they are hashed and zipped. The
+# key is Certum's cloud key (SimplySign): log in to SimplySign Desktop first, so the certificate
+# shows up in the CurrentUser\My store; signtool then asks the cloud to sign.
 param([string]$Version = '',
       [string]$Commit = 'HEAD',
-      [string]$OutputDirectory = '')
+      [string]$OutputDirectory = '',
+      [switch]$Sign,
+      [string]$CertificateThumbprint = '4683DA63C881A76D5A1E803751B481F621ADF9C1',  # Certum, until 2027-11-04
+      [string]$TimestampUrl = 'http://time.certum.pl')
 $ErrorActionPreference = 'Stop'
+
+if ($Sign) {
+    # Checked before the build, so a missing login fails in seconds, not after the tests.
+    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+    $signtool = Get-ChildItem -LiteralPath $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.Directory.Name -eq 'x64' } | Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $signtool) { throw "signtool.exe not found under $kits (install the Windows SDK)" }
+    $signtool = $signtool.FullName
+    $certificate = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Thumbprint -eq $CertificateThumbprint }
+    if (-not $certificate) {
+        throw "Certificate $CertificateThumbprint is not in CurrentUser\My. Log in to SimplySign Desktop (its tray icon) and try again."
+    }
+    if ($certificate.NotAfter -lt (Get-Date)) { throw "Certificate $CertificateThumbprint expired on $($certificate.NotAfter)" }
+}
 $repo = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'dist' }
 
@@ -79,6 +99,17 @@ try {
     }
     foreach ($source in $files.Keys) {
         Copy-Item -LiteralPath (Join-Path $work $source) -Destination (Join-Path $stage $files[$source])
+    }
+    if ($Sign) {
+        # Signed before SHA256.txt is written, so its hashes are of the signed files.
+        $binaries = @('sim-qvfr-launcher.exe', 'layer\sim-qvfr.dll') | ForEach-Object { Join-Path $stage $_ }
+        foreach ($binary in $binaries) {
+            Invoke-Native "signing $binary" {
+                & $signtool sign /sha1 $CertificateThumbprint /fd sha256 /tr $TimestampUrl /td sha256 /d 'Sim-QVFR' $binary
+            } | Out-Null
+            Invoke-Native "verifying $binary" { & $signtool verify /pa $binary } | Out-Null
+            Write-Host "  signed $(Split-Path -Leaf $binary)"
+        }
     }
     Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Value "Sim-QVFR $Version`r`ncommit $hash" -Encoding ASCII
     Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {

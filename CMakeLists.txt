@@ -9,6 +9,40 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
+set(SIM_QVFR_RELEASE "1.0.0-beta")
+set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
+
+# Windows version info for a binary (src/version_info.rc.in): numbers from the version's leading digits
+# ("1.0.0-beta (abc1234)" -> 1,0,0,0), or from SIM_QVFR_RELEASE in a "dev" build.
+set(SIM_QVFR_VERSION_TEXT "${SIM_QVFR_VERSION}")
+string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" _numbers "${SIM_QVFR_VERSION}")
+if(NOT _numbers)
+  string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" _numbers "${SIM_QVFR_RELEASE}")
+  set(SIM_QVFR_VERSION_TEXT "${SIM_QVFR_VERSION} (${SIM_QVFR_RELEASE})")
+endif()
+string(REPLACE "." ";" _numbers "${_numbers}")
+list(LENGTH _numbers _count)
+while(_count LESS 4)
+  list(APPEND _numbers 0)
+  math(EXPR _count "${_count} + 1")
+endwhile()
+list(SUBLIST _numbers 0 4 _numbers)
+list(JOIN _numbers "," SIM_QVFR_VERSION_COMMAS)
+if(SIM_QVFR_VERSION_TEXT MATCHES "alpha|beta|rc|dev")
+  set(SIM_QVFR_VERSION_FLAGS "VS_FF_PRERELEASE")
+else()
+  set(SIM_QVFR_VERSION_FLAGS "0")
+endif()
+function(sim_qvfr_version_info target file_name file_type description)
+  set(SIM_QVFR_FILE_NAME "${file_name}")
+  set(SIM_QVFR_FILE_TYPE "${file_type}")
+  set(SIM_QVFR_FILE_DESCRIPTION "${description}")
+  set(rc ${CMAKE_CURRENT_BINARY_DIR}/generated/${target}_version.rc)
+  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/version_info.rc.in ${rc} @ONLY)
+  target_sources(${target} PRIVATE ${rc})
+endfunction()
+
 # MinHook 1.3.4 and the OpenXR SDK headers, vendored (third_party/README.md).
 set(THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 add_library(minhook STATIC
@@ -40,6 +74,7 @@ target_compile_definitions(sim_qvfr PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN
 target_compile_options(sim_qvfr PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr PRIVATE sim_qvfr_core)
 set_target_properties(sim_qvfr PROPERTIES OUTPUT_NAME sim-qvfr)
+sim_qvfr_version_info(sim_qvfr sim-qvfr.dll VFT_DLL "Sim-QVFR OpenXR layer")
 # A linker map next to the DLL, to name the layer's frames in a game's crash call stack (no effect on the code).
 target_link_options(sim_qvfr PRIVATE /MAP)
 
@@ -186,9 +221,6 @@ target_link_libraries(hang_watch_test PRIVATE sim_qvfr_core)
 
 # Launcher: starts the chosen game in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
-# The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
-set(SIM_QVFR_RELEASE "1.0.0-sim-qvfr-beta")
-set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
@@ -198,6 +230,12 @@ target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version)
 set_target_properties(sim_qvfr_launcher PROPERTIES OUTPUT_NAME sim-qvfr-launcher)
+sim_qvfr_version_info(sim_qvfr_launcher sim-qvfr-launcher.exe VFT_APP "Sim-QVFR launcher")
+# A development build gets the default settings next to the launcher, once: an edited copy is kept.
+add_custom_command(TARGET sim_qvfr_launcher POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/manifest/sim-qvfr.ini
+          -DDESTINATION=$<TARGET_FILE_DIR:sim_qvfr_launcher>/sim-qvfr.ini
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_if_missing.cmake)
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
 add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/settings.cpp src/launcher/report.cpp src/quad/osd.cpp
