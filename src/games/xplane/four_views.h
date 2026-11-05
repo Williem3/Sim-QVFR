@@ -9,4 +9,8 @@ namespace xplane {
 // build's), or some patches failed (logged).
 bool four_views_copies_start();
 
+// The focus stage: views 2-3 render the focus boxes (their projections narrowed to `fraction` x `fractionY` of each
+// eye's tangent span, centred on its forward direction) instead of copies of the eyes.
+void four_views_set_focus(bool on, double fraction, double fractionY);
+
 }  // namespace xplane

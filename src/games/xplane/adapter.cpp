@@ -81,6 +81,12 @@ void apply_copies(const wchar_t* ini) {
     apply_layer_count(ini, 4);
     apply_context_layers(ini, 4);
     four_views_copies_start();
+    // [experiment] xplane_focus = 1: views 2-3 render focus boxes of focus_percent (default 20) of each eye.
+    if (GetPrivateProfileIntW(L"experiment", L"xplane_focus", 0, ini) == 1) {
+        const int percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 20, ini);
+        const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
+        four_views_set_focus(true, fraction, fraction);
+    }
 }
 
 class XPlaneAdapter final : public simqvfr::games::GameAdapter {

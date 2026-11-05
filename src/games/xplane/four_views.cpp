@@ -12,6 +12,7 @@
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "abi.h"
+#include "focus_projection.h"
 #include "spirv_patch.h"
 
 namespace xplane {
@@ -110,6 +111,44 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
     return real(device, info, allocator, module);
 }
 
+// The focus views (four_views_set_focus): off = slots 2-3 copy the eyes (the copies stage).
+std::atomic<bool> g_focus{false};
+std::atomic<double> g_focusFraction{0.2}, g_focusFractionY{0.2};
+std::atomic<int> g_fillLogs{0};
+
+// From the per-draw upload (kTransformUpload), with four views, before the transform block is filled from the render
+// state: modelview slots 2-3 = slots 0-1 (the focus views look where their eyes look), projection slots 2-3 = the
+// eyes' projections, narrowed to the focus box when the focus is on. Doubles, 16 per matrix, 0x80 per slot.
+void fill_views(std::uint8_t* state) {
+    auto slot = [&](std::size_t base, int i) {
+        return reinterpret_cast<double(*)[16]>(state + base + static_cast<std::size_t>(i) * kStateViewStride);
+    };
+    const bool focus = g_focus.load(std::memory_order_relaxed);
+    const double fx = g_focusFraction.load(std::memory_order_relaxed), fy = g_focusFractionY.load(std::memory_order_relaxed);
+    for (int eye = 0; eye < 2; ++eye) {
+        std::memcpy(*slot(kStateModelviews, eye + 2), *slot(kStateModelviews, eye), sizeof(double) * 16);
+        const double(&eyeProj)[16] = *slot(kStateProjections, eye);
+        double(&focusProj)[16] = *slot(kStateProjections, eye + 2);
+        if (!focus) {
+            std::memcpy(focusProj, eyeProj, sizeof(double) * 16);
+            continue;
+        }
+        double out[16];
+        const bool ok = focus_projection(eyeProj, fx, fy, 0.0, 0.0, out);
+        std::memcpy(focusProj, out, sizeof(out));
+        if (g_fillLogs.load(std::memory_order_relaxed) < 4) {
+            ++g_fillLogs;
+            bool cm = false;
+            double tan[4] = {};
+            projection_layout(eyeProj, cm);
+            projection_tangents(eyeProj, tan);
+            logf("xplane: focus view %d %s: eye tangents x %.3f..%.3f y %.3f..%.3f (%s), focus %.0f%% x %.0f%%", eye + 2,
+                 ok ? "built" : "NOT built (not a projection: copy of the eye)", tan[0], tan[1], tan[2], tan[3],
+                 cm ? "column-major" : "row-major", fx * 100.0, fy * 100.0);
+        }
+    }
+}
+
 bool redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
               std::size_t stubSize, const char* what) {
     const bool ok = code_redirect(rva, anchor, size, stub, stubSize);
@@ -175,31 +214,53 @@ bool four_views_copies_start() {
                    sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
     ok &= redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
                    "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
-    // The per-draw upload: with four views, slots 2-3 = slots 0-1 for both arrays right before the block is filled,
-    // whichever setter wrote them (the projection setter copies four entries from a two-eye source, so a path that
-    // sets projections after modelviews left slots 2-3 with the camera's mono matrices: the light sprites' white).
-    // xmm0-xmm2 are live there; the stub uses xmm3, rcx and rdx (set again before their next use).
-    static const std::uint8_t uploadCopy[] = {
-        0x41, 0x83, 0xFE, 0x04,                    // cmp r14d, 4
-        0x75, 0x2C,                                // jne done
-        0x48, 0x8D, 0x8F, 0x88, 0x00, 0x00, 0x00,  // lea rcx, [rdi + 0x88]   (modelview slot 0)
-        0xBA, 0x10, 0x00, 0x00, 0x00,              // mov edx, 16
-        0x0F, 0x10, 0x19,                          // loop: movups xmm3, [rcx]
-        0x0F, 0x11, 0x99, 0x00, 0x01, 0x00, 0x00,  //   movups [rcx + 0x100], xmm3   (modelview slots 2-3)
-        0x0F, 0x10, 0x99, 0x00, 0x02, 0x00, 0x00,  //   movups xmm3, [rcx + 0x200]   (projection slots 0-1)
-        0x0F, 0x11, 0x99, 0x00, 0x03, 0x00, 0x00,  //   movups [rcx + 0x300], xmm3   (projection slots 2-3)
-        0x48, 0x83, 0xC1, 0x10,                    //   add rcx, 16
-        0xFF, 0xCA,                                //   dec edx
-        0x75, 0xE0,                                //   jnz loop
-        0x8B, 0x87, 0x94, 0x24, 0x00, 0x00,        // done: mov eax, [rdi + 0x2494] (the original)
+    // The per-draw upload: with four views, fill_views (slots 2-3 from 0-1: copies, or focus projections) right before
+    // the block is filled, whichever setter wrote the slots. The function keeps rsp 16-aligned in its body (5 pushes and
+    // sub rsp, 0x830 from entry); xmm0-xmm2 are live there, so the stub saves xmm0-xmm5 and the volatile registers.
+    std::uint8_t uploadCall[] = {
+        0x41, 0x83, 0xFE, 0x04,                          // cmp r14d, 4
+        0x75, 0x6F,                                      // jne done
+        0x50, 0x51, 0x52, 0x41, 0x50, 0x41, 0x51,        // push rax, rcx, rdx, r8, r9
+        0x41, 0x52, 0x41, 0x53,                          // push r10, r11
+        0x48, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00,        // sub rsp, 0x88  (7 pushes + 0x88: aligned for the call)
+        0x0F, 0x11, 0x44, 0x24, 0x20,                    // movups [rsp+0x20], xmm0
+        0x0F, 0x11, 0x4C, 0x24, 0x30,                    // movups [rsp+0x30], xmm1
+        0x0F, 0x11, 0x54, 0x24, 0x40,                    // movups [rsp+0x40], xmm2
+        0x0F, 0x11, 0x5C, 0x24, 0x50,                    // movups [rsp+0x50], xmm3
+        0x0F, 0x11, 0x64, 0x24, 0x60,                    // movups [rsp+0x60], xmm4
+        0x0F, 0x11, 0x6C, 0x24, 0x70,                    // movups [rsp+0x70], xmm5
+        0x48, 0x89, 0xF9,                                // mov rcx, rdi (the render state)
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,              // mov rax, fill_views
+        0xFF, 0xD0,                                      // call rax
+        0x0F, 0x10, 0x44, 0x24, 0x20,                    // movups xmm0, [rsp+0x20]
+        0x0F, 0x10, 0x4C, 0x24, 0x30,                    // movups xmm1, [rsp+0x30]
+        0x0F, 0x10, 0x54, 0x24, 0x40,                    // movups xmm2, [rsp+0x40]
+        0x0F, 0x10, 0x5C, 0x24, 0x50,                    // movups xmm3, [rsp+0x50]
+        0x0F, 0x10, 0x64, 0x24, 0x60,                    // movups xmm4, [rsp+0x60]
+        0x0F, 0x10, 0x6C, 0x24, 0x70,                    // movups xmm5, [rsp+0x70]
+        0x48, 0x81, 0xC4, 0x88, 0x00, 0x00, 0x00,        // add rsp, 0x88
+        0x41, 0x5B, 0x41, 0x5A, 0x41, 0x59, 0x41, 0x58,  // pop r11, r10, r9, r8
+        0x5A, 0x59, 0x58,                                // pop rdx, rcx, rax
+        0x8B, 0x87, 0x94, 0x24, 0x00, 0x00,              // done: mov eax, [rdi + 0x2494] (the original)
     };
-    ok &= redirect(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor), uploadCopy,
-                   sizeof(uploadCopy), "per-draw upload: slots 2-3 = 0-1");
+    static_assert(sizeof(uploadCall) == 6 + 0x6F + 6, "the jne skips the call block");
+    const auto fill = reinterpret_cast<std::uintptr_t>(&fill_views);
+    std::memcpy(uploadCall + 0x3B, &fill, 8);
+    ok &= redirect(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor), uploadCall,
+                   sizeof(uploadCall), "per-draw upload: slots 2-3 filled (copies or focus)");
     const bool clouds = simqvfr::code_write(kCloudDispatchDepth, kCloudDispatchDepthCount, sizeof(kCloudDispatchDepthCount));
     logf("xplane: cloud render dispatch depth = view count (was stereo ? 2 : 1) at 0x%llx: %s",
          static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
     ok &= clouds;
     return ok;
+}
+
+void four_views_set_focus(bool on, double fraction, double fractionY) {
+    g_focusFraction = fraction;
+    g_focusFractionY = fractionY > 0.0 ? fractionY : fraction;
+    g_focus = on;
+    logf("xplane: focus views %s (%.0f%% x %.0f%% of each eye, centred)", on ? "on" : "off (copies of the eyes)",
+         fraction * 100.0, g_focusFractionY.load() * 100.0);
 }
 
 }  // namespace xplane
