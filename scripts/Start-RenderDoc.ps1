@@ -12,6 +12,8 @@
 #       [-ExtraArgs '--gfx_validation'] [-NoRenderDoc] [-MuteVuids 'VUID-...,VUID-...'] [-ValidationLog]
 # -ValidationLog: the Vulkan loader adds the SDK's validation layer and it writes every error to
 # build\<Build>\logs\vk-validation-<time>.txt, with no message boxes (instead of X-Plane's --gfx_validation).
+# -ViaLauncher: RenderDoc runs the launcher (`--launch`) and hooks the game it starts (--opt-hook-children), so a game
+# the launcher loads the layer into before it runs (GameInfo::earlyLoad: X-Plane) is captured with that early load.
 # -MuteVuids: validation messages to leave out (VK_KHRONOS_VALIDATION_MESSAGE_ID_FILTER), for errors that aren't the
 # one being looked for. X-Plane stops with a message box on each validation error.
 param(
@@ -21,6 +23,7 @@ param(
     [switch]$NoRenderDoc,
     [string]$MuteVuids = '',
     [switch]$ValidationLog,
+    [switch]$ViaLauncher,
     [string]$RenderDoc = 'C:\Program Files\RenderDoc\renderdoccmd.exe'
 )
 $ErrorActionPreference = 'Stop'
@@ -75,6 +78,12 @@ if ($NoRenderDoc) {
     return
 }
 $captures = Join-Path ([Environment]::GetFolderPath('Desktop')) $CaptureName
+if ($ViaLauncher) {
+    Write-Host ""
+    Write-Host "RenderDoc runs the launcher, which starts $exeName with its own launch (early load included); captures: $captures*.rdc"
+    & $RenderDoc capture --opt-hook-children -w -d $bin -c $captures $launcher --launch
+    return
+}
 Write-Host ""
 Write-Host "Starting $exeName under RenderDoc ($set variables set, arguments: $gameArgs); captures: $captures*.rdc"
 & $RenderDoc capture -d (Split-Path -Parent $game) -c $captures $game @argList
