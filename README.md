@@ -94,17 +94,18 @@ ZIP named here:
 
 | Download | Where | What it's for |
 | --- | --- | --- |
-| `CheekyFoveatedDLSS-0.6.3-Standalone-ace.2.zip` | [Cheeky Foveated DLSS v0.6.3-ace.2](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-ace.2) | The DLSS files themselves. This build includes fixes Assetto Corsa EVO needs (the official build shows the outer view shrunk, like "picture in picture"). |
+| The **Standalone** ZIP | [Cheeky Foveated DLSS v1.0.0-sim-qvfr-beta](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v1.0.0-sim-qvfr-beta) | The DLSS files themselves. This build includes fixes both games need: Assetto Corsa EVO (the official build shows the outer view shrunk, like "picture in picture") and Assetto Corsa Competizione (the official build crashes ACC at start and can't tell its views apart). Older builds such as `v0.6.3-ace.2` don't work with ACC. |
 | `CheekyFoveatedDLSS-0.6.3-Standalone-TEST-SIGNED.zip` | [Cheeky Foveated DLSS v0.6.3](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/releases/tag/v0.6.3) (official) | Only for its installer, `CheekyOpenXRSetup.exe`. |
 
 Once an official Cheeky release includes the fixes, its own download will replace both.
 
 ### Setting it up
 
-1. **Turn on DLSS** in Assetto Corsa EVO's graphics settings.
+1. **Turn on DLSS** in the game's graphics settings (Assetto Corsa EVO or Competizione). Foveated DLSS works
+   on the game's own DLSS, so it has to be on.
 2. **Run Cheeky's installer.** In the official ZIP, open the `OpenXR` folder and run
    `CheekyOpenXRSetup.exe`.
-3. **Copy Cheeky's folder into Sim-QuadView.** In the `ace.2` ZIP there's a folder called
+3. **Copy Cheeky's folder into Sim-QuadView.** In the beta ZIP there's a folder called
    `CheekyFoveatedDLSS`. Copy that whole folder into the `ace` folder inside your Sim-QuadView folder.
    (If you'd rather keep it somewhere else, use **Choose…** in the launcher's **Foveated DLSS** page to
    point to `CheekyFoveatedDLSSRuntime.dll`.)
@@ -115,9 +116,18 @@ Once an official Cheeky release includes the fixes, its own download will replac
    the order in the free [OpenXR API Layers GUI](https://github.com/fredemmott/OpenXR-API-Layers-GUI).
 6. **Turn it on.** In the launcher, open **Foveated DLSS** and tick **Use Cheeky Foveated DLSS**. The page
    tells you whether it found everything. After you've launched once, it also shows Cheeky's version.
-7. **Click Launch ACE.**
+7. **Click Launch.**
 
-**Frame generation:** tick **Frame generation** on the same page. Before you do:
+**In Assetto Corsa Competizione, also:**
+- **Update ACC's DLSS.** ACC comes with DLSS 2.2.15, which is too old for Foveated DLSS: the sharp area works,
+  but the cheaper outer view doesn't. Replace `nvngx_dlss.dll` in
+  `Assetto Corsa Competizione\AC2\Plugins\DLSS\Binaries\ThirdParty\Win64` with DLSS 310 or newer (a tool such
+  as DLSS Swapper does it). **Launch checks** tells you when it's too old and shows you the file. Steam's
+  **Verify integrity of game files** puts the original back.
+- **For DLSS-NR,** put NVIDIA's `nvngx_dlssnr.dll` in the same `CheekyFoveatedDLSS` folder you copied in step 3
+  (Assetto Corsa EVO has one in its own folder; ACC doesn't come with one).
+
+**Frame generation** (Assetto Corsa EVO only for now): tick **Frame generation** on the same page. Before you do:
 - Turn off **Turbo mode** in OpenXR Toolkit (the game crashes with it).
 - Don't use another frame generator at the same time, such as VectorXR's.
 
