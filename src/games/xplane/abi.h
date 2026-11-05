@@ -64,6 +64,11 @@ inline constexpr std::uint8_t kMultiplierStoreAnchor[6] = {0x89, 0x88, 0x90, 0x2
 // `or dword [rax], 0x18; mov rbx, [rsp+0x30]`, rax the render state.
 inline constexpr std::uintptr_t kModelviewCopyEnd = 0x1595653;
 inline constexpr std::uint8_t kModelviewCopyEndAnchor[8] = {0x83, 0x08, 0x18, 0x48, 0x8B, 0x5C, 0x24, 0x30};
+// The per-draw transform block upload (0x1594600): for i < r14d (the transform count) it reads modelview
+// state+0x88+i*0x80 and projection state+0x288+i*0x80 (doubles) into the block. Hooked at `mov eax, [rdi+0x2494]`
+// (rdi the state), just before that loop: every draw passes here, whichever setter filled the slots.
+inline constexpr std::uintptr_t kTransformUpload = 0x1594bf9;
+inline constexpr std::uint8_t kTransformUploadAnchor[6] = {0x8B, 0x87, 0x94, 0x24, 0x00, 0x00};
 // The cloud render's dispatch depth (0x1b63980): count = max(multiplier, layers), then z = (count > 1) + 1, i.e. 2 in
 // stereo: `cmp dword [rdx], 1; setg r14b; inc r14d`. Replaced by z = count: `mov r14d, [rdx]` and a 7-byte nop.
 inline constexpr std::uintptr_t kCloudDispatchDepth = 0x1b6460f;

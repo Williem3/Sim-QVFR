@@ -125,7 +125,8 @@ bool four_views_copies_start() {
         !code_matches(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
         !code_matches(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor)) ||
         !code_matches(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor)) ||
-        !code_matches(kCloudDispatchDepth, kCloudDispatchDepthAnchor, sizeof(kCloudDispatchDepthAnchor))) {
+        !code_matches(kCloudDispatchDepth, kCloudDispatchDepthAnchor, sizeof(kCloudDispatchDepthAnchor)) ||
+        !code_matches(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor))) {
         logf("xplane: four views not started: the draw path code isn't this build's");
         return false;
     }
@@ -174,6 +175,26 @@ bool four_views_copies_start() {
                    sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
     ok &= redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
                    "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
+    // The per-draw upload: with four views, slots 2-3 = slots 0-1 for both arrays right before the block is filled,
+    // whichever setter wrote them (the projection setter copies four entries from a two-eye source, so a path that
+    // sets projections after modelviews left slots 2-3 with the camera's mono matrices: the light sprites' white).
+    // xmm0-xmm2 are live there; the stub uses xmm3, rcx and rdx (set again before their next use).
+    static const std::uint8_t uploadCopy[] = {
+        0x41, 0x83, 0xFE, 0x04,                    // cmp r14d, 4
+        0x75, 0x2C,                                // jne done
+        0x48, 0x8D, 0x8F, 0x88, 0x00, 0x00, 0x00,  // lea rcx, [rdi + 0x88]   (modelview slot 0)
+        0xBA, 0x10, 0x00, 0x00, 0x00,              // mov edx, 16
+        0x0F, 0x10, 0x19,                          // loop: movups xmm3, [rcx]
+        0x0F, 0x11, 0x99, 0x00, 0x01, 0x00, 0x00,  //   movups [rcx + 0x100], xmm3   (modelview slots 2-3)
+        0x0F, 0x10, 0x99, 0x00, 0x02, 0x00, 0x00,  //   movups xmm3, [rcx + 0x200]   (projection slots 0-1)
+        0x0F, 0x11, 0x99, 0x00, 0x03, 0x00, 0x00,  //   movups [rcx + 0x300], xmm3   (projection slots 2-3)
+        0x48, 0x83, 0xC1, 0x10,                    //   add rcx, 16
+        0xFF, 0xCA,                                //   dec edx
+        0x75, 0xE0,                                //   jnz loop
+        0x8B, 0x87, 0x94, 0x24, 0x00, 0x00,        // done: mov eax, [rdi + 0x2494] (the original)
+    };
+    ok &= redirect(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor), uploadCopy,
+                   sizeof(uploadCopy), "per-draw upload: slots 2-3 = 0-1");
     const bool clouds = simqvfr::code_write(kCloudDispatchDepth, kCloudDispatchDepthCount, sizeof(kCloudDispatchDepthCount));
     logf("xplane: cloud render dispatch depth = view count (was stereo ? 2 : 1) at 0x%llx: %s",
          static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
