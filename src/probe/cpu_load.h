@@ -36,7 +36,8 @@ struct CpuLoad {
 CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map<uint32_t, uint64_t>& after,
                       uint64_t elapsedCycles, uint32_t renderThread, const std::set<uint32_t>& spinning = {});
 // A thread that spins while it waits, by its description: ACE's Physics (on QueryPerformanceCounter, for its
-// next step) and the Pimax eye tracker's client (polling the tracker).
+// next step), the Pimax eye tracker's client (polling the tracker) and Virtual Desktop's runtime thread (its
+// frame pacing, on the clock: "(virtualdesktop-openxr.dll)").
 bool cpu_load_spins(const std::wstring& name);
 
 bool cpu_load_start();

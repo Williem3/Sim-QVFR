@@ -71,9 +71,10 @@ int main() {
         const CpuLoad spun = cpu_load_from(before, after, 100000, 3, {2});
         check(spun.valid && spun.busiestThread == 3 && close_to(spun.busiestPercent, 40) && close_to(spun.processPercent, 131),
               "a spinning thread is never the busiest (the next one is, 40%) but counts in the process's total");
-        check(cpu_load_spins(L"Physics") && cpu_load_spins(L"(aSeeVRClient.dll)") && !cpu_load_spins(L"GameThread") &&
+        check(cpu_load_spins(L"Physics") && cpu_load_spins(L"(aSeeVRClient.dll)") &&
+                  cpu_load_spins(L"(virtualdesktop-openxr.dll)") && !cpu_load_spins(L"GameThread") &&
                   !cpu_load_spins(L""),
-              "spinning threads by description: Physics and the eye tracker's client");
+              "spinning threads by description: Physics, the eye tracker's client and Virtual Desktop's pacing");
         const std::map<uint32_t, double> shares = cpu_load_shares(before, after, 100000);
         check(shares.size() == 3 && close_to(shares.at(1), 1) && close_to(shares.at(2), 90) && close_to(shares.at(3), 40) &&
                   !shares.count(4),

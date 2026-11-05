@@ -1461,6 +1461,8 @@ std::wstring thread_note(const std::wstring& name) {
         return L"Waits for each physics step by spinning on the clock, so it always looks busy.";
     if (name.find(L"aSeeVRClient") != std::wstring::npos)
         return L"The Pimax eye tracker's client: it polls the tracker continuously, so it always looks busy.";
+    if (name.find(L"virtualdesktop-openxr") != std::wstring::npos)
+        return L"Virtual Desktop's frame pacing: it waits for each frame by spinning on the clock, so it always looks busy.";
     if (name.find(L"Cheeky") != std::wstring::npos)
         return L"Cheeky Foveated DLSS's frame generation.";
     return L"";
