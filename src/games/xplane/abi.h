@@ -21,6 +21,12 @@ inline constexpr std::size_t kVrLayerCountImm = 4;
 inline constexpr std::uintptr_t kVrContextLayers = 0xc6680f;
 inline constexpr std::uint8_t kVrContextLayersAnchor[8] = {0xC7, 0x44, 0x24, 0x28, 0x02, 0x00, 0x00, 0x00};
 inline constexpr std::size_t kVrContextLayersImm = 4;
+// The VR context's resizes (0x196cd90(ctx, width, height, layers), which also rebuilds its lit-image miptree, the
+// reflections' input): `mov r9d, 2` in the VR setup (0xc66670) and the VR window resize (0xc86410). Immediate at +2.
+inline constexpr std::uintptr_t kVrContextResizeA = 0xc6684f;
+inline constexpr std::uintptr_t kVrContextResizeB = 0xc86675;
+inline constexpr std::uint8_t kVrContextResizeAnchor[6] = {0x41, 0xB9, 0x02, 0x00, 0x00, 0x00};
+inline constexpr std::size_t kVrContextResizeImm = 2;
 // The camera setup (0x196c5d0): stereo flag = (layers == 2), `sete al` after `cmp dword ptr [r15+0xc], 2`.
 inline constexpr std::uintptr_t kStereoTestCmp = 0x196ca8b;
 inline constexpr std::uint8_t kStereoTestCmpAnchor[5] = {0x41, 0x83, 0x7F, 0x0C, 0x02};
