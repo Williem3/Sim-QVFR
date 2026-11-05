@@ -40,4 +40,31 @@ inline constexpr std::uintptr_t kWorldSubgraphLayers = 0x198f33c;
 inline constexpr std::uint8_t kWorldSubgraphLayersAnchor[5] = {0xBE, 0x02, 0x00, 0x00, 0x00};
 inline constexpr std::size_t kWorldSubgraphLayersImm = 1;
 
+// ---- Four views, drawn (README.md "The stereo count in the draw path") ----
+// The per-thread render state: `+0x2490` the instance multiplier; per-view modelviews at +0x88 + i*0x80 and
+// projections at +0x288 + i*0x80, room for four of each.
+inline constexpr std::size_t kStateModelviews = 0x88;
+inline constexpr std::size_t kStateProjections = 0x288;
+inline constexpr std::size_t kStateViewStride = 0x80;
+// set viewports (count ecx, multiplier edx, rects r8): its first instruction, `mov [rsp+8], rbx`. Callers pass
+// multiplier = stereo + 1 (0x7ba150, 0x7a7a70 twice, 0x1995650).
+inline constexpr std::uintptr_t kSetViewports = 0x1595790;
+inline constexpr std::uint8_t kSetViewportsAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
+// The two direct stores of multiplier = stereo + 1 (OGL_build_world_gbuffer_graph's lambdas): `mov [rax+0x2490], ecx`.
+inline constexpr std::uintptr_t kMultiplierStoreA = 0x79ca48;
+inline constexpr std::uintptr_t kMultiplierStoreB = 0x7ab258;
+inline constexpr std::uint8_t kMultiplierStoreAnchor[6] = {0x89, 0x88, 0x90, 0x24, 0x00, 0x00};
+// The end of the modelview copy (0x15955d0, after 0x1595510 copied the projections in 0x7b9f00's stereo path):
+// `or dword [rax], 0x18; mov rbx, [rsp+0x30]`, rax the render state.
+inline constexpr std::uintptr_t kModelviewCopyEnd = 0x1595653;
+inline constexpr std::uint8_t kModelviewCopyEndAnchor[8] = {0x83, 0x08, 0x18, 0x48, 0x8B, 0x5C, 0x24, 0x30};
+// X-Plane's one vkCreateShaderModule call loads the function from its table: `mov rax, [rip+...]` (0x632dad0).
+inline constexpr std::uintptr_t kShaderModuleLoad = 0x64495a;
+inline constexpr std::uint8_t kShaderModuleLoadAnchor[7] = {0x48, 0x8B, 0x05, 0x6F, 0x91, 0xCE, 0x05};
+inline constexpr std::uintptr_t kVkCreateShaderModuleSlot = 0x632dad0;
+// The final resolve's fragment shader (HDR array -> the side-by-side image; layer = (u > 1) + v_eye), as X-Plane
+// creates it: its size and SHA-256.
+inline constexpr std::size_t kFinalResolveFsBytes = 16716;
+inline constexpr const char* kFinalResolveFsSha256 = "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f";
+
 }  // namespace xplane

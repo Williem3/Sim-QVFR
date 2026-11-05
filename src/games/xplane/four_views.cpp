@@ -1,0 +1,148 @@
+#include "four_views.h"
+
+#include <windows.h>
+#include <bcrypt.h>
+
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "../../engine/code_patch.h"
+#include "../../log.h"
+#include "abi.h"
+#include "spirv_patch.h"
+
+namespace xplane {
+namespace {
+
+using simqvfr::code_matches;
+using simqvfr::code_redirect;
+using simqvfr::logf;
+
+// VkShaderModuleCreateInfo, as far as needed: sType, pNext, flags, codeSize, pCode (x64 layout).
+struct ShaderModuleCreateInfo {
+    std::uint32_t sType;
+    const void* pNext;
+    std::uint32_t flags;
+    std::size_t codeSize;
+    const std::uint32_t* pCode;
+};
+using CreateShaderModule = std::int32_t (*)(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
+                                           std::uint64_t* module);
+
+std::atomic<int> g_finalResolveEdits{0};
+
+std::string sha256_hex(const void* data, std::size_t size) {
+    std::string hex;
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    UCHAR digest[32];
+    if (BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0)) &&
+        BCRYPT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0)) &&
+        BCRYPT_SUCCESS(BCryptHashData(hash, static_cast<PUCHAR>(const_cast<void*>(data)), static_cast<ULONG>(size), 0)) &&
+        BCRYPT_SUCCESS(BCryptFinishHash(hash, digest, sizeof(digest), 0))) {
+        static const char* digits = "0123456789abcdef";
+        for (UCHAR b : digest) {
+            hex += digits[b >> 4];
+            hex += digits[b & 15];
+        }
+    }
+    if (hash)
+        BCryptDestroyHash(hash);
+    if (alg)
+        BCryptCloseAlgorithmProvider(alg, 0);
+    return hex;
+}
+
+// X-Plane's vkCreateShaderModule call lands here (kShaderModuleLoad). The final resolve's fragment shader gets
+// v_eye + 2 (it then shows layers 2-3); every other module goes through as it is.
+std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
+                                  std::uint64_t* module) {
+    const auto real = *reinterpret_cast<CreateShaderModule*>(simqvfr::module_base() + kVkCreateShaderModuleSlot);
+    if (info && info->pCode && info->codeSize == kFinalResolveFsBytes &&
+        sha256_hex(info->pCode, info->codeSize) == kFinalResolveFsSha256) {
+        std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
+        std::string why;
+        if (spirv_add_to_input(words, "v_eye", 2, &why)) {
+            ShaderModuleCreateInfo edited = *info;
+            edited.codeSize = words.size() * 4;
+            edited.pCode = words.data();
+            const std::int32_t result = real(device, &edited, allocator, module);
+            logf("xplane: final resolve shader edited (v_eye + 2: layers 2-3), vkCreateShaderModule %d, edit %d", result,
+                 ++g_finalResolveEdits);
+            return result;
+        }
+        logf("xplane: final resolve shader NOT edited: %s", why.c_str());
+    }
+    return real(device, info, allocator, module);
+}
+
+bool redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
+              std::size_t stubSize, const char* what) {
+    const bool ok = code_redirect(rva, anchor, size, stub, stubSize);
+    logf("xplane: %s at 0x%llx: %s", what, static_cast<unsigned long long>(rva), ok ? "patched" : "FAILED");
+    return ok;
+}
+
+}  // namespace
+
+bool four_views_copies_start() {
+    if (!code_matches(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor)) ||
+        !code_matches(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
+        !code_matches(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
+        !code_matches(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor)) ||
+        !code_matches(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor))) {
+        logf("xplane: four views not started: the draw path code isn't this build's");
+        return false;
+    }
+    // set viewports: a multiplier of 2 (stereo) becomes 4.
+    static const std::uint8_t setViewports[] = {
+        0x83, 0xFA, 0x02,              // cmp edx, 2
+        0x75, 0x05,                    // jne +5
+        0xBA, 0x04, 0x00, 0x00, 0x00,  // mov edx, 4
+        0x48, 0x89, 0x5C, 0x24, 0x08,  // mov [rsp+8], rbx (the original)
+    };
+    // The direct stores: 2 becomes 4.
+    static const std::uint8_t store[] = {
+        0x83, 0xF9, 0x02,                    // cmp ecx, 2
+        0x75, 0x05,                          // jne +5
+        0xB9, 0x04, 0x00, 0x00, 0x00,        // mov ecx, 4
+        0x89, 0x88, 0x90, 0x24, 0x00, 0x00,  // mov [rax+0x2490], ecx (the original)
+    };
+    // The end of the modelview copy: the render state's modelview and projection slots 0-1 copied into 2-3.
+    static const std::uint8_t slotCopy[] = {
+        0x83, 0x08, 0x18,                          // or dword [rax], 0x18 (the original)
+        0x48, 0x8B, 0x5C, 0x24, 0x30,              // mov rbx, [rsp+0x30] (the original)
+        0x48, 0x8D, 0x88, 0x88, 0x00, 0x00, 0x00,  // lea rcx, [rax + 0x88]   (modelview slot 0)
+        0xBA, 0x10, 0x00, 0x00, 0x00,              // mov edx, 16             (2 slots of 0x80, 16 bytes a time)
+        0x0F, 0x10, 0x01,                          // loop: movups xmm0, [rcx]
+        0x0F, 0x11, 0x81, 0x00, 0x01, 0x00, 0x00,  //   movups [rcx + 0x100], xmm0   (modelview slots 2-3)
+        0x0F, 0x10, 0x81, 0x00, 0x02, 0x00, 0x00,  //   movups xmm0, [rcx + 0x200]   (projection slots 0-1)
+        0x0F, 0x11, 0x81, 0x00, 0x03, 0x00, 0x00,  //   movups [rcx + 0x300], xmm0   (projection slots 2-3)
+        0x48, 0x83, 0xC1, 0x10,                    //   add rcx, 16
+        0xFF, 0xCA,                                //   dec edx
+        0x75, 0xE0,                                //   jnz loop
+    };
+    static_assert(kStateProjections - kStateModelviews == 0x200 && kStateViewStride * 2 == 0x100,
+                  "the slot copy's offsets");
+    // vkCreateShaderModule: rax = ours instead of X-Plane's table entry (the call that follows is `call rax`).
+    std::uint8_t shader[10] = {0x48, 0xB8};
+    const auto hook = reinterpret_cast<std::uintptr_t>(&create_shader_module);
+    std::memcpy(shader + 2, &hook, 8);
+
+    bool ok = redirect(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor), setViewports,
+                       sizeof(setViewports), "multiplier 4 in set viewports");
+    ok &= redirect(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
+                   "multiplier 4 (g-buffer store A)");
+    ok &= redirect(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
+                   "multiplier 4 (g-buffer store B)");
+    ok &= redirect(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor), slotCopy,
+                   sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
+    ok &= redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
+                   "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
+    return ok;
+}
+
+}  // namespace xplane

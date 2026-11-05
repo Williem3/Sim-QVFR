@@ -59,7 +59,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/adapters.cpp src/engine/code_patch.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/spirv_patch.cpp src/games/adapters.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -258,6 +258,12 @@ target_include_directories(cpu_profile_test PRIVATE src ${THIRD_PARTY}/openxr/in
 target_compile_definitions(cpu_profile_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(cpu_profile_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cpu_profile_test PRIVATE sim_qvfr_core)
+
+# Offline check of the SPIR-V edit for X-Plane's final resolve shader (tests/xplane_spirv_test.cpp).
+add_executable(xplane_spirv_test tests/xplane_spirv_test.cpp src/games/xplane/spirv_patch.cpp)
+target_include_directories(xplane_spirv_test PRIVATE src)
+target_compile_definitions(xplane_spirv_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+target_compile_options(xplane_spirv_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
 add_executable(acc_views_test tests/acc_views_test.cpp)
