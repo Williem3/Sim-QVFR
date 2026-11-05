@@ -172,6 +172,23 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         if (in.cheekyRuntimeFound && in.cheekyLayer == CheekyLayer::Enabled)
             add("cheeky", CheckTone::Ok, L"Cheeky Foveated DLSS ready", L"Its runtime and its OpenXR layer were found.");
 
+        // The game's DLSS: Cheeky's own passes (its periphery pass, its presets) need the 310 series.
+        if (!in.dlssVersion.empty()) {
+            if (version_major(in.dlssVersion) >= kCheekyDlssMajor) {
+                add("dlss_version", CheckTone::Ok, shortName + L"’s DLSS is " + in.dlssVersion,
+                    L"New enough for Foveated DLSS.");
+            } else {
+                Check& c = add("dlss_version", CheckTone::Warn, shortName + L"’s DLSS is too old for Foveated DLSS",
+                               shortName + L" has DLSS " + in.dlssVersion + L". Foveated DLSS needs DLSS 310 or newer "
+                               L"(DLSS 4): with an older one Cheeky can’t make its own periphery pass, and the game’s "
+                               L"DLSS runs as it is. Replace nvngx_dlss.dll with a newer one (a tool such as DLSS Swapper "
+                               L"does it, or the NVIDIA app’s DLSS override); Steam’s file check puts the original back.");
+                c.fix = CheckFix::ShowFile;
+                c.fixLabel = L"Show the file";
+                c.fixTarget = in.dlssPath;
+            }
+        }
+
         const int toolkit = rank(in.layers, kToolkitLayer), cheeky = rank(in.layers, kCheekyLayer);
         if (toolkit >= 0 && cheeky >= 0 && toolkit > cheeky) {
             Check& c = add("toolkit_order", CheckTone::Bad, L"OpenXR Toolkit is below Cheeky’s layer",
@@ -216,6 +233,27 @@ const Check* first_with(const std::vector<Check>& checks, CheckTone tone) {
         if (c.tone == tone)
             return &c;
     return nullptr;
+}
+
+int version_major(const std::wstring& version) {
+    if (version.empty() || !iswdigit(version[0]))
+        return -1;
+    return _wtoi(version.c_str());
+}
+
+std::wstring file_version(const std::wstring& path) {
+    DWORD ignored = 0;
+    const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &ignored);
+    if (!size)
+        return {};
+    std::vector<unsigned char> data(size);
+    VS_FIXEDFILEINFO* info = nullptr;
+    UINT length = 0;
+    if (!GetFileVersionInfoW(path.c_str(), 0, size, data.data()) ||
+        !VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &length) || !info)
+        return {};
+    return std::to_wstring(HIWORD(info->dwFileVersionMS)) + L"." + std::to_wstring(LOWORD(info->dwFileVersionMS)) + L"." +
+           std::to_wstring(HIWORD(info->dwFileVersionLS)) + L"." + std::to_wstring(LOWORD(info->dwFileVersionLS));
 }
 
 OpenComposite open_composite(const std::wstring& path) {

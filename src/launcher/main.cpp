@@ -388,7 +388,14 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
     const bool dlss = games::launcher_game().features.foveatedDlss;
     in.cheekyLoad = dlss && cheeky.load;
-    in.cheekyFg = dlss && cheeky.fg;
+    if (const wchar_t* dlssDll = games::launcher_game().dlssDll; in.cheekyLoad && dlssDll) {
+        const std::wstring folder = game_folder(ini);
+        if (!folder.empty()) {
+            in.dlssPath = (fs::path(folder) / dlssDll).wstring();
+            in.dlssVersion = file_version(in.dlssPath);
+        }
+    }
+    in.cheekyFg = dlss && cheeky.fg && games::launcher_game().features.frameGeneration;
     in.cheekyRuntimeFound = GetFileAttributesW(cheeky_runtime_path(ini, layer_folder()).c_str()) != INVALID_FILE_ATTRIBUTES;
     in.cheekyLayer = cheeky_layer_state();
     in.layers = launcher_layer_plan();

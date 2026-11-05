@@ -16,6 +16,7 @@ struct GameFeatures {
     bool helmet;          // the helmet overlay ([helmet])
     bool liveResolution;  // resolution changes while the game runs (otherwise: at the next launch)
     bool fovCrop;         // the field of view crop ([crop])
+    bool frameGeneration; // Cheeky's frame generation ([cheeky] fg), within Foveated DLSS
 };
 
 struct GameInfo {
@@ -30,6 +31,9 @@ struct GameInfo {
     // A game that reaches OpenXR through OpenComposite: its openvr_api.dll under steamFolder, which the launcher checks
     // is OpenComposite's (docs/acc-opencomposite.md); null for a game with OpenXR of its own.
     const wchar_t* openComposite;
+    // The game's DLSS (nvngx_dlss.dll) under steamFolder, whose version the launcher checks with Foveated DLSS on:
+    // Cheeky's own DLSS passes need the 310 series (DLSS 4: its presets E, K, L and M). Null: not checked.
+    const wchar_t* dlssDll;
     GameFeatures features;
     const char* const* builds;   // the exe SHA-256s (lowercase hex) the game's addresses were taken from
     std::size_t buildCount;

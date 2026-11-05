@@ -2,9 +2,10 @@
 // lives in its resident runtime, CheekyFoveatedDLSSRuntime.dll (GPL v3, built and shipped separately
 // from Cheeky's repository), behind a versioned C ABI: Start / Tick / Command / Snapshot / Detach.
 // Cheeky's own dxgi.dll loader and desktop overlay are one host of that ABI; this layer is another,
-// so Cheeky runs inside ACE without its loader: the layer starts the runtime at
-// xrCreateApiLayerInstance (seconds before ACE initialises NGX), hands it ACE's D3D12 device and
-// queue from the session's graphics binding and ticks it at every xrEndFrame.
+// so Cheeky runs inside the game without its loader: the layer starts the runtime at
+// xrCreateApiLayerInstance (seconds before the game initialises NGX), hands it the session's device from
+// its graphics binding (D3D12 with its queue, as ACE; D3D11 alone, as ACC: the runtime's renderer 0, as Cheeky's
+// own loader passes a D3D11 swapchain's device) and ticks it at every xrEndFrame.
 //
 // Spike: Cheeky's settings come from CheekyFoveatedDLSS.ini in `config_dir` (Cheeky writes it), and
 // the layer logs, every `report_s` seconds, each DLSS view Cheeky sees with its sizes and evaluations
@@ -13,6 +14,7 @@
 
 #include <string>
 
+struct ID3D11Device;
 struct ID3D12Device;
 struct ID3D12CommandQueue;
 
@@ -45,6 +47,8 @@ bool cheeky_apply(const std::string& lines);
 // The session's D3D12 device and queue (xrCreateSession), or none (xrDestroySession: processing
 // pauses until the next session).
 void cheeky_session(ID3D12Device* device, ID3D12CommandQueue* queue);
+// The session's D3D11 device (xrCreateSession with a D3D11 binding): Cheeky's renderer 0, no queue.
+void cheeky_session_d3d11(ID3D11Device* device);
 // Every xrEndFrame: Cheeky's frame callback, and the periodic view report.
 void cheeky_frame();
 // Applies "Name=value" lines to Cheeky's settings at once (CheekyRuntime_Command "set").

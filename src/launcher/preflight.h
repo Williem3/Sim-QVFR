@@ -11,6 +11,8 @@
 //   (ACE crashes at start otherwise); with its frame generation, Toolkit's Turbo mode off (ACE crashes).
 // - Eye tracked foveation without eye tracking at the last launch.
 // - A game that reaches OpenXR through OpenComposite (ACC): OpenComposite's openvr_api.dll in its folder.
+// - With Cheeky on: the game's DLSS (GameInfo::dlssDll) new enough for Cheeky's own DLSS passes (the 310 series;
+//   ACC ships 2.2.15, with which Cheeky's periphery pass can't be made and the game's own DLSS is kept).
 #pragma once
 
 #include <string>
@@ -58,7 +60,13 @@ struct PreflightInput {
     bool eyeTracked = true;
     EyeTracker eyeTracker = EyeTracker::Unknown;
     OpenComposite openComposite = OpenComposite::Unknown;  // only for a game that needs it
+    std::wstring dlssPath, dlssVersion;  // the game's nvngx_dlss.dll and its file version ("2.2.15.0"); empty: unknown
 };
+
+// The lowest DLSS (nvngx_dlss.dll) major version Cheeky's own DLSS passes need: the 310 series, DLSS 4.
+inline constexpr int kCheekyDlssMajor = 310;
+// A file version's major number ("310.9.1.0" -> 310), -1 for none.
+int version_major(const std::wstring& version);
 
 std::vector<Check> preflight_checks(const PreflightInput& in);
 
@@ -69,6 +77,8 @@ const Check* first_with(const std::vector<Check>& checks, CheckTone tone);
 // The build an exe hash is: Hashing while `sha` is empty and `hashing`, Unknown if it is empty otherwise.
 BuildState build_state(const std::string& sha, bool hashing);
 
+// The file version `path` carries ("310.9.1.0"), empty without one.
+std::wstring file_version(const std::wstring& path);
 // Whose openvr_api.dll `path` is: Valve's has its version information, OpenComposite's names itself.
 OpenComposite open_composite(const std::wstring& path);
 // dxgi.dll and version.dll in `gameFolder` that are Cheeky Foveated DLSS's loader (they name Cheeky).

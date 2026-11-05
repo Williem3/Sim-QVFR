@@ -1594,6 +1594,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             d3d11_capture_start(device, experiment.d3d11CaptureFrame);
             if (experiment.views4ComposeD3D11)
                 game->d3d11_session(device);
+            cheeky_session_d3d11(device);  // when Cheeky runs in this game (loads_cheeky)
         }
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
@@ -3134,9 +3135,12 @@ struct IniSnapshot;
 void menu_values_changed(const IniSnapshot& s);  // the settings menu shows the ini's values (below)
 
 // Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
-void cheeky_apply_settings(const CheekySettings& c, bool gazeOn) {
-    if (cheeky_running())
-        cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn));
+void cheeky_apply_settings(const CheekySettings& settings, bool gazeOn) {
+    if (!cheeky_running())
+        return;
+    CheekySettings c = settings;
+    c.fg = c.fg && game_features().frameGeneration;  // a game without it: off, whatever the ini says
+    cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn, experiment.views4ComposeD3D11));
 }
 void cheeky_apply_ini() {
     if (!live.ini.empty())
@@ -3637,6 +3641,7 @@ void menu_open(int64_t now) {
         const games::GameFeatures features = game_features();  // what the game has: the rest is left out
         menu.model.launch.cropPage = features.fovCrop;
         menu.model.launch.helmetPage = features.helmet;
+        menu.model.launch.fgPage = features.frameGeneration;
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
