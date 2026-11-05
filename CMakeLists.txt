@@ -228,7 +228,7 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(sim_qvfr_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version)
+target_link_libraries(sim_qvfr_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32)
 set_target_properties(sim_qvfr_launcher PROPERTIES OUTPUT_NAME sim-qvfr-launcher)
 sim_qvfr_version_info(sim_qvfr_launcher sim-qvfr-launcher.exe VFT_APP "Sim-QVFR launcher")
 # A development build gets the default settings next to the launcher, once: an edited copy is kept.
