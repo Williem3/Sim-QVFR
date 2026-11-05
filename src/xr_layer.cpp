@@ -3137,7 +3137,7 @@ void menu_values_changed(const IniSnapshot& s);  // the settings menu shows the 
 // Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
 void cheeky_apply_settings(const CheekySettings& c, bool gazeOn) {
     if (cheeky_running())
-        cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn));
+        cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn, experiment.views4ComposeD3D11));
 }
 void cheeky_apply_ini() {
     if (!live.ini.empty())

@@ -155,7 +155,10 @@ inline bool write_cheeky_settings(const wchar_t* ini, const CheekySettings& c, b
 // Cheeky's "set" lines for these settings and, for QVFR, the quad view roles. `gaze`: QVFR's focus follows
 // the eyes ([quad] gaze), so Cheeky's FG region follows them too (CenterMode 1, its OpenXR layer's eye
 // gaze; game-composited quad views use it only for FG). Otherwise the region sits at each eye's forward point.
-inline std::string cheeky_set_lines(const CheekySettings& c, bool quadRoles, bool gaze = false) {
+// `d3d11`: a D3D11 game (ACC). Cheeky runs DLSS-NR on D3D11 only through its DX12 transport (its USAGE.md), which
+// also moves its SR and periphery work onto a D3D12 bridge; so the transport is on only while NR is, and the direct
+// D3D11 path (the periphery measured working there) stays otherwise.
+inline std::string cheeky_set_lines(const CheekySettings& c, bool quadRoles, bool gaze = false, bool d3d11 = false) {
     char scale[16], supersampling[16];
     snprintf(scale, sizeof(scale), "%.2f", std::clamp(c.outerScale, kCheekyScaleMin, kCheekyScaleMax) / 100.0);
     snprintf(supersampling, sizeof(supersampling), "%.2f",
@@ -182,6 +185,8 @@ inline std::string cheeky_set_lines(const CheekySettings& c, bool quadRoles, boo
          "\nFgResolutionPercent=" + std::to_string(cheeky_fg_quarter(c.fgScale)) +
          "\nFgPeripheralPercent=" + std::to_string(cheeky_fg_quarter(c.fgPeriphery)) +
          "\nFgShowBorder=" + std::to_string(c.fgBorder ? 1 : 0);
+    if (d3d11)
+        s += "\nD3D11D3D12Transport=" + std::to_string(c.nr ? 1 : 0);
     if (quadRoles)
         s += "\nManualQuadViewAssignment=1\nQuadSavedSourceCount=4\nQuadView1Role=1\nQuadView2Role=2"
              "\nQuadView3Role=3\nQuadView4Role=4";

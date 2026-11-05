@@ -423,6 +423,14 @@ int main() {
                   nrSet.find("NrEnabled=1") != std::string::npos && nrSet.find("NrPreset=2") != std::string::npos &&
                   nrSet.find("NrPasses=3") != std::string::npos,
               "Cheeky's set lines carry supersampling, the motion fix and DLSS-NR");
+        {
+            CheekySettings off = c.cheeky.values;
+            off.nr = false;
+            check(cheeky_set_lines(c.cheeky.values, true, false, true).find("D3D11D3D12Transport=1") != std::string::npos &&
+                      cheeky_set_lines(off, true, false, true).find("D3D11D3D12Transport=0") != std::string::npos &&
+                      nrSet.find("D3D11D3D12Transport") == std::string::npos,
+                  "a D3D11 game: Cheeky's DX12 transport on only with DLSS-NR; a D3D12 game never sets it");
+        }
         const auto nrIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_cheeky_nr.ini").wstring();
         DeleteFileW(nrIni.c_str());
         write_cheeky_settings(nrIni.c_str(), c.cheeky.values, false);
