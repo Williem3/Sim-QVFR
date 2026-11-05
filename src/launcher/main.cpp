@@ -245,6 +245,7 @@ int run(bool dryRun) {
 
     say(L"Sim-QVFR launcher " + widen(SIM_QVFR_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
+    say(L"  args:      " + std::wstring(info.launchArgs));
     say(L"  layer:     " + library.wstring());
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
