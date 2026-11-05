@@ -12,17 +12,25 @@ struct Colors {
     uint32_t sidebar_bg;
     uint32_t titlebar_bg;
     uint32_t group_bg;
+    uint32_t card_border;
     uint32_t control_bg;
+    uint32_t control_hover;
     uint32_t field_bg;
     uint32_t segment_track;
+    uint32_t segment_selected;
+    uint32_t switch_off;
+    uint32_t knob;
     uint32_t label;
+    uint32_t heading;
     uint32_t label_secondary;
+    uint32_t label_muted;
     uint32_t label_tertiary;
     uint32_t separator;
     uint32_t control_border;
     uint32_t accent;
     uint32_t accent_fill;
     uint32_t on_accent;
+    uint32_t support_fill;
     uint32_t sidebar_selection;
     uint32_t focus_ring;
     uint32_t success;
@@ -31,86 +39,118 @@ struct Colors {
     uint32_t warning_bg;
     uint32_t danger;
     uint32_t danger_bg;
-    uint32_t overlay_teal;
-    uint32_t overlay_magenta;
-    uint32_t overlay_green;
     uint32_t preview_canvas;
     uint32_t preview_periphery;
     uint32_t preview_focus;
+    uint32_t overlay_teal;
+    uint32_t overlay_magenta;
+    uint32_t overlay_green;
     uint32_t preview_label;
     uint32_t traffic_close;
     uint32_t traffic_minimize;
     uint32_t traffic_zoom;
 };
 inline constexpr Colors kLight = {
-    0xf0f0f2,  // window-bg
-    0xe4e4e8,  // sidebar-bg
-    0xe8e8eb,  // titlebar-bg
+    0xf2f2f5,  // window-bg
+    0xebebef,  // sidebar-bg
+    0xe4e4e9,  // titlebar-bg
     0xffffff,  // group-bg
-    0xffffff,  // control-bg
+    0xdcdce2,  // card-border
+    0xe9e9ee,  // control-bg
+    0xdedee4,  // control-hover
     0xffffff,  // field-bg
-    0xe3e3e7,  // segment-track
+    0xe3e3e8,  // segment-track
+    0xffffff,  // segment-selected
+    0x8e8e93,  // switch-off
+    0xffffff,  // knob
     0x1d1d1f,  // label
-    0x636366,  // label-secondary
-    0xaeaeb2,  // label-tertiary
-    0xd1d1d6,  // separator
-    0x8e8e93,  // control-border
+    0x3a3a3f,  // heading
+    0x55555c,  // label-secondary
+    0x6e6e75,  // label-muted
+    0xb0b0b6,  // label-tertiary
+    0xdcdce2,  // separator
+    0xc2c2c9,  // control-border
     0x0064d2,  // accent
-    0x0068da,  // accent-fill
+    0x0071e3,  // accent-fill
     0xffffff,  // on-accent
-    0x0068da,  // sidebar-selection
-    0x1f74e8,  // focus-ring
+    0xd6246e,  // support-fill
+    0x0071e3,  // sidebar-selection
+    0x0064d2,  // focus-ring
     0x1f7a34,  // success
     0xe3f4e7,  // success-bg
-    0x9a5b00,  // warning
+    0x8f5500,  // warning
     0xfdf0dc,  // warning-bg
     0xc20012,  // danger
     0xfde7e9,  // danger-bg
+    0x1c1c1e,  // preview-canvas
+    0x2c2c30,  // preview-periphery
+    0x5a5a62,  // preview-focus
     0x0e8a9e,  // overlay-teal
     0xc026b8,  // overlay-magenta
     0x1f8a3c,  // overlay-green
-    0x1c1c1e,  // preview-canvas
-    0x3a3a3c,  // preview-periphery
-    0x6e6e73,  // preview-focus
     0xf5f5f7,  // preview-label
     0xff5f57,  // traffic-close
     0xfebc2e,  // traffic-minimize
     0x28c840,  // traffic-zoom
 };
 inline constexpr Colors kDark = {
-    0x1f1f21,  // window-bg
-    0x2b2b2e,  // sidebar-bg
-    0x2a2a2c,  // titlebar-bg
-    0x2c2c2e,  // group-bg
-    0x545458,  // control-bg
-    0x232325,  // field-bg
-    0x3a3a3c,  // segment-track
-    0xf5f5f7,  // label
-    0xa1a1a6,  // label-secondary
-    0x636366,  // label-tertiary
-    0x3a3a3c,  // separator
-    0x8e8e93,  // control-border
+    0x1c1c1e,  // window-bg
+    0x18181a,  // sidebar-bg
+    0x141416,  // titlebar-bg
+    0x232326,  // group-bg
+    0x2e2e31,  // card-border
+    0x333338,  // control-bg
+    0x3d3d43,  // control-hover
+    0x18181a,  // field-bg
+    0x3a3a40,  // segment-track
+    0x5a5a62,  // segment-selected
+    0x707078,  // switch-off
+    0xf5f5f7,  // knob
+    0xf2f2f4,  // label
+    0xc7c7cc,  // heading
+    0xa1a1aa,  // label-secondary
+    0x8e8e93,  // label-muted
+    0x5c5c62,  // label-tertiary
+    0x2e2e31,  // separator
+    0x4a4a50,  // control-border
     0x4da3ff,  // accent
-    0x0a6fe0,  // accent-fill
+    0x0071e3,  // accent-fill
     0xffffff,  // on-accent
-    0x0a6fe0,  // sidebar-selection
-    0x6cb4ff,  // focus-ring
-    0x30d158,  // success
-    0x193a22,  // success-bg
-    0xffb340,  // warning
-    0x3d2e12,  // warning-bg
+    0xd6246e,  // support-fill
+    0x0071e3,  // sidebar-selection
+    0x4da3ff,  // focus-ring
+    0x4cd964,  // success
+    0x1b3522,  // success-bg
+    0xffcc66,  // warning
+    0x3a2e17,  // warning-bg
     0xff6961,  // danger
     0x3f1a1d,  // danger-bg
+    0x111113,  // preview-canvas
+    0x1d1d21,  // preview-periphery
+    0x3c4a5c,  // preview-focus
     0x40c8e0,  // overlay-teal
     0xf272e6,  // overlay-magenta
     0x4cd964,  // overlay-green
-    0x0f0f10,  // preview-canvas
-    0x2a2a2c,  // preview-periphery
-    0x5a5a5e,  // preview-focus
     0xf5f5f7,  // preview-label
     0xff5f57,  // traffic-close
     0xfebc2e,  // traffic-minimize
     0x28c840,  // traffic-zoom
+};
+
+// Each game tab's accent (tokens.json "games"): it replaces accent, accent_fill, on_accent and focus_ring.
+struct Accent {
+    uint32_t accent;
+    uint32_t accent_fill;
+    uint32_t on_accent;
+    uint32_t focus_ring;
+};
+struct GamePalette {
+    const char* id;  // games::GameInfo::id
+    Accent light, dark;
+};
+inline constexpr GamePalette kGamePalettes[] = {
+    {"ace", {0x0064d2, 0x0071e3, 0xffffff, 0x0064d2}, {0x4da3ff, 0x0071e3, 0xffffff, 0x4da3ff}},  // Assetto Corsa EVO
+    {"acc", {0xa84400, 0xb84a00, 0xffffff, 0xa84400}, {0xff9f45, 0xb84a00, 0xffffff, 0xff9f45}},  // Assetto Corsa Competizione
 };
 
 // Type styles: size and line height in DIPs, weight, monospaced family.
@@ -119,16 +159,16 @@ struct TypeStyle {
     int weight;
     bool mono;
 };
-inline constexpr TypeStyle kLargeTitle = {26.0f, 32.0f, 400, false};
-inline constexpr TypeStyle kTitle1 = {22.0f, 26.0f, 400, false};
-inline constexpr TypeStyle kTitle2 = {17.0f, 22.0f, 500, false};
-inline constexpr TypeStyle kTitle3 = {15.0f, 20.0f, 400, false};
-inline constexpr TypeStyle kHeadline = {13.0f, 16.0f, 600, false};
-inline constexpr TypeStyle kBody = {13.0f, 16.0f, 400, false};
-inline constexpr TypeStyle kCallout = {12.0f, 15.0f, 400, false};
-inline constexpr TypeStyle kSubheadline = {11.0f, 14.0f, 400, false};
-inline constexpr TypeStyle kFootnote = {10.0f, 13.0f, 400, false};
-inline constexpr TypeStyle kValue = {12.0f, 16.0f, 400, true};
+inline constexpr TypeStyle kLargeTitle = {28.0f, 34.0f, 700, false};
+inline constexpr TypeStyle kTitle1 = {22.0f, 28.0f, 700, false};
+inline constexpr TypeStyle kTitle2 = {17.0f, 22.0f, 600, false};
+inline constexpr TypeStyle kTitle3 = {15.0f, 20.0f, 600, false};
+inline constexpr TypeStyle kHeadline = {13.0f, 18.0f, 600, false};
+inline constexpr TypeStyle kBody = {14.0f, 20.0f, 400, false};
+inline constexpr TypeStyle kCallout = {12.5f, 17.0f, 400, false};
+inline constexpr TypeStyle kSubheadline = {12.0f, 16.0f, 400, false};
+inline constexpr TypeStyle kFootnote = {11.0f, 14.0f, 600, false};
+inline constexpr TypeStyle kValue = {13.0f, 18.0f, 600, false};
 
 // Spacing (DIPs).
 inline constexpr float kSpace1 = 4.0f;
@@ -137,21 +177,25 @@ inline constexpr float kSpace3 = 12.0f;
 inline constexpr float kSpace4 = 16.0f;
 inline constexpr float kSpace5 = 20.0f;
 inline constexpr float kSpace6 = 24.0f;
+inline constexpr float kSpace7 = 28.0f;
 inline constexpr float kSpace8 = 32.0f;
 
 // Radius (DIPs).
-inline constexpr float kRadiusCheck = 4.0f;
-inline constexpr float kRadiusControl = 6.0f;
-inline constexpr float kRadiusGroup = 10.0f;
+inline constexpr float kRadiusCheck = 5.0f;
+inline constexpr float kRadiusControl = 8.0f;
+inline constexpr float kRadiusGroup = 12.0f;
 inline constexpr float kRadiusWindow = 12.0f;
 inline constexpr float kRadiusFull = 999.0f;
 
 // Size (DIPs).
-inline constexpr float kControlHeight = 22.0f;
-inline constexpr float kControlHeightLarge = 32.0f;
-inline constexpr float kRowMinHeight = 40.0f;
-inline constexpr float kSidebarWidth = 188.0f;
-inline constexpr float kPreviewWidth = 300.0f;
+inline constexpr float kControlHeight = 34.0f;
+inline constexpr float kControlHeightLarge = 44.0f;
+inline constexpr float kRowMinHeight = 52.0f;
+inline constexpr float kSidebarWidth = 228.0f;
+inline constexpr float kPreviewWidth = 340.0f;
 inline constexpr float kTitlebarHeight = 38.0f;
+inline constexpr float kTabbarHeight = 48.0f;
+inline constexpr float kActionbarHeight = 68.0f;
+inline constexpr float kSidebarRowHeight = 30.0f;
 
 }  // namespace aceqv::launcher::ui::tokens

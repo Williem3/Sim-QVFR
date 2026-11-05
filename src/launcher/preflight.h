@@ -52,6 +52,7 @@ struct PreflightInput {
     BuildState build = BuildState::Unknown;
     LaunchMode mode = LaunchMode::Qvfr;
     bool steamRunning = true, gameRunning = false;
+    bool gameHasLayer = false;  // the running game loaded ace-quadview (runtime.ini's live_pid is that process)
     std::vector<std::wstring> cheekyLoaders;  // Cheeky's loader DLLs in the game folder
     bool cheekyLoad = false, cheekyFg = false, cheekyRuntimeFound = false;
     CheekyLayer cheekyLayer = CheekyLayer::Missing;

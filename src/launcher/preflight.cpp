@@ -115,9 +115,14 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         c.fix = CheckFix::StartSteam;
         c.fixLabel = L"Start Steam";
     }
-    if (in.gameRunning)
+    // Running with ace-quadview (this launcher's launch, or one before it) is how it should be; running without it,
+    // a launch would start a second copy.
+    if (in.gameRunning && in.gameHasLayer)
+        add("ace_running", CheckTone::Ok, name + L" is running with ace-quadview",
+            L"Changes here reach it as you make them; resolution beyond its launch size waits for the next launch.");
+    else if (in.gameRunning)
         add("ace_running", CheckTone::Bad, name + L" is already running",
-            L"Close it first: the launch starts a new copy of the game with ace-quadview.");
+            L"It runs without ace-quadview. Close it first: the launch starts a new copy of the game with ace-quadview.");
 
     // OpenComposite, for a game that reaches OpenXR through it.
     if (game.openComposite && in.openComposite != OpenComposite::Unknown) {

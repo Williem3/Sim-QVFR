@@ -979,6 +979,11 @@ int main() {
         check(find(checks, "steam")->tone == CheckTone::Bad && find(checks, "steam")->fix == CheckFix::StartSteam &&
                   find(checks, "ace_running") && find(checks, "ace_running")->tone == CheckTone::Bad,
               "preflight: Steam not running and ACE already running");
+        in.gameHasLayer = true;
+        checks = preflight_checks(in);
+        check(find(checks, "ace_running") && find(checks, "ace_running")->tone == CheckTone::Ok && !find(checks, "ace_running")->confirm,
+              "preflight: ACE running with ace-quadview (launched from here) is no problem");
+        in.gameHasLayer = false;
         in.steamRunning = true;
         in.gameRunning = false;
         in.gameExe.clear();

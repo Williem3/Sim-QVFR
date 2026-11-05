@@ -1,8 +1,9 @@
-// The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a sidebar
-// of panes (Launch checks, Profiles, Rendering, Resolution, Foveation, Focus overlay, Foveated DLSS, Headset menu, Hotkeys, OpenXR layers, Diagnostics,
-// Report an issue, About), grouped forms with
-// the kit's controls, a live foveation preview with readouts (the Headset menu pane: a placement preview
-// to drag the in-headset settings menu around), and an action bar with the status badge,
+// The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a tab per game
+// across the top (each with its own accent palette, which the whole window takes while its tab is chosen), a
+// sidebar of panes in groups (Setup: Launch checks, Profiles; Picture: Rendering, Resolution, Foveation, Focus
+// overlay, Foveated DLSS; In the headset: Headset menu, Hotkeys; Advanced: OpenXR layers, Diagnostics; Help:
+// Report an issue, About), cards of the kit's controls, a live foveation preview with readouts (the Headset menu
+// pane: a placement preview to drag the in-headset settings menu around), and an action bar with the status,
 // Restore Defaults and Launch. Every colour, size and type style comes from theme_tokens.h; every
 // label is the kit's. Settings save as they change (settings.h); Launch runs launch_ace (main.cpp).
 //
@@ -55,7 +56,7 @@ std::wstring not_yet() { return L"Not available for " + std::wstring(games::laun
 enum class Pane { Checks, Profiles, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
 constexpr int kPanes = 13;
 enum Ctl {
-    kNone, kSidebar, kGame, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
+    kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
     // (FocusCorner's order, across then up or down).
@@ -142,7 +143,7 @@ constexpr wchar_t kMethodNames[2][40] = {L"Quad View Foveated Rendering", L"Two-
 constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
 constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
-constexpr float kMinWidth = 820, kMinHeight = 540, kDefaultWidth = 960, kDefaultHeight = 600;
+constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1160, kDefaultHeight = 740;
 constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes its title bar; ours is native
 // The placement preview's reference view (degrees) and the panel's distance (the layer's kMenuDistance).
 constexpr float kRefFovX = 100, kRefFovY = 80, kMenuDistance = 0.8f;
@@ -156,7 +157,12 @@ struct App {
     HWND hwnd = nullptr;
     Canvas canvas;
     bool dark = false;
-    const t::Colors* c = &t::kLight;
+    t::Colors theme = t::kLight;  // the system theme's colours with the chosen game's accent (apply_theme)
+    const t::Colors* c = &theme;
+    // The pointer (DIPs; off the window: -1) and the control under it in the last frame's hits (hover states).
+    float mouseX = -1, mouseY = -1;
+    Ctl hover = kNone;
+    int hoverOption = -1;
     Settings s;
     RuntimeInfo runtime;
     std::wstring ini;
@@ -245,9 +251,24 @@ bool system_dark() {
 
 COLORREF colorref(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
 
+// A game tab's palette (tokens.json "games"), for the theme in use; the kit's default accent for a game without one.
+t::Accent game_accent(const games::GameInfo& game) {
+    for (const t::GamePalette& p : t::kGamePalettes)
+        if (_stricmp(p.id, game.id) == 0)
+            return app.dark ? p.dark : p.light;
+    const t::Colors& base = app.dark ? t::kDark : t::kLight;
+    return {base.accent, base.accent_fill, base.on_accent, base.focus_ring};
+}
+
 void apply_theme() {
     app.dark = system_dark();
-    app.c = app.dark ? &t::kDark : &t::kLight;
+    app.theme = app.dark ? t::kDark : t::kLight;
+    const t::Accent a = game_accent(games::launcher_game());
+    app.theme.accent = a.accent;
+    app.theme.accent_fill = a.accent_fill;
+    app.theme.on_accent = a.on_accent;
+    app.theme.focus_ring = a.focus_ring;
+    app.theme.sidebar_selection = a.accent_fill;
     const BOOL dark = app.dark;
     DwmSetWindowAttribute(app.hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
     const COLORREF caption = colorref(app.c->titlebar_bg), text = colorref(app.c->label);
@@ -285,12 +306,15 @@ std::string ini_text() {
     return text;
 }
 
+void refresh_profiles();  // the profiles and the one in use (below)
+
 void changed(bool save = true) {
     app.status = Status::Idle;
     if (save && app.iniFound) {
         save_settings(app.ini, app.s);
         app.iniText = ini_text();
         push_live();
+        refresh_profiles();  // whether the settings still match the profile in use
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -432,8 +456,7 @@ void follow_ini() {
         return;
     app.iniText = std::move(text);
     app.s = load_settings(app.ini);
-    if (app.pane == Pane::Profiles)  // the headset menu may have switched profiles
-        refresh_profiles();
+    refresh_profiles();  // the headset menu may have switched profiles (the action bar names the one in use)
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -550,13 +573,12 @@ bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
 bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
 std::vector<Ctl> focus_order() {
-    std::vector<Ctl> order = {kSidebar};
+    std::vector<Ctl> order = {kGameTab, kSidebar};
     switch (app.pane) {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
     case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
     case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
     case Pane::Rendering:
-        order.push_back(kGame);
         if (method_shown())
             order.push_back(kMethod);
         order.push_back(kMode);
@@ -621,7 +643,7 @@ std::vector<Ctl> focus_order() {
         break;
     case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::Report: order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport}); break;
-    case Pane::About: order.insert(order.end(), {kUpdateCheck, kUpdateNow, kSupport}); break;
+    case Pane::About: order.insert(order.end(), {kSupport, kUpdateCheck, kUpdateNow}); break;
     }
     order.insert(order.end(), {kRestore, kLaunch});
     return order;
@@ -667,63 +689,134 @@ void launch() {
 // ---- Controls ----------------------------------------------------------------------------------
 
 void focus_ring(const Rect& r, float radius) {
-    // Solid 3px focus-ring, offset 1px.
-    app.canvas.stroke({r.x - 4, r.y - 4, r.w + 8, r.h + 8}, col(app.c->focus_ring), 3, radius + 4);
+    // A 2px ring 3px outside the control (:focus-visible).
+    app.canvas.stroke({r.x - 5, r.y - 5, r.w + 10, r.h + 10}, col(app.c->focus_ring), 2, radius + 5);
 }
 
 bool focused(Ctl id) { return app.keyboard && app.focus == id && !app.popup.open; }
+// The pointer is over `r` (hover states), with no menu open and nothing dragged.
+bool pointer_in(const Rect& r) {
+    return app.hover != kNone && !app.popup.open && app.dragging == kNone && r.contains(app.mouseX, app.mouseY);
+}
 
-// A primary button's label (Launch's); measure with it when sizing one.
-constexpr t::TypeStyle kPrimaryLabel{15, 20, 500, false};
+// `a` moved toward `b` by `f` (0..1), per channel.
+uint32_t mix(uint32_t a, uint32_t b, float f) {
+    uint32_t out = 0;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        const float ca = static_cast<float>((a >> shift) & 0xff), cb = static_cast<float>((b >> shift) & 0xff);
+        out |= static_cast<uint32_t>(std::lround(ca + (cb - ca) * f)) << shift;
+    }
+    return out;
+}
+
+// Button labels; the Launch button's.
+constexpr t::TypeStyle kButtonLabel{14, 20, 500, false};
+constexpr t::TypeStyle kPrimaryLabel = t::kTitle3;
+// StatusBadge text; measure with it when sizing one.
+constexpr t::TypeStyle kBadgeStyle{12, 16, 600, false};
+float badge_width(const std::wstring& text) { return 7 + 12 + 5 + std::ceil(app.canvas.measure(text, kBadgeStyle)) + 10; }
+
+// Secondary: a filled grey button. Primary: the game's accent (one per view). Ghost: no fill until the pointer is
+// over it. Tint: the accent at 16% with accent text (an action that adds). Danger: red text, no fill. Support: pink,
+// for Support on Ko-fi.
+enum class Btn { Secondary, Primary, Ghost, Tint, Danger, Support };
+
+// Button glyphs (16 x 16, stroked).
+constexpr const char* kIconPlus = "M8 3.5v9M3.5 8h9";
+constexpr const char* kIconPaste = "M6 2.5h4v2H6zM4.75 3.5H3.5v10h9v-10h-1.25";
+constexpr const char* kIconReset = "M2.75 8C2.75 10.9 5.1 13.25 8 13.25S13.25 10.9 13.25 8 10.9 2.75 8 2.75C6.3 2.75 4.8 3.55 3.85 4.8M3.5 2.25V5.25H6.5";
+constexpr const char* kIconPlay = "M5 3.25v9.5L12.5 8z";
+constexpr const char* kIconHeart =
+    "M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 14 5.9 14 9.9 8 13.5 8 13.5Z";
+
+float button_width(const std::wstring& label, const t::TypeStyle& style = kButtonLabel) {
+    return std::ceil(app.canvas.measure(label, style)) + 2 * t::kSpace4;
+}
+
+// A button; `icon`: a 16-box stroke path drawn before the label.
+void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr) {
+    const bool down = app.pressed == id && r.contains(app.mouseX, app.mouseY), over = pointer_in(r);
+    const float radius = t::kRadiusControl;
+    Color bg{0, 0}, fg = col(app.c->label);
+    switch (style) {
+    case Btn::Primary:
+        bg = col(down ? mix(app.c->accent_fill, 0, 0.12f) : over ? mix(app.c->accent_fill, 0xffffff, 0.1f) : app.c->accent_fill);
+        fg = col(app.c->on_accent);
+        break;
+    case Btn::Secondary: bg = col(down ? mix(app.c->control_hover, 0, 0.08f) : over ? app.c->control_hover : app.c->control_bg); break;
+    case Btn::Ghost:
+        bg = over || down ? col(app.dark ? 0xffffff : 0, down ? 0.1f : 0.06f) : Color{0, 0};
+        fg = col(app.c->heading);
+        break;
+    case Btn::Tint:
+        bg = col(app.c->accent_fill, down ? 0.3f : over ? 0.24f : 0.16f);
+        fg = col(app.c->accent);
+        break;
+    case Btn::Support:
+        bg = col(down ? mix(app.c->support_fill, 0, 0.12f) : over ? mix(app.c->support_fill, 0xffffff, 0.1f) : app.c->support_fill);
+        fg = col(app.c->on_accent);
+        break;
+    case Btn::Danger:
+        bg = over || down ? col(app.c->danger, down ? 0.18f : 0.12f) : Color{0, 0};
+        fg = col(app.c->danger);
+        break;
+    }
+    if (bg.alpha > 0)
+        app.canvas.fill(r, bg, radius);
+    const t::TypeStyle textStyle = style == Btn::Primary && r.h >= t::kControlHeightLarge ? kPrimaryLabel : kButtonLabel;
+    if (icon) {
+        const float tw = std::ceil(app.canvas.measure(label, textStyle)), iw = 16, gap = 8;
+        const float x0 = r.x + (r.w - tw - iw - gap) / 2;
+        app.canvas.path(icon, {x0, r.y + (r.h - iw) / 2, iw, iw}, 16, fg, 1.6f, icon == kIconPlay || icon == kIconHeart);
+        app.canvas.text(label, textStyle, {x0 + iw + gap, r.y, tw + 2, r.h}, fg);
+    } else {
+        app.canvas.text(label, textStyle, r, fg, Align::Center);
+    }
+    if (focused(id))
+        focus_ring(r, radius);
+    app.hits.push_back({id, r});
+}
 
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {
-    const bool down = app.pressed == id;
-    Color bg = col(primary ? app.c->accent_fill : app.c->control_bg);
-    if (down)
-        bg.rgb = ((((bg.rgb >> 16) & 0xff) * 92 / 100) << 16) | ((((bg.rgb >> 8) & 0xff) * 92 / 100) << 8) |
-                 ((bg.rgb & 0xff) * 92 / 100);  // brightness 92%
-    if (!primary)
-        app.canvas.control_shadow(r, t::kRadiusControl, app.dark);
-    app.canvas.fill(r, bg, t::kRadiusControl);
-    app.canvas.stroke(r, col(primary ? app.c->accent_fill : app.c->control_border), 1, t::kRadiusControl);
-    const t::TypeStyle style = primary ? kPrimaryLabel : t::kBody;
-    app.canvas.text(label, style, r, col(primary ? app.c->on_accent : app.c->label), Align::Center);
-    if (focused(id))
-        focus_ring(r, t::kRadiusControl);
-    app.hits.push_back({id, r});
+    button(id, r, label, primary ? Btn::Primary : Btn::Secondary);
 }
 
 float popup_width(const std::wstring* items, int count, float minWidth) {
     float w = 0;
     for (int i = 0; i < count; ++i)
         w = std::max(w, app.canvas.measure(items[i], t::kBody));
-    return std::max(minWidth, std::ceil(w) + t::kSpace2 + 26);
+    return std::max(minWidth, std::ceil(w) + t::kSpace3 + 32);
 }
 
 void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disabled) {
-    if (!disabled)
-        app.canvas.control_shadow(r, t::kRadiusControl, app.dark);
-    app.canvas.fill(r, col(app.c->control_bg), t::kRadiusControl);
-    app.canvas.stroke(r, col(disabled ? app.c->separator : app.c->control_border), 1, t::kRadiusControl);
-    app.canvas.text(value, t::kBody, {r.x + t::kSpace2, r.y, r.w - t::kSpace2 - 26, r.h},
+    const bool open = app.popup.open && app.popup.owner == id;
+    app.canvas.fill(r, col(!disabled && (open || pointer_in(r)) ? app.c->control_hover : app.c->control_bg, disabled ? 0.5f : 1),
+                    t::kRadiusControl);
+    if (!app.dark)
+        app.canvas.stroke(r, col(app.c->control_border, disabled ? 0.5f : 1), 1, t::kRadiusControl);
+    app.canvas.text(value, t::kBody, {r.x + t::kSpace3, r.y, r.w - t::kSpace3 - 30, r.h},
                     col(disabled ? app.c->label_tertiary : app.c->label));
-    // Chevron 8 x 12, 8px from the trailing edge.
-    app.canvas.path("M1.5 4.25L4 1.75l2.5 2.5M1.5 7.75L4 10.25l2.5-2.5", {r.right() - 16, r.y + (r.h - 12) / 2, 8, 12},
-                    8, col(app.c->label_secondary), 1.5f);
+    // Chevron 8 x 12, 12px from the trailing edge.
+    app.canvas.path("M1.5 4.25L4 1.75l2.5 2.5M1.5 7.75L4 10.25l2.5-2.5", {r.right() - 20, r.y + (r.h - 12) / 2, 8, 12},
+                    8, col(disabled ? app.c->label_tertiary : app.c->label_secondary), 1.5f);
     if (focused(id))
         focus_ring(r, t::kRadiusControl);
     app.hits.push_back({id, r});
 }
 
-// The kit's PercentSlider: track, value readout (in `unit`) and an optional detail line. Height 20 (+16 with detail).
-// `tenths`: the value is in tenths, shown with one decimal ("1.5°").
+// The value column of a slider: the value, and a detail line under it (a pixel size).
+constexpr float kSliderValueW = 112;
+
+// The kit's PercentSlider: track, value readout (in `unit`) and an optional detail line under the value. Height 20
+// (36 with detail). `tenths`: the value is in tenths, shown with one decimal ("1.5°").
 void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
             const wchar_t* unit = L"%", bool tenths = false) {
-    const float valueW = 40, trackW = r.w - valueW - t::kSpace3;
-    const Rect track{r.x, r.y, trackW, 20};
+    const float trackW = r.w - kSliderValueW - t::kSpace5;
+    const float cy = r.y + (detail.empty() ? 10.0f : 18.0f);
+    const Rect track{r.x, cy - 10, trackW, 20};
     const float knob = 18, travel = track.w - knob;
     const float f = range.max > range.min ? static_cast<float>(value - range.min) / (range.max - range.min) : 0;
-    const float kx = track.x + travel * f, cy = track.y + 10;
+    const float kx = track.x + travel * f;
     const Color fill = col(disabled ? app.c->label_tertiary : app.c->accent_fill);
     app.canvas.fill({track.x, cy - 2, track.w, 4}, col(app.c->segment_track), 2);
     // Filled from the range's start, or from 0 when it spans both signs (degrees left and right).
@@ -731,21 +824,35 @@ void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& d
     const float kc = kx + knob / 2;
     app.canvas.fill({std::min(zx, kc), cy - 2, std::abs(kc - zx), 4}, fill, 2);
     const Rect k{kx, cy - knob / 2, knob, knob};
-    app.canvas.control_shadow(k, knob / 2, app.dark);
-    app.canvas.fill(k, col(app.c->control_bg), knob / 2);
-    app.canvas.stroke(k, col(app.c->control_border), 1, knob / 2);
+    if (!disabled)
+        app.canvas.fill({k.x, k.y + 1, k.w, k.h}, {0, app.dark ? 0.5f : 0.2f}, knob / 2);  // its drop
+    app.canvas.fill(k, col(disabled ? app.c->label_tertiary : app.c->knob), knob / 2);
+    if (!app.dark && !disabled)
+        app.canvas.stroke(k, col(app.c->control_border), 1, knob / 2);
     if (focused(id))
-        app.canvas.circle(k.x + knob / 2, k.y + knob / 2, knob / 2 + 1.5f, col(app.c->focus_ring), false, 3);
-    app.canvas.text((tenths ? gaze_deadzone_text(value) : std::to_wstring(value)) + unit, t::kValue, {track.right() + t::kSpace3, r.y, valueW, 20},
-                    col(disabled ? app.c->label_tertiary : app.c->label), Align::Trailing);
-    if (!detail.empty())
-        app.canvas.text(detail, t::kSubheadline, {r.x, r.y + 22, r.w, 14}, col(disabled ? app.c->label_tertiary : app.c->label_secondary));
+        app.canvas.circle(k.x + knob / 2, k.y + knob / 2, knob / 2 + 4, col(app.c->focus_ring), false, 2);
+    const float vx = track.right() + t::kSpace5;
+    const std::wstring text = (tenths ? gaze_deadzone_text(value) : std::to_wstring(value)) + unit;
+    if (detail.empty()) {
+        app.canvas.text(text, t::kValue, {vx, cy - 10, kSliderValueW, 20}, col(disabled ? app.c->label_tertiary : app.c->label),
+                        Align::Trailing);
+    } else {
+        app.canvas.text(text, t::kValue, {vx, r.y, kSliderValueW, 18}, col(disabled ? app.c->label_tertiary : app.c->label),
+                        Align::Trailing);
+        app.canvas.text(detail, t::kSubheadline, {vx - 40, r.y + 19, kSliderValueW + 40, 16},
+                        col(disabled ? app.c->label_tertiary : app.c->label_muted), Align::Trailing);
+    }
     if (!disabled)
         app.hits.push_back({id, track});
 }
 
+// A switch row: the label (and its description) leading, the switch trailing.
+constexpr float kSwitchW = 44, kSwitchH = 26;
+
 float checkbox_height(const std::wstring& desc, float width) {
-    return t::kBody.lineHeight + (desc.empty() ? 0 : 2 + app.canvas.measure_height(desc, t::kCallout, width - 22));
+    const float text = t::kBody.lineHeight +
+                       (desc.empty() ? 0 : 2 + app.canvas.measure_height(desc, t::kCallout, width - kSwitchW - t::kSpace5));
+    return std::max(text, kSwitchH);
 }
 
 // ---- Help --------------------------------------------------------------------------------------
@@ -826,15 +933,15 @@ const wchar_t* help_for(const std::wstring& label) {
 void help_icon(const std::wstring& label, float x, float y) {
     if (!help_for(label))
         return;
-    const Rect r{x, y + (t::kBody.lineHeight - 13) / 2, 13, 13};
+    const Rect r{x, y + (t::kBody.lineHeight - 14) / 2, 14, 14};
     int index = 0;
     while (label != kHelp[index].label)
         ++index;
-    const Color c = col(app.tip == index ? app.c->accent : app.c->label_tertiary);
-    app.canvas.circle(r.x + 6.5f, r.y + 6.5f, 5.75f, c, false, 1.2f);
-    app.canvas.line(r.x + 6.5f, r.y + 5.75f, r.x + 6.5f, r.y + 9.5f, c, 1.3f);
-    app.canvas.circle(r.x + 6.5f, r.y + 3.9f, 0.8f, c, true);
-    app.hits.push_back({kHelpIcon, {r.x - 3, r.y - 3, r.w + 6, r.h + 6}, index});
+    const Color c = col(app.tip == index ? app.c->accent : app.c->label_muted);
+    app.canvas.circle(r.x + 7, r.y + 7, 6.25f, c, false, 1.3f);
+    app.canvas.line(r.x + 7, r.y + 6.25f, r.x + 7, r.y + 10.25f, c, 1.4f);
+    app.canvas.circle(r.x + 7, r.y + 4.2f, 0.85f, c, true);
+    app.hits.push_back({kHelpIcon, {r.x - 5, r.y - 5, r.w + 10, r.h + 10}, index});
     if (app.tip == index)
         app.tipAnchor = r;
 }
@@ -843,49 +950,48 @@ void help_icon(const std::wstring& label, float x, float y) {
 void help_tip() {
     if (app.tip < 0 || app.tip >= static_cast<int>(std::size(kHelp)) || app.tipAnchor.w <= 0)
         return;
-    const float w = 300, pad = t::kSpace3;
+    const float w = 320, pad = t::kSpace4;
     const std::wstring text = kHelp[app.tip].text;
     const float th = app.canvas.measure_height(text, t::kCallout, w - 2 * pad);
-    Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 6, w, th + 2 * pad};
+    Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 8, w, th + 2 * pad};
     card.x = std::clamp(card.x, 8.0f, app.canvas.width() - w - 8);
     if (card.bottom() > app.canvas.height() - 8)  // no room under it: above
-        card.y = app.tipAnchor.y - 6 - card.h;
-    app.canvas.fill({card.x, card.y + 2, card.w, card.h}, {0, app.dark ? 0.5f : 0.18f}, t::kRadiusControl + 2);
-    app.canvas.fill(card, col(app.c->control_bg), t::kRadiusControl + 2);
-    app.canvas.stroke(card, col(app.c->control_border), 1, t::kRadiusControl + 2);
+        card.y = app.tipAnchor.y - 8 - card.h;
+    app.canvas.fill({card.x, card.y + 4, card.w, card.h}, {0, app.dark ? 0.5f : 0.16f}, t::kRadiusGroup);
+    app.canvas.fill(card, col(app.dark ? app.c->control_bg : app.c->group_bg), t::kRadiusGroup);
+    app.canvas.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, t::kRadiusGroup);
     app.canvas.text(text, t::kCallout, {card.x + pad, card.y + pad, w - 2 * pad, th + 2}, col(app.c->label), Align::Leading, false,
                     true);
 }
 
+// The switch itself (44 x 26): the accent when on, with its knob at the trailing end.
+void switch_track(const Rect& s, bool on, bool disabled) {
+    const float alpha = disabled ? 0.4f : 1;
+    app.canvas.fill(s, col(on ? app.c->accent_fill : app.c->switch_off, alpha), s.h / 2);
+    const float knob = s.h - 6, kx = on ? s.right() - 3 - knob : s.x + 3;
+    app.canvas.fill({kx, s.y + 4, knob, knob}, {0, disabled ? 0.0f : 0.3f}, knob / 2);
+    app.canvas.fill({kx, s.y + 3, knob, knob}, col(0xffffff, disabled ? 0.6f : 1), knob / 2);
+}
+
+// A setting that is on or off: its label (and description) leading, a switch trailing; the whole row toggles it.
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,
               bool disabled = false) {
-    const Rect box{r.x, r.y + 1, 14, 14};
-    if (disabled) {
-        app.canvas.stroke(box, col(app.c->separator), 1, t::kRadiusCheck);
-        const float tx = r.x + 14 + t::kSpace2, tw = r.w - 14 - t::kSpace2;
-        app.canvas.text(label, t::kBody, {tx, r.y, tw, t::kBody.lineHeight}, col(app.c->label_tertiary));
-        if (!desc.empty())
-            app.canvas.text(desc, t::kCallout, {tx, r.y + t::kBody.lineHeight + 2, tw, 200}, col(app.c->label_tertiary),
-                            Align::Leading, false, true);
-        return;  // no hit: it does nothing
-    }
-    if (checked) {
-        app.canvas.fill(box, col(app.c->accent_fill), t::kRadiusCheck);
-        app.canvas.path("M4 7.2l2.1 2.1L10.2 4.6", box, 14, col(app.c->on_accent), 2);
-    } else {
-        app.canvas.control_shadow(box, t::kRadiusCheck, app.dark);
-        app.canvas.fill(box, col(app.c->control_bg), t::kRadiusCheck);
-        app.canvas.stroke(box, col(app.c->control_border), 1, t::kRadiusCheck);
-    }
-    if (focused(id))
-        focus_ring(box, t::kRadiusCheck);
-    const float tx = r.x + 14 + t::kSpace2, tw = r.w - 14 - t::kSpace2;
-    app.canvas.text(label, t::kBody, {tx, r.y, tw, t::kBody.lineHeight}, col(app.c->label));
+    const float tw = r.w - kSwitchW - t::kSpace5;
+    const float descH = desc.empty() ? 0 : app.canvas.measure_height(desc, t::kCallout, tw);
+    const float textH = t::kBody.lineHeight + (desc.empty() ? 0 : 2 + descH);
+    const float ty = r.y + (r.h - textH) / 2;
+    app.canvas.text(label, t::kBody, {r.x, ty, tw, t::kBody.lineHeight}, col(disabled ? app.c->label_tertiary : app.c->label));
     if (!desc.empty())
-        app.canvas.text(desc, t::kCallout, {tx, r.y + t::kBody.lineHeight + 2, tw, 200}, col(app.c->label_secondary),
-                        Align::Leading, false, true);
-    app.hits.push_back({id, {r.x, r.y, 14 + t::kSpace2 + app.canvas.measure(label, t::kBody), t::kBody.lineHeight + 2}});
-    help_icon(label, tx + std::ceil(app.canvas.measure(label, t::kBody)) + 6, r.y);
+        app.canvas.text(desc, t::kCallout, {r.x, ty + t::kBody.lineHeight + 2, tw, descH + 2},
+                        col(disabled ? app.c->label_tertiary : app.c->label_secondary), Align::Leading, false, true);
+    const Rect s{r.right() - kSwitchW, r.y + (r.h - kSwitchH) / 2, kSwitchW, kSwitchH};
+    switch_track(s, checked, disabled);
+    if (disabled)
+        return;  // no hit: it does nothing
+    if (focused(id))
+        focus_ring(s, kSwitchH / 2);
+    app.hits.push_back({id, r});
+    help_icon(label, r.x + std::min(tw - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), ty);
 }
 
 float segmented_width() {
@@ -905,8 +1011,10 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
         const Rect item{x, r.y + 2, w, r.h - 4};
         if (i == selected) {
             if (!disabled)
-                app.canvas.control_shadow(item, t::kRadiusControl - 2, app.dark);
-            app.canvas.fill(item, col(app.c->control_bg), t::kRadiusControl - 2);
+                app.canvas.fill({item.x, item.y + 1, item.w, item.h}, {0, app.dark ? 0.35f : 0.12f}, t::kRadiusControl - 2);
+            app.canvas.fill(item, col(app.c->segment_selected, disabled ? 0.35f : 1), t::kRadiusControl - 2);
+        } else if (!disabled && pointer_in(item)) {
+            app.canvas.fill(item, col(app.c->segment_selected, 0.35f), t::kRadiusControl - 2);
         }
         app.canvas.circle(item.x + t::kSpace3 + 5, item.y + item.h / 2, 5, col(overlay(i), disabled ? 0.4f : 1), true);
         app.canvas.text(kColorNames[i], t::kBody, {item.x + t::kSpace3 + 16, item.y, w - t::kSpace3 - 16, item.h},
@@ -937,13 +1045,12 @@ void glyph(int tone, float x, float y, Color c) {
 
 // StatusBadge: tone 0 success, 1 warning, 2 danger, 3 neutral. Returns its width.
 float badge(float x, float y, int tone, const std::wstring& text, float maxWidth = 10000) {
-    const t::TypeStyle style{11, 14, 500, false};
-    const float w = std::min(maxWidth, 7 + 12 + 5 + std::ceil(app.canvas.measure(text, style)) + 9);
+    const float w = std::min(maxWidth, badge_width(text));
     const uint32_t bg[] = {app.c->success_bg, app.c->warning_bg, app.c->danger_bg, app.c->segment_track};
     const uint32_t fg[] = {app.c->success, app.c->warning, app.c->danger, app.c->label};
-    app.canvas.fill({x, y, w, 20}, col(bg[tone]), 10);
-    glyph(tone, x + 7, y + 4, col(fg[tone]));
-    app.canvas.text(text, style, {x + 24, y, w - 24 - 9, 20}, col(fg[tone]));
+    app.canvas.fill({x, y - 1, w, 22}, col(bg[tone]), 11);
+    glyph(tone, x + 8, y + 4, col(fg[tone]));
+    app.canvas.text(text, kBadgeStyle, {x + 25, y - 1, w - 25 - 9, 22}, col(fg[tone]));
     return w;
 }
 
@@ -954,30 +1061,39 @@ struct Row {
     std::wstring label, desc;
     float controlW = 0, controlH = 0;
     bool disabled = false;
+    bool wide = false;  // the control takes the row's width after a label column (sliders)
     std::function<void(const Rect&)> control;  // drawn at its rect
-    std::function<float(float)> fullHeight;    // full-width rows (checkboxes): height for a width
+    std::function<float(float)> fullHeight;    // full-width rows (switches): height for a width
     std::function<void(const Rect&)> full;
 };
 
+// Inside a card: rows are padded 18 across and 14 down.
+constexpr float kRowPadX = 18, kRowPadY = 14;
+
+// The width of a row's label column: the space the control leaves, or (wide rows) a column of its own.
+float label_width(const Row& row, float inner) {
+    return row.wide ? std::clamp(inner * 0.36f, 140.0f, 230.0f) : inner - row.controlW - t::kSpace5;
+}
+
 float row_height(const Row& row, float w) {
-    const float inner = w - 2 * t::kSpace3;
+    const float inner = w - 2 * kRowPadX;
     if (row.full)
-        return std::max(t::kRowMinHeight, row.fullHeight(inner) + 2 * t::kSpace2);
-    const float textW = inner - row.controlW - t::kSpace4;
+        return std::max(t::kRowMinHeight, row.fullHeight(inner) + 2 * kRowPadY);
+    const float textW = label_width(row, inner);
     float textH = t::kBody.lineHeight;
     if (!row.desc.empty())
         textH += 2 + app.canvas.measure_height(row.desc, t::kCallout, textW);
-    return std::max(t::kRowMinHeight, std::max(textH, row.controlH) + 2 * t::kSpace2);
+    return std::max(t::kRowMinHeight, std::max(textH, row.controlH) + 2 * kRowPadY);
 }
 
-// FormSection at (x, y), width w. Returns its height.
+// FormSection at (x, y), width w: its heading, a card of rows, a footer under it. Returns its height.
 float section(float x, float y, float w, const std::wstring& title, const std::vector<Row>& rows, const std::wstring& footer,
               bool draw) {
     float h = 0;
     if (!title.empty()) {
         if (draw)
-            app.canvas.text(title, t::kHeadline, {x + t::kSpace3, y, w - t::kSpace3, 16}, col(app.c->label));
-        h += 16 + 6;
+            app.canvas.text(title, t::kHeadline, {x + 2, y, w - 2, t::kHeadline.lineHeight}, col(app.c->heading));
+        h += t::kHeadline.lineHeight + t::kSpace2;
     }
     float boxH = 0;
     for (const Row& row : rows)
@@ -985,19 +1101,19 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
     const Rect box{x, y + h, w, boxH};
     if (draw) {
         app.canvas.fill(box, col(app.c->group_bg), t::kRadiusGroup);
-        app.canvas.stroke(box, col(app.c->separator), 0.5f, t::kRadiusGroup);
+        app.canvas.stroke(box, col(app.c->card_border), 1, t::kRadiusGroup);
         float ry = box.y;
         for (size_t i = 0; i < rows.size(); ++i) {
             const Row& row = rows[i];
             const float rh = row_height(row, w);
             if (i > 0)
-                app.canvas.line(box.x + t::kSpace3, ry, box.right() - t::kSpace3, ry, col(app.c->separator), 0.5f);
-            const Rect inner{box.x + t::kSpace3, ry + t::kSpace2, w - 2 * t::kSpace3, rh - 2 * t::kSpace2};
+                app.canvas.line(box.x + kRowPadX, ry, box.right() - 1, ry, col(app.c->separator), 1);
+            const Rect inner{box.x + kRowPadX, ry + kRowPadY, w - 2 * kRowPadX, rh - 2 * kRowPadY};
             if (row.full) {
                 const float fh = row.fullHeight(inner.w);
                 row.full({inner.x, inner.y + (inner.h - fh) / 2, inner.w, fh});
             } else {
-                const float textW = inner.w - row.controlW - t::kSpace4;
+                const float textW = label_width(row, inner.w);
                 float textH = t::kBody.lineHeight;
                 const float descH = row.desc.empty() ? 0 : app.canvas.measure_height(row.desc, t::kCallout, textW);
                 if (!row.desc.empty())
@@ -1009,19 +1125,23 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
                 if (!row.desc.empty())
                     app.canvas.text(row.desc, t::kCallout, {inner.x, ty + t::kBody.lineHeight + 2, textW, descH + 2},
                                     col(row.disabled ? app.c->label_tertiary : app.c->label_secondary), Align::Leading, false, true);
-                if (row.control)  // a row of text alone has none
+                if (row.control && row.wide) {
+                    const float cx = inner.x + textW + t::kSpace5;
+                    row.control({cx, inner.y + (inner.h - row.controlH) / 2, inner.right() - cx, row.controlH});
+                } else if (row.control) {  // a row of text alone has none
                     row.control({inner.right() - row.controlW, inner.y + (inner.h - row.controlH) / 2, row.controlW, row.controlH});
+                }
             }
             ry += rh;
         }
     }
     h += boxH;
     if (!footer.empty()) {
-        const float fw = w - 2 * t::kSpace3, fh = app.canvas.measure_height(footer, t::kSubheadline, fw);
+        const float fw = w - 4, fh = app.canvas.measure_height(footer, t::kSubheadline, fw);
         if (draw)
-            app.canvas.text(footer, t::kSubheadline, {x + t::kSpace3, y + h + 6 + 2, fw, fh + 2}, col(app.c->label_secondary),
+            app.canvas.text(footer, t::kSubheadline, {x + 2, y + h + t::kSpace2, fw, fh + 2}, col(app.c->label_muted),
                             Align::Leading, false, true);
-        h += 6 + 2 + fh;
+        h += t::kSpace2 + fh;
     }
     return h;
 }
@@ -1046,7 +1166,7 @@ Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int 
     Row row;
     row.label = label;
     row.desc = desc;
-    row.controlW = 240;
+    row.wide = true;
     row.controlH = detail.empty() ? 20.0f : 36.0f;
     row.disabled = disabled;
     const Range range = slider_range(id);
@@ -1135,30 +1255,21 @@ void apply_layers() {
 }
 
 void mini_check(int option, const Rect& box, bool on, bool disabled) {
-    const Color fill = col(disabled ? app.c->label_tertiary : app.c->accent_fill);
-    if (on) {
-        app.canvas.fill(box, fill, t::kRadiusCheck);
-        app.canvas.path("M4 7.2l2.1 2.1L10.2 4.6", box, 14, col(app.c->on_accent), 2);
-    } else {
-        app.canvas.fill(box, col(app.c->control_bg), t::kRadiusCheck);
-        app.canvas.stroke(box, col(disabled ? app.c->separator : app.c->control_border), 1, t::kRadiusCheck);
-    }
+    switch_track(box, on, disabled);
     if (!disabled)
         app.hits.push_back({kLayerOn, {box.x - 4, box.y - 4, box.w + 8, box.h + 8}, option});
 }
 
 void arrow_button(Ctl id, int option, const Rect& r, bool disabled) {
-    if (!disabled)
-        app.canvas.control_shadow(r, t::kRadiusControl, app.dark);
-    app.canvas.fill(r, col(app.c->control_bg), t::kRadiusControl);
-    app.canvas.stroke(r, col(disabled ? app.c->separator : app.c->control_border), 1, t::kRadiusControl);
+    app.canvas.fill(r, col(!disabled && pointer_in(r) ? app.c->control_hover : app.c->control_bg, disabled ? 0.5f : 1),
+                    t::kRadiusControl);
     app.canvas.path(id == kLayerUp ? "M3 7.5L6 4.5l3 3" : "M3 4.5L6 7.5l3-3", {r.x + (r.w - 12) / 2, r.y + (r.h - 12) / 2, 12, 12},
                     12, col(disabled ? app.c->label_tertiary : app.c->label), 1.5f);
     if (!disabled)
         app.hits.push_back({id, r, option});
 }
 
-constexpr float kLayerControlsW = 14 + 12 + 26 + 4 + 26;
+constexpr float kLayerControlsW = 40 + 14 + 32 + 4 + 32;
 
 // One movable layer: its switch (disabled when locked) and its moves.
 Row layer_row(const std::wstring& label, const std::wstring& desc, int index, bool on, bool switchLocked, bool canUp,
@@ -1167,11 +1278,11 @@ Row layer_row(const std::wstring& label, const std::wstring& desc, int index, bo
     row.label = label;
     row.desc = desc;
     row.controlW = kLayerControlsW;
-    row.controlH = 24;
+    row.controlH = 32;
     row.control = [=](const Rect& r) {
-        mini_check(index, {r.x, r.y + 5, 14, 14}, on, switchLocked);
-        arrow_button(kLayerUp, index, {r.x + 26, r.y, 26, 24}, !canUp);
-        arrow_button(kLayerDown, index, {r.x + 56, r.y, 26, 24}, !canDown);
+        mini_check(index, {r.x, r.y + 5, 40, 22}, on, switchLocked);
+        arrow_button(kLayerUp, index, {r.x + 54, r.y, 32, 32}, !canUp);
+        arrow_button(kLayerDown, index, {r.x + 90, r.y, 32, 32}, !canDown);
         if (focused(kLayerList) && app.layerRow == index)
             focus_ring({r.x - 2, r.y - 2, r.w + 4, r.h + 4}, t::kRadiusControl);
     };
@@ -1183,7 +1294,7 @@ Row locked_row(const std::wstring& label, const std::wstring& desc, const std::w
     Row row;
     row.label = label;
     row.desc = desc;
-    row.controlW = 7 + 12 + 5 + std::ceil(app.canvas.measure(text, {11, 14, 500, false})) + 9;
+    row.controlW = badge_width(text);
     row.controlH = 20;
     row.control = [text](const Rect& r) { badge(r.x, r.y, 3, text); };
     return row;
@@ -1220,7 +1331,7 @@ float layers_pane(float x, float y, float w, bool draw) {
         Row reset;
         reset.label = L"Windows’ order";
         reset.desc = L"Forget this profile: launches follow Windows’ order and switches again.";
-        reset.controlW = std::ceil(app.canvas.measure(L"Reset", t::kBody)) + 2 * t::kSpace3;
+        reset.controlW = button_width(L"Reset");
         reset.controlH = t::kControlHeight;
         reset.control = [](const Rect& r) { button(kLayerReset, r, L"Reset", false); };
         h += t::kSpace6 + section(x, y + h + t::kSpace6, w, L"", {reset}, L"", draw);
@@ -1255,8 +1366,8 @@ float layers_pane(float x, float y, float w, bool draw) {
         apply.label = layers_dirty() ? L"Changes not applied" : L"Windows’ list";
         apply.desc = app.layersLockMoved ? L"The ACE layer is not first in its list: applying moves it there."
                                          : L"Nearest the game first. The current list is backed up into logs before it changes.";
-        const float applyW = std::ceil(app.canvas.measure(L"Apply", t::kBody)) + 2 * t::kSpace3,
-                    revertW = std::ceil(app.canvas.measure(L"Revert", t::kBody)) + 2 * t::kSpace3;
+        const float applyW = button_width(L"Apply"),
+                    revertW = button_width(L"Revert");
         apply.controlW = applyW + t::kSpace2 + revertW;
         apply.controlH = t::kControlHeight;
         const bool dirty = layers_dirty();
@@ -1510,7 +1621,7 @@ float report_pane(float x, float y, float w, bool draw) {
     Row report;
     report.fullHeight = [](float) { return t::kControlHeight; };
     report.full = [](const Rect& r) {
-        const float reportW = std::ceil(app.canvas.measure(L"Report an issue", kPrimaryLabel)) + 2 * t::kSpace4;
+        const float reportW = button_width(L"Report an issue");
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
@@ -1607,8 +1718,8 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     Row actions;
     actions.fullHeight = [](float) { return t::kControlHeight; };
     actions.full = [](const Rect& r) {
-        const float copyW = std::ceil(app.canvas.measure(L"Copy summary", t::kBody)) + 2 * t::kSpace3;
-        const float logsW = std::ceil(app.canvas.measure(L"Open logs folder", t::kBody)) + 2 * t::kSpace3;
+        const float copyW = button_width(L"Copy summary");
+        const float logsW = button_width(L"Open logs folder");
         button(kDiagCopy, {r.x, r.y, copyW, t::kControlHeight}, L"Copy summary", false);
         button(kDiagLogs, {r.x + copyW + t::kSpace3, r.y, logsW, t::kControlHeight}, L"Open logs folder", false);
     };
@@ -1630,8 +1741,8 @@ float profiles_pane(float x, float y, float w, bool draw) {
         float width = 0;
         std::vector<float> widths;
         for (const auto& [id, label] : list) {
-            widths.push_back(id == kNone ? 7 + 12 + 5 + std::ceil(app.canvas.measure(label, {11, 14, 500, false})) + 9
-                                         : std::ceil(app.canvas.measure(label, t::kBody)) + 2 * t::kSpace3);
+            widths.push_back(id == kNone ? badge_width(label)
+                                         : button_width(label));
             width += widths.back();
         }
         width += t::kSpace2 * (list.size() - 1);
@@ -1644,7 +1755,8 @@ float profiles_pane(float x, float y, float w, bool draw) {
                 if (list[b].first == kNone) {
                     badge(bx, rect.y + (rect.h - 20) / 2, 0, list[b].second);
                 } else {
-                    button(list[b].first, {bx, rect.y, widths[b], rect.h}, list[b].second, false);
+                    button(list[b].first, {bx, rect.y, widths[b], rect.h}, list[b].second,
+                           list[b].first == kProfileDelete ? Btn::Danger : list[b].first == kProfileShare ? Btn::Ghost : Btn::Secondary);
                     app.hits.back().option = static_cast<int>(i);
                 }
                 bx += widths[b] + t::kSpace2;
@@ -1689,10 +1801,11 @@ float profiles_pane(float x, float y, float w, bool draw) {
     Row actions;
     actions.fullHeight = [](float) { return t::kControlHeight; };
     actions.full = [](const Rect& r) {
-        const float saveW = std::ceil(app.canvas.measure(L"Save current settings…", t::kBody)) + 2 * t::kSpace3;
-        const float pasteW = std::ceil(app.canvas.measure(L"Paste a shared profile", t::kBody)) + 2 * t::kSpace3;
-        button(kProfileSave, {r.x, r.y, saveW, t::kControlHeight}, L"Save current settings…", false);
-        button(kProfilePaste, {r.x + saveW + t::kSpace3, r.y, pasteW, t::kControlHeight}, L"Paste a shared profile", false);
+        const float saveW = button_width(L"Save current settings…") + 24;
+        const float pasteW = button_width(L"Paste a shared profile") + 24;
+        button(kProfileSave, {r.x, r.y, saveW, t::kControlHeight}, L"Save current settings…", Btn::Tint, kIconPlus);
+        button(kProfilePaste, {r.x + saveW + t::kSpace2, r.y, pasteW, t::kControlHeight}, L"Paste a shared profile", Btn::Ghost,
+               kIconPaste);
     };
     savedRows.push_back(actions);
     h += section(x, y + h, w, L"Your profiles", savedRows,
@@ -1779,7 +1892,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
     Row reset;
     reset.fullHeight = [](float) { return t::kControlHeight; };
     reset.full = [](const Rect& r) {
-        const float resetW = std::ceil(app.canvas.measure(L"Reset hotkeys", t::kBody)) + 2 * t::kSpace3;
+        const float resetW = button_width(L"Reset hotkeys");
         button(kHotkeysReset, {r.x, r.y, resetW, t::kControlHeight}, L"Reset hotkeys", false);
     };
     h += section(x, y + h, w, L"", {reset}, L"Back to Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V and Ctrl+Alt+C, without wheel buttons. "
@@ -1798,7 +1911,7 @@ float checks_pane(float x, float y, float w, bool draw) {
         row.label = c.title;
         row.desc = c.detail;
         if (!c.fixLabel.empty()) {
-            row.controlW = std::ceil(app.canvas.measure(c.fixLabel, t::kBody)) + 2 * t::kSpace3;
+            row.controlW = button_width(c.fixLabel);
             row.controlH = t::kControlHeight;
             row.control = [i](const Rect& r) {
                 button(kCheckFix, r, app.checks[i].fixLabel, false);
@@ -1807,7 +1920,7 @@ float checks_pane(float x, float y, float w, bool draw) {
         } else {
             const int tone = static_cast<int>(c.tone);  // the badge's tones are CheckTone's
             const std::wstring text = kToneText[tone];
-            row.controlW = 7 + 12 + 5 + std::ceil(app.canvas.measure(text, {11, 14, 500, false})) + 9;
+            row.controlW = badge_width(text);
             row.controlH = 20;
             row.control = [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); };
         }
@@ -1852,22 +1965,8 @@ float pane_content(float x, float y, float w, bool draw) {
         }
         mode.controlH = t::kControlHeight;
         mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
-        Row game;
-        game.label = L"Game";
-        game.desc = games::launcher_game().openComposite ? L"Reaches your headset through OpenComposite (Launch checks)."
-                                                         : L"Launch starts it in VR with ace-quadview.";
-        {
-            std::size_t count = 0;
-            const games::GameInfo* const* all = games::all_games(count);
-            std::vector<std::wstring> names;
-            for (std::size_t i = 0; i < count; ++i)
-                names.push_back(all[i]->name);
-            game.controlW = popup_width(names.data(), static_cast<int>(names.size()), 220);
-        }
-        game.controlH = t::kControlHeight;
-        game.control = [](const Rect& r) { popup_button(kGame, r, games::launcher_game().name, false); };
-        h += section(x, y, w, L"Game", {game}, L"", draw) + t::kSpace6;
-        h += section(x, y + h, w, L"Rendering", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
+        // The game is its tab's (the strip at the top); this pane says how it reaches the headset.
+        h += section(x, y, w, L"Rendering", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
                      qvfr ? L"Quad View Foveated Rendering draws a sharp focus view inside a lower-resolution outer view for each eye."
                           : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
                             L"Foveated Rendering; Two-loop won't be offered again.",
@@ -2044,7 +2143,7 @@ float pane_content(float x, float y, float w, bool draw) {
             Row row;
             row.label = label;
             row.desc = desc;
-            row.controlW = 7 + 12 + 5 + std::ceil(app.canvas.measure(text, {11, 14, 500, false})) + 9;
+            row.controlW = badge_width(text);
             row.controlH = 20;
             row.control = [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); };
             return row;
@@ -2057,7 +2156,7 @@ float pane_content(float x, float y, float w, bool draw) {
         Row rt;
         rt.label = L"Runtime";
         rt.desc = (found ? L"" : L"Not found: ") + runtime;
-        rt.controlW = std::ceil(app.canvas.measure(L"Choose…", t::kBody)) + 2 * t::kSpace3;
+        rt.controlW = button_width(L"Choose…");
         rt.controlH = t::kControlHeight;
         rt.control = [](const Rect& r) { button(kCheekyRuntime, r, L"Choose…", false); };
         const Row xr = layer == CheekyLayer::Enabled
@@ -2231,14 +2330,26 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::Diagnostics: h += diagnostics_pane(x, y, w, draw); break;
     case Pane::Report: h += report_pane(x, y, w, draw); break;
     case Pane::About: {
+        const float lh = t::kBody.lineHeight;
         if (draw) {
-            app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, 26}, col(app.c->label));
-            app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody, {x, y + 26 + 8, w, 16},
-                            col(app.c->label_secondary));
-            app.canvas.text(L"Version " + widen(ACE_QV_VERSION), t::kBody, {x, y + 26 + 8 + 16 + 8, w, 16},
+            app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
+            app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody,
+                            {x, y + t::kTitle1.lineHeight + 8, w, lh}, col(app.c->label_secondary));
+            app.canvas.text(L"Version " + widen(ACE_QV_VERSION), t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
                             col(app.c->label_secondary));
         }
-        h += 26 + 8 + 16 + 8 + 16 + t::kSpace6;
+        h += t::kTitle1.lineHeight + 8 + lh + 4 + lh;
+        // Support, before Updates so a short window still shows it: a line and a button that opens the Ko-fi page.
+        const std::wstring support = L"If ace-quadview improves your races, you can support its development on Ko-fi.";
+        const float sh = app.canvas.measure_height(support, t::kCallout, w);
+        if (draw)
+            app.canvas.text(support, t::kCallout, {x, y + h + t::kSpace6, w, sh + 2}, col(app.c->label_secondary),
+                            Align::Leading, false, true);
+        h += t::kSpace6 + sh + t::kSpace2;
+        const float bw = button_width(L"Support on Ko-fi") + 24;
+        if (draw)
+            button(kSupport, {x, y + h, bw, t::kControlHeight}, L"Support on Ko-fi", Btn::Support, kIconHeart);
+        h += t::kControlHeight + t::kSpace6;
         // Updates (update_check.h): the start-up switch, then where the last check stands with Check now and Download.
         Row autoCheck;
         const std::wstring autoDesc = L"Asks GitHub for the newest ace-quadview release when the launcher starts. Nothing else "
@@ -2283,7 +2394,7 @@ float pane_content(float x, float y, float w, bool draw) {
             actions.full = [install, download, installLabel](const Rect& r) {
                 float bx = r.x;
                 const auto add = [&bx, &r](Ctl id, const std::wstring& label, bool primary) {
-                    const float bw = std::ceil(app.canvas.measure(label, primary ? kPrimaryLabel : t::kBody)) + 2 * t::kSpace3;
+                    const float bw = button_width(label);
                     button(id, {bx, r.y, bw, t::kControlHeight}, label, primary);
                     bx += bw + t::kSpace2;
                 };
@@ -2314,17 +2425,6 @@ float pane_content(float x, float y, float w, bool draw) {
                             col(app.c->label_secondary), Align::Leading, false, true);
         }
         h += t::kSpace6 + 16 + t::kSpace2 + nh;
-        // Support: a line and a button that opens the Ko-fi page in the browser.
-        const std::wstring support = L"If ace-quadview improves your races, you can support its development on Ko-fi.";
-        const float sh = app.canvas.measure_height(support, t::kCallout, w);
-        if (draw)
-            app.canvas.text(support, t::kCallout, {x, y + h + t::kSpace6, w, sh + 2}, col(app.c->label_secondary),
-                            Align::Leading, false, true);
-        h += t::kSpace6 + sh + t::kSpace2;
-        const float bw = std::ceil(app.canvas.measure(L"Support on Ko-fi", t::kBody)) + 2 * t::kSpace3;
-        if (draw)
-            button(kSupport, {x, y + h, bw, t::kControlHeight}, L"Support on Ko-fi", false);
-        h += t::kControlHeight;
         break;
     }
     }
@@ -2453,49 +2553,102 @@ float preview(float x, float y, float w, bool draw) {
         rt->PopLayer();
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
     }
-    float h = frameH + t::kSpace2;
-    // Caption: method · mode · focus density.
-    const std::wstring caption = std::wstring(kMethodNames[app.s.mode == RenderMode::Qvfr ? 0 : 1]) + L"  ·  " +
-                                 (app.s.eyeTracking && !eye_warning() ? L"Eye tracked" : L"Fixed") + L"  ·  Focus density " +
-                                 std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%";
-    const float ch = app.canvas.measure_height(caption, t::kSubheadline, w);
-    if (draw)
-        app.canvas.text(caption, t::kSubheadline, {x, y + h, w, ch + 2}, col(app.c->label_secondary), Align::Leading, false, true);
-    h += ch + t::kSpace4;
-    // Readouts.
-    const t::TypeStyle dt{12, 16, 400, false};
+    return frameH;
+}
+
+// What the foveation preview's two marks mean. Returns its height.
+float preview_legend(float x, float y, float w, bool draw) {
+    if (draw) {
+        const Rect focusKey{x, y + 3, 10, 10};
+        app.canvas.fill(focusKey, col(app.c->preview_focus), 2);
+        app.canvas.stroke(focusKey, col(app.c->accent), 1, 2);
+        const std::wstring focusText = app.s.eyeTracking && !eye_warning() ? L"Focus, follows your eyes" : L"Focus, fixed";
+        const float fw = std::ceil(app.canvas.measure(focusText, t::kSubheadline));
+        app.canvas.text(focusText, t::kSubheadline, {x + 16, y, fw + 2, 16}, col(app.c->label_secondary));
+        const float cx = x + 16 + fw + t::kSpace4;
+        app.canvas.fill({cx, y + 3, 10, 10}, col(app.c->preview_canvas), 2);
+        app.canvas.stroke({cx, y + 3, 10, 10}, col(app.c->label_muted), 1, 2);
+        app.canvas.text(L"Not rendered", t::kSubheadline, {cx + 16, y, std::max(0.0f, x + w - cx - 16), 16}, col(app.c->label_secondary));
+    }
+    return 16;
+}
+
+// A label and its value on one line, the value trailing. Returns the line's height.
+float readout(float x, float y, float w, const std::wstring& name, const std::wstring& value, bool draw,
+              const std::wstring& of = L"") {
+    if (draw) {
+        app.canvas.text(name, t::kBody, {x, y, w / 2, 20}, col(app.c->label_secondary));
+        const float ow = of.empty() ? 0 : std::ceil(app.canvas.measure(of, t::kBody)) + 2;
+        app.canvas.text(value, t::kBody, {x + w / 2, y, w / 2 - ow - (of.empty() ? 0 : 4), 20}, col(app.c->label), Align::Trailing);
+        if (!of.empty())
+            app.canvas.text(of, t::kBody, {x + w - ow, y, ow, 20}, col(app.c->label_muted), Align::Trailing);
+    }
+    return 20;
+}
+
+// A share as a bar under a readout. Returns its height.
+float meter(float x, float y, float w, double share, uint32_t color, bool draw) {
+    if (draw) {
+        app.canvas.fill({x, y, w, 6}, col(app.c->segment_track), 3);
+        const float f = static_cast<float>(std::clamp(share, 0.0, 1.0));
+        if (f > 0)
+            app.canvas.fill({x, y, std::max(6.0f, w * f), 6}, col(color), 3);
+    }
+    return 6;
+}
+
+// An upper-case group label (the sidebar's, a card's). Returns its height.
+float eyebrow(float x, float y, float w, const std::wstring& text, bool draw) {
+    if (draw) {
+        std::wstring upper = text;
+        for (wchar_t& ch : upper)
+            ch = static_cast<wchar_t>(towupper(ch));
+        app.canvas.text(upper, t::kFootnote, {x, y, w, t::kFootnote.lineHeight}, col(app.c->label_muted));
+    }
+    return t::kFootnote.lineHeight;
+}
+
+// The foveation preview's numbers: each view's size, then the pixels and VRAM against what the headset would draw.
+float readouts_card(float x, float y, float w, bool draw) {
+    const Readouts ro = readouts(app.s, app.runtime);
+    const bool known = app.runtime.known();
     const std::wstring dash = L"—";
-    char mp[32], saved[48];
-    std::snprintf(mp, sizeof(mp), "%.2f M of %.2f M", ro.pixels / 1e6, ro.runtimePixels / 1e6);
-    const int savedPercent = static_cast<int>(std::lround(ro.saved * 100));
-    if (savedPercent >= 0)
-        std::snprintf(saved, sizeof(saved), "%d%%", savedPercent);
-    else
-        std::snprintf(saved, sizeof(saved), "None (%d%% more)", -savedPercent);
+    float h = eyebrow(x, y, w, L"Per eye", draw) + t::kSpace2;
+    h += readout(x, y + h, w, L"Headset", known ? dims(ro.runtime) : dash, draw) + 6;
+    h += readout(x, y + h, w, L"Outer view", known ? dims(ro.outer) : dash, draw) + 6;
+    h += readout(x, y + h, w, L"Focus view", known ? dims(ro.focus) : dash, draw) + 6;
+    h += readout(x, y + h, w, L"Center sharpness", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) + L" PPD" : dash,
+                 draw);
+    h += t::kSpace3;
+    if (draw)
+        app.canvas.line(x, y + h, x + w, y + h, col(app.c->separator), 1);
+    h += t::kSpace3;
+    char mp[24], of[24];
+    std::snprintf(mp, sizeof(mp), "%.2f M", ro.pixels / 1e6);
+    std::snprintf(of, sizeof(of), "of %.2f M", ro.runtimePixels / 1e6);
+    h += readout(x, y + h, w, L"Pixels per frame", known ? widen(mp) : dash, draw, known ? widen(of) : L"") + 6;
+    h += meter(x, y + h, w, known && ro.runtimePixels > 0 ? ro.pixels / ro.runtimePixels : 0, app.c->accent_fill, draw) + 6;
+    if (known) {
+        const int savedPercent = static_cast<int>(std::lround(ro.saved * 100));
+        const std::wstring saved = savedPercent >= 0 ? std::to_wstring(savedPercent) + L"% fewer pixels than full resolution"
+                                                     : std::to_wstring(-savedPercent) + L"% more pixels than full resolution";
+        if (draw)
+            app.canvas.text(saved, t::kCallout, {x, y + h, w, 17}, col(savedPercent >= 0 ? app.c->success : app.c->warning));
+        h += 17;
+    }
     // VRAM, scaled from the last QVFR launch's measurement (settings.h's vram_estimate).
     const VramEstimate vram = vram_estimate(app.s, ro, app.runtime);
-    char vramText[48] = "";
+    h += t::kSpace4;
+    char gb[24], budget[24] = "";
+    std::snprintf(gb, sizeof(gb), "%.1f GB", vram.mb / 1024);
     if (vram.budgetMb > 0)
-        std::snprintf(vramText, sizeof(vramText), "%.1f GB of %.1f GB", vram.mb / 1024, vram.budgetMb / 1024);
-    else
-        std::snprintf(vramText, sizeof(vramText), "%.1f GB", vram.mb / 1024);
-    const std::pair<std::wstring, std::wstring> lines[] = {
-        {L"Runtime resolution", known ? dims(ro.runtime) : dash},
-        {L"Outer view", known ? dims(ro.outer) : dash},
-        {L"Focus view", known ? dims(ro.focus) : dash},
-        {L"Pixels per frame", known ? widen(mp) : dash},
-        {L"Pixels saved", known ? widen(saved) : dash},
-        {L"Center PPD", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) : dash},
-        {L"VRAM (estimate)", known && vram.mb > 0 ? widen(vramText) : dash},
-    };
-    for (const auto& [name, value] : lines) {
-        if (draw) {
-            app.canvas.text(name, dt, {x, y + h, w / 2, 16}, col(app.c->label_secondary));
-            app.canvas.text(value, t::kValue, {x + w / 2, y + h, w / 2, 16}, col(app.c->label), Align::Trailing);
-        }
-        h += 16 + 4;
-    }
-    return h - 4;
+        std::snprintf(budget, sizeof(budget), "of %.1f GB", vram.budgetMb / 1024);
+    const bool vramKnown = known && vram.mb > 0;
+    h += readout(x, y + h, w, L"VRAM, estimated", vramKnown ? widen(gb) : dash, draw, vramKnown ? widen(budget) : L"") + 6;
+    const double share = vram.budgetMb > 0 ? vram.mb / vram.budgetMb : 0;
+    h += meter(x, y + h, w, vramKnown ? share : 0,
+               share > 0.9 ? app.c->danger : share > 0.75 ? app.c->warning : app.c->accent_fill, draw);
+    return h;
 }
 
 // Angular size of a panel: its height in degrees for a width in degrees, at any distance.
@@ -2591,10 +2744,6 @@ float placement_preview(float x, float y, float w, bool draw) {
             if (focused(kOsdPanel))
                 focus_ring(card, r);
         }
-        const t::TypeStyle tiny{9.5f, 12, 400, false};
-        app.canvas.text(L"Reference view  " + std::to_wstring(static_cast<int>(kRefFovX)) + L"° × " +
-                            std::to_wstring(static_cast<int>(kRefFovY)) + L"°",
-                        tiny, {x + 8, y + 5, w - 16, 12}, col(app.c->preview_label, 0.75f), Align::Leading, false);
         rt->PopLayer();
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
         app.hits.push_back({kMenuPanel, frame, 0});  // empty space: the panel's centre jumps there
@@ -2602,40 +2751,88 @@ float placement_preview(float x, float y, float w, bool draw) {
         if (app.s.osd.enabled)
             app.hits.push_back({kOsdPanel, card, 1});  // the overlay, over the menu
     }
-    float h = frameH + t::kSpace2;
-    const std::wstring caption = app.s.osd.enabled ? L"Drag the menu or the overlay to place it  ·  Headsets’ fields of view vary"
-                                                   : L"Drag the panel to place it  ·  Headsets’ fields of view vary";
+    return frameH;
+}
+
+// How to use the placement preview. Returns its height.
+float placement_caption(float x, float y, float w, bool draw) {
+    const std::wstring caption = app.s.osd.enabled ? L"Drag the menu or the overlay to place it. Headsets’ fields of view vary."
+                                                   : L"Drag the panel to place it. Headsets’ fields of view vary.";
     const float ch = app.canvas.measure_height(caption, t::kSubheadline, w);
     if (draw)
-        app.canvas.text(caption, t::kSubheadline, {x, y + h, w, ch + 2}, col(app.c->label_secondary), Align::Leading, false, true);
-    h += ch + t::kSpace4;
-    const t::TypeStyle dt{12, 16, 400, false};
+        app.canvas.text(caption, t::kSubheadline, {x, y, w, ch + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+    return ch;
+}
+
+// The settings menu's place and size, in numbers.
+float placement_readouts(float x, float y, float w, bool draw) {
     char size[48], metres[48], distance[16];
     std::snprintf(size, sizeof(size), "%d° × %d°", app.s.menuWidth, static_cast<int>(std::lround(menu_height_deg(app.s.menuWidth))));
     std::snprintf(metres, sizeof(metres), "%.2f m", 2 * kMenuDistance * std::tan(app.s.menuWidth * 3.14159265 / 360));
     std::snprintf(distance, sizeof(distance), "%.1f m", kMenuDistance);
-    const std::pair<std::wstring, std::wstring> lines[] = {
-        {L"Horizontal", degrees(app.s.menuYaw, L"right", L"left")},
-        {L"Vertical", degrees(app.s.menuPitch, L"up", L"down")},
-        {L"Panel size", widen(size)},
-        {L"Panel width", widen(metres)},
-        {L"Distance", widen(distance)},
-    };
-    for (const auto& [name, value] : lines) {
-        if (draw) {
-            app.canvas.text(name, dt, {x, y + h, w / 2, 16}, col(app.c->label_secondary));
-            app.canvas.text(value, t::kValue, {x + w / 2, y + h, w / 2, 16}, col(app.c->label), Align::Trailing);
-        }
-        h += 16 + 4;
-    }
-    return h - 4;
+    float h = eyebrow(x, y, w, L"Settings menu", draw) + t::kSpace2;
+    h += readout(x, y + h, w, L"Horizontal", degrees(app.s.menuYaw, L"right", L"left"), draw) + 6;
+    h += readout(x, y + h, w, L"Vertical", degrees(app.s.menuPitch, L"up", L"down"), draw) + 6;
+    h += readout(x, y + h, w, L"Panel size", widen(size), draw) + 6;
+    h += readout(x, y + h, w, L"Panel width", widen(metres), draw) + 6;
+    h += readout(x, y + h, w, L"Distance", widen(distance), draw);
+    return h;
 }
 
-// The preview column: the placement preview on the Headset menu pane, the foveation preview elsewhere.
+using Content = std::function<float(float, float, float, bool)>;
+
+// A card in the preview column: a title (and a pill at its end) over `content`. Returns its height.
+float preview_card(float x, float y, float w, const std::wstring& title, const std::wstring& pill, const Content& content,
+                   bool draw) {
+    const float pad = t::kSpace4, head = title.empty() ? 0 : 20 + t::kSpace3, radius = t::kRadiusGroup + 2;
+    const float ch = content(x + pad, y + pad + head, w - 2 * pad, false);
+    const float h = pad + head + ch + pad;
+    if (draw) {
+        app.canvas.fill({x, y, w, h}, col(app.c->group_bg), radius);
+        app.canvas.stroke({x, y, w, h}, col(app.c->card_border), 1, radius);
+        if (!title.empty()) {
+            app.canvas.text(title, t::kHeadline, {x + pad, y + pad, w - 2 * pad, 20}, col(app.c->label));
+            if (!pill.empty()) {
+                const float pw = std::ceil(app.canvas.measure(pill, t::kSubheadline)) + 18;
+                const Rect pr{x + w - pad - pw, y + pad, pw, 20};
+                app.canvas.fill(pr, col(app.dark ? 0xffffff : 0, 0.07f), 10);
+                app.canvas.text(pill, t::kSubheadline, pr, col(app.c->label_secondary), Align::Center);
+            }
+        }
+        content(x + pad, y + pad + head, w - 2 * pad, true);
+    }
+    return h;
+}
+
+// `frame` drawn in the preview's dark well, then `after` under it.
+Content in_well(Content frame, Content after = nullptr) {
+    return [frame, after](float x, float y, float w, bool draw) {
+        const float pad = t::kSpace3, fh = frame(x + pad, y + pad, w - 2 * pad, false);
+        if (draw) {
+            app.canvas.fill({x, y, w, fh + 2 * pad}, col(app.c->preview_canvas), 10);
+            frame(x + pad, y + pad, w - 2 * pad, true);
+        }
+        float h = fh + 2 * pad;
+        if (after)
+            h += t::kSpace3 + after(x, y + h + t::kSpace3, w, draw);
+        return h;
+    };
+}
+
+// The preview column: the placement preview on the Headset menu pane, the load order on OpenXR layers, the foveation
+// preview elsewhere; each a card, with a second card of numbers under the previews.
 float side_preview(float x, float y, float w, bool draw) {
-    return app.pane == Pane::Menu     ? placement_preview(x, y, w, draw)
-           : app.pane == Pane::Layers ? layers_preview(x, y, w, draw)
-                                      : preview(x, y, w, draw);
+    if (app.pane == Pane::Layers)
+        return preview_card(x, y, w, L"Load order", game_name() + L" to headset", layers_preview, draw);
+    float h = 0;
+    if (app.pane == Pane::Menu) {
+        h += preview_card(x, y, w, L"Placement", L"100° × 80° view", in_well(placement_preview, placement_caption), draw);
+        h += t::kSpace4;
+        return h + preview_card(x, y + h, w, L"", L"", placement_readouts, draw);
+    }
+    h += preview_card(x, y, w, L"Preview", L"Left eye", in_well(preview, preview_legend), draw);
+    h += t::kSpace4;
+    return h + preview_card(x, y + h, w, L"", L"", readouts_card, draw);
 }
 
 // ---- Window ------------------------------------------------------------------------------------
@@ -2663,6 +2860,44 @@ const Item kItems[] = {
 
 static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 
+// The sidebar's groups, each a run of panes in Pane's order; a pane's eyebrow is its group.
+struct Group {
+    const wchar_t* label;
+    int first, end;
+};
+constexpr Group kGroups[] = {{L"Setup", 0, 2}, {L"Picture", 2, 7}, {L"In the headset", 7, 9}, {L"Advanced", 9, 11}, {L"Help", 11, 13}};
+static_assert(kGroups[std::size(kGroups) - 1].end == kPanes, "every pane in a group");
+
+const wchar_t* group_of(int pane) {
+    for (const Group& g : kGroups)
+        if (pane >= g.first && pane < g.end)
+            return g.label;
+    return L"";
+}
+
+// What a pane is for, under its title.
+std::wstring pane_description(Pane pane) {
+    switch (pane) {
+    case Pane::Checks: return L"What would stop ace-quadview at the next launch, each with its fix.";
+    case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
+    case Pane::Rendering:
+        return L"How " + game_name() + L" draws each eye. " +
+               (games::launcher_game().openComposite ? L"It reaches your headset through OpenComposite (Launch checks)."
+                                                     : L"Launch starts it in VR with ace-quadview.");
+    case Pane::Resolution: return L"How many pixels each view draws, the edges it skips and the helmet around it.";
+    case Pane::Foveation: return L"The size, shape and movement of the sharp focus region.";
+    case Pane::Overlay: return L"An outline in the headset that shows where the focus region is.";
+    case Pane::Dlss: return L"Cheaper outer views, a sharper centre and frame generation, with Cheeky Foveated DLSS.";
+    case Pane::Menu: return L"Where the settings menu and the performance overlay float in your view.";
+    case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
+    case Pane::Layers: return L"The OpenXR layers " + game_name() + L" loads, and their order.";
+    case Pane::Diagnostics: return L"The last session’s numbers, and what to share when you ask for help.";
+    case Pane::Report: return L"Zips the logs and opens a GitHub issue with the details filled in.";
+    case Pane::About: return L"The version, updates and support.";
+    }
+    return L"";
+}
+
 void sidebar_icon(int i, const Rect& r, Color c) {
     for (const char* p : kItems[i].icon)
         if (p)
@@ -2689,12 +2924,14 @@ void sidebar_icon(int i, const Rect& r, Color c) {
 
 // The open pop-up menu: under its button, as wide as the button or its longest item (check mark
 // column included), right-aligned with the button when it would leave the window.
+constexpr float kMenuItemH = 32;
+
 Rect popup_menu_rect() {
     const Popup& p = app.popup;
     float w = p.anchor.w;
     for (const auto& item : p.items)
-        w = std::max(w, std::ceil(app.canvas.measure(item, t::kBody)) + 22 + 4 + 10 + 8);
-    Rect menu{p.anchor.x, p.anchor.y + p.anchor.h + 4, w, 22.0f * p.items.size() + 10};
+        w = std::max(w, std::ceil(app.canvas.measure(item, t::kBody)) + 28 + 6 + 12 + 8);
+    Rect menu{p.anchor.x, p.anchor.y + p.anchor.h + 4, w, kMenuItemH * p.items.size() + 12};
     if (menu.right() > app.canvas.width() - 8)
         menu.x = p.anchor.right() - w;
     if (menu.bottom() > app.canvas.height())
@@ -2762,14 +2999,138 @@ void create_report_edit() {
     SetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(report_edit_proc));
 }
 
-// The action bar's badge for the launch checks' first problem (and how many more); it opens the pane.
-void checks_badge(float y, int tone, const Check& first, float maxWidth) {
+// The action bar's badge for the launch checks' first problem (and how many more); it opens the pane. Returns its width.
+constexpr float kBarX = t::kSpace5;
+float checks_badge(float y, int tone, const Check& first, float maxWidth) {
     size_t more = 0;
     for (const Check& c : app.checks)
         more += c.tone == CheckTone::Bad || c.tone == CheckTone::Warn ? 1 : 0;
     const std::wstring text = first.title + (more > 1 ? L"  ·  " + std::to_wstring(more - 1) + L" more" : L"");
-    const float w = badge(t::kSpace5, y, tone, text, maxWidth);
-    app.hits.push_back({kChecksBadge, {t::kSpace5, y, w, 20}});
+    const float w = badge(kBarX, y, tone, text, maxWidth);
+    app.hits.push_back({kChecksBadge, {kBarX, y, w, 20}});
+    return w;
+}
+
+constexpr t::TypeStyle kBodyMedium{t::kBody.size, t::kBody.lineHeight, 500, false};
+constexpr t::TypeStyle kBodyStrong{t::kBody.size, t::kBody.lineHeight, 600, false};
+
+// The app's mark: the game's accent with an eye.
+void brand_mark(float x, float y, float size) {
+    app.canvas.fill({x, y, size, size}, col(app.c->accent_fill), size * 0.28f);
+    const float g = size * 0.66f, gx = x + (size - g) / 2, gy = y + (size - g) / 2;
+    app.canvas.path("M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z", {gx, gy, g, g}, 24, col(app.c->on_accent), 2.2f);
+    app.canvas.circle(gx + g / 2, gy + g / 2, g * 0.11f, col(app.c->on_accent), false, 2.2f * g / 24);
+}
+
+// The tab strip: the app's name, then a tab per game, each marked in its own accent; the chosen one's palette is the
+// window's (apply_theme).
+void game_tabs(float W) {
+    Canvas& cv = app.canvas;
+    const float H = t::kTabbarHeight;
+    cv.fill({0, 0, W, H}, col(app.c->titlebar_bg));
+    cv.line(0, H - 0.5f, W, H - 0.5f, col(app.c->card_border), 1);
+    // The app: its mark, its name and BETA.
+    const float bx = t::kSpace4;
+    brand_mark(bx, (H - 24) / 2, 24);
+    const float nameW = std::ceil(cv.measure(L"Sim QVFR", kBodyStrong));
+    cv.text(L"Sim QVFR", kBodyStrong, {bx + 24 + 10, 0, nameW + 2, H}, col(app.c->label));
+    const t::TypeStyle beta{10.5f, 14, 600, false};
+    const float betaW = std::ceil(cv.measure(L"BETA", beta)) + 14, betaX = bx + 24 + 10 + nameW + 8;
+    cv.fill({betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning_bg), 9);
+    cv.text(L"BETA", beta, {betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning), Align::Center);
+    // The games, from the content column's edge; short names when the full ones don't fit.
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    const float x0 = std::max(t::kSidebarWidth, betaX + betaW + t::kSpace5);
+    const auto tab_width = [&](const std::wstring& label) { return 14 + 8 + 8 + std::ceil(cv.measure(label, kBodyStrong)) + 16; };
+    float full = 0;
+    for (std::size_t i = 0; i < count; ++i)
+        full += tab_width(all[i]->name) + 4;
+    const bool shortNames = x0 + full > W - t::kSpace4;
+    float x = x0;
+    for (std::size_t i = 0; i < count; ++i) {
+        const games::GameInfo& game = *all[i];
+        const bool selected = &game == &games::launcher_game();
+        const std::wstring label = shortNames ? game.shortName : game.name;
+        const t::Accent accent = game_accent(game);
+        const Rect tab{x, 8, tab_width(label), H - 16};
+        if (selected)
+            cv.fill(tab, col(accent.accent_fill, app.dark ? 0.22f : 0.12f), t::kRadiusControl);
+        else if (pointer_in(tab))
+            cv.fill(tab, col(app.dark ? 0xffffff : 0, 0.06f), t::kRadiusControl);
+        cv.circle(tab.x + 14 + 4, tab.y + tab.h / 2, 4, col(accent.accent), true);
+        cv.text(label, selected ? kBodyStrong : kBodyMedium, {tab.x + 14 + 8 + 8, tab.y, tab.w - 30, tab.h},
+                col(selected ? app.c->label : app.c->label_secondary));
+        if (selected)  // the chosen tab's edge, in its accent, on the strip's bottom line
+            cv.fill({tab.x + 10, H - 3, tab.w - 20, 3}, col(accent.accent), 1.5f);
+        if (selected && focused(kGameTab))
+            focus_ring(tab, t::kRadiusControl);
+        app.hits.push_back({kGameTab, tab, static_cast<int>(i)});
+        x += tab.w + 4;
+    }
+}
+
+// The sidebar: the panes in their groups, each a row with its icon. When the groups don't fit, their labels go.
+void sidebar(float top, float bottom) {
+    Canvas& cv = app.canvas;
+    const float W = t::kSidebarWidth;
+    cv.fill({0, top, W, bottom - top}, col(app.c->sidebar_bg));
+    cv.line(W - 0.5f, top, W - 0.5f, bottom, col(app.c->card_border), 1);
+    const float labelH = t::kFootnote.lineHeight + 6, groupGap = 10, rowGap = 2;
+    float fullH = 2 * t::kSpace3;
+    for (const Group& g : kGroups)
+        fullH += labelH + (g.end - g.first) * (t::kSidebarRowHeight + rowGap);
+    fullH += groupGap * (std::size(kGroups) - 1);
+    const bool compact = fullH > bottom - top;
+    const float rowH = compact ? 28.0f : t::kSidebarRowHeight;
+    const CheckTone worst = worst_tone(app.checks);
+    float sy = top + t::kSpace3;
+    for (const Group& g : kGroups) {
+        if (!compact) {
+            eyebrow(12 + 10, sy, W - 44, g.label, true);
+            sy += labelH;
+        }
+        for (int i = g.first; i < g.end; ++i) {
+            const Rect row{12, sy, W - 24, rowH};
+            const bool selected = static_cast<int>(app.pane) == i;
+            if (selected)
+                cv.fill(row, col(app.c->sidebar_selection, app.dark ? 0.2f : 0.12f), t::kRadiusControl);
+            else if (pointer_in(row))
+                cv.fill(row, col(app.dark ? 0xffffff : 0, 0.05f), t::kRadiusControl);
+            sidebar_icon(i, {row.x + 10, row.y + (rowH - 16) / 2, 16, 16}, col(selected ? app.c->accent : app.c->label_muted));
+            cv.text(kItems[i].label, selected ? kBodyStrong : kBodyMedium, {row.x + 10 + 16 + 10, row.y, row.w - 64, rowH},
+                    col(selected ? app.c->label : app.c->heading));
+            // A mark on Foveation without an eye tracker, and on Launch checks with a problem (red) or warning.
+            const bool checksMark = i == static_cast<int>(Pane::Checks) && worst != CheckTone::Ok;
+            if ((i == static_cast<int>(Pane::Foveation) && eye_warning()) || checksMark) {
+                const bool danger = checksMark && worst == CheckTone::Bad;
+                const float bx = row.right() - 10 - 16, by = row.y + (rowH - 16) / 2;
+                cv.circle(bx + 8, by + 8, 8, col(danger ? app.c->danger_bg : app.c->warning_bg), true);
+                const Color mark = col(danger ? app.c->danger : app.c->warning);
+                cv.line(bx + 8, by + 4.5f, bx + 8, by + 8.5f, mark, 1.7f);
+                cv.circle(bx + 8, by + 11, 1, mark, true);
+            }
+            if (selected && focused(kSidebar))
+                focus_ring(row, t::kRadiusControl);
+            app.hits.push_back({kSidebar, row, i});
+            sy += rowH + rowGap;
+        }
+        sy += compact ? 6 : groupGap;
+    }
+}
+
+// The pane's header: its group, its title and what it is for. Returns its height.
+float pane_header(float x, float y, float w, bool draw) {
+    const std::wstring desc = pane_description(app.pane);
+    const float dh = app.canvas.measure_height(desc, t::kBody, w);
+    if (draw) {
+        app.canvas.text(group_of(static_cast<int>(app.pane)), {12, 16, 600, false}, {x, y, w, 16}, col(app.c->label_muted));
+        app.canvas.text(kItems[static_cast<int>(app.pane)].label, t::kLargeTitle, {x, y + 20, w, t::kLargeTitle.lineHeight},
+                        col(app.c->label));
+        app.canvas.text(desc, t::kBody, {x, y + 20 + t::kLargeTitle.lineHeight + 4, w, dh + 2}, col(app.c->label_secondary),
+                        Align::Leading, false, true);
+    }
+    return 20 + t::kLargeTitle.lineHeight + 4 + dh;
 }
 
 void paint() {
@@ -2779,125 +3140,123 @@ void paint() {
     app.reportEditRect = {};
     Canvas& cv = app.canvas;
     const float W = cv.width(), Hh = cv.height();
-    const float actionH = 10 + t::kControlHeightLarge + 10;
-    const float bodyH = Hh - actionH;
+    const float tabH = t::kTabbarHeight, actionH = t::kActionbarHeight;
+    const float bodyTop = tabH, bodyH = Hh - tabH - actionH;
     cv.fill({0, 0, W, Hh}, col(app.c->window_bg));
 
-    // Sidebar.
-    cv.fill({0, 0, t::kSidebarWidth, bodyH}, col(app.c->sidebar_bg));
-    cv.line(t::kSidebarWidth - 0.25f, 0, t::kSidebarWidth - 0.25f, bodyH, col(app.c->separator), 0.5f);
-    float sy = t::kSpace2;
-    for (int i = 0; i < kPanes; ++i) {
-        const Rect row{10, sy, t::kSidebarWidth - 20, 28};
-        const bool selected = static_cast<int>(app.pane) == i;
-        if (selected)
-            cv.fill(row, col(app.c->sidebar_selection), t::kRadiusControl);
-        const Color fg = col(selected ? app.c->on_accent : app.c->label);
-        sidebar_icon(i, {row.x + t::kSpace2, row.y + 6, 16, 16}, col(selected ? app.c->on_accent : app.c->accent));
-        cv.text(kItems[i].label, t::kBody, {row.x + t::kSpace2 + 16 + t::kSpace2, row.y, row.w - 40, 28}, fg);
-        // A mark on Foveation without an eye tracker, and on Launch checks with a problem (red) or warning.
-        const CheckTone worst = worst_tone(app.checks);
-        const bool checksMark = i == static_cast<int>(Pane::Checks) && worst != CheckTone::Ok;
-        if ((i == static_cast<int>(Pane::Foveation) && eye_warning()) || checksMark) {
-            const bool danger = checksMark && worst == CheckTone::Bad;
-            const float bx = row.right() - t::kSpace2 - 16, by = row.y + 6;
-            cv.circle(bx + 8, by + 8, 8, col(selected ? app.c->on_accent : danger ? app.c->danger_bg : app.c->warning_bg), true);
-            const Color mark = col(selected ? app.c->accent_fill : danger ? app.c->danger : app.c->warning);
-            cv.line(bx + 8, by + 5, bx + 8, by + 8.5f, mark, 1.6f);
-            cv.circle(bx + 8, by + 10.75f, 0.9f, mark, true);
-        }
-        if (selected && focused(kSidebar))
-            focus_ring(row, t::kRadiusControl);
-        app.hits.push_back({kSidebar, row, i});
-        sy += 28 + 2;
-    }
+    game_tabs(W);
+    sidebar(bodyTop, bodyTop + bodyH);
 
-    // Main and preview columns; below 900 wide the preview drops under the form.
-    const bool narrow = W < 900;
+    // Main and preview columns; below 1000 wide the preview drops under the form.
+    const bool narrow = W < 1000;
+    const float pad = t::kSpace7;
     const float mainX = t::kSidebarWidth, mainW = narrow ? W - mainX : W - mainX - t::kPreviewWidth;
-    const float contentX = mainX + t::kSpace5, contentW = mainW - 2 * t::kSpace5;
-    app.scrollArea = {mainX, 0, W - mainX, bodyH};
+    const float contentX = mainX + pad, contentW = std::min(mainW - 2 * pad, 760.0f);
+    app.scrollArea = {mainX, bodyTop, W - mainX, bodyH};
     cv.push_clip(app.scrollArea);
-    const float y0 = t::kSpace5 - app.scroll;
-    cv.text(kItems[static_cast<int>(app.pane)].label, t::kTitle2, {contentX, y0, contentW, 22}, col(app.c->label));
-    float contentH = 22 + t::kSpace6;
+    const float y0 = bodyTop + pad - app.scroll;
+    // About has no header: its own title, the app's name, says what the page is.
+    float contentH = app.pane == Pane::About ? 0 : pane_header(contentX, y0, contentW, true) + t::kSpace7;
     contentH += pane_content(contentX, y0 + contentH, contentW, true);
-    float total = contentH + t::kSpace5;
+    float total = contentH + pad;
     if (narrow) {
-        const float py = y0 + total + t::kSpace2;
-        cv.text(L"Preview", t::kHeadline, {contentX + 2, py, contentW, 16}, col(app.c->label));
-        const float pw = std::min(contentW, t::kPreviewWidth - t::kSpace5);
-        total += t::kSpace2 + 16 + t::kSpace4 + side_preview(contentX, py + 16 + t::kSpace4, pw, true) + t::kSpace5;
+        const float pw = std::min(contentW, 460.0f);
+        total += side_preview(contentX, y0 + total, pw, true) + pad;
+    }
+    float previewOver = 0;
+    if (!narrow) {  // the preview stays in view, scrolling only as far as its own bottom needs
+        const float ax = W - t::kPreviewWidth, aw = t::kPreviewWidth - pad;
+        const float ph = side_preview(ax, 0, aw, false) + 2 * pad;
+        previewOver = std::max(0.0f, ph - bodyH);
+        side_preview(ax, bodyTop + pad - std::min(app.scroll, previewOver), aw, true);
     }
     cv.pop_clip();
-    app.scrollMax = std::max(0.0f, total + t::kSpace5 - bodyH);
-    if (!narrow) {
-        const float ax = W - t::kPreviewWidth, aw = t::kPreviewWidth - t::kSpace5;
-        cv.text(L"Preview", t::kHeadline, {ax + 2, t::kSpace5, aw, 16}, col(app.c->label));
-        side_preview(ax, t::kSpace5 + 16 + t::kSpace4, aw, true);
-    }
+    app.scrollMax = std::max({0.0f, total - bodyH, previewOver});
 
-    // Action bar: status badge, Restore Defaults, Launch.
-    const Rect bar{0, bodyH, W, actionH};
-    cv.fill(bar, col(app.c->titlebar_bg));
-    cv.line(0, bodyH + 0.25f, W, bodyH + 0.25f, col(app.c->separator), 0.5f);
-    const float launchW = std::ceil(cv.measure(L"Launch " + game_name(), {15, 20, 500, false})) + 36;
-    const Rect launchR{W - t::kSpace5 - launchW, bodyH + 10, launchW, t::kControlHeightLarge};
-    const float restoreW = std::ceil(cv.measure(L"Restore Defaults", t::kBody)) + 2 * t::kSpace3;
-    const Rect restoreR{launchR.x - t::kSpace3 - restoreW, bodyH + (actionH - t::kControlHeight) / 2, restoreW, t::kControlHeight};
-    const float badgeMax = restoreR.x - t::kSpace3 - t::kSpace5;
-    const float by = bodyH + (actionH - 20) / 2;
+    // Action bar: the status, Restore Defaults, Launch.
+    const float barY = bodyTop + bodyH;
+    cv.fill({0, barY, W, actionH}, col(app.c->sidebar_bg));
+    cv.line(0, barY + 0.5f, W, barY + 0.5f, col(app.c->card_border), 1);
+    std::wstring launchLabel = L"Launch " + game_name();
+    float launchW = std::ceil(cv.measure(launchLabel, kPrimaryLabel)) + 16 + 10 + 2 * 22;
+    const float restoreW = button_width(L"Restore Defaults") + 24;
+    if (W - launchW - restoreW - 3 * t::kSpace5 < 200) {  // narrow: the game's short name
+        launchLabel = L"Launch " + std::wstring(games::launcher_game().shortName);
+        launchW = std::ceil(cv.measure(launchLabel, kPrimaryLabel)) + 16 + 10 + 2 * 22;
+    }
+    const Rect launchR{W - t::kSpace5 - launchW, barY + (actionH - t::kControlHeightLarge) / 2, launchW, t::kControlHeightLarge};
+    const Rect restoreR{launchR.x - t::kSpace2 - restoreW, barY + (actionH - t::kControlHeight) / 2, restoreW, t::kControlHeight};
+    const float badgeMax = restoreR.x - t::kSpace4 - kBarX;
+    const float by = barY + (actionH - 20) / 2;
     const Readouts ro = readouts(app.s, app.runtime);
+    float bw = 0;
     if (app.status == Status::Starting)
-        badge(t::kSpace5, by, 3, L"Starting " + game_name() + L"…", badgeMax);
+        bw = badge(kBarX, by, 3, L"Starting " + game_name() + L"…", badgeMax);
     else if (app.status == Status::Error)
-        badge(t::kSpace5, by, 2, app.error, badgeMax);
+        bw = badge(kBarX, by, 2, app.error, badgeMax);
     else if (!app.iniFound)
-        badge(t::kSpace5, by, 2, L"ace-quadview.ini not found next to the launcher.", badgeMax);
+        bw = badge(kBarX, by, 2, L"ace-quadview.ini not found next to the launcher.", badgeMax);
     else if (const Check* bad = first_with(app.checks, CheckTone::Bad))
-        checks_badge(by, 2, *bad, badgeMax);
+        bw = checks_badge(by, 2, *bad, badgeMax);
     else if (eye_warning())
-        badge(t::kSpace5, by, 1, L"Eye tracker not detected", badgeMax);
+        bw = badge(kBarX, by, 1, L"Eye tracker not detected", badgeMax);
     else if (app.runtime.known() && ro.overRuntimeLimit)
-        badge(t::kSpace5, by, 1, L"Larger than the runtime’s maximum image size", badgeMax);
+        bw = badge(kBarX, by, 1, L"Larger than the runtime’s maximum image size", badgeMax);
     else if (const Check* warn = first_with(app.checks, CheckTone::Warn))
-        checks_badge(by, 1, *warn, badgeMax);
+        bw = checks_badge(by, 1, *warn, badgeMax);
     else if (app.live == Live::NextLaunch)
-        badge(t::kSpace5, by, 1, app.s.mode == RenderMode::Qvfr
+        bw = badge(kBarX, by, 1, app.s.mode == RenderMode::Qvfr
                                      ? L"Applied live up to the launch resolution · the rest at the next launch"
                                      : L"Foveation applied live · resolution and method at the next launch",
-              badgeMax);
+                   badgeMax);
     else if (app.live == Live::Applied)
-        badge(t::kSpace5, by, 0, L"Applied to the running game", badgeMax);
+        bw = badge(kBarX, by, 0, L"Applied to the running game", badgeMax);
     else if (app.update == Update::Available) {
-        const float bw = badge(t::kSpace5, by, 3,
-                               app.installing ? L"Installing ace-quadview " + app.release.tag + L"…"
-                                              : L"ace-quadview " + app.release.tag + L" is available" + (installable() ? L" · Install" : L""),
-                               badgeMax);
-        app.hits.push_back({kUpdateBadge, {t::kSpace5, by, bw, 20}});
+        bw = badge(kBarX, by, 3,
+                   app.installing ? L"Installing ace-quadview " + app.release.tag + L"…"
+                                  : L"ace-quadview " + app.release.tag + L" is available" + (installable() ? L" · Install" : L""),
+                   badgeMax);
+        app.hits.push_back({kUpdateBadge, {kBarX, by, bw, 20}});
     } else
-        badge(t::kSpace5, by, 0, L"Ready", badgeMax);
-    button(kRestore, restoreR, L"Restore Defaults", false);
-    button(kLaunch, launchR, L"Launch " + game_name(), true);
+        bw = badge(kBarX, by, 0, L"Ready", badgeMax);
+    // What the launch will use, after the status when there is room: the profile, the mode, the focus density.
+    {
+        const std::wstring profile = !app.profileCurrent.empty() && app.profileMatches ? app.profileCurrent : L"Custom";
+        const std::wstring rest = L"  ·  " + std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L"  ·  Focus " +
+                                  std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%";
+        const float sx = kBarX + bw + t::kSpace4, room = badgeMax + kBarX - sx;
+        const float w1 = std::ceil(cv.measure(L"Profile ", t::kBody)), w2 = std::ceil(cv.measure(profile, kBodyMedium)),
+                    w3 = std::ceil(cv.measure(rest, t::kBody));
+        if (room > 1 + t::kSpace4 + w1 + w2 + w3) {
+            cv.line(sx, by + 2, sx, by + 18, col(app.c->card_border), 1);
+            const float tx = sx + t::kSpace4;
+            cv.text(L"Profile ", t::kBody, {tx, by - 2, w1 + 2, 24}, col(app.c->label_secondary));
+            cv.text(profile, kBodyMedium, {tx + w1, by - 2, w2 + 2, 24}, col(app.c->label));
+            cv.text(rest, t::kBody, {tx + w1 + w2, by - 2, w3 + 2, 24}, col(app.c->label_secondary));
+        }
+    }
+    button(kRestore, restoreR, L"Restore Defaults", Btn::Ghost, kIconReset);
+    button(kLaunch, launchR, launchLabel, Btn::Primary, kIconPlay);
 
     help_tip();
 
     // An open pop-up menu, over everything.
     if (app.popup.open) {
         const Popup& p = app.popup;
-        const float itemH = 22;
+        const float itemH = kMenuItemH;
         const Rect menu = popup_menu_rect();
-        cv.fill({menu.x, menu.y + 2, menu.w, menu.h}, {0, app.dark ? 0.5f : 0.18f}, t::kRadiusControl + 2);
-        cv.fill(menu, col(app.c->control_bg), t::kRadiusControl + 2);
-        cv.stroke(menu, col(app.c->separator), 1, t::kRadiusControl + 2);
+        cv.fill({menu.x, menu.y + 4, menu.w, menu.h}, {0, app.dark ? 0.5f : 0.16f}, t::kRadiusGroup);
+        cv.fill(menu, col(app.dark ? app.c->control_bg : app.c->group_bg), t::kRadiusGroup);
+        cv.stroke(menu, col(app.dark ? app.c->control_hover : app.c->card_border), 1, t::kRadiusGroup);
         for (size_t i = 0; i < p.items.size(); ++i) {
-            const Rect item{menu.x + 5, menu.y + 5 + itemH * i, menu.w - 10, itemH};
+            const Rect item{menu.x + 6, menu.y + 6 + itemH * i, menu.w - 12, itemH};
             const bool hot = static_cast<int>(i) == p.hover;
             if (hot)
-                cv.fill(item, col(app.c->accent_fill), 4);
+                cv.fill(item, col(app.c->accent_fill), 6);
             if (static_cast<int>(i) == p.selected)
-                cv.path("M3.5 8.2l2.6 2.6L12.5 4.5", {item.x + 4, item.y + 4, 14, 14}, 16, col(hot ? app.c->on_accent : app.c->label), 1.6f);
-            cv.text(p.items[i], t::kBody, {item.x + 22, item.y, item.w - 26, itemH}, col(hot ? app.c->on_accent : app.c->label));
+                cv.path("M3.5 8.2l2.6 2.6L12.5 4.5", {item.x + 8, item.y + (itemH - 14) / 2, 14, 14}, 16,
+                        col(hot ? app.c->on_accent : app.c->accent), 1.8f);
+            cv.text(p.items[i], t::kBody, {item.x + 28, item.y, item.w - 34, itemH}, col(hot ? app.c->on_accent : app.c->label));
         }
     }
     cv.end();
@@ -2997,16 +3356,6 @@ void open_popup(Ctl owner) {
     } else if (owner == kCheekyNrPasses) {
         app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
         app.popup.selected = app.s.cheeky.nrPasses - 1;
-    } else if (owner == kGame) {
-        std::size_t count = 0;
-        const games::GameInfo* const* all = games::all_games(count);
-        app.popup.items.clear();
-        app.popup.selected = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (all[i] == &games::launcher_game())
-                app.popup.selected = static_cast<int>(i);
-            app.popup.items.push_back(all[i]->name);
-        }
     } else {
         app.popup.items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
                                            : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
@@ -3020,17 +3369,6 @@ void open_popup(Ctl owner) {
 void choose(Ctl owner, int option) {
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
-        return;
-    }
-    if (owner == kGame) {  // the launcher's own: [launcher] game, then everything that follows the game
-        std::size_t count = 0;
-        const games::GameInfo* const* all = games::all_games(count);
-        if (option >= 0 && static_cast<std::size_t>(option) < count && all[option] != &games::launcher_game()) {
-            WritePrivateProfileStringW(L"launcher", L"game", widen(all[option]->id).c_str(), app.ini.c_str());
-            choose_launcher_game();
-            refresh_checks();
-        }
-        InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
     if (owner == kMethod)
@@ -3069,6 +3407,39 @@ void choose(Ctl owner, int option) {
     changed();
 }
 
+// A game tab: [launcher] game, then everything that follows the game (its checks, its features, its palette).
+void select_game(int option) {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    if (option < 0 || static_cast<std::size_t>(option) >= count || all[option] == &games::launcher_game())
+        return;
+    if (app.iniFound) {
+        WritePrivateProfileStringW(L"launcher", L"game", widen(all[option]->id).c_str(), app.ini.c_str());
+        choose_launcher_game();
+        app.iniText = ini_text();
+    } else {
+        games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
+    }
+    apply_theme();
+    refresh_checks();
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+int game_index() {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    for (std::size_t i = 0; i < count; ++i)
+        if (all[i] == &games::launcher_game())
+            return static_cast<int>(i);
+    return 0;
+}
+
+int game_count() {
+    std::size_t count = 0;
+    games::all_games(count);
+    return static_cast<int>(count);
+}
+
 void close_popup(bool accept) {
     if (accept && app.popup.hover >= 0)
         choose(app.popup.owner, app.popup.hover);
@@ -3078,10 +3449,10 @@ void close_popup(bool accept) {
 
 int popup_item_at(float x, float y) {
     const Popup& p = app.popup;
-    const float itemH = 22;
+    const float itemH = kMenuItemH;
     const Rect menu = popup_menu_rect();
     for (size_t i = 0; i < p.items.size(); ++i)
-        if (Rect{menu.x + 5, menu.y + 5 + itemH * i, menu.w - 10, itemH}.contains(x, y))
+        if (Rect{menu.x + 6, menu.y + 6 + itemH * i, menu.w - 12, itemH}.contains(x, y))
             return static_cast<int>(i);
     return -1;
 }
@@ -3439,7 +3810,7 @@ void activate(Ctl id, int option) {
         edit_launcher_layers([](LauncherLayers& p) { p = {}; });
         app.layerMessage.clear();
         break;
-    case kGame:
+    case kGameTab: select_game(option); return;
     case kMethod:
     case kMode:
     case kCheekyOuterPreset:
@@ -3526,6 +3897,12 @@ void on_key(WPARAM key) {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
+    if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game
+        const int n = game_count();
+        if (n > 1)
+            select_game((game_index() + (shift ? n - 1 : 1)) % n);
+        return;
+    }
     if (key == VK_TAB) {
         const auto order = focus_order();
         auto it = std::find(order.begin(), order.end(), app.focus);
@@ -3580,6 +3957,12 @@ void on_key(WPARAM key) {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         break;
     }
+    case kGameTab:  // Left and Right pick the game, Home and End the first and last
+        if (key == VK_LEFT || key == VK_RIGHT)
+            select_game(std::clamp(game_index() + (key == VK_RIGHT ? 1 : -1), 0, game_count() - 1));
+        else if (key == VK_HOME || key == VK_END)
+            select_game(key == VK_HOME ? 0 : game_count() - 1);
+        break;
     case kSidebar:
         if (key == VK_UP || key == VK_DOWN) {
             const int p = std::clamp(static_cast<int>(app.pane) + (key == VK_DOWN ? 1 : -1), 0, kPanes - 1);
@@ -3658,6 +4041,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         create_report_edit();
         refresh_checks();
+        if (app.iniFound)
+            refresh_profiles();
         if (app.s.updateCheck)
             start_update_check();
         return 0;
@@ -3803,6 +4188,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     }
     case WM_MOUSEMOVE: {
         const float x = dip(lParam, false), y = dip(lParam, true);
+        app.mouseX = x;
+        app.mouseY = y;
         if (app.dragging == kMenuPanel || app.dragging == kOsdPanel)
             set_panel_from(x, y);
         else if (app.dragging != kNone)
@@ -3816,11 +4203,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         } else {
             const Hit* h = hit_at(x, y);
             const int tip = h && h->id == kHelpIcon ? h->option : -1;
-            if (tip != app.tip) {
+            const Ctl hover = h ? h->id : kNone;
+            const int hoverOption = h ? h->option : -1;
+            if (tip != app.tip || hover != app.hover || hoverOption != app.hoverOption) {  // hover states follow
                 app.tip = tip;
+                app.hover = hover;
+                app.hoverOption = hoverOption;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
-            if (tip >= 0) {  // a WM_MOUSELEAVE when the pointer leaves the window, to hide it
+            if (hover != kNone) {  // a WM_MOUSELEAVE when the pointer leaves the window, to clear them
                 TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
                 TrackMouseEvent(&track);
             }
@@ -3828,8 +4219,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_MOUSELEAVE:
-        if (app.tip >= 0) {
+        app.mouseX = app.mouseY = -1;
+        if (app.tip >= 0 || app.hover != kNone) {
             app.tip = -1;
+            app.hover = kNone;
+            app.hoverOption = -1;
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
