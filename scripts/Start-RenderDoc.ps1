@@ -9,12 +9,15 @@
 # layer, whose reports X-Plane writes to its Log.txt); -NoRenderDoc starts the game the same way without RenderDoc.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\Start-RenderDoc.ps1 [-Build Release] [-CaptureName acc]
-#       [-ExtraArgs '--gfx_validation'] [-NoRenderDoc]
+#       [-ExtraArgs '--gfx_validation'] [-NoRenderDoc] [-MuteVuids 'VUID-...,VUID-...']
+# -MuteVuids: validation messages to leave out (VK_KHRONOS_VALIDATION_MESSAGE_ID_FILTER), for errors that aren't the
+# one being looked for. X-Plane stops with a message box on each validation error.
 param(
     [string]$Build = 'Release',
     [string]$CaptureName = '',
     [string]$ExtraArgs = '',
     [switch]$NoRenderDoc,
+    [string]$MuteVuids = '',
     [string]$RenderDoc = 'C:\Program Files\RenderDoc\renderdoccmd.exe'
 )
 $ErrorActionPreference = 'Stop'
@@ -45,6 +48,10 @@ foreach ($line in $plan) {
     }
 }
 if ($set -eq 0) { throw "no variables in the launcher's plan" }
+if ($MuteVuids) {
+    [Environment]::SetEnvironmentVariable('VK_KHRONOS_VALIDATION_MESSAGE_ID_FILTER', $MuteVuids, 'Process')
+    Write-Host "validation: muting $MuteVuids"
+}
 
 $argList = @($gameArgs -split ' ' | Where-Object { $_ })
 if ($NoRenderDoc) {
