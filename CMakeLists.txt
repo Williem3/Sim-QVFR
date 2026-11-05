@@ -194,7 +194,7 @@ add_executable(ace_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/
 target_include_directories(ace_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(ace_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ace_launcher PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(ace_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp)
+target_link_libraries(ace_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version)
 set_target_properties(ace_launcher PROPERTIES OUTPUT_NAME ace-quadview-launcher)
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
@@ -203,7 +203,7 @@ add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/lau
 target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(launcher_test PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(launcher_test PRIVATE bcrypt winhttp)
+target_link_libraries(launcher_test PRIVATE bcrypt winhttp version)
 
 # Offline check of the VRAM census on a WARP device: textures recorded, sorted and taken off when freed
 # (tests/vram_census_test.cpp).

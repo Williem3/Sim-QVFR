@@ -938,6 +938,41 @@ int main() {
                   open_composite((folder / "missing_openvr.dll").wstring()) == OpenComposite::Missing,
               "open_composite: OpenComposite's names itself, Valve's doesn't, a missing one is missing");
 
+        // The game's DLSS with Foveated DLSS on: the 310 series or a warning that shows the file (ACC ships 2.2.15).
+        {
+            PreflightInput d = in;
+            aceqv::games::set_launcher_game(acc::kGame);
+            d.openComposite = OpenComposite::Installed;
+            d.cheekyLoad = d.cheekyRuntimeFound = true;
+            d.cheekyLayer = CheekyLayer::Enabled;
+            d.dlssPath = L"K:\\ACC\\nvngx_dlss.dll";
+            d.dlssVersion = L"2.2.15.0";
+            std::vector<Check> dc = preflight_checks(d);
+            const Check* old = find(dc, "dlss_version");
+            check(old && old->tone == CheckTone::Warn && !old->confirm && old->fix == CheckFix::ShowFile &&
+                      old->fixTarget == d.dlssPath && old->detail.find(L"2.2.15.0") != std::wstring::npos,
+                  "preflight: Foveated DLSS with ACC's own DLSS 2.2.15 warns, names it and shows the file");
+            d.dlssVersion = L"310.9.1.0";
+            dc = preflight_checks(d);
+            check(find(dc, "dlss_version") && find(dc, "dlss_version")->tone == CheckTone::Ok,
+                  "preflight: DLSS 310 is new enough");
+            d.dlssVersion.clear();
+            check(!find(preflight_checks(d), "dlss_version"), "preflight: an unknown DLSS version says nothing");
+            d.dlssVersion = L"2.2.15.0";
+            d.cheekyLoad = false;
+            check(!find(preflight_checks(d), "dlss_version"), "preflight: without Foveated DLSS the DLSS version doesn't matter");
+            aceqv::games::set_launcher_game(ace::kGame);
+            check(version_major(L"310.9.1.0") == 310 && version_major(L"2.2.15.0") == 2 && version_major(L"") == -1 &&
+                      version_major(L"x1") == -1,
+                  "version_major: a file version's first number");
+            check(!file_version(L"C:\\Windows\\System32\\kernel32.dll").empty() &&
+                      file_version((folder / "missing.dll").wstring()).empty(),
+                  "file_version: a system DLL has one, a missing file none");
+            check(std::wstring(acc::kGame.dlssDll).find(L"nvngx_dlss.dll") != std::wstring::npos &&
+                      std::wstring(ace::kGame.dlssDll) == L"nvngx_dlss.dll",
+                  "games: each names its DLSS");
+        }
+
         in.steamRunning = false;
         in.gameRunning = true;
         checks = preflight_checks(in);
