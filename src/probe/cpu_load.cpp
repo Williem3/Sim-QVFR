@@ -225,7 +225,8 @@ CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map
 }
 
 bool cpu_load_spins(const std::wstring& name) {
-    return name == L"Physics" || name.find(L"aSeeVRClient") != std::wstring::npos;
+    return name == L"Physics" || name.find(L"aSeeVRClient") != std::wstring::npos ||
+           name.find(L"virtualdesktop-openxr") != std::wstring::npos;
 }
 
 std::map<uint32_t, double> cpu_load_shares(const std::map<uint32_t, uint64_t>& before,
@@ -249,7 +250,7 @@ bool cpu_load_start() {
     worker.latest = CpuLoad{};
     worker.running = true;
     worker.thread = std::thread(run);
-    logf("cpu load: sampling the game's threads every %d ms (the busiest leaves out Physics and the eye tracker's client: they spin)",
+    logf("cpu load: sampling the game's threads every %d ms (the busiest leaves out Physics, the eye tracker's client and Virtual Desktop's pacing: they spin)",
          kCpuLoadMs);
     return true;
 }
