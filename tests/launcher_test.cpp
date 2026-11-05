@@ -13,6 +13,7 @@
 
 #include "games/ace/game.h"
 #include "games/acc/game.h"
+#include "games/xplane/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/install.h"
@@ -897,18 +898,21 @@ int main() {
         // The games: found by exe name in any case; the launcher starts ACE; ACC's build isn't ACE's.
         check(simqvfr::games::game_for_exe(L"AssettoCorsaEVO.exe") == &ace::kGame &&
                   simqvfr::games::game_for_exe(L"ac2-win64-shipping.EXE") == &acc::kGame &&
+                  simqvfr::games::game_for_exe(L"x-plane.exe") == &xplane::kGame &&
                   simqvfr::games::game_for_exe(L"acc.exe") == nullptr && simqvfr::games::game_for_exe(nullptr) == nullptr &&
                   &simqvfr::games::launcher_game() == &ace::kGame &&
                   simqvfr::games::supported_build(acc::kGame, acc::kBuilds[0]) &&
-                  !simqvfr::games::supported_build(ace::kGame, acc::kBuilds[0]),
+                  !simqvfr::games::supported_build(ace::kGame, acc::kBuilds[0]) &&
+                  simqvfr::games::supported_build(xplane::kGame, xplane::kBuilds[0]),
               "games: lookup by exe, the launcher's game, builds per game");
         in.build = BuildState::Supported;
 
         // The launcher's game ([launcher] game): by id in any case; ACC's launch and what it has so far.
         std::size_t count = 0;
         const simqvfr::games::GameInfo* const* all = simqvfr::games::all_games(count);
-        check(count == 2 && all[0] == &ace::kGame && all[1] == &acc::kGame &&
-                  simqvfr::games::game_by_id("ACC") == &acc::kGame && simqvfr::games::game_by_id("nope") == nullptr,
+        check(count == 3 && all[0] == &ace::kGame && all[1] == &acc::kGame && all[2] == &xplane::kGame &&
+                  simqvfr::games::game_by_id("ACC") == &acc::kGame && simqvfr::games::game_by_id("XPlane") == &xplane::kGame &&
+                  simqvfr::games::game_by_id("nope") == nullptr,
               "games: the launcher's list, found by id in any case");
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
