@@ -49,7 +49,7 @@ body:
       label: Screenshots and logs
       description: |
         Drag in screenshots of the launcher's Diagnostics page and the performance overlay, and the report zip
-        from the launcher's logs folder (ace-quadview-report-*.zip).
+        from the launcher's logs folder (sim-qvfr-report-*.zip).
   - type: textarea
     id: checks
     attributes:

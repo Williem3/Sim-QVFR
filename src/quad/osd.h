@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 // Where the card floats ([osd], reloaded live), placed as the settings menu's panel is (settings_menu.h's
 // MenuPlacement, menu_pose): degrees right (yaw) and up (pitch) of straight ahead, and its width in
@@ -48,7 +48,7 @@ struct OsdInput {
     double gpuMs = -1;             // ACE's GPU time per frame (D3D12 timestamps), -1: unknown
     double composeMs = -1;         // the layer's own GPU work per frame (QVFR composition), -1: unknown
     double gpuBusyPercent = -1;    // the whole GPU: its busiest render engine, every process (probe/gpu_load.h), -1: unknown
-    double gpuAcePercent = -1;     // ACE's own share of it
+    double gpuGamePercent = -1;     // ACE's own share of it
     double cpuBusiestPercent = -1; // ACE's busiest thread, percent of one core (probe/cpu_load.h), -1: unknown
     std::wstring cpuBusiestName;   // its description, if any
     bool cpuBusiestIsRender = false;  // it is the render thread
@@ -93,7 +93,7 @@ struct OsdSummary {
     // GPU: the whole GPU's time per ACE frame (its busy share times the frame time; ACE's queue time when
     // the busy share is unknown), and its parts: ACE's queue, frame generation, the layer's composition, the rest
     // (the runtime's compositor, other apps). -1: unknown.
-    double gpuMs = -1, gpuAceMs = -1, gpuFgMs = -1, gpuLayerMs = -1, gpuRestMs = -1;
+    double gpuMs = -1, gpuGameMs = -1, gpuFgMs = -1, gpuLayerMs = -1, gpuRestMs = -1;
     bool gpuWhole = false;      // gpuMs is the whole GPU's
     double cpuHeadroom = 0, gpuHeadroom = 0;  // percent of the budget left (negative: over)
     OsdBound bound = OsdBound::Unknown;
@@ -134,4 +134,4 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
 // it could not do what it was asked (xr_layer.cpp's notice).
 std::vector<uint32_t> draw_notice_panel(const std::wstring& title, const std::vector<std::wstring>& lines);
 
-}  // namespace aceqv
+}  // namespace simqvfr

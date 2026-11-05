@@ -50,7 +50,7 @@ int main() {
                                     IID_PPV_ARGS(&image));
 
     // Clear to black first with the outline module itself (one box covering everything, 64 px thick).
-    aceqv::FocusOutline outline;
+    simqvfr::FocusOutline outline;
     if (!image || !outline.initialize(device, queue, format)) {
         std::puts("RESULT: FAIL (setup)");
         return 1;

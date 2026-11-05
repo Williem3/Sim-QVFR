@@ -14,7 +14,7 @@
 #include "../log.h"
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr size_t kProbeCount = std::size(ace::kProbeTargets);
@@ -182,7 +182,7 @@ bool verified_build() {
     }
     wchar_t path[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, path, MAX_PATH);
-    const std::string sha = aceqv::sha256_file(path);
+    const std::string sha = simqvfr::sha256_file(path);
     if (!games::supported_build(*game, sha)) {
         logf("probe: unsupported exe sha256=%s (expected %s); probes refused", sha.c_str(), game->builds[0]);
         return false;
@@ -278,4 +278,4 @@ void probe_frame_end() {
     }
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

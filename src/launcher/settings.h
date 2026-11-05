@@ -1,5 +1,5 @@
 // The launcher window's settings (the kit's LauncherSettings), read from and written to
-// ace-quadview.ini: only the keys the layer reads, everything else in the file is left as it is.
+// sim-qvfr.ini: only the keys the layer reads, everything else in the file is left as it is.
 //
 // Quad View Foveated Rendering (mode=views4): one ACE frame renders the outer views at `outer` of the
 // headset's recommended size and the focus views at `inner` density over the foveated size, each
@@ -18,7 +18,7 @@
 #include "../quad/helmet.h"
 #include "../quad/osd.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
 enum class RenderMode { Qvfr, TwoLoop };
 enum class OutlineColor { Teal, Magenta, Green };
@@ -178,4 +178,4 @@ std::wstring session_summary_text(const RuntimeInfo& runtime);
 
 const wchar_t* color_name(OutlineColor color);
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

@@ -1,6 +1,6 @@
 # Games
 
-Everything that belongs to one game lives in `src/games/<id>/`. The rest of ace-quadview (the OpenXR
+Everything that belongs to one game lives in `src/games/<id>/`. The rest of Sim-QVFR (the OpenXR
 layer, the composition, the menus, the launcher) is shared, and only talks to a game through two
 headers here.
 
@@ -45,7 +45,7 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
    menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
    swapchain sizes and formats, frame submission. `acc/` started this way.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
-4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`ace_qv_core`: the layer and the
+4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`sim_qvfr_core`: the layer and the
    tests link it).
 5. Write `<id>/README.md`: the build the addresses are from, what is patched, and the open questions.
 

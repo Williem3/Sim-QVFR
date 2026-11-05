@@ -12,7 +12,7 @@
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -158,7 +158,7 @@ int main() {
     // The ini: written keys read back; Two-loop writes no resolution.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
-    const std::wstring ini = std::wstring(temp) + L"ace-quadview-menu-test.ini";
+    const std::wstring ini = std::wstring(temp) + L"sim-qvfr-menu-test.ini";
     DeleteFileW(ini.c_str());
     WritePrivateProfileStringW(L"experiment", L"eye_scale", L"40", ini.c_str());
     WritePrivateProfileStringW(L"experiment", L"focus_percent", L"31", ini.c_str());
@@ -180,7 +180,7 @@ int main() {
     check(back.periphery == 35 && back.density == 110 && back.width == 30 && back.height == 25 && back.feather == 12 &&
               back.corners == 60 && back.outline && !back.eyeTracking && back.overlay == v.overlay,
           "and read back");
-    const std::wstring loopIni = std::wstring(temp) + L"ace-quadview-menu-test-loop.ini";
+    const std::wstring loopIni = std::wstring(temp) + L"sim-qvfr-menu-test-loop.ini";
     DeleteFileW(loopIni.c_str());
     write_menu_values(loopIni.c_str(), v, false);
     check(GetPrivateProfileIntW(L"experiment", L"periphery_scale", -1, loopIni.c_str()) == -1 &&
@@ -212,7 +212,7 @@ int main() {
               "and the gaze offset with it on, leaving the fixed one");
         o.values.offset.gaze = kFocusOffsetMax;
         check(!menu_key(o, MenuKey::Right) && o.values.offset.gaze == kFocusOffsetMax, "clamped at the most");
-        const std::wstring offsetIni = std::wstring(temp) + L"ace-quadview-menu-test-offset.ini";
+        const std::wstring offsetIni = std::wstring(temp) + L"sim-qvfr-menu-test-offset.ini";
         DeleteFileW(offsetIni.c_str());
         check(write_menu_values(offsetIni.c_str(), o.values, true), "offsets written");
         const FocusOffset read = read_menu_values(offsetIni.c_str()).offset;
@@ -236,7 +236,7 @@ int main() {
         check(d.values.gazeDeadzone == 0 && menu_lines(d)[10].value == L"Off (follows every sample)", "down to 0: off");
         d.values.eyeTracking = false;
         check(menu_lines(d)[10].value == L"Eye tracking off", "and says so without eye tracking");
-        const std::wstring deadzoneIni = std::wstring(temp) + L"ace-quadview-menu-test-deadzone.ini";
+        const std::wstring deadzoneIni = std::wstring(temp) + L"sim-qvfr-menu-test-deadzone.ini";
         DeleteFileW(deadzoneIni.c_str());
         check(read_gaze_deadzone(deadzoneIni.c_str()) == kGazeDeadzoneDefault, "unset reads as the default");
         d.values.gazeDeadzone = 25;
@@ -273,7 +273,7 @@ int main() {
     menu_key(moving, MenuKey::Left);
     moving.selected = 7;  // Menu size
     menu_key(moving, MenuKey::Right);
-    const auto movingIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_moving.ini").wstring();
+    const auto movingIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_moving.ini").wstring();
     write_menu_values(movingIni.c_str(), moving.values, true);
     const MenuPlacement moved = read_menu_placement(movingIni.c_str());
     const OsdPlacement overlayMoved = read_osd_placement(movingIni.c_str());
@@ -319,7 +319,7 @@ int main() {
               std::fabs(zy + turned.position[1] / kMenuDistance) < 1e-4f &&
               std::fabs(zz + turned.position[2] / kMenuDistance) < 1e-4f,
           "menu placement: right of and above ahead, the panel faces the eye");
-    const auto placementIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_placement.ini").wstring();
+    const auto placementIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_placement.ini").wstring();
     WritePrivateProfileStringW(L"menu", L"yaw", L"-50", placementIni.c_str());
     WritePrivateProfileStringW(L"menu", L"pitch", L"-7", placementIni.c_str());
     const MenuPlacement read = read_menu_placement(placementIni.c_str());
@@ -401,7 +401,7 @@ int main() {
                   set.find("CenterPreset=13") != std::string::npos && set.find("QuadView4Role=4") != std::string::npos &&
                   cheeky_set_lines(c.cheeky.values, false).find("Quad") == std::string::npos,
               "Cheeky's set lines carry the values, and the quad roles only for QVFR");
-        const auto cheekyIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_cheeky.ini").wstring();
+        const auto cheekyIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_cheeky.ini").wstring();
         DeleteFileW(cheekyIni.c_str());
         write_cheeky_settings(cheekyIni.c_str(), c.cheeky.values, false);
         const CheekySettings back = read_cheeky_settings(cheekyIni.c_str());
@@ -448,7 +448,7 @@ int main() {
                       nrSet.find("D3D11D3D12Transport") == std::string::npos,
                   "a D3D11 game: Cheeky's DX12 transport on only with DLSS-NR; a D3D12 game never sets it");
         }
-        const auto nrIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_cheeky_nr.ini").wstring();
+        const auto nrIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_cheeky_nr.ini").wstring();
         DeleteFileW(nrIni.c_str());
         write_cheeky_settings(nrIni.c_str(), c.cheeky.values, false);
         const CheekySettings nrBack = read_cheeky_settings(nrIni.c_str());
@@ -498,7 +498,7 @@ int main() {
         check(captureFirst && generated && c.cheeky.values.fgRelease == 5 && menu_lines(c)[6].value == L"Never (5)" &&
                   cheeky_set_lines(c.cheeky.values, true).find("FgReleasePoint=5") != std::string::npos,
               "Release ACE: Capture (8), Generated (3), Never (5); Cheeky's FgReleasePoint follows");
-        const auto releaseIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_release.ini").wstring();
+        const auto releaseIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_release.ini").wstring();
         DeleteFileW(releaseIni.c_str());
         write_cheeky_settings(releaseIni.c_str(), c.cheeky.values, false);
         const bool roundTrip = read_cheeky_settings(releaseIni.c_str()).fgRelease == 5;
@@ -547,7 +547,7 @@ int main() {
               "View crop: no note when it only takes more off than at launch");
         v.launch.dlssHeld = true;
         check(menu_notes(v).front().find(L"DLSS is on") == 0, "View crop with DLSS: the savings wait for the next launch");
-        const auto cropIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_crop.ini").wstring();
+        const auto cropIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_crop.ini").wstring();
         DeleteFileW(cropIni.c_str());
         write_menu_values(cropIni.c_str(), v.values, true);
         const MenuValues back = read_menu_values(cropIni.c_str());
@@ -645,7 +645,7 @@ int main() {
         const std::vector<MenuLine> first = menu_lines(f);
         check(first[4].label == L"Corners" && first[4].value == L"Corner shape",
               "the settings page's corner radius says the corner shape replaces it");
-        const auto shapeIni = (std::filesystem::temp_directory_path() / L"aceqv_menu_shape.ini").wstring();
+        const auto shapeIni = (std::filesystem::temp_directory_path() / L"simqvfr_menu_shape.ini").wstring();
         DeleteFileW(shapeIni.c_str());
         write_menu_values(shapeIni.c_str(), f.values, false);
         const FocusShape back = read_focus_shape(shapeIni.c_str());
@@ -716,7 +716,7 @@ int main() {
             footerText |= row_has_text(y);
         check(lines.size() == 13 && lastNoteRow < kPanelHeight - 100 && footerText,
               "the panel: 13 lines and three notes end above the footer, which shows");
-        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"ACEQV_MENU_SAVE", path, MAX_PATH)) {
+        if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_MENU_SAVE", path, MAX_PATH)) {
             if (FILE* f = _wfopen(path, L"wb")) {
                 const int w = kPanelWidth, h = kPanelHeight;
                 BITMAPFILEHEADER file{0x4D42, static_cast<DWORD>(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + w * h * 4), 0, 0,
@@ -745,7 +745,7 @@ int main() {
               "Hotkeys footer: Right or Left turns it off and on");
         wchar_t temp[MAX_PATH];
         GetTempPathW(MAX_PATH, temp);
-        const std::wstring ini = std::wstring(temp) + L"aceqv-menu-footer.ini";
+        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-footer.ini";
         DeleteFileW(ini.c_str());
         check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
                   !read_menu_values(ini.c_str()).hotkeyFooter,

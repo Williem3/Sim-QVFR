@@ -30,6 +30,6 @@ The comments in `abi.h` and `views4.h` explain each patch and the run that calle
 
 `[experiment]` `views4_callers`, `views4_borrow`, `views4_eyes_only_advance`,
 `views4_shadow_view1_plain`, `views4_screen_size_legacy` and `batch_watch` are read by `adapter.cpp`,
-not the layer. `manifest/ace-quadview.ini` documents them.
+not the layer. `manifest/sim-qvfr.ini` documents them.
 
 The static-analysis notes (`docs/recon.md`) are kept out of the repository.

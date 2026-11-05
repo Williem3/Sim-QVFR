@@ -11,7 +11,7 @@
 
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 // Each side's most, so every axis keeps at least 1 - 2 x kCropMax of the view.
 inline constexpr double kCropMax = 0.40;
@@ -59,4 +59,4 @@ inline void uncrop_tangents(const float (&tan)[4], const FovCrop& c, int eye, fl
 // most all of it): the focus box keeps its size, and its density, whatever the crop.
 inline double cropped_share(double fraction, double kept) { return std::min(1.0, fraction / kept); }
 
-}  // namespace aceqv
+}  // namespace simqvfr

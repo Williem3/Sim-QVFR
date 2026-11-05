@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct CheekyView {
     std::string id, eye, region, mapping, api;
@@ -97,4 +97,4 @@ inline std::vector<std::string> cheeky_view_report(const std::vector<CheekyView>
     return lines;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

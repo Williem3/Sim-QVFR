@@ -1,4 +1,4 @@
-# Registers ace-quadview.dll as an implicit OpenXR API layer for the current user only (HKCU), so
+# Registers sim-qvfr.dll as an implicit OpenXR API layer for the current user only (HKCU), so
 # Assetto Corsa EVO loads it when started normally from Steam. The DLL is inert in every other
 # OpenXR app. Undo with Unregister-ProbeLayer.ps1.
 #
@@ -6,7 +6,7 @@
 # The OpenXR loader puts HKLM layers above HKCU ones, so this is needed to sit above another machine-wide
 # layer such as VectorXR; set the order between them in the VectorXR app's layer order.
 #
-# To skip the layer for one launch without unregistering: set DISABLE_XR_APILAYER_ACE_quadview=1.
+# To skip the layer for one launch without unregistering: set DISABLE_XR_APILAYER_SIM_qvfr=1.
 [CmdletBinding()]
 param(
     [string]$Manifest = "",
@@ -19,12 +19,12 @@ $ErrorActionPreference = "Stop"
 # Windows PowerShell 5.1 can leave $PSScriptRoot empty in param() defaults, so resolve it here.
 if (-not $Manifest) {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $Manifest = Join-Path $scriptDir "..\build\Release\XR_APILAYER_ACE_quadview.json"
+    $Manifest = Join-Path $scriptDir "..\build\Release\XR_APILAYER_SIM_qvfr.json"
 }
 
 $manifestPath = (Resolve-Path $Manifest).Path
-if (-not (Test-Path (Join-Path (Split-Path $manifestPath) "ace-quadview.dll"))) {
-    throw "ace-quadview.dll not found next to $manifestPath. Build first."
+if (-not (Test-Path (Join-Path (Split-Path $manifestPath) "sim-qvfr.dll"))) {
+    throw "sim-qvfr.dll not found next to $manifestPath. Build first."
 }
 $userKey = "HKCU:\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Implicit"
 $key = if ($Machine) { "HKLM:\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Implicit" } else { $userKey }
@@ -40,4 +40,4 @@ if ($Machine -and (Get-ItemProperty -Path $userKey -Name $manifestPath -ErrorAct
     Write-Host "Removed the per-user entry (the layer would otherwise be listed twice)"
 }
 Write-Host "Registered ($(if ($Machine) { 'HKLM' } else { 'HKCU' }) implicit): $manifestPath"
-Write-Host "Probe log: $(Join-Path (Split-Path $manifestPath) 'logs\ace-quadview.log')"
+Write-Host "Probe log: $(Join-Path (Split-Path $manifestPath) 'logs\sim-qvfr.log')"

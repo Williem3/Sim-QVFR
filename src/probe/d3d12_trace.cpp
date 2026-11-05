@@ -13,19 +13,19 @@
 #include "../log.h"
 #include "../xr.h"
 
-extern "C" size_t aceqv_slot_CreateRenderTargetView(void);
-extern "C" size_t aceqv_slot_OMSetRenderTargets(void);
-extern "C" size_t aceqv_slot_RSSetViewports(void);
-extern "C" size_t aceqv_slot_BeginRenderPass(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource(void);
-extern "C" size_t aceqv_slot_CreatePlacedResource(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource1(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource2(void);
-extern "C" size_t aceqv_slot_CreatePlacedResource1(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource3(void);
-extern "C" size_t aceqv_slot_CreatePlacedResource2(void);
+extern "C" size_t simqvfr_slot_CreateRenderTargetView(void);
+extern "C" size_t simqvfr_slot_OMSetRenderTargets(void);
+extern "C" size_t simqvfr_slot_RSSetViewports(void);
+extern "C" size_t simqvfr_slot_BeginRenderPass(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource(void);
+extern "C" size_t simqvfr_slot_CreatePlacedResource(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource1(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource2(void);
+extern "C" size_t simqvfr_slot_CreatePlacedResource1(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource3(void);
+extern "C" size_t simqvfr_slot_CreatePlacedResource2(void);
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 using CreateRtvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_RENDER_TARGET_VIEW_DESC*,
@@ -336,27 +336,27 @@ bool d3d12_trace_start(ID3D12Device* device) {
     const bool has8 = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device8)));
     const bool has10 = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device10)));
 
-    bool ok = hook(deviceVtable, aceqv_slot_CreateRenderTargetView(), &createRtvHook, &createRtvOriginal) &&
-              hook(deviceVtable, aceqv_slot_CreateCommittedResource(), &committedHook, &committedOriginal) &&
-              hook(deviceVtable, aceqv_slot_CreatePlacedResource(), &placedHook, &placedOriginal) &&
-              hook(listVtable, aceqv_slot_OMSetRenderTargets(), &omSetHook, &omSetOriginal) &&
-              hook(listVtable, aceqv_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
+    bool ok = hook(deviceVtable, simqvfr_slot_CreateRenderTargetView(), &createRtvHook, &createRtvOriginal) &&
+              hook(deviceVtable, simqvfr_slot_CreateCommittedResource(), &committedHook, &committedOriginal) &&
+              hook(deviceVtable, simqvfr_slot_CreatePlacedResource(), &placedHook, &placedOriginal) &&
+              hook(listVtable, simqvfr_slot_OMSetRenderTargets(), &omSetHook, &omSetOriginal) &&
+              hook(listVtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
     // Newer interfaces on the same object: their methods extend the device's single vtable.
     if (ok && has4)
-        ok = hook(*reinterpret_cast<void***>(device4.Get()), aceqv_slot_CreateCommittedResource1(), &committed1Hook,
+        ok = hook(*reinterpret_cast<void***>(device4.Get()), simqvfr_slot_CreateCommittedResource1(), &committed1Hook,
                   &committed1Original);
     if (ok && has8)
-        ok = hook(*reinterpret_cast<void***>(device8.Get()), aceqv_slot_CreateCommittedResource2(), &committed2Hook,
+        ok = hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreateCommittedResource2(), &committed2Hook,
                   &committed2Original) &&
-             hook(*reinterpret_cast<void***>(device8.Get()), aceqv_slot_CreatePlacedResource1(), &placed1Hook,
+             hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreatePlacedResource1(), &placed1Hook,
                   &placed1Original);
     if (ok && has10)
-        ok = hook(*reinterpret_cast<void***>(device10.Get()), aceqv_slot_CreateCommittedResource3(), &committed3Hook,
+        ok = hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreateCommittedResource3(), &committed3Hook,
                   &committed3Original) &&
-             hook(*reinterpret_cast<void***>(device10.Get()), aceqv_slot_CreatePlacedResource2(), &placed2Hook,
+             hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreatePlacedResource2(), &placed2Hook,
                   &placed2Original);
     if (ok && hasRenderPasses)
-        ok = hook(*reinterpret_cast<void***>(list4.Get()), aceqv_slot_BeginRenderPass(), &beginPassHook,
+        ok = hook(*reinterpret_cast<void***>(list4.Get()), simqvfr_slot_BeginRenderPass(), &beginPassHook,
                   &beginPassOriginal);
     started = ok;
     logf("d3d12 trace: %s (device vtable %p, list vtable %p, render passes %d, device4/8/10 %d/%d/%d, rtv increment %u)",
@@ -380,4 +380,4 @@ void d3d12_trace_frame_end(bool sequenceActive) {
              static_cast<unsigned long long>(writes), static_cast<unsigned long long>(binds));
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

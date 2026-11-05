@@ -13,7 +13,7 @@
 #include "helmet.h"
 #include "osd.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 enum class MenuKey { Up, Down, Left, Right };
 enum class MenuItem {
@@ -194,4 +194,4 @@ struct MenuPose {
 };
 MenuPose menu_pose(const MenuPlacement& placement, float aspect);
 
-}  // namespace aceqv
+}  // namespace simqvfr

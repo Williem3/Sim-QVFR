@@ -12,7 +12,7 @@
 
 #include "settings_menu.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 inline constexpr int kPanelWidth = 1024, kPanelHeight = 1072;  // up to 13 lines, 3 notes, the footer and the hint
 
@@ -40,4 +40,4 @@ public:
 std::unique_ptr<PanelUpload> make_panel_upload(const SessionGraphics& graphics, int width = kPanelWidth,
                                                int height = kPanelHeight);
 
-}  // namespace aceqv
+}  // namespace simqvfr

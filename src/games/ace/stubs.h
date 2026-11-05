@@ -9,7 +9,7 @@
 #include <cstring>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 // A tiny assembler for these stubs: bytes plus short forward jumps to labels.
 class StubAsm {
@@ -204,4 +204,4 @@ inline std::vector<std::uint8_t> stub_import_step(const std::uint8_t (&original)
     return a.finish();
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

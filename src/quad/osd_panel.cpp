@@ -8,7 +8,7 @@
 
 #include "osd.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 // sRGB colours, 0xRRGGBB (the swapchain is _SRGB).
@@ -246,4 +246,4 @@ std::vector<uint32_t> draw_notice_panel(const std::wstring& title, const std::ve
     return out;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -28,7 +28,7 @@ using EyePoseFn = bool (*)(void* self, int deviceId, int pass, void* orientation
 AdjustViewRectFn originalAdjust = nullptr;
 ProjectionFn originalProjection = nullptr;
 EyePoseFn originalEyePose = nullptr;
-aceqv::Views4Layout layout;
+simqvfr::Views4Layout layout;
 std::atomic<double> focusX{0}, focusY{0};  // the focus box (views_set_focus); 0: the focus views copy the eyes
 std::atomic<std::uint64_t> focused{0};      // side-pass projections narrowed to it
 std::atomic<int> targetWidth{0}, targetHeight{0};
@@ -74,7 +74,7 @@ unsigned pass_view(const void*, int pass) { return view_for_pass(pass); }
 // to tell which one each frame it records was rendered with (match_layout).
 struct LiveLayouts {
     std::mutex mutex;
-    aceqv::Views4Layout pending, frame;
+    simqvfr::Views4Layout pending, frame;
     bool pendingSet = false;
     static constexpr int kKept = 8;
     HandedLayout handed[kKept];  // oldest first
@@ -111,7 +111,7 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     const int width = static_cast<int>(2 * half);
     targetWidth.store(width, std::memory_order_relaxed);
     targetHeight.store(static_cast<int>(height), std::memory_order_relaxed);
-    aceqv::Views4Layout frameLayout;
+    simqvfr::Views4Layout frameLayout;
     {
         std::lock_guard guard(liveLayouts.mutex);
         if (pass == kPassLeft) {
@@ -156,13 +156,13 @@ struct FocusFrame {
     float gaze[2][2] = {};  // tangents of each eye's view, the latest from xrLocateViews (views_set_gaze)
     bool gazeValid[2] = {};
     bool latched = false;
-    aceqv::Views4Frame frame{};
+    simqvfr::Views4Frame frame{};
 };
 FocusFrame focusFrame;
 std::atomic<std::uint64_t> turned{0};  // side poses turned
 // Recorded by the render thread as it renders a frame (record_rendered), taken at that frame's xrEndFrame on the
 // same thread (D3D11 has no RHI thread here): none in flight at a composition.
-aceqv::FrameRecords<aceqv::Views4Frame> records{0, 3};
+simqvfr::FrameRecords<simqvfr::Views4Frame> records{0, 3};
 
 // This frame's tangents and turns (under focusFrame.mutex): the eyes' cached projections, the focus box, the gaze.
 void latch_frame() {
@@ -175,7 +175,7 @@ void latch_frame() {
             std::memcpy(matrix[e], cache.matrix[kPassLeft + e].m, sizeof(matrix[e]));
         }
     }
-    aceqv::Views4Frame& f = focusFrame.frame;
+    simqvfr::Views4Frame& f = focusFrame.frame;
     f = {};
     const double boxX = focusX.load(std::memory_order_relaxed), boxY = focusY.load(std::memory_order_relaxed);
     for (int e = 0; e < 2; ++e) {
@@ -187,12 +187,12 @@ void latch_frame() {
             continue;
         }
         double hw = 0, hh = 0;
-        aceqv::focus_extents(f.outerTan[e], boxX, boxY, hw, hh);
+        simqvfr::focus_extents(f.outerTan[e], boxX, boxY, hw, hh);
         const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
                                    static_cast<float>(-hh)};
         std::memcpy(f.focusTan[e], focusTan, sizeof(focusTan));
         if (focusFrame.gazeValid[e])
-            f.turn[e] = aceqv::focus_turn(f.outerTan[e], boxX, boxY, focusFrame.gaze[e][0], focusFrame.gaze[e][1]);
+            f.turn[e] = simqvfr::focus_turn(f.outerTan[e], boxX, boxY, focusFrame.gaze[e][0], focusFrame.gaze[e][1]);
     }
     focusFrame.latched = true;
 }
@@ -275,9 +275,9 @@ void record_rendered(const unsigned char* view) {
         std::memcpy(projectionLog.jittered[v], views[i] + kViewProjection, sizeof(projectionLog.jittered[v]));
     }
     if (!familyOrderLogged.exchange(true))
-        aceqv::logf("acc views: the rendered family's views are passes %d, %d, %d, %d", order[0], order[1], order[2],
+        simqvfr::logf("acc views: the rendered family's views are passes %d, %d, %d, %d", order[0], order[1], order[2],
                     order[3]);
-    aceqv::Views4Frame frame{};
+    simqvfr::Views4Frame frame{};
     if (rendered_frame(matrices, projections, frame)) {
         // The layout it was rendered with, from its final rects (stored by this frame's SetFinalViewRect calls, on
         // this thread): a live one goes into the record, so the composition reads its views where they were drawn.
@@ -295,7 +295,7 @@ void record_rendered(const unsigned char* view) {
             if (found < 0)
                 found = liveLayouts.count - 1;  // none (a frame of two layouts): the newest
             if (found >= 0 && liveLayouts.handed[found].layout.live) {
-                const aceqv::Views4Layout& l = liveLayouts.handed[found].layout;
+                const simqvfr::Views4Layout& l = liveLayouts.handed[found].layout;
                 frame.live = true;
                 std::memcpy(frame.width, l.width, sizeof(frame.width));
                 std::memcpy(frame.height, l.height, sizeof(frame.height));
@@ -359,7 +359,7 @@ std::atomic<bool> started{false};
 // The 7 bytes at a kRightEyePicks site, and that GetStereoEyeView is called right after (directly, or after
 // `mov rcx, [rcx]`).
 bool right_eye_picks_match() {
-    const std::uintptr_t base = aceqv::module_base();
+    const std::uintptr_t base = simqvfr::module_base();
     for (const RightEyePick& p : kRightEyePicks) {
         const std::uint8_t pick[7] = {0xf6, 0xd8, 0x1b, 0xd2, 0x83, 0xe2, 0x02};
         std::uint8_t anchor[7];
@@ -367,13 +367,13 @@ bool right_eye_picks_match() {
         if (p.passInEax)
             anchor[0] = 0xf7;  // neg eax
         const std::uint8_t loadFamily[3] = {0x48, 0x8b, 0x09};
-        const std::uintptr_t call = p.rva + 7 + (aceqv::code_matches(p.rva + 7, loadFamily, 3) ? 3 : 0);
+        const std::uintptr_t call = p.rva + 7 + (simqvfr::code_matches(p.rva + 7, loadFamily, 3) ? 3 : 0);
         std::int32_t rel = 0;
-        const bool ok = aceqv::code_matches(p.rva, anchor, sizeof(anchor)) &&
+        const bool ok = simqvfr::code_matches(p.rva, anchor, sizeof(anchor)) &&
                         *reinterpret_cast<const std::uint8_t*>(base + call) == 0xe8 &&
                         (std::memcpy(&rel, reinterpret_cast<const void*>(base + call + 1), 4), call + 5 + rel == kGetStereoEyeView);
         if (!ok) {
-            aceqv::logf("acc views: no right-eye pick at 0x%llx", static_cast<unsigned long long>(p.rva));
+            simqvfr::logf("acc views: no right-eye pick at 0x%llx", static_cast<unsigned long long>(p.rva));
             return false;
         }
     }
@@ -406,50 +406,50 @@ bool pair_right_views() {
         stub[jz] = static_cast<std::uint8_t>(n - (jz + 1));
         stub[n++] = 0x33;  // zero: xor edx, edx
         stub[n++] = 0xd2;
-        ok = aceqv::code_redirect(p.rva, anchor, sizeof(anchor), stub, n) && ok;
+        ok = simqvfr::code_redirect(p.rva, anchor, sizeof(anchor), stub, n) && ok;
     }
     return ok;
 }
 
 bool counts_match() {
     for (const CountRead& r : kInstancedViewCounts)
-        if (!aceqv::code_matches(r.rva, r.bytes, r.size)) {
-            aceqv::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
+        if (!simqvfr::code_matches(r.rva, r.bytes, r.size)) {
+            simqvfr::logf("acc views: no instanced view count read at 0x%llx", static_cast<unsigned long long>(r.rva));
             return false;
         }
     for (const HeldCvar& c : kHeldCvars)
-        if (!aceqv::code_matches(c.ref, c.refAnchor, sizeof(c.refAnchor)) ||
-            !aceqv::code_matches(c.store, c.storeAnchor, sizeof(c.storeAnchor)))
+        if (!simqvfr::code_matches(c.ref, c.refAnchor, sizeof(c.refAnchor)) ||
+            !simqvfr::code_matches(c.store, c.storeAnchor, sizeof(c.storeAnchor)))
             return false;
-    if (!aceqv::code_matches(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor)) ||
-        !aceqv::code_matches(kPreExposurePrimary[0], kPreExposurePrimaryAnchor[0], sizeof(kPreExposurePrimaryAnchor[0])) ||
-        !aceqv::code_matches(kPreExposurePrimary[1], kPreExposurePrimaryAnchor[1], sizeof(kPreExposurePrimaryAnchor[1])))
+    if (!simqvfr::code_matches(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor)) ||
+        !simqvfr::code_matches(kPreExposurePrimary[0], kPreExposurePrimaryAnchor[0], sizeof(kPreExposurePrimaryAnchor[0])) ||
+        !simqvfr::code_matches(kPreExposurePrimary[1], kPreExposurePrimaryAnchor[1], sizeof(kPreExposurePrimaryAnchor[1])))
         return false;
-    if (!aceqv::code_matches(kTonemapperVignette, kTonemapperVignetteAnchor, sizeof(kTonemapperVignetteAnchor)))
+    if (!simqvfr::code_matches(kTonemapperVignette, kTonemapperVignetteAnchor, sizeof(kTonemapperVignetteAnchor)))
         return false;
     for (std::uintptr_t rva : kFoliageLodProjection)
-        if (!aceqv::code_matches(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor)))
+        if (!simqvfr::code_matches(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor)))
             return false;
-    if (!aceqv::code_matches(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
+    if (!simqvfr::code_matches(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
                              sizeof(kFoliageShaderLodProjectionAnchor)))
         return false;
-    if (!aceqv::code_matches(kShadowCascadesCreate, kShadowCascadesCreateAnchor, sizeof(kShadowCascadesCreateAnchor)) ||
-        !aceqv::code_matches(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
+    if (!simqvfr::code_matches(kShadowCascadesCreate, kShadowCascadesCreateAnchor, sizeof(kShadowCascadesCreateAnchor)) ||
+        !simqvfr::code_matches(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
                              sizeof(kShadowVisibilitySecondaryAnchor)) ||
-        !aceqv::code_matches(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor)))
+        !simqvfr::code_matches(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor)))
         return false;
-    if (!aceqv::code_matches(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor)) ||
-        !aceqv::code_matches(kExposurePrimary[0], kExposurePrimaryAnchor[0], sizeof(kExposurePrimaryAnchor[0])) ||
-        !aceqv::code_matches(kExposurePrimary[1], kExposurePrimaryAnchor[1], sizeof(kExposurePrimaryAnchor[1])))
+    if (!simqvfr::code_matches(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor)) ||
+        !simqvfr::code_matches(kExposurePrimary[0], kExposurePrimaryAnchor[0], sizeof(kExposurePrimaryAnchor[0])) ||
+        !simqvfr::code_matches(kExposurePrimary[1], kExposurePrimaryAnchor[1], sizeof(kExposurePrimaryAnchor[1])))
         return false;
-    return aceqv::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
-           aceqv::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
-           aceqv::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
+    return simqvfr::code_matches(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor)) &&
+           simqvfr::code_matches(kStereoPassIndexCall, kStereoPassIndexCallAnchor, sizeof(kStereoPassIndexCallAnchor)) &&
+           simqvfr::code_matches(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor)) &&
            right_eye_picks_match() &&
-           aceqv::code_matches(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor)) &&
-           aceqv::code_matches(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor)) &&
-           aceqv::code_matches(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor)) &&
-           aceqv::code_matches(kFoliageRightViewRead, kFoliageRightViewReadAnchor, sizeof(kFoliageRightViewReadAnchor));
+           simqvfr::code_matches(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor)) &&
+           simqvfr::code_matches(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor)) &&
+           simqvfr::code_matches(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor)) &&
+           simqvfr::code_matches(kFoliageRightViewRead, kFoliageRightViewReadAnchor, sizeof(kFoliageRightViewReadAnchor));
 }
 
 // Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
@@ -459,41 +459,41 @@ bool pairs_per_draw() {
         const std::uint8_t reg = (r.bytes[r.size - 2] >> 3) & 7;  // ModRM reg
         const std::uint8_t three[3] = {0x6a, 0x02, static_cast<std::uint8_t>(0x58 + reg)};        // push 2; pop r64
         const std::uint8_t four[4] = {0x6a, 0x02, 0x41, static_cast<std::uint8_t>(0x58 + reg)};   // push 2; pop r8-r15
-        ok = aceqv::code_write(r.rva, r.size == 3 ? three : four, r.size) && ok;
+        ok = simqvfr::code_write(r.rva, r.size == 3 ? three : four, r.size) && ok;
     }
     // cmp ecx, 2; jle +5; mov ecx, 2; then the moved `mov rdi, [rbp + 0xe8]`.
     const std::uint8_t clamp[] = {0x83, 0xf9, 0x02, 0x7e, 0x05, 0xb9, 0x02, 0x00, 0x00, 0x00,
                                   0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
-    ok = aceqv::code_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
+    ok = simqvfr::code_redirect(kViewInstancedCount, kViewInstancedCountAnchor, sizeof(kViewInstancedCountAnchor), clamp,
                               sizeof(clamp)) && ok;
     // StereoPassIndex: the eye within its pair (and eax, 1; then the moved store).
     const std::uint8_t pairEye[] = {0x83, 0xe0, 0x01, 0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
-    ok = aceqv::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
+    ok = simqvfr::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
                               pairEye, sizeof(pairEye)) && ok;
     ok = pair_right_views() && ok;
     // Exposure (abi.h): every view but the left eye takes its exposure, and only the left eye computes it.
     const std::uint8_t secondary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x02, 0x0f, 0x9d, 0xc0};  // cmp [rcx+ad0],2; setge al
     const std::uint8_t primary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x9e, 0xc0};    // cmp [rcx+ad0],1; setle al
-    ok = aceqv::code_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor), secondary,
+    ok = simqvfr::code_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor), secondary,
                               sizeof(secondary)) && ok;
     for (int i = 0; i < 2; ++i)
-        ok = aceqv::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]), primary,
+        ok = simqvfr::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]), primary,
                                   sizeof(primary)) && ok;
     // No tonemapper vignette (abi.h): `xor al, al` and an 8-byte nop in place of the test.
     const std::uint8_t noVignette[] = {0x32, 0xc0, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
-    ok = aceqv::code_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
+    ok = simqvfr::code_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
     // Pre-exposure (abi.h): the left eye's reaches every other view.
-    ok = aceqv::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
+    ok = simqvfr::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
                               secondary, sizeof(secondary)) && ok;
     for (int i = 0; i < 2; ++i)
-        ok = aceqv::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i], sizeof(kPreExposurePrimaryAnchor[i]),
+        ok = simqvfr::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i], sizeof(kPreExposurePrimaryAnchor[i]),
                                   primary, sizeof(primary)) && ok;
     // The sun's cascades (abi.h): only the left eye creates them, and every view projects them.
     const std::uint8_t leftEyeCascades[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x96, 0xc0};
-    ok = aceqv::code_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
-    ok = aceqv::code_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
+    ok = simqvfr::code_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
+    ok = simqvfr::code_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
                               sizeof(kShadowVisibilitySecondaryAnchor), secondary, sizeof(secondary)) && ok;
-    ok = aceqv::code_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor),
+    ok = simqvfr::code_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor),
                               primary, sizeof(primary)) && ok;
     // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
     const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
@@ -503,11 +503,11 @@ bool pairs_per_draw() {
     const std::uint8_t right[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
                                   0x48, 0x83, 0xc0, 0x02,        // add rax, 2
                                   0x0f, 0x59, 0xc7};             // mulps xmm0, xmm7
-    ok = aceqv::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
+    ok = simqvfr::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
                               sizeof(gate)) && ok;
-    ok = aceqv::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
+    ok = simqvfr::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
                               sizeof(left)) && ok;
-    ok = aceqv::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
+    ok = simqvfr::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
                               sizeof(right)) && ok;
     // Foliage LOD distances from the left eye's projection in the focus views, on the CPU and in the shader (abi.h).
     const std::uint8_t cpuLod[] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00,        // lea r8, [r15 + 0x280]
@@ -518,7 +518,7 @@ bool pairs_per_draw() {
                                    0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views[0])
                                    0x49, 0x81, 0xc0, 0x80, 0x02, 0x00, 0x00};       // add r8, 0x280
     for (std::uintptr_t rva : kFoliageLodProjection)
-        ok = aceqv::code_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
+        ok = simqvfr::code_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
                                   sizeof(cpuLod)) && ok;
     const std::uint8_t shaderLod[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r14 + 0xad0], 3
                                       0x72, 0x09,                                      // jb own
@@ -526,9 +526,9 @@ bool pairs_per_draw() {
                                       0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views.Data)
                                       0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views[0])
                                       0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};       // own: add r14, 0x280
-    ok = aceqv::code_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
+    ok = simqvfr::code_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
                               sizeof(kFoliageShaderLodProjectionAnchor), shaderLod, sizeof(shaderLod)) && ok;
-    aceqv::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
+    simqvfr::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
                                       "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
                                       "foliage culled per pair and its LOD the left eye's in the focus views, "
                                       "the sun's shadow cascades the left eye's in every view)"
@@ -538,33 +538,33 @@ bool pairs_per_draw() {
 
 }  // namespace
 
-bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
+bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
     if (started.load())
         return true;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
                           kGetStereoProjectionMatrix, kGetRelativeEyePose, kDeviceIsAPrimaryPass, kDeviceIsAPrimaryView,
                           kSetFinalViewRect};
     for (const Slot& s : slots)
-        if (aceqv::vtable_slot(s.rva) != s.function) {
-            aceqv::logf("acc views: slot 0x%llx holds 0x%llx, expected 0x%llx: not the build these addresses are "
+        if (simqvfr::vtable_slot(s.rva) != s.function) {
+            simqvfr::logf("acc views: slot 0x%llx holds 0x%llx, expected 0x%llx: not the build these addresses are "
                         "from; nothing patched",
-                        static_cast<unsigned long long>(s.rva), static_cast<unsigned long long>(aceqv::vtable_slot(s.rva)),
+                        static_cast<unsigned long long>(s.rva), static_cast<unsigned long long>(simqvfr::vtable_slot(s.rva)),
                         static_cast<unsigned long long>(s.function));
             return false;
         }
-    if (!aceqv::code_matches(kAllowSubPrimitiveQueriesRef, kAllowSubPrimitiveQueriesRefAnchor,
+    if (!simqvfr::code_matches(kAllowSubPrimitiveQueriesRef, kAllowSubPrimitiveQueriesRefAnchor,
                              sizeof(kAllowSubPrimitiveQueriesRefAnchor))) {
-        aceqv::log_line("acc views: r.AllowSubPrimitiveQueries' registration isn't this build's; nothing patched");
+        simqvfr::log_line("acc views: r.AllowSubPrimitiveQueries' registration isn't this build's; nothing patched");
         return false;
     }
     if (!counts_match()) {
-        aceqv::log_line("acc views: the views-per-draw code isn't this build's; nothing patched");
+        simqvfr::log_line("acc views: the views-per-draw code isn't this build's; nothing patched");
         return false;
     }
-    const std::uintptr_t base = aceqv::module_base();
+    const std::uintptr_t base = simqvfr::module_base();
     // Foliage's per-cluster occlusion results crash with the side views on track (abi.h): one query per proxy.
     auto* subPrimitiveQueries = reinterpret_cast<volatile std::int32_t*>(base + kAllowSubPrimitiveQueries);
-    aceqv::logf("acc views: r.AllowSubPrimitiveQueries %d -> 0 (foliage occlusion per proxy, not per cluster)",
+    simqvfr::logf("acc views: r.AllowSubPrimitiveQueries %d -> 0 (foliage occlusion per proxy, not per cluster)",
                 static_cast<int>(*subPrimitiveQueries));
     *subPrimitiveQueries = 0;
     layout = l;
@@ -580,25 +580,25 @@ bool views_start(const aceqv::Views4Layout& l, double boxX, double boxY) {
     originalEyePose = reinterpret_cast<EyePoseFn>(base + kGetRelativeEyePose.function);
     // Pose, projection, rects and pairs before the count, so no frame sees four views without them.
     bool ok = pairs_per_draw();
-    ok = ok && aceqv::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
+    ok = ok && simqvfr::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
                                          reinterpret_cast<void*>(&eye_pose));
-    ok = ok && aceqv::vtable_slot_replace(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
+    ok = ok && simqvfr::vtable_slot_replace(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
                                           reinterpret_cast<void*>(&projection));
-    ok = ok && aceqv::vtable_slot_replace(kAdjustViewRect.rva, kAdjustViewRect.function,
+    ok = ok && simqvfr::vtable_slot_replace(kAdjustViewRect.rva, kAdjustViewRect.function,
                                           reinterpret_cast<void*>(&adjust_view_rect));
-    ok = ok && aceqv::vtable_slot_replace(kSetFinalViewRect.rva, kSetFinalViewRect.function,
+    ok = ok && simqvfr::vtable_slot_replace(kSetFinalViewRect.rva, kSetFinalViewRect.function,
                                           reinterpret_cast<void*>(&final_view_rect));
-    ok = ok && aceqv::vtable_slot_replace(kDeviceIsAPrimaryView.rva, kDeviceIsAPrimaryView.function,
+    ok = ok && simqvfr::vtable_slot_replace(kDeviceIsAPrimaryView.rva, kDeviceIsAPrimaryView.function,
                                           reinterpret_cast<void*>(&primary_view));
-    ok = ok && aceqv::vtable_slot_replace(kDeviceIsAPrimaryPass.rva, kDeviceIsAPrimaryPass.function,
+    ok = ok && simqvfr::vtable_slot_replace(kDeviceIsAPrimaryPass.rva, kDeviceIsAPrimaryPass.function,
                                           reinterpret_cast<void*>(&primary));
-    ok = ok && aceqv::vtable_slot_replace(kGetViewIndexForPass.rva, kGetViewIndexForPass.function,
+    ok = ok && simqvfr::vtable_slot_replace(kGetViewIndexForPass.rva, kGetViewIndexForPass.function,
                                           reinterpret_cast<void*>(&pass_view));
-    ok = ok && aceqv::vtable_slot_replace(kGetViewPassForIndex.rva, kGetViewPassForIndex.function,
+    ok = ok && simqvfr::vtable_slot_replace(kGetViewPassForIndex.rva, kGetViewPassForIndex.function,
                                           reinterpret_cast<void*>(&view_pass));
-    ok = ok && aceqv::vtable_slot_replace(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
+    ok = ok && simqvfr::vtable_slot_replace(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
                                           reinterpret_cast<void*>(&desired_views));
-    aceqv::logf("acc views: %s; layout widths %.3f %.3f %.3f %.3f heights %.3f %.3f %.3f %.3f of the target",
+    simqvfr::logf("acc views: %s; layout widths %.3f %.3f %.3f %.3f heights %.3f %.3f %.3f %.3f of the target",
                 ok ? (boxX > 0 ? "four views patched in (views 2-3 focus views, centred)"
                                : "four views patched in (views 2-3 copy the eyes)")
                    : "a slot write failed",
@@ -613,18 +613,18 @@ void views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
     std::memcpy(focusFrame.gazeValid, valid, sizeof(focusFrame.gazeValid));
 }
 
-bool views_take_frame(aceqv::Views4Frame& frame) {
+bool views_take_frame(simqvfr::Views4Frame& frame) {
     composeThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     bool drifted = false;
     std::uint64_t behind = 0;
     const bool any = records.take(frame, &drifted, &behind);
     if (drifted)
-        aceqv::logf("acc views: frame records stayed %llu behind the compositions: resynced",
+        simqvfr::logf("acc views: frame records stayed %llu behind the compositions: resynced",
                     static_cast<unsigned long long>(behind));
     return any;
 }
 
-bool views_latest_frame(aceqv::Views4Frame& frame) { return records.latest(frame); }
+bool views_latest_frame(simqvfr::Views4Frame& frame) { return records.latest(frame); }
 
 void views_set_focus(double boxX, double boxY) {
     const double y = boxY > 0 ? boxY : boxX;
@@ -632,24 +632,24 @@ void views_set_focus(double boxX, double boxY) {
     const double oldY = focusY.exchange(y, std::memory_order_relaxed);
     if (oldX == boxX && oldY == y)
         return;  // the layer passes the live box again now and then
-    aceqv::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
+    simqvfr::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
                 y * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
 }
 
-void views_set_live_layout(const aceqv::Views4Layout& l) {
+void views_set_live_layout(const simqvfr::Views4Layout& l) {
     {
         std::lock_guard guard(liveLayouts.mutex);
         liveLayouts.pending = l;
         liveLayouts.pendingSet = true;
     }
-    aceqv::logf("acc views: live layout: every view %.3f of the target wide, outer %.3f and focus %.3f of its height "
+    simqvfr::logf("acc views: live layout: every view %.3f of the target wide, outer %.3f and focus %.3f of its height "
                 "(from the next frame UE sets up)",
                 l.width[0], l.height[0], l.height[2]);
 }
 
 void views_session_running(bool running) {
     sessionRunning.store(running, std::memory_order_release);
-    aceqv::logf("acc views: OpenXR session %s; %llu projection/pose answers came from the cache while none ran",
+    simqvfr::logf("acc views: OpenXR session %s; %llu projection/pose answers came from the cache while none ran",
                 running ? "running: SteamVR answers again" : "not running: answers from the cache",
                 static_cast<unsigned long long>(served.exchange(0)));
 }
@@ -684,11 +684,11 @@ void hold_cvars() {
         return;
     for (std::size_t i = 0; i < std::size(kHeldCvars); ++i) {
         const HeldCvar& c = kHeldCvars[i];
-        auto* data = *reinterpret_cast<int* const*>(aceqv::module_base() + c.data);
+        auto* data = *reinterpret_cast<int* const*>(simqvfr::module_base() + c.data);
         if (!data || (data[0] == c.value && data[1] == c.value))
             continue;
         if (!cvarLogged[i].exchange(true))
-            aceqv::logf("acc views: %s %d -> %d (screen-space lens effects off while QVFR runs)", c.name, data[1], c.value);
+            simqvfr::logf("acc views: %s %d -> %d (screen-space lens effects off while QVFR runs)", c.name, data[1], c.value);
         data[0] = data[1] = c.value;
     }
 }
@@ -698,7 +698,7 @@ void views_frame_end() {
     if (!started.load() || ++frames % 900 != 0)
         return;
     const auto line = [](const char* what, std::atomic<std::uint64_t> (&calls)[5]) {
-        aceqv::logf("acc views: %s per pass full/left/right/left side/right side = %llu/%llu/%llu/%llu/%llu", what,
+        simqvfr::logf("acc views: %s per pass full/left/right/left side/right side = %llu/%llu/%llu/%llu/%llu", what,
                     static_cast<unsigned long long>(calls[0].exchange(0)), static_cast<unsigned long long>(calls[1].exchange(0)),
                     static_cast<unsigned long long>(calls[2].exchange(0)), static_cast<unsigned long long>(calls[3].exchange(0)),
                     static_cast<unsigned long long>(calls[4].exchange(0)));
@@ -707,34 +707,34 @@ void views_frame_end() {
     line("projection", projectionCalls);
     line("eye pose", poseCalls);
     for (int pass = 1; pass < 5; ++pass)
-        aceqv::logf("acc views: renderer's final rect for pass %d: %d,%d - %d,%d", pass, finalRect[pass][0].load(),
+        simqvfr::logf("acc views: renderer's final rect for pass %d: %d,%d - %d,%d", pass, finalRect[pass][0].load(),
                     finalRect[pass][1].load(), finalRect[pass][2].load(), finalRect[pass][3].load());
-    aceqv::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
+    simqvfr::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
-    aceqv::logf("acc views: %llu side-pass projections narrowed to the focus box, %llu side poses turned",
+    simqvfr::logf("acc views: %llu side-pass projections narrowed to the focus box, %llu side poses turned",
                 static_cast<unsigned long long>(focused.exchange(0)), static_cast<unsigned long long>(turned.exchange(0)));
     {
         std::lock_guard guard(liveLayouts.mutex);
         if (liveLayouts.count > 1 || liveLayouts.unmatched)
-            aceqv::logf("acc views: records matched to the layout they were rendered with: %llu, unmatched %llu "
+            simqvfr::logf("acc views: records matched to the layout they were rendered with: %llu, unmatched %llu "
                         "(given the newest); %d layouts kept",
                         static_cast<unsigned long long>(liveLayouts.matched),
                         static_cast<unsigned long long>(liveLayouts.unmatched), liveLayouts.count);
         liveLayouts.matched = liveLayouts.unmatched = 0;
     }
     const auto n = records.counts();
-    aceqv::Views4Frame last{};
+    simqvfr::Views4Frame last{};
     records.latest(last);
     // The latest rendered turns against what the game thread chose, as yaw / pitch in degrees (OpenXR: yaw left +).
-    aceqv::Views4Frame chosen{};
+    simqvfr::Views4Frame chosen{};
     {
         std::lock_guard guard(focusFrame.mutex);
         chosen = focusFrame.frame;
     }
     const auto yaw_pitch = [](const XrQuaternionf& q, double& yaw, double& pitch) {
         float m[9];
-        aceqv::to_matrix(q, m);  // the turned camera's forward is -column 2
+        simqvfr::to_matrix(q, m);  // the turned camera's forward is -column 2
         const double fx = -m[2], fy = -m[5], fz = -m[8];
         yaw = std::atan2(-fx, -fz) * 57.29577951;
         pitch = std::atan2(fy, std::sqrt(fx * fx + fz * fz)) * 57.29577951;
@@ -744,7 +744,7 @@ void views_frame_end() {
         yaw_pitch(last.turn[e], ry[e], rp[e]);
         yaw_pitch(chosen.turn[e], cy[e], cp[e]);
     }
-    aceqv::logf("acc views: focus turns, yaw/pitch deg: rendered left %.1f/%.1f right %.1f/%.1f; chosen left %.1f/%.1f "
+    simqvfr::logf("acc views: focus turns, yaw/pitch deg: rendered left %.1f/%.1f right %.1f/%.1f; chosen left %.1f/%.1f "
                 "right %.1f/%.1f",
                 ry[0], rp[0], ry[1], rp[1], cy[0], cp[0], cy[1], cp[1]);
     {
@@ -761,14 +761,14 @@ void views_frame_end() {
             tangents(projectionLog.handed[v], handed, sizeof(handed));
             tangents(projectionLog.stored[v], stored, sizeof(stored));
             tangents(projectionLog.jittered[v], jittered, sizeof(jittered));
-            aceqv::logf("acc views: view %d projection tangents l/r/u/d: handed to UE %s; rendered view's %s, jittered %s",
+            simqvfr::logf("acc views: view %d projection tangents l/r/u/d: handed to UE %s; rendered view's %s, jittered %s",
                         v, handed, stored, jittered);
         }
     }
-    aceqv::logf("acc views: rendered frames recorded %llu (skipped %llu); render thread %lu, composing thread %lu",
+    simqvfr::logf("acc views: rendered frames recorded %llu (skipped %llu); render thread %lu, composing thread %lu",
                 static_cast<unsigned long long>(renderedRecords.exchange(0)),
                 static_cast<unsigned long long>(renderedSkipped.exchange(0)), renderThread.load(), composeThread.load());
-    aceqv::logf("acc views: frames recorded %llu, composed %llu (backlog %llu, resyncs %llu, composed before "
+    simqvfr::logf("acc views: frames recorded %llu, composed %llu (backlog %llu, resyncs %llu, composed before "
                 "recording %llu); eye 0 turn %.3f,%.3f,%.3f,%.3f",
                 static_cast<unsigned long long>(n.pushed), static_cast<unsigned long long>(n.taken),
                 static_cast<unsigned long long>(n.pushed - n.taken), static_cast<unsigned long long>(n.resyncs),

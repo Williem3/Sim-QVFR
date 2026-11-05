@@ -8,7 +8,7 @@
 
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 struct SessionGraphics {
     ID3D12Device* d3d12 = nullptr;
@@ -75,4 +75,4 @@ inline XrResult swapchain_textures(const SessionGraphics& g, PFN_xrEnumerateSwap
     return r;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

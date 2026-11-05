@@ -5,7 +5,7 @@
 
 #include "hotkeys.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 struct PadInput::Impl {
     IDirectInput8W* input = nullptr;
@@ -106,4 +106,4 @@ std::vector<std::pair<std::wstring, std::wstring>> PadInput::devices() const {
     return out;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

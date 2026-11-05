@@ -1,4 +1,4 @@
-// The Cheeky Foveated DLSS settings ace-quadview exposes ([cheeky] in ace-quadview.ini), shared by the
+// The Cheeky Foveated DLSS settings Sim-QVFR exposes ([cheeky] in sim-qvfr.ini), shared by the
 // layer (which applies them to Cheeky's runtime with its "set" command, live), the launcher's Foveated
 // DLSS pane and the in-headset menu's Foveated DLSS page. Cheeky keeps its own CheekyFoveatedDLSS.ini;
 // these few keys are applied over it at every start and change.
@@ -14,7 +14,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct CheekySettings {
     bool load = false;        // enabled: load Cheeky's runtime (applies at the next launch)
@@ -200,4 +200,4 @@ inline std::wstring cheeky_version_label(const std::wstring& version) {
     return v.empty() ? L"CheekyFoveatedDLSS" : L"CheekyFoveatedDLSS - v" + v;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

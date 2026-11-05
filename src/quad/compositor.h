@@ -16,7 +16,7 @@
 #include "helmet.h"
 #include "helmet_pieces.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 // Frame B may look in a different direction than frame A (its camera turned towards the gaze, with
 // a centred projection): every output pixel's ray in A's eye frame is rotated into B's frame and
@@ -153,4 +153,4 @@ private:
     bool ready_ = false;
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

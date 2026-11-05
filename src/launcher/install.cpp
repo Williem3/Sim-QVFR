@@ -10,13 +10,13 @@
 #include "../sha256_file.h"
 #include "launch_plan.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace {
 
 namespace fs = std::filesystem;
 
 constexpr unsigned long long kMaxDownload = 256ull << 20;  // far more than a release zip
-constexpr wchar_t kSettingsFile[] = L"ace-quadview.ini";
+constexpr wchar_t kSettingsFile[] = L"sim-qvfr.ini";
 constexpr wchar_t kHashList[] = L"SHA256.txt";
 
 std::string lower(std::string s) {
@@ -50,7 +50,7 @@ bool download(const std::string& url, const fs::path& file, unsigned long long s
         error = L"the download address isn't one to trust";
         return false;
     }
-    HINTERNET session = WinHttpOpen(L"ace-quadview-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+    HINTERNET session = WinHttpOpen(L"sim-qvfr-launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
                                     WINHTTP_NO_PROXY_BYPASS, 0);
     HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
     // GitHub answers with a redirect to its download host; WinHTTP follows it (HTTPS to HTTPS only).
@@ -178,7 +178,7 @@ std::vector<InstallStep> plan_install(const std::map<std::wstring, std::string>&
             // Not as the old release had it: the user's own. Without the old release's list, the helmet images
             // count as the user's (they are meant to be replaced) and the program files as the old release's.
             const auto old = oldRelease.find(path);
-            const bool helmet = _wcsnicmp(path.c_str(), L"ace\\helmet\\", 11) == 0;
+            const bool helmet = _wcsnicmp(path.c_str(), L"layer\\helmet\\", 13) == 0;
             const bool changed = old != oldRelease.end() ? old->second != now : helmet;
             step.action = changed ? InstallAction::KeepChanged : InstallAction::Replace;
         }
@@ -235,7 +235,7 @@ InstallResult install_staged(const std::wstring& folderText, const std::wstring&
     r.backup = backup.wstring();
     std::error_code ec;
     const std::map<std::wstring, std::string> release = read_hash_list(staged / kHashList);
-    if (!release.count(L"ace-quadview-launcher.exe") || !release.count(L"ace\\ace-quadview.dll")) {
+    if (!release.count(L"sim-qvfr-launcher.exe") || !release.count(L"layer\\sim-qvfr.dll")) {
         r.error = L"the release has no launcher or layer in it";
         return r;
     }
@@ -322,4 +322,4 @@ void clean_update_folder(const std::wstring& folderText) {
         fs::remove_all(backups[i].path(), ec);
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

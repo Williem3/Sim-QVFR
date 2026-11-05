@@ -250,8 +250,8 @@ XrResult XRAPI_CALL fakeLocate(XrSession, const XrViewLocateInfo*, XrViewState*,
 
 // Eye gaze: the fake tracker looks at tangent (kGazeX, kGazeY) of the eye views.
 constexpr double kGazeX = 0.5, kGazeY = -0.4;
-const XrActionSet kAceSet = reinterpret_cast<XrActionSet>(0x800);
-const XrAction kAceAction = reinterpret_cast<XrAction>(0x900);
+const XrActionSet kGameSet = reinterpret_cast<XrActionSet>(0x800);
+const XrAction kGameAction = reinterpret_cast<XrAction>(0x900);
 struct FakeInput {
     std::map<std::string, XrPath> paths;
     uint32_t suggestedBindings = 0, attachedSets = 0, syncedSets = 0;
@@ -310,12 +310,12 @@ XrResult XRAPI_CALL fakeLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* l
 }
 
 // Fake ACE: one complete frame, red for the full FOV and green for a narrowed one.
-XrResult ace_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
-    using namespace aceqv;
+XrResult game_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
+    using namespace simqvfr;
     XrFrameState state{XR_TYPE_FRAME_STATE};
     layerWaitFrame(nullptr, nullptr, &state);
     layerBeginFrame(nullptr, nullptr);
-    const XrActiveActionSet active{kAceSet, XR_NULL_PATH};
+    const XrActiveActionSet active{kGameSet, XR_NULL_PATH};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
     sync.countActiveActionSets = 1;
     sync.activeActionSets = &active;
@@ -362,8 +362,8 @@ XrResult ace_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
 // Fake ACE in views4: one frame drawing the four views where the layout puts them (outer views red
 // and blue, focus views green and yellow, the unused rest of the target magenta), submitted as ACE
 // does: the two halves of its double-wide target.
-XrResult ace_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
-    using namespace aceqv;
+XrResult game_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
+    using namespace simqvfr;
     XrFrameState state{XR_TYPE_FRAME_STATE};
     layerWaitFrame(nullptr, nullptr, &state);
     layerBeginFrame(nullptr, nullptr);
@@ -417,9 +417,9 @@ XrResult ace_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
 // (green | yellow), the unused rest black. The frame's record goes to the composition first, as
 // fill_focus_cameras would push it. If the composition maps both views with the geometry they were
 // rendered with, both boundaries land on the same output tangent.
-XrResult ace_views4_split_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH, const aceqv::Views4Frame& frame,
+XrResult game_views4_split_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH, const simqvfr::Views4Frame& frame,
                                 bool vertical, float split) {
-    using namespace aceqv;
+    using namespace simqvfr;
     XrFrameState state{XR_TYPE_FRAME_STATE};
     layerWaitFrame(nullptr, nullptr, &state);
     layerBeginFrame(nullptr, nullptr);
@@ -516,14 +516,14 @@ std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
 }  // namespace
 
 int main() {
-    using namespace aceqv;
+    using namespace simqvfr;
     game = &games::adapter_for(&ace::kGame);  // views4 below is ACE's
     // The log goes to a file of the test's own (opened at its first line); the pacing check reads it back.
     wchar_t logDir[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, logDir);
-    const std::wstring logPath = std::wstring(logDir) + L"aceqv-quad-flow-test.log";
+    const std::wstring logPath = std::wstring(logDir) + L"simqvfr-quad-flow-test.log";
     DeleteFileW(logPath.c_str());
-    SetEnvironmentVariableW(L"ACE_QV_LOG", logPath.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", logPath.c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))) || FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
@@ -540,12 +540,12 @@ int main() {
     D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1};
     gpu.device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&gpu.rtvHeap));
 
-    // The launcher's runtime report (ACE_QV_RUNTIME_INFO), read once by the layer.
+    // The launcher's runtime report (SIM_QVFR_RUNTIME_INFO), read once by the layer.
     wchar_t tempDir[MAX_PATH];
     GetTempPathW(MAX_PATH, tempDir);
-    const std::wstring runtimeInfo = std::wstring(tempDir) + L"aceqv-quad-flow-runtime.ini";
+    const std::wstring runtimeInfo = std::wstring(tempDir) + L"simqvfr-quad-flow-runtime.ini";
     DeleteFileW(runtimeInfo.c_str());
-    SetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", runtimeInfo.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_RUNTIME_INFO", runtimeInfo.c_str());
     next.EnumerateViewConfigurationViews = fakeViews;
     next.CreateSwapchain = fakeCreateSwapchain;
     next.CreateReferenceSpace = fakeCreateReferenceSpace;
@@ -582,15 +582,15 @@ int main() {
     XrPath profile = XR_NULL_PATH, posePath = XR_NULL_PATH;
     fakeStringToPath(nullptr, "/interaction_profiles/ext/eye_gaze_interaction", &profile);
     fakeStringToPath(nullptr, "/user/eyes_ext/input/gaze_ext/pose", &posePath);
-    const XrActionSuggestedBinding aceBinding{kAceAction, posePath};
+    const XrActionSuggestedBinding gameBinding{kGameAction, posePath};
     XrInteractionProfileSuggestedBinding suggest{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     suggest.interactionProfile = profile;
     suggest.countSuggestedBindings = 1;
-    suggest.suggestedBindings = &aceBinding;
+    suggest.suggestedBindings = &gameBinding;
     layerSuggestInteractionProfileBindings(nullptr, &suggest);
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attach.countActionSets = 1;
-    attach.actionSets = &kAceSet;
+    attach.actionSets = &kGameSet;
     const XrResult attachResult = layerAttachSessionActionSets(nullptr, &attach);
 
     // ACE's start-up: recommended size (halved by eye_scale), then its double-wide eye swapchain, scaled
@@ -606,9 +606,9 @@ int main() {
     sci.sampleCount = sci.faceCount = sci.arraySize = sci.mipCount = 1;
     sci.width = 2 * eyeW;
     sci.height = eyeH;
-    XrSwapchain aceChain = XR_NULL_HANDLE;
-    layerCreateSwapchain(nullptr, &sci, &aceChain);
-    const bool scaledAdopted = quad.appChain == aceChain;
+    XrSwapchain gameChain = XR_NULL_HANDLE;
+    layerCreateSwapchain(nullptr, &sci, &gameChain);
+    const bool scaledAdopted = quad.appChain == gameChain;
     XrSwapchainCreateInfo ui = sci;  // ACE's 1920x1080 UI chain: never the eye target
     ui.width = 1920;
     ui.height = 1080;
@@ -617,7 +617,7 @@ int main() {
     XrSwapchainImageD3D12KHR images[3] = {};
     for (auto& i : images)
         i.type = XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR;
-    layerEnumerateSwapchainImages(aceChain, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
+    layerEnumerateSwapchainImages(gameChain, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
 
     bool ok = true;
     auto check = [&](bool condition, const char* what) {
@@ -627,8 +627,8 @@ int main() {
     check(offeredW == kNativeW / 2 && offeredH == kNativeH / 2, "ACE is offered the eye_scale size");
     check(GetPrivateProfileIntW(L"runtime", L"recommended_width", 0, runtimeInfo.c_str()) == kNativeW &&
               GetPrivateProfileIntW(L"runtime", L"recommended_height", 0, runtimeInfo.c_str()) == kNativeH,
-          "the runtime's recommended size is reported for the launcher (ACE_QV_RUNTIME_INFO)");
-    check(scaledAdopted && quad.outChain != XR_NULL_HANDLE && quad.appChain == aceChain,
+          "the runtime's recommended size is reported for the launcher (SIM_QVFR_RUNTIME_INFO)");
+    check(scaledAdopted && quad.outChain != XR_NULL_HANDLE && quad.appChain == gameChain,
           "output swapchain created for ACE's chain, scaled by ACE's own resolution setting");
     check(input.suggestedBindings == 2, "gaze binding added to ACE's eye gaze suggestion");
     check(input.suggestedActions.size() == 2 && input.suggestedActions[1] == realGaze,
@@ -637,7 +637,7 @@ int main() {
 
     int endErrors = 0;
     for (int i = 0; i < 130; ++i)
-        endErrors += XR_FAILED(ace_frame(aceChain, eyeW, eyeH)) ? 1 : 0;
+        endErrors += XR_FAILED(game_frame(gameChain, eyeW, eyeH)) ? 1 : 0;
     std::printf("runtime waits=%d begins=%d ends=%d violations=%d endErrors=%d composed=%llu fallbacks=%llu\n",
                 rt.waits, rt.begins, rt.ends, rt.violations, endErrors,
                 static_cast<unsigned long long>(quad.composed), static_cast<unsigned long long>(quad.fallbacks));
@@ -710,7 +710,7 @@ int main() {
 
         int v4Errors = 0;
         for (int i = 0; i < 3; ++i)
-            v4Errors += XR_FAILED(ace_views4_frame(v4Chain, v4EyeW, v4EyeH)) ? 1 : 0;
+            v4Errors += XR_FAILED(game_views4_frame(v4Chain, v4EyeW, v4EyeH)) ? 1 : 0;
         check(v4Errors == 0 && rt.violations == 0 && quad.composed == 3 && quad.fallbacks == 0,
               "views4: every frame composed, runtime rules held");
         check(rt.submittedChain == quad.outChain && rt.submittedViews[1].subImage.imageRect.extent.width ==
@@ -776,7 +776,7 @@ int main() {
                     frame.turn[e] = {0, 0, 0, 1};
                 }
                 const auto& sp = splits[f];
-                if (XR_FAILED(ace_views4_split_frame(v4Chain, v4EyeW, v4EyeH, frame, sp.vertical, sp.split)))
+                if (XR_FAILED(game_views4_split_frame(v4Chain, v4EyeW, v4EyeH, frame, sp.vertical, sp.split)))
                     aligned = false;
                 for (int e = 0; e < 2; ++e) {
                     const XrFovf& sub = rt.submittedViews[e].fov;
@@ -827,7 +827,7 @@ int main() {
 
         // Without composition ACE's own image goes out: views 0 and 1 at their own size.
         experiment.views4Compose = false;
-        ace_views4_frame(v4Chain, v4EyeW, v4EyeH);
+        game_views4_frame(v4Chain, v4EyeW, v4EyeH);
         const XrRect2Di& s0 = rt.submittedViews[0].subImage.imageRect;
         const XrRect2Di& s1 = rt.submittedViews[1].subImage.imageRect;
         std::printf("     views4 uncomposed rects %d,%d %dx%d and %d,%d %dx%d\n", s0.offset.x, s0.offset.y,
@@ -856,7 +856,7 @@ int main() {
         layerEnumerateSwapchainImages(broken, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
         int brokenErrors = 0;
         for (int i = 0; i < 3; ++i)
-            brokenErrors += XR_FAILED(ace_views4_frame(broken, v4EyeW, v4EyeH)) ? 1 : 0;
+            brokenErrors += XR_FAILED(game_views4_frame(broken, v4EyeW, v4EyeH)) ? 1 : 0;
         QuadCompositor::failInitialize = false;
         check(quad.outChain == XR_NULL_HANDLE && brokenErrors == 0 && rt.violations == 0 && quad.composed == 0 &&
                   rt.submittedChain == broken,
@@ -876,7 +876,7 @@ int main() {
             for (int p = 0; p < 3; ++p)
                 quad.helmetPiecesTried[p].clear();
         }
-        const std::wstring brow = std::wstring(tempDir) + L"aceqv-flow-top.png";
+        const std::wstring brow = std::wstring(tempDir) + L"simqvfr-flow-top.png";
         write_file_png(brow);
         helmetSettings = HelmetSettings{};
         helmetSettings.on = true;
@@ -889,7 +889,7 @@ int main() {
         layerEnumerateSwapchainImages(helmeted, 3, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images));
         int helmetErrors = 0;
         for (int i = 0; i < 4; ++i)
-            helmetErrors += XR_FAILED(ace_views4_frame(helmeted, v4EyeW, v4EyeH)) ? 1 : 0;
+            helmetErrors += XR_FAILED(game_views4_frame(helmeted, v4EyeW, v4EyeH)) ? 1 : 0;
         const XrRect2Di& scene = rt.submittedViews[0].subImage.imageRect;
         const XrCompositionLayerQuad& hq = rt.submittedQuad;
         std::printf("     helmet: scene %dx%d (native %ux%u), quad at layer %d (scene %d), %.3f x %.3f m, %.3f m ahead\n",
@@ -953,7 +953,7 @@ int main() {
         // Frame records: filled and composed in lockstep, each composition gets its own frame's record. Two
         // records filled and never composed (2026-11-02, the focus lagging the eyes) put every composition two
         // frames behind; after a while of that the queue resyncs to the newest record.
-        using namespace aceqv;
+        using namespace simqvfr;
         const auto marked = [](float marker) {
             Views4Frame f{};
             f.outerTan[0][0] = marker;

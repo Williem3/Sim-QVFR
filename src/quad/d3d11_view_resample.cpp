@@ -6,7 +6,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr char kShader[] = R"(
@@ -277,4 +277,4 @@ void D3D11ViewResample::shutdown() {
     ready_ = false;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

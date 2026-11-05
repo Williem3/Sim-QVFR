@@ -5,7 +5,7 @@
 
 struct ID3D12Device;
 
-namespace aceqv {
+namespace simqvfr {
 
 // Must run before the app creates its D3D12 device (xrCreateInstance is early enough).
 bool dred_enable();
@@ -21,4 +21,4 @@ bool dred_report_if_removed(ID3D12Device* device);
 bool d3d12_debug_enable(bool gpuValidation = false);
 void d3d12_debug_attach(ID3D12Device* device);
 
-}  // namespace aceqv
+}  // namespace simqvfr

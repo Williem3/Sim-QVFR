@@ -10,7 +10,7 @@
 
 #include "../games/game.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace {
 
 namespace fs = std::filesystem;
@@ -143,7 +143,7 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
         // Switched off in Windows it needs no silencing, so even a layer without a disable variable can be
         // loaded below this one. Switched on without one, the loader keeps it above.
         if (r.enabled && !is_variable_name(disable)) {
-            plan.notes.push_back(name + ": has no disable_environment, so it stays ABOVE the ACE layer (" + where + ")");
+            plan.notes.push_back(name + ": has no disable_environment, so it stays ABOVE the Sim-QVFR layer (" + where + ")");
             plan.above.push_back(name);
             if (same != candidates.end())
                 candidates.erase(same);
@@ -198,7 +198,7 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
     json::Value ours;
     if (!read_file(layerManifest, text) || !json::parse(text, ours) || !layer_of(ours) ||
         layer_of(ours)->string_at("name") != kLayerName) {
-        error = L"the layer manifest " + layerManifest + L" is missing or not the ACE layer's";
+        error = L"the layer manifest " + layerManifest + L" is missing or not the Sim-QVFR layer's";
         return false;
     }
     json::Value* layer = ours.find("api_layer");
@@ -228,14 +228,14 @@ std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerP
         {L"XR_API_LAYER_PATH", runFolder},
         {L"XR_ENABLE_API_LAYERS", enabled},
         {L"DISABLE_" + widen(kLayerName), L"1"},  // an installed copy of this layer
-        {L"ACE_QV_INI", ini},
-        {L"ACE_QV_LOG", log},
-        {L"ACE_QV_RUNTIME_INFO", runtimeInfo},
+        {L"SIM_QVFR_INI", ini},
+        {L"SIM_QVFR_LOG", log},
+        {L"SIM_QVFR_RUNTIME_INFO", runtimeInfo},
         {L"SteamAppId", games::launcher_game().steamAppId},
         {L"SteamGameId", games::launcher_game().steamAppId},
     };
     if (!settings.empty())
-        v.emplace_back(L"ACE_QV_SETTINGS", settings);
+        v.emplace_back(L"SIM_QVFR_SETTINGS", settings);
     for (const MovedLayer& m : plan.below)
         if (!m.disableVar.empty())
             v.emplace_back(m.disableVar, L"1");
@@ -252,7 +252,7 @@ std::wstring environment_block(const std::vector<std::wstring>& current,
         if (eq == std::wstring::npos)
             continue;
         std::wstring name = entry.substr(0, eq);
-        if (_wcsnicmp(name.c_str(), L"ACE_QV_", 7) == 0)
+        if (_wcsnicmp(name.c_str(), L"SIM_QVFR_", 9) == 0)
             continue;
         vars.emplace_back(std::move(name), entry.substr(eq + 1));
     }
@@ -300,4 +300,4 @@ std::vector<std::wstring> steam_libraries(const std::string& vdf) {
     return out;
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

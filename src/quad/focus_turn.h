@@ -10,7 +10,7 @@
 
 #include "../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 inline XrQuaternionf qmul(const XrQuaternionf& a, const XrQuaternionf& b) {
     return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y, a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
@@ -134,4 +134,4 @@ inline void turn_inverse_view_matrix(float (&m)[16], const XrQuaternionf& turn) 
     std::memcpy(m, out, sizeof(out));
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

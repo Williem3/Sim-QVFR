@@ -15,16 +15,16 @@ int main() {
     // The log goes to a file of the test's own (opened at its first line), read back at the end.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
-    const std::wstring ownLog = std::wstring(temp) + L"aceqv-dred-test.log";
+    const std::wstring ownLog = std::wstring(temp) + L"simqvfr-dred-test.log";
     DeleteFileW(ownLog.c_str());
-    SetEnvironmentVariableW(L"ACE_QV_LOG", ownLog.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", ownLog.c_str());
     char logPath[MAX_PATH] = {};
-    GetEnvironmentVariableA("ACE_QV_LOG", logPath, MAX_PATH);
-    if (!aceqv::dred_enable()) {
+    GetEnvironmentVariableA("SIM_QVFR_LOG", logPath, MAX_PATH);
+    if (!simqvfr::dred_enable()) {
         std::puts("RESULT: FAIL (dred_enable)");
         return 1;
     }
-    const bool debugLayer = aceqv::d3d12_debug_enable();
+    const bool debugLayer = simqvfr::d3d12_debug_enable();
     IDXGIFactory4* factory = nullptr;
     IDXGIAdapter* warp = nullptr;
     ID3D12Device5* device = nullptr;
@@ -43,7 +43,7 @@ int main() {
     queue->SetName(L"test queue");
     list->SetName(L"test list");
     // ACE's failure: resetting an allocator while its command list is still recording.
-    aceqv::d3d12_debug_attach(device);
+    simqvfr::d3d12_debug_attach(device);
     const HRESULT earlyReset = allocator->Reset();
     static const char marker[] = "views4 test pass";
     list->SetMarker(0, marker, sizeof(marker));
@@ -52,7 +52,7 @@ int main() {
     queue->ExecuteCommandLists(1, lists);
 
     device->RemoveDevice();
-    const bool removed = aceqv::dred_report_if_removed(device);
+    const bool removed = simqvfr::dred_report_if_removed(device);
 
     std::ifstream in(logPath);
     std::stringstream text;

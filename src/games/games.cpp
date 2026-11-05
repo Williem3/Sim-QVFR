@@ -9,11 +9,11 @@
 #include "ace/game.h"
 #include "acc/game.h"
 
-namespace aceqv::games {
+namespace simqvfr::games {
 
 namespace {
 
-// Every game ace-quadview supports. A new game adds its game.h here (src/games/README.md).
+// Every game Sim-QVFR supports. A new game adds its game.h here (src/games/README.md).
 constexpr const GameInfo* kGames[] = {&::ace::kGame, &::acc::kGame};
 
 const GameInfo* chosen = &::ace::kGame;
@@ -59,4 +59,4 @@ bool supported_build(const GameInfo& game, const std::string& sha256) {
     return false;
 }
 
-}  // namespace aceqv::games
+}  // namespace simqvfr::games

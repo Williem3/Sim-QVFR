@@ -1,7 +1,7 @@
 // Log-only hooks on ACE's VR functions: every hooked call still runs the original unchanged.
 #pragma once
 
-namespace aceqv {
+namespace simqvfr {
 
 // Verifies the exe hash and anchors, then installs the probes. Safe to call more than once.
 bool probe_start();
@@ -14,4 +14,4 @@ bool probe_sequence_active();
 // observer per target; fn must never throw. Returns false for an unknown name.
 bool probe_set_observer(const char* name, void (*fn)(void* self));
 
-}  // namespace aceqv
+}  // namespace simqvfr

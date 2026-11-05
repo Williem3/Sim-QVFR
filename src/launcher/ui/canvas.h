@@ -11,7 +11,7 @@
 
 #include "theme_tokens.h"
 
-namespace aceqv::launcher::ui {
+namespace simqvfr::launcher::ui {
 
 using Microsoft::WRL::ComPtr;
 
@@ -87,4 +87,4 @@ private:
     std::wstring systemFamily_, monoFamily_;
 };
 
-}  // namespace aceqv::launcher::ui
+}  // namespace simqvfr::launcher::ui

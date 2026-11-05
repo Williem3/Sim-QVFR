@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <mutex>
 
-namespace aceqv {
+namespace simqvfr {
 
 template <class Record, std::size_t kRing = 8>
 class FrameRecords {
@@ -84,4 +84,4 @@ private:
     uint64_t pushed_ = 0, taken_ = 0, resyncs_ = 0, emptyTakes_ = 0, behindRuns_ = 0;
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

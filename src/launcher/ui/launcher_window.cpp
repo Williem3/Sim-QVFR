@@ -5,7 +5,7 @@
 // Report an issue, About), cards of the kit's controls, a live foveation preview with readouts (the Headset menu
 // pane: a placement preview to drag the in-headset settings menu around), and an action bar with the status,
 // Restore Defaults and Launch. Every colour, size and type style comes from theme_tokens.h; every
-// label is the kit's. Settings save as they change (settings.h); Launch runs launch_ace (main.cpp).
+// label is the kit's. Settings save as they change (settings.h); Launch runs launch_game (main.cpp).
 //
 // Immediate mode: each paint lays out and draws the current pane and records hit rectangles; input
 // acts on the last frame's rectangles and the settings, then repaints.
@@ -41,7 +41,7 @@
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace ui {
 namespace {
 
@@ -197,7 +197,7 @@ struct App {
     int layerProfile = 0, layerRow = 0;
     LayerPlan layerPlan;
     std::vector<SystemLayer> layersWindows, layersDraft;
-    bool layersLockMoved = false;  // Windows has the ACE layer below another one: applying moves it first
+    bool layersLockMoved = false;  // Windows has the Sim-QVFR layer below another one: applying moves it first
     std::wstring layerMessage;
     int layerTone = 0;
     // Launch checks (preflight.h), refreshed every few seconds. The game exe is hashed once per file (its size
@@ -239,9 +239,9 @@ Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
 bool layers_dirty() { return app.layersDraft != app.layersWindows || app.layersLockMoved; }
 
 bool system_dark() {
-    // ACE_QV_LAUNCHER_THEME=light|dark overrides the Windows app theme (for checking both).
+    // SIM_QVFR_LAUNCHER_THEME=light|dark overrides the Windows app theme (for checking both).
     wchar_t forced[16] = {};
-    if (GetEnvironmentVariableW(L"ACE_QV_LAUNCHER_THEME", forced, 16))
+    if (GetEnvironmentVariableW(L"SIM_QVFR_LAUNCHER_THEME", forced, 16))
         return _wcsicmp(forced, L"dark") == 0;
     DWORD light = 1, size = sizeof(light);
     RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
@@ -345,7 +345,7 @@ void update_done(UpdateResult* r) {
         return;
     }
     app.release = result->release;
-    const std::wstring mine = widen(ACE_QV_VERSION);
+    const std::wstring mine = widen(SIM_QVFR_VERSION);
     app.update = !known_version(mine)                              ? Update::Dev
                  : compare_versions(result->release.tag, mine) <= 0 ? Update::UpToDate
                                                                     : Update::Available;
@@ -359,9 +359,9 @@ bool installable() {
            packaged_install(launcher_folder());
 }
 
-bool ace_running() {
+bool game_running() {
     for (const Check& c : app.checks)
-        if (c.id == "ace_running")
+        if (c.id == "game_running")
             return true;
     return false;
 }
@@ -372,14 +372,14 @@ void start_install() {
     if (app.installing || !installable())
         return;
     refresh_checks();
-    if (ace_running()) {
-        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: ace-quadview’s layer is in use while it runs.").c_str(), L"Sim QVFR Launcher",
+    if (game_running()) {
+        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: Sim-QVFR’s layer is in use while it runs.").c_str(), L"Sim QVFR Launcher",
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
     const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
     if (MessageBoxW(app.hwnd,
-                    (L"Install ace-quadview " + app.release.tag + L"?\n\nThe launcher downloads it from GitHub (" + mb +
+                    (L"Install Sim-QVFR " + app.release.tag + L"?\n\nThe launcher downloads it from GitHub (" + mb +
                      L" MB), checks it, replaces its program files and restarts. Your settings, profiles, logs and any file "
                      L"you changed (your own helmet images) stay. The version you have now is kept in the update folder.")
                         .c_str(),
@@ -388,7 +388,7 @@ void start_install() {
     app.installing = true;
     app.installError.clear();
     app.installProgress = {L"Starting", 0};
-    std::thread([hwnd = app.hwnd, folder = launcher_folder(), release = app.release, version = widen(ACE_QV_VERSION)] {
+    std::thread([hwnd = app.hwnd, folder = launcher_folder(), release = app.release, version = widen(SIM_QVFR_VERSION)] {
         // Progress as messages, at most one per percent or step.
         std::wstring lastStep;
         int lastPercent = -1;
@@ -420,7 +420,7 @@ void install_done(InstallResult* r) {
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);  // the new launcher now: the old one moved into the backup
     MessageBoxW(app.hwnd,
-                (L"ace-quadview " + app.release.tag + L" is installed (" + std::to_wstring(result->replaced + result->added) +
+                (L"Sim-QVFR " + app.release.tag + L" is installed (" + std::to_wstring(result->replaced + result->added) +
                  L" files; " + std::to_wstring(result->kept) + L" of yours kept). The launcher restarts now.\n\nThe version you had "
                  L"is in " + result->backup + L".")
                     .c_str(),
@@ -652,7 +652,7 @@ std::vector<Ctl> focus_order() {
 void launch() {
     if (!app.iniFound) {
         app.status = Status::Error;
-        app.error = L"ace-quadview.ini not found next to the launcher.";
+        app.error = L"sim-qvfr.ini not found next to the launcher.";
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
@@ -661,7 +661,7 @@ void launch() {
     app.s = load_settings(app.ini);
     save_settings(app.ini, app.s);
     app.iniText = ini_text();
-    // A launch that would crash the game, or run it without ace-quadview: ask first.
+    // A launch that would crash the game, or run it without Sim-QVFR: ask first.
     refresh_checks();
     std::wstring problems;
     for (const Check& c : app.checks)
@@ -678,7 +678,7 @@ void launch() {
     app.status = Status::Starting;
     RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     std::wstring report;
-    if (launch_ace(false, report) != 0) {
+    if (launch_game(false, report) != 0) {
         app.status = Status::Error;
         const size_t at = report.find(L"ERROR: ");
         app.error = at == std::wstring::npos ? L"Launch failed." : report.substr(at + 7, report.find(L'\n', at) - at - 7);
@@ -1196,7 +1196,7 @@ std::wstring friendly_layer(const std::string& name, const std::wstring& manifes
         {"XR_APILAYER_DIENERTECH_VECTORXR", L"VectorXR"},
         {"XR_APILAYER_CHEEKY_foveated_dlss", L"Cheeky Foveated DLSS"},
         {"XR_APILAYER_MBUCCHIA_quad_views_foveated", L"Quad-Views-Foveated"},
-        {"XR_APILAYER_ACE_quadview", L"ACE layer (ace-quadview)"},
+        {"XR_APILAYER_SIM_qvfr", L"Sim-QVFR"},
         {"XR_APILAYER_NOVENDOR_motion_compensation", L"OpenXR Motion Compensation"},
         {"XR_APILAYER_FREDEMMOTT_OpenKneeboard", L"OpenKneeboard"},
         {"XR_APILAYER_FREDEMMOTT_HandTrackedCockpitClicking", L"Hand Tracked Cockpit Clicking"},
@@ -1312,7 +1312,7 @@ float layers_pane(float x, float y, float w, bool draw) {
     if (app.layerProfile == 0) {
         std::vector<Row> rows;
         for (const std::string& name : app.layerPlan.above)
-            rows.push_back(locked_row(friendly_layer(name), L"Has no switch to turn it off per launch, so it stays above the ACE layer.",
+            rows.push_back(locked_row(friendly_layer(name), L"Has no switch to turn it off per launch, so it stays above the Sim-QVFR layer.",
                                       L"Above"));
         rows.push_back(locked_row(friendly_layer(kLayerName), L"Always nearest the game.", L"Locked"));
         const int n = static_cast<int>(app.layerPlan.layers.size());
@@ -1325,7 +1325,7 @@ float layers_pane(float x, float y, float w, bool draw) {
         }
         h += section(x, y + h, w, L"Load order for ACE",
                      rows,
-                     L"Nearest the game first. Each launch loads these below the ACE layer in this order; a layer off in "
+                     L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in "
                      L"Windows can still be loaded for ACE alone. Locked switches keep the mod and ACE working.",
                      draw);
         Row reset;
@@ -1364,7 +1364,7 @@ float layers_pane(float x, float y, float w, bool draw) {
         }
         Row apply;
         apply.label = layers_dirty() ? L"Changes not applied" : L"Windows’ list";
-        apply.desc = app.layersLockMoved ? L"The ACE layer is not first in its list: applying moves it there."
+        apply.desc = app.layersLockMoved ? L"The Sim-QVFR layer is not first in its list: applying moves it there."
                                          : L"Nearest the game first. The current list is backed up into logs before it changes.";
         const float applyW = button_width(L"Apply"),
                     revertW = button_width(L"Revert");
@@ -1463,7 +1463,7 @@ std::wstring thread_note(const std::wstring& name) {
     return L"";
 }
 
-// The layers below ace-quadview as people know them: "XR_APILAYER_MBUCCHIA_toolkit, ..." -> "OpenXR Toolkit, ...".
+// The layers below Sim-QVFR as people know them: "XR_APILAYER_MBUCCHIA_toolkit, ..." -> "OpenXR Toolkit, ...".
 std::wstring friendly_layers(const std::wstring& names) {
     std::wstring out;
     for (size_t at = 0; at < names.size();) {
@@ -1529,7 +1529,7 @@ bool report_edit_fits() {
     return r.w > 0 && r.y >= app.scrollArea.y && r.bottom() <= app.scrollArea.bottom();
 }
 
-// Report an issue: the logs zipped into logs\ace-quadview-report-<time>.zip (with the issue's text as
+// Report an issue: the logs zipped into logs\sim-qvfr-report-<time>.zip (with the issue's text as
 // issue.md), Explorer showing it, and a new issue on the kind's form, its fields prefilled (report.h).
 void report_issue() {
     const std::wstring logs = logs_folder();
@@ -1537,10 +1537,10 @@ void report_issue() {
     SYSTEMTIME now;
     GetLocalTime(&now);
     wchar_t name[64];
-    swprintf_s(name, L"ace-quadview-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
+    swprintf_s(name, L"sim-qvfr-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
                now.wMinute, now.wSecond);
     app.runtime = load_runtime_info(runtime_info_path());
-    IssueReport report{widen(ACE_QV_VERSION), app.s, app.runtime, system_info(), name, app.reportKind};
+    IssueReport report{widen(SIM_QVFR_VERSION), app.s, app.runtime, system_info(), name, app.reportKind};
     const int length = GetWindowTextLengthW(app.reportEdit);
     report.description.resize(static_cast<size_t>(std::max(length, 0)));
     GetWindowTextW(app.reportEdit, report.description.data(), length + 1);
@@ -1684,7 +1684,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         if (s.gazeMs >= 0)
             layer.push_back(value_row(L"Eye tracking lookup", L"On the layer's own thread, not ACE's.",
                                       formatted(L"%.3f ms", s.gazeMs)));
-        layer.push_back(value_row(L"Layer on the render thread", L"ace-quadview's own time in each frame (composition apart).",
+        layer.push_back(value_row(L"Layer on the render thread", L"Sim-QVFR's own time in each frame (composition apart).",
                                   s.layerMs >= 0 ? formatted(L"%.2f ms", s.layerMs) : dash));
         layer.push_back(value_row(L"Layers below", toolkit ? L"OpenXR Toolkit adds time to every frame's submission (about "
                                                              L"0.8 ms measured): switch it off for ACE in OpenXR layers if you "
@@ -1932,11 +1932,11 @@ float checks_pane(float x, float y, float w, bool draw) {
     float h = 0;
     if (!attention.empty())
         h += section(x, y + h, w, L"Needs attention", attention,
-                     L"Launch asks before starting the game while a problem would crash it or leave ace-quadview off.", draw) +
+                     L"Launch asks before starting the game while a problem would crash it or leave Sim-QVFR off.", draw) +
              t::kSpace6;
     if (!ready.empty())
         h += section(x, y + h, w, attention.empty() ? L"Ready to launch" : L"Ready", ready,
-                     attention.empty() ? L"Nothing found that would stop ace-quadview at the next launch." : L"", draw);
+                     attention.empty() ? L"Nothing found that would stop Sim-QVFR at the next launch." : L"", draw);
     return h;
 }
 
@@ -2170,7 +2170,7 @@ float pane_content(float x, float y, float w, bool draw) {
                                   : status == L"refused" ? L"At the last launch, Cheeky did not start: see its log next to its runtime."
                                                          : L"";
         h += section(x, y + h, w, L"Cheeky Foveated DLSS", {use, rt, xr},
-                     L"Put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to ace-quadview.dll, or choose "
+                     L"Put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to sim-qvfr.dll, or choose "
                      L"its runtime. No Cheeky loader goes in the game folder. " + last,
                      draw) + t::kSpace6;
         const bool outer = app.s.cheeky.outerDlaa;
@@ -2202,7 +2202,7 @@ float pane_content(float x, float y, float w, bool draw) {
                       preset_row(kCheekyOuterPreset, L"Outer preset", L"", app.s.cheeky.outerPreset, !outer),
                       preset_row(kCheekyFocusPreset, L"Focus preset", L"DLSS preset for the sharp focus views.",
                                  app.s.cheeky.focusPreset, false)},
-                     L"Applies live while the game runs. In Quad View Foveated Rendering, ace-quadview tells Cheeky which "
+                     L"Applies live while the game runs. In Quad View Foveated Rendering, Sim-QVFR tells Cheeky which "
                      L"views are outer and which are focus.",
                      draw);
         h += t::kSpace6;
@@ -2335,12 +2335,12 @@ float pane_content(float x, float y, float w, bool draw) {
             app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
             app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody,
                             {x, y + t::kTitle1.lineHeight + 8, w, lh}, col(app.c->label_secondary));
-            app.canvas.text(L"Version " + widen(ACE_QV_VERSION), t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
+            app.canvas.text(L"Version " + widen(SIM_QVFR_VERSION), t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
                             col(app.c->label_secondary));
         }
         h += t::kTitle1.lineHeight + 8 + lh + 4 + lh;
         // Support, before Updates so a short window still shows it: a line and a button that opens the Ko-fi page.
-        const std::wstring support = L"If ace-quadview improves your races, you can support its development on Ko-fi.";
+        const std::wstring support = L"If Sim-QVFR improves your races, you can support its development on Ko-fi.";
         const float sh = app.canvas.measure_height(support, t::kCallout, w);
         if (draw)
             app.canvas.text(support, t::kCallout, {x, y + h + t::kSpace6, w, sh + 2}, col(app.c->label_secondary),
@@ -2352,14 +2352,14 @@ float pane_content(float x, float y, float w, bool draw) {
         h += t::kControlHeight + t::kSpace6;
         // Updates (update_check.h): the start-up switch, then where the last check stands with Check now and Download.
         Row autoCheck;
-        const std::wstring autoDesc = L"Asks GitHub for the newest ace-quadview release when the launcher starts. Nothing else "
+        const std::wstring autoDesc = L"Asks GitHub for the newest Sim-QVFR release when the launcher starts. Nothing else "
                                       L"is sent, and nothing downloads by itself.";
         autoCheck.fullHeight = [autoDesc](float width) { return checkbox_height(autoDesc, width); };
         autoCheck.full = [autoDesc](const Rect& r) {
             checkbox(kUpdateCheck, r, app.s.updateCheck, L"Check for updates when the launcher starts", autoDesc);
         };
         Row status;
-        const std::wstring mine = widen(ACE_QV_VERSION);
+        const std::wstring mine = widen(SIM_QVFR_VERSION);
         switch (app.update) {
         case Update::Off: status.label = L"Not checked"; break;
         case Update::Checking: status.label = L"Checking…"; break;
@@ -2413,7 +2413,7 @@ float pane_content(float x, float y, float w, bool draw) {
                      draw);
         // The same notice as the README's: unofficial, at the user's own risk.
         const std::wstring notice =
-            L"ace-quadview is not made, approved or sanctioned by Kunos Simulazioni or the Assetto Corsa EVO "
+            L"Sim-QVFR is not made, approved or sanctioned by Kunos Simulazioni or the Assetto Corsa EVO "
             L"developers. It hooks the game's code and changes how it renders, so a game update can break it, and "
             L"it can crash the game. Use it in offline sessions only, and please don't report problems you see "
             L"while using it to the ACE developers.";
@@ -2878,12 +2878,12 @@ const wchar_t* group_of(int pane) {
 // What a pane is for, under its title.
 std::wstring pane_description(Pane pane) {
     switch (pane) {
-    case Pane::Checks: return L"What would stop ace-quadview at the next launch, each with its fix.";
+    case Pane::Checks: return L"What would stop Sim-QVFR at the next launch, each with its fix.";
     case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
     case Pane::Rendering:
         return L"How " + game_name() + L" draws each eye. " +
                (games::launcher_game().openComposite ? L"It reaches your headset through OpenComposite (Launch checks)."
-                                                     : L"Launch starts it in VR with ace-quadview.");
+                                                     : L"Launch starts it in VR with Sim-QVFR.");
     case Pane::Resolution: return L"How many pixels each view draws, the edges it skips and the helmet around it.";
     case Pane::Foveation: return L"The size, shape and movement of the sharp focus region.";
     case Pane::Overlay: return L"An outline in the headset that shows where the focus region is.";
@@ -2973,7 +2973,7 @@ void on_key(WPARAM key);
 
 // The description box's keys: Tab and Shift+Tab move on through the window's focus order; Escape leaves it.
 LRESULT CALLBACK report_edit_proc(HWND edit, UINT message, WPARAM wParam, LPARAM lParam) {
-    static const WNDPROC base = reinterpret_cast<WNDPROC>(GetPropW(edit, L"aceqv.base"));
+    static const WNDPROC base = reinterpret_cast<WNDPROC>(GetPropW(edit, L"simqvfr.base"));
     if (message == WM_KEYDOWN && (wParam == VK_TAB || wParam == VK_ESCAPE)) {
         app.focus = kDiagDescription;
         SetFocus(app.hwnd);
@@ -2995,7 +2995,7 @@ void create_report_edit() {
     if (!app.reportEdit)
         return;
     SendMessageW(app.reportEdit, EM_SETLIMITTEXT, 4000, 0);  // the link has room for about that much
-    SetPropW(app.reportEdit, L"aceqv.base", reinterpret_cast<HANDLE>(GetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC)));
+    SetPropW(app.reportEdit, L"simqvfr.base", reinterpret_cast<HANDLE>(GetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC)));
     SetWindowLongPtrW(app.reportEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(report_edit_proc));
 }
 
@@ -3195,7 +3195,7 @@ void paint() {
     else if (app.status == Status::Error)
         bw = badge(kBarX, by, 2, app.error, badgeMax);
     else if (!app.iniFound)
-        bw = badge(kBarX, by, 2, L"ace-quadview.ini not found next to the launcher.", badgeMax);
+        bw = badge(kBarX, by, 2, L"sim-qvfr.ini not found next to the launcher.", badgeMax);
     else if (const Check* bad = first_with(app.checks, CheckTone::Bad))
         bw = checks_badge(by, 2, *bad, badgeMax);
     else if (eye_warning())
@@ -3213,8 +3213,8 @@ void paint() {
         bw = badge(kBarX, by, 0, L"Applied to the running game", badgeMax);
     else if (app.update == Update::Available) {
         bw = badge(kBarX, by, 3,
-                   app.installing ? L"Installing ace-quadview " + app.release.tag + L"…"
-                                  : L"ace-quadview " + app.release.tag + L" is available" + (installable() ? L" · Install" : L""),
+                   app.installing ? L"Installing Sim-QVFR " + app.release.tag + L"…"
+                                  : L"Sim-QVFR " + app.release.tag + L" is available" + (installable() ? L" · Install" : L""),
                    badgeMax);
         app.hits.push_back({kUpdateBadge, {kBarX, by, bw, 20}});
     } else
@@ -4319,4 +4319,4 @@ int run_window(HINSTANCE instance, int show) {
     return static_cast<int>(msg.wParam);
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

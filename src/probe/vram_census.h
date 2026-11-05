@@ -15,7 +15,7 @@
 
 struct ID3D12Device;
 
-namespace aceqv {
+namespace simqvfr {
 
 bool vram_census_start(ID3D12Device* device);
 
@@ -31,4 +31,4 @@ VramCensus vram_census(int renderWidth, int renderHeight, int outputWidth, int o
 // 4 or 8 (rounded either way).
 bool vram_follows(uint64_t width, uint32_t height, int targetWidth, int targetHeight);
 
-}  // namespace aceqv
+}  // namespace simqvfr

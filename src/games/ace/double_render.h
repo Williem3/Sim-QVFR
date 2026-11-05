@@ -3,8 +3,8 @@
 // exe verified) to have succeeded first.
 #pragma once
 
-namespace aceqv {
+namespace simqvfr {
 
 bool double_render_start();
 
-}  // namespace aceqv
+}  // namespace simqvfr

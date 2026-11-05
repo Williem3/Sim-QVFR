@@ -26,13 +26,13 @@ inline int eye_pass(int pass) { return pass >= kPassLeftSide ? pass - 2 : pass; 
 inline bool primary_pass(int pass) { return pass == kPassFull || pass == kPassLeft || pass == kPassLeftSide; }
 
 // A stereo pass's view in the target (its width, height) the game sized for all four
-// (aceqv::views4_rect_eye_columns).
+// (simqvfr::views4_rect_eye_columns).
 struct PassRect {
     int x = 0, y = 0, width = 0, height = 0;
 };
-inline PassRect pass_rect(const aceqv::Views4Layout& layout, int pass, int targetWidth, int targetHeight) {
-    const aceqv::ViewRect r =
-        aceqv::views4_rect_eye_columns(layout, static_cast<int>(view_for_pass(pass)), targetWidth, targetHeight);
+inline PassRect pass_rect(const simqvfr::Views4Layout& layout, int pass, int targetWidth, int targetHeight) {
+    const simqvfr::ViewRect r =
+        simqvfr::views4_rect_eye_columns(layout, static_cast<int>(view_for_pass(pass)), targetWidth, targetHeight);
     return {r.left, r.top, r.width, r.height};
 }
 
@@ -40,10 +40,10 @@ inline PassRect pass_rect(const aceqv::Views4Layout& layout, int pass, int targe
 // target it was handed out for. The render thread finds which one a frame was rendered with from that frame's final
 // rects (match_layout), so the composition reads each frame where it was drawn, whatever the game thread chose since.
 struct HandedLayout {
-    aceqv::Views4Layout layout;
+    simqvfr::Views4Layout layout;
     int size[kViews][2] = {};  // each view's width, height
 };
-inline HandedLayout handed_layout(const aceqv::Views4Layout& layout, int targetWidth, int targetHeight) {
+inline HandedLayout handed_layout(const simqvfr::Views4Layout& layout, int targetWidth, int targetHeight) {
     HandedLayout h;
     h.layout = layout;
     for (int v = 0; v < kViews; ++v) {
@@ -114,7 +114,7 @@ inline bool focus_projection(float (&m)[16], double fractionX, double fractionY)
     if (!(fractionX > 0) || !ue_projection_tangents(m, tan))
         return false;
     double hw = 0, hh = 0;
-    aceqv::focus_extents(tan, fractionX, fractionY > 0 ? fractionY : fractionX, hw, hh);
+    simqvfr::focus_extents(tan, fractionX, fractionY > 0 ? fractionY : fractionX, hw, hh);
     m[0] = static_cast<float>(1.0 / hw);  // 2 / (r - l) with r = -l = hw
     m[5] = static_cast<float>(1.0 / hh);
     m[8] = 0.0f;
@@ -149,8 +149,8 @@ inline void ue_rotate(const UeQuat& q, const float (&v)[3], float (&out)[3]) {
 // from the two view matrices' rotations, as the composition takes it (to_matrix(qconj(turn)) takes a direction in
 // the eye's frame into the focus view's, OpenXR's axes: x right, y up, -z forward). False: a projection unreadable
 // or a view rotation not proper (a mirrored capture), the record left as it was.
-inline bool rendered_frame(const float (&view)[4][16], const float (&projection)[4][16], aceqv::Views4Frame& f) {
-    aceqv::Views4Frame out{};
+inline bool rendered_frame(const float (&view)[4][16], const float (&projection)[4][16], simqvfr::Views4Frame& f) {
+    simqvfr::Views4Frame out{};
     float rotation[4][9];
     for (int v = 0; v < 4; ++v) {
         for (int r = 0; r < 3; ++r)
@@ -177,7 +177,7 @@ inline bool rendered_frame(const float (&view)[4][16], const float (&projection)
                     sum += rf[k * 3 + i] * re[k * 3 + j];
                 m[i * 3 + j] = ((i == 2) != (j == 2)) ? -sum : sum;
             }
-        out.turn[e] = aceqv::qconj(aceqv::from_matrix(m));
+        out.turn[e] = simqvfr::qconj(simqvfr::from_matrix(m));
     }
     f = out;
     return true;

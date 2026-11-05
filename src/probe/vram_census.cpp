@@ -10,12 +10,12 @@
 
 #include "../log.h"
 
-extern "C" size_t aceqv_slot_CreateCommittedResource(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource1(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource2(void);
-extern "C" size_t aceqv_slot_CreateCommittedResource3(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource1(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource2(void);
+extern "C" size_t simqvfr_slot_CreateCommittedResource3(void);
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 // {6b0f3a52-2c1e-4b8e-9d55-7a3f0e6c1d21}: the tracker's private-data slot on each recorded texture.
@@ -178,19 +178,19 @@ bool vram_census_start(ID3D12Device* device) {
     if (started || !device)
         return started;
     void** vtable = *reinterpret_cast<void***>(device);
-    bool ok = hook(vtable, aceqv_slot_CreateCommittedResource(), &committedHook, &committedOriginal);
+    bool ok = hook(vtable, simqvfr_slot_CreateCommittedResource(), &committedHook, &committedOriginal);
     // Newer interfaces on the same object: their methods extend the device's single vtable.
     Microsoft::WRL::ComPtr<ID3D12Device4> device4;
     Microsoft::WRL::ComPtr<ID3D12Device8> device8;
     Microsoft::WRL::ComPtr<ID3D12Device10> device10;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device4))))
-        ok = ok && hook(*reinterpret_cast<void***>(device4.Get()), aceqv_slot_CreateCommittedResource1(), &committed1Hook,
+        ok = ok && hook(*reinterpret_cast<void***>(device4.Get()), simqvfr_slot_CreateCommittedResource1(), &committed1Hook,
                         &committed1Original);
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device8))))
-        ok = ok && hook(*reinterpret_cast<void***>(device8.Get()), aceqv_slot_CreateCommittedResource2(), &committed2Hook,
+        ok = ok && hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreateCommittedResource2(), &committed2Hook,
                         &committed2Original);
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device10))))
-        ok = ok && hook(*reinterpret_cast<void***>(device10.Get()), aceqv_slot_CreateCommittedResource3(), &committed3Hook,
+        ok = ok && hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreateCommittedResource3(), &committed3Hook,
                         &committed3Original);
     started = ok;
     logf("vram census: %s (device4/8/10 %d/%d/%d)", ok ? "on" : "FAILED to patch the device", device4 ? 1 : 0,
@@ -214,4 +214,4 @@ VramCensus vram_census(int renderWidth, int renderHeight, int outputWidth, int o
     return c;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

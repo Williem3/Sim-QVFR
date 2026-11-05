@@ -18,7 +18,7 @@
 
 #include <string>
 
-namespace aceqv {
+namespace simqvfr {
 
 // The QVFR resolution keys, percent: periphery_scale, focus_density, focus_percent, focus_height_percent.
 struct QvfrValues {
@@ -102,4 +102,4 @@ private:
     std::wstring status_ = L"Right: run";
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

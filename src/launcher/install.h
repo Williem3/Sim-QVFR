@@ -5,7 +5,7 @@
 // 1. The release's zip is downloaded into update\ next to the launcher, from the repository's release
 //    downloads only, and checked against the SHA-256 GitHub gives for it.
 // 2. Windows' own tar.exe unpacks it into update\staged, and every file is checked against its SHA256.txt.
-// 3. Program files are replaced; the user's are kept: ace-quadview.ini always, anything the release doesn't
+// 3. Program files are replaced; the user's are kept: sim-qvfr.ini always, anything the release doesn't
 //    have (profiles, logs, Cheeky's folder), and any file of the old release the user changed (their helmet
 //    images): one that differs from the old release's SHA256.txt (plan_install).
 // 4. Each file replaced moves into update\backup-<old version>\ first (the running launcher too: a running exe
@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
 inline constexpr char kReleaseDownloadPrefix[] = "https://github.com/Williem3/Sim-QVFR/releases/download/";
 
@@ -31,7 +31,7 @@ struct InstallStep {
     InstallAction action = InstallAction::Add;
 };
 // What each file of the new release does: Add (not there), Replace (there, as the old release had it), Same
-// (there and already the new one), KeepSettings (ace-quadview.ini), KeepChanged (there but not as the old release
+// (there and already the new one), KeepSettings (sim-qvfr.ini), KeepChanged (there but not as the old release
 // had it: the user's own). `current` gives an installed file's hash (lowercase hex; empty: not there).
 std::vector<InstallStep> plan_install(const std::map<std::wstring, std::string>& release,
                                       const std::map<std::wstring, std::string>& oldRelease,
@@ -66,4 +66,4 @@ InstallResult install_staged(const std::wstring& folder, const std::wstring& sta
 // At a start: update\ cleared but the newest backup.
 void clean_update_folder(const std::wstring& folder);
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

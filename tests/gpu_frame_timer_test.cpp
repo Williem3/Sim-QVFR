@@ -13,7 +13,7 @@
 #include "probe/gpu_frame_timer.h"
 
 using Microsoft::WRL::ComPtr;
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -30,9 +30,9 @@ int main() {
     // The log goes to a file of the test's own (opened at its first line), read back at the end.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
-    const std::wstring logPath = std::wstring(temp) + L"aceqv-gpu-timer-test.log";
+    const std::wstring logPath = std::wstring(temp) + L"simqvfr-gpu-timer-test.log";
     DeleteFileW(logPath.c_str());
-    SetEnvironmentVariableW(L"ACE_QV_LOG", logPath.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", logPath.c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;
@@ -119,7 +119,7 @@ int main() {
     expect(heavy.intervalP50 > 0, "consecutive frames give an interval");
 
     // The log keeps its own samples: the overlay's two collects above did not take them, so the report
-    // logs all twelve timed frames (into ACE_QV_LOG, read back).
+    // logs all twelve timed frames (into SIM_QVFR_LOG, read back).
     gpu_frame_timer_report();
     std::string logged;
     if (FILE* f = _wfopen(logPath.c_str(), L"rb")) {

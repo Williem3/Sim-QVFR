@@ -11,7 +11,7 @@
 #include "../log.h"
 #include "compose_shader.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr UINT kConstants = kComposeConstants;
@@ -599,4 +599,4 @@ void QuadCompositor::shutdown() {
     outerValid_ = ready_ = false;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

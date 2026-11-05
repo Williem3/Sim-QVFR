@@ -11,7 +11,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 // Each corner moves at most this far in, percent of the box's width or height: the corners stay in their
 // own quarters of the box, so the edges never cross.
@@ -109,4 +109,4 @@ inline void focus_corner_point(const FocusShape& s, FocusCorner corner, float& x
     y = bottom ? 1 - v : v;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

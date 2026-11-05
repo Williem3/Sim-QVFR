@@ -10,7 +10,7 @@
 #include "../log.h"
 #include "helmet.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 bool decode_helmet_piece(HelmetPiece which, const std::wstring& path, std::vector<uint8_t>& pixels, uint32_t& width,
                          uint32_t& height, HelmetPieceInfo& info) {
@@ -190,4 +190,4 @@ void HelmetPieceSet::clear_pieces() {
     }
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

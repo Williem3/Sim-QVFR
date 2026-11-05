@@ -1,7 +1,7 @@
-// XR_APILAYER_ACE_quadview: logs what Assetto Corsa EVO asks for (views, swapchains, frame
+// XR_APILAYER_SIM_qvfr: logs what Assetto Corsa EVO asks for (views, swapchains, frame
 // submission) and starts the log-only engine probes (probe/probe.cpp) at xrCreateSession. With
 // mode=off nothing alters rendering; the experiments and the quad pipeline are selected in
-// ace-quadview.ini.
+// sim-qvfr.ini.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -58,10 +58,10 @@
 #include <dxgi1_4.h>
 #include <intrin.h>
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
-constexpr char kLayerName[] = "XR_APILAYER_ACE_quadview";
+constexpr char kLayerName[] = "XR_APILAYER_SIM_qvfr";
 constexpr uint64_t kDetailedFrames = 4;
 constexpr uint64_t kSampleEveryFrames = 1800;
 
@@ -102,7 +102,7 @@ Dispatch next;
 std::mutex chainMutex;
 std::map<XrSwapchain, std::pair<uint32_t, uint32_t>> chainSizes;
 
-// Round 5 experiment, read from ace-quadview.ini next to the DLL (ACE starts through Steam, so
+// Round 5 experiment, read from sim-qvfr.ini next to the DLL (ACE starts through Steam, so
 // there is no per-launch environment): [experiment] mode=focus_only narrows every located view to a
 // centred focus box. ACE builds its eye cameras and its submitted projection views from these FOVs.
 struct Experiment {
@@ -299,12 +299,12 @@ struct Live {
 };
 Live live;
 
-// What the launcher shows before the next launch (ACE_QV_RUNTIME_INFO, set by the launcher): the
+// What the launcher shows before the next launch (SIM_QVFR_RUNTIME_INFO, set by the launcher): the
 // headset's recommended per-eye size and whether eye tracking delivered samples. An ini file.
 void runtime_info(const wchar_t* key, const std::wstring& value) {
     static const std::wstring path = [] {
         wchar_t buffer[MAX_PATH] = {};
-        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_RUNTIME_INFO", buffer, MAX_PATH);
+        const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_RUNTIME_INFO", buffer, MAX_PATH);
         return n > 0 && n < MAX_PATH ? std::wstring(buffer) : std::wstring();
     }();
     if (!path.empty())
@@ -324,10 +324,10 @@ std::wstring layer_directory() {
 void hotkeys_changed(const Hotkeys& h);  // [hotkeys] (below)
 
 void load_experiment() {
-    // A launcher passes its per-launch settings in ACE_QV_INI; otherwise the ini next to the DLL.
-    std::wstring ini = (std::filesystem::path(layer_directory()) / L"ace-quadview.ini").wstring();
+    // A launcher passes its per-launch settings in SIM_QVFR_INI; otherwise the ini next to the DLL.
+    std::wstring ini = (std::filesystem::path(layer_directory()) / L"sim-qvfr.ini").wstring();
     wchar_t env[MAX_PATH] = {};
-    const DWORD n = GetEnvironmentVariableW(L"ACE_QV_INI", env, MAX_PATH);
+    const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", env, MAX_PATH);
     if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
         ini = env;
     wchar_t mode[32] = {};
@@ -642,8 +642,8 @@ void gaze_init(XrInstance instance) {
     if ((!experiment.quad && !experiment.composing()) || !next.CreateActionSet)
         return;
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
-    strcpy_s(setInfo.actionSetName, "acequadview_gaze");
-    strcpy_s(setInfo.localizedActionSetName, "ace-quadview gaze");
+    strcpy_s(setInfo.actionSetName, "simqvfr_gaze");
+    strcpy_s(setInfo.localizedActionSetName, "Sim-QVFR gaze");
     XrActionCreateInfo actionInfo{XR_TYPE_ACTION_CREATE_INFO};
     actionInfo.actionType = XR_ACTION_TYPE_POSE_INPUT;
     strcpy_s(actionInfo.actionName, "gaze");
@@ -669,11 +669,11 @@ void gaze_init(XrInstance instance) {
     XrActionCreateInfo toggleInfo{XR_TYPE_ACTION_CREATE_INFO};
     toggleInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
     strcpy_s(toggleInfo.actionName, "settings_menu");
-    strcpy_s(toggleInfo.localizedActionName, "ace-quadview settings menu");
+    strcpy_s(toggleInfo.localizedActionName, "Sim-QVFR settings menu");
     XrActionCreateInfo navigateInfo{XR_TYPE_ACTION_CREATE_INFO};
     navigateInfo.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
     strcpy_s(navigateInfo.actionName, "settings_navigate");
-    strcpy_s(navigateInfo.localizedActionName, "ace-quadview settings navigate");
+    strcpy_s(navigateInfo.localizedActionName, "Sim-QVFR settings navigate");
     if (XR_FAILED(next.CreateAction(gaze.set, &toggleInfo, &gaze.menuToggle)) ||
         XR_FAILED(next.CreateAction(gaze.set, &navigateInfo, &gaze.menuNavigate))) {
         log_line("settings menu: controller actions failed; keyboard only");
@@ -1060,7 +1060,7 @@ struct Quad {
     bool v4FovValid = false;
     XrExtent2Di v4Extent[2] = {};  // each composed eye's size in the output (views4_compose), for views4_submit
     XrFovf v4SubmitFov[2] = {};  // the FOV the composed output covers (views4_compose), for views4_submit
-    XrFovf v4LoggedAceFov[2] = {};  // ACE's submitted FOV, as last logged against v4SubmitFov
+    XrFovf v4LoggedGameFov[2] = {};  // ACE's submitted FOV, as last logged against v4SubmitFov
     bool v4Composed = false;
     int captures = 0;
     ULONGLONG lastCapture = 0;
@@ -1342,7 +1342,7 @@ void report_load(double frameMs) {
     char gpuText[192] = "GPU load unknown", cpuText[256] = "threads unknown", shown[256] = "";
     if (gpu.valid)
         std::snprintf(gpuText, sizeof(gpuText), "GPU %.0f%% busy (%ls engine; ACE %.0f%%): %.1f ms of GPU per ACE frame",
-                      gpu.busy, gpu.engine.c_str(), gpu.ace, gpu.busy / 100 * frameMs);
+                      gpu.busy, gpu.engine.c_str(), gpu.game, gpu.busy / 100 * frameMs);
     if (threads.valid)
         std::snprintf(cpuText, sizeof(cpuText),
                       "busiest ACE thread %.0f%% of a core (last: %u%s%ls%s), render thread %.0f%%, all threads %.0f%% "
@@ -1452,7 +1452,7 @@ void write_session_summary(double layerMs) {
             gazeMs = gazeThread.lookupMs / gazeThread.lookups;
     }
     wchar_t log[MAX_PATH] = {};
-    GetEnvironmentVariableW(L"ACE_QV_LOG", log, MAX_PATH);
+    GetEnvironmentVariableW(L"SIM_QVFR_LOG", log, MAX_PATH);
     const std::wstring profile = cpu_profile_last_report();
     const std::wstring layers(layersBelow.begin(), layersBelow.end());
     ini_write_later([s, limited = std::wstring(limited), threads, time = std::wstring(time), mode, fg, gazeMs, layerMs,
@@ -2789,19 +2789,19 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
 bool views4RectsLogged = false;
 
 // Logs ACE's own submitted FOV next to the one the output is submitted with, once and on a change.
-void log_submitted_fov(uint32_t eye, const XrFovf& ace, const XrFovf& composed) {
-    XrFovf& last = quad.v4LoggedAceFov[eye];
+void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& composed) {
+    XrFovf& last = quad.v4LoggedGameFov[eye];
     const auto same = [](const XrFovf& a, const XrFovf& b, float eps) {
         return std::fabs(a.angleLeft - b.angleLeft) < eps && std::fabs(a.angleRight - b.angleRight) < eps &&
                std::fabs(a.angleUp - b.angleUp) < eps && std::fabs(a.angleDown - b.angleDown) < eps;
     };
-    if (same(ace, last, 0.002f))
+    if (same(submitted, last, 0.002f))
         return;
-    last = ace;
+    last = submitted;
     logf("views4: eye %u ACE submits FOV %.4f/%.4f/%.4f/%.4f, output submitted with %.4f/%.4f/%.4f/%.4f (its "
          "rendered projection)%s",
-         eye, ace.angleLeft, ace.angleRight, ace.angleUp, ace.angleDown, composed.angleLeft, composed.angleRight,
-         composed.angleUp, composed.angleDown, same(ace, composed, 0.002f) ? "" : "  <-- DIFFERENT");
+         eye, submitted.angleLeft, submitted.angleRight, submitted.angleUp, submitted.angleDown, composed.angleLeft, composed.angleRight,
+         composed.angleUp, composed.angleDown, same(submitted, composed, 0.002f) ? "" : "  <-- DIFFERENT");
 }
 
 // The D3D11 output chain and compositor, made at the first composition (the game's format, the native eye size,
@@ -2993,10 +2993,10 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         Views4Frame latest{};
         game->qvfr_latest_frame(latest);  // the rendered sizes (live resolution)
         const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.live, latest.width, latest.height);
-        bool aceLayout = true;
+        bool gameLayout = true;
         for (uint32_t v = 0; v < proj->viewCount; ++v)
-            aceLayout &= copy[v].subImage.imageRect.offset.x == static_cast<int32_t>(v) * copy[v].subImage.imageRect.extent.width;
-        if (!aceLayout)
+            gameLayout &= copy[v].subImage.imageRect.offset.x == static_cast<int32_t>(v) * copy[v].subImage.imageRect.extent.width;
+        if (!gameLayout)
             continue;
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_eye_columns() &&
             v4d3d11_compose(session, proj, copy)) {
@@ -3346,7 +3346,7 @@ bool pad_bound(const Hotkeys& h) {
 
 void pad_watch_run() {
     // DirectInput wants a top-level window of this process; a hidden one of the thread's own.
-    HWND window = CreateWindowExW(0, L"STATIC", L"ace-quadview input", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
+    HWND window = CreateWindowExW(0, L"STATIC", L"Sim-QVFR input", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
                                   GetModuleHandleW(nullptr), nullptr);
     PadInput pads;
     if (!window || !pads.open(window)) {
@@ -3437,11 +3437,11 @@ void hotkeys_changed(const Hotkeys& h) {
     logf("hotkeys: %ls", line.c_str());
 }
 
-bool ace_focused();
+bool game_focused();
 
 // Exactly `key`'s modifiers and its key held, while ACE has focus.
 bool key_held(const KeyCombo& key) {
-    if (!key.set() || !ace_focused())
+    if (!key.set() || !game_focused())
         return false;
     const auto down = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
     return down(key.vk) && down(VK_CONTROL) == key.ctrl && down(VK_MENU) == key.alt && down(VK_SHIFT) == key.shift;
@@ -3495,7 +3495,7 @@ std::wstring hotkey_footer(bool helmetOn) {
 // ---- Settings menu ---------------------------------------------------------------------------
 // In the headset (settings_menu.h): its hotkeys (above; Ctrl+Alt+arrows by default), or a controller's left
 // stick click (open, close) and right stick (select, change). Changes are written to the ini the
-// layer reloads from and to the launcher's (ACE_QV_SETTINGS), so they apply as the launcher's do.
+// layer reloads from and to the launcher's (SIM_QVFR_SETTINGS), so they apply as the launcher's do.
 // Shown as a head-locked quad layer on top of whatever this layer submits, where the launcher's
 // Headset menu pane places it ([menu], live); hidden kMenuHideMs after the last input.
 struct Menu {
@@ -3530,7 +3530,7 @@ int64_t qpc_ms(int64_t ms) {
     return frequency * ms / 1000;
 }
 
-bool ace_focused() {
+bool game_focused() {
     DWORD pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     return pid == GetCurrentProcessId();
@@ -3569,7 +3569,7 @@ void menu_placement_changed(const MenuPlacement& placement) {
         menu_open(qpc_now());
 }
 
-// Profiles (profile/profiles.h) in the launcher's folder (ACE_QV_SETTINGS), else next to the ini the layer reads.
+// Profiles (profile/profiles.h) in the launcher's folder (SIM_QVFR_SETTINGS), else next to the ini the layer reads.
 std::wstring menu_profiles_ini() { return menu.settingsIni.empty() ? live.ini : menu.settingsIni; }
 
 void menu_profiles_read() {
@@ -3615,7 +3615,7 @@ void menu_profile_use() {
 void menu_open(int64_t now) {
     if (menu.settingsIni.empty()) {  // the launcher's own ini, where the next launch reads them
         wchar_t path[MAX_PATH] = {};
-        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
+        const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", path, MAX_PATH);
         if (n > 0 && n < MAX_PATH)
             menu.settingsIni = path;
     }
@@ -4124,7 +4124,7 @@ void visor_hotkey() {
             h = helmetSettings;
         }
         wchar_t path[MAX_PATH] = {};
-        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
+        const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", path, MAX_PATH);
         const std::wstring settings = n > 0 && n < MAX_PATH ? std::wstring(path) : std::wstring();
         ini_write_later([ini = live.ini, settings, h] {
             write_helmet_settings(ini.c_str(), h);
@@ -4143,7 +4143,7 @@ void osd_hotkey() {
         OsdPlacement placement = osd.placement;
         placement.enabled = !placement.enabled;
         wchar_t path[MAX_PATH] = {};  // the launcher's own ini: the next launch starts with it
-        const DWORD n = GetEnvironmentVariableW(L"ACE_QV_SETTINGS", path, MAX_PATH);
+        const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", path, MAX_PATH);
         const std::wstring settings = n > 0 && n < MAX_PATH ? std::wstring(path) : std::wstring();
         ini_write_later([ini = live.ini, settings, placement] {
             write_osd_placement(ini.c_str(), placement);
@@ -4261,7 +4261,7 @@ OsdInput osd_input(int64_t now) {
     int samples = 0;
     if (const GpuLoad gpu = gpu_load_window(samples, 0); gpu.valid) {
         in.gpuBusyPercent = gpu.busy;
-        in.gpuAcePercent = gpu.ace;
+        in.gpuGamePercent = gpu.game;
     }
     if (const CpuLoad threads = cpu_load_window(samples, 0); threads.valid) {
         in.cpuBusiestPercent = threads.busiestPercent;
@@ -4445,7 +4445,7 @@ QvfrWindow optimize_window() {
     int samples = 0;
     if (const GpuLoad load = gpu_load_window(samples, 2); load.valid) {
         in.gpuBusyPercent = load.busy;
-        in.gpuAcePercent = load.ace;
+        in.gpuGamePercent = load.game;
     }
     if (const CpuLoad threads = cpu_load_window(samples, 2); threads.valid) {
         in.cpuBusiestPercent = threads.busiestPercent;
@@ -4696,7 +4696,7 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
 
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 
-#define ACEQV_INTERCEPT(fn)                                              \
+#define SIMQVFR_INTERCEPT(fn)                                              \
     if (std::strcmp(name, "xr" #fn) == 0) {                              \
         *function = reinterpret_cast<PFN_xrVoidFunction>(&layer##fn);    \
         return XR_SUCCESS;                                               \
@@ -4705,27 +4705,27 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function) {
     if (!name || !function)
         return XR_ERROR_VALIDATION_FAILURE;
-    ACEQV_INTERCEPT(GetInstanceProcAddr)
+    SIMQVFR_INTERCEPT(GetInstanceProcAddr)
     if (next.EndFrame) {
-        ACEQV_INTERCEPT(EnumerateViewConfigurationViews)
-        ACEQV_INTERCEPT(CreateSession)
-        ACEQV_INTERCEPT(DestroySession)
-        ACEQV_INTERCEPT(BeginSession)
-        ACEQV_INTERCEPT(WaitFrame)
-        ACEQV_INTERCEPT(BeginFrame)
-        ACEQV_INTERCEPT(CreateSwapchain)
-        ACEQV_INTERCEPT(EnumerateSwapchainImages)
-        ACEQV_INTERCEPT(LocateViews)
-        ACEQV_INTERCEPT(CreateReferenceSpace)
-        ACEQV_INTERCEPT(DestroySpace)
-        ACEQV_INTERCEPT(EndFrame)
-        ACEQV_INTERCEPT(AcquireSwapchainImage)
-        ACEQV_INTERCEPT(ReleaseSwapchainImage)
-        ACEQV_INTERCEPT(SuggestInteractionProfileBindings)
-        ACEQV_INTERCEPT(AttachSessionActionSets)
-        ACEQV_INTERCEPT(SyncActions)
+        SIMQVFR_INTERCEPT(EnumerateViewConfigurationViews)
+        SIMQVFR_INTERCEPT(CreateSession)
+        SIMQVFR_INTERCEPT(DestroySession)
+        SIMQVFR_INTERCEPT(BeginSession)
+        SIMQVFR_INTERCEPT(WaitFrame)
+        SIMQVFR_INTERCEPT(BeginFrame)
+        SIMQVFR_INTERCEPT(CreateSwapchain)
+        SIMQVFR_INTERCEPT(EnumerateSwapchainImages)
+        SIMQVFR_INTERCEPT(LocateViews)
+        SIMQVFR_INTERCEPT(CreateReferenceSpace)
+        SIMQVFR_INTERCEPT(DestroySpace)
+        SIMQVFR_INTERCEPT(EndFrame)
+        SIMQVFR_INTERCEPT(AcquireSwapchainImage)
+        SIMQVFR_INTERCEPT(ReleaseSwapchainImage)
+        SIMQVFR_INTERCEPT(SuggestInteractionProfileBindings)
+        SIMQVFR_INTERCEPT(AttachSessionActionSets)
+        SIMQVFR_INTERCEPT(SyncActions)
         if (next.GetVisibilityMaskKHR)
-            ACEQV_INTERCEPT(GetVisibilityMaskKHR)
+            SIMQVFR_INTERCEPT(GetVisibilityMaskKHR)
     }
     return next.GetInstanceProcAddr ? next.GetInstanceProcAddr(instance, name, function) : XR_ERROR_HANDLE_INVALID;
 }
@@ -4808,47 +4808,47 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         start.ini = live.ini.c_str();
         if (!game->qvfr_start(start)) {
             experiment.views4 = false;  // no doubled eye width or rect rewrite without the engine side
-            notice_set(L"ace-quadview is off",
+            notice_set(L"Sim-QVFR is off",
                        {L"This " + std::wstring(thisGame->name) +
-                            L" build isn’t one ace-quadview supports, so the game runs as normal, "
+                            L" build isn’t one Sim-QVFR supports, so the game runs as normal, "
                             L"without foveated rendering. The game has probably been updated.",
-                        L"Look for an ace-quadview release for the new build. The launcher’s Launch checks say the same "
+                        L"Look for an Sim-QVFR release for the new build. The launcher’s Launch checks say the same "
                         L"before a launch."});
         }
     }
     Dispatch d;
     d.GetInstanceProcAddr = gipa;
     bool ok = true;
-#define ACEQV_LOAD(fn) ok &= XR_SUCCEEDED(gipa(*instance, "xr" #fn, reinterpret_cast<PFN_xrVoidFunction*>(&d.fn))) && d.fn;
-    ACEQV_LOAD(EnumerateViewConfigurationViews)
-    ACEQV_LOAD(CreateSession)
-    ACEQV_LOAD(DestroySession)
-    ACEQV_LOAD(BeginSession)
-    ACEQV_LOAD(WaitFrame)
-    ACEQV_LOAD(BeginFrame)
-    ACEQV_LOAD(CreateSwapchain)
-    ACEQV_LOAD(EnumerateSwapchainImages)
-    ACEQV_LOAD(LocateViews)
-    ACEQV_LOAD(EndFrame)
-    ACEQV_LOAD(AcquireSwapchainImage)
-    ACEQV_LOAD(WaitSwapchainImage)
-    ACEQV_LOAD(ReleaseSwapchainImage)
-    ACEQV_LOAD(StringToPath)
-    ACEQV_LOAD(CreateActionSet)
-    ACEQV_LOAD(CreateAction)
-    ACEQV_LOAD(SuggestInteractionProfileBindings)
-    ACEQV_LOAD(AttachSessionActionSets)
-    ACEQV_LOAD(SyncActions)
-    ACEQV_LOAD(CreateActionSpace)
-    ACEQV_LOAD(LocateSpace)
-    ACEQV_LOAD(CreateReferenceSpace)
-    ACEQV_LOAD(DestroySpace)
-    ACEQV_LOAD(DestroySwapchain)
-    ACEQV_LOAD(GetActionStateBoolean)
-    ACEQV_LOAD(GetActionStateVector2f)
-    ACEQV_LOAD(GetCurrentInteractionProfile)
-    ACEQV_LOAD(PathToString)
-#undef ACEQV_LOAD
+#define SIMQVFR_LOAD(fn) ok &= XR_SUCCEEDED(gipa(*instance, "xr" #fn, reinterpret_cast<PFN_xrVoidFunction*>(&d.fn))) && d.fn;
+    SIMQVFR_LOAD(EnumerateViewConfigurationViews)
+    SIMQVFR_LOAD(CreateSession)
+    SIMQVFR_LOAD(DestroySession)
+    SIMQVFR_LOAD(BeginSession)
+    SIMQVFR_LOAD(WaitFrame)
+    SIMQVFR_LOAD(BeginFrame)
+    SIMQVFR_LOAD(CreateSwapchain)
+    SIMQVFR_LOAD(EnumerateSwapchainImages)
+    SIMQVFR_LOAD(LocateViews)
+    SIMQVFR_LOAD(EndFrame)
+    SIMQVFR_LOAD(AcquireSwapchainImage)
+    SIMQVFR_LOAD(WaitSwapchainImage)
+    SIMQVFR_LOAD(ReleaseSwapchainImage)
+    SIMQVFR_LOAD(StringToPath)
+    SIMQVFR_LOAD(CreateActionSet)
+    SIMQVFR_LOAD(CreateAction)
+    SIMQVFR_LOAD(SuggestInteractionProfileBindings)
+    SIMQVFR_LOAD(AttachSessionActionSets)
+    SIMQVFR_LOAD(SyncActions)
+    SIMQVFR_LOAD(CreateActionSpace)
+    SIMQVFR_LOAD(LocateSpace)
+    SIMQVFR_LOAD(CreateReferenceSpace)
+    SIMQVFR_LOAD(DestroySpace)
+    SIMQVFR_LOAD(DestroySwapchain)
+    SIMQVFR_LOAD(GetActionStateBoolean)
+    SIMQVFR_LOAD(GetActionStateVector2f)
+    SIMQVFR_LOAD(GetCurrentInteractionProfile)
+    SIMQVFR_LOAD(PathToString)
+#undef SIMQVFR_LOAD
     gipa(*instance, "xrGetVisibilityMaskKHR", reinterpret_cast<PFN_xrVoidFunction*>(&d.GetVisibilityMaskKHR));
     if (ok && (experiment.views4 || experiment.measure)) {  // time what runs below this layer (report_cpu_times)
         LARGE_INTEGER frequency;
@@ -4868,12 +4868,12 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
 }
 
 }  // namespace
-}  // namespace aceqv
+}  // namespace simqvfr
 
 extern "C" __declspec(dllexport) XrResult XRAPI_CALL
 xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, const char* layerName,
                                    XrNegotiateApiLayerRequest* request) {
-    if (!loaderInfo || !layerName || !request || std::strcmp(layerName, aceqv::kLayerName) != 0 ||
+    if (!loaderInfo || !layerName || !request || std::strcmp(layerName, simqvfr::kLayerName) != 0 ||
         loaderInfo->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
         request->structType != XR_LOADER_INTERFACE_STRUCT_API_LAYER_REQUEST ||
         loaderInfo->minInterfaceVersion > XR_CURRENT_LOADER_API_LAYER_VERSION ||
@@ -4881,9 +4881,9 @@ xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, cons
         return XR_ERROR_INITIALIZATION_FAILED;
     request->layerInterfaceVersion = XR_CURRENT_LOADER_API_LAYER_VERSION;
     request->layerApiVersion = XR_API_VERSION_1_0;
-    request->getInstanceProcAddr = aceqv::layerGetInstanceProcAddr;
-    request->createApiLayerInstance = aceqv::layerCreateApiLayerInstance;
-    if (aceqv::is_game_process())
-        aceqv::log_line("Loader negotiated API layer interface v1 (ace-quadview probe build)");
+    request->getInstanceProcAddr = simqvfr::layerGetInstanceProcAddr;
+    request->createApiLayerInstance = simqvfr::layerCreateApiLayerInstance;
+    if (simqvfr::is_game_process())
+        simqvfr::log_line("Loader negotiated API layer interface v1 (Sim-QVFR probe build)");
     return XR_SUCCESS;
 }

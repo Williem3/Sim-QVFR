@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace aceqv {
+namespace simqvfr {
 
 std::uintptr_t module_base();
 // True when the code at `rva` starts with `anchor` (and is readable).
@@ -35,4 +35,4 @@ std::uintptr_t vtable_slot(std::uintptr_t slotRva);
 // build's own) or already `replacement` (a second call); otherwise nothing is written.
 bool vtable_slot_replace(std::uintptr_t slotRva, std::uintptr_t expectedRva, const void* replacement);
 
-}  // namespace aceqv
+}  // namespace simqvfr

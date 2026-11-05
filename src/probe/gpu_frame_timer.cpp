@@ -10,7 +10,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 using Microsoft::WRL::ComPtr;
@@ -273,4 +273,4 @@ void gpu_frame_timer_report() {
          static_cast<unsigned long long>(s.skipped));
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 // The helmet's pieces (helmet.h), drawn over the scene in this order.
 enum class HelmetPiece { Visor, Bottom, Top };
@@ -67,4 +67,4 @@ private:
     bool loaded_[3] = {};
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

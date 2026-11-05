@@ -12,7 +12,7 @@
 struct ID3D12Device;
 struct ID3D12CommandQueue;
 
-namespace aceqv {
+namespace simqvfr {
 
 enum class GpuMark { kBegin, kRendered, kComposed };
 
@@ -36,4 +36,4 @@ GpuFrameStats gpu_frame_timer_collect_optimizer();
 // logs while the overlay collects too.
 void gpu_frame_timer_report();
 
-}  // namespace aceqv
+}  // namespace simqvfr

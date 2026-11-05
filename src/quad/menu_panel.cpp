@@ -5,7 +5,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 // sRGB colours (the swapchain is _SRGB, so these bytes display as written). 0xRRGGBB.
@@ -200,7 +200,7 @@ bool PanelUploadD3D12::initialize(ID3D12Device* device, ID3D12CommandQueue* queu
         shutdown();
         return false;
     }
-    list_->SetName(L"ace-quadview settings panel");
+    list_->SetName(L"Sim-QVFR settings panel");
     return true;
 }
 
@@ -273,4 +273,4 @@ std::unique_ptr<PanelUpload> make_panel_upload(const SessionGraphics& graphics, 
     return nullptr;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

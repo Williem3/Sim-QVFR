@@ -18,7 +18,7 @@
 #include "quad/d3d11_compositor.h"
 
 using Microsoft::WRL::ComPtr;
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -243,7 +243,7 @@ int main() {
     // piece's first quarter white, the rest clear; the scene through the clear part.
     wchar_t tempDir[MAX_PATH];
     GetTempPathW(MAX_PATH, tempDir);
-    const std::wstring top = std::wstring(tempDir) + L"aceqv-d3d11-helmet-top.png";
+    const std::wstring top = std::wstring(tempDir) + L"simqvfr-d3d11-helmet-top.png";
     const uint32_t clear = 0xFFFFFF00;
     const bool loaded = write_png(top, {0xFFFFFFFF, 0xFFFFFFFF, clear, clear, clear, clear, clear, clear}) &&
                         compositor.load_helmet_piece(HelmetPiece::Top, top);

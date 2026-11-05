@@ -16,9 +16,9 @@ int main() {
     // The log goes to a file of the test's own (opened at its first line), read back at the end.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
-    const std::wstring ownLog = std::wstring(temp) + L"aceqv-d3d12-trace-test.log";
+    const std::wstring ownLog = std::wstring(temp) + L"simqvfr-d3d12-trace-test.log";
     DeleteFileW(ownLog.c_str());
-    SetEnvironmentVariableW(L"ACE_QV_LOG", ownLog.c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", ownLog.c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;
@@ -27,7 +27,7 @@ int main() {
         std::puts("no WARP D3D12 device");
         return 2;
     }
-    if (!aceqv::d3d12_trace_start(device.Get()))
+    if (!simqvfr::d3d12_trace_start(device.Get()))
         return 3;
 
     auto make_texture = [&](UINT width) {
@@ -41,7 +41,7 @@ int main() {
     };
     ComPtr<ID3D12Resource> swapchainImage = make_texture(256), other = make_texture(128);
     ComPtr<ID3D12Resource> internal = make_texture(2048), internalAgain = make_texture(2048);
-    aceqv::d3d12_trace_register_image(swapchainImage.Get(), 256, 64, 1);
+    simqvfr::d3d12_trace_register_image(swapchainImage.Get(), 256, 64, 1);
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 3};
     ComPtr<ID3D12DescriptorHeap> rtvHeap;
@@ -74,7 +74,7 @@ int main() {
     list->Close();
 
     char logPath[MAX_PATH];
-    GetEnvironmentVariableA("ACE_QV_LOG", logPath, MAX_PATH);
+    GetEnvironmentVariableA("SIM_QVFR_LOG", logPath, MAX_PATH);
     std::ifstream log(logPath);
     std::string line;
     int omHits = 0, passHits = 0, viewportLines = 0, falseHits = 0, allocations = 0, firstBinds = 0, repeatBinds = 0;

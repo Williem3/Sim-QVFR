@@ -8,7 +8,7 @@
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
 
-namespace aceqv::launcher::ui {
+namespace simqvfr::launcher::ui {
 namespace {
 
 D2D1_COLOR_F d2d(Color c) {
@@ -321,4 +321,4 @@ float Canvas::measure_height(const std::wstring& s, const tokens::TypeStyle& sty
     return m.height;
 }
 
-}  // namespace aceqv::launcher::ui
+}  // namespace simqvfr::launcher::ui

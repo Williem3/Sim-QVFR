@@ -13,7 +13,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 struct Worker {
@@ -329,4 +329,4 @@ CpuLoad cpu_load_window(int& samples, int window) {
     return load;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

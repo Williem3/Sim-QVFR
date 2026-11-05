@@ -6,6 +6,6 @@
 
 namespace ace {
 
-aceqv::games::GameAdapter& adapter();
+simqvfr::games::GameAdapter& adapter();
 
 }  // namespace ace

@@ -10,7 +10,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 inline constexpr int kGazeDeadzoneDefault = 15;  // tenths of a degree
 inline constexpr int kGazeDeadzoneMax = 50;
@@ -33,4 +33,4 @@ inline bool write_gaze_deadzone(const wchar_t* ini, int tenths) {
     return WritePrivateProfileStringW(L"quad", L"gaze_deadzone", gaze_deadzone_text(tenths).c_str(), ini) != 0;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

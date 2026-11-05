@@ -4,7 +4,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 
 bool FocusOutline::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, DXGI_FORMAT format) {
     shutdown();
@@ -24,7 +24,7 @@ bool FocusOutline::initialize(ID3D12Device* device, ID3D12CommandQueue* queue, D
         shutdown();
         return false;
     }
-    list_->SetName(L"ace-quadview focus outline");
+    list_->SetName(L"Sim-QVFR focus outline");
     return true;
 }
 
@@ -100,4 +100,4 @@ bool FocusOutline::draw(ID3D12Resource* image, const std::vector<OutlineBox>& bo
     return true;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

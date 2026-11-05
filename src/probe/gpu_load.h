@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace aceqv {
+namespace simqvfr {
 
 inline constexpr int kGpuLoadMs = 250;
 
@@ -27,7 +27,7 @@ GpuEngineName parse_gpu_engine_name(const std::wstring& name);
 struct GpuLoad {
     bool valid = false;
     double busy = 0;     // percent: the adapter's busiest 3D or compute engine, all processes
-    double ace = 0;      // percent: this process on that engine
+    double game = 0;     // percent: this process on that engine
     std::wstring engine; // its type, e.g. "3D"
 };
 // One sample (instance name, utilization percent) for the adapter (`luidHigh`, `luidLow`) and process
@@ -45,4 +45,4 @@ GpuLoad gpu_load_latest();
 // many), and resets that window.
 GpuLoad gpu_load_window(int& samples, int window = 1);
 
-}  // namespace aceqv
+}  // namespace simqvfr

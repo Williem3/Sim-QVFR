@@ -13,7 +13,7 @@
 
 #include "probe/cpu_profile.h"
 
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 
@@ -77,7 +77,7 @@ int main() {
     });
     while (!id || !sleeperId)
         Sleep(1);
-    const std::wstring path = (std::filesystem::temp_directory_path() / L"ace-qv-cpu-profile-test.txt").wstring();
+    const std::wstring path = (std::filesystem::temp_directory_path() / L"sim-qvfr-cpu-profile-test.txt").wstring();
     DeleteFileW(path.c_str());
     check(cpu_profile_start({{id, GetCurrentThreadId(), sleeperId}, 1, path}), "a capture starts (the calling thread profiled too)");
     check(!cpu_profile_start({{id}, 1, path}), "only one capture at a time");

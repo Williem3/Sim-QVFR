@@ -9,7 +9,7 @@
 #include "../../probe/probe.h"
 #include "../../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr uint64_t kReportEvery = 900;
@@ -88,4 +88,4 @@ void views3_watch() {
         log_line("views3: renderer begin probe not found; no view-mode report");
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

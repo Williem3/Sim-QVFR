@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace aceqv::launcher::ui::tokens {
+namespace simqvfr::launcher::ui::tokens {
 
 // Colours, 0xRRGGBB.
 struct Colors {
@@ -198,4 +198,4 @@ inline constexpr float kTabbarHeight = 48.0f;
 inline constexpr float kActionbarHeight = 68.0f;
 inline constexpr float kSidebarRowHeight = 30.0f;
 
-}  // namespace aceqv::launcher::ui::tokens
+}  // namespace simqvfr::launcher::ui::tokens

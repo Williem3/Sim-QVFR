@@ -33,7 +33,7 @@ int main() {
           "primary passes: mono, the left eye and the left focus view (each leads an instanced pair)");
 
     // Equal outer and focus views: each eye's half holds its outer view over its focus view.
-    const aceqv::Views4Layout equal;
+    const simqvfr::Views4Layout equal;
     const PassRect l = pass_rect(equal, kPassLeft, 8000, 3000), r = pass_rect(equal, kPassRight, 8000, 3000),
                    ls = pass_rect(equal, kPassLeftSide, 8000, 3000), rs = pass_rect(equal, kPassRightSide, 8000, 3000);
     check(l.x == 0 && l.y == 0 && l.width == 4000 && l.height == 1500 && r.x == 4000 && r.y == 0 && ls.x == 0 &&
@@ -42,7 +42,7 @@ int main() {
 
     // Instanced stereo draws both eyes in one viewport from x = 0 to the right eye's edge, halved: the right eye
     // must start where the left one ends. OpenComposite copies each eye's half: each eye's views stay in it.
-    const aceqv::Views4Layout gate = aceqv::views4_layout(0.6, 0.4);  // acc-gate.ini
+    const simqvfr::Views4Layout gate = simqvfr::views4_layout(0.6, 0.4);  // acc-gate.ini
     const int width = 4844, height = 3376;
     const PassRect gl = pass_rect(gate, kPassLeft, width, height), gr = pass_rect(gate, kPassRight, width, height),
                    gls = pass_rect(gate, kPassLeftSide, width, height), grs = pass_rect(gate, kPassRightSide, width, height);
@@ -57,7 +57,7 @@ int main() {
     // The layer submits eye e as OpenComposite's half (offset e x W/2) moved and cut to view e: the view UE drew.
     bool same = true;
     for (int e = 0; e < 2; ++e) {
-        const aceqv::ViewRect view = aceqv::views4_rect_eye_columns(gate, e, 2 * (width / 2), height);
+        const simqvfr::ViewRect view = simqvfr::views4_rect_eye_columns(gate, e, 2 * (width / 2), height);
         const int submittedX = e * (width / 2) + view.left - e * (width / 2), submittedY = view.top;
         const PassRect rendered = pass_rect(gate, kPassLeft + e, width, height);
         same &= submittedX == rendered.x && submittedY == rendered.y && view.width == rendered.width &&
@@ -89,14 +89,14 @@ int main() {
         const float eye[4] = {-1.2f, 1.0f, 1.0f, -1.1f};
         const float forward[3] = {1, 0, 0};
         float f[3];
-        ue_rotate(ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.3, 0.0)), forward, f);
+        ue_rotate(ue_quat(simqvfr::focus_turn(eye, 0.4, 0.4, 0.3, 0.0)), forward, f);
         check(f[1] > 0.25f && std::fabs(f[2]) < 1e-5f && f[0] > 0.9f, "a gaze to the right turns the focus view right");
-        ue_rotate(ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.0, 0.3)), forward, f);
+        ue_rotate(ue_quat(simqvfr::focus_turn(eye, 0.4, 0.4, 0.0, 0.3)), forward, f);
         check(f[2] > 0.25f && std::fabs(f[1]) < 1e-5f, "a gaze upwards turns the focus view up");
         // An eye yawed 90 degrees right (forward = +Y): the same right turn moves forward from +Y towards -X.
         const float s = std::sqrt(0.5f);
         const UeQuat yawed{0, 0, s, s};
-        ue_rotate(ue_mul(yawed, ue_quat(aceqv::focus_turn(eye, 0.4, 0.4, 0.3, 0.0))), forward, f);
+        ue_rotate(ue_mul(yawed, ue_quat(simqvfr::focus_turn(eye, 0.4, 0.4, 0.3, 0.0))), forward, f);
         check(f[1] > 0.9f && f[0] < -0.25f, "the turn applies in the eye's own frame");
     }
     {
@@ -104,7 +104,7 @@ int main() {
         // world), each focus view's from the eye's turned in its own frame; the record's turns are the ones applied.
         const auto view_matrix = [](const UeQuat& q, float (&v)[16]) {
             float c[9];  // column form: world = C local
-            aceqv::to_matrix(XrQuaternionf{q.x, q.y, q.z, q.w}, c);
+            simqvfr::to_matrix(XrQuaternionf{q.x, q.y, q.z, q.w}, c);
             // Row vectors: local = world C; then UE's view axes (x right = local Y, y up = local Z, z forward = X).
             for (int r = 0; r < 3; ++r) {
                 v[r * 4 + 0] = c[r * 3 + 1];
@@ -116,8 +116,8 @@ int main() {
             v[15] = 1;
         };
         const float eyeTan[2][4] = {{-1.2f, 1.0f, 1.0f, -1.1f}, {-1.0f, 1.2f, 1.0f, -1.1f}};
-        const XrQuaternionf turn[2] = {aceqv::focus_turn(eyeTan[0], 0.4, 0.4, 0.3, -0.2),
-                                       aceqv::focus_turn(eyeTan[1], 0.4, 0.4, -0.25, 0.1)};
+        const XrQuaternionf turn[2] = {simqvfr::focus_turn(eyeTan[0], 0.4, 0.4, 0.3, -0.2),
+                                       simqvfr::focus_turn(eyeTan[1], 0.4, 0.4, -0.25, 0.1)};
         const UeQuat head = ue_mul(UeQuat{0, 0, std::sin(0.3f), std::cos(0.3f)}, UeQuat{0, std::sin(-0.1f), 0, std::cos(-0.1f)});
         const UeQuat eyes[2] = {ue_mul(head, UeQuat{0, 0, std::sin(-0.02f), std::cos(-0.02f)}), head};
         float views[4][16], projections[4][16];
@@ -132,13 +132,13 @@ int main() {
             std::memcpy(projections[e + 2], eyeProjection, sizeof(eyeProjection));
             focus_projection(projections[e + 2], 0.4, 0.4);
         }
-        aceqv::Views4Frame frame{};
+        simqvfr::Views4Frame frame{};
         const bool ok = rendered_frame(views, projections, frame);
         bool match = ok;
         for (int e = 0; e < 2 && ok; ++e) {
             float want[9], got[9];
-            aceqv::to_matrix(aceqv::qconj(turn[e]), want);
-            aceqv::to_matrix(aceqv::qconj(frame.turn[e]), got);
+            simqvfr::to_matrix(simqvfr::qconj(turn[e]), want);
+            simqvfr::to_matrix(simqvfr::qconj(frame.turn[e]), got);
             for (int i = 0; i < 9; ++i)
                 match &= std::fabs(want[i] - got[i]) < 1e-4f;
             match &= std::fabs(frame.outerTan[e][0] - eyeTan[e][0]) < 1e-4f &&
@@ -148,7 +148,7 @@ int main() {
         views[1][0] = -views[1][0];  // a mirrored view (a planar reflection's)
         views[1][1] = -views[1][1];
         views[1][2] = -views[1][2];
-        aceqv::Views4Frame kept = frame;
+        simqvfr::Views4Frame kept = frame;
         check(!rendered_frame(views, projections, kept) && std::memcmp(&kept, &frame, sizeof(kept)) == 0,
               "a mirrored view: no record");
     }
@@ -181,10 +181,10 @@ int main() {
         // Live resolution in eye columns: launch periphery 0.5, focus 0.3 x 0.3, no crop: the target two 0.5 wide,
         // 0.8 high (2000 x 1600 for a 2000 x 2000 native eye); the launch eyes 1000 x 1000, the focus views
         // 1000 x 600 under them.
-        const aceqv::Views4Layout launch = aceqv::views4_layout(0.5, 0.3, 0.3);
+        const simqvfr::Views4Layout launch = simqvfr::views4_layout(0.5, 0.3, 0.3);
         constexpr int W = 2000, H = 1600;
-        const auto rect = [&](const aceqv::Views4Layout& lay, int pass) { return pass_rect(lay, pass, W, H); };
-        const aceqv::Views4Layout atLaunch = aceqv::views4_live_eye_columns(launch, 0.5, 0.3);
+        const auto rect = [&](const simqvfr::Views4Layout& lay, int pass) { return pass_rect(lay, pass, W, H); };
+        const simqvfr::Views4Layout atLaunch = simqvfr::views4_live_eye_columns(launch, 0.5, 0.3);
         bool unchanged = atLaunch.live;
         for (int pass = kPassLeft; pass <= kPassRightSide; ++pass) {
             const PassRect a = rect(launch, pass), b = rect(atLaunch, pass);
@@ -193,26 +193,26 @@ int main() {
         check(unchanged, "live layout at the launch sizes: the launch rects");
         // A lower periphery: every view narrower (one width: instanced stereo), the outer rows lower, the focus rows
         // as tall as before, right under them; each pair side by side from x = 0.
-        const aceqv::Views4Layout low = aceqv::views4_live_eye_columns(launch, 0.25, 0.3);
+        const simqvfr::Views4Layout low = simqvfr::views4_live_eye_columns(launch, 0.25, 0.3);
         const PassRect lo = rect(low, kPassLeft), ro = rect(low, kPassRight), lf = rect(low, kPassLeftSide),
                        rf = rect(low, kPassRightSide);
         check(lo.x == 0 && lo.width == 500 && lo.height == 500 && ro.x == 500 && ro.width == 500 && lf.x == 0 &&
                   lf.y == 500 && lf.width == 500 && lf.height == 600 && rf.x == 500 && rf.y == 500,
               "live periphery 25%: every view 500 wide, eyes 500 high, the focus views 600 high under them");
         // Caps: the periphery no wider than half the target; a taller focus takes the height first.
-        const aceqv::Views4Fit wide = aceqv::views4_fit_eye_columns(launch, 1.0, 0.3);
+        const simqvfr::Views4Fit wide = simqvfr::views4_fit_eye_columns(launch, 1.0, 0.3);
         check(wide.outerCapped && !wide.outerByRoom && std::fabs(wide.outer - 0.5) < 1e-9,
               "live periphery above the target's half: capped at it");
-        const aceqv::Views4Fit tall = aceqv::views4_fit_eye_columns(launch, 0.5, 0.7);
+        const simqvfr::Views4Fit tall = simqvfr::views4_fit_eye_columns(launch, 0.5, 0.7);
         check(!tall.focusCapped && std::fabs(tall.focusHeight - 0.7) < 1e-9 && tall.outerByRoom &&
                   std::fabs(tall.outer - 0.1) < 1e-9,
               "a taller focus view first: the periphery takes the height left (held by room)");
-        const aceqv::Views4Layout tallLayout = aceqv::views4_live_eye_columns(launch, 0.5, 0.7);
+        const simqvfr::Views4Layout tallLayout = simqvfr::views4_live_eye_columns(launch, 0.5, 0.7);
         const PassRect tf = rect(tallLayout, kPassLeftSide);
         check(tf.y + tf.height <= H && rect(tallLayout, kPassLeft).height + tf.height <= H,
               "the outer and focus rows fit the target");
         // A frame's record (width, height) gives the compositor the same rects.
-        const aceqv::Views4Layout recorded = aceqv::views4_with_live(launch, true, low.width, low.height);
+        const simqvfr::Views4Layout recorded = simqvfr::views4_with_live(launch, true, low.width, low.height);
         bool sameRects = recorded.live;
         for (int pass = kPassLeft; pass <= kPassRightSide; ++pass) {
             const PassRect a = rect(low, pass), b = rect(recorded, pass);
@@ -222,7 +222,7 @@ int main() {
         // Which layout a frame was rendered with, from its final rects: the newest with their sizes at one scale (the
         // renderer's resolution fraction, its places rounded to 4); none for sizes of no layout.
         const HandedLayout handed[2] = {handed_layout(launch, W, H), handed_layout(low, W, H)};
-        const auto finals = [&](const aceqv::Views4Layout& lay, double scale, int (&out)[kViews][4]) {
+        const auto finals = [&](const simqvfr::Views4Layout& lay, double scale, int (&out)[kViews][4]) {
             for (int v = 0; v < kViews; ++v) {
                 const PassRect p = rect(lay, kPassLeft + v);
                 const int x = static_cast<int>(p.x * scale) / 4 * 4, y = static_cast<int>(p.y * scale) / 4 * 4;

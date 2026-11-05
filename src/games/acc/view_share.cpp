@@ -94,9 +94,9 @@ std::atomic<ID3D11DeviceContext*> immediate{nullptr};
 
 // The render thread's (the only caller of ACC's immediate context), and view_share_stop's: under `mutex`.
 std::mutex mutex;
-aceqv::D3D11ViewResample resampler;
+simqvfr::D3D11ViewResample resampler;
 ComPtr<ID3D11Texture2D> eyeSsr[2];
-aceqv::ViewRegion eyeSsrRegion[2];
+simqvfr::ViewRegion eyeSsrRegion[2];
 bool eyeSsrFresh[2] = {};
 // The texture each eye last drew its AO into this frame (compared, never dereferenced): a focus view's draw is
 // refilled only from the same texture's eye region. Under DLSS several single-channel textures share the scene
@@ -108,7 +108,7 @@ ID3D11Resource* eyeAo[2] = {};
 // finished region.
 struct AoPending {
     ComPtr<ID3D11Texture2D> texture;
-    aceqv::ViewRegion eye, focus;
+    simqvfr::ViewRegion eye, focus;
     bool set = false;
 };
 AoPending aoPending[2];  // under `mutex`
@@ -191,7 +191,7 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
         std::lock_guard guard(loggedMutex);
         if (logged.size() < 32 && std::find(logged.begin(), logged.end(), key) == logged.end()) {
             logged.push_back(key);
-            aceqv::logf("acc view share: format %d texture %dx%d (mips %u, array %u, bind 0x%x) is not a scene texture "
+            simqvfr::logf("acc view share: format %d texture %dx%d (mips %u, array %u, bind 0x%x) is not a scene texture "
                         "(views reach %dx%d, target %dx%d)",
                         static_cast<int>(d.Format), w, h, d.MipLevels, d.ArraySize, d.BindFlags, extent[0], extent[1],
                         target[0], target[1]);
@@ -205,7 +205,7 @@ bool on_immediate(ID3D11DeviceContext* ctx) {
 }
 
 // The view the bound viewport is (-1: none, logged once per effect), its rect in `region`.
-int bound_view(ID3D11DeviceContext* ctx, Counts& counts, const char* what, aceqv::ViewRegion& region) {
+int bound_view(ID3D11DeviceContext* ctx, Counts& counts, const char* what, simqvfr::ViewRegion& region) {
     D3D11_VIEWPORT vp{};
     UINT n = 1;
     ctx->RSGetViewports(&n, &vp);
@@ -217,7 +217,7 @@ int bound_view(ID3D11DeviceContext* ctx, Counts& counts, const char* what, aceqv
     if (view < 0) {
         counts.unplaced.fetch_add(1, std::memory_order_relaxed);
         if (!counts.unplacedLogged.exchange(true))
-            aceqv::logf("acc view share: %s at viewport %.0f,%.0f %.0fx%.0f, none of the views' (%d,%d %dx%d / %d,%d "
+            simqvfr::logf("acc view share: %s at viewport %.0f,%.0f %.0fx%.0f, none of the views' (%d,%d %dx%d / %d,%d "
                         "%dx%d / %d,%d %dx%d / %d,%d %dx%d): left as it is",
                         what, vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, rects[0][0], rects[0][1], rects[0][2],
                         rects[0][3], rects[1][0], rects[1][1], rects[1][2], rects[1][3], rects[2][0], rects[2][1],
@@ -229,8 +229,8 @@ int bound_view(ID3D11DeviceContext* ctx, Counts& counts, const char* what, aceqv
 }
 
 // Focus view e's mapping into its eye from this frame's record (what its views were rendered with).
-bool focus_mapping(int e, aceqv::ViewMapping& m) {
-    aceqv::Views4Frame frame{};
+bool focus_mapping(int e, simqvfr::ViewMapping& m) {
+    simqvfr::Views4Frame frame{};
     if (!views_latest_frame(frame) || frame.focusTan[e][1] <= frame.focusTan[e][0] ||
         frame.outerTan[e][1] <= frame.outerTan[e][0])
         return false;
@@ -238,14 +238,14 @@ bool focus_mapping(int e, aceqv::ViewMapping& m) {
         m.focusTan[i] = frame.focusTan[e][i];
         m.eyeTan[i] = frame.outerTan[e][i];
     }
-    aceqv::to_matrix(frame.turn[e], m.rotation);  // the focus camera is the eye's turned by turn[e]
+    simqvfr::to_matrix(frame.turn[e], m.rotation);  // the focus camera is the eye's turned by turn[e]
     return true;
 }
 
-void note_shared(Counts& counts, const char* what, int view, const aceqv::ViewRegion& from, const aceqv::ViewRegion& to) {
+void note_shared(Counts& counts, const char* what, int view, const simqvfr::ViewRegion& from, const simqvfr::ViewRegion& to) {
     counts.shared[view - 2].fetch_add(1, std::memory_order_relaxed);
     if (!counts.firstLogged.exchange(true))
-        aceqv::logf("acc view share: focus view %d's %s from its eye's (eye %d,%d %dx%d -> focus %d,%d %dx%d)", view, what,
+        simqvfr::logf("acc view share: focus view %d's %s from its eye's (eye %d,%d %dx%d -> focus %d,%d %dx%d)", view, what,
                     from.x, from.y, from.width, from.height, to.x, to.y, to.width, to.height);
 }
 
@@ -294,7 +294,7 @@ void on_composite(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
     }
     if (!cubeArray || !ssr)
         return;
-    aceqv::ViewRegion region;
+    simqvfr::ViewRegion region;
     const int view = bound_view(ctx, ssrCounts, "a reflection composite", region);
     if (view < 0)
         return;
@@ -311,7 +311,7 @@ void on_composite(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
         return;
     }
     eyeSsrFresh[e] = false;
-    aceqv::ViewMapping m{};
+    simqvfr::ViewMapping m{};
     if (!focus_mapping(e, m) || !resampler.resample(eyeSsr[e].Get(), eyeSsrRegion[e], ssr.Get(), region, m)) {
         ssrCounts.failed.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -362,7 +362,7 @@ void STDMETHODCALLTYPE set_targets_and_uavs_hook(ID3D11DeviceContext* ctx, UINT 
 // A draw into the AO texture (the view's AO, just drawn): after a focus view's, its region from its eye's once ACC
 // leaves the texture (flush_ao).
 void on_ao_drawn(ID3D11DeviceContext* ctx, ID3D11Resource* written) {
-    aceqv::ViewRegion region;
+    simqvfr::ViewRegion region;
     const int view = bound_view(ctx, aoCounts, "a draw into the AO texture", region);
     if (view < 0)
         return;
@@ -411,7 +411,7 @@ void flush_ao() {
             continue;
         pending.set = false;
         ComPtr<ID3D11Texture2D> ao = std::move(pending.texture);
-        aceqv::ViewMapping m{};
+        simqvfr::ViewMapping m{};
         if (!focus_mapping(e, m) || !resampler.resample_target(ao.Get(), pending.eye, ao.Get(), pending.focus, m)) {
             aoCounts.failed.fetch_add(1, std::memory_order_relaxed);
             continue;
@@ -471,7 +471,7 @@ bool hook_vtable(void** vtable) {
 }
 
 void report(Counts& c, const char* what) {
-    aceqv::logf("acc view share: %s over the last 900 frames: focus views given their eye's left %llu right %llu; eye "
+    simqvfr::logf("acc view share: %s over the last 900 frames: focus views given their eye's left %llu right %llu; eye "
                 "passes %llu, focus passes without an eye's %llu, into another texture than their eye's %llu, failed %llu, "
                 "at no view's viewport %llu",
                 what, static_cast<unsigned long long>(c.shared[0].exchange(0)),
@@ -486,9 +486,9 @@ void view_share_configure(bool ssr, bool ao) {
     shareSsr.store(ssr);
     shareAo.store(ao);
     if (!ssr)
-        aceqv::log_line("acc view share: reflections not shared (acc_ssr_share=0): each focus view traces its own");
+        simqvfr::log_line("acc view share: reflections not shared (acc_ssr_share=0): each focus view traces its own");
     if (!ao)
-        aceqv::log_line("acc view share: ambient occlusion not shared (acc_ao_share=0): each focus view computes its own");
+        simqvfr::log_line("acc view share: ambient occlusion not shared (acc_ao_share=0): each focus view computes its own");
 }
 
 void view_share_start(ID3D11Device* device) {
@@ -499,20 +499,20 @@ void view_share_start(ID3D11Device* device) {
     device->GetImmediateContext(&context);
     void** vtable = *reinterpret_cast<void***>(context.Get());
     if (!resampler.initialize(device)) {
-        aceqv::log_line("acc view share: resampler unavailable; each focus view computes its own effects");
+        simqvfr::log_line("acc view share: resampler unavailable; each focus view computes its own effects");
         return;
     }
     const int before = hookedCount.load();
     if (!hook_vtable(vtable)) {
-        aceqv::log_line("acc view share: hooking the immediate context failed; each focus view computes its own effects");
+        simqvfr::log_line("acc view share: hooking the immediate context failed; each focus view computes its own effects");
         resampler.shutdown();
         return;
     }
     if (hookedCount.load() != before && before > 0)
-        aceqv::logf("acc view share: this session's context has another vtable (%p): hooked too", static_cast<void*>(vtable));
+        simqvfr::logf("acc view share: this session's context has another vtable (%p): hooked too", static_cast<void*>(vtable));
     immediate.store(context.Get());  // the device holds it as long as the session's
     sessionVtable = vtable;
-    aceqv::logf("acc view share: the session's immediate context %p, vtable %p (in %s)",
+    simqvfr::logf("acc view share: the session's immediate context %p, vtable %p (in %s)",
                 static_cast<void*>(context.Get()), static_cast<void*>(vtable),
                 [&] {
                     HMODULE owner = nullptr;
@@ -525,7 +525,7 @@ void view_share_start(ID3D11Device* device) {
                     return narrow;
                 }());
     active.store(true);
-    aceqv::logf("acc view share: on (the focus views take their eyes' %s)",
+    simqvfr::logf("acc view share: on (the focus views take their eyes' %s)",
                 shareSsr.load() && shareAo.load() ? "reflections and ambient occlusion"
                 : shareSsr.load()                 ? "reflections"
                                                   : "ambient occlusion");
@@ -563,7 +563,7 @@ void view_share_frame_end() {
             }
             if (aoTrace.dropped)
                 std::snprintf(line + n, sizeof(line) - n, " (+%d more)", aoTrace.dropped);
-            aceqv::log_line(line);
+            simqvfr::log_line(line);
         }
         for (int e = 0; e < 2; ++e)
             eyeAo[e] = nullptr;  // an eye's AO is this frame's only
@@ -589,7 +589,7 @@ void view_share_frame_end() {
         const bool ours = sessionVtable && sessionVtable[kSlotDrawIndexed] == reinterpret_cast<void*>(&draw_indexed_hook) &&
                           sessionVtable[kSlotDispatch] == reinterpret_cast<void*>(&dispatch_hook) &&
                           sessionVtable[kSlotOMSetRenderTargets] == reinterpret_cast<void*>(&set_targets_hook);
-        aceqv::logf("acc view share: hooks over the last 900 frames: draws %llu (on the session's context %llu), "
+        simqvfr::logf("acc view share: hooks over the last 900 frames: draws %llu (on the session's context %llu), "
                     "dispatches %llu (%llu), target sets %llu (%llu), draw/dispatch slots put back %llu times; the "
                     "context's vtable %p %s the hooked one %p, whose slots are %s",
                     static_cast<unsigned long long>(hookCalls.draws.exchange(0)),

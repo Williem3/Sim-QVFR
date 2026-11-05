@@ -8,7 +8,7 @@
 
 #include <d3d12.h>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct OutlineBox {
     int left, top, right, bottom;  // pixels, exclusive right/bottom
@@ -37,4 +37,4 @@ private:
     int frame_ = 0;
 };
 
-}  // namespace aceqv
+}  // namespace simqvfr

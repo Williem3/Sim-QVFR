@@ -1,5 +1,5 @@
 # Starts ACC under RenderDoc exactly as the launcher would start it: the launcher's dry run writes this launch's
-# run folder (the layer manifest pointing at build\Release\ace-quadview.dll, the settings snapshot) and prints the
+# run folder (the layer manifest pointing at build\Release\sim-qvfr.dll, the settings snapshot) and prints the
 # variables; this script sets them and has renderdoccmd start the game with them, so RenderDoc hooks D3D11 from
 # the first frame. Captures (F12 or PrtScn in the game window, or qrenderdoc's File > Attach to Running Instance)
 # land on the Desktop as acc_<date>_<time>_frame<N>.rdc.
@@ -13,13 +13,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $bin = Join-Path $repo "build\$Build"
-$launcher = Join-Path $bin 'ace-quadview-launcher.exe'
+$launcher = Join-Path $bin 'sim-qvfr-launcher.exe'
 foreach ($p in $launcher, $RenderDoc) { if (-not (Test-Path $p)) { throw "missing: $p" } }
 if (-not (Get-Process steam -ErrorAction SilentlyContinue)) { throw 'Steam is not running; start it first' }
 if (Get-Process AC2-Win64-Shipping -ErrorAction SilentlyContinue) { throw 'ACC is already running; close it first' }
 
 # The launcher is a GUI-subsystem exe: `&` neither waits for it nor captures its output, so redirect to a file.
-$planFile = Join-Path $env:TEMP 'ace-quadview-renderdoc-plan.txt'
+$planFile = Join-Path $env:TEMP 'sim-qvfr-renderdoc-plan.txt'
 Start-Process -FilePath $launcher -ArgumentList '--dry-run' -WorkingDirectory $bin -Wait -NoNewWindow `
     -RedirectStandardOutput $planFile
 $plan = Get-Content $planFile

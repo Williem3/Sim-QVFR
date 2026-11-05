@@ -54,7 +54,7 @@ body:
     attributes:
       label: Screenshots and logs
       description: |
-        Drag in the report zip from the launcher's logs folder (ace-quadview-report-*.zip): it has the session's
+        Drag in the report zip from the launcher's logs folder (sim-qvfr-report-*.zip): it has the session's
         logs and any hang dump. Screenshots of an error message help too.
   - type: textarea
     id: checks

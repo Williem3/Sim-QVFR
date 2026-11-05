@@ -7,14 +7,14 @@
 
 #include "../games/game.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace {
 
 namespace fs = std::filesystem;
 
 constexpr wchar_t kToolkitKey[] = L"SOFTWARE\\OpenXR_Toolkit";
 
-// A layer's place counted from ACE: every layer above the ACE layer 0 (the loader orders those), then
+// A layer's place counted from ACE: every layer above the Sim-QVFR layer 0 (the loader orders those), then
 // the layers below it in order. -1: not loaded at this launch.
 int rank(const LayerPlan& plan, const char* name) {
     for (const std::string& above : plan.above)
@@ -78,17 +78,17 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     if (in.gameExe.empty()) {
         add("game", CheckTone::Bad, name + L" not found",
             L"Steam doesn’t list it in any of its libraries. Set game_dir_" +
-                std::wstring(game.id, game.id + std::strlen(game.id)) + L" in the [launcher] section of ace-quadview.ini "
+                std::wstring(game.id, game.id + std::strlen(game.id)) + L" in the [launcher] section of sim-qvfr.ini "
             L"to its folder (the one Steam’s Browse local files opens).");
     } else {
         switch (in.build) {
         case BuildState::Supported:
             add("build", CheckTone::Ok, L"Game build supported",
-                exe + L" is the build this version of ace-quadview was made for.");
+                exe + L" is the build this version of Sim-QVFR was made for.");
             break;
         case BuildState::Hashing:
             add("build", CheckTone::Pending, L"Checking the game build…",
-                L"Reading " + exe + L" to compare it with the build ace-quadview supports.");
+                L"Reading " + exe + L" to compare it with the build Sim-QVFR supports.");
             break;
         case BuildState::Unknown:
             add("build", CheckTone::Warn, L"Game build not checked",
@@ -96,8 +96,8 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
             break;
         case BuildState::Unsupported: {
             Check& c = add("build", method ? CheckTone::Bad : CheckTone::Warn, name + L" was updated",
-                           L"Its " + exe + L" isn’t the build this version of ace-quadview supports, so ace-quadview "
-                           L"stays off and the game runs as normal, without foveated rendering. Look for an ace-quadview "
+                           L"Its " + exe + L" isn’t the build this version of Sim-QVFR supports, so Sim-QVFR "
+                           L"stays off and the game runs as normal, without foveated rendering. Look for an Sim-QVFR "
                            L"release for the new build.");
             c.fix = CheckFix::OpenReleases;
             c.fixLabel = L"Check for an update";
@@ -115,14 +115,14 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         c.fix = CheckFix::StartSteam;
         c.fixLabel = L"Start Steam";
     }
-    // Running with ace-quadview (this launcher's launch, or one before it) is how it should be; running without it,
+    // Running with Sim-QVFR (this launcher's launch, or one before it) is how it should be; running without it,
     // a launch would start a second copy.
     if (in.gameRunning && in.gameHasLayer)
-        add("ace_running", CheckTone::Ok, name + L" is running with ace-quadview",
+        add("game_running", CheckTone::Ok, name + L" is running with Sim-QVFR",
             L"Changes here reach it as you make them; resolution beyond its launch size waits for the next launch.");
     else if (in.gameRunning)
-        add("ace_running", CheckTone::Bad, name + L" is already running",
-            L"It runs without ace-quadview. Close it first: the launch starts a new copy of the game with ace-quadview.");
+        add("game_running", CheckTone::Bad, name + L" is already running",
+            L"It runs without Sim-QVFR. Close it first: the launch starts a new copy of the game with Sim-QVFR.");
 
     // OpenComposite, for a game that reaches OpenXR through it.
     if (game.openComposite && in.openComposite != OpenComposite::Unknown) {
@@ -131,7 +131,7 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
                 shortName + L" reaches your headset’s OpenXR runtime through it.");
         } else {
             Check& c = add("opencomposite", CheckTone::Bad, L"OpenComposite isn’t installed",
-                           shortName + L" uses SteamVR’s OpenVR; ace-quadview needs it on OpenXR, through OpenComposite. "
+                           shortName + L" uses SteamVR’s OpenVR; Sim-QVFR needs it on OpenXR, through OpenComposite. "
                            L"Without it the game starts without foveated rendering. The guide shows the one file to copy.");
             c.fix = CheckFix::OpenGuide;
             c.fixLabel = L"Open the guide";
@@ -145,7 +145,7 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         for (const std::wstring& loader : in.cheekyLoaders) {
             Check& c = add("cheeky_loader", CheckTone::Bad,
                            L"Cheeky’s " + fs::path(loader).filename().wstring() + L" is in the game folder",
-                           L"It’s Cheeky Foveated DLSS’s own loader. ACE fails to start with it there, and ace-quadview loads Cheeky "
+                           L"It’s Cheeky Foveated DLSS’s own loader. ACE fails to start with it there, and Sim-QVFR loads Cheeky "
                            L"itself. Move it out of the game folder.");
             c.fix = CheckFix::ShowFile;
             c.fixLabel = L"Show file";
@@ -295,4 +295,4 @@ bool toolkit_turbo_off(const std::wstring& exe) {
            RegSetKeyValueW(HKEY_CURRENT_USER, key.c_str(), L"turbo", REG_DWORD, &off, sizeof(off)) == ERROR_SUCCESS;
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

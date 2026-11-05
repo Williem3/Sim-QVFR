@@ -13,7 +13,7 @@
 #include <array>
 #include <string>
 
-namespace aceqv {
+namespace simqvfr {
 
 enum class HotkeyAction { MenuToggle, MenuUp, MenuDown, MenuLeft, MenuRight, Overlay, Visor, CpuCapture };
 inline constexpr int kHotkeyActions = 8;
@@ -68,4 +68,4 @@ unsigned hat_directions(unsigned long angle);
 // Another action with the same key (or, `pad`, the same wheel control) as `action`'s, or -1.
 int hotkey_clash(const Hotkeys& hotkeys, HotkeyAction action, bool pad);
 
-}  // namespace aceqv
+}  // namespace simqvfr

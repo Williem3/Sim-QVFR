@@ -15,7 +15,7 @@
 #include "quad/focus_turn.h"
 
 using Microsoft::WRL::ComPtr;
-using namespace aceqv;
+using namespace simqvfr;
 
 namespace {
 

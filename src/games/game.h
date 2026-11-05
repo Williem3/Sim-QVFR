@@ -6,9 +6,9 @@
 #include <cstddef>
 #include <string>
 
-namespace aceqv::games {
+namespace simqvfr::games {
 
-// What ace-quadview does in a game so far, beyond QVFR itself (four views, composed, following the gaze, the
+// What Sim-QVFR does in a game so far, beyond QVFR itself (four views, composed, following the gaze, the
 // headset menu and overlay). The launcher greys the rest out, the headset menu leaves it out, and the layer keeps it
 // off whatever the ini says.
 struct GameFeatures {
@@ -39,7 +39,7 @@ struct GameInfo {
     std::size_t buildCount;
 };
 
-// The games ace-quadview supports, in the launcher's order.
+// The games Sim-QVFR supports, in the launcher's order.
 const GameInfo* const* all_games(std::size_t& count);
 // The game with this id ("ace", "acc"; any case); null for none.
 const GameInfo* game_by_id(const char* id);
@@ -53,4 +53,4 @@ const GameInfo* current_game();
 // `sha256` (lowercase hex) is one of the game's builds.
 bool supported_build(const GameInfo& game, const std::string& sha256);
 
-}  // namespace aceqv::games
+}  // namespace simqvfr::games

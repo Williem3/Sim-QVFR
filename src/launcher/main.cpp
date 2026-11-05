@@ -1,16 +1,16 @@
-// ace-quadview-launcher: starts the chosen game (src/games) in VR with the ace-quadview layer for this launch
+// sim-qvfr-launcher: starts the chosen game (src/games) in VR with the Sim-QVFR layer for this launch
 // only, nearest the game and above every implicit layer it can move (launch_plan.h). Settings come
-// from ace-quadview.ini next to the launcher; [launcher] holds the launcher's own:
+// from sim-qvfr.ini next to the launcher; [launcher] holds the launcher's own:
 //   game=       the game to launch: ace (default) or acc (games/<id>/game.h)
 //   game_dir_<id>= that game's folder in Steam's libraries (default: found through Steam; ACE also reads the older
 //               game_dir)
 //   off_layers= comma-separated OpenXR layer names to turn off for ACE (e.g. XR_APILAYER_MBUCCHIA_toolkit)
 //   on_layers=  layers switched off in Windows to load for ACE all the same
-//   layer_order= the layers' order below the ACE layer (the OpenXR layers pane; layer_order.h)
-// Usage: ace-quadview-launcher               the settings window (window.cpp)
-//        ace-quadview-launcher --launch      launch now, report on the console it was started from
-//        ace-quadview-launcher --dry-run     write the run folder and the plan, start nothing
-//        ace-quadview-launcher --apply-system-layers <request>   (elevated, from the window) writes
+//   layer_order= the layers' order below the Sim-QVFR layer (the OpenXR layers pane; layer_order.h)
+// Usage: sim-qvfr-launcher               the settings window (window.cpp)
+//        sim-qvfr-launcher --launch      launch now, report on the console it was started from
+//        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
+//        sim-qvfr-launcher --apply-system-layers <request>   (elevated, from the window) writes
 //                                            HKLM's part of Windows' layer list (layer_order.h)
 #include <algorithm>
 #include <cstdio>
@@ -32,9 +32,9 @@
 #include "preflight.h"
 #include "settings.h"
 
-using namespace aceqv::launcher;
+using namespace simqvfr::launcher;
 namespace fs = std::filesystem;
-namespace games = aceqv::games;
+namespace games = simqvfr::games;
 
 namespace {
 
@@ -160,7 +160,7 @@ std::vector<std::wstring> variable_names(const std::vector<std::wstring>& enviro
 // The launch's layer options from the ini: the launcher's profile and what the method and Cheeky lock.
 Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstring>& environment) {
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
-    const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
+    const simqvfr::CheekySettings cheeky = simqvfr::read_cheeky_settings(ini.c_str());
     const bool dlss = games::launcher_game().features.foveatedDlss;  // Cheeky only in a game that has it
     return launch_options(read_launcher_layers(ini),
                           _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0,
@@ -209,19 +209,19 @@ int run(bool dryRun) {
     const fs::path here = exe_folder();
     const fs::path layerFolder = layer_folder();
     std::error_code ec;
-    const fs::path library = layerFolder / L"ace-quadview.dll", manifest = layerFolder / L"XR_APILAYER_ACE_quadview.json";
+    const fs::path library = layerFolder / L"sim-qvfr.dll", manifest = layerFolder / L"XR_APILAYER_SIM_qvfr.json";
     if (!fs::exists(library, ec) || !fs::exists(manifest, ec))
-        return fail(L"ace-quadview.dll and XR_APILAYER_ACE_quadview.json not found next to the launcher or in its ace folder");
-    const fs::path ini = here / L"ace-quadview.ini";
+        return fail(L"sim-qvfr.dll and XR_APILAYER_SIM_qvfr.json not found next to the launcher or in its layer folder");
+    const fs::path ini = here / L"sim-qvfr.ini";
     if (!fs::exists(ini, ec))
-        return fail(L"ace-quadview.ini not found next to the launcher (" + ini.wstring() + L")");
+        return fail(L"sim-qvfr.ini not found next to the launcher (" + ini.wstring() + L")");
 
     const std::wstring game = game_folder(ini.wstring());
     const games::GameInfo& info = games::launcher_game();
     const fs::path exe = game_exe(game);
     if (game.empty() || !fs::exists(exe, ec))
         return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + widen(info.id) +
-                    L" in [launcher] of ace-quadview.ini");
+                    L" in [launcher] of sim-qvfr.ini");
 
     const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
@@ -229,12 +229,12 @@ int run(bool dryRun) {
 
     const std::wstring stamp = stamp_now();
     const fs::path logs = here / L"logs", runFolder = logs / (std::wstring(L"run-") + stamp);
-    const fs::path log = logs / (std::wstring(L"ace-") + stamp + L".log"), iniCopy = runFolder / L"ace-quadview.ini";
+    const fs::path log = logs / (std::wstring(L"session-") + stamp + L".log"), iniCopy = runFolder / L"sim-qvfr.ini";
     std::wstring error;
     if (!write_run_folder(runFolder.wstring(), manifest.wstring(), library.wstring(), plan, error))
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
-        return fail(L"cannot copy ace-quadview.ini into " + runFolder.wstring());
+        return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
     // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
     // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
     const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
@@ -243,7 +243,7 @@ int run(bool dryRun) {
     const auto variables =
         launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring());
 
-    say(L"ace-quadview launcher " + widen(ACE_QV_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
+    say(L"Sim-QVFR launcher " + widen(SIM_QVFR_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
     say(L"  layer:     " + library.wstring());
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
@@ -299,17 +299,17 @@ int run(bool dryRun) {
 
 }  // namespace
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 
-std::wstring settings_path() { return (fs::path(exe_folder()) / L"ace-quadview.ini").wstring(); }
+std::wstring settings_path() { return (fs::path(exe_folder()) / L"sim-qvfr.ini").wstring(); }
 
 std::wstring runtime_info_path() { return (fs::path(exe_folder()) / L"runtime.ini").wstring(); }
 
 std::wstring layer_folder() {
-    // The layer: next to the launcher (development build) or in ace\ (release package).
+    // The layer: next to the launcher (development build) or in layer\ (release package).
     const fs::path here = exe_folder();
     std::error_code ec;
-    return (fs::exists(here / L"ace-quadview.dll", ec) ? here : here / L"ace").wstring();
+    return (fs::exists(here / L"sim-qvfr.dll", ec) ? here : here / L"layer").wstring();
 }
 
 LayerPlan launcher_layer_plan() {
@@ -386,7 +386,7 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     }
     if (!exe.empty() && games::launcher_game().features.foveatedDlss)
         in.cheekyLoaders = cheeky_loaders(fs::path(exe).parent_path().wstring());
-    const aceqv::CheekySettings cheeky = aceqv::read_cheeky_settings(ini.c_str());
+    const simqvfr::CheekySettings cheeky = simqvfr::read_cheeky_settings(ini.c_str());
     const bool dlss = games::launcher_game().features.foveatedDlss;
     in.cheekyLoad = dlss && cheeky.load;
     if (const wchar_t* dlssDll = games::launcher_game().dlssDll; in.cheekyLoad && dlssDll) {
@@ -406,14 +406,14 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     return in;
 }
 
-int launch_ace(bool dryRun, std::wstring& out) {
+int launch_game(bool dryRun, std::wstring& out) {
     report.clear();
     const int result = run(dryRun);
     out = report;
     return result;
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     int argc = 0;

@@ -39,7 +39,7 @@ def main(src=SRC, out=OUT):
         '',
         '#include <cstdint>',
         '',
-        'namespace aceqv::launcher::ui::tokens {',
+        'namespace simqvfr::launcher::ui::tokens {',
         '',
         '// Colours, 0xRRGGBB.',
         'struct Colors {',
@@ -76,7 +76,7 @@ def main(src=SRC, out=OUT):
         lines += ['', f'// {section.capitalize()} (DIPs).']
         for t in tokens[section]['tokens']:
             lines.append(f'inline constexpr float k{ident(t["name"]).title().replace("_", "")} = {px(t["value"])}f;')
-    lines += ['', '}  // namespace aceqv::launcher::ui::tokens', '']
+    lines += ['', '}  // namespace simqvfr::launcher::ui::tokens', '']
     os.makedirs(os.path.dirname(out), exist_ok=True)
     open(out, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines))
     print('wrote', out)

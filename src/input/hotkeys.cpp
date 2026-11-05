@@ -5,7 +5,7 @@
 
 #include <windows.h>
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr const wchar_t* kIniKeys[kHotkeyActions] = {L"menu_toggle", L"menu_up", L"menu_down", L"menu_left",
@@ -226,4 +226,4 @@ int hotkey_clash(const Hotkeys& h, HotkeyAction action, bool pad) {
     return -1;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

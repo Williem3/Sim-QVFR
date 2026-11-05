@@ -8,7 +8,7 @@
 
 #include <cmath>
 
-namespace aceqv {
+namespace simqvfr {
 
 struct FocusFrustum {
     // Planes (nx, ny, nz, d) with unit normals pointing out: n . p + d > 0 is outside that plane.
@@ -52,4 +52,4 @@ inline bool box_outside(const FocusFrustum& f, const float (&centre)[3], const f
     return false;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

@@ -56,7 +56,7 @@ body:
       label: Screenshots and logs
       description: |
         A photo through the lens or a screenshot of the mirror helps most. Drag it in with the report zip from
-        the launcher's logs folder (ace-quadview-report-*.zip).
+        the launcher's logs folder (sim-qvfr-report-*.zip).
   - type: textarea
     id: checks
     attributes:

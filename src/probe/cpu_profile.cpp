@@ -15,7 +15,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr size_t kStackCopy = 64 * 1024;  // the top of a stack copied per sample: enough for the frames walked
@@ -308,7 +308,7 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         if (f)
             std::fwprintf(f, L"%ls\n", s.c_str());
     };
-    line(L"ace-quadview CPU profile: " + std::to_wstring(seconds) + L" s, a sample every " +
+    line(L"Sim-QVFR CPU profile: " + std::to_wstring(seconds) + L" s, a sample every " +
          std::to_wstring(kCpuProfileSampleMs) + L" ms per thread. 'Of a core' is the thread's load (its CPU cycles).");
     line(L"Samples where the thread was blocked in a wait (or had not run since the last) are counted apart. The rest: "
          L"Self, where it was running; Total, in the function or anything it called (each function once per sample), "
@@ -525,4 +525,4 @@ std::wstring cpu_profile_last_report() {
     return state.lastReport;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

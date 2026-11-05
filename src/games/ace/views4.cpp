@@ -21,7 +21,7 @@
 #include "../../quad/frame_records.h"
 #include "../../xr.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 constexpr int kViews = 4;
@@ -1353,4 +1353,4 @@ void views4_frame_end() {
     }
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr

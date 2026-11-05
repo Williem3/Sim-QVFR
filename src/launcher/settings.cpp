@@ -11,7 +11,7 @@
 
 #include "../games/game.h"
 
-namespace aceqv::launcher {
+namespace simqvfr::launcher {
 namespace {
 
 // The views4 call sites of the tested QVFR configuration (recon "Darkness fixed").
@@ -177,7 +177,7 @@ Profile settings_profile(const Settings& settings, const std::wstring& name) {
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
     const std::filesystem::path folder =
-        std::filesystem::path(temp) / (L"aceqv-profile-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+        std::filesystem::path(temp) / (L"simqvfr-profile-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
     std::error_code ec;
     std::filesystem::create_directories(folder, ec);
     save_settings((folder / L"scratch.ini").wstring(), settings);
@@ -379,7 +379,7 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
 std::wstring session_summary_text(const RuntimeInfo& r) {
     const SessionInfo& s = r.session;
     if (!s.known())
-        return L"ace-quadview: no session measured yet.";
+        return L"Sim-QVFR: no session measured yet.";
     const auto f = [](const wchar_t* format, double v) {  // at whatever length it comes to
         const int n = _scwprintf(format, v);
         if (n <= 0)
@@ -388,7 +388,7 @@ std::wstring session_summary_text(const RuntimeInfo& r) {
         swprintf_s(text.data(), static_cast<size_t>(n) + 1, format, v);
         return text;
     };
-    std::wstring t = L"ace-quadview session " + s.time + L" · " + s.mode;
+    std::wstring t = L"Sim-QVFR session " + s.time + L" · " + s.mode;
     if (s.refreshHz > 0)
         t += f(L" · %.0f Hz", s.refreshHz);
     t += s.frameGeneration ? L" · frame generation on\n" : L" · frame generation off\n";
@@ -480,4 +480,4 @@ VramEstimate vram_estimate(const Settings& s, const Readouts& r, const RuntimeIn
     return e;
 }
 
-}  // namespace aceqv::launcher
+}  // namespace simqvfr::launcher

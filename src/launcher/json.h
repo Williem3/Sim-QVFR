@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace aceqv::json {
+namespace simqvfr::json {
 
 struct Value {
     enum class Type { Null, Bool, Number, String, Array, Object } type = Type::Null;
@@ -293,4 +293,4 @@ inline std::string dump(const Value& v) {
     return out;
 }
 
-}  // namespace aceqv::json
+}  // namespace simqvfr::json

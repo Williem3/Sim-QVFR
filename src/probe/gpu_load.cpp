@@ -14,7 +14,7 @@
 
 #include "../log.h"
 
-namespace aceqv {
+namespace simqvfr {
 namespace {
 
 // The number after `key` in `name` (hex with 0x), or false.
@@ -43,7 +43,7 @@ struct Worker {
     bool stop = false, running = false;
     uint32_t luidHigh = 0, luidLow = 0;
     GpuLoad latest;
-    double busySum[3] = {}, aceSum[3] = {};  // gpu_load_window's, per window
+    double busySum[3] = {}, gameSum[3] = {};  // gpu_load_window's, per window
     int samples[3] = {};
 };
 Worker worker;
@@ -92,7 +92,7 @@ void run() {
         if (load.valid)
             for (int w = 0; w < 3; ++w) {
                 worker.busySum[w] += load.busy;
-                worker.aceSum[w] += load.ace;
+                worker.gameSum[w] += load.game;
                 ++worker.samples[w];
             }
     }
@@ -127,7 +127,7 @@ GpuEngineName parse_gpu_engine_name(const std::wstring& name) {
 GpuLoad gpu_load_from(const std::vector<std::pair<std::wstring, double>>& samples, uint32_t luidHigh, uint32_t luidLow,
                       uint32_t pid) {
     struct Engine {
-        double total = 0, ace = 0;
+        double total = 0, game = 0;
         std::wstring type;
     };
     std::map<int, Engine> engines;
@@ -139,7 +139,7 @@ GpuLoad gpu_load_from(const std::vector<std::pair<std::wstring, double>>& sample
         e.type = n.type;
         e.total += std::max(0.0, value);
         if (n.pid == pid)
-            e.ace += std::max(0.0, value);
+            e.game += std::max(0.0, value);
     }
     GpuLoad load;
     for (const auto& [index, e] : engines) {
@@ -147,7 +147,7 @@ GpuLoad gpu_load_from(const std::vector<std::pair<std::wstring, double>>& sample
         if (!load.valid || total > load.busy) {
             load.valid = true;
             load.busy = total;
-            load.ace = std::min(total, e.ace);
+            load.game = std::min(total, e.game);
             load.engine = e.type;
         }
     }
@@ -196,11 +196,11 @@ GpuLoad gpu_load_window(int& samples, int window) {
     load.valid = samples > 0;
     if (samples) {
         load.busy = worker.busySum[w] / samples;
-        load.ace = worker.aceSum[w] / samples;
+        load.game = worker.gameSum[w] / samples;
     }
-    worker.busySum[w] = worker.aceSum[w] = 0;
+    worker.busySum[w] = worker.gameSum[w] = 0;
     worker.samples[w] = 0;
     return load;
 }
 
-}  // namespace aceqv
+}  // namespace simqvfr
