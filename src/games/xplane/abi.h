@@ -46,6 +46,13 @@ inline constexpr std::uintptr_t kWorldSubgraphLayers = 0x198f33c;
 inline constexpr std::uint8_t kWorldSubgraphLayersAnchor[5] = {0xBE, 0x02, 0x00, 0x00, 0x00};
 inline constexpr std::size_t kWorldSubgraphLayersImm = 1;
 
+// The art control "tonemap/exposure_fusion" (registered at 0x550f20 through 0xd758c0, type 5 = float, default 1.0):
+// its value is the first float of its object, in .data. 0xb0fc00 (exposure fusion on?) returns value > 0, so 0 turns
+// the pass off. Exposure fusion builds its pyramids for two layers only (lambda 4 of
+// OGL_build_exposure_fusion_graph, 0xae8e00: per-layer views for layers 0 and 1, `if (layers > 1)`), so with four
+// views it is turned off.
+inline constexpr std::uintptr_t kExposureFusionControl = 0x575fd80;
+
 // ---- Four views, drawn (README.md "The stereo count in the draw path") ----
 // The per-thread render state: `+0x2490` the instance multiplier; per-view modelviews at +0x88 + i*0x80 and
 // projections at +0x288 + i*0x80, room for four of each.

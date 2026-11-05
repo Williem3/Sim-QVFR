@@ -106,6 +106,18 @@ public:
         simqvfr::logf("xplane: layer loaded early (before X-Plane runs): patching now");
         apply_all(ini);
         patched_ = true;
+        fourViews_ = GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1;
+    }
+    // Every xrEndFrame: with four views, exposure fusion stays off (it builds its pyramids for two layers only; abi.h).
+    // X-Plane's static initialisers set the control after an early load, so it is checked here, not once.
+    void frame_end() override {
+        if (!fourViews_)
+            return;
+        auto* control = reinterpret_cast<volatile float*>(simqvfr::module_base() + kExposureFusionControl);
+        if (*control != 0.0f) {
+            simqvfr::logf("xplane: exposure fusion %.2f -> 0 (two-layer pyramids; four views)", static_cast<double>(*control));
+            *control = 0.0f;
+        }
     }
     // At xrCreateInstance: X-Plane builds its render graph later, when the flight loads.
     void instance_created(const wchar_t* ini, const wchar_t*) override {
@@ -115,10 +127,12 @@ public:
         }
         simqvfr::logf("xplane: layer loaded at xrCreateInstance (not early): shaders X-Plane made at startup are not edited");
         apply_all(ini);
+        fourViews_ = GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1;
     }
 
 private:
     bool patched_ = false;
+    bool fourViews_ = false;
     static void apply_all(const wchar_t* ini) {
         if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1) {
             apply_copies(ini);
