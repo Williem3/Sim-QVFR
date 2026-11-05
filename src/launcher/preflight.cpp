@@ -145,8 +145,8 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         for (const std::wstring& loader : in.cheekyLoaders) {
             Check& c = add("cheeky_loader", CheckTone::Bad,
                            L"Cheeky’s " + fs::path(loader).filename().wstring() + L" is in the game folder",
-                           L"It’s Cheeky Foveated DLSS’s own loader. ACE fails to start with it there, and Sim-QVFR loads Cheeky "
-                           L"itself. Move it out of the game folder.");
+                           L"It’s Cheeky Foveated DLSS’s own loader. The game can fail to start with it there, and "
+                           L"Sim-QVFR loads Cheeky itself. Move it out of the game folder.");
             c.fix = CheckFix::ShowFile;
             c.fixLabel = L"Show file";
             c.fixTarget = loader;
@@ -197,15 +197,15 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         const int toolkit = rank(in.layers, kToolkitLayer), cheeky = rank(in.layers, kCheekyLayer);
         if (toolkit >= 0 && cheeky >= 0 && toolkit > cheeky) {
             Check& c = add("toolkit_order", CheckTone::Bad, L"OpenXR Toolkit is below Cheeky’s layer",
-                           L"ACE crashes at start in this order. Move OpenXR Toolkit above Cheeky’s layer.");
+                           L"The game can crash at start in this order. Move OpenXR Toolkit above Cheeky’s layer.");
             c.fix = CheckFix::OpenLayers;
             c.fixLabel = L"Open OpenXR layers";
             c.confirm = true;
         }
         if (in.cheekyFg && toolkit >= 0 && in.toolkitTurbo == 1) {
             Check& c = add("toolkit_turbo", CheckTone::Bad, L"OpenXR Toolkit’s Turbo mode is on",
-                           L"ACE crashes with Turbo mode and Cheeky’s frame generation together. Turning it off changes "
-                           L"Toolkit’s setting for ACE only.");
+                           shortName + L" crashes with Turbo mode and Cheeky’s frame generation together. Turning it off changes "
+                           L"Toolkit’s setting for " + shortName + L" only.");
             c.fix = CheckFix::TurboOff;
             c.fixLabel = L"Turn off";
             c.confirm = true;

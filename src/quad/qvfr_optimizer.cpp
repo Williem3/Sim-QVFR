@@ -145,7 +145,7 @@ QvfrAction QvfrOptimizer::feed(const QvfrWindow& w) {
     if (windows_ < kMeasureWindows)
         return {};
     if (gpuCount_ == 0 || budget_ <= 0) {
-        finish(QvfrState::Failed, L"No GPU frame timing: is ACE rendering?");
+        finish(QvfrState::Failed, L"No GPU frame timing: is the game rendering?");
         return {};
     }
     const double gpu = gpuSum_ / gpuCount_;

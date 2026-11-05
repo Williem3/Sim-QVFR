@@ -205,7 +205,7 @@ std::vector<OsdTile> osd_tiles(const OsdInput& in, const OsdSummary& s) {
     {
         OsdTile t{L"Frame rate", s.shownFps > 0 ? format(L"%.0f", s.shownFps) : L"—", L"fps"};
         if (in.fg == OsdFg::On && s.fps > 0)
-            t.detail = format(L"ACE %.0f  ·  %.0f Hz", s.fps, s.refreshHz);
+            t.detail = format(L"game %.0f  ·  %.0f Hz", s.fps, s.refreshHz);
         else if (s.refreshHz > 0)
             t.detail = format(L"of %.0f Hz", s.refreshHz);
         tiles.push_back(t);
@@ -271,7 +271,7 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     {
         // The GPU's time per ACE frame, by who used it (ms): ACE's queue, frame generation, the layer, the rest.
         const auto part = [](double ms) { return ms >= 0 ? format(L"%.1f", ms) : std::wstring(L"—"); };
-        OsdRow r{L"GPU ms: ACE/FG/layer/rest"};
+        OsdRow r{L"GPU ms: game/FG/layer/rest"};
         r.value = s.gpuWhole ? part(s.gpuGameMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / " +
                                    part(s.gpuRestMs)
                   : s.gpuGameMs >= 0 ? part(s.gpuGameMs) + L" / " + part(s.gpuFgMs) + L" / " + part(s.gpuLayerMs) + L" / —"
@@ -279,7 +279,7 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         rows.push_back(r);
     }
     {
-        OsdRow r{L"Busiest ACE thread"};
+        OsdRow r{L"Busiest game thread"};
         if (in.cpuBusiestPercent < 0) {
             r.value = L"—";
         } else {

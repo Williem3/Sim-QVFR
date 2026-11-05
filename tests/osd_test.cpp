@@ -134,8 +134,8 @@ int main() {
         const OsdRow* vram = row(rows, L"VRAM");
         const OsdRow* fg = row(rows, L"Frame generation");
         const OsdRow* gaze = row(rows, L"Eye tracking");
-        const OsdRow* gpuParts = row(rows, L"GPU ms: ACE/FG/layer/rest");
-        check(rows.size() == 9 && row(rows, L"Busiest ACE thread") && row(rows, L"Render thread") &&
+        const OsdRow* gpuParts = row(rows, L"GPU ms: game/FG/layer/rest");
+        check(rows.size() == 9 && row(rows, L"Busiest game thread") && row(rows, L"Render thread") &&
                   row(rows, L"Frame p90 · 1% low"),
               "nine cells: three rows of three");
         const std::vector<OsdTile> tiles = osd_tiles(in, osd_summary(in));
@@ -153,7 +153,7 @@ int main() {
         in.fgMultiplier = 2;
         in.fgOutputFps = 180;
         const std::vector<OsdTile> fgTiles = osd_tiles(in, osd_summary(in));
-        check(fgTiles[0].value == L"180" && fgTiles[0].detail.find(L"ACE 90") == 0,
+        check(fgTiles[0].value == L"180" && fgTiles[0].detail.find(L"game 90") == 0,
               "with frame generation the frame rate tile shows what the headset shows, and ACE's own");
     }
     // The whole GPU and ACE's threads (the layer's samplers): 2x frame generation at 90 Hz (a 22.2 ms budget).
@@ -179,7 +179,7 @@ int main() {
                   close_to(s.gpuFgMs, 1.1) && s.bound == OsdBound::Gpu && s.gpuHeadroom < 3,
               "the whole GPU 98% busy: its time per frame, the rest beyond ACE, FG and the layer; GPU bound, ~2% left");
         const std::vector<OsdRow> rows = osd_rows(in, s);
-        check(row(rows, L"GPU ms: ACE/FG/layer/rest")->value == L"19.0 / 1.1 / 0.4 / 1.3" &&
+        check(row(rows, L"GPU ms: game/FG/layer/rest")->value == L"19.0 / 1.1 / 0.4 / 1.3" &&
                   row(rows, L"Limited by")->value == L"GPU" && osd_tiles(in, s)[3].label == L"GPU (all work)",
               "the GPU row shows its parts; the tile says it is all the GPU's work");
         check(close_to(s.cpuMs, 12.5) && close_to(s.cpuBusyMs, 9) && close_to(s.cpuBlockedMs, 3.5) &&

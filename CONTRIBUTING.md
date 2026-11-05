@@ -85,7 +85,9 @@ focus outline/cull/turn, launcher settings and plan, two-loop and quad flow, and
 exits non-zero on failure.
 
 `package.ps1 -Version <version>` builds a release zip in `dist\` from a clean checkout of a commit,
-after running every test. `packaging/README.txt` is the user guide that ships in the zip.
+after running every test. `packaging/README.txt` is the user guide that ships in the zip. Without
+`-Version` it packages the release planned in `CMakeLists.txt` (`SIM_QVFR_RELEASE`), the one the
+launcher's About pane names in a development build. Update that line when the next release is planned.
 
 ## The launcher
 

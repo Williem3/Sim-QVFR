@@ -53,7 +53,7 @@ void run() {
     PDH_HCOUNTER counter = nullptr;
     if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS ||
         PdhAddEnglishCounterW(query, L"\\GPU Engine(*)\\Utilization Percentage", 0, &counter) != ERROR_SUCCESS) {
-        log_line("gpu load: the GPU engine counters are not available; the overlay uses ACE's GPU time");
+        log_line("gpu load: the GPU engine counters are not available; the overlay uses the game's GPU time");
         if (query)
             PdhCloseQuery(query);
         return;

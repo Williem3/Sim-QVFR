@@ -433,7 +433,7 @@ void load_experiment() {
                             experiment.views3;
     experiment.eyeScale = scaledMode ? eyePercent / 100.0 : 1.0;
     if (!scaledMode && eyePercent != 100)
-        logf("experiment: mode=off: ACE gets the runtime's own eye size (eye_scale=%u applies to the other modes)",
+        logf("experiment: mode=off: the game gets the runtime's own eye size (eye_scale=%u applies to the other modes)",
              eyePercent);
     // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most
     // either can be live.
@@ -704,7 +704,7 @@ XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
                                                           const XrInteractionProfileSuggestedBinding* suggested) {
     std::lock_guard guard(gaze.mutex);
     if (suggested)
-        logf("input: ACE suggests %u binding(s) for %s", suggested->countSuggestedBindings,
+        logf("input: the game suggests %u binding(s) for %s", suggested->countSuggestedBindings,
              path_name(instance, suggested->interactionProfile).c_str());
     const auto own = suggested ? gaze.bindings.find(suggested->interactionProfile) : gaze.bindings.end();
     if (!gaze.set || own == gaze.bindings.end())
@@ -716,7 +716,7 @@ XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
     merged.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
     merged.suggestedBindings = bindings.data();
     XrResult r = next.SuggestInteractionProfileBindings(instance, &merged);
-    logf("input: added %zu layer binding(s) to ACE's %u, result=%d", own->second.size(),
+    logf("input: added %zu layer binding(s) to the game's %u, result=%d", own->second.size(),
          suggested->countSuggestedBindings, r);
     if (XR_FAILED(r))
         return next.SuggestInteractionProfileBindings(instance, suggested);
@@ -750,7 +750,7 @@ XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSess
     merged.countActionSets = static_cast<uint32_t>(sets.size());
     merged.actionSets = sets.data();
     XrResult r = next.AttachSessionActionSets(session, &merged);
-    logf("gaze: attached with ACE's %u action set(s), result=%d", info->countActionSets, r);
+    logf("gaze: attached with the game's %u action set(s), result=%d", info->countActionSets, r);
     if (XR_SUCCEEDED(r)) {
         gaze.attached = true;
         return r;
@@ -994,7 +994,7 @@ void gaze_thread_report(double seconds) {
     std::lock_guard guard(gazeThread.mutex);
     if (!gazeThread.lookups)
         return;
-    logf("gaze thread: %.0f lookups/s, xrLocateSpace %.3f ms avg, %.3f ms max (off ACE's render thread)",
+    logf("gaze thread: %.0f lookups/s, xrLocateSpace %.3f ms avg, %.3f ms max (off the game's render thread)",
          seconds > 0 ? gazeThread.lookups / seconds : 0.0, gazeThread.lookupMs / gazeThread.lookups, gazeThread.lookupMaxMs);
     gazeThread.lookups = 0;
     gazeThread.lookupMs = gazeThread.lookupMaxMs = 0;
@@ -1341,11 +1341,11 @@ void report_load(double frameMs) {
         return;
     char gpuText[192] = "GPU load unknown", cpuText[256] = "threads unknown", shown[256] = "";
     if (gpu.valid)
-        std::snprintf(gpuText, sizeof(gpuText), "GPU %.0f%% busy (%ls engine; ACE %.0f%%): %.1f ms of GPU per ACE frame",
+        std::snprintf(gpuText, sizeof(gpuText), "GPU %.0f%% busy (%ls engine; game %.0f%%): %.1f ms of GPU per game frame",
                       gpu.busy, gpu.engine.c_str(), gpu.game, gpu.busy / 100 * frameMs);
     if (threads.valid)
         std::snprintf(cpuText, sizeof(cpuText),
-                      "busiest ACE thread %.0f%% of a core (last: %u%s%ls%s), render thread %.0f%%, all threads %.0f%% "
+                      "busiest game thread %.0f%% of a core (last: %u%s%ls%s), render thread %.0f%%, all threads %.0f%% "
                       "(%d)",
                       threads.busiestPercent, threads.busiestThread, threads.busiestName.empty() ? "" : " \"",
                       threads.busiestName.c_str(), threads.busiestName.empty() ? "" : "\"", threads.renderPercent,
@@ -1443,7 +1443,7 @@ void write_session_summary(double layerMs) {
     swprintf_s(time, L"%04u-%02u-%02u %02u:%02u", now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute);
     const std::wstring mode = experiment.views4                       ? L"QVFR"
                               : experiment.quad || experiment.twoLoops ? L"Two-loop"
-                                                                       : L"Off (ACE's own two views)";
+                                                                       : L"Off (the game's own two views)";
     const bool fg = frame_generation_on();
     double gazeMs = -1;
     {
@@ -4646,7 +4646,7 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
         if (loops.ends > loops.begins && !loops.broken) {
             loops.broken = true;
             log_line("two_loops: refused: xrEndFrame calls outnumber xrBeginFrame (a frame generator above this "
-                     "layer, e.g. VectorXR Frame Generation?); turn it off for ACE");
+                     "layer, e.g. VectorXR Frame Generation?); turn it off for the game");
         }
         lock.unlock();
         return next.EndFrame(session, info);
@@ -4743,7 +4743,7 @@ void log_layer_order(const XrApiLayerNextInfo* below) {
     logf("layers below this one: [%s]", names.c_str());
     layersBelow = names;
     if (!vectorxrBelow && GetModuleHandleW(L"XR_APILAYER_DIENERTECH_VECTORXR.dll"))
-        log_line("VectorXR is loaded above this layer: its frame generation would see ACE's four-view image; move "
+        log_line("VectorXR is loaded above this layer: its frame generation would see the game's four-view image; move "
                  "this layer above VectorXR (machine-wide registration, then VectorXR's layer order)");
 }
 

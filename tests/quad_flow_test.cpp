@@ -945,7 +945,7 @@ int main() {
         std::printf("     %s\n", load.c_str());
         int left = 0;
         cpu_load_window(left);
-        check(load.find("busiest ACE thread") != std::string::npos && load.find("GPU load unknown") != std::string::npos &&
+        check(load.find("busiest game thread") != std::string::npos && load.find("GPU load unknown") != std::string::npos &&
                   left == 0,
               "load: the threads' line, the GPU unknown without its sampler; the window emptied");
     }

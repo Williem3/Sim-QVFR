@@ -49,9 +49,11 @@ namespace t = tokens;
 
 // The game the launcher starts, by name (games/game.h).
 std::wstring game_name() { return games::launcher_game().name; }
+// Its short name ("ACE", "ACC"), for short text.
+std::wstring short_name() { return games::launcher_game().shortName; }
 // The chosen game has `feature` (games::GameFeatures); without it the window greys it out.
 bool game_has(bool games::GameFeatures::*feature) { return games::launcher_game().features.*feature; }
-std::wstring not_yet() { return L"Not available for " + std::wstring(games::launcher_game().shortName) + L" yet."; }
+std::wstring not_yet() { return L"Not available for " + short_name() + L" yet."; }
 
 enum class Pane { Checks, Profiles, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
 constexpr int kPanes = 13;
@@ -863,8 +865,8 @@ struct Help {
 };
 constexpr Help kHelp[] = {
     {L"Rendering method",
-     L"Quad View Foveated Rendering draws the outer and focus views in one ACE frame: the lightest on the CPU, and the one "
-     L"with every feature. Two-loop (legacy) draws two whole ACE frames per headset frame: about twice the CPU work per frame, "
+     L"Quad View Foveated Rendering draws the outer and focus views in one game frame: the lightest on the CPU, and the one "
+     L"with every feature. Two-loop (legacy) draws two whole game frames per headset frame: about twice the CPU work per frame, "
      L"and no frame generation."},
     {L"Foveated mode",
      L"Eye tracked: the sharp area follows your eyes, so it can be small and dense; it needs a headset with eye tracking. "
@@ -892,20 +894,20 @@ constexpr Help kHelp[] = {
     {L"Gaze offset", L"Moves the eye-tracked focus area up or down, in degrees, for a tracker that sits a little off. No cost."},
     {L"Vertical position", L"Moves the fixed focus area up or down, in degrees: towards the dash and mirrors, or the road. No cost."},
     {L"Crop the view",
-     L"Cuts the edges a helmet or the lens hides before ACE renders them. It saves GPU time and VRAM with the pixels cut; the "
+     L"Cuts the edges a helmet or the lens hides before the game renders them. It saves GPU time and VRAM with the pixels cut; the "
      L"headset shows black there."},
-    {L"Top", L"How much of the top of each eye’s view ACE doesn’t render. Saves pixels in proportion."},
-    {L"Bottom", L"How much of the bottom of each eye’s view ACE doesn’t render. Saves pixels in proportion."},
-    {L"Outer side", L"How much of each eye’s temple side ACE doesn’t render. Saves pixels in proportion."},
-    {L"Inner side", L"How much of each eye’s nose side ACE doesn’t render; the other eye still sees most of it. Saves pixels in "
+    {L"Top", L"How much of the top of each eye’s view the game doesn’t render. Saves pixels in proportion."},
+    {L"Bottom", L"How much of the bottom of each eye’s view the game doesn’t render. Saves pixels in proportion."},
+    {L"Outer side", L"How much of each eye’s temple side the game doesn’t render. Saves pixels in proportion."},
+    {L"Inner side", L"How much of each eye’s nose side the game doesn’t render; the other eye still sees most of it. Saves pixels in "
                     L"proportion."},
     {L"Show a helmet",
      L"Draws a helmet’s visor opening round the view, lit by the scene, in a layer of its own. It costs the headset a layer "
-     L"to composite; nothing for ACE."},
+     L"to composite; nothing for the game."},
     {L"Show focus outline", L"Draws the focus area’s edge, to see where it is and how it follows your eyes. For setting up; "
                             L"turn it off to drive."},
     {L"Use Cheeky Foveated DLSS",
-     L"Runs Cheeky Foveated DLSS inside ACE, for the DLSS options below. Needs an NVIDIA RTX GPU, DLSS on in ACE, and Cheeky’s "
+     L"Runs Cheeky Foveated DLSS inside the game, for the DLSS options below. Needs an NVIDIA RTX GPU, DLSS on in the game, and Cheeky’s "
      L"download. Applies at the next launch."},
     {L"Cheaper outer views",
      L"The outer views get Cheeky’s DLAA at a lower resolution instead of ACE’s DLSS: GPU time saved on the views you see "
@@ -913,7 +915,7 @@ constexpr Help kHelp[] = {
     {L"Outer DLAA scale", L"The resolution of that cheaper pass. Lower saves more GPU time and softens the side view."},
     {L"Focus supersampling", L"Renders the focus views above their size before DLSS: a sharper centre, for more GPU time."},
     {L"Frame generation",
-     L"Cheeky’s DLSS frame generation adds frames between ACE’s: smoother motion when ACE can’t hold the refresh rate, for some "
+     L"Cheeky’s DLSS frame generation adds frames between the game’s: smoother motion when the game can’t hold the refresh rate, for some "
      L"GPU time and latency. Turn OpenXR Toolkit’s Turbo mode off with it, and run no other frame generator."},
     {L"Center region", L"The part of the view frame generation makes at full quality (it follows your eyes when eye tracked). "
                        L"Larger looks better and costs more GPU time."},
@@ -1305,8 +1307,9 @@ float layers_pane(float x, float y, float w, bool draw) {
     {
         const std::wstring names[2] = {kLayerProfileNames[0], kLayerProfileNames[1]};
         Row profile = choice_row(kLayerProfile, L"Profile", names, 2, app.layerProfile, false);
-        profile.desc = app.layerProfile == 0 ? L"What ACE loads when you launch it from here. Windows’ own list stays as it is."
-                                             : L"What every other app loads, and ACE started from Steam. Changes Windows’ registry.";
+        profile.desc = app.layerProfile == 0
+                           ? L"What " + short_name() + L" loads when you launch it from here. Windows’ own list stays as it is."
+                           : L"What every other app loads, and " + short_name() + L" started from Steam. Changes Windows’ registry.";
         h += section(x, y, w, L"", {profile}, L"", draw) + t::kSpace6;
     }
     if (app.layerProfile == 0) {
@@ -1323,10 +1326,10 @@ float layers_pane(float x, float y, float w, bool draw) {
                 desc += (desc.empty() ? L"" : L" · ") + widen(l.name);
             rows.push_back(layer_row(friendly_layer(l.name), desc, i, l.on, !l.lock.empty(), i > 0, i + 1 < n));
         }
-        h += section(x, y + h, w, L"Load order for ACE",
+        h += section(x, y + h, w, L"Load order for " + short_name(),
                      rows,
                      L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in "
-                     L"Windows can still be loaded for ACE alone. Locked switches keep the mod and ACE working.",
+                     L"Windows can still be loaded for the game alone. Locked switches keep the mod and the game working.",
                      draw);
         Row reset;
         reset.label = L"Windows’ order";
@@ -1453,7 +1456,7 @@ std::wstring formatted(const wchar_t* format, double v) {
 // What a thread is, for the names users will see most (others: none).
 std::wstring thread_note(const std::wstring& name) {
     if (name == L"GameThread")
-        return L"ACE's main thread, which here also submits each frame. Near 100% it limits the frame rate.";
+        return L"The game's main thread, which here also submits each frame. Near 100% it limits the frame rate.";
     if (name == L"Physics")
         return L"Waits for each physics step by spinning on the clock, so it always looks busy.";
     if (name.find(L"aSeeVRClient") != std::wstring::npos)
@@ -1659,14 +1662,14 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
             value_row(L"Late frames", L"Frames that missed the headset's refresh.",
                       s.latePercent >= 0 ? formatted(L"%.1f%%", s.latePercent) : dash),
             value_row(L"CPU frame time",
-                      budget > 0 ? formatted(L"ACE's render thread's work per frame. Close to %.1f ms, the CPU limits the frame.",
+                      budget > 0 ? formatted(L"The game's render thread's work per frame. Close to %.1f ms, the CPU limits the frame.",
                                              budget)
-                                 : L"ACE's render thread's work per frame.",
+                                 : L"The game's render thread's work per frame.",
                       s.cpuMs >= 0 ? formatted(L"%.2f ms", s.cpuMs) : dash),
-            value_row(L"GPU frame time", L"The whole GPU per ACE frame, the compositor and frame generation included.",
+            value_row(L"GPU frame time", L"The whole GPU per game frame, the compositor and frame generation included.",
                       s.gpuMs >= 0 ? formatted(L"%.2f ms", s.gpuMs) + formatted(L"  ·  %.0f%% busy", s.gpuBusy) : dash),
             value_row(L"Limited by", L"", s.limited.empty() ? dash : s.limited),
-            value_row(L"CPU in use", L"All of ACE's threads together.", s.cores >= 0 ? formatted(L"%.1f cores", s.cores) : dash)};
+            value_row(L"CPU in use", L"All of the game's threads together.", s.cores >= 0 ? formatted(L"%.1f cores", s.cores) : dash)};
         h += section(x, y + h, w, L"Last session", rows, L"", draw);
         h += t::kSpace6;
         std::vector<Row> threads;
@@ -1682,17 +1685,17 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         const bool toolkit = s.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos;
         std::vector<Row> layer;
         if (s.gazeMs >= 0)
-            layer.push_back(value_row(L"Eye tracking lookup", L"On the layer's own thread, not ACE's.",
+            layer.push_back(value_row(L"Eye tracking lookup", L"On the layer's own thread, not the game's.",
                                       formatted(L"%.3f ms", s.gazeMs)));
         layer.push_back(value_row(L"Layer on the render thread", L"Sim-QVFR's own time in each frame (composition apart).",
                                   s.layerMs >= 0 ? formatted(L"%.2f ms", s.layerMs) : dash));
         layer.push_back(value_row(L"Layers below", toolkit ? L"OpenXR Toolkit adds time to every frame's submission (about "
-                                                             L"0.8 ms measured): switch it off for ACE in OpenXR layers if you "
+                                                             L"0.8 ms measured): switch it off for the game in OpenXR layers if you "
                                                              L"don't use it."
                                                            : L"",
                                   s.layersBelow.empty() ? L"None" : friendly_layers(s.layersBelow)));
         if (app.runtime.vramUsedMb > 0)
-            layer.push_back(value_row(L"VRAM", L"ACE's use against what Windows allows it.",
+            layer.push_back(value_row(L"VRAM", L"The game's use against what Windows allows it.",
                                       formatted(L"%.1f GB", app.runtime.vramUsedMb / 1024) +
                                           formatted(L" of %.1f GB", app.runtime.vramBudgetMb / 1024)));
         h += section(x, y + h, w, L"Layer and memory", layer, L"", draw);
@@ -1701,7 +1704,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     // Asking for help: the capture switch, copying the numbers above, the logs folder.
     Row capture;
     const std::wstring captureDesc =
-        L"At the next launch, Ctrl+Alt+C while driving records for 20 s where ACE's busiest threads spend their time, "
+        L"At the next launch, Ctrl+Alt+C while driving records for 20 s where the game's busiest threads spend their time, "
         L"into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; the game may "
         L"stutter slightly while it records.";
     capture.fullHeight = [captureDesc](float width) { return checkbox_height(captureDesc, width); };
@@ -2257,9 +2260,9 @@ float pane_content(float x, float y, float w, bool draw) {
                       [&] {
                           const std::wstring names[3] = {kCheekyFgReleaseNames[0], kCheekyFgReleaseNames[1],
                                                          kCheekyFgReleaseNames[2]};
-                          Row release = choice_row(kFgRelease, L"Release ACE", names, 3,
+                          Row release = choice_row(kFgRelease, L"Release game", names, 3,
                                                    cheeky_fg_release_index(app.s.cheeky.fgRelease), fgOff);
-                          release.desc = L"When ACE starts its next frame. Never: CPU and GPU overlap (most frames). "
+                          release.desc = L"When the game starts its next frame. Never: CPU and GPU overlap (most frames). "
                                          L"Capture: after the GPU finishes. Generated: after the generated frame.";
                           return release;
                       }(),
@@ -2335,7 +2338,11 @@ float pane_content(float x, float y, float w, bool draw) {
             app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
             app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody,
                             {x, y + t::kTitle1.lineHeight + 8, w, lh}, col(app.c->label_secondary));
-            app.canvas.text(L"Version " + widen(SIM_QVFR_VERSION), t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
+            // A packaged build has its release's version; a development build ("dev") names the release it is headed for.
+            const std::wstring version = known_version(widen(SIM_QVFR_VERSION))
+                                             ? widen(SIM_QVFR_VERSION)
+                                             : widen(SIM_QVFR_RELEASE) + L" · development build";
+            app.canvas.text(L"Version " + version, t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
                             col(app.c->label_secondary));
         }
         h += t::kTitle1.lineHeight + 8 + lh + 4 + lh;
@@ -2413,10 +2420,10 @@ float pane_content(float x, float y, float w, bool draw) {
                      draw);
         // The same notice as the README's: unofficial, at the user's own risk.
         const std::wstring notice =
-            L"Sim-QVFR is not made, approved or sanctioned by Kunos Simulazioni or the Assetto Corsa EVO "
-            L"developers. It hooks the game's code and changes how it renders, so a game update can break it, and "
+            L"Sim-QVFR is not made, approved or sanctioned by Kunos Simulazioni or the developers of the games it "
+            L"supports. It hooks the game's code and changes how it renders, so a game update can break it, and "
             L"it can crash the game. Use it in offline sessions only, and please don't report problems you see "
-            L"while using it to the ACE developers.";
+            L"while using it to the game's developers.";
         const float nh = app.canvas.measure_height(notice, t::kCallout, w);
         if (draw) {
             app.canvas.text(L"Experimental and unofficial. Use at your own risk.", t::kHeadline,
@@ -3713,7 +3720,9 @@ void fix_check(const Check& c) {
     case CheckFix::OpenRendering: activate(kSidebar, static_cast<int>(Pane::Rendering)); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
-            MessageBoxW(app.hwnd, L"OpenXR Toolkit’s settings for ACE could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.",
+            MessageBoxW(app.hwnd,
+                        (L"OpenXR Toolkit’s settings for " + short_name() +
+                         L" could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.").c_str(),
                         L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
         break;
     case CheckFix::None: return;
