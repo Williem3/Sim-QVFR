@@ -19,4 +19,9 @@ bool spirv_add_to_input(std::vector<std::uint32_t>& words, const char* name, std
 // accesses whose index type couldn't be found (left as they were).
 int spirv_fold_eye_arrays(std::vector<std::uint32_t>& words, const std::vector<std::string>& blocks, int* skipped);
 
+// Compute shaders that take their eye from the dispatch depth as `eye = (gl_GlobalInvocationID.z == 1) ? 1 : 0` and
+// write to layer `eye` (X-Plane's cloud render): the test becomes `(z & 1) == 1` (views 2-3 act as eyes 0-1) and the
+// written layer becomes z (a 3-component int coordinate whose last component was `eye` now takes z). True if edited.
+bool spirv_layer_from_dispatch_z(std::vector<std::uint32_t>& words);
+
 }  // namespace xplane

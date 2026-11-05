@@ -114,6 +114,59 @@ int main() {
               "a block not named: left alone");
     }
 
+    {
+        // The cloud render's idiom: %1 uint, %2 int, %3 bool, %4 = uint 2, %5 = uint 1, %6 = int 1, %7 = int 0,
+        // OpDecorate %10 BuiltIn GlobalInvocationId; %11 = OpAccessChain %ptr %10 %4; %12 = OpLoad %1 %11;
+        // %13 = OpIEqual %3 %12 %5; %14 = OpSelect %2 %13 %6 %7; %15 = OpCompositeConstruct %int3 %20 %21 %14.
+        std::vector<std::uint32_t> m = {0x07230203, 0x00010300, 0, 30, 0};
+        m.insert(m.end(), {op(71, 4), 10, 11, 28});
+        m.insert(m.end(), {op(21, 4), 1, 32, 0});
+        m.insert(m.end(), {op(21, 4), 2, 32, 1});
+        m.insert(m.end(), {op(43, 4), 1, 4, 2});
+        m.insert(m.end(), {op(43, 4), 1, 5, 1});
+        m.insert(m.end(), {op(43, 4), 2, 6, 1});
+        m.insert(m.end(), {op(43, 4), 2, 7, 0});
+        m.insert(m.end(), {op(65, 5), 9, 11, 10, 4});
+        m.insert(m.end(), {op(61, 4), 1, 12, 11});
+        m.insert(m.end(), {op(170, 5), 3, 13, 12, 5});
+        m.insert(m.end(), {op(169, 6), 2, 14, 13, 6, 7});
+        m.insert(m.end(), {op(80, 6), 8, 15, 20, 21, 14});
+        std::vector<std::uint32_t> e = m;
+        check(xplane::spirv_layer_from_dispatch_z(e), "cloud idiom found");
+        // Expected: after the load, %30 = OpBitwiseAnd %1 %12 %5 and %31 = OpBitcast %2 %12; the IEqual tests %30; the
+        // construct's last component is %31; bound 32.
+        std::vector<std::uint32_t> want3 = {0x07230203, 0x00010300, 0, 32, 0};
+        want3.insert(want3.end(), {op(71, 4), 10, 11, 28});
+        want3.insert(want3.end(), {op(21, 4), 1, 32, 0});
+        want3.insert(want3.end(), {op(21, 4), 2, 32, 1});
+        want3.insert(want3.end(), {op(43, 4), 1, 4, 2});
+        want3.insert(want3.end(), {op(43, 4), 1, 5, 1});
+        want3.insert(want3.end(), {op(43, 4), 2, 6, 1});
+        want3.insert(want3.end(), {op(43, 4), 2, 7, 0});
+        want3.insert(want3.end(), {op(65, 5), 9, 11, 10, 4});
+        want3.insert(want3.end(), {op(61, 4), 1, 12, 11});
+        want3.insert(want3.end(), {op(199, 5), 1, 30, 12, 5});
+        want3.insert(want3.end(), {op(124, 4), 2, 31, 12});
+        want3.insert(want3.end(), {op(170, 5), 3, 13, 30, 5});
+        want3.insert(want3.end(), {op(169, 6), 2, 14, 13, 6, 7});
+        want3.insert(want3.end(), {op(80, 6), 8, 15, 20, 21, 31});
+        check(e == want3, "eye test on z & 1, written layer = z");
+        std::vector<std::uint32_t> none(m.begin(), m.begin() + 9);  // no GlobalInvocationId use
+        none[3] = 30;
+        check(!xplane::spirv_layer_from_dispatch_z(none), "no idiom: left alone");
+    }
+
+    // SIM_QVFR_SPV_CLOUD: the cloud render compute shader (from a capture); writes <file>.edited.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_CLOUD")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        check(xplane::spirv_layer_from_dispatch_z(real), "edits the cloud render shader");
+        std::ofstream o(std::string(in) + ".edited.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
     // SIM_QVFR_SPV_FOLD: a .spv using the per-eye blocks (from a capture); writes <file>.folded.spv.
     if (const char* in = std::getenv("SIM_QVFR_SPV_FOLD")) {
         std::ifstream file(in, std::ios::binary);

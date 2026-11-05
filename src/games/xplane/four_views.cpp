@@ -34,6 +34,7 @@ using CreateShaderModule = std::int32_t (*)(void* device, const ShaderModuleCrea
 
 std::atomic<int> g_finalResolveEdits{0};
 std::atomic<int> g_eyeArrayModules{0};
+std::atomic<int> g_layerFromZModules{0};
 
 // The uniform blocks with per-eye arrays of two (README.md, "Inventory"), by their variables' names.
 const std::vector<std::string> kEyeArrayBlocks = {
@@ -95,7 +96,11 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             if (skipped > 0 || n <= 3 || n % 25 == 0)
                 logf("xplane: per-eye arrays folded in shader module %d: %d accesses, %d skipped", n, folded, skipped);
         }
-        if (folded > 0) {
+        // Compute shaders taking their eye from the dispatch depth (the cloud render): write layer z, eye = z & 1.
+        const bool layered = spirv_layer_from_dispatch_z(words);
+        if (layered)
+            logf("xplane: compute shader writes layer = dispatch z (eye from z & 1), module %d", ++g_layerFromZModules);
+        if (folded > 0 || layered) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();

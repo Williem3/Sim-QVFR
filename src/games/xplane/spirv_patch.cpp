@@ -127,6 +127,84 @@ bool spirv_add_to_input(std::vector<std::uint32_t>& words, const char* name, std
     return true;
 }
 
+bool spirv_layer_from_dispatch_z(std::vector<std::uint32_t>& words) {
+    constexpr std::uint16_t kOpDecorate = 71, kOpIEqual = 170, kOpSelect = 169, kOpCompositeConstruct = 80,
+                            kOpBitcast = 124;
+    constexpr std::uint32_t kBuiltIn = 11, kGlobalInvocationId = 28;
+    if (words.size() < kHeader || words[0] != kMagic)
+        return false;
+    std::uint32_t gid = 0;
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> consts;  // id -> (type, value)
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        if (count == 0 || i + count > words.size())
+            return false;
+        if (code == kOpDecorate && count >= 4 && words[i + 2] == kBuiltIn && words[i + 3] == kGlobalInvocationId)
+            gid = words[i + 1];
+        if (code == kOpConstant && count == 4)
+            consts[words[i + 2]] = {words[i + 1], words[i + 3]};
+        i += count;
+    }
+    if (!gid)
+        return false;
+    // z: OpLoad of an access chain gl_GlobalInvocationID[2]; eye: OpSelect on OpIEqual(z, 1).
+    std::uint32_t zPtr = 0, z = 0, zType = 0, eq = 0, eye = 0, eyeType = 0, one = 0;
+    std::size_t zLoadAt = 0, eqAt = 0, constructAt = 0;
+    int eqZOperand = 0;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        const std::uint32_t* w = &words[i];
+        if ((code == kOpAccessChain || code == kOpInBoundsAccessChain) && count == 5 && w[3] == gid) {
+            const auto c = consts.find(w[4]);
+            if (c != consts.end() && c->second.second == 2)
+                zPtr = w[2];
+        } else if (code == kOpLoad && count >= 4 && zPtr && w[3] == zPtr && !z) {
+            zType = w[1];
+            z = w[2];
+            zLoadAt = i;
+        } else if (code == kOpIEqual && count == 5 && z && !eq) {
+            for (int k = 0; k < 2; ++k) {
+                const auto c = consts.find(w[4 - k]);
+                if (w[3 + k] == z && c != consts.end() && c->second.second == 1) {
+                    eq = w[2];
+                    eqAt = i;
+                    eqZOperand = 3 + k;
+                    one = w[4 - k];
+                }
+            }
+        } else if (code == kOpSelect && count == 6 && eq && w[3] == eq && !eye) {
+            eyeType = w[1];
+            eye = w[2];
+        } else if (code == kOpCompositeConstruct && count == 6 && eye && w[5] == eye && !constructAt) {
+            constructAt = i;
+        }
+        i += count;
+    }
+    if (!zLoadAt || !eqAt || !eye || !constructAt || consts[one].first != zType)
+        return false;
+    const std::uint32_t zMasked = words[3], zAsInt = words[3] + 1;
+    std::vector<std::uint32_t> out(words.begin(), words.begin() + kHeader);
+    out.reserve(words.size() + 10);
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16);
+        const std::size_t start = out.size();
+        out.insert(out.end(), words.begin() + static_cast<std::ptrdiff_t>(i),
+                   words.begin() + static_cast<std::ptrdiff_t>(i + count));
+        if (i == zLoadAt) {  // right after z: z & 1, and z as the eye's int type
+            out.insert(out.end(), {op(kOpBitwiseAnd, 5), zType, zMasked, z, one});
+            out.insert(out.end(), {op(kOpBitcast, 4), eyeType, zAsInt, z});
+        } else if (i == eqAt) {
+            out[start + static_cast<std::size_t>(eqZOperand)] = zMasked;
+        } else if (i == constructAt) {
+            out[start + 5] = zAsInt;
+        }
+        i += count;
+    }
+    out[3] = words[3] + 2;
+    words.swap(out);
+    return true;
+}
+
 int spirv_fold_eye_arrays(std::vector<std::uint32_t>& words, const std::vector<std::string>& blocks, int* skipped) {
     if (skipped)
         *skipped = 0;
