@@ -58,6 +58,11 @@ inline constexpr std::uint8_t kMultiplierStoreAnchor[6] = {0x89, 0x88, 0x90, 0x2
 // `or dword [rax], 0x18; mov rbx, [rsp+0x30]`, rax the render state.
 inline constexpr std::uintptr_t kModelviewCopyEnd = 0x1595653;
 inline constexpr std::uint8_t kModelviewCopyEndAnchor[8] = {0x83, 0x08, 0x18, 0x48, 0x8B, 0x5C, 0x24, 0x30};
+// The cloud render's dispatch depth (0x1b63980): count = max(multiplier, layers), then z = (count > 1) + 1, i.e. 2 in
+// stereo: `cmp dword [rdx], 1; setg r14b; inc r14d`. Replaced by z = count: `mov r14d, [rdx]` and a 7-byte nop.
+inline constexpr std::uintptr_t kCloudDispatchDepth = 0x1b6460f;
+inline constexpr std::uint8_t kCloudDispatchDepthAnchor[10] = {0x83, 0x3A, 0x01, 0x41, 0x0F, 0x9F, 0xC6, 0x41, 0xFF, 0xC6};
+inline constexpr std::uint8_t kCloudDispatchDepthCount[10] = {0x44, 0x8B, 0x32, 0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00};
 // X-Plane's one vkCreateShaderModule call loads the function from its table: `mov rax, [rip+...]` (0x632dad0).
 inline constexpr std::uintptr_t kShaderModuleLoad = 0x64495a;
 inline constexpr std::uint8_t kShaderModuleLoadAnchor[7] = {0x48, 0x8B, 0x05, 0x6F, 0x91, 0xCE, 0x05};

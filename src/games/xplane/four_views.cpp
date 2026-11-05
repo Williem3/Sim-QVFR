@@ -119,7 +119,8 @@ bool four_views_copies_start() {
         !code_matches(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
         !code_matches(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
         !code_matches(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor)) ||
-        !code_matches(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor))) {
+        !code_matches(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor)) ||
+        !code_matches(kCloudDispatchDepth, kCloudDispatchDepthAnchor, sizeof(kCloudDispatchDepthAnchor))) {
         logf("xplane: four views not started: the draw path code isn't this build's");
         return false;
     }
@@ -168,6 +169,10 @@ bool four_views_copies_start() {
                    sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
     ok &= redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
                    "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
+    const bool clouds = simqvfr::code_write(kCloudDispatchDepth, kCloudDispatchDepthCount, sizeof(kCloudDispatchDepthCount));
+    logf("xplane: cloud render dispatch depth = view count (was stereo ? 2 : 1) at 0x%llx: %s",
+         static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
+    ok &= clouds;
     return ok;
 }
 
