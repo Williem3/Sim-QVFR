@@ -43,7 +43,7 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
    The layer now switches on in the game but **only logs**: it runs as `mode=off` whatever the ini says,
    turns the session and swapchain logging on, and adds nothing to the game or the headset (no Cheeky,
    menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
-   swapchain sizes and formats, frame submission. `acc/` started this way.
+   swapchain sizes and formats, frame submission. `acc/` started this way, and `xplane/` is at this stage now.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
 4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`sim_qvfr_core`: the layer and the
    tests link it).
