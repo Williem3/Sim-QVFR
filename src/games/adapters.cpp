@@ -4,6 +4,7 @@
 #include "ace/game.h"
 #include "acc/adapter.h"
 #include "acc/game.h"
+#include "xplane/adapter.h"
 #include "xplane/game.h"
 
 namespace simqvfr::games {
@@ -41,10 +42,8 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::ace::adapter();
     if (game == &::acc::kGame)
         return ::acc::adapter();
-    if (game == &::xplane::kGame) {  // identity only (xplane/README.md)
-        static NoQvfr xplane(game);
-        return xplane;
-    }
+    if (game == &::xplane::kGame)  // identity only, with its experiments (xplane/README.md)
+        return ::xplane::adapter();
     static NoQvfr none(nullptr);
     return none;
 }
