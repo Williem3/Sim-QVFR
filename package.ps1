@@ -1,7 +1,7 @@
 # Builds a portable Sim-QVFR release from a commit: a clean checkout of it in a scratch
 # folder (so nothing uncommitted or outside the repo gets in), a Release build, every offline test,
 # then dist\sim-qvfr-<version>.zip and its folder.
-#   powershell -ExecutionPolicy Bypass -File package.ps1 [-Version 1.0.0-sim-qvfr-beta] [-Commit HEAD] [-Sign]
+#   powershell -ExecutionPolicy Bypass -File package.ps1 [-Version 1.0.0-beta] [-Commit HEAD] [-Sign]
 # Without -Version it packages the commit's planned release (SIM_QVFR_RELEASE in CMakeLists.txt).
 # -Sign Authenticode-signs the launcher and the layer DLL before they are hashed and zipped. The
 # key is Certum's cloud key (SimplySign): log in to SimplySign Desktop first, so the certificate
