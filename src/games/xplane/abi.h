@@ -90,4 +90,23 @@ inline constexpr std::uintptr_t kVkCreateShaderModuleSlot = 0x632dad0;
 inline constexpr std::size_t kFinalResolveFsBytes = 16716;
 inline constexpr const char* kFinalResolveFsSha256 = "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f";
 
+// ---- Eye columns (README.md "Composition"): the stereo image is (2 x eye width) x (outer + focus height), the views
+// half its height. Where X-Plane takes a view's height from the stereo image (its `+0x88`) or its own VR context:
+// The render size query (0xc83a40): `mov ecx, [r15+0x88]` (the stereo image's height) before the min with the caller's.
+inline constexpr std::uintptr_t kRenderSizeHeight = 0xc83b3c;
+inline constexpr std::uint8_t kRenderSizeHeightAnchor[7] = {0x41, 0x8B, 0x8F, 0x88, 0x00, 0x00, 0x00};
+// REN_build_render_graph_3d_world_subgraph (0x198f270), the VR window: `mov edi, [rax+0x88]`, its graph's height.
+inline constexpr std::uintptr_t kWorldSubgraphHeight = 0x198f333;
+inline constexpr std::uint8_t kWorldSubgraphHeightAnchor[6] = {0x8B, 0xB8, 0x88, 0x00, 0x00, 0x00};
+// The VR context made in 0xc66670 (width = image width / 2, height ebx = the image's): `mov [rsp+0x20], ebx;
+// lea r8, [rbp+0x10]` (the height argument, then the name).
+inline constexpr std::uintptr_t kVrContextHeight = 0xc66817;
+inline constexpr std::uint8_t kVrContextHeightAnchor[8] = {0x89, 0x5C, 0x24, 0x20, 0x4C, 0x8D, 0x45, 0x10};
+// Its two resizes (0x196cd90: ctx, width, height r8d, layers r9d). A: `mov r9d, 4` (kVrContextResizeA, after
+// xplane_context_layers) then `mov r8d, ebx`; B: `mov r8d, eax; mov eax, ebx`.
+inline constexpr std::uintptr_t kVrContextResizeHeightA = 0xc6684f;
+inline constexpr std::uint8_t kVrContextResizeHeightAAnchor[9] = {0x41, 0xB9, 0x04, 0x00, 0x00, 0x00, 0x44, 0x8B, 0xC3};
+inline constexpr std::uintptr_t kVrContextResizeHeightB = 0xc8665c;
+inline constexpr std::uint8_t kVrContextResizeHeightBAnchor[5] = {0x44, 0x8B, 0xC0, 0x8B, 0xC3};
+
 }  // namespace xplane

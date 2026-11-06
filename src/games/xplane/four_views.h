@@ -13,4 +13,15 @@ bool four_views_copies_start();
 // eye's tangent span, centred on its forward direction) instead of copies of the eyes.
 void four_views_set_focus(bool on, double fraction, double fractionY);
 
+// QVFR composition in eye columns (README.md "Composition"): the final resolve writes each eye's view over its focus
+// view (instead of showing layers 2-3). Set before X-Plane creates its shaders (early load).
+void four_views_set_eye_columns(bool on);
+// The views' height = half the stereo image's (five sites; abi.h). After four_views_copies_start. False: not this
+// build's code, or a patch failed (logged).
+bool four_views_eye_columns_start();
+
+// What the views were last rendered with, per eye (left, right, up, down tangents): the eye's own projection and the
+// focus view's. False before the first four-view draw. A fresh record is taken at the next draw after each call.
+bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]);
+
 }  // namespace xplane

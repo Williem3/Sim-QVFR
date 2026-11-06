@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,7 @@ std::atomic<int> g_finalResolveEdits{0};
 std::atomic<int> g_eyeArrayModules{0};
 std::atomic<int> g_layerFromZModules{0};
 std::atomic<int> g_inverseModules{0};
+std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
 
 // The uniform blocks with per-eye arrays of two (README.md, "Inventory"), by their variables' names.
 const std::vector<std::string> kEyeArrayBlocks = {
@@ -77,12 +79,14 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         sha256_hex(info->pCode, info->codeSize) == kFinalResolveFsSha256) {
         std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
         std::string why;
-        if (spirv_add_to_input(words, "v_eye", 2, &why)) {
+        const bool columns = g_eyeColumns.load();
+        if (columns ? spirv_eye_columns_resolve(words, &why) : spirv_add_to_input(words, "v_eye", 2, &why)) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();
             const std::int32_t result = real(device, &edited, allocator, module);
-            logf("xplane: final resolve shader edited (v_eye + 2: layers 2-3), vkCreateShaderModule %d, edit %d", result,
+            logf("xplane: final resolve shader edited (%s), vkCreateShaderModule %d, edit %d",
+                 columns ? "eye columns: each eye's view over its focus view" : "v_eye + 2: layers 2-3", result,
                  ++g_finalResolveEdits);
             return result;
         }
@@ -124,6 +128,23 @@ std::atomic<bool> g_focus{false};
 std::atomic<double> g_focusFraction{0.2}, g_focusFractionY{0.2};
 std::atomic<int> g_fillLogs{0};
 
+// The tangents the views were rendered with (four_views_tangents): taken by the first draw after each request.
+struct TangentRecord {
+    std::mutex mutex;
+    float outer[2][4] = {}, focus[2][4] = {};
+    bool valid = false;
+};
+TangentRecord g_record;
+std::atomic<bool> g_recordWanted{true};
+
+// (left, right, up, down) from a projection's ascending x and y tangents (projection_tangents).
+void lrud(const double (&t)[4], float (&out)[4]) {
+    out[0] = static_cast<float>(t[0]);
+    out[1] = static_cast<float>(t[1]);
+    out[2] = static_cast<float>(t[3]);
+    out[3] = static_cast<float>(t[2]);
+}
+
 // From the per-draw upload (kTransformUpload), with four views, before the transform block is filled from the render
 // state: modelview slots 2-3 = slots 0-1 (the focus views look where their eyes look), projection slots 2-3 = the
 // eyes' projections, narrowed to the focus box when the focus is on. Doubles, 16 per matrix, 0x80 per slot.
@@ -133,6 +154,29 @@ void fill_views(std::uint8_t* state) {
     };
     const bool focus = g_focus.load(std::memory_order_relaxed);
     const double fx = g_focusFraction.load(std::memory_order_relaxed), fy = g_focusFractionY.load(std::memory_order_relaxed);
+    if (g_recordWanted.load(std::memory_order_relaxed) && g_recordWanted.exchange(false)) {
+        float outer[2][4] = {}, inner[2][4] = {};
+        bool ok = true;
+        for (int eye = 0; eye < 2; ++eye) {
+            double tan[4];
+            ok &= projection_tangents(*slot(kStateProjections, eye), tan);
+            lrud(tan, outer[eye]);
+            // The focus box, centred on the eye's axis (focus_projection with cx = cy = 0).
+            const double hw = focus ? 0.5 * fx * (tan[1] - tan[0]) : 0.0, hh = focus ? 0.5 * fy * (tan[3] - tan[2]) : 0.0;
+            const float box[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                  static_cast<float>(-hh)};
+            if (focus)
+                std::memcpy(inner[eye], box, sizeof(box));
+            else
+                std::memcpy(inner[eye], outer[eye], sizeof(box));
+        }
+        if (ok) {
+            std::lock_guard guard(g_record.mutex);
+            std::memcpy(g_record.outer, outer, sizeof(outer));
+            std::memcpy(g_record.focus, inner, sizeof(inner));
+            g_record.valid = true;
+        }
+    }
     for (int eye = 0; eye < 2; ++eye) {
         std::memcpy(*slot(kStateModelviews, eye + 2), *slot(kStateModelviews, eye), sizeof(double) * 16);
         const double(&eyeProj)[16] = *slot(kStateProjections, eye);
@@ -261,6 +305,57 @@ bool four_views_copies_start() {
          static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
     ok &= clouds;
     return ok;
+}
+
+void four_views_set_eye_columns(bool on) {
+    g_eyeColumns = on;
+    logf("xplane: eye columns %s (the final resolve writes each eye's view over its focus view)", on ? "on" : "off");
+}
+
+bool four_views_eye_columns_start() {
+    if (!code_matches(kRenderSizeHeight, kRenderSizeHeightAnchor, sizeof(kRenderSizeHeightAnchor)) ||
+        !code_matches(kWorldSubgraphHeight, kWorldSubgraphHeightAnchor, sizeof(kWorldSubgraphHeightAnchor)) ||
+        !code_matches(kVrContextHeight, kVrContextHeightAnchor, sizeof(kVrContextHeightAnchor)) ||
+        !code_matches(kVrContextResizeHeightA, kVrContextResizeHeightAAnchor, sizeof(kVrContextResizeHeightAAnchor)) ||
+        !code_matches(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor))) {
+        logf("xplane: eye columns not started: the view size code isn't this build's (or the VR context isn't at 4 layers)");
+        return false;
+    }
+    static const std::uint8_t renderSize[] = {0x41, 0x8B, 0x8F, 0x88, 0x00, 0x00, 0x00,  // mov ecx, [r15+0x88]
+                                              0xD1, 0xE9};                               // shr ecx, 1
+    static const std::uint8_t subgraph[] = {0x8B, 0xB8, 0x88, 0x00, 0x00, 0x00,  // mov edi, [rax+0x88]
+                                            0xD1, 0xEF};                         // shr edi, 1
+    static const std::uint8_t context[] = {0x89, 0xD8,                    // mov eax, ebx
+                                           0xD1, 0xE8,                    // shr eax, 1
+                                           0x89, 0x44, 0x24, 0x20,        // mov [rsp+0x20], eax
+                                           0x4C, 0x8D, 0x45, 0x10};       // lea r8, [rbp+0x10]
+    static const std::uint8_t resizeA[] = {0x41, 0xB9, 0x04, 0x00, 0x00, 0x00,  // mov r9d, 4
+                                           0x44, 0x8B, 0xC3,                    // mov r8d, ebx
+                                           0x41, 0xD1, 0xE8};                   // shr r8d, 1
+    static const std::uint8_t resizeB[] = {0x44, 0x8B, 0xC0,  // mov r8d, eax
+                                           0x41, 0xD1, 0xE8,  // shr r8d, 1
+                                           0x8B, 0xC3};       // mov eax, ebx
+    bool ok = redirect(kRenderSizeHeight, kRenderSizeHeightAnchor, sizeof(kRenderSizeHeightAnchor), renderSize,
+                       sizeof(renderSize), "eye columns: render size height / 2");
+    ok &= redirect(kWorldSubgraphHeight, kWorldSubgraphHeightAnchor, sizeof(kWorldSubgraphHeightAnchor), subgraph,
+                   sizeof(subgraph), "eye columns: 3D world graph height / 2");
+    ok &= redirect(kVrContextHeight, kVrContextHeightAnchor, sizeof(kVrContextHeightAnchor), context, sizeof(context),
+                   "eye columns: VR context height / 2");
+    ok &= redirect(kVrContextResizeHeightA, kVrContextResizeHeightAAnchor, sizeof(kVrContextResizeHeightAAnchor), resizeA,
+                   sizeof(resizeA), "eye columns: VR context resize A height / 2");
+    ok &= redirect(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor), resizeB,
+                   sizeof(resizeB), "eye columns: VR context resize B height / 2");
+    return ok;
+}
+
+bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]) {
+    g_recordWanted = true;
+    std::lock_guard guard(g_record.mutex);
+    if (!g_record.valid)
+        return false;
+    std::memcpy(outer, g_record.outer, sizeof(outer));
+    std::memcpy(focus, g_record.focus, sizeof(focus));
+    return true;
 }
 
 void four_views_set_focus(bool on, double fraction, double fractionY) {

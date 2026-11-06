@@ -334,6 +334,130 @@ int spirv_fold_eye_arrays(std::vector<std::uint32_t>& words, const std::vector<s
     return static_cast<int>(edits.size());
 }
 
+bool spirv_eye_columns_resolve(std::vector<std::uint32_t>& words, std::string* why) {
+    constexpr std::uint16_t kOpMemberName = 6, kOpTypeBool = 20, kOpTypeFloat = 22, kOpFAdd = 129, kOpFSub = 131,
+                            kOpSelect = 169, kOpFOrdLessThanEqual = 188;
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return false;
+    };
+    if (words.size() < kHeader || words[0] != kMagic)
+        return fail("not SPIR-V");
+    std::map<std::uint32_t, std::string> names;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::string> memberNames;
+    std::map<std::uint32_t, std::uint32_t> pointee, varType;
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> consts;
+    std::uint32_t boolType = 0, floatType = 0, intType = 0, eyeVar = 0;
+    std::size_t floatAt = 0, intAt = 0;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        if (count == 0 || i + count > words.size())
+            return fail("malformed instruction");
+        const std::uint32_t* w = &words[i];
+        if (code == kOpName && count >= 3)
+            names[w[1]] = literal(words, i + 2, i + count);
+        else if (code == kOpMemberName && count >= 4)
+            memberNames[{w[1], w[2]}] = literal(words, i + 3, i + count);
+        else if (code == kOpTypeBool && count == 2 && !boolType)
+            boolType = w[1];
+        else if (code == kOpTypeFloat && count == 3 && w[2] == 32 && !floatType) {
+            floatType = w[1];
+            floatAt = i;
+        } else if (code == kOpTypeInt && count == 4 && w[2] == 32 && w[3] == 1 && !intType) {
+            intType = w[1];
+            intAt = i;
+        } else if (code == kOpTypePointer && count == 4 && w[2] == kUniform)
+            pointee[w[1]] = w[3];
+        else if (code == kOpVariable && count >= 4 && w[3] == kUniform)
+            varType[w[2]] = w[1];
+        if (code == kOpConstant && count == 4)
+            consts[w[2]] = {w[1], w[3]};
+        i += count;
+    }
+    if (!boolType || !floatType || !intType)
+        return fail("no bool, float or int type");
+    for (const auto& [id, n] : names)
+        if (n == "v_eye")
+            eyeVar = id;
+    if (!eyeVar)
+        return fail("no v_eye");
+    // The Uniform variable whose block has a member "u_y_offset", and that member's index.
+    std::uint32_t blockVar = 0, member = 0;
+    for (const auto& [var, ptr] : varType) {
+        const auto p = pointee.find(ptr);
+        if (p == pointee.end())
+            continue;
+        for (const auto& [key, n] : memberNames)
+            if (key.first == p->second && n == "u_y_offset") {
+                blockVar = var;
+                member = key.second;
+            }
+    }
+    if (!blockVar)
+        return fail("no u_y_offset");
+    // var.u_y_offset -> its loads -> the one OpFSub of a load; the one load of v_eye.
+    std::set<std::uint32_t> yPtrs, yLoads;
+    std::size_t subAt = 0, eyeLoadAt = 0;
+    int subs = 0, eyeLoads = 0;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        const std::uint32_t* w = &words[i];
+        if ((code == kOpAccessChain || code == kOpInBoundsAccessChain) && count == 5 && w[3] == blockVar) {
+            const auto c = consts.find(w[4]);
+            if (c != consts.end() && c->second.second == member)
+                yPtrs.insert(w[2]);
+        } else if (code == kOpLoad && count >= 4 && yPtrs.count(w[3])) {
+            yLoads.insert(w[2]);
+        } else if (code == kOpFSub && count == 5 && w[1] == floatType && yLoads.count(w[3])) {
+            ++subs;
+            subAt = i;
+        } else if (code == kOpLoad && count >= 4 && w[3] == eyeVar) {
+            ++eyeLoads;
+            eyeLoadAt = i;
+        }
+        i += count;
+    }
+    if (subs != 1)
+        return fail("not exactly one u_y_offset - y");
+    if (eyeLoads != 1)
+        return fail("v_eye not loaded exactly once");
+    if (eyeLoadAt < subAt)
+        return fail("v_eye loaded before the row is known");
+    const std::uint32_t zero = words[3], one = zero + 1, two = zero + 2, yRaw = zero + 3, row = zero + 4,
+                        yUp = zero + 5, eyeRaw = zero + 6, eyeUp = zero + 7, bound = zero + 8;
+    const std::uint32_t y = words[subAt + 2], eye = words[eyeLoadAt + 2], eyeType = words[eyeLoadAt + 1];
+    if (eyeType != intType)
+        return fail("v_eye is not the 32-bit int");
+    std::vector<std::uint32_t> out(words.begin(), words.begin() + kHeader);
+    out.reserve(words.size() + 40);
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16);
+        const std::size_t start = out.size();
+        out.insert(out.end(), words.begin() + static_cast<std::ptrdiff_t>(i),
+                   words.begin() + static_cast<std::ptrdiff_t>(i + count));
+        if (i == floatAt) {
+            out.insert(out.end(), {op(kOpConstant, 4), floatType, zero, 0x00000000u});  // 0.0f
+            out.insert(out.end(), {op(kOpConstant, 4), floatType, one, 0x3F800000u});   // 1.0f
+        } else if (i == intAt) {
+            out.insert(out.end(), {op(kOpConstant, 4), intType, two, 2});
+        } else if (i == subAt) {
+            out[start + 2] = yRaw;
+            out.insert(out.end(), {op(kOpFOrdLessThanEqual, 5), boolType, row, yRaw, zero});
+            out.insert(out.end(), {op(kOpFAdd, 5), floatType, yUp, yRaw, one});
+            out.insert(out.end(), {op(kOpSelect, 6), floatType, y, row, yUp, yRaw});
+        } else if (i == eyeLoadAt) {
+            out[start + 2] = eyeRaw;
+            out.insert(out.end(), {op(kOpIAdd, 5), intType, eyeUp, eyeRaw, two});
+            out.insert(out.end(), {op(kOpSelect, 6), intType, eye, row, eyeUp, eyeRaw});
+        }
+        i += count;
+    }
+    out[3] = bound;
+    words.swap(out);
+    return true;
+}
+
 int spirv_inverse_from_view_projection(std::vector<std::uint32_t>& words, const char* block, const char* member,
                                        const char* transform, const char* projection) {
     constexpr std::uint16_t kOpExtInstImport = 11, kOpExtInst = 12, kOpMemberName = 6, kOpMemberDecorate = 72;

@@ -89,20 +89,68 @@ void apply_copies(const wchar_t* ini) {
     }
 }
 
+// QVFR as the ini asks for it: [experiment] mode=views4 with views4_compose=1 (the launcher's QVFR). Read at the early
+// load, before X-Plane creates its shaders: the final resolve's edit depends on it.
+bool qvfr_wanted(const wchar_t* ini) {
+    wchar_t mode[32] = {};
+    GetPrivateProfileStringW(L"experiment", L"mode", L"off", mode, 32, ini);
+    return _wcsicmp(mode, L"views4") == 0 && GetPrivateProfileIntW(L"experiment", L"views4_compose", 0, ini) == 1 &&
+           GetPrivateProfileIntW(L"experiment", L"baseline", 0, ini) == 0;
+}
+
+// QVFR: four views (layers, contexts, multiplier, copies stage), focus cameras at focus_percent, the final resolve and
+// view heights in eye columns. False: some part isn't this build's (logged); X-Plane may then render oddly, so the
+// layer stays off and the headset shows what X-Plane submits.
+bool apply_qvfr(const wchar_t* ini) {
+    four_views_set_eye_columns(true);
+    apply_layer_count(ini, 4);
+    apply_context_layers(ini, 4);
+    bool ok = four_views_copies_start();
+    ok = ok && four_views_eye_columns_start();
+    const int percent = GetPrivateProfileIntW(L"experiment", L"focus_percent", 20, ini);
+    const double fraction = (percent > 0 && percent <= 100 ? percent : 20) / 100.0;
+    four_views_set_focus(true, fraction, fraction);
+    simqvfr::logf("xplane: QVFR %s (eye columns, D3D11 compositor)", ok ? "patched in" : "NOT fully patched in");
+    return ok;
+}
+
 class XPlaneAdapter final : public simqvfr::games::GameAdapter {
 public:
     const simqvfr::games::GameInfo* info() const override { return &kGame; }
-    bool has_qvfr() const override { return false; }  // identity only: the layer logs
-    bool qvfr_start(const simqvfr::games::QvfrStart&) override { return false; }
-    void qvfr_set_gaze(const float (&)[2][2], const bool (&)[2], bool) override {}
+    // QVFR runs only when the early load patched it in (qvfr_start); otherwise the layer stays off.
+    bool qvfr_composable() const override { return false; }    // not by the D3D12 compositor:
+    bool qvfr_compose_d3d11() const override { return true; }  // X-Plane submits D3D11 (--d3d11_vr)
+    bool qvfr_eye_columns() const override { return true; }    // one side-by-side image, each eye a column
+    bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
+        if (!qvfr_) {
+            simqvfr::logf("xplane: QVFR not started: it needs the launcher's early load with mode=views4 and "
+                          "views4_compose=1 (the shaders are edited as X-Plane starts)");
+            return false;
+        }
+        if (s.focusFraction > 0)
+            four_views_set_focus(true, s.focusFraction, s.focusFractionY > 0 ? s.focusFractionY : s.focusFraction);
+        const Views4Layout& l = s.layout;
+        simqvfr::logf("xplane: QVFR started; launch layout outer %.2f x %.2f, focus %.2f x %.2f of the native eye (X-Plane "
+                      "renders every view at half the column: the records say so)",
+                      l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
+        return true;
+    }
+    void qvfr_set_gaze(const float (&)[2][2], const bool (&)[2], bool) override {}  // centred focus views for now
     void qvfr_set_live_layout(const Views4Layout&) override {}
-    void qvfr_set_live(double, double, double, bool) override {}
+    void qvfr_set_live(double focus, double focusY, double, bool) override {
+        if (focus > 0 && (focus != focus_ || focusY != focusY_)) {
+            focus_ = focus;
+            focusY_ = focusY;
+            four_views_set_focus(true, focus, focusY > 0 ? focusY : focus);
+        }
+    }
     bool qvfr_dlss_held() override { return false; }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
         render[0] = render[1] = output[0] = output[1] = 0;
     }
-    bool qvfr_take_frame(Views4Frame&) override { return false; }
-    bool qvfr_latest_frame(Views4Frame&) override { return false; }
+    // Each frame's record: the tangents last drawn with, every view half the column (eye columns, frame.live).
+    bool qvfr_take_frame(Views4Frame& frame) override { return record(frame); }
+    bool qvfr_latest_frame(Views4Frame& frame) override { return record(frame); }
     void qvfr_note_views(const XrView*, uint32_t) override {}
     void qvfr_frame_end() override {}
 
@@ -110,8 +158,13 @@ public:
     // wrapper sees every module. xrCreateInstance then finds them in.
     void early_start(const wchar_t* ini) override {
         simqvfr::logf("xplane: layer loaded early (before X-Plane runs): patching now");
-        apply_all(ini);
         patched_ = true;
+        if (qvfr_wanted(ini)) {
+            qvfr_ = apply_qvfr(ini);
+            fourViews_ = true;
+            return;
+        }
+        apply_all(ini);
         fourViews_ = GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1;
     }
     // Every xrEndFrame: with four views, exposure fusion stays off (it builds its pyramids for two layers only; abi.h).
@@ -139,6 +192,21 @@ public:
 private:
     bool patched_ = false;
     bool fourViews_ = false;
+    bool qvfr_ = false;
+    double focus_ = 0, focusY_ = 0;
+    static bool record(Views4Frame& frame) {
+        frame = {};
+        if (!four_views_tangents(frame.outerTan, frame.focusTan))
+            return false;
+        for (int e = 0; e < 2; ++e)
+            frame.turn[e] = {0, 0, 0, 1};
+        frame.live = true;  // views4_rect_eye_columns: each view half the target wide, each row half its height
+        for (int v = 0; v < 4; ++v) {
+            frame.width[v] = frame.renderWidth[v] = 0.5;
+            frame.height[v] = frame.renderHeight[v] = 0.5;
+        }
+        return true;
+    }
     static void apply_all(const wchar_t* ini) {
         if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1) {
             apply_copies(ini);

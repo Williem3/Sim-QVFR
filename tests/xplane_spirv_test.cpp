@@ -1,6 +1,7 @@
 // Offline check of the SPIR-V edit applied to X-Plane's final resolve shader (src/games/xplane/spirv_patch.h) on a
 // small hand-built module. With SIM_QVFR_SPV_IN set to a .spv file (X-Plane's shader, from a RenderDoc capture; not
 // in the repo), it also edits that and writes SIM_QVFR_SPV_OUT, for the Vulkan SDK's spirv-val.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -200,6 +201,65 @@ int main() {
         const std::vector<std::uint32_t> copy = unshared;
         check(xplane::spirv_inverse_from_view_projection(unshared, "blk", "inv", "xf", "proj") == 0 && unshared == copy,
               "an index the projection doesn't use: left alone");
+    }
+
+    // The final resolve in eye columns: v <= 0 (the lower row) samples v + 1 in layer v_eye + 2.
+    {
+        auto str = [](std::vector<std::uint32_t>& v, const char* s) {
+            const std::size_t n = std::strlen(s) / 4 + 1;
+            std::vector<std::uint32_t> words(n, 0);
+            std::memcpy(words.data(), s, std::strlen(s));
+            v.insert(v.end(), words.begin(), words.end());
+        };
+        auto build = [&](bool eyeFirst) {
+            std::vector<std::uint32_t> m = {0x07230203, 0x00010300, 0, 21, 0};
+            m.push_back(op(5, 2 + 2)); m.push_back(5); str(m, "v_eye");
+            m.push_back(op(6, 3 + 3)); m.insert(m.end(), {10, 0}); str(m, "u_offset");
+            m.push_back(op(6, 3 + 3)); m.insert(m.end(), {10, 1}); str(m, "u_y_offset");
+            m.insert(m.end(), {op(21, 4), 2, 32, 1, op(22, 3), 3, 32, op(20, 2), 4});
+            m.insert(m.end(), {op(32, 4), 6, 1, 2, op(59, 4), 6, 5, 1, op(43, 4), 2, 7, 1});
+            m.insert(m.end(), {op(30, 4), 10, 3, 3, op(32, 4), 11, 2, 10, op(59, 4), 11, 12, 2, op(32, 4), 13, 2, 3});
+            if (eyeFirst)
+                m.insert(m.end(), {op(61, 4), 2, 18, 5});
+            m.insert(m.end(), {op(65, 5), 13, 14, 12, 7, op(61, 4), 3, 15, 14, op(129, 5), 3, 16, 15, 15});
+            m.insert(m.end(), {op(131, 5), 3, 17, 15, 16});
+            if (!eyeFirst)
+                m.insert(m.end(), {op(61, 4), 2, 18, 5});
+            m.insert(m.end(), {op(128, 5), 2, 19, 18, 18, op(129, 5), 3, 20, 17, 17});
+            return m;
+        };
+        std::vector<std::uint32_t> m = build(false);
+        std::string reason;
+        const bool ok = xplane::spirv_eye_columns_resolve(m, &reason);
+        // New ids from 21: 0.0 %21, 1.0 %22, 2 %23, y raw %24, row %25, y + 1 %26, v_eye raw %27, v_eye + 2 %28.
+        auto has = [&](const std::vector<std::uint32_t>& seq) {
+            return std::search(m.begin(), m.end(), seq.begin(), seq.end()) != m.end();
+        };
+        check(ok && m[3] == 29 && has({op(131, 5), 3, 24, 15, 16, op(188, 5), 4, 25, 24, 21, op(129, 5), 3, 26, 24, 22,
+                                       op(169, 6), 3, 17, 25, 26, 24}) &&
+                  has({op(61, 4), 2, 27, 5, op(128, 5), 2, 28, 27, 23, op(169, 6), 2, 18, 25, 28, 27}) &&
+                  has({op(22, 3), 3, 32, op(43, 4), 3, 21, 0, op(43, 4), 3, 22, 0x3F800000}) &&
+                  has({op(21, 4), 2, 32, 1, op(43, 4), 2, 23, 2}),
+              "eye columns resolve: lower row v + 1, layer v_eye + 2");
+        std::vector<std::uint32_t> early = build(true);
+        const std::vector<std::uint32_t> earlyCopy = early;
+        check(!xplane::spirv_eye_columns_resolve(early, &reason) && early == earlyCopy,
+              "v_eye loaded before the row: left alone");
+    }
+
+    // SIM_QVFR_SPV_COLUMNS: the final resolve fragment shader (from a capture); writes <file>.columns.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_COLUMNS")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        std::string reason;
+        const bool ok = xplane::spirv_eye_columns_resolve(real, &reason);
+        check(ok, "edits the final resolve for eye columns");
+        if (!ok)
+            std::printf("     %s\n", reason.c_str());
+        std::ofstream o(std::string(in) + ".columns.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
     }
 
     // SIM_QVFR_SPV_INV: the light billboards' vertex shader (from a capture); writes <file>.inv.spv.
