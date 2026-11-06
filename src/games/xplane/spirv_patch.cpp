@@ -801,6 +801,165 @@ std::uint32_t focus_pair(Module& m, const FocusBlock& f, std::uint32_t entry, st
 }
 constexpr std::uint32_t kInput = 1, kOutput = 3, kFloatOne = 0x3f800000, kFloatHalf = 0x3f000000;
 
+// Where screen positions come from (per-view rects; docs/recon-xplane.md "Measured: stage 2's rects"): the pixel the
+// shader runs on (gl_FragCoord, a compute invocation's IDs) over the whole layer, or a varying spanning the viewport (the
+// sky's v_ratio). For each load in `loads` (a vec4 of view-ray coefficients): the operands multiplied with its xy (the
+// load, its shuffles of components 0-1, or extracts of 0 / 1) traced back through arithmetic, conversions, composites,
+// selects, phis and function-local variables. True for the loads whose trace reaches such a pixel builtin.
+std::set<std::uint32_t> screen_from_pixels(const Module& m, const std::vector<std::uint32_t>& loads) {
+    constexpr std::uint16_t kOpExtInst = 12, kOpFunctionParameter = 55, kOpLoadCode = 61,
+                            kOpAccessChainCode = 65, kOpInBoundsAccessChainCode = 66, kOpDecorate = 71,
+                            kOpShuffle = 79, kOpConstruct = 80, kOpExtract = 81, kOpInsert = 82, kOpFMulCode = 133,
+                            kOpVectorTimesScalar = 142, kOpSelect = 169, kOpPhi = 245;
+    constexpr std::uint32_t kBuiltIn = 11, kFragCoord = 15, kWorkgroupId = 26, kLocalInvocationId = 27,
+                            kGlobalInvocationId = 28, kFunctionStorage = 7, kPrivateStorage = 6, kGlslFma = 50;
+    // The value operands' word positions of a value instruction (none for others).
+    auto operands = [](const std::vector<std::uint32_t>& w) {
+        std::vector<std::size_t> at;
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpExtInst)
+            for (std::size_t k = 5; k < w.size(); ++k) at.push_back(k);
+        else if (c == kOpShuffle || c == kOpInsert)
+            at = {3, 4};
+        else if (c == kOpExtract || c == kOpLoadCode || c == kOpAccessChainCode || c == kOpInBoundsAccessChainCode)
+            at = {3};
+        else if (c == kOpPhi)
+            for (std::size_t k = 3; k < w.size(); k += 2) at.push_back(k);
+        else if (c == kOpConstruct || c == kOpSelect || (c >= 109 && c <= 200))
+            for (std::size_t k = 3; k < w.size(); ++k) at.push_back(k);
+        at.erase(std::remove_if(at.begin(), at.end(), [&](std::size_t k) { return k >= w.size(); }), at.end());
+        return at;
+    };
+    std::map<std::uint32_t, std::size_t> def;
+    std::map<std::uint32_t, std::vector<std::size_t>> users;
+    std::map<std::uint32_t, std::uint32_t> builtin, storage, chainBase;
+    std::map<std::uint32_t, std::vector<std::uint32_t>> stored;
+    for (std::size_t i = 0; i < m.insts.size(); ++i) {
+        const auto& w = m.insts[i];
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpDecorate && w.size() >= 4 && w[2] == kBuiltIn)
+            builtin[w[1]] = w[3];
+        if (c == kOpVariable && w.size() >= 4)
+            storage[w[2]] = w[3];
+        if ((c == kOpAccessChainCode || c == kOpInBoundsAccessChainCode) && w.size() >= 4)
+            chainBase[w[2]] = w[3];
+        const std::vector<std::size_t> at = operands(w);
+        if (!at.empty() || c == kOpVariable || c == kOpFunctionParameter)
+            def[w[2]] = i;
+        for (const std::size_t k : at)
+            users[w[k]].push_back(i);
+    }
+    auto base = [&](std::uint32_t ptr) {
+        for (int guard = 0; guard < 16 && chainBase.count(ptr); ++guard)
+            ptr = chainBase[ptr];
+        return ptr;
+    };
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpStore && w.size() >= 3)
+            stored[base(w[1])].push_back(w[2]);
+    // Function parameters (the cloud render passes its screen position by pointer): each one's function and place, and
+    // the calls of each function, whose arguments stand for the parameters.
+    constexpr std::uint16_t kOpFunctionCall = 57;
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::size_t>> parameter;
+    std::map<std::uint32_t, std::vector<std::size_t>> calls;
+    {
+        std::uint32_t function = 0;
+        std::size_t index = 0;
+        for (std::size_t i = 0; i < m.insts.size(); ++i) {
+            const auto& w = m.insts[i];
+            const std::uint16_t c = Module::code(w);
+            if (c == Module::kFunction && w.size() >= 3) {
+                function = w[2];
+                index = 0;
+            } else if (c == kOpFunctionParameter && w.size() >= 3) {
+                parameter[w[2]] = {function, index++};
+            } else if (c == kOpFunctionCall && w.size() >= 4) {
+                calls[w[3]].push_back(i);
+            }
+        }
+    }
+    auto arguments = [&](std::uint32_t param) {
+        std::vector<std::uint32_t> args;
+        const auto p = parameter.find(param);
+        if (p != parameter.end())
+            for (const std::size_t i : calls[p->second.first])
+                if (4 + p->second.second < m.insts[i].size())
+                    args.push_back(m.insts[i][4 + p->second.second]);
+        return args;
+    };
+    auto reaches_pixels = [&](std::uint32_t from) {
+        std::vector<std::uint32_t> stack = {from}, pointers;
+        std::set<std::uint32_t> seen, seenPointers;
+        while ((!stack.empty() || !pointers.empty()) && seen.size() + seenPointers.size() < 4000) {
+            if (!pointers.empty()) {  // what a pointer's loads see: a builtin, the values stored, or a call's argument
+                const std::uint32_t ptr = pointers.back();
+                pointers.pop_back();
+                if (!seenPointers.insert(ptr).second)
+                    continue;
+                const std::uint32_t var = base(ptr);
+                const auto b = builtin.find(var);
+                if (b != builtin.end() && (b->second == kFragCoord || b->second == kGlobalInvocationId ||
+                                           b->second == kLocalInvocationId || b->second == kWorkgroupId))
+                    return true;
+                const auto s = storage.find(var);
+                if (s != storage.end() && (s->second == kFunctionStorage || s->second == kPrivateStorage))
+                    for (const std::uint32_t v : stored[var])
+                        stack.push_back(v);
+                for (const std::uint32_t a : arguments(var))
+                    pointers.push_back(a);
+                continue;
+            }
+            const std::uint32_t id = stack.back();
+            stack.pop_back();
+            if (!seen.insert(id).second || !def.count(id))
+                continue;
+            const auto& w = m.insts[def[id]];
+            const std::uint16_t c = Module::code(w);
+            if (c == kOpLoadCode) {
+                pointers.push_back(w[3]);
+                continue;
+            }
+            if (c == kOpFunctionParameter) {
+                for (const std::uint32_t a : arguments(id))
+                    stack.push_back(a);
+                continue;
+            }
+            for (const std::size_t k : operands(w))
+                stack.push_back(w[k]);
+        }
+        return false;
+    };
+    std::set<std::uint32_t> pixels;
+    for (const std::uint32_t load : loads) {
+        // The load's xy: itself, shuffles of components 0-1 only, extracts of 0 or 1.
+        std::set<std::uint32_t> xy = {load};
+        for (const std::size_t i : users[load]) {
+            const auto& w = m.insts[i];
+            const std::uint16_t c = Module::code(w);
+            if (c == kOpShuffle && w[3] == load && w[4] == load &&
+                std::all_of(w.begin() + 5, w.end(), [](std::uint32_t k) { return k <= 1; }))
+                xy.insert(w[2]);
+            if (c == kOpExtract && w.size() == 5 && w[4] <= 1)
+                xy.insert(w[2]);
+        }
+        bool found = false;
+        for (const std::uint32_t x : xy)
+            for (const std::size_t i : users[x]) {
+                const auto& w = m.insts[i];
+                const std::uint16_t c = Module::code(w);
+                const bool fma = c == kOpExtInst && w.size() >= 5 && w[4] == kGlslFma;
+                if (c != kOpFMulCode && c != kOpVectorTimesScalar && !fma)
+                    continue;
+                for (const std::size_t k : operands(w))
+                    if (!xy.count(w[k]) && !(fma && k == 7) && reaches_pixels(w[k]))
+                        found = true;
+            }
+        if (found)
+            pixels.insert(load);
+    }
+    return pixels;
+}
+
 }  // namespace
 
 bool spirv_view_to_eye_map_out(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why) {
@@ -885,7 +1044,7 @@ bool spirv_view_to_eye_map_out(std::vector<std::uint32_t>& words, std::uint32_t 
     return true;
 }
 
-bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why) {
+bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why, bool push) {
     auto fail = [&](const char* reason) {
         if (why)
             *why = reason;
@@ -925,6 +1084,18 @@ bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t locat
         return fail("v_eye loaded or the position made other than once");
     const std::uint32_t fl = m.type_float(), v4 = m.type_vector(fl, 4), ptrV4 = m.type_pointer(kInput, v4);
     const std::uint32_t one = m.constant(intType, 1);
+    // Per-view rects (push constants): types and constants before the positions below are taken.
+    constexpr std::uint16_t kOpTypeBool = 20, kOpSelect = 169, kOpSGreaterThanEqual = 175;
+    const FocusBlock focusBlock = push ? focus_block(m, intType) : FocusBlock{};
+    std::uint32_t boolType = 0, bool2 = 0, cRects = 0, two = 0;
+    if (push) {
+        boolType = m.find(kOpTypeBool, {}, 1);
+        if (!boolType)
+            boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+        bool2 = m.type_vector(boolType, 2);
+        cRects = m.constant(intType, kViewRectsEntry);
+        two = m.constant(intType, 2);
+    }
     const std::uint32_t mapVar = m.add_interface(ptrV4, kInput, location);
     // Renames: the load's and the FMul's results get new ids; the old ids become the edited values.
     const std::uint32_t eyeRaw = m.fresh(), uvRaw = m.fresh();
@@ -934,13 +1105,31 @@ bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t locat
     m.insts[eyeAt][2] = eyeRaw;
     m.insts[uvAt][2] = uvRaw;
     const std::uint32_t map = m.fresh(), xy = m.fresh(), zw = m.fresh(), scaled = m.fresh();
-    const std::vector<std::vector<std::uint32_t>> uvBody = {
+    std::vector<std::vector<std::uint32_t>> uvBody = {
         {op(kOpLoad, 4), v4, map, mapVar},
         {op(kOpVectorShuffle, 7), uvType, xy, map, map, 0, 1},
         {op(kOpVectorShuffle, 7), uvType, zw, map, map, 2, 3},
-        {op(kOpFMul, 5), uvType, scaled, uvRaw, xy},
-        {op(kOpFAdd, 5), uvType, uv, scaled, zw},
     };
+    if (push) {
+        // With rects the view's uv spans its share s_v of the layer (uv / s_v: its whole view), and its eye's bloom
+        // lies in the eye's share s_o (x s_o). The eye taken fresh: its own load may come later.
+        const std::uint32_t eyeNow = m.fresh(), focus = m.fresh(), focus2 = m.fresh(), viewShare = m.fresh(),
+                            inView = m.fresh(), inEye = m.fresh();
+        uvBody.push_back({op(kOpLoad, 4), intType, eyeNow, eyeVar});
+        uvBody.push_back({op(kOpSGreaterThanEqual, 5), boolType, focus, eyeNow, two});
+        uvBody.push_back({op(kOpCompositeConstruct, 5), bool2, focus2, focus, focus});
+        const std::uint32_t rects = focus_entry_load(m, focusBlock, cRects, uvBody);
+        const std::uint32_t outerShare = focus_pair(m, focusBlock, rects, 0, uvBody),
+                            focusShare = focus_pair(m, focusBlock, rects, 2, uvBody);
+        uvBody.push_back({op(kOpSelect, 6), uvType, viewShare, focus2, focusShare, outerShare});
+        uvBody.push_back({op(kOpFDiv, 5), uvType, inView, uvRaw, viewShare});
+        uvBody.push_back({op(kOpFMul, 5), uvType, scaled, inView, xy});
+        uvBody.push_back({op(kOpFAdd, 5), uvType, inEye, scaled, zw});
+        uvBody.push_back({op(kOpFMul, 5), uvType, uv, inEye, outerShare});
+    } else {
+        uvBody.push_back({op(kOpFMul, 5), uvType, scaled, uvRaw, xy});
+        uvBody.push_back({op(kOpFAdd, 5), uvType, uv, scaled, zw});
+    }
     const std::vector<std::vector<std::uint32_t>> eyeBody = {{op(kOpBitwiseAnd, 5), intType, eyeLoad, eyeRaw, one}};
     // The later one first, so the earlier index holds.
     auto insert = [&](std::size_t after, const std::vector<std::vector<std::uint32_t>>& b) {
@@ -1023,9 +1212,11 @@ int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t 
 
 
 int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char* member, float fx, float fy,
-                                  int* skipped, bool push) {
+                                  int* skipped, bool push, int* byPixels) {
     if (skipped)
         *skipped = 0;
+    if (byPixels)
+        *byPixels = 0;
     Module m;
     if (!m.parse(words))
         return 0;
@@ -1085,6 +1276,8 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
             loads.push_back(w[2]);
     if (loads.empty())
         return 0;
+    // Per-view rects: the loads whose screen position counts pixels over the whole layer take each view's share.
+    const std::set<std::uint32_t> pixels = push ? screen_from_pixels(m, loads) : std::set<std::uint32_t>{};
     const std::uint32_t fl = m.type_float(), v2 = m.type_vector(fl, 2);
     std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
     if (!boolType)
@@ -1109,8 +1302,9 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
         const auto rawType = typeOf.find(raw);
         if (rawType == typeOf.end() || !intSigned.count(rawType->second))
             continue;
-        const std::uint32_t two = m.constant(rawType->second, 2);
+        const std::uint32_t two = m.constant(rawType->second, 2), rectsEntry = push ? m.constant(rawType->second, kViewRectsEntry) : 0;
         const FocusBlock block = push ? focus_block(m, rawType->second) : FocusBlock{};
+        const bool byRect = pixels.count(load) > 0;
         const std::size_t loadAt = m.defined_at(load);  // constants may have moved it
         const std::uint32_t original = m.fresh();
         m.insts[loadAt][2] = original;
@@ -1133,12 +1327,28 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
             body.push_back({op(kOpFMul, 5), v2, fxy, xy, scale});
             body.push_back({op(142 /* OpVectorTimesScalar */, 5), v2, zw, fxy, cHalf});
         }
+        // Each view's rect (push constants): where the screen position counts pixels over the whole layer, a view in
+        // share s of it spans the ray range at positions 0..s, so its scale is c.xy / s (the rect starts at the
+        // layer's top-left, where position 0 is). Positions from a varying span the viewport, the rect itself.
+        std::uint32_t focusXY = fxy, outerC = original;
+        if (byRect) {
+            const std::uint32_t rects = focus_entry_load(m, block, rectsEntry, body);
+            const std::uint32_t outerShare = focus_pair(m, block, rects, 0, body), focusShare = focus_pair(m, block, rects, 2, body);
+            const std::uint32_t outerXY = m.fresh();
+            focusXY = m.fresh();
+            outerC = m.fresh();
+            body.push_back({op(kOpFDiv, 5), v2, focusXY, fxy, focusShare});
+            body.push_back({op(kOpFDiv, 5), v2, outerXY, xy, outerShare});
+            body.push_back({op(kOpVectorShuffle, 9), v4, outerC, outerXY, original, 0, 1, 4, 5});
+            if (byPixels)
+                ++*byPixels;
+        }
         body.insert(body.end(), {
-            {op(kOpVectorShuffle, 9), v4, focusC, fxy, zw, 0, 1, 2, 3},
+            {op(kOpVectorShuffle, 9), v4, focusC, focusXY, zw, 0, 1, 2, 3},
             {op(intSigned[rawType->second] ? kOpSGreaterThanEqual : kOpUGreaterThanEqual, 5), boolType, isFocus, raw,
              two},
             {op(kOpCompositeConstruct, 7), bv4, mask, isFocus, isFocus, isFocus, isFocus},
-            {op(kOpSelect, 6), v4, load, mask, focusC, original},
+            {op(kOpSelect, 6), v4, load, mask, focusC, outerC},
         });
         m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(loadAt + 1), body.begin(), body.end());
         ++edited;
@@ -1687,6 +1897,7 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
             cHalfF = fconst(0.5f * f);
         }
         const FocusBlock focusBlock = push ? focus_block(m, intType) : FocusBlock{};
+        const std::uint32_t cRects = push ? m.constant(intType, kViewRectsEntry) : 0;
         const std::size_t here = m.defined_at(division);  // constants may have moved it
         const std::uint32_t eye = m.fresh(), eyeBit = m.fresh(), coefPtr = m.fresh(), coef = m.fresh(), scale = m.fresh(),
                             offset = m.fresh(), negOffset = m.fresh(), centre = m.fresh(), sizePtr = m.fresh(),
@@ -1712,16 +1923,34 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
         } else {
             body.push_back({op(kOpFNegate, 4), fl, negOffset, offset});
         }
+        // Per-view rects (push constants, kViewRectsEntry): the focus pixel in its whole view is x / s_f, and its eye
+        // pixel lies in the eye's rect (x s_o).
+        std::uint32_t inView = xf, eyeShare = 0;
+        if (push) {
+            const std::uint32_t rects = focus_entry_load(m, focusBlock, cRects, body), viewShare = m.fresh();
+            eyeShare = m.fresh();
+            inView = m.fresh();
+            body.push_back({op(kOpCompositeExtract, 5), fl, viewShare, rects, k + 2});
+            body.push_back({op(kOpCompositeExtract, 5), fl, eyeShare, rects, k});
+            body.push_back({op(kOpConvertSToF, 4), fl, xf, x});
+            body.push_back({op(kOpFDiv, 5), fl, inView, xf, viewShare});
+        } else {
+            body.push_back({op(kOpConvertSToF, 4), fl, xf, x});
+        }
+        const std::uint32_t inEye = push ? m.fresh() : mappedF, mappedView = push ? m.fresh() : mappedF;
         body.insert(body.end(), {
             {op(kOpFDiv, 5), fl, centre, negOffset, scale},
             {op(kOpAccessChain, 6), ptrF, sizePtr, gbufVar, cSize, cK},  // u_viewport_size[k]
             {op(kOpLoad, 4), fl, size, sizePtr},
-            {op(kOpConvertSToF, 4), fl, xf, x},
             {op(kOpFSub, 5), fl, corner, centre, cHalfF},
             {op(kOpFMul, 5), fl, origin, corner, size},
-            {op(kOpFMul, 5), fl, scaled, xf, cF},
-            {op(kOpFAdd, 5), fl, mappedF, origin, scaled},
-            {op(kOpConvertFToS, 4), intType, mapped, mappedF},
+            {op(kOpFMul, 5), fl, scaled, inView, cF},
+            {op(kOpFAdd, 5), fl, mappedView, origin, scaled},
+        });
+        if (push)
+            body.push_back({op(kOpFMul, 5), fl, inEye, mappedView, eyeShare});
+        body.insert(body.end(), {
+            {op(kOpConvertFToS, 4), intType, mapped, push ? inEye : mappedF},
             {op(kOpSGreaterThanEqual, 5), boolType, focus, eye, c2},
             {op(kOpSelect, 6), intType, chosen, focus, mapped, x},
         });
@@ -1825,6 +2054,7 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
         cBand = fconst(band);
     }
     const FocusBlock focusBlock = push ? focus_block(m, intType) : FocusBlock{};
+    const std::uint32_t cRects = push ? m.constant(intType, kViewRectsEntry) : 0;
     int edited = 0;
     for (const std::uint32_t sample : samples) {
         const std::size_t at = m.defined_at(sample);
@@ -1852,8 +2082,12 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
         const std::uint32_t uv = emit({kOpVectorShuffle, v2, 0, coord, coord, 0, 1});
         const std::uint32_t pixel = emit({kOpFMul, v2, 0, uv, emit({kOpVectorShuffle, v2, 0, gbuffer, gbuffer, 0, 1})});
         const std::uint32_t coefOffset = emit({kOpVectorShuffle, v2, 0, coef, coef, 2, 3});
-        std::uint32_t fromCentre = 0, f2 = 0, halfF2 = 0, bandValue = cBand;
+        std::uint32_t fromCentre = 0, f2 = 0, halfF2 = 0, bandValue = cBand, eyeShare = 0, viewShare = 0;
         if (push) {
+            // Per-view rects (kViewRectsEntry): the focus view in share s_f of its layer, its eye in s_o of its own.
+            const std::uint32_t rects = focus_entry_load(m, focusBlock, cRects, body);
+            eyeShare = focus_pair(m, focusBlock, rects, 0, body);
+            viewShare = focus_pair(m, focusBlock, rects, 2, body);
             const std::uint32_t box = focus_entry_load(m, focusBlock, eyeBit, body);
             const std::uint32_t t = focus_pair(m, focusBlock, box, 0, body);
             f2 = focus_pair(m, focusBlock, box, 2, body);
@@ -1869,12 +2103,16 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
         const std::uint32_t uv0 = emit({kOpFDiv, v2, 0, fromCentre, emit({kOpVectorShuffle, v2, 0, coef, coef, 0, 1})});
         const std::uint32_t origin =
             emit({kOpFMul, v2, 0, emit({kOpFSub, v2, 0, uv0, halfF2}), emit({kOpVectorShuffle, v2, 0, viewport, viewport, 0, 1})});
-        const std::uint32_t eyePixel = emit({kOpFAdd, v2, 0, origin, emit({kOpFMul, v2, 0, pixel, f2})});
+        // The pixel in its whole view (pixel / s_f with rects), its eye pixel in the eye's rect (x s_o).
+        const std::uint32_t inView = push ? emit({kOpFDiv, v2, 0, pixel, viewShare}) : pixel;
+        std::uint32_t eyePixel = emit({kOpFAdd, v2, 0, origin, emit({kOpFMul, v2, 0, inView, f2})});
+        if (push)
+            eyePixel = emit({kOpFMul, v2, 0, eyePixel, eyeShare});
         const std::uint32_t eyeUv = emit({kOpFMul, v2, 0, eyePixel, emit({kOpVectorShuffle, v2, 0, gbuffer, gbuffer, 2, 3})});
         const std::uint32_t eyeCoord = emit({kOpCompositeConstruct, v3, 0, eyeUv, emit({kOpConvertSToF, fl, 0, eyeBit})});
         const std::uint32_t eyeAo = emit({kOpImageSampleExplicitLod, v4, 0, image, eyeCoord, kImageOperandLod, f0});
         // The weight: the distance to the view's nearest edge (in viewport uv), smoothstep(0, band).
-        const std::uint32_t own = emit({kOpFMul, v2, 0, pixel, emit({kOpVectorShuffle, v2, 0, viewport, viewport, 2, 3})});
+        const std::uint32_t own = emit({kOpFMul, v2, 0, inView, emit({kOpVectorShuffle, v2, 0, viewport, viewport, 2, 3})});
         const std::uint32_t one2 = emit({kOpCompositeConstruct, v2, 0, f1, f1});
         const std::uint32_t near2 = emit({kOpExtInst, v2, 0, glsl, kGlslFMin, own, emit({kOpFSub, v2, 0, one2, own})});
         const std::uint32_t edge = emit({kOpExtInst, fl, 0, glsl, kGlslFMin, emit({kOpCompositeExtract, fl, 0, near2, 0}),
@@ -2355,15 +2593,18 @@ int spirv_eye_parity_test(std::vector<std::uint32_t>& words, const char* block, 
     return edited;
 }
 
-int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why) {
+int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why, bool push) {
     auto fail = [&](const char* reason) {
         if (why)
             *why = reason;
         return 0;
     };
-    constexpr std::uint32_t kExecutionVertex = 0, kBuiltInViewportIndex = 10;
+    constexpr std::uint32_t kExecutionVertex = 0, kBuiltInViewportIndex = 10, kBuiltInInstanceIndex = 43,
+                            kBuiltInBaseInstance = 4425;
     constexpr std::uint16_t kOpTypeBool = 20, kOpConvertSToF = 111, kOpSMod = 139, kOpIEqual = 170,
-                            kOpLogicalAnd = 167, kOpSelect = 169, kOpReturnValue = 254;
+                            kOpLogicalAnd = 167, kOpSelect = 169, kOpReturnValue = 254, kOpReturn = 253,
+                            kOpISub = 130, kOpSGreaterThanEqual = 175, kOpCompositeExtract = 81,
+                            kOpCompositeInsert = 82, kOpFunctionEnd = 56;
     Module m;
     if (!m.parse(words))
         return fail("not SPIR-V");
@@ -2462,6 +2703,200 @@ int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why
     }
     if (!edited)
         return fail("loads moved");
+    // Per-view rects: before each return of the entry point, a four-view pass's texture coordinates go into its view's
+    // rect, from its top row (v = 0: the rects start at the layer's top-left in memory) and left column, the share s
+    // from the push block (kViewRectsEntry).
+    if (push) {
+        std::uint32_t instType = 0, texType = 0;
+        const std::uint32_t instVar = builtin_variable(m, kBuiltInInstanceIndex, kInput, &instType),
+                            baseVar = builtin_variable(m, kBuiltInBaseInstance, kInput, nullptr),
+                            texVar = m.variable("v_texcoord0", kOutput, &texType);
+        const std::uint32_t fl = m.type_float(), v4 = m.type_vector(fl, 4);
+        if (!instVar || !baseVar || !texVar || instType != intType || texType != v4)
+            return fail("no instance, base instance or vec4 v_texcoord0");
+        const FocusBlock focusBlock = focus_block(m, intType);
+        const std::uint32_t c2 = m.constant(intType, 2), cRects = m.constant(intType, kViewRectsEntry),
+                            cViewport = m.constant(intType, static_cast<std::uint32_t>(viewportMember));
+        std::uint32_t entry = 0;
+        for (const auto& w : m.insts)
+            if (Module::code(w) == Module::kEntryPoint && w.size() >= 3)
+                entry = w[2];
+        std::vector<std::size_t> returns;
+        bool inEntry = false;
+        for (std::size_t i = 0; i < m.insts.size(); ++i) {
+            const std::uint16_t c = Module::code(m.insts[i]);
+            if (c == Module::kFunction)
+                inEntry = m.insts[i].size() >= 3 && m.insts[i][2] == entry;
+            else if (c == kOpFunctionEnd)
+                inEntry = false;
+            else if (c == kOpReturn && inEntry)
+                returns.push_back(i);
+        }
+        if (returns.empty())
+            return fail("no return in the entry point");
+        for (std::size_t r = returns.size(); r-- > 0;) {  // from the last, so earlier positions hold
+            std::vector<std::vector<std::uint32_t>> body;
+            auto emit = [&](std::vector<std::uint32_t> w) {
+                const std::uint32_t id = m.fresh();
+                w[2] = id;
+                w[0] = op(static_cast<std::uint16_t>(w[0]), static_cast<std::uint16_t>(w.size()));
+                body.push_back(std::move(w));
+                return id;
+            };
+            const std::uint32_t inst = emit({kOpLoad, intType, 0, instVar}), base = emit({kOpLoad, intType, 0, baseVar});
+            const std::uint32_t view0 = emit({kOpISub, intType, 0, inst, base});
+            const std::uint32_t viewports = emit({kOpLoad, intType, 0, emit({kOpAccessChain, ptrInt, 0, blockVar, cViewport})});
+            const std::uint32_t layers = emit({kOpLoad, intType, 0, emit({kOpAccessChain, ptrInt, 0, blockVar, cLayer})});
+            const std::uint32_t four = emit({kOpLogicalAnd, boolType, 0, emit({kOpIEqual, boolType, 0, viewports, c4}),
+                                             emit({kOpIEqual, boolType, 0, layers, c4})});
+            const std::uint32_t view = emit({kOpSMod, intType, 0, view0, layers});
+            const std::uint32_t focus = emit({kOpSGreaterThanEqual, boolType, 0, view, c2});
+            const std::uint32_t rects = focus_entry_load(m, focusBlock, cRects, body);
+            auto part = [&](std::uint32_t composite, std::uint32_t k) { return emit({kOpCompositeExtract, fl, 0, composite, k}); };
+            const std::uint32_t sx = emit({kOpSelect, fl, 0, focus, part(rects, 2), part(rects, 0)});
+            const std::uint32_t sy = emit({kOpSelect, fl, 0, focus, part(rects, 3), part(rects, 1)});
+            const std::uint32_t tc = emit({kOpLoad, v4, 0, texVar});
+            const std::uint32_t u = part(tc, 0), v = part(tc, 1);
+            const std::uint32_t u2 = emit({kOpFMul, fl, 0, u, sx});
+            const std::uint32_t v2 = emit({kOpFMul, fl, 0, v, sy});
+            const std::uint32_t uOut = emit({kOpSelect, fl, 0, four, u2, u}), vOut = emit({kOpSelect, fl, 0, four, v2, v});
+            const std::uint32_t tc2 = emit({kOpCompositeInsert, v4, 0, uOut, tc, 0});
+            const std::uint32_t tc3 = emit({kOpCompositeInsert, v4, 0, vOut, tc2, 1});
+            body.push_back({op(kOpStore, 3), texVar, tc3});
+            m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(returns[r]), body.begin(), body.end());
+        }
+    }
+    words = m.emit();
+    return edited;
+}
+
+int spirv_sample_view_rects(std::vector<std::uint32_t>& words, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint32_t kExecutionFragment = 4, kDim2D = 1;
+    constexpr std::uint16_t kOpTypeBool = 20, kOpTypeImage = 25, kOpTypeSampledImage = 27,
+                            kOpImageSampleImplicitLod = 87, kOpImageSampleExplicitLod = 88, kOpCompositeExtract = 81,
+                            kOpSelect = 169, kOpFOrdGreaterThanEqual = 190, kOpImageFetch = 95, kOpConvertFToS = 110,
+                            kOpConvertSToF = 111, kOpSGreaterThanEqual = 175;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    bool fragment = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionFragment)
+            fragment = true;
+    if (!fragment)
+        return fail("not a fragment shader");
+    // 2D array images, the sampled image types of them, float vec3 types and 32-bit int vec3 types (by component).
+    std::set<std::uint32_t> arrayImages, arraySampled, vec3f, ints;
+    std::map<std::uint32_t, std::uint32_t> vec3i;  // int vec3 type -> its component type
+    const std::uint32_t fl = m.type_float();
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpTypeInt && w.size() == 4 && w[2] == 32)
+            ints.insert(w[1]);
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpTypeImage && w.size() >= 9 && w[3] == kDim2D && w[5] == 1)
+            arrayImages.insert(w[1]);
+        if (c == Module::kTypeVector && w.size() == 4 && w[2] == fl && w[3] == 3)
+            vec3f.insert(w[1]);
+        if (c == Module::kTypeVector && w.size() == 4 && ints.count(w[2]) && w[3] == 3)
+            vec3i[w[1]] = w[2];
+    }
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpTypeSampledImage && w.size() == 3 && arrayImages.count(w[2]))
+            arraySampled.insert(w[1]);
+    auto type_of = [&](std::uint32_t id) -> std::uint32_t {
+        const std::size_t at = m.defined_at(id);
+        return at < m.insts.size() && m.insts[at].size() >= 3 ? m.insts[at][1] : 0;
+    };
+    // Samples at float (u, v, layer), and fetches at integer (x, y, layer) (the MSAA variants' stencil mask).
+    std::vector<std::uint32_t> samples, fetches;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c == kOpImageSampleImplicitLod || c == kOpImageSampleExplicitLod) && w.size() >= 5 &&
+            arraySampled.count(type_of(w[3])) && vec3f.count(type_of(w[4])))
+            samples.push_back(w[2]);
+        if (c == kOpImageFetch && w.size() >= 5 && arrayImages.count(type_of(w[3])) && vec3i.count(type_of(w[4])))
+            fetches.push_back(w[2]);
+    }
+    if (samples.empty() && fetches.empty())
+        return fail("no array image sampled at (u, v, layer)");
+    // Types and constants first (they go before the first function and move the instructions).
+    std::uint32_t intType = m.find(kOpTypeInt, {32, 1}, 1);
+    if (!intType)
+        intType = m.add_global({op(kOpTypeInt, 4), 0, 32, 1}, 1);
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const FocusBlock block = focus_block(m, intType);
+    const std::uint32_t rectsEntry = m.constant(intType, kViewRectsEntry), v3 = m.type_vector(fl, 3);
+    std::uint32_t oneHalfBits;
+    const float oneHalf = 1.5f;
+    std::memcpy(&oneHalfBits, &oneHalf, 4);
+    const std::uint32_t cFocusLayer = m.constant(fl, oneHalfBits);
+    int edited = 0;
+    for (const std::uint32_t sample : samples) {
+        const std::size_t at = m.defined_at(sample);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t coord = m.insts[at][4];
+        std::vector<std::vector<std::uint32_t>> body;
+        auto emit = [&](std::vector<std::uint32_t> w) {
+            const std::uint32_t id = m.fresh();
+            w[2] = id;
+            w[0] = op(static_cast<std::uint16_t>(w[0]), static_cast<std::uint16_t>(w.size()));
+            body.push_back(std::move(w));
+            return id;
+        };
+        const std::uint32_t rects = focus_entry_load(m, block, rectsEntry, body);
+        auto part = [&](std::uint32_t composite, std::uint32_t k) { return emit({kOpCompositeExtract, fl, 0, composite, k}); };
+        const std::uint32_t layer = part(coord, 2);
+        const std::uint32_t focus = emit({kOpFOrdGreaterThanEqual, boolType, 0, layer, cFocusLayer});
+        const std::uint32_t sx = emit({kOpSelect, fl, 0, focus, part(rects, 2), part(rects, 0)});
+        const std::uint32_t sy = emit({kOpSelect, fl, 0, focus, part(rects, 3), part(rects, 1)});
+        const std::uint32_t u = emit({kOpFMul, fl, 0, part(coord, 0), sx}), v = emit({kOpFMul, fl, 0, part(coord, 1), sy});
+        const std::uint32_t scaled = emit({kOpCompositeConstruct, v3, 0, u, v, layer});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at), body.begin(), body.end());
+        m.insts[at + body.size()][4] = scaled;
+        ++edited;
+    }
+    for (const std::uint32_t fetch : fetches) {
+        const std::size_t at = m.defined_at(fetch);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t coord = m.insts[at][4], coordType = type_of(coord), component = vec3i[coordType];
+        const std::uint32_t two = m.constant(component, 2);
+        const std::size_t here = m.defined_at(fetch);  // the constant may have moved it
+        std::vector<std::vector<std::uint32_t>> body;
+        auto emit = [&](std::vector<std::uint32_t> w) {
+            const std::uint32_t id = m.fresh();
+            w[2] = id;
+            w[0] = op(static_cast<std::uint16_t>(w[0]), static_cast<std::uint16_t>(w.size()));
+            body.push_back(std::move(w));
+            return id;
+        };
+        const std::uint32_t rects = focus_entry_load(m, block, rectsEntry, body);
+        auto part = [&](std::uint32_t type, std::uint32_t composite, std::uint32_t k) {
+            return emit({kOpCompositeExtract, type, 0, composite, k});
+        };
+        const std::uint32_t layer = part(component, coord, 2);
+        const std::uint32_t focus = emit({kOpSGreaterThanEqual, boolType, 0, layer, two});
+        const std::uint32_t sx = emit({kOpSelect, fl, 0, focus, part(fl, rects, 2), part(fl, rects, 0)});
+        const std::uint32_t sy = emit({kOpSelect, fl, 0, focus, part(fl, rects, 3), part(fl, rects, 1)});
+        auto scale = [&](std::uint32_t k, std::uint32_t share) {
+            const std::uint32_t f = emit({kOpConvertSToF, fl, 0, part(component, coord, k)});
+            return emit({kOpConvertFToS, component, 0, emit({kOpFMul, fl, 0, f, share})});
+        };
+        const std::uint32_t x = scale(0, sx), y = scale(1, sy);
+        const std::uint32_t scaled = emit({kOpCompositeConstruct, coordType, 0, x, y, layer});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(here), body.begin(), body.end());
+        m.insts[here + body.size()][4] = scaled;
+        ++edited;
+    }
     words = m.emit();
     return edited;
 }

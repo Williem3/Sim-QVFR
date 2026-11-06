@@ -34,9 +34,13 @@ void four_views_gaze_log();
 // QVFR composition in eye columns (docs/recon-xplane.md "Composition"): the final resolve writes each eye's view over
 // its focus view (instead of showing layers 2-3). Set before X-Plane creates its shaders (early load).
 void four_views_set_eye_columns(bool on);
-// Per-view sizes (docs/recon-xplane.md "Design: true per-view sizes"): one viewport per view, the outer views'
-// `outerScale` of their layers from the top-left (1: the whole layer). Before four_views_copies_start.
-void four_views_set_view_rects(bool on, double outerScale);
+// Per-view sizes (docs/recon-xplane.md "Design: true per-view sizes"), stage 1: one viewport per view (every rect the
+// whole layer unless four_views_set_view_sizes). Before four_views_copies_start.
+void four_views_set_view_rects(bool on);
+// Stage 2: each kind of view in a rect of its own size inside its layers, the layer being the larger of the two per
+// axis (the size the layer offers X-Plane). Sizes in native eye widths and heights (Views4Layout's outer_width(),
+// outer_height(), focus, focusHeight). Needs view rects; off: every rect the whole layer. From the next frame.
+void four_views_set_view_sizes(bool on, double outerWidth, double outerHeight, double focusWidth, double focusHeight);
 // set viewports calls given four rects so far. Focus views take their eye's bloom (docs/recon-xplane.md "Measured:
 // bloom per view"). Before X-Plane makes its shaders.
 void four_views_set_bloom_from_eye(bool on);

@@ -130,9 +130,19 @@ inline constexpr std::uintptr_t kBindPipelineGraphics = 0x64a9e7;
 inline constexpr std::uint8_t kBindPipelineGraphicsAnchor[6] = {0xFF, 0x15, 0x03, 0x2F, 0xCE, 0x05};
 inline constexpr std::uintptr_t kVkCmdBindPipelineSlot = 0x632d8f0;
 inline constexpr std::uintptr_t kVkCmdPushConstantsSlot = 0x632d9a8;
-// Shaders recognised by size and SHA-256: the final resolve and the bloom apply (fragment). [Shader hashes]
-inline constexpr std::size_t kFinalResolveFsBytes = 16716;
-inline constexpr const char* kFinalResolveFsSha256 = "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f";
+// Shaders recognised by size and SHA-256: the final resolve's variants and the bloom apply (fragment). [Shader hashes]
+struct ShaderHash {
+    std::size_t bytes;
+    const char* sha256;
+};
+inline constexpr ShaderHash kFinalResolveFs[] = {
+    {16716, "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f"},
+    {2588, "a09a0f22f9eb9e0422dc04354ab27d9fb18cd4638121e3284a79dfaa81842fc4"},
+    {15836, "59ea0b96b6eb0aa6db20223206f31c79316d5fe7bdc6516cc0720b15d46bf608"},
+    {16980, "c9c7649c58c01dabaa8dc6a18d2b18f56fcec45b8ca6a7b775b2b9a0c0e372fe"},
+    {17096, "a958e90131eba066bc979e0df36c8a254089a7833e2b4704318ee50d2c0af585"},
+    {17360, "36701cdd3d164f83a67bd47f45326137eb560d489951fca8eb0858c1839d2844"},
+};
 inline constexpr std::size_t kBloomApplyFsBytes = 3084;
 inline constexpr const char* kBloomApplyFsSha256 = "131f984cc9e2bd4fb801f987969d49e92cc6bad16e5c44a89b2384d5b27b6938";
 // Vertex output locations of our own, above X-Plane's: the view-to-eye map, the layer. [Shader locations]

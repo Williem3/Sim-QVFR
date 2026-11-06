@@ -106,7 +106,7 @@ bool qvfr_wanted(const wchar_t* ini) {
 bool apply_qvfr(const wchar_t* ini) {
     four_views_set_eye_columns(true);
     // Stage 1 of per-view sizes: one viewport per view, every rect the whole layer (the image must not change).
-    four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1, 1.0);
+    four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1);
     four_views_set_focus_full_rate(GetPrivateProfileIntW(L"experiment", L"xplane_focus_full_rate", 1, ini) == 1);
     four_views_set_bloom_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_bloom_from_eye", 1, ini) == 1);
     four_views_set_periphery_alpha_lod(GetPrivateProfileIntW(L"experiment", L"xplane_periphery_alpha_lod", 1, ini) == 1);
@@ -142,6 +142,10 @@ public:
         if (s.focusFraction > 0)
             four_views_set_focus(true, s.focusFraction, s.focusFractionY > 0 ? s.focusFractionY : s.focusFraction);
         const Views4Layout& l = s.layout;
+        // Stage 2 of per-view sizes ([experiment] xplane_view_sizes=1, off by default while the screen-space passes
+        // still read whole layers): each kind of view renders at its own size inside the layers.
+        four_views_set_view_sizes(s.ini && GetPrivateProfileIntW(L"experiment", L"xplane_view_sizes", 0, s.ini) == 1,
+                                  l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
         simqvfr::logf("xplane: QVFR started; launch layout outer %.2f x %.2f, focus %.2f x %.2f of the native eye (X-Plane "
                       "renders every view at half the column: the records say so)",
                       l.outer_width(), l.outer_height(), l.focus, l.focusHeight);

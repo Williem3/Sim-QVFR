@@ -12,12 +12,15 @@ namespace xplane {
 // size"): a push constant block `vec4 qvfr_focus[3]` at offset 0, which four_views.cpp pushes after every pipeline
 // bind. Entry e (eye 0-1) is that eye's box: its centre tangents in xy, its size as a share of the eye's tangent span
 // in zw. Entry 2 holds the values that follow the box's size: x the periphery's alpha-test mip bias, y the AO edge band
-// (zw 0). With `push`, the edits below read the box and those values from there, so the focus size, the gaze and the
-// view sizes can change at any time without new shaders. Without it they bake in the size given when X-Plane makes the
-// shader, the box on the eye's forward axis (tangent 0).
-inline constexpr std::uint32_t kFocusBlockEntries = 3;
+// (zw 0). Entry 3 holds the views' rects (docs/recon-xplane.md "Design: true per-view sizes"): the outer views' share of
+// their layers in xy, the focus views' in zw (1: the whole layer), from the layer's top-left in memory (X-Plane flips
+// within each viewport; capture XPlane_frame470.rdc). With `push`, the edits below read the box and those values from there, so the
+// focus size, the gaze and the view sizes can change at any time without new shaders. Without it they bake in the size
+// given when X-Plane makes the shader, the box on the eye's forward axis (tangent 0).
+inline constexpr std::uint32_t kFocusBlockEntries = 4;
 inline constexpr std::uint32_t kFocusBlockBytes = 16 * kFocusBlockEntries;
 inline constexpr std::uint32_t kFocusValuesEntry = 2;
+inline constexpr std::uint32_t kViewRectsEntry = 3;
 
 // Adds `add` to the value of the `int` input variable named `name` where the shader loads it: the one OpLoad of
 // that variable gets a new id, and an OpIAdd of a new constant gives the old id, so every use sees the sum.
@@ -58,7 +61,8 @@ int spirv_eye_projection_beside(std::vector<std::uint32_t>& words, const char* b
 bool spirv_view_to_eye_map_out(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why);
 // A fragment shader that samples at gl_FragCoord.xy * (scale) in layer v_eye (X-Plane's bloom apply): it reads that map
 // at `location`, samples at the position mapped into the eye's view, in layer v_eye & 1.
-bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why);
+// With `push`, the views' rects (kViewRectsEntry): the view's uv / its share before the map, the eye's share after.
+bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why, bool push = false);
 
 // X-Plane's shading-rate compute (VRS; docs/recon-xplane.md "Measured: the focus views shaded coarsely"): every tile
 // starts at u_fill_rate (coarse) and only the shapes of its layer refine it, and X-Plane makes shapes for layers 0-1
@@ -69,10 +73,14 @@ int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t 
 // Per-eye projection coefficients (docs/recon-xplane.md "Measured: the sky and positions in the focus views"): `member`
 // is a vec4[2] (xy scale, zw offset: the view ray's tangents at screen position 0..1), which the fold reads at index &
 // 1. After each such load, views 2-3 (index >= 2) get the focus box's coefficients from their eye's: (f c.xy, t - f
-// c.xy / 2) for the box's size f and centre t (with `push`, the block's; else fx, fy and t = 0). Returns loads edited;
-// `skipped` counts reads of single components (left as they are).
+// c.xy / 2) for the box's size f and centre t (with `push`, the block's; else fx, fy and t = 0). With `push`, a load
+// whose screen position counts pixels over the whole layer (gl_FragCoord, a compute invocation's IDs: traced back from
+// what multiplies c.xy) also takes each view's rect (kViewRectsEntry, share s): c.xy / s for every view, its rect
+// starting at the layer's top-left where position 0 is; positions from a varying span the viewport and keep it.
+// Returns loads edited; `skipped` counts reads of single components (left as they are); `byPixels` the loads given the
+// rects.
 int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char* member, float fx, float fy,
-                                  int* skipped, bool push = false);
+                                  int* skipped, bool push = false, int* byPixels = nullptr);
 
 // Per-eye projection matrices (docs/recon-xplane.md "Measured: the wing lit differently in the focus views"):
 // `block.member` is a mat4[2] (u_ssr_data.u_proj: SSR projects its reflected rays with it), which the fold reads at
@@ -136,8 +144,18 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
 // n = u_viewport_count, while its source is layered (`.z` += the layer). With one viewport per view (n = 4) each view
 // sampled a quarter of its layer. In a vertex shader that converts a load of u_viewport_count to float (that split),
 // every use of the load but the `i % n` stored to gl_ViewportIndex takes 1 while n and u_layer_count are both 4 (a
-// four-view pass); other passes are unchanged. Returns the loads edited (0: `words` unchanged; `why` says why).
-int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why);
+// four-view pass); other passes are unchanged. With `push`, a four-view pass's texture coordinates also go into its
+// view's rect (the push block's kViewRectsEntry, share s): u s, v s (Vulkan-style texture coordinates, v = 0 the top
+// row, where the rects start in memory). Returns the loads edited (0: `words` unchanged; `why` says why).
+int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why, bool push = false);
+
+// Per-view rects in the final resolve (docs/recon-xplane.md "Measured: stage 2's rects"): each view renders in a share s
+// of its layers from their top-left, and the final resolve copies whole layers into the eye columns. In a fragment
+// shader, every sample of a 2D array image at a float (u, v, layer) coordinate takes (u s, v s, layer), s the share of
+// that layer's view (the push block's kViewRectsEntry: focus views for layers >= 2), so each view fills its part of
+// the column again. Texel offsets (FXAA's) stay whole texels. Integer fetches at (x, y, layer) (the MSAA variants'
+// stencil mask) take (x s, y s, layer). Returns the samples and fetches edited (0: `words` unchanged).
+int spirv_sample_view_rects(std::vector<std::uint32_t>& words, std::string* why);
 
 // The eye tests beside a per-eye member that isn't an array (docs/recon-xplane.md "Measured: dark shadow edges in the
 // focus views"): deferred shading brings the right eye's view-space position into the left eye's for the shadow lookup

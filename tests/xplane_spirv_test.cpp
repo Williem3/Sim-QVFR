@@ -292,7 +292,7 @@ int main() {
         std::vector<std::uint32_t> real(bytes.size() / 4);
         std::memcpy(real.data(), bytes.data(), real.size() * 4);
         std::string reason;
-        const bool ok = xplane::spirv_sample_eye_box(real, 15, &reason);
+        const bool ok = xplane::spirv_sample_eye_box(real, 15, &reason, true);
         check(ok, "the bloom apply samples its eye's bloom");
         if (!ok)
             std::printf("     %s\n", reason.c_str());
@@ -401,7 +401,7 @@ int main() {
 
     // The focus box from the push constants (spirv_focus_proj_coefficients with push): %6 = struct { vec4
     // u_proj_coefficients[2] } named blk, read at the folded view index %15; %17 the loaded entry, used by %18. With the
-    // push block the edit declares `vec4 qvfr_focus[3]` (push constant storage) and bakes no size in; without it the
+    // push block the edit declares `vec4 qvfr_focus[kFocusBlockEntries]` (push constant storage) and bakes no size in; without it the
     // size is a constant.
     {
         const auto named = [](std::vector<std::uint32_t>& w, std::uint16_t code, std::initializer_list<std::uint32_t> head,
@@ -437,19 +437,19 @@ int main() {
         // constant variable).
         const auto scan = [](const std::vector<std::uint32_t>& w, std::uint32_t floatBits) {
             struct Found {
-                bool baked = false, name = false, three = false, pushVar = false;
+                bool baked = false, name = false, entries = false, pushVar = false;
             } f;
             std::vector<std::uint32_t> name((std::strlen("qvfr_focus") + 4) / 4, 0);
             std::memcpy(name.data(), "qvfr_focus", std::strlen("qvfr_focus"));
-            std::vector<std::uint32_t> threes;  // int constants of value 3
+            std::vector<std::uint32_t> counts;  // int constants of the block's entry count
             for (std::size_t i = 5; i < w.size();) {
                 const std::uint16_t count = static_cast<std::uint16_t>(w[i] >> 16), code = w[i] & 0xffff;
                 if (code == 43 && count == 4 && w[i + 1] == 1 && w[i + 3] == floatBits)
                     f.baked = true;
-                if (code == 43 && count == 4 && w[i + 1] == 3 && w[i + 3] == 3)
-                    threes.push_back(w[i + 2]);
-                if (code == 28 && count == 4 && std::find(threes.begin(), threes.end(), w[i + 3]) != threes.end())
-                    f.three = true;
+                if (code == 43 && count == 4 && w[i + 1] == 3 && w[i + 3] == xplane::kFocusBlockEntries)
+                    counts.push_back(w[i + 2]);
+                if (code == 28 && count == 4 && std::find(counts.begin(), counts.end(), w[i + 3]) != counts.end())
+                    f.entries = true;
                 if (code == 59 && count >= 4 && w[i + 3] == 9)
                     f.pushVar = true;
                 if (code == 5 && count == 2 + name.size() && std::equal(name.begin(), name.end(), w.begin() + i + 2))
@@ -464,8 +464,8 @@ int main() {
         auto pushed = cm;
         const int n = xplane::spirv_focus_proj_coefficients(pushed, "u_proj_coefficients", fx, fx, nullptr, true);
         const auto p = scan(pushed, fxBits);
-        check(n == 1 && p.name && p.three && p.pushVar && !p.baked,
-              "focus coefficients from the push block: vec4 qvfr_focus[3] declared, no size baked in");
+        check(n == 1 && p.name && p.entries && p.pushVar && !p.baked,
+              "focus coefficients from the push block: vec4 qvfr_focus[kFocusBlockEntries] declared, no size baked in");
         auto baked = cm;
         const int nb = xplane::spirv_focus_proj_coefficients(baked, "u_proj_coefficients", fx, fx, nullptr, false);
         const auto b = scan(baked, fxBits);
@@ -573,8 +573,9 @@ int main() {
                                                                      "u_transform_block_fat", "projection_matrix");
             const int parity = xplane::spirv_eye_parity_test(real, "u_shadow_data", "u_eye_right_to_left", "v_eye");
             const int folded = xplane::spirv_fold_eye_arrays(real, blocks, &skipped);
+            int coefPixels = 0;
             const int coef = folded > 0 ? xplane::spirv_focus_proj_coefficients(real, "u_proj_coefficients", 0.3f, 0.3f,
-                                                                                 &coefSkipped, true)
+                                                                                 &coefSkipped, true, &coefPixels)
                                         : 0;
             int rays = 0, starts = 0;
             const auto* raw = reinterpret_cast<const char*>(real.data());
@@ -586,12 +587,19 @@ int main() {
             }
             const int tiles = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, nullptr, true);
             const int ao = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, nullptr, true);
-            const int splitOff = xplane::spirv_viewport_split_off(real, nullptr);
+            const int splitOff = xplane::spirv_viewport_split_off(real, nullptr, true);
             const bool layered = xplane::spirv_layer_from_dispatch_z(real);
             const bool mapped = xplane::spirv_view_to_eye_map_out(real, 15, nullptr);
             const int rate = xplane::spirv_full_rate_from_layer(real, 2, nullptr);
             const bool layerOut = xplane::spirv_layer_out(real, 20);
             const int alpha = xplane::spirv_alpha_test_lod_bias(real, 20, -1.737f, nullptr, true);
+            // The final resolve (captured already in eye columns): its samples from each view's rect.
+            static const char kYOffset[] = "u_y_offset";
+            const auto* yo = reinterpret_cast<const char*>(real.data());
+            const int rectSamples =
+                std::search(yo, yo + real.size() * 4, kYOffset, kYOffset + sizeof(kYOffset) - 1) != yo + real.size() * 4
+                    ? xplane::spirv_sample_view_rects(real, nullptr)
+                    : 0;
             if (real == original)
                 continue;
             ++changed;
@@ -599,10 +607,11 @@ int main() {
             const auto* out = reinterpret_cast<const char*>(real.data());
             const bool hasPush = std::search(out, out + real.size() * 4, kPush, kPush + sizeof(kPush) - 1) != out + real.size() * 4;
             pushed += hasPush ? 1 : 0;
-            std::printf("     %s: light %d parity %d fold %d coef %d ssr %d/%d tiles %d ao %d split %d z %d map %d rate %d "
-                        "layer %d alpha %d%s\n",
-                        in.c_str(), inverted, parity, folded, coef, rays, starts, tiles, ao, splitOff, layered ? 1 : 0,
-                        mapped ? 1 : 0, rate, layerOut ? 1 : 0, alpha, hasPush ? " (push block)" : "");
+            std::printf("     %s: light %d parity %d fold %d coef %d (by pixels %d) ssr %d/%d tiles %d ao %d split %d z %d "
+                        "map %d rate %d layer %d alpha %d rects %d%s\n",
+                        in.c_str(), inverted, parity, folded, coef, coefPixels, rays, starts, tiles, ao, splitOff,
+                        layered ? 1 : 0, mapped ? 1 : 0, rate, layerOut ? 1 : 0, alpha, rectSamples,
+                        hasPush ? " (push block)" : "");
             std::ofstream o(in + ".all.spv", std::ios::binary);
             o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
         }
