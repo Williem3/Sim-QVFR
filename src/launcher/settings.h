@@ -55,6 +55,9 @@ struct Settings {
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
     CheekySettings cheeky;
     bool cpuProfile = false;  // [experiment] cpu_profile: the CPU capture hotkey records one (Diagnostics pane)
+    // [experiment] d3d11_capture_hotkey: the frame capture hotkey saves the next frame's swapchain images (Diagnostics
+    // pane; games composed by the D3D11 compositor).
+    bool frameCapture = false;
     Hotkeys hotkeys = default_hotkeys();  // [hotkeys] (input/hotkeys.h; the Hotkeys pane): live
     // [launcher] baseline_next: the next launch runs without QVFR (ACE's own two views, measured), once.
     bool baselineNext = false;

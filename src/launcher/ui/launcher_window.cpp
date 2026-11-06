@@ -79,7 +79,7 @@ enum Ctl {
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
     // The Report an issue pane (its kind, the description box, the button, the zip it made to drag into the
     // issue) and the Diagnostics pane (the CPU capture switch, copying the summary, the logs folder).
-    kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
+    kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
     // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
@@ -121,7 +121,7 @@ constexpr UINT kCaptureMs = 30;
 // The hotkeys' names, in HotkeyAction's order.
 constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {L"Open or close", L"Up",      L"Down",         L"Left",
                                                           L"Right",         L"Overlay",       L"Helmet visor",
-                                                          L"CPU capture"};
+                                                          L"CPU capture",   L"Frame capture"};
 
 struct Hit {
     Ctl id;
@@ -645,7 +645,7 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
+    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::Report:
         order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});
         if (!app.reportZip.empty())
@@ -1789,6 +1789,18 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         L"stutter slightly while it records.";
     capture.fullHeight = [captureDesc](float width) { return checkbox_height(captureDesc, width); };
     capture.full = [captureDesc](const Rect& r) { checkbox(kDiagCapture, r, app.s.cpuProfile, L"CPU capture", captureDesc); };
+    // Frame capture (probe/d3d11_capture.h): the frame the headset gets, saved at a key press.
+    Row frame;
+    const std::wstring frameKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::FrameCapture)].key);
+    const std::wstring frameDesc =
+        L"At the next launch, " + (frameKey.empty() ? std::wstring(L"the Frame capture hotkey") : frameKey) +
+        L" saves the frame the headset gets: the game's own image and the composed output, as PNG files in the "
+        L"captures folder inside the logs folder. Each press saves one more frame, to compare the views where "
+        L"something looks wrong. For games composed by the D3D11 compositor (X-Plane 12, Assetto Corsa Competizione).";
+    frame.fullHeight = [frameDesc](float width) { return checkbox_height(frameDesc, width); };
+    frame.full = [frameDesc](const Rect& r) {
+        checkbox(kDiagFrameCapture, r, app.s.frameCapture, L"Frame capture", frameDesc);
+    };
     Row baseline;
     const std::wstring baselineDesc =
         L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the "
@@ -1809,7 +1821,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     std::wstring footer = L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the "
                           L"issue. Elsewhere, send a screenshot of this page (or paste the summary) and the session's ace-*.log";
     footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
-    h += section(x, y + h, w, L"Capture and share", {capture, baseline, actions}, footer, draw);
+    h += section(x, y + h, w, L"Capture and share", {capture, frame, baseline, actions}, footer, draw);
     return h;
 }
 
@@ -1929,7 +1941,8 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
         L"Raises the selected value.",
         L"Turns the performance overlay on or off.",
         L"Steps the helmet’s visor: closed, half, open.",
-        L"Records a CPU capture, with CPU capture on in the Diagnostics pane."};
+        L"Records a CPU capture, with CPU capture on in the Diagnostics pane.",
+        L"Saves the frame the headset gets, with Frame capture on in the Diagnostics pane."};
     const float slotW = 136;
     const auto row = [slotW](HotkeyAction action) {
         const int a = static_cast<int>(action);
@@ -1966,7 +1979,8 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
                  draw) +
          t::kSpace6;
     h += section(x, y + h, w, L"In the game",
-                 {row(HotkeyAction::Overlay), row(HotkeyAction::Visor), row(HotkeyAction::CpuCapture)},
+                 {row(HotkeyAction::Overlay), row(HotkeyAction::Visor), row(HotkeyAction::CpuCapture),
+                  row(HotkeyAction::FrameCapture)},
                  L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever "
                  L"the game runs. Click a button above, then press the keys or the wheel button: Esc cancels, Delete "
                  L"clears it. They apply to a running game at once.",
@@ -1978,7 +1992,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
         const float resetW = button_width(L"Reset hotkeys");
         button(kHotkeysReset, {r.x, r.y, resetW, t::kControlHeight}, L"Reset hotkeys", false);
     };
-    h += section(x, y + h, w, L"", {reset}, L"Back to Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V and Ctrl+Alt+C, without wheel buttons. "
+    h += section(x, y + h, w, L"", {reset}, L"Back to Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C and Ctrl+Alt+F, without wheel buttons. "
                                         L"Restore Defaults leaves the hotkeys as they are.",
                  draw);
     return h;
@@ -3870,6 +3884,7 @@ void activate(Ctl id, int option) {
             fix_check(app.checks[option]);
         return;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
+    case kDiagFrameCapture: app.s.frameCapture = !app.s.frameCapture; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
     case kDiagKind: open_popup(id); return;
     case kDiagDescription:

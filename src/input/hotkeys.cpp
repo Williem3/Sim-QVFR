@@ -9,7 +9,8 @@ namespace simqvfr {
 namespace {
 
 constexpr const wchar_t* kIniKeys[kHotkeyActions] = {L"menu_toggle", L"menu_up", L"menu_down", L"menu_left",
-                                                     L"menu_right",  L"overlay", L"visor",     L"cpu_capture"};
+                                                     L"menu_right",  L"overlay", L"visor",     L"cpu_capture",
+                                                     L"frame_capture"};
 
 struct KeyName {
     int vk;
@@ -86,6 +87,7 @@ Hotkeys default_hotkeys() {
     h[static_cast<int>(HotkeyAction::Overlay)].key = ctrl_alt('P');
     h[static_cast<int>(HotkeyAction::Visor)].key = ctrl_alt('V');
     h[static_cast<int>(HotkeyAction::CpuCapture)].key = ctrl_alt('C');
+    h[static_cast<int>(HotkeyAction::FrameCapture)].key = ctrl_alt('F');
     return h;
 }
 

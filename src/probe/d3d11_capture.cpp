@@ -105,9 +105,22 @@ void d3d11_capture_start(ID3D11Device* d, uint64_t frame) {
     device = frame ? d : nullptr;
     captureFrame = frame;
     done.clear();
-    if (device)
+    if (device && frame == 0xFFFFFFFFull)
+        logf("d3d11 capture: armed by the frame capture hotkey (each swapchain's image of the next frame), into %ls\\captures",
+             log_directory().c_str());
+    else if (device)
         logf("d3d11 capture: each swapchain's image once, from frame %llu, into %ls\\captures",
              static_cast<unsigned long long>(frame), log_directory().c_str());
+}
+
+bool d3d11_capture_arm(uint64_t frame) {
+    std::lock_guard guard(mutex);
+    if (!device)
+        return false;
+    captureFrame = frame;
+    done.clear();
+    logf("d3d11 capture: armed for frame %llu", static_cast<unsigned long long>(frame));
+    return true;
 }
 
 void d3d11_capture_stop() {

@@ -118,6 +118,7 @@ struct Experiment {
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
+    bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
@@ -395,6 +396,10 @@ void load_experiment() {
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
     experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
+    // d3d11_capture_hotkey=1: tracked from the start with a frame never reached; the frame capture hotkey arms the next.
+    experiment.d3d11CaptureHotkey = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_hotkey", 0, ini.c_str()) == 1;
+    if (experiment.d3d11CaptureHotkey && experiment.d3d11CaptureFrame == 0)
+        experiment.d3d11CaptureFrame = 0xFFFFFFFFu;
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
     experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
@@ -3488,7 +3493,8 @@ std::wstring menu_hint() {
 }
 
 // The menu's hotkeys footer ([menu] hotkey_footer): the in-game actions' keys and wheel buttons, those that apply
-// (the visor with the helmet on, the CPU capture with cpu_profile); empty when none is bound.
+// (the visor with the helmet on, the CPU capture with cpu_profile, the frame capture with d3d11_capture_hotkey); empty
+// when none is bound.
 std::wstring hotkey_footer(bool helmetOn) {
     struct Entry {
         HotkeyAction action;
@@ -3497,7 +3503,8 @@ std::wstring hotkey_footer(bool helmetOn) {
     };
     const Entry entries[] = {{HotkeyAction::Overlay, L"Overlay", true},
                              {HotkeyAction::Visor, L"Visor", helmetOn},
-                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile}};
+                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile},
+                             {HotkeyAction::FrameCapture, L"Frame capture", experiment.d3d11CaptureHotkey}};
     std::wstring out;
     for (const Entry& e : entries) {
         const Hotkey& h = hotkeys[static_cast<int>(e.action)];
@@ -4531,6 +4538,7 @@ void optimize_tick(int64_t now) {
 // cpu_profile=1: a capture of the busiest threads (and this one, the render thread) at cpu_profile_frame, and
 // whenever Ctrl+Alt+C is pressed while ACE has focus and none is running.
 bool cpuProfileHotkeyHeld = false;
+bool frameCaptureHotkeyHeld = false;
 // The capture's start and end in the headset: the settings menu's panel shows for a few seconds with a line
 // under its title (QVFR and Two-loop: the panel is theirs; with mode=off only the log says).
 struct ProfileNotice {
@@ -4547,6 +4555,18 @@ void profile_notice(const std::wstring& text, int64_t ms) {
     menu_open(now);
     menu.hideAt = now + qpc_ms(ms);
     profileNotice.until = menu.hideAt;
+}
+
+// The frame capture hotkey (d3d11_capture_hotkey, probe/d3d11_capture.h): each press saves the next frame's swapchain
+// images, the game's and the composed output: what the headset gets at that moment.
+void frame_capture_poll() {
+    if (!experiment.d3d11CaptureHotkey)
+        return;
+    const bool held = hotkey_held(HotkeyAction::FrameCapture);
+    const bool pressed = held && !frameCaptureHotkeyHeld;
+    frameCaptureHotkeyHeld = held;
+    if (pressed && d3d11_capture_arm(endFrames + 1))
+        profile_notice(L"Frame capture: saved to the logs folder (captures)", 2500);
 }
 
 void cpu_profile_poll() {
@@ -4595,6 +4615,7 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
     hang_watch_frame();
     cpu_load_render_thread(GetCurrentThreadId());
     cpu_profile_poll();
+    frame_capture_poll();
     if ((experiment.views4 || experiment.measure) && cpu.msPerTick > 0) {
         const int64_t now = qpc_now();
         if (pacing.lastEnd && pacing.interval.size() < 4 * kCpuReportFrames)

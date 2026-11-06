@@ -69,6 +69,7 @@ Settings load_settings(const std::wstring& ini) {
     s.shape = read_focus_shape(ini.c_str());
     s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
+    s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
     s.updateCheck = read_int(ini, L"launcher", L"update_check", 0) != 0;
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
@@ -128,6 +129,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
+    ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"update_check", s.updateCheck ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
@@ -188,7 +190,7 @@ Profile settings_profile(const Settings& settings, const std::wstring& name) {
     p.name = name;
     for (const ProfileKey& k : written.keys) {
         const bool skip = k.section == L"menu" || k.section == L"osd" || k.section == L"hotkeys" || k.section == L"launcher" ||
-                          k.section == L"profiles" || (k.section == L"experiment" && k.key == L"cpu_profile") ||
+                          k.section == L"profiles" || (k.section == L"experiment" && (k.key == L"cpu_profile" || k.key == L"d3d11_capture_hotkey")) ||
                           (k.section == L"cheeky" && (k.key == L"runtime" || k.key == L"config_dir"));
         if (!skip)
             p.keys.push_back(k);

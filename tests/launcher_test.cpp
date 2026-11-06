@@ -1098,6 +1098,7 @@ int main() {
         const Hotkeys defaults = default_hotkeys();
         check(read_hotkeys(hotkeysIni.c_str()) == defaults &&
                   key_text(defaults[static_cast<int>(HotkeyAction::Overlay)].key) == L"Ctrl+Alt+P" &&
+                  key_text(defaults[static_cast<int>(HotkeyAction::FrameCapture)].key) == L"Ctrl+Alt+F" &&
                   !defaults[static_cast<int>(HotkeyAction::MenuToggle)].key.set(),
               "hotkeys: unset, the defaults (no open/close key)");
         Hotkeys changedKeys = defaults;
@@ -1115,8 +1116,10 @@ int main() {
 
         Settings withKeys;
         withKeys.hotkeys[static_cast<int>(HotkeyAction::Overlay)].key = {VK_F9, false, false, false};
+        withKeys.frameCapture = true;
         check(save_settings(hotkeysIni, withKeys) &&
-                  load_settings(hotkeysIni).hotkeys[static_cast<int>(HotkeyAction::Overlay)].key.vk == VK_F9,
+                  load_settings(hotkeysIni).hotkeys[static_cast<int>(HotkeyAction::Overlay)].key.vk == VK_F9 &&
+                  load_settings(hotkeysIni).frameCapture,
               "hotkeys: saved and loaded with the launcher's settings (the live keys)");
     }
 
