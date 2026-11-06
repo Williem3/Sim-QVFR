@@ -12,21 +12,23 @@ namespace xplane {
 bool four_views_copies_start();
 
 // The focus stage: views 2-3 render the focus boxes (their projections narrowed to `fraction` x `fractionY` of each
-// eye's tangent span, centred on the gaze, or on its forward direction) instead of copies of the eyes.
+// eye's tangent span, centred on the gaze, or on its forward direction) instead of copies of the eyes. Any time: it
+// takes effect at the next four_views_latch_frame (at once before the first).
 void four_views_set_focus(bool on, double fraction, double fractionY);
 
 // The focus boxes follow the gaze (docs/recon-xplane.md "Gaze: the focus box off the eye's axis"): their projections
-// shift off the eye's axis, and the shader edits that place a box in its eye read its centre from push constants that
-// follow every pipeline bind. Set before four_views_copies_start (default on).
+// shift off the eye's axis. Set before four_views_copies_start (default on); off keeps them on the eyes' axes.
+// Either way the shader edits that place a box in its eye read it (centre and size) from push constants that follow
+// every pipeline bind (docs/recon-xplane.md "Live focus size").
 void four_views_set_gaze_follow(bool on);
-// The push constants are patched in (four_views_copies_start): the boxes can follow the gaze.
+// The push constants are patched in (four_views_copies_start) and the boxes follow the gaze.
 bool four_views_gaze_follows();
 // Where each eye looks (tangents x, y of its view; `valid` false: its forward axis), from xrLocateViews.
 void four_views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]);
-// The last gaze becomes the boxes' centres (clamped inside the eyes' views), for every draw and pipeline bind until the
-// next latch: once a frame (xrEndFrame), so a frame's passes all place the boxes alike.
-void four_views_latch_gaze();
-// Logs the centres and the push counts (diagnostics).
+// The settings (focus size, view rects) and the last gaze become the boxes of every draw and pipeline bind until the
+// next latch: once a frame (xrEndFrame), so a frame's projections, push constants, LOD and composition record agree.
+void four_views_latch_frame();
+// Logs the latched boxes, the values pushed with them and the push counts (diagnostics).
 void four_views_gaze_log();
 
 // QVFR composition in eye columns (docs/recon-xplane.md "Composition"): the final resolve writes each eye's view over

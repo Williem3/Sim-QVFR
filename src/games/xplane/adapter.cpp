@@ -147,7 +147,7 @@ public:
                       l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
         return true;
     }
-    // The boxes move with it from the next frame (four_views_latch_gaze at xrEndFrame).
+    // The boxes move with it from the next frame (four_views_latch_frame at xrEndFrame).
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override { four_views_set_gaze(tan, valid); }
     void qvfr_set_live_layout(const Views4Layout&) override {}
     void qvfr_set_live(double focus, double focusY, double, bool) override {
@@ -168,7 +168,7 @@ public:
     // The final resolve's whole-column viewport, counted once the flight's final resolve exists: 300 frames after it,
     // then every 1800, with the viewports X-Plane set (diagnostics).
     void qvfr_frame_end() override {
-        four_views_latch_gaze();
+        four_views_latch_frame();
         // Eyes only: no four-view draw since the last frame end (X-Plane's menu draws its eyes straight into the
         // image).
         const std::uint64_t draws = four_views_draws();

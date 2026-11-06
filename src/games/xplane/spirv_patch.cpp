@@ -728,35 +728,37 @@ struct Module {
 constexpr std::uint16_t kOpFAdd = 129, kOpFSub = 131, kOpFMul = 133, kOpFDiv = 136, kOpVectorShuffle = 79,
                         kOpCompositeConstruct = 80, kOpStore = 62;
 
-// The focus box centres' push constant block (spirv_patch.h kFocusCentreBlock): `vec4 c[2]`, eye e's centre tangents in
-// c[e].xy. One per module: a later edit finds the earlier one's by name.
-struct FocusCentre {
-    std::uint32_t var = 0, ptrV4 = 0, member = 0, v4 = 0, v2 = 0;
+// The focus boxes' push constant block (spirv_patch.h kFocusBlockEntries): `vec4 qvfr_focus[3]`, eye e's box in [e]
+// (centre tangents xy, size zw), the values that follow its size in [2]. One per module: a later edit finds the earlier
+// one's by name.
+struct FocusBlock {
+    std::uint32_t var = 0, ptrV4 = 0, member = 0, v4 = 0, v2 = 0, values = 0;
 };
 constexpr std::uint32_t kPushConstant = 9;
-constexpr const char kFocusCentreName[] = "qvfr_focus_centre";
+constexpr const char kFocusBlockName[] = "qvfr_focus";
 
 // Declares the block in `m` (if not there yet), its types and constants: before an edit computes where it inserts.
-FocusCentre focus_centre_block(Module& m, std::uint32_t intType) {
+FocusBlock focus_block(Module& m, std::uint32_t intType) {
     constexpr std::uint32_t kBlock = 2, kArrayStride = 6, kOffset = 35;
-    FocusCentre f;
+    FocusBlock f;
     const std::uint32_t fl = m.type_float();
     f.v4 = m.type_vector(fl, 4);
     f.v2 = m.type_vector(fl, 2);
     f.ptrV4 = m.type_pointer(kPushConstant, f.v4);
     f.member = m.constant(intType, 0);
-    f.var = m.variable(kFocusCentreName, kPushConstant, nullptr);
+    f.values = m.constant(intType, kFocusValuesEntry);
+    f.var = m.variable(kFocusBlockName, kPushConstant, nullptr);
     if (f.var)
         return f;
-    const std::uint32_t two = m.constant(intType, 2);
-    const std::uint32_t array = m.add_global({op(kOpTypeArray, 4), 0, f.v4, two}, 1);
+    const std::uint32_t entries = m.constant(intType, kFocusBlockEntries);
+    const std::uint32_t array = m.add_global({op(kOpTypeArray, 4), 0, f.v4, entries}, 1);
     const std::uint32_t block = m.add_global({op(kOpTypeStruct, 3), 0, array}, 1);
     f.var = m.add_global({op(Module::kVariable, 4), m.type_pointer(kPushConstant, block), 0, kPushConstant}, 2);
     // Its name (with the debug names, before the decorations) and decorations (after the last).
     std::vector<std::uint32_t> name = {op(Module::kName, 2), f.var};
-    for (std::size_t i = 0; i < sizeof(kFocusCentreName); i += 4) {
+    for (std::size_t i = 0; i < sizeof(kFocusBlockName); i += 4) {
         std::uint32_t word = 0;
-        std::memcpy(&word, kFocusCentreName + i, std::min<std::size_t>(4, sizeof(kFocusCentreName) - i));
+        std::memcpy(&word, kFocusBlockName + i, std::min<std::size_t>(4, sizeof(kFocusBlockName) - i));
         name.push_back(word);
     }
     std::size_t names = 0, decorations = 0;
@@ -781,14 +783,21 @@ FocusCentre focus_centre_block(Module& m, std::uint32_t intType) {
     return f;
 }
 
-// Appends to `body` the load of eye `eyeBit`'s centre (0 or 1, any integer type); returns the vec2's id.
-std::uint32_t focus_centre_load(Module& m, const FocusCentre& f, std::uint32_t eyeBit,
-                                std::vector<std::vector<std::uint32_t>>& body) {
-    const std::uint32_t ptr = m.fresh(), value = m.fresh(), xy = m.fresh();
-    body.push_back({op(kOpAccessChain, 6), f.ptrV4, ptr, f.var, f.member, eyeBit});
+// Appends to `body` the load of entry `entry` (an eye bit 0 or 1 of any integer type, or f.values); returns the vec4's
+// id.
+std::uint32_t focus_entry_load(Module& m, const FocusBlock& f, std::uint32_t entry,
+                               std::vector<std::vector<std::uint32_t>>& body) {
+    const std::uint32_t ptr = m.fresh(), value = m.fresh();
+    body.push_back({op(kOpAccessChain, 6), f.ptrV4, ptr, f.var, f.member, entry});
     body.push_back({op(kOpLoad, 4), f.v4, value, ptr});
-    body.push_back({op(kOpVectorShuffle, 7), f.v2, xy, value, value, 0, 1});
-    return xy;
+    return value;
+}
+// Two components of a loaded entry (xy: an eye's centre, zw: its size): the vec2's id.
+std::uint32_t focus_pair(Module& m, const FocusBlock& f, std::uint32_t entry, std::uint32_t first,
+                         std::vector<std::vector<std::uint32_t>>& body) {
+    const std::uint32_t pair = m.fresh();
+    body.push_back({op(kOpVectorShuffle, 7), f.v2, pair, entry, entry, first, first + 1});
+    return pair;
 }
 constexpr std::uint32_t kInput = 1, kOutput = 3, kFloatOne = 0x3f800000, kFloatHalf = 0x3f000000;
 
@@ -1014,7 +1023,7 @@ int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t 
 
 
 int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char* member, float fx, float fy,
-                                  int* skipped, bool pushCentre) {
+                                  int* skipped, bool push) {
     if (skipped)
         *skipped = 0;
     Module m;
@@ -1086,8 +1095,10 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
     std::memcpy(&fxBits, &fx, 4);
     std::memcpy(&fyBits, &fy, 4);
     std::memcpy(&halfBits, &negHalf, 4);
-    const std::uint32_t cfx = m.constant(fl, fxBits), cfy = m.constant(fl, fyBits), cHalf = m.constant(fl, halfBits);
-    const std::uint32_t scale = m.add_global({op(44 /* OpConstantComposite */, 5), v2, 0, cfx, cfy}, 2);
+    const std::uint32_t cHalf = m.constant(fl, halfBits);
+    std::uint32_t scale = 0;  // the baked size (without the push block)
+    if (!push)
+        scale = m.add_global({op(44 /* OpConstantComposite */, 5), v2, 0, m.constant(fl, fxBits), m.constant(fl, fyBits)}, 2);
     int edited = 0;
     for (const std::uint32_t load : loads) {
         const std::size_t at = m.defined_at(load);
@@ -1099,23 +1110,27 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
         if (rawType == typeOf.end() || !intSigned.count(rawType->second))
             continue;
         const std::uint32_t two = m.constant(rawType->second, 2);
-        const FocusCentre centre = pushCentre ? focus_centre_block(m, rawType->second) : FocusCentre{};
+        const FocusBlock block = push ? focus_block(m, rawType->second) : FocusBlock{};
         const std::size_t loadAt = m.defined_at(load);  // constants may have moved it
         const std::uint32_t original = m.fresh();
         m.insts[loadAt][2] = original;
         const std::uint32_t xy = m.fresh(), fxy = m.fresh(), zw = m.fresh(), focusC = m.fresh(), isFocus = m.fresh(),
                             mask = m.fresh();
-        // The box's coefficients: its size (fx c.x, fy c.y), and its offset, the tangent at its top-left corner: the
-        // centre minus half the size (the centre the gaze's, from the push constants; else the eye's forward axis).
+        // The box's coefficients: its size (f c.xy), and its offset, the tangent at its top-left corner: the centre
+        // minus half the size. Size and centre from the push constants (this frame's); else the baked size, centred on
+        // the eye's forward axis.
         std::vector<std::vector<std::uint32_t>> body = {
             {op(kOpVectorShuffle, 7), v2, xy, original, original, 0, 1},
-            {op(kOpFMul, 5), v2, fxy, xy, scale},
         };
-        if (pushCentre) {
-            const std::uint32_t c = focus_centre_load(m, centre, chainFolded[ptr], body), half = m.fresh();
+        if (push) {
+            const std::uint32_t box = focus_entry_load(m, block, chainFolded[ptr], body);
+            const std::uint32_t size = focus_pair(m, block, box, 2, body), centre = focus_pair(m, block, box, 0, body);
+            const std::uint32_t half = m.fresh();
+            body.push_back({op(kOpFMul, 5), v2, fxy, xy, size});
             body.push_back({op(142 /* OpVectorTimesScalar */, 5), v2, half, fxy, cHalf});
-            body.push_back({op(kOpFAdd, 5), v2, zw, c, half});
+            body.push_back({op(kOpFAdd, 5), v2, zw, centre, half});
         } else {
+            body.push_back({op(kOpFMul, 5), v2, fxy, xy, scale});
             body.push_back({op(142 /* OpVectorTimesScalar */, 5), v2, zw, fxy, cHalf});
         }
         body.insert(body.end(), {
@@ -1134,9 +1149,9 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
 }
 
 int spirv_focus_projection_matrix(std::vector<std::uint32_t>& words, const char* block, const char* member, float fx,
-                                  float fy, bool pushCentre) {
+                                  float fy, bool push) {
     Module m;
-    if (!m.parse(words) || !(fx > 0.0f) || !(fy > 0.0f))
+    if (!m.parse(words) || (!push && (!(fx > 0.0f) || !(fy > 0.0f))))
         return 0;
     constexpr std::uint16_t kOpSelect = 169, kOpSGreaterThanEqual = 175, kOpUGreaterThanEqual = 174, kOpTypeBool = 20,
                             kOpTypeMatrix = 24, kOpCompositeExtract = 81, kOpCompositeInsert = 82;
@@ -1194,12 +1209,19 @@ int spirv_focus_projection_matrix(std::vector<std::uint32_t>& words, const char*
     if (!boolType)
         boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
     const std::uint32_t bv4 = m.type_vector(boolType, 4);
-    const float invFx = 1.0f / fx, invFy = 1.0f / fy, zero = 0.0f;
-    std::uint32_t invFxBits, invFyBits, zeroBits;
-    std::memcpy(&invFxBits, &invFx, 4);
-    std::memcpy(&invFyBits, &invFy, 4);
+    const float zero = 0.0f;
+    std::uint32_t zeroBits;
     std::memcpy(&zeroBits, &zero, 4);
-    const std::uint32_t cInvFx = m.constant(fl, invFxBits), cInvFy = m.constant(fl, invFyBits), cZero = m.constant(fl, zeroBits);
+    const std::uint32_t cZero = m.constant(fl, zeroBits);
+    std::uint32_t cInvFx = 0, cInvFy = 0;  // the baked size's (without the push block)
+    if (!push) {
+        const float invFx = 1.0f / fx, invFy = 1.0f / fy;
+        std::uint32_t invFxBits, invFyBits;
+        std::memcpy(&invFxBits, &invFx, 4);
+        std::memcpy(&invFyBits, &invFy, 4);
+        cInvFx = m.constant(fl, invFxBits);
+        cInvFy = m.constant(fl, invFyBits);
+    }
     int edited = 0;
     for (const std::uint32_t load : loads) {
         const std::size_t loadAt = m.defined_at(load);
@@ -1211,7 +1233,7 @@ int spirv_focus_projection_matrix(std::vector<std::uint32_t>& words, const char*
         if (rawType == typeOf.end() || !intSigned.count(rawType->second))
             continue;
         const std::uint32_t two = m.constant(rawType->second, 2);
-        const FocusCentre centre = pushCentre ? focus_centre_block(m, rawType->second) : FocusCentre{};
+        const FocusBlock focusBlock = push ? focus_block(m, rawType->second) : FocusBlock{};
         const std::size_t at = m.defined_at(load);  // constants may have moved it
         const std::uint32_t original = m.fresh();
         m.insts[at][2] = original;
@@ -1226,20 +1248,31 @@ int spirv_focus_projection_matrix(std::vector<std::uint32_t>& words, const char*
         std::vector<std::vector<std::uint32_t>> body;
         for (std::uint32_t k = 0; k < 4; ++k)
             body.push_back({op(kOpCompositeExtract, 5), v4, col[k], original, k});
+        // The box's scale: col0.x / fx, col1.y / fy, the size this frame's (push constants) or the baked one.
+        std::uint32_t box = 0;
         body.push_back({op(kOpCompositeExtract, 5), fl, c0x, col[0], 0});
-        body.push_back({op(kOpFMul, 5), fl, c0xf, c0x, cInvFx});
-        body.push_back({op(kOpCompositeInsert, 6), v4, c0f, c0xf, col[0], 0});
         body.push_back({op(kOpCompositeExtract, 5), fl, c1y, col[1], 1});
-        body.push_back({op(kOpFMul, 5), fl, c1yf, c1y, cInvFy});
+        if (push) {
+            box = focus_entry_load(m, focusBlock, chainFolded[ptr], body);
+            const std::uint32_t sx = m.fresh(), sy = m.fresh();
+            body.push_back({op(kOpCompositeExtract, 5), fl, sx, box, 2});
+            body.push_back({op(kOpCompositeExtract, 5), fl, sy, box, 3});
+            body.push_back({op(kOpFDiv, 5), fl, c0xf, c0x, sx});
+            body.push_back({op(kOpFDiv, 5), fl, c1yf, c1y, sy});
+        } else {
+            body.push_back({op(kOpFMul, 5), fl, c0xf, c0x, cInvFx});
+            body.push_back({op(kOpFMul, 5), fl, c1yf, c1y, cInvFy});
+        }
+        body.push_back({op(kOpCompositeInsert, 6), v4, c0f, c0xf, col[0], 0});
         body.push_back({op(kOpCompositeInsert, 6), v4, c1f, c1yf, col[1], 1});
         // Column 2's x and y: the centre (cx, cy) times the box's scale (focus_projection), 0 for the eye's axis.
         std::uint32_t c2x = cZero, c2y = cZero;
-        if (pushCentre) {
-            const std::uint32_t c = focus_centre_load(m, centre, chainFolded[ptr], body), cx = m.fresh(), cy = m.fresh();
+        if (push) {
+            const std::uint32_t cx = m.fresh(), cy = m.fresh();
             c2x = m.fresh();
             c2y = m.fresh();
-            body.push_back({op(kOpCompositeExtract, 5), fl, cx, c, 0});
-            body.push_back({op(kOpCompositeExtract, 5), fl, cy, c, 1});
+            body.push_back({op(kOpCompositeExtract, 5), fl, cx, box, 0});
+            body.push_back({op(kOpCompositeExtract, 5), fl, cy, box, 1});
             body.push_back({op(kOpFMul, 5), fl, c2x, c0xf, cx});
             body.push_back({op(kOpFMul, 5), fl, c2y, c1yf, cy});
         }
@@ -1316,7 +1349,8 @@ bool spirv_layer_out(std::vector<std::uint32_t>& words, std::uint32_t location) 
     return true;
 }
 
-int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t location, float bias, std::string* why) {
+int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t location, float bias, std::string* why,
+                              bool push) {
     auto fail = [&](const char* reason) {
         if (why)
             *why = reason;
@@ -1500,8 +1534,10 @@ int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t l
     const float zero = 0.0f;
     std::memcpy(&biasBits, &bias, 4);
     std::memcpy(&zeroBits, &zero, 4);
-    const std::uint32_t cBias = m.constant(fl, biasBits), cZero = m.constant(fl, zeroBits), c2 = m.constant(intType, 2),
-                        c4 = m.constant(intType, 4), cCount = m.constant(intType, transformCount);
+    const std::uint32_t cZero = m.constant(fl, zeroBits), c2 = m.constant(intType, 2), c4 = m.constant(intType, 4),
+                        cCount = m.constant(intType, transformCount);
+    const std::uint32_t cBias = push ? 0 : m.constant(fl, biasBits);  // the baked bias (without the push block)
+    const FocusBlock focusBlock = push ? focus_block(m, intType) : FocusBlock{};
     const std::uint32_t ptrInt = m.type_pointer(kUniform, intType);
     const std::uint32_t layerVar = m.add_interface(m.type_pointer(kInput, intType), kInput, location);
     int edited = 0;
@@ -1514,18 +1550,27 @@ int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t l
         m.insts[at][2] = original;
         const std::uint32_t layer = m.fresh(), countPtr = m.fresh(), count = m.fresh(), periphery = m.fresh(),
                             four = m.fresh(), on = m.fresh(), b = m.fresh(), biased = m.fresh(), alpha = m.fresh();
-        const std::vector<std::vector<std::uint32_t>> body = {
+        std::vector<std::vector<std::uint32_t>> body = {
             {op(kOpLoad, 4), intType, layer, layerVar},
             {op(kOpAccessChain, 5), ptrInt, countPtr, transformVar, cCount},
             {op(kOpLoad, 4), intType, count, countPtr},
             {op(kOpSLessThan, 5), boolType, periphery, layer, c2},
             {op(kOpIEqual, 5), boolType, four, count, c4},
             {op(kOpLogicalAnd, 5), boolType, on, periphery, four},
-            {op(kOpSelect, 6), fl, b, on, cBias, cZero},
+        };
+        // The bias: this frame's (the push block's entry 2 x, following the focus size), or the baked one.
+        std::uint32_t biasValue = cBias;
+        if (push) {
+            const std::uint32_t values = focus_entry_load(m, focusBlock, focusBlock.values, body);
+            biasValue = m.fresh();
+            body.push_back({op(kOpCompositeExtract, 5), fl, biasValue, values, 0});
+        }
+        body.insert(body.end(), {
+            {op(kOpSelect, 6), fl, b, on, biasValue, cZero},
             {op(kOpImageSampleImplicitLod, 7), v4, biased, sample[3], sample[4], 0x1 /* Bias */, b},
             {op(kOpCompositeExtract, 5), vecComponent[v4], alpha, biased, 3},
             {op(kOpCompositeInsert, 6), v4, target, alpha, original, 3},
-        };
+        });
         m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
         ++edited;
     }
@@ -1535,7 +1580,7 @@ int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t l
     return edited;
 }
 
-int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float fy, std::string* why, bool pushCentre) {
+int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float fy, std::string* why, bool push) {
     auto fail = [&](const char* reason) {
         if (why)
             *why = reason;
@@ -1545,7 +1590,7 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
                             kOpConvertFToS = 110, kOpSGreaterThanEqual = 175, kOpCompositeExtract = 81,
                             kOpFNegate = 127, kOpMemberNameCode = 6;
     Module m;
-    if (!m.parse(words) || !(fx > 0.0f) || !(fy > 0.0f))
+    if (!m.parse(words) || (!push && (!(fx > 0.0f) || !(fy > 0.0f))))
         return fail("not SPIR-V");
     // Members by name: the tile size, the projection coefficients and the viewport size.
     std::uint32_t tileType = 0, tileSize = 0, gbufType = 0, coefIndex = 0, sizeIndex = 0;
@@ -1632,8 +1677,16 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
             continue;
         const std::uint32_t x = m.insts[at][3], k = sizeLoad[m.insts[at][4]];
         const float f = k == 0 ? fx : fy;
-        const std::uint32_t cF = fconst(f), cHalfF = fconst(0.5f * f), cK = m.constant(intType, k);
-        const FocusCentre gaze = pushCentre ? focus_centre_block(m, intType) : FocusCentre{};
+        const std::uint32_t cK = m.constant(intType, k);
+        // The box's size along k: this frame's (push constants) or the baked one.
+        std::uint32_t cF = 0, cHalfF = 0, cHalf = 0;
+        if (push)
+            cHalf = fconst(0.5f);
+        else {
+            cF = fconst(f);
+            cHalfF = fconst(0.5f * f);
+        }
+        const FocusBlock focusBlock = push ? focus_block(m, intType) : FocusBlock{};
         const std::size_t here = m.defined_at(division);  // constants may have moved it
         const std::uint32_t eye = m.fresh(), eyeBit = m.fresh(), coefPtr = m.fresh(), coef = m.fresh(), scale = m.fresh(),
                             offset = m.fresh(), negOffset = m.fresh(), centre = m.fresh(), sizePtr = m.fresh(),
@@ -1648,9 +1701,13 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
             {op(kOpCompositeExtract, 5), fl, offset, coef, k + 2},
         };
         // uv0, the box centre in the eye: (t - c.zw) / c.xy for its centre tangent t (the gaze's; else 0).
-        if (pushCentre) {
-            const std::uint32_t c = focus_centre_load(m, gaze, eyeBit, body), t = m.fresh();
-            body.push_back({op(kOpCompositeExtract, 5), fl, t, c, k});
+        if (push) {
+            const std::uint32_t box = focus_entry_load(m, focusBlock, eyeBit, body), t = m.fresh();
+            cF = m.fresh();
+            cHalfF = m.fresh();
+            body.push_back({op(kOpCompositeExtract, 5), fl, t, box, k});
+            body.push_back({op(kOpCompositeExtract, 5), fl, cF, box, k + 2});
+            body.push_back({op(kOpFMul, 5), fl, cHalfF, cF, cHalf});
             body.push_back({op(kOpFSub, 5), fl, negOffset, t, offset});
         } else {
             body.push_back({op(kOpFNegate, 4), fl, negOffset, offset});
@@ -1679,7 +1736,7 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
 }
 
 int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, float fy, float band, std::string* why,
-                                  bool pushCentre) {
+                                  bool push) {
     auto fail = [&](const char* reason) {
         if (why)
             *why = reason;
@@ -1691,8 +1748,9 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
                             kOpMemberNameCode = 6, kOpReturnValue = 254;
     constexpr std::uint32_t kUniformConstant = 0, kGlslFMin = 37, kGlslFMix = 46, kGlslSmoothStep = 49,
                             kImageOperandLod = 2;
+    constexpr std::uint16_t kOpVectorTimesScalarCode = 142;
     Module m;
-    if (!m.parse(words) || !(fx > 0.0f) || !(fy > 0.0f) || !(band > 0.0f))
+    if (!m.parse(words) || (!push && (!(fx > 0.0f) || !(fy > 0.0f) || !(band > 0.0f))))
         return fail("not SPIR-V");
     std::uint32_t aoType = 0;
     const std::uint32_t ao = m.variable("u_tex_ssao", kUniformConstant, &aoType);
@@ -1754,10 +1812,19 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
     const std::uint32_t c1 = m.constant(intType, 1), c2 = m.constant(intType, 2),
                         cCoef = m.constant(intType, names.at("u_proj_coefficients")),
                         cViewport = m.constant(intType, names.at("u_viewport_size")),
-                        cGbuffer = m.constant(intType, names.at("u_gbuffer_size")), f0 = fconst(0.0f), f1 = fconst(1.0f),
-                        cFx = fconst(fx), cFy = fconst(fy), cHalfFx = fconst(0.5f * fx), cHalfFy = fconst(0.5f * fy),
-                        cBand = fconst(band);
-    const FocusCentre gaze = pushCentre ? focus_centre_block(m, intType) : FocusCentre{};
+                        cGbuffer = m.constant(intType, names.at("u_gbuffer_size")), f0 = fconst(0.0f), f1 = fconst(1.0f);
+    // The box's size and the band: this frame's (push constants) or the baked ones.
+    std::uint32_t cFx = 0, cFy = 0, cHalfFx = 0, cHalfFy = 0, cBand = 0, cHalf = 0;
+    if (push)
+        cHalf = fconst(0.5f);
+    else {
+        cFx = fconst(fx);
+        cFy = fconst(fy);
+        cHalfFx = fconst(0.5f * fx);
+        cHalfFy = fconst(0.5f * fy);
+        cBand = fconst(band);
+    }
+    const FocusBlock focusBlock = push ? focus_block(m, intType) : FocusBlock{};
     int edited = 0;
     for (const std::uint32_t sample : samples) {
         const std::size_t at = m.defined_at(sample);
@@ -1785,16 +1852,21 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
         const std::uint32_t uv = emit({kOpVectorShuffle, v2, 0, coord, coord, 0, 1});
         const std::uint32_t pixel = emit({kOpFMul, v2, 0, uv, emit({kOpVectorShuffle, v2, 0, gbuffer, gbuffer, 0, 1})});
         const std::uint32_t coefOffset = emit({kOpVectorShuffle, v2, 0, coef, coef, 2, 3});
-        std::uint32_t fromCentre = 0;
-        if (pushCentre) {
-            const std::uint32_t t = focus_centre_load(m, gaze, eyeBit, body);
+        std::uint32_t fromCentre = 0, f2 = 0, halfF2 = 0, bandValue = cBand;
+        if (push) {
+            const std::uint32_t box = focus_entry_load(m, focusBlock, eyeBit, body);
+            const std::uint32_t t = focus_pair(m, focusBlock, box, 0, body);
+            f2 = focus_pair(m, focusBlock, box, 2, body);
+            halfF2 = emit({kOpVectorTimesScalarCode, v2, 0, f2, cHalf});
             fromCentre = emit({kOpFSub, v2, 0, t, coefOffset});
+            const std::uint32_t values = focus_entry_load(m, focusBlock, focusBlock.values, body);
+            bandValue = emit({kOpCompositeExtract, fl, 0, values, 1});
         } else {
             fromCentre = emit({kOpFNegate, v2, 0, coefOffset});
+            f2 = emit({kOpCompositeConstruct, v2, 0, cFx, cFy});
+            halfF2 = emit({kOpCompositeConstruct, v2, 0, cHalfFx, cHalfFy});
         }
         const std::uint32_t uv0 = emit({kOpFDiv, v2, 0, fromCentre, emit({kOpVectorShuffle, v2, 0, coef, coef, 0, 1})});
-        const std::uint32_t f2 = emit({kOpCompositeConstruct, v2, 0, cFx, cFy});
-        const std::uint32_t halfF2 = emit({kOpCompositeConstruct, v2, 0, cHalfFx, cHalfFy});
         const std::uint32_t origin =
             emit({kOpFMul, v2, 0, emit({kOpFSub, v2, 0, uv0, halfF2}), emit({kOpVectorShuffle, v2, 0, viewport, viewport, 0, 1})});
         const std::uint32_t eyePixel = emit({kOpFAdd, v2, 0, origin, emit({kOpFMul, v2, 0, pixel, f2})});
@@ -1807,7 +1879,7 @@ int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, f
         const std::uint32_t near2 = emit({kOpExtInst, v2, 0, glsl, kGlslFMin, own, emit({kOpFSub, v2, 0, one2, own})});
         const std::uint32_t edge = emit({kOpExtInst, fl, 0, glsl, kGlslFMin, emit({kOpCompositeExtract, fl, 0, near2, 0}),
                                          emit({kOpCompositeExtract, fl, 0, near2, 1})});
-        const std::uint32_t weight = emit({kOpExtInst, fl, 0, glsl, kGlslSmoothStep, f0, cBand, edge});
+        const std::uint32_t weight = emit({kOpExtInst, fl, 0, glsl, kGlslSmoothStep, f0, bandValue, edge});
         const std::uint32_t weight4 = emit({kOpCompositeConstruct, v4, 0, weight, weight, weight, weight});
         const std::uint32_t mixed = emit({kOpExtInst, v4, 0, glsl, kGlslFMix, eyeAo, sample, weight4});
         const std::uint32_t focus = emit({kOpSGreaterThanEqual, boolType, 0, eye, c2});

@@ -399,6 +399,79 @@ int main() {
               "focus projection: another block is left alone");
     }
 
+    // The focus box from the push constants (spirv_focus_proj_coefficients with push): %6 = struct { vec4
+    // u_proj_coefficients[2] } named blk, read at the folded view index %15; %17 the loaded entry, used by %18. With the
+    // push block the edit declares `vec4 qvfr_focus[3]` (push constant storage) and bakes no size in; without it the
+    // size is a constant.
+    {
+        const auto named = [](std::vector<std::uint32_t>& w, std::uint16_t code, std::initializer_list<std::uint32_t> head,
+                              const char* s) {
+            std::vector<std::uint32_t> text((std::strlen(s) + 4) / 4, 0);
+            std::memcpy(text.data(), s, std::strlen(s));
+            w.push_back(op(code, static_cast<std::uint16_t>(1 + head.size() + text.size())));
+            w.insert(w.end(), head);
+            w.insert(w.end(), text.begin(), text.end());
+        };
+        std::vector<std::uint32_t> cm = {0x07230203, 0x00010600, 0, 19, 0};
+        named(cm, 5, {6}, "blk");
+        named(cm, 6, {6, 0}, "u_proj_coefficients");
+        cm.insert(cm.end(), {op(22, 3), 1, 32});              // %1 float
+        cm.insert(cm.end(), {op(23, 4), 2, 1, 4});            // %2 vec4
+        cm.insert(cm.end(), {op(21, 4), 3, 32, 1});           // %3 int
+        cm.insert(cm.end(), {op(43, 4), 3, 4, 2});            // %4 = 2
+        cm.insert(cm.end(), {op(28, 4), 5, 2, 4});            // %5 vec4[2]
+        cm.insert(cm.end(), {op(30, 3), 6, 5});               // %6 struct
+        cm.insert(cm.end(), {op(32, 4), 7, 2, 6});            // %7 Uniform pointer to it
+        cm.insert(cm.end(), {op(59, 4), 7, 8, 2});            // %8 the block
+        cm.insert(cm.end(), {op(43, 4), 3, 9, 0});            // %9 = 0
+        cm.insert(cm.end(), {op(43, 4), 3, 10, 1});           // %10 = 1
+        cm.insert(cm.end(), {op(32, 4), 11, 1, 3});           // %11 Input pointer to int
+        cm.insert(cm.end(), {op(59, 4), 11, 12, 1});          // %12 the view index
+        cm.insert(cm.end(), {op(32, 4), 13, 2, 2});           // %13 Uniform pointer to vec4
+        cm.insert(cm.end(), {op(61, 4), 3, 14, 12});          // %14 = load %12
+        cm.insert(cm.end(), {op(199, 5), 3, 15, 14, 10});     // %15 = %14 & 1 (the fold)
+        cm.insert(cm.end(), {op(65, 6), 13, 16, 8, 9, 15});   // %16 = &blk.u_proj_coefficients[%15]
+        cm.insert(cm.end(), {op(61, 4), 2, 17, 16});          // %17 = load %16
+        cm.insert(cm.end(), {op(81, 5), 1, 18, 17, 0});       // %18 = component 0 of %17
+        // What a module holds: a float constant with these bits, the push block (its name, its array of 3, a push
+        // constant variable).
+        const auto scan = [](const std::vector<std::uint32_t>& w, std::uint32_t floatBits) {
+            struct Found {
+                bool baked = false, name = false, three = false, pushVar = false;
+            } f;
+            std::vector<std::uint32_t> name((std::strlen("qvfr_focus") + 4) / 4, 0);
+            std::memcpy(name.data(), "qvfr_focus", std::strlen("qvfr_focus"));
+            std::vector<std::uint32_t> threes;  // int constants of value 3
+            for (std::size_t i = 5; i < w.size();) {
+                const std::uint16_t count = static_cast<std::uint16_t>(w[i] >> 16), code = w[i] & 0xffff;
+                if (code == 43 && count == 4 && w[i + 1] == 1 && w[i + 3] == floatBits)
+                    f.baked = true;
+                if (code == 43 && count == 4 && w[i + 1] == 3 && w[i + 3] == 3)
+                    threes.push_back(w[i + 2]);
+                if (code == 28 && count == 4 && std::find(threes.begin(), threes.end(), w[i + 3]) != threes.end())
+                    f.three = true;
+                if (code == 59 && count >= 4 && w[i + 3] == 9)
+                    f.pushVar = true;
+                if (code == 5 && count == 2 + name.size() && std::equal(name.begin(), name.end(), w.begin() + i + 2))
+                    f.name = true;
+                i += count ? count : 1;
+            }
+            return f;
+        };
+        std::uint32_t fxBits;
+        const float fx = 0.3f;
+        std::memcpy(&fxBits, &fx, 4);
+        auto pushed = cm;
+        const int n = xplane::spirv_focus_proj_coefficients(pushed, "u_proj_coefficients", fx, fx, nullptr, true);
+        const auto p = scan(pushed, fxBits);
+        check(n == 1 && p.name && p.three && p.pushVar && !p.baked,
+              "focus coefficients from the push block: vec4 qvfr_focus[3] declared, no size baked in");
+        auto baked = cm;
+        const int nb = xplane::spirv_focus_proj_coefficients(baked, "u_proj_coefficients", fx, fx, nullptr, false);
+        const auto b = scan(baked, fxBits);
+        check(nb == 1 && b.baked && !b.pushVar, "focus coefficients without the push block: the size baked in");
+    }
+
     // The alpha-test mip bias and the layer output leave modules without their pieces alone (the v_eye module above has
     // neither an alpha test nor gl_Layer).
     {
@@ -437,9 +510,10 @@ int main() {
         }
     }
 
-    // SIM_QVFR_SPV_GAZE: shaders reading the per-eye coefficients, tiles or AO (from a capture, ';'-separated, folded),
-    // each given the edits that place the focus box, with the box centre from the push constants, in four_views.cpp's
-    // order; written to <file>.gaze.spv (spirv-val: one push constant block, listed on the entry point).
+    // SIM_QVFR_SPV_GAZE: shaders reading the per-eye coefficients, tiles, AO or an alpha test (from a capture,
+    // ';'-separated, folded), each given the edits that place the focus box, with the box (centre and size) and its
+    // values from the push constants, in four_views.cpp's order; written to <file>.gaze.spv (spirv-val: one push
+    // constant block, listed on the entry point).
     if (const char* list = std::getenv("SIM_QVFR_SPV_GAZE")) {
         int total = 0;
         std::string all = list;
@@ -458,12 +532,81 @@ int main() {
             const int ssr = xplane::spirv_focus_projection_matrix(real, "u_ssr_data", "u_proj", 0.3f, 0.3f, true);
             const int tiles = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, &tilesWhy, true);
             const int ao = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, &aoWhy, true);
-            std::printf("     %s: coefficients %d, SSR projection %d, tiles %d, AO %d\n", in.c_str(), coef, ssr, tiles, ao);
-            total += coef + ssr + tiles + ao;
+            std::string alphaWhy;
+            const int alpha = xplane::spirv_alpha_test_lod_bias(real, 20, -1.737f, &alphaWhy, true);
+            std::printf("     %s: coefficients %d, SSR projection %d, tiles %d, AO %d, alpha %d\n", in.c_str(), coef, ssr,
+                        tiles, ao, alpha);
+            total += coef + ssr + tiles + ao + alpha;
             std::ofstream o(in + ".gaze.spv", std::ios::binary);
             o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
         }
         check(total > 0, "gaze: the placing edits applied (modules without folded reads are left as they are)");
+    }
+
+    // SIM_QVFR_SPV_ALL: any shaders from a capture (';'-separated, as X-Plane makes them), each given every edit in
+    // four_views.cpp's create_shader_module order with the focus box from the push constants (QVFR's defaults: SSR from
+    // the eye, AO edges, bloom maps, full rate, alpha tests); written to <file>.all.spv when edited (spirv-val: the
+    // whole chain on every module).
+    if (const char* list = std::getenv("SIM_QVFR_SPV_ALL")) {
+        const std::vector<std::string> blocks = {
+            "u_misc_data_var",          "u_new_sky_data_var",       "u_gbuffer_data_var",   "u_dome_data_var",
+            "u_particle_data_var",      "u_ocean_shading_data_var", "u_line3d_data_var",    "u_ocean_meta_data_var",
+            "u_ssr_data_var",           "u_ogl_light_data_var",     "u_cloud_upscale_data_var",
+            "u_volumetric_apply_data_var", "u_rain_draw_info_var",
+        };
+        int modules = 0, changed = 0, pushed = 0;
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            const auto original = real;
+            ++modules;
+            int skipped = 0, coefSkipped = 0;
+            const int inverted = xplane::spirv_eye_projection_beside(real, "u_ogl_light_data", "u_proj_inv",
+                                                                     "u_transform_block_fat", "projection_matrix");
+            const int parity = xplane::spirv_eye_parity_test(real, "u_shadow_data", "u_eye_right_to_left", "v_eye");
+            const int folded = xplane::spirv_fold_eye_arrays(real, blocks, &skipped);
+            const int coef = folded > 0 ? xplane::spirv_focus_proj_coefficients(real, "u_proj_coefficients", 0.3f, 0.3f,
+                                                                                 &coefSkipped, true)
+                                        : 0;
+            int rays = 0, starts = 0;
+            const auto* raw = reinterpret_cast<const char*>(real.data());
+            static const char kSsr[] = "u_ssr_data";
+            if (folded > 0 && std::search(raw, raw + real.size() * 4, kSsr, kSsr + sizeof(kSsr) - 1) != raw + real.size() * 4) {
+                rays = xplane::spirv_ray_reads_from_eye(real, {"tex_hiZ", "tex_ssr", "gbuffer_vel"});
+                if (rays > 0)
+                    starts = xplane::spirv_ray_start_at_eye_pixel(real);
+            }
+            const int tiles = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, nullptr, true);
+            const int ao = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, nullptr, true);
+            const bool layered = xplane::spirv_layer_from_dispatch_z(real);
+            const bool mapped = xplane::spirv_view_to_eye_map_out(real, 15, nullptr);
+            const int rate = xplane::spirv_full_rate_from_layer(real, 2, nullptr);
+            const bool layerOut = xplane::spirv_layer_out(real, 20);
+            const int alpha = xplane::spirv_alpha_test_lod_bias(real, 20, -1.737f, nullptr, true);
+            if (real == original)
+                continue;
+            ++changed;
+            static const char kPush[] = "qvfr_focus";
+            const auto* out = reinterpret_cast<const char*>(real.data());
+            const bool hasPush = std::search(out, out + real.size() * 4, kPush, kPush + sizeof(kPush) - 1) != out + real.size() * 4;
+            pushed += hasPush ? 1 : 0;
+            std::printf("     %s: light %d parity %d fold %d coef %d ssr %d/%d tiles %d ao %d z %d map %d rate %d layer %d "
+                        "alpha %d%s\n",
+                        in.c_str(), inverted, parity, folded, coef, rays, starts, tiles, ao, layered ? 1 : 0, mapped ? 1 : 0,
+                        rate, layerOut ? 1 : 0, alpha, hasPush ? " (push block)" : "");
+            std::ofstream o(in + ".all.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+        std::printf("     %d modules, %d edited, %d with the push block\n", modules, changed, pushed);
+        check(changed > 0, "all edits: some modules edited");
     }
 
     // SIM_QVFR_SPV_ALPHA: alpha-tested fragment shaders (from a capture, ';'-separated), each written to
