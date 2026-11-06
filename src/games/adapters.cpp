@@ -44,7 +44,7 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::ace::adapter();
     if (game == &::acc::kGame)
         return ::acc::adapter();
-    if (game == &::xplane::kGame)  // identity only, with its experiments (xplane/README.md)
+    if (game == &::xplane::kGame)  // identity only, with its experiments (docs/recon-xplane.md)
         return ::xplane::adapter();
     static NoQvfr none(nullptr);
     return none;

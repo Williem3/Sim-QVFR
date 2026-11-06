@@ -131,9 +131,9 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
 }
 
 // A side pass starts from its eye: it takes what its eye got last (the eyes come first in every frame) instead of
-// asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no cached views; README.md),
-// so the side views keep its calls to what ACC makes without them. Its projection is then narrowed to the focus
-// box; its pose stays its eye's.
+// asking SteamVR again: OpenComposite aborts when asked while it rebuilds its session (no cached views;
+// docs/recon-acc.md), so the side views keep its calls to what ACC makes without them. Its projection is then narrowed
+// to the focus box; its pose stays its eye's.
 struct EyeCache {
     std::mutex mutex;
     bool projection[3] = {}, pose[3] = {}, poseOk[3] = {};

@@ -47,7 +47,8 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
 4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`sim_qvfr_core`: the layer and the
    tests link it).
-5. Write `<id>/README.md`: the build the addresses are from, what is patched, and the open questions.
+5. Keep the recon notes (the build the addresses are from, what is patched, the open questions) in
+   `docs/recon-<id>.md`: local only, listed in `.gitignore`, never committed.
 
 `ace/` is the worked example.
 

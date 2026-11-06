@@ -112,12 +112,12 @@ inline Views4Layout views4_live(const Views4Layout& launch, double outer, double
     return l;
 }
 
-// Live resolution in eye columns (views4_rect_eye_columns): sizes that fit the target the game made at launch
-// (two column_eye_width() wide, column_eye_height() high). Instanced stereo draws each pair in one viewport the
-// eyes' width wide, halved (ACC: README.md), so all four views share one width: the periphery's, at most half the
-// target; the outer views' rows and the focus views' rows share the target's height. Focus first: the periphery
-// takes the height the focus views leave. The focus views' horizontal density follows the periphery (their width is
-// its), as at launch; Views4Fit::focus is that width.
+// Live resolution in eye columns (views4_rect_eye_columns): sizes that fit the target the game made at launch (two
+// column_eye_width() wide, column_eye_height() high). Instanced stereo draws each pair in one viewport the eyes' width
+// wide, halved (ACC: docs/recon-acc.md), so all four views share one width: the periphery's, at most half the target;
+// the outer views' rows and the focus views' rows share the target's height. Focus first: the periphery takes the
+// height the focus views leave. The focus views' horizontal density follows the periphery (their width is its), as at
+// launch; Views4Fit::focus is that width.
 inline Views4Fit views4_fit_eye_columns(const Views4Layout& launch, double outer, double focusHeight,
                                         double cropWidth = -1, double cropHeight = -1) {
     constexpr double kSlack = 1e-4;

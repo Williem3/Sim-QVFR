@@ -1,6 +1,6 @@
-// X-Plane drawing four views (README.md): the instance multiplier 4, render-state slots 2-3 filled, and the final
-// resolve's shader edited at runtime. Stage gate so far: slots 2-3 are copies of the eyes and the final resolve shows
-// layers 2-3, so a normal headset image means X-Plane rendered four views.
+// X-Plane drawing four views (docs/recon-xplane.md): the instance multiplier 4, render-state slots 2-3 filled, and the
+// final resolve's shader edited at runtime. Stage gate so far: slots 2-3 are copies of the eyes and the final resolve
+// shows layers 2-3, so a normal headset image means X-Plane rendered four views.
 #pragma once
 
 #include <cstdint>
@@ -15,21 +15,27 @@ bool four_views_copies_start();
 // eye's tangent span, centred on its forward direction) instead of copies of the eyes.
 void four_views_set_focus(bool on, double fraction, double fractionY);
 
-// QVFR composition in eye columns (README.md "Composition"): the final resolve writes each eye's view over its focus
-// view (instead of showing layers 2-3). Set before X-Plane creates its shaders (early load).
+// QVFR composition in eye columns (docs/recon-xplane.md "Composition"): the final resolve writes each eye's view over
+// its focus view (instead of showing layers 2-3). Set before X-Plane creates its shaders (early load).
 void four_views_set_eye_columns(bool on);
-// Per-view sizes (README.md "Design: true per-view sizes"): one viewport per view, the outer views' `outerScale` of
-// their layers from the top-left (1: the whole layer). Before four_views_copies_start.
+// Per-view sizes (docs/recon-xplane.md "Design: true per-view sizes"): one viewport per view, the outer views'
+// `outerScale` of their layers from the top-left (1: the whole layer). Before four_views_copies_start.
 void four_views_set_view_rects(bool on, double outerScale);
-// set viewports calls given four rects so far.
-// Focus views take their eye's bloom (README.md "Measured: bloom per view"). Before X-Plane makes its shaders.
+// set viewports calls given four rects so far. Focus views take their eye's bloom (docs/recon-xplane.md "Measured:
+// bloom per view"). Before X-Plane makes its shaders.
 void four_views_set_bloom_from_eye(bool on);
-// Alpha-tested materials in views 0-1 test the alpha of the focus view's mip (README.md "Measured: a 'wall' missing in
-// the focus view"), so fences and foliage cut out alike in both views. Before X-Plane makes its shaders.
+// Alpha-tested materials in views 0-1 test the alpha of the focus view's mip (docs/recon-xplane.md "Measured: a 'wall'
+// missing in the focus view"), so fences and foliage cut out alike in both views. Before X-Plane makes its shaders.
 void four_views_set_periphery_alpha_lod(bool on);
 // SSR in the focus views: marched in their eye's screen (true, the default) or in their own. Before X-Plane makes its
 // shaders.
 void four_views_set_ssr_from_eye(bool on);
+// AO at the focus views' edges from their eye's (true, the default) or their own (docs/recon-xplane.md "Measured: a
+// dark rim at the top of the focus views"). Before X-Plane makes its shaders.
+void four_views_set_ao_edges_from_eye(bool on);
+// The object and tree LOD from the focus views' pixel density (true, the default) or the eye view's, X-Plane's own
+// (docs/recon-xplane.md "Measured: trees low poly in the focus views"). Any time; follows four_views_set_focus's size.
+void four_views_set_focus_lod(bool on);
 // The focus views shaded at the full rate (VRS writes rate 1x1 into layers 2-3). Before X-Plane makes its shaders.
 void four_views_set_focus_full_rate(bool on);
 int four_views_view_rect_sets();

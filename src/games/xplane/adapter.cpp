@@ -18,7 +18,7 @@ using simqvfr::Views4Layout;
 
 // [experiment] xplane_layers = 3 or 4: the render size query reports that many layers instead of 2, so
 // REN_graph_info and the per-eye targets get them. A measurement for QVFR: a frame capture then shows which counts,
-// targets and draws follow (README.md). 0 or 2: X-Plane as it is.
+// targets and draws follow (docs/recon-xplane.md). 0 or 2: X-Plane as it is.
 void apply_layer_count(const wchar_t* ini, int forced = 0) {
     const int layers = forced ? forced : GetPrivateProfileIntW(L"experiment", L"xplane_layers", 0, ini);
     if (layers == 0 || layers == 2)
@@ -111,6 +111,8 @@ bool apply_qvfr(const wchar_t* ini) {
     four_views_set_bloom_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_bloom_from_eye", 1, ini) == 1);
     four_views_set_periphery_alpha_lod(GetPrivateProfileIntW(L"experiment", L"xplane_periphery_alpha_lod", 1, ini) == 1);
     four_views_set_ssr_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ssr_from_eye", 1, ini) == 1);
+    four_views_set_ao_edges_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ao_edges_from_eye", 1, ini) == 1);
+    four_views_set_focus_lod(GetPrivateProfileIntW(L"experiment", L"xplane_focus_lod", 1, ini) == 1);
     apply_layer_count(ini, 4);
     apply_context_layers(ini, 4);
     bool ok = four_views_copies_start();
@@ -164,7 +166,8 @@ public:
     // The final resolve's whole-column viewport, counted once the flight's final resolve exists: 300 frames after it,
     // then every 1800, with the viewports X-Plane set (diagnostics).
     void qvfr_frame_end() override {
-        // Eyes only: no four-view draw since the last frame end (X-Plane's menu draws its eyes straight into the image).
+        // Eyes only: no four-view draw since the last frame end (X-Plane's menu draws its eyes straight into the
+        // image).
         const std::uint64_t draws = four_views_draws();
         const bool eyesOnly = draws == lastDraws_;
         lastDraws_ = draws;
@@ -186,8 +189,8 @@ public:
         }
     }
 
-    // Loaded early (the launcher, GameInfo::earlyLoad): the patches go in before X-Plane's Vulkan startup, so the shader
-    // wrapper sees every module. xrCreateInstance then finds them in.
+    // Loaded early (the launcher, GameInfo::earlyLoad): the patches go in before X-Plane's Vulkan startup, so the
+    // shader wrapper sees every module. xrCreateInstance then finds them in.
     void early_start(const wchar_t* ini) override {
         simqvfr::logf("xplane: layer loaded early (before X-Plane runs): patching now");
         patched_ = true;

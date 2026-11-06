@@ -346,8 +346,8 @@ int main() {
               "shadow eye test: a module not reading the member is left alone");
     }
 
-    // The focus projection matrix (spirv_focus_projection_matrix): %7 = struct { mat4 proj[2] } named blk; the input %13
-    // loaded, folded (& 1) and used to read proj[]; %18 = the loaded matrix, used by %19.
+    // The focus projection matrix (spirv_focus_projection_matrix): %7 = struct { mat4 proj[2] } named blk; the input
+    // %13 loaded, folded (& 1) and used to read proj[]; %18 = the loaded matrix, used by %19.
     {
         const auto named = [](std::vector<std::uint32_t>& w, std::uint16_t code, std::initializer_list<std::uint32_t> head,
                               const char* s) {
@@ -437,8 +437,8 @@ int main() {
         }
     }
 
-    // SIM_QVFR_SPV_ALPHA: alpha-tested fragment shaders (from a capture, ';'-separated), each written to <file>.alpha.spv;
-    // SIM_QVFR_SPV_LAYER: vertex shaders writing gl_Layer, each written to <file>.layer.spv.
+    // SIM_QVFR_SPV_ALPHA: alpha-tested fragment shaders (from a capture, ';'-separated), each written to
+    // <file>.alpha.spv; SIM_QVFR_SPV_LAYER: vertex shaders writing gl_Layer, each written to <file>.layer.spv.
     for (const char* var : {"SIM_QVFR_SPV_ALPHA", "SIM_QVFR_SPV_LAYER"}) {
         const char* list = std::getenv(var);
         if (!list)
@@ -465,8 +465,8 @@ int main() {
         }
     }
 
-    // SIM_QVFR_SPV_SSRTRACE: SSR compute shaders (from a capture, ';'-separated): the reads along the ray (hi-Z, the lit
-    // history, velocities) take the eye's layer; each written to <file>.trace.spv.
+    // SIM_QVFR_SPV_SSRTRACE: SSR compute shaders (from a capture, ';'-separated): the reads along the ray (hi-Z, the
+    // lit history, velocities) take the eye's layer; each written to <file>.trace.spv.
     if (const char* list = std::getenv("SIM_QVFR_SPV_SSRTRACE")) {
         std::string all = list;
         for (std::size_t start = 0; start < all.size();) {
@@ -480,9 +480,34 @@ int main() {
             std::vector<std::uint32_t> real(bytes.size() / 4);
             std::memcpy(real.data(), bytes.data(), real.size() * 4);
             const int n = xplane::spirv_ray_reads_from_eye(real, {"tex_hiZ", "tex_ssr", "gbuffer_vel"});
-            std::printf("     %s: %d reads\n", in.c_str(), n);
+            const int starts = xplane::spirv_ray_start_at_eye_pixel(real);
+            std::printf("     %s: %d reads, ray start at the eye pixel %d\n", in.c_str(), n, starts);
             check(n == 3, "SSR trace: hi-Z, history and velocity reads take the eye's layer");
+            check(starts == 1, "SSR trace: the focus views' rays start at their eye pixel's centre and depth");
             std::ofstream o(in + ".trace.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_AOEDGE: deferred shading from a capture (';'-separated): the focus views' AO at their edges from the
+    // eye; each written to <file>.aoedge.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_AOEDGE")) {
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string aoWhy;
+            const int n = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, &aoWhy);
+            std::printf("     %s: %d AO samples%s%s\n", in.c_str(), n, aoWhy.empty() ? "" : ": ", aoWhy.c_str());
+            check(n >= 1, "AO edges: the focus views' AO comes from the eye at their edges");
+            std::ofstream o(in + ".aoedge.spv", std::ios::binary);
             o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
         }
     }

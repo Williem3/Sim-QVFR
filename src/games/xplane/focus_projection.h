@@ -1,6 +1,6 @@
-// X-Plane's focus projections (README.md, "focus stage"): a focus view looks the same way as its eye with a narrower
-// frustum, a box of the eye's tangent span. Built from the eye's own projection matrix, so X-Plane's conventions (axis
-// signs, reversed-Z depth) carry over: only the x and y rows change.
+// X-Plane's focus projections (docs/recon-xplane.md, "focus stage"): a focus view looks the same way as its eye with a
+// narrower frustum, a box of the eye's tangent span. Built from the eye's own projection matrix, so X-Plane's
+// conventions (axis signs, reversed-Z depth) carry over: only the x and y rows change.
 //
 // With row 0 = (a, 0, b, 0) and w = -z, x_ndc = a*t - b for the view-space tangent t = x / -z, so the eye spans
 // t in [(-1 + b) / a, (1 + b) / a] (either order, if a < 0). A focus box of half-width h around tangent t0 has

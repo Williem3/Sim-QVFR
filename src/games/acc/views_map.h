@@ -88,13 +88,13 @@ inline int match_layout(const HandedLayout* layouts, int count, const int (&fina
 }
 
 // The view tangents (left, right, up, down; OpenXR's: x right, y up) a UE 4.26 projection renders. UE's FMatrix is
-// row-major for row vectors, as SteamVR's GetStereoProjectionMatrix fills it from GetProjectionRaw (OpenComposite:
-// the located FOV): [0] = 2 / (r - l), [8] = -(r + l) / (r - l) (it passes Right and Left swapped, then negates
-// them), [5] = 2 / (u - d), [9] = -(u + d) / (u - d), reversed infinite depth in [11] and [14]. Both off-centre
-// terms have the opposite sign of ACE's projections (focus_turn.h projection_tangents): reading the horizontal one
-// with ACE's mirrored every eye left to right (README.md, twenty-fourth run), and the vertical one flipped every eye
-// upside down, seen once the FOV crop made the eyes' FOV uneven vertically (a live top crop of 21% moved what was
-// read as the bottom edge). False for anything that is not such a projection.
+// row-major for row vectors, as SteamVR's GetStereoProjectionMatrix fills it from GetProjectionRaw (OpenComposite: the
+// located FOV): [0] = 2 / (r - l), [8] = -(r + l) / (r - l) (it passes Right and Left swapped, then negates them), [5]
+// = 2 / (u - d), [9] = -(u + d) / (u - d), reversed infinite depth in [11] and [14]. Both off-centre terms have the
+// opposite sign of ACE's projections (focus_turn.h projection_tangents): reading the horizontal one with ACE's mirrored
+// every eye left to right (docs/recon-acc.md, twenty-fourth run), and the vertical one flipped every eye upside down,
+// seen once the FOV crop made the eyes' FOV uneven vertically (a live top crop of 21% moved what was read as the bottom
+// edge). False for anything that is not such a projection.
 inline bool ue_projection_tangents(const float (&m)[16], float (&tan)[4]) {
     if (!(m[0] > 0.01f && m[5] > 0.01f && std::isfinite(m[8]) && std::isfinite(m[9])))
         return false;

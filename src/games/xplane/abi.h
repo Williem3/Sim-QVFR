@@ -1,5 +1,5 @@
-// X-Plane 12 facts from static analysis (README.md). Pinned to the exe build in game.h: patches check the anchor
-// bytes before writing.
+// X-Plane 12 facts from static analysis (docs/recon-xplane.md). Pinned to the exe build in game.h: patches check the
+// anchor bytes before writing.
 #pragma once
 
 #include <cstddef>
@@ -53,7 +53,7 @@ inline constexpr std::size_t kWorldSubgraphLayersImm = 1;
 // views it is turned off.
 inline constexpr std::uintptr_t kExposureFusionControl = 0x575fd80;
 
-// ---- Four views, drawn (README.md "The stereo count in the draw path") ----
+// ---- Four views, drawn (docs/recon-xplane.md "The stereo count in the draw path") ----
 // The per-thread render state: `+0x2490` the instance multiplier; per-view modelviews at +0x88 + i*0x80 and
 // projections at +0x288 + i*0x80, room for four of each.
 inline constexpr std::size_t kStateModelviews = 0x88;
@@ -62,8 +62,8 @@ inline constexpr std::size_t kStateViewStride = 0x80;
 // set viewports (count ecx, multiplier edx, rects r8): its first instruction, `mov [rsp+8], rbx`. Callers pass
 // multiplier = stereo + 1 (0x7ba150, 0x7a7a70 twice, 0x1995650).
 inline constexpr std::uintptr_t kSetViewports = 0x1595790;
-// Per-view sizes (README.md "Design: true per-view sizes"): the graphics pipelines' viewport and scissor count,
-// `setne cl; inc ecx` = (device+0x91 != 0) + 1, i.e. 2 with multiViewport. Written as `mov ecx, 4`.
+// Per-view sizes (docs/recon-xplane.md "Design: true per-view sizes"): the graphics pipelines' viewport and scissor
+// count, `setne cl; inc ecx` = (device+0x91 != 0) + 1, i.e. 2 with multiViewport. Written as `mov ecx, 4`.
 inline constexpr std::uintptr_t kPipelineViewportCount = 0x628437;
 inline constexpr std::uint8_t kPipelineViewportCountAnchor[5] = {0x0F, 0x95, 0xC1, 0xFF, 0xC1};
 inline constexpr std::uint8_t kPipelineViewportCountFour[5] = {0xB9, 0x04, 0x00, 0x00, 0x00};
@@ -81,9 +81,9 @@ inline constexpr std::uint8_t kSetViewportsAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 
 inline constexpr std::uintptr_t kMultiplierStoreA = 0x79ca48;
 inline constexpr std::uintptr_t kMultiplierStoreB = 0x7ab258;
 inline constexpr std::uint8_t kMultiplierStoreAnchor[6] = {0x89, 0x88, 0x90, 0x24, 0x00, 0x00};
-// More writes of the multiplier (README.md "Measured: trees missing in the focus views"), each `mov [base + 0x2490],
-// reg`: the render-state restore (0x7ac280, from a saved block's +0x480: the world passes' lambdas restore a block
-// saved with 2), and two in one draw path that write their own count back right after set viewports. A 2 written
+// More writes of the multiplier (docs/recon-xplane.md "Measured: trees missing in the focus views"), each `mov [base +
+// 0x2490], reg`: the render-state restore (0x7ac280, from a saved block's +0x480: the world passes' lambdas restore a
+// block saved with 2), and two in one draw path that write their own count back right after set viewports. A 2 written
 // there becomes 4. {rva, register (x86 number), base register}.
 struct MultiplierWrite {
     std::uintptr_t rva;
@@ -95,27 +95,28 @@ inline constexpr MultiplierWrite kMoreMultiplierWrites[] = {
     {0x92f34c, 5 /* ebp */, 3 /* rbx */, {0x89, 0xAB, 0x90, 0x24, 0x00, 0x00}},
     {0x92f61f, 6 /* esi */, 0 /* rax */, {0x89, 0xB0, 0x90, 0x24, 0x00, 0x00}},
 };
-// The vegetation cull's uniform fill (0x9382f0, one call per cull from 0x1932ae8; README.md "Measured: trees missing in
-// the focus views"): rdi the cull object, rbx the setup's struct (0x1935b70: +0x19c = max(multiplier, viewport count),
-// +0x1a0 = that > 1), r9 the uniform data. `u_render_layers` (+0x1b8) = ([rdi+0x1c8], the copied flag, != 0) + 1: a
-// hard-coded 2 in stereo, whatever the multiplier. It is the mesh trees' instance factor and the billboards' instance
-// count. {mov eax, esi; cmp byte [rdi+0x1c8], al; setne al; inc eax; mov [r9+0x1b8], eax}.
+// The vegetation cull's uniform fill (0x9382f0, one call per cull from 0x1932ae8; docs/recon-xplane.md "Measured: trees
+// missing in the focus views"): rdi the cull object, rbx the setup's struct (0x1935b70: +0x19c = max(multiplier,
+// viewport count), +0x1a0 = that > 1), r9 the uniform data. `u_render_layers` (+0x1b8) = ([rdi+0x1c8], the copied flag,
+// != 0) + 1: a hard-coded 2 in stereo, whatever the multiplier. It is the mesh trees' instance factor and the
+// billboards' instance count. {mov eax, esi; cmp byte [rdi+0x1c8], al; setne al; inc eax; mov [r9+0x1b8], eax}.
 inline constexpr std::uintptr_t kVegetationRenderLayers = 0x9384a9;
 inline constexpr std::uint8_t kVegetationRenderLayersAnchor[20] = {0x8B, 0xC6, 0x38, 0x87, 0xC8, 0x01, 0x00,
                                                                    0x00, 0x0F, 0x95, 0xC0, 0xFF, 0xC0, 0x41,
                                                                    0x89, 0x81, 0xB8, 0x01, 0x00, 0x00};
 inline constexpr std::size_t kCullSetupViewCount = 0x19c;  // in the setup's struct (rbx)
-// The cull frustum builder (0xce08d0, into state+0x24a0; README.md "Measured: the right eye's outer strip culled"):
-// `if (multiplier == 2 && projection 0 is perspective)` it builds one frustum covering both eyes (0xcb3930 from
-// modelview/projection slots 0-1); any other multiplier takes a per-view loop whose combined frustum is view 0's, the
-// left eye alone. {cmp esi, 2; jne 0xce095b}: 4 now takes the two-eye path too (the eyes' union holds the focus views).
+// The cull frustum builder (0xce08d0, into state+0x24a0; docs/recon-xplane.md "Measured: the right eye's outer strip
+// culled"): `if (multiplier == 2 && projection 0 is perspective)` it builds one frustum covering both eyes (0xcb3930
+// from modelview/projection slots 0-1); any other multiplier takes a per-view loop whose combined frustum is view 0's,
+// the left eye alone. {cmp esi, 2; jne 0xce095b}: 4 now takes the two-eye path too (the eyes' union holds the focus
+// views).
 inline constexpr std::uintptr_t kStereoFrustumTest = 0xce08ec;
 inline constexpr std::uint8_t kStereoFrustumTestAnchor[5] = {0x83, 0xFE, 0x02, 0x75, 0x6A};
 inline constexpr std::uintptr_t kStereoFrustumOther = 0xce095b;  // the jne's target: the other multipliers
-// Stereo as `max(multiplier, viewport count) == 2` (README.md "Measured: the right eye's SSR matrices never written"):
-// with four views these skip the eyes' second entry or their stereo-only work, leaving it stale. Each now takes 2 or 4.
-// {cmp X, 2; jne target}: eye-1 / stereo-only blocks (0x7b888d: per-eye globals from modelview and projection slots
-// 0-1; 0x93005d: a per-eye fill reading projection slot 1; 0x1910eff: a stereo-only branch).
+// Stereo as `max(multiplier, viewport count) == 2` (docs/recon-xplane.md "Measured: the right eye's SSR matrices never
+// written"): with four views these skip the eyes' second entry or their stereo-only work, leaving it stale. Each now
+// takes 2 or 4. {cmp X, 2; jne target}: eye-1 / stereo-only blocks (0x7b888d: per-eye globals from modelview and
+// projection slots 0-1; 0x93005d: a per-eye fill reading projection slot 1; 0x1910eff: a stereo-only branch).
 struct StereoCountJump {
     std::uintptr_t rva, target;
     std::uint8_t anchor[9];  // the cmp (3 bytes, immediate 2 at +2) and the jne rel32
@@ -126,12 +127,27 @@ inline constexpr StereoCountJump kStereoCountJumps[] = {
     {0x1910eff, 0x1911481, {0x83, 0x3A, 0x02, 0x0F, 0x85, 0x79, 0x05, 0x00, 0x00}},
 };
 // The SSR fill (0x918cd0, u_ssr_data): the count stored at [rbp+0x518], read only by `stereo = (count == 2)` (sete,
-// passed to the reprojection 0x927040) and `if (count == 2)` eye 1's u_proj/u_reproj/u_local_reproj. A 4 is stored as 2.
+// passed to the reprojection 0x927040) and `if (count == 2)` eye 1's u_proj/u_reproj/u_local_reproj. A 4 is stored as
+// 2.
 inline constexpr std::uintptr_t kSsrFillCount = 0x918f7f;
 inline constexpr std::uint8_t kSsrFillCountAnchor[6] = {0x89, 0x85, 0x18, 0x05, 0x00, 0x00};  // mov [rbp+0x518], eax
 // The reprojection globals (0x925d70): `cmp ebx, 2; sete bpl` (stereo flag), then `if (ebx == 2)` eye 1. A 4 becomes 2.
 inline constexpr std::uintptr_t kReprojectionCount = 0x925dc8;
 inline constexpr std::uint8_t kReprojectionCountAnchor[7] = {0x83, 0xFB, 0x02, 0x40, 0x0F, 0x94, 0xC5};
+// The object and tree LOD's screen width (docs/recon-xplane.md "Measured: trees low poly in the focus views").
+// X-Plane's LOD bias, a multiplier on each object's and tree's distance, is tan(fov / 2) / tan(22.5 deg) x c / (W /
+// 1280), W the 3D graph's width (REN_graph_info+4; the session log: 1614 with a VR context of 1614x1350). The world
+// pass reads W at 0x7ab3f6 for the world-objects draw 0x7a6fe0, whose bias goes to the scenery draw 0x7b4800 and from
+// there to the vegetation cull's u_lod_bias (0x1969680, 0x1931a00, 0x916200, read into the uniform at 0x93843e). The
+// graph setup 0x196c5d0 reads W at 0x196ccd0 for 0x7a7520, whose bias it keeps at REN_graph_info+0x1e8 for the other
+// object draws (0x7a6aa0, 0x7a7640). Both: the next instructions write a stack argument or rdx and call; rax, r11 are
+// free.
+inline constexpr std::uintptr_t kWorldLodHeight = 0x7ab3f6;
+inline constexpr std::uint8_t kWorldLodHeightAnchor[9] = {0x45, 0x8B, 0x40, 0x04,         // mov r8d, [r8 + 4]
+                                                          0x48, 0x89, 0x44, 0x24, 0x28};  // mov [rsp + 0x28], rax
+inline constexpr std::uintptr_t kGraphLodHeight = 0x196ccd0;
+inline constexpr std::uint8_t kGraphLodHeightAnchor[8] = {0x41, 0x8B, 0x4F, 0x04,   // mov ecx, [r15 + 4]
+                                                          0x49, 0x8D, 0x57, 0x10};  // lea rdx, [r15 + 0x10]
 // The end of the modelview copy (0x15955d0, after 0x1595510 copied the projections in 0x7b9f00's stereo path):
 // `or dword [rax], 0x18; mov rbx, [rsp+0x30]`, rax the render state.
 inline constexpr std::uintptr_t kModelviewCopyEnd = 0x1595653;
@@ -155,7 +171,7 @@ inline constexpr std::uintptr_t kVkCreateShaderModuleSlot = 0x632dad0;
 inline constexpr std::size_t kFinalResolveFsBytes = 16716;
 inline constexpr const char* kFinalResolveFsSha256 = "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f";
 // The bloom apply (fragment shader: the bloom mips summed at gl_FragCoord.xy * u_offset in layer v_eye, into
-// "resolved msaa"; README.md "Measured: bloom per view").
+// "resolved msaa"; docs/recon-xplane.md "Measured: bloom per view").
 inline constexpr std::size_t kBloomApplyFsBytes = 3084;
 inline constexpr const char* kBloomApplyFsSha256 = "131f984cc9e2bd4fb801f987969d49e92cc6bad16e5c44a89b2384d5b27b6938";
 // The vertex outputs' location for the view-to-eye map (spirv_view_to_eye_map_out); X-Plane's use 0-2 here.
@@ -164,9 +180,10 @@ inline constexpr std::uint32_t kEyeMapLocation = 15;
 // spirv_alpha_test_lod_bias). X-Plane's shaders use locations up to 16 (capture XPlane_frame2409.rdc, 201 modules).
 inline constexpr std::uint32_t kLayerLocation = 20;
 
-// ---- Eye columns (README.md "Composition"): the stereo image is (2 x eye width) x (outer + focus height), the views
-// half its height. Where X-Plane takes a view's height from the stereo image (its `+0x88`) or its own VR context:
-// The render size query (0xc83a40): `mov ecx, [r15+0x88]` (the stereo image's height) before the min with the caller's.
+// ---- Eye columns (docs/recon-xplane.md "Composition"): the stereo image is (2 x eye width) x (outer + focus height),
+// the views half its height. Where X-Plane takes a view's height from the stereo image (its `+0x88`) or its own VR
+// context: The render size query (0xc83a40): `mov ecx, [r15+0x88]` (the stereo image's height) before the min with the
+// caller's.
 inline constexpr std::uintptr_t kRenderSizeHeight = 0xc83b3c;
 inline constexpr std::uint8_t kRenderSizeHeightAnchor[7] = {0x41, 0x8B, 0x8F, 0x88, 0x00, 0x00, 0x00};
 // REN_build_render_graph_3d_world_subgraph (0x198f270), the VR window: `mov edi, [rax+0x88]`, its graph's height.

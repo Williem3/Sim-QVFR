@@ -159,7 +159,7 @@ bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
         return false;
     int target[2];
     views_target(target);
-    // The scene textures span the views, rounded up to 4 (README.md). The views can reach past the target: with
+    // The scene textures span the views, rounded up to 4 (docs/recon-acc.md). The views can reach past the target: with
     // an odd eye width (1614) UE starts the right eye at an even x (1616), so its views end at 3230 and its
     // scene textures are 3232 wide against a 3228 target (2026-11-04: none matched, nothing was shared). Under
     // DLSS (or any screen percentage) the views render smaller than the target and the scene textures with them
@@ -571,8 +571,8 @@ void view_share_frame_end() {
     if (++frames % 900 != 0)
         return;
     {
-        // The next frame, traced: at the first three reports, and at three where the views drew their AO more than once a
-        // frame (on track).
+        // The next frame, traced: at the first three reports, and at three where the views drew their AO more than once
+        // a frame (on track).
         const bool many = aoCounts.eyes.load(std::memory_order_relaxed) > 2 * 900 + 200;
         std::lock_guard guard(mutex);
         if (aoTrace.reports < 3 || (many && aoTrace.trackReports < 3)) {

@@ -1,4 +1,4 @@
-// ACC's per-view screen-space effects, shared from each eye with its focus view (README.md, "Screen-space
+// ACC's per-view screen-space effects, shared from each eye with its focus view (docs/recon-acc.md, "Screen-space
 // effects"). UE 4.26 computes them per view in that view's own screen, so the focus views came out differently
 // from the eyes round them, most at their edges, where the box meets the periphery:
 //  - reflections (SSR): traced on the view's own screen and faded towards its edges, so a narrow focus view lost
