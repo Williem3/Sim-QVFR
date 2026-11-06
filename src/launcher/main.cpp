@@ -331,6 +331,11 @@ int run(bool dryRun) {
     say(L"  game:      " + exe.wstring());
     say(L"  args:      " + std::wstring(info.launchArgs));
     say(L"  layer:     " + library.wstring());
+    // An elevated game's OpenXR loader ignores XR_API_LAYER_PATH (the Launch checks' "elevated" check).
+    say(std::wstring(L"  rights:    ") +
+        (launcher_elevated() ? L"ADMINISTRATOR: the game inherits it and OpenXR won't find the layers (started by "
+                             : L"normal (started by ") +
+        (parent_process_name().empty() ? L"unknown" : parent_process_name()) + L")");
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
@@ -477,6 +482,9 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();
+    in.elevated = launcher_elevated();
+    if (in.elevated)
+        in.parent = parent_process_name();
     if (const wchar_t* openvr = games::launcher_game().openComposite) {
         const std::wstring folder = game_folder(ini);
         in.openComposite = folder.empty() ? OpenComposite::Unknown : open_composite((fs::path(folder) / openvr).wstring());

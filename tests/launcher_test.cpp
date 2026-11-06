@@ -921,6 +921,31 @@ int main() {
                   find(checks, "cheeky_loader") && !find(checks, "game_running") && !find(checks, "cheeky"),
               "preflight: all clear: build, Steam and the game folder pass; nothing about Cheeky while it is off");
 
+        // Administrator rights: the game would inherit them and its OpenXR loader ignore the layer folder.
+        check(find(checks, "elevated") && find(checks, "elevated")->tone == CheckTone::Ok,
+              "preflight: a launcher with normal rights passes the administrator check");
+        {
+            PreflightInput e = in;
+            e.elevated = true;
+            e.parent = L"SimHub.exe";
+            std::vector<Check> elevatedChecks = preflight_checks(e);
+            const Check* elevated = find(elevatedChecks, "elevated");
+            check(elevated && elevated->tone == CheckTone::Bad && elevated->confirm &&
+                      elevated->detail.find(L"SimHub.exe") != std::wstring::npos,
+                  "preflight: an elevated launcher holds the launch back and names the program that started it");
+            e.parent = L"explorer.exe";
+            elevatedChecks = preflight_checks(e);
+            elevated = find(elevatedChecks, "elevated");
+            check(elevated && elevated->detail.find(L"Compatibility tab") != std::wstring::npos,
+                  "preflight: elevated from Explorer: the answer is a normal double-click or the Compatibility tab");
+            e.mode = LaunchMode::Off;
+            elevatedChecks = preflight_checks(e);
+            check(find(elevatedChecks, "elevated")->tone == CheckTone::Warn && !find(elevatedChecks, "elevated")->confirm,
+                  "preflight: elevated with mode=off is only a warning");
+        }
+        std::printf("info preflight: this test runs %s (started by %ls)\n",
+                    launcher_elevated() ? "as administrator" : "with normal rights", parent_process_name().c_str());
+
         in.build = BuildState::Unsupported;
         checks = preflight_checks(in);
         const Check* build = find(checks, "build");
