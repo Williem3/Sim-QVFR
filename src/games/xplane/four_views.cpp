@@ -198,6 +198,109 @@ std::string sha256_hex(const void* data, std::size_t size) {
     return hex;
 }
 
+// ---- The focus boxes' centres: from the gaze, latched once a frame, into fill_views and the shaders ----
+// The shaders read them from a push constant block (spirv_patch.h kFocusCentreBytes; docs/recon-xplane.md "Gaze: the
+// focus box off the eye's axis"): every pipeline layout X-Plane makes gets its range, and every pipeline bind is
+// followed by a push. On only when all three call sites are patched, before X-Plane makes any shader or layout.
+std::atomic<bool> g_gazeWanted{true};  // four_views_set_gaze_follow
+std::atomic<bool> g_focusPush{false};
+// VkPipelineLayoutCreateInfo and VkPushConstantRange, as far as needed (x64 layout).
+struct PushConstantRange {
+    std::uint32_t stageFlags, offset, size;
+};
+struct PipelineLayoutCreateInfo {
+    std::uint32_t sType;
+    const void* pNext;
+    std::uint32_t flags;
+    std::uint32_t setLayoutCount;
+    const std::uint64_t* pSetLayouts;
+    std::uint32_t pushConstantRangeCount;
+    const PushConstantRange* pPushConstantRanges;
+};
+using CreatePipelineLayout = std::int32_t (*)(void* device, const PipelineLayoutCreateInfo* info, const void* allocator,
+                                             std::uint64_t* layout);
+using CmdBindPipeline = void (*)(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t pipeline);
+using CmdPushConstants = void (*)(void* commandBuffer, std::uint64_t layout, std::uint32_t stages, std::uint32_t offset,
+                                  std::uint32_t size, const void* values);
+constexpr std::uint32_t kCentreStages = 0x1 | 0x10 | 0x20;  // vertex, fragment, compute
+constexpr PushConstantRange kCentreRange = {kCentreStages, 0, kFocusCentreBytes};
+std::once_flag g_pushLayoutOnce;
+std::uint64_t g_pushLayout = 0;  // ours, with the range alone: pushes through it reach every layout (same ranges)
+std::atomic<int> g_layoutsExtended{0}, g_layoutsOwnRanges{0};
+std::atomic<std::uint64_t> g_centrePushes{0};
+
+// The gaze as the layer last gave it (four_views_set_gaze), and the centres latched from it (four_views_latch_gaze):
+// each eye's (cx, cy) as two floats in one word, so a draw reads an eye's pair whole.
+struct PendingGaze {
+    std::mutex mutex;
+    float tan[2][2] = {};
+    bool valid[2] = {};
+};
+PendingGaze g_pendingGaze;
+std::atomic<std::uint64_t> g_centre[2] = {};
+
+std::uint64_t pack(float x, float y) {
+    std::uint32_t a, b;
+    std::memcpy(&a, &x, 4);
+    std::memcpy(&b, &y, 4);
+    return static_cast<std::uint64_t>(a) | (static_cast<std::uint64_t>(b) << 32);
+}
+void unpack(std::uint64_t v, double& x, double& y) {
+    const std::uint32_t a = static_cast<std::uint32_t>(v), b = static_cast<std::uint32_t>(v >> 32);
+    float fx, fy;
+    std::memcpy(&fx, &a, 4);
+    std::memcpy(&fy, &b, 4);
+    x = fx;
+    y = fy;
+}
+
+// X-Plane's vkCreatePipelineLayout call (kPipelineLayoutLoad): the centres' range added to a layout without ranges of
+// its own (X-Plane's shaders have no push constants; a layout with some is left as it is and counted).
+std::int32_t create_pipeline_layout(void* device, const PipelineLayoutCreateInfo* info, const void* allocator,
+                                    std::uint64_t* layout) {
+    const auto real = *reinterpret_cast<CreatePipelineLayout*>(simqvfr::module_base() + kVkCreatePipelineLayoutSlot);
+    if (!g_focusPush.load(std::memory_order_relaxed) || !info)
+        return real(device, info, allocator, layout);
+    std::call_once(g_pushLayoutOnce, [&] {
+        PipelineLayoutCreateInfo own{};
+        own.sType = info->sType;
+        own.pushConstantRangeCount = 1;
+        own.pPushConstantRanges = &kCentreRange;
+        const std::int32_t r = real(device, &own, nullptr, &g_pushLayout);
+        logf("xplane: focus centres: own pipeline layout for the pushes: %d", r);
+        if (r != 0)
+            g_pushLayout = 0;
+    });
+    if (info->pushConstantRangeCount != 0) {
+        if (g_layoutsOwnRanges.fetch_add(1) == 0)
+            logf("xplane: focus centres: a pipeline layout with push constants of its own (left as it is; its shaders "
+                 "would read no centres)");
+        return real(device, info, allocator, layout);
+    }
+    PipelineLayoutCreateInfo extended = *info;
+    extended.pushConstantRangeCount = 1;
+    extended.pPushConstantRanges = &kCentreRange;
+    g_layoutsExtended.fetch_add(1, std::memory_order_relaxed);
+    return real(device, &extended, allocator, layout);
+}
+
+// X-Plane's vkCmdBindPipeline calls (kBindPipelineCompute, kBindPipelineGraphics): after the bind, the latched centres.
+void bind_pipeline(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t pipeline) {
+    const auto base = simqvfr::module_base();
+    (*reinterpret_cast<CmdBindPipeline*>(base + kVkCmdBindPipelineSlot))(commandBuffer, bindPoint, pipeline);
+    if (!g_pushLayout)
+        return;
+    double c[2][2];
+    for (int e = 0; e < 2; ++e)
+        unpack(g_centre[e].load(std::memory_order_relaxed), c[e][0], c[e][1]);
+    const float values[8] = {static_cast<float>(c[0][0]), static_cast<float>(c[0][1]), 0, 0,
+                             static_cast<float>(c[1][0]), static_cast<float>(c[1][1]), 0, 0};
+    static_assert(sizeof(values) == kFocusCentreBytes, "the block's size");
+    (*reinterpret_cast<CmdPushConstants*>(base + kVkCmdPushConstantsSlot))(commandBuffer, g_pushLayout, kCentreStages, 0,
+                                                                           kFocusCentreBytes, values);
+    g_centrePushes.fetch_add(1, std::memory_order_relaxed);
+}
+
 // X-Plane's vkCreateShaderModule call lands here (kShaderModuleLoad). The final resolve's fragment shader gets
 // v_eye + 2 (it then shows layers 2-3); every other module goes through as it is.
 std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
@@ -250,7 +353,8 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         const int coefficients =
             folded > 0 ? spirv_focus_proj_coefficients(words, "u_proj_coefficients",
                                                        static_cast<float>(g_focusFraction.load()),
-                                                       static_cast<float>(g_focusFractionY.load()), &coefSkipped)
+                                                       static_cast<float>(g_focusFractionY.load()), &coefSkipped,
+                                                       g_focusPush.load())
                        : 0;
         if (coefficients > 0 || coefSkipped > 0)
             logf("xplane: projection coefficients: focus views' own in shader module (%d loads, %d component reads "
@@ -277,7 +381,7 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         else if (folded > 0 && ssrModule)
             ssrProjections = spirv_focus_projection_matrix(words, "u_ssr_data", "u_proj",
                                                            static_cast<float>(g_focusFraction.load()),
-                                                           static_cast<float>(g_focusFractionY.load()));
+                                                           static_cast<float>(g_focusFractionY.load()), g_focusPush.load());
         if (ssrRays > 0)
             logf("xplane: SSR: focus views march in their eye's screen in shader module (%d reads, rays from the eye "
                  "pixel's start %s), %d so far",
@@ -289,15 +393,17 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         // tile of their pixel's position in the eye. After the coefficient edit, which would otherwise turn the eye's
         // coefficients this reads into the focus box's.
         const int tiles = spirv_focus_light_tiles(words, static_cast<float>(g_focusFraction.load()),
-                                                  static_cast<float>(g_focusFractionY.load()), nullptr);
+                                                  static_cast<float>(g_focusFractionY.load()), nullptr, g_focusPush.load());
         if (tiles > 0)
             logf("xplane: tiled lights: focus views take their eye's tile in shader module (%d coordinates), %d so far",
                  tiles, ++g_tileModules);
         // AO at the focus views' edges from the eye (docs/recon-xplane.md "Measured: a dark rim at the top of the focus
         // views").
         if (g_aoEdgesFromEye.load()) {
-            const int aoEdges = spirv_focus_ao_edges_from_eye(words, static_cast<float>(g_focusFraction.load()),
-                                                              static_cast<float>(g_focusFractionY.load()), kAoEdgeBand, nullptr);
+            const int aoEdges =
+                spirv_focus_ao_edges_from_eye(words, static_cast<float>(g_focusFraction.load()),
+                                              static_cast<float>(g_focusFractionY.load()), kAoEdgeBand, nullptr,
+                                              g_focusPush.load());
             if (aoEdges > 0)
                 logf("xplane: AO: focus views take their eye's at their edges (%.0f%% band) in shader module (%d samples), "
                      "%d so far",
@@ -397,6 +503,10 @@ void fill_views(std::uint8_t* state) {
     g_fourViewDraws.fetch_add(1, std::memory_order_relaxed);
     const bool focus = g_focus.load(std::memory_order_relaxed);
     const double fx = g_focusFraction.load(std::memory_order_relaxed), fy = g_focusFractionY.load(std::memory_order_relaxed);
+    // Each focus box's centre (tangents): the latched gaze (four_views_latch_gaze), the same the shaders get pushed.
+    double centre[2][2];
+    for (int eye = 0; eye < 2; ++eye)
+        unpack(g_centre[eye].load(std::memory_order_relaxed), centre[eye][0], centre[eye][1]);
     if (g_recordWanted.load(std::memory_order_relaxed) && g_recordWanted.exchange(false)) {
         float outer[2][4] = {}, inner[2][4] = {};
         bool ok = true;
@@ -404,10 +514,11 @@ void fill_views(std::uint8_t* state) {
             double tan[4];
             ok &= projection_tangents(*slot(kStateProjections, eye), tan);
             lrud(tan, outer[eye]);
-            // The focus box, centred on the eye's axis (focus_projection with cx = cy = 0).
+            // The focus box around its centre (focus_projection's).
             const double hw = focus ? 0.5 * fx * (tan[1] - tan[0]) : 0.0, hh = focus ? 0.5 * fy * (tan[3] - tan[2]) : 0.0;
-            const float box[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
-                                  static_cast<float>(-hh)};
+            const double cx = centre[eye][0], cy = centre[eye][1];
+            const float box[4] = {static_cast<float>(cx - hw), static_cast<float>(cx + hw), static_cast<float>(cy + hh),
+                                  static_cast<float>(cy - hh)};
             if (focus)
                 std::memcpy(inner[eye], box, sizeof(box));
             else
@@ -429,7 +540,7 @@ void fill_views(std::uint8_t* state) {
             continue;
         }
         double out[16];
-        const bool ok = focus_projection(eyeProj, fx, fy, 0.0, 0.0, out);
+        const bool ok = focus_projection(eyeProj, fx, fy, centre[eye][0], centre[eye][1], out);
         std::memcpy(focusProj, out, sizeof(out));
         if (g_fillLogs.load(std::memory_order_relaxed) < 4) {
             ++g_fillLogs;
@@ -555,6 +666,31 @@ bool four_views_copies_start() {
                    sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
     ok &= redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
                    "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
+    // The focus centres' push constants (g_focusPush): every pipeline layout gets their range, and every bind is
+    // followed by a push. All three call sites or none; without them the boxes stay on the eyes' axes.
+    if (g_gazeWanted.load()) {
+        std::uint8_t layoutCall[10] = {0x48, 0xB8};  // mov rax, create_pipeline_layout (the call that follows: call rax)
+        const auto layoutHook = reinterpret_cast<std::uintptr_t>(&create_pipeline_layout);
+        std::memcpy(layoutCall + 2, &layoutHook, 8);
+        std::uint8_t bindCall[12] = {0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xD0};  // mov rax, bind_pipeline; call rax
+        const auto bindHook = reinterpret_cast<std::uintptr_t>(&bind_pipeline);
+        std::memcpy(bindCall + 2, &bindHook, 8);
+        const bool sites =
+            code_matches(kPipelineLayoutLoad, kPipelineLayoutLoadAnchor, sizeof(kPipelineLayoutLoadAnchor)) &&
+            code_matches(kBindPipelineCompute, kBindPipelineComputeAnchor, sizeof(kBindPipelineComputeAnchor)) &&
+            code_matches(kBindPipelineGraphics, kBindPipelineGraphicsAnchor, sizeof(kBindPipelineGraphicsAnchor));
+        const bool hooked =
+            sites &&
+            redirect(kPipelineLayoutLoad, kPipelineLayoutLoadAnchor, sizeof(kPipelineLayoutLoadAnchor), layoutCall,
+                     sizeof(layoutCall), "focus centres: vkCreatePipelineLayout wrapped (their push constant range)") &&
+            redirect(kBindPipelineCompute, kBindPipelineComputeAnchor, sizeof(kBindPipelineComputeAnchor), bindCall,
+                     sizeof(bindCall), "focus centres: compute vkCmdBindPipeline wrapped (then the push)") &&
+            redirect(kBindPipelineGraphics, kBindPipelineGraphicsAnchor, sizeof(kBindPipelineGraphicsAnchor), bindCall,
+                     sizeof(bindCall), "focus centres: graphics vkCmdBindPipeline wrapped (then the push)");
+        g_focusPush = hooked;
+        logf("xplane: focus boxes %s", hooked ? "follow the gaze (centres pushed to the shaders)"
+                                              : "stay on the eyes' axes: the pipeline calls aren't this build's");
+    }
     // The per-draw upload: with four views, fill_views (slots 2-3 from 0-1: copies, or focus projections) right before
     // the block is filled, whichever setter wrote the slots. The function keeps rsp 16-aligned in its body (5 pushes
     // and sub rsp, 0x830 from entry); xmm0-xmm2 are live there, so the stub saves xmm0-xmm5 and the volatile registers.
@@ -907,6 +1043,61 @@ bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]) {
     return true;
 }
 
+void four_views_set_gaze_follow(bool on) { g_gazeWanted = on; }
+
+bool four_views_gaze_follows() { return g_focusPush.load(); }
+
+void four_views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
+    std::lock_guard guard(g_pendingGaze.mutex);
+    std::memcpy(g_pendingGaze.tan, tan, sizeof(tan));
+    std::memcpy(g_pendingGaze.valid, valid, sizeof(valid));
+}
+
+void four_views_latch_gaze() {
+    if (!g_focusPush.load(std::memory_order_relaxed))
+        return;
+    float tan[2][2];
+    bool valid[2];
+    {
+        std::lock_guard guard(g_pendingGaze.mutex);
+        std::memcpy(tan, g_pendingGaze.tan, sizeof(tan));
+        std::memcpy(valid, g_pendingGaze.valid, sizeof(valid));
+    }
+    float outer[2][4] = {};
+    bool recorded = false;
+    {
+        std::lock_guard guard(g_record.mutex);
+        recorded = g_record.valid;
+        std::memcpy(outer, g_record.outer, sizeof(outer));
+    }
+    const double fx = g_focusFraction.load(), fy = g_focusFractionY.load();
+    for (int e = 0; e < 2; ++e) {
+        double cx = 0, cy = 0;
+        // Clamped so the box stays inside its eye's view (left, right, up, down), as focus_turn does for ACE.
+        if (valid[e] && recorded && g_focus.load()) {
+            const double l = outer[e][0], r = outer[e][1], u = outer[e][2], d = outer[e][3];
+            const double hw = 0.5 * fx * (r - l), hh = 0.5 * fy * (u - d);
+            if (l + hw <= r - hw && d + hh <= u - hh) {
+                cx = std::clamp(static_cast<double>(tan[e][0]), l + hw, r - hw);
+                cy = std::clamp(static_cast<double>(tan[e][1]), d + hh, u - hh);
+            }
+        }
+        g_centre[e].store(pack(static_cast<float>(cx), static_cast<float>(cy)), std::memory_order_relaxed);
+    }
+}
+
+void four_views_gaze_log() {
+    if (!g_focusPush.load())
+        return;
+    double c[2][2];
+    for (int e = 0; e < 2; ++e)
+        unpack(g_centre[e].load(), c[e][0], c[e][1]);
+    logf("xplane: focus centres (tangents) L %.3f, %.3f R %.3f, %.3f; %llu pushes so far, %d pipeline layouts given "
+         "their range, %d with push constants of their own",
+         c[0][0], c[0][1], c[1][0], c[1][1], static_cast<unsigned long long>(g_centrePushes.load()),
+         g_layoutsExtended.load(), g_layoutsOwnRanges.load());
+}
+
 void four_views_set_focus(bool on, double fraction, double fractionY) {
     if (g_coefficientModules.load() > 0 && (fraction != g_focusFraction.load() ||
                                             (fractionY > 0.0 ? fractionY : fraction) != g_focusFractionY.load()))
@@ -916,8 +1107,9 @@ void four_views_set_focus(bool on, double fraction, double fractionY) {
     g_focusFractionY = fractionY > 0.0 ? fractionY : fraction;
     g_focus = on;
     update_lod_scale();
-    logf("xplane: focus views %s (%.0f%% x %.0f%% of each eye, centred)", on ? "on" : "off (copies of the eyes)",
-         fraction * 100.0, g_focusFractionY.load() * 100.0);
+    logf("xplane: focus views %s (%.0f%% x %.0f%% of each eye, %s)", on ? "on" : "off (copies of the eyes)",
+         fraction * 100.0, g_focusFractionY.load() * 100.0,
+         g_focusPush.load() ? "centred on the gaze" : "centred on the eye's axis");
 }
 
 }  // namespace xplane

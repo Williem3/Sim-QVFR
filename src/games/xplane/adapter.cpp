@@ -113,6 +113,7 @@ bool apply_qvfr(const wchar_t* ini) {
     four_views_set_ssr_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ssr_from_eye", 1, ini) == 1);
     four_views_set_ao_edges_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ao_edges_from_eye", 1, ini) == 1);
     four_views_set_focus_lod(GetPrivateProfileIntW(L"experiment", L"xplane_focus_lod", 1, ini) == 1);
+    four_views_set_gaze_follow(GetPrivateProfileIntW(L"experiment", L"xplane_gaze", 1, ini) == 1);
     apply_layer_count(ini, 4);
     apply_context_layers(ini, 4);
     bool ok = four_views_copies_start();
@@ -146,7 +147,8 @@ public:
                       l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
         return true;
     }
-    void qvfr_set_gaze(const float (&)[2][2], const bool (&)[2], bool) override {}  // centred focus views for now
+    // The boxes move with it from the next frame (four_views_latch_gaze at xrEndFrame).
+    void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override { four_views_set_gaze(tan, valid); }
     void qvfr_set_live_layout(const Views4Layout&) override {}
     void qvfr_set_live(double focus, double focusY, double, bool) override {
         if (focus > 0 && (focus != focus_ || focusY != focusY_)) {
@@ -166,6 +168,7 @@ public:
     // The final resolve's whole-column viewport, counted once the flight's final resolve exists: 300 frames after it,
     // then every 1800, with the viewports X-Plane set (diagnostics).
     void qvfr_frame_end() override {
+        four_views_latch_gaze();
         // Eyes only: no four-view draw since the last frame end (X-Plane's menu draws its eyes straight into the
         // image).
         const std::uint64_t draws = four_views_draws();
@@ -186,6 +189,7 @@ public:
             four_views_viewport_log();
             four_views_vegetation_log();
             simqvfr::logf("xplane: set viewports given one rect per view %d times so far", four_views_view_rect_sets());
+            four_views_gaze_log();
         }
     }
 

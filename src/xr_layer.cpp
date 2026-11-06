@@ -86,6 +86,7 @@ struct Dispatch {
     PFN_xrSuggestInteractionProfileBindings SuggestInteractionProfileBindings = nullptr;
     PFN_xrAttachSessionActionSets AttachSessionActionSets = nullptr;
     PFN_xrSyncActions SyncActions = nullptr;
+    PFN_xrPollEvent PollEvent = nullptr;
     PFN_xrCreateActionSpace CreateActionSpace = nullptr;
     PFN_xrLocateSpace LocateSpace = nullptr;
     PFN_xrCreateReferenceSpace CreateReferenceSpace = nullptr;
@@ -93,6 +94,7 @@ struct Dispatch {
     PFN_xrDestroySwapchain DestroySwapchain = nullptr;
     PFN_xrGetActionStateBoolean GetActionStateBoolean = nullptr;
     PFN_xrGetActionStateVector2f GetActionStateVector2f = nullptr;
+    PFN_xrGetActionStatePose GetActionStatePose = nullptr;
     PFN_xrGetCurrentInteractionProfile GetCurrentInteractionProfile = nullptr;
     PFN_xrPathToString PathToString = nullptr;
     PFN_xrGetVisibilityMaskKHR GetVisibilityMaskKHR = nullptr;  // optional (XR_KHR_visibility_mask)
@@ -540,6 +542,11 @@ struct Gaze {
     XrTime directionTime = 0;
     uint64_t queries = 0, tracked = 0;
     bool firstLogged = false;
+    // The game's own gaze pose action (from its eye gaze suggestion; X-Plane binds one), and a space of it: the
+    // lookups fall back to it while the layer's own action never tracks (its set not synced or not active).
+    XrAction gameAction = XR_NULL_HANDLE;
+    XrSpace gameSpace = XR_NULL_HANDLE;
+    bool syncFailLogged = false, syncLogged = false;
 };
 Gaze gaze;
 constexpr XrDuration kGazeHoldNs = 500'000'000;  // keep the last gaze this long, then recentre
@@ -638,6 +645,9 @@ void gaze_init(XrInstance instance) {
         gaze.set = XR_NULL_HANDLE;
         gaze.action = gaze.menuToggle = gaze.menuNavigate = XR_NULL_HANDLE;
         gaze.profile = gaze.pose = XR_NULL_PATH;
+        gaze.gameAction = XR_NULL_HANDLE;
+        gaze.gameSpace = XR_NULL_HANDLE;
+        gaze.syncFailLogged = false;
         gaze.bindings.clear();
         gaze.profileSuggested.clear();
         gaze.suggested = gaze.attached = false;
@@ -716,6 +726,10 @@ XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
         return next.SuggestInteractionProfileBindings(instance, suggested);
     std::vector<XrActionSuggestedBinding> bindings(suggested->suggestedBindings,
                                                    suggested->suggestedBindings + suggested->countSuggestedBindings);
+    if (suggested->interactionProfile == gaze.profile)
+        for (const XrActionSuggestedBinding& b : bindings)
+            if (b.binding == gaze.pose && b.action != gaze.action)
+                gaze.gameAction = b.action;
     bindings.insert(bindings.end(), own->second.begin(), own->second.end());
     XrInteractionProfileSuggestedBinding merged = *suggested;
     merged.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
@@ -763,17 +777,50 @@ XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSess
     return next.AttachSessionActionSets(session, info);
 }
 
+// Session state and interaction profile changes, for the log (actions are only active while the session is FOCUSED).
+XrResult XRAPI_CALL layerPollEvent(XrInstance instance, XrEventDataBuffer* event) {
+    const XrResult r = next.PollEvent(instance, event);
+    if (r == XR_SUCCESS && event) {
+        if (event->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+            static const char* const kStates[] = {"UNKNOWN", "IDLE", "READY", "SYNCHRONIZED", "VISIBLE",
+                                                  "FOCUSED", "STOPPING", "LOSS_PENDING", "EXITING"};
+            const auto state = reinterpret_cast<const XrEventDataSessionStateChanged*>(event)->state;
+            logf("session state: %s", state >= 0 && state < 9 ? kStates[state] : "?");
+        } else if (event->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            log_line("input: interaction profile changed");
+        }
+    }
+    return r;
+}
+
 XrResult XRAPI_CALL layerSyncActions(XrSession session, const XrActionsSyncInfo* info) {
     std::lock_guard guard(gaze.mutex);
     if (!gaze.attached || !info)
         return next.SyncActions(session, info);
     ++gaze.appSyncs;
+    if (!gaze.syncLogged) {  // what the game syncs: a subaction path other than null leaves that set's other actions out
+        gaze.syncLogged = true;
+        std::string list;
+        for (uint32_t i = 0; i < info->countActiveActionSets; ++i) {
+            const XrActiveActionSet& a = info->activeActionSets[i];
+            char entry[64];
+            std::snprintf(entry, sizeof(entry), "%s%p ", i ? ", " : "", static_cast<void*>(a.actionSet));
+            list += entry;
+            list += a.subactionPath == XR_NULL_PATH ? std::string("(all)") : path_name(gaze.instance, a.subactionPath);
+        }
+        logf("gaze: the game syncs %u action set(s): %s; next %p", info->countActiveActionSets, list.c_str(), info->next);
+    }
     std::vector<XrActiveActionSet> sets(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
     sets.push_back({gaze.set, XR_NULL_PATH});
     XrActionsSyncInfo merged = *info;
     merged.countActiveActionSets = static_cast<uint32_t>(sets.size());
     merged.activeActionSets = sets.data();
     const XrResult r = next.SyncActions(session, &merged);
+    if (XR_FAILED(r) && !gaze.syncFailLogged) {
+        gaze.syncFailLogged = true;
+        logf("gaze: the game's xrSyncActions with the layer's set failed (%d; the game's %u set(s)); synced without it",
+             r, info->countActiveActionSets);
+    }
     return XR_SUCCEEDED(r) ? r : next.SyncActions(session, info);
 }
 
@@ -854,6 +901,49 @@ struct GazeThread {
 };
 GazeThread gazeThread;
 
+// While the layer's own gaze action has never tracked: after kGazeUntrackedLookups lookups, logs why (the lookup's
+// result and flags, whether each gaze action is active), and moves the lookups to a space of the game's own gaze
+// action if it bound one (X-Plane: the layer's action stayed untracked while the game's set and its binding were in
+// place, 2026-11-06). From the gaze thread.
+constexpr uint64_t kGazeUntrackedLookups = 500;
+void gaze_untracked_check(XrSession session, bool ok, XrResult located, XrSpaceLocationFlags flags) {
+    std::lock_guard guard(gaze.mutex);
+    if (ok || gaze.tracked > 0 || gaze.queries + 1 != kGazeUntrackedLookups)
+        return;
+    const auto active = [&](XrAction action) {
+        if (!action || !next.GetActionStatePose)
+            return std::string("none");
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
+        const XrResult r = next.GetActionStatePose(session, &info, &state);
+        return XR_SUCCEEDED(r) ? std::string(state.isActive ? "active" : "inactive") : "error " + std::to_string(r);
+    };
+    std::string eyesProfile = "?";
+    XrPath eyes = XR_NULL_PATH;
+    if (next.GetCurrentInteractionProfile && XR_SUCCEEDED(next.StringToPath(gaze.instance, "/user/eyes_ext", &eyes))) {
+        XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+        const XrResult r = next.GetCurrentInteractionProfile(session, eyes, &state);
+        eyesProfile = XR_FAILED(r) ? "error " + std::to_string(r)
+                      : state.interactionProfile == XR_NULL_PATH ? std::string("none")
+                                                                 : path_name(gaze.instance, state.interactionProfile);
+    }
+    logf("gaze: no tracked sample in %llu lookups (xrLocateSpace %d, flags 0x%llx; the layer's gaze action %s, the "
+         "game's %s; %llu game syncs; /user/eyes_ext profile %s)",
+         static_cast<unsigned long long>(kGazeUntrackedLookups), located, static_cast<unsigned long long>(flags),
+         active(gaze.action).c_str(), active(gaze.gameAction).c_str(), static_cast<unsigned long long>(gaze.appSyncs),
+         eyesProfile.c_str());
+    if (gaze.gameAction && !gaze.gameSpace) {
+        XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        spaceInfo.action = gaze.gameAction;
+        spaceInfo.poseInActionSpace.orientation.w = 1;
+        const XrResult r = next.CreateActionSpace(session, &spaceInfo, &gaze.gameSpace);
+        if (XR_FAILED(r))
+            gaze.gameSpace = XR_NULL_HANDLE;
+        logf("gaze: lookups moved to the game's own gaze action: %d", r);
+    }
+}
+
 void gaze_thread_run() {
     std::unique_lock lock(gazeThread.mutex);
     const auto period = std::chrono::microseconds(1'000'000 / std::max(1, experiment.gazePollHz));
@@ -872,15 +962,17 @@ void gaze_thread_run() {
                 spaceInfo.poseInActionSpace.orientation.w = 1;
                 next.CreateActionSpace(session, &spaceInfo, &gaze.space);
             }
-            space = gaze.attached ? gaze.space : XR_NULL_HANDLE;
+            space = gaze.attached ? (gaze.gameSpace ? gaze.gameSpace : gaze.space) : XR_NULL_HANDLE;
         }
         if (space && base && time) {
             XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
             const auto t0 = std::chrono::steady_clock::now();
-            const bool ok = XR_SUCCEEDED(next.LocateSpace(space, base, time, &location)) &&
+            const XrResult located = next.LocateSpace(space, base, time, &location);
+            const bool ok = XR_SUCCEEDED(located) &&
                             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
                             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            gaze_untracked_check(session, ok, located, location.locationFlags);
             const XrVector3f direction = rotate(location.pose.orientation, {0, 0, -1});
             bool first = false;
             {
@@ -1717,7 +1809,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     gaze_thread_stop();  // before the spaces it locates go
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
-        gaze.space = XR_NULL_HANDLE;
+        gaze.space = gaze.gameSpace = XR_NULL_HANDLE;
         gaze.attached = false;
         gaze.appSyncs = 0;
     }
@@ -4764,6 +4856,7 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
         SIMQVFR_INTERCEPT(SuggestInteractionProfileBindings)
         SIMQVFR_INTERCEPT(AttachSessionActionSets)
         SIMQVFR_INTERCEPT(SyncActions)
+        SIMQVFR_INTERCEPT(PollEvent)
         if (next.GetVisibilityMaskKHR)
             SIMQVFR_INTERCEPT(GetVisibilityMaskKHR)
     }
@@ -4879,6 +4972,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     SIMQVFR_LOAD(SuggestInteractionProfileBindings)
     SIMQVFR_LOAD(AttachSessionActionSets)
     SIMQVFR_LOAD(SyncActions)
+    SIMQVFR_LOAD(PollEvent)
     SIMQVFR_LOAD(CreateActionSpace)
     SIMQVFR_LOAD(LocateSpace)
     SIMQVFR_LOAD(CreateReferenceSpace)
@@ -4886,6 +4980,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     SIMQVFR_LOAD(DestroySwapchain)
     SIMQVFR_LOAD(GetActionStateBoolean)
     SIMQVFR_LOAD(GetActionStateVector2f)
+    SIMQVFR_LOAD(GetActionStatePose)
     SIMQVFR_LOAD(GetCurrentInteractionProfile)
     SIMQVFR_LOAD(PathToString)
 #undef SIMQVFR_LOAD

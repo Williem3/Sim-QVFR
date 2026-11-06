@@ -120,6 +120,16 @@ inline constexpr std::uint8_t kCloudDispatchDepthCount[10] = {0x44, 0x8B, 0x32, 
 inline constexpr std::uintptr_t kShaderModuleLoad = 0x64495a;
 inline constexpr std::uint8_t kShaderModuleLoadAnchor[7] = {0x48, 0x8B, 0x05, 0x6F, 0x91, 0xCE, 0x05};
 inline constexpr std::uintptr_t kVkCreateShaderModuleSlot = 0x632dad0;
+// vkCreatePipelineLayout's and vkCmdBindPipeline's calls and table slots, and vkCmdPushConstants' slot. [Pipeline calls]
+inline constexpr std::uintptr_t kPipelineLayoutLoad = 0x5f73fd;
+inline constexpr std::uint8_t kPipelineLayoutLoadAnchor[7] = {0x48, 0x8B, 0x05, 0xA4, 0x66, 0xD3, 0x05};
+inline constexpr std::uintptr_t kVkCreatePipelineLayoutSlot = 0x632daa8;
+inline constexpr std::uintptr_t kBindPipelineCompute = 0x63635a;
+inline constexpr std::uint8_t kBindPipelineComputeAnchor[6] = {0xFF, 0x15, 0x90, 0x75, 0xCF, 0x05};
+inline constexpr std::uintptr_t kBindPipelineGraphics = 0x64a9e7;
+inline constexpr std::uint8_t kBindPipelineGraphicsAnchor[6] = {0xFF, 0x15, 0x03, 0x2F, 0xCE, 0x05};
+inline constexpr std::uintptr_t kVkCmdBindPipelineSlot = 0x632d8f0;
+inline constexpr std::uintptr_t kVkCmdPushConstantsSlot = 0x632d9a8;
 // Shaders recognised by size and SHA-256: the final resolve and the bloom apply (fragment). [Shader hashes]
 inline constexpr std::size_t kFinalResolveFsBytes = 16716;
 inline constexpr const char* kFinalResolveFsSha256 = "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f";

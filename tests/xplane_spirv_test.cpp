@@ -437,6 +437,35 @@ int main() {
         }
     }
 
+    // SIM_QVFR_SPV_GAZE: shaders reading the per-eye coefficients, tiles or AO (from a capture, ';'-separated, folded),
+    // each given the edits that place the focus box, with the box centre from the push constants, in four_views.cpp's
+    // order; written to <file>.gaze.spv (spirv-val: one push constant block, listed on the entry point).
+    if (const char* list = std::getenv("SIM_QVFR_SPV_GAZE")) {
+        int total = 0;
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string tilesWhy, aoWhy;
+            const int coef = xplane::spirv_focus_proj_coefficients(real, "u_proj_coefficients", 0.3f, 0.3f, nullptr, true);
+            const int ssr = xplane::spirv_focus_projection_matrix(real, "u_ssr_data", "u_proj", 0.3f, 0.3f, true);
+            const int tiles = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, &tilesWhy, true);
+            const int ao = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, &aoWhy, true);
+            std::printf("     %s: coefficients %d, SSR projection %d, tiles %d, AO %d\n", in.c_str(), coef, ssr, tiles, ao);
+            total += coef + ssr + tiles + ao;
+            std::ofstream o(in + ".gaze.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+        check(total > 0, "gaze: the placing edits applied (modules without folded reads are left as they are)");
+    }
+
     // SIM_QVFR_SPV_ALPHA: alpha-tested fragment shaders (from a capture, ';'-separated), each written to
     // <file>.alpha.spv; SIM_QVFR_SPV_LAYER: vertex shaders writing gl_Layer, each written to <file>.layer.spv.
     for (const char* var : {"SIM_QVFR_SPV_ALPHA", "SIM_QVFR_SPV_LAYER"}) {

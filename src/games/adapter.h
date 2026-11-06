@@ -55,7 +55,7 @@ public:
     // runs uncomposed, the headset showing views 0-1.
     virtual bool qvfr_composable() const { return has_qvfr(); }
     // The layer composes this game's views with its D3D11 compositor instead (d3d11_compositor.h): one image
-    // holds all four views in eye columns (qvfr_eye_columns), each focus view centred on its eye (no gaze turn).
+    // holds all four views in eye columns (qvfr_eye_columns), each focus view placed by its record (turned or off-centre).
     virtual bool qvfr_compose_d3d11() const { return false; }
     // Cheeky Foveated DLSS runs in this game (GameInfo::features.foveatedDlss).
     virtual bool loads_cheeky() const { return has_qvfr() && info() && info()->features.foveatedDlss; }

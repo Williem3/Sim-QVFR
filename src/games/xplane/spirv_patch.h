@@ -8,6 +8,12 @@
 
 namespace xplane {
 
+// The focus boxes follow the gaze (docs/recon-xplane.md "Gaze: the focus box off the eye's axis"): with `pushCentre`,
+// the edits below that place the box in its eye take its centre from a push constant block, `vec4 c[2]` at offset 0
+// (eye e's centre tangents in c[e].xy, zw unused), which four_views.cpp pushes after every pipeline bind. Without it,
+// the box sits on the eye's forward axis (tangent 0).
+inline constexpr std::uint32_t kFocusCentreBytes = 32;
+
 // Adds `add` to the value of the `int` input variable named `name` where the shader loads it: the one OpLoad of
 // that variable gets a new id, and an OpIAdd of a new constant gives the old id, so every use sees the sum.
 // False (and `words` unchanged) unless the module has exactly one such load. `why` says what was missing.
@@ -61,7 +67,7 @@ int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t 
 // -fx c.x / 2, -fy c.y / 2), the box centred on the eye's forward direction. Returns loads edited; `skipped` counts
 // reads of single components (left as they are).
 int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char* member, float fx, float fy,
-                                  int* skipped);
+                                  int* skipped, bool pushCentre = false);
 
 // Per-eye projection matrices (docs/recon-xplane.md "Measured: the wing lit differently in the focus views"):
 // `block.member` is a mat4[2] (u_ssr_data.u_proj: SSR projects its reflected rays with it), which the fold reads at
@@ -69,7 +75,7 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
 // focus_projection builds it: col0.x / fx, col1.y / fy, col2.x = col2.y = 0 (the box centred on the eye's forward
 // direction). Returns loads edited.
 int spirv_focus_projection_matrix(std::vector<std::uint32_t>& words, const char* block, const char* member, float fx,
-                                  float fy);
+                                  float fy, bool pushCentre = false);
 
 // Reads along a screen-space ray from the eye (docs/recon-xplane.md "Measured: focus views reflect only what is in the
 // box"): in a compute shader indexed by the dispatch z (one layer per view), the reads of the images named in `images`
@@ -105,7 +111,8 @@ int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t l
 // views 2-3 (v_eye >= 2) each divided pixel coordinate becomes its eye's: (uv0 - f / 2) * size + xy * f, uv0 = -c.zw /
 // c.xy from the eye's u_gbuffer_data.u_proj_coefficients[v_eye & 1] (the focus box's centre, tangent 0), size =
 // u_viewport_size, f = fx / fy. Returns the divisions edited (0: `words` unchanged; `why` says what was missing).
-int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float fy, std::string* why);
+int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float fy, std::string* why,
+                            bool pushCentre = false);
 
 // AO at the focus views' edges from the eye (docs/recon-xplane.md "Measured: a dark rim at the top of the focus
 // views"). CACAO runs on each focus view alone and samples depth past its edges mirrored back, inventing occluders
@@ -113,7 +120,8 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
 // In a fragment shader sampling `u_tex_ssao` at (uv, v_eye): for views 2-3 the AO is mixed from their eye's (layer
 // v_eye & 1, at the pixel's eye position as in spirv_focus_light_tiles) at the view's edges to their own `band` (a
 // share of the view) in. Returns the samples edited (0: `words` unchanged; `why` says what was missing).
-int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, float fy, float band, std::string* why);
+int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, float fy, float band, std::string* why,
+                                  bool pushCentre = false);
 
 // The eye tests beside a per-eye member that isn't an array (docs/recon-xplane.md "Measured: dark shadow edges in the
 // focus views"): deferred shading brings the right eye's view-space position into the left eye's for the shadow lookup
