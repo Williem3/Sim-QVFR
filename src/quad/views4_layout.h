@@ -151,6 +151,48 @@ inline Views4Layout views4_live_eye_columns(const Views4Layout& launch, double o
     return l;
 }
 
+// Live resolution with one view size (qvfr_one_view_size: X-Plane): the game's layers keep their launch size, the larger
+// of the outer and focus views per axis, and each kind of view renders in a rect of its own size inside them. So the
+// periphery and the focus views are sized independently, neither trading room with the other:
+//  - each no larger than the launch layer, scaled down evenly on both axes when it is (its density stays the same
+//    across and down),
+//  - each at least kMinLive of its launch size.
+// `outer` is the periphery's density over `cropWidth` x `cropHeight` of the eye (< 0: the launch's); Views4Fit's
+// outerByRoom stays false (nothing shares the room).
+inline Views4Fit views4_fit_one_size(const Views4Layout& launch, double outer, double focus, double focusHeight,
+                                     double cropWidth = -1, double cropHeight = -1) {
+    constexpr double kSlack = 1e-4;
+    const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
+    const double layerW = std::max(launch.outer_width(), launch.focus),
+                 layerH = std::max(launch.outer_height(), launch.focusHeight);
+    Views4Fit f;
+    f.outer = std::clamp(outer, kMinLive * launch.outer, std::min(layerW / cw, layerH / ch));
+    f.outerCapped = f.outer < outer - kSlack;
+    const double fit = std::min({1.0, focus > 0 ? layerW / focus : 1.0, focusHeight > 0 ? layerH / focusHeight : 1.0});
+    f.focus = std::clamp(focus * fit, kMinLive * launch.focus, layerW);
+    f.focusHeight = std::clamp(focusHeight * fit, kMinLive * launch.focusHeight, layerH);
+    f.focusCapped = f.focus < focus - kSlack || f.focusHeight < focusHeight - kSlack;
+    return f;
+}
+
+// The launch layout `launch` with its views at live sizes with one view size (views4_fit_one_size). The target is two
+// layers wide and two high (each eye's column: its view over its focus view), so width[v] and height[v] are half the
+// view's share of its layers (0.5: the whole layer); the views sit at their layers' top-left.
+inline Views4Layout views4_live_one_size(const Views4Layout& launch, double outer, double focus, double focusHeight,
+                                         double cropWidth = -1, double cropHeight = -1) {
+    const Views4Fit f = views4_fit_one_size(launch, outer, focus, focusHeight, cropWidth, cropHeight);
+    const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
+    const double layerW = std::max(launch.outer_width(), launch.focus),
+                 layerH = std::max(launch.outer_height(), launch.focusHeight);
+    Views4Layout l = launch;
+    for (int v = 0; v < 4; ++v) {
+        l.width[v] = 0.5 * std::min(1.0, (v < 2 ? f.outer * cw : f.focus) / layerW);
+        l.height[v] = 0.5 * std::min(1.0, (v < 2 ? f.outer * ch : f.focusHeight) / layerH);
+    }
+    l.live = true;
+    return l;
+}
+
 // `l` with a frame's recorded view layout (`live`: recorded; otherwise `l` as it is).
 inline Views4Layout views4_with_live(Views4Layout l, bool live, const double (&width)[4], const double (&height)[4]) {
     if (live) {

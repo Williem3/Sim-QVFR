@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "games/xplane/focus_projection.h"
+#include "quad/views4_layout.h"
 
 namespace {
 
@@ -55,6 +56,35 @@ int main() {
         double off[16];
         xplane::focus_projection(eye, 0.2, 0.2, 0.3, -0.1, off);
         check(near(ndc(off, cm, 0, 0.3, 0, -1), 0.0) && near(ndc(off, cm, 1, 0, -0.1, -1), 0.0), "an off-centre focus box");
+    }
+    {
+        // Live resolution with one view size (X-Plane): launch periphery 1.0, focus 0.3 x 0.3 at density 1.5 (0.45 of
+        // the native eye): the layers 1.0 x 1.0, the outer views the whole layer, the focus views 45% of it.
+        const simqvfr::Views4Layout launch = simqvfr::views4_layout(1.0, 0.45, 0.45);
+        const simqvfr::Views4Layout atLaunch = simqvfr::views4_live_one_size(launch, 1.0, 0.45, 0.45);
+        check(atLaunch.live && near(2 * atLaunch.width[0], 1.0) && near(2 * atLaunch.height[0], 1.0) &&
+                  near(2 * atLaunch.width[2], 0.45) && near(2 * atLaunch.height[3], 0.45),
+              "one size at the launch sizes: the launch shares");
+        // A lower periphery doesn't give the focus views room, nor they it: each sized on its own.
+        const simqvfr::Views4Layout low = simqvfr::views4_live_one_size(launch, 0.6, 0.45, 0.45);
+        check(near(2 * low.width[0], 0.6) && near(2 * low.height[1], 0.6) && near(2 * low.width[2], 0.45),
+              "one size, periphery 60%: the outer views 60% of their layers, the focus views as before");
+        const simqvfr::Views4Fit big = simqvfr::views4_fit_one_size(launch, 1.0, 0.8, 0.6);
+        check(!big.outerCapped && !big.focusCapped && near(big.focus, 0.8) && near(big.focusHeight, 0.6),
+              "one size, a larger focus box within the layer: as asked");
+        // Larger than the layer: capped at it, evenly on both axes (the density stays square).
+        const simqvfr::Views4Fit over = simqvfr::views4_fit_one_size(launch, 1.4, 1.2, 0.9);
+        check(over.outerCapped && near(over.outer, 1.0) && over.focusCapped && near(over.focus, 1.0) &&
+                  near(over.focusHeight, 0.75) && !over.outerByRoom,
+              "one size, both above the layer: each capped at it, the focus views' aspect kept");
+        const simqvfr::Views4Fit tiny = simqvfr::views4_fit_one_size(launch, 0.01, 0.01, 0.01);
+        check(near(tiny.outer, 0.1) && near(tiny.focus, 0.045) && near(tiny.focusHeight, 0.045),
+              "one size, at least kMinLive of the launch sizes");
+        // The periphery the smaller view (a large fixed focus box): the layers its size, the periphery a share.
+        const simqvfr::Views4Layout fixed = simqvfr::views4_layout(0.5, 0.9, 0.9);
+        const simqvfr::Views4Layout fixedLive = simqvfr::views4_live_one_size(fixed, 0.5, 0.9, 0.9);
+        check(near(2 * fixedLive.width[0], 0.5 / 0.9) && near(2 * fixedLive.width[2], 1.0),
+              "one size, the periphery smaller: its share of the focus-sized layers");
     }
     double flat[16] = {};
     double out[16];

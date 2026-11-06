@@ -144,8 +144,8 @@ public:
         const Views4Layout& l = s.layout;
         // Stage 2 of per-view sizes ([experiment] xplane_view_sizes=1, off by default while the screen-space passes
         // still read whole layers): each kind of view renders at its own size inside the layers.
-        four_views_set_view_sizes(s.ini && GetPrivateProfileIntW(L"experiment", L"xplane_view_sizes", 0, s.ini) == 1,
-                                  l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
+        viewSizes_ = s.ini && GetPrivateProfileIntW(L"experiment", L"xplane_view_sizes", 0, s.ini) == 1;
+        four_views_set_view_sizes(viewSizes_, l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
         simqvfr::logf("xplane: QVFR started; launch layout outer %.2f x %.2f, focus %.2f x %.2f of the native eye (X-Plane "
                       "renders every view at half the column: the records say so)",
                       l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
@@ -153,7 +153,19 @@ public:
     }
     // The boxes move with it from the next frame (four_views_latch_frame at xrEndFrame).
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override { four_views_set_gaze(tan, valid); }
-    void qvfr_set_live_layout(const Views4Layout&) override {}
+    // Live resolution (views4_live_one_size): each kind of view's rect, half its share of the layers (the target is two
+    // layers wide and high), from the next frame's latch. The layers keep their launch size, so nothing is remade.
+    void qvfr_set_live_layout(const Views4Layout& live) override {
+        if (!four_views_set_view_shares(2 * live.width[0], 2 * live.height[0], 2 * live.width[2], 2 * live.height[2]))
+            simqvfr::logf("xplane: live resolution needs per-view sizes (xplane_view_sizes=1): the views keep the whole "
+                          "layer");
+        else
+            simqvfr::logf("xplane: live view rects: outer views %.0f%% x %.0f%% of their layers, focus views %.0f%% x "
+                          "%.0f%% (from the next frame)",
+                          200 * live.width[0], 200 * live.height[0], 200 * live.width[2], 200 * live.height[2]);
+    }
+    // Views resize live only inside the launch layers, with per-view sizes on.
+    bool qvfr_live_resolution() const override { return viewSizes_; }
     void qvfr_set_live(double focus, double focusY, double, bool) override {
         if (focus > 0 && (focus != focus_ || focusY != focusY_)) {
             focus_ = focus;
@@ -236,6 +248,7 @@ private:
     bool patched_ = false;
     bool fourViews_ = false;
     bool qvfr_ = false;
+    bool viewSizes_ = false;  // per-view sizes on (xplane_view_sizes=1, at QVFR's start)
     double focus_ = 0, focusY_ = 0;
     int frames_ = 0;
     std::uint64_t lastDraws_ = 0;

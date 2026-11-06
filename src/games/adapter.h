@@ -75,6 +75,9 @@ public:
     virtual void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample) = 0;
     // Live resolution: `live` (views4_live) from the next frame the game fills on.
     virtual void qvfr_set_live_layout(const Views4Layout& live) = 0;
+    // Live resolution works this run (GameInfo::features.liveResolution, unless the adapter knows better once QVFR
+    // started: a game whose views resize live only with an experiment on).
+    virtual bool qvfr_live_resolution() const { return info() && info()->features.liveResolution; }
     // Live focus box and focus cull, from the next frame the game fills on.
     virtual void qvfr_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze) = 0;
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).

@@ -223,7 +223,9 @@ FovCrop read_crop(const wchar_t* ini) {
 // What the game has beyond QVFR (games/game.h GameFeatures); anything else stays off whatever the ini says.
 games::GameFeatures game_features() {
     const games::GameInfo* g = games::current_game();
-    return g ? g->features : games::GameFeatures{};
+    games::GameFeatures f = g ? g->features : games::GameFeatures{};
+    f.liveResolution = g && game->qvfr_live_resolution();  // the adapter knows it for this run
+    return f;
 }
 
 LiveSettings read_live(const wchar_t* ini) {
@@ -3175,12 +3177,15 @@ void live_resolution(const LiveSettings& l) {
     const Views4Layout& launch = experiment.views4Layout;
     const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
     const double cw = l.crop.kept_width(), ch = l.crop.kept_height();  // the outer views take the live crop
-    // Eye columns (ACC): one width for all four views, the outer and focus rows sharing the height.
-    const bool columns = game->qvfr_eye_columns();
-    game->qvfr_set_live_layout(columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
-                                       : views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
-    const Views4Fit fit = columns ? views4_fit_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
-                                  : views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
+    // One view size (X-Plane): periphery and focus each sized on its own inside the launch layers. Eye columns (ACC):
+    // one width for all four views, the outer and focus rows sharing the height.
+    const bool columns = game->qvfr_eye_columns(), oneSize = columns && game->qvfr_one_view_size();
+    game->qvfr_set_live_layout(oneSize   ? views4_live_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
+                               : columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
+                                         : views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
+    const Views4Fit fit = oneSize   ? views4_fit_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
+                          : columns ? views4_fit_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
+                                    : views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
     logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
          "eye; launch %.0f%%, %.0f%% x %.0f%%)%s%s",
          fit.outer * 100, fit.focus / l.focusFraction * 100, fit.focusHeight / experiment.focus_y() * 100,

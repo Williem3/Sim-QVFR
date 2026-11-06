@@ -177,15 +177,18 @@ private:
 LatchedFrame g_frame;
 void latched_rects(float (&rects)[4]) { std::memcpy(rects, g_frame.load().rects, sizeof(rects)); }
 void latch_if_no_frame();  // a setting before the first frame's latch takes effect at once (below)
+void store_view_shares(bool on, const double (&share)[2][2]);  // under the latch's lock (below)
 
-// The LOD width: W / the focus view's horizontal fraction, the eye's width at the focus views' pixel density, so every
-// view's objects and trees take the LOD the focus views need (the cull and its LOD are shared by all four views). From
-// the latched frame's size.
+// The LOD width: the eye's width at the finest view's pixel density, so every view's objects and trees take the LOD the
+// finest needs (the cull and its LOD are shared by all four views). W is the layer's width; a focus view spans its share
+// of it over the box's share of the eye (s_focus W / box), the eye view its own share (s_outer W). From the latched
+// frame's size and rects.
 void update_lod_scale() {
     const FocusFrame frame = g_frame.load();
     const double fx = frame.box[0][2];
     const bool on = g_focusLod.load() && frame.focus && fx > 0.0 && fx < 1.0;
-    const auto scale = static_cast<std::uint32_t>(on ? 65536.0 / std::max(fx, 0.05) + 0.5 : 65536.0);
+    const double finest = std::max(static_cast<double>(frame.rects[0]), frame.rects[2] / std::max(fx, 0.05));
+    const auto scale = static_cast<std::uint32_t>(on ? 65536.0 * finest + 0.5 : 65536.0);
     for (LodHeightSite& s : g_lodHeight)
         s.scale = scale;
 }
@@ -978,11 +981,7 @@ void four_views_set_view_sizes(bool on, double outerWidth, double outerHeight, d
     on = on && valid && g_viewRects.load();
     const double share[2][2] = {{on ? outerWidth / w : 1.0, on ? outerHeight / h : 1.0},
                                 {on ? focusWidth / w : 1.0, on ? focusHeight / h : 1.0}};
-    for (int k = 0; k < 2; ++k)
-        for (int a = 0; a < 2; ++a)
-            g_viewShares.share[k][a] = share[k][a];
-    g_viewShares.on = on;
-    latch_if_no_frame();
+    store_view_shares(on, share);
     logf("xplane: per-view sizes %s: outer views %.0f%% x %.0f%% of their layers, focus views %.0f%% x %.0f%% (views "
          "%.2f x %.2f and %.2f x %.2f of the native eye, layers %.2f x %.2f)%s",
          on ? "on" : "off", share[0][0] * 100, share[0][1] * 100, share[1][0] * 100, share[1][1] * 100, outerWidth,
@@ -1267,12 +1266,33 @@ void latch_if_no_frame() {
         latch_frame();
 }
 
+// The view rects' shares (four_views_set_view_sizes, four_views_set_view_shares), all four under the latch's lock so a
+// frame never latches half of a change; before the first latch, at once.
+void store_view_shares(bool on, const double (&share)[2][2]) {
+    std::lock_guard lock(g_latchMutex);
+    for (int k = 0; k < 2; ++k)
+        for (int a = 0; a < 2; ++a)
+            g_viewShares.share[k][a] = share[k][a];
+    g_viewShares.on = on;
+    if (!g_latched)
+        latch_frame();
+}
+
 }  // namespace
 
 void four_views_latch_frame() {
     std::lock_guard lock(g_latchMutex);
     g_latched = true;
     latch_frame();
+}
+
+bool four_views_set_view_shares(double outerX, double outerY, double focusX, double focusY) {
+    if (!g_viewShares.on.load())
+        return false;
+    const auto share = [](double s) { return std::clamp(s, 0.01, 1.0); };
+    const double shares[2][2] = {{share(outerX), share(outerY)}, {share(focusX), share(focusY)}};
+    store_view_shares(true, shares);
+    return true;
 }
 
 void four_views_gaze_log() {
