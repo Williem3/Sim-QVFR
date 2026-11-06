@@ -253,10 +253,11 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
                                                                     const std::wstring& ini, const std::wstring& log,
                                                                     const std::wstring& runtimeInfo,
-                                                                    const std::wstring& settings) {
-    std::wstring enabled = widen(kLayerName);  // listed nearest the game first
+                                                                    const std::wstring& settings, bool layerChains) {
+    std::wstring below;  // listed nearest the game first
     for (const MovedLayer& m : plan.below)
-        enabled += L";" + widen(m.name);
+        below += (below.empty() ? L"" : L";") + widen(m.name);
+    const std::wstring enabled = widen(kLayerName) + (layerChains || below.empty() ? L"" : L";" + below);
     std::vector<std::pair<std::wstring, std::wstring>> v = {
         {L"XR_API_LAYER_PATH", runFolder},
         {L"XR_ENABLE_API_LAYERS", enabled},
@@ -269,6 +270,8 @@ std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerP
     };
     if (!settings.empty())
         v.emplace_back(L"SIM_QVFR_SETTINGS", settings);
+    if (layerChains && !below.empty())
+        v.emplace_back(L"SIM_QVFR_CHAIN", below);
     for (const MovedLayer& m : plan.below)
         if (!m.disableVar.empty())
             v.emplace_back(m.disableVar, L"1");

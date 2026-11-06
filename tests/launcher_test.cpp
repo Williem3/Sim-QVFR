@@ -279,6 +279,16 @@ int main() {
     check(value_of(quadVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_SIM_qvfr" &&
               value_of(quadVars, L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR") == L"1",
           "mode=quad: only the Sim-QVFR layer, VectorXR silenced");
+    // An OpenComposite game (ACC): its loader keeps only the first and last of a list, so the loader gets the
+    // Sim-QVFR layer alone and the layer chains the rest (SIM_QVFR_CHAIN), still silenced as implicit copies.
+    const auto chainVars = launch_variables(plan, L"C:\\run", L"i", L"l", L"r", {}, true);
+    check(value_of(chainVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_SIM_qvfr" &&
+              value_of(chainVars, L"SIM_QVFR_CHAIN") == L"XR_APILAYER_MBUCCHIA_toolkit;XR_APILAYER_DIENERTECH_VECTORXR" &&
+              value_of(chainVars, L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit") == L"1",
+          "chained: the loader gets the Sim-QVFR layer alone; SIM_QVFR_CHAIN lists the rest in order");
+    check(value_of(launch_variables(quadPlan, L"C:\\run", L"i", L"l", L"r", {}, true), L"SIM_QVFR_CHAIN") == L"<unset>" &&
+              value_of(vars, L"SIM_QVFR_CHAIN") == L"<unset>",
+          "chained: nothing to chain, or a game whose loader takes the list: no SIM_QVFR_CHAIN");
 
     // Run folder.
     const fs::path run = folder / L"run";

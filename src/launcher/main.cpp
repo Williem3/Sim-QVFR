@@ -319,7 +319,8 @@ int run(bool dryRun) {
     if (baseline)
         WritePrivateProfileStringW(L"experiment", L"baseline", L"1", iniCopy.c_str());
     auto variables =
-        launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring());
+        launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring(),
+                         info.openComposite != nullptr);  // OpenComposite's loader mangles a list of layers
     // The OpenXR loader prints why it refuses a runtime or a layer (errors on stderr, XR_LOADER_DEBUG's levels on
     // stdout), before any layer runs: a game it fails starts flat with no layer log at all. The game's
     // stdout and stderr go to the run folder (loader_output) for the report. A user's own level is kept.
@@ -344,7 +345,8 @@ int run(bool dryRun) {
     std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);
     for (const MovedLayer& m : plan.below)
         order += L" -> " + widen(m.name);
-    say(L"  OpenXR:    " + order + L" -> runtime");
+    say(L"  OpenXR:    " + order + L" -> runtime" +
+        (info.openComposite && !plan.below.empty() ? L" (the layers below Sim-QVFR chained by it: SIM_QVFR_CHAIN)" : L""));
     for (const PlannedLayer& p : plan.layers)
         if (!p.on)
             say(L"  off:       " + widen(p.name) +

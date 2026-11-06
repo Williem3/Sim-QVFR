@@ -91,10 +91,14 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
 // The variables this launch sets (name, value). `runtimeInfo`: where the layer reports the headset's
 // recommended size and eye tracking for the launcher window (SIM_QVFR_RUNTIME_INFO). `settings`: the
 // launcher's own ini, where the in-headset menu saves its changes (SIM_QVFR_SETTINGS; empty: not set).
+// `layerChains`: the game's OpenXR loader can't take a list of layers (OpenComposite's splits it wrongly), so
+// XR_ENABLE_API_LAYERS names only the Sim-QVFR layer and SIM_QVFR_CHAIN lists the rest for it to load
+// (layer_chain.h); their manifests are in the run folder either way.
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
                                                                     const std::wstring& ini, const std::wstring& log,
                                                                     const std::wstring& runtimeInfo,
-                                                                    const std::wstring& settings = {});
+                                                                    const std::wstring& settings = {},
+                                                                    bool layerChains = false);
 
 // A CreateProcess environment block: `current` ("NAME=value" strings) without inherited SIM_QVFR_*
 // variables, with `set` applied (case-insensitive names), sorted, double-NUL terminated.
