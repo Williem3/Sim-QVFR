@@ -46,6 +46,7 @@ std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
 std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
 std::atomic<bool> g_bloomFromEye{false};  // four_views_set_bloom_from_eye
 std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0};
+std::atomic<bool> g_focusFullRate{false};  // four_views_set_focus_full_rate
 std::atomic<double> g_outerScale{1.0};  // the outer views' rect, a share of their layers (1: the whole layer)
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
 
@@ -175,7 +176,15 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
                      bloom ? std::to_string(++g_bloomEdits).c_str() : why.c_str());
             }
         }
-        if (inverted > 0 || folded > 0 || layered || mapped || bloom) {
+        // VRS: the focus views shaded at the full rate (README.md "Measured: the focus views shaded coarsely").
+        int fullRate = 0;
+        if (g_focusFullRate.load()) {
+            std::string why;
+            fullRate = spirv_full_rate_from_layer(words, 2, &why);
+            if (fullRate > 0)
+                logf("xplane: shading-rate shader: layers 2-3 at the full rate (%d writes)", fullRate);
+        }
+        if (inverted > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();
@@ -425,6 +434,11 @@ void four_views_set_view_rects(bool on, double outerScale) {
 }
 
 int four_views_view_rect_sets() { return g_viewRectSets.load(); }
+
+void four_views_set_focus_full_rate(bool on) {
+    g_focusFullRate = on;
+    logf("xplane: focus views at the full shading rate %s", on ? "on" : "off");
+}
 
 void four_views_set_bloom_from_eye(bool on) {
     g_bloomFromEye = on;

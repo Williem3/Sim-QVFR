@@ -300,6 +300,21 @@ int main() {
         o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
     }
 
+    // SIM_QVFR_SPV_VRS: the shading-rate compute shader (from a capture); writes <file>.vrs.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_VRS")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        std::string reason;
+        const int n = xplane::spirv_full_rate_from_layer(real, 2, &reason);
+        check(n == 1, "the shading-rate shader writes the full rate in layers 2-3");
+        if (n != 1)
+            std::printf("     %d: %s\n", n, reason.c_str());
+        std::ofstream o(std::string(in) + ".vrs.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
     // SIM_QVFR_SPV_CLOUD: the cloud render compute shader (from a capture); writes <file>.edited.spv.
     if (const char* in = std::getenv("SIM_QVFR_SPV_CLOUD")) {
         std::ifstream file(in, std::ios::binary);

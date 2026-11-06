@@ -24,6 +24,8 @@ void four_views_set_view_rects(bool on, double outerScale);
 // set viewports calls given four rects so far.
 // Focus views take their eye's bloom (README.md "Measured: bloom per view"). Before X-Plane makes its shaders.
 void four_views_set_bloom_from_eye(bool on);
+// The focus views shaded at the full rate (VRS writes rate 1x1 into layers 2-3). Before X-Plane makes its shaders.
+void four_views_set_focus_full_rate(bool on);
 int four_views_view_rect_sets();
 // The views' height = half the stereo image's (five sites; abi.h). After four_views_copies_start. False: not this
 // build's code, or a patch failed (logged).

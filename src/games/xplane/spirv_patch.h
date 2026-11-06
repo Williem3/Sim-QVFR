@@ -49,4 +49,9 @@ bool spirv_view_to_eye_map_out(std::vector<std::uint32_t>& words, std::uint32_t 
 // at `location`, samples at the position mapped into the eye's view, in layer v_eye & 1.
 bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why);
 
+// X-Plane's shading-rate compute (VRS; README.md "Measured: the focus views shaded coarsely"): every tile starts at
+// u_fill_rate (coarse) and only the shapes of its layer refine it, and X-Plane makes shapes for layers 0-1 only. In
+// layers >= firstLayer every tile gets rate 0 (1x1, full). Returns the image writes edited (0: `words` unchanged).
+int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t firstLayer, std::string* why);
+
 }  // namespace xplane

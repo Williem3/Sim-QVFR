@@ -107,6 +107,7 @@ bool apply_qvfr(const wchar_t* ini) {
     four_views_set_eye_columns(true);
     // Stage 1 of per-view sizes: one viewport per view, every rect the whole layer (the image must not change).
     four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1, 1.0);
+    four_views_set_focus_full_rate(GetPrivateProfileIntW(L"experiment", L"xplane_focus_full_rate", 1, ini) == 1);
     four_views_set_bloom_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_bloom_from_eye", 1, ini) == 1);
     apply_layer_count(ini, 4);
     apply_context_layers(ini, 4);

@@ -1,5 +1,6 @@
 #include "spirv_patch.h"
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -881,6 +882,70 @@ bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t locat
     }
     words = m.emit();
     return true;
+}
+
+
+int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t firstLayer, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    // X-Plane's shading-rate compute: a block named shading_rate_data with a member u_fill_rate.
+    const std::uint32_t block = m.named("shading_rate_data");
+    bool fill = false;
+    for (const auto& w : m.insts)
+        if (block && Module::code(w) == Module::kMemberName && w.size() >= 4 && w[1] == block &&
+            literal(w, 3, w.size()) == "u_fill_rate")
+            fill = true;
+    if (!fill)
+        return fail("not the shading-rate shader");
+    const std::uint32_t gid = m.variable("gl_GlobalInvocationID", kInput, nullptr);
+    if (!gid)
+        return fail("no gl_GlobalInvocationID");
+    constexpr std::uint16_t kOpImageWrite = 99, kOpTypeBool = 20, kOpUGreaterThanEqual = 174, kOpSelect = 169;
+    // Each image write's texel: an OpCompositeConstruct whose first component is the rate.
+    std::vector<std::size_t> constructs;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpImageWrite && w.size() >= 4) {
+            const std::size_t at = m.defined_at(w[3]);
+            if (at < m.insts.size() && Module::code(m.insts[at]) == kOpCompositeConstruct && m.insts[at].size() >= 4)
+                constructs.push_back(at);
+        }
+    if (constructs.empty())
+        return fail("no rate write");
+    const std::uint32_t uintType = m.find(kOpTypeInt, {32, 0}, 1);
+    if (!uintType)
+        return fail("no uint type");
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const std::uint32_t ptrU = m.type_pointer(kInput, uintType);
+    const std::uint32_t c0 = m.constant(uintType, 0), c2 = m.constant(uintType, 2),
+                        cLayer = m.constant(uintType, firstLayer);
+    // Later ones first, so earlier indexes hold (constructs were found before the globals moved them: find again).
+    constructs.clear();
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpImageWrite && w.size() >= 4)
+            constructs.push_back(m.defined_at(w[3]));
+    std::sort(constructs.rbegin(), constructs.rend());
+    for (const std::size_t at : constructs) {
+        const std::uint32_t ptr = m.fresh(), z = m.fresh(), focus = m.fresh(), rate = m.fresh();
+        const std::uint32_t original = m.insts[at][3];
+        const std::vector<std::vector<std::uint32_t>> body = {
+            {op(kOpAccessChain, 5), ptrU, ptr, gid, c2},
+            {op(kOpLoad, 4), uintType, z, ptr},
+            {op(kOpUGreaterThanEqual, 5), boolType, focus, z, cLayer},
+            {op(kOpSelect, 6), uintType, rate, focus, c0, original},
+        };
+        m.insts[at][3] = rate;
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at), body.begin(), body.end());
+    }
+    words = m.emit();
+    return static_cast<int>(constructs.size());
 }
 
 }  // namespace xplane
