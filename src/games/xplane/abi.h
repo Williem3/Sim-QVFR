@@ -81,6 +81,20 @@ inline constexpr std::uint8_t kSetViewportsAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 
 inline constexpr std::uintptr_t kMultiplierStoreA = 0x79ca48;
 inline constexpr std::uintptr_t kMultiplierStoreB = 0x7ab258;
 inline constexpr std::uint8_t kMultiplierStoreAnchor[6] = {0x89, 0x88, 0x90, 0x24, 0x00, 0x00};
+// More writes of the multiplier (README.md "Measured: trees missing in the focus views"), each `mov [base + 0x2490],
+// reg`: the render-state restore (0x7ac280, from a saved block's +0x480: the world passes' lambdas restore a block
+// saved with 2), and two in one draw path that write their own count back right after set viewports. A 2 written
+// there becomes 4. {rva, register (x86 number), base register}.
+struct MultiplierWrite {
+    std::uintptr_t rva;
+    std::uint8_t reg, base;
+    std::uint8_t anchor[6];
+};
+inline constexpr MultiplierWrite kMoreMultiplierWrites[] = {
+    {0x7ac28d, 0 /* eax */, 2 /* rdx */, {0x89, 0x82, 0x90, 0x24, 0x00, 0x00}},
+    {0x92f34c, 5 /* ebp */, 3 /* rbx */, {0x89, 0xAB, 0x90, 0x24, 0x00, 0x00}},
+    {0x92f61f, 6 /* esi */, 0 /* rax */, {0x89, 0xB0, 0x90, 0x24, 0x00, 0x00}},
+};
 // The end of the modelview copy (0x15955d0, after 0x1595510 copied the projections in 0x7b9f00's stereo path):
 // `or dword [rax], 0x18; mov rbx, [rsp+0x30]`, rax the render state.
 inline constexpr std::uintptr_t kModelviewCopyEnd = 0x1595653;

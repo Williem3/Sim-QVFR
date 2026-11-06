@@ -419,6 +419,22 @@ bool four_views_copies_start() {
     std::memcpy(uploadCall + 0x3B, &fill, 8);
     ok &= redirect(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor), uploadCall,
                    sizeof(uploadCall), "per-draw upload: slots 2-3 filled (copies or focus)");
+    // The other multiplier writes: a 2 stored becomes 4 (the register itself is left as it is).
+    for (const MultiplierWrite& w : kMoreMultiplierWrites) {
+        const std::uint8_t stub[] = {
+            0x83, static_cast<std::uint8_t>(0xF8 | w.reg), 0x02,          // cmp reg32, 2
+            0x75, 0x0C,                                                   // jne original
+            0xC7, static_cast<std::uint8_t>(0x80 | w.base), 0x90, 0x24,   // mov dword [base + 0x2490], 4
+            0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+            0xEB, 0x06,                                                   // jmp done
+            w.anchor[0], w.anchor[1], w.anchor[2], w.anchor[3], w.anchor[4], w.anchor[5],  // original: the store
+        };                                                                // done
+        static_assert(sizeof(stub) == 23, "the jumps' offsets");
+        char what[96];
+        std::snprintf(what, sizeof(what), "multiplier 4 (restore or draw-path store) at 0x%llx",
+                      static_cast<unsigned long long>(w.rva));
+        ok &= redirect(w.rva, w.anchor, sizeof(w.anchor), stub, sizeof(stub), what);
+    }
     const bool clouds = simqvfr::code_write(kCloudDispatchDepth, kCloudDispatchDepthCount, sizeof(kCloudDispatchDepthCount));
     logf("xplane: cloud render dispatch depth = view count (was stereo ? 2 : 1) at 0x%llx: %s",
          static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
