@@ -25,6 +25,9 @@ struct Views4Frame {
     bool live = false;  // `width`/`height`: the view layout in the game's output (live resolution, views4_layout.h)
     double width[4] = {}, height[4] = {};  // what the composition reads; with DLSS, its output layout
     double renderWidth[4] = {}, renderHeight[4] = {};  // the views rendered (DLSS's input; else the same)
+    // The game drew only its two eyes this frame, each over its whole half of the target (X-Plane's menu): nothing to
+    // compose, the layer submits it as it is.
+    bool eyesOnly = false;
 };
 
 namespace games {

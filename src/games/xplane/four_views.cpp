@@ -148,6 +148,7 @@ struct TangentRecord {
 };
 TangentRecord g_record;
 std::atomic<bool> g_recordWanted{true};
+std::atomic<std::uint64_t> g_fourViewDraws{0};  // draws with four views (fill_views calls)
 
 // (left, right, up, down) from a projection's ascending x and y tangents (projection_tangents).
 void lrud(const double (&t)[4], float (&out)[4]) {
@@ -164,6 +165,7 @@ void fill_views(std::uint8_t* state) {
     auto slot = [&](std::size_t base, int i) {
         return reinterpret_cast<double(*)[16]>(state + base + static_cast<std::size_t>(i) * kStateViewStride);
     };
+    g_fourViewDraws.fetch_add(1, std::memory_order_relaxed);
     const bool focus = g_focus.load(std::memory_order_relaxed);
     const double fx = g_focusFraction.load(std::memory_order_relaxed), fy = g_focusFractionY.load(std::memory_order_relaxed);
     if (g_recordWanted.load(std::memory_order_relaxed) && g_recordWanted.exchange(false)) {
@@ -408,6 +410,8 @@ bool four_views_eye_columns_start() {
 }
 
 int four_views_column_viewports() { return g_columnViewports.load(); }
+
+std::uint64_t four_views_draws() { return g_fourViewDraws.load(std::memory_order_relaxed); }
 
 bool four_views_final_resolve_made() { return g_finalResolveEdits.load() > 0; }
 

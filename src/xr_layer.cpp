@@ -2787,6 +2787,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
 // views4: ACE's two "eyes" are each an outer plus a focus view wide and hold views 0+1 and 2+3 side
 // by side (views4_layout.h). Submit views 0 and 1, the real eyes, as the projection views.
 bool views4RectsLogged = false;
+bool v4EyesOnlyLogged = false;  // views4_submit: an eyes-only frame (Views4Frame::eyesOnly) was reported
 
 // Logs ACE's own submitted FOV next to the one the output is submitted with, once and on a change.
 void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& composed) {
@@ -2992,6 +2993,15 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         }
         Views4Frame latest{};
         game->qvfr_latest_frame(latest);  // the rendered sizes (live resolution)
+        // The game drew only its eyes this frame, each over its whole half (X-Plane's menu): submitted as it is.
+        if (latest.eyesOnly) {
+            if (!v4EyesOnlyLogged) {
+                logf("views4: the game drew its eyes only (no four views): submitted as it is, uncomposed");
+                v4EyesOnlyLogged = true;
+            }
+            continue;
+        }
+        v4EyesOnlyLogged = false;
         const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.live, latest.width, latest.height);
         bool gameLayout = true;
         for (uint32_t v = 0; v < proj->viewCount; ++v)

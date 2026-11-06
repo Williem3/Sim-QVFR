@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <atomic>
+
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "abi.h"
@@ -155,6 +157,14 @@ public:
     // The final resolve's whole-column viewport, counted once the flight's final resolve exists: 300 frames after it,
     // then every 1800, with the viewports X-Plane set (diagnostics).
     void qvfr_frame_end() override {
+        // Eyes only: no four-view draw since the last frame end (X-Plane's menu draws its eyes straight into the image).
+        const std::uint64_t draws = four_views_draws();
+        const bool eyesOnly = draws == lastDraws_;
+        lastDraws_ = draws;
+        if (eyesOnly != eyesOnly_.load())
+            simqvfr::logf("xplane: %s", eyesOnly ? "frames with the eyes only (the menu): submitted uncomposed"
+                                                 : "four views drawn again: composed");
+        eyesOnly_ = eyesOnly;
         if (!four_views_final_resolve_made())
             return;
         ++frames_;
@@ -208,8 +218,14 @@ private:
     bool qvfr_ = false;
     double focus_ = 0, focusY_ = 0;
     int frames_ = 0;
+    std::uint64_t lastDraws_ = 0;
+    static inline std::atomic<bool> eyesOnly_{true};
     static bool record(Views4Frame& frame) {
         frame = {};
+        if (eyesOnly_.load()) {
+            frame.eyesOnly = true;
+            return true;
+        }
         if (!four_views_tangents(frame.outerTan, frame.focusTan))
             return false;
         for (int e = 0; e < 2; ++e)

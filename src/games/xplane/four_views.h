@@ -3,6 +3,8 @@
 // layers 2-3, so a normal headset image means X-Plane rendered four views.
 #pragma once
 
+#include <cstdint>
+
 namespace xplane {
 
 // At xrCreateInstance, after the layer counts are 4 (adapter.cpp). False: nothing was changed (a site isn't this
@@ -21,6 +23,8 @@ void four_views_set_eye_columns(bool on);
 bool four_views_eye_columns_start();
 // How many viewports the eye-columns patch gave the whole column (the final resolve's, one a frame).
 int four_views_column_viewports();
+// Draws made with four views so far (a frame without any drew its eyes only: X-Plane's menu).
+std::uint64_t four_views_draws();
 // The final resolve's shader was made (X-Plane makes it when the flight loads).
 bool four_views_final_resolve_made();
 // Logs the viewports X-Plane set lately (the setter's arguments) and the VR context's size (diagnostics).
