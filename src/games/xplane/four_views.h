@@ -21,6 +21,10 @@ void four_views_set_eye_columns(bool on);
 bool four_views_eye_columns_start();
 // How many viewports the eye-columns patch gave the whole column (the final resolve's, one a frame).
 int four_views_column_viewports();
+// The final resolve's shader was made (X-Plane makes it when the flight loads).
+bool four_views_final_resolve_made();
+// Logs the viewports X-Plane set lately (the setter's arguments) and the VR context's size (diagnostics).
+void four_views_viewport_log();
 
 // What the views were last rendered with, per eye (left, right, up, down tangents): the eye's own projection and the
 // focus view's. False before the first four-view draw. A fresh record is taken at the next draw after each call.

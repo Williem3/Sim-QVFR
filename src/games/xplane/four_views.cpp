@@ -4,7 +4,9 @@
 #include <bcrypt.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -41,6 +43,14 @@ std::atomic<int> g_inverseModules{0};
 std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
 std::atomic<int> g_columnViewports{0};  // final resolve viewports given the whole column (the stub counts)
 static_assert(sizeof(std::atomic<int>) == 4, "the stub's lock inc dword");
+// The last 64 calls of the single-viewport setter (x, y, w, h), written by the stub: the index, then the entries.
+struct ViewportRing {
+    volatile std::int32_t next;
+    std::int32_t pad;
+    volatile std::int32_t entry[64][4];
+};
+ViewportRing g_viewportRing{};
+static_assert(offsetof(ViewportRing, entry) == 8 && sizeof(ViewportRing::entry[0]) == 16, "the stub's ring layout");
 
 // The uniform blocks with per-eye arrays of two (README.md, "Inventory"), by their variables' names.
 const std::vector<std::string> kEyeArrayBlocks = {
@@ -349,6 +359,17 @@ bool four_views_eye_columns_start() {
                    sizeof(resizeB), "eye columns: VR context resize B height / 2");
     // The final resolve's viewport (0, 0, 2 x context width, context height) gets the whole column: twice the height.
     std::uint8_t viewport[] = {
+        // Recorded first (diagnostics, four_views_viewport_log): (x, y, w, h) into a ring of 64.
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // mov rax, &g_viewportRing
+        0x41, 0xBA, 0x01, 0x00, 0x00, 0x00,  // mov r10d, 1
+        0xF0, 0x44, 0x0F, 0xC1, 0x10,        // lock xadd [rax], r10d
+        0x41, 0x83, 0xE2, 0x3F,              // and r10d, 63
+        0x41, 0xC1, 0xE2, 0x04,              // shl r10d, 4
+        0x4A, 0x8D, 0x44, 0x10, 0x08,        // lea rax, [rax + r10 + 8]
+        0x89, 0x08,                          // mov [rax], ecx
+        0x89, 0x50, 0x04,                    // mov [rax+4], edx
+        0x44, 0x89, 0x40, 0x08,              // mov [rax+8], r8d
+        0x44, 0x89, 0x48, 0x0C,              // mov [rax+12], r9d
         0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // 0:  mov rax, &the VR context pointer
         0x48, 0x8B, 0x00,                    // 10: mov rax, [rax]
         0x48, 0x85, 0xC0,                    // 13: test rax, rax
@@ -368,11 +389,14 @@ bool four_views_eye_columns_start() {
         0x45, 0x01, 0xC9,                    // 57: add r9d, r9d
         0x48, 0x89, 0x5C, 0x24, 0x08,        // 60: done: mov [rsp+8], rbx (the original)
     };
-    static_assert(sizeof(viewport) == 65, "the jumps land on done (60)");
+    constexpr std::size_t kRecord = 47;  // the recording prefix; the check's offsets (comments) start after it
+    static_assert(sizeof(viewport) == kRecord + 65, "the jumps land on done (60)");
     const std::uintptr_t contextPointer = simqvfr::module_base() + kVrContextPointer;
     const auto counter = reinterpret_cast<std::uintptr_t>(&g_columnViewports);
-    std::memcpy(viewport + 2, &contextPointer, 8);
-    std::memcpy(viewport + 46, &counter, 8);
+    const auto ring = reinterpret_cast<std::uintptr_t>(&g_viewportRing);
+    std::memcpy(viewport + 2, &ring, 8);
+    std::memcpy(viewport + kRecord + 2, &contextPointer, 8);
+    std::memcpy(viewport + kRecord + 46, &counter, 8);
     static_assert(kContextWidth == 4 && kContextHeight == 8, "the stub's offsets");
     if (!code_matches(kSetViewport, kSetViewportAnchor, sizeof(kSetViewportAnchor))) {
         logf("xplane: eye columns: the viewport setter at 0x%llx isn't this build's", static_cast<unsigned long long>(kSetViewport));
@@ -384,6 +408,38 @@ bool four_views_eye_columns_start() {
 }
 
 int four_views_column_viewports() { return g_columnViewports.load(); }
+
+bool four_views_final_resolve_made() { return g_finalResolveEdits.load() > 0; }
+
+void four_views_viewport_log() {
+    std::int32_t seen[64][4];
+    int count = 0;
+    for (int i = 0; i < 64; ++i) {
+        std::int32_t v[4];
+        for (int k = 0; k < 4; ++k)
+            v[k] = g_viewportRing.entry[i][k];
+        bool dup = v[2] == 0 && v[3] == 0;
+        for (int j = 0; j < count && !dup; ++j)
+            dup = std::memcmp(seen[j], v, sizeof(v)) == 0;
+        if (!dup)
+            std::memcpy(seen[count++], v, sizeof(v));
+    }
+    int cw = 0, ch = 0, cl = 0;
+    if (const auto* ctx = *reinterpret_cast<std::uint8_t* const*>(simqvfr::module_base() + kVrContextPointer)) {
+        cw = *reinterpret_cast<const std::int32_t*>(ctx + kContextWidth);
+        ch = *reinterpret_cast<const std::int32_t*>(ctx + kContextHeight);
+        cl = *reinterpret_cast<const std::int32_t*>(ctx + 0xc);
+    }
+    std::string list;
+    for (int j = 0; j < count; ++j) {
+        char item[64];
+        std::snprintf(item, sizeof(item), "%s(%d,%d %dx%d)", j ? " " : "", seen[j][0], seen[j][1], seen[j][2], seen[j][3]);
+        list += item;
+    }
+    logf("xplane: viewports set lately (x,y wxh; %d distinct of the last 64): %s; VR context %dx%dx%d; whole-column "
+         "grants %d",
+         count, list.c_str(), cw, ch, cl, g_columnViewports.load());
+}
 
 bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]) {
     g_recordWanted = true;

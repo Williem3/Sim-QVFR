@@ -152,14 +152,18 @@ public:
     bool qvfr_take_frame(Views4Frame& frame) override { return record(frame); }
     bool qvfr_latest_frame(Views4Frame& frame) override { return record(frame); }
     void qvfr_note_views(const XrView*, uint32_t) override {}
-    // The final resolve's whole-column viewport: logged once it happens, or after 900 frames without it.
+    // The final resolve's whole-column viewport, counted once the flight's final resolve exists: 300 frames after it,
+    // then every 1800, with the viewports X-Plane set (diagnostics).
     void qvfr_frame_end() override {
+        if (!four_views_final_resolve_made())
+            return;
         ++frames_;
-        const int n = four_views_column_viewports();
-        if (!viewportLogged_ && (n > 0 || frames_ == 900)) {
-            viewportLogged_ = true;
-            simqvfr::logf("xplane: final resolve viewport given the whole column %d times after %d frames%s", n, frames_,
-                          n > 0 ? "" : " (NOT seen: the lower row, the focus views, stays undrawn)");
+        if (frames_ == 300 || frames_ % 1800 == 0) {
+            const int n = four_views_column_viewports();
+            simqvfr::logf("xplane: final resolve viewport given the whole column %d times over %d frames since the flight's "
+                          "final resolve was made%s",
+                          n, frames_, n > 0 ? "" : " (NOT seen: the lower row, the focus views, stays undrawn)");
+            four_views_viewport_log();
         }
     }
 
@@ -204,7 +208,6 @@ private:
     bool qvfr_ = false;
     double focus_ = 0, focusY_ = 0;
     int frames_ = 0;
-    bool viewportLogged_ = false;
     static bool record(Views4Frame& frame) {
         frame = {};
         if (!four_views_tangents(frame.outerTan, frame.focusTan))
