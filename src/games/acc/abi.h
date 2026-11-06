@@ -1,6 +1,6 @@
-// Assetto Corsa Competizione facts from static analysis (docs/recon-acc.md). Pinned to the exe build in game.h.
-// ACC is UE 4.26; its stereo device is the SteamVR plugin's FSteamVRHMD (no symbols, no RTTI). Each slot
-// below holds, in this build, the function given next to it: patches check that before writing.
+// Assetto Corsa Competizione addresses, pinned to the exe build in game.h: patches check that each slot holds its
+// function, or each anchor its bytes, before writing. What each patch does and how it was found: docs/recon-acc.md,
+// section "abi.h", under the [name] given here (local notes, not in the repository).
 #pragma once
 
 #include <cstddef>
@@ -13,48 +13,29 @@ struct Slot {
     std::uintptr_t function;  // what it holds in this build
 };
 
-// FSteamVRHMD's IStereoRendering vtable (subobject +0xA0), slots in the order of 4.26's StereoRendering.h.
+// The stereo device's vtable slots, and the view's fields they go with. [Stereo device]
 inline constexpr std::uintptr_t kStereoVtable = 0x3a4f070;
-inline constexpr Slot kGetDesiredNumberOfViews = {kStereoVtable + 4 * 8, 0x7b5e60};  // default: stereo ? 2 : 1
-inline constexpr Slot kGetViewPassForIndex = {kStereoVtable + 5 * 8, 0x7b7fb0};      // default: 1 + (index != 0)
-inline constexpr Slot kGetViewIndexForPass = {kStereoVtable + 6 * 8, 0x7b7f90};      // default: 0, 1, else -1
-// Primary passes draw their meshes; under instanced stereo a primary pass draws itself and the pass after it in
-// one instanced draw (4.26 FSceneRenderer: GetInstancedView = pass + 1), secondary passes draw none. Defaults:
-// FULL and LEFT primary. Slot 11 (secondary pass) calls slot 9 and slot 12 (secondary view) calls slot 10.
-inline constexpr Slot kDeviceIsAPrimaryPass = {kStereoVtable + 9 * 8, 0x7b1c90};   // `cmp edx, 1; setbe al`
-inline constexpr Slot kDeviceIsAPrimaryView = {kStereoVtable + 10 * 8, 0x2da8900};  // engine's, inlined: below
-inline constexpr std::ptrdiff_t kViewStereoPass = 0xad0;  // FSceneView::StereoPass (`cmp [rdx + 0xad0], 1`)
-// FSceneView::ViewMatrices (FViewMatrices, 4.26 SceneView.h: ProjectionMatrix, ProjectionNoAAMatrix,
-// InvProjectionMatrix, ViewMatrix, InvViewMatrix, ViewProjectionMatrix, ... 64 bytes each) at 0x280: the foliage
-// culling reads Views[0]->ViewMatrices.GetViewProjectionMatrix() at 0x3c0 (HISM, below), and DispatchPassSetup
-// copies 64 bytes from 0x340 (the view matrix, for translucency sorting). FSceneView::Family is at 0.
+inline constexpr Slot kGetDesiredNumberOfViews = {kStereoVtable + 4 * 8, 0x7b5e60};
+inline constexpr Slot kGetViewPassForIndex = {kStereoVtable + 5 * 8, 0x7b7fb0};
+inline constexpr Slot kGetViewIndexForPass = {kStereoVtable + 6 * 8, 0x7b7f90};
+inline constexpr Slot kDeviceIsAPrimaryPass = {kStereoVtable + 9 * 8, 0x7b1c90};
+inline constexpr Slot kDeviceIsAPrimaryView = {kStereoVtable + 10 * 8, 0x2da8900};
+inline constexpr std::ptrdiff_t kViewStereoPass = 0xad0;
 inline constexpr std::ptrdiff_t kViewProjection = 0x280;  // with the temporal jitter
 inline constexpr std::ptrdiff_t kViewProjectionNoAA = 0x2c0;
 inline constexpr std::ptrdiff_t kViewMatrix = 0x340;
-inline constexpr Slot kAdjustViewRect = {kStereoVtable + 16 * 8, 0x7ae650};          // halves of the target
-// SetFinalViewRect(pass, const FIntRect&): the renderer reports each view's final rect (screen percentage applied)
-// every frame (4.26 FSceneRenderer::PrepareViewRectsForRendering). FSteamVRHMD's is empty, shared with others.
+inline constexpr Slot kAdjustViewRect = {kStereoVtable + 16 * 8, 0x7ae650};
 inline constexpr Slot kSetFinalViewRect = {kStereoVtable + 17 * 8, 0x776df0};
-inline constexpr Slot kGetStereoProjectionMatrix = {kStereoVtable + 20 * 8, 0x7b75e0};  // non-left = right eye
-// FSteamVRHMD's IXRTrackingSystem vtable (primary, +0x00): GetRelativeEyePose answers passes 1-2 only.
+inline constexpr Slot kGetStereoProjectionMatrix = {kStereoVtable + 20 * 8, 0x7b75e0};
 inline constexpr std::uintptr_t kTrackingVtable = 0x3a4ecc0;
 inline constexpr Slot kGetRelativeEyePose = {kTrackingVtable + 12 * 8, 0x7b7290};
 
-// r.AllowSubPrimitiveQueries (4.26 SceneVisibility.cpp: "currently only used by hierarchical instanced static
-// meshes"): the static int32 the cvar wraps. Foliage's per-cluster occlusion results crash with the side views
-// on track (docs/recon-acc.md, stage gate runs), so views.cpp sets it to 0: one query per foliage proxy instead.
-inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;  // .data, 1 at load
-// Its registration (static init 0x686c10): `lea r8, [rip + 0x45c5057]`, the int passed to
-// IConsoleManager::RegisterConsoleVariableRef, next to `lea rdx, u"r.AllowSubPrimitiveQueries"` (0x3e70308).
+// r.AllowSubPrimitiveQueries: the int it wraps, and its registration. [Sub-primitive queries]
+inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
 inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
 
-// Console variables views.cpp holds at a value while QVFR runs. Screen-space lens effects are drawn in each view's own
-// frame, so the focus view showed the bloom's dirt mask (and lens flares) at a different size and place than the
-// periphery round it (docs/recon-acc.md): bloom and lens flares off for now, until they are left out of the focus views
-// alone. Each cvar's registration (static init) has `lea rdx, u"<name>"` (`ref`) and, last, the store of
-// AsVariableInt()'s result (`store`): the TConsoleVariableData<int32>* at `data` (game thread's value at +0, render
-// thread's at +4). ACC sets them from its graphics settings whenever they apply, so they are held every frame.
+// Console variables held at a value while QVFR runs: bloom and lens flares off. [Held console variables]
 struct HeldCvar {
     const char* name;
     std::uintptr_t ref;
@@ -66,78 +47,38 @@ struct HeldCvar {
 };
 inline constexpr HeldCvar kHeldCvars[] = {
     {"r.BloomQuality", 0x617514, {0x48, 0x8d, 0x15, 0x9d, 0x51, 0x60, 0x03}, 0x617543,
-     {0x48, 0x89, 0x05, 0x86, 0xb0, 0x9f, 0x04}, 0x50125d0, 0},  // default 5 (static init 0x6174e0)
+     {0x48, 0x89, 0x05, 0x86, 0xb0, 0x9f, 0x04}, 0x50125d0, 0},
     {"r.LensFlareQuality", 0x672e94, {0x48, 0x8d, 0x15, 0x4d, 0xbd, 0x7c, 0x03}, 0x672ec3,
-     {0x48, 0x89, 0x05, 0xae, 0x10, 0xa9, 0x04}, 0x5103f78, 0},  // default 2 (static init 0x672e60)
+     {0x48, 0x89, 0x05, 0xae, 0x10, 0xa9, 0x04}, 0x5103f78, 0},
 };
 
-// Auto exposure (eye adaptation): 4.26 gives a secondary stereo view the left eye's exposure (FSceneView's
-// constructor: EyeAdaptationViewState = Views[0]->State when IsASecondaryView), and computes exposure and the colour
-// grading LUT only in primary views (AddPostProcessingPasses: bPrimaryView). The left focus view leads its instanced
-// pair, so it is primary: it measured its own exposure from its narrow view and came out darker than its eye (a
-// capture: 43 against 51; the right focus view, secondary, matched). views.cpp redirects the three calls deciding
-// it, rcx the view each time: the constructor's IsASecondaryView (0x2daec80) answers StereoPass >= 2, so every
-// view but the left eye takes Views[0]'s state; the two AddPostProcessingPasses copies' IsAPrimaryView (0x2daec20,
-// followed by ViewState at + 0x15f0, DiaphragmDOF::IsEnabled, GetAutoExposureMethod) answer StereoPass <= 1, so
-// only the left eye computes exposure and the LUT, which the other views reuse through that state.
-inline constexpr std::uintptr_t kExposureSecondary = 0x2cebde5;  // FSceneView::EyeAdaptationViewState at + 0x15d8
+// Auto exposure: every view takes the left eye's. [Auto exposure]
+inline constexpr std::uintptr_t kExposureSecondary = 0x2cebde5;
 inline constexpr std::uint8_t kExposureSecondaryAnchor[5] = {0xe8, 0x96, 0x2e, 0x0c, 0x00};
 inline constexpr std::uintptr_t kExposurePrimary[2] = {0x1ad45e2, 0x1ad7d2b};
 inline constexpr std::uint8_t kExposurePrimaryAnchor[2][5] = {{0xe8, 0x39, 0xa6, 0x2d, 0x01}, {0xe8, 0xf0, 0x6e, 0x2d, 0x01}};
-// Pre-exposure (the factor scene colour is scaled by before tonemapping, from the exposure): a loop over the views
-// (fn 0x1c5ddc9; FViewInfo stride 0x5920) computes it for each primary view and copies it to the secondary views that
-// follow, stopping at the next primary. With the left focus view primary, it kept a pre-exposure of its own, stale
-// once it no longer computed exposure, and its box stayed darker than the eye round it (twenty-seventh run). The
-// three calls, rcx the view each time: IsAPrimaryView of the view (0x1c5df37), IsASecondaryView of the next one
-// (0x1c5df6f), IsAPrimaryView of the next one (0x1c5df9f): redirected as above, so the left eye's pre-exposure
-// reaches all three other views.
+// Pre-exposure: the left eye's reaches the other views. [Pre-exposure]
 inline constexpr std::uintptr_t kPreExposurePrimary[2] = {0x1c5df37, 0x1c5df9f};
 inline constexpr std::uint8_t kPreExposurePrimaryAnchor[2][5] = {{0xe8, 0xe4, 0x0c, 0x15, 0x01},
                                                                  {0xe8, 0x7c, 0x0c, 0x15, 0x01}};
 inline constexpr std::uintptr_t kPreExposureSecondary = 0x1c5df6f;
 inline constexpr std::uint8_t kPreExposureSecondaryAnchor[5] = {0xe8, 0x0c, 0x0d, 0x15, 0x01};
 
-// The sun's cascaded shadows. 0x1c5ddc9 is 4.26's FSceneRenderer::AddViewDependentWholeSceneShadowsForView: per view,
-// the FadeAlphas loop above (the three calls redirected there, so the left eye's cascades get a fade of 1 in every
-// view), then GetNumViewDependentWholeSceneShadows (proxy + 0xa0) and one FProjectedShadowInfo (0x900 bytes,
-// constructor 0x1c5a110) per cascade from GetViewDependentWholeSceneProjectedShadowInitializer (+ 0xa8). ACC creates a
-// view's cascades when `View.StereoPass != eSSP_RIGHT_EYE` (`cmp dword [r14 + 0xad0], 2; setne al` here), so each focus
-// view fitted four of its own to its narrow frustum: a capture (2026-11-04) had 12 4088x4088 tiles in the 16384x12288
-// atlas, rows 0-2 the left eye's, the left and the right focus view's, and trees and their shadows changed across the
-// box edge. views.cpp makes it `cmp dword [r14 + 0xad0], 1; setbe al` (same length): only the left eye (or a mono view)
-// creates them.
+// The sun's cascaded shadows: only the left eye (or a mono view) creates them. [Shadow cascades]
 inline constexpr std::uintptr_t kShadowCascadesCreate = 0x1c5dfb9;
 inline constexpr std::uint8_t kShadowCascadesCreateAnchor[11] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00,
                                                                   0x00, 0x02, 0x0f, 0x95, 0xc0};
-// 0x1c71080 is InitProjectedShadowVisibility: a view projects a shadow made for another view only when
-// `IsASecondaryView(View) && IsAPrimaryView(*DependentView) && FadeAlphas[ViewIndex] == 1` (ACC's triple screens
-// skip the first two). The left focus view leads its instanced pair, so the stereo device counts it primary and it
-// refused the left eye's cascades. views.cpp redirects both calls as for the exposure: IsASecondaryView(View)
-// (0x1c71363, rcx the view) answers StereoPass >= 2 and IsAPrimaryView(DependentView) (0x1c71370) StereoPass <= 1,
-// so all four views project the left eye's cascades.
+// Shadow projection: all four views project the left eye's cascades. [Shadow visibility]
 inline constexpr std::uintptr_t kShadowVisibilitySecondary = 0x1c71363;
 inline constexpr std::uint8_t kShadowVisibilitySecondaryAnchor[5] = {0xe8, 0x18, 0xd9, 0x13, 0x01};
 inline constexpr std::uintptr_t kShadowVisibilityPrimary = 0x1c71370;
 inline constexpr std::uint8_t kShadowVisibilityPrimaryAnchor[5] = {0xe8, 0xab, 0xd8, 0x13, 0x01};
 
-// The tonemapper's vignette darkens each view towards its own edges (a capture: at equal scene brightness, 0.70 at
-// the corners of the outer and the focus views alike), so a focus view, in the middle of the eye, showed a dark rim
-// round the focus area. In 4.26 it's on when FinalPostProcessSettings.VignetteIntensity > 0 (FSceneView + 0x11f0),
-// not by r.Tonemapper.Quality: TonemapperPermutation::BuildCommonPermutationDomain (0x1b317e0), shared by the
-// tonemapper's pixel and compute shaders, sets FTonemapperVignetteDim from `comiss xmm0, [rdi + 0x11f0]; setb al`
-// here. views.cpp makes it `xor al, al`: no vignette in any view while QVFR runs.
+// The tonemapper's vignette, off in every view while QVFR runs. [Vignette]
 inline constexpr std::uintptr_t kTonemapperVignette = 0x1b31875;
 inline constexpr std::uint8_t kTonemapperVignetteAnchor[10] = {0x0f, 0x2f, 0x87, 0xf0, 0x11, 0x00, 0x00, 0x0f, 0x92, 0xc0};
 
-// Views per instanced draw. Kunos extended instanced stereo to the triple-screen views: where 4.26 has a literal 2
-// (`View.IsInstancedStereoPass() ? 2 : 1`), ACC reads Family->Views.Num() (FSceneViewFamily has no vtable, so
-// Views.Num sits at +8), and its vertex shaders take eye = SV_InstanceID % N, N in the view constants. With our four
-// views every instanced draw went 4 wide (RenderDoc, docs/recon-acc.md); two instanced pairs need 2.
-// Each is `mov r32, [rax + 8]` (rbx at 0x2befafa) right after `call IsInstancedStereoPass (0x2cfe700); test al, al;
-// je`, with Family in rax; views.cpp writes `push 2; pop r64` over it (same length). Found by walking that
-// function's 43 callers; the other 22 only test the count against 0, or read other fields. 0x1a094b1 is
-// TaskContext.InstanceFactor (FParallelMeshDrawCommandPass::DispatchPassSetup 0x1a09300, found through
-// r.MeshDrawCommands.ParallelPassSetup).
+// Views per instanced draw: 2, for two instanced pairs. [Views per instanced draw]
 struct CountRead {
     std::uintptr_t rva;
     std::uint8_t size;  // 3, or 4 with REX.R (r8d-r15d)
@@ -156,41 +97,21 @@ inline constexpr CountRead kInstancedViewCounts[] = {
     {0x1cf35a8, 3, {0x8b, 0x48, 0x08}},       {0x2bef0f6, 4, {0x44, 0x8b, 0x78, 0x08}},
     {0x2befafa, 3, {0x8b, 0x43, 0x08}},
 };
-// The view constants' N (cb0[135].y, byte 0x874 of the view uniform struct), in what looks like
-// FSceneView::SetupCommonViewUniformBufferParameters (0x2d08510): `ecx = Family ? Family->Views.Num() : 0`, then
-// this `mov rdi, [rbp + 0xe8]`, then `mov [rdx + 0x874], ecx`. Written for every view, mono families too, so
-// views.cpp clamps it to 2 in a stub here instead of writing 2: a capture or mirror family keeps N = 1.
+// The view constants' views per instanced draw, clamped to 2. [Instanced count in the view constants]
 inline constexpr std::uintptr_t kViewInstancedCount = 0x2d085ab;
 inline constexpr std::uint8_t kViewInstancedCountAnchor[7] = {0x48, 0x8b, 0xbd, 0xe8, 0x00, 0x00, 0x00};
 
-// The view constants' StereoPassIndex: 4.26 FViewInfo::SetupUniformBufferParameters (SceneRendering.cpp) stores
-// `StereoRenderingDevice->GetViewIndexForPass(StereoPass)` there, so the focus views got 2 and 3. Shaders index
-// two-entry tables with it as the eye within an instanced pair: planar reflections' ProjectionWithExtraFOV[2] and
-// PlanarReflectionScreenScaleBias[2] (PlanarReflectionShared.ush) read past the end for 2 and 3, and view 3 drew the
-// dash's windscreen reflection from the wrong place (docs/recon-acc.md). GetViewIndexForPass must stay 0-3 (each view's
-// own FSceneViewState in ULocalPlayer), so views.cpp redirects this store, `mov [rsi + 0xc5c], eax`, through `and eax,
-// 1`: 0, 1, 0, 1. Before it: `mov edx, [r14 + 0xad0]; call [rax + 0x30]; jmp; mov eax, r13d` (no device: 0), both paths
-// meeting here.
+// The view constants' stereo pass index: 0, 1, 0, 1. [Stereo pass index]
 inline constexpr std::uintptr_t kStereoPassIndexCall = 0x1c11f29;
 inline constexpr std::uint8_t kStereoPassIndexCallAnchor[15] = {0x41, 0x8b, 0x96, 0xd0, 0x0a, 0x00, 0x00, 0xff,
                                                                 0x50, 0x30, 0xeb, 0x03, 0x41, 0x8b, 0xc5};
 inline constexpr std::uintptr_t kStereoPassIndexStore = 0x1c11f38;
 inline constexpr std::uint8_t kStereoPassIndexStoreAnchor[6] = {0x89, 0x86, 0x5c, 0x0c, 0x00, 0x00};
 
-// The instanced view's constants (shaders' second view of a pair, cb2 in ACC's): 4.26 has two ways to pick it.
-// Scene->UniformBuffers.GetInstancedView and the base pass take `View.StereoPass + 1` (right for both pairs); 12
-// other places (custom depth in SceneRendering.cpp, and Kunos's, the translucent base pass among them) take
-// `IStereoRendering::IsStereoEyeView(View) ? eSSP_RIGHT_EYE : eSSP_FULL`, so the focus pair's second view got the
-// right eye's constants: the windscreen drew into view 3 with the right eye's camera, a faint, larger copy of the
-// dash's reflection in it (RenderDoc, docs/recon-acc.md: event 26464's cb2 held the right eye's projection). Each is
-// `neg al; sbb edx, edx; and edx, 2` (al: IsStereoEyeView), then `call GetStereoEyeView (0x2cf8140)` with rcx the
-// family; views.cpp redirects those 7 bytes to `edx = al ? (View.StereoPass + 1) & ~1 : 0`: pass 2 for the eyes
-// as before, 4 for the focus views. `view` is the register holding the view there (x64 number: rsi 6, rbx 3,
-// r14 14, r15 15; rcx 1 at 0x1bfa6b8, loaded from [rdi + 8] just before); 0x1ccc9eb tests the pass in eax instead
-// (`neg eax`). Found by walking GetStereoEyeView's 26 callers.
+// The instanced view's constants: each pair's own second view. [Instanced view constants]
 struct RightEyePick {
     std::uintptr_t rva;
-    std::uint8_t view;
+    std::uint8_t view;  // the register holding the view there (x64 number)
     bool passInEax;
 };
 inline constexpr RightEyePick kRightEyePicks[] = {
@@ -200,19 +121,7 @@ inline constexpr RightEyePick kRightEyePicks[] = {
 };
 inline constexpr std::uintptr_t kGetStereoEyeView = 0x2cf8140;
 
-// Foliage (HISM) culling for an instanced eye pair: 4.26 FHierarchicalStaticMeshSceneProxy::GetDynamicMeshElements
-// culls view 0 with its own frustum but the right plane of `Views[1]` (`check(Views.Num() == 2)`), so trees seen only
-// by the right eye survive. Kunos made it `Views.Last()` (the right triple screen): with four views, view 3, the right
-// focus view, so the eyes culled foliage past the focus box's right edge, in both eyes, and only on that side
-// (docs/recon-acc.md). And only view 0 gets the union, so the focus pair (view 2 primary) culled with view 2 alone.
-// Found through foliage.DitheredLOD's reader (0x2a42ff1) and the IsInstancedStereoPass call (0x2a435c3) in the same
-// function; `[rsp + 0x38]` is the loop's ViewIndex (0 at 0x2a43033, compared with Views.Num). views.cpp redirects three
-// spots so each pair's primary (view 0 or 2) culls with its own left plane and its partner's right:
-//  - the union's gate, `cmp dword [rsp + 0x38], 0` (then jne): `test dword [rsp + 0x38], ~2`, views 0 and 2;
-//  - the left view, `mov rax, [rcx]` (Views[0]; rcx = Views.Data) and the next `movaps xmm4, xmm15`:
-//    `rax = Views[ViewIndex]`;
-//  - the right view's index, `movsxd rax, [rsi + 8]` (Views.Num, for `mov rcx, [rcx + rax*8 - 8]` at 0x2a43737)
-//    and the next `mulps xmm0, xmm7`: `rax = ViewIndex + 2`, so Views[ViewIndex + 1].
+// Foliage culling: each pair's primary culls with its own left plane and its partner's right. [Foliage culling]
 inline constexpr std::uintptr_t kFoliageUnionGate = 0x2a435f2;
 inline constexpr std::uint8_t kFoliageUnionGateAnchor[5] = {0x83, 0x7c, 0x24, 0x38, 0x00};
 inline constexpr std::uintptr_t kFoliageLeftView = 0x2a43637;
@@ -222,20 +131,7 @@ inline constexpr std::uint8_t kFoliageRightViewAnchor[7] = {0x48, 0x63, 0x46, 0x
 inline constexpr std::uintptr_t kFoliageRightViewRead = 0x2a43737;
 inline constexpr std::uint8_t kFoliageRightViewReadAnchor[5] = {0x48, 0x8b, 0x4c, 0xc1, 0xf8};
 
-// Foliage LOD. Static meshes pick their LOD through GetLODView (ComputeStaticMeshLOD 0x2cf26a0: a stereo view uses
-// Family->Views[GetLODViewIndex()], the left eye); foliage takes every LOD distance from the drawing view's own
-// projection (ComputeBoundsDrawDistance 0x2cf1cb0, r8 the matrix), so the focus pair's narrow projection put each
-// LOD several times farther out and drew the same trees at higher LODs (a capture: 2286 indices against 3690/7224).
-// The distances are computed twice, and both must agree (RenderDoc, docs/recon-acc.md):
-//  - on the CPU, the HISM function above: the minimum-screen-size cull and the LOD planes its cluster traversal
-//    picks each instance's LOD with, `lea r8, [r15 + 0x280]` (r15 the view) at four sites, two code paths of two;
-//  - in the vertex shader: FInstancedStaticMeshVertexFactoryShaderParameters::GetElementShaderBindings builds each
-//    LOD batch's InstancingViewZCompare (its distance window, by which the shader drops or dithers out instances
-//    outside it) from the same calls, `add r14, 0x280` (r14 the view) feeding three of them.
-// Moving the CPU side alone put near trees in a lower LOD whose shader window, still the focus view's, began
-// farther out: the shader dropped them and near trees vanished from the focus box. views.cpp passes Views[0]'s
-// projection at all five sites (View->Family at +0, Family->Views at +0), only for the focus views (StereoPass >= 3):
-// the eyes, shadow depth views and mono views keep their own.
+// Foliage LOD: the focus views take the left eye's projection, on the CPU and in the shader. [Foliage LOD]
 inline constexpr std::uintptr_t kFoliageLodProjection[4] = {0x2a446fb, 0x2a44791, 0x2a44f7d, 0x2a45007};
 inline constexpr std::uint8_t kFoliageLodProjectionAnchor[7] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00};
 inline constexpr std::uintptr_t kFoliageShaderLodProjection = 0x2a7e01f;

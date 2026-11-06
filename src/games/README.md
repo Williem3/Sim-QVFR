@@ -27,9 +27,10 @@ headers here.
   the renderer counts views, lays them out, and fills their cameras, then patching it to render four.
   `GameAdapter::qvfr_*` is everything the layer needs back: the frame records (`Views4Frame`: what FOV
   each view was rendered with), the target sizes, and the live resolution and focus box going in.
-- **Its addresses** (`<id>/abi.h` by convention): RVAs, anchor bytes and struct offsets, each with a
-  comment saying how it was found. `src/engine/code_patch.h` has the shared tools for anchored code
-  patches.
+- **Its addresses** (`<id>/abi.h` by convention): RVAs, anchor bytes and struct offsets. Each group gets one
+  comment line saying what it is for, ending in a `[name]`; how it was found, what the engine does there and
+  what was measured go into the game's recon notes under that `[name]` (step 5), not into the code.
+  `src/engine/code_patch.h` has the shared tools for anchored code patches.
 - **Optionally, its own experiments and diagnostics**: `GameAdapter::instance_created`,
   `session_created`, `session_destroyed` and `frame_end`, each reading the game's own `[experiment]`
   ini keys.
@@ -47,8 +48,10 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
 4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`sim_qvfr_core`: the layer and the
    tests link it).
-5. Keep the recon notes (the build the addresses are from, what is patched, the open questions) in
-   `docs/recon-<id>.md`: local only, listed in `.gitignore`, never committed.
+5. Keep the recon notes (the build the addresses are from, what is patched and why, how each address was
+   found, measurements, the open questions) in `docs/recon-<id>.md`, with a `## abi.h` section holding a
+   `### [name]` per group in `abi.h`. The file is local only: add it to `.gitignore` next to the other games'
+   and never commit it. Code comments point there (`docs/recon-<id>.md "Section"`) instead of retelling it.
 
 `ace/` is the worked example.
 
