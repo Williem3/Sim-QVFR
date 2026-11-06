@@ -237,10 +237,10 @@ int main() {
         };
         check(ok && m[3] == 29 && has({op(131, 5), 3, 24, 15, 16, op(188, 5), 4, 25, 24, 21, op(129, 5), 3, 26, 24, 22,
                                        op(169, 6), 3, 17, 25, 26, 24}) &&
-                  has({op(61, 4), 2, 27, 5, op(128, 5), 2, 28, 27, 23, op(169, 6), 2, 18, 25, 28, 27}) &&
+                  has({op(61, 4), 2, 27, 5, op(128, 5), 2, 28, 27, 23, op(169, 6), 2, 18, 25, 27, 28}) &&
                   has({op(22, 3), 3, 32, op(43, 4), 3, 21, 0, op(43, 4), 3, 22, 0x3F800000}) &&
                   has({op(21, 4), 2, 32, 1, op(43, 4), 2, 23, 2}),
-              "eye columns resolve: lower row v + 1, layer v_eye + 2");
+              "eye columns resolve: lower row v + 1 in layer v_eye, upper row layer v_eye + 2");
         std::vector<std::uint32_t> early = build(true);
         const std::vector<std::uint32_t> earlyCopy = early;
         check(!xplane::spirv_eye_columns_resolve(early, &reason) && early == earlyCopy,

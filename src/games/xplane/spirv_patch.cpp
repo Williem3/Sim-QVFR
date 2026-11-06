@@ -449,7 +449,9 @@ bool spirv_eye_columns_resolve(std::vector<std::uint32_t>& words, std::string* w
         } else if (i == eyeLoadAt) {
             out[start + 2] = eyeRaw;
             out.insert(out.end(), {op(kOpIAdd, 5), intType, eyeUp, eyeRaw, two});
-            out.insert(out.end(), {op(kOpSelect, 6), intType, eye, row, eyeUp, eyeRaw});
+            // The upper row (v > 0) takes the focus view: X-Plane's blit into the D3D11 image flips it vertically
+            // (capture XPlane_frame2096.rdc), so there it is the lower row, as eye columns have it.
+            out.insert(out.end(), {op(kOpSelect, 6), intType, eye, row, eyeRaw, eyeUp});
         }
         i += count;
     }

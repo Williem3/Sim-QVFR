@@ -24,9 +24,10 @@ int spirv_fold_eye_arrays(std::vector<std::uint32_t>& words, const std::vector<s
 // written layer becomes z (a 3-component int coordinate whose last component was `eye` now takes z). True if edited.
 bool spirv_layer_from_dispatch_z(std::vector<std::uint32_t>& words);
 
-// X-Plane's final resolve in eye columns (README.md, "Composition"): its output is two layers tall per eye column (the
-// eye's view on top, its focus view below), and it samples at `v = u_y_offset - y * u_offset.y` in layer `v_eye`. A
-// pixel of the lower row has v <= 0 there: it takes v + 1 in layer v_eye + 2. The test sits right after the subtraction
+// X-Plane's final resolve in eye columns (README.md, "Composition"): its output is two layers tall per eye column, and
+// it samples at `v = u_y_offset - y * u_offset.y` in layer `v_eye`. A pixel of the lower row has v <= 0 there: it takes
+// v + 1 (in layer v_eye, the eye's view); the upper row takes layer v_eye + 2 (the focus view). X-Plane's blit into the
+// D3D11 image flips it vertically, so there the eye's view is on top and its focus view below. The test sits right after the subtraction
 // (an OpFSub of the loaded `u_y_offset`), the layer at the one load of `v_eye`, which must come after it. False (and
 // `words` unchanged) if any piece is missing; `why` says which.
 bool spirv_eye_columns_resolve(std::vector<std::uint32_t>& words, std::string* why);
