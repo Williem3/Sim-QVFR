@@ -107,13 +107,14 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
     // Every shader reading X-Plane's per-eye arrays: views 2-3 read their eye's entry (index & 1).
     if (info && info->pCode && info->codeSize >= 20) {
         std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
-        // Before the fold: the light billboards' inverse projection follows the view's own projection (README.md,
-        // "Measured: focus cameras"), so focus views size their lights with the focus projection.
-        const int inverted = spirv_inverse_from_view_projection(words, "u_ogl_light_data", "u_proj_inv",
-                                                                "u_transform_block_fat", "projection_matrix");
+        // The light billboards' size: projected and un-projected with the eye's pair (README.md, "Measured: focus
+        // views darker"), so a light covers the same angle in a focus view as in its eye. The fold then takes the
+        // inverse's index & 1.
+        const int inverted = spirv_eye_projection_beside(words, "u_ogl_light_data", "u_proj_inv",
+                                                         "u_transform_block_fat", "projection_matrix");
         if (inverted > 0)
-            logf("xplane: light inverse projection = inverse(view projection) in shader module (%d loads), %d so far",
-                 inverted, ++g_inverseModules);
+            logf("xplane: light size from the eye's projection in shader module (%d accesses), %d so far", inverted,
+                 ++g_inverseModules);
         int skipped = 0;
         const int folded = spirv_fold_eye_arrays(words, kEyeArrayBlocks, &skipped);
         if (folded > 0 || skipped > 0) {

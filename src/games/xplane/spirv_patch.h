@@ -32,12 +32,13 @@ bool spirv_layer_from_dispatch_z(std::vector<std::uint32_t>& words);
 // `words` unchanged) if any piece is missing; `why` says which.
 bool spirv_eye_columns_resolve(std::vector<std::uint32_t>& words, std::string* why);
 
-// A per-eye inverse projection read with a view index (`block.member[i]`, e.g. u_ogl_light_data.u_proj_inv) becomes
-// `inverse(transform.projection[i])`, the per-view projection the same shader already reads with the same index
-// (u_transform_block_fat.projection_matrix[i]). Exact for the eyes, and the focus views get their own inverse. Blocks
-// and members by their types' names. Only accesses whose index the shader also uses for the projection are edited,
-// and only if both members are matrices of one type with the same major order. Returns how many (0: unchanged).
-int spirv_inverse_from_view_projection(std::vector<std::uint32_t>& words, const char* block, const char* member,
-                                       const char* transform, const char* projection);
+// The light billboards' size (README.md, "Measured: focus views darker"): X-Plane sizes each light as a few pixels by
+// projecting its centre with `transform.projection[i]`, offsetting it a pixel and un-projecting with the per-eye
+// `block.member[i]` (u_ogl_light_data.u_proj_inv). For the focus views that pair must be the eye's (index & 1), so a
+// light covers the same angle as in its eye (a focus pixel is a fraction of the eye's); its placement keeps the view's
+// own projection. So: in each basic block that reads `block.member`, the projection accesses before that read take
+// `index & 1`. Blocks and members by their types' names. Returns how many accesses (0: `words` unchanged).
+int spirv_eye_projection_beside(std::vector<std::uint32_t>& words, const char* block, const char* member,
+                                const char* transform, const char* projection);
 
 }  // namespace xplane
