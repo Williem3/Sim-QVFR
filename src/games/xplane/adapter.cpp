@@ -152,7 +152,16 @@ public:
     bool qvfr_take_frame(Views4Frame& frame) override { return record(frame); }
     bool qvfr_latest_frame(Views4Frame& frame) override { return record(frame); }
     void qvfr_note_views(const XrView*, uint32_t) override {}
-    void qvfr_frame_end() override {}
+    // The final resolve's whole-column viewport: logged once it happens, or after 900 frames without it.
+    void qvfr_frame_end() override {
+        ++frames_;
+        const int n = four_views_column_viewports();
+        if (!viewportLogged_ && (n > 0 || frames_ == 900)) {
+            viewportLogged_ = true;
+            simqvfr::logf("xplane: final resolve viewport given the whole column %d times after %d frames%s", n, frames_,
+                          n > 0 ? "" : " (NOT seen: the lower row, the focus views, stays undrawn)");
+        }
+    }
 
     // Loaded early (the launcher, GameInfo::earlyLoad): the patches go in before X-Plane's Vulkan startup, so the shader
     // wrapper sees every module. xrCreateInstance then finds them in.
@@ -194,6 +203,8 @@ private:
     bool fourViews_ = false;
     bool qvfr_ = false;
     double focus_ = 0, focusY_ = 0;
+    int frames_ = 0;
+    bool viewportLogged_ = false;
     static bool record(Views4Frame& frame) {
         frame = {};
         if (!four_views_tangents(frame.outerTan, frame.focusTan))

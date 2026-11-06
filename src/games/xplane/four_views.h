@@ -19,6 +19,8 @@ void four_views_set_eye_columns(bool on);
 // The views' height = half the stereo image's (five sites; abi.h). After four_views_copies_start. False: not this
 // build's code, or a patch failed (logged).
 bool four_views_eye_columns_start();
+// How many viewports the eye-columns patch gave the whole column (the final resolve's, one a frame).
+int four_views_column_viewports();
 
 // What the views were last rendered with, per eye (left, right, up, down tangents): the eye's own projection and the
 // focus view's. False before the first four-view draw. A fresh record is taken at the next draw after each call.

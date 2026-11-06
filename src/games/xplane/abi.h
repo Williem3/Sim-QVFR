@@ -108,5 +108,15 @@ inline constexpr std::uintptr_t kVrContextResizeHeightA = 0xc6684f;
 inline constexpr std::uint8_t kVrContextResizeHeightAAnchor[9] = {0x41, 0xB9, 0x04, 0x00, 0x00, 0x00, 0x44, 0x8B, 0xC3};
 inline constexpr std::uintptr_t kVrContextResizeHeightB = 0xc8665c;
 inline constexpr std::uint8_t kVrContextResizeHeightBAnchor[5] = {0x44, 0x8B, 0xC0, 0x8B, 0xC3};
+// The single-viewport setter (x ecx, y edx, w r8d, h r9d; it also gives the scissor): its first instruction,
+// `mov [rsp+8], rbx`. Every one-viewport pass comes here (0x1595790 with count 1 among them). The final resolve sets
+// (0, 0, 2 x context width, context height): with the context at half the column (capture XPlane_frame2096.rdc), it
+// drew the top row only.
+inline constexpr std::uintptr_t kSetViewport = 0x104a500;
+inline constexpr std::uint8_t kSetViewportAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
+// The VR REN_context's pointer (written by 0xc66670), and its width and height (`+4`, `+8`; "Updating REN_context").
+inline constexpr std::uintptr_t kVrContextPointer = 0x5777c60;
+inline constexpr std::size_t kContextWidth = 4;
+inline constexpr std::size_t kContextHeight = 8;
 
 }  // namespace xplane

@@ -39,6 +39,8 @@ std::atomic<int> g_eyeArrayModules{0};
 std::atomic<int> g_layerFromZModules{0};
 std::atomic<int> g_inverseModules{0};
 std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
+std::atomic<int> g_columnViewports{0};  // final resolve viewports given the whole column (the stub counts)
+static_assert(sizeof(std::atomic<int>) == 4, "the stub's lock inc dword");
 
 // The uniform blocks with per-eye arrays of two (README.md, "Inventory"), by their variables' names.
 const std::vector<std::string> kEyeArrayBlocks = {
@@ -345,8 +347,43 @@ bool four_views_eye_columns_start() {
                    sizeof(resizeA), "eye columns: VR context resize A height / 2");
     ok &= redirect(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor), resizeB,
                    sizeof(resizeB), "eye columns: VR context resize B height / 2");
+    // The final resolve's viewport (0, 0, 2 x context width, context height) gets the whole column: twice the height.
+    std::uint8_t viewport[] = {
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // 0:  mov rax, &the VR context pointer
+        0x48, 0x8B, 0x00,                    // 10: mov rax, [rax]
+        0x48, 0x85, 0xC0,                    // 13: test rax, rax
+        0x74, 0x2A,                          // 16: jz done
+        0x85, 0xC9,                          // 18: test ecx, ecx       (x = 0)
+        0x75, 0x26,                          // 20: jnz done
+        0x85, 0xD2,                          // 22: test edx, edx       (y = 0)
+        0x75, 0x22,                          // 24: jnz done
+        0x44, 0x3B, 0x48, 0x08,              // 26: cmp r9d, [rax+8]    (h = context height)
+        0x75, 0x1C,                          // 30: jne done
+        0x44, 0x8B, 0x50, 0x04,              // 32: mov r10d, [rax+4]
+        0x45, 0x01, 0xD2,                    // 36: add r10d, r10d
+        0x45, 0x39, 0xD0,                    // 39: cmp r8d, r10d       (w = 2 x context width)
+        0x75, 0x10,                          // 42: jne done
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // 44: mov rax, &g_columnViewports
+        0xF0, 0xFF, 0x00,                    // 54: lock inc dword [rax]
+        0x45, 0x01, 0xC9,                    // 57: add r9d, r9d
+        0x48, 0x89, 0x5C, 0x24, 0x08,        // 60: done: mov [rsp+8], rbx (the original)
+    };
+    static_assert(sizeof(viewport) == 65, "the jumps land on done (60)");
+    const std::uintptr_t contextPointer = simqvfr::module_base() + kVrContextPointer;
+    const auto counter = reinterpret_cast<std::uintptr_t>(&g_columnViewports);
+    std::memcpy(viewport + 2, &contextPointer, 8);
+    std::memcpy(viewport + 46, &counter, 8);
+    static_assert(kContextWidth == 4 && kContextHeight == 8, "the stub's offsets");
+    if (!code_matches(kSetViewport, kSetViewportAnchor, sizeof(kSetViewportAnchor))) {
+        logf("xplane: eye columns: the viewport setter at 0x%llx isn't this build's", static_cast<unsigned long long>(kSetViewport));
+        return false;
+    }
+    ok &= redirect(kSetViewport, kSetViewportAnchor, sizeof(kSetViewportAnchor), viewport, sizeof(viewport),
+                   "eye columns: the final resolve's viewport the whole column");
     return ok;
 }
+
+int four_views_column_viewports() { return g_columnViewports.load(); }
 
 bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]) {
     g_recordWanted = true;
