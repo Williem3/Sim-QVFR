@@ -61,6 +61,7 @@ std::atomic<int> g_layerOutModules{0}, g_alphaLodModules{0}, g_tileModules{0};
 std::atomic<bool> g_focusFullRate{false};  // four_views_set_focus_full_rate
 std::atomic<double> g_outerScale{1.0};  // the outer views' rect, a share of their layers (1: the whole layer)
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
+std::atomic<int> g_splitOffModules{0};  // blit shaders whose side-by-side split is off in four-view passes
 
 // set viewports(count, multiplier, rects {x, y, w, h} x count) (abi.h kSetViewports). Stereo (multiplier 2) becomes
 // four views; with view rects, a four-view pass's one rect becomes one per view, the outer views' scaled by
@@ -448,6 +449,15 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
                 logf("xplane: AO: focus views take their eye's at their edges (%s) in shader module (%d samples), %d so far",
                      push ? "band following the focus size" : "12% band", aoEdges, ++g_aoEdgeModules);
         }
+        // One viewport per view (docs/recon-xplane.md "Measured: the zoom with one viewport per view"): X-Plane's blit
+        // vertex shader splits its source into u_viewport_count side-by-side parts; in four-view passes it takes 1.
+        int splitOff = 0;
+        if (g_viewRects.load()) {
+            splitOff = spirv_viewport_split_off(words, nullptr);
+            if (splitOff > 0)
+                logf("xplane: view rects: the blit's side-by-side split off in four-view passes (%d loads), module %d",
+                     splitOff, ++g_splitOffModules);
+        }
         // Compute shaders taking their eye from the dispatch depth (the cloud render): write layer z, eye = z & 1.
         const bool layered = spirv_layer_from_dispatch_z(words);
         if (layered)
@@ -503,7 +513,7 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             }
         }
         if (inverted > 0 || parity > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0 ||
-            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0) {
+            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0 || splitOff > 0) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();

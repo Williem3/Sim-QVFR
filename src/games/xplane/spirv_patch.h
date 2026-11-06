@@ -131,6 +131,14 @@ int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float f
 int spirv_focus_ao_edges_from_eye(std::vector<std::uint32_t>& words, float fx, float fy, float band, std::string* why,
                                   bool push = false);
 
+// Per-view viewports (docs/recon-xplane.md "Measured: the zoom with one viewport per view"): X-Plane's blit vertex
+// shader takes several viewports as side-by-side parts of one wide source, `v_texcoord0.x = x / n + (i % n) / n` for
+// n = u_viewport_count, while its source is layered (`.z` += the layer). With one viewport per view (n = 4) each view
+// sampled a quarter of its layer. In a vertex shader that converts a load of u_viewport_count to float (that split),
+// every use of the load but the `i % n` stored to gl_ViewportIndex takes 1 while n and u_layer_count are both 4 (a
+// four-view pass); other passes are unchanged. Returns the loads edited (0: `words` unchanged; `why` says why).
+int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why);
+
 // The eye tests beside a per-eye member that isn't an array (docs/recon-xplane.md "Measured: dark shadow edges in the
 // focus views"): deferred shading brings the right eye's view-space position into the left eye's for the shadow lookup
 // with `block.member` (u_shadow_data.u_eye_right_to_left) when `input == 1` (v_eye), so view 3 (the right focus view)

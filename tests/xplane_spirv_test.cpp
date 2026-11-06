@@ -586,6 +586,7 @@ int main() {
             }
             const int tiles = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, nullptr, true);
             const int ao = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, nullptr, true);
+            const int splitOff = xplane::spirv_viewport_split_off(real, nullptr);
             const bool layered = xplane::spirv_layer_from_dispatch_z(real);
             const bool mapped = xplane::spirv_view_to_eye_map_out(real, 15, nullptr);
             const int rate = xplane::spirv_full_rate_from_layer(real, 2, nullptr);
@@ -598,10 +599,10 @@ int main() {
             const auto* out = reinterpret_cast<const char*>(real.data());
             const bool hasPush = std::search(out, out + real.size() * 4, kPush, kPush + sizeof(kPush) - 1) != out + real.size() * 4;
             pushed += hasPush ? 1 : 0;
-            std::printf("     %s: light %d parity %d fold %d coef %d ssr %d/%d tiles %d ao %d z %d map %d rate %d layer %d "
-                        "alpha %d%s\n",
-                        in.c_str(), inverted, parity, folded, coef, rays, starts, tiles, ao, layered ? 1 : 0, mapped ? 1 : 0,
-                        rate, layerOut ? 1 : 0, alpha, hasPush ? " (push block)" : "");
+            std::printf("     %s: light %d parity %d fold %d coef %d ssr %d/%d tiles %d ao %d split %d z %d map %d rate %d "
+                        "layer %d alpha %d%s\n",
+                        in.c_str(), inverted, parity, folded, coef, rays, starts, tiles, ao, splitOff, layered ? 1 : 0,
+                        mapped ? 1 : 0, rate, layerOut ? 1 : 0, alpha, hasPush ? " (push block)" : "");
             std::ofstream o(in + ".all.spv", std::ios::binary);
             o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
         }

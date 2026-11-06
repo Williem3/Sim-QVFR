@@ -2355,4 +2355,115 @@ int spirv_eye_parity_test(std::vector<std::uint32_t>& words, const char* block, 
     return edited;
 }
 
+int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint32_t kExecutionVertex = 0, kBuiltInViewportIndex = 10;
+    constexpr std::uint16_t kOpTypeBool = 20, kOpConvertSToF = 111, kOpSMod = 139, kOpIEqual = 170,
+                            kOpLogicalAnd = 167, kOpSelect = 169, kOpReturnValue = 254;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    bool vertex = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionVertex)
+            vertex = true;
+    if (!vertex)
+        return fail("not a vertex shader");
+    // The transform block, its two counts' members and its variable.
+    const std::uint32_t block = m.named("u_transform_block_fat");
+    std::int64_t viewportMember = -1, layerMember = -1;
+    for (const auto& w : m.insts)
+        if (block && Module::code(w) == Module::kMemberName && w.size() >= 4 && w[1] == block) {
+            const std::string name = literal(w, 3, w.size());
+            if (name == "u_viewport_count")
+                viewportMember = w[2];
+            else if (name == "u_layer_count")
+                layerMember = w[2];
+        }
+    if (viewportMember < 0 || layerMember < 0)
+        return fail("no transform block counts");
+    std::uint32_t blockVar = 0, intType = 0;
+    for (const auto& w : m.insts) {
+        if (Module::code(w) == Module::kVariable && w.size() >= 4 && w[3] == kUniform)
+            for (const auto& t : m.insts)
+                if (Module::code(t) == Module::kTypePointer && t[1] == w[1] && t[3] == block)
+                    blockVar = w[2];
+        if (Module::code(w) == kOpTypeStruct && w[1] == block && static_cast<std::size_t>(viewportMember) + 2 < w.size())
+            intType = w[2 + viewportMember];
+    }
+    if (!blockVar || !intType)
+        return fail("transform block not bound");
+    // The loads of u_viewport_count (through chains [block][member]), and whether one is converted to float.
+    std::map<std::uint32_t, std::uint32_t> constValue;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpConstant && w.size() == 4)
+            constValue[w[2]] = w[3];
+    std::set<std::uint32_t> chains, loads;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c == kOpAccessChain || c == kOpInBoundsAccessChain) && w.size() == 5 && w[3] == blockVar &&
+            constValue.count(w[4]) && constValue[w[4]] == static_cast<std::uint32_t>(viewportMember))
+            chains.insert(w[2]);
+    }
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && chains.count(w[3]))
+            loads.insert(w[2]);
+    bool split = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpConvertSToF && w.size() == 4 && loads.count(w[3]))
+            split = true;
+    if (!split)
+        return fail("no side-by-side split");
+    // The `i % n` stored to gl_ViewportIndex keeps n.
+    const std::uint32_t viewportVar = builtin_variable(m, kBuiltInViewportIndex, kOutput, nullptr);
+    std::set<std::uint32_t> kept;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpStore && w.size() >= 3 && w[1] == viewportVar)
+            kept.insert(w[2]);
+    // Types and constants first (they go before the first function and move the instructions).
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const std::uint32_t c1 = m.constant(intType, 1), c4 = m.constant(intType, 4),
+                        cLayer = m.constant(intType, static_cast<std::uint32_t>(layerMember)),
+                        ptrInt = m.type_pointer(kUniform, intType);
+    int edited = 0;
+    for (const std::uint32_t load : loads) {
+        const std::size_t at = m.defined_at(load);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t layerPtr = m.fresh(), layers = m.fresh(), fourViewports = m.fresh(), fourLayers = m.fresh(),
+                            fourViews = m.fresh(), count = m.fresh();
+        const std::vector<std::vector<std::uint32_t>> body = {
+            {op(kOpAccessChain, 5), ptrInt, layerPtr, blockVar, cLayer},
+            {op(kOpLoad, 4), intType, layers, layerPtr},
+            {op(kOpIEqual, 5), boolType, fourViewports, load, c4},
+            {op(kOpIEqual, 5), boolType, fourLayers, layers, c4},
+            {op(kOpLogicalAnd, 5), boolType, fourViews, fourViewports, fourLayers},
+            {op(kOpSelect, 6), intType, count, fourViews, c1, load},
+        };
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
+        // Every later use but the viewport index's `i % n` takes the count.
+        for (std::size_t i = at + 1 + body.size(); i < m.insts.size(); ++i) {
+            auto& u = m.insts[i];
+            const std::uint16_t c = Module::code(u);
+            if (c == kOpSMod && u.size() >= 3 && kept.count(u[2]))
+                continue;
+            const std::size_t first = (c == kOpStore || c == kOpReturnValue) ? 1 : 3;
+            for (std::size_t k = first; k < u.size(); ++k)
+                if (u[k] == load)
+                    u[k] = count;
+        }
+        ++edited;
+    }
+    if (!edited)
+        return fail("loads moved");
+    words = m.emit();
+    return edited;
+}
+
 }  // namespace xplane
