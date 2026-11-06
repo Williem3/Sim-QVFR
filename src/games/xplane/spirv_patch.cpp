@@ -581,4 +581,306 @@ int spirv_eye_projection_beside(std::vector<std::uint32_t>& words, const char* b
     return static_cast<int>(edits.size());
 }
 
+
+namespace {
+
+// A parsed module for edits that add declarations: instructions as word vectors, the id bound, find-or-add helpers.
+struct Module {
+    std::vector<std::uint32_t> header;
+    std::vector<std::vector<std::uint32_t>> insts;
+    std::uint32_t bound = 0;
+
+    static constexpr std::uint16_t kTypeFloat = 22, kTypeVector = 23, kTypePointer = 32, kConstant = 43,
+                                   kVariable = 59, kName = 5, kMemberName = 6, kDecorate = 71, kMemberDecorate = 72,
+                                   kEntryPoint = 15, kFunction = 54;
+
+    bool parse(const std::vector<std::uint32_t>& words) {
+        if (words.size() < kHeader || words[0] != kMagic)
+            return false;
+        header.assign(words.begin(), words.begin() + kHeader);
+        bound = words[3];
+        for (std::size_t i = kHeader; i < words.size();) {
+            const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16);
+            if (count == 0 || i + count > words.size())
+                return false;
+            insts.emplace_back(words.begin() + static_cast<std::ptrdiff_t>(i),
+                               words.begin() + static_cast<std::ptrdiff_t>(i + count));
+            i += count;
+        }
+        return true;
+    }
+    std::vector<std::uint32_t> emit() {
+        std::vector<std::uint32_t> out = header;
+        out[3] = bound;
+        for (auto& w : insts) {
+            w[0] = op(code(w), static_cast<std::uint16_t>(w.size()));
+            out.insert(out.end(), w.begin(), w.end());
+        }
+        return out;
+    }
+    static std::uint16_t code(const std::vector<std::uint32_t>& w) { return static_cast<std::uint16_t>(w[0] & 0xffff); }
+    std::uint32_t fresh() { return bound++; }
+    std::size_t first_function() const {
+        for (std::size_t i = 0; i < insts.size(); ++i)
+            if (code(insts[i]) == kFunction)
+                return i;
+        return insts.size();
+    }
+    // A global (type, constant, variable) added before the first function; `resultAt` is its result id's word.
+    std::uint32_t add_global(std::vector<std::uint32_t> w, std::size_t resultAt) {
+        const std::uint32_t id = fresh();
+        w[resultAt] = id;
+        insts.insert(insts.begin() + static_cast<std::ptrdiff_t>(first_function()), std::move(w));
+        return id;
+    }
+    // An instruction of opcode `c` whose words after the opcode, leaving out the result id at `resultAt`, are
+    // `operands`: its result id (0 if none).
+    std::uint32_t find(std::uint16_t c, const std::vector<std::uint32_t>& operands, std::size_t resultAt) const {
+        for (const auto& w : insts) {
+            if (code(w) != c || w.size() != operands.size() + 2)
+                continue;
+            bool same = true;
+            std::size_t o = 0;
+            for (std::size_t k = 1; k < w.size(); ++k) {
+                if (k == resultAt)
+                    continue;
+                if (w[k] != operands[o++]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same)
+                return w[resultAt];
+        }
+        return 0;
+    }
+    std::uint32_t type_float() {
+        const std::uint32_t t = find(kTypeFloat, {32}, 1);
+        return t ? t : add_global({op(kTypeFloat, 3), 0, 32}, 1);
+    }
+    std::uint32_t type_vector(std::uint32_t component, std::uint32_t n) {
+        const std::uint32_t t = find(kTypeVector, {component, n}, 1);
+        return t ? t : add_global({op(kTypeVector, 4), 0, component, n}, 1);
+    }
+    std::uint32_t type_pointer(std::uint32_t storage, std::uint32_t type) {
+        const std::uint32_t t = find(kTypePointer, {storage, type}, 1);
+        return t ? t : add_global({op(kTypePointer, 4), 0, storage, type}, 1);
+    }
+    std::uint32_t constant(std::uint32_t type, std::uint32_t bits) {
+        const std::uint32_t c = find(kConstant, {type, bits}, 2);
+        return c ? c : add_global({op(kConstant, 4), type, 0, bits}, 2);
+    }
+    std::uint32_t named(const char* name) const {
+        for (const auto& w : insts)
+            if (code(w) == kName && w.size() >= 3 && literal(w, 2, w.size()) == name)
+                return w[1];
+        return 0;
+    }
+    // The variable named `name` with the given storage class (0 if none), and its pointee type.
+    std::uint32_t variable(const char* name, std::uint32_t storage, std::uint32_t* pointee) const {
+        const std::uint32_t id = named(name);
+        if (!id)
+            return 0;
+        for (const auto& w : insts)
+            if (code(w) == kVariable && w.size() >= 4 && w[2] == id && w[3] == storage) {
+                if (pointee)
+                    for (const auto& t : insts)
+                        if (code(t) == kTypePointer && t[1] == w[1])
+                            *pointee = t[3];
+                return id;
+            }
+        return 0;
+    }
+    // Where the instruction with result id `id` is, among those with the result in word 2 (insts.size() if none).
+    std::size_t defined_at(std::uint32_t id) const {
+        for (std::size_t i = 0; i < insts.size(); ++i)
+            if (insts[i].size() >= 3 && code(insts[i]) != kDecorate && code(insts[i]) != kName &&
+                code(insts[i]) != kMemberName && insts[i][2] == id)
+                return i;
+        return insts.size();
+    }
+    bool location_used(std::uint32_t location) const {
+        for (const auto& w : insts)
+            if (code(w) == kDecorate && w.size() == 4 && w[2] == 30 && w[3] == location)
+                return true;
+        return false;
+    }
+    // An interface variable with a Location (and Flat), listed on the entry point.
+    std::uint32_t add_interface(std::uint32_t pointer, std::uint32_t storage, std::uint32_t location) {
+        const std::uint32_t var = add_global({op(kVariable, 4), pointer, 0, storage}, 2);
+        std::size_t at = 0;
+        for (std::size_t i = 0; i < insts.size(); ++i)
+            if (code(insts[i]) == kDecorate || code(insts[i]) == kMemberDecorate)
+                at = i + 1;
+        const std::vector<std::vector<std::uint32_t>> decorations = {{op(kDecorate, 4), var, 30, location},
+                                                                     {op(kDecorate, 3), var, 14}};
+        insts.insert(insts.begin() + static_cast<std::ptrdiff_t>(at), decorations.begin(), decorations.end());
+        for (auto& w : insts)
+            if (code(w) == kEntryPoint) {
+                w.push_back(var);
+                break;
+            }
+        return var;
+    }
+};
+
+constexpr std::uint16_t kOpFAdd = 129, kOpFSub = 131, kOpFMul = 133, kOpFDiv = 136, kOpVectorShuffle = 79,
+                        kOpCompositeConstruct = 80, kOpStore = 62;
+constexpr std::uint32_t kInput = 1, kOutput = 3, kFloatOne = 0x3f800000, kFloatHalf = 0x3f000000;
+
+}  // namespace
+
+bool spirv_view_to_eye_map_out(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return false;
+    };
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    std::uint32_t intType = 0;
+    const std::uint32_t eyeVar = m.variable("v_eye", kOutput, &intType);
+    if (!eyeVar || !intType)
+        return fail("no v_eye output");
+    // The transform block's variable and projection_matrix's member index.
+    const std::uint32_t block = m.named("u_transform_block_fat");
+    std::uint32_t member = ~0u, blockVar = 0;
+    for (const auto& w : m.insts)
+        if (block && Module::code(w) == Module::kMemberName && w.size() >= 4 && w[1] == block &&
+            literal(w, 3, w.size()) == "projection_matrix")
+            member = w[2];
+    for (const auto& w : m.insts)
+        if (block && Module::code(w) == Module::kVariable && w.size() >= 4 && w[3] == kUniform)
+            for (const auto& t : m.insts)
+                if (Module::code(t) == Module::kTypePointer && t[1] == w[1] && t[3] == block)
+                    blockVar = w[2];
+    if (!blockVar || member == ~0u)
+        return fail("no u_transform_block_fat.projection_matrix");
+    if (m.location_used(location))
+        return fail("location taken");
+    int stores = 0;
+    for (const auto& w : m.insts)
+        stores += Module::code(w) == kOpStore && w.size() >= 3 && w[1] == eyeVar;
+    if (stores != 1)
+        return fail("v_eye not stored exactly once");
+    const std::uint32_t fl = m.type_float(), v4 = m.type_vector(fl, 4), ptrF = m.type_pointer(kUniform, fl),
+                        ptrV4 = m.type_pointer(kOutput, v4);
+    std::uint32_t c[4];
+    for (std::uint32_t k = 0; k < 4; ++k)
+        c[k] = m.constant(intType, k);
+    const std::uint32_t cMember = m.constant(intType, member), one = m.constant(fl, kFloatOne),
+                        half = m.constant(fl, kFloatHalf);
+    const std::uint32_t mapVar = m.add_interface(ptrV4, kOutput, location);
+    std::size_t at = 0;
+    std::uint32_t view = 0;
+    for (std::size_t i = 0; i < m.insts.size(); ++i)
+        if (Module::code(m.insts[i]) == kOpStore && m.insts[i][1] == eyeVar) {
+            at = i + 1;
+            view = m.insts[i][2];
+        }
+    std::vector<std::vector<std::uint32_t>> body;
+    auto emit = [&](std::vector<std::uint32_t> w) {
+        const std::uint32_t id = m.fresh();
+        w[2] = id;
+        body.push_back(std::move(w));
+        return id;
+    };
+    const std::uint32_t eye = emit({op(kOpBitwiseAnd, 5), intType, 0, view, c[1]});
+    auto element = [&](std::uint32_t index, int col, int row) {
+        const std::uint32_t ptr = emit({op(kOpAccessChain, 7), ptrF, 0, blockVar, cMember, index, c[col], c[row]});
+        return emit({op(kOpLoad, 4), fl, 0, ptr});
+    };
+    auto bin = [&](std::uint16_t code, std::uint32_t a, std::uint32_t b) { return emit({op(code, 5), fl, 0, a, b}); };
+    // Clip x = P[0][0] x + P[2][0] z, w = P[2][3] z: ndc = P[0][0] t + P[2][0] / P[2][3] with t = x / (P[2][3] z), the
+    // same t for both projections. So ndc_eye = s ndc_view + k, s = Pe[0][0] / Pv[0][0], k = Pe[2][0]/Pe[2][3] -
+    // s Pv[2][0]/Pv[2][3]; likewise y with [1][1], [2][1]. uv = (ndc_x + 1) / 2 across, (1 - ndc_y) / 2 down (README).
+    const std::uint32_t v00 = element(view, 0, 0), v11 = element(view, 1, 1), v20 = element(view, 2, 0),
+                        v21 = element(view, 2, 1), v23 = element(view, 2, 3);
+    const std::uint32_t e00 = element(eye, 0, 0), e11 = element(eye, 1, 1), e20 = element(eye, 2, 0),
+                        e21 = element(eye, 2, 1), e23 = element(eye, 2, 3);
+    const std::uint32_t sx = bin(kOpFDiv, e00, v00), sy = bin(kOpFDiv, e11, v11);
+    const std::uint32_t kx = bin(kOpFSub, bin(kOpFDiv, e20, e23), bin(kOpFMul, sx, bin(kOpFDiv, v20, v23)));
+    const std::uint32_t ky = bin(kOpFSub, bin(kOpFDiv, e21, e23), bin(kOpFMul, sy, bin(kOpFDiv, v21, v23)));
+    const std::uint32_t ox = bin(kOpFMul, bin(kOpFAdd, bin(kOpFSub, one, sx), kx), half);
+    const std::uint32_t oy = bin(kOpFMul, bin(kOpFSub, bin(kOpFSub, one, sy), ky), half);
+    const std::uint32_t map = emit({op(kOpCompositeConstruct, 7), v4, 0, sx, sy, ox, oy});
+    body.push_back({op(kOpStore, 3), mapVar, map});
+    m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at), body.begin(), body.end());
+    words = m.emit();
+    return true;
+}
+
+bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return false;
+    };
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    std::uint32_t intType = 0;
+    const std::uint32_t eyeVar = m.variable("v_eye", kInput, &intType);
+    const std::uint32_t fragCoord = m.variable("gl_FragCoord", kInput, nullptr);
+    if (!eyeVar || !intType || !fragCoord)
+        return fail("no v_eye or gl_FragCoord input");
+    if (m.location_used(location))
+        return fail("location taken");
+    // The one load of v_eye, and the one FMul of (gl_FragCoord.xy, ...): the sample position in the view.
+    std::uint32_t eyeLoad = 0, uv = 0, uvType = 0;
+    int eyeLoads = 0, uvs = 0;
+    std::set<std::uint32_t> fragLoads, fragXY;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpLoad && w.size() >= 4 && w[3] == eyeVar) {
+            eyeLoad = w[2];
+            ++eyeLoads;
+        }
+        if (c == kOpLoad && w.size() >= 4 && w[3] == fragCoord)
+            fragLoads.insert(w[2]);
+        if (c == kOpVectorShuffle && w.size() == 7 && fragLoads.count(w[3]) && w[5] == 0 && w[6] == 1)
+            fragXY.insert(w[2]);
+        if (c == kOpFMul && w.size() == 5 && (fragXY.count(w[3]) || fragXY.count(w[4]))) {
+            uv = w[2];
+            uvType = w[1];
+            ++uvs;
+        }
+    }
+    if (eyeLoads != 1 || uvs != 1)
+        return fail("v_eye loaded or the position made other than once");
+    const std::uint32_t fl = m.type_float(), v4 = m.type_vector(fl, 4), ptrV4 = m.type_pointer(kInput, v4);
+    const std::uint32_t one = m.constant(intType, 1);
+    const std::uint32_t mapVar = m.add_interface(ptrV4, kInput, location);
+    // Renames: the load's and the FMul's results get new ids; the old ids become the edited values.
+    const std::uint32_t eyeRaw = m.fresh(), uvRaw = m.fresh();
+    const std::size_t eyeAt = m.defined_at(eyeLoad), uvAt = m.defined_at(uv);
+    if (eyeAt >= m.insts.size() || uvAt >= m.insts.size())
+        return fail("definitions not found");
+    m.insts[eyeAt][2] = eyeRaw;
+    m.insts[uvAt][2] = uvRaw;
+    const std::uint32_t map = m.fresh(), xy = m.fresh(), zw = m.fresh(), scaled = m.fresh();
+    const std::vector<std::vector<std::uint32_t>> uvBody = {
+        {op(kOpLoad, 4), v4, map, mapVar},
+        {op(kOpVectorShuffle, 7), uvType, xy, map, map, 0, 1},
+        {op(kOpVectorShuffle, 7), uvType, zw, map, map, 2, 3},
+        {op(kOpFMul, 5), uvType, scaled, uvRaw, xy},
+        {op(kOpFAdd, 5), uvType, uv, scaled, zw},
+    };
+    const std::vector<std::vector<std::uint32_t>> eyeBody = {{op(kOpBitwiseAnd, 5), intType, eyeLoad, eyeRaw, one}};
+    // The later one first, so the earlier index holds.
+    auto insert = [&](std::size_t after, const std::vector<std::vector<std::uint32_t>>& b) {
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(after + 1), b.begin(), b.end());
+    };
+    if (uvAt > eyeAt) {
+        insert(uvAt, uvBody);
+        insert(eyeAt, eyeBody);
+    } else {
+        insert(eyeAt, eyeBody);
+        insert(uvAt, uvBody);
+    }
+    words = m.emit();
+    return true;
+}
+
 }  // namespace xplane

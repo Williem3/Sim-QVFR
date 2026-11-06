@@ -41,4 +41,12 @@ bool spirv_eye_columns_resolve(std::vector<std::uint32_t>& words, std::string* w
 int spirv_eye_projection_beside(std::vector<std::uint32_t>& words, const char* block, const char* member,
                                 const char* transform, const char* projection);
 
+// Per-view post-processing taken from the eye (README.md "Measured: bloom per view"): a vertex shader that writes
+// `v_eye` (the view) and binds u_transform_block_fat gets a flat vec4 output at `location`: the affine map from the
+// view's uv to its eye's (scale xy, offset zw), from projection_matrix[v] and [v & 1] (identity for the eyes).
+bool spirv_view_to_eye_map_out(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why);
+// A fragment shader that samples at gl_FragCoord.xy * (scale) in layer v_eye (X-Plane's bloom apply): it reads that map
+// at `location`, samples at the position mapped into the eye's view, in layer v_eye & 1.
+bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t location, std::string* why);
+
 }  // namespace xplane

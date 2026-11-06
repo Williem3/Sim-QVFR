@@ -44,6 +44,8 @@ std::atomic<int> g_layerFromZModules{0};
 std::atomic<int> g_inverseModules{0};
 std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
 std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
+std::atomic<bool> g_bloomFromEye{false};  // four_views_set_bloom_from_eye
+std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0};
 std::atomic<double> g_outerScale{1.0};  // the outer views' rect, a share of their layers (1: the whole layer)
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
 
@@ -156,7 +158,24 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         const bool layered = spirv_layer_from_dispatch_z(words);
         if (layered)
             logf("xplane: compute shader writes layer = dispatch z (eye from z & 1), module %d", ++g_layerFromZModules);
-        if (inverted > 0 || folded > 0 || layered) {
+        // Bloom from the eye (README.md "Measured: bloom per view"): vertex shaders pass each view's map into its
+        // eye's view, and the bloom apply samples the eye's bloom there, so a focus view gets its eye's glow.
+        bool mapped = false, bloom = false;
+        if (g_bloomFromEye.load()) {
+            mapped = spirv_view_to_eye_map_out(words, kEyeMapLocation, nullptr);
+            if (mapped) {
+                const int n = ++g_eyeMapModules;
+                if (n <= 3 || n % 25 == 0)
+                    logf("xplane: vertex shader passes the view-to-eye map, module %d", n);
+            }
+            if (info->codeSize == kBloomApplyFsBytes && sha256_hex(info->pCode, info->codeSize) == kBloomApplyFsSha256) {
+                std::string why;
+                bloom = spirv_sample_eye_box(words, kEyeMapLocation, &why);
+                logf("xplane: bloom apply %s%s", bloom ? "samples the eye's bloom in the focus views, edit " : "NOT edited: ",
+                     bloom ? std::to_string(++g_bloomEdits).c_str() : why.c_str());
+            }
+        }
+        if (inverted > 0 || folded > 0 || layered || mapped || bloom) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();
@@ -406,6 +425,11 @@ void four_views_set_view_rects(bool on, double outerScale) {
 }
 
 int four_views_view_rect_sets() { return g_viewRectSets.load(); }
+
+void four_views_set_bloom_from_eye(bool on) {
+    g_bloomFromEye = on;
+    logf("xplane: bloom from the eye %s (focus views take their eye's glow)", on ? "on" : "off");
+}
 
 void four_views_set_eye_columns(bool on) {
     g_eyeColumns = on;

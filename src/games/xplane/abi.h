@@ -103,6 +103,12 @@ inline constexpr std::uintptr_t kVkCreateShaderModuleSlot = 0x632dad0;
 // creates it: its size and SHA-256.
 inline constexpr std::size_t kFinalResolveFsBytes = 16716;
 inline constexpr const char* kFinalResolveFsSha256 = "bddaf459f44fe41d16eaf8c672eadf99a15afbce80713b3fb33958f3a1a95e0f";
+// The bloom apply (fragment shader: the bloom mips summed at gl_FragCoord.xy * u_offset in layer v_eye, into
+// "resolved msaa"; README.md "Measured: bloom per view").
+inline constexpr std::size_t kBloomApplyFsBytes = 3084;
+inline constexpr const char* kBloomApplyFsSha256 = "131f984cc9e2bd4fb801f987969d49e92cc6bad16e5c44a89b2384d5b27b6938";
+// The vertex outputs' location for the view-to-eye map (spirv_view_to_eye_map_out); X-Plane's use 0-2 here.
+inline constexpr std::uint32_t kEyeMapLocation = 15;
 
 // ---- Eye columns (README.md "Composition"): the stereo image is (2 x eye width) x (outer + focus height), the views
 // half its height. Where X-Plane takes a view's height from the stereo image (its `+0x88`) or its own VR context:

@@ -268,6 +268,38 @@ int main() {
         o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
     }
 
+    // SIM_QVFR_SPV_EYEMAP: a fullscreen vertex shader writing v_eye (from a capture); writes <file>.map.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_EYEMAP")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        std::string reason;
+        const bool ok = xplane::spirv_view_to_eye_map_out(real, 15, &reason);
+        check(ok, "a vertex shader passes the view-to-eye map");
+        if (!ok)
+            std::printf("     %s\n", reason.c_str());
+        std::vector<std::uint32_t> again = real;
+        check(!xplane::spirv_view_to_eye_map_out(again, 15, &reason) && again == real, "a second time: left alone");
+        std::ofstream o(std::string(in) + ".map.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
+    // SIM_QVFR_SPV_BLOOM: the bloom apply fragment shader (from a capture); writes <file>.bloom.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_BLOOM")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        std::string reason;
+        const bool ok = xplane::spirv_sample_eye_box(real, 15, &reason);
+        check(ok, "the bloom apply samples its eye's bloom");
+        if (!ok)
+            std::printf("     %s\n", reason.c_str());
+        std::ofstream o(std::string(in) + ".bloom.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
     // SIM_QVFR_SPV_CLOUD: the cloud render compute shader (from a capture); writes <file>.edited.spv.
     if (const char* in = std::getenv("SIM_QVFR_SPV_CLOUD")) {
         std::ifstream file(in, std::ios::binary);
