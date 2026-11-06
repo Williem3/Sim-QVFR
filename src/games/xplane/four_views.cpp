@@ -43,9 +43,10 @@ std::atomic<int> g_eyeArrayModules{0};
 std::atomic<int> g_layerFromZModules{0};
 std::atomic<int> g_inverseModules{0};
 std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
+std::atomic<double> g_focusFraction{0.2}, g_focusFractionY{0.2};  // four_views_set_focus
 std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
 std::atomic<bool> g_bloomFromEye{false};  // four_views_set_bloom_from_eye
-std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0};
+std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0}, g_coefficientModules{0};
 std::atomic<bool> g_focusFullRate{false};  // four_views_set_focus_full_rate
 std::atomic<double> g_outerScale{1.0};  // the outer views' rect, a share of their layers (1: the whole layer)
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
@@ -155,6 +156,17 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             if (skipped > 0 || n <= 3 || n % 25 == 0)
                 logf("xplane: per-eye arrays folded in shader module %d: %d accesses, %d skipped", n, folded, skipped);
         }
+        // The projection coefficients (view rays from screen positions): the focus views' own, from their eye's and
+        // the focus fraction (README.md "Measured: the sky and positions in the focus views").
+        int coefSkipped = 0;
+        const int coefficients =
+            folded > 0 ? spirv_focus_proj_coefficients(words, "u_proj_coefficients",
+                                                       static_cast<float>(g_focusFraction.load()),
+                                                       static_cast<float>(g_focusFractionY.load()), &coefSkipped)
+                       : 0;
+        if (coefficients > 0 || coefSkipped > 0)
+            logf("xplane: projection coefficients: focus views' own in shader module (%d loads, %d component reads "
+                 "left), %d so far", coefficients, coefSkipped, ++g_coefficientModules);
         // Compute shaders taking their eye from the dispatch depth (the cloud render): write layer z, eye = z & 1.
         const bool layered = spirv_layer_from_dispatch_z(words);
         if (layered)
@@ -184,7 +196,7 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             if (fullRate > 0)
                 logf("xplane: shading-rate shader: layers 2-3 at the full rate (%d writes)", fullRate);
         }
-        if (inverted > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0) {
+        if (inverted > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();
@@ -196,7 +208,6 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
 
 // The focus views (four_views_set_focus): off = slots 2-3 copy the eyes (the copies stage).
 std::atomic<bool> g_focus{false};
-std::atomic<double> g_focusFraction{0.2}, g_focusFractionY{0.2};
 std::atomic<int> g_fillLogs{0};
 
 // The tangents the views were rendered with (four_views_tangents): taken by the first draw after each request.
@@ -596,6 +607,10 @@ bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]) {
 }
 
 void four_views_set_focus(bool on, double fraction, double fractionY) {
+    if (g_coefficientModules.load() > 0 && (fraction != g_focusFraction.load() ||
+                                            (fractionY > 0.0 ? fractionY : fraction) != g_focusFractionY.load()))
+        logf("xplane: focus size changed after X-Plane made its shaders: the sky and screen-space passes keep the launch "
+             "size until X-Plane restarts (projection coefficients are baked in)");
     g_focusFraction = fraction;
     g_focusFractionY = fractionY > 0.0 ? fractionY : fraction;
     g_focus = on;

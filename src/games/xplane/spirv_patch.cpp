@@ -948,4 +948,112 @@ int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t 
     return static_cast<int>(constructs.size());
 }
 
+
+int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char* member, float fx, float fy,
+                                  int* skipped) {
+    if (skipped)
+        *skipped = 0;
+    Module m;
+    if (!m.parse(words))
+        return 0;
+    constexpr std::uint16_t kOpSelect = 169, kOpSGreaterThanEqual = 175, kOpUGreaterThanEqual = 174, kOpTypeBool = 20;
+    // Structs with a member named `member`, and the Uniform variables of them.
+    std::map<std::uint32_t, std::uint32_t> memberOf;  // struct -> member index
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kMemberName && w.size() >= 4 && literal(w, 3, w.size()) == member)
+            memberOf[w[1]] = w[2];
+    if (memberOf.empty())
+        return 0;
+    std::map<std::uint32_t, std::uint32_t> varMember;  // variable -> member index
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kVariable && w.size() >= 4 && w[3] == kUniform)
+            for (const auto& t : m.insts)
+                if (Module::code(t) == Module::kTypePointer && t[1] == w[1] && memberOf.count(t[3]))
+                    varMember[w[2]] = memberOf[t[3]];
+    if (varMember.empty())
+        return 0;
+    // Integer constants by id (value), the fold's `index & 1` (result -> raw index), and int types' signedness.
+    std::map<std::uint32_t, std::uint32_t> constValue, typeOf;
+    std::map<std::uint32_t, bool> intSigned;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpConstant && w.size() == 4)
+            constValue[w[2]] = w[3];
+        if (c == kOpTypeInt && w.size() == 4)
+            intSigned[w[1]] = w[3] != 0;
+        if (w.size() >= 3 && typed_result(c))
+            typeOf[w[2]] = w[1];
+    }
+    std::map<std::uint32_t, std::uint32_t> foldedRaw;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpBitwiseAnd && w.size() == 5 && constValue.count(w[4]) && constValue[w[4]] == 1)
+            foldedRaw[w[2]] = w[3];
+    // Chains var[member][index & 1] to a vec4, and the loads through them.
+    std::map<std::uint32_t, std::uint32_t> chainRaw;  // chain result -> raw index
+    int partial = 0;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c != kOpAccessChain && c != kOpInBoundsAccessChain) || w.size() < 6 || !varMember.count(w[3]))
+            continue;
+        if (!constValue.count(w[4]) || constValue[w[4]] != varMember[w[3]] || !foldedRaw.count(w[5]))
+            continue;
+        if (w.size() == 6)
+            chainRaw[w[2]] = foldedRaw[w[5]];
+        else
+            ++partial;  // a component of the entry: not handled (counted)
+    }
+    if (skipped)
+        *skipped = partial;
+    std::vector<std::uint32_t> loads;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && chainRaw.count(w[3]))
+            loads.push_back(w[2]);
+    if (loads.empty())
+        return 0;
+    const std::uint32_t fl = m.type_float(), v2 = m.type_vector(fl, 2);
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const std::uint32_t bv4 = m.type_vector(boolType, 4);
+    std::uint32_t fxBits, fyBits, halfBits;
+    const float negHalf = -0.5f;
+    std::memcpy(&fxBits, &fx, 4);
+    std::memcpy(&fyBits, &fy, 4);
+    std::memcpy(&halfBits, &negHalf, 4);
+    const std::uint32_t cfx = m.constant(fl, fxBits), cfy = m.constant(fl, fyBits), cHalf = m.constant(fl, halfBits);
+    const std::uint32_t scale = m.add_global({op(44 /* OpConstantComposite */, 5), v2, 0, cfx, cfy}, 2);
+    int edited = 0;
+    for (const std::uint32_t load : loads) {
+        const std::size_t at = m.defined_at(load);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t v4 = m.insts[at][1], ptr = m.insts[at][3];
+        const std::uint32_t raw = chainRaw[ptr];
+        const auto rawType = typeOf.find(raw);
+        if (rawType == typeOf.end() || !intSigned.count(rawType->second))
+            continue;
+        const std::uint32_t two = m.constant(rawType->second, 2);
+        const std::size_t loadAt = m.defined_at(load);  // constants may have moved it
+        const std::uint32_t original = m.fresh();
+        m.insts[loadAt][2] = original;
+        const std::uint32_t xy = m.fresh(), fxy = m.fresh(), zw = m.fresh(), focusC = m.fresh(), isFocus = m.fresh(),
+                            mask = m.fresh();
+        const std::vector<std::vector<std::uint32_t>> body = {
+            {op(kOpVectorShuffle, 7), v2, xy, original, original, 0, 1},
+            {op(kOpFMul, 5), v2, fxy, xy, scale},
+            {op(142 /* OpVectorTimesScalar */, 5), v2, zw, fxy, cHalf},
+            {op(kOpVectorShuffle, 9), v4, focusC, fxy, zw, 0, 1, 2, 3},
+            {op(intSigned[rawType->second] ? kOpSGreaterThanEqual : kOpUGreaterThanEqual, 5), boolType, isFocus, raw,
+             two},
+            {op(kOpCompositeConstruct, 7), bv4, mask, isFocus, isFocus, isFocus, isFocus},
+            {op(kOpSelect, 6), v4, load, mask, focusC, original},
+        };
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(loadAt + 1), body.begin(), body.end());
+        ++edited;
+    }
+    if (edited > 0)
+        words = m.emit();
+    return edited;
+}
+
 }  // namespace xplane

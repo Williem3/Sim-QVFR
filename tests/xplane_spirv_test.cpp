@@ -315,6 +315,29 @@ int main() {
         o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
     }
 
+    // SIM_QVFR_SPV_COEF: shaders reading the folded u_proj_coefficients (from a capture, ';'-separated); each
+    // writes <file>.coef.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_COEF")) {
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            int skipped = 0;
+            const int n = xplane::spirv_focus_proj_coefficients(real, "u_proj_coefficients", 0.2f, 0.2f, &skipped);
+            std::printf("     %s: %d loads, %d component reads\n", in.c_str(), n, skipped);
+            check(n >= 0, "focus coefficients: coverage reported");
+            std::ofstream o(in + ".coef.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
     // SIM_QVFR_SPV_CLOUD: the cloud render compute shader (from a capture); writes <file>.edited.spv.
     if (const char* in = std::getenv("SIM_QVFR_SPV_CLOUD")) {
         std::ifstream file(in, std::ios::binary);

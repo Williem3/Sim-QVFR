@@ -54,4 +54,12 @@ bool spirv_sample_eye_box(std::vector<std::uint32_t>& words, std::uint32_t locat
 // layers >= firstLayer every tile gets rate 0 (1x1, full). Returns the image writes edited (0: `words` unchanged).
 int spirv_full_rate_from_layer(std::vector<std::uint32_t>& words, std::uint32_t firstLayer, std::string* why);
 
+// Per-eye projection coefficients (README.md "Measured: the sky and positions in the focus views"): `member` is a
+// vec4[2] (xy scale, zw offset: the view ray's tangents at screen position 0..1), which the fold reads at index & 1.
+// After each such load, views 2-3 (index >= 2) get the focus box's coefficients from their eye's: (fx c.x, fy c.y,
+// -fx c.x / 2, -fy c.y / 2), the box centred on the eye's forward direction. Returns loads edited; `skipped` counts
+// reads of single components (left as they are).
+int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char* member, float fx, float fy,
+                                  int* skipped);
+
 }  // namespace xplane
