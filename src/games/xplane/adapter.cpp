@@ -123,6 +123,7 @@ public:
     bool qvfr_composable() const override { return false; }    // not by the D3D12 compositor:
     bool qvfr_compose_d3d11() const override { return true; }  // X-Plane submits D3D11 (--d3d11_vr)
     bool qvfr_eye_columns() const override { return true; }    // one side-by-side image, each eye a column
+    bool qvfr_one_view_size() const override { return true; }  // four instanced layers, one viewport
     bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         if (!qvfr_) {
             simqvfr::logf("xplane: QVFR not started: it needs the launcher's early load with mode=views4 and "

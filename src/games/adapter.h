@@ -62,6 +62,9 @@ public:
     // The game lays its views out in eye columns (views4_rect_eye_columns) and submits each eye as its half of
     // the target: the layer offers that layout's eye size, and keeps each eye's offset, cut to its outer view.
     virtual bool qvfr_eye_columns() const { return false; }
+    // The game draws all four views at one size (instanced layers in one viewport): each eye column is one view wide
+    // and two high, a view being the larger of the outer and focus sizes asked for (the layer offers that).
+    virtual bool qvfr_one_view_size() const { return false; }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the

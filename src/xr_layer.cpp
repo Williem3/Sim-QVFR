@@ -1544,10 +1544,19 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     // double-wide target holds all four.
     const Views4Layout& layout = experiment.views4Layout;
     const bool columns = experiment.views4 && game->qvfr_eye_columns();  // eye columns: views4_rect_eye_columns
-    const double widthScale =
-        experiment.views4 ? (columns ? layout.column_eye_width() : layout.eye_width()) : experiment.eyeScale;
-    const double heightScale =
-        experiment.views4 ? (columns ? layout.column_eye_height() : layout.eye_height()) : experiment.eyeScale;
+    // One view size (qvfr_one_view_size): every view the larger of the outer and focus sizes, the column two high.
+    const bool oneSize = columns && game->qvfr_one_view_size();
+    const double viewWidth = std::max(layout.outer_width(), layout.focus);
+    const double viewHeight = std::max(layout.outer_height(), layout.focusHeight);
+    const double widthScale = experiment.views4 ? (oneSize ? viewWidth : columns ? layout.column_eye_width() : layout.eye_width())
+                                                : experiment.eyeScale;
+    const double heightScale = experiment.views4
+                                   ? (oneSize ? 2 * viewHeight : columns ? layout.column_eye_height() : layout.eye_height())
+                                   : experiment.eyeScale;
+    if (oneSize && stereo && (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight))
+        logf("views4: the game draws every view at one size: %.2f x %.2f of the native eye (outer asked %.2f x %.2f, "
+             "focus %.2f x %.2f)", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(), layout.focus,
+             layout.focusHeight);
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum.
