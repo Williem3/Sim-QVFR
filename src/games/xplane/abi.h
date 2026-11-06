@@ -95,6 +95,43 @@ inline constexpr MultiplierWrite kMoreMultiplierWrites[] = {
     {0x92f34c, 5 /* ebp */, 3 /* rbx */, {0x89, 0xAB, 0x90, 0x24, 0x00, 0x00}},
     {0x92f61f, 6 /* esi */, 0 /* rax */, {0x89, 0xB0, 0x90, 0x24, 0x00, 0x00}},
 };
+// The vegetation cull's uniform fill (0x9382f0, one call per cull from 0x1932ae8; README.md "Measured: trees missing in
+// the focus views"): rdi the cull object, rbx the setup's struct (0x1935b70: +0x19c = max(multiplier, viewport count),
+// +0x1a0 = that > 1), r9 the uniform data. `u_render_layers` (+0x1b8) = ([rdi+0x1c8], the copied flag, != 0) + 1: a
+// hard-coded 2 in stereo, whatever the multiplier. It is the mesh trees' instance factor and the billboards' instance
+// count. {mov eax, esi; cmp byte [rdi+0x1c8], al; setne al; inc eax; mov [r9+0x1b8], eax}.
+inline constexpr std::uintptr_t kVegetationRenderLayers = 0x9384a9;
+inline constexpr std::uint8_t kVegetationRenderLayersAnchor[20] = {0x8B, 0xC6, 0x38, 0x87, 0xC8, 0x01, 0x00,
+                                                                   0x00, 0x0F, 0x95, 0xC0, 0xFF, 0xC0, 0x41,
+                                                                   0x89, 0x81, 0xB8, 0x01, 0x00, 0x00};
+inline constexpr std::size_t kCullSetupViewCount = 0x19c;  // in the setup's struct (rbx)
+// The cull frustum builder (0xce08d0, into state+0x24a0; README.md "Measured: the right eye's outer strip culled"):
+// `if (multiplier == 2 && projection 0 is perspective)` it builds one frustum covering both eyes (0xcb3930 from
+// modelview/projection slots 0-1); any other multiplier takes a per-view loop whose combined frustum is view 0's, the
+// left eye alone. {cmp esi, 2; jne 0xce095b}: 4 now takes the two-eye path too (the eyes' union holds the focus views).
+inline constexpr std::uintptr_t kStereoFrustumTest = 0xce08ec;
+inline constexpr std::uint8_t kStereoFrustumTestAnchor[5] = {0x83, 0xFE, 0x02, 0x75, 0x6A};
+inline constexpr std::uintptr_t kStereoFrustumOther = 0xce095b;  // the jne's target: the other multipliers
+// Stereo as `max(multiplier, viewport count) == 2` (README.md "Measured: the right eye's SSR matrices never written"):
+// with four views these skip the eyes' second entry or their stereo-only work, leaving it stale. Each now takes 2 or 4.
+// {cmp X, 2; jne target}: eye-1 / stereo-only blocks (0x7b888d: per-eye globals from modelview and projection slots
+// 0-1; 0x93005d: a per-eye fill reading projection slot 1; 0x1910eff: a stereo-only branch).
+struct StereoCountJump {
+    std::uintptr_t rva, target;
+    std::uint8_t anchor[9];  // the cmp (3 bytes, immediate 2 at +2) and the jne rel32
+};
+inline constexpr StereoCountJump kStereoCountJumps[] = {
+    {0x7b888d, 0x7b899b, {0x83, 0xFD, 0x02, 0x0F, 0x85, 0x05, 0x01, 0x00, 0x00}},
+    {0x93005d, 0x930212, {0x83, 0x3A, 0x02, 0x0F, 0x85, 0xAC, 0x01, 0x00, 0x00}},
+    {0x1910eff, 0x1911481, {0x83, 0x3A, 0x02, 0x0F, 0x85, 0x79, 0x05, 0x00, 0x00}},
+};
+// The SSR fill (0x918cd0, u_ssr_data): the count stored at [rbp+0x518], read only by `stereo = (count == 2)` (sete,
+// passed to the reprojection 0x927040) and `if (count == 2)` eye 1's u_proj/u_reproj/u_local_reproj. A 4 is stored as 2.
+inline constexpr std::uintptr_t kSsrFillCount = 0x918f7f;
+inline constexpr std::uint8_t kSsrFillCountAnchor[6] = {0x89, 0x85, 0x18, 0x05, 0x00, 0x00};  // mov [rbp+0x518], eax
+// The reprojection globals (0x925d70): `cmp ebx, 2; sete bpl` (stereo flag), then `if (ebx == 2)` eye 1. A 4 becomes 2.
+inline constexpr std::uintptr_t kReprojectionCount = 0x925dc8;
+inline constexpr std::uint8_t kReprojectionCountAnchor[7] = {0x83, 0xFB, 0x02, 0x40, 0x0F, 0x94, 0xC5};
 // The end of the modelview copy (0x15955d0, after 0x1595510 copied the projections in 0x7b9f00's stereo path):
 // `or dword [rax], 0x18; mov rbx, [rsp+0x30]`, rax the render state.
 inline constexpr std::uintptr_t kModelviewCopyEnd = 0x1595653;
@@ -123,6 +160,9 @@ inline constexpr std::size_t kBloomApplyFsBytes = 3084;
 inline constexpr const char* kBloomApplyFsSha256 = "131f984cc9e2bd4fb801f987969d49e92cc6bad16e5c44a89b2384d5b27b6938";
 // The vertex outputs' location for the view-to-eye map (spirv_view_to_eye_map_out); X-Plane's use 0-2 here.
 inline constexpr std::uint32_t kEyeMapLocation = 15;
+// The layer passed from vertex to fragment shaders for the alpha tests' mip bias (spirv_layer_out,
+// spirv_alpha_test_lod_bias). X-Plane's shaders use locations up to 16 (capture XPlane_frame2409.rdc, 201 modules).
+inline constexpr std::uint32_t kLayerLocation = 20;
 
 // ---- Eye columns (README.md "Composition"): the stereo image is (2 x eye width) x (outer + focus height), the views
 // half its height. Where X-Plane takes a view's height from the stereo image (its `+0x88`) or its own VR context:
@@ -145,7 +185,8 @@ inline constexpr std::uint8_t kVrContextResizeHeightBAnchor[5] = {0x44, 0x8B, 0x
 // The single-viewport setter (x ecx, y edx, w r8d, h r9d; it also gives the scissor): its first instruction,
 // `mov [rsp+8], rbx`. Every one-viewport pass comes here (0x1595790 with count 1 among them). The final resolve sets
 // (0, 0, 2 x context width, context height): with the context at half the column (capture XPlane_frame2096.rdc), it
-// drew the top row only.
+// drew the top row only. Its width is the desktop window's when that is wider (a 1614-wide image on a 2560-wide
+// monitor: 2560x675, session 2026-11-05 22:23), so the match is width >= 2 x context width.
 inline constexpr std::uintptr_t kSetViewport = 0x104a500;
 inline constexpr std::uint8_t kSetViewportAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 // The VR REN_context's pointer (written by 0xc66670), and its width and height (`+4`, `+8`; "Updating REN_context").

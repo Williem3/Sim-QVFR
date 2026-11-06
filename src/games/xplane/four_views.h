@@ -24,6 +24,12 @@ void four_views_set_view_rects(bool on, double outerScale);
 // set viewports calls given four rects so far.
 // Focus views take their eye's bloom (README.md "Measured: bloom per view"). Before X-Plane makes its shaders.
 void four_views_set_bloom_from_eye(bool on);
+// Alpha-tested materials in views 0-1 test the alpha of the focus view's mip (README.md "Measured: a 'wall' missing in
+// the focus view"), so fences and foliage cut out alike in both views. Before X-Plane makes its shaders.
+void four_views_set_periphery_alpha_lod(bool on);
+// SSR in the focus views: marched in their eye's screen (true, the default) or in their own. Before X-Plane makes its
+// shaders.
+void four_views_set_ssr_from_eye(bool on);
 // The focus views shaded at the full rate (VRS writes rate 1x1 into layers 2-3). Before X-Plane makes its shaders.
 void four_views_set_focus_full_rate(bool on);
 int four_views_view_rect_sets();
@@ -38,6 +44,8 @@ std::uint64_t four_views_draws();
 bool four_views_final_resolve_made();
 // Logs the viewports X-Plane set lately (the setter's arguments) and the VR context's size (diagnostics).
 void four_views_viewport_log();
+// Logs the stereo vegetation culls given u_render_layers 4, by the view count their setup computed (diagnostics).
+void four_views_vegetation_log();
 
 // What the views were last rendered with, per eye (left, right, up, down tangents): the eye's own projection and the
 // focus view's. False before the first four-view draw. A fresh record is taken at the next draw after each call.

@@ -4,6 +4,7 @@
 #include <bcrypt.h>
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -46,7 +47,10 @@ std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
 std::atomic<double> g_focusFraction{0.2}, g_focusFractionY{0.2};  // four_views_set_focus
 std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
 std::atomic<bool> g_bloomFromEye{false};  // four_views_set_bloom_from_eye
-std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0}, g_coefficientModules{0};
+std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0}, g_coefficientModules{0}, g_parityModules{0}, g_ssrModules{0};
+std::atomic<bool> g_peripheryAlphaLod{false};  // four_views_set_periphery_alpha_lod
+std::atomic<bool> g_ssrFromEye{true};          // four_views_set_ssr_from_eye
+std::atomic<int> g_layerOutModules{0}, g_alphaLodModules{0}, g_tileModules{0};
 std::atomic<bool> g_focusFullRate{false};  // four_views_set_focus_full_rate
 std::atomic<double> g_outerScale{1.0};  // the outer views' rect, a share of their layers (1: the whole layer)
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
@@ -75,6 +79,9 @@ void set_viewports(int count, int multiplier, const std::int32_t* rects) {
     }
     g_setViewportsOriginal(count, multiplier, rects);
 }
+// Stereo vegetation culls given u_render_layers 4, by the setup's view count (max(multiplier, viewport count)): index
+// 0-3 that count, 4 for 4 or more (the stub counts; four_views_vegetation_log).
+std::atomic<int> g_vegetationCulls[5]{};
 std::atomic<int> g_columnViewports{0};  // final resolve viewports given the whole column (the stub counts)
 static_assert(sizeof(std::atomic<int>) == 4, "the stub's lock inc dword");
 // The last 64 calls of the single-viewport setter (x, y, w, h), written by the stub: the index, then the entries.
@@ -149,6 +156,12 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         if (inverted > 0)
             logf("xplane: light size from the eye's projection in shader module (%d accesses), %d so far", inverted,
                  ++g_inverseModules);
+        // Shadows (README.md "Measured: dark shadow edges in the focus views"): deferred shading's right-eye test
+        // (v_eye == 1) takes v_eye & 1, so the right focus view's shadow lookups come from its eye, not 6 cm off.
+        const int parity = spirv_eye_parity_test(words, "u_shadow_data", "u_eye_right_to_left", "v_eye");
+        if (parity > 0)
+            logf("xplane: shadows: the right-eye test takes v_eye & 1 in shader module (%d tests), %d so far", parity,
+                 ++g_parityModules);
         int skipped = 0;
         const int folded = spirv_fold_eye_arrays(words, kEyeArrayBlocks, &skipped);
         if (folded > 0 || skipped > 0) {
@@ -167,6 +180,36 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         if (coefficients > 0 || coefSkipped > 0)
             logf("xplane: projection coefficients: focus views' own in shader module (%d loads, %d component reads "
                  "left), %d so far", coefficients, coefSkipped, ++g_coefficientModules);
+        // SSR in the focus views. From the eye (default; README.md "Measured: focus views reflect only what is in the
+        // box"): a focus pixel's ray is projected with its eye's u_proj (the fold's) and marched in its eye's hi-Z and lit
+        // history, so it reflects what lies outside the box too. Or in the focus view's own screen
+        // (`xplane_ssr_from_eye=0`; README.md "Measured: the wing lit differently in the focus views"): sharper, but blind
+        // to anything outside the box. Only in modules binding u_ssr_data (the hi-Z builder reads tex_hiZ too).
+        static const char kSsrBlock[] = "u_ssr_data";
+        const auto* bytes = reinterpret_cast<const char*>(words.data());
+        const bool ssrModule =
+            std::search(bytes, bytes + words.size() * 4, kSsrBlock, kSsrBlock + sizeof(kSsrBlock) - 1) != bytes + words.size() * 4;
+        int ssrProjections = 0, ssrRays = 0;
+        if (folded > 0 && ssrModule && g_ssrFromEye.load())
+            ssrRays = spirv_ray_reads_from_eye(words, {"tex_hiZ", "tex_ssr", "gbuffer_vel"});
+        else if (folded > 0 && ssrModule)
+            ssrProjections = spirv_focus_projection_matrix(words, "u_ssr_data", "u_proj",
+                                                           static_cast<float>(g_focusFraction.load()),
+                                                           static_cast<float>(g_focusFractionY.load()));
+        if (ssrRays > 0)
+            logf("xplane: SSR: focus views march in their eye's screen in shader module (%d reads), %d so far", ssrRays,
+                 ++g_ssrModules);
+        if (ssrProjections > 0)
+            logf("xplane: SSR: focus views trace with their own projection in shader module (%d loads), %d so far",
+                 ssrProjections, ++g_ssrModules);
+        // Tiled lights (README.md "Measured: right-eye popping near the wing"): the focus views pick the tile of their
+        // pixel's position in the eye. After the coefficient edit, which would otherwise turn the eye's coefficients
+        // this reads into the focus box's.
+        const int tiles = spirv_focus_light_tiles(words, static_cast<float>(g_focusFraction.load()),
+                                                  static_cast<float>(g_focusFractionY.load()), nullptr);
+        if (tiles > 0)
+            logf("xplane: tiled lights: focus views take their eye's tile in shader module (%d coordinates), %d so far",
+                 tiles, ++g_tileModules);
         // Compute shaders taking their eye from the dispatch depth (the cloud render): write layer z, eye = z & 1.
         const bool layered = spirv_layer_from_dispatch_z(words);
         if (layered)
@@ -196,7 +239,30 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             if (fullRate > 0)
                 logf("xplane: shading-rate shader: layers 2-3 at the full rate (%d writes)", fullRate);
         }
-        if (inverted > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0) {
+        // Alpha tests matched across views (README.md "Measured: a 'wall' missing in the focus view"): vertex shaders pass
+        // their layer on, and alpha-tested fragment shaders take the alpha of the focus view's mip in views 0-1.
+        bool layerOut = false;
+        int alphaLod = 0;
+        if (g_peripheryAlphaLod.load()) {
+            layerOut = spirv_layer_out(words, kLayerLocation);
+            if (layerOut) {
+                const int n = ++g_layerOutModules;
+                if (n <= 3 || n % 25 == 0)
+                    logf("xplane: vertex shader passes its layer to the fragment shader, module %d", n);
+            }
+            const double fx = g_focusFraction.load(), fy = g_focusFractionY.load();
+            const float bias = static_cast<float>(0.5 * std::log2(fx * fy));
+            std::string why;
+            alphaLod = spirv_alpha_test_lod_bias(words, kLayerLocation, bias, &why);
+            if (alphaLod > 0) {
+                const int n = ++g_alphaLodModules;
+                if (n <= 3 || n % 25 == 0)
+                    logf("xplane: alpha test takes the focus view's mip in the periphery (bias %.2f, %d samples), module %d",
+                         bias, alphaLod, n);
+            }
+        }
+        if (inverted > 0 || parity > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0 ||
+            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();
@@ -446,6 +512,86 @@ bool four_views_copies_start() {
                       static_cast<unsigned long long>(w.rva));
         ok &= redirect(w.rva, w.anchor, sizeof(w.anchor), stub, sizeof(stub), what);
     }
+    // The vegetation cull's u_render_layers (abi.h kVegetationRenderLayers): stereo ? 4 : 1 instead of stereo + 1, so
+    // the cull writes four instances per tree (mesh trees: visible x 4, the VS taking point i / 4 and layer i % 4) and four
+    // billboard instances (layer i % 4). With 2 the mesh trees drew only the first half of the visible points (popping)
+    // and the billboards only layers 0-1 (none in the focus views). Each stereo cull is counted by the setup's own view
+    // count (rcx, rax free here: the next instructions load ecx and eax; r9, rbx, rdi, esi = 0 kept).
+    std::uint8_t renderLayers[] = {
+        0x0F, 0xB6, 0x87, 0xC8, 0x01, 0x00, 0x00,  // movzx eax, byte [rdi + 0x1c8]  (the stereo flag)
+        0x85, 0xC0,                                // test eax, eax
+        0x74, 0x25,                                // jz one
+        0x8B, 0x8B, 0x9C, 0x01, 0x00, 0x00,        // mov ecx, [rbx + 0x19c]  (the setup's view count)
+        0x83, 0xF9, 0x04,                          // cmp ecx, 4
+        0x76, 0x05,                                // jbe +5
+        0xB9, 0x04, 0x00, 0x00, 0x00,              // mov ecx, 4
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,        // mov rax, g_vegetationCulls
+        0xF0, 0xFF, 0x04, 0x88,                    // lock inc dword [rax + rcx*4]
+        0xB8, 0x04, 0x00, 0x00, 0x00,              // mov eax, 4
+        0xEB, 0x05,                                // jmp store
+        0xB8, 0x01, 0x00, 0x00, 0x00,              // one: mov eax, 1
+        0x41, 0x89, 0x81, 0xB8, 0x01, 0x00, 0x00,  // store: mov [r9 + 0x1b8], eax (the original)
+    };
+    static_assert(sizeof(renderLayers) == 11 + 0x25 + 5 + 7, "the jz lands on one, the jmp on store");
+    static_assert(kCullSetupViewCount == 0x19c && sizeof(std::atomic<int>) == 4, "the stub's offsets and counters");
+    const auto culls = reinterpret_cast<std::uintptr_t>(&g_vegetationCulls[0]);
+    std::memcpy(renderLayers + 29, &culls, 8);
+    ok &= redirect(kVegetationRenderLayers, kVegetationRenderLayersAnchor, sizeof(kVegetationRenderLayersAnchor),
+                   renderLayers, sizeof(renderLayers), "vegetation cull: u_render_layers 4 in stereo (was 2)");
+    // The cull frustum (abi.h kStereoFrustumTest): with the multiplier 4 X-Plane culled against the left eye's frustum
+    // alone, so the right eye's outer strip (its tangents 1.213 to 1.402) lost objects and lights, which popped in and out
+    // there. 2 or 4 take the two-eye path; others go on as before. rax is free here (the function's next write is
+    // `lea rax`, and the other path starts with compares and calls).
+    std::uint8_t frustum[] = {
+        0x83, 0xFE, 0x02,                    // cmp esi, 2
+        0x74, 0x11,                          // je two-eye path (the stub's end: back to the original's next instruction)
+        0x83, 0xFE, 0x04,                    // cmp esi, 4
+        0x74, 0x0C,                          // je two-eye path
+        0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // mov rax, the other multipliers' path
+        0xFF, 0xE0,                          // jmp rax
+    };
+    static_assert(sizeof(frustum) == 22, "the je offsets land on the stub's end");
+    const std::uintptr_t other = simqvfr::module_base() + kStereoFrustumOther;
+    std::memcpy(frustum + 12, &other, 8);
+    ok &= redirect(kStereoFrustumTest, kStereoFrustumTestAnchor, sizeof(kStereoFrustumTestAnchor), frustum,
+                   sizeof(frustum), "cull frustum: both eyes' with 4 views (was the left eye's alone)");
+    // Stereo as `count == 2` (abi.h kStereoCountJumps): 2 or 4 run the eyes' work; otherwise the original jne's target,
+    // through `jmp [rip]` (no register used). The flags are not read after the jne.
+    for (const StereoCountJump& s : kStereoCountJumps) {
+        std::uint8_t stub[] = {
+            s.anchor[0], s.anchor[1], 0x02,      // cmp X, 2 (the original)
+            0x74, 0x13,                          // je: the eyes' work (the stub's end, back after the jne)
+            s.anchor[0], s.anchor[1], 0x04,      // cmp X, 4
+            0x74, 0x0E,                          // je: the eyes' work
+            0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,  // jmp [rip]: the original jne's target
+            0, 0, 0, 0, 0, 0, 0, 0,
+        };
+        static_assert(sizeof(stub) == 24, "the je offsets land on the stub's end");
+        const std::uintptr_t target = simqvfr::module_base() + s.target;
+        std::memcpy(stub + 16, &target, 8);
+        char what[96];
+        std::snprintf(what, sizeof(what), "stereo test (count == 2) takes 4 at 0x%llx", static_cast<unsigned long long>(s.rva));
+        ok &= redirect(s.rva, s.anchor, sizeof(s.anchor), stub, sizeof(stub), what);
+    }
+    // The SSR fill's count (abi.h kSsrFillCount) and the reprojection globals' (kReprojectionCount): 4 becomes 2, so the
+    // stereo flag is set and the right eye's matrices are written (they were left stale: garbage in u_ssr_data[1]).
+    static const std::uint8_t ssrCount[] = {
+        0x83, 0xF8, 0x04,                    // cmp eax, 4
+        0x75, 0x05,                          // jne +5
+        0xB8, 0x02, 0x00, 0x00, 0x00,        // mov eax, 2
+        0x89, 0x85, 0x18, 0x05, 0x00, 0x00,  // mov [rbp+0x518], eax (the original)
+    };
+    ok &= redirect(kSsrFillCount, kSsrFillCountAnchor, sizeof(kSsrFillCountAnchor), ssrCount, sizeof(ssrCount),
+                   "SSR fill: the eyes' stereo count with 4 views (right eye's u_proj/u_reproj written)");
+    static const std::uint8_t reprojectionCount[] = {
+        0x83, 0xFB, 0x04,              // cmp ebx, 4
+        0x75, 0x05,                    // jne +5
+        0xBB, 0x02, 0x00, 0x00, 0x00,  // mov ebx, 2
+        0x83, 0xFB, 0x02,              // cmp ebx, 2 (the original)
+        0x40, 0x0F, 0x94, 0xC5,        // sete bpl (the original)
+    };
+    ok &= redirect(kReprojectionCount, kReprojectionCountAnchor, sizeof(kReprojectionCountAnchor), reprojectionCount,
+                   sizeof(reprojectionCount), "reprojection globals: the eyes' stereo count with 4 views (right eye's written)");
     const bool clouds = simqvfr::code_write(kCloudDispatchDepth, kCloudDispatchDepthCount, sizeof(kCloudDispatchDepthCount));
     logf("xplane: cloud render dispatch depth = view count (was stereo ? 2 : 1) at 0x%llx: %s",
          static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
@@ -465,6 +611,18 @@ int four_views_view_rect_sets() { return g_viewRectSets.load(); }
 void four_views_set_focus_full_rate(bool on) {
     g_focusFullRate = on;
     logf("xplane: focus views at the full shading rate %s", on ? "on" : "off");
+}
+
+void four_views_set_ssr_from_eye(bool on) {
+    g_ssrFromEye = on;
+    logf("xplane: SSR in the focus views %s", on ? "marched in the eye's screen (reflects what lies outside the box)"
+                                                 : "traced in the focus view's own screen (sharper, blind outside the box)");
+}
+
+void four_views_set_periphery_alpha_lod(bool on) {
+    g_peripheryAlphaLod = on;
+    logf("xplane: alpha tests in the periphery at the focus view's mip %s (fences and foliage alike in both views)",
+         on ? "on" : "off");
 }
 
 void four_views_set_bloom_from_eye(bool on) {
@@ -510,7 +668,8 @@ bool four_views_eye_columns_start() {
                    sizeof(resizeA), "eye columns: VR context resize A height / 2");
     ok &= redirect(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor), resizeB,
                    sizeof(resizeB), "eye columns: VR context resize B height / 2");
-    // The final resolve's viewport (0, 0, 2 x context width, context height) gets the whole column: twice the height.
+    // The final resolve's viewport (0, 0, max(2 x context width, desktop window width), context height) gets the whole
+    // column: twice the height.
     std::uint8_t viewport[] = {
         // Recorded first (diagnostics, four_views_viewport_log): (x, y, w, h) into a ring of 64.
         0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // mov rax, &g_viewportRing
@@ -535,8 +694,8 @@ bool four_views_eye_columns_start() {
         0x75, 0x1C,                          // 30: jne done
         0x44, 0x8B, 0x50, 0x04,              // 32: mov r10d, [rax+4]
         0x45, 0x01, 0xD2,                    // 36: add r10d, r10d
-        0x45, 0x39, 0xD0,                    // 39: cmp r8d, r10d       (w = 2 x context width)
-        0x75, 0x10,                          // 42: jne done
+        0x45, 0x39, 0xD0,                    // 39: cmp r8d, r10d       (w >= 2 x context width: the resolve's
+        0x72, 0x10,                          // 42: jb done              target is the desktop window's width when wider)
         0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // 44: mov rax, &g_columnViewports
         0xF0, 0xFF, 0x00,                    // 54: lock inc dword [rax]
         0x45, 0x01, 0xC9,                    // 57: add r9d, r9d
@@ -561,6 +720,15 @@ bool four_views_eye_columns_start() {
 }
 
 int four_views_column_viewports() { return g_columnViewports.load(); }
+
+void four_views_vegetation_log() {
+    int c[5];
+    for (int i = 0; i < 5; ++i)
+        c[i] = g_vegetationCulls[i].load();
+    logf("xplane: stereo vegetation culls given u_render_layers 4: %d; the setup's view count (max(multiplier, "
+         "viewports)) was 2 in %d, 4+ in %d, other in %d",
+         c[0] + c[1] + c[2] + c[3] + c[4], c[2], c[4], c[0] + c[1] + c[3]);
+}
 
 std::uint64_t four_views_draws() { return g_fourViewDraws.load(std::memory_order_relaxed); }
 

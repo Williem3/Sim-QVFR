@@ -1056,4 +1056,742 @@ int spirv_focus_proj_coefficients(std::vector<std::uint32_t>& words, const char*
     return edited;
 }
 
+int spirv_focus_projection_matrix(std::vector<std::uint32_t>& words, const char* block, const char* member, float fx,
+                                  float fy) {
+    Module m;
+    if (!m.parse(words) || !(fx > 0.0f) || !(fy > 0.0f))
+        return 0;
+    constexpr std::uint16_t kOpSelect = 169, kOpSGreaterThanEqual = 175, kOpUGreaterThanEqual = 174, kOpTypeBool = 20,
+                            kOpTypeMatrix = 24, kOpCompositeExtract = 81, kOpCompositeInsert = 82;
+    // The struct named `block`, its member named `member`, and the Uniform variables of it.
+    const std::uint32_t blockType = m.named(block);
+    std::int64_t memberIndex = -1;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kMemberName && w.size() >= 4 && w[1] == blockType && literal(w, 3, w.size()) == member)
+            memberIndex = w[2];
+    if (!blockType || memberIndex < 0)
+        return 0;
+    std::set<std::uint32_t> vars;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kVariable && w.size() >= 4 && w[3] == kUniform)
+            for (const auto& t : m.insts)
+                if (Module::code(t) == Module::kTypePointer && t[1] == w[1] && t[3] == blockType)
+                    vars.insert(w[2]);
+    if (vars.empty())
+        return 0;
+    std::map<std::uint32_t, std::uint32_t> constValue, typeOf, matrixColumn;  // matrixColumn: mat4 type -> vec4 type
+    std::map<std::uint32_t, bool> intSigned;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpConstant && w.size() == 4)
+            constValue[w[2]] = w[3];
+        if (c == kOpTypeInt && w.size() == 4)
+            intSigned[w[1]] = w[3] != 0;
+        if (c == kOpTypeMatrix && w.size() == 4 && w[3] == 4)
+            matrixColumn[w[1]] = w[2];
+        if (w.size() >= 3 && typed_result(c))
+            typeOf[w[2]] = w[1];
+    }
+    std::map<std::uint32_t, std::uint32_t> foldedRaw;  // the fold's `index & 1` -> the raw index
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpBitwiseAnd && w.size() == 5 && constValue.count(w[4]) && constValue[w[4]] == 1)
+            foldedRaw[w[2]] = w[3];
+    std::map<std::uint32_t, std::uint32_t> chainRaw;  // var[member][index & 1] -> raw index
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c == kOpAccessChain || c == kOpInBoundsAccessChain) && w.size() == 6 && vars.count(w[3]) &&
+            constValue.count(w[4]) && constValue[w[4]] == static_cast<std::uint32_t>(memberIndex) && foldedRaw.count(w[5]))
+            chainRaw[w[2]] = foldedRaw[w[5]];
+    }
+    std::vector<std::uint32_t> loads;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && chainRaw.count(w[3]) && matrixColumn.count(w[1]))
+            loads.push_back(w[2]);
+    if (loads.empty())
+        return 0;
+    const std::uint32_t fl = m.type_float();
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const std::uint32_t bv4 = m.type_vector(boolType, 4);
+    const float invFx = 1.0f / fx, invFy = 1.0f / fy, zero = 0.0f;
+    std::uint32_t invFxBits, invFyBits, zeroBits;
+    std::memcpy(&invFxBits, &invFx, 4);
+    std::memcpy(&invFyBits, &invFy, 4);
+    std::memcpy(&zeroBits, &zero, 4);
+    const std::uint32_t cInvFx = m.constant(fl, invFxBits), cInvFy = m.constant(fl, invFyBits), cZero = m.constant(fl, zeroBits);
+    int edited = 0;
+    for (const std::uint32_t load : loads) {
+        const std::size_t loadAt = m.defined_at(load);
+        if (loadAt >= m.insts.size())
+            continue;
+        const std::uint32_t mat = m.insts[loadAt][1], v4 = matrixColumn[mat], ptr = m.insts[loadAt][3];
+        const std::uint32_t raw = chainRaw[ptr];
+        const auto rawType = typeOf.find(raw);
+        if (rawType == typeOf.end() || !intSigned.count(rawType->second))
+            continue;
+        const std::uint32_t two = m.constant(rawType->second, 2);
+        const std::size_t at = m.defined_at(load);  // constants may have moved it
+        const std::uint32_t original = m.fresh();
+        m.insts[at][2] = original;
+        std::uint32_t col[4], sel[4];
+        for (std::uint32_t& c : col)
+            c = m.fresh();
+        const std::uint32_t c0x = m.fresh(), c0xf = m.fresh(), c0f = m.fresh(), c1y = m.fresh(), c1yf = m.fresh(),
+                            c1f = m.fresh(), c2a = m.fresh(), c2f = m.fresh(), isFocus = m.fresh(), mask = m.fresh();
+        for (std::uint32_t& s : sel)
+            s = m.fresh();
+        const std::uint32_t focusCol[4] = {c0f, c1f, c2f, col[3]};
+        std::vector<std::vector<std::uint32_t>> body;
+        for (std::uint32_t k = 0; k < 4; ++k)
+            body.push_back({op(kOpCompositeExtract, 5), v4, col[k], original, k});
+        body.push_back({op(kOpCompositeExtract, 5), fl, c0x, col[0], 0});
+        body.push_back({op(kOpFMul, 5), fl, c0xf, c0x, cInvFx});
+        body.push_back({op(kOpCompositeInsert, 6), v4, c0f, c0xf, col[0], 0});
+        body.push_back({op(kOpCompositeExtract, 5), fl, c1y, col[1], 1});
+        body.push_back({op(kOpFMul, 5), fl, c1yf, c1y, cInvFy});
+        body.push_back({op(kOpCompositeInsert, 6), v4, c1f, c1yf, col[1], 1});
+        body.push_back({op(kOpCompositeInsert, 6), v4, c2a, cZero, col[2], 0});
+        body.push_back({op(kOpCompositeInsert, 6), v4, c2f, cZero, c2a, 1});
+        body.push_back({op(intSigned[rawType->second] ? kOpSGreaterThanEqual : kOpUGreaterThanEqual, 5), boolType, isFocus,
+                        raw, two});
+        body.push_back({op(kOpCompositeConstruct, 7), bv4, mask, isFocus, isFocus, isFocus, isFocus});
+        for (int k = 0; k < 4; ++k)
+            body.push_back({op(kOpSelect, 6), v4, sel[k], mask, focusCol[k], col[k]});
+        body.push_back({op(kOpCompositeConstruct, 7), mat, load, sel[0], sel[1], sel[2], sel[3]});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
+        ++edited;
+    }
+    if (edited > 0)
+        words = m.emit();
+    return edited;
+}
+
+namespace {
+
+// A Location decoration with this value on any variable.
+bool location_taken(const Module& m, std::uint32_t location) {
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kDecorate && w.size() == 4 && w[2] == 30 && w[3] == location)
+            return true;
+    return false;
+}
+
+// The variable decorated BuiltIn `builtIn` with the given storage class (0 if none), and its pointee type.
+std::uint32_t builtin_variable(const Module& m, std::uint32_t builtIn, std::uint32_t storage, std::uint32_t* pointee) {
+    for (const auto& d : m.insts) {
+        if (Module::code(d) != Module::kDecorate || d.size() != 4 || d[2] != 11 || d[3] != builtIn)
+            continue;
+        for (const auto& w : m.insts)
+            if (Module::code(w) == Module::kVariable && w.size() >= 4 && w[2] == d[1] && w[3] == storage) {
+                if (pointee)
+                    for (const auto& t : m.insts)
+                        if (Module::code(t) == Module::kTypePointer && t[1] == w[1])
+                            *pointee = t[3];
+                return w[2];
+            }
+    }
+    return 0;
+}
+
+}  // namespace
+
+bool spirv_layer_out(std::vector<std::uint32_t>& words, std::uint32_t location) {
+    constexpr std::uint32_t kBuiltInLayer = 9, kExecutionVertex = 0;
+    Module m;
+    if (!m.parse(words))
+        return false;
+    bool vertex = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionVertex)
+            vertex = true;
+    std::uint32_t intType = 0;
+    const std::uint32_t layer = builtin_variable(m, kBuiltInLayer, kOutput, &intType);
+    if (!vertex || !layer || !intType || location_taken(m, location))
+        return false;
+    std::vector<std::size_t> stores;
+    for (std::size_t i = 0; i < m.insts.size(); ++i)
+        if (Module::code(m.insts[i]) == kOpStore && m.insts[i].size() >= 3 && m.insts[i][1] == layer)
+            stores.push_back(i);
+    if (stores.empty())
+        return false;
+    const std::uint32_t out = m.add_interface(m.type_pointer(kOutput, intType), kOutput, location);
+    // Each store to gl_Layer is followed by the same store to ours (indexes moved by the globals just added).
+    for (std::size_t i = m.insts.size(); i-- > 0;)
+        if (Module::code(m.insts[i]) == kOpStore && m.insts[i].size() >= 3 && m.insts[i][1] == layer)
+            m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(i + 1), {op(kOpStore, 3), out, m.insts[i][2]});
+    words = m.emit();
+    return true;
+}
+
+int spirv_alpha_test_lod_bias(std::vector<std::uint32_t>& words, std::uint32_t location, float bias, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint32_t kExecutionFragment = 4;
+    constexpr std::uint16_t kOpTypeBool = 20, kOpSelect = 169, kOpIEqual = 170, kOpSLessThan = 177, kOpLogicalAnd = 167,
+                            kOpCompositeExtract = 81, kOpCompositeInsert = 82, kOpImageSampleImplicitLod = 87,
+                            kOpPhi = 245, kOpExtInst = 12, kOpFNegate = 127,
+                            kOpVectorTimesScalar = 142, kOpMemberNameCode = 6;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    bool fragment = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionFragment)
+            fragment = true;
+    if (!fragment)
+        return fail("not a fragment shader");
+    // Structs by member name: the alpha cut's and the transform block's counts.
+    std::map<std::uint32_t, std::uint32_t> alphaCutOf;  // struct -> member index of u_alpha_cut
+    std::uint32_t transformType = 0, transformCount = 0;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpMemberNameCode && w.size() >= 4) {
+            const std::string name = literal(w, 3, w.size());
+            if (name == "u_alpha_cut")
+                alphaCutOf[w[1]] = w[2];
+            if (name == "u_transform_count") {
+                transformType = w[1];
+                transformCount = w[2];
+            }
+        }
+    if (alphaCutOf.empty())
+        return fail("no u_alpha_cut");
+    if (!transformType)
+        return fail("no transform block");
+    std::map<std::uint32_t, std::uint32_t> constValue, varType;  // var -> struct
+    std::map<std::uint32_t, std::size_t> def;                    // result id -> instruction index
+    for (std::size_t i = 0; i < m.insts.size(); ++i) {
+        const auto& w = m.insts[i];
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpConstant && w.size() == 4)
+            constValue[w[2]] = w[3];
+        if (c == Module::kVariable && w.size() >= 4 && w[3] == kUniform)
+            for (const auto& t : m.insts)
+                if (Module::code(t) == Module::kTypePointer && t[1] == w[1])
+                    varType[w[2]] = t[3];
+        if (w.size() >= 3 && (typed_result(c) || c == kOpAccessChain || c == kOpInBoundsAccessChain ||
+                              c == kOpCompositeExtract || c == kOpCompositeInsert || c == kOpCompositeConstruct ||
+                              c == kOpVectorShuffle || c == kOpImageSampleImplicitLod || (c >= 127 && c <= 142)))
+            def[w[2]] = i;
+    }
+    std::uint32_t transformVar = 0;
+    for (const auto& [var, type] : varType)
+        if (type == transformType)
+            transformVar = var;
+    if (!transformVar)
+        return fail("transform block not bound");
+    // Loads of the alpha cut (any component), then the float comparisons against them: the other side is the alpha.
+    std::set<std::uint32_t> cutChains, cutValues;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c == kOpAccessChain || c == kOpInBoundsAccessChain) && w.size() >= 5 && varType.count(w[3]) &&
+            alphaCutOf.count(varType[w[3]]) && constValue.count(w[4]) && constValue[w[4]] == alphaCutOf[varType[w[3]]])
+            cutChains.insert(w[2]);
+    }
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpLoad && w.size() >= 4 && cutChains.count(w[3]))
+            cutValues.insert(w[2]);
+        if (c == kOpCompositeExtract && w.size() >= 5 && cutValues.count(w[3]))
+            cutValues.insert(w[2]);
+    }
+    // Values are traced as (id, component): -1 a scalar (or the whole value), else that component of a vector.
+    std::vector<std::pair<std::uint32_t, int>> work;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c >= 184 && c <= 191 && w.size() == 5) {  // OpFOrd/FUnord LessThan .. GreaterThanEqual
+            if (cutValues.count(w[3]))
+                work.push_back({w[4], -1});
+            if (cutValues.count(w[4]))
+                work.push_back({w[3], -1});
+        }
+    }
+    if (work.empty())
+        return fail("no comparison with u_alpha_cut");
+    // Component counts of vector types, and every result's type, to place a component in a composite.
+    std::map<std::uint32_t, std::uint32_t> vecComponent, vecSize;  // vector type -> component type, size
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kTypeVector && w.size() == 4) {
+            vecSize[w[1]] = w[3];
+            if (w[3] == 4)
+                vecComponent[w[1]] = w[2];
+        }
+    auto size_of = [&](std::uint32_t id) -> std::uint32_t {
+        if (!def.count(id))
+            return 1;
+        const auto t = vecSize.find(m.insts[def[id]][1]);
+        return t == vecSize.end() ? 1 : t->second;
+    };
+    // Back from the alpha to the texture samples whose alpha it is: through phis, selects, componentwise arithmetic and
+    // GLSL.std.450 calls, and composites by component.
+    std::set<std::pair<std::uint32_t, int>> seen;
+    std::set<std::size_t> samples;
+    while (!work.empty() && seen.size() < 4000) {
+        const auto [id, comp] = work.back();
+        work.pop_back();
+        if (!seen.insert({id, comp}).second || !def.count(id))
+            continue;
+        const auto& w = m.insts[def[id]];
+        const std::uint16_t c = Module::code(w);
+        // An operand of a componentwise operation: the same component if it is a vector, else itself.
+        auto same = [&](std::uint32_t operand) { work.push_back({operand, size_of(operand) > 1 ? comp : -1}); };
+        if (c == kOpImageSampleImplicitLod) {
+            if (comp == 3 || comp == -1)
+                samples.insert(def[id]);
+        } else if (c == kOpPhi) {
+            for (std::size_t k = 3; k < w.size(); k += 2)
+                same(w[k]);
+        } else if (c == kOpExtInst) {
+            for (std::size_t k = 5; k < w.size(); ++k)
+                same(w[k]);
+        } else if (c == kOpSelect) {
+            same(w[4]);
+            same(w[5]);
+        } else if (c == kOpCompositeExtract && w.size() == 5) {
+            work.push_back({w[3], static_cast<int>(w[4])});
+        } else if (c == kOpCompositeInsert && w.size() == 6) {  // object, composite, index
+            if (comp == static_cast<int>(w[5]))
+                work.push_back({w[3], -1});
+            else
+                work.push_back({w[4], comp});
+        } else if (c == kOpVectorShuffle && comp >= 0 && static_cast<std::size_t>(comp) + 5 < w.size()) {
+            const std::uint32_t pick = w[5 + comp], first = size_of(w[3]);
+            if (pick != 0xffffffff)
+                work.push_back(pick < first ? std::pair<std::uint32_t, int>{w[3], static_cast<int>(pick)}
+                                            : std::pair<std::uint32_t, int>{w[4], static_cast<int>(pick - first)});
+        } else if (c == kOpCompositeConstruct && comp >= 0) {
+            std::uint32_t at = 0;  // the constituent holding component `comp`
+            for (std::size_t k = 3; k < w.size(); ++k) {
+                const std::uint32_t n = size_of(w[k]);
+                if (static_cast<std::uint32_t>(comp) < at + n) {
+                    work.push_back({w[k], n > 1 ? static_cast<int>(comp - at) : -1});
+                    break;
+                }
+                at += n;
+            }
+        } else if (c == kOpVectorTimesScalar && w.size() == 5) {
+            work.push_back({w[3], comp});
+            work.push_back({w[4], -1});
+        } else if (c == kOpFNegate || c == kOpFAdd || c == kOpFSub || c == kOpFMul || c == kOpFDiv) {
+            for (std::size_t k = 3; k < w.size(); ++k)
+                same(w[k]);
+        }
+    }
+    // Only plain samples (no image operands) of a float vec4.
+    std::vector<std::uint32_t> targets;  // result ids
+    for (const std::size_t i : samples)
+        if (m.insts[i].size() == 5 && vecComponent.count(m.insts[i][1]))
+            targets.push_back(m.insts[i][2]);
+    if (targets.empty())
+        return fail("no plain implicit-LOD sample reaches the alpha test");
+    if (location_taken(m, location))
+        return fail("location taken");
+    // The int type of the transform count, a bool, and the constants.
+    std::uint32_t intType = 0;
+    {
+        std::vector<std::uint32_t> members;
+        for (const auto& w : m.insts)
+            if (Module::code(w) == kOpTypeStruct && w[1] == transformType)
+                members.assign(w.begin() + 2, w.end());
+        if (transformCount >= members.size())
+            return fail("transform block layout");
+        intType = members[transformCount];
+    }
+    const std::uint32_t fl = m.type_float();
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    std::uint32_t biasBits, zeroBits;
+    const float zero = 0.0f;
+    std::memcpy(&biasBits, &bias, 4);
+    std::memcpy(&zeroBits, &zero, 4);
+    const std::uint32_t cBias = m.constant(fl, biasBits), cZero = m.constant(fl, zeroBits), c2 = m.constant(intType, 2),
+                        c4 = m.constant(intType, 4), cCount = m.constant(intType, transformCount);
+    const std::uint32_t ptrInt = m.type_pointer(kUniform, intType);
+    const std::uint32_t layerVar = m.add_interface(m.type_pointer(kInput, intType), kInput, location);
+    int edited = 0;
+    for (const std::uint32_t target : targets) {
+        const std::size_t at = m.defined_at(target);
+        if (at >= m.insts.size())
+            continue;
+        const std::vector<std::uint32_t> sample = m.insts[at];
+        const std::uint32_t v4 = sample[1], original = m.fresh();
+        m.insts[at][2] = original;
+        const std::uint32_t layer = m.fresh(), countPtr = m.fresh(), count = m.fresh(), periphery = m.fresh(),
+                            four = m.fresh(), on = m.fresh(), b = m.fresh(), biased = m.fresh(), alpha = m.fresh();
+        const std::vector<std::vector<std::uint32_t>> body = {
+            {op(kOpLoad, 4), intType, layer, layerVar},
+            {op(kOpAccessChain, 5), ptrInt, countPtr, transformVar, cCount},
+            {op(kOpLoad, 4), intType, count, countPtr},
+            {op(kOpSLessThan, 5), boolType, periphery, layer, c2},
+            {op(kOpIEqual, 5), boolType, four, count, c4},
+            {op(kOpLogicalAnd, 5), boolType, on, periphery, four},
+            {op(kOpSelect, 6), fl, b, on, cBias, cZero},
+            {op(kOpImageSampleImplicitLod, 7), v4, biased, sample[3], sample[4], 0x1 /* Bias */, b},
+            {op(kOpCompositeExtract, 5), vecComponent[v4], alpha, biased, 3},
+            {op(kOpCompositeInsert, 6), v4, target, alpha, original, 3},
+        };
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
+        ++edited;
+    }
+    if (!edited)
+        return fail("samples moved");
+    words = m.emit();
+    return edited;
+}
+
+int spirv_focus_light_tiles(std::vector<std::uint32_t>& words, float fx, float fy, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint16_t kOpTypeBool = 20, kOpSelect = 169, kOpSDiv = 135, kOpConvertSToF = 111,
+                            kOpConvertFToS = 110, kOpSGreaterThanEqual = 175, kOpCompositeExtract = 81,
+                            kOpFNegate = 127, kOpMemberNameCode = 6;
+    Module m;
+    if (!m.parse(words) || !(fx > 0.0f) || !(fy > 0.0f))
+        return fail("not SPIR-V");
+    // Members by name: the tile size, the projection coefficients and the viewport size.
+    std::uint32_t tileType = 0, tileSize = 0, gbufType = 0, coefIndex = 0, sizeIndex = 0;
+    std::map<std::uint32_t, std::uint32_t> coefOf, sizeOf;  // struct -> member index
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpMemberNameCode && w.size() >= 4) {
+            const std::string name = literal(w, 3, w.size());
+            if (name == "u_light_tile_size") {
+                tileType = w[1];
+                tileSize = w[2];
+            } else if (name == "u_proj_coefficients") {
+                coefOf[w[1]] = w[2];
+            } else if (name == "u_viewport_size") {
+                sizeOf[w[1]] = w[2];
+            }
+        }
+    if (!tileType)
+        return fail("no light tiles");
+    for (const auto& [type, index] : coefOf)  // the block with both (u_gbuffer_data)
+        if (sizeOf.count(type)) {
+            gbufType = type;
+            coefIndex = index;
+            sizeIndex = sizeOf[type];
+        }
+    if (!gbufType)
+        return fail("no u_gbuffer_data coefficients and viewport size");
+    std::uint32_t intType = 0;
+    const std::uint32_t eyeVar = m.variable("v_eye", kInput, &intType);
+    if (!eyeVar || !intType)
+        return fail("no v_eye input");
+    std::map<std::uint32_t, std::uint32_t> constValue, varType;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpConstant && w.size() == 4)
+            constValue[w[2]] = w[3];
+        if (c == Module::kVariable && w.size() >= 4 && w[3] == kUniform)
+            for (const auto& t : m.insts)
+                if (Module::code(t) == Module::kTypePointer && t[1] == w[1])
+                    varType[w[2]] = t[3];
+    }
+    std::uint32_t tileVar = 0, gbufVar = 0;
+    for (const auto& [var, type] : varType) {
+        if (type == tileType)
+            tileVar = var;
+        if (type == gbufType)
+            gbufVar = var;
+    }
+    if (!tileVar || !gbufVar)
+        return fail("blocks not bound");
+    // tile_size[k] loads: chain [tileVar][tileSize][k] -> k.
+    std::map<std::uint32_t, std::uint32_t> sizeChain, sizeLoad;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c == kOpAccessChain || c == kOpInBoundsAccessChain) && w.size() == 6 && w[3] == tileVar &&
+            constValue.count(w[4]) && constValue[w[4]] == tileSize && constValue.count(w[5]) && constValue[w[5]] <= 1)
+            sizeChain[w[2]] = constValue[w[5]];
+    }
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && sizeChain.count(w[3]))
+            sizeLoad[w[2]] = sizeChain[w[3]];
+    std::vector<std::uint32_t> divisions;  // result ids of `coordinate / tile_size[k]`
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpSDiv && w.size() == 5 && w[1] == intType && sizeLoad.count(w[4]))
+            divisions.push_back(w[2]);
+    if (divisions.empty())
+        return fail("no division by u_light_tile_size");
+    // Types and constants.
+    const std::uint32_t fl = m.type_float(), v4 = m.type_vector(fl, 4);
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    auto fconst = [&](float v) {
+        std::uint32_t bits;
+        std::memcpy(&bits, &v, 4);
+        return m.constant(fl, bits);
+    };
+    const std::uint32_t c1 = m.constant(intType, 1), c2 = m.constant(intType, 2), cCoef = m.constant(intType, coefIndex),
+                        cSize = m.constant(intType, sizeIndex);
+    const std::uint32_t ptrV4 = m.type_pointer(kUniform, v4), ptrF = m.type_pointer(kUniform, fl);
+    int edited = 0;
+    for (const std::uint32_t division : divisions) {
+        const std::size_t at = m.defined_at(division);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t x = m.insts[at][3], k = sizeLoad[m.insts[at][4]];
+        const float f = k == 0 ? fx : fy;
+        const std::uint32_t cF = fconst(f), cHalfF = fconst(0.5f * f), cK = m.constant(intType, k);
+        const std::size_t here = m.defined_at(division);  // constants may have moved it
+        const std::uint32_t eye = m.fresh(), eyeBit = m.fresh(), coefPtr = m.fresh(), coef = m.fresh(), scale = m.fresh(),
+                            offset = m.fresh(), negOffset = m.fresh(), centre = m.fresh(), sizePtr = m.fresh(),
+                            size = m.fresh(), xf = m.fresh(), corner = m.fresh(), origin = m.fresh(), scaled = m.fresh(),
+                            mappedF = m.fresh(), mapped = m.fresh(), focus = m.fresh(), chosen = m.fresh();
+        const std::vector<std::vector<std::uint32_t>> body = {
+            {op(kOpLoad, 4), intType, eye, eyeVar},
+            {op(kOpBitwiseAnd, 5), intType, eyeBit, eye, c1},
+            {op(kOpAccessChain, 6), ptrV4, coefPtr, gbufVar, cCoef, eyeBit},
+            {op(kOpLoad, 4), v4, coef, coefPtr},
+            {op(kOpCompositeExtract, 5), fl, scale, coef, k},
+            {op(kOpCompositeExtract, 5), fl, offset, coef, k + 2},
+            {op(kOpFNegate, 4), fl, negOffset, offset},
+            {op(kOpFDiv, 5), fl, centre, negOffset, scale},  // uv0: the box centre in the eye (tangent 0)
+            {op(kOpAccessChain, 6), ptrF, sizePtr, gbufVar, cSize, cK},  // u_viewport_size[k]
+            {op(kOpLoad, 4), fl, size, sizePtr},
+            {op(kOpConvertSToF, 4), fl, xf, x},
+            {op(kOpFSub, 5), fl, corner, centre, cHalfF},
+            {op(kOpFMul, 5), fl, origin, corner, size},
+            {op(kOpFMul, 5), fl, scaled, xf, cF},
+            {op(kOpFAdd, 5), fl, mappedF, origin, scaled},
+            {op(kOpConvertFToS, 4), intType, mapped, mappedF},
+            {op(kOpSGreaterThanEqual, 5), boolType, focus, eye, c2},
+            {op(kOpSelect, 6), intType, chosen, focus, mapped, x},
+        };
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(here), body.begin(), body.end());
+        m.insts[here + body.size()][3] = chosen;  // the division takes the chosen coordinate
+        ++edited;
+    }
+    if (!edited)
+        return fail("divisions moved");
+    words = m.emit();
+    return edited;
+}
+
+int spirv_ray_reads_from_eye(std::vector<std::uint32_t>& words, const std::vector<std::string>& images) {
+    constexpr std::uint16_t kOpSampledImage = 86, kOpImage = 100, kOpConvertSToF = 111, kOpConvertUToF = 112,
+                            kOpBitcast = 124, kOpImageSampleImplicitLod = 87, kOpImageSampleExplicitLod = 88,
+                            kOpImageFetch = 95, kOpImageGather = 96, kOpImageRead = 98, kOpCompositeConstructCode = 80;
+    constexpr std::uint32_t kBuiltIn = 11, kGlobalInvocationId = 28;
+    Module m;
+    if (!m.parse(words))
+        return 0;
+    // The image variables by name, and gl_GlobalInvocationID.
+    std::set<std::uint32_t> targets;
+    for (const std::string& name : images)
+        if (const std::uint32_t id = m.named(name.c_str()))
+            targets.insert(id);
+    std::uint32_t gid = 0;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kDecorate && w.size() >= 4 && w[2] == kBuiltIn && w[3] == kGlobalInvocationId)
+            gid = w[1];
+    if (targets.empty() || !gid)
+        return 0;
+    std::map<std::uint32_t, std::uint32_t> constValue, typeOf;
+    std::map<std::uint32_t, std::size_t> def;
+    for (std::size_t i = 0; i < m.insts.size(); ++i) {
+        const auto& w = m.insts[i];
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpConstant && w.size() == 4)
+            constValue[w[2]] = w[3];
+        if (w.size() >= 3 && (typed_result(c) || c == kOpAccessChain || c == kOpInBoundsAccessChain ||
+                              c == kOpSampledImage || c == kOpImage || c == kOpCompositeConstructCode ||
+                              (c >= 87 && c <= 98))) {
+            def[w[2]] = i;
+            typeOf[w[2]] = w[1];
+        }
+    }
+    // z: loads of gl_GlobalInvocationID[2] (uint) and their bitcasts (int); zf: their float conversions.
+    std::set<std::uint32_t> zChains, z, zf;
+    for (const auto& w : m.insts)
+        if ((Module::code(w) == kOpAccessChain || Module::code(w) == kOpInBoundsAccessChain) && w.size() == 5 &&
+            w[3] == gid && constValue.count(w[4]) && constValue[w[4]] == 2)
+            zChains.insert(w[2]);
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if (c == kOpLoad && w.size() >= 4 && zChains.count(w[3]))
+            z.insert(w[2]);
+        else if (c == kOpBitcast && w.size() == 4 && z.count(w[3]))
+            z.insert(w[2]);
+        else if ((c == kOpConvertSToF || c == kOpConvertUToF) && w.size() == 4 && z.count(w[3]))
+            zf.insert(w[2]);
+    }
+    if (z.empty())
+        return 0;
+    // The image variable a read's first operand comes from (through OpSampledImage / OpImage / OpLoad).
+    auto image_var = [&](std::uint32_t id) -> std::uint32_t {
+        for (int depth = 0; depth < 8 && def.count(id); ++depth) {
+            const auto& w = m.insts[def[id]];
+            const std::uint16_t c = Module::code(w);
+            if (c == kOpSampledImage || c == kOpImage || c == kOpLoad)
+                id = w[3];
+            else
+                break;
+        }
+        return id;
+    };
+    struct Edit {
+        std::uint32_t read, construct;
+    };
+    std::vector<Edit> edits;
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c != kOpImageSampleImplicitLod && c != kOpImageSampleExplicitLod && c != kOpImageFetch && c != kOpImageGather &&
+             c != kOpImageRead) || w.size() < 5 || !targets.count(image_var(w[3])) || !def.count(w[4]))
+            continue;
+        const auto& coord = m.insts[def[w[4]]];
+        if (Module::code(coord) != kOpCompositeConstructCode || coord.size() < 5)
+            continue;
+        const std::uint32_t last = coord.back();
+        if (z.count(last) || zf.count(last))
+            edits.push_back({w[2], w[4]});
+    }
+    if (edits.empty())
+        return 0;
+    for (const Edit& e : edits) {
+        const std::vector<std::uint32_t> coord = m.insts[m.defined_at(e.construct)];
+        const std::uint32_t last = coord.back();
+        // The layer's integer source and its type (z itself, or the value a float conversion converted).
+        std::uint32_t zi = last;
+        if (zf.count(last))
+            zi = m.insts[m.defined_at(last)][3];
+        const std::uint32_t zType = typeOf.count(zi) ? typeOf[zi] : 0;
+        if (!zType || m.defined_at(e.read) >= m.insts.size())
+            continue;
+        const std::uint32_t one = m.constant(zType, 1);
+        const std::size_t at = m.defined_at(e.read);  // constants may have moved it
+        const std::uint32_t masked = m.fresh(), coordNew = m.fresh();
+        std::vector<std::vector<std::uint32_t>> body = {{op(kOpBitwiseAnd, 5), zType, masked, zi, one}};
+        std::uint32_t layer = masked;
+        if (zf.count(last)) {  // the same conversion (signed or unsigned) to the same float type, of z & 1
+            const std::vector<std::uint32_t>& conversion = m.insts[m.defined_at(last)];
+            const std::uint32_t asFloat = m.fresh();
+            body.push_back({op(Module::code(conversion), 4), conversion[1], asFloat, masked});
+            layer = asFloat;
+        }
+        std::vector<std::uint32_t> construct = coord;
+        construct[2] = coordNew;
+        construct.back() = layer;
+        body.push_back(construct);
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at), body.begin(), body.end());
+        m.insts[at + body.size()][4] = coordNew;  // the read takes the eye's layer
+    }
+    words = m.emit();
+    return static_cast<int>(edits.size());
+}
+
+int spirv_eye_parity_test(std::vector<std::uint32_t>& words, const char* block, const char* member, const char* input) {
+    constexpr std::uint16_t kOpMemberName = 6, kOpIEqual = 170, kOpINotEqual = 171;
+    if (words.size() < kHeader || words[0] != kMagic)
+        return 0;
+    std::map<std::uint32_t, std::string> names;                               // OpName
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::string> members;  // (struct, index) -> OpMemberName
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> consts; // id -> (type, value)
+    std::map<std::uint32_t, std::uint32_t> pointee, varPointer;             // pointer type -> pointee, var -> pointer
+    std::map<std::uint32_t, std::uint32_t> varStorage;
+    std::set<std::uint32_t> structs, int32;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        if (count == 0 || i + count > words.size())
+            return 0;
+        const std::uint32_t* w = &words[i];
+        if (code == kOpName && count >= 3)
+            names[w[1]] = literal(words, i + 2, i + count);
+        else if (code == kOpMemberName && count >= 4)
+            members[{w[1], w[2]}] = literal(words, i + 3, i + count);
+        else if (code == kOpConstant && count == 4)
+            consts[w[2]] = {w[1], w[3]};
+        else if (code == kOpTypeStruct && count >= 2)
+            structs.insert(w[1]);
+        else if (code == kOpTypeInt && count == 4 && w[2] == 32)
+            int32.insert(w[1]);
+        else if (code == kOpTypePointer && count == 4)
+            pointee[w[1]] = w[3];
+        else if (code == kOpVariable && count >= 4) {
+            varPointer[w[2]] = w[1];
+            varStorage[w[2]] = w[3];
+        }
+        i += count;
+    }
+    std::uint32_t blockType = 0, inputVar = 0;
+    for (const auto& [id, name] : names) {
+        if (name == block && structs.count(id))
+            blockType = id;
+        if (name == input && varStorage.count(id) && varStorage[id] == kInput)
+            inputVar = id;
+    }
+    std::int64_t memberIndex = -1;
+    for (const auto& [key, name] : members)
+        if (key.first == blockType && name == member)
+            memberIndex = key.second;
+    if (!blockType || !inputVar || memberIndex < 0)
+        return 0;
+    // The module reads the member (an access chain whose first index is that member), and loads the input.
+    bool reads = false;
+    std::map<std::uint32_t, std::uint32_t> inputLoads;  // load result -> its type
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        const std::uint32_t* w = &words[i];
+        if ((code == kOpAccessChain || code == kOpInBoundsAccessChain) && count >= 5 && varPointer.count(w[3]) &&
+            pointee[varPointer[w[3]]] == blockType) {
+            const auto c = consts.find(w[4]);
+            reads |= c != consts.end() && c->second.second == static_cast<std::uint32_t>(memberIndex);
+        } else if (code == kOpLoad && count >= 4 && w[3] == inputVar && int32.count(w[1])) {
+            inputLoads[w[2]] = w[1];
+        }
+        i += count;
+    }
+    if (!reads || inputLoads.empty())
+        return 0;
+    std::uint32_t anyOne = 0;  // a 32-bit integer constant 1, for tests against 0
+    for (const auto& [id, c] : consts)
+        if (c.second == 1 && int32.count(c.first) && !anyOne)
+            anyOne = id;
+    std::uint32_t bound = words[3];
+    int edited = 0;
+    std::vector<std::uint32_t> out(words.begin(), words.begin() + kHeader);
+    out.reserve(words.size() + 16);
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        const std::uint32_t* w = &words[i];
+        int operand = 0;
+        std::uint32_t one = 0;
+        if ((code == kOpIEqual || code == kOpINotEqual) && count == 5) {
+            for (int k = 0; k < 2 && !operand; ++k) {
+                const auto c = consts.find(w[4 - k]);
+                if (inputLoads.count(w[3 + k]) && c != consts.end() && c->second.second <= 1 && int32.count(c->second.first)) {
+                    operand = 3 + k;
+                    one = c->second.second == 1 ? w[4 - k] : anyOne;
+                }
+            }
+        }
+        if (operand && one) {  // masked = input & 1, then the test on masked
+            const std::uint32_t masked = bound++;
+            out.insert(out.end(), {op(kOpBitwiseAnd, 5), inputLoads[w[operand]], masked, w[operand], one});
+            const std::size_t start = out.size();
+            out.insert(out.end(), words.begin() + static_cast<std::ptrdiff_t>(i),
+                       words.begin() + static_cast<std::ptrdiff_t>(i + count));
+            out[start + static_cast<std::size_t>(operand)] = masked;
+            ++edited;
+        } else {
+            out.insert(out.end(), words.begin() + static_cast<std::ptrdiff_t>(i),
+                       words.begin() + static_cast<std::ptrdiff_t>(i + count));
+        }
+        i += count;
+    }
+    if (!edited)
+        return 0;
+    out[3] = bound;
+    words.swap(out);
+    return edited;
+}
+
 }  // namespace xplane

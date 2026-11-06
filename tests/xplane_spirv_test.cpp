@@ -300,6 +300,236 @@ int main() {
         o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
     }
 
+    // The shadows' right-eye test (spirv_eye_parity_test): %3 = struct { int; int u_eye_right_to_left } named
+    // u_shadow_data, read at member 1; v_eye loaded and tested == 1.
+    {
+        const auto named = [](std::vector<std::uint32_t>& w, std::uint16_t code, std::initializer_list<std::uint32_t> head,
+                              const char* s) {
+            std::vector<std::uint32_t> text((std::strlen(s) + 4) / 4, 0);
+            std::memcpy(text.data(), s, std::strlen(s));
+            w.push_back(op(code, static_cast<std::uint16_t>(1 + head.size() + text.size())));
+            w.insert(w.end(), head);
+            w.insert(w.end(), text.begin(), text.end());
+        };
+        const auto shadowModule = [&](std::uint32_t readMember) {
+            std::vector<std::uint32_t> w = {0x07230203, 0x00010300, 0, 14, 0};
+            named(w, 5, {3}, "u_shadow_data");
+            named(w, 6, {3, 1}, "u_eye_right_to_left");
+            named(w, 5, {7}, "v_eye");
+            w.insert(w.end(), {op(21, 4), 1, 32, 1});         // %1 int
+            w.insert(w.end(), {op(20, 2), 2});                // %2 bool
+            w.insert(w.end(), {op(30, 4), 3, 1, 1});          // %3 struct
+            w.insert(w.end(), {op(32, 4), 4, 2, 3});          // %4 Uniform pointer to it
+            w.insert(w.end(), {op(59, 4), 4, 5, 2});          // %5 the block
+            w.insert(w.end(), {op(32, 4), 6, 1, 1});          // %6 Input pointer to int
+            w.insert(w.end(), {op(59, 4), 6, 7, 1});          // %7 v_eye
+            w.insert(w.end(), {op(43, 4), 1, 8, 1});          // %8 = 1
+            w.insert(w.end(), {op(43, 4), 1, 12, 0});         // %12 = 0
+            w.insert(w.end(), {op(32, 4), 9, 2, 1});          // %9 Uniform pointer to int
+            w.insert(w.end(), {op(65, 5), 9, 10, 5, readMember == 1 ? 8u : 12u});  // %10 = &block.member
+            w.insert(w.end(), {op(61, 4), 1, 11, 7});         // %11 = v_eye
+            w.insert(w.end(), {op(170, 5), 2, 13, 11, 8});   // %13 = OpIEqual %2 %11 %8
+            return w;
+        };
+        auto m = shadowModule(1);
+        const std::size_t shadowBefore = m.size();
+        const int n = xplane::spirv_eye_parity_test(m, "u_shadow_data", "u_eye_right_to_left", "v_eye");
+        check(n == 1 && m.size() == shadowBefore + 5, "shadow eye test: one test edited, one instruction added");
+        // The new %14 = OpBitwiseAnd %1 %11 %8 sits before the test, and the test compares %14.
+        check(m[3] == 15 && m[shadowBefore - 5] == op(199, 5) && m[shadowBefore - 4] == 1 && m[shadowBefore - 3] == 14 &&
+                  m[shadowBefore - 2] == 11 && m[shadowBefore - 1] == 8 && m[m.size() - 2] == 14 && m[m.size() - 1] == 8,
+              "shadow eye test: compares v_eye & 1");
+        auto shadowOther = shadowModule(0);
+        const auto shadowOtherCopy = shadowOther;
+        check(xplane::spirv_eye_parity_test(shadowOther, "u_shadow_data", "u_eye_right_to_left", "v_eye") == 0 &&
+                  shadowOther == shadowOtherCopy,
+              "shadow eye test: a module not reading the member is left alone");
+    }
+
+    // The focus projection matrix (spirv_focus_projection_matrix): %7 = struct { mat4 proj[2] } named blk; the input %13
+    // loaded, folded (& 1) and used to read proj[]; %18 = the loaded matrix, used by %19.
+    {
+        const auto named = [](std::vector<std::uint32_t>& w, std::uint16_t code, std::initializer_list<std::uint32_t> head,
+                              const char* s) {
+            std::vector<std::uint32_t> text((std::strlen(s) + 4) / 4, 0);
+            std::memcpy(text.data(), s, std::strlen(s));
+            w.push_back(op(code, static_cast<std::uint16_t>(1 + head.size() + text.size())));
+            w.insert(w.end(), head);
+            w.insert(w.end(), text.begin(), text.end());
+        };
+        std::vector<std::uint32_t> pm = {0x07230203, 0x00010300, 0, 20, 0};
+        named(pm, 5, {7}, "blk");
+        named(pm, 6, {7, 0}, "proj");
+        pm.insert(pm.end(), {op(22, 3), 1, 32});              // %1 float
+        pm.insert(pm.end(), {op(23, 4), 2, 1, 4});            // %2 vec4
+        pm.insert(pm.end(), {op(24, 4), 3, 2, 4});            // %3 mat4
+        pm.insert(pm.end(), {op(21, 4), 4, 32, 1});           // %4 int
+        pm.insert(pm.end(), {op(43, 4), 4, 5, 2});            // %5 = 2
+        pm.insert(pm.end(), {op(28, 4), 6, 3, 5});            // %6 mat4[2]
+        pm.insert(pm.end(), {op(30, 3), 7, 6});               // %7 struct
+        pm.insert(pm.end(), {op(32, 4), 8, 2, 7});            // %8 Uniform pointer to it
+        pm.insert(pm.end(), {op(59, 4), 8, 9, 2});            // %9 the block
+        pm.insert(pm.end(), {op(43, 4), 4, 10, 0});           // %10 = 0
+        pm.insert(pm.end(), {op(43, 4), 4, 11, 1});           // %11 = 1
+        pm.insert(pm.end(), {op(32, 4), 12, 1, 4});           // %12 Input pointer to int
+        pm.insert(pm.end(), {op(59, 4), 12, 13, 1});          // %13 the view index
+        pm.insert(pm.end(), {op(32, 4), 14, 2, 3});           // %14 Uniform pointer to mat4
+        pm.insert(pm.end(), {op(61, 4), 4, 15, 13});          // %15 = load %13
+        pm.insert(pm.end(), {op(199, 5), 4, 16, 15, 11});     // %16 = %15 & 1 (the fold)
+        pm.insert(pm.end(), {op(65, 6), 14, 17, 9, 10, 16});  // %17 = &blk.proj[%16]
+        pm.insert(pm.end(), {op(61, 4), 3, 18, 17});          // %18 = load %17
+        pm.insert(pm.end(), {op(81, 5), 2, 19, 18, 0});       // %19 = column 0 of %18
+        const auto pmCopy = pm;
+        auto pmOther = pm;
+        const int n = xplane::spirv_focus_projection_matrix(pm, "blk", "proj", 0.2f, 0.2f);
+        // %18 is now a matrix built from four selected columns; the load got a new id; %19 still reads %18.
+        bool built = false, loadRenamed = false, useKept = false;
+        for (std::size_t i = 5; i < pm.size();) {
+            const std::uint16_t count = static_cast<std::uint16_t>(pm[i] >> 16), code = pm[i] & 0xffff;
+            if (code == 80 && count == 7 && pm[i + 1] == 3 && pm[i + 2] == 18)
+                built = true;
+            if (code == 61 && count == 4 && pm[i + 1] == 3 && pm[i + 3] == 17)
+                loadRenamed = pm[i + 2] != 18;
+            if (code == 81 && count == 5 && pm[i + 2] == 19)
+                useKept = pm[i + 3] == 18;
+            i += count ? count : 1;
+        }
+        check(n == 1 && built && loadRenamed && useKept, "focus projection: the loaded matrix is rebuilt for views 2-3");
+        check(xplane::spirv_focus_projection_matrix(pmOther, "pmOther", "proj", 0.2f, 0.2f) == 0 && pmOther == pmCopy,
+              "focus projection: another block is left alone");
+    }
+
+    // The alpha-test mip bias and the layer output leave modules without their pieces alone (the v_eye module above has
+    // neither an alpha test nor gl_Layer).
+    {
+        auto plain = module(false);
+        const auto plainCopy = plain;
+        std::string reason;
+        check(xplane::spirv_alpha_test_lod_bias(plain, 20, -1.0f, &reason) == 0 && plain == plainCopy,
+              "alpha mip bias: a module without an alpha test is left alone");
+        check(!xplane::spirv_layer_out(plain, 20) && plain == plainCopy, "layer output: a module without gl_Layer is left alone");
+        check(xplane::spirv_ray_reads_from_eye(plain, {"tex_hiZ"}) == 0 && plain == plainCopy,
+              "SSR trace: a module without the images is left alone");
+        check(xplane::spirv_focus_light_tiles(plain, 0.3f, 0.3f, &reason) == 0 && plain == plainCopy,
+              "light tiles: a module without them is left alone");
+    }
+
+    // SIM_QVFR_SPV_TILES: deferred shading shaders with light tiles (from a capture, ';'-separated); each written to
+    // <file>.tiles.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_TILES")) {
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string reason;
+            const int n = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, &reason);
+            std::printf("     %s: %d%s%s\n", in.c_str(), n, n ? "" : " - ", n ? "" : reason.c_str());
+            check(n == 2, "light tiles: both coordinates of the tile index edited");
+            std::ofstream o(in + ".tiles.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_ALPHA: alpha-tested fragment shaders (from a capture, ';'-separated), each written to <file>.alpha.spv;
+    // SIM_QVFR_SPV_LAYER: vertex shaders writing gl_Layer, each written to <file>.layer.spv.
+    for (const char* var : {"SIM_QVFR_SPV_ALPHA", "SIM_QVFR_SPV_LAYER"}) {
+        const char* list = std::getenv(var);
+        if (!list)
+            continue;
+        const bool alpha = std::strcmp(var, "SIM_QVFR_SPV_ALPHA") == 0;
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string reason;
+            const int n = alpha ? xplane::spirv_alpha_test_lod_bias(real, 20, -1.737f, &reason)
+                                : (xplane::spirv_layer_out(real, 20) ? 1 : 0);
+            std::printf("     %s: %d%s%s\n", in.c_str(), n, n ? "" : " - ", n ? "" : reason.c_str());
+            check(n >= 1, alpha ? "alpha mip bias: edits the given shader" : "layer output: edits the given shader");
+            std::ofstream o(in + (alpha ? ".alpha.spv" : ".layer.spv"), std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_SSRTRACE: SSR compute shaders (from a capture, ';'-separated): the reads along the ray (hi-Z, the lit
+    // history, velocities) take the eye's layer; each written to <file>.trace.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_SSRTRACE")) {
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            const int n = xplane::spirv_ray_reads_from_eye(real, {"tex_hiZ", "tex_ssr", "gbuffer_vel"});
+            std::printf("     %s: %d reads\n", in.c_str(), n);
+            check(n == 3, "SSR trace: hi-Z, history and velocity reads take the eye's layer");
+            std::ofstream o(in + ".trace.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_SSR: shaders reading u_ssr_data.u_proj (from a capture, ';'-separated); each writes <file>.ssr.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_SSR")) {
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            const int n = xplane::spirv_focus_projection_matrix(real, "u_ssr_data", "u_proj", 0.2f, 0.2f);
+            std::printf("     %s: %d loads\n", in.c_str(), n);
+            check(n >= 1, "focus projection: edits the given SSR shader");
+            std::ofstream o(in + ".ssr.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_SHADOW: shaders reading u_shadow_data.u_eye_right_to_left (from a capture, ';'-separated); each
+    // writes <file>.shadow.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_SHADOW")) {
+        std::string all = list;
+        for (std::size_t start = 0; start < all.size();) {
+            std::size_t end = all.find(';', start);
+            if (end == std::string::npos)
+                end = all.size();
+            const std::string in = all.substr(start, end - start);
+            start = end + 1;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            const int n = xplane::spirv_eye_parity_test(real, "u_shadow_data", "u_eye_right_to_left", "v_eye");
+            std::printf("     %s: %d tests\n", in.c_str(), n);
+            check(n >= 1, "shadow eye test: edits the given shader");
+            std::ofstream o(in + ".shadow.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
     // SIM_QVFR_SPV_VRS: the shading-rate compute shader (from a capture); writes <file>.vrs.spv.
     if (const char* in = std::getenv("SIM_QVFR_SPV_VRS")) {
         std::ifstream file(in, std::ios::binary);

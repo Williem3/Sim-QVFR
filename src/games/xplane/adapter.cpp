@@ -109,6 +109,8 @@ bool apply_qvfr(const wchar_t* ini) {
     four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1, 1.0);
     four_views_set_focus_full_rate(GetPrivateProfileIntW(L"experiment", L"xplane_focus_full_rate", 1, ini) == 1);
     four_views_set_bloom_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_bloom_from_eye", 1, ini) == 1);
+    four_views_set_periphery_alpha_lod(GetPrivateProfileIntW(L"experiment", L"xplane_periphery_alpha_lod", 1, ini) == 1);
+    four_views_set_ssr_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ssr_from_eye", 1, ini) == 1);
     apply_layer_count(ini, 4);
     apply_context_layers(ini, 4);
     bool ok = four_views_copies_start();
@@ -179,6 +181,7 @@ public:
                           "final resolve was made%s",
                           n, frames_, n > 0 ? "" : " (NOT seen: the lower row, the focus views, stays undrawn)");
             four_views_viewport_log();
+            four_views_vegetation_log();
             simqvfr::logf("xplane: set viewports given one rect per view %d times so far", four_views_view_rect_sets());
         }
     }
