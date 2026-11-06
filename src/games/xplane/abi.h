@@ -62,6 +62,11 @@ inline constexpr std::size_t kStateViewStride = 0x80;
 // set viewports (count ecx, multiplier edx, rects r8): its first instruction, `mov [rsp+8], rbx`. Callers pass
 // multiplier = stereo + 1 (0x7ba150, 0x7a7a70 twice, 0x1995650).
 inline constexpr std::uintptr_t kSetViewports = 0x1595790;
+// Per-view sizes (README.md "Design: true per-view sizes"): the graphics pipelines' viewport and scissor count,
+// `setne cl; inc ecx` = (device+0x91 != 0) + 1, i.e. 2 with multiViewport. Written as `mov ecx, 4`.
+inline constexpr std::uintptr_t kPipelineViewportCount = 0x628437;
+inline constexpr std::uint8_t kPipelineViewportCountAnchor[5] = {0x0F, 0x95, 0xC1, 0xFF, 0xC1};
+inline constexpr std::uint8_t kPipelineViewportCountFour[5] = {0xB9, 0x04, 0x00, 0x00, 0x00};
 inline constexpr std::uint8_t kSetViewportsAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 // The two direct stores of multiplier = stereo + 1 (OGL_build_world_gbuffer_graph's lambdas): `mov [rax+0x2490], ecx`.
 inline constexpr std::uintptr_t kMultiplierStoreA = 0x79ca48;

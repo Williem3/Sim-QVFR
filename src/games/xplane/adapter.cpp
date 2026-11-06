@@ -105,6 +105,8 @@ bool qvfr_wanted(const wchar_t* ini) {
 // layer stays off and the headset shows what X-Plane submits.
 bool apply_qvfr(const wchar_t* ini) {
     four_views_set_eye_columns(true);
+    // Stage 1 of per-view sizes: one viewport per view, every rect the whole layer (the image must not change).
+    four_views_set_view_rects(GetPrivateProfileIntW(L"experiment", L"xplane_view_rects", 1, ini) == 1, 1.0);
     apply_layer_count(ini, 4);
     apply_context_layers(ini, 4);
     bool ok = four_views_copies_start();
@@ -175,6 +177,7 @@ public:
                           "final resolve was made%s",
                           n, frames_, n > 0 ? "" : " (NOT seen: the lower row, the focus views, stays undrawn)");
             four_views_viewport_log();
+            simqvfr::logf("xplane: set viewports given one rect per view %d times so far", four_views_view_rect_sets());
         }
     }
 

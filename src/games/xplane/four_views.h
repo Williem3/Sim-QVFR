@@ -18,6 +18,11 @@ void four_views_set_focus(bool on, double fraction, double fractionY);
 // QVFR composition in eye columns (README.md "Composition"): the final resolve writes each eye's view over its focus
 // view (instead of showing layers 2-3). Set before X-Plane creates its shaders (early load).
 void four_views_set_eye_columns(bool on);
+// Per-view sizes (README.md "Design: true per-view sizes"): one viewport per view, the outer views' `outerScale` of
+// their layers from the top-left (1: the whole layer). Before four_views_copies_start.
+void four_views_set_view_rects(bool on, double outerScale);
+// set viewports calls given four rects so far.
+int four_views_view_rect_sets();
 // The views' height = half the stereo image's (five sites; abi.h). After four_views_copies_start. False: not this
 // build's code, or a patch failed (logged).
 bool four_views_eye_columns_start();

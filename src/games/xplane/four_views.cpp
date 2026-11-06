@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <bcrypt.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "../../engine/code_patch.h"
+#include "MinHook.h"
 #include "../../log.h"
 #include "abi.h"
 #include "focus_projection.h"
@@ -41,6 +43,34 @@ std::atomic<int> g_eyeArrayModules{0};
 std::atomic<int> g_layerFromZModules{0};
 std::atomic<int> g_inverseModules{0};
 std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
+std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
+std::atomic<double> g_outerScale{1.0};  // the outer views' rect, a share of their layers (1: the whole layer)
+std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
+
+// set viewports(count, multiplier, rects {x, y, w, h} x count) (abi.h kSetViewports). Stereo (multiplier 2) becomes
+// four views; with view rects, a four-view pass's one rect becomes one per view, the outer views' scaled by
+// g_outerScale from its top-left corner (README.md "Design: true per-view sizes").
+using SetViewports = void (*)(int count, int multiplier, const std::int32_t* rects);
+SetViewports g_setViewportsOriginal = nullptr;
+void set_viewports(int count, int multiplier, const std::int32_t* rects) {
+    if (multiplier == 2)
+        multiplier = 4;
+    if (g_viewRects.load(std::memory_order_relaxed) && count == 1 && multiplier == 4 && rects) {
+        const double s = g_outerScale.load(std::memory_order_relaxed);
+        std::int32_t four[16];
+        for (int v = 0; v < 4; ++v) {
+            std::int32_t* r = four + v * 4;
+            r[0] = rects[0];
+            r[1] = rects[1];
+            r[2] = v < 2 ? std::max(1, static_cast<std::int32_t>(rects[2] * s + 0.5)) : rects[2];
+            r[3] = v < 2 ? std::max(1, static_cast<std::int32_t>(rects[3] * s + 0.5)) : rects[3];
+        }
+        g_viewRectSets.fetch_add(1, std::memory_order_relaxed);
+        g_setViewportsOriginal(4, 4, four);
+        return;
+    }
+    g_setViewportsOriginal(count, multiplier, rects);
+}
 std::atomic<int> g_columnViewports{0};  // final resolve viewports given the whole column (the stub counts)
 static_assert(sizeof(std::atomic<int>) == 4, "the stub's lock inc dword");
 // The last 64 calls of the single-viewport setter (x, y, w, h), written by the stub: the index, then the entries.
@@ -271,8 +301,31 @@ bool four_views_copies_start() {
     const auto hook = reinterpret_cast<std::uintptr_t>(&create_shader_module);
     std::memcpy(shader + 2, &hook, 8);
 
-    bool ok = redirect(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor), setViewports,
-                       sizeof(setViewports), "multiplier 4 in set viewports");
+    bool ok = false;
+    if (g_viewRects) {
+        // One viewport per view: the pipelines take four (multiViewport; X-Plane makes them with two), and set viewports
+        // is detoured (set_viewports) instead of the multiplier stub.
+        const bool count = code_matches(kPipelineViewportCount, kPipelineViewportCountAnchor,
+                                        sizeof(kPipelineViewportCountAnchor)) &&
+                           simqvfr::code_write(kPipelineViewportCount, kPipelineViewportCountFour,
+                                               sizeof(kPipelineViewportCountFour));
+        logf("xplane: view rects: pipelines with 4 viewports and scissors at 0x%llx: %s",
+             static_cast<unsigned long long>(kPipelineViewportCount), count ? "patched" : "FAILED");
+        const MH_STATUS init = MH_Initialize();
+        void* target = reinterpret_cast<void*>(simqvfr::module_base() + kSetViewports);
+        MH_STATUS detour = init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED
+                             ? MH_CreateHook(target, reinterpret_cast<void*>(&set_viewports),
+                                             reinterpret_cast<void**>(&g_setViewportsOriginal))
+                             : init;
+        if (detour == MH_OK)
+            detour = MH_EnableHook(target);
+        logf("xplane: view rects: set viewports detoured (multiplier 4, one rect per view) at 0x%llx: %s",
+             static_cast<unsigned long long>(kSetViewports), detour == MH_OK ? "patched" : MH_StatusToString(detour));
+        ok = count && detour == MH_OK;
+    } else {
+        ok = redirect(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor), setViewports,
+                      sizeof(setViewports), "multiplier 4 in set viewports");
+    }
     ok &= redirect(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
                    "multiplier 4 (g-buffer store A)");
     ok &= redirect(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
@@ -321,6 +374,15 @@ bool four_views_copies_start() {
     ok &= clouds;
     return ok;
 }
+
+void four_views_set_view_rects(bool on, double outerScale) {
+    g_viewRects = on;
+    g_outerScale = outerScale > 0 && outerScale <= 1 ? outerScale : 1.0;
+    logf("xplane: view rects %s (one viewport per view; outer views %.0f%% of their layers)", on ? "on" : "off",
+         g_outerScale.load() * 100);
+}
+
+int four_views_view_rect_sets() { return g_viewRectSets.load(); }
 
 void four_views_set_eye_columns(bool on) {
     g_eyeColumns = on;
