@@ -24,4 +24,12 @@ int spirv_fold_eye_arrays(std::vector<std::uint32_t>& words, const std::vector<s
 // written layer becomes z (a 3-component int coordinate whose last component was `eye` now takes z). True if edited.
 bool spirv_layer_from_dispatch_z(std::vector<std::uint32_t>& words);
 
+// A per-eye inverse projection read with a view index (`block.member[i]`, e.g. u_ogl_light_data.u_proj_inv) becomes
+// `inverse(transform.projection[i])`, the per-view projection the same shader already reads with the same index
+// (u_transform_block_fat.projection_matrix[i]). Exact for the eyes, and the focus views get their own inverse. Blocks
+// and members by their types' names. Only accesses whose index the shader also uses for the projection are edited,
+// and only if both members are matrices of one type with the same major order. Returns how many (0: unchanged).
+int spirv_inverse_from_view_projection(std::vector<std::uint32_t>& words, const char* block, const char* member,
+                                       const char* transform, const char* projection);
+
 }  // namespace xplane

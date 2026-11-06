@@ -36,6 +36,7 @@ using CreateShaderModule = std::int32_t (*)(void* device, const ShaderModuleCrea
 std::atomic<int> g_finalResolveEdits{0};
 std::atomic<int> g_eyeArrayModules{0};
 std::atomic<int> g_layerFromZModules{0};
+std::atomic<int> g_inverseModules{0};
 
 // The uniform blocks with per-eye arrays of two (README.md, "Inventory"), by their variables' names.
 const std::vector<std::string> kEyeArrayBlocks = {
@@ -90,6 +91,13 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
     // Every shader reading X-Plane's per-eye arrays: views 2-3 read their eye's entry (index & 1).
     if (info && info->pCode && info->codeSize >= 20) {
         std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
+        // Before the fold: the light billboards' inverse projection follows the view's own projection (README.md,
+        // "Measured: focus cameras"), so focus views size their lights with the focus projection.
+        const int inverted = spirv_inverse_from_view_projection(words, "u_ogl_light_data", "u_proj_inv",
+                                                                "u_transform_block_fat", "projection_matrix");
+        if (inverted > 0)
+            logf("xplane: light inverse projection = inverse(view projection) in shader module (%d loads), %d so far",
+                 inverted, ++g_inverseModules);
         int skipped = 0;
         const int folded = spirv_fold_eye_arrays(words, kEyeArrayBlocks, &skipped);
         if (folded > 0 || skipped > 0) {
@@ -101,7 +109,7 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         const bool layered = spirv_layer_from_dispatch_z(words);
         if (layered)
             logf("xplane: compute shader writes layer = dispatch z (eye from z & 1), module %d", ++g_layerFromZModules);
-        if (folded > 0 || layered) {
+        if (inverted > 0 || folded > 0 || layered) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();

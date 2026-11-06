@@ -156,6 +156,66 @@ int main() {
         check(!xplane::spirv_layer_from_dispatch_z(none), "no idiom: left alone");
     }
 
+    // The light billboards' inverse projection: blk.inv[i] -> inverse(xf.proj[i]).
+    {
+        auto str = [](std::vector<std::uint32_t>& v, const char* s) {
+            const std::size_t n = std::strlen(s) / 4 + 1;
+            std::vector<std::uint32_t> words(n, 0);
+            std::memcpy(words.data(), s, std::strlen(s));
+            v.insert(v.end(), words.begin(), words.end());
+        };
+        auto build = [&](bool sharedIndex, bool folded) {
+            std::vector<std::uint32_t> m = {0x07230203, 0x00010300, 0, 30, 0};
+            m.push_back(op(11, 2 + 4)); m.push_back(1); str(m, "GLSL.std.450");
+            m.push_back(op(5, 2 + 1)); m.push_back(10); str(m, "blk");
+            m.push_back(op(5, 2 + 1)); m.push_back(20); str(m, "xf");
+            m.push_back(op(6, 3 + 1)); m.insert(m.end(), {10, 0}); str(m, "inv");
+            m.push_back(op(6, 3 + 2)); m.insert(m.end(), {20, 0}); str(m, "proj");
+            m.insert(m.end(), {op(72, 4), 10, 0, 5, op(72, 4), 20, 0, 5});  // ColMajor
+            m.insert(m.end(), {op(21, 4), 2, 32, 1, op(22, 3), 3, 32, op(23, 4), 4, 3, 4, op(24, 4), 5, 4, 4});
+            m.insert(m.end(), {op(43, 4), 2, 6, 2, op(43, 4), 2, 7, 0, op(43, 4), 2, 9, 4, op(43, 4), 2, 18, 1});
+            m.insert(m.end(), {op(28, 4), 8, 5, 6, op(28, 4), 11, 5, 9, op(30, 3), 10, 8, op(30, 3), 20, 11});
+            m.insert(m.end(), {op(32, 4), 12, 2, 10, op(32, 4), 21, 2, 20, op(32, 4), 13, 2, 5, op(32, 4), 15, 1, 2});
+            m.insert(m.end(), {op(59, 4), 12, 14, 2, op(59, 4), 21, 22, 2, op(59, 4), 15, 16, 1});
+            m.insert(m.end(), {op(61, 4), 2, 17, 16, op(61, 4), 2, 28, 16});
+            m.insert(m.end(), {op(199, 5), 2, 19, 17, 18});  // %19 = %17 & 1 (as folded)
+            m.insert(m.end(), {op(65, 6), 13, 23, 22, 7, 17, op(61, 4), 5, 24, 23});
+            const std::uint32_t idx = folded ? 19 : (sharedIndex ? 17 : 28);
+            m.insert(m.end(), {op(65, 6), 13, 25, 14, 7, idx, op(61, 4), 5, 26, 25});
+            return m;
+        };
+        for (int folded = 0; folded < 2; ++folded) {
+            std::vector<std::uint32_t> m = build(true, folded == 1);
+            const std::size_t sizeBefore = m.size();
+            const int n = xplane::spirv_inverse_from_view_projection(m, "blk", "inv", "xf", "proj");
+            // The access now xf.proj[%17], its load %30, then %26 = OpExtInst %5 %1 MatrixInverse %30; bound 31.
+            const std::vector<std::uint32_t> tail = {op(65, 6), 13, 25, 22, 7, 17, op(61, 4), 5, 30, 25,
+                                                     op(12, 6), 5, 26, 1, 34, 30};
+            check(n == 1 && m.size() == sizeBefore + 6 && m[3] == 31 &&
+                      std::vector<std::uint32_t>(m.end() - 16, m.end()) == tail,
+                  folded ? "inverse from the view projection (index already folded to i & 1)"
+                         : "inverse from the view projection");
+        }
+        std::vector<std::uint32_t> unshared = build(false, false);
+        const std::vector<std::uint32_t> copy = unshared;
+        check(xplane::spirv_inverse_from_view_projection(unshared, "blk", "inv", "xf", "proj") == 0 && unshared == copy,
+              "an index the projection doesn't use: left alone");
+    }
+
+    // SIM_QVFR_SPV_INV: the light billboards' vertex shader (from a capture); writes <file>.inv.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_INV")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        const int n = xplane::spirv_inverse_from_view_projection(real, "u_ogl_light_data", "u_proj_inv",
+                                                                 "u_transform_block_fat", "projection_matrix");
+        std::printf("     %s: %d loads\n", in, n);
+        check(n > 0, "edits the light billboards' inverse projection");
+        std::ofstream o(std::string(in) + ".inv.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
     // SIM_QVFR_SPV_CLOUD: the cloud render compute shader (from a capture); writes <file>.edited.spv.
     if (const char* in = std::getenv("SIM_QVFR_SPV_CLOUD")) {
         std::ifstream file(in, std::ios::binary);

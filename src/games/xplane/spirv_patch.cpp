@@ -334,4 +334,163 @@ int spirv_fold_eye_arrays(std::vector<std::uint32_t>& words, const std::vector<s
     return static_cast<int>(edits.size());
 }
 
+int spirv_inverse_from_view_projection(std::vector<std::uint32_t>& words, const char* block, const char* member,
+                                       const char* transform, const char* projection) {
+    constexpr std::uint16_t kOpExtInstImport = 11, kOpExtInst = 12, kOpMemberName = 6, kOpMemberDecorate = 72;
+    constexpr std::uint32_t kRowMajor = 4, kColMajor = 5, kMatrixInverse = 34;
+    if (words.size() < kHeader || words[0] != kMagic)
+        return 0;
+    std::map<std::uint32_t, std::string> names;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::string> memberNames;  // (struct, member) -> name
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::uint32_t> major;      // (struct, member) -> Row/ColMajor
+    std::map<std::uint32_t, std::vector<std::uint32_t>> structs;
+    std::map<std::uint32_t, std::uint32_t> arrayElement;
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> consts;
+    std::map<std::uint32_t, std::uint32_t> pointee, varType;
+    std::uint32_t glsl = 0;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        if (count == 0 || i + count > words.size())
+            return 0;
+        const std::uint32_t* w = &words[i];
+        if (code == kOpName && count >= 3)
+            names[w[1]] = literal(words, i + 2, i + count);
+        else if (code == kOpMemberName && count >= 4)
+            memberNames[{w[1], w[2]}] = literal(words, i + 3, i + count);
+        else if (code == kOpMemberDecorate && count >= 4 && (w[3] == kRowMajor || w[3] == kColMajor))
+            major[{w[1], w[2]}] = w[3];
+        else if (code == kOpExtInstImport && count >= 3 && literal(words, i + 2, i + count) == "GLSL.std.450")
+            glsl = w[1];
+        else if (code == kOpTypeStruct)
+            structs[w[1]] = std::vector<std::uint32_t>(w + 2, w + count);
+        else if (code == kOpTypeArray && count == 4)
+            arrayElement[w[1]] = w[2];
+        else if (code == kOpTypePointer && count == 4 && w[2] == kUniform)
+            pointee[w[1]] = w[3];
+        else if (code == kOpVariable && count >= 4 && w[3] == kUniform)
+            varType[w[2]] = w[1];
+        if (code == kOpConstant && count == 4)
+            consts[w[2]] = {w[1], w[3]};
+        i += count;
+    }
+    if (!glsl)
+        return 0;
+    // A Uniform variable of the named block type, and its member's index, struct and array element type.
+    struct Found {
+        std::uint32_t var = 0, structId = 0, index = 0, element = 0;
+    };
+    auto find = [&](const std::string& typeName, const std::string& memberName) {
+        Found f;
+        for (const auto& [var, ptr] : varType) {
+            const auto p = pointee.find(ptr);
+            if (p == pointee.end() || !structs.count(p->second))
+                continue;
+            const auto n = names.find(p->second);
+            if (n == names.end() || (n->second != typeName && n->second + "_var" != typeName))
+                continue;
+            const auto& members = structs[p->second];
+            for (std::uint32_t m = 0; m < members.size(); ++m) {
+                const auto mn = memberNames.find({p->second, m});
+                const auto el = arrayElement.find(members[m]);
+                if (mn != memberNames.end() && mn->second == memberName && el != arrayElement.end())
+                    f = {var, p->second, m, el->second};
+            }
+        }
+        return f;
+    };
+    const Found src = find(block, member), proj = find(transform, projection);
+    if (!src.var || !proj.var || src.element != proj.element)
+        return 0;
+    const auto srcMajor = major.find({src.structId, src.index}), projMajor = major.find({proj.structId, proj.index});
+    if (srcMajor == major.end() || projMajor == major.end() || srcMajor->second != projMajor->second)
+        return 0;
+    // The projection's accesses: the member constant they use and the indexes they take.
+    std::uint32_t projMember = 0;
+    std::set<std::uint32_t> projIndexes;
+    struct Access {
+        std::size_t at;
+        std::uint32_t result;
+    };
+    std::vector<Access> accesses;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        if ((code == kOpAccessChain || code == kOpInBoundsAccessChain) && count == 6) {
+            const auto m = consts.find(words[i + 4]);
+            if (m != consts.end()) {
+                if (words[i + 3] == proj.var && m->second.second == proj.index) {
+                    projMember = words[i + 4];
+                    projIndexes.insert(words[i + 5]);
+                } else if (words[i + 3] == src.var && m->second.second == src.index) {
+                    accesses.push_back({i, words[i + 2]});
+                }
+            }
+        }
+        i += count;
+    }
+    if (!projMember)
+        return 0;
+    // Indexes already folded to the eye (`i & 1`, spirv_fold_eye_arrays): the unfolded `i`.
+    std::map<std::uint32_t, std::uint32_t> unfold;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        if (code == kOpBitwiseAnd && count == 5) {
+            const auto c = consts.find(words[i + 4]);
+            if (c != consts.end() && c->second.second == 1)
+                unfold[words[i + 2]] = words[i + 3];
+        }
+        i += count;
+    }
+    // Each source access with a shared index: point it at the projection; each load of it gets a new id, and
+    // OpExtInst MatrixInverse gives the old id.
+    std::map<std::size_t, std::uint32_t> editAccess;  // position -> the index to use
+    std::set<std::uint32_t> edited;
+    for (const auto& a : accesses) {
+        std::uint32_t index = words[a.at + 5];
+        const auto u = unfold.find(index);
+        if (!projIndexes.count(index) && u != unfold.end())
+            index = u->second;
+        if (projIndexes.count(index)) {
+            editAccess[a.at] = index;
+            edited.insert(a.result);
+        }
+    }
+    if (edited.empty())
+        return 0;
+    std::uint32_t bound = words[3];
+    std::vector<std::uint32_t> out(words.begin(), words.begin() + kHeader);
+    out.reserve(words.size() + edited.size() * 8);
+    int loads = 0;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16), code = words[i] & 0xffff;
+        const std::size_t start = out.size();
+        out.insert(out.end(), words.begin() + static_cast<std::ptrdiff_t>(i),
+                   words.begin() + static_cast<std::ptrdiff_t>(i + count));
+        if (editAccess.count(i)) {
+            out[start + 3] = proj.var;
+            out[start + 4] = projMember;
+            out[start + 5] = editAccess[i];
+        } else if (code == kOpLoad && count >= 4 && edited.count(words[i + 3])) {
+            const std::uint32_t type = words[i + 1], result = words[i + 2], raw = bound++;
+            out[start + 2] = raw;
+            out.insert(out.end(), {op(kOpExtInst, 6), type, result, glsl, kMatrixInverse, raw});
+            ++loads;
+        }
+        i += count;
+    }
+    // A pointer to the source element used other than by a load (e.g. a copy) would now point at the projection
+    // without the inverse: give up rather than change its meaning.
+    std::size_t uses = 0;
+    for (std::size_t i = kHeader; i < words.size();) {
+        const std::uint16_t count = static_cast<std::uint16_t>(words[i] >> 16);
+        for (std::size_t k = 1; k < count; ++k)
+            uses += edited.count(words[i + k]) && !editAccess.count(i) ? 1 : 0;
+        i += count;
+    }
+    if (uses != static_cast<std::size_t>(loads))
+        return 0;
+    out[3] = bound;
+    words.swap(out);
+    return loads;
+}
+
 }  // namespace xplane
