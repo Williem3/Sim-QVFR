@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 
 #include <windows.h>
 #include <dxgi.h>
@@ -171,6 +172,35 @@ std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now)
     // In order of use, so the size cap leaves out what matters least.
     add_file(sources.settingsIni, L"sim-qvfr.ini");
     add_file(sources.runtimeIni, L"runtime.ini");
+    // The newest launch: its plan, and what the OpenXR loader said (a game it failed starts flat, no layer log).
+    fs::path newestRun;
+    {
+        std::error_code ec;
+        for (fs::directory_iterator it(sources.logs, ec), end; !ec && it != end; it.increment(ec)) {
+            const std::wstring name = it->path().filename().wstring();
+            if (it->is_directory(ec) && starts_with(name, L"run-") &&
+                (newestRun.empty() || name > newestRun.filename().wstring()))
+                newestRun = it->path();
+        }
+    }
+    if (!newestRun.empty()) {
+        add_file((newestRun / L"launch.txt").wstring(), L"launch.txt");
+        const fs::path output = newestRun / kLoaderOutputName;
+        std::error_code ec;
+        const uint64_t size = fs::file_size(output, ec);
+        if (!ec && size <= kReportLoaderOutputBytes) {
+            add(output, kLoaderOutputName, size);
+        } else if (!ec && total + kReportLoaderOutputBytes <= kReportMaxBytes) {  // its end: the newest lines
+            std::ifstream in(output, std::ios::binary);
+            in.seekg(static_cast<std::streamoff>(size - kReportLoaderOutputBytes));
+            std::string tail(kReportLoaderOutputBytes, '\0');
+            in.read(tail.data(), static_cast<std::streamsize>(tail.size()));
+            tail.resize(static_cast<size_t>(in.gcount()));
+            total += tail.size();
+            out.push_back({kLoaderOutputName, {}, std::move(tail), 0});
+            out.back().size = out.back().data.size();
+        }
+    }
     const std::vector<Found> logs = find(sources.logs, L"session-", L".log", session_log);
     for (size_t i = 0; i < logs.size() && i < kReportLogs; ++i)
         if (i == 0 || logs[i].time >= since)

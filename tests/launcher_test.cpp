@@ -703,6 +703,27 @@ int main() {
         check(std::count_if(old.begin(), old.end(), [](const ReportFile& f) { return f.name == L"session-20261101-100000.log"; }) == 1,
               "report: only an old session log: the newest one still goes in");
 
+        // A launch the loader failed has no session log: the newest run's plan and loader output go in instead,
+        // only the end of a long output.
+        fs::create_directories(logs / L"run-20261103-120000");
+        fs::create_directories(logs / L"run-20261103-130000");
+        write_file((logs / L"run-20261103-120000" / L"launch.txt").wstring(), "older launch");
+        write_file((logs / L"run-20261103-130000" / L"launch.txt").wstring(), "newest launch");
+        write_file((logs / L"run-20261103-130000" / kLoaderOutputName).wstring(),
+                   std::string(static_cast<size_t>(kReportLoaderOutputBytes), 'x') + "Error [GENERAL | xrCreateInstance]");
+        const std::vector<ReportFile> runs = report_files({logs.wstring(), reportRuntime, settingsIni}, nowTicks);
+        const auto entry = [&](const wchar_t* name) {
+            const auto it = std::find_if(runs.begin(), runs.end(), [&](const ReportFile& f) { return f.name == name; });
+            return it == runs.end() ? nullptr : &*it;
+        };
+        const ReportFile* runPlan = entry(L"launch.txt");
+        const ReportFile* loader = entry(kLoaderOutputName);
+        check(runPlan && runPlan->path.find(L"run-20261103-130000") != std::wstring::npos,
+              "report: the newest run's launch.txt goes in");
+        check(loader && loader->path.empty() && loader->data.size() == kReportLoaderOutputBytes &&
+                  loader->data.ends_with("xrCreateInstance]"),
+              "report: a long loader output goes in as its last part");
+
         check(crc32("123456789", 9) == 0xcbf43926u, "report: CRC-32 check value");
         const std::vector<ReportFile> zipEntries = {{L"runtime.ini", reportRuntime}, {L"issue.md", L"", "# Problem \xc3\xa9"}};
         const std::wstring zip = (folder / L"report" / L"report.zip").wstring();
