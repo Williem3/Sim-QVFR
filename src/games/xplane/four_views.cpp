@@ -321,7 +321,30 @@ bool four_views_copies_start() {
             detour = MH_EnableHook(target);
         logf("xplane: view rects: set viewports detoured (multiplier 4, one rect per view) at 0x%llx: %s",
              static_cast<unsigned long long>(kSetViewports), detour == MH_OK ? "patched" : MH_StatusToString(detour));
-        ok = count && detour == MH_OK;
+        // 3D lines: room for two viewports' entries; write the first two (abi.h kLineViewportAssert).
+        static const std::uint8_t nop6[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
+        std::uint8_t loopEnd[] = {
+            0x48, 0x03, 0xD0,                    // add rdx, rax (the original: the entry count)
+            0x48, 0x83, 0xFA, 0x02,              // cmp rdx, 2
+            0x76, 0x05,                          // jbe +5
+            0xBA, 0x02, 0x00, 0x00, 0x00,        // mov edx, 2
+            0x4C, 0x3B, 0xC2,                    // cmp r8, rdx (the original)
+            0x73, 0x0C,                          // jae done (the loop is over)
+            0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,  // mov rax, loop top (rax is free there)
+            0xFF, 0xE0,                          // jmp rax
+        };                                       // done: back after the original jb
+        static_assert(sizeof(loopEnd) == 19 + 12, "the jae skips the jump");
+        const std::uintptr_t top = simqvfr::module_base() + kLineViewportLoopTop;
+        std::memcpy(loopEnd + 21, &top, 8);
+        const bool lines =
+            code_matches(kLineViewportAssert, kLineViewportAssertAnchor, sizeof(kLineViewportAssertAnchor)) &&
+            code_matches(kLineViewportLoopEnd, kLineViewportLoopEndAnchor, sizeof(kLineViewportLoopEndAnchor)) &&
+            redirect(kLineViewportLoopEnd, kLineViewportLoopEndAnchor, sizeof(kLineViewportLoopEndAnchor), loopEnd,
+                     sizeof(loopEnd), "view rects: 3D lines write the first two viewports' entries") &&
+            simqvfr::code_write(kLineViewportAssert, nop6, sizeof(nop6));
+        logf("xplane: view rects: 3D lines' viewport assertion (<= 2) at 0x%llx: %s",
+             static_cast<unsigned long long>(kLineViewportAssert), lines ? "lifted" : "FAILED");
+        ok = count && detour == MH_OK && lines;
     } else {
         ok = redirect(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor), setViewports,
                       sizeof(setViewports), "multiplier 4 in set viewports");

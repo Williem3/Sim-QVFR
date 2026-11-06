@@ -67,6 +67,15 @@ inline constexpr std::uintptr_t kSetViewports = 0x1595790;
 inline constexpr std::uintptr_t kPipelineViewportCount = 0x628437;
 inline constexpr std::uint8_t kPipelineViewportCountAnchor[5] = {0x0F, 0x95, 0xC1, 0xFF, 0xC1};
 inline constexpr std::uint8_t kPipelineViewportCountFour[5] = {0xB9, 0x04, 0x00, 0x00, 0x00};
+// 3D line drawing (`u_line3d_data`, 0x80 bytes) writes one {w, h, w/h, 1} entry per viewport at +0x10 and +0x20, room
+// for two (+0x30 is the line width), and asserts "Viewport count out of range for line drawing! viewports.size() <= 2".
+// With four viewports: the assertion's `ja` (count > 2) is skipped, and the loop's end (`add rdx, rax; cmp r8, rdx;
+// jb loop`) stops at min(count, 2). The shader reads entry index & 1 (the eye-array fold).
+inline constexpr std::uintptr_t kLineViewportAssert = 0xcb9ee1;
+inline constexpr std::uint8_t kLineViewportAssertAnchor[6] = {0x0F, 0x87, 0x54, 0x05, 0x00, 0x00};
+inline constexpr std::uintptr_t kLineViewportLoopEnd = 0xcb9f58;
+inline constexpr std::uint8_t kLineViewportLoopEndAnchor[8] = {0x48, 0x03, 0xD0, 0x4C, 0x3B, 0xC2, 0x72, 0x92};
+inline constexpr std::uintptr_t kLineViewportLoopTop = 0xcb9ef2;
 inline constexpr std::uint8_t kSetViewportsAnchor[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 // The two direct stores of multiplier = stereo + 1 (OGL_build_world_gbuffer_graph's lambdas): `mov [rax+0x2490], ecx`.
 inline constexpr std::uintptr_t kMultiplierStoreA = 0x79ca48;
