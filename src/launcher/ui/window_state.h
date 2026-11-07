@@ -300,6 +300,9 @@ struct Help {
     const wchar_t* text;
 };
 
+// A pop-up menu item's height (chrome.cpp's popup_menu_rect).
+inline constexpr float kMenuItemH = 32;
+
 // window_state.cpp
 std::wstring game_name();
 std::wstring short_name();
@@ -430,9 +433,14 @@ float side_preview(float x, float y, float w, bool draw);
 // pane_about.cpp
 float about_pane(float x, float y, float w, bool draw);
 
-// launcher_window.cpp
+// chrome.cpp
 bool pane_shown(int pane);
+int shown_pane(int pane, int step, int from);
+Rect popup_menu_rect();
 void edit_font();
+void paint();
+
+// launcher_window.cpp
 void choose_game_folder();
 void activate(Ctl id, int option);
 void on_key(WPARAM key);
