@@ -8,6 +8,10 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+# Each project compiles its sources in parallel; with `cmake --build --parallel` the projects build in parallel too.
+if(MSVC)
+  add_compile_options(/MP)
+endif()
 
 # The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
 set(SIM_QVFR_RELEASE "1.0.1-beta")
