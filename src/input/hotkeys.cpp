@@ -5,6 +5,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 namespace {
 
@@ -110,9 +112,8 @@ Hotkeys read_hotkeys(const wchar_t* ini) {
 bool write_hotkeys(const wchar_t* ini, const Hotkeys& h) {
     bool ok = true;
     for (int i = 0; i < kHotkeyActions; ++i) {
-        ok &= WritePrivateProfileStringW(L"hotkeys", kIniKeys[i], key_text(h[i].key).c_str(), ini) != 0;
-        ok &= WritePrivateProfileStringW(L"hotkeys", (std::wstring(kIniKeys[i]) + L"_pad").c_str(), pad_value(h[i].pad).c_str(),
-                                         ini) != 0;
+        ok &= ini_put(ini, L"hotkeys", kIniKeys[i], key_text(h[i].key).c_str());
+        ok &= ini_put(ini, L"hotkeys", (std::wstring(kIniKeys[i]) + L"_pad").c_str(), pad_value(h[i].pad).c_str());
     }
     return ok;
 }

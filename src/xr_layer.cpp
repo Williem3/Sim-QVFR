@@ -22,6 +22,7 @@
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "games/adapter.h"
+#include "ini_put.h"
 #include "layer_chain.h"
 #include "log.h"
 #include "probe/d3d11_capture.h"
@@ -319,7 +320,7 @@ void runtime_info(const wchar_t* key, const std::wstring& value) {
         return n > 0 && n < MAX_PATH ? std::wstring(buffer) : std::wstring();
     }();
     if (!path.empty())
-        WritePrivateProfileStringW(L"runtime", key, value.c_str(), path.c_str());
+        ini_put(path.c_str(), L"runtime", key, value.c_str());
 }
 
 // The folder this DLL is in.
@@ -1483,7 +1484,10 @@ void report_load(double frameMs) {
         logf("views4 threads: %s (of one core each)", list.c_str());
 }
 
-uint64_t ini_write_later(std::function<void()> write);  // (below)
+// A write queued for the ini worker (ini_write_later). MenuStep: a settings menu step, which writes every value the
+// menu holds, so a newer step queued right behind an older one stands in for it (held keys don't queue for seconds).
+enum class IniWrite { Once, MenuStep };
+uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);  // (below)
 
 // VRAM (views4): this process's use of the GPU's local memory and the census of ACE's render targets
 // (probe/vram_census.h) against its render and output sizes, logged and written to the runtime info, where
@@ -3311,11 +3315,17 @@ IniSnapshot read_snapshot(const wchar_t* ini) {
 // The ini worker: every read and write of the ini while the game runs, off the render thread (each
 // Get/WritePrivateProfileString opens the file; a menu step wrote and re-read about a hundred keys, up to
 // ~130 ms in xrEndFrame). It runs the queued writes (the menu's, the hotkeys'), then, every kLiveCheckMs or
-// when woken, reads a snapshot when the ini's write time changed; live_reload applies the latest.
+// when woken, reads a snapshot when the ini's write time changed; live_reload applies the latest. Writes go
+// through ini_put (only values that differ: each WritePrivateProfileString rewrites the whole ini, ~5 ms).
+struct QueuedIniWrite {
+    uint64_t number;  // ini_write_later's
+    IniWrite kind;
+    std::function<void()> write;
+};
 struct IniWorker {
     std::mutex mutex;
     std::condition_variable wake, settled;
-    std::deque<std::function<void()>> writes;
+    std::deque<QueuedIniWrite> writes;
     std::wstring ini;     // the ini watched
     FILETIME written{};   // its write time when last read
     std::optional<IniSnapshot> ready;  // the latest read, not yet applied
@@ -3331,15 +3341,16 @@ void ini_worker_loop() {
         iniWorker.wake.wait_for(lock, std::chrono::milliseconds(kLiveCheckMs),
                                 [] { return iniWorker.poke || !iniWorker.writes.empty(); });
         iniWorker.poke = false;
-        std::deque<std::function<void()>> writes;
+        std::deque<QueuedIniWrite> writes;
         writes.swap(iniWorker.writes);
         const std::wstring ini = iniWorker.ini;
         const FILETIME seen = iniWorker.written;
         const uint64_t pass = iniWorker.requested;
-        const uint64_t through = iniWorker.writesDone + writes.size();
+        // Numbered in order; a menu step that stood in for an older one skips that one's number.
+        const uint64_t through = writes.empty() ? iniWorker.writesDone : writes.back().number;
         lock.unlock();
-        for (auto& write : writes)
-            write();
+        for (auto& w : writes)
+            w.write();
         // After its own writes it reads the ini whatever its write time says (a write can leave it unchanged).
         std::optional<IniSnapshot> snapshot;
         WIN32_FILE_ATTRIBUTE_DATA attributes{};
@@ -3375,13 +3386,19 @@ void ini_worker_watch(const std::wstring& ini, const FILETIME& written) {
 }
 
 // Queues a write to the ini (or the launcher's) and wakes the worker; the live reload follows it. Returns
-// the write's number: snapshots read after it carry writesBefore >= it.
-uint64_t ini_write_later(std::function<void()> write) {
+// the write's number: snapshots read after it carry writesBefore >= it. A menu step queued right behind another
+// one not yet written replaces it: it writes every value the older one did (only the last in the queue, so a
+// write of another kind between them keeps its order).
+uint64_t ini_write_later(std::function<void()> write, IniWrite kind) {
     std::lock_guard guard(iniWorker.mutex);
     ini_worker_watch(live.ini, live.written);
-    iniWorker.writes.push_back(std::move(write));
+    const uint64_t number = ++iniWorker.writesQueued;
+    if (kind != IniWrite::Once && !iniWorker.writes.empty() && iniWorker.writes.back().kind == kind)
+        iniWorker.writes.back() = {number, kind, std::move(write)};
+    else
+        iniWorker.writes.push_back({number, kind, std::move(write)});
     iniWorker.wake.notify_one();
-    return ++iniWorker.writesQueued;
+    return number;
 }
 
 // Waits until the writes queued so far are done and the ini has been read after them (tests; the
@@ -3830,7 +3847,8 @@ void menu_press(MenuKey key, int64_t now) {
                  lines[i].value.c_str());
     }
     // Written on the ini worker (off the render thread), to the ini the layer reloads and the launcher's
-    // (the next launch starts from them); the live reload follows within a frame or two.
+    // (the next launch starts from them); the live reload follows within a frame or two. Steps quicker than the
+    // worker are written as one (IniWrite::MenuStep).
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail] {
         write_menu_values(ini.c_str(), values, qvfr, detail);
@@ -3843,13 +3861,13 @@ void menu_press(MenuKey key, int64_t now) {
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (target != settings) {  // the panels' places and the overlay are every game's: the launcher's ini
                 write_osd_placement(settings.c_str(), values.overlay);
-                WritePrivateProfileStringW(L"menu", L"yaw", std::to_wstring(values.placement.yaw).c_str(), settings.c_str());
-                WritePrivateProfileStringW(L"menu", L"pitch", std::to_wstring(values.placement.pitch).c_str(), settings.c_str());
-                WritePrivateProfileStringW(L"menu", L"width", std::to_wstring(values.placement.width).c_str(), settings.c_str());
-                WritePrivateProfileStringW(L"menu", L"hotkey_footer", values.hotkeyFooter ? L"1" : L"0", settings.c_str());
+                ini_put(settings.c_str(), L"menu", L"yaw", values.placement.yaw);
+                ini_put(settings.c_str(), L"menu", L"pitch", values.placement.pitch);
+                ini_put(settings.c_str(), L"menu", L"width", values.placement.width);
+                ini_put(settings.c_str(), L"menu", L"hotkey_footer", values.hotkeyFooter ? 1 : 0);
             }
         }
-    });
+    }, IniWrite::MenuStep);
 }
 
 // Held keys and stick directions repeat after kRepeatDelayMs, every kRepeatMs.

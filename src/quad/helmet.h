@@ -33,6 +33,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 
 enum class VisorPosition { Closed, Half, Open };
@@ -133,7 +135,7 @@ inline HelmetSettings read_helmet_settings(const wchar_t* ini) {
 // The keys the launcher and the menu change (the image paths and visor_travel are set in the ini by hand).
 inline bool write_helmet_settings(const wchar_t* ini, const HelmetSettings& h) {
     const auto write = [ini](const wchar_t* key, int value) {
-        return WritePrivateProfileStringW(L"helmet", key, std::to_wstring(value).c_str(), ini) != 0;
+        return ini_put(ini, L"helmet", key, value);
     };
     bool ok = write(L"enabled", h.on ? 1 : 0);
     ok &= write(L"rim", std::clamp(h.rim, 0, kHelmetRimMax));
@@ -143,7 +145,7 @@ inline bool write_helmet_settings(const wchar_t* ini, const HelmetSettings& h) {
     ok &= write(L"height", std::clamp(h.height, -kHelmetHeightMax, kHelmetHeightMax));
     ok &= write(L"depth", helmet_depth(h.depth));
     const wchar_t* const visor[] = {L"closed", L"half", L"open"};
-    ok &= WritePrivateProfileStringW(L"helmet", L"visor", visor[static_cast<int>(h.visor)], ini) != 0;
+    ok &= ini_put(ini, L"helmet", L"visor", visor[static_cast<int>(h.visor)]);
     ok &= write(L"debug_light", h.debugLight ? 1 : 0);
     ok &= write(L"detail", h.detail ? 1 : 0);
     return ok;

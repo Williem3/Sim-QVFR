@@ -11,6 +11,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 
 inline constexpr int kFocusOffsetMax = 20;  // degrees either way
@@ -35,7 +37,7 @@ inline FocusOffset read_focus_offset(const wchar_t* ini) {
 inline bool write_focus_offset(const wchar_t* ini, const FocusOffset& o) {
     const auto put = [ini](const wchar_t* key, int value) {
         const int v = std::clamp(value, -kFocusOffsetMax, kFocusOffsetMax);
-        return WritePrivateProfileStringW(L"quad", key, std::to_wstring(v).c_str(), ini) != 0;
+        return ini_put(ini, L"quad", key, v);
     };
     return put(L"fixed_offset_y", o.fixed) & put(L"gaze_offset_y", o.gaze);
 }

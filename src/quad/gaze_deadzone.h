@@ -10,6 +10,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 
 inline constexpr int kGazeDeadzoneDefault = 15;  // tenths of a degree
@@ -30,7 +32,7 @@ inline std::wstring gaze_deadzone_text(int tenths) {
 }
 
 inline bool write_gaze_deadzone(const wchar_t* ini, int tenths) {
-    return WritePrivateProfileStringW(L"quad", L"gaze_deadzone", gaze_deadzone_text(tenths).c_str(), ini) != 0;
+    return ini_put(ini, L"quad", L"gaze_deadzone", gaze_deadzone_text(tenths).c_str());
 }
 
 }  // namespace simqvfr

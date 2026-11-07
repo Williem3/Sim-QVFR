@@ -1,6 +1,7 @@
 // Offline check of the in-headset settings menu: selection, steps and ranges, the items per method,
 // the ini round trip and the launch-size note; and that the panel image draws text and highlight.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include "games/ace/game.h"
 #include "games/acc/game.h"
 #include "games/xplane/game.h"
+#include "ini_put.h"
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
 
@@ -806,6 +808,75 @@ int main() {
                   !read_menu_values(ini.c_str()).hotkeyFooter,
               "Hotkeys footer: unset is on; written and read back");
         DeleteFileW(ini.c_str());
+    }
+
+    // Only what changed is written (ini_put.h): WritePrivateProfileString rewrites the whole ini for every key, even
+    // one that already holds the value, and a step changes one key of the ~50 the menu writes.
+    {
+        wchar_t temp[MAX_PATH];
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-only-changes.ini";
+        const auto bytes = [&ini] {
+            std::string text;
+            if (FILE* f = _wfopen(ini.c_str(), L"rb")) {
+                char buffer[4096];
+                for (size_t n; (n = std::fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                    text.append(buffer, n);
+                std::fclose(f);
+            }
+            return text;
+        };
+        const auto put_text = [&ini](const std::string& text) {
+            if (FILE* f = _wfopen(ini.c_str(), L"wb")) {
+                std::fwrite(text.data(), 1, text.size(), f);
+                std::fclose(f);
+            }
+        };
+        // Spaces round the value: a rewrite by Windows would make the line "focus_percent=31".
+        const std::string original = "; notes\r\n[experiment]\r\nfocus_percent = 31\r\n";
+        put_text(original);
+        check(ini_put(ini.c_str(), L"experiment", L"focus_percent", 31) && bytes() == original,
+              "ini_put: the value already there: the file is left as it is");
+        check(ini_put(ini.c_str(), L"experiment", L"focus_percent", 32) &&
+                  GetPrivateProfileIntW(L"experiment", L"focus_percent", 0, ini.c_str()) == 32,
+              "ini_put: a different value is written");
+        check(ini_put(ini.c_str(), L"quad", L"feather_percent", 0) &&
+                  GetPrivateProfileIntW(L"quad", L"feather_percent", 7, ini.c_str()) == 0,
+              "ini_put: a missing key is written");
+        const std::wstring longValue(200, L'x');
+        check(ini_put(ini.c_str(), L"x", L"long", longValue.c_str()) && ini_put(ini.c_str(), L"x", L"long", longValue.c_str()),
+              "ini_put: a value longer than its read buffer is written each time");
+
+        // A step's write: every value again, one of them changed. Only that key's line changes. A fresh file: a
+        // rewrite keeps a key's own spacing ("focus_percent =32" above).
+        DeleteFileW(ini.c_str());
+        MenuValues v = read_menu_values(ini.c_str());
+        write_menu_values(ini.c_str(), v, true);
+        const std::string before = bytes();
+        check(write_menu_values(ini.c_str(), v, true) && bytes() == before, "menu step: the same values again leave the ini as it is");
+        v.width = 33;
+        write_menu_values(ini.c_str(), v, true);
+        std::string expected = before;
+        const size_t at = expected.find("focus_percent=39");
+        if (at != std::string::npos)
+            expected.replace(at, 16, "focus_percent=33");
+        check(at != std::string::npos && bytes() == expected, "menu step: only the changed key's line is rewritten");
+        DeleteFileW(ini.c_str());
+
+        // On the documented ini (34 KB): 20 steps took ~7 s when every key was rewritten (0.37 s a step).
+        const std::wstring documented = std::wstring(temp) + L"simqvfr-menu-documented.ini";
+        const bool copied = CopyFileW(L"" SIM_QVFR_DOCUMENTED_INI, documented.c_str(), FALSE) != 0;
+        MenuValues d = read_menu_values(documented.c_str());
+        const auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 20; ++i) {
+            d.width = 50 + i;
+            write_menu_values(documented.c_str(), d, true);
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        std::printf("     20 menu steps on the documented ini: %.0f ms (%.1f ms a step)\n", ms, ms / 20);
+        check(copied && read_menu_values(documented.c_str()).width == 69 && ms < 3000,
+              "menu step: on the documented ini, 20 steps well under the 7 s a full rewrite took");
+        DeleteFileW(documented.c_str());
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

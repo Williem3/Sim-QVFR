@@ -14,6 +14,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 
 struct CheekySettings {
@@ -127,7 +129,7 @@ inline CheekySettings read_cheeky_settings(const wchar_t* ini) {
 // The live keys (everything but `load`), or with `load` the enabled key as well.
 inline bool write_cheeky_settings(const wchar_t* ini, const CheekySettings& c, bool load) {
     const auto put = [ini](const wchar_t* key, int value) {
-        return WritePrivateProfileStringW(L"cheeky", key, std::to_wstring(value).c_str(), ini) != 0;
+        return ini_put(ini, L"cheeky", key, value);
     };
     bool ok = true;
     if (load)

@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 
 OsdPlacement read_osd_placement(const wchar_t* ini) {
@@ -26,7 +28,7 @@ OsdPlacement read_osd_placement(const wchar_t* ini) {
 
 bool write_osd_placement(const wchar_t* ini, const OsdPlacement& p) {
     const auto put = [ini](const wchar_t* key, int value) {
-        return WritePrivateProfileStringW(L"osd", key, std::to_wstring(value).c_str(), ini) != 0;
+        return ini_put(ini, L"osd", key, value);
     };
     return put(L"enabled", p.enabled ? 1 : 0) && put(L"yaw", p.yaw) && put(L"pitch", p.pitch) && put(L"width", p.width);
 }

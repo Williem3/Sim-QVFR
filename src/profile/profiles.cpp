@@ -7,6 +7,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 namespace {
 
@@ -252,8 +254,8 @@ bool delete_profile(const std::wstring& folder, const std::wstring& name) {
 
 bool apply_profile(const wchar_t* ini, const Profile& profile) {
     bool ok = true;
-    for (const ProfileKey& k : profile.keys)
-        ok &= WritePrivateProfileStringW(k.section.c_str(), k.key.c_str(), k.value.c_str(), ini) != 0;
+    for (const ProfileKey& k : profile.keys)  // only what differs: each write rewrites the whole ini (ini_put.h)
+        ok &= ini_put(ini, k.section.c_str(), k.key.c_str(), k.value.c_str());
     return ok;
 }
 
@@ -272,7 +274,7 @@ std::wstring current_profile(const wchar_t* ini) {
 }
 
 bool set_current_profile(const wchar_t* ini, const std::wstring& name) {
-    return WritePrivateProfileStringW(L"profiles", L"current", name.c_str(), ini) != 0;
+    return ini_put(ini, L"profiles", L"current", name.c_str());
 }
 
 std::string export_profile(const Profile& profile) {

@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include "../games/game.h"
+#include "../ini_put.h"
 #include "game_tabs.h"
 
 namespace simqvfr::launcher {
@@ -37,8 +38,9 @@ int read_signed(const std::wstring& ini, const wchar_t* section, const wchar_t* 
 
 int clamp_to(int v, Range r) { return std::clamp(v, r.min, r.max); }
 
+// Only a value that differs is written: a change saves ~100 keys, each write rewrites the whole ini (ini_put.h).
 bool write(const std::wstring& ini, const wchar_t* section, const wchar_t* key, const std::wstring& value) {
-    return WritePrivateProfileStringW(section, key, value.c_str(), ini.c_str()) != 0;
+    return ini_put(ini.c_str(), section, key, value.c_str());
 }
 
 }  // namespace
