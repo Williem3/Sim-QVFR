@@ -1,5 +1,5 @@
-// X-Plane 12's identity (../game.h). Identity only so far: the layer switches on in X-Plane and only logs
-// (docs/recon-xplane.md). It renders with Vulkan and reaches OpenXR on its own (no OpenComposite).
+// X-Plane 12's identity (../game.h); QVFR in xplane/adapter.cpp (docs/recon-xplane.md). It renders with Vulkan and
+// reaches OpenXR on its own (no OpenComposite).
 #pragma once
 
 #include <iterator>
@@ -18,7 +18,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"--open_xr --d3d11_vr",
     nullptr,  // OpenXR of its own
     nullptr,  // no DLSS
-    {false, false, false, false, false},  // identity only: nothing beyond logging yet
+    // Live resolution only; the adapter decides it per run (per-view sizes, qvfr_live_resolution).
+    {false, false, true, false, false},
     kBuilds, std::size(kBuilds),
     true,  // early load: X-Plane creates its shader modules at startup, before OpenXR (docs/recon-xplane.md)
 };
