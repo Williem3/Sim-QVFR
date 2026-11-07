@@ -291,6 +291,14 @@ struct App {
 // The window (window_state.cpp).
 extern App app;
 
+// The timer follow_ini runs on (app_actions.cpp).
+inline constexpr UINT_PTR kFollowTimer = 1;
+
+// Secondary: a filled grey button. Primary: the game's accent (one per view). Ghost: no fill until the pointer is
+// over it. Tint: the accent at 16% with accent text (an action that adds). Danger: red text, no fill. Support: pink,
+// for Support on Ko-fi.
+enum class Btn { Secondary, Primary, Ghost, Tint, Danger, Support };
+
 // window_state.cpp
 std::wstring game_name();
 std::wstring short_name();
@@ -299,7 +307,38 @@ std::wstring not_yet();
 Color col(uint32_t rgb, float alpha = 1);
 bool layers_dirty();
 
+// app_actions.cpp
+COLORREF colorref(uint32_t rgb);
+t::Accent builtin_accent(const games::GameInfo& game);
+std::wstring game_id(const games::GameInfo& game);
+t::Accent game_accent(const games::GameInfo& game);
+void apply_theme();
+bool eye_warning();
+void push_live();
+std::string ini_text();
+void changed(bool save = true);
+void refresh_profiles();
+void reload_runtime();
+void follow_ini();
+void refresh_checks();
+int* slider_value(Ctl id);
+Range slider_range(Ctl id);
+bool method_shown();
+std::vector<Ctl> focus_order();
+void launch();
+
+// update_install.cpp
+void start_update_check();
+void update_done(UpdateResult* r);
+void ask_update_check();
+bool installable();
+bool game_running();
+void start_install();
+void install_done(InstallResult* r);
+
 // launcher_window.cpp
+void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr);
+void button(Ctl id, const Rect& r, const std::wstring& label, bool primary);
 bool installed(const games::GameInfo& game);
 
 }  // namespace simqvfr::launcher::ui::win
