@@ -199,3 +199,21 @@
   --on-accent: #ffffff;
   --focus-ring: #ff9f45;
 }
+[data-game="xplane"] {
+  --accent: #00756b;
+  --accent-fill: #007d72;
+  --on-accent: #ffffff;
+  --focus-ring: #00756b;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"])[data-game="xplane"] {
+  --accent: #3dd6c6;
+  --accent-fill: #007d72;
+  --on-accent: #ffffff;
+  --focus-ring: #3dd6c6;
+} }
+[data-theme="dark"][data-game="xplane"] {
+  --accent: #3dd6c6;
+  --accent-fill: #007d72;
+  --on-accent: #ffffff;
+  --focus-ring: #3dd6c6;
+}
