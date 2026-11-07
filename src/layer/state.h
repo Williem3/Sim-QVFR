@@ -40,6 +40,12 @@
 
 namespace simqvfr::layer {
 
+inline constexpr char kLayerName[] = "XR_APILAYER_SIM_qvfr";
+
+inline constexpr uint64_t kDetailedFrames = 4;
+
+inline constexpr uint64_t kSampleEveryFrames = 1800;
+
 struct Dispatch {
     PFN_xrGetInstanceProcAddr GetInstanceProcAddr = nullptr;
     PFN_xrEnumerateViewConfigurationViews EnumerateViewConfigurationViews = nullptr;
@@ -178,6 +184,14 @@ struct LiveSettings {
     FovCrop crop;  // views4 only
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
+};
+
+// views4: the outer and focus views' sizes, linear scales of the native eye (views4_layout.h), from
+// periphery_scale and focus_density and the focus box. Unset, both follow eye_scale (equal quarters:
+// periphery = eye_scale, focus density = eye_scale / focus_percent).
+struct Views4Sizes {
+    double outer = 1, density = 1, focus = 1, focusHeight = 1;
+    bool fromEyeScale = false;
 };
 
 struct Live {

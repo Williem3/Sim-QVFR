@@ -4,9 +4,11 @@
 
 #include <functional>
 
+#include "input/hotkeys.h"
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/state.h"
+#include "layer/config.h"
 
 namespace simqvfr::layer {
 
@@ -45,6 +47,7 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);
 void ini_worker_sync();
 void live_reload();
+void hotkeys_changed(const Hotkeys& h);
 void menu_values_changed(const IniSnapshot& s);
 void menu_press(MenuKey key, int64_t now);
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
