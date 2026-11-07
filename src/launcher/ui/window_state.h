@@ -361,12 +361,22 @@ void apply_layers();
 float layers_pane(float x, float y, float w, bool draw);
 float layers_preview(float x, float y, float w, bool draw);
 
-// launcher_window.cpp
+// pane_diagnostics.cpp
+std::wstring logs_folder();
+bool copy_text(const std::wstring& text);
+void copy_summary();
 std::wstring clipboard_text();
-bool pane_shown(int pane);
-void edit_font();
-void choose_game_folder();
-void activate(Ctl id, int option);
+bool report_edit_fits();
+float diagnostics_pane(float x, float y, float w, bool draw);
+
+// pane_report.cpp
+void export_logs();
+void report_issue();
+void show_report_zip();
+void drag_report_zip(int px, int py);
+float report_pane(float x, float y, float w, bool draw);
+void place_report_edit();
+void create_report_edit();
 
 // pane_profiles.cpp
 float profiles_pane(float x, float y, float w, bool draw);
@@ -416,5 +426,15 @@ float dlss_pane(float x, float y, float w, bool draw);
 // pane_menu.cpp
 float menu_pane(float x, float y, float w, bool draw);
 float side_preview(float x, float y, float w, bool draw);
+
+// pane_about.cpp
+float about_pane(float x, float y, float w, bool draw);
+
+// launcher_window.cpp
+bool pane_shown(int pane);
+void edit_font();
+void choose_game_folder();
+void activate(Ctl id, int option);
+void on_key(WPARAM key);
 
 }  // namespace simqvfr::launcher::ui::win
