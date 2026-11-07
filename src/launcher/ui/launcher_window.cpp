@@ -202,7 +202,10 @@ struct App {
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
     Pane pane = Pane::Resolution;
+    // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
+    // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
+    int focusOption = -1;
     bool keyboard = false;  // focus rings show after keyboard use only (:focus-visible)
     Ctl pressed = kNone, dragging = kNone;
     Rect dragTrack;
@@ -544,7 +547,11 @@ void restart_launcher(const std::wstring& exe) {
 }
 
 void refresh_profiles() {
+    const std::vector<std::wstring> before = app.profileNames;
     app.profileNames = profile_names(profiles_folder(app.ini));
+    // A profile's button keeps the focus by its index: with the list changed it would be another profile's.
+    if (app.profileNames != before && app.focus >= kProfileUse && app.focus <= kProfileRevert)
+        app.focus = kNone;
     app.profileCurrent = current_profile(app.ini.c_str());
     Profile p;
     app.profileMatches = !app.profileCurrent.empty() && load_profile(profiles_folder(app.ini), app.profileCurrent, p, app.s.eyeTracking) &&
@@ -3105,7 +3112,7 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::About: {
         const float lh = t::kBody.lineHeight;
         if (draw) {
-            app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
+            app.canvas.text(L"Sim-QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
             app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody,
                             {x, y + t::kTitle1.lineHeight + 8, w, lh}, col(app.c->label_secondary));
             // A packaged build has its release's version; a development build ("dev") names the release it is headed for.
@@ -3911,8 +3918,8 @@ void game_tabs(float W) {
     // The app: its mark, its name and BETA.
     const float bx = t::kSpace4;
     brand_mark(bx, (H - 24) / 2, 24);
-    const float nameW = std::ceil(cv.measure(L"Sim QVFR", kBodyStrong));
-    cv.text(L"Sim QVFR", kBodyStrong, {bx + 24 + 10, 0, nameW + 2, H}, col(app.c->label));
+    const float nameW = std::ceil(cv.measure(L"Sim-QVFR", kBodyStrong));
+    cv.text(L"Sim-QVFR", kBodyStrong, {bx + 24 + 10, 0, nameW + 2, H}, col(app.c->label));
     const t::TypeStyle beta{10.5f, 14, 600, false};
     const float betaW = std::ceil(cv.measure(L"BETA", beta)) + 14, betaX = bx + 24 + 10 + nameW + 8;
     cv.fill({betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning_bg), 9);
@@ -4884,6 +4891,87 @@ float dip(LPARAM lp, bool y) {
     return (y ? GET_Y_LPARAM(lp) : GET_X_LPARAM(lp)) / app.canvas.dpi_scale();
 }
 
+// A push button: Return presses it while it has the focus (as on Windows); anywhere else Return presses Launch, the
+// window's default button. Space presses these too.
+bool push_button(Ctl id) {
+    switch (id) {
+    case kCheekyRuntime:
+    case kUpdateNow:
+    case kUpdateDownload:
+    case kUpdateInstall:
+    case kUpdateBadge:
+    case kLayerApply:
+    case kLayerRevert:
+    case kLayerReset:
+    case kLayerUp:
+    case kLayerDown:
+    case kSupport:
+    case kRestore:
+    case kLaunch:
+    case kHotkeysReset:
+    case kHotkeyKey:
+    case kHotkeyPad:
+    case kProfileUse:
+    case kProfileShare:
+    case kProfileDelete:
+    case kProfileUpdate:
+    case kProfileRevert:
+    case kProfileSave:
+    case kProfilePaste:
+    case kCheckFix:
+    case kChecksBadge:
+    case kUndoBadge:
+    case kLaunchBadge:
+    case kDiagReport:
+    case kDiagZip:
+    case kDiagCopy:
+    case kDiagLogs:
+    case kColorReset: return true;
+    default: return false;
+    }
+}
+
+// A switch or a pop-up button: Space toggles or opens it; Return, as on Windows, presses Launch.
+bool space_control(Ctl id) {
+    switch (id) {
+    case kMethod:
+    case kMode:
+    case kOutline:
+    case kCheekyUse:
+    case kCheekyOn:
+    case kCheekyOuter:
+    case kCheekyOuterPreset:
+    case kCheekyFocusPreset:
+    case kCheekyMotionFix:
+    case kCheekyNr:
+    case kCheekyNrPreset:
+    case kCheekyNrPasses:
+    case kFgOn:
+    case kFgBorder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery:
+    case kFgRelease:
+    case kOsdOn:
+    case kHotkeyFooter:
+    case kUpdateCheck:
+    case kCropOn:
+    case kHelmetOn:
+    case kVisor:
+    case kShape:
+    case kHelmetDetail:
+    case kLayerProfile:
+    case kLayerOn:
+    case kDiagCapture:
+    case kDiagFrameCapture:
+    case kDiagBaseline:
+    case kDiagKind:
+    case kGameShown:
+    case kColorGame: return true;
+    default: return false;
+    }
+}
+
 void on_key(WPARAM key) {
     if (app.sheet.open) {
         sheet_key(key);
@@ -4924,14 +5012,18 @@ void on_key(WPARAM key) {
         int i = it == order.end() ? (shift ? 0 : -1) : static_cast<int>(it - order.begin());
         i = (i + (shift ? static_cast<int>(order.size()) - 1 : 1)) % static_cast<int>(order.size());
         app.focus = order[i];
+        app.focusOption = -1;
         app.keyboard = true;
         if (app.focus == kDiagDescription)  // typing goes to the description box
             activate(kDiagDescription, -1);
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
-    if (key == VK_RETURN) {
-        launch();
+    if (key == VK_RETURN) {  // the focused button, else Launch (the window's default button)
+        if (push_button(app.focus))
+            activate(app.focus, app.focusOption);
+        else
+            launch();
         return;
     }
     app.keyboard = true;
@@ -5015,45 +5107,10 @@ void on_key(WPARAM key) {
             activate(kColor, (static_cast<int>(app.s.color) + d) % 3);
         }
         break;
-    case kMethod:
-    case kMode:
-    case kOutline:
-    case kCheekyUse:
-    case kCheekyRuntime:
-    case kCheekyOn:
-    case kCheekyOuter:
-    case kCheekyOuterPreset:
-    case kCheekyFocusPreset:
-    case kCheekyMotionFix:
-    case kCheekyNr:
-    case kCheekyNrPreset:
-    case kCheekyNrPasses:
-    case kFgOn:
-    case kFgBorder:
-    case kFgMultiplier:
-    case kFgScale:
-    case kFgPeriphery:
-    case kFgRelease:
-    case kOsdOn:
-    case kHotkeyFooter:
-    case kUpdateCheck:
-    case kUpdateNow:
-    case kCropOn:
-    case kHelmetOn:
-    case kVisor:
-    case kShape:
-    case kHelmetDetail:
-    case kLayerProfile:
-    case kLayerApply:
-    case kLayerRevert:
-    case kLayerReset:
-    case kSupport:
-    case kRestore:
-    case kLaunch:
-        if (key == VK_SPACE)
-            activate(app.focus, -1);
+    default:
+        if (key == VK_SPACE && (push_button(app.focus) || space_control(app.focus)))
+            activate(app.focus, app.focusOption);
         break;
-    default: break;
     }
 }
 
@@ -5216,7 +5273,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         }
         if (!h)
             return 0;
-        app.focus = h->id;
+        app.focus = h->id;  // as Windows does: Return now presses it, if it's a button
+        app.focusOption = h->option;
         if (slider_value(h->id)) {
             app.dragging = h->id;
             app.dragTrack = h->r;
@@ -5380,7 +5438,7 @@ int run_window(HINSTANCE instance, int show) {
     const UINT dpi = GetDpiForSystem();
     RECT r{0, 0, MulDiv(static_cast<int>(kDefaultWidth), dpi, 96), MulDiv(static_cast<int>(kDefaultHeight - kTitlebar), dpi, 96)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
-    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"Sim QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
+    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"Sim-QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                 r.right - r.left, r.bottom - r.top, nullptr, nullptr, instance, nullptr);
     if (!hwnd)
         return 1;
