@@ -95,6 +95,33 @@ BuildState build_state(const std::string& sha, bool hashing) {
     return games::supported_build(games::launcher_game(), sha) ? BuildState::Supported : BuildState::Unsupported;
 }
 
+std::wstring game_folder_from(const std::wstring& picked, const games::GameInfo& game) {
+    if (picked.empty())
+        return {};
+    std::error_code ec;
+    const fs::path exeFolder = game.exeFolder, exe = game.exeName;
+    const auto holds_game = [&](const fs::path& folder) { return fs::is_regular_file(folder / exeFolder / exe, ec); };
+    fs::path folder = fs::path(picked).lexically_normal();
+    if (!folder.has_filename())  // a trailing separator: "D:\Games\" -> "D:\Games"
+        folder = folder.parent_path();
+    if (holds_game(folder))
+        return folder.wstring();
+    // The exe's own folder (ACC's AC2\Binaries\Win64): as many folders up as exeFolder is deep.
+    if (fs::is_regular_file(folder / exe, ec)) {
+        fs::path up = folder;
+        for (const fs::path& part : exeFolder)
+            if (!part.empty())
+                up = up.parent_path();
+        if (holds_game(up))
+            return up.wstring();
+    }
+    // Steam's steamapps\common (or the library above it): the game's folder inside.
+    for (const fs::path& inside : {folder / game.steamFolder, folder / L"steamapps" / L"common" / game.steamFolder})
+        if (holds_game(inside))
+            return inside.wstring();
+    return {};
+}
+
 std::vector<Check> preflight_checks(const PreflightInput& in) {
     std::vector<Check> out;
     const auto add = [&](const char* id, CheckTone tone, std::wstring title, std::wstring detail) -> Check& {
@@ -111,10 +138,11 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
 
     // The game and its build.
     if (in.gameExe.empty()) {
-        add("game", CheckTone::Bad, name + L" not found",
-            L"Steam doesn’t list it in any of its libraries. Set game_dir_" +
-                std::wstring(game.id, game.id + std::strlen(game.id)) + L" in the [launcher] section of sim-qvfr.ini "
-            L"to its folder (the one Steam’s Browse local files opens).");
+        Check& c = add("game", CheckTone::Bad, name + L" not found",
+                       L"Steam doesn’t list it in any of its libraries. Choose its folder: the one Steam’s Browse local "
+                       L"files opens.");
+        c.fix = CheckFix::ChooseGameFolder;
+        c.fixLabel = L"Choose folder…";
     } else {
         switch (in.build) {
         case BuildState::Supported:
@@ -174,6 +202,9 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     if (in.gameRunning && in.gameHasLayer)
         add("game_running", CheckTone::Ok, name + L" is running with Sim-QVFR",
             L"Changes here reach it as you make them; resolution beyond its launch size waits for the next launch.");
+    else if (in.gameRunning && in.gameStarting)
+        add("game_running", CheckTone::Ok, name + L" is starting",
+            L"Launched from here. Sim-QVFR loads when the game starts VR.");
     else if (in.gameRunning)
         add("game_running", CheckTone::Bad, name + L" is already running",
             L"It runs without Sim-QVFR. Close it first: the launch starts a new copy of the game with Sim-QVFR.");

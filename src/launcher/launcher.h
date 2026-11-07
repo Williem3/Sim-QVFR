@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include "launch_plan.h"
+#include "launch_watch.h"
 #include "layer_order.h"
 #include "preflight.h"
 
@@ -19,8 +20,9 @@ std::wstring settings_path();
 std::wstring runtime_info_path();
 // The folder holding sim-qvfr.dll: next to the launcher (development build) or its layer folder.
 std::wstring layer_folder();
-// One launch (or dry run) with the settings in that file; `report` gets what it did. 0 on success.
-int launch_game(bool dryRun, std::wstring& report);
+// One launch (or dry run) with the settings in that file; `report` gets what it did. 0 on success. `launched`
+// (optional): the game started, its process handle the caller's to close.
+int launch_game(bool dryRun, std::wstring& report, LaunchedGame* launched = nullptr);
 // The layers a launch with the settings in that file would load, and how (the OpenXR layers pane).
 LayerPlan launcher_layer_plan();
 // The chosen game's exe as a launch would start it ([launcher] game_dir_<id>, else through Steam); empty if not

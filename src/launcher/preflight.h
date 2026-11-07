@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "../games/game.h"
 #include "launch_plan.h"
 #include "settings.h"
 
@@ -31,7 +32,8 @@ inline constexpr wchar_t kReleasesUrl[] = L"https://github.com/Williem3/Sim-QVFR
 // Pending: still being found out (the exe's hash). Ok and Pending never hold a launch back.
 enum class CheckTone { Ok, Warn, Bad, Pending };
 // What a check's button does (the window carries it out).
-enum class CheckFix { None, OpenReleases, StartSteam, ShowFile, OpenLayers, TurboOff, OpenDlss, OpenFoveation, OpenGuide };
+// ChooseGameFolder: a folder picker for the game's folder, saved as [launcher] game_dir_<id> (game_folder_exe).
+enum class CheckFix { None, OpenReleases, StartSteam, ShowFile, OpenLayers, TurboOff, OpenDlss, OpenFoveation, OpenGuide, ChooseGameFolder };
 inline constexpr wchar_t kOpenCompositeGuideUrl[] =
     L"https://github.com/Williem3/Sim-QVFR/blob/main/docs/acc-opencomposite.md";
 
@@ -55,6 +57,7 @@ struct PreflightInput {
     LaunchMode mode = LaunchMode::Qvfr;
     bool steamRunning = true, gameRunning = false;
     bool gameHasLayer = false;  // the running game loaded Sim-QVFR (runtime.ini's live_pid is that process)
+    bool gameStarting = false;  // the running game is the one the window just launched, Sim-QVFR not loaded in it yet
     std::vector<std::wstring> cheekyLoaders;  // Cheeky's loader DLLs in the game folder
     bool cheekyLoad = false, cheekyFg = false, cheekyRuntimeFound = false;
     CheekyLayer cheekyLayer = CheekyLayer::Missing;
@@ -87,6 +90,11 @@ BuildState build_state(const std::string& sha, bool hashing);
 bool launcher_elevated();
 // The exe name of the process that started this one, empty if it has exited or can't be found.
 std::wstring parent_process_name();
+
+// The game's folder (the one Steam's Browse local files opens, holding GameInfo::exeFolder\exeName) from a folder
+// the user picked: that folder; the folder the exe sits in, taken up to the game's; or Steam's steamapps\common (or its
+// library) with the game's folder inside. Empty if none of them holds the game's exe.
+std::wstring game_folder_from(const std::wstring& picked, const games::GameInfo& game);
 
 // The file version `path` carries ("310.9.1.0"), empty without one.
 std::wstring file_version(const std::wstring& path);
