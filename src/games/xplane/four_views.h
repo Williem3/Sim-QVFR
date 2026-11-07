@@ -44,6 +44,11 @@ void four_views_set_view_sizes(bool on, double outerWidth, double outerHeight, d
 // Live resolution: the rects' shares of their layers (outer views x, y, focus views x, y; each (0, 1], the layers keep
 // their launch size), from the next frame (the latch). Only with per-view sizes on: false, and nothing changed, when off.
 bool four_views_set_view_shares(double outerX, double outerY, double focusX, double focusY);
+// Diagnostics (docs/recon-xplane.md "Measured: the wing after the SSR edit"): the switch edits go into the SSR and CACAO
+// and deferred-shading shaders (before X-Plane makes its shaders), and SSR's reflections, CACAO's occlusion or the sun's
+// cascaded shadows are off from the next frame.
+void four_views_set_diag_edits(bool on);
+void four_views_set_diagnostics(bool ssrOff, bool aoOff, bool shadowOff);
 // set viewports calls given four rects so far. Focus views take their eye's bloom (docs/recon-xplane.md "Measured:
 // bloom per view"). Before X-Plane makes its shaders.
 void four_views_set_bloom_from_eye(bool on);

@@ -588,6 +588,7 @@ int main() {
             const int tiles = xplane::spirv_focus_light_tiles(real, 0.3f, 0.3f, nullptr, true);
             const int ao = xplane::spirv_focus_ao_edges_from_eye(real, 0.3f, 0.3f, 0.12f, nullptr, true);
             const int splitOff = xplane::spirv_viewport_split_off(real, nullptr, true);
+            const int histogram = xplane::spirv_histogram_view_rect(real, nullptr);
             const bool layered = xplane::spirv_layer_from_dispatch_z(real);
             const bool mapped = xplane::spirv_view_to_eye_map_out(real, 15, nullptr);
             const int rate = xplane::spirv_full_rate_from_layer(real, 2, nullptr);
@@ -608,9 +609,9 @@ int main() {
             const bool hasPush = std::search(out, out + real.size() * 4, kPush, kPush + sizeof(kPush) - 1) != out + real.size() * 4;
             pushed += hasPush ? 1 : 0;
             std::printf("     %s: light %d parity %d fold %d coef %d (by pixels %d) ssr %d/%d tiles %d ao %d split %d z %d "
-                        "map %d rate %d layer %d alpha %d rects %d%s\n",
+                        "map %d rate %d layer %d alpha %d rects %d histogram %d%s\n",
                         in.c_str(), inverted, parity, folded, coef, coefPixels, rays, starts, tiles, ao, splitOff,
-                        layered ? 1 : 0, mapped ? 1 : 0, rate, layerOut ? 1 : 0, alpha, rectSamples,
+                        layered ? 1 : 0, mapped ? 1 : 0, rate, layerOut ? 1 : 0, alpha, rectSamples, histogram,
                         hasPush ? " (push block)" : "");
             std::ofstream o(in + ".all.spv", std::ios::binary);
             o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
@@ -803,6 +804,146 @@ int main() {
         check(n > 0 && skipped == 0, "folds the given shader's per-eye accesses");
         std::ofstream o(std::string(in) + ".folded.spv", std::ios::binary);
         o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
+    {
+        // The histogram edit takes only compute shaders with u_histo_data.
+        std::vector<std::uint32_t> plain = module(false);
+        const std::vector<std::uint32_t> copy = plain;
+        std::string reason;
+        check(xplane::spirv_histogram_view_rect(plain, &reason) == 0 && plain == copy,
+              "histogram edit: any other shader left alone");
+    }
+    // SIM_QVFR_SPV_HISTOGRAM: the auto exposure's histogram compute shader (from a capture); writes <file>.histo.spv.
+    if (const char* in = std::getenv("SIM_QVFR_SPV_HISTOGRAM")) {
+        std::ifstream file(in, std::ios::binary);
+        std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        std::vector<std::uint32_t> real(bytes.size() / 4);
+        std::memcpy(real.data(), bytes.data(), real.size() * 4);
+        std::string reason;
+        const int n = xplane::spirv_histogram_view_rect(real, &reason);
+        std::printf("     %s: %d fetches%s%s\n", in, n, n ? "" : ": ", n ? "" : reason.c_str());
+        check(n == 1, "histogram edit: its one fetch takes the outer view's rect");
+        std::vector<std::uint32_t> again = real;
+        check(xplane::spirv_sample_view_rects(again, nullptr) == 0, "histogram: left alone by the resolve's edit");
+        std::ofstream o(std::string(in) + ".histo.spv", std::ios::binary);
+        o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+    }
+
+    {
+        // The diagnostic switch takes only modules with the named block and image.
+        std::vector<std::uint32_t> plain = module(false);
+        const std::vector<std::uint32_t> copy = plain;
+        check(xplane::spirv_diag_override_write(plain, "u_ssr_data", "i_output", 2, 0.0f, nullptr) == 0 && plain == copy,
+              "diagnostics: any other shader left alone");
+    }
+    // SIM_QVFR_SPV_DIAG: SSR and CACAO output shaders (from a capture, ';'-separated), each with both switches, written
+    // to <file>.diag.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_DIAG")) {
+        std::string all = list;
+        for (std::size_t from = 0; from <= all.size();) {
+            const std::size_t to = std::min(all.find(';', from), all.size());
+            const std::string in = all.substr(from, to - from);
+            from = to + 1;
+            if (in.empty())
+                continue;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            const int ssr = xplane::spirv_diag_override_write(real, "u_ssr_data", "i_output", 0, 0.0f, nullptr);
+            const int ao = xplane::spirv_diag_override_write(real, "u_ffx_cacao_data", "g_RwOutput", 1, 1.0f, nullptr);
+            const int shadow = xplane::spirv_diag_override_sample(real, "u_shadow_data", "tex_smap0", 2, 1.0f, nullptr);
+            std::printf("     %s: SSR writes %d, AO writes %d, shadow samples %d\n", in.c_str(), ssr, ao, shadow);
+            check(ssr + ao + shadow > 0 && (ssr > 0) + (ao > 0) + (shadow > 0) == 1,
+                  "diagnostics: the module's output switchable");
+            std::ofstream o(in + ".diag.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    {
+        std::vector<std::uint32_t> plain = module(false);
+        const std::vector<std::uint32_t> copy = plain;
+        check(xplane::spirv_viewport_size_from_gbuffer(plain, nullptr) == 0 && plain == copy,
+              "u_viewport_size as the layer: a module without u_gbuffer_data left alone");
+    }
+    // SIM_QVFR_SPV_VPSIZE: shaders with u_gbuffer_data (from a capture, ';'-separated), each with u_viewport_size read
+    // as u_gbuffer_size, written to <file>.vp.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_VPSIZE")) {
+        std::string all = list;
+        for (std::size_t from = 0; from <= all.size();) {
+            const std::size_t to = std::min(all.find(';', from), all.size());
+            const std::string in = all.substr(from, to - from);
+            from = to + 1;
+            if (in.empty())
+                continue;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string reason;
+            const int n = xplane::spirv_viewport_size_from_gbuffer(real, &reason);
+            std::printf("     %s: %d u_viewport_size reads%s%s\n", in.c_str(), n, n ? "" : ": ", n ? "" : reason.c_str());
+            std::vector<std::uint32_t> again = real;
+            check(n > 0 && xplane::spirv_viewport_size_from_gbuffer(again, nullptr) == 0,
+                  "u_viewport_size as the layer: every read moved, none left");
+            std::ofstream o(in + ".vp.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_HIZ: the depth chain's reduction shaders (from a capture, ';'-separated), each with its source limits
+    // per view, written to <file>.hiz.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_HIZ")) {
+        std::string all = list;
+        for (std::size_t from = 0; from <= all.size();) {
+            const std::size_t to = std::min(all.find(';', from), all.size());
+            const std::string in = all.substr(from, to - from);
+            from = to + 1;
+            if (in.empty())
+                continue;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string reason;
+            const int n = xplane::spirv_hiz_view_rects(real, &reason);
+            std::printf("     %s: %d limits%s%s\n", in.c_str(), n, n ? "" : ": ", n ? "" : reason.c_str());
+            // The first level copies the depth texel for texel (no source limits); the reductions after it read them.
+            check(n >= 2 || reason == "the limits are never read", "depth chain: its source limits take the view's rect");
+            std::ofstream o(in + ".hiz.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
+    }
+
+    // SIM_QVFR_SPV_SSR: SSR compute shaders (from a capture, ';'-separated, as X-Plane made them through the layer: the
+    // eye-reads edits in), each written to <file>.ssr.spv.
+    if (const char* list = std::getenv("SIM_QVFR_SPV_SSR")) {
+        std::string all = list;
+        for (std::size_t from = 0; from <= all.size();) {
+            const std::size_t to = std::min(all.find(';', from), all.size());
+            const std::string in = all.substr(from, to - from);
+            from = to + 1;
+            if (in.empty())
+                continue;
+            std::ifstream file(in, std::ios::binary);
+            std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            std::vector<std::uint32_t> real(bytes.size() / 4);
+            std::memcpy(real.data(), bytes.data(), real.size() * 4);
+            std::string reason;
+            const int n = xplane::spirv_ssr_view_rects(real, true, &reason);
+            std::vector<std::uint32_t> own(bytes.size() / 4);
+            std::memcpy(own.data(), bytes.data(), own.size() * 4);
+            const std::vector<std::uint32_t> ownBefore = own;
+            const int nOwn = xplane::spirv_ssr_view_rects(own, false, nullptr);
+            std::printf("     %s: %d projections (eye layers), %d (own screens)%s%s\n", in.c_str(), n, nOwn,
+                        n ? "" : ": ", n ? "" : reason.c_str());
+            // The eye's u_proj, loaded once; SSR in the focus views' own screens is left as it is.
+            check(n >= 1 && nOwn == 0 && own == ownBefore, "SSR: its projection takes the view's place in the layer");
+            std::ofstream o(in + ".ssr.spv", std::ios::binary);
+            o.write(reinterpret_cast<const char*>(real.data()), static_cast<std::streamsize>(real.size() * 4));
+        }
     }
 
     if (const char* in = std::getenv("SIM_QVFR_SPV_IN")) {

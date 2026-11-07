@@ -11,16 +11,20 @@ namespace xplane {
 // The focus boxes reach the shaders as data (docs/recon-xplane.md "Gaze: the focus box off the eye's axis", "Live focus
 // size"): a push constant block `vec4 qvfr_focus[3]` at offset 0, which four_views.cpp pushes after every pipeline
 // bind. Entry e (eye 0-1) is that eye's box: its centre tangents in xy, its size as a share of the eye's tangent span
-// in zw. Entry 2 holds the values that follow the box's size: x the periphery's alpha-test mip bias, y the AO edge band
-// (zw 0). Entry 3 holds the views' rects (docs/recon-xplane.md "Design: true per-view sizes"): the outer views' share of
-// their layers in xy, the focus views' in zw (1: the whole layer), from the layer's top-left in memory (X-Plane flips
+// in zw. Entry 2 holds the values that follow the box's size: x the periphery's alpha-test mip bias, y the AO edge band;
+// zw 0. Entry 3 holds the views'
+// rects (docs/recon-xplane.md "Design: true per-view sizes"): the outer views' share of their layers in xy, the focus
+// views' in zw (1: the whole layer), from the layer's top-left in memory (X-Plane flips
 // within each viewport; capture XPlane_frame470.rdc). With `push`, the edits below read the box and those values from there, so the
 // focus size, the gaze and the view sizes can change at any time without new shaders. Without it they bake in the size
 // given when X-Plane makes the shader, the box on the eye's forward axis (tangent 0).
-inline constexpr std::uint32_t kFocusBlockEntries = 4;
+// Entry 4 holds diagnostic switches (spirv_diag_override_write, _sample: x SSR off, y AO off, z the sun's shadow off;
+// 0 normally, 1 on).
+inline constexpr std::uint32_t kFocusBlockEntries = 5;
 inline constexpr std::uint32_t kFocusBlockBytes = 16 * kFocusBlockEntries;
 inline constexpr std::uint32_t kFocusValuesEntry = 2;
 inline constexpr std::uint32_t kViewRectsEntry = 3;
+inline constexpr std::uint32_t kDiagEntry = 4;
 
 // Adds `add` to the value of the `int` input variable named `name` where the shader loads it: the one OpLoad of
 // that variable gets a new id, and an OpIAdd of a new constant gives the old id, so every use sees the sum.
@@ -156,6 +160,53 @@ int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why
 // the column again. Texel offsets (FXAA's) stay whole texels. Integer fetches at (x, y, layer) (the MSAA variants'
 // stencil mask) take (x s, y s, layer). Returns the samples and fetches edited (0: `words` unchanged).
 int spirv_sample_view_rects(std::vector<std::uint32_t>& words, std::string* why);
+
+// The auto exposure's histogram over the outer view's rect (docs/recon-xplane.md "Measured: the smaller periphery
+// traced"): X-Plane's histogram compute shader (u_histo_data) fetches the lit miptree's layer 0 at every invocation
+// (x, y) < (u_image_width, u_image_height), the whole layer; with the outer view in share s of it the rest (nothing
+// drawn, black) went into the darkest bin and the exposure rose. Each fetch now reads (int(x s), int(y s)), so the same
+// grid spans the view's rect and the histogram keeps its pixel count (the CPU reads the bins back). s from the push
+// block's kViewRectsEntry (focus share for layers >= 2). Returns the fetches edited (0: `words` unchanged).
+int spirv_histogram_view_rect(std::vector<std::uint32_t>& words, std::string* why);
+
+// SSR over each view's rect (docs/recon-xplane.md "Measured: SSR's saw-tooth at 30%"): X-Plane's SSR compute shaders
+// (u_ssr_data: the scene's and the water's) march in screen uv from u_proj and read the hi-Z, the velocity and the lit
+// history in the layer's own texel grid (u_hiz_width / u_hiz_height, the images' sizes). With the view in share s of
+// its layer (top-left), each loaded u_proj becomes S x u_proj, S: ndc' = s ndc + (s - 1) on x and y, so the projected
+// uv is the layer's (uv s) and every cell and read lines up with the layer's texels at every level (scaling the reads
+// instead left the coarse cells off the texels: saw-tooth streaks). s is the outer share: only modules marching in the
+// eye's layer (`eyeLayers`: the eyes, and the focus views reading their eye's screen, spirv_ray_reads_from_eye) are
+// edited; SSR in the focus views' own screens is left as it is. Returns the loads edited (0: `words` unchanged).
+int spirv_ssr_view_rects(std::vector<std::uint32_t>& words, bool eyeLayers, std::string* why);
+
+// u_viewport_size as the whole layer (docs/recon-xplane.md "Measured: u_viewport_size follows the first rect"): X-Plane
+// fills u_gbuffer_data.u_viewport_size from the first viewport of the pass, so in raster passes after the per-view
+// rects it is the outer view's rect (1009 x 844 at 25% in a 1614 x 1350 layer), in compute passes the layer. Every edit
+// here (the coefficients' c.xy / s, AO edges, tiled lights, bloom) takes it as the layer, as X-Plane's own shaders do
+// without dynamic resolution (u_viewport_to_buffer_ratio 1). In a module with u_gbuffer_data, every access chain into
+// u_viewport_size reads u_gbuffer_size (the layer) instead. Returns the chains edited (0: `words` unchanged).
+int spirv_viewport_size_from_gbuffer(std::vector<std::uint32_t>& words, std::string* why);
+
+// The depth chains (hi-Z: "Z depth average", "Z depth first sample") over each view's rect (docs/recon-xplane.md
+// "Measured: SSR's strip and the depth chain"): X-Plane's min/max reduction shaders (u_z_minmax_data) clamp every
+// source fetch to u_src_width_limit x u_src_height_limit, the whole layer, so a coarse cell at a smaller view's edge
+// mixed in the undrawn rest of the layer (SSR's march and CACAO read those cells). Each load of the two limits takes
+// the share of its layer (gl_GlobalInvocationID.z, one layer per view; the focus share from 2), rounded up, so the chain
+// only reads the view. Returns the loads edited (0: `words` unchanged).
+int spirv_hiz_view_rects(std::vector<std::uint32_t>& words, std::string* why);
+
+// Diagnostics: a pass's output switched off live, to find which pass draws an artefact (docs/recon-xplane.md "Measured:
+// the wing after the SSR edit"). In a module with the block type named `block`, every write of a float texel to the
+// storage image named `image` writes `value` instead while the push block's entry kDiagEntry has component
+// `component` > 0.5 (four_views_set_diagnostics). The SSR results (u_ssr_data, i_output: 0, no reflection) and CACAO's
+// output (u_ffx_cacao_data, g_RwOutput: 1, no occlusion). Returns the writes edited (0: `words` unchanged).
+int spirv_diag_override_write(std::vector<std::uint32_t>& words, const char* block, const char* image,
+                              std::uint32_t component, float value, std::string* why);
+// The same for depth-compare samples (OpImageSampleDref*) of the image named `image` in a module with `block`: their
+// result is `value` while the switch is on. The sun's cascaded shadows in deferred shading (u_shadow_data, tex_smap0:
+// 1, lit). Returns the samples edited.
+int spirv_diag_override_sample(std::vector<std::uint32_t>& words, const char* block, const char* image,
+                               std::uint32_t component, float value, std::string* why);
 
 // The eye tests beside a per-eye member that isn't an array (docs/recon-xplane.md "Measured: dark shadow edges in the
 // focus views"): deferred shading brings the right eye's view-space position into the left eye's for the shadow lookup

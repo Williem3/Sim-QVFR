@@ -2770,26 +2770,22 @@ int spirv_viewport_split_off(std::vector<std::uint32_t>& words, std::string* why
     return edited;
 }
 
-int spirv_sample_view_rects(std::vector<std::uint32_t>& words, std::string* why) {
+namespace {
+
+// spirv_sample_view_rects' and spirv_histogram_view_rect's edit on a parsed module: every 2D array image sample at
+// float (u, v, layer) and fetch at integer (x, y, layer) takes its view's rect, (u s, v s) / (int(x s), int(y s)), s the
+// share of that layer's view (focus for layers >= 2). Emits into `words` when anything was edited.
+int view_rect_coords(Module& m, std::vector<std::uint32_t>& words, std::string* why) {
     auto fail = [&](const char* reason) {
         if (why)
             *why = reason;
         return 0;
     };
-    constexpr std::uint32_t kExecutionFragment = 4, kDim2D = 1;
+    constexpr std::uint32_t kDim2D = 1;
     constexpr std::uint16_t kOpTypeBool = 20, kOpTypeImage = 25, kOpTypeSampledImage = 27,
                             kOpImageSampleImplicitLod = 87, kOpImageSampleExplicitLod = 88, kOpCompositeExtract = 81,
                             kOpSelect = 169, kOpFOrdGreaterThanEqual = 190, kOpImageFetch = 95, kOpConvertFToS = 110,
                             kOpConvertSToF = 111, kOpSGreaterThanEqual = 175;
-    Module m;
-    if (!m.parse(words))
-        return fail("not SPIR-V");
-    bool fragment = false;
-    for (const auto& w : m.insts)
-        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionFragment)
-            fragment = true;
-    if (!fragment)
-        return fail("not a fragment shader");
     // 2D array images, the sampled image types of them, float vec3 types and 32-bit int vec3 types (by component).
     std::set<std::uint32_t> arrayImages, arraySampled, vec3f, ints;
     std::map<std::uint32_t, std::uint32_t> vec3i;  // int vec3 type -> its component type
@@ -2895,6 +2891,505 @@ int spirv_sample_view_rects(std::vector<std::uint32_t>& words, std::string* why)
         const std::uint32_t scaled = emit({kOpCompositeConstruct, coordType, 0, x, y, layer});
         m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(here), body.begin(), body.end());
         m.insts[here + body.size()][4] = scaled;
+        ++edited;
+    }
+    words = m.emit();
+    return edited;
+}
+
+// The module's entry point is of this execution model (4 fragment, 5 compute).
+bool entry_model(const Module& m, std::uint32_t model) {
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == model)
+            return true;
+    return false;
+}
+
+}  // namespace
+
+int spirv_sample_view_rects(std::vector<std::uint32_t>& words, std::string* why) {
+    Module m;
+    if (!m.parse(words)) {
+        if (why)
+            *why = "not SPIR-V";
+        return 0;
+    }
+    if (!entry_model(m, 4)) {
+        if (why)
+            *why = "not a fragment shader";
+        return 0;
+    }
+    return view_rect_coords(m, words, why);
+}
+
+int spirv_histogram_view_rect(std::vector<std::uint32_t>& words, std::string* why) {
+    Module m;
+    if (!m.parse(words)) {
+        if (why)
+            *why = "not SPIR-V";
+        return 0;
+    }
+    if (!entry_model(m, 5)) {
+        if (why)
+            *why = "not a compute shader";
+        return 0;
+    }
+    // Its uniform block's type is named u_histo_data (the variable itself has no name), its input image_input_hdr.
+    if (!m.named("u_histo_data") || !m.named("image_input_hdr")) {
+        if (why)
+            *why = "not the histogram (no u_histo_data, image_input_hdr)";
+        return 0;
+    }
+    return view_rect_coords(m, words, why);
+}
+
+int spirv_ssr_view_rects(std::vector<std::uint32_t>& words, bool eyeLayers, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint16_t kOpMemberName = 6, kOpCompositeExtract = 81, kOpTypeMatrix = 24;
+    constexpr std::uint32_t kExecutionGLCompute = 5;
+    if (!eyeLayers)
+        return fail("SSR in the focus views' own screens (xplane_ssr_from_eye=0): not edited");
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    bool compute = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionGLCompute)
+            compute = true;
+    if (!compute)
+        return fail("not a compute shader");
+    // The SSR block (its type u_ssr_data) and its projections u_proj (mat4[2], one per eye).
+    const std::uint32_t ssrType = m.named("u_ssr_data");
+    if (!ssrType)
+        return fail("no u_ssr_data");
+    std::uint32_t projMember = UINT32_MAX;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpMemberName && w.size() >= 4 && w[1] == ssrType && literal(w, 3, w.size()) == "u_proj")
+            projMember = w[2];
+    if (projMember == UINT32_MAX)
+        return fail("no u_proj");
+    std::set<std::uint32_t> pointers, vars;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kTypePointer && w.size() == 4 && w[3] == ssrType)
+            pointers.insert(w[1]);
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kVariable && w.size() >= 4 && pointers.count(w[1]))
+            vars.insert(w[2]);
+    std::map<std::uint32_t, std::uint32_t> constants;  // id -> value
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpConstant && w.size() == 4)
+            constants[w[2]] = w[3];
+    // Chains to one eye's projection: (var, member u_proj, eye); their loads are the matrices.
+    std::set<std::uint32_t> chains;
+    for (const auto& w : m.insts)
+        if ((Module::code(w) == kOpAccessChain || Module::code(w) == kOpInBoundsAccessChain) && w.size() == 6 &&
+            vars.count(w[3]) && constants.count(w[4]) && constants[w[4]] == projMember)
+            chains.insert(w[2]);
+    const std::uint32_t fl = m.type_float(), v4 = m.type_vector(fl, 4);
+    std::vector<std::uint32_t> loads;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && chains.count(w[3]))
+            loads.push_back(w[2]);
+    if (loads.empty())
+        return fail("u_proj never loaded");
+    // Types and constants first (they go before the first function and move the instructions).
+    std::uint32_t intType = m.find(kOpTypeInt, {32, 1}, 1);
+    if (!intType)
+        intType = m.add_global({op(kOpTypeInt, 4), 0, 32, 1}, 1);
+    const FocusBlock block = focus_block(m, intType);
+    const std::uint32_t rectsEntry = m.constant(intType, kViewRectsEntry), cOne = m.constant(fl, kFloatOne);
+    int edited = 0;
+    for (const std::uint32_t load : loads) {
+        // The load gets a new id; right after it the old id = S x M, S taking ndc to ndc' = s ndc + (s - 1) on x and y
+        // (uv' = uv s: the view's place at its layer's top-left), s the outer share: the eye's layer is read.
+        const std::size_t at = m.defined_at(load);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t matType = m.insts[at][1];
+        bool mat4 = false;
+        for (const auto& t : m.insts)
+            if (Module::code(t) == kOpTypeMatrix && t.size() == 4 && t[1] == matType && t[2] == v4 && t[3] == 4)
+                mat4 = true;
+        if (!mat4)
+            continue;
+        const std::uint32_t raw = m.fresh();
+        m.insts[at][2] = raw;
+        std::vector<std::vector<std::uint32_t>> body;
+        auto emit = [&](std::vector<std::uint32_t> w) {
+            if (w[2] == 0)
+                w[2] = m.fresh();
+            w[0] = op(static_cast<std::uint16_t>(w[0]), static_cast<std::uint16_t>(w.size()));
+            body.push_back(w);
+            return w[2];
+        };
+        const std::uint32_t rects = focus_entry_load(m, block, rectsEntry, body);
+        const std::uint32_t s[2] = {emit({kOpCompositeExtract, fl, 0, rects, 0}),
+                                    emit({kOpCompositeExtract, fl, 0, rects, 1})};
+        const std::uint32_t t[2] = {emit({kOpFSub, fl, 0, s[0], cOne}), emit({kOpFSub, fl, 0, s[1], cOne})};
+        std::uint32_t columns[4];
+        for (std::uint32_t c = 0; c < 4; ++c) {
+            const std::uint32_t col = emit({kOpCompositeExtract, v4, 0, raw, c});
+            std::uint32_t parts[4];
+            for (std::uint32_t k = 0; k < 4; ++k)
+                parts[k] = emit({kOpCompositeExtract, fl, 0, col, k});
+            for (int a = 0; a < 2; ++a)  // row a' = s row a + (s - 1) row w
+                parts[a] = emit({kOpFAdd, fl, 0, emit({kOpFMul, fl, 0, parts[a], s[a]}),
+                                 emit({kOpFMul, fl, 0, parts[3], t[a]})});
+            columns[c] = emit({kOpCompositeConstruct, v4, 0, parts[0], parts[1], parts[2], parts[3]});
+        }
+        emit({kOpCompositeConstruct, matType, load, columns[0], columns[1], columns[2], columns[3]});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
+        ++edited;
+    }
+    if (!edited)
+        return fail("u_proj not a mat4");
+    words = m.emit();
+    return edited;
+}
+
+int spirv_diag_override_write(std::vector<std::uint32_t>& words, const char* block, const char* image,
+                              std::uint32_t component, float value, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint16_t kOpTypeBool = 20, kOpConstantComposite = 44, kOpCompositeExtract = 81, kOpSelect = 169,
+                            kOpFOrdGreaterThan = 186, kOpImageWrite = 99;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    if (!m.named(block))
+        return fail("no such block");
+    const std::uint32_t imageVar = m.named(image);
+    if (!imageVar)
+        return fail("no such image");
+    std::set<std::uint32_t> imageLoads;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && w[3] == imageVar)
+            imageLoads.insert(w[2]);
+    auto type_of = [&](std::uint32_t id) -> std::uint32_t {
+        const std::size_t at = m.defined_at(id);
+        return at < m.insts.size() && m.insts[at].size() >= 3 ? m.insts[at][1] : 0;
+    };
+    // The writes, with their texel's type: a float or a vector of floats.
+    const std::uint32_t fl = m.type_float();
+    std::vector<std::uint32_t> writes;  // the texels written
+    std::map<std::uint32_t, std::uint32_t> lanes;  // texel type -> its component count
+    lanes[fl] = 1;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kTypeVector && w.size() == 4 && w[2] == fl)
+            lanes[w[1]] = w[3];
+    for (std::size_t i = 0; i < m.insts.size(); ++i) {
+        const auto& w = m.insts[i];
+        if (Module::code(w) == kOpImageWrite && w.size() >= 4 && imageLoads.count(w[1]) && lanes.count(type_of(w[3])))
+            writes.push_back(w[3]);
+    }
+    if (writes.empty())
+        return fail("no float write to the image");
+    // Types and constants first (they go before the first function and move the instructions).
+    std::uint32_t intType = m.find(kOpTypeInt, {32, 1}, 1);
+    if (!intType)
+        intType = m.add_global({op(kOpTypeInt, 4), 0, 32, 1}, 1);
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const FocusBlock f = focus_block(m, intType);
+    std::uint32_t valueBits, halfBits;
+    std::memcpy(&valueBits, &value, 4);
+    const float half = 0.5f;
+    std::memcpy(&halfBits, &half, 4);
+    const std::uint32_t cValue = m.constant(fl, valueBits), cHalf = m.constant(fl, halfBits),
+                        cDiag = m.constant(intType, kDiagEntry);
+    std::map<std::uint32_t, std::uint32_t> replacement, boolVector;  // texel type -> constant, its bool vector type
+    for (const std::uint32_t texel : writes) {
+        const std::uint32_t type = type_of(texel), n = lanes[type];
+        if (replacement.count(type))
+            continue;
+        if (n == 1) {
+            replacement[type] = cValue;
+            continue;
+        }
+        std::vector<std::uint32_t> c = {op(kOpConstantComposite, static_cast<std::uint16_t>(3 + n)), type, 0};
+        c.insert(c.end(), n, cValue);
+        replacement[type] = m.add_global(c, 2);
+        boolVector[type] = m.type_vector(boolType, n);
+    }
+    int edited = 0;
+    for (std::size_t i = 0; i < m.insts.size(); ++i) {
+        auto& w = m.insts[i];
+        if (Module::code(w) != kOpImageWrite || w.size() < 4 || !imageLoads.count(w[1]))
+            continue;
+        const std::uint32_t texel = w[3], type = type_of(texel);
+        if (!replacement.count(type))
+            continue;
+        std::vector<std::vector<std::uint32_t>> body;
+        auto emit = [&](std::vector<std::uint32_t> e) {
+            e[2] = m.fresh();
+            e[0] = op(static_cast<std::uint16_t>(e[0]), static_cast<std::uint16_t>(e.size()));
+            body.push_back(e);
+            return e[2];
+        };
+        const std::uint32_t values = focus_entry_load(m, f, cDiag, body);
+        const std::uint32_t flag = emit({kOpCompositeExtract, fl, 0, values, component});
+        std::uint32_t on = emit({kOpFOrdGreaterThan, boolType, 0, flag, cHalf});
+        if (lanes[type] > 1) {
+            std::vector<std::uint32_t> b = {kOpCompositeConstruct, boolVector[type], 0};
+            b.insert(b.end(), lanes[type], on);
+            on = emit(b);
+        }
+        const std::uint32_t chosen = emit({kOpSelect, type, 0, on, replacement[type], texel});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(i), body.begin(), body.end());
+        i += body.size();
+        m.insts[i][3] = chosen;
+        ++edited;
+    }
+    words = m.emit();
+    return edited;
+}
+
+int spirv_diag_override_sample(std::vector<std::uint32_t>& words, const char* block, const char* image,
+                               std::uint32_t component, float value, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint16_t kOpTypeBool = 20, kOpCompositeExtract = 81, kOpSelect = 169, kOpFOrdGreaterThan = 186,
+                            kOpSampleDrefImplicit = 89, kOpSampleDrefExplicit = 90;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    if (!m.named(block))
+        return fail("no such block");
+    const std::uint32_t imageVar = m.named(image);
+    if (!imageVar)
+        return fail("no such image");
+    std::set<std::uint32_t> imageLoads;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && w[3] == imageVar)
+            imageLoads.insert(w[2]);
+    const std::uint32_t fl = m.type_float();
+    std::vector<std::uint32_t> samples;  // their results (floats)
+    for (const auto& w : m.insts) {
+        const std::uint16_t c = Module::code(w);
+        if ((c == kOpSampleDrefImplicit || c == kOpSampleDrefExplicit) && w.size() >= 6 && w[1] == fl &&
+            imageLoads.count(w[3]))
+            samples.push_back(w[2]);
+    }
+    if (samples.empty())
+        return fail("no depth-compare sample of the image");
+    std::uint32_t intType = m.find(kOpTypeInt, {32, 1}, 1);
+    if (!intType)
+        intType = m.add_global({op(kOpTypeInt, 4), 0, 32, 1}, 1);
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    const FocusBlock f = focus_block(m, intType);
+    std::uint32_t valueBits, halfBits;
+    std::memcpy(&valueBits, &value, 4);
+    const float half = 0.5f;
+    std::memcpy(&halfBits, &half, 4);
+    const std::uint32_t cValue = m.constant(fl, valueBits), cHalf = m.constant(fl, halfBits),
+                        cDiag = m.constant(intType, kDiagEntry);
+    int edited = 0;
+    for (const std::uint32_t result : samples) {
+        // The sample gets a new id; right after it, `result` = the switch on ? value : the sample.
+        const std::size_t at = m.defined_at(result);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t raw = m.fresh();
+        m.insts[at][2] = raw;
+        std::vector<std::vector<std::uint32_t>> body;
+        const std::uint32_t values = focus_entry_load(m, f, cDiag, body);
+        const std::uint32_t flag = m.fresh(), on = m.fresh();
+        body.push_back({op(kOpCompositeExtract, 5), fl, flag, values, component});
+        body.push_back({op(kOpFOrdGreaterThan, 5), boolType, on, flag, cHalf});
+        body.push_back({op(kOpSelect, 6), fl, result, on, cValue, raw});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
+        ++edited;
+    }
+    words = m.emit();
+    return edited;
+}
+
+int spirv_viewport_size_from_gbuffer(std::vector<std::uint32_t>& words, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint16_t kOpMemberName = 6;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    const std::uint32_t blockType = m.named("u_gbuffer_data");
+    if (!blockType)
+        return fail("no u_gbuffer_data");
+    std::uint32_t viewportMember = UINT32_MAX, gbufferMember = UINT32_MAX;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpMemberName && w.size() >= 4 && w[1] == blockType) {
+            const std::string name = literal(w, 3, w.size());
+            if (name == "u_viewport_size")
+                viewportMember = w[2];
+            else if (name == "u_gbuffer_size")
+                gbufferMember = w[2];
+        }
+    if (viewportMember == UINT32_MAX || gbufferMember == UINT32_MAX)
+        return fail("no u_viewport_size / u_gbuffer_size");
+    // The block's variables (pointers to it, any storage class).
+    std::set<std::uint32_t> pointers, vars;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kTypePointer && w.size() == 4 && w[3] == blockType)
+            pointers.insert(w[1]);
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kVariable && w.size() >= 4 && pointers.count(w[1]))
+            vars.insert(w[2]);
+    // Integer constants by id: value and type.
+    std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> constants;  // id -> (type, value)
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpConstant && w.size() == 4)
+            constants[w[2]] = {w[1], w[3]};
+    // The chains into u_viewport_size, and the index constant each would take instead.
+    std::vector<std::size_t> chains;
+    std::set<std::uint32_t> indexTypes;
+    for (std::size_t i = 0; i < m.insts.size(); ++i) {
+        const auto& w = m.insts[i];
+        if ((Module::code(w) == kOpAccessChain || Module::code(w) == kOpInBoundsAccessChain) && w.size() >= 5 &&
+            vars.count(w[3]) && constants.count(w[4]) && constants[w[4]].second == viewportMember) {
+            chains.push_back(i);
+            indexTypes.insert(constants[w[4]].first);
+        }
+    }
+    if (chains.empty())
+        return fail("u_viewport_size never read");
+    std::map<std::uint32_t, std::uint32_t> replacement;  // index type -> constant gbufferMember of it
+    for (const std::uint32_t type : indexTypes)
+        replacement[type] = m.constant(type, gbufferMember);
+    // The constants may have gone in before the first function: find the chains again by their result ids.
+    std::set<std::uint32_t> results;
+    for (const std::size_t i : chains)
+        results.insert(m.insts[i][2]);
+    int edited = 0;
+    for (auto& w : m.insts)
+        if ((Module::code(w) == kOpAccessChain || Module::code(w) == kOpInBoundsAccessChain) && w.size() >= 5 &&
+            results.count(w[2])) {
+            w[4] = replacement[constants[w[4]].first];
+            ++edited;
+        }
+    words = m.emit();
+    return edited;
+}
+
+int spirv_hiz_view_rects(std::vector<std::uint32_t>& words, std::string* why) {
+    auto fail = [&](const char* reason) {
+        if (why)
+            *why = reason;
+        return 0;
+    };
+    constexpr std::uint16_t kOpTypeBool = 20, kOpMemberName = 6, kOpCompositeExtract = 81, kOpSelect = 169,
+                            kOpUGreaterThanEqual = 174, kOpConvertFToS = 110, kOpConvertSToF = 111;
+    constexpr std::uint32_t kBuiltInGlobalInvocationId = 28, kExecutionGLCompute = 5;
+    Module m;
+    if (!m.parse(words))
+        return fail("not SPIR-V");
+    bool compute = false;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kEntryPoint && w.size() >= 2 && w[1] == kExecutionGLCompute)
+            compute = true;
+    if (!compute)
+        return fail("not a compute shader");
+    const std::uint32_t blockType = m.named("u_z_minmax_data");
+    if (!blockType)
+        return fail("no u_z_minmax_data");
+    std::map<std::uint32_t, int> members;  // member index -> axis (0 width, 1 height)
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpMemberName && w.size() >= 4 && w[1] == blockType) {
+            const std::string name = literal(w, 3, w.size());
+            if (name == "u_src_width_limit")
+                members[w[2]] = 0;
+            else if (name == "u_src_height_limit")
+                members[w[2]] = 1;
+        }
+    if (members.size() != 2)
+        return fail("no u_src_width_limit / u_src_height_limit");
+    std::set<std::uint32_t> pointers, vars;
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kTypePointer && w.size() == 4 && w[3] == blockType)
+            pointers.insert(w[1]);
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kVariable && w.size() >= 4 && pointers.count(w[1]))
+            vars.insert(w[2]);
+    std::map<std::uint32_t, std::uint32_t> constants;  // id -> value
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpConstant && w.size() == 4)
+            constants[w[2]] = w[3];
+    std::map<std::uint32_t, int> chains;  // access chain -> axis
+    for (const auto& w : m.insts)
+        if ((Module::code(w) == kOpAccessChain || Module::code(w) == kOpInBoundsAccessChain) && w.size() == 5 &&
+            vars.count(w[3]) && constants.count(w[4]) && members.count(constants[w[4]]))
+            chains[w[2]] = members[constants[w[4]]];
+    std::vector<std::pair<std::uint32_t, int>> loads;  // load result -> axis
+    for (const auto& w : m.insts)
+        if (Module::code(w) == kOpLoad && w.size() >= 4 && chains.count(w[3]))
+            loads.push_back({w[2], chains[w[3]]});
+    if (loads.empty())
+        return fail("the limits are never read");
+    // Types and constants first (they go before the first function and move the instructions).
+    const std::uint32_t fl = m.type_float();
+    std::uint32_t intType = m.find(kOpTypeInt, {32, 1}, 1);
+    if (!intType)
+        intType = m.add_global({op(kOpTypeInt, 4), 0, 32, 1}, 1);
+    std::uint32_t boolType = m.find(kOpTypeBool, {}, 1);
+    if (!boolType)
+        boolType = m.add_global({op(kOpTypeBool, 2), 0}, 1);
+    std::uint32_t gidType = 0, uintType = 0;
+    const std::uint32_t gid = builtin_variable(m, kBuiltInGlobalInvocationId, kInput, &gidType);
+    for (const auto& w : m.insts)
+        if (Module::code(w) == Module::kTypeVector && w.size() == 4 && w[1] == gidType)
+            uintType = w[2];
+    if (!gid || !uintType)
+        return fail("no gl_GlobalInvocationID");
+    const FocusBlock block = focus_block(m, intType);
+    const std::uint32_t rectsEntry = m.constant(intType, kViewRectsEntry), ptrUint = m.type_pointer(kInput, uintType),
+                        cTwo = m.constant(uintType, 2), cZ = m.constant(intType, 2);
+    std::uint32_t upBits;
+    const float up = 0.999f;  // rounds up: the partly covered texel at the rect's edge stays in
+    std::memcpy(&upBits, &up, 4);
+    const std::uint32_t cUp = m.constant(fl, upBits);
+    int edited = 0;
+    for (const auto& [load, axis] : loads) {
+        // The load gets a new id; right after it, the old id = int(limit x share + 0.999), the share of layer
+        // gl_GlobalInvocationID.z (the dispatch depth: one layer per view; focus views from 2).
+        const std::size_t at = m.defined_at(load);
+        if (at >= m.insts.size())
+            continue;
+        const std::uint32_t type = m.insts[at][1], raw = m.fresh();
+        m.insts[at][2] = raw;
+        std::vector<std::vector<std::uint32_t>> body;
+        auto emit = [&](std::vector<std::uint32_t> w) {
+            if (w[2] == 0)
+                w[2] = m.fresh();
+            w[0] = op(static_cast<std::uint16_t>(w[0]), static_cast<std::uint16_t>(w.size()));
+            body.push_back(w);
+            return w[2];
+        };
+        const std::uint32_t rects = focus_entry_load(m, block, rectsEntry, body);
+        const std::uint32_t ptr = m.fresh(), z = m.fresh();
+        body.push_back({op(kOpAccessChain, 5), ptrUint, ptr, gid, cZ});
+        body.push_back({op(kOpLoad, 4), uintType, z, ptr});
+        const std::uint32_t focus = emit({kOpUGreaterThanEqual, boolType, 0, z, cTwo});
+        const std::uint32_t share = emit({kOpSelect, fl, 0, focus,
+                                          emit({kOpCompositeExtract, fl, 0, rects, static_cast<std::uint32_t>(2 + axis)}),
+                                          emit({kOpCompositeExtract, fl, 0, rects, static_cast<std::uint32_t>(axis)})});
+        const std::uint32_t f = emit({kOpConvertSToF, fl, 0, raw});
+        const std::uint32_t g = emit({kOpFAdd, fl, 0, emit({kOpFMul, fl, 0, f, share}), cUp});
+        emit({kOpConvertFToS, type, load, g});
+        m.insts.insert(m.insts.begin() + static_cast<std::ptrdiff_t>(at + 1), body.begin(), body.end());
         ++edited;
     }
     words = m.emit();

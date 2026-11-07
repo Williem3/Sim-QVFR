@@ -71,6 +71,13 @@ struct ViewShares {
 ViewShares g_viewShares;
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
 std::atomic<int> g_splitOffModules{0};  // blit shaders whose side-by-side split is off in four-view passes
+std::atomic<int> g_histogramModules{0};  // auto exposure histograms bounded by the outer view's rect
+std::atomic<int> g_ssrRectModules{0};    // SSR shaders reading each view's rect
+std::atomic<int> g_viewportSizeModules{0};  // shaders reading u_viewport_size as the layer (u_gbuffer_size)
+std::atomic<int> g_hizRectModules{0};       // depth-chain reductions clamped to each view's rect
+// Diagnostics (four_views_set_diag_edits, four_views_set_diagnostics): the switch edits in, and which outputs are off.
+std::atomic<bool> g_diagEdits{false}, g_diagSsrOff{false}, g_diagAoOff{false}, g_diagShadowOff{false};
+std::atomic<int> g_diagModules{0};
 
 // set viewports(count, multiplier, rects {x, y, w, h} x count) (abi.h kSetViewports). Stereo (multiplier 2) becomes
 // four views; with view rects, a four-view pass's one rect becomes one per view, each view's scaled by its share of
@@ -127,12 +134,14 @@ struct FocusFrame {
     float box[2][4] = {{0, 0, 1, 1}, {0, 0, 1, 1}};  // eye e: centre x, y; size x, y (the push block's entry e)
     float values[4] = {};                            // the alpha-test mip bias, the AO edge band, 0, 0 (entry 2)
     float rects[4] = {1, 1, 1, 1};                   // outer views' share x, y; focus views' (entry 3)
+    float diag[4] = {};                              // diagnostics: SSR off, AO off, sun shadow off, 0 (entry 4)
     std::uint32_t focus = 0;                         // the focus views are on (else slots 2-3 copy the eyes)
 };
 static_assert(sizeof(FocusFrame) % 4 == 0 && std::is_trivially_copyable_v<FocusFrame>, "copied as words");
-static_assert(sizeof(FocusFrame::box) + sizeof(FocusFrame::values) + sizeof(FocusFrame::rects) == kFocusBlockBytes &&
+static_assert(sizeof(FocusFrame::box) + sizeof(FocusFrame::values) + sizeof(FocusFrame::rects) +
+                          sizeof(FocusFrame::diag) == kFocusBlockBytes &&
                   offsetof(FocusFrame, values) == 16 * kFocusValuesEntry &&
-                  offsetof(FocusFrame, rects) == 16 * kViewRectsEntry,
+                  offsetof(FocusFrame, rects) == 16 * kViewRectsEntry && offsetof(FocusFrame, diag) == 16 * kDiagEntry,
               "the push block's layout");
 
 // A seqlock: one writer at a time (g_latchMutex); readers on any thread (every draw and pipeline bind) never block it
@@ -360,6 +369,7 @@ void bind_pipeline(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t p
     std::memcpy(values, frame.box, sizeof(frame.box));
     std::memcpy(values + 4 * kFocusValuesEntry, frame.values, sizeof(frame.values));
     std::memcpy(values + 4 * kViewRectsEntry, frame.rects, sizeof(frame.rects));
+    std::memcpy(values + 4 * kDiagEntry, frame.diag, sizeof(frame.diag));
     (*reinterpret_cast<CmdPushConstants*>(base + kVkCmdPushConstantsSlot))(commandBuffer, g_pushLayout, kFocusStages, 0,
                                                                            kFocusBlockBytes, values);
     g_focusPushes.fetch_add(1, std::memory_order_relaxed);
@@ -504,6 +514,27 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
         if (ssrProjections > 0)
             logf("xplane: SSR: focus views trace with their own projection in shader module (%d loads), %d so far",
                  ssrProjections, ++g_ssrModules);
+        // SSR over each view's rect (docs/recon-xplane.md "Measured: SSR's saw-tooth at 30%"): its projection takes the
+        // view's place in the layer, so the march runs in the layer's texel grid. After the edits above (the eye's
+        // projection, the eye-pixel start).
+        int ssrRects = 0;
+        if (ssrModule && g_viewRects.load() && push) {
+            ssrRects = spirv_ssr_view_rects(words, ssrRays > 0, nullptr);
+            if (ssrRects > 0)
+                logf("xplane: SSR marches in each view's rect of the layer (%d projections) in shader module, %d so far",
+                     ssrRects, ++g_ssrRectModules);
+        }
+        // Diagnostics ([experiment] xplane_diag=1; docs/recon-xplane.md "Measured: the wing after the SSR edit"): the
+        // SSR results and CACAO's output can be switched off live, to see which pass draws an artefact.
+        int diag = 0;
+        if (g_diagEdits.load() && push) {
+            diag = spirv_diag_override_write(words, "u_ssr_data", "i_output", 0, 0.0f, nullptr) +
+                   spirv_diag_override_write(words, "u_ffx_cacao_data", "g_RwOutput", 1, 1.0f, nullptr) +
+                   spirv_diag_override_sample(words, "u_shadow_data", "tex_smap0", 2, 1.0f, nullptr);
+            if (diag > 0)
+                logf("xplane: diagnostics: switchable output in shader module (%d writes), %d so far", diag,
+                     ++g_diagModules);
+        }
         // Tiled lights (docs/recon-xplane.md "Measured: right-eye popping near the wing"): the focus views pick the
         // tile of their pixel's position in the eye. After the coefficient edit, which would otherwise turn the eye's
         // coefficients this reads into the focus box's.
@@ -527,6 +558,16 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
             if (splitOff > 0)
                 logf("xplane: view rects: the blit's side-by-side split off in four-view passes (%d loads), module %d",
                      splitOff, ++g_splitOffModules);
+        }
+        // The auto exposure's histogram over the outer view's rect, not the whole layer (docs/recon-xplane.md
+        // "Measured: the smaller periphery traced"): the undrawn rest of the layer counted as black and raised the
+        // exposure as the periphery shrank.
+        int histogram = 0;
+        if (g_viewRects.load() && push) {
+            histogram = spirv_histogram_view_rect(words, nullptr);
+            if (histogram > 0)
+                logf("xplane: auto exposure histogram reads the outer view's rect (%d fetches), module %d", histogram,
+                     ++g_histogramModules);
         }
         // Compute shaders taking their eye from the dispatch depth (the cloud render): write layer z, eye = z & 1.
         const bool layered = spirv_layer_from_dispatch_z(words);
@@ -582,8 +623,31 @@ std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* in
                          alphaLod, n);
             }
         }
+        // The depth chains over each view's rect (docs/recon-xplane.md "Measured: SSR's strip and the depth chain"): the
+        // min/max reductions read only the view, so SSR's and CACAO's coarse cells hold no undrawn depth.
+        int hizRects = 0;
+        if (g_viewRects.load() && push) {
+            hizRects = spirv_hiz_view_rects(words, nullptr);
+            if (hizRects > 0)
+                logf("xplane: depth chain reads each view's rect (%d limits) in shader module, %d so far", hizRects,
+                     ++g_hizRectModules);
+        }
+        // u_viewport_size as the whole layer (docs/recon-xplane.md "Measured: u_viewport_size follows the first rect"):
+        // X-Plane fills it from the pass's first viewport, the outer view's rect once that is smaller. After every edit
+        // above, which reads it too.
+        int viewportSize = 0;
+        if (g_viewRects.load()) {
+            viewportSize = spirv_viewport_size_from_gbuffer(words, nullptr);
+            if (viewportSize > 0) {
+                const int n = ++g_viewportSizeModules;
+                if (n <= 3 || n % 25 == 0)
+                    logf("xplane: u_viewport_size read as the layer (u_gbuffer_size) in shader module (%d reads), %d so far",
+                         viewportSize, n);
+            }
+        }
         if (inverted > 0 || parity > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0 ||
-            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0 || splitOff > 0) {
+            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0 || splitOff > 0 || histogram > 0 ||
+            ssrRects > 0 || diag > 0 || viewportSize > 0 || hizRects > 0) {
             ShaderModuleCreateInfo edited = *info;
             edited.codeSize = words.size() * 4;
             edited.pCode = words.data();
@@ -991,6 +1055,13 @@ void four_views_set_view_sizes(bool on, double outerWidth, double outerHeight, d
 
 int four_views_view_rect_sets() { return g_viewRectSets.load(); }
 
+void four_views_set_diag_edits(bool on) {
+    g_diagEdits = on;
+    if (on)
+        logf("xplane: diagnostics on: SSR, AO and the sun's shadow switchable live (Ctrl+Alt+1 SSR, Ctrl+Alt+2 AO, "
+             "Ctrl+Alt+3 sun shadow; or xplane_diag_ssr_off, _ao_off, _shadow_off)");
+}
+
 void four_views_set_focus_full_rate(bool on) {
     g_focusFullRate = on;
     logf("xplane: focus views at the full shading rate %s", on ? "on" : "off");
@@ -1255,6 +1326,9 @@ void latch_frame() {
                                                                 (static_cast<double>(f.rects[2]) * f.rects[3])))
                           : 0.0f;
     f.values[1] = ao_edge_band(fx, fy);
+    f.diag[0] = g_diagSsrOff.load() ? 1.0f : 0.0f;
+    f.diag[1] = g_diagAoOff.load() ? 1.0f : 0.0f;
+    f.diag[2] = g_diagShadowOff.load() ? 1.0f : 0.0f;
     g_frame.store(f);
     update_lod_scale();
 }
@@ -1284,6 +1358,22 @@ void four_views_latch_frame() {
     std::lock_guard lock(g_latchMutex);
     g_latched = true;
     latch_frame();
+}
+
+void four_views_set_diagnostics(bool ssrOff, bool aoOff, bool shadowOff) {
+    if (ssrOff == g_diagSsrOff.load() && aoOff == g_diagAoOff.load() && shadowOff == g_diagShadowOff.load())
+        return;
+    {
+        std::lock_guard lock(g_latchMutex);
+        g_diagSsrOff = ssrOff;
+        g_diagAoOff = aoOff;
+        g_diagShadowOff = shadowOff;
+        if (!g_latched)
+            latch_frame();
+    }
+    logf("xplane: diagnostics: SSR %s, AO %s, sun shadow %s (from the next frame)%s", ssrOff ? "OFF" : "on",
+         aoOff ? "OFF" : "on", shadowOff ? "OFF" : "on",
+         g_diagModules.load() > 0 ? "" : " (no shader has the switch: xplane_diag=1 wasn't set at launch)");
 }
 
 bool four_views_set_view_shares(double outerX, double outerY, double focusX, double focusY) {
