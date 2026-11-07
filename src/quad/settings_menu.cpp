@@ -20,6 +20,7 @@ struct Spec {
 // The launcher's ranges (kOuterRange, kInnerRange, kSizeRange, kFeatherRange, kCornerRange).
 constexpr Spec kSpecs[] = {
     {MenuItem::Periphery, L"Periphery", 10, 100, 5},  {MenuItem::Density, L"Focus density", 50, 400, 5},
+    {MenuItem::ObjectDetail, L"Object detail", 0, 100, 10},  // the launcher's kObjectDetailRange
     {MenuItem::Width, L"Focus width", 10, 100, 1},     {MenuItem::Height, L"Focus height", 10, 100, 1},
     {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
     {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
@@ -96,6 +97,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     switch (item) {
     case MenuItem::Periphery: return &v.periphery;
     case MenuItem::Density: return &v.density;
+    case MenuItem::ObjectDetail: return &v.objectDetail;
     case MenuItem::Width: return &v.width;
     case MenuItem::Height: return &v.height;
     case MenuItem::Feather: return &v.feather;
@@ -202,7 +204,9 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else {
         if (!menu.profiles.empty())
             items.push_back(MenuItem::Profile);
-        const std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
+        std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
+        if (menu.launch.qvfr && menu.launch.objectDetail)  // only a game with it (X-Plane), after Focus density
+            method.insert(std::find(method.begin(), method.end(), MenuItem::Density) + 1, MenuItem::ObjectDetail);
         items.insert(items.end(), method.begin(), method.end());
         if (menu.launch.qvfr)  // last: Up from the page switch reaches it
             items.push_back(MenuItem::Optimize);
@@ -380,11 +384,14 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.cropOuter = std::clamp(read_int(ini, L"crop", L"outer", 0), 0, cropMax);
     v.cropInner = std::clamp(read_int(ini, L"crop", L"inner", 0), 0, cropMax);
     v.helmet = read_helmet_settings(ini);
+    v.objectDetail = std::clamp(read_int(ini, L"experiment", L"object_detail", v.objectDetail), 0, 100);
     return v;
 }
 
-bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr) {
+bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail) {
     bool ok = true;
+    if (qvfr && objectDetail)
+        ok &= write(ini, L"experiment", L"object_detail", std::clamp(v.objectDetail, 0, 100));
     if (qvfr) {
         ok &= write(ini, L"experiment", L"periphery_scale", v.periphery);
         ok &= write(ini, L"experiment", L"focus_density", v.density);

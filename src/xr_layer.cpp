@@ -3772,6 +3772,7 @@ void menu_open(int64_t now) {
         menu.model.launch.cropPage = features.fovCrop;
         menu.model.launch.helmetPage = features.helmet;
         menu.model.launch.fgPage = features.frameGeneration;
+        menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
@@ -3816,12 +3817,12 @@ void menu_press(MenuKey key, int64_t now) {
     // Written on the ini worker (off the render thread), to the ini the layer reloads and the launcher's
     // (the next launch starts from them); the live reload follows within a frame or two.
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
-                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr] {
-        write_menu_values(ini.c_str(), values, qvfr);
+                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail] {
+        write_menu_values(ini.c_str(), values, qvfr, detail);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (!settings.empty()) {
-            write_menu_values(settings.c_str(), values, qvfr);
+            write_menu_values(settings.c_str(), values, qvfr, detail);
             if (cheeky.available)
                 write_cheeky_settings(settings.c_str(), cheeky.values, false);
         }
