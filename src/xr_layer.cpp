@@ -4331,6 +4331,10 @@ bool osd_resources(XrSession session) {
             osd.adapter = nullptr;
         factory->Release();
     }
+    // D3D11 (ACC, X-Plane): no queue timestamps, so the GPU tile is the whole GPU's load from Windows' engine
+    // counters (probe/gpu_load.h). A D3D12 session started it at xrCreateSession; it stops with the session.
+    if (!graphics.d3d12 && graphics.adapter_luid(luid))
+        gpu_load_start(static_cast<uint32_t>(luid.HighPart), luid.LowPart);
     log_line(osd.adapter ? "performance overlay: card ready" : "performance overlay: card ready (no VRAM numbers)");
     return true;
 }
