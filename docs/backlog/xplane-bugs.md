@@ -1,7 +1,7 @@
 # X-Plane: known bugs
 
-Open issues in X-Plane's QVFR path with per-view sizes (`[experiment] xplane_view_sizes=1`), found while testing live
-resolution (2026-11-06). Each view renders in a rect at the top-left of its layer; the layer keeps its launch size.
+Open issues in X-Plane's QVFR path with per-view sizes (on by default since 1.0.1-beta; `[experiment]
+xplane_view_sizes=0` turns them off), found while testing live resolution (2026-11-06). Each view renders in a rect at the top-left of its layer; the layer keeps its launch size.
 The detailed measurements are in the local recon notes (`docs/recon-xplane.md`, not in the repository).
 
 Fixed in `3fe687a` (for reference): the auto exposure, the sun's shadows (`u_viewport_size`), the depth chains and SSR

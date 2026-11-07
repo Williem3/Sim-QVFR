@@ -149,9 +149,10 @@ public:
         if (s.focusFraction > 0)
             four_views_set_focus(true, s.focusFraction, s.focusFractionY > 0 ? s.focusFractionY : s.focusFraction);
         const Views4Layout& l = s.layout;
-        // Stage 2 of per-view sizes ([experiment] xplane_view_sizes=1, off by default while the screen-space passes
-        // still read whole layers): each kind of view renders at its own size inside the layers.
-        viewSizes_ = s.ini && GetPrivateProfileIntW(L"experiment", L"xplane_view_sizes", 0, s.ini) == 1;
+        // Per-view sizes (on unless [experiment] xplane_view_sizes=0): each kind of view renders at its own size inside
+        // the layers, which live resolution needs. Some screen-space passes still read whole layers
+        // (docs/backlog/xplane-bugs.md).
+        viewSizes_ = !s.ini || GetPrivateProfileIntW(L"experiment", L"xplane_view_sizes", 1, s.ini) == 1;
         four_views_set_view_sizes(viewSizes_, l.outer_width(), l.outer_height(), l.focus, l.focusHeight);
         simqvfr::logf("xplane: QVFR started; launch layout outer %.2f x %.2f, focus %.2f x %.2f of the native eye (X-Plane "
                       "renders every view at half the column: the records say so)",
