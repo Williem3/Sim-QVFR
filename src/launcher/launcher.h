@@ -11,6 +11,10 @@
 #include "layer_order.h"
 #include "preflight.h"
 
+namespace simqvfr::games {
+struct GameInfo;
+}
+
 namespace simqvfr::launcher {
 
 // sim-qvfr.ini next to the launcher.
@@ -28,6 +32,9 @@ LayerPlan launcher_layer_plan();
 // The chosen game's exe as a launch would start it ([launcher] game_dir_<id>, else through Steam); empty if not
 // found.
 std::wstring launcher_game_exe();
+// `game` is installed: its exe is in its [launcher] game_dir_<id>, or Steam's libraries have it. Games that aren't get
+// no tab unless the Games pane shows them.
+bool game_installed(const games::GameInfo& game);
 // Makes the game in [launcher] game (ace, acc; games::game_by_id) the one the launcher starts.
 void choose_launcher_game();
 // The launch checks' input (preflight.h) for `exe` from the ini, Steam, the game folder and Windows' layers;

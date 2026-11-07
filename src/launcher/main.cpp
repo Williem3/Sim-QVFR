@@ -105,7 +105,8 @@ bool process_running(const wchar_t* exe) {
     return found;
 }
 
-std::wstring find_game_folder() {
+// `game`'s folder in Steam's libraries; empty if Steam doesn't have it.
+std::wstring find_game_folder(const games::GameInfo& game) {
     HKEY key = nullptr;
     wchar_t steam[MAX_PATH] = {};
     DWORD size = sizeof(steam);
@@ -120,7 +121,6 @@ std::wstring find_game_folder() {
     if (read_file((fs::path(steam) / L"steamapps" / L"libraryfolders.vdf").wstring(), vdf))
         for (const std::wstring& library : steam_libraries(vdf))
             libraries.push_back(library);
-    const games::GameInfo& game = games::launcher_game();
     for (const std::wstring& library : libraries) {
         const fs::path folder = fs::path(library) / L"steamapps" / L"common" / game.steamFolder;
         std::error_code ec;
@@ -130,18 +130,16 @@ std::wstring find_game_folder() {
     return {};
 }
 
-// The chosen game's folder: [launcher] game_dir_<id> (ACE: also game_dir), else its folder in Steam's libraries.
-std::wstring game_folder(const std::wstring& ini) {
-    const games::GameInfo& game = games::launcher_game();
+// A game's folder: [launcher] game_dir_<id> (ACE: also game_dir), else its folder in Steam's libraries.
+std::wstring game_folder(const std::wstring& ini, const games::GameInfo& game = games::launcher_game()) {
     std::wstring set = ini_string(ini, L"launcher", (L"game_dir_" + widen(game.id)).c_str());
     if (set.empty() && game.id == std::string_view("ace"))
         set = ini_string(ini, L"launcher", L"game_dir");
-    return set.empty() ? find_game_folder() : set;
+    return set.empty() ? find_game_folder(game) : set;
 }
 
-// The chosen game's exe under `folder`.
-fs::path game_exe(const std::wstring& folder) {
-    const games::GameInfo& game = games::launcher_game();
+// A game's exe under `folder` (the chosen game's by default).
+fs::path game_exe(const std::wstring& folder, const games::GameInfo& game = games::launcher_game()) {
     return fs::path(folder) / game.exeFolder / game.exeName;
 }
 
@@ -467,6 +465,12 @@ std::wstring launcher_game_exe() {
     const fs::path exe = game_exe(game);
     std::error_code ec;
     return !game.empty() && fs::exists(exe, ec) ? exe.wstring() : std::wstring();
+}
+
+bool game_installed(const games::GameInfo& game) {
+    const std::wstring folder = game_folder(settings_path(), game);
+    std::error_code ec;
+    return !folder.empty() && fs::exists(game_exe(folder, game), ec);
 }
 
 void choose_launcher_game() {

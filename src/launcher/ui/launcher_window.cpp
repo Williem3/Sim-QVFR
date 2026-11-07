@@ -33,6 +33,7 @@
 #include "../report.h"
 #include "../game_tabs.h"
 #include "../settings.h"
+#include "../session_history.h"
 #include "../install.h"
 #include "../update_check.h"
 #include "../../games/game.h"
@@ -86,9 +87,10 @@ enum Ctl {
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
     kHotkeyKey, kHotkeyPad, kHotkeysReset,
-    // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete (option: its index in
-    // app.profileNames), saving the settings as one, adding a shared one from the clipboard.
-    kProfileUse, kProfileShare, kProfileDelete, kProfileSave, kProfilePaste,
+    // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete, and the one in use's Update and Revert
+    // once the settings differ from it (option: its index in app.profileNames), saving the settings as one, adding a
+    // shared one from the clipboard.
+    kProfileUse, kProfileShare, kProfileDelete, kProfileUpdate, kProfileRevert, kProfileSave, kProfilePaste,
     // The Headset menu pane: the hotkeys footer ([menu] hotkey_footer).
     kHotkeyFooter,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
@@ -100,7 +102,9 @@ enum Ctl {
     kHelpIcon,
     // The action bar: the launched game's status (launch_watch.h; it opens Diagnostics or Report an issue) and
     // Restore Defaults' Undo.
-    kLaunchBadge, kUndoBadge
+    kLaunchBadge, kUndoBadge,
+    // An open sheet (open_sheet): its buttons (option: the button's index) and its name field.
+    kSheetButton, kSheetField
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -150,6 +154,24 @@ struct Popup {
     int selected = 0, hover = -1;
 };
 
+// A sheet (open_sheet): a question or notice over the dimmed window, in the window's theme, in place of a Windows
+// message box. While one shows, only it takes the mouse and the keys: Tab and the arrows move between its buttons,
+// Return and Space press the focused one, Escape presses `cancel`.
+struct Sheet {
+    bool open = false;
+    std::wstring title, text;
+    std::vector<std::wstring> buttons;  // left to right; the last is the main one (the accent, or red when `danger`)
+    int focus = -1;   // the button with the focus when it opens; -1: the main one (the name field, with one)
+    int cancel = 0;   // the button Escape presses
+    bool danger = false;
+    bool field = false;  // a name field above the buttons (Return in it presses the main button)
+    std::wstring fieldLabel, fieldText;
+    std::function<void(int button, const std::wstring& text)> done;  // the button pressed, and the field's text
+};
+void open_sheet(Sheet sheet);
+// A notice with OK; `then` once it's closed.
+void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then = nullptr);
+
 constexpr wchar_t kMethodNames[2][40] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced (legacy)"};
 constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
@@ -179,8 +201,11 @@ struct App {
     std::wstring ini;
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Resolution;
+    Pane pane = Pane::Checks;
+    // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
+    // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
+    int focusOption = -1;
     bool keyboard = false;  // focus rings show after keyboard use only (:focus-visible)
     Ctl pressed = kNone, dragging = kNone;
     Rect dragTrack;
@@ -254,6 +279,18 @@ struct App {
     LaunchWatch watch;
     // Restore Defaults: the settings before it, for Undo (the action bar, Ctrl+Z) until the next change.
     std::optional<Settings> undoRestore;
+    // The last few sessions (session_history.h), newest first, each with the settings it ran with: Diagnostics compares
+    // the last session with the one before it.
+    std::vector<SessionRecord> sessions;
+    // Which games are installed, by id (refresh_installed): the others get no tab unless the Games pane gives them one.
+    std::map<std::wstring, bool> installed;
+    // The open sheet, its name field (a native edit over the canvas at sheetEditRect, like the report's), and whether
+    // the next paint gives that field the keyboard.
+    Sheet sheet;
+    HWND sheetEdit = nullptr;
+    Rect sheetEditRect;
+    bool sheetFocusField = false;
+    bool drawingSheet = false;  // paint is drawing the sheet: its controls show hover
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -389,6 +426,25 @@ void update_done(UpdateResult* r) {
                                                                     : Update::Available;
 }
 
+// The first start: whether to check for updates when the launcher starts, asked once ([launcher] update_asked keeps the
+// answer; About's switch changes it).
+void ask_update_check() {
+    Sheet s;
+    s.title = L"Check for updates automatically?";
+    s.text = L"When it starts, the launcher can ask GitHub for the newest Sim-QVFR release and tell you when there is one. "
+             L"Nothing else is sent, and nothing downloads by itself. You can change this in About.";
+    s.buttons = {L"Don’t Check", L"Check Automatically"};
+    s.cancel = 0;
+    s.done = [](int button, const std::wstring&) {
+        app.s.updateAsked = true;
+        app.s.updateCheck = button == 1;
+        changed();
+        if (app.s.updateCheck)
+            start_update_check();
+    };
+    open_sheet(std::move(s));
+}
+
 std::wstring launcher_folder() { return std::filesystem::path(app.ini).parent_path().wstring(); }
 
 // Install is offered for a newer release with a zip GitHub gives a SHA-256 for, in a packaged install.
@@ -406,23 +462,8 @@ bool game_running() {
 
 void refresh_checks();  // the launch checks (below)
 
-void start_install() {
-    if (app.installing || !installable())
-        return;
-    refresh_checks();
-    if (game_running()) {
-        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: Sim-QVFR’s layer is in use while it runs.").c_str(), L"Sim QVFR Launcher",
-                    MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
-    if (MessageBoxW(app.hwnd,
-                    (L"Install Sim-QVFR " + app.release.tag + L"?\n\nThe launcher downloads it from GitHub (" + mb +
-                     L" MB), checks it, replaces its program files and restarts. Your settings, profiles, logs and any file "
-                     L"you changed (your own helmet images) stay. The version you have now is kept in the update folder.")
-                        .c_str(),
-                    L"Sim QVFR Launcher", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
-        return;
+// The install itself, on a worker (install.h): its progress and outcome come back as messages.
+void run_install() {
     app.installing = true;
     app.installError.clear();
     app.installProgress = {L"Starting", 0};
@@ -447,7 +488,32 @@ void start_install() {
     }).detach();
 }
 
-// The install's outcome: on success the new launcher starts and this one closes.
+// Install: asked first, in a sheet.
+void start_install() {
+    if (app.installing || !installable())
+        return;
+    refresh_checks();
+    if (game_running()) {
+        notify(L"Close " + game_name() + L" first", L"Sim-QVFR’s layer is in use while the game runs, so it can’t be replaced yet.");
+        return;
+    }
+    const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
+    Sheet s;
+    s.title = L"Install Sim-QVFR " + app.release.tag + L"?";
+    s.text = L"The launcher downloads it from GitHub (" + mb + L" MB), checks it, replaces its program files and restarts. "
+             L"Your settings, profiles, logs and any file you changed (your own helmet images) stay. The version you have now "
+             L"is kept in the update folder.";
+    s.buttons = {L"Cancel", L"Install"};
+    s.done = [](int button, const std::wstring&) {
+        if (button == 1)
+            run_install();
+    };
+    open_sheet(std::move(s));
+}
+
+void restart_launcher(const std::wstring& exe);
+
+// The install's outcome: on success a sheet says so, then the new launcher starts and this one closes.
 void install_done(InstallResult* r) {
     const std::unique_ptr<InstallResult> result(r);
     app.installing = false;
@@ -455,18 +521,23 @@ void install_done(InstallResult* r) {
         app.installError = result->error;
         return;
     }
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);  // the new launcher now: the old one moved into the backup
-    MessageBoxW(app.hwnd,
-                (L"Sim-QVFR " + app.release.tag + L" is installed (" + std::to_wstring(result->replaced + result->added) +
-                 L" files; " + std::to_wstring(result->kept) + L" of yours kept). The launcher restarts now.\n\nThe version you had "
-                 L"is in " + result->backup + L".")
-                    .c_str(),
-                L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);  // the new launcher now: the old one moved into the backup
+    Sheet s;
+    s.title = L"Sim-QVFR " + app.release.tag + L" is installed";
+    s.text = std::to_wstring(result->replaced + result->added) + L" files installed, " + std::to_wstring(result->kept) +
+             L" of yours kept. The version you had is in " + result->backup + L".";
+    s.buttons = {L"Restart Now"};
+    s.done = [exe = std::wstring(path)](int, const std::wstring&) { restart_launcher(exe); };
+    open_sheet(std::move(s));
+}
+
+// The new launcher started, this one closed.
+void restart_launcher(const std::wstring& exe) {
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
-    std::wstring command = L"\"" + std::wstring(exe) + L"\"";
-    if (CreateProcessW(exe, command.data(), nullptr, nullptr, FALSE, 0, nullptr, launcher_folder().c_str(), &si, &pi)) {
+    std::wstring command = L"\"" + exe + L"\"";
+    if (CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, launcher_folder().c_str(), &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         DestroyWindow(app.hwnd);
@@ -476,11 +547,55 @@ void install_done(InstallResult* r) {
 }
 
 void refresh_profiles() {
+    const std::vector<std::wstring> before = app.profileNames;
     app.profileNames = profile_names(profiles_folder(app.ini));
+    // A profile's button keeps the focus by its index: with the list changed it would be another profile's.
+    if (app.profileNames != before && app.focus >= kProfileUse && app.focus <= kProfileRevert)
+        app.focus = kNone;
     app.profileCurrent = current_profile(app.ini.c_str());
     Profile p;
     app.profileMatches = !app.profileCurrent.empty() && load_profile(profiles_folder(app.ini), app.profileCurrent, p, app.s.eyeTracking) &&
                          profile_matches(app.ini.c_str(), p);
+}
+
+// The session runtime.ini reports, into the history (session_history.h) when its numbers are new: with the settings
+// its game has now in the launcher's folder (the launcher's ini or the game's copy, where the headset menu also writes).
+void record_session() {
+    const SessionInfo& s = app.runtime.session;
+    if (!app.iniFound || !s.known())
+        return;
+    const std::wstring id = session_id(s.log);
+    if (id.empty())
+        return;
+    for (const SessionRecord& r : app.sessions)
+        if (r.id == id && r.same_numbers(s))
+            return;
+    // Its game: the run folder's copy of the ini names it ([launcher] game, ACE when unset); without one, the game shown.
+    const std::wstring runIni = session_run_ini(s.log);
+    std::wstring game = game_id(games::launcher_game());
+    if (GetFileAttributesW(runIni.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        wchar_t named[32] = {};
+        GetPrivateProfileStringW(L"launcher", L"game", L"ace", named, static_cast<DWORD>(std::size(named)), runIni.c_str());
+        game = named;
+    }
+    // Every ~10 s while the game runs, so the history is kept up to date here rather than read again (12 files of ~100
+    // keys): the shown game's settings are the window's own, kept in step with the ini (follow_ini).
+    const std::wstring source = game_settings_target(app.ini, game);
+    SessionRecord record = session_record(s, game, game == game_id(games::launcher_game()) ? app.s : load_settings(source));
+    if (!store_session(sessions_folder(app.ini), record, source))
+        return;
+    std::vector<SessionRecord>& list = app.sessions;
+    list.erase(std::remove_if(list.begin(), list.end(), [&](const SessionRecord& r) { return r.id == record.id; }), list.end());
+    const auto at = std::find_if(list.begin(), list.end(), [&](const SessionRecord& r) { return r.id < record.id; });  // newest first
+    list.insert(at, std::move(record));
+    if (list.size() > static_cast<size_t>(kSessionHistory))
+        list.resize(kSessionHistory);
+}
+
+// runtime.ini read again (the headset, the last session), and that session kept in the history.
+void reload_runtime() {
+    app.runtime = load_runtime_info(runtime_info_path());
+    record_session();
 }
 
 // The in-headset settings menu saves into the same ini: show what it set (not while a knob is held). A
@@ -701,6 +816,8 @@ std::vector<Ctl> focus_order() {
     return order;
 }
 
+void start_launch();
+
 void launch() {
     if (!app.iniFound) {
         app.status = Status::Error;
@@ -730,19 +847,35 @@ void launch() {
             InvalidateRect(app.hwnd, nullptr, FALSE);
             return;
         }
-    // A launch that would crash the game, or run it without Sim-QVFR: ask first.
+    // A launch that would crash the game, or run it without Sim-QVFR: asked first, Show Checks the focused answer.
     std::wstring problems;
     for (const Check& c : app.checks)
         if (c.confirm)
-            problems += L"\u2022 " + c.title + L"\n";
-    if (!problems.empty() &&
-        MessageBoxW(app.hwnd, (L"The launch checks found:\n\n" + problems + L"\nLaunch " + game_name() + L" anyway?").c_str(),
-                    L"Sim QVFR Launcher", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+            problems += (problems.empty() ? L"" : L"\n") + std::wstring(L"\u2022 ") + c.title;
+    if (problems.empty()) {
+        start_launch();
+        return;
+    }
+    Sheet s;
+    s.title = L"Launch " + game_name() + L" anyway?";
+    s.text = L"The launch checks found:\n" + problems;
+    s.buttons = {L"Show Checks", L"Launch Anyway"};
+    s.focus = 0;
+    s.danger = true;
+    s.done = [](int button, const std::wstring&) {
+        if (button == 1) {
+            start_launch();
+            return;
+        }
         app.pane = Pane::Checks;
         app.scroll = 0;
         InvalidateRect(app.hwnd, nullptr, FALSE);
-        return;
-    }
+    };
+    open_sheet(std::move(s));
+}
+
+// The launch itself (main.cpp's launch_game), then the watch on what becomes of it.
+void start_launch() {
     app.status = Status::Starting;
     RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     std::wstring report;
@@ -771,6 +904,8 @@ void focus_ring(const Rect& r, float radius) {
 bool focused(Ctl id) { return app.keyboard && app.focus == id && !app.popup.open; }
 // The pointer is over `r` (hover states), with no menu open and nothing dragged.
 bool pointer_in(const Rect& r) {
+    if (app.sheet.open && !app.drawingSheet)
+        return false;  // under the sheet
     return app.hover != kNone && !app.popup.open && app.dragging == kNone && r.contains(app.mouseX, app.mouseY);
 }
 
@@ -1000,6 +1135,79 @@ constexpr Help kHelp[] = {
      L"GPU time and latency. Turn OpenXR Toolkit’s Turbo mode off with it, and run no other frame generator."},
     {L"Center region", L"The part of the view frame generation makes at full quality (it follows your eyes when eye tracked). "
                        L"Larger looks better and costs more GPU time."},
+    // Sections' reference text, by their titles (their footers keep a line).
+    {L"Load order",
+     L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in Windows can "
+     L"still be loaded for the game alone. Locked switches keep the mod and the game working."},
+    {L"Describe the problem",
+     L"Zips the logs and the game’s crash reports from those sessions (names and account IDs taken out) into the logs "
+     L"folder, then opens a new issue on GitHub with what you wrote, your settings, the last session and your PC filled in. "
+     L"Add the steps there, and drag in the zip (it shows below) and any screenshots."},
+    {L"Busiest threads",
+     L"Each thread is a share of ONE core. A thread near 100% can hold the frame rate back even when Windows shows the whole "
+     L"CPU at 15%; a thread that spins by design looks busy whatever limits it."},
+    {L"Capture and share",
+     L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the issue. Elsewhere, send a "
+     L"screenshot of this page (or paste the summary) and the session’s log, with the latest cpu-profile file if you made one."},
+    {L"CPU capture",
+     L"At the next launch, the CPU capture hotkey (Ctrl+Alt+C) while driving records for 20 s where the game’s busiest "
+     L"threads spend their time, into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; "
+     L"the game may stutter slightly while it records."},
+    {L"Frame capture",
+     L"Saves the game’s own image and the composed output, as PNG files in the captures folder inside the logs folder. Each "
+     L"press saves one more frame, to compare the views where something looks wrong. For games composed by the D3D11 "
+     L"compositor (X-Plane 12, Assetto Corsa Competizione)."},
+    {L"Next launch without QVFR",
+     L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the same race with "
+     L"and without QVFR. It turns itself off after that launch; the next one has QVFR again. The performance overlay works "
+     L"in it, the settings menu does not."},
+    {L"Presets for eye tracked foveation",
+     L"Starting points that put the pixels in the centre: low outer views and a dense focus area. Eye tracked, the area "
+     L"follows your eyes, so it can be small and very sharp. They set the resolution only and keep everything else."},
+    {L"Presets for fixed foveation",
+     L"Starting points that put the pixels in the centre: low outer views and a dense focus area. Fixed, your eyes move off "
+     L"the centre, so the area is larger and a little less dense. They set the resolution only and keep everything else."},
+    {L"Your profiles",
+     L"A profile holds every setting of the picture: resolution, foveation and the focus overlay, and where the game has "
+     L"them the view crop, the helmet and Foveated DLSS. Not the menu’s and overlay’s places, the hotkeys or the OpenXR "
+     L"layers. Share copies one as a line of text to paste in a chat; Paste adds one from the clipboard. The headset menu’s "
+     L"Profile line switches between them while you drive."},
+    {L"Headset menu",
+     L"A key’s first press also opens the menu. A wheel’s directions act only while the menu shows, so a switch the game "
+     L"also uses doesn’t open it: use Open or close first."},
+    {L"In the game",
+     L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever the game runs."},
+    {L"Field of view crop",
+     L"The outer view keeps its sharpness and the focus region its size. Changes reach a running game at once; with DLSS "
+     L"on, or with less crop than at launch, the pixel count follows at the next launch."},
+    {L"Helmet overlay",
+     L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png and visor.png "
+     L"with alpha in the helmet folder next to the layer; the log suggests the crop that matches them."},
+    {L"Focus shape",
+     L"Each corner moves toward the middle of the focus region, percent of its width (in) or height (down, up). Pull the top "
+     L"corners in for a trapezoid: more of the dash sharp, less of the far field. The focus view still renders the whole "
+     L"box, so the cost stays the same."},
+    {L"Cheeky Foveated DLSS",
+     L"No Cheeky loader goes in the game folder: Sim-QVFR loads Cheeky’s runtime into the game itself."},
+    {L"Frame generation (experimental)",
+     L"Outside the center region frames are warped with the game’s motion. Lower scales use less GPU time and memory. With "
+     L"an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer."},
+    {L"Placement", L"The settings menu stays 0.8 m in front of your head, wherever you look."},
+    {L"Updates",
+     L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
+     L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "
+     L"update folder. Download opens the release’s page instead."},
+    {L"Live", L"These settings reach the game while it runs, as soon as you change them. Without the game running, they "
+              L"apply when it starts."},
+    {L"Live when lowered",
+     L"Lowering it reaches a running game at once, and so does raising it back up to what the game started with. Above "
+     L"that, it takes effect at the next launch. With DLSS on in the game, the views keep their launch sizes until the "
+     L"next launch."},
+    {L"Focus region",
+     L"Changes reach a running game at once. A focus area wider or taller than the game started with renders at a lower "
+     L"density until the next launch, which sizes its view to fit."},
+    {L"Next launch", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
+                     L"what it started with."},
     {L"Show the overlay",
      L"The performance overlay in the headset: frame rate, CPU and GPU time and what limits the frame. A little CPU time while "
      L"it shows."},
@@ -1137,7 +1345,160 @@ float badge(float x, float y, int tone, const std::wstring& text, float maxWidth
     return w;
 }
 
+// ---- Sheets ------------------------------------------------------------------------------------
+
+void open_sheet(Sheet sheet) {
+    app.popup.open = false;
+    app.tip = -1;
+    app.pressed = kNone;
+    sheet.open = true;
+    if (sheet.buttons.empty())
+        sheet.buttons = {L"OK"};
+    const int main = static_cast<int>(sheet.buttons.size()) - 1;
+    sheet.cancel = std::clamp(sheet.cancel, 0, main);
+    if (sheet.focus < 0 || sheet.focus > main)
+        sheet.focus = sheet.field ? -1 : main;
+    app.sheet = std::move(sheet);
+    if (app.sheet.field && app.sheetEdit) {
+        SetWindowTextW(app.sheetEdit, app.sheet.fieldText.c_str());
+        SendMessageW(app.sheetEdit, EM_SETSEL, 0, -1);
+        app.sheetFocusField = app.sheet.focus < 0;  // once the paint has placed it
+    }
+    if (GetFocus() != app.hwnd)
+        SetFocus(app.hwnd);  // out of the report's description box
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then) {
+    Sheet s;
+    s.title = title;
+    s.text = text;
+    if (then)
+        s.done = [then](int, const std::wstring&) { then(); };
+    open_sheet(std::move(s));
+}
+
+// Closes the sheet with `button` pressed, then tells its `done` (which may open another).
+void close_sheet(int button) {
+    if (!app.sheet.open)
+        return;
+    std::wstring text;
+    if (app.sheet.field && app.sheetEdit) {
+        text.resize(static_cast<size_t>(std::max(0, GetWindowTextLengthW(app.sheetEdit))));
+        GetWindowTextW(app.sheetEdit, text.data(), static_cast<int>(text.size()) + 1);
+    }
+    const auto done = std::move(app.sheet.done);
+    app.sheet = {};
+    app.sheetFocusField = false;
+    if (app.sheetEdit) {
+        if (GetFocus() == app.sheetEdit)
+            SetFocus(app.hwnd);
+        ShowWindow(app.sheetEdit, SW_HIDE);
+    }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+    if (done)
+        done(button, text);
+}
+
+// Tab and Shift+Tab: the focus to the next or previous of the name field (-1, with one) and the buttons.
+void move_sheet_focus(int step) {
+    Sheet& s = app.sheet;
+    const int n = static_cast<int>(s.buttons.size()), first = s.field ? -1 : 0;
+    int f = s.focus + step;
+    if (f >= n)
+        f = first;
+    if (f < first)
+        f = n - 1;
+    s.focus = f;
+    app.keyboard = true;
+    if (f < 0)
+        SetFocus(app.sheetEdit);
+    else if (GetFocus() == app.sheetEdit)
+        SetFocus(app.hwnd);
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// The window's keys while a sheet shows (its name field has its own: sheet_edit_proc).
+void sheet_key(WPARAM key) {
+    Sheet& s = app.sheet;
+    if (key == VK_ESCAPE)
+        close_sheet(s.cancel);
+    else if ((key == VK_RETURN || key == VK_SPACE) && s.focus >= 0)
+        close_sheet(s.focus);
+    else if (key == VK_TAB)
+        move_sheet_focus(GetKeyState(VK_SHIFT) < 0 ? -1 : 1);
+    else if ((key == VK_LEFT || key == VK_RIGHT) && s.focus >= 0) {  // along the buttons only
+        s.focus = std::clamp(s.focus + (key == VK_RIGHT ? 1 : -1), 0, static_cast<int>(s.buttons.size()) - 1);
+        app.keyboard = true;
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+    }
+}
+
+// The sheet over the window: the window dimmed, a card in its middle with the title, the text, the field and the
+// buttons (trailing, the main one last). Modal: the hits under it go.
+void sheet_card() {
+    Sheet& s = app.sheet;
+    Canvas& cv = app.canvas;
+    const float W = cv.width(), H = cv.height();
+    cv.fill({0, 0, W, H}, {0, app.dark ? 0.55f : 0.32f});
+    app.hits.clear();
+    app.drawingSheet = true;
+    const float w = std::min(460.0f, W - 32), pad = t::kSpace6, inner = w - 2 * pad;
+    const float textH = s.text.empty() ? 0 : cv.measure_height(s.text, t::kBody, inner);
+    constexpr float kFieldH = 32;
+    const float labelH = s.fieldLabel.empty() ? 0 : t::kCallout.lineHeight + t::kSpace2;
+    const float h = pad + t::kTitle3.lineHeight + (textH > 0 ? t::kSpace2 + textH : 0) + (s.field ? t::kSpace4 + labelH + kFieldH : 0) +
+                    t::kSpace6 + t::kControlHeight + pad;
+    const float radius = t::kRadiusGroup + 4;
+    const Rect card{std::round((W - w) / 2), std::round(std::max(16.0f, (H - h) / 2 - 24)), w, h};
+    cv.fill({card.x, card.y + 6, card.w, card.h}, {0, app.dark ? 0.5f : 0.18f}, radius);
+    cv.fill(card, col(app.c->group_bg), radius);  // the panes' cards: their buttons read on it
+    cv.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, radius);
+    float y = card.y + pad;
+    cv.text(s.title, t::kTitle3, {card.x + pad, y, inner, t::kTitle3.lineHeight}, col(app.c->label));
+    y += t::kTitle3.lineHeight;
+    if (textH > 0) {
+        cv.text(s.text, t::kBody, {card.x + pad, y + t::kSpace2, inner, textH + 2}, col(app.c->label_secondary), Align::Leading,
+                false, true);
+        y += t::kSpace2 + textH;
+    }
+    if (s.field) {
+        y += t::kSpace4;
+        if (labelH > 0) {
+            cv.text(s.fieldLabel, t::kCallout, {card.x + pad, y, inner, t::kCallout.lineHeight}, col(app.c->label));
+            y += labelH;
+        }
+        const Rect field{card.x + pad, y, inner, kFieldH};
+        cv.fill(field, col(app.c->field_bg), t::kRadiusControl);
+        cv.stroke(field, col(app.c->control_border), 1, t::kRadiusControl);
+        if (s.focus < 0)
+            focus_ring(field, t::kRadiusControl);
+        app.sheetEditRect = {field.x + 8, field.y + (kFieldH - 20) / 2, field.w - 16, 20};
+        app.hits.push_back({kSheetField, field});
+        y += kFieldH;
+    }
+    y += t::kSpace6;
+    float bx = card.right() - pad;
+    const int main = static_cast<int>(s.buttons.size()) - 1;
+    for (int i = main; i >= 0; --i) {
+        const float bw = std::max(88.0f, button_width(s.buttons[i]));
+        bx -= bw;
+        const Rect r{bx, y, bw, t::kControlHeight};
+        button(kSheetButton, r, s.buttons[i], i == main ? (s.danger ? Btn::Danger : Btn::Primary) : Btn::Secondary);
+        app.hits.back().option = i;
+        if (s.focus == i)  // Return presses it: shown as a dialog's default button is
+            focus_ring(r, t::kRadiusControl);
+        bx -= t::kSpace2;
+    }
+    app.drawingSheet = false;
+}
+
 // ---- Form layout -------------------------------------------------------------------------------
+
+// When a section's settings reach the game: at once while it runs (Live), or when it next starts (NextLaunch); QVFR's
+// resolution live as it goes down, or back up to the size the game started with, and above that at the next launch
+// (LiveLowered: the views can't grow past their launch size). The section's title carries it as a tag (section).
+enum class Applies { None, Live, LiveLowered, NextLaunch };
 
 // One FormRow inside a section box: label (+ description) leading, the control trailing.
 struct Row {
@@ -1169,13 +1530,39 @@ float row_height(const Row& row, float w) {
     return std::max(t::kRowMinHeight, std::max(textH, row.controlH) + 2 * kRowPadY);
 }
 
-// FormSection at (x, y), width w: its heading, a card of rows, a footer under it. Returns its height.
+// The tag after a section's title: "Live" or "Live when lowered" (green), or "Next launch" (grey), 18 high; under the
+// pointer, what it means (its help, as an ⓘ's).
+void applies_tag(float x, float y, Applies applies) {
+    const bool live = applies != Applies::NextLaunch;
+    const std::wstring text = applies == Applies::Live ? L"Live" : applies == Applies::LiveLowered ? L"Live when lowered" : L"Next launch";
+    const Rect r{x, y, std::ceil(app.canvas.measure(text, kBadgeStyle)) + 16, 18};
+    app.canvas.fill(r, col(live ? app.c->success_bg : app.c->segment_track), 9);
+    app.canvas.text(text, kBadgeStyle, r, col(live ? app.c->success : app.c->label_secondary), Align::Center);
+    int index = 0;
+    while (text != kHelp[index].label)
+        ++index;
+    app.hits.push_back({kHelpIcon, r, index});
+    if (app.tip == index)
+        app.tipAnchor = r;
+}
+
+// FormSection at (x, y), width w: its heading (and when its settings apply), a card of rows, a footer under it.
+// Returns its height.
 float section(float x, float y, float w, const std::wstring& title, const std::vector<Row>& rows, const std::wstring& footer,
-              bool draw) {
+              bool draw, Applies applies = Applies::None) {
     float h = 0;
     if (!title.empty()) {
-        if (draw)
+        if (draw) {
             app.canvas.text(title, t::kHeadline, {x + 2, y, w - 2, t::kHeadline.lineHeight}, col(app.c->heading));
+            // Then its ⓘ (the section's reference text, kHelp by its title) and when its settings apply.
+            float tx = x + 2 + std::ceil(app.canvas.measure(title, t::kHeadline)) + 6;
+            if (help_for(title)) {
+                help_icon(title, tx, y + (t::kHeadline.lineHeight - t::kBody.lineHeight) / 2);
+                tx += 14 + 4;
+            }
+            if (applies != Applies::None)
+                applies_tag(tx + 2, y + (t::kHeadline.lineHeight - 18) / 2, applies);
+        }
         h += t::kHeadline.lineHeight + t::kSpace2;
     }
     float boxH = 0;
@@ -1407,11 +1794,9 @@ float layers_pane(float x, float y, float w, bool draw) {
                 desc += (desc.empty() ? L"" : L" · ") + widen(l.name);
             rows.push_back(layer_row(friendly_layer(l.name), desc, i, l.on, !l.lock.empty(), i > 0, i + 1 < n));
         }
-        h += section(x, y + h, w, L"Load order for " + short_name(),
-                     rows,
-                     L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in "
-                     L"Windows can still be loaded for the game alone. Locked switches keep the mod and the game working.",
-                     draw);
+        h += section(x, y + h, w, L"Load order", rows,
+                     L"Nearest the game first: each launch loads them below the Sim-QVFR layer in this order.", draw,
+                     Applies::NextLaunch);
         Row reset;
         reset.label = L"Windows’ order";
         reset.desc = L"Forget this profile: launches follow Windows’ order and switches again.";
@@ -1438,7 +1823,7 @@ float layers_pane(float x, float y, float w, bool draw) {
             h += section(x, y + h, w, machine ? L"All users (HKLM)" : L"This user (HKCU)", rows,
                          machine ? L"Changing these needs administrator rights: Windows asks once when you apply."
                                  : L"Windows loads these after the machine-wide ones.",
-                         draw) +
+                         draw, Applies::NextLaunch) +
                  t::kSpace6;
         }
         if (app.layersDraft.empty()) {
@@ -1592,7 +1977,34 @@ bool copy_text(const std::wstring& text) {
     return false;
 }
 
-void copy_summary() { copy_text(session_summary_text(app.runtime)); }
+// The last session's record in the history (runtime.ini's session), -1: not kept (no ini, or not measured).
+int last_session_index() {
+    const std::wstring id = session_id(app.runtime.session.log);
+    for (size_t i = 0; !id.empty() && i < app.sessions.size(); ++i)
+        if (app.sessions[i].id == id)
+            return static_cast<int>(i);
+    return -1;
+}
+
+// The last session against the one before it, and against the newest of the other kind (with or without QVFR), as
+// lines for the summary: "vs previous: +6.0 fps, 90th percentile −1.20 ms, after Outer 50% → 40%".
+std::wstring comparison_lines() {
+    const int now = last_session_index();
+    if (now < 0)
+        return L"";
+    std::wstring text;
+    const SessionRecord& r = app.sessions[now];
+    if (const int before = previous_session(app.sessions, now); before >= 0)
+        text += comparison_text(L"vs previous (" + app.sessions[before].time + L")", r, app.sessions[before]) + L"\n";
+    if (const int other = other_kind_session(app.sessions, now); other >= 0)
+        text += comparison_text(r.baseline ? L"vs with QVFR (" + app.sessions[other].time + L")"
+                                           : L"vs without QVFR (" + app.sessions[other].time + L")",
+                                r, app.sessions[other]) +
+                L"\n";
+    return text;
+}
+
+void copy_summary() { copy_text(session_summary_text(app.runtime) + comparison_lines()); }
 
 std::wstring clipboard_text() {
     std::wstring text;
@@ -1625,7 +2037,7 @@ void report_issue() {
     wchar_t name[64];
     swprintf_s(name, L"sim-qvfr-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
                now.wMinute, now.wSecond);
-    app.runtime = load_runtime_info(runtime_info_path());
+    reload_runtime();
     IssueReport report{widen(SIM_QVFR_VERSION), app.s, app.runtime, system_info(), name, app.reportKind};
     const int length = GetWindowTextLengthW(app.reportEdit);
     report.description.resize(static_cast<size_t>(std::max(length, 0)));
@@ -1753,10 +2165,7 @@ float report_pane(float x, float y, float w, bool draw) {
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Zips the logs and the game's crash reports from those sessions (names and account IDs taken "
-                 L"out) into the logs folder, then opens a new issue on GitHub with what you wrote, your "
-                 L"settings, the last session and your PC filled in. Add the steps there, and drag in the zip "
-                 L"(it shows below) and any screenshots.",
+                 L"Opens a GitHub issue with the details filled in, and zips the logs for you to drag into it.",
                  draw);
     if (app.reportZip.empty())
         return h;
@@ -1786,8 +2195,7 @@ float report_pane(float x, float y, float w, bool draw) {
     };
     h += t::kSpace6;
     h += section(x, y + h, w, L"Attach the logs", {zip},
-                 L"GitHub can't attach it for you: drop it into the issue's \"Screenshots and logs\" box (or a "
-                 L"comment). Without it most problems can't be tracked down.",
+                 L"GitHub can’t attach it for you: drop it into the issue’s “Screenshots and logs” box.",
                  draw);
     return h;
 }
@@ -1829,14 +2237,38 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
             value_row(L"CPU in use", L"All of the game's threads together.", s.cores >= 0 ? formatted(L"%.1f cores", s.cores) : dash)};
         h += section(x, y + h, w, L"Last session", rows, L"", draw);
         h += t::kSpace6;
+        // Against the session before it (what changed in between) and a run of the other kind (with or without QVFR).
+        const int now = last_session_index();
+        if (now >= 0) {
+            const SessionRecord& r = app.sessions[now];
+            std::vector<Row> compared;
+            if (const int before = previous_session(app.sessions, now); before >= 0) {
+                const SessionRecord& p = app.sessions[before];
+                std::wstring desc = p.time;
+                if (!r.baseline) {
+                    const std::vector<std::wstring> changes = setting_changes(p.settings, r.settings);
+                    desc += changes.empty() ? L"  ·  same settings" : L"  ·  after " + changes_text(changes);
+                }
+                compared.push_back(value_row(L"Previous session", desc, difference_text(r, p)));
+            }
+            if (const int other = other_kind_session(app.sessions, now); other >= 0) {
+                const SessionRecord& o = app.sessions[other];
+                compared.push_back(value_row(r.baseline ? L"With QVFR" : L"Without QVFR",
+                                             o.time + (r.baseline ? L"" : L"  ·  the game’s own two views"), difference_text(r, o)));
+            }
+            if (!compared.empty()) {
+                h += section(x, y + h, w, L"Compared with", compared,
+                             L"This session’s frame rate and 90th percentile against each, for the same game.", draw);
+                h += t::kSpace6;
+            }
+        }
         std::vector<Row> threads;
         for (const auto& [name, percent] : s.threads)
             threads.push_back(value_row(name, thread_note(name), formatted(L"%.0f%% of a core", percent)));
         if (threads.empty())
             threads.push_back(value_row(L"Not measured", L"", dash));
         h += section(x, y + h, w, L"Busiest threads", threads,
-                     L"Each thread is a share of ONE core. A thread near 100% can hold the frame rate back even when "
-                     L"Windows shows the whole CPU at 15%; a thread that spins by design looks busy whatever limits it.",
+                     L"Each is a share of one core: near 100%, a thread can hold the frame rate back.",
                      draw);
         h += t::kSpace6;
         const bool toolkit = s.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos;
@@ -1858,31 +2290,56 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         h += section(x, y + h, w, L"Layer and memory", layer, L"", draw);
         h += t::kSpace6;
     }
+    // The game's last few sessions, each with what changed since the one before it (the last session's game, else the
+    // game shown).
+    {
+        const int now = last_session_index();
+        const std::wstring game = now >= 0 ? app.sessions[now].game : game_id(games::launcher_game());
+        std::vector<Row> recent;
+        for (size_t i = 0; i < app.sessions.size() && recent.size() < kSessionRows; ++i) {
+            const SessionRecord& r = app.sessions[i];
+            if (r.game != game)
+                continue;
+            const int before = previous_session(app.sessions, i);
+            std::wstring desc;
+            if (r.baseline)
+                desc = L"Without QVFR: the game’s own two views.";
+            else if (before < 0)
+                desc = L"The oldest kept.";
+            else if (const std::vector<std::wstring> changes = setting_changes(app.sessions[before].settings, r.settings); changes.empty())
+                desc = L"Same settings as the one before.";
+            else
+                desc = changes_text(changes, 4) + L".";
+            std::wstring value = formatted(L"%.1f fps", r.fps);
+            if (r.frameP90 > 0)
+                value += formatted(L"  ·  %.2f ms", r.frameP90);
+            recent.push_back(value_row(r.time + (static_cast<int>(i) == now ? L"  ·  last" : L""), desc, value));
+        }
+        if (recent.size() > 1) {
+            h += section(x, y + h, w, L"Recent sessions", recent,
+                         L"Frame rate and 90th percentile, with what changed since the session before.", draw);
+            h += t::kSpace6;
+        }
+    }
     // Asking for help: the capture switch, copying the numbers above, the logs folder.
     Row capture;
-    const std::wstring captureDesc =
-        L"At the next launch, Ctrl+Alt+C while driving records for 20 s where the game's busiest threads spend their time, "
-        L"into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; the game may "
-        L"stutter slightly while it records.";
+    const std::wstring captureKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::CpuCapture)].key);
+    const std::wstring captureDesc = L"At the next launch, " + (captureKey.empty() ? std::wstring(L"the CPU capture hotkey") : captureKey) +
+                                     L" while driving records 20 s of where the busiest threads spend their time.";
     capture.fullHeight = [captureDesc](float width) { return checkbox_height(captureDesc, width); };
     capture.full = [captureDesc](const Rect& r) { checkbox(kDiagCapture, r, app.s.cpuProfile, L"CPU capture", captureDesc); };
     // Frame capture (probe/d3d11_capture.h): the frame the headset gets, saved at a key press.
     Row frame;
     const std::wstring frameKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::FrameCapture)].key);
-    const std::wstring frameDesc =
-        L"At the next launch, " + (frameKey.empty() ? std::wstring(L"the Frame capture hotkey") : frameKey) +
-        L" saves the frame the headset gets: the game's own image and the composed output, as PNG files in the "
-        L"captures folder inside the logs folder. Each press saves one more frame, to compare the views where "
-        L"something looks wrong. For games composed by the D3D11 compositor (X-Plane 12, Assetto Corsa Competizione).";
+    const std::wstring frameDesc = L"At the next launch, " + (frameKey.empty() ? std::wstring(L"the Frame capture hotkey") : frameKey) +
+                                   L" saves the frame the headset gets, as PNG files in the logs folder.";
     frame.fullHeight = [frameDesc](float width) { return checkbox_height(frameDesc, width); };
     frame.full = [frameDesc](const Rect& r) {
         checkbox(kDiagFrameCapture, r, app.s.frameCapture, L"Frame capture", frameDesc);
     };
     Row baseline;
-    const std::wstring baselineDesc =
-        L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the "
-        L"same race with and without QVFR. It turns itself off after that launch; the next one has QVFR again. The "
-        L"performance overlay works in it, the settings menu does not.";
+    const std::wstring baselineDesc = L"Starts the game once with QVFR off, still measuring, to compare against. The launch after "
+                                      L"has QVFR again.";
     baseline.fullHeight = [baselineDesc](float width) { return checkbox_height(baselineDesc, width); };
     baseline.full = [baselineDesc](const Rect& r) {
         checkbox(kDiagBaseline, r, app.s.baselineNext, L"Next launch without QVFR", baselineDesc);
@@ -1895,10 +2352,8 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         button(kDiagCopy, {r.x, r.y, copyW, t::kControlHeight}, L"Copy summary", false);
         button(kDiagLogs, {r.x + copyW + t::kSpace3, r.y, logsW, t::kControlHeight}, L"Open logs folder", false);
     };
-    std::wstring footer = L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the "
-                          L"issue. Elsewhere, send a screenshot of this page (or paste the summary) and the session's ace-*.log";
-    footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
-    h += section(x, y + h, w, L"Capture and share", {capture, frame, baseline, actions}, footer, draw);
+    const std::wstring footer = L"To report a problem, use Report an issue: it zips these logs and fills in the issue.";
+    h += section(x, y + h, w, L"Capture and share", {capture, frame, baseline, actions}, footer, draw, Applies::NextLaunch);
     return h;
 }
 
@@ -1927,8 +2382,12 @@ float profiles_pane(float x, float y, float w, bool draw) {
                 if (list[b].first == kNone) {
                     badge(bx, rect.y + (rect.h - 20) / 2, 0, list[b].second);
                 } else {
-                    button(list[b].first, {bx, rect.y, widths[b], rect.h}, list[b].second,
-                           list[b].first == kProfileDelete ? Btn::Danger : list[b].first == kProfileShare ? Btn::Ghost : Btn::Secondary);
+                    const Ctl id = list[b].first;
+                    button(id, {bx, rect.y, widths[b], rect.h}, list[b].second,
+                           id == kProfileDelete ? Btn::Danger
+                           : id == kProfileShare ? Btn::Ghost
+                           : id == kProfileUpdate ? Btn::Tint
+                                                  : Btn::Secondary);
                     app.hits.back().option = static_cast<int>(i);
                 }
                 bx += widths[b] + t::kSpace2;
@@ -1936,21 +2395,28 @@ float profiles_pane(float x, float y, float w, bool draw) {
         };
         return r;
     };
-    // The one in use shows a badge for its Use button while the settings still match it; changed since, it says so.
+    // The one in use shows a badge for its Use button while the settings still match it. Changed since, it says so and
+    // offers Update (a saved profile: the settings now go into it) and Revert (back to what it holds).
     std::vector<Row> presetRows, savedRows;
     for (size_t i = 0; i < app.profileNames.size(); ++i) {
         const std::wstring& name = app.profileNames[i];
-        const bool current = _wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0;
-        const std::pair<Ctl, std::wstring> use =
-            current && app.profileMatches ? std::pair<Ctl, std::wstring>{kNone, L"In use"} : std::pair<Ctl, std::wstring>{kProfileUse, L"Use"};
-        const std::wstring changedNote = current && !app.profileMatches ? L"In use, changed since." : L"";
-        if (i < presets.size()) {
-            Row r = buttons_row(i, {use});
+        const bool current = _wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0, changedSince = current && !app.profileMatches;
+        const bool preset = i < presets.size();
+        std::vector<std::pair<Ctl, std::wstring>> buttons;
+        if (changedSince && !preset)
+            buttons.push_back({kProfileUpdate, L"Update"});
+        buttons.push_back(changedSince ? std::pair<Ctl, std::wstring>{kProfileRevert, L"Revert"}
+                          : current    ? std::pair<Ctl, std::wstring>{kNone, L"In use"}
+                                       : std::pair<Ctl, std::wstring>{kProfileUse, L"Use"});
+        const std::wstring changedNote = changedSince ? L"In use, changed since." : L"";
+        if (preset) {
+            Row r = buttons_row(i, buttons);
             r.label = name;
             r.desc = preset_summary(presets[i]) + L". " + kPresetNotes[i] + (changedNote.empty() ? L"" : L" " + changedNote);
             presetRows.push_back(r);
         } else {
-            Row r = buttons_row(i, {use, {kProfileShare, L"Share"}, {kProfileDelete, L"Delete"}});
+            buttons.insert(buttons.end(), {{kProfileShare, L"Share"}, {kProfileDelete, L"Delete"}});
+            Row r = buttons_row(i, buttons);
             r.label = name;
             r.desc = changedNote;
             savedRows.push_back(r);
@@ -1958,10 +2424,7 @@ float profiles_pane(float x, float y, float w, bool draw) {
     }
     float h = 0;
     h += section(x, y + h, w, app.s.eyeTracking ? L"Presets for eye tracked foveation" : L"Presets for fixed foveation", presetRows,
-                 std::wstring(L"Starting points that put the pixels in the centre: low outer views and a dense focus area. ") +
-                     (app.s.eyeTracking ? L"Eye tracked, the area follows your eyes, so it can be small and very sharp. "
-                                        : L"Fixed, your eyes move off the centre, so the area is larger and a little less dense. ") +
-                     L"They set the resolution only and keep everything else; the Foveated mode (Foveation) picks the set.",
+                 L"They set the resolution only; the Foveated mode (Foveation) picks the set.",
                  draw) +
          t::kSpace6;
     if (savedRows.empty()) {
@@ -1981,14 +2444,8 @@ float profiles_pane(float x, float y, float w, bool draw) {
     };
     savedRows.push_back(actions);
     h += section(x, y + h, w, L"Your profiles", savedRows,
-                 (app.profileMessage.empty() ? L"" : app.profileMessage + L" ") +
-                     L"A profile holds every setting of the picture: resolution, foveation, the focus overlay" +
-                     std::wstring(game_has(&games::GameFeatures::fovCrop) ? L", the view crop" : L"") +
-                     (game_has(&games::GameFeatures::helmet) ? L", the helmet" : L"") +
-                     (game_has(&games::GameFeatures::foveatedDlss) ? L", Foveated DLSS" : L"") +
-                     L". Not the menu’s and overlay’s places, the hotkeys or the OpenXR layers. Share copies one as a "
-                     L"line of text to paste in a chat; Paste adds one from the clipboard. The headset menu’s Profile line "
-                     L"switches between them while you drive.",
+                 app.profileMessage.empty() ? L"Share copies one as a line of text; the headset menu switches between them."
+                                            : app.profileMessage,
                  draw);
     return h;
 }
@@ -2054,19 +2511,16 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
     h += section(x, y + h, w, L"Headset menu",
                  {row(HotkeyAction::MenuToggle), row(HotkeyAction::MenuUp), row(HotkeyAction::MenuDown),
                   row(HotkeyAction::MenuLeft), row(HotkeyAction::MenuRight)},
-                 L"A key’s first press also opens the menu. A wheel’s directions act only while the menu shows, so a "
-                 L"switch the game also uses doesn’t open it: use Open or close first. " + pads_found(),
-                 draw) +
+                 pads_found(),
+                 draw, Applies::Live) +
          t::kSpace6;
     std::vector<Row> inGame = {row(HotkeyAction::Overlay)};
     if (game_has(&games::GameFeatures::helmet))  // the visor steps the helmet overlay
         inGame.push_back(row(HotkeyAction::Visor));
     inGame.insert(inGame.end(), {row(HotkeyAction::CpuCapture), row(HotkeyAction::FrameCapture)});
     h += section(x, y + h, w, L"In the game", inGame,
-                 L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever "
-                 L"the game runs. Click a button above, then press the keys or the wheel button: Esc cancels, Delete "
-                 L"clears it. They apply to a running game at once.",
-                 draw) +
+                 L"Click a button, then press the keys or a wheel button: Esc cancels, Delete clears it.",
+                 draw, Applies::Live) +
          t::kSpace6;
     Row reset;
     reset.fullHeight = [](float) { return t::kControlHeight; };
@@ -2074,8 +2528,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
         const float resetW = button_width(L"Reset hotkeys");
         button(kHotkeysReset, {r.x, r.y, resetW, t::kControlHeight}, L"Reset hotkeys", false);
     };
-    h += section(x, y + h, w, L"", {reset}, L"Back to Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C and Ctrl+Alt+F, without wheel buttons. "
-                                        L"Restore Defaults leaves the hotkeys as they are.",
+    h += section(x, y + h, w, L"", {reset}, L"Back to the Ctrl+Alt keys, without wheel buttons. Restore Defaults leaves them as they are.",
                  draw);
     return h;
 }
@@ -2121,7 +2574,25 @@ float checks_pane(float x, float y, float w, bool draw) {
 
 // ---- Games ------------------------------------------------------------------------------------
 
-bool game_shown(const games::GameInfo& game) { return !game_hidden(app.s.hiddenGames, game_id(game)); }
+// Which games are installed (launcher.h game_installed), by id: looked up when the window opens, comes back to the front
+// or a game's folder is chosen.
+void refresh_installed() {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    for (std::size_t i = 0; i < count; ++i)
+        app.installed[game_id(*all[i])] = game_installed(*all[i]);
+}
+
+bool installed(const games::GameInfo& game) {
+    const auto it = app.installed.find(game_id(game));
+    return it == app.installed.end() || it->second;
+}
+
+// A game has a tab when it is installed and not hidden, or when the user gave it one (one Steam doesn't find, installed
+// elsewhere: its folder is chosen in Launch checks).
+bool game_shown(const games::GameInfo& game) {
+    return installed(game) ? !game_hidden(app.s.hiddenGames, game_id(game)) : game_hidden(app.s.shownGames, game_id(game));
+}
 
 int shown_game_count() {
     std::size_t count = 0;
@@ -2225,9 +2696,12 @@ float games_pane(float x, float y, float w, bool draw) {
     for (std::size_t i = 0; i < count; ++i) {
         const games::GameInfo* game = all[i];
         const bool shown = game_shown(*game), locked = shown && onlyOne;  // the last tab stays
-        const std::wstring desc = locked ? L"The last tab: show another game to hide this one."
-                                         : shown ? L"Has a tab at the top of the window."
-                                                 : L"No tab. Its settings are kept for when you show it again.";
+        const bool found = installed(*game);
+        const std::wstring desc = locked  ? L"The last tab: show another game to hide this one."
+                                  : !found ? shown ? L"Has a tab: choose its folder in Launch checks."
+                                                   : L"Steam doesn’t list it. Turn it on if it’s installed elsewhere."
+                                  : shown  ? L"Has a tab at the top of the window."
+                                           : L"No tab. Its settings are kept for when you show it again.";
         Row row;
         row.fullHeight = [desc](float width) { return checkbox_height(desc, width - 36); };
         row.full = [=](const Rect& r) {
@@ -2244,6 +2718,10 @@ float games_pane(float x, float y, float w, bool draw) {
             const float descH = app.canvas.measure_height(desc, t::kCallout, tw);
             const float ty = rest.y + (rest.h - t::kBody.lineHeight - 2 - descH) / 2;
             app.canvas.text(game->name, t::kBody, {rest.x, ty, tw, t::kBody.lineHeight}, col(app.c->label));
+            if (!found) {  // tagged: Steam doesn't have it
+                const float nx = rest.x + std::ceil(app.canvas.measure(game->name, t::kBody)) + t::kSpace2;
+                badge(nx, ty, 3, L"Not found", std::max(0.0f, rest.x + tw - nx));
+            }
             app.canvas.text(desc, t::kCallout, {rest.x, ty + t::kBody.lineHeight + 2, tw, descH + 2}, col(app.c->label_secondary),
                             Align::Leading, false, true);
             switch_track({rest.right() - kSwitchW, rest.y + (rest.h - kSwitchH) / 2, kSwitchW, kSwitchH}, shown, locked);
@@ -2253,9 +2731,7 @@ float games_pane(float x, float y, float w, bool draw) {
         rows.push_back(row);
     }
     float h = section(x, y, w, L"Game tabs", rows,
-                      L"A hidden game keeps its own settings and colour. If the game you are on is hidden, the first shown "
-                      L"game is selected. Click a game’s colour dot to change its colour below.",
-                      draw);
+                      L"Installed games get a tab; turn one off to hide it. Click a colour dot to change it below.", draw);
     h += t::kSpace6;
     const games::GameInfo& game = color_game();
     const bool custom = app.s.gameColors.count(game_id(game)) > 0;
@@ -2303,9 +2779,9 @@ float pane_content(float x, float y, float w, bool draw) {
         const bool known = app.runtime.known();
         const std::wstring footer =
             known ? L"Percent of the headset’s recommended resolution (" + std::to_wstring(app.runtime.width) + L" × " +
-                        std::to_wstring(app.runtime.height) + L" px per eye). Outer and inner are set independently. Applies at next launch."
+                        std::to_wstring(app.runtime.height) + L" px per eye). Outer and inner are set independently."
                   : L"Percent of the headset’s recommended resolution. Pixel sizes appear after the first launch. Outer and inner are "
-                    L"set independently. Applies at next launch.";
+                    L"set independently.";
         std::vector<Row> rows = {
             slider_row(kOuter, L"Outer resolution", L"The full field of view, rendered at lower density.", app.s.outer,
                        known ? px(ro.outer) : L""),
@@ -2315,7 +2791,7 @@ float pane_content(float x, float y, float w, bool draw) {
                        qvfr ? app.s.inner : static_cast<int>(std::lround(ro.focusDensity * 100)),
                        known && qvfr ? px(ro.focus) : L"", !qvfr),
         };
-        h += section(x, y, w, L"Per-eye resolution", rows, footer, draw);
+        h += section(x, y, w, L"Per-eye resolution", rows, footer, draw, qvfr ? Applies::LiveLowered : Applies::NextLaunch);
         // Object detail (X-Plane): the LOD the focus views need, or less of it for main-thread time.
         if (game_has(&games::GameFeatures::objectDetail)) {
             h += t::kSpace6;
@@ -2325,8 +2801,8 @@ float pane_content(float x, float y, float w, bool draw) {
                                           : L"Available in Quad View Foveated Rendering.",
                                      app.s.objectDetail, L"", !qvfr)},
                          L"100% keeps trees and objects as detailed in the focus region as at its density; 0% is the "
-                         L"game’s own detail for the outer resolution. Applies live while the game runs.",
-                         draw);
+                         L"game’s own detail for the outer resolution.",
+                         draw, Applies::Live);
         }
         // The FOV crop (each side on its own, QVFR only) and the helmet overlay: left out for a game without them.
         if (game_has(&games::GameFeatures::fovCrop)) {
@@ -2343,10 +2819,8 @@ float pane_content(float x, float y, float w, bool draw) {
                           slider_row(kCropOuter, L"Outer side", L"Toward the temple, mirrored for each eye.", app.s.cropOuter, L"",
                                      cropOff),
                           slider_row(kCropInner, L"Inner side", L"Toward the nose.", app.s.cropInner, L"", cropOff)},
-                         L"Share of each eye’s field of view removed at that side; the headset shows black there. The outer "
-                         L"view keeps its sharpness and the focus region its size. Applies live while the game runs; with DLSS "
-                         L"on, or with less crop than at launch, the pixel count follows at the next launch.",
-                         draw);
+                         L"Share of each eye’s view removed at that side; the headset shows black there.",
+                         draw, Applies::Live);
         }
         if (game_has(&games::GameFeatures::helmet)) {
             h += t::kSpace6;
@@ -2385,10 +2859,8 @@ float pane_content(float x, float y, float w, bool draw) {
                               detail.desc = L"Your images only: Detail is sharper, Performance costs less GPU and memory.";
                               return detail;
                           }()},
-                         L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png "
-                         L"and visor.png with alpha in the helmet folder next to the layer; the log suggests the crop that "
-                         L"matches them. Applies live.",
-                         draw);
+                         L"Your own helmet: top.png, bottom.png and visor.png in the helmet folder next to the layer.",
+                         draw, Applies::Live);
         }
         break;
     }
@@ -2418,7 +2890,7 @@ float pane_content(float x, float y, float w, bool draw) {
                      qvfr ? L"Eye tracked or fixed: whether the sharp focus region follows your eyes."
                           : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
                             L"Foveated Rendering; Two-loop won't be offered again.",
-                     draw);
+                     draw, method_shown() ? Applies::NextLaunch : Applies::Live);
         h += t::kSpace6;
         h += section(x, y + h, w, L"Focus region",
                      {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
@@ -2439,8 +2911,8 @@ float pane_content(float x, float y, float w, bool draw) {
                                  L"against eye-tracker jitter (shimmer with MSAA); 0 follows every sample.",
                                  app.s.gazeDeadzone, L"", !app.s.eyeTracking, L"°", true)},
                      L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
-                     L"vertical offset. All apply live.",
-                     draw);
+                     L"vertical offset.",
+                     draw, Applies::Live);
         h += t::kSpace6;
         {
             const std::wstring names[2] = {kShapeNames[0], kShapeNames[1]};
@@ -2456,11 +2928,8 @@ float pane_content(float x, float y, float w, bool draw) {
                           corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"),
                           corner(kShapeBottomRightIn, L"Bottom right in"),
                           corner(kShapeBottomRightUp, L"Bottom right up")},
-                         L"Each corner moves toward the middle of the focus region, percent of its width (in) or "
-                         L"height (down, up). Pull the top corners in for a trapezoid: more of the dash sharp, less "
-                         L"of the far field. The focus view still renders the whole box, so the cost stays the same. "
-                         L"Applies live.",
-                         draw);
+                         L"Pull the top corners in for a trapezoid: more of the dash sharp, at the same cost.",
+                         draw, Applies::Live);
         }
         break;
     }
@@ -2477,7 +2946,7 @@ float pane_content(float x, float y, float w, bool draw) {
         color.control = [](const Rect& r) { segmented(kColor, r, static_cast<int>(app.s.color), !app.s.outline); };
         h += section(x, y, w, L"Focus overlay",
                      {show, color},
-                     L"The outline is drawn into the headset image, to show where the focus region is.", draw);
+                     L"The outline is drawn into the headset image, to show where the focus region is.", draw, Applies::Live);
         break;
     }
     case Pane::Dlss: {
@@ -2509,7 +2978,7 @@ float pane_content(float x, float y, float w, bool draw) {
         };
         Row use;
         const std::wstring useDesc = L"Loads Cheeky’s DLSS runtime into " + game_name() + L", so the outer views can use a "
-                                     L"cheaper DLSS pass. Applies at the next launch.";
+                                     L"cheaper DLSS pass.";
         use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
         use.full = [useDesc](const Rect& r) { checkbox(kCheekyUse, r, app.s.cheeky.load, L"Use Cheeky Foveated DLSS", useDesc); };
         Row rt;
@@ -2530,8 +2999,8 @@ float pane_content(float x, float y, float w, bool draw) {
                                                          : L"";
         h += section(x, y + h, w, L"Cheeky Foveated DLSS", {use, rt, xr},
                      L"Put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to sim-qvfr.dll, or choose "
-                     L"its runtime. No Cheeky loader goes in the game folder. " + last,
-                     draw) + t::kSpace6;
+                     L"its runtime. " + last,
+                     draw, Applies::NextLaunch) + t::kSpace6;
         const bool outer = app.s.cheeky.outerDlaa;
         Row on, cheap;
         const std::wstring onDesc = L"Off leaves ACE’s own DLSS on every view.";
@@ -2561,9 +3030,9 @@ float pane_content(float x, float y, float w, bool draw) {
                       preset_row(kCheekyOuterPreset, L"Outer preset", L"", app.s.cheeky.outerPreset, !outer),
                       preset_row(kCheekyFocusPreset, L"Focus preset", L"DLSS preset for the sharp focus views.",
                                  app.s.cheeky.focusPreset, false)},
-                     L"Applies live while the game runs. In Quad View Foveated Rendering, Sim-QVFR tells Cheeky which "
+                     L"In Quad View Foveated Rendering, Sim-QVFR tells Cheeky which "
                      L"views are outer and which are focus.",
-                     draw);
+                     draw, Applies::Live);
         h += t::kSpace6;
         Row fix, nr;
         const std::wstring fixDesc = L"Cheeky’s workaround for smearing with some presets. Adds GPU work.";
@@ -2583,9 +3052,9 @@ float pane_content(float x, float y, float w, bool draw) {
             choice_row(kCheekyNrPasses, L"DLSS-NR passes", nrPasses, 3, std::clamp(app.s.cheeky.nrPasses, 1, 3) - 1,
                        !app.s.cheeky.nr)};
         h += section(x, y + h, w, L"Experimental: focus views", experimental,
-                     L"Cheeky applies these to the focus views only. Applies live. Each extra DLSS-NR pass costs about "
+                     L"Cheeky applies these to the focus views only. Each extra DLSS-NR pass costs about "
                      L"one more NR evaluation.",
-                     draw);
+                     draw, Applies::Live);
         h += t::kSpace6;
         Row fgOn;
         const bool fgHere = game_has(&games::GameFeatures::frameGeneration);
@@ -2623,9 +3092,8 @@ float pane_content(float x, float y, float w, bool draw) {
                           return release;
                       }(),
                       fgBorder},
-                     L"Outside the center region frames are warped with ACE’s motion. Lower scales use less GPU time "
-                     L"and memory. Applies live. With an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
-                     draw);
+                     L"Lower scales use less GPU time and memory.",
+                     draw, Applies::Live);
         const std::wstring license = L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the "
                                      L"GNU GPL v3 (github.com/ClarkCheekyKent/CheekyFoveatedDLSS).";
         const float lh = app.canvas.measure_height(license, t::kCallout, w);
@@ -2643,9 +3111,8 @@ float pane_content(float x, float y, float w, bool draw) {
                                  false, L"°"),
                       slider_row(kMenuWidth, L"Size", L"Width of the panel, in degrees of your view.", app.s.menuWidth, L"",
                                  false, L"°")},
-                     L"The settings menu stays 0.8 m in front of your head, wherever you look. Drag it in the preview, "
-                     L"or move it from the menu itself in the headset. While the game runs, it moves at once.",
-                     draw);
+                     L"Drag it in the preview, or move it from the menu itself in the headset.",
+                     draw, Applies::Live);
         const std::wstring open = L"Ctrl+Alt+arrows while the game has focus (or the keys and wheel buttons set in the Hotkeys "
                                   L"pane), or click the left controller stick. The right stick selects and changes values; "
                                   L"the menu hides after a few seconds.";
@@ -2681,8 +3148,8 @@ float pane_content(float x, float y, float w, bool draw) {
                       slider_row(kOsdSize, L"Size", L"Width of the overlay, in degrees of your view.", app.s.osd.width, L"",
                                  osdOff, L"°")},
                      L"Drag it in the preview, or move it from the headset menu’s Overlay and menu page. Ctrl+Alt+P "
-                     L"while the game has focus turns it on and off. While the game runs, it changes at once.",
-                     draw);
+                     L"while the game has focus turns it on and off.",
+                     draw, Applies::Live);
         break;
     }
     case Pane::Games: h += games_pane(x, y, w, draw); break;
@@ -2692,7 +3159,7 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::About: {
         const float lh = t::kBody.lineHeight;
         if (draw) {
-            app.canvas.text(L"Sim QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
+            app.canvas.text(L"Sim-QVFR Launcher", t::kTitle1, {x, y, w, t::kTitle1.lineHeight}, col(app.c->label));
             app.canvas.text(L"Starts " + game_name() + L" with foveated rendering enabled.", t::kBody,
                             {x, y + t::kTitle1.lineHeight + 8, w, lh}, col(app.c->label_secondary));
             // A packaged build has its release's version; a development build ("dev") names the release it is headed for.
@@ -2771,9 +3238,7 @@ float pane_content(float x, float y, float w, bool draw) {
             updateRows.push_back(actions);
         }
         h += section(x, y + h, w, L"Updates", updateRows,
-                     L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the "
-                     L"program files and restarts the launcher; your settings, profiles and changed files stay, and the version "
-                     L"you had is kept in the update folder. Download opens the release’s page instead.",
+                     L"Install keeps your settings, profiles and changed files; Download opens the release’s page.",
                      draw);
         // The same notice as the README's: unofficial, at the user's own risk.
         const std::wstring notice =
@@ -3271,7 +3736,7 @@ std::wstring pane_description(Pane pane) {
     case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
     case Pane::Games: return L"Which games have a tab, and each game’s colour.";
     case Pane::Layers: return L"The OpenXR layers " + game_name() + L" loads, and their order.";
-    case Pane::Diagnostics: return L"The last session’s numbers, and what to share when you ask for help.";
+    case Pane::Diagnostics: return L"The last session’s numbers against the ones before it, and what to share when you ask for help.";
     case Pane::Report: return L"Zips the logs and opens a GitHub issue with the details filled in.";
     case Pane::About: return L"The version, updates and support.";
     }
@@ -3321,27 +3786,35 @@ Rect popup_menu_rect() {
 
 // The description box (a native edit, kept in step with the canvas after each paint): over the field the
 // Diagnostics pane drew; hidden when it is not wholly in view, or a popup is open.
+// The native edits' font (Segoe UI 13 at the window's DPI), made again when the DPI changes: the report's description
+// box and the sheet's name field.
+void edit_font() {
+    const UINT dpi = static_cast<UINT>(std::lround(96 * app.canvas.dpi_scale()));
+    if (app.reportFont && app.reportFontDpi == dpi)
+        return;
+    HFONT font = CreateFontW(-MulDiv(13, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    for (HWND edit : {app.reportEdit, app.sheetEdit})
+        if (edit)
+            SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    if (app.reportFont)
+        DeleteObject(app.reportFont);
+    app.reportFont = font;
+    app.reportFontDpi = dpi;
+}
+
 void place_report_edit() {
     const Rect& r = app.reportEditRect;
     if (!app.reportEdit)
         return;
-    if (!report_edit_fits() || app.popup.open) {
+    if (!report_edit_fits() || app.popup.open || app.sheet.open) {
         if (GetFocus() == app.reportEdit)
             SetFocus(app.hwnd);
         ShowWindow(app.reportEdit, SW_HIDE);
         return;
     }
     const float k = app.canvas.dpi_scale();
-    const UINT dpi = static_cast<UINT>(std::lround(96 * k));
-    if (app.reportFontDpi != dpi) {
-        HFONT font = CreateFontW(-MulDiv(13, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        SendMessageW(app.reportEdit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        if (app.reportFont)
-            DeleteObject(app.reportFont);
-        app.reportFont = font;
-        app.reportFontDpi = dpi;
-    }
+    edit_font();
     const int x = static_cast<int>(std::lround(r.x * k)), y = static_cast<int>(std::lround(r.y * k));
     const int w = static_cast<int>(std::lround(r.w * k)), h = static_cast<int>(std::lround(r.h * k));
     SetWindowPos(app.reportEdit, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -3367,6 +3840,65 @@ LRESULT CALLBACK report_edit_proc(HWND edit, UINT message, WPARAM wParam, LPARAM
     if (message == WM_SETFOCUS || message == WM_KILLFOCUS)
         InvalidateRect(app.hwnd, nullptr, FALSE);  // the field's focus ring
     return CallWindowProcW(base, edit, message, wParam, lParam);
+}
+
+// The sheet's name field over the field sheet_card drew; hidden without one.
+void place_sheet_edit() {
+    if (!app.sheetEdit)
+        return;
+    const Rect& r = app.sheetEditRect;
+    if (!app.sheet.open || !app.sheet.field || r.w <= 0) {
+        if (IsWindowVisible(app.sheetEdit))
+            ShowWindow(app.sheetEdit, SW_HIDE);
+        return;
+    }
+    edit_font();
+    const float k = app.canvas.dpi_scale();
+    SetWindowPos(app.sheetEdit, HWND_TOP, static_cast<int>(std::lround(r.x * k)), static_cast<int>(std::lround(r.y * k)),
+                 static_cast<int>(std::lround(r.w * k)), static_cast<int>(std::lround(r.h * k)), SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (app.reportBrushRgb != app.c->field_bg)
+        InvalidateRect(app.sheetEdit, nullptr, TRUE);
+    if (app.sheetFocusField) {
+        app.sheetFocusField = false;
+        SetFocus(app.sheetEdit);
+    }
+}
+
+// The name field's keys: Return presses the main button, Escape the cancel one, Tab moves on to the buttons.
+LRESULT CALLBACK sheet_edit_proc(HWND edit, UINT message, WPARAM wParam, LPARAM lParam) {
+    static const WNDPROC base = reinterpret_cast<WNDPROC>(GetPropW(edit, L"simqvfr.base"));
+    if (message == WM_KEYDOWN && app.sheet.open) {
+        if (wParam == VK_RETURN) {
+            close_sheet(static_cast<int>(app.sheet.buttons.size()) - 1);
+            return 0;
+        }
+        if (wParam == VK_ESCAPE) {
+            close_sheet(app.sheet.cancel);
+            return 0;
+        }
+        if (wParam == VK_TAB) {
+            move_sheet_focus(GetKeyState(VK_SHIFT) < 0 ? -1 : 1);
+            return 0;
+        }
+    }
+    if (message == WM_CHAR && (wParam == L'\r' || wParam == L'\t' || wParam == 27))  // handled as keys: no beep
+        return 0;
+    if (message == WM_SETFOCUS || message == WM_KILLFOCUS) {
+        if (message == WM_SETFOCUS && app.sheet.open)
+            app.sheet.focus = -1;
+        InvalidateRect(app.hwnd, nullptr, FALSE);  // the field's focus ring
+    }
+    return CallWindowProcW(base, edit, message, wParam, lParam);
+}
+
+void create_sheet_edit() {
+    app.sheetEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 0, 0, app.hwnd, nullptr,
+                                    GetModuleHandleW(nullptr), nullptr);
+    if (!app.sheetEdit)
+        return;
+    SendMessageW(app.sheetEdit, EM_SETLIMITTEXT, 40, 0);  // a profile's name (valid_profile_name)
+    SetPropW(app.sheetEdit, L"simqvfr.base", reinterpret_cast<HANDLE>(GetWindowLongPtrW(app.sheetEdit, GWLP_WNDPROC)));
+    SetWindowLongPtrW(app.sheetEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(sheet_edit_proc));
 }
 
 void create_report_edit() {
@@ -3412,8 +3944,8 @@ void game_tabs(float W) {
     // The app: its mark, its name and BETA.
     const float bx = t::kSpace4;
     brand_mark(bx, (H - 24) / 2, 24);
-    const float nameW = std::ceil(cv.measure(L"Sim QVFR", kBodyStrong));
-    cv.text(L"Sim QVFR", kBodyStrong, {bx + 24 + 10, 0, nameW + 2, H}, col(app.c->label));
+    const float nameW = std::ceil(cv.measure(L"Sim-QVFR", kBodyStrong));
+    cv.text(L"Sim-QVFR", kBodyStrong, {bx + 24 + 10, 0, nameW + 2, H}, col(app.c->label));
     const t::TypeStyle beta{10.5f, 14, 600, false};
     const float betaW = std::ceil(cv.measure(L"BETA", beta)) + 14, betaX = bx + 24 + 10 + nameW + 8;
     cv.fill({betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning_bg), 9);
@@ -3526,6 +4058,7 @@ void paint() {
         return;
     app.hits.clear();
     app.reportEditRect = {};
+    app.sheetEditRect = {};
     Canvas& cv = app.canvas;
     const float W = cv.width(), Hh = cv.height();
     const float tabH = t::kTabbarHeight, actionH = t::kActionbarHeight;
@@ -3647,7 +4180,10 @@ void paint() {
     else
         button(kLaunch, launchR, launchLabel, Btn::Primary, kIconPlay);
 
-    help_tip();
+    if (app.sheet.open)
+        sheet_card();  // over everything: nothing under it answers
+    else
+        help_tip();
 
     // An open pop-up menu, over everything.
     if (app.popup.open) {
@@ -3670,6 +4206,7 @@ void paint() {
     }
     cv.end();
     place_report_edit();
+    place_sheet_edit();
 }
 
 // ---- Input -------------------------------------------------------------------------------------
@@ -3852,12 +4389,6 @@ int game_index() {
     return 0;
 }
 
-int game_count() {
-    std::size_t count = 0;
-    games::all_games(count);
-    return static_cast<int>(count);
-}
-
 void close_popup(bool accept) {
     if (accept && app.popup.hover >= 0)
         choose(app.popup.owner, app.popup.hover);
@@ -3924,20 +4455,17 @@ void choose_game_folder() {
         return;
     const std::wstring folder = game_folder_from(picked, game);
     if (folder.empty()) {
-        MessageBoxW(app.hwnd,
-                    (picked + L" doesn’t hold " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " +
-                     game_name() + L".")
-                        .c_str(),
-                    L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
+        notify(L"That folder doesn’t hold " + game_name(),
+               picked + L" has no " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " + game_name() + L".");
         return;
     }
     if (!app.iniFound || !WritePrivateProfileStringW(L"launcher", (L"game_dir_" + widen(game.id)).c_str(), folder.c_str(),
                                                      app.ini.c_str())) {
-        MessageBoxW(app.hwnd, L"The folder couldn’t be saved: sim-qvfr.ini wasn’t found next to the launcher.", L"Sim QVFR Launcher",
-                    MB_OK | MB_ICONWARNING);
+        notify(L"The folder couldn’t be saved", L"sim-qvfr.ini wasn’t found next to the launcher.");
         return;
     }
     app.iniText = ini_text();
+    refresh_installed();  // found now
     if (app.status == Status::Error)
         app.status = Status::Idle;  // "not found: choose its folder" is answered
 }
@@ -3963,8 +4491,7 @@ void start_capture(int action, bool pad) {
     if (pad) {
         open_pads();
         if (!app.padsOpen) {
-            MessageBoxW(app.hwnd, L"DirectInput isn’t available, so wheel and controller buttons can’t be read.", L"Sim QVFR Launcher",
-                        MB_OK | MB_ICONWARNING);
+            notify(L"Wheel buttons can’t be read", L"DirectInput isn’t available, so wheel and controller buttons can’t be read.");
             return;
         }
         app.captureHeld = app.pads.poll();
@@ -4028,80 +4555,6 @@ void capture_poll() {
     app.captureHeld = std::move(still);
 }
 
-// A name asked for in a small dialog of its own (built in memory): `text` holds the first value and, on OK,
-// what was typed. False on Cancel.
-INT_PTR CALLBACK prompt_proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
-    constexpr int kEdit = 100;
-    switch (message) {
-    case WM_INITDIALOG: {
-        SetWindowLongPtrW(dialog, DWLP_USER, lParam);
-        SetDlgItemTextW(dialog, kEdit, reinterpret_cast<std::wstring*>(lParam)->c_str());
-        SendDlgItemMessageW(dialog, kEdit, EM_SETLIMITTEXT, 40, 0);
-        SendDlgItemMessageW(dialog, kEdit, EM_SETSEL, 0, -1);
-        SetFocus(GetDlgItem(dialog, kEdit));
-        return FALSE;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDOK) {
-            wchar_t text[64] = {};
-            GetDlgItemTextW(dialog, kEdit, text, static_cast<int>(std::size(text)));
-            *reinterpret_cast<std::wstring*>(GetWindowLongPtrW(dialog, DWLP_USER)) = text;
-            EndDialog(dialog, IDOK);
-            return TRUE;
-        }
-        if (LOWORD(wParam) == IDCANCEL) {
-            EndDialog(dialog, IDCANCEL);
-            return TRUE;
-        }
-        break;
-    }
-    return FALSE;
-}
-
-bool prompt_name(const std::wstring& title, const std::wstring& label, std::wstring& text) {
-    std::vector<WORD> t;  // DLGTEMPLATE, then its items, each DWORD-aligned
-    const auto words = [&t](const void* data, size_t bytes) {
-        const auto* w = static_cast<const WORD*>(data);
-        t.insert(t.end(), w, w + bytes / 2);
-    };
-    const auto string = [&t](const std::wstring& s) {
-        t.insert(t.end(), s.begin(), s.end());
-        t.push_back(0);
-    };
-    const auto align = [&t] {
-        if (t.size() % 2)
-            t.push_back(0);
-    };
-    DLGTEMPLATE dlg{DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 4, 0, 0, 220, 70};
-    words(&dlg, sizeof(dlg));
-    t.push_back(0);  // no menu
-    t.push_back(0);  // the default class
-    string(title);
-    t.push_back(9);  // the font: 9 pt Segoe UI
-    string(L"Segoe UI");
-    const auto item = [&](DWORD style, short x, short y, short cx, short cy, WORD id, WORD atom, const std::wstring& caption) {
-        align();
-        DLGITEMTEMPLATE it{style | WS_CHILD | WS_VISIBLE, 0, x, y, cx, cy, id};
-        words(&it, sizeof(it));
-        t.push_back(0xFFFF);
-        t.push_back(atom);
-        string(caption);
-        t.push_back(0);  // no creation data
-    };
-    item(SS_LEFT, 8, 8, 204, 10, static_cast<WORD>(-1), 0x0082, label);
-    item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 8, 22, 204, 13, 100, 0x0081, L"");
-    item(BS_DEFPUSHBUTTON | WS_TABSTOP, 106, 46, 50, 14, IDOK, 0x0080, L"Save");
-    item(BS_PUSHBUTTON | WS_TABSTOP, 162, 46, 50, 14, IDCANCEL, 0x0080, L"Cancel");
-    align();
-    std::wstring value = text;
-    const INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<LPCDLGTEMPLATEW>(t.data()), app.hwnd,
-                                                   prompt_proc, reinterpret_cast<LPARAM>(&value));
-    if (result != IDOK)
-        return false;
-    text = value;
-    return true;
-}
-
 void use_profile(const std::wstring& name) {
     Profile p;
     if (!load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking) || !apply_profile(app.ini.c_str(), p)) {
@@ -4115,38 +4568,63 @@ void use_profile(const std::wstring& name) {
     refresh_profiles();
 }
 
-// Saves `p` under its name, asking first when one of that name exists. False if not saved.
-bool store_profile(const Profile& p) {
+// Saves `p` under its name, asking first (a sheet) when one of that name exists; `then` once it is saved.
+void store_profile(const Profile& p, std::function<void()> then) {
     const std::wstring folder = profiles_folder(app.ini);
+    const auto save = [p, folder, then] {
+        if (!save_profile(folder, p)) {
+            notify(L"The profile couldn’t be saved", L"Sim-QVFR couldn’t write it in " + folder + L".");
+            return;
+        }
+        if (then)
+            then();
+    };
     Profile existing;
-    if (load_profile(folder, p.name, existing, app.s.eyeTracking) &&
-        MessageBoxW(app.hwnd, (L"A profile named " + p.name + L" exists. Replace it?").c_str(), L"Sim QVFR Launcher",
-                    MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
-        return false;
-    if (!save_profile(folder, p)) {
-        MessageBoxW(app.hwnd, (L"The profile couldn’t be saved in " + folder + L".").c_str(), L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
-        return false;
+    if (!load_profile(folder, p.name, existing, app.s.eyeTracking)) {
+        save();
+        return;
     }
-    return true;
+    Sheet s;
+    s.title = L"Replace " + p.name + L"?";
+    s.text = L"A profile named " + p.name + L" exists. Replacing it puts these settings in its place.";
+    s.buttons = {L"Cancel", L"Replace"};
+    s.focus = 0;
+    s.danger = true;
+    s.done = [save](int button, const std::wstring&) {
+        if (button == 1)
+            save();
+    };
+    open_sheet(std::move(s));
 }
 
-void save_current_profile() {
-    std::wstring name = is_preset_name(app.profileCurrent) ? L"" : app.profileCurrent;
-    while (prompt_name(L"Save profile", L"A name for the settings you have now:", name)) {
-        if (!valid_profile_name(name)) {
-            MessageBoxW(app.hwnd,
-                        L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
-                        L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
-            continue;
+// Save current settings…: a name asked for in a sheet (`name` filled in), then the settings saved under it.
+void ask_profile_name(const std::wstring& name) {
+    Sheet s;
+    s.title = L"Save current settings";
+    s.text = L"A profile holds every setting of the picture. Name the settings you have now.";
+    s.field = true;
+    s.fieldLabel = L"Name";
+    s.fieldText = name;
+    s.buttons = {L"Cancel", L"Save"};
+    s.done = [](int button, const std::wstring& typed) {
+        if (button != 1)
+            return;
+        if (!valid_profile_name(typed)) {
+            notify(L"Choose another name",
+                   L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
+                   [typed] { ask_profile_name(typed); });
+            return;
         }
-        if (store_profile(settings_profile(app.s, name))) {
-            set_current_profile(app.ini.c_str(), name);
-            app.profileMessage = L"Saved " + name + L".";
-        }
-        break;
-    }
-    refresh_profiles();
+        store_profile(settings_profile(app.s, typed), [typed] {
+            set_current_profile(app.ini.c_str(), typed);
+            app.profileMessage = L"Saved " + typed + L".";
+            refresh_profiles();
+        });
+    };
+    open_sheet(std::move(s));
 }
+
+void save_current_profile() { ask_profile_name(is_preset_name(app.profileCurrent) ? L"" : app.profileCurrent); }
 
 void paste_profile() {
     std::string text;
@@ -4154,17 +4632,23 @@ void paste_profile() {
         text += c < 128 ? static_cast<char>(c) : '?';
     Profile p;
     if (!shared_profile(text, p)) {
-        MessageBoxW(app.hwnd, L"The clipboard holds no shared profile. Copy the whole line that starts with QVFR1:, then try again.",
-                    L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+        notify(L"No shared profile on the clipboard", L"Copy the whole line that starts with QVFR1:, then try again.");
         return;
     }
-    if (!store_profile(p))
-        return;
-    refresh_profiles();
-    app.profileMessage = L"Added " + p.name + L".";
-    if (MessageBoxW(app.hwnd, (L"Added the profile " + p.name + L". Use it now?").c_str(), L"Sim QVFR Launcher",
-                    MB_YESNO | MB_ICONQUESTION) == IDYES)
-        use_profile(p.name);
+    store_profile(p, [name = p.name] {
+        refresh_profiles();
+        app.profileMessage = L"Added " + name + L".";
+        Sheet s;
+        s.title = L"Use " + name + L" now?";
+        s.text = L"It’s in Your profiles. Using it sets the picture to what it holds.";
+        s.buttons = {L"Not Now", L"Use It"};
+        s.done = [name](int button, const std::wstring&) {
+            if (button == 1)
+                use_profile(name);
+            InvalidateRect(app.hwnd, nullptr, FALSE);
+        };
+        open_sheet(std::move(s));
+    });
 }
 
 // A launch check's button (preflight.h's CheckFix).
@@ -4188,10 +4672,8 @@ void fix_check(const Check& c) {
     case CheckFix::OpenFoveation: activate(kSidebar, static_cast<int>(Pane::Foveation)); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
-            MessageBoxW(app.hwnd,
-                        (L"OpenXR Toolkit’s settings for " + short_name() +
-                         L" could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.").c_str(),
-                        L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
+            notify(L"Turbo mode is still on", L"OpenXR Toolkit’s settings for " + short_name() +
+                                                  L" couldn’t be changed. Turn Turbo mode off in Toolkit’s menu in the game.");
         break;
     case CheckFix::ChooseGameFolder: choose_game_folder(); break;
     case CheckFix::None: return;
@@ -4215,8 +4697,9 @@ void activate(Ctl id, int option) {
             refresh_profiles();
         }
         if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
-            app.runtime = load_runtime_info(runtime_info_path());
+            reload_runtime();
         break;
+    case kSheetButton: close_sheet(option); return;
     case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
     case kUndoBadge: undo_restore(); return;
     case kLaunchBadge: {
@@ -4242,26 +4725,46 @@ void activate(Ctl id, int option) {
         changed();
         return;
     case kProfileUse:
+    case kProfileRevert:
+    case kProfileUpdate:
     case kProfileShare:
     case kProfileDelete: {
         if (option < 0 || option >= static_cast<int>(app.profileNames.size()))
             return;
         const std::wstring name = app.profileNames[option];
         Profile p;
-        if (id == kProfileUse) {
+        if (id == kProfileUse || id == kProfileRevert) {
             use_profile(name);
+            if (id == kProfileRevert && app.profileMatches)
+                app.profileMessage = L"Back to " + name + L".";
+        } else if (id == kProfileUpdate) {  // the settings now, into the profile in use: no question, it's its own button
+            if (save_profile(profiles_folder(app.ini), settings_profile(app.s, name))) {
+                app.profileMessage = L"Updated " + name + L" with the settings you have now.";
+            } else {
+                app.profileMessage = L"Couldn’t update " + name + L".";
+            }
+            refresh_profiles();
         } else if (id == kProfileShare && load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking)) {
             app.profileMessage = copy_text(widen(share_profile(p)))
                                      ? L"Copied " + name + L" to the clipboard: paste it in a chat or a post."
                                      : L"Couldn’t copy to the clipboard.";
-        } else if (id == kProfileDelete &&
-                   MessageBoxW(app.hwnd, (L"Delete the profile " + name + L"?").c_str(), L"Sim QVFR Launcher",
-                               MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK) {
-            delete_profile(profiles_folder(app.ini), name);
-            if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
-                set_current_profile(app.ini.c_str(), L"");
-            app.profileMessage = L"Deleted " + name + L".";
-            refresh_profiles();
+        } else if (id == kProfileDelete) {
+            Sheet s;
+            s.title = L"Delete " + name + L"?";
+            s.text = L"It goes from Your profiles. The settings you have now stay as they are.";
+            s.buttons = {L"Cancel", L"Delete"};
+            s.focus = 0;
+            s.danger = true;
+            s.done = [name](int button, const std::wstring&) {
+                if (button != 1)
+                    return;
+                delete_profile(profiles_folder(app.ini), name);
+                if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
+                    set_current_profile(app.ini.c_str(), L"");
+                app.profileMessage = L"Deleted " + name + L".";
+                refresh_profiles();
+            };
+            open_sheet(std::move(s));
         }
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
@@ -4328,6 +4831,7 @@ void activate(Ctl id, int option) {
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
     case kUpdateCheck:
         app.s.updateCheck = !app.s.updateCheck;
+        app.s.updateAsked = true;  // a choice: the first start's question is answered
         changed();
         if (app.s.updateCheck && app.update == Update::Off)
             start_update_check();
@@ -4347,7 +4851,11 @@ void activate(Ctl id, int option) {
         const bool hide = game_shown(*all[option]);
         if (hide && shown_game_count() <= 1)
             return;  // the last tab stays
-        app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, game_id(*all[option]), hide);
+        // An installed game is hidden by its listing in hidden_games; one Steam doesn't find is shown by shown_games.
+        if (installed(*all[option]))
+            app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, game_id(*all[option]), hide);
+        else
+            app.s.shownGames = with_game_hidden(app.s.shownGames, game_id(*all[option]), !hide);
         changed();
         if (hide && all[option] == &games::launcher_game())  // the game in use went: the first shown takes over
             for (std::size_t i = 0; i < count; ++i)
@@ -4409,7 +4917,92 @@ float dip(LPARAM lp, bool y) {
     return (y ? GET_Y_LPARAM(lp) : GET_X_LPARAM(lp)) / app.canvas.dpi_scale();
 }
 
+// A push button: Return presses it while it has the focus (as on Windows); anywhere else Return presses Launch, the
+// window's default button. Space presses these too.
+bool push_button(Ctl id) {
+    switch (id) {
+    case kCheekyRuntime:
+    case kUpdateNow:
+    case kUpdateDownload:
+    case kUpdateInstall:
+    case kUpdateBadge:
+    case kLayerApply:
+    case kLayerRevert:
+    case kLayerReset:
+    case kLayerUp:
+    case kLayerDown:
+    case kSupport:
+    case kRestore:
+    case kLaunch:
+    case kHotkeysReset:
+    case kHotkeyKey:
+    case kHotkeyPad:
+    case kProfileUse:
+    case kProfileShare:
+    case kProfileDelete:
+    case kProfileUpdate:
+    case kProfileRevert:
+    case kProfileSave:
+    case kProfilePaste:
+    case kCheckFix:
+    case kChecksBadge:
+    case kUndoBadge:
+    case kLaunchBadge:
+    case kDiagReport:
+    case kDiagZip:
+    case kDiagCopy:
+    case kDiagLogs:
+    case kColorReset: return true;
+    default: return false;
+    }
+}
+
+// A switch or a pop-up button: Space toggles or opens it; Return, as on Windows, presses Launch.
+bool space_control(Ctl id) {
+    switch (id) {
+    case kMethod:
+    case kMode:
+    case kOutline:
+    case kCheekyUse:
+    case kCheekyOn:
+    case kCheekyOuter:
+    case kCheekyOuterPreset:
+    case kCheekyFocusPreset:
+    case kCheekyMotionFix:
+    case kCheekyNr:
+    case kCheekyNrPreset:
+    case kCheekyNrPasses:
+    case kFgOn:
+    case kFgBorder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery:
+    case kFgRelease:
+    case kOsdOn:
+    case kHotkeyFooter:
+    case kUpdateCheck:
+    case kCropOn:
+    case kHelmetOn:
+    case kVisor:
+    case kShape:
+    case kHelmetDetail:
+    case kLayerProfile:
+    case kLayerOn:
+    case kDiagCapture:
+    case kDiagFrameCapture:
+    case kDiagBaseline:
+    case kDiagKind:
+    case kGameShown:
+    case kColorGame: return true;
+    default: return false;
+    }
+}
+
 void on_key(WPARAM key) {
+    if (app.sheet.open) {
+        sheet_key(key);
+        return;
+    }
     const bool shift = GetKeyState(VK_SHIFT) < 0;
     if (app.popup.open) {
         const int n = static_cast<int>(app.popup.items.size());
@@ -4426,10 +5019,17 @@ void on_key(WPARAM key) {
         undo_restore();
         return;
     }
-    if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game
-        const int n = game_count();
-        if (n > 1)
-            select_game((game_index() + (shift ? n - 1 : 1)) % n);
+    if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game with a tab
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        const int n = static_cast<int>(count);
+        for (int step = 1; step < n; ++step) {
+            const int i = (game_index() + (shift ? n - step : step)) % n;
+            if (game_shown(*all[i])) {
+                select_game(i);
+                break;
+            }
+        }
         return;
     }
     if (key == VK_TAB) {
@@ -4438,14 +5038,18 @@ void on_key(WPARAM key) {
         int i = it == order.end() ? (shift ? 0 : -1) : static_cast<int>(it - order.begin());
         i = (i + (shift ? static_cast<int>(order.size()) - 1 : 1)) % static_cast<int>(order.size());
         app.focus = order[i];
+        app.focusOption = -1;
         app.keyboard = true;
         if (app.focus == kDiagDescription)  // typing goes to the description box
             activate(kDiagDescription, -1);
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
-    if (key == VK_RETURN) {
-        launch();
+    if (key == VK_RETURN) {  // the focused button, else Launch (the window's default button)
+        if (push_button(app.focus))
+            activate(app.focus, app.focusOption);
+        else
+            launch();
         return;
     }
     app.keyboard = true;
@@ -4529,45 +5133,10 @@ void on_key(WPARAM key) {
             activate(kColor, (static_cast<int>(app.s.color) + d) % 3);
         }
         break;
-    case kMethod:
-    case kMode:
-    case kOutline:
-    case kCheekyUse:
-    case kCheekyRuntime:
-    case kCheekyOn:
-    case kCheekyOuter:
-    case kCheekyOuterPreset:
-    case kCheekyFocusPreset:
-    case kCheekyMotionFix:
-    case kCheekyNr:
-    case kCheekyNrPreset:
-    case kCheekyNrPasses:
-    case kFgOn:
-    case kFgBorder:
-    case kFgMultiplier:
-    case kFgScale:
-    case kFgPeriphery:
-    case kFgRelease:
-    case kOsdOn:
-    case kHotkeyFooter:
-    case kUpdateCheck:
-    case kUpdateNow:
-    case kCropOn:
-    case kHelmetOn:
-    case kVisor:
-    case kShape:
-    case kHelmetDetail:
-    case kLayerProfile:
-    case kLayerApply:
-    case kLayerRevert:
-    case kLayerReset:
-    case kSupport:
-    case kRestore:
-    case kLaunch:
-        if (key == VK_SPACE)
-            activate(app.focus, -1);
+    default:
+        if (key == VK_SPACE && (push_button(app.focus) || space_control(app.focus)))
+            activate(app.focus, app.focusOption);
         break;
-    default: break;
     }
 }
 
@@ -4581,11 +5150,27 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         app.iniText = ini_text();
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         create_report_edit();
+        create_sheet_edit();
+        refresh_installed();
+        if (!game_shown(games::launcher_game())) {  // e.g. ACE, the first default, where only another game is installed
+            std::size_t count = 0;
+            const games::GameInfo* const* all = games::all_games(count);
+            for (std::size_t i = 0; i < count; ++i)
+                if (game_shown(*all[i])) {
+                    select_game(static_cast<int>(i));
+                    break;
+                }
+        }
         refresh_checks();
         if (app.iniFound)
             refresh_profiles();
+        // The window opens on Launch checks: what the game, Steam and the layers look like now (often a new day: a game
+        // update, Steam closed). The launcher stays open while the game runs, so a tuning session keeps its pane.
+        activate(kSidebar, static_cast<int>(Pane::Checks));
         if (app.s.updateCheck)
             start_update_check();
+        else if (app.iniFound && !app.s.updateAsked)
+            ask_update_check();  // the first start, once
         return 0;
     case kUpdateMessage:
         update_done(reinterpret_cast<UpdateResult*>(lParam));
@@ -4610,7 +5195,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_CTLCOLOREDIT:  // the description box in the theme's field colours
-        if (reinterpret_cast<HWND>(lParam) == app.reportEdit) {
+        if (reinterpret_cast<HWND>(lParam) == app.reportEdit || reinterpret_cast<HWND>(lParam) == app.sheetEdit) {
             if (!app.reportBrush || app.reportBrushRgb != app.c->field_bg) {
                 if (app.reportBrush)
                     DeleteObject(app.reportBrush);
@@ -4638,14 +5223,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                 refresh_checks();
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
-            // Diagnostics and Report an issue follow a running session: the layer rewrites runtime.ini every ~10 s.
+            // A running session: the layer rewrites runtime.ini every ~10 s. Diagnostics and Report an issue follow it,
+            // and the session history keeps its numbers whichever pane shows.
             static FILETIME seen{};
             WIN32_FILE_ATTRIBUTE_DATA a{};
-            if ((app.pane == Pane::Diagnostics || app.pane == Pane::Report) &&
-                GetFileAttributesExW(runtime_info_path().c_str(), GetFileExInfoStandard, &a) &&
+            if (GetFileAttributesExW(runtime_info_path().c_str(), GetFileExInfoStandard, &a) &&
                 CompareFileTime(&a.ftLastWriteTime, &seen) != 0) {
                 seen = a.ftLastWriteTime;
-                app.runtime = load_runtime_info(runtime_info_path());
+                reload_runtime();
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
         }
@@ -4685,7 +5270,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     case WM_ACTIVATE:
         if (LOWORD(wParam) != WA_INACTIVE) {  // a session may have reported the headset meanwhile
-            app.runtime = load_runtime_info(runtime_info_path());
+            reload_runtime();
+            refresh_installed();  // a game installed or removed meanwhile
             if (app.pane == Pane::Layers)  // a layer may have been installed or switched meanwhile
                 refresh_layers();
             refresh_checks();
@@ -4703,9 +5289,20 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             return 0;
         }
         const Hit* h = hit_at(x, y);
+        if (app.sheet.open) {  // only its buttons (pressed until the button is let go) and its field
+            if (h && h->id == kSheetButton) {
+                app.pressed = kSheetButton;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (h && h->id == kSheetField) {
+                SetFocus(app.sheetEdit);
+            }
+            return 0;
+        }
         if (!h)
             return 0;
-        app.focus = h->id;
+        app.focus = h->id;  // as Windows does: Return now presses it, if it's a button
+        app.focusOption = h->option;
         if (slider_value(h->id)) {
             app.dragging = h->id;
             app.dragTrack = h->r;
@@ -4797,12 +5394,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.pressed = kNone;
             const Hit* h = hit_at(dip(lParam, false), dip(lParam, true));
             if (h && h->id == pressed)
-                activate(pressed, -1);
+                activate(pressed, h->option);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
     }
     case WM_MOUSEWHEEL:
+        if (app.sheet.open)
+            return 0;
         app.tip = -1;  // its ⓘ moves away
         if (app.scrollMax > 0) {
             app.scroll = std::clamp(app.scroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f, app.scrollMax);
@@ -4846,8 +5445,9 @@ int run_window(HINSTANCE instance, int show) {
         // starts from the settings in use, so updating changes nothing until a game's settings are changed.
         seed_game_settings(app.ini);
         app.s = load_settings(app.ini);
+        app.sessions = load_sessions(sessions_folder(app.ini));
     }
-    app.runtime = load_runtime_info(runtime_info_path());
+    reload_runtime();
     app.focus = kLaunch;  // Return launches
 
     WNDCLASSEXW cls{sizeof(cls)};
@@ -4864,7 +5464,7 @@ int run_window(HINSTANCE instance, int show) {
     const UINT dpi = GetDpiForSystem();
     RECT r{0, 0, MulDiv(static_cast<int>(kDefaultWidth), dpi, 96), MulDiv(static_cast<int>(kDefaultHeight - kTitlebar), dpi, 96)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi);
-    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"Sim QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
+    HWND hwnd = CreateWindowExW(0, cls.lpszClassName, L"Sim-QVFR Launcher", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT,
                                 r.right - r.left, r.bottom - r.top, nullptr, nullptr, instance, nullptr);
     if (!hwnd)
         return 1;
