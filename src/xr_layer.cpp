@@ -4886,6 +4886,34 @@ void log_layer_order(const XrApiLayerNextInfo* below) {
                  "this layer above VectorXR (machine-wide registration, then VectorXR's layer order)");
 }
 
+// Whether the layer adds XR_EXT_eye_gaze_interaction to the game's instance (layerCreateApiLayerInstance).
+enum class GazeExtension {
+    Requested,  // the game enables it itself
+    Add,        // the runtime (through the layers below) lists it: add it
+    Try,        // the list didn't answer: add it, and create the instance without it if that fails
+    Absent,     // the runtime doesn't list it: leave the request as it is
+};
+
+GazeExtension gaze_extension(const XrInstanceCreateInfo& info, PFN_xrGetInstanceProcAddr gipa) {
+    for (uint32_t i = 0; i < info.enabledExtensionCount; ++i)
+        if (std::strcmp(info.enabledExtensionNames[i], XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0)
+            return GazeExtension::Requested;
+    PFN_xrVoidFunction function = nullptr;
+    if (!gipa || XR_FAILED(gipa(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", &function)) || !function)
+        return GazeExtension::Try;
+    const auto enumerate = reinterpret_cast<PFN_xrEnumerateInstanceExtensionProperties>(function);
+    uint32_t count = 0;
+    if (XR_FAILED(enumerate(nullptr, 0, &count, nullptr)))
+        return GazeExtension::Try;
+    std::vector<XrExtensionProperties> properties(count, XrExtensionProperties{XR_TYPE_EXTENSION_PROPERTIES});
+    if (count && XR_FAILED(enumerate(nullptr, count, &count, properties.data())))
+        return GazeExtension::Try;
+    for (const XrExtensionProperties& p : properties)
+        if (std::strcmp(p.extensionName, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0)
+            return GazeExtension::Add;
+    return GazeExtension::Absent;
+}
+
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
                                                 const XrApiLayerCreateInfo* layerInfo, XrInstance* instance) {
     if (!info || !layerInfo || !layerInfo->nextInfo || !instance ||
@@ -4894,14 +4922,31 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     XrApiLayerCreateInfo nextLayerInfo = *layerInfo;
     nextLayerInfo.nextInfo = layerInfo->nextInfo->next;
     PFN_xrGetInstanceProcAddr gipa = layerInfo->nextInfo->nextGetInstanceProcAddr;
-    XrResult r = layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     // Registered as an implicit layer, so it loads into every OpenXR app: stay silent and
     // pass-through everywhere except a supported game (src/games).
     const games::GameInfo* thisGame = games::current_game();
     if (!thisGame) {
         next = Dispatch{gipa};
-        return r;
+        return layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     }
+    // Eye tracking needs XR_EXT_eye_gaze_interaction on the instance. ACE and X-Plane ask for it themselves; ACC
+    // (through OpenComposite) doesn't, so its gaze worked only with a layer below that adds it (Cheeky, OpenXR Toolkit,
+    // VectorXR), and failed with none (the eye gaze profile's bindings rejected, XR_ERROR_PATH_UNSUPPORTED). So the
+    // layer adds it when the game hasn't and the runtime offers it; with the offer unknown it tries, and creates the
+    // instance without it if the runtime refuses.
+    const GazeExtension gazeExtension = gaze_extension(*info, gipa);
+    XrResult r = XR_ERROR_EXTENSION_NOT_PRESENT;
+    if (gazeExtension == GazeExtension::Add || gazeExtension == GazeExtension::Try) {
+        std::vector<const char*> names(info->enabledExtensionNames, info->enabledExtensionNames + info->enabledExtensionCount);
+        names.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+        XrInstanceCreateInfo withGaze = *info;
+        withGaze.enabledExtensionCount = static_cast<uint32_t>(names.size());
+        withGaze.enabledExtensionNames = names.data();
+        r = layerInfo->nextInfo->nextCreateApiLayerInstance(&withGaze, &nextLayerInfo, instance);
+    }
+    const bool gazeAdded = XR_SUCCEEDED(r);
+    if (!gazeAdded)
+        r = layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     game = &games::adapter_for(thisGame);
     load_experiment();
     // Where the launcher writes live settings while this ACE runs (live_reload).
@@ -4912,6 +4957,16 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
          info->applicationInfo.engineName, info->enabledExtensionCount, r);
     for (uint32_t i = 0; i < info->enabledExtensionCount; ++i)
         logf("  extension %s", info->enabledExtensionNames[i]);
+    switch (gazeExtension) {
+    case GazeExtension::Requested: log_line("gaze: the game enables XR_EXT_eye_gaze_interaction itself"); break;
+    case GazeExtension::Absent: log_line("gaze: the runtime doesn't offer XR_EXT_eye_gaze_interaction (no eye tracking)"); break;
+    case GazeExtension::Add:
+    case GazeExtension::Try:
+        logf("gaze: XR_EXT_eye_gaze_interaction %s (%s)",
+             gazeAdded ? "added for the game" : "NOT added: the runtime refused the instance with it",
+             gazeExtension == GazeExtension::Add ? "the runtime offers it" : "the runtime's offer unknown, tried");
+        break;
+    }
     if (XR_FAILED(r))
         return r;
     // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Only in a game
