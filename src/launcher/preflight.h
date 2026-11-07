@@ -31,7 +31,7 @@ inline constexpr wchar_t kReleasesUrl[] = L"https://github.com/Williem3/Sim-QVFR
 // Pending: still being found out (the exe's hash). Ok and Pending never hold a launch back.
 enum class CheckTone { Ok, Warn, Bad, Pending };
 // What a check's button does (the window carries it out).
-enum class CheckFix { None, OpenReleases, StartSteam, ShowFile, OpenLayers, TurboOff, OpenDlss, OpenRendering, OpenGuide };
+enum class CheckFix { None, OpenReleases, StartSteam, ShowFile, OpenLayers, TurboOff, OpenDlss, OpenFoveation, OpenGuide };
 inline constexpr wchar_t kOpenCompositeGuideUrl[] =
     L"https://github.com/Williem3/Sim-QVFR/blob/main/docs/acc-opencomposite.md";
 

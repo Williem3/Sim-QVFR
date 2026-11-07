@@ -1,6 +1,6 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a tab per game
 // across the top (each with its own accent palette, which the whole window takes while its tab is chosen), a
-// sidebar of panes in groups (Setup: Launch checks, Profiles; Picture: Rendering, Resolution, Foveation, Focus
+// sidebar of panes in groups (Setup: Launch checks, Profiles; Picture: Resolution, Foveation, Focus
 // overlay, Foveated DLSS; In the headset: Headset menu, Hotkeys; Advanced: OpenXR layers, Diagnostics; Help:
 // Report an issue, About), cards of the kit's controls, a live foveation preview with readouts (the Headset menu
 // pane: a placement preview to drag the in-headset settings menu around), and an action bar with the status,
@@ -56,8 +56,8 @@ std::wstring short_name() { return games::launcher_game().shortName; }
 bool game_has(bool games::GameFeatures::*feature) { return games::launcher_game().features.*feature; }
 std::wstring not_yet() { return L"Not available for " + short_name() + L" yet."; }
 
-enum class Pane { Checks, Profiles, Rendering, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
-constexpr int kPanes = 13;
+enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
+constexpr int kPanes = 12;
 enum Ctl {
     kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -171,7 +171,7 @@ struct App {
     std::wstring ini;
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Rendering;
+    Pane pane = Pane::Resolution;
     Ctl focus = kNone;
     bool keyboard = false;  // focus rings show after keyboard use only (:focus-visible)
     Ctl pressed = kNone, dragging = kNone;
@@ -582,11 +582,6 @@ std::vector<Ctl> focus_order() {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
     case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
     case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
-    case Pane::Rendering:
-        if (method_shown())
-            order.push_back(kMethod);
-        order.push_back(kMode);
-        break;
     case Pane::Resolution:
         order.push_back(kOuter);
         if (!inner_disabled()) {
@@ -603,7 +598,9 @@ std::vector<Ctl> focus_order() {
         }
         break;
     case Pane::Foveation:
-        order.insert(order.end(), {kWidth, kHeight});
+        if (method_shown())
+            order.push_back(kMethod);
+        order.insert(order.end(), {kMode, kWidth, kHeight});
         if (!app.s.shape.corners)
             order.push_back(kCorner);
         order.push_back(kFocusOffset);
@@ -1886,7 +1883,7 @@ float profiles_pane(float x, float y, float w, bool draw) {
                  std::wstring(L"Starting points that put the pixels in the centre: low outer views and a dense focus area. ") +
                      (app.s.eyeTracking ? L"Eye tracked, the area follows your eyes, so it can be small and very sharp. "
                                         : L"Fixed, your eyes move off the centre, so the area is larger and a little less dense. ") +
-                     L"They set the resolution only and keep everything else; the Foveated mode (Rendering) picks the set.",
+                     L"They set the resolution only and keep everything else; the Foveated mode (Foveation) picks the set.",
                  draw) +
          t::kSpace6;
     if (savedRows.empty()) {
@@ -2052,31 +2049,6 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::Checks: h += checks_pane(x, y, w, draw); break;
     case Pane::Hotkeys: h += hotkeys_pane(x, y, w, draw); break;
     case Pane::Profiles: h += profiles_pane(x, y, w, draw); break;
-    case Pane::Rendering: {
-        Row method, mode;
-        method.label = L"Rendering method";
-        {
-            const std::wstring names[2] = {kMethodNames[0], kMethodNames[1]};
-            method.controlW = popup_width(names, 2, 180);
-        }
-        method.controlH = t::kControlHeight;
-        method.control = [](const Rect& r) { popup_button(kMethod, r, kMethodNames[app.s.mode == RenderMode::Qvfr ? 0 : 1], false); };
-        mode.label = L"Foveated mode";
-        mode.desc = app.s.eyeTracking ? L"The focus region follows your gaze." : L"The focus region stays at the center of each lens.";
-        {
-            const std::wstring names[2] = {kModeNames[0], kModeNames[1]};
-            mode.controlW = popup_width(names, 2, 140);
-        }
-        mode.controlH = t::kControlHeight;
-        mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
-        // The game is its tab's (the strip at the top); this pane says how it reaches the headset.
-        h += section(x, y, w, L"Rendering", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
-                     qvfr ? L"Quad View Foveated Rendering draws a sharp focus view inside a lower-resolution outer view for each eye."
-                          : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
-                            L"Foveated Rendering; Two-loop won't be offered again.",
-                     draw);
-        break;
-    }
     case Pane::Resolution: {
         const bool known = app.runtime.known();
         const std::wstring footer =
@@ -2164,6 +2136,28 @@ float pane_content(float x, float y, float w, bool draw) {
                 badge(x, y, 1, L"Eye tracker not detected. The focus region stays centered until one connects.", w);
             h += 20 + t::kSpace6;
         }
+        Row method, mode;
+        method.label = L"Rendering method";
+        {
+            const std::wstring names[2] = {kMethodNames[0], kMethodNames[1]};
+            method.controlW = popup_width(names, 2, 180);
+        }
+        method.controlH = t::kControlHeight;
+        method.control = [](const Rect& r) { popup_button(kMethod, r, kMethodNames[app.s.mode == RenderMode::Qvfr ? 0 : 1], false); };
+        mode.label = L"Foveated mode";
+        mode.desc = app.s.eyeTracking ? L"The focus region follows your gaze." : L"The focus region stays at the center of each lens.";
+        {
+            const std::wstring names[2] = {kModeNames[0], kModeNames[1]};
+            mode.controlW = popup_width(names, 2, 140);
+        }
+        mode.controlH = t::kControlHeight;
+        mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
+        h += section(x, y + h, w, L"Mode", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
+                     qvfr ? L"Eye tracked or fixed: whether the sharp focus region follows your eyes."
+                          : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
+                            L"Foveated Rendering; Two-loop won't be offered again.",
+                     draw);
+        h += t::kSpace6;
         h += section(x, y + h, w, L"Focus region",
                      {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
                       slider_row(kHeight, L"Foveated height", L"", app.s.height, L""),
@@ -2367,7 +2361,7 @@ float pane_content(float x, float y, float w, bool draw) {
                       }(),
                       fgBorder},
                      L"Outside the center region frames are warped with ACE’s motion. Lower scales use less GPU time "
-                     L"and memory. Applies live. With an eye-tracked focus (Rendering pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
+                     L"and memory. Applies live. With an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
                      draw);
         const std::wstring license = L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the "
                                      L"GNU GPL v3 (github.com/ClarkCheekyKent/CheekyFoveatedDLSS).";
@@ -2952,7 +2946,6 @@ struct Item {
 const Item kItems[] = {
     {L"Launch checks", {"M2 4.25l1.5 1.5 2.75-3", "M2 10.75l1.5 1.5 2.75-3", "M8.75 4.5H14M8.75 11H14"}},
     {L"Profiles", {"M3 3.25H10.5V12.75H3Z", "M10.5 5.25H13V14.75H5.5V12.75", "M5 6.25H8.5M5 8.75H8.5"}},
-    {L"Rendering", {"M8 2l6 3-6 3-6-3 6-3z", "M2 8.5l6 3 6-3", "M2 11.5l6 3 6-3"}},
     {L"Resolution", {"M3.25 2.75H12.75C13.6 2.75 14.25 3.4 14.25 4.25V9.75C14.25 10.6 13.6 11.25 12.75 11.25H3.25C2.4 11.25 1.75 10.6 1.75 9.75V4.25C1.75 3.4 2.4 2.75 3.25 2.75Z", "M5.5 14h5M8 11.25V14", nullptr}},
     {L"Foveation", {"M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", nullptr, nullptr}},
     {L"Focus overlay", {"M5 5H11V11H5Z", nullptr, nullptr}},
@@ -2984,7 +2977,7 @@ struct Group {
     const wchar_t* label;
     int first, end;
 };
-constexpr Group kGroups[] = {{L"Setup", 0, 2}, {L"Picture", 2, 7}, {L"In the headset", 7, 9}, {L"Advanced", 9, 11}, {L"Help", 11, 13}};
+constexpr Group kGroups[] = {{L"Setup", 0, 2}, {L"Picture", 2, 6}, {L"In the headset", 6, 8}, {L"Advanced", 8, 10}, {L"Help", 10, 12}};
 static_assert(kGroups[std::size(kGroups) - 1].end == kPanes, "every pane in a group");
 
 const wchar_t* group_of(int pane) {
@@ -2999,10 +2992,6 @@ std::wstring pane_description(Pane pane) {
     switch (pane) {
     case Pane::Checks: return L"What would stop Sim-QVFR at the next launch, each with its fix.";
     case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
-    case Pane::Rendering:
-        return L"How " + game_name() + L" draws each eye. " +
-               (games::launcher_game().openComposite ? L"It reaches your headset through OpenComposite (Launch checks)."
-                                                     : L"Launch starts it in VR with Sim-QVFR.");
     case Pane::Resolution: {
         const bool crop = game_has(&games::GameFeatures::fovCrop), helmet = game_has(&games::GameFeatures::helmet);
         return std::wstring(L"How many pixels each view draws") + (crop && helmet ? L", the edges it skips and the helmet around it."
@@ -3845,7 +3834,7 @@ void fix_check(const Check& c) {
         if (pane_shown(static_cast<int>(Pane::Dlss)))
             activate(kSidebar, static_cast<int>(Pane::Dlss));
         return;
-    case CheckFix::OpenRendering: activate(kSidebar, static_cast<int>(Pane::Rendering)); return;
+    case CheckFix::OpenFoveation: activate(kSidebar, static_cast<int>(Pane::Foveation)); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
             MessageBoxW(app.hwnd,

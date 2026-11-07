@@ -271,8 +271,8 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         Check& c = add("eye_tracking", CheckTone::Warn, L"No eye tracking at the last launch",
                        L"The focus area stayed in the centre. Check that the headset’s eye tracker is on and calibrated, "
                        L"or choose Fixed foveation.");
-        c.fix = CheckFix::OpenRendering;
-        c.fixLabel = L"Open Rendering";
+        c.fix = CheckFix::OpenFoveation;
+        c.fixLabel = L"Open Foveation";
     }
     return out;
 }
