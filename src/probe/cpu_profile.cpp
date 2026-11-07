@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cwchar>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -22,7 +23,8 @@ constexpr size_t kStackCopy = 64 * 1024;  // the top of a stack copied per sampl
 constexpr int kMaxFrames = 48;
 constexpr size_t kTop = 25;
 
-// ACE's functions mapped so far (static analysis, docs/recon-ace.md and games/ace/abi.h), by RVA of their start.
+// Games' functions mapped so far (static analysis, docs/recon-ace.md and games/ace/abi.h), by RVA of their start, per
+// game module. Other games' functions show as module+offset: their names stay in the local recon notes.
 struct Label {
     uint32_t rva;
     const char* name;
@@ -43,6 +45,36 @@ constexpr Label kAceLabels[] = {
     {0x1f8fa40, "DLSS parameters"},
     {0x1f90430, "DLSS feature create"},
     {0x1f920f0, "DLSS evaluate"},
+};
+struct GameLabels {
+    const wchar_t* module;
+    const Label* labels;
+    size_t count;
+};
+constexpr GameLabels kGameLabels[] = {
+    {L"AssettoCorsaEVO.exe", kAceLabels, std::size(kAceLabels)},
+};
+
+// Frame ends (cpu_profile_mark_frame), QPC ticks, while a capture runs: a quarter million is over 45 minutes at 90 fps.
+constexpr size_t kMaxMarks = size_t{1} << 18;
+std::atomic<uint64_t> g_marks[kMaxMarks];
+std::atomic<size_t> g_markCount{0};
+std::atomic<bool> g_marking{false};
+
+// A sample kept for the slow-frame comparison: its time and its stack's distinct functions (in `Samples::starts`,
+// innermost first, from `first`).
+struct Sample {
+    uint64_t qpc;
+    uint32_t target;
+    uint32_t first;
+    uint16_t count;
+    bool blocked;
+};
+constexpr size_t kMaxStarts = size_t{8} << 20;  // 64 MB of function starts at most; later samples are not kept
+struct Samples {
+    std::vector<Sample> list;
+    std::vector<uint64_t> starts;
+    bool full = false;
 };
 
 struct Target {
@@ -235,11 +267,14 @@ std::wstring function_name(Symbols& symbols, uint64_t start) {
     uint64_t base = 0;
     const std::wstring module = module_name(start, base);
     wchar_t text[512];
-    if (_wcsicmp(module.c_str(), L"AssettoCorsaEVO.exe") == 0) {
+    for (const GameLabels& game : kGameLabels) {
+        if (_wcsicmp(module.c_str(), game.module) != 0)
+            continue;
         const uint64_t rva = start - base;
-        for (const Label& l : kAceLabels)
-            if (l.rva == rva) {
-                _snwprintf_s(text, _TRUNCATE, L"%ls+0x%llx (%hs)", module.c_str(), static_cast<unsigned long long>(rva), l.name);
+        for (size_t i = 0; i < game.count; ++i)
+            if (game.labels[i].rva == rva) {
+                _snwprintf_s(text, _TRUNCATE, L"%ls+0x%llx (%hs)", module.c_str(), static_cast<unsigned long long>(rva),
+                             game.labels[i].name);
                 return text;
             }
     }
@@ -299,7 +334,146 @@ Ranked ranked(const std::unordered_map<uint64_t, uint64_t>& m) {
     return r;
 }
 
-void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, const std::wstring& path) {
+// The frames' ends the layer marked during the capture, in order (an entry a late marker had not stored yet, 0, left out).
+std::vector<uint64_t> taken_marks() {
+    const size_t n = std::min(g_markCount.load(), kMaxMarks);
+    std::vector<uint64_t> marks;
+    marks.reserve(n);
+    for (size_t i = 0; i < n; ++i)
+        if (const uint64_t m = g_marks[i].load(std::memory_order_relaxed))
+            marks.push_back(m);
+    std::sort(marks.begin(), marks.end());
+    return marks;
+}
+
+// The slow frames against the others: each kept sample goes to the frame it fell in (between two marks), and per
+// thread the functions are ranked by how much more time a slow frame spends in them than a normal one, in ms per frame
+// (samples per frame x the thread's sampling period). Returns a summary line for the log (empty: no frames marked).
+template <class Line>
+std::string slow_frames(const Line& line, Symbols& symbols, const std::vector<Target>& targets, const Samples& samples,
+                        const std::vector<uint64_t>& marks, double slowMs, double qpcPerMs, double elapsedMs) {
+    if (marks.size() < 3) {
+        line(L"\nSlow frames: no frames were marked during the capture (the game ended no frame, or none is marked).");
+        return {};
+    }
+    std::vector<double> ms(marks.size() - 1);  // frame k (1..n-1) ends at marks[k]: ms[k - 1]
+    for (size_t k = 1; k < marks.size(); ++k)
+        ms[k - 1] = static_cast<double>(marks[k] - marks[k - 1]) / qpcPerMs;
+    std::vector<double> sorted = ms;
+    std::sort(sorted.begin(), sorted.end());
+    const auto pct = [&](double p) { return sorted[std::min(sorted.size() - 1, static_cast<size_t>(p * static_cast<double>(sorted.size())))]; };
+    const double median = pct(0.5);
+    const double threshold = slowMs > 0 ? slowMs : 1.25 * median;
+    size_t slow = 0;
+    for (const double m : ms)
+        slow += m > threshold ? 1 : 0;
+    const size_t normal = ms.size() - slow;
+    wchar_t text[600];
+    _snwprintf_s(text, _TRUNCATE,
+                 L"\nSlow frames: %zu frames, median %.2f ms, p90 %.2f, p99 %.2f, max %.2f. Slow: longer than %.2f ms (%ls): "
+                 L"%zu frames (%.1f%%), %.0f ms of the %.0f ms frames.",
+                 ms.size(), median, pct(0.9), pct(0.99), sorted.back(), threshold, slowMs > 0 ? L"cpu_profile_slow_ms" : L"1.25x the median",
+                 slow, 100.0 * static_cast<double>(slow) / static_cast<double>(ms.size()),
+                 [&] { double s = 0; for (const double m : ms) s += m > threshold ? m : 0; return s; }(),
+                 [&] { double s = 0; for (const double m : ms) s += m; return s; }());
+    line(text);
+    if (samples.full)
+        line(L"  (the sample store filled up: the capture's later samples are not in this comparison)");
+    {
+        std::vector<size_t> order(ms.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = i;
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return ms[a] > ms[b]; });
+        std::wstring list = L"  Slowest (ms at s into the capture):";
+        for (size_t i = 0; i < order.size() && i < 12; ++i) {
+            wchar_t item[64];
+            _snwprintf_s(item, _TRUNCATE, L"%ls %.1f at %.2f", i ? L"," : L"", ms[order[i]],
+                         static_cast<double>(marks[order[i] + 1] - marks.front()) / qpcPerMs / 1000.0);
+            list += item;
+        }
+        line(list);
+    }
+    if (!slow || !normal) {
+        line(slow ? L"  Every frame is slow: nothing to compare with." : L"  No slow frame: nothing to compare.");
+        return "no slow frames";
+    }
+    line(L"  Per thread: ms per frame in a slow frame against a normal one, the functions slow frames spend most "
+         L"extra time in first (Total: in the function or anything it called; blocked: waits, by the functions waiting).");
+    struct Counts {
+        uint64_t running = 0, blocked = 0;
+        std::unordered_map<uint64_t, uint64_t> self, total, waits;
+    };
+    std::vector<Counts> slowCounts(targets.size()), normalCounts(targets.size());
+    for (const Sample& s : samples.list) {
+        const auto at = std::lower_bound(marks.begin(), marks.end(), s.qpc);
+        if (at == marks.begin() || at == marks.end())
+            continue;  // before the first frame end or after the last: no whole frame
+        const size_t k = static_cast<size_t>(at - marks.begin());
+        Counts& c = (ms[k - 1] > threshold ? slowCounts : normalCounts)[s.target];
+        const uint64_t* starts = samples.starts.data() + s.first;
+        if (s.blocked) {
+            ++c.blocked;
+            for (uint16_t i = 0; i < s.count; ++i)
+                ++c.waits[starts[i]];
+        } else {
+            ++c.running;
+            if (s.count)
+                ++c.self[starts[0]];
+            for (uint16_t i = 0; i < s.count; ++i)
+                ++c.total[starts[i]];
+        }
+    }
+    std::string summary;
+    for (size_t t = 0; t < targets.size(); ++t) {
+        const Target& target = targets[t];
+        const double period = target.samples ? elapsedMs / static_cast<double>(target.samples) : kCpuProfileSampleMs;
+        const auto perSlow = [&](uint64_t n) { return static_cast<double>(n) * period / static_cast<double>(slow); };
+        const auto perNormal = [&](uint64_t n) { return static_cast<double>(n) * period / static_cast<double>(normal); };
+        const Counts& a = slowCounts[t];
+        const Counts& b = normalCounts[t];
+        const std::wstring name = thread_name(target.id);
+        _snwprintf_s(text, _TRUNCATE, L"\n  Thread %u%ls%ls%ls: running %.2f ms per slow frame (normal %.2f), blocked %.2f (normal %.2f)",
+                     target.id, name.empty() ? L"" : L" \"", name.c_str(), name.empty() ? L"" : L"\"", perSlow(a.running),
+                     perNormal(b.running), perSlow(a.blocked), perNormal(b.blocked));
+        line(text);
+        if (t == 0 || perSlow(a.running) - perNormal(b.running) > 1.0) {
+            char item[200];
+            std::snprintf(item, sizeof(item), "%sthread %u +%.1f ms running, +%.1f blocked", summary.empty() ? "" : "; ", target.id,
+                          perSlow(a.running) - perNormal(b.running), perSlow(a.blocked) - perNormal(b.blocked));
+            summary += item;
+        }
+        const auto ranked_extra = [&](const std::unordered_map<uint64_t, uint64_t>& x, const std::unordered_map<uint64_t, uint64_t>& y,
+                                      const wchar_t* title, size_t top) {
+            std::vector<std::pair<uint64_t, double>> extra;
+            for (const auto& [start, n] : x) {
+                const auto other = y.find(start);
+                extra.push_back({start, perSlow(n) - perNormal(other == y.end() ? 0 : other->second)});
+            }
+            std::sort(extra.begin(), extra.end(), [](const auto& p, const auto& q) { return p.second > q.second; });
+            if (extra.empty() || extra.front().second < 0.05)
+                return;
+            line(title);
+            for (size_t i = 0; i < extra.size() && i < top && extra[i].second >= 0.05; ++i) {
+                const auto inY = y.find(extra[i].first);
+                const auto inX = x.find(extra[i].first);
+                wchar_t row[700];
+                _snwprintf_s(row, _TRUNCATE, L"    %+6.2f ms  (slow %.2f, normal %.2f)  %ls", extra[i].second, perSlow(inX->second),
+                             perNormal(inY == y.end() ? 0 : inY->second), function_name(symbols, extra[i].first).c_str());
+                line(row);
+            }
+        };
+        ranked_extra(a.total, b.total, L"   Running, total:", 20);
+        ranked_extra(a.self, b.self, L"   Running, self:", 10);
+        ranked_extra(a.waits, b.waits, L"   Blocked:", 10);
+    }
+    char head[160];
+    std::snprintf(head, sizeof(head), "%zu of %zu frames over %.1f ms (median %.1f, max %.1f): ", slow, ms.size(), threshold, median,
+                  sorted.back());
+    return head + summary;
+}
+
+void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, const std::wstring& path, const Samples& samples,
+            const std::vector<uint64_t>& marks, double slowMs, double qpcPerMs, double elapsedMs) {
     Symbols symbols;
     FILE* f = nullptr;
     if (_wfopen_s(&f, path.c_str(), L"w, ccs=UTF-8") != 0)
@@ -370,6 +544,9 @@ void report(std::vector<Target>& targets, uint64_t elapsedTsc, int seconds, cons
         logf("cpu profile: thread %u%s%ls%s %.0f%% of a core; self: %ls", t.id, name.empty() ? "" : " \"", name.c_str(),
              name.empty() ? "" : "\"", load, summary.c_str());
     }
+    const std::string slow = slow_frames(line, symbols, targets, samples, marks, slowMs, qpcPerMs, elapsedMs);
+    if (!slow.empty())
+        logf("cpu profile: slow frames: %s", slow.c_str());
     if (f)
         std::fclose(f);
     logf("cpu profile: report %ls%s", path.c_str(), f ? "" : " (could not be written)");
@@ -394,14 +571,21 @@ bool blocked_in_wait(uint64_t start) {
                        name.find("RemoveIoCompletion") != std::string::npos);
 }
 
-void run(std::vector<Target> targets, int seconds, std::wstring path) {
+uint64_t qpc() {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return static_cast<uint64_t>(now.QuadPart);
+}
+
+void run(std::vector<Target> targets, int seconds, std::wstring path, double slowMs) {
     // A high-resolution waitable timer paces the samples (Windows 10 1803 on); else 1 ms sleeps.
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
     std::vector<uint8_t> copy(kStackCopy);
     uint64_t frames[kMaxFrames];
+    Samples kept;
     for (Target& t : targets)
         QueryThreadCycleTime(t.handle, &t.lastCycles);
-    const uint64_t tsc0 = __rdtsc();
+    const uint64_t tsc0 = __rdtsc(), qpc0 = qpc();
     const ULONGLONG end = GetTickCount64() + static_cast<ULONGLONG>(seconds) * 1000;
     while (GetTickCount64() < end) {
         if (timer) {
@@ -412,7 +596,8 @@ void run(std::vector<Target> targets, int seconds, std::wstring path) {
         } else {
             Sleep(kCpuProfileSampleMs);
         }
-        for (Target& t : targets) {
+        for (uint32_t index = 0; index < targets.size(); ++index) {
+            Target& t = targets[index];
             ULONG64 cycles = 0;
             if (!QueryThreadCycleTime(t.handle, &cycles))
                 continue;  // gone
@@ -426,6 +611,7 @@ void run(std::vector<Target> targets, int seconds, std::wstring path) {
             CONTEXT context;
             size_t size = 0;
             uint64_t rsp = 0;
+            const uint64_t when = qpc();
             if (!sample(t, copy, context, size, rsp)) {
                 ++t.failed;
                 continue;
@@ -435,28 +621,40 @@ void run(std::vector<Target> targets, int seconds, std::wstring path) {
             // Looked up after the thread runs again: the unwind tables' locks are never taken while it is paused.
             if (n == 0)
                 continue;
-            if (blocked_in_wait(function_start(frames[0]))) {
-                ++t.blocked;
-                continue;
-            }
-            ++t.running;
             uint64_t seen[kMaxFrames];
             int unique = 0;
             for (int i = 0; i < n; ++i) {
                 const uint64_t start = function_start(frames[i]);
-                if (i == 0)
-                    ++t.self[start];
-                if (std::find(seen, seen + unique, start) == seen + unique) {
+                if (std::find(seen, seen + unique, start) == seen + unique)
                     seen[unique++] = start;
-                    ++t.total[start];
-                }
             }
+            const bool blocked = blocked_in_wait(seen[0]);
+            // Kept for the slow frames (also the blocked ones: what a slow frame waits in matters there).
+            if (!kept.full && kept.starts.size() + unique <= kMaxStarts) {
+                kept.list.push_back({when, index, static_cast<uint32_t>(kept.starts.size()), static_cast<uint16_t>(unique), blocked});
+                kept.starts.insert(kept.starts.end(), seen, seen + unique);
+            } else {
+                kept.full = true;
+            }
+            if (blocked) {
+                ++t.blocked;
+                continue;
+            }
+            ++t.running;
+            ++t.self[seen[0]];
+            for (int i = 0; i < unique; ++i)
+                ++t.total[seen[i]];
         }
     }
     const uint64_t elapsed = __rdtsc() - tsc0;
+    g_marking = false;
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    const double qpcPerMs = static_cast<double>(frequency.QuadPart) / 1000.0;
+    const double elapsedMs = static_cast<double>(qpc() - qpc0) / qpcPerMs;
     if (timer)
         CloseHandle(timer);
-    report(targets, elapsed, seconds, path);
+    report(targets, elapsed, seconds, path, kept, taken_marks(), slowMs, qpcPerMs, elapsedMs);
     for (Target& t : targets)
         CloseHandle(t.handle);
     std::lock_guard guard(state.mutex);
@@ -503,9 +701,22 @@ bool cpu_profile_start(const CpuProfileRequest& request) {
     for (const Target& t : targets)
         ids += (ids.empty() ? "" : ", ") + std::to_string(t.id);
     logf("cpu profile: sampling threads %s every %d ms for %d s", ids.c_str(), kCpuProfileSampleMs, request.seconds);
+    // The last capture's marks cleared, so an entry not yet stored reads 0 (left out), never an old frame end.
+    for (size_t i = 0, n = std::min(g_markCount.load(), kMaxMarks); i < n; ++i)
+        g_marks[i].store(0, std::memory_order_relaxed);
+    g_markCount = 0;
+    g_marking = true;
     state.running = true;
-    state.worker = std::thread(run, std::move(targets), std::max(1, request.seconds), std::move(path));
+    state.worker = std::thread(run, std::move(targets), std::max(1, request.seconds), std::move(path), request.slowFrameMs);
     return true;
+}
+
+void cpu_profile_mark_frame() {
+    if (!g_marking.load(std::memory_order_relaxed))
+        return;
+    const size_t i = g_markCount.fetch_add(1, std::memory_order_relaxed);
+    if (i < kMaxMarks)
+        g_marks[i].store(qpc(), std::memory_order_relaxed);
 }
 
 bool cpu_profile_running() { return state.running; }
