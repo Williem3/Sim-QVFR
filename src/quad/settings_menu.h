@@ -38,7 +38,9 @@ enum class MenuItem {
     // The settings page's first line: the profiles (profile/profiles.h), stepped through and used at once.
     Profile,
     // The Overlay and menu page: the hotkeys' line under the panel ([menu] hotkey_footer).
-    HotkeyFooter
+    HotkeyFooter,
+    // The settings page, after Focus density, for a game with it (MenuLaunch::objectDetail: X-Plane): object detail.
+    ObjectDetail
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -72,6 +74,7 @@ struct MenuValues {
     bool crop = false;        // [crop] enabled (QVFR)
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)
+    int objectDetail = 100;   // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     // The outer views' kept share of the eye (percent; 100 without a crop).
     double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }
     double crop_height() const { return crop ? 100.0 - cropTop - cropBottom : 100.0; }
@@ -93,6 +96,9 @@ struct MenuLaunch {
     // while it runs (otherwise at the next launch).
     bool cropPage = true, helmetPage = true, liveResolution = true;
     bool fgPage = true;  // Cheeky's frame generation page (GameFeatures::frameGeneration)
+    // Object detail on the settings page (GameFeatures::objectDetail): off unless the layer says the game has it, so
+    // no other game ever shows it.
+    bool objectDetail = false;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.
@@ -139,8 +145,9 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
-// Writes the menu's keys (resolution, the crop and the helmet only for QVFR). False if the file cannot be written.
-bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr);
+// Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
+// a game that has it). False if the file cannot be written.
+bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus

@@ -64,6 +64,10 @@ void four_views_set_ao_edges_from_eye(bool on);
 // The object and tree LOD from the focus views' pixel density (true, the default) or the eye view's, X-Plane's own
 // (docs/recon-xplane.md "Measured: trees low poly in the focus views"). Any time; follows four_views_set_focus's size.
 void four_views_set_focus_lod(bool on);
+// Object detail, percent (the launcher's Object detail slider, [experiment] object_detail; default 100): how far the LOD
+// moves from X-Plane's own (0) to the focus views' density (100), in equal ratios. Any time; with four_views_set_focus_lod
+// off it has no effect.
+void four_views_set_object_detail(int percent);
 // The focus views shaded at the full rate (VRS writes rate 1x1 into layers 2-3). Before X-Plane makes its shaders.
 void four_views_set_focus_full_rate(bool on);
 int four_views_view_rect_sets();

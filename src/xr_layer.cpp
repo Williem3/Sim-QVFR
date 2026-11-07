@@ -212,6 +212,7 @@ struct LiveSettings {
     float borderColor[4] = {0, 1, 0, 1};
     FovCrop crop;  // views4 only
     HelmetSettings helmet;  // views4 composing only
+    int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
 };
 
 // [crop] (QVFR): the sides of each eye's FOV ACE does not render (fov_crop.h), each on its own.
@@ -237,6 +238,8 @@ LiveSettings read_live(const wchar_t* ini) {
         l.crop = read_crop(ini);
     l.helmet = read_helmet_settings(ini);
     l.helmet.on = l.helmet.on && features.helmet;
+    if (features.objectDetail)
+        l.objectDetail = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"object_detail", 100, ini)), 0, 100);
     l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
     const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
     l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
@@ -3234,6 +3237,8 @@ void live_apply(const LiveSettings& l) {
         std::lock_guard guard(gaze.mutex);
         gazeAvailable = gaze.set != XR_NULL_HANDLE;
     }
+    if (experiment.views4 && game_features().objectDetail)
+        game->qvfr_set_object_detail(l.objectDetail);  // the adapter logs a change
     if (experiment.views4 && !experiment.views4EyeCamera)
         game->qvfr_set_live(experiment.box_x(l.focusFraction),
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
@@ -3767,6 +3772,7 @@ void menu_open(int64_t now) {
         menu.model.launch.cropPage = features.fovCrop;
         menu.model.launch.helmetPage = features.helmet;
         menu.model.launch.fgPage = features.frameGeneration;
+        menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
@@ -3811,12 +3817,12 @@ void menu_press(MenuKey key, int64_t now) {
     // Written on the ini worker (off the render thread), to the ini the layer reloads and the launcher's
     // (the next launch starts from them); the live reload follows within a frame or two.
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
-                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr] {
-        write_menu_values(ini.c_str(), values, qvfr);
+                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail] {
+        write_menu_values(ini.c_str(), values, qvfr, detail);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (!settings.empty()) {
-            write_menu_values(settings.c_str(), values, qvfr);
+            write_menu_values(settings.c_str(), values, qvfr, detail);
             if (cheeky.available)
                 write_cheeky_settings(settings.c_str(), cheeky.values, false);
         }

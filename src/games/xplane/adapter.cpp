@@ -115,6 +115,8 @@ bool apply_qvfr(const wchar_t* ini) {
     four_views_set_ssr_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ssr_from_eye", 1, ini) == 1);
     four_views_set_ao_edges_from_eye(GetPrivateProfileIntW(L"experiment", L"xplane_ao_edges_from_eye", 1, ini) == 1);
     four_views_set_focus_lod(GetPrivateProfileIntW(L"experiment", L"xplane_focus_lod", 1, ini) == 1);
+    // The launcher's Object detail (live from then on: qvfr_set_object_detail).
+    four_views_set_object_detail(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"object_detail", 100, ini)));
     // [experiment] xplane_diag=1: SSR, CACAO and the sun's shadow switchable live (Ctrl+Alt+1/2/3, or the ini's
     // xplane_diag_ssr_off, _ao_off, _shadow_off).
     four_views_set_diag_edits(GetPrivateProfileIntW(L"experiment", L"xplane_diag", 0, ini) == 1);
@@ -181,6 +183,7 @@ public:
             four_views_set_focus(true, focus, focusY > 0 ? focusY : focus);
         }
     }
+    void qvfr_set_object_detail(int percent) override { four_views_set_object_detail(percent); }
     bool qvfr_dlss_held() override { return false; }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
         render[0] = render[1] = output[0] = output[1] = 0;

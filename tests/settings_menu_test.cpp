@@ -1,5 +1,6 @@
 // Offline check of the in-headset settings menu: selection, steps and ranges, the items per method,
 // the ini round trip and the launch-size note; and that the panel image draws text and highlight.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -187,6 +188,11 @@ int main() {
     check(GetPrivateProfileIntW(L"experiment", L"periphery_scale", -1, loopIni.c_str()) == -1 &&
               GetPrivateProfileIntW(L"experiment", L"focus_percent", -1, loopIni.c_str()) == 30,
           "Two-loop writes foveation but no resolution");
+    check(GetPrivateProfileIntW(L"experiment", L"object_detail", -1, ini.c_str()) == -1,
+          "object detail isn't written for a game without it");
+    v.objectDetail = 40;
+    write_menu_values(ini.c_str(), v, true, true);
+    check(read_menu_values(ini.c_str()).objectDetail == 40, "object detail is written for a game with it, and read back");
     DeleteFileW(ini.c_str());
     DeleteFileW(loopIni.c_str());
 
@@ -361,6 +367,41 @@ int main() {
             check(!f.fovCrop && !f.helmet && !f.foveatedDlss &&
                       menu_pages(g) == std::vector<MenuPage>{MenuPage::Settings, MenuPage::Shape, MenuPage::Headset},
                   "X-Plane 12: Settings, Shape and Headset only (no crop, helmet or Foveated DLSS pages)");
+        }
+        {
+            // Object detail: only a game whose GameFeatures has it (X-Plane), as the layer sets launch.objectDetail.
+            const auto has_detail = [](const SettingsMenu& s) {
+                const std::vector<MenuItem> items = menu_page_items(s);
+                return std::find(items.begin(), items.end(), MenuItem::ObjectDetail) != items.end();
+            };
+            check(xplane::kGame.features.objectDetail && !ace::kGame.features.objectDetail &&
+                      !acc::kGame.features.objectDetail,
+                  "games: only X-Plane has Object detail");
+            SettingsMenu other = c;
+            check(!other.launch.objectDetail && !has_detail(other), "Object detail: off by default, so no other game shows it");
+            for (const games::GameInfo* game : {&ace::kGame, &acc::kGame}) {
+                SettingsMenu g = c;
+                g.launch.objectDetail = game->features.objectDetail;
+                check(!has_detail(g), "Object detail: not on ACE's or ACC's settings page");
+            }
+            SettingsMenu x = c;
+            x.launch.objectDetail = xplane::kGame.features.objectDetail;
+            const std::vector<MenuItem> items = menu_page_items(x);
+            const auto density = std::find(items.begin(), items.end(), MenuItem::Density);
+            check(density != items.end() && density + 1 != items.end() && density[1] == MenuItem::ObjectDetail &&
+                      items.size() == menu_page_items(other).size() + 1,
+                  "X-Plane: Object detail on the settings page, right after Focus density");
+            x.selected = static_cast<int>(density - items.begin()) + 1;
+            check(menu_lines(x)[x.selected].label == L"Object detail" && menu_lines(x)[x.selected].value == L"100%",
+                  "Object detail's line: 100% by default");
+            check(!menu_key(x, MenuKey::Right) && x.values.objectDetail == 100, "Object detail: Right at 100% stays there");
+            check(menu_key(x, MenuKey::Left) && x.values.objectDetail == 90, "Object detail: Left steps 10%");
+            for (int i = 0; i < 12; ++i)
+                menu_key(x, MenuKey::Left);
+            check(x.values.objectDetail == 0, "Object detail: down to 0%, no lower");
+            SettingsMenu loop = x;
+            loop.launch.qvfr = false;
+            check(!has_detail(loop), "Object detail: QVFR only (not in Two-loop)");
         }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
         {

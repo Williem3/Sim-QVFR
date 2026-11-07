@@ -83,6 +83,9 @@ public:
     virtual bool qvfr_live_resolution() const { return info() && info()->features.liveResolution; }
     // Live focus box and focus cull, from the next frame the game fills on.
     virtual void qvfr_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze) = 0;
+    // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and
+    // live. 100: the LOD the focus views' pixel density needs, 0: the game's own for its render size.
+    virtual void qvfr_set_object_detail(int percent) { (void)percent; }
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
     virtual bool qvfr_dlss_held() = 0;
     // The game's render and output target sizes (width, height) as last laid out (0 before the first frame).
