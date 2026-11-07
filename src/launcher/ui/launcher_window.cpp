@@ -1,11 +1,8 @@
 // The launcher window, built natively from the QVFR launcher kit (docs/qvfr-launcher-kit): a tab per game
-// across the top (each with its own accent palette, which the whole window takes while its tab is chosen), a
-// sidebar of panes in groups (Setup: Launch checks, Profiles; Picture: Resolution, Foveation, Focus
-// overlay, Foveated DLSS; In the headset: Headset menu, Hotkeys; Advanced: OpenXR layers, Diagnostics; Help:
-// Report an issue, About), cards of the kit's controls, a live foveation preview with readouts (the Headset menu
-// pane: a placement preview to drag the in-headset settings menu around), and an action bar with the status,
-// Restore Defaults and Launch. Every colour, size and type style comes from theme_tokens.h; every
-// label is the kit's. Settings save as they change (settings.h); Launch runs launch_game (main.cpp).
+// across the top, a sidebar of panes in groups, cards of the kit's controls, a live preview, and an action bar
+// with the status, Restore Defaults and Launch. This file has the window procedure and run_window; the state
+// is in window_state.h, the panes in pane_*.cpp, the window around them in chrome.cpp, input in pointer.cpp
+// and input.cpp. Settings save as they change (settings.h); Launch runs launch_game (main.cpp).
 //
 // Immediate mode: each paint lays out and draws the current pane and records hit rectangles; input
 // acts on the last frame's rectangles and the settings, then repaints.
@@ -15,9 +12,9 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <windows.h>
@@ -39,266 +36,15 @@
 #include "../../games/game.h"
 #include "../../input/pad_input.h"
 #include "../../sha256_file.h"
-#include "canvas.h"
 #include "launcher_version.h"
+#include "window_state.h"
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-namespace simqvfr::launcher {
-namespace ui {
+namespace simqvfr::launcher::ui::win {
+
 namespace {
-
-namespace t = tokens;
-
-// The game the launcher starts, by name (games/game.h).
-std::wstring game_name() { return games::launcher_game().name; }
-// Its short name ("ACE", "ACC"), for short text.
-std::wstring short_name() { return games::launcher_game().shortName; }
-// The chosen game has `feature` (games::GameFeatures); without it the window greys it out.
-bool game_has(bool games::GameFeatures::*feature) { return games::launcher_game().features.*feature; }
-std::wstring not_yet() { return L"Not available for " + short_name() + L" yet."; }
-
-enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Games, Layers, Diagnostics, Report, About };
-constexpr int kPanes = 13;
-enum Ctl {
-    kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
-    kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
-    // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
-    // (FocusCorner's order, across then up or down).
-    kShape, kShapeTopLeftIn, kShapeTopLeftDown, kShapeTopRightIn, kShapeTopRightDown, kShapeBottomRightIn,
-    kShapeBottomRightUp, kShapeBottomLeftIn, kShapeBottomLeftUp,
-    // Foveated DLSS (Cheeky Foveated DLSS, [cheeky]).
-    kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
-    kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
-    kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
-    // The performance overlay ([osd], Headset menu pane).
-    kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
-    // The FOV crop ([crop], Resolution pane).
-    kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
-    // The helmet overlay ([helmet], Resolution pane).
-    kHelmetOn, kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight, kHelmetDepth, kHelmetDetail,
-    // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
-    kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
-    // The Report an issue pane (its kind, the description box, the button, the zip it made to drag into the
-    // issue, exporting the logs alone) and the Diagnostics pane (the CPU capture switch, copying the summary, the
-    // logs folder).
-    kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagExport, kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
-    // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
-    kCheckFix, kChecksBadge,
-    // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
-    kHotkeyKey, kHotkeyPad, kHotkeysReset,
-    // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete, and the one in use's Update and Revert
-    // once the settings differ from it (option: its index in app.profileNames), saving the settings as one, adding a
-    // shared one from the clipboard.
-    kProfileUse, kProfileShare, kProfileDelete, kProfileUpdate, kProfileRevert, kProfileSave, kProfilePaste,
-    // The Headset menu pane: the hotkeys footer ([menu] hotkey_footer).
-    kHotkeyFooter,
-    // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
-    kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
-    // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
-    // (option the same), the colour wheel, its brightness, and the game's own colour back.
-    kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset,
-    // A setting's ⓘ: its help shows while the pointer is over it (option: its index in kHelp).
-    kHelpIcon,
-    // The action bar: the launched game's status (launch_watch.h; it opens Diagnostics or Report an issue) and
-    // Restore Defaults' Undo.
-    kLaunchBadge, kUndoBadge,
-    // An open sheet (open_sheet): its buttons (option: the button's index) and its name field.
-    kSheetButton, kSheetField
-};
-
-constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
-
-constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
-constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
-
-constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
-// The exe's hash, done on a worker: its message carries a new std::string (the hex digest).
-constexpr UINT kHashedMessage = WM_APP + 1;
-// The update check, done on a worker: its message carries a new UpdateResult.
-constexpr UINT kUpdateMessage = WM_APP + 2;
-// Dev: a development build (no version to compare): the newest release is shown, not offered as an update.
-enum class Update { Off, Checking, UpToDate, Available, Dev, Failed };
-struct UpdateResult {
-    bool ok = false;
-    Release release;
-    std::wstring error;
-};
-// An install (install.h), done on a worker: its progress and its outcome, each message a new InstallProgress or
-// InstallResult.
-constexpr UINT kInstallProgressMessage = WM_APP + 3, kInstallDoneMessage = WM_APP + 4;
-// The Hotkeys pane catching a wheel or controller button: polled this often.
-constexpr UINT_PTR kCaptureTimer = 2;
-constexpr UINT kCaptureMs = 30;
-// The hotkeys' names, in HotkeyAction's order.
-constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {L"Open or close", L"Up",      L"Down",         L"Left",
-                                                          L"Right",         L"Overlay",       L"Helmet visor",
-                                                          L"CPU capture",   L"Frame capture"};
-
-struct Hit {
-    Ctl id;
-    Rect r;
-    int option = -1;  // sidebar row, segment, popup item
-};
-
-enum class Status { Idle, Starting, Error };
-// After a change while ACE runs: its live keys went to the running game (Applied), and resolution
-// or method differ from what it runs with (NextLaunch).
-enum class Live { Off, Applied, NextLaunch };
-
-struct Popup {
-    bool open = false;
-    Ctl owner = kNone;
-    Rect anchor;
-    std::vector<std::wstring> items;
-    int selected = 0, hover = -1;
-};
-
-// A sheet (open_sheet): a question or notice over the dimmed window, in the window's theme, in place of a Windows
-// message box. While one shows, only it takes the mouse and the keys: Tab and the arrows move between its buttons,
-// Return and Space press the focused one, Escape presses `cancel`.
-struct Sheet {
-    bool open = false;
-    std::wstring title, text;
-    std::vector<std::wstring> buttons;  // left to right; the last is the main one (the accent, or red when `danger`)
-    int focus = -1;   // the button with the focus when it opens; -1: the main one (the name field, with one)
-    int cancel = 0;   // the button Escape presses
-    bool danger = false;
-    bool field = false;  // a name field above the buttons (Return in it presses the main button)
-    std::wstring fieldLabel, fieldText;
-    std::function<void(int button, const std::wstring& text)> done;  // the button pressed, and the field's text
-};
-void open_sheet(Sheet sheet);
-// A notice with OK; `then` once it's closed.
-void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then = nullptr);
-
-constexpr wchar_t kMethodNames[2][40] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced (legacy)"};
-constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
-constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
-constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
-constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1160, kDefaultHeight = 740;
-constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes its title bar; ours is native
-// The placement preview's reference view (degrees) and the panel's distance (the layer's kMenuDistance).
-constexpr float kRefFovX = 100, kRefFovY = 80, kMenuDistance = 0.8f;
-// The in-headset panel's image (the layer's kPanelWidth x kPanelHeight) and colours (menu_panel.cpp).
-constexpr float kMenuAspect = 972.0f / 1024;
-constexpr uint32_t kMenuBackground = 0x16181c, kMenuHighlight = 0x0a6e78, kMenuLabel = 0xe8eaed, kMenuDim = 0x9aa0a6;
-// The performance overlay's card (quad/osd_panel.cpp's colours).
-constexpr uint32_t kOsdCard = 0x1c1c1e, kOsdTrack = 0x2c2c2e, kOsdGreen = 0x30d158, kOsdYellow = 0xffd60a;
-
-struct App {
-    HWND hwnd = nullptr;
-    Canvas canvas;
-    bool dark = false;
-    t::Colors theme = t::kLight;  // the system theme's colours with the chosen game's accent (apply_theme)
-    const t::Colors* c = &theme;
-    // The pointer (DIPs; off the window: -1) and the control under it in the last frame's hits (hover states).
-    float mouseX = -1, mouseY = -1;
-    Ctl hover = kNone;
-    int hoverOption = -1;
-    Settings s;
-    RuntimeInfo runtime;
-    std::wstring ini;
-    bool iniFound = false;
-    std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Checks;
-    // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
-    // check's fix), which (its hit's option; -1 from Tab).
-    Ctl focus = kNone;
-    int focusOption = -1;
-    bool keyboard = false;  // focus rings show after keyboard use only (:focus-visible)
-    Ctl pressed = kNone, dragging = kNone;
-    Rect dragTrack;
-    Range dragRange{0, 100};
-    Rect placeFrame;                   // the placement preview's reference view, as last drawn
-    float grabYaw = 0, grabPitch = 0;  // dragging the panel: its centre less the pointer, degrees
-    Popup popup;
-    Status status = Status::Idle;
-    Live live = Live::Off;
-    std::wstring error;
-    float scroll = 0, scrollMax = 0;
-    Rect scrollArea;
-    // Report an issue: the kind (kIssueKinds) and the description, a native multi-line edit over the canvas
-    // at reportEditRect (empty when this frame drew none), with its font and background brush.
-    int reportKind = 0;
-    HWND reportEdit = nullptr;
-    Rect reportEditRect;
-    HFONT reportFont = nullptr;
-    UINT reportFontDpi = 0;
-    HBRUSH reportBrush = nullptr;
-    uint32_t reportBrushRgb = 0;
-    std::wstring reportZip;  // the last report's zip (full path): the pane shows it to drag into the issue
-    std::wstring exportZip;  // the last Export logs zip (full path), named under its button
-    std::vector<Hit> hits;
-    // The OpenXR layers pane: 0 with the launcher (layerPlan, from the ini), 1 Windows' list (layersDraft,
-    // edited until applied over layersWindows). layerRow: the keyboard's row.
-    int layerProfile = 0, layerRow = 0;
-    LayerPlan layerPlan;
-    std::vector<SystemLayer> layersWindows, layersDraft;
-    bool layersLockMoved = false;  // Windows has the Sim-QVFR layer below another one: applying moves it first
-    std::wstring layerMessage;
-    int layerTone = 0;
-    // Launch checks (preflight.h), refreshed every few seconds. The game exe is hashed once per file (its size
-    // and write time): hashedExe/hashedStamp name the file exeSha is for, or the one being hashed.
-    std::vector<Check> checks;
-    std::wstring hashedExe;
-    uint64_t hashedStamp = 0;
-    std::string exeSha;
-    bool hashing = false;
-    // The Hotkeys pane: the action catching a press (-1: none), from the keyboard or (capturePad) a wheel or
-    // controller, whose controls already held when it started don't count (captureHeld).
-    int captureAction = -1;
-    bool capturePad = false;
-    PadInput pads;
-    bool padsOpen = false;
-    std::vector<PadHeld> captureHeld;
-    // The Profiles pane: the presets and saved profiles, the one in use and whether the ini still matches it
-    // (refresh_profiles: when the pane shows, after its actions and when the ini changes), and its last message.
-    std::vector<std::wstring> profileNames;
-    std::wstring profileCurrent;
-    bool profileMatches = false;
-    std::wstring profileMessage;
-    // The update check: where it stands, the newest release found and why a check failed.
-    Update update = Update::Off;
-    Release release;
-    std::wstring updateError;
-    // An install of `release`: running (its step and share), or how the last one failed.
-    bool installing = false;
-    InstallProgress installProgress;
-    std::wstring installError;
-    // The help under the pointer (kHelp's index, -1: none) and the ⓘ it belongs to, as last drawn.
-    int tip = -1;
-    Rect tipAnchor;
-    // The Games pane's colour: the game edited (index in games::all_games; -1: the selected game), the wheel as last
-    // drawn, and the colour as hue (degrees), saturation and brightness (percent), kept apart from its RGB so a dark
-    // colour keeps its hue; colorLoaded is the game they were read for.
-    int colorGame = -1, colorLoaded = -2;
-    Rect colorWheel;
-    float colorHue = 0, colorSat = 1;
-    int colorValue = 100;
-    // The game launched from here, followed until the next launch (launch_watch.h): the action bar's status.
-    LaunchWatch watch;
-    // Restore Defaults: the settings before it, for Undo (the action bar, Ctrl+Z) until the next change.
-    std::optional<Settings> undoRestore;
-    // The last few sessions (session_history.h), newest first, each with the settings it ran with: Diagnostics compares
-    // the last session with the one before it.
-    std::vector<SessionRecord> sessions;
-    // Which games are installed, by id (refresh_installed): the others get no tab unless the Games pane gives them one.
-    std::map<std::wstring, bool> installed;
-    // The open sheet, its name field (a native edit over the canvas at sheetEditRect, like the report's), and whether
-    // the next paint gives that field the keyboard.
-    Sheet sheet;
-    HWND sheetEdit = nullptr;
-    Rect sheetEditRect;
-    bool sheetFocusField = false;
-    bool drawingSheet = false;  // paint is drawing the sheet: its controls show hover
-} app;
-
-Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
-
-// The OpenXR layers pane: Windows' list has changes not applied yet.
-bool layers_dirty() { return app.layersDraft != app.layersWindows || app.layersLockMoved; }
 
 bool system_dark() {
     // SIM_QVFR_LAUNCHER_THEME=light|dark overrides the Windows app theme (for checking both).
@@ -603,6 +349,7 @@ void reload_runtime() {
 // The in-headset settings menu saves into the same ini: show what it set (not while a knob is held). A
 // read halfway through the menu's writes is read again on the next tick (the bytes differ by then).
 constexpr UINT_PTR kFollowTimer = 1;
+
 void follow_ini() {
     if (!app.iniFound || app.dragging != kNone)
         return;
@@ -735,6 +482,7 @@ Range slider_range(Ctl id) {
 }
 
 bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
+
 // Two-loop is legacy (ini mode=quad still runs it): the method picker shows only while it is chosen, to leave it.
 bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
@@ -905,6 +653,7 @@ void focus_ring(const Rect& r, float radius) {
 }
 
 bool focused(Ctl id) { return app.keyboard && app.focus == id && !app.popup.open; }
+
 // The pointer is over `r` (hover states), with no menu open and nothing dragged.
 bool pointer_in(const Rect& r) {
     if (app.sheet.open && !app.drawingSheet)
@@ -924,9 +673,12 @@ uint32_t mix(uint32_t a, uint32_t b, float f) {
 
 // Button labels; the Launch button's.
 constexpr t::TypeStyle kButtonLabel{14, 20, 500, false};
+
 constexpr t::TypeStyle kPrimaryLabel = t::kTitle3;
+
 // StatusBadge text; measure with it when sizing one.
 constexpr t::TypeStyle kBadgeStyle{12, 16, 600, false};
+
 float badge_width(const std::wstring& text) { return 7 + 12 + 5 + std::ceil(app.canvas.measure(text, kBadgeStyle)) + 10; }
 
 // Secondary: a filled grey button. Primary: the game's accent (one per view). Ghost: no fill until the pointer is
@@ -936,9 +688,13 @@ enum class Btn { Secondary, Primary, Ghost, Tint, Danger, Support };
 
 // Button glyphs (16 x 16, stroked).
 constexpr const char* kIconPlus = "M8 3.5v9M3.5 8h9";
+
 constexpr const char* kIconPaste = "M6 2.5h4v2H6zM4.75 3.5H3.5v10h9v-10h-1.25";
+
 constexpr const char* kIconReset = "M2.75 8C2.75 10.9 5.1 13.25 8 13.25S13.25 10.9 13.25 8 10.9 2.75 8 2.75C6.3 2.75 4.8 3.55 3.85 4.8M3.5 2.25V5.25H6.5";
+
 constexpr const char* kIconPlay = "M5 3.25v9.5L12.5 8z";
+
 constexpr const char* kIconHeart =
     "M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 14 5.9 14 9.9 8 13.5 8 13.5Z";
 
@@ -1074,6 +830,7 @@ struct Help {
     const wchar_t* label;
     const wchar_t* text;
 };
+
 constexpr Help kHelp[] = {
     {L"Rendering method",
      L"Quad View Foveated Rendering draws the outer and focus views in one game frame: the lightest on the CPU, and the one "
@@ -1348,6 +1105,8 @@ float badge(float x, float y, int tone, const std::wstring& text, float maxWidth
     return w;
 }
 
+}  // namespace
+
 // ---- Sheets ------------------------------------------------------------------------------------
 
 void open_sheet(Sheet sheet) {
@@ -1380,6 +1139,8 @@ void notify(const std::wstring& title, const std::wstring& text, std::function<v
         s.done = [then](int, const std::wstring&) { then(); };
     open_sheet(std::move(s));
 }
+
+namespace {
 
 // Closes the sheet with `button` pressed, then tells its `done` (which may open another).
 void close_sheet(int button) {
@@ -1620,6 +1381,7 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
 }
 
 std::wstring px(Size s) { return std::to_wstring(s.width) + L" × " + std::to_wstring(s.height) + L" px"; }
+
 std::wstring dims(Size s) { return std::to_wstring(s.width) + L" × " + std::to_wstring(s.height); }
 
 // A row with a popup button: `names[selected]` of `count` choices.
@@ -2643,10 +2405,14 @@ void refresh_installed() {
         app.installed[game_id(*all[i])] = game_installed(*all[i]);
 }
 
+}  // namespace
+
 bool installed(const games::GameInfo& game) {
     const auto it = app.installed.find(game_id(game));
     return it == app.installed.end() || it->second;
 }
+
+namespace {
 
 // A game has a tab when it is installed and not hidden, or when the user gave it one (one Steam doesn't find, installed
 // elsewhere: its folder is chosen in Launch checks).
@@ -3546,7 +3312,9 @@ float panel_height_deg(int widthDeg, float aspect) {
     constexpr float kRad = 3.14159265f / 180;
     return 2 * std::atan(std::tan(widthDeg * kRad / 2) * aspect) / kRad;
 }
+
 float menu_height_deg(int widthDeg) { return panel_height_deg(widthDeg, kMenuAspect); }
+
 float osd_height_deg(int widthDeg) { return panel_height_deg(widthDeg, static_cast<float>(kOsdHeight) / kOsdWidth); }
 
 std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
@@ -3731,6 +3499,7 @@ struct Item {
     const wchar_t* label;
     const char* icon[3];
 };
+
 // The kit's sidebar glyphs (16 x 16, 1.5 stroke); circles and rects are drawn as paths.
 const Item kItems[] = {
     {L"Launch checks", {"M2 4.25l1.5 1.5 2.75-3", "M2 10.75l1.5 1.5 2.75-3", "M8.75 4.5H14M8.75 11H14"}},
@@ -3754,6 +3523,7 @@ static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 bool pane_shown(int pane) {
     return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss);
 }
+
 // The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
 int shown_pane(int pane, int step, int from) {
     for (int p = pane; p >= 0 && p < kPanes; p += step)
@@ -3767,6 +3537,7 @@ struct Group {
     const wchar_t* label;
     int first, end;
 };
+
 constexpr Group kGroups[] = {{L"Setup", 0, 2}, {L"Picture", 2, 6}, {L"In the headset", 6, 8}, {L"Advanced", 8, 11}, {L"Help", 11, 13}};
 static_assert(kGroups[std::size(kGroups) - 1].end == kPanes, "every pane in a group");
 
@@ -3973,6 +3744,7 @@ void create_report_edit() {
 
 // The action bar's badge for the launch checks' first problem (and how many more); it opens the pane. Returns its width.
 constexpr float kBarX = t::kSpace5;
+
 float checks_badge(float y, int tone, const Check& first, float maxWidth) {
     size_t more = 0;
     for (const Check& c : app.checks)
@@ -3984,6 +3756,7 @@ float checks_badge(float y, int tone, const Check& first, float maxWidth) {
 }
 
 constexpr t::TypeStyle kBodyMedium{t::kBody.size, t::kBody.lineHeight, 500, false};
+
 constexpr t::TypeStyle kBodyStrong{t::kBody.size, t::kBody.lineHeight, 600, false};
 
 // The app's mark: the game's accent with an eye.
@@ -5494,10 +5267,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
 }
 
 }  // namespace
-}  // namespace ui
+
+}  // namespace simqvfr::launcher::ui::win
+
+namespace simqvfr::launcher {
 
 int run_window(HINSTANCE instance, int show) {
-    using namespace ui;
+    using namespace ui::win;
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     OleInitialize(nullptr);  // dragging the report's zip out (SHDoDragDrop)
     app.ini = settings_path();
