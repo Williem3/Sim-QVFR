@@ -136,6 +136,7 @@ struct Experiment {
     bool measure = false;
     int cpuProfileSeconds = 20, cpuProfileThreads = 4;
     uint64_t cpuProfileFrame = 0;
+    int cpuProfileSlowMs = 0;  // cpu_profile_slow_ms: a slow frame is longer than this (0: 1.25x the median)
     UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
     char passCensusWatch[512] = "";        // the census logs stacks of these pipelines' draws and dispatches (comma-separated)
     bool dred = false;                     // D3D12 DRED report on device removal (dred=1; off by default, costs GPU time)
@@ -386,6 +387,8 @@ void load_experiment() {
     experiment.cpuProfileThreads =
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_threads", 4, ini.c_str())), 1, 16);
     experiment.cpuProfileFrame = GetPrivateProfileIntW(L"experiment", L"cpu_profile_frame", 0, ini.c_str());
+    experiment.cpuProfileSlowMs =
+        std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_slow_ms", 0, ini.c_str())), 0, 1000);
     experiment.measure =
         GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline;
     experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
@@ -4704,6 +4707,7 @@ void cpu_profile_poll() {
     // capture started on a loading screen still gets them), then the busiest others.
     CpuProfileRequest request;
     request.seconds = experiment.cpuProfileSeconds;
+    request.slowFrameMs = experiment.cpuProfileSlowMs;
     request.threads.push_back(GetCurrentThreadId());
     const std::vector<ThreadLoad> all = cpu_load_latest_threads(256);
     for (const ThreadLoad& t : all)
@@ -4722,6 +4726,7 @@ void cpu_profile_poll() {
 
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
+    cpu_profile_mark_frame();  // the game's frame ends here: a running capture's samples go to their frames
     cpu_load_render_thread(GetCurrentThreadId());
     cpu_profile_poll();
     frame_capture_poll();

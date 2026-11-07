@@ -53,6 +53,27 @@ __declspec(noinline) void work_then_sleep() {
     std::printf("     (%llu)\n", static_cast<unsigned long long>(x & 1));
 }
 
+// A game loop: a frame every ~5 ms, every 8th frame 30 ms longer in a function of its own (the spike), marked
+// at each frame's end as the layer does at xrEndFrame.
+__declspec(noinline) uint64_t spike_work(uint64_t x) {
+    const ULONGLONG until = GetTickCount64() + 30;
+    while (GetTickCount64() < until)
+        x = busy_leaf(x);
+    return x;
+}
+
+__declspec(noinline) void frame_loop() {
+    uint64_t x = 5;
+    for (int frame = 1; !stop; ++frame) {
+        x = busy_leaf(x);
+        if (frame % 8 == 0)
+            x = spike_work(x);
+        Sleep(4);
+        cpu_profile_mark_frame();
+    }
+    std::printf("     (%llu)\n", static_cast<unsigned long long>(x & 1));
+}
+
 // How the report names a function (at its start, `address`) without symbols: module+offset.
 std::string start_offset(void* address) {
     char text[64];
@@ -75,11 +96,17 @@ int main() {
         sleeperId = GetCurrentThreadId();
         work_then_sleep();
     });
-    while (!id || !sleeperId)
+    DWORD framesId = 0;
+    std::thread frames([&framesId] {
+        framesId = GetCurrentThreadId();
+        frame_loop();
+    });
+    while (!id || !sleeperId || !framesId)
         Sleep(1);
+    cpu_profile_mark_frame();  // no capture running: nothing kept
     const std::wstring path = (std::filesystem::temp_directory_path() / L"sim-qvfr-cpu-profile-test.txt").wstring();
     DeleteFileW(path.c_str());
-    check(cpu_profile_start({{id, GetCurrentThreadId(), sleeperId}, 1, path}), "a capture starts (the calling thread profiled too)");
+    check(cpu_profile_start({{id, GetCurrentThreadId(), sleeperId, framesId}, 2, path}), "a capture starts (the calling thread profiled too)");
     check(!cpu_profile_start({{id}, 1, path}), "only one capture at a time");
     cpu_profile_wait();
     const uint64_t before = spins.load();
@@ -88,6 +115,7 @@ int main() {
     stop = true;
     worker.join();
     sleeper.join();
+    frames.join();
 
     std::wifstream in(path);
     std::wstringstream text;
@@ -132,6 +160,25 @@ int main() {
     check(utf8.find("ntdll.dll!") != std::string::npos || utf8.find("KERNEL32.DLL!") != std::string::npos ||
               utf8.find("KERNELBASE.dll!") != std::string::npos,
           "system functions are named from their exports (the waiting main thread is in one)");
+    {
+        // The slow frames: found, and the spike's function ranked first among the frame thread's extra time.
+        const size_t at = utf8.find("\nSlow frames:");
+        const std::string part = at == std::string::npos ? "" : utf8.substr(at);
+        std::printf("     %s\n", part.substr(1, part.find('\n', 1) - 1).c_str());
+        check(at != std::string::npos && part.find("Slow: longer than") != std::string::npos, "slow frames are found from the marks");
+        const size_t thread = part.find("Thread " + std::to_string(framesId));
+        const std::string section = thread == std::string::npos ? "" : part.substr(thread, part.find("\n  Thread ", thread + 1) - thread);
+        const size_t running = section.find("Running, total:");
+        const std::string topExtra = running == std::string::npos ? "" : first_line(section.substr(running));
+        std::printf("     frame thread's top extra: %s\n", topExtra.c_str());
+        const std::string spike = start_offset(reinterpret_cast<void*>(&spike_work));
+        check(section.find("spike_work") != std::string::npos || section.find(spike) != std::string::npos,
+              "the spike's function is in the slow frames' extra time");
+        const size_t slowSelf = section.find("Running, self:");
+        const std::string slowSelfPart = slowSelf == std::string::npos ? "" : section.substr(slowSelf);
+        check(first_line(slowSelfPart).find("busy_leaf") != std::string::npos || first_line(slowSelfPart).find(leaf) != std::string::npos,
+              "the slow frames' extra self time is the spike's leaf");
+    }
     DeleteFileW(path.c_str());
     std::puts(failures ? "RESULT: FAIL" : "RESULT: pass");
     return failures ? 1 : 0;
