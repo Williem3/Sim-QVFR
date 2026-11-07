@@ -1,16 +1,21 @@
 #include "report.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
 #include <windows.h>
 #include <dxgi.h>
+#include <shlobj.h>
 
 #include "json.h"
 
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
 
 namespace simqvfr::launcher {
 
@@ -150,6 +155,83 @@ std::wstring without_folders(const std::wstring& summary) {
     return out;
 }
 
+constexpr uint64_t kTicksPerSecond = 10'000'000;  // FILETIME's 100 ns
+
+// A session's start from its log's name, session-<yyyymmdd>-<hhmmss>.log (local time), in FILETIME ticks; 0
+// when the name has no time.
+uint64_t session_start(const std::wstring& name) {
+    unsigned y = 0, mo = 0, d = 0, h = 0, mi = 0, s = 0;
+    if (swscanf_s(name.c_str(), L"session-%4u%2u%2u-%2u%2u%2u", &y, &mo, &d, &h, &mi, &s) != 6)
+        return 0;
+    const SYSTEMTIME local{static_cast<WORD>(y), static_cast<WORD>(mo), 0, static_cast<WORD>(d),
+                           static_cast<WORD>(h), static_cast<WORD>(mi), static_cast<WORD>(s), 0};
+    SYSTEMTIME utc{};
+    FILETIME ft{};
+    if (!TzSpecificLocalTimeToSystemTime(nullptr, &local, &utc) || !SystemTimeToFileTime(&utc, &ft))
+        return 0;
+    return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+}
+
+// FILETIME ticks as local "<yyyymmdd>-<hhmmss>", the session logs' style.
+std::wstring local_stamp(uint64_t ticks) {
+    const FILETIME ft{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
+    SYSTEMTIME utc{}, local{};
+    if (!FileTimeToSystemTime(&ft, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local))
+        return L"unknown";
+    wchar_t text[32];
+    swprintf_s(text, L"%04u%02u%02u-%02u%02u%02u", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute,
+               local.wSecond);
+    return text;
+}
+
+// The game's crash folders (any folder in `folder` holding a minidump or a CrashContext), newest first by their
+// newest file: the crash reporter writes them at the crash.
+struct GameCrash {
+    fs::path folder;
+    uint64_t time = 0;
+};
+std::vector<GameCrash> game_crashes(const std::wstring& folder) {
+    std::vector<GameCrash> out;
+    if (folder.empty())
+        return out;
+    std::error_code ec;
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fec;
+        if (!it->is_directory(fec))
+            continue;
+        GameCrash c{it->path()};
+        bool report = false;
+        for (fs::directory_iterator f(it->path(), fec), fend; !fec && f != fend; f.increment(fec)) {
+            std::error_code e;
+            if (!f->is_regular_file(e))
+                continue;
+            const fs::path& p = f->path();
+            report |= _wcsicmp(p.extension().c_str(), L".dmp") == 0 || p.filename() == kCrashContextName;
+            const auto written = f->last_write_time(e);
+            if (!e)
+                c.time = std::max(c.time, static_cast<uint64_t>(written.time_since_epoch().count()));
+        }
+        if (report)
+            out.push_back(c);
+    }
+    std::sort(out.begin(), out.end(), [](const GameCrash& a, const GameCrash& b) { return a.time > b.time; });
+    return out;
+}
+
+void replace_all(std::string& text, const std::string& from, const std::string& to) {
+    if (from.empty())
+        return;
+    for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size())
+        text.replace(at, from.size(), to);
+}
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\r' || s.back() == '\t'))
+        s.pop_back();
+    s.erase(0, s.find_first_not_of(" \t"));
+    return s;
+}
+
 }  // namespace
 
 std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now) {
@@ -202,9 +284,66 @@ std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now)
         }
     }
     const std::vector<Found> logs = find(sources.logs, L"session-", L".log", session_log);
+    std::vector<std::pair<uint64_t, uint64_t>> sessions;  // the zipped sessions: start, last line
     for (size_t i = 0; i < logs.size() && i < kReportLogs; ++i)
-        if (i == 0 || logs[i].time >= since)
+        if (i == 0 || logs[i].time >= since) {
             add(logs[i].path, logs[i].path.filename().wstring(), logs[i].size);
+            if (const uint64_t start = session_start(logs[i].path.filename().wstring()))
+                sessions.emplace_back(start, logs[i].time);
+        }
+    // The game's crashes during those sessions (one that ended the session leaves the log's last line just before
+    // it), redacted: CrashContext and the game's log name the player; the zip goes into a public issue.
+    const auto add_data = [&](const std::wstring& name, std::string data) {
+        if (total + data.size() > kReportMaxBytes)
+            return;
+        total += data.size();
+        const uint64_t size = data.size();
+        out.push_back({name, {}, std::move(data), size});
+    };
+    int crashes = 0;
+    for (const GameCrash& c : game_crashes(sources.gameCrashes)) {
+        if (crashes >= kReportGameCrashes)
+            break;
+        const bool during = std::any_of(sessions.begin(), sessions.end(), [&](const auto& s) {
+            return c.time >= s.first && c.time <= s.second + kReportCrashSlackSeconds * kTicksPerSecond;
+        });
+        if (!during)
+            continue;
+        ++crashes;
+        const std::wstring folder = L"game-crash-" + local_stamp(c.time) + L"/";
+        // The context first: its ids are what the dump and the log must lose too. A dump without one can't be
+        // redacted, so it stays out.
+        std::string context;
+        const bool hasContext = read_file((c.folder / kCrashContextName).wstring(), context);
+        const std::vector<std::string> ids = hasContext ? crash_context_ids(context) : std::vector<std::string>{};
+        if (hasContext)
+            add_data(folder + kCrashContextName, redact_crash_context(std::move(context)));
+        std::error_code ec;
+        for (fs::directory_iterator f(c.folder, ec), end; !ec && f != end; f.increment(ec)) {
+            std::error_code e;
+            if (!f->is_regular_file(e))
+                continue;
+            const fs::path& p = f->path();
+            const std::wstring name = p.filename().wstring();
+            const uint64_t size = f->file_size(e);
+            if (e)
+                continue;
+            std::string text;
+            if (_wcsicmp(p.extension().c_str(), L".dmp") == 0) {
+                if (hasContext && size <= kReportMaxDumpBytes && total + size <= kReportMaxBytes &&
+                    read_file(p.wstring(), text))
+                    add_data(folder + name, redact_dump(std::move(text), ids));
+            } else if (_wcsicmp(p.extension().c_str(), L".log") == 0 && read_file(p.wstring(), text)) {
+                // The whole log: its names come from the first lines.
+                text = redact_dump(redact_game_log(std::move(text)), ids);
+                if (text.size() > kReportLoaderOutputBytes) {  // its end, from a line's start
+                    text.erase(0, text.size() - kReportLoaderOutputBytes);
+                    text.erase(0, text.find('\n') + 1);
+                }
+                add_data(folder + name, std::move(text));
+            }
+        }
+    }
     const std::vector<Found> profiles = find(sources.logs, L"cpu-profile-", L".txt");
     for (size_t i = 0; i < profiles.size() && i < kReportCpuProfiles; ++i)
         if (profiles[i].time >= since)
@@ -219,6 +358,143 @@ std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now)
             ++dumps;
         }
     return out;
+}
+
+std::wstring game_crashes_folder(const wchar_t* crashReports) {
+    if (!crashReports || !*crashReports)
+        return {};
+    wchar_t* local = nullptr;
+    std::wstring out;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &local)) && local)
+        out = (fs::path(local) / crashReports).wstring();
+    CoTaskMemFree(local);
+    return out;
+}
+
+std::string redact_crash_context(std::string xml) {
+    for (const char* tag : {"LoginId", "MachineId", "EpicAccountId", "UserName"}) {
+        const std::string open = std::string("<") + tag + ">", close = std::string("</") + tag + ">";
+        for (size_t at = 0; (at = xml.find(open, at)) != std::string::npos;) {
+            const size_t begin = at + open.size(), end = xml.find(close, begin);
+            if (end == std::string::npos)
+                break;
+            if (end > begin)
+                xml.replace(begin, end - begin, "redacted");
+            at = begin;
+        }
+    }
+    return xml;
+}
+
+std::vector<std::string> crash_context_ids(const std::string& xml) {
+    std::vector<std::string> ids;
+    for (const char* tag : {"LoginId", "MachineId", "EpicAccountId"}) {
+        const std::string open = std::string("<") + tag + ">", close = std::string("</") + tag + ">";
+        for (size_t at = 0; (at = xml.find(open, at)) != std::string::npos;) {
+            const size_t begin = at + open.size(), end = xml.find(close, begin);
+            if (end == std::string::npos)
+                break;
+            const std::string id = trimmed(xml.substr(begin, end - begin));
+            if (id.size() >= 8 && std::find(ids.begin(), ids.end(), id) == ids.end())  // shorter: no id
+                ids.push_back(id);
+            at = end;
+        }
+    }
+    return ids;
+}
+
+std::string redact_dump(std::string dump, const std::vector<std::string>& ids) {
+    const auto lower = [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); };
+    std::string folded(dump.size(), '\0');  // lower case, for a match in any case at the same offsets
+    std::transform(dump.begin(), dump.end(), folded.begin(), lower);
+    for (const std::string& id : ids) {
+        std::string ascii(id.size(), '\0'), wide;
+        std::transform(id.begin(), id.end(), ascii.begin(), lower);
+        for (char ch : ascii) {
+            wide += ch;
+            wide += '\0';
+        }
+        for (const std::string* form : {&ascii, &wide})
+            for (size_t at = 0; (at = folded.find(*form, at)) != std::string::npos; at += form->size())
+                for (size_t i = 0; i < form->size(); i += form == &wide ? 2 : 1)
+                    dump[at + i] = folded[at + i] = '0';
+    }
+    return dump;
+}
+
+std::string redact_game_log(std::string log) {
+    // The lines that name the player, each value up to `stop` (the line's end when empty) replaced on the spot;
+    // the longer values then wherever else they appear (a short one could match ordinary text).
+    struct Rule {
+        const char *key, *stop, *as;
+    };
+    constexpr Rule kRules[] = {
+        {"LogInit: Computer: ", "", "<computer>"},
+        {"LogInit: User: ", "", "<user>"},
+        {"loaded local account: ", "", "<account>"},          // ACC: "S<SteamID64> <name> <nickname>#0"
+        {"steam user stats, user: ", " [", "<steam name>"},  // Steam's "has no stats entries" warning
+    };
+    constexpr size_t kMinAnywhere = 4;
+    std::vector<std::pair<std::string, std::string>> anywhere;  // value, placeholder
+    std::vector<std::string> users;
+    for (const Rule& r : kRules)
+        for (size_t at = 0; (at = log.find(r.key, at)) != std::string::npos;) {
+            const size_t begin = at + std::strlen(r.key);
+            const size_t eol = std::min(log.find('\n', begin), log.size());
+            size_t end = *r.stop ? log.find(r.stop, begin) : eol;
+            end = std::min(end, eol);
+            const std::string value = trimmed(log.substr(begin, end - begin));
+            if (value.empty()) {
+                at = begin;
+                continue;
+            }
+            log.replace(begin, log.find(value, begin) + value.size() - begin, r.as);
+            at = begin + std::strlen(r.as);
+            if (std::strcmp(r.as, "<user>") == 0) {
+                users.push_back(value);
+                continue;
+            }
+            std::vector<std::string> values = {value};
+            if (std::strcmp(r.as, "<account>") == 0) {  // the name after the id, without and with the nickname
+                const size_t space = value.find(' ');
+                if (space != std::string::npos) {
+                    const std::string name = trimmed(value.substr(space + 1));
+                    values.push_back(name);
+                    const size_t last = name.rfind(' ');
+                    if (last != std::string::npos) {
+                        values.push_back(trimmed(name.substr(0, last)));
+                        values.push_back(trimmed(name.substr(last + 1)));
+                    }
+                }
+            }
+            for (const std::string& v : values)
+                if (v.size() >= kMinAnywhere)
+                    anywhere.emplace_back(v, r.as);
+        }
+    std::sort(anywhere.begin(), anywhere.end(), [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
+    for (const auto& [value, as] : anywhere)
+        replace_all(log, value, as);
+    for (const std::string& user : users)  // in paths only: a short name would match ordinary words
+        for (const char* sep : {"/", "\\"}) {
+            replace_all(log, std::string("Users") + sep + user + sep, std::string("Users") + sep + "<user>" + sep);
+            replace_all(log, std::string("Users") + sep + sep + user + sep + sep,
+                        std::string("Users") + sep + sep + "<user>" + sep + sep);
+        }
+    // SteamID64s: 7656119 and ten more digits, not inside a longer number.
+    const std::string prefix = "7656119", steamId = "<steam id>";
+    for (size_t at = 0; (at = log.find(prefix, at)) != std::string::npos;) {
+        size_t end = at + prefix.size();
+        while (end < log.size() && end - at < 18 && std::isdigit(static_cast<unsigned char>(log[end])))
+            ++end;
+        const bool before = at > 0 && std::isdigit(static_cast<unsigned char>(log[at - 1]));
+        if (end - at == 17 && !before) {
+            log.replace(at, 17, steamId);
+            at += steamId.size();
+        } else {
+            at = end;
+        }
+    }
+    return log;
 }
 
 uint32_t crc32(const void* data, size_t size, uint32_t crc) {

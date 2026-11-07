@@ -22,6 +22,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // never paced to the generated rate (docs/recon-acc.md).
     {true, true, true, true, false},
     kBuilds, std::size(kBuilds),
+    false,
+    L"AC2\\Saved\\Crashes",  // UE4CC-Windows-<id>_0000\: UE4Minidump.dmp, CrashContext.runtime-xml, AC2.log
 };
 
 }  // namespace acc

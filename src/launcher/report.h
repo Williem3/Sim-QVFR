@@ -26,6 +26,14 @@ inline constexpr uint64_t kReportMaxBytes = 24ull << 20, kReportMaxDumpBytes = 1
 // launch.txt (the launch plan).
 inline constexpr wchar_t kLoaderOutputName[] = L"openxr-loader.log";
 inline constexpr uint64_t kReportLoaderOutputBytes = 1ull << 20;
+// The game's own crash reports (GameInfo::crashReports): a folder per crash. The zip takes the newest
+// kReportGameCrashes that happened during a session whose log it carries (from the session's start, its log's
+// name, to kReportCrashSlackSeconds after its last line), each as game-crash-<local time>\: the minidump (under
+// kReportMaxDumpBytes), CrashContext.runtime-xml and the game's log (its last kReportLoaderOutputBytes), all
+// three redacted, since the zip goes into a public issue.
+inline constexpr int kReportGameCrashes = 2;
+inline constexpr uint64_t kReportCrashSlackSeconds = 300;
+inline constexpr wchar_t kCrashContextName[] = L"CrashContext.runtime-xml";
 
 // One entry of the zip: a file on disk (`path`), or `data` when `path` is empty.
 struct ReportFile {
@@ -39,12 +47,27 @@ struct ReportSources {
     std::wstring logs;         // the logs folder: ace-*.log, cpu-profile-*.txt, cheeky-snapshot.json, hang-*.dmp
     std::wstring runtimeIni;   // runtime.ini
     std::wstring settingsIni;  // the sim-qvfr.ini in use
+    std::wstring gameCrashes;  // the game's crash reports folder (game_crashes_folder); empty: none
 };
 
 // The files to zip from `sources`, as of `now` (FILETIME units): the newest kReportLogs session logs, the
-// two ini files, the newest kReportCpuProfiles CPU captures and kReportDumps hang dumps (each under
-// kReportMaxDumpBytes) of the last kReportMaxAgeDays, Cheeky's snapshot; kReportMaxBytes in all.
+// two ini files, the game's crash reports during those sessions (kReportGameCrashes), the newest
+// kReportCpuProfiles CPU captures and kReportDumps hang dumps (each under kReportMaxDumpBytes) of the last
+// kReportMaxAgeDays, Cheeky's snapshot; kReportMaxBytes in all.
 std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now);
+// %LOCALAPPDATA%\<crashReports>; empty when the game names none.
+std::wstring game_crashes_folder(const wchar_t* crashReports);
+// CrashContext.runtime-xml without the ids that follow the user: LoginId, MachineId, EpicAccountId, UserName.
+std::string redact_crash_context(std::string xml);
+// Those ids' values in a CrashContext (the non-empty ones), for redact_dump.
+std::vector<std::string> crash_context_ids(const std::string& xml);
+// A minidump with each of `ids` overwritten by '0's of the same length, as ASCII or UTF-16 and in any case
+// (Unreal copies its crash context into the dump): the dump keeps its size and layout, so it still opens.
+std::string redact_dump(std::string dump, const std::vector<std::string>& ids);
+// An Unreal game's log without who played: the computer and Windows user names (LogInit), the game account
+// (ACC's "loaded local account:" line) and Steam name (Steam's "user stats, user:" warning), wherever they
+// appear, and every SteamID64.
+std::string redact_game_log(std::string log);
 // Writes `files` into a new zip at `zip` (stored entries, CRC-32). Empty on success, else why.
 std::wstring write_zip(const std::wstring& zip, const std::vector<ReportFile>& files);
 uint32_t crc32(const void* data, size_t size, uint32_t crc = 0);
