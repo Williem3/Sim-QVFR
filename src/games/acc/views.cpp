@@ -693,8 +693,39 @@ void hold_cvars() {
     }
 }
 
+// abi.h kDiagCvars, switched off live (views_set_diag): held at 0, the game's value kept to put back. Both threads'
+// copies, as hold_cvars. Only this thread (xrEndFrame) reads or writes `diagSaved` / `diagHeld`.
+std::atomic<bool> diagReady{false}, diagOff[std::size(kDiagCvars)];
+int diagSaved[std::size(kDiagCvars)][2];
+bool diagHeld[std::size(kDiagCvars)];
+void hold_diag_cvars() {
+    if (!diagReady.load(std::memory_order_relaxed))
+        return;
+    for (std::size_t i = 0; i < std::size(kDiagCvars); ++i) {
+        const HeldCvar& c = kDiagCvars[i];
+        auto* data = *reinterpret_cast<int* const*>(simqvfr::module_base() + c.data);
+        if (!data)
+            continue;
+        if (diagOff[i].load(std::memory_order_relaxed)) {
+            if (!diagHeld[i]) {
+                diagSaved[i][0] = data[0];
+                diagSaved[i][1] = data[1];
+                diagHeld[i] = true;
+                simqvfr::logf("acc diagnostics: %s %d -> %d (switched off)", c.name, data[1], c.value);
+            }
+            data[0] = data[1] = c.value;
+        } else if (diagHeld[i]) {
+            data[0] = diagSaved[i][0];
+            data[1] = diagSaved[i][1];
+            diagHeld[i] = false;
+            simqvfr::logf("acc diagnostics: %s back to %d", c.name, data[1]);
+        }
+    }
+}
+
 void views_frame_end() {
     hold_cvars();
+    hold_diag_cvars();
     if (!started.load() || ++frames % 900 != 0)
         return;
     const auto line = [](const char* what, std::atomic<std::uint64_t> (&calls)[5]) {
@@ -774,6 +805,22 @@ void views_frame_end() {
                 static_cast<unsigned long long>(n.pushed - n.taken), static_cast<unsigned long long>(n.resyncs),
                 static_cast<unsigned long long>(n.emptyTakes), last.turn[0].x, last.turn[0].y, last.turn[0].z,
                 last.turn[0].w);
+}
+
+bool views_diag_start() {
+    for (const HeldCvar& c : kDiagCvars)
+        if (!simqvfr::code_matches(c.ref, c.refAnchor, sizeof(c.refAnchor)) ||
+            !simqvfr::code_matches(c.store, c.storeAnchor, sizeof(c.storeAnchor))) {
+            simqvfr::logf("acc diagnostics: %s isn't where this build had it: the switches do nothing", c.name);
+            return false;
+        }
+    diagReady = true;
+    return true;
+}
+
+void views_set_diag(int which, bool off) {
+    if (which >= 0 && which < static_cast<int>(std::size(kDiagCvars)))
+        diagOff[which] = off;
 }
 
 }  // namespace acc

@@ -7,6 +7,7 @@
 
 #include "../../engine/code_patch.h"
 #include "../../log.h"
+#include "../diag_switches.h"
 #include "abi.h"
 #include "four_views.h"
 #include "game.h"
@@ -223,14 +224,9 @@ public:
         patched_ = true;
         if (qvfr_wanted(ini)) {
             qvfr_ = apply_qvfr(ini);
-            // The switches are read from the launcher's own ini (SIM_QVFR_SETTINGS: the one to edit while flying),
-            // else this run's snapshot.
-            if (GetPrivateProfileIntW(L"experiment", L"xplane_diag", 0, ini) == 1) {
-                wchar_t settings[MAX_PATH] = {};
-                const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", settings, MAX_PATH);
-                diagIni_ = n > 0 && n < MAX_PATH ? settings : ini;
-                simqvfr::logf("xplane: diagnostic switches read from %ls", diagIni_.c_str());
-            }
+            // Diagnostic switches (xplane_diag=1): SSR, AO and the sun's shadow (four_views_set_diagnostics).
+            if (diag_.start(ini, L"xplane", {L"ssr", L"ao", L"shadow"}))
+                simqvfr::logf("xplane: diagnostic switches read from %ls", diag_.ini().c_str());
             fourViews_ = true;
             return;
         }
@@ -260,58 +256,18 @@ public:
     }
 
 private:
-    // Diagnostics (xplane_diag=1): Ctrl+Alt+1 toggles SSR's reflections, Ctrl+Alt+2 CACAO's occlusion, Ctrl+Alt+3 the
-    // sun's cascaded shadows, from the next frame (beside Ctrl+Alt+F, the frame capture); the ini's
-    // xplane_diag_ssr_off / _ao_off / _shadow_off, read twice a second or so, set them when they change.
+    // Diagnostics (xplane_diag=1; games/diag_switches.h): Ctrl+Alt+1 SSR's reflections, Ctrl+Alt+2 CACAO's occlusion,
+    // Ctrl+Alt+3 the sun's cascaded shadows, from the next frame.
     void diag_poll() {
-        if (diagIni_.empty())
-            return;
-        auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
-        const bool chord = down(VK_CONTROL) && down(VK_MENU);
-        const bool ssrKey = chord && down('1'), aoKey = chord && down('2'), shadowKey = chord && down('3');
-        bool changed = false;
-        if (ssrKey && !ssrKeyHeld_) {
-            diagSsrOff_ = !diagSsrOff_;
-            changed = true;
-        }
-        if (aoKey && !aoKeyHeld_) {
-            diagAoOff_ = !diagAoOff_;
-            changed = true;
-        }
-        if (shadowKey && !shadowKeyHeld_) {
-            diagShadowOff_ = !diagShadowOff_;
-            changed = true;
-        }
-        ssrKeyHeld_ = ssrKey;
-        aoKeyHeld_ = aoKey;
-        shadowKeyHeld_ = shadowKey;
-        if (++diagFrames_ % 45 == 0) {
-            const int ssr = GetPrivateProfileIntW(L"experiment", L"xplane_diag_ssr_off", 0, diagIni_.c_str()) == 1;
-            const int ao = GetPrivateProfileIntW(L"experiment", L"xplane_diag_ao_off", 0, diagIni_.c_str()) == 1;
-            const int shadow = GetPrivateProfileIntW(L"experiment", L"xplane_diag_shadow_off", 0, diagIni_.c_str()) == 1;
-            if (ssr != iniSsrOff_ || ao != iniAoOff_ || shadow != iniShadowOff_) {
-                diagSsrOff_ = ssr == 1;
-                diagAoOff_ = ao == 1;
-                diagShadowOff_ = shadow == 1;
-                changed = iniSsrOff_ >= 0 || ssr || ao || shadow;  // the first read only applies a switch already on
-                iniSsrOff_ = ssr;
-                iniAoOff_ = ao;
-                iniShadowOff_ = shadow;
-            }
-        }
-        if (changed)
-            four_views_set_diagnostics(diagSsrOff_, diagAoOff_, diagShadowOff_);
+        if (diag_.poll())
+            four_views_set_diagnostics(diag_.off(0), diag_.off(1), diag_.off(2));
     }
 
     bool patched_ = false;
     bool fourViews_ = false;
     bool qvfr_ = false;
     bool viewSizes_ = false;  // per-view sizes on (xplane_view_sizes=1, at QVFR's start)
-    std::wstring diagIni_;    // the ini the diagnostic switches are read from (xplane_diag=1), else empty
-    int diagFrames_ = 0;
-    bool diagSsrOff_ = false, diagAoOff_ = false, diagShadowOff_ = false;
-    bool ssrKeyHeld_ = false, aoKeyHeld_ = false, shadowKeyHeld_ = false;
-    int iniSsrOff_ = -1, iniAoOff_ = -1, iniShadowOff_ = -1;  // the ini's switches when last read (-1: not yet)
+    simqvfr::games::DiagSwitches diag_;  // xplane_diag=1
     double focus_ = 0, focusY_ = 0;
     int frames_ = 0;
     std::uint64_t lastDraws_ = 0;
