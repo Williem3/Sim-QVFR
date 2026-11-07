@@ -56,8 +56,8 @@ add_library(minhook STATIC
   ${THIRD_PARTY}/minhook/src/hde/hde64.c)
 target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 
-# Every source the layer shares with its tests except src/xr_layer.cpp (two_loops_test and quad_flow_test
-# #include it), compiled once. A test links this and takes only the objects it references.
+# Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
+# A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
   src/games/games.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
@@ -72,11 +72,20 @@ target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND
 target_compile_options(sim_qvfr_core PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 
-add_library(sim_qvfr SHARED src/xr_layer.cpp src/early_load.cpp)
+# The layer (src/xr_layer.cpp and src/layer/), for the DLL and for two_loops_test and quad_flow_test. An OBJECT
+# library, not a static one: every object is linked in, including xr_layer.cpp's exported
+# xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
+add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp)
+target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(sim_qvfr_layer PUBLIC sim_qvfr_core)
+
+add_library(sim_qvfr SHARED src/early_load.cpp)
 target_include_directories(sim_qvfr PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(sim_qvfr PRIVATE sim_qvfr_core)
+target_link_libraries(sim_qvfr PRIVATE sim_qvfr_layer)
 set_target_properties(sim_qvfr PROPERTIES OUTPUT_NAME sim-qvfr)
 sim_qvfr_version_info(sim_qvfr sim-qvfr.dll VFT_DLL "Sim-QVFR OpenXR layer")
 # A linker map next to the DLL, to name the layer's frames in a game's crash call stack (no effect on the code).
@@ -140,13 +149,13 @@ target_compile_options(frame_records_test PRIVATE /W4 /permissive- /utf-8)
 add_executable(two_loops_test tests/two_loops_test.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(two_loops_test PRIVATE sim_qvfr_core)
+target_link_libraries(two_loops_test PRIVATE sim_qvfr_layer)
 
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
 add_executable(quad_flow_test tests/quad_flow_test.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(quad_flow_test PRIVATE sim_qvfr_core)
+target_link_libraries(quad_flow_test PRIVATE sim_qvfr_layer)
 
 # Offline check of the views4 index-folding trampolines (tests/code_patch_test.cpp).
 add_executable(code_patch_test tests/code_patch_test.cpp)

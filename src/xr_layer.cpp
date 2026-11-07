@@ -1,221 +1,74 @@
-// XR_APILAYER_SIM_qvfr: logs what Assetto Corsa EVO asks for (views, swapchains, frame
-// submission) and starts the log-only engine probes (probe/probe.cpp) at xrCreateSession. With
-// mode=off nothing alters rendering; the experiments and the quad pipeline are selected in
-// sim-qvfr.ini.
+// XR_APILAYER_SIM_qvfr: logs what the game asks for (views, swapchains, frame submission) and starts the
+// log-only engine probes (probe/probe.cpp) at xrCreateSession. With mode=off nothing alters rendering; the
+// experiments and the quad pipeline are selected in sim-qvfr.ini. This file has the loader side:
+// GetInstanceProcAddr, the layer order and gaze extension checks, CreateApiLayerInstance and the exported
+// negotiation; the rest is in src/layer/ (layer.h).
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <future>
-#include <map>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include "cheeky/cheeky_host.h"
-#include "cheeky/cheeky_settings.h"
-#include "games/adapter.h"
-#include "ini_put.h"
-#include "layer_chain.h"
-#include "log.h"
-#include "probe/d3d11_capture.h"
-#include "probe/d3d12_trace.h"
-#include "probe/cpu_load.h"
-#include "probe/cpu_profile.h"
-#include "probe/gpu_frame_timer.h"
-#include "probe/gpu_load.h"
-#include "probe/pass_census.h"
-#include "probe/pix_capture.h"
-#include "quad/focus_turn.h"
-#include "quad/fov_crop.h"
-#include "quad/helmet.h"
-#include "probe/dred.h"
-#include "games/game.h"
-#include "probe/hang_watch.h"
-#include "probe/probe.h"
-#include "probe/vram_census.h"
-#include "quad/compositor.h"
-#include "quad/d3d11_compositor.h"
-#include "quad/session_graphics.h"
-#include "quad/focus_offset.h"
-#include "quad/focus_shape.h"
-#include "quad/gaze_deadzone.h"
-#include "quad/focus_outline.h"
-#include "quad/menu_panel.h"
-#include "input/hotkeys.h"
-#include "input/pad_input.h"
-#include "profile/profiles.h"
-#include "quad/osd.h"
-#include "quad/qvfr_optimizer.h"
-#include "quad/settings_menu.h"
-#include "xr.h"
-
 #include <dxgi1_4.h>
 #include <intrin.h>
 
-namespace simqvfr {
+#include "cheeky/cheeky_host.h"
+#include "cheeky/cheeky_settings.h"
+#include "games/adapter.h"
+#include "games/game.h"
+#include "ini_put.h"
+#include "input/hotkeys.h"
+#include "input/pad_input.h"
+#include "layer_chain.h"
+#include "log.h"
+#include "probe/cpu_load.h"
+#include "probe/cpu_profile.h"
+#include "probe/d3d11_capture.h"
+#include "probe/d3d12_trace.h"
+#include "probe/dred.h"
+#include "probe/gpu_frame_timer.h"
+#include "probe/gpu_load.h"
+#include "probe/hang_watch.h"
+#include "probe/pass_census.h"
+#include "probe/pix_capture.h"
+#include "probe/probe.h"
+#include "probe/vram_census.h"
+#include "profile/profiles.h"
+#include "quad/compositor.h"
+#include "quad/focus_offset.h"
+#include "quad/focus_outline.h"
+#include "quad/focus_shape.h"
+#include "quad/focus_turn.h"
+#include "quad/fov_crop.h"
+#include "quad/gaze_deadzone.h"
+#include "quad/helmet.h"
+#include "quad/menu_panel.h"
+#include "quad/osd.h"
+#include "quad/qvfr_optimizer.h"
+#include "quad/session_graphics.h"
+#include "quad/settings_menu.h"
+#include "xr.h"
+#include "layer/layer.h"
+
+namespace simqvfr::layer {
+
 namespace {
 
 constexpr char kLayerName[] = "XR_APILAYER_SIM_qvfr";
+
 constexpr uint64_t kDetailedFrames = 4;
+
 constexpr uint64_t kSampleEveryFrames = 1800;
-
-struct Dispatch {
-    PFN_xrGetInstanceProcAddr GetInstanceProcAddr = nullptr;
-    PFN_xrEnumerateViewConfigurationViews EnumerateViewConfigurationViews = nullptr;
-    PFN_xrCreateSession CreateSession = nullptr;
-    PFN_xrDestroySession DestroySession = nullptr;
-    PFN_xrBeginSession BeginSession = nullptr;
-    PFN_xrWaitFrame WaitFrame = nullptr;
-    PFN_xrBeginFrame BeginFrame = nullptr;
-    PFN_xrCreateSwapchain CreateSwapchain = nullptr;
-    PFN_xrEnumerateSwapchainImages EnumerateSwapchainImages = nullptr;
-    PFN_xrLocateViews LocateViews = nullptr;
-    PFN_xrEndFrame EndFrame = nullptr;
-    PFN_xrAcquireSwapchainImage AcquireSwapchainImage = nullptr;
-    PFN_xrWaitSwapchainImage WaitSwapchainImage = nullptr;
-    PFN_xrReleaseSwapchainImage ReleaseSwapchainImage = nullptr;
-    PFN_xrStringToPath StringToPath = nullptr;
-    PFN_xrCreateActionSet CreateActionSet = nullptr;
-    PFN_xrCreateAction CreateAction = nullptr;
-    PFN_xrSuggestInteractionProfileBindings SuggestInteractionProfileBindings = nullptr;
-    PFN_xrAttachSessionActionSets AttachSessionActionSets = nullptr;
-    PFN_xrSyncActions SyncActions = nullptr;
-    PFN_xrPollEvent PollEvent = nullptr;
-    PFN_xrCreateActionSpace CreateActionSpace = nullptr;
-    PFN_xrLocateSpace LocateSpace = nullptr;
-    PFN_xrCreateReferenceSpace CreateReferenceSpace = nullptr;
-    PFN_xrDestroySpace DestroySpace = nullptr;
-    PFN_xrDestroySwapchain DestroySwapchain = nullptr;
-    PFN_xrGetActionStateBoolean GetActionStateBoolean = nullptr;
-    PFN_xrGetActionStateVector2f GetActionStateVector2f = nullptr;
-    PFN_xrGetActionStatePose GetActionStatePose = nullptr;
-    PFN_xrGetCurrentInteractionProfile GetCurrentInteractionProfile = nullptr;
-    PFN_xrPathToString PathToString = nullptr;
-    PFN_xrGetVisibilityMaskKHR GetVisibilityMaskKHR = nullptr;  // optional (XR_KHR_visibility_mask)
-};
-
-Dispatch next;
-std::mutex chainMutex;
-std::map<XrSwapchain, std::pair<uint32_t, uint32_t>> chainSizes;
-
-// Round 5 experiment, read from sim-qvfr.ini next to the DLL (ACE starts through Steam, so
-// there is no per-launch environment): [experiment] mode=focus_only narrows every located view to a
-// centred focus box. ACE builds its eye cameras and its submitted projection views from these FOVs.
-struct Experiment {
-    bool focusOnly = false;
-    bool doubleRender = false;    // round 6: render_frame runs twice per frame, identical cameras
-    bool views3 = false;          // single-frame quad views step 1: VR runs the renderer's 3-view mode
-    bool views4 = false;          // QVFR: 4 views in one game frame (the game's adapter, games/adapter.h)
-    wchar_t mode[32] = L"off";    // [experiment] mode in effect (baseline=1: off), for the game's adapter
-    bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
-    bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
-    bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
-    bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
-    bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
-    bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
-    UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
-    bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
-    bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
-    double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
-    bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
-    bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
-    bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
-    // CPU sampling profiler (probe/cpu_profile.h): on (Ctrl+Alt+C starts a capture), seconds per capture, the
-    // busiest threads it samples (and the render thread), and the frame a capture starts at by itself (0: none).
-    bool cpuProfile = false;
-    // [experiment] measure=1: the CPU and pacing reports (views4 cpu/pacing/load/threads lines) and the load
-    // samplers in any mode, so a mode=off run measures what ACE costs without the four views. Always on in
-    // views4; cpu_profile=1 turns it on too (its thread choice needs the load sampler).
-    bool measure = false;
-    int cpuProfileSeconds = 20, cpuProfileThreads = 4;
-    uint64_t cpuProfileFrame = 0;
-    int cpuProfileSlowMs = 0;  // cpu_profile_slow_ms: a slow frame is longer than this (0: 1.25x the median)
-    UINT passCensusFrame = 1500;           // the census counts xrEndFrames from this one, for 10 frames
-    char passCensusWatch[512] = "";        // the census logs stacks of these pipelines' draws and dispatches (comma-separated)
-    bool dred = false;                     // D3D12 DRED report on device removal (dred=1; off by default, costs GPU time)
-    bool d3d12Debug = false;               // D3D12 debug layer, errors into the log (slow; diagnosis only)
-    bool gpuValidation = false;            // d3d12_debug=2: plus GPU-based validation (very slow)
-    UINT pixCaptureFrame = 0;              // PIX GPU capture from this xrEndFrame (probe/pix_capture.h), 0 = off
-    bool twoLoops = false;        // round 7: two complete ACE frames per display frame
-    bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
-    double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
-    Views4Layout views4Layout;    // views4: outer views at periphery_scale, focus views at focus_density x focus_percent
-    // views4: [crop], the FOV ACE renders the eyes with (fov_crop.h); live (set_crop). The launch crop sizes
-    // ACE's target (views4Layout's cropWidth and cropHeight).
-    std::atomic<double> cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;
-    FovCrop crop() const { return {cropTop, cropBottom, cropOuter, cropInner}; }
-    void set_crop(const FovCrop& c) {
-        cropTop = c.top;
-        cropBottom = c.bottom;
-        cropOuter = c.outer;
-        cropInner = c.inner;
-    }
-    // Atomic: live settings (live_reload), changed between frames while other threads read them.
-    std::atomic<double> focusFraction = 0.35;  // of the view's tangent-space width (focus_percent)
-    std::atomic<double> focusFractionY = 0;    // of its height (focus_height_percent); 0 = the same as the width
-    double focus_y() const {
-        const double y = focusFractionY;
-        return y > 0 ? y : focusFraction.load();
-    }
-    // The focus box as a share of the view ACE renders: focus_percent is of the uncropped eye.
-    double box_x(double fraction) const { return cropped_share(fraction, crop().kept_width()); }
-    double box_y(double fraction) const { return cropped_share(fraction, crop().kept_height()); }
-    double box_x() const { return box_x(focusFraction); }
-    double box_y() const { return box_y(focus_y()); }
-    // QVFR composes the views itself, by either compositor (views4_compose: ACE's D3D12 one; views4ComposeD3D11).
-    bool composing() const { return views4Compose || views4ComposeD3D11; }
-    bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
-    std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
-    std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
-    std::atomic<uint64_t> focusShape = 0;  // the focus area's pulled-in corners (focus_shape.h's bits; 0 = the box)
-    std::atomic<bool> border = false;      // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
-    bool borderAtLaunch = false;           // views4 without composition tracks the outline's chains only if on at launch
-    float borderColor[4] = {0, 1, 0, 1};   // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
-    std::atomic<bool> gaze = true;         // quad: the focus box follows XR_EXT_eye_gaze_interaction
-    // [quad] gaze_thread: the gaze is looked up on the layer's own thread, not inside ACE's xrLocateViews
-    // (a lookup took ~1.5 ms of ACE's render thread every frame on the Pimax runtime, 2026-11-03).
-    bool gazeThread = true;
-    int gazePollHz = 250;
-    // The focus box's vertical offset, degrees up (focus_offset.h): fixed, and added to a tracked gaze.
-    std::atomic<int> fixedOffsetY = 0, gazeOffsetY = 0;
-    // [quad] gaze_deadzone: the focus box holds still while the gaze stays this many degrees of where it
-    // aims, so tracker noise does not turn the focus cameras every frame (MSAA shimmer in the box).
-    std::atomic<double> gazeDeadzone = 1.5;
-    UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
-    bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
-    UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h;
-                                  // default: the game's hang_watch_s)
-};
-Experiment experiment;
-// The game this process is (games/adapter.h): its QVFR and its own experiments. Elsewhere one that does nothing.
-games::GameAdapter* game = &games::adapter_for(nullptr);
-bool focusLogged = false;
-// The helmet overlay ([helmet], views4 composing; helmet.h): set at launch, then live under quad.mutex.
-HelmetSettings helmetSettings;
-
-// The settings a running game takes from its ini without a restart (live_reload): the focus box,
-// its blend and outline, gaze and (views4) the FOV crop and the helmet overlay. Resolution is fixed at launch: ACE sizes its render target once,
-// from the eye size offered at session start, so the focus views keep their pixels and a live box
-// size changes their density.
-struct LiveSettings {
-    double focusFraction = 0.35, focusFractionY = 0, feather = 0.10, cornerRadius = 0;
-    FocusShape shape;  // focus_shape.h; with corners the box's corner radius is not used
-    bool border = false, gaze = true;
-    FocusOffset offset;
-    double gazeDeadzone = 1.5;  // degrees
-    float borderColor[4] = {0, 1, 0, 1};
-    FovCrop crop;  // views4 only
-    HelmetSettings helmet;  // views4 composing only
-    int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
-};
 
 // [crop] (QVFR): the sides of each eye's FOV ACE does not render (fov_crop.h), each on its own.
 FovCrop read_crop(const wchar_t* ini) {
@@ -302,14 +155,6 @@ Views4Sizes views4_sizes(const wchar_t* ini, double focusFraction, double focusF
     s.focusHeight = focusFractionY > 0 ? s.density * focusFractionY : s.focus;
     return s;
 }
-
-struct Live {
-    std::wstring ini;          // the ini load_experiment read
-    std::wstring restartKeys;  // restart_keys when last read
-    MenuPlacement menuPlacement;  // the settings menu's place ([menu]) when last read
-    FILETIME written{};        // the ini's last write time when last read
-};
-Live live;
 
 // What the launcher shows before the next launch (SIM_QVFR_RUNTIME_INFO, set by the launcher): the
 // headset's recommended per-eye size and whether eye tracking delivered samples. An ini file.
@@ -491,27 +336,8 @@ void load_experiment() {
              launchCrop.kept_width() * launchCrop.kept_height() * 100);
 }
 
-// Round 7: two complete ACE frames per display frame. ACE's frames are paired A, B by its own
-// xrWaitFrame calls. A gets the real xrWaitFrame/xrBeginFrame and its xrEndFrame is swallowed. B
-// receives A's frame state at once (same display time, same pose), its xrBeginFrame is answered
-// here and its xrEndFrame is the one the runtime sees. The runtime keeps one wait/begin/end per
-// display frame. Arms only after ACE's own wait/begin/end calls ran 1:1:1 for a while (a frame
-// generator above this layer breaks that), and switches on only between frames.
-struct TwoLoops {
-    std::mutex mutex;
-    bool active = false;
-    uint64_t waits = 0, begins = 0, ends = 0;  // app calls since session start
-    uint64_t pairedWaits = 0, pairedBegins = 0, pairedEnds = 0;
-    XrFrameState pendingState{XR_TYPE_FRAME_STATE};
-    LARGE_INTEGER frequency{}, aWaitReturned{}, bWaitReturned{};
-    double aMs = 0, bMs = 0, displayMs = 0;
-    uint64_t pairs = 0;
-    std::atomic<bool> inB{false};  // between B's xrWaitFrame and B's xrEndFrame
-    LARGE_INTEGER lastReport{};
-    bool broken = false;
-};
-TwoLoops loops;
 constexpr uint64_t kArmAfterFrames = 30;
+
 constexpr uint64_t kMaxFallbackRun = 90;  // ~1-2 s of display frames
 
 double ms_between(const LARGE_INTEGER& from, const LARGE_INTEGER& to) {
@@ -528,54 +354,8 @@ void narrow(float& loAngle, float& hiAngle, double fraction, double centre = 0.0
     hiAngle = static_cast<float>(std::atan(centre + half));
 }
 
-// Eye gaze for the quad focus box (XR_EXT_eye_gaze_interaction, which ACE enables itself). The
-// layer has its own action set with one gaze pose action. OpenXR allows one attach per session and
-// replaces a profile's suggested bindings on every call, so the set rides along in ACE's own calls:
-// its gaze binding is added to ACE's suggestion for the eye gaze profile, and the set is added to
-// ACE's xrAttachSessionActionSets and xrSyncActions.
-// The same action set also carries the settings menu's controller actions (menuToggle: open or
-// close, menuNavigate: select and step), bound for the common controller profiles next to ACE's own.
-struct Gaze {
-    std::mutex mutex;
-    XrInstance instance = XR_NULL_HANDLE;
-    XrActionSet set = XR_NULL_HANDLE;
-    XrAction action = XR_NULL_HANDLE;
-    XrAction menuToggle = XR_NULL_HANDLE, menuNavigate = XR_NULL_HANDLE;
-    XrPath profile = XR_NULL_PATH, pose = XR_NULL_PATH;
-    // The layer's bindings per interaction profile (the eye gaze one and the controllers'), and which
-    // were suggested, merged into ACE's suggestion or on their own at attach.
-    std::map<XrPath, std::vector<XrActionSuggestedBinding>> bindings;
-    std::map<XrPath, bool> profileSuggested;
-    bool suggested = false, attached = false;
-    uint64_t appSyncs = 0;
-    XrSpace space = XR_NULL_HANDLE;
-    XrVector3f direction{0, 0, -1};  // last tracked gaze, in the space ACE locates its views in
-    XrTime directionTime = 0;
-    uint64_t queries = 0, tracked = 0;
-    bool firstLogged = false;
-    // The game's own gaze pose action (from its eye gaze suggestion; X-Plane binds one), and a space of it: the
-    // lookups fall back to it while the layer's own action never tracks (its set not synced or not active).
-    XrAction gameAction = XR_NULL_HANDLE;
-    XrSpace gameSpace = XR_NULL_HANDLE;
-    bool syncFailLogged = false, syncLogged = false;
-};
-Gaze gaze;
 constexpr XrDuration kGazeHoldNs = 500'000'000;  // keep the last gaze this long, then recentre
 
-// The game's head-locked reference spaces (XR_REFERENCE_SPACE_TYPE_VIEW, from its xrCreateReferenceSpace).
-// OpenComposite (ACC) locates its views twice a frame: in the scene's space for rendering and in its VIEW
-// space for the eyes-to-head transforms. The gaze is looked up in the space a call locates in and held there
-// (steady_gaze), so taking it from both mixed two frames: the gaze thread's result from one space was used
-// for the other, and the box jumped by the head's turn whenever the two came apart (every few seconds,
-// whatever the dead-zone; 2026-11-04). The gaze now follows only the calls in a scene space while there
-// are any; a game that locates only in VIEW space still gets its gaze there.
-struct HeadSpaces {
-    std::mutex mutex;
-    std::vector<XrSpace> view;
-    XrTime sceneLocated = 0;  // display time of the last xrLocateViews in a space that is not head-locked
-    bool skipLogged = false;
-};
-HeadSpaces headSpaces;
 constexpr XrDuration kSceneLocateRecentNs = 1'000'000'000;
 
 // True when the gaze is not taken from this xrLocateViews: it locates in a head-locked space while the
@@ -597,6 +377,8 @@ bool gaze_skips_space(XrSpace space, XrTime time) {
     return skip;
 }
 
+}  // namespace
+
 XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space) {
     const XrResult r = next.CreateReferenceSpace(session, info, space);
     if (XR_SUCCEEDED(r) && info && space && info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW) {
@@ -613,6 +395,8 @@ XrResult XRAPI_CALL layerDestroySpace(XrSpace space) {
     }
     return next.DestroySpace(space);
 }
+
+namespace {
 
 XrVector3f rotate(const XrQuaternionf& q, const XrVector3f& v) {
     // v + 2w(u x v) + 2u x (u x v), u = q.xyz
@@ -634,6 +418,7 @@ struct MenuProfile {
     const char* toggle;
     const char* navigate;
 };
+
 constexpr MenuProfile kMenuProfiles[] = {
     {"/interaction_profiles/oculus/touch_controller", "/user/hand/left/input/thumbstick/click",
      "/user/hand/right/input/thumbstick"},
@@ -644,6 +429,8 @@ constexpr MenuProfile kMenuProfiles[] = {
     {"/interaction_profiles/htc/vive_controller", "/user/hand/left/input/trackpad/click",
      "/user/hand/right/input/trackpad"},
 };
+
+}  // namespace
 
 // Gaze (and menu) actions. Also with gaze off at launch, so gaze can be turned on live.
 void gaze_init(XrInstance instance) {
@@ -717,6 +504,8 @@ void gaze_init(XrInstance instance) {
     }
 }
 
+namespace {
+
 // A path's name for the log ("?" when the runtime cannot say).
 std::string path_name(XrInstance instance, XrPath path) {
     char name[XR_MAX_PATH_LENGTH] = "?";
@@ -725,6 +514,8 @@ std::string path_name(XrInstance instance, XrPath path) {
         next.PathToString(instance, path, sizeof(name), &length, name);
     return name;
 }
+
+}  // namespace
 
 XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
                                                           const XrInteractionProfileSuggestedBinding* suggested) {
@@ -835,6 +626,8 @@ XrResult XRAPI_CALL layerSyncActions(XrSession session, const XrActionsSyncInfo*
     return XR_SUCCEEDED(r) ? r : next.SyncActions(session, info);
 }
 
+namespace {
+
 // Gaze direction in `base` at `time`; false while gaze is not tracked (then the last tracked
 // direction is used for a short while, then straight ahead).
 bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& direction) {
@@ -876,47 +669,12 @@ bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& di
     return true;
 }
 
-// The gaze thread ([quad] gaze_thread, on by default): ACE's xrLocateViews only reads the latest gaze; this
-// thread looks it up (xrLocateSpace on the gaze action's space) at gaze_poll_hz, at the display time ACE last
-// located its views for, in the space it located them in. The lookup can be slow (~1.5 ms on the Pimax
-// runtime) and now costs ACE's render thread nothing; the gaze it gets is at most a poll period plus a
-// lookup old. It runs only while ACE syncs actions itself (it does: it binds eye gaze too), so the layer
-// never syncs from two threads; otherwise, or with gaze_thread=0, xrLocateViews looks the gaze up itself.
-// The lookup runs outside gaze.mutex, so ACE's xrSyncActions never waits for it.
-struct GazeThread {
-    std::mutex mutex;
-    std::condition_variable wake;
-    std::thread thread;
-    bool stop = false;
-    // From xrLocateViews: what to locate against.
-    XrSession session = XR_NULL_HANDLE;
-    XrSpace base = XR_NULL_HANDLE;
-    XrTime time = 0;
-    // The thread's last result: the gaze in `base` and the display time it was located at (0: none tracked).
-    XrVector3f direction{0, 0, -1};
-    XrTime directionTime = 0;
-    // For the log: lookups and their time since the last report.
-    uint64_t lookups = 0;
-    double lookupMs = 0, lookupMaxMs = 0;
-    // A running thread left at exit (no xrDestroySession) would end the process in std::terminate. At a
-    // process exit it has already ended, so the join returns at once.
-    ~GazeThread() {
-        {
-            std::lock_guard guard(mutex);
-            stop = true;
-        }
-        wake.notify_all();
-        if (thread.joinable())
-            thread.join();
-    }
-};
-GazeThread gazeThread;
-
 // While the layer's own gaze action has never tracked: after kGazeUntrackedLookups lookups, logs why (the lookup's
 // result and flags, whether each gaze action is active), and moves the lookups to a space of the game's own gaze
 // action if it bound one (X-Plane: the layer's action stayed untracked while the game's set and its binding were in
 // place, 2026-11-06). From the gaze thread.
 constexpr uint64_t kGazeUntrackedLookups = 500;
+
 void gaze_untracked_check(XrSession session, bool ok, XrResult located, XrSpaceLocationFlags flags) {
     std::lock_guard guard(gaze.mutex);
     if (ok || gaze.tracked > 0 || gaze.queries + 1 != kGazeUntrackedLookups)
@@ -1017,6 +775,8 @@ void gaze_thread_run() {
     }
 }
 
+}  // namespace
+
 void gaze_thread_stop() {
     std::thread thread;
     {
@@ -1061,15 +821,7 @@ bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& directio
     return true;
 }
 
-// The gaze the focus box aims at (ACE's render thread only): held while the tracked gaze stays within
-// gaze_deadzone of it, so a fixation keeps the focus cameras still, and moved to the gaze at once when it
-// leaves (a saccade). Held in the located space, so a fixation on the scene holds through a head turn.
-struct GazeHold {
-    XrVector3f direction{0, 0, -1};
-    bool held = false;
-    std::atomic<uint64_t> samples = 0, moves = 0;  // for the log (gaze_hold_report)
-};
-GazeHold gazeHold;
+namespace {
 
 // `direction` (unit, from gaze_now or gaze_direction) replaced by the held gaze; `tracked` false drops the hold.
 void steady_gaze(bool tracked, XrVector3f& direction) {
@@ -1107,103 +859,11 @@ void gaze_thread_report(double seconds) {
     gazeThread.lookups = 0;
     gazeThread.lookupMs = gazeThread.lookupMaxMs = 0;
 }
-// Quad pipeline (mode=quad), on top of two_loops with b_focus. ACE renders frame A with the full
-// FOV and frame B with the focus FOV into its own (eye_scale-sized) double-wide swapchain, which
-// the runtime never sees. A's image is copied when ACE releases it; B's release is held back until
-// B's xrEndFrame, where the compositor draws the outer view with the focus view blended into its
-// box into this layer's own double-wide swapchain at the runtime's native size. That swapchain
-// replaces ACE's projection layer, using the poses and FOVs ACE rendered frame A with.
-struct EyeView {
-    XrPosef pose{};
-    XrFovf fov{};
-    XrRect2Di rect{};
-};
-struct Quad {
-    std::mutex mutex;
-    uint32_t nativeW = 0, nativeH = 0;      // runtime's recommended eye size (before eye_scale)
-    uint32_t reportedW = 0, reportedH = 0;  // what ACE was offered
-    XrSwapchain appChain = XR_NULL_HANDLE;  // ACE's double-wide colour swapchain
-    uint32_t appW = 0, appH = 0;
-    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  // ACE's eye chain format, also the output's
-    std::vector<ID3D12Resource*> appImages;
-    uint32_t appAcquired = 0;
-    bool releaseHeld = false;               // B's image, released at B's xrEndFrame
-    XrSwapchain outChain = XR_NULL_HANDLE;  // this layer's double-wide output
-    std::vector<ID3D12Resource*> outImages;
-    ID3D12Device* device = nullptr;
-    ID3D12CommandQueue* queue = nullptr;
-    QuadCompositor compositor;
-    bool outerCaptured = false;
-    EyeView aViews[2];
-    bool aViewsValid = false;
-    uint64_t composed = 0, fallbacks = 0;
-    uint64_t fallbackRun = 0;  // fallbacks in a row; a long run turns the pipeline off
-    // views4 composition: done at ACE's image release, submitted at xrEndFrame.
-    XrFovf v4Fov[2] = {};
-    FovCrop v4Crop;  // the FOV crop ACE last located with (views4_output_extent, the helmet's uncropped eye)
-    std::wstring helmetPiecesTried[3];  // the pieces' images last loaded (or tried) into the compositor, HelmetPiece order
-    std::filesystem::file_time_type helmetPiecesWritten[3] = {};  // their files' write times then (min: missing)
-    int64_t helmetPiecesCheck = 0;  // QPC of the next look at the files (helmet_pieces)
-    XrQuaternionf v4EyeTurn[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};  // each eye against the head (canted displays), last located
-    XrVector3f v4EyeOffset[2] = {{-0.032f, 0, 0}, {0.032f, 0, 0}};  // each eye from the eyes' middle, in the head's frame (m)
-    double visorPosition = -1;  // the visor's slide shown (0 closed .. 1 open; < 0: not yet), towards visor_target
-    int64_t visorAt = 0;        // QPC of its last step
-    std::wstring helmetHinted;  // the settings the last crop hint was logged for
-    // The helmet's pieces in their own head-locked quad layer (helmet_layer_resources): its swapchain in
-    // VIEW space, drawn at each composition, submitted over the scene. helmetLayerFailed: the pieces go
-    // into the scene image instead (its whole FOV; frame generation then mismatches).
-    XrSwapchain helmetChain = XR_NULL_HANDLE;
-    XrSpace helmetSpace = XR_NULL_HANDLE;
-    std::vector<ID3D12Resource*> helmetImages;
-    std::vector<ID3D11Texture2D*> helmetImages11;  // the same, for a D3D11 session (ACC)
-    bool helmetPiecesLoaded = false;  // the composing compositor holds pieces (helmet_pieces), for the menu and submit
-    bool helmetLayerFailed = false, helmetDrawn = false;
-    // Its quads this frame: the bands the pieces draw on (helmet_bands), one or two, from the same image.
-    XrCompositionLayerQuad helmetQuads[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
-    int helmetQuadCount = 0;
-    uint32_t helmetSide = 0;   // its swapchain's side (helmet_layer_side when made)
-    bool helmetResize = false;  // [helmet] detail changed: made again at the next submission
-    std::string helmetBandsLogged;
-    ULONGLONG helmetLightLogAt = 0;  // when to ask the compositor for the helmet's light again (log_helmet_light)
-    bool v4FovValid = false;
-    XrExtent2Di v4Extent[2] = {};  // each composed eye's size in the output (views4_compose), for views4_submit
-    XrFovf v4SubmitFov[2] = {};  // the FOV the composed output covers (views4_compose), for views4_submit
-    XrFovf v4LoggedGameFov[2] = {};  // ACE's submitted FOV, as last logged against v4SubmitFov
-    bool v4Composed = false;
-    int captures = 0;
-    ULONGLONG lastCapture = 0;
-    bool failureLogged = false;
-};
-Quad quad;
-// The session's graphics API and devices (session_graphics.h), under quad.mutex: the panels and compositors draw with it.
-SessionGraphics sessionGraphics;
+
 SessionGraphics session_graphics_now() {
     std::lock_guard guard(quad.mutex);
     return sessionGraphics;
 }
-
-// views4 composition for a D3D11 game (experiment.views4ComposeD3D11; ACC): its eye swapchains each hold its whole
-// target, all four views in eye columns, so at xrEndFrame the layer composes both eyes from the image the
-// projection layer's first view shows into a double-wide output of its own, at the runtime's native eye size,
-// and submits that in its place. The game's image was released before xrEndFrame; the runtime reads it only
-// after, as the layer does.
-struct V4D3D11 {
-    std::mutex mutex;
-    D3D11Compositor compositor;  // on the session's device (sessionGraphics)
-    struct Chain {
-        int64_t format = 0;
-        std::vector<ID3D11Texture2D*> images;
-        uint32_t acquired = 0;  // the image last acquired (released by the time of xrEndFrame)
-    };
-    std::map<XrSwapchain, Chain> chains;  // the game's
-    XrSwapchain outChain = XR_NULL_HANDLE;
-    std::vector<ID3D11Texture2D*> outImages;
-    uint32_t outW = 0, outH = 0;  // one eye's size in it
-    bool failed = false;          // no compositor or output chain: views 0-1 as they are
-    uint64_t composed = 0, fallbacks = 0;
-    const char* lastFallback = nullptr;
-};
-V4D3D11 v4d3d11;
 
 // The compositor that holds the helmet's pieces and light: the D3D11 one for a D3D11 game (ACC; under
 // v4d3d11.mutex), else ACE's D3D12 one (under quad.mutex).
@@ -1212,22 +872,6 @@ HelmetPieceSet& helmet_set() {
         return v4d3d11.compositor;
     return quad.compositor;
 }
-
-// views4 debug: the focus region's outline drawn into each outer view (debug_border), on ACE's eye
-// image just before ACE releases it. The chain is the one ACE's projection layer submits.
-struct Views4Outline {
-    std::mutex mutex;
-    std::map<XrSwapchain, std::vector<ID3D12Resource*>> images;
-    std::map<XrSwapchain, int64_t> formats;
-    std::map<XrSwapchain, uint32_t> acquired;
-    XrSwapchain chain = XR_NULL_HANDLE;
-    XrFovf fov[2] = {};  // last located, per eye
-    bool fovValid = false;
-    FocusOutline outline;
-    bool ready = false, failed = false;
-    float rgba[4] = {0, 1, 0, 1};
-};
-Views4Outline v4outline;
 
 // Without composition the outline goes on ACE's outer views; with it, on the composed output.
 bool views4_outline_on() {
@@ -1321,49 +965,19 @@ void focus_centre(const EyeComposition& eye, float& tanX, float& tanY) {
     tanY = -eye.rotation[7] / eye.rotation[8];
 }
 
-uint64_t endFrames = 0;
-uint64_t locates = 0;
-
 bool sampled(uint64_t count) { return count <= kDetailedFrames || count % kSampleEveryFrames == 0; }
 
-// views4 CPU cost of this layer's hot calls (the focus-cull measurement): each layer entry point
-// in total, and the part spent below it (runtime, VectorXR), so the layer's own share is the
-// difference. Logged every kCpuReportFrames xrEndFrames next to the views4 report.
-struct CpuSpan {
-    std::atomic<uint64_t> ticks{0}, maxTicks{0}, calls{0};
-    void add(int64_t t) {
-        const auto v = static_cast<uint64_t>(t);
-        ticks.fetch_add(v, std::memory_order_relaxed);
-        calls.fetch_add(1, std::memory_order_relaxed);
-        for (uint64_t m = maxTicks.load(std::memory_order_relaxed); v > m && !maxTicks.compare_exchange_weak(m, v);) {
-        }
-    }
-};
-struct CpuTimes {
-    CpuSpan endFrame, endFrameBelow, locate, locateBelow, compose;
-    PFN_xrEndFrame realEndFrame = nullptr;
-    PFN_xrLocateViews realLocateViews = nullptr;
-    double msPerTick = 0;
-};
-CpuTimes cpu;
 constexpr uint64_t kCpuReportFrames = 900;
 
-// views4 frame pacing (render thread): ACE's xrEndFrame-to-xrEndFrame interval, the time it spends in
-// xrWaitFrame (the runtime holding it to the display) and the display period the runtime predicts.
-// Logged with the CPU times as a "views4 pacing:" line: frames that miss their display slot wait a whole
-// extra period, so the frame rate falls below the refresh even with headroom on average.
-struct Pacing {
-    std::vector<float> interval, wait;  // ms
-    int64_t lastEnd = 0;
-    double periodMs = 0;
-};
-Pacing pacing;
+}  // namespace
 
 int64_t qpc_now() {
     LARGE_INTEGER t;
     QueryPerformanceCounter(&t);
     return t.QuadPart;
 }
+
+namespace {
 
 XrResult XRAPI_CALL timedEndFrameBelow(XrSession session, const XrFrameEndInfo* info) {
     const int64_t t0 = qpc_now();
@@ -1380,18 +994,9 @@ XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateI
     return r;
 }
 
-// The pacing line, and resets: ACE's frame interval and its time in and outside xrWaitFrame (p50, p90),
-// and how many frames took one display period, two, three or more (rounded to the nearest). Returns the
-// mean frame interval (0 without frames).
-// The latest report's numbers, for the launcher's Diagnostics pane (write_session_summary).
-struct SessionSummary {
-    double fps = 0, frameP50 = 0, frameP90 = 0, latePercent = 0, periodMs = 0;
-    double cpuMs = -1, gpuMs = -1, gpuBusy = -1, cores = -1;  // the render thread's CPU and the whole GPU per frame
-    std::vector<ThreadLoad> threads;
-};
-SessionSummary summary;
-std::string layersBelow;  // the layers between this one and the runtime (log_layer_order)
 bool frame_generation_on();  // Cheeky's, now (below)
+
+}  // namespace
 
 double report_pacing() {
     if (pacing.interval.empty())
@@ -1432,7 +1037,11 @@ double report_pacing() {
     return mean;
 }
 
+namespace {
+
 bool osd_shown(OsdSummary& out);  // the overlay's last numbers (below)
+
+}  // namespace
 
 // The load line, over the same 900 frames: the whole GPU's busy share (ACE's part) and so its time per frame
 // (`frameMs`: the mean interval), ACE's busiest thread and the render thread's share of a core, all ACE's
@@ -1484,15 +1093,11 @@ void report_load(double frameMs) {
         logf("views4 threads: %s (of one core each)", list.c_str());
 }
 
-// A write queued for the ini worker (ini_write_later). MenuStep: a settings menu step, which writes every value the
-// menu holds, so a newer step queued right behind an older one stands in for it (held keys don't queue for seconds).
-enum class IniWrite { Once, MenuStep };
-uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);  // (below)
+namespace {
 
 // VRAM (views4): this process's use of the GPU's local memory and the census of ACE's render targets
 // (probe/vram_census.h) against its render and output sizes, logged and written to the runtime info, where
 // the launcher scales the part that follows the targets to estimate other settings (launcher/settings.h).
-IDXGIAdapter3* vramAdapter = nullptr;
 void report_vram() {
     int render[2], output[2];
     game->qvfr_target_sizes(render, output);
@@ -1636,6 +1241,8 @@ void report_cpu_times() {
 // A game in src/games, by its exe: anywhere else the layer passes through.
 bool is_game_process() { return games::current_game() != nullptr; }
 
+}  // namespace
+
 XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system,
                                                          XrViewConfigurationType type, uint32_t capacity,
                                                          uint32_t* countOutput, XrViewConfigurationView* views) {
@@ -1753,12 +1360,17 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     return r;
 }
 
+namespace {
+
 void menu_shutdown();  // the settings menu's panel (below)
+
 void osd_shutdown();   // the performance overlay's card (below)
+
 void pad_watch_stop();  // the hotkeys' wheel and controller thread (below)
 
-void ini_worker_sync();  // (below)
 void helmet_layer_release();  // (below)
+
+}  // namespace
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     game->session_running(false);
@@ -1832,8 +1444,13 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     return next.DestroySession(session);
 }
 
+namespace {
+
 void osd_waited(XrDuration period);  // the performance overlay's frame budget (below)
+
 void osd_wait_returned(double waitMs);  // where the render thread's work for a frame starts (below)
+
+}  // namespace
 
 XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* info, XrFrameState* state) {
     if (!experiment.twoLoops) {
@@ -1919,6 +1536,8 @@ XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInf
     return r;
 }
 
+namespace {
+
 // Takes ACE's double-wide eye swapchain as the quad input and creates the output swapchain.
 void quad_adopt_chain(XrSession session, const XrSwapchainCreateInfo* info, XrSwapchain chain) {
     std::lock_guard guard(quad.mutex);
@@ -1974,6 +1593,8 @@ void quad_adopt_chain(XrSession session, const XrSwapchainCreateInfo* info, XrSw
          quad.reportedW, quad.reportedH, static_cast<void*>(outChain), out.width, out.height, count,
          experiment.focusFraction * 100, experiment.feather * 100);
 }
+
+}  // namespace
 
 XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCreateInfo* info, XrSwapchain* swapchain) {
     XrResult r = next.CreateSwapchain(session, info, swapchain);
@@ -2070,7 +1691,10 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
     return r;
 }
 
+namespace {
+
 bool quad_capture_due();
+
 void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
 
 int64_t qpc_ms(int64_t ms);
@@ -2114,6 +1738,7 @@ void helmet_pieces(const HelmetSettings& h) {
 // The visor's slide this frame (under quad.mutex): it moves towards the asked position, all the way
 // from closed to open in kVisorSlideS.
 constexpr double kVisorSlideS = 0.3;
+
 double visor_step(const HelmetSettings& h) {
     const double target = visor_target(h);
     const int64_t now = qpc_now();
@@ -2395,6 +2020,7 @@ struct V4Helmet {
     double visorOffset = 0;
     float fullView[2][4] = {};  // each eye's uncropped view (the helmet layer covers both)
 };
+
 V4Helmet views4_helmet_start(const HelmetSettings& helmet) {
     V4Helmet h;
     if (helmet.on)
@@ -2551,6 +2177,8 @@ void views4_compose() {
              eyes[0].focusTan[2], quad.nativeW, quad.nativeH);
 }
 
+}  // namespace
+
 // Frame A's image is copied before the runtime gets it back; frame B's stays acquired (so this
 // layer may still read it) until B's xrEndFrame has composed it.
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info) {
@@ -2585,6 +2213,8 @@ XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSw
     }
     return next.ReleaseSwapchainImage(swapchain, info);
 }
+
+namespace {
 
 // Frame A's xrEndFrame is swallowed: keep the views ACE rendered it with.
 void quad_record_a(const XrFrameEndInfo* info) {
@@ -2759,11 +2389,12 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
     return next.EndFrame(session, &end);
 }
 
+}  // namespace
+
 // views4 composing: the game draws each eye's hidden-area mesh into every view, so the focus views got the
 // lens mask's black corners in their own frame (ACE: composition run 2; ACC through OpenComposite: a dark rim
 // round the focus area, 2026-11-04). views4_mask=0 answers the hidden
 // mesh with one zero-area triangle: nothing is masked in any view (the lenses hide those pixels anyway).
-bool visibilityMaskLogged = false;
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask) {
     if (!experiment.views4NoMask || maskType != XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR || !mask)
@@ -2784,6 +2415,8 @@ XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigura
     }
     return XR_SUCCESS;
 }
+
+namespace {
 
 XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewState* state, uint32_t capacity,
                       uint32_t* countOutput, XrView* views) {
@@ -2906,9 +2539,6 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
 
 // views4: ACE's two "eyes" are each an outer plus a focus view wide and hold views 0+1 and 2+3 side
 // by side (views4_layout.h). Submit views 0 and 1, the real eyes, as the projection views.
-bool views4RectsLogged = false;
-bool v4EyesOnlyLogged = false;  // views4_submit: an eyes-only frame (Views4Frame::eyesOnly) was reported
-
 // Logs ACE's own submitted FOV next to the one the output is submitted with, once and on a change.
 void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& composed) {
     XrFovf& last = quad.v4LoggedGameFov[eye];
@@ -3170,6 +2800,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     return next.EndFrame(session, &submitted);
 }
 
+}  // namespace
+
 XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
                                      uint32_t capacity, uint32_t* countOutput, XrView* views) {
     if (!cpu.realLocateViews)
@@ -3179,6 +2811,8 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
     cpu.locate.add(qpc_now() - t0);
     return r;
 }
+
+namespace {
 
 XrResult end_frame(XrSession session, const XrFrameEndInfo* info);
 
@@ -3266,9 +2900,6 @@ void live_apply(const LiveSettings& l) {
         log_line("live: debug_border without views4_compose starts at the next launch");
 }
 
-struct IniSnapshot;
-void menu_values_changed(const IniSnapshot& s);  // the settings menu shows the ini's values (below)
-
 // Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
 void cheeky_apply_settings(const CheekySettings& settings, bool gazeOn) {
     if (!cheeky_running())
@@ -3277,28 +2908,21 @@ void cheeky_apply_settings(const CheekySettings& settings, bool gazeOn) {
     c.fg = c.fg && game_features().frameGeneration;  // a game without it: off, whatever the ini says
     cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn, experiment.views4ComposeD3D11));
 }
+
 void cheeky_apply_ini() {
     if (!live.ini.empty())
         cheeky_apply_settings(read_cheeky_settings(live.ini.c_str()), read_live(live.ini.c_str()).gaze);
 }
+
 void menu_placement_changed(const MenuPlacement& placement);  // the launcher moved the settings menu's panel (below)
+
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);  // the overlay (below)
+
 void osd_placement_changed();
+
 void hotkeys_changed(const Hotkeys& h);  // [hotkeys] (below)
 
 constexpr int64_t kLiveCheckMs = 250;
-
-// Everything the live reload takes from the ini, read in one go (on the ini worker).
-struct IniSnapshot {
-    LiveSettings live;
-    CheekySettings cheeky;
-    MenuValues menu;
-    MenuPlacement menuPlacement;
-    OsdPlacement osd;
-    Hotkeys hotkeys;
-    std::wstring restartKeys;
-    uint64_t writesBefore = 0;  // ini_write_later's writes done before it was read (menu_values_changed)
-};
 
 IniSnapshot read_snapshot(const wchar_t* ini) {
     IniSnapshot s;
@@ -3311,29 +2935,6 @@ IniSnapshot read_snapshot(const wchar_t* ini) {
     s.restartKeys = restart_keys(ini, experiment.views4);
     return s;
 }
-
-// The ini worker: every read and write of the ini while the game runs, off the render thread (each
-// Get/WritePrivateProfileString opens the file; a menu step wrote and re-read about a hundred keys, up to
-// ~130 ms in xrEndFrame). It runs the queued writes (the menu's, the hotkeys'), then, every kLiveCheckMs or
-// when woken, reads a snapshot when the ini's write time changed; live_reload applies the latest. Writes go
-// through ini_put (only values that differ: each WritePrivateProfileString rewrites the whole ini, ~5 ms).
-struct QueuedIniWrite {
-    uint64_t number;  // ini_write_later's
-    IniWrite kind;
-    std::function<void()> write;
-};
-struct IniWorker {
-    std::mutex mutex;
-    std::condition_variable wake, settled;
-    std::deque<QueuedIniWrite> writes;
-    std::wstring ini;     // the ini watched
-    FILETIME written{};   // its write time when last read
-    std::optional<IniSnapshot> ready;  // the latest read, not yet applied
-    uint64_t requested = 0, done = 0;  // passes asked for (ini_worker_sync) and finished
-    uint64_t writesQueued = 0, writesDone = 0;  // ini_write_later's writes, numbered from 1
-    bool poke = false, started = false;
-};
-IniWorker iniWorker;
 
 void ini_worker_loop() {
     std::unique_lock lock(iniWorker.mutex);
@@ -3384,6 +2985,8 @@ void ini_worker_watch(const std::wstring& ini, const FILETIME& written) {
         iniWorker.ready.reset();
     }
 }
+
+}  // namespace
 
 // Queues a write to the ini (or the launcher's) and wakes the worker; the live reload follows it. Returns
 // the write's number: snapshots read after it carry writesBefore >= it. A menu step queued right behind another
@@ -3446,43 +3049,14 @@ void live_reload() {
     }
 }
 
-// The settings menu's QVFR optimizer (quad/qvfr_optimizer.h; run below, after the overlay): the frames
-// the overlay's measurement gives it while it runs (osd_measure).
-struct Optimize {
-    QvfrOptimizer optimizer;
-    std::vector<OsdFrame> frames;  // since the last window
-    int64_t nextWindow = 0;
-    bool shown = false;  // the menu shows its detail (from the first run until the menu reopens)
-    std::wstring note;   // why it did not start, shown instead of its own status
-};
-Optimize optimize;
+namespace {
+
 constexpr int64_t kOptimizeWindowMs = 500;
 
 // ---- Hotkeys ---------------------------------------------------------------------------------
 // [hotkeys] (input/hotkeys.h), reloaded live: each action's keyboard combination, held while ACE has focus,
 // and its wheel or controller button, read by a thread of its own through DirectInput (input/pad_input.h)
 // whenever one is bound. The thread polls every kPadPollMs and publishes the actions held as bits.
-Hotkeys hotkeys = default_hotkeys();  // the frame thread's
-
-struct PadWatch {
-    std::mutex mutex;
-    std::condition_variable wake;
-    std::thread thread;
-    bool stop = false;
-    Hotkeys bindings;              // a copy for the thread
-    std::atomic<uint32_t> held{0};  // bit per HotkeyAction
-    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate.
-    ~PadWatch() {
-        {
-            std::lock_guard guard(mutex);
-            stop = true;
-        }
-        wake.notify_all();
-        if (thread.joinable())
-            thread.join();
-    }
-};
-PadWatch padWatch;
 constexpr int kPadPollMs = 8, kPadRescanMs = 3000;
 
 bool pad_bound(const Hotkeys& h) {
@@ -3642,33 +3216,8 @@ std::wstring hotkey_footer(bool helmetOn) {
     return out;
 }
 
-// ---- Settings menu ---------------------------------------------------------------------------
-// In the headset (settings_menu.h): its hotkeys (above; Ctrl+Alt+arrows by default), or a controller's left
-// stick click (open, close) and right stick (select, change). Changes are written to the ini the
-// layer reloads from and to the launcher's (SIM_QVFR_SETTINGS), so they apply as the launcher's do.
-// Shown as a head-locked quad layer on top of whatever this layer submits, where the launcher's
-// Headset menu pane places it ([menu], live); hidden kMenuHideMs after the last input.
-struct Menu {
-    SettingsMenu model;
-    bool visible = false, dirty = true, failed = false, uploaded = false;
-    int64_t hideAt = 0;  // QPC
-    std::wstring settingsIni;
-    XrSpace view = XR_NULL_HANDLE;
-    XrSwapchain chain = XR_NULL_HANDLE;
-    std::vector<void*> images;  // the session API's textures
-    std::unique_ptr<PanelUpload> upload;
-    XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    int heldKey = -1;  // keyboard repeat: the held arrow (index into kMenuKeys)
-    int64_t keyRepeat = 0;
-    int stickDir = -1;  // controller repeat: the held stick direction
-    int64_t stickRepeat = 0;
-    bool togglePrevious = false;
-    bool hotkeyTogglePrevious = false;  // the open/close hotkey, held at the last frame
-    bool profileLogged = false;
-    uint64_t lastWrite = 0;  // ini_write_later's number for the latest step
-};
-Menu menu;
 constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
+
 constexpr MenuKey kMenuKeyOf[] = {MenuKey::Up, MenuKey::Down, MenuKey::Left, MenuKey::Right};
 
 int64_t qpc_ms(int64_t ms) {
@@ -3695,6 +3244,8 @@ void menu_place(const MenuPlacement& placement) {
     menu.layer.size = {pose.width, pose.height};
 }
 
+}  // namespace
+
 // The launcher changed the ini: an open menu shows the new values.
 // A snapshot read before the latest step was written would put the menu back a step (and the next step's
 // write would carry the old value: two quick steps lost the second), so the menu waits for a newer one.
@@ -3705,6 +3256,8 @@ void menu_values_changed(const IniSnapshot& s) {
     menu.model.cheeky.values = s.cheeky;
     menu.dirty = true;
 }
+
+namespace {
 
 void menu_open(int64_t now);
 
@@ -3823,6 +3376,8 @@ void menu_open(int64_t now) {
     menu.hideAt = now + qpc_ms(kMenuHideMs);
 }
 
+}  // namespace
+
 void menu_press(MenuKey key, int64_t now) {
     if (!menu.visible) {  // the first press only opens it
         menu_open(now);
@@ -3869,6 +3424,8 @@ void menu_press(MenuKey key, int64_t now) {
         }
     }, IniWrite::MenuStep);
 }
+
+namespace {
 
 // Held keys and stick directions repeat after kRepeatDelayMs, every kRepeatMs.
 bool repeat(int& held, int64_t& nextAt, int direction, int64_t now) {
@@ -4062,7 +3619,9 @@ void menu_render() {
 }
 
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);  // the overlay's card (below)
+
 void optimize_tick(int64_t now);  // the QVFR optimizer (below)
+
 bool notice_pending();            // a notice for the start of the session (below)
 
 // This frame's layers with the performance overlay and the menu panel on top while they are shown;
@@ -4126,61 +3685,10 @@ void menu_shutdown() {
     menu.dirty = true;
 }
 
-// ---- Performance overlay ---------------------------------------------------------------------
-// [osd] (quad/osd.h): a head-locked card where the launcher's Headset menu pane or the menu places it, redrawn every kOsdDrawMs from the
-// frames since the last draw. The numbers are gathered on the frame thread; the card is drawn on a
-// worker (GDI takes milliseconds) and uploaded at a later frame. Ctrl+Alt+P while ACE has focus turns it on and off, written to the ini
-// the layer reloads from and to the launcher's, as the launcher's Headset menu pane does.
-// ACE's frame: xrEndFrame to xrEndFrame; its CPU time: the cycles the thread calling xrEndFrame ran
-// between the two (ACE's render thread; time it spends blocked is not counted); its GPU time: the
-// views4 GPU frame timer (probe/gpu_frame_timer.h), started when the card first shows.
-struct Osd {
-    OsdPlacement placement;  // [osd] when last read
-    bool read = false, failed = false, uploaded = false, hotkeyHeld = false;
-    XrSpace view = XR_NULL_HANDLE;
-    XrSwapchain chain = XR_NULL_HANDLE;
-    std::vector<void*> images;  // the session API's textures
-    std::unique_ptr<PanelUpload> upload;
-    XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    std::atomic<int64_t> periodNs{0};  // the display's, from xrWaitFrame (any thread)
-    // On the thread calling xrEndFrame.
-    int64_t lastEnd = 0;
-    DWORD thread = 0;
-    uint64_t lastCycles = 0;
-    int64_t tscStartQpc = 0;
-    uint64_t tscStart = 0;
-    double cyclesPerMs = 0;  // the TSC's rate, measured against QPC
-    std::vector<OsdFrame> frames;  // since the last draw
-    std::deque<double> history;    // the graph: the last kOsdHistory frame times
-    int64_t nextDraw = 0;
-    uint64_t gazeQueries = 0, gazeTracked = 0;  // at the last draw
-    std::future<std::vector<uint32_t>> drawing;  // the card being drawn
-    CheekySettings cheeky;                         // [cheeky] when last read
-    std::string cheekySnapshot;
-    int64_t nextCheeky = 0;
-    IDXGIAdapter3* adapter = nullptr;
-    // xrWaitFrame's last return (the render thread's work for the frame runs from it to xrEndFrame).
-    int64_t waitReturnQpc = 0;
-    uint64_t waitReturnCycles = 0;
-    DWORD waitThread = 0;
-    double waitMs = -1;
-    OsdSummary shown;  // the card's numbers at its last draw (for the log)
-    bool shownValid = false;
-};
-Osd osd;
 constexpr int64_t kOsdDrawMs = 500, kOsdCheekyMs = 1000;
 
-// A notice in the performance overlay's card, for the first kNoticeMs of the session's frames, when the layer
-// could not do what it was asked: views4 refused, an ACE build it does not know (the game updated). Without
-// it the game would just look as it always does, and nothing would say why. Straight ahead, a little low.
-struct Notice {
-    std::wstring title;
-    std::vector<std::wstring> lines;
-    int64_t until = 0;  // set at its first frame
-    bool uploaded = false;
-};
-Notice notice;
 constexpr int64_t kNoticeMs = 30000;
+
 constexpr OsdPlacement kNoticePlacement{true, 0, -6, 34};
 
 void notice_set(std::wstring title, std::vector<std::wstring> lines) {
@@ -4189,8 +3697,8 @@ void notice_set(std::wstring title, std::vector<std::wstring> lines) {
 }
 
 bool notice_pending() { return !notice.title.empty(); }
-constexpr size_t kOsdHistory = 150;
 
+constexpr size_t kOsdHistory = 150;
 
 void osd_waited(XrDuration period) { osd.periodNs.store(period, std::memory_order_relaxed); }
 
@@ -4285,7 +3793,6 @@ void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& 
 
 // The visor hotkey (Ctrl+Alt+V by default) steps the helmet's visor (closed, half, open, closed), written to the
 // ini the layer reloads from and to the launcher's, as the headset menu writes it.
-bool visorHotkeyHeld = false;
 void visor_hotkey() {
     const bool held = hotkey_held(HotkeyAction::Visor);
     if (held && !visorHotkeyHeld && experiment.composing()) {
@@ -4687,15 +4194,6 @@ void optimize_tick(int64_t now) {
 
 // cpu_profile=1: a capture of the busiest threads (and this one, the render thread) at cpu_profile_frame, and
 // whenever Ctrl+Alt+C is pressed while ACE has focus and none is running.
-bool cpuProfileHotkeyHeld = false;
-bool frameCaptureHotkeyHeld = false;
-// The capture's start and end in the headset: the settings menu's panel shows for a few seconds with a line
-// under its title (QVFR and Two-loop: the panel is theirs; with mode=off only the log says).
-struct ProfileNotice {
-    int64_t until = 0;
-    bool wasRunning = false;
-};
-ProfileNotice profileNotice;
 void profile_notice(const std::wstring& text, int64_t ms) {
     if (!experiment.views4 && !experiment.quad)
         return;  // no settings menu to show it in (baseline): the log has it
@@ -4762,6 +4260,8 @@ void cpu_profile_poll() {
     }
 }
 
+}  // namespace
+
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info) {
     hang_watch_frame();
     cpu_profile_mark_frame();  // the game's frame ends here: a running capture's samples go to their frames
@@ -4789,6 +4289,8 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
     live_reload();
     return r;
 }
+
+namespace {
 
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     XrFrameEndInfo withMenu{};
@@ -4886,7 +4388,7 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     return r;
 }
 
-XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
+}  // namespace
 
 #define SIMQVFR_INTERCEPT(fn)                                              \
     if (std::strcmp(name, "xr" #fn) == 0) {                              \
@@ -4922,6 +4424,8 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
     }
     return next.GetInstanceProcAddr ? next.GetInstanceProcAddr(instance, name, function) : XR_ERROR_HANDLE_INVALID;
 }
+
+namespace {
 
 // The layers between this one and the runtime. VectorXR's frame generation has to be among them:
 // above this layer it would get ACE's four-view image instead of the composed stereo frame.
@@ -4972,9 +4476,6 @@ GazeExtension gaze_extension(const XrInstanceCreateInfo& info, PFN_xrGetInstance
 // fail xrCreateInstance before the chain reaches this one (a layer named in XR_ENABLE_API_LAYERS whose manifest
 // it refuses, an extension nobody provides). The loader prints its reason on the game's stderr, which the launcher
 // keeps in the run folder's openxr-loader.log; this log names the layers and says when that happened.
-std::atomic<int> loaderNegotiations{0};
-std::atomic<bool> instanceReachedLayer{false};
-
 void note_loader_negotiation() {
     const int n = ++loaderNegotiations;
     if (n == 1) {
@@ -5012,6 +4513,8 @@ const XrApiLayerNextInfo* chain_layers_below(const XrApiLayerNextInfo* self) {
     }
     return chain::link(layers, self, storage);
 }
+
+}  // namespace
 
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
                                                 const XrApiLayerCreateInfo* layerInfo, XrInstance* instance) {
@@ -5165,13 +4668,12 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     return r;
 }
 
-}  // namespace
-}  // namespace simqvfr
+}  // namespace simqvfr::layer
 
 extern "C" __declspec(dllexport) XrResult XRAPI_CALL
 xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, const char* layerName,
                                    XrNegotiateApiLayerRequest* request) {
-    if (!loaderInfo || !layerName || !request || std::strcmp(layerName, simqvfr::kLayerName) != 0 ||
+    if (!loaderInfo || !layerName || !request || std::strcmp(layerName, simqvfr::layer::kLayerName) != 0 ||
         loaderInfo->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
         request->structType != XR_LOADER_INTERFACE_STRUCT_API_LAYER_REQUEST ||
         loaderInfo->minInterfaceVersion > XR_CURRENT_LOADER_API_LAYER_VERSION ||
@@ -5179,11 +4681,11 @@ xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, cons
         return XR_ERROR_INITIALIZATION_FAILED;
     request->layerInterfaceVersion = XR_CURRENT_LOADER_API_LAYER_VERSION;
     request->layerApiVersion = XR_API_VERSION_1_0;
-    request->getInstanceProcAddr = simqvfr::layerGetInstanceProcAddr;
-    request->createApiLayerInstance = simqvfr::layerCreateApiLayerInstance;
-    if (simqvfr::is_game_process()) {
+    request->getInstanceProcAddr = simqvfr::layer::layerGetInstanceProcAddr;
+    request->createApiLayerInstance = simqvfr::layer::layerCreateApiLayerInstance;
+    if (simqvfr::layer::is_game_process()) {
         simqvfr::log_line("Loader negotiated API layer interface v1 (Sim-QVFR probe build)");
-        simqvfr::note_loader_negotiation();
+        simqvfr::layer::note_loader_negotiation();
     }
     return XR_SUCCESS;
 }
