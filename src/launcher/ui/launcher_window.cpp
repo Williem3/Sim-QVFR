@@ -30,6 +30,7 @@
 #include "../launch_plan.h"
 #include "../preflight.h"
 #include "../report.h"
+#include "../game_tabs.h"
 #include "../settings.h"
 #include "../install.h"
 #include "../update_check.h"
@@ -56,8 +57,8 @@ std::wstring short_name() { return games::launcher_game().shortName; }
 bool game_has(bool games::GameFeatures::*feature) { return games::launcher_game().features.*feature; }
 std::wstring not_yet() { return L"Not available for " + short_name() + L" yet."; }
 
-enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
-constexpr int kPanes = 12;
+enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Games, Layers, Diagnostics, Report, About };
+constexpr int kPanes = 13;
 enum Ctl {
     kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
@@ -91,6 +92,9 @@ enum Ctl {
     kHotkeyFooter,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
+    // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
+    // (option the same), the colour wheel, its brightness, and the game's own colour back.
+    kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset,
     // A setting's ⓘ: its help shows while the pointer is over it (option: its index in kHelp).
     kHelpIcon
 };
@@ -235,6 +239,13 @@ struct App {
     // The help under the pointer (kHelp's index, -1: none) and the ⓘ it belongs to, as last drawn.
     int tip = -1;
     Rect tipAnchor;
+    // The Games pane's colour: the game edited (index in games::all_games; -1: the selected game), the wheel as last
+    // drawn, and the colour as hue (degrees), saturation and brightness (percent), kept apart from its RGB so a dark
+    // colour keeps its hue; colorLoaded is the game they were read for.
+    int colorGame = -1, colorLoaded = -2;
+    Rect colorWheel;
+    float colorHue = 0, colorSat = 1;
+    int colorValue = 100;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -256,12 +267,23 @@ bool system_dark() {
 COLORREF colorref(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
 
 // A game tab's palette (tokens.json "games"), for the theme in use; the kit's default accent for a game without one.
-t::Accent game_accent(const games::GameInfo& game) {
+t::Accent builtin_accent(const games::GameInfo& game) {
     for (const t::GamePalette& p : t::kGamePalettes)
         if (_stricmp(p.id, game.id) == 0)
             return app.dark ? p.dark : p.light;
     const t::Colors& base = app.dark ? t::kDark : t::kLight;
     return {base.accent, base.accent_fill, base.on_accent, base.focus_ring};
+}
+
+std::wstring game_id(const games::GameInfo& game) { return widen(std::string(game.id)); }
+
+// A game's accent: the colour picked for it in the Games pane (game_tabs.h accent_from), else its palette.
+t::Accent game_accent(const games::GameInfo& game) {
+    const auto custom = app.s.gameColors.find(game_id(game));
+    if (custom == app.s.gameColors.end())
+        return builtin_accent(game);
+    const AccentColors a = accent_from(custom->second, app.dark);
+    return {a.accent, a.fill, a.onAccent, a.ring};
 }
 
 void apply_theme() {
@@ -311,6 +333,8 @@ std::string ini_text() {
 }
 
 void refresh_profiles();  // the profiles and the one in use (below)
+
+void apply_color_edit();  // the Games pane's colour into the settings (below)
 
 void changed(bool save = true) {
     app.status = Status::Idle;
@@ -494,6 +518,7 @@ int* slider_value(Ctl id) {
     case kOuter: return &app.s.outer;
     case kInner: return &app.s.inner;
     case kObjectDetail: return &app.s.objectDetail;
+    case kColorValue: return &app.colorValue;
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
     case kFeather: return &app.s.feather;
@@ -539,6 +564,7 @@ Range slider_range(Ctl id) {
     case kOuter: return kOuterRange;
     case kInner: return kInnerRange;
     case kObjectDetail: return kObjectDetailRange;
+    case kColorValue: return {0, 100};
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
     case kFocusOffset: return kFocusOffsetRange;
@@ -645,6 +671,7 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
+    case Pane::Games: order.insert(order.end(), {kColorValue, kColorReset}); break;
     case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::Report:
         order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});
@@ -890,6 +917,9 @@ constexpr Help kHelp[] = {
      L"region as its pixel density shows them; lower settings move toward the game’s own detail for the outer resolution. "
      L"It costs CPU, not GPU: more detail means more objects for X-Plane’s main thread to prepare every frame, often what "
      L"limits the frame rate with QVFR. Lower it if frames stutter in dense scenery; the focus region shows coarser trees."},
+    {L"Brightness",
+     L"How light or dark the game’s colour is. The wheel picks its hue and how strong it is; the launcher keeps "
+     L"its text and edges readable in light and dark mode."},
     {L"Foveated width",
      L"The focus area’s width, a share of the view. Wider hides the edge between sharp and soft better; its pixels cost "
      L"density × width × height, so a wide area at a high density costs the most."},
@@ -2049,6 +2079,178 @@ float checks_pane(float x, float y, float w, bool draw) {
     return h;
 }
 
+// ---- Games ------------------------------------------------------------------------------------
+
+bool game_shown(const games::GameInfo& game) { return !game_hidden(app.s.hiddenGames, game_id(game)); }
+
+int shown_game_count() {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    int shown = 0;
+    for (std::size_t i = 0; i < count; ++i)
+        shown += game_shown(*all[i]) ? 1 : 0;
+    return shown;
+}
+
+// The game whose colour the wheel edits: the one picked by its swatch, else the selected game.
+int color_game_index() {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    if (app.colorGame >= 0 && static_cast<std::size_t>(app.colorGame) < count)
+        return app.colorGame;
+    for (std::size_t i = 0; i < count; ++i)
+        if (all[i] == &games::launcher_game())
+            return static_cast<int>(i);
+    return 0;
+}
+
+const games::GameInfo& color_game() {
+    std::size_t count = 0;
+    return *games::all_games(count)[color_game_index()];
+}
+
+// The wheel's hue, saturation and brightness from the edited game's colour (its own, else its palette's fill).
+void load_color_edit() {
+    const int index = color_game_index();
+    if (app.colorLoaded == index)
+        return;
+    app.colorLoaded = index;
+    const auto it = app.s.gameColors.find(game_id(color_game()));
+    const uint32_t rgb = it != app.s.gameColors.end() ? it->second : builtin_accent(color_game()).accent_fill;
+    float value = 1;
+    rgb_hsv(rgb, app.colorHue, app.colorSat, value);
+    app.colorValue = static_cast<int>(std::lround(value * 100));
+}
+
+void apply_color_edit() {
+    app.s.gameColors[game_id(color_game())] = hsv_rgb(app.colorHue, app.colorSat, app.colorValue / 100.0f);
+    apply_theme();  // the selected game's accent may be the one changed
+}
+
+// A point on the wheel: its angle the hue, its distance from the centre the saturation (the rim: full).
+void set_color_from(float x, float y) {
+    const Rect& r = app.colorWheel;
+    if (r.w <= 0)
+        return;
+    const float radius = r.w / 2, dx = (x - (r.x + radius)) / radius, dy = (y - (r.y + radius)) / radius;
+    app.colorSat = std::min(1.0f, std::sqrt(dx * dx + dy * dy));
+    float hue = std::atan2(-dy, dx) * 180.0f / 3.14159265f;
+    app.colorHue = hue < 0 ? hue + 360 : hue;
+    apply_color_edit();
+    changed(false);  // saved once the pointer lets go (WM_LBUTTONUP), as a slider is
+}
+
+// The colour wheel at `r` (square): hue round it, saturation outward, at the brightness set; a ring marks the colour.
+void color_wheel(const Rect& r) {
+    static std::vector<uint32_t> pixels;
+    static int madeSize = -1, madeValue = -1;
+    const int n = std::max(16, static_cast<int>(std::lround(r.w * app.canvas.dpi_scale())));
+    if (n != madeSize || app.colorValue != madeValue) {
+        madeSize = n;
+        madeValue = app.colorValue;
+        pixels.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0);
+        const float half = n / 2.0f, value = app.colorValue / 100.0f;
+        for (int py = 0; py < n; ++py)
+            for (int px = 0; px < n; ++px) {
+                const float dx = (px + 0.5f - half) / half, dy = (py + 0.5f - half) / half;
+                const float d = std::sqrt(dx * dx + dy * dy);
+                const float alpha = std::clamp((1.0f - d) * half + 0.5f, 0.0f, 1.0f);  // a smooth rim
+                if (alpha <= 0)
+                    continue;
+                float hue = std::atan2(-dy, dx) * 180.0f / 3.14159265f;
+                const uint32_t rgb = hsv_rgb(hue < 0 ? hue + 360 : hue, std::min(d, 1.0f), value);
+                const auto pre = [alpha](uint32_t c) { return static_cast<uint32_t>(std::lround(c * alpha)); };
+                pixels[static_cast<std::size_t>(py) * n + px] = static_cast<uint32_t>(std::lround(alpha * 255)) << 24 |
+                                                                pre((rgb >> 16) & 0xff) << 16 | pre((rgb >> 8) & 0xff) << 8 |
+                                                                pre(rgb & 0xff);
+            }
+    }
+    app.canvas.image(r, pixels, n, n, static_cast<uint64_t>(n) * 1000 + static_cast<uint64_t>(app.colorValue) + 1);
+    const float radius = r.w / 2, angle = app.colorHue * 3.14159265f / 180.0f;
+    const float mx = r.x + radius + std::cos(angle) * app.colorSat * radius, my = r.y + radius - std::sin(angle) * app.colorSat * radius;
+    app.canvas.circle(mx, my, 7, col(hsv_rgb(app.colorHue, app.colorSat, app.colorValue / 100.0f)), true);
+    app.canvas.circle(mx, my, 7.5f, col(0xffffff), false, 2);
+    app.canvas.circle(mx, my, 9, col(0x000000, 0.35f), false, 1);
+    app.colorWheel = r;
+    app.hits.push_back({kColorWheel, r});
+}
+
+float games_pane(float x, float y, float w, bool draw) {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    load_color_edit();
+    const int editing = color_game_index();
+    const bool onlyOne = shown_game_count() <= 1;
+    std::vector<Row> rows;
+    for (std::size_t i = 0; i < count; ++i) {
+        const games::GameInfo* game = all[i];
+        const bool shown = game_shown(*game), locked = shown && onlyOne;  // the last tab stays
+        const std::wstring desc = locked ? L"The last tab: show another game to hide this one."
+                                         : shown ? L"Has a tab at the top of the window."
+                                                 : L"No tab. Its settings are kept for when you show it again.";
+        Row row;
+        row.fullHeight = [desc](float width) { return checkbox_height(desc, width - 36); };
+        row.full = [=](const Rect& r) {
+            const t::Accent a = game_accent(*game);
+            const Rect swatch{r.x, r.y + (r.h - 22) / 2, 22, 22};
+            app.canvas.circle(swatch.x + 11, swatch.y + 11, 9, col(a.accent_fill), true);
+            if (static_cast<int>(i) == editing)  // the game the wheel below edits
+                app.canvas.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
+            if (focused(kColorGame) && app.hoverOption == static_cast<int>(i))
+                focus_ring(swatch, 11);
+            app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i)});
+            const Rect rest{r.x + 36, r.y, r.w - 36, r.h};
+            const float tw = rest.w - kSwitchW - t::kSpace5;
+            const float descH = app.canvas.measure_height(desc, t::kCallout, tw);
+            const float ty = rest.y + (rest.h - t::kBody.lineHeight - 2 - descH) / 2;
+            app.canvas.text(game->name, t::kBody, {rest.x, ty, tw, t::kBody.lineHeight}, col(app.c->label));
+            app.canvas.text(desc, t::kCallout, {rest.x, ty + t::kBody.lineHeight + 2, tw, descH + 2}, col(app.c->label_secondary),
+                            Align::Leading, false, true);
+            switch_track({rest.right() - kSwitchW, rest.y + (rest.h - kSwitchH) / 2, kSwitchW, kSwitchH}, shown, locked);
+            if (!locked)
+                app.hits.push_back({kGameShown, rest, static_cast<int>(i)});
+        };
+        rows.push_back(row);
+    }
+    float h = section(x, y, w, L"Game tabs", rows,
+                      L"A hidden game keeps its own settings and colour. If the game you are on is hidden, the first shown "
+                      L"game is selected. Click a game’s colour dot to change its colour below.",
+                      draw);
+    h += t::kSpace6;
+    const games::GameInfo& game = color_game();
+    const bool custom = app.s.gameColors.count(game_id(game)) > 0;
+    Row wheel;
+    wheel.fullHeight = [](float) { return 184.0f; };
+    wheel.full = [&game](const Rect& r) {
+        color_wheel({r.x, r.y, r.h, r.h});
+        // What it looks like: the game's tab and a button in its colours.
+        const t::Accent a = game_accent(game);
+        const float px = r.x + r.h + t::kSpace6, pw = std::min(260.0f, r.right() - px);
+        if (pw < 120)
+            return;
+        const Rect tab{px, r.y + 40, pw, 34};
+        app.canvas.fill(tab, col(a.accent_fill, app.dark ? 0.22f : 0.12f), t::kRadiusControl);
+        app.canvas.circle(tab.x + 18, tab.y + tab.h / 2, 4, col(a.accent), true);
+        app.canvas.text(game.name, t::kBody, {tab.x + 30, tab.y, tab.w - 34, tab.h}, col(app.c->label));
+        app.canvas.fill({tab.x + 10, tab.bottom() - 3, tab.w - 20, 3}, col(a.accent), 1.5f);
+        const Rect button{px, tab.bottom() + 16, std::min(pw, 140.0f), t::kControlHeight};
+        app.canvas.fill(button, col(a.accent_fill), t::kRadiusControl);
+        app.canvas.text(L"Launch", kButtonLabel, button, col(a.on_accent), Align::Center);
+        app.canvas.text(L"Preview", t::kSubheadline, {px, r.y + 14, pw, 18}, col(app.c->label_secondary));
+    };
+    Row reset;
+    reset.label = L"Built-in colour";
+    reset.desc = custom ? L"Go back to " + std::wstring(game.shortName) + L"’s own colour." : L"In use.";
+    reset.controlW = button_width(L"Use default");
+    reset.controlH = t::kControlHeight;
+    if (custom)
+        reset.control = [](const Rect& r) { button(kColorReset, r, L"Use default", Btn::Secondary); };
+    h += section(x, y + h, w, L"Colour for " + std::wstring(game.name),
+                 {wheel, slider_row(kColorValue, L"Brightness", L"", app.colorValue, L""), reset},
+                 L"Drag in the wheel to pick a colour; it applies at once.", draw);
+    return h;
+}
+
 float pane_content(float x, float y, float w, bool draw) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool qvfr = app.s.mode == RenderMode::Qvfr;
@@ -2443,6 +2645,7 @@ float pane_content(float x, float y, float w, bool draw) {
                      draw);
         break;
     }
+    case Pane::Games: h += games_pane(x, y, w, draw); break;
     case Pane::Layers: h += layers_pane(x, y, w, draw); break;
     case Pane::Diagnostics: h += diagnostics_pane(x, y, w, draw); break;
     case Pane::Report: h += report_pane(x, y, w, draw); break;
@@ -2973,6 +3176,7 @@ const Item kItems[] = {
     {L"Foveated DLSS", {"M8 1.75L9.6 6.4 14.25 8 9.6 9.6 8 14.25 6.4 9.6 1.75 8 6.4 6.4Z", nullptr, nullptr}},
     {L"Headset menu", {"M3.25 3.25H12.75C13.6 3.25 14.25 3.9 14.25 4.75V11.25C14.25 12.1 13.6 12.75 12.75 12.75H3.25C2.4 12.75 1.75 12.1 1.75 11.25V4.75C1.75 3.9 2.4 3.25 3.25 3.25Z", "M4.5 6.5H8.5", "M4.5 9.5H11.5"}},
     {L"Hotkeys", {"M2.25 4.25H13.75V11.75H2.25Z", "M4.75 6.75H5.25M7.75 6.75H8.25M10.75 6.75H11.25", "M5.25 9.25H10.75"}},
+    {L"Games", {"M2.5 2.5H7V7H2.5Z", "M9 2.5H13.5V7H9Z", "M2.5 9H7V13.5H2.5ZM9 9H13.5V13.5H9Z"}},
     {L"OpenXR layers", {"M2.5 4.5H10.5", "M2.5 8H10.5", "M2.5 11.5H10.5"}},
     {L"Diagnostics", {"M1.5 8.5H4.5L6.25 4.5L9.75 11.5L11.5 8.5H14.5", nullptr, nullptr}},
     {L"Report an issue", {"M3.5 14.25V2", "M3.5 2.75H12.5L10.5 5.5L12.5 8.25H3.5", nullptr}},
@@ -2998,7 +3202,7 @@ struct Group {
     const wchar_t* label;
     int first, end;
 };
-constexpr Group kGroups[] = {{L"Setup", 0, 2}, {L"Picture", 2, 6}, {L"In the headset", 6, 8}, {L"Advanced", 8, 10}, {L"Help", 10, 12}};
+constexpr Group kGroups[] = {{L"Setup", 0, 2}, {L"Picture", 2, 6}, {L"In the headset", 6, 8}, {L"Advanced", 8, 11}, {L"Help", 11, 13}};
 static_assert(kGroups[std::size(kGroups) - 1].end == kPanes, "every pane in a group");
 
 const wchar_t* group_of(int pane) {
@@ -3025,6 +3229,7 @@ std::wstring pane_description(Pane pane) {
     case Pane::Dlss: return L"Cheaper outer views, a sharper centre and frame generation, with Cheeky Foveated DLSS.";
     case Pane::Menu: return L"Where the settings menu and the performance overlay float in your view.";
     case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
+    case Pane::Games: return L"Which games have a tab, and each game’s colour.";
     case Pane::Layers: return L"The OpenXR layers " + game_name() + L" loads, and their order.";
     case Pane::Diagnostics: return L"The last session’s numbers, and what to share when you ask for help.";
     case Pane::Report: return L"Zips the logs and opens a GitHub issue with the details filled in.";
@@ -3180,12 +3385,15 @@ void game_tabs(float W) {
     const auto tab_width = [&](const std::wstring& label) { return 14 + 8 + 8 + std::ceil(cv.measure(label, kBodyStrong)) + 16; };
     float full = 0;
     for (std::size_t i = 0; i < count; ++i)
-        full += tab_width(all[i]->name) + 4;
+        if (game_shown(*all[i]) || all[i] == &games::launcher_game())
+            full += tab_width(all[i]->name) + 4;
     const bool shortNames = x0 + full > W - t::kSpace4;
     float x = x0;
     for (std::size_t i = 0; i < count; ++i) {
         const games::GameInfo& game = *all[i];
         const bool selected = &game == &games::launcher_game();
+        if (!selected && !game_shown(game))
+            continue;  // hidden in the Games pane
         const std::wstring label = shortNames ? game.shortName : game.name;
         const t::Accent accent = game_accent(game);
         const Rect tab{x, 8, tab_width(label), H - 16};
@@ -3420,6 +3628,8 @@ void set_slider_from_x(float x) {
     const float f = std::clamp((x - app.dragTrack.x - 9) / travel, 0.0f, 1.0f);
     const int before = *v;
     *v = app.dragRange.min + static_cast<int>(std::lround(f * (app.dragRange.max - app.dragRange.min)));
+    if (app.dragging == kColorValue)
+        apply_color_edit();  // the brightness: the edited game's colour follows
     changed(false);
     if (*v != before && app.iniFound)
         push_live();  // the running game follows the knob; the settings save once it is let go
@@ -3998,6 +4208,37 @@ void activate(Ctl id, int option) {
         return;
     case kUpdateBadge: activate(kSidebar, static_cast<int>(Pane::About)); return;
     case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
+    case kGameShown: {
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        if (option < 0 || static_cast<std::size_t>(option) >= count)
+            return;
+        const bool hide = game_shown(*all[option]);
+        if (hide && shown_game_count() <= 1)
+            return;  // the last tab stays
+        app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, game_id(*all[option]), hide);
+        changed();
+        if (hide && all[option] == &games::launcher_game())  // the game in use went: the first shown takes over
+            for (std::size_t i = 0; i < count; ++i)
+                if (game_shown(*all[i])) {
+                    select_game(static_cast<int>(i));
+                    break;
+                }
+        return;
+    }
+    case kColorGame:
+        app.colorGame = option;
+        app.colorLoaded = -2;
+        load_color_edit();
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    case kColorReset:
+        app.s.gameColors.erase(game_id(color_game()));
+        app.colorLoaded = -2;
+        load_color_edit();
+        apply_theme();
+        changed();
+        return;
     case kCropOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::fovCrop)) {
             app.s.crop = !app.s.crop;
@@ -4110,12 +4351,24 @@ void on_key(WPARAM key) {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         break;
     }
-    case kGameTab:  // Left and Right pick the game, Home and End the first and last
+    case kGameTab: {  // Left and Right pick the game, Home and End the first and last (shown games only)
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        const auto next_shown = [&](int from, int step) {
+            for (int i = from; i >= 0 && i < static_cast<int>(count); i += step)
+                if (game_shown(*all[i]))
+                    return i;
+            return -1;
+        };
+        int to = -1;
         if (key == VK_LEFT || key == VK_RIGHT)
-            select_game(std::clamp(game_index() + (key == VK_RIGHT ? 1 : -1), 0, game_count() - 1));
+            to = next_shown(game_index() + (key == VK_RIGHT ? 1 : -1), key == VK_RIGHT ? 1 : -1);
         else if (key == VK_HOME || key == VK_END)
-            select_game(key == VK_HOME ? 0 : game_count() - 1);
+            to = key == VK_HOME ? next_shown(0, 1) : next_shown(static_cast<int>(count) - 1, -1);
+        if (to >= 0)
+            select_game(to);
         break;
+    }
     case kSidebar:
         if (key == VK_UP || key == VK_DOWN) {
             const int step = key == VK_DOWN ? 1 : -1, here = static_cast<int>(app.pane);
@@ -4320,6 +4573,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.dragRange = slider_range(h->id);
             SetCapture(hwnd);
             set_slider_from_x(x);
+        } else if (h->id == kColorWheel) {
+            app.dragging = kColorWheel;
+            SetCapture(hwnd);
+            set_color_from(x, y);
         } else if (h->id == kMenuPanel || h->id == kOsdPanel) {
             app.dragging = h->id;
             const float k = app.placeFrame.w / kRefFovX;
@@ -4347,6 +4604,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         app.mouseY = y;
         if (app.dragging == kMenuPanel || app.dragging == kOsdPanel)
             set_panel_from(x, y);
+        else if (app.dragging == kColorWheel)
+            set_color_from(x, y);
         else if (app.dragging != kNone)
             set_slider_from_x(x);
         else if (app.popup.open) {

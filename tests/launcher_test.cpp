@@ -18,6 +18,7 @@
 #include "games/xplane/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
+#include "launcher/game_tabs.h"
 #include "launcher/install.h"
 #include "launcher/layer_order.h"
 #include "launcher/preflight.h"
@@ -76,6 +77,71 @@ std::wstring value_of(const std::vector<std::pair<std::wstring, std::wstring>>& 
 
 int ini_int(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
     return static_cast<int>(GetPrivateProfileIntW(section, key, -1, ini.c_str()));
+}
+
+// The game tabs (game_tabs.h; the Games pane): the hidden list, the colours as text, HSV, readable accents, and the
+// settings keeping both launcher-wide.
+void game_tabs_checks() {
+    check(!game_hidden(L"", L"ace") && game_hidden(L"acc, xplane", L"xplane") && game_hidden(L"ACC", L"acc") &&
+              !game_hidden(L"acc", L"ace"),
+          "game tabs: the hidden list (commas, spaces, any case)");
+    check(with_game_hidden(L"", L"acc", true) == L"acc" && with_game_hidden(L"acc", L"xplane", true) == L"acc,xplane" &&
+              with_game_hidden(L"acc,xplane", L"acc", false) == L"xplane" && with_game_hidden(L"acc", L"acc", true) == L"acc",
+          "game tabs: hiding and showing, no duplicates");
+    uint32_t rgb = 0;
+    check(parse_color(L"#1A2b3C", rgb) && rgb == 0x1a2b3c && parse_color(L"00ff00", rgb) && rgb == 0x00ff00 &&
+              !parse_color(L"12345", rgb) && !parse_color(L"zzzzzz", rgb) && color_text(0x0a0b0c) == L"0A0B0C",
+          "game tabs: colours as RRGGBB text");
+    check(hsv_rgb(0, 1, 1) == 0xff0000 && hsv_rgb(120, 1, 1) == 0x00ff00 && hsv_rgb(240, 1, 1) == 0x0000ff &&
+              hsv_rgb(0, 0, 1) == 0xffffff && hsv_rgb(77, 0.4f, 0) == 0,
+          "game tabs: HSV to RGB");
+    bool round = true;
+    for (const uint32_t c : {0xd2691eu, 0x3dd6c6u, 0x7f00ffu, 0x808080u}) {
+        float h = 0, s = 0, v = 0;
+        rgb_hsv(c, h, s, v);
+        const uint32_t back = hsv_rgb(h, s, v);
+        for (int shift = 0; shift <= 16; shift += 8)
+            round &= std::abs(static_cast<int>((back >> shift) & 0xff) - static_cast<int>((c >> shift) & 0xff)) <= 1;
+    }
+    check(round, "game tabs: RGB to HSV and back");
+    bool readable = true, fillKept = true, textOnFill = true;
+    for (const uint32_t c : {0xffff00u, 0xffffffu, 0x000000u, 0x00ffffu, 0x1010a0u, 0xff5f57u, 0x808080u})
+        for (const bool dark : {false, true}) {
+            const AccentColors a = accent_from(c, dark);
+            readable &= contrast(a.accent, dark ? 0x1c1c1e : 0xf2f2f5) >= 3.0 && a.ring == a.accent;
+            fillKept &= a.fill == c;
+            textOnFill &= contrast(a.onAccent, a.fill) >= contrast(a.onAccent ^ 0xffffffu, a.fill);
+        }
+    check(readable, "game tabs: an accent from any colour reads against the window (3:1), light and dark");
+    check(fillKept && textOnFill, "game tabs: the fill is the colour picked, with the better of black and white on it");
+
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-game-tabs-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const std::wstring ini = (dir / L"sim-qvfr.ini").wstring();
+    Settings s;
+    s.hiddenGames = L"acc";
+    s.gameColors[L"xplane"] = 0x7f00ff;
+    save_settings(ini, s);
+    Settings back = load_settings(ini);
+    check(back.hiddenGames == L"acc" && back.gameColors.size() == 1 && back.gameColors[L"xplane"] == 0x7f00ff,
+          "game tabs: hidden games and colours round-trip");
+    back.gameColors.clear();
+    save_settings(ini, back);
+    wchar_t value[16] = {};
+    GetPrivateProfileStringW(L"launcher", L"color_xplane", L"gone", value, 16, ini.c_str());
+    check(std::wstring(value) == L"gone" && load_settings(ini).gameColors.empty(), "game tabs: the default colour back removes the key");
+    back.gameColors[L"ace"] = 0x123456;
+    save_settings(ini, back);
+    const Profile p = settings_profile(load_settings(ini), L"x");
+    check(std::none_of(p.keys.begin(), p.keys.end(), [](const ProfileKey& k) { return k.section == L"launcher"; }),
+          "game tabs: launcher-wide, never in a profile or a game's own settings");
+    WritePrivateProfileStringW(L"launcher", L"game", L"ace", ini.c_str());
+    switch_game_settings(ini, L"ace", L"xplane");
+    const Settings after = load_settings(ini);
+    check(after.hiddenGames == L"acc" && after.gameColors.count(L"ace") == 1, "game tabs: switching games keeps them");
+    fs::remove_all(dir, ec);
 }
 
 // Per-game settings (settings.h store/restore/seed/switch_game_settings, profiles.h game_settings_target): an update
@@ -1720,6 +1786,7 @@ int main() {
 
     fs::remove_all(folder, ec);
     per_game_settings_checks();
+    game_tabs_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }
