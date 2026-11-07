@@ -1086,6 +1086,10 @@ constexpr Help kHelp[] = {
      L"GPU time and latency. Turn OpenXR Toolkit’s Turbo mode off with it, and run no other frame generator."},
     {L"Center region", L"The part of the view frame generation makes at full quality (it follows your eyes when eye tracked). "
                        L"Larger looks better and costs more GPU time."},
+    {L"Live", L"These settings reach the game while it runs, as soon as you change them. Without the game running, they "
+              L"apply when it starts."},
+    {L"Next launch", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
+                     L"what it started with."},
     {L"Show the overlay",
      L"The performance overlay in the headset: frame rate, CPU and GPU time and what limits the frame. A little CPU time while "
      L"it shows."},
@@ -1373,6 +1377,10 @@ void sheet_card() {
 
 // ---- Form layout -------------------------------------------------------------------------------
 
+// When a section's settings reach the game: at once while it runs (Live), or when it next starts (NextLaunch). The
+// section's title carries it as a tag (section).
+enum class Applies { None, Live, NextLaunch };
+
 // One FormRow inside a section box: label (+ description) leading, the control trailing.
 struct Row {
     std::wstring label, desc;
@@ -1403,13 +1411,34 @@ float row_height(const Row& row, float w) {
     return std::max(t::kRowMinHeight, std::max(textH, row.controlH) + 2 * kRowPadY);
 }
 
-// FormSection at (x, y), width w: its heading, a card of rows, a footer under it. Returns its height.
+// The tag after a section's title: "Live" (green) or "Next launch" (grey), 18 high; under the pointer, what it means
+// (its help, as an ⓘ's).
+void applies_tag(float x, float y, Applies applies) {
+    const bool live = applies == Applies::Live;
+    const std::wstring text = live ? L"Live" : L"Next launch";
+    const Rect r{x, y, std::ceil(app.canvas.measure(text, kBadgeStyle)) + 16, 18};
+    app.canvas.fill(r, col(live ? app.c->success_bg : app.c->segment_track), 9);
+    app.canvas.text(text, kBadgeStyle, r, col(live ? app.c->success : app.c->label_secondary), Align::Center);
+    int index = 0;
+    while (text != kHelp[index].label)
+        ++index;
+    app.hits.push_back({kHelpIcon, r, index});
+    if (app.tip == index)
+        app.tipAnchor = r;
+}
+
+// FormSection at (x, y), width w: its heading (and when its settings apply), a card of rows, a footer under it.
+// Returns its height.
 float section(float x, float y, float w, const std::wstring& title, const std::vector<Row>& rows, const std::wstring& footer,
-              bool draw) {
+              bool draw, Applies applies = Applies::None) {
     float h = 0;
     if (!title.empty()) {
-        if (draw)
+        if (draw) {
             app.canvas.text(title, t::kHeadline, {x + 2, y, w - 2, t::kHeadline.lineHeight}, col(app.c->heading));
+            if (applies != Applies::None)
+                applies_tag(x + 2 + std::ceil(app.canvas.measure(title, t::kHeadline)) + t::kSpace2,
+                            y + (t::kHeadline.lineHeight - 18) / 2, applies);
+        }
         h += t::kHeadline.lineHeight + t::kSpace2;
     }
     float boxH = 0;
@@ -1645,7 +1674,7 @@ float layers_pane(float x, float y, float w, bool draw) {
                      rows,
                      L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in "
                      L"Windows can still be loaded for the game alone. Locked switches keep the mod and the game working.",
-                     draw);
+                     draw, Applies::NextLaunch);
         Row reset;
         reset.label = L"Windows’ order";
         reset.desc = L"Forget this profile: launches follow Windows’ order and switches again.";
@@ -1672,7 +1701,7 @@ float layers_pane(float x, float y, float w, bool draw) {
             h += section(x, y + h, w, machine ? L"All users (HKLM)" : L"This user (HKCU)", rows,
                          machine ? L"Changing these needs administrator rights: Windows asks once when you apply."
                                  : L"Windows loads these after the machine-wide ones.",
-                         draw) +
+                         draw, Applies::NextLaunch) +
                  t::kSpace6;
         }
         if (app.layersDraft.empty()) {
@@ -2215,7 +2244,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     std::wstring footer = L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the "
                           L"issue. Elsewhere, send a screenshot of this page (or paste the summary) and the session's ace-*.log";
     footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
-    h += section(x, y + h, w, L"Capture and share", {capture, frame, baseline, actions}, footer, draw);
+    h += section(x, y + h, w, L"Capture and share", {capture, frame, baseline, actions}, footer, draw, Applies::NextLaunch);
     return h;
 }
 
@@ -2384,7 +2413,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
                   row(HotkeyAction::MenuLeft), row(HotkeyAction::MenuRight)},
                  L"A key’s first press also opens the menu. A wheel’s directions act only while the menu shows, so a "
                  L"switch the game also uses doesn’t open it: use Open or close first. " + pads_found(),
-                 draw) +
+                 draw, Applies::Live) +
          t::kSpace6;
     std::vector<Row> inGame = {row(HotkeyAction::Overlay)};
     if (game_has(&games::GameFeatures::helmet))  // the visor steps the helmet overlay
@@ -2393,8 +2422,8 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
     h += section(x, y + h, w, L"In the game", inGame,
                  L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever "
                  L"the game runs. Click a button above, then press the keys or the wheel button: Esc cancels, Delete "
-                 L"clears it. They apply to a running game at once.",
-                 draw) +
+                 L"clears it.",
+                 draw, Applies::Live) +
          t::kSpace6;
     Row reset;
     reset.fullHeight = [](float) { return t::kControlHeight; };
@@ -2654,9 +2683,9 @@ float pane_content(float x, float y, float w, bool draw) {
         const bool known = app.runtime.known();
         const std::wstring footer =
             known ? L"Percent of the headset’s recommended resolution (" + std::to_wstring(app.runtime.width) + L" × " +
-                        std::to_wstring(app.runtime.height) + L" px per eye). Outer and inner are set independently. Applies at next launch."
+                        std::to_wstring(app.runtime.height) + L" px per eye). Outer and inner are set independently."
                   : L"Percent of the headset’s recommended resolution. Pixel sizes appear after the first launch. Outer and inner are "
-                    L"set independently. Applies at next launch.";
+                    L"set independently.";
         std::vector<Row> rows = {
             slider_row(kOuter, L"Outer resolution", L"The full field of view, rendered at lower density.", app.s.outer,
                        known ? px(ro.outer) : L""),
@@ -2666,7 +2695,7 @@ float pane_content(float x, float y, float w, bool draw) {
                        qvfr ? app.s.inner : static_cast<int>(std::lround(ro.focusDensity * 100)),
                        known && qvfr ? px(ro.focus) : L"", !qvfr),
         };
-        h += section(x, y, w, L"Per-eye resolution", rows, footer, draw);
+        h += section(x, y, w, L"Per-eye resolution", rows, footer, draw, Applies::NextLaunch);
         // Object detail (X-Plane): the LOD the focus views need, or less of it for main-thread time.
         if (game_has(&games::GameFeatures::objectDetail)) {
             h += t::kSpace6;
@@ -2676,8 +2705,8 @@ float pane_content(float x, float y, float w, bool draw) {
                                           : L"Available in Quad View Foveated Rendering.",
                                      app.s.objectDetail, L"", !qvfr)},
                          L"100% keeps trees and objects as detailed in the focus region as at its density; 0% is the "
-                         L"game’s own detail for the outer resolution. Applies live while the game runs.",
-                         draw);
+                         L"game’s own detail for the outer resolution.",
+                         draw, Applies::Live);
         }
         // The FOV crop (each side on its own, QVFR only) and the helmet overlay: left out for a game without them.
         if (game_has(&games::GameFeatures::fovCrop)) {
@@ -2695,9 +2724,9 @@ float pane_content(float x, float y, float w, bool draw) {
                                      cropOff),
                           slider_row(kCropInner, L"Inner side", L"Toward the nose.", app.s.cropInner, L"", cropOff)},
                          L"Share of each eye’s field of view removed at that side; the headset shows black there. The outer "
-                         L"view keeps its sharpness and the focus region its size. Applies live while the game runs; with DLSS "
+                         L"view keeps its sharpness and the focus region its size. With DLSS "
                          L"on, or with less crop than at launch, the pixel count follows at the next launch.",
-                         draw);
+                         draw, Applies::Live);
         }
         if (game_has(&games::GameFeatures::helmet)) {
             h += t::kSpace6;
@@ -2738,8 +2767,8 @@ float pane_content(float x, float y, float w, bool draw) {
                           }()},
                          L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png "
                          L"and visor.png with alpha in the helmet folder next to the layer; the log suggests the crop that "
-                         L"matches them. Applies live.",
-                         draw);
+                         L"matches them.",
+                         draw, Applies::Live);
         }
         break;
     }
@@ -2769,7 +2798,7 @@ float pane_content(float x, float y, float w, bool draw) {
                      qvfr ? L"Eye tracked or fixed: whether the sharp focus region follows your eyes."
                           : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
                             L"Foveated Rendering; Two-loop won't be offered again.",
-                     draw);
+                     draw, method_shown() ? Applies::NextLaunch : Applies::Live);
         h += t::kSpace6;
         h += section(x, y + h, w, L"Focus region",
                      {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
@@ -2790,8 +2819,8 @@ float pane_content(float x, float y, float w, bool draw) {
                                  L"against eye-tracker jitter (shimmer with MSAA); 0 follows every sample.",
                                  app.s.gazeDeadzone, L"", !app.s.eyeTracking, L"°", true)},
                      L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
-                     L"vertical offset. All apply live.",
-                     draw);
+                     L"vertical offset.",
+                     draw, Applies::Live);
         h += t::kSpace6;
         {
             const std::wstring names[2] = {kShapeNames[0], kShapeNames[1]};
@@ -2811,7 +2840,7 @@ float pane_content(float x, float y, float w, bool draw) {
                          L"height (down, up). Pull the top corners in for a trapezoid: more of the dash sharp, less "
                          L"of the far field. The focus view still renders the whole box, so the cost stays the same. "
                          L"Applies live.",
-                         draw);
+                         draw, Applies::Live);
         }
         break;
     }
@@ -2828,7 +2857,7 @@ float pane_content(float x, float y, float w, bool draw) {
         color.control = [](const Rect& r) { segmented(kColor, r, static_cast<int>(app.s.color), !app.s.outline); };
         h += section(x, y, w, L"Focus overlay",
                      {show, color},
-                     L"The outline is drawn into the headset image, to show where the focus region is.", draw);
+                     L"The outline is drawn into the headset image, to show where the focus region is.", draw, Applies::Live);
         break;
     }
     case Pane::Dlss: {
@@ -2860,7 +2889,7 @@ float pane_content(float x, float y, float w, bool draw) {
         };
         Row use;
         const std::wstring useDesc = L"Loads Cheeky’s DLSS runtime into " + game_name() + L", so the outer views can use a "
-                                     L"cheaper DLSS pass. Applies at the next launch.";
+                                     L"cheaper DLSS pass.";
         use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
         use.full = [useDesc](const Rect& r) { checkbox(kCheekyUse, r, app.s.cheeky.load, L"Use Cheeky Foveated DLSS", useDesc); };
         Row rt;
@@ -2882,7 +2911,7 @@ float pane_content(float x, float y, float w, bool draw) {
         h += section(x, y + h, w, L"Cheeky Foveated DLSS", {use, rt, xr},
                      L"Put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to sim-qvfr.dll, or choose "
                      L"its runtime. No Cheeky loader goes in the game folder. " + last,
-                     draw) + t::kSpace6;
+                     draw, Applies::NextLaunch) + t::kSpace6;
         const bool outer = app.s.cheeky.outerDlaa;
         Row on, cheap;
         const std::wstring onDesc = L"Off leaves ACE’s own DLSS on every view.";
@@ -2912,9 +2941,9 @@ float pane_content(float x, float y, float w, bool draw) {
                       preset_row(kCheekyOuterPreset, L"Outer preset", L"", app.s.cheeky.outerPreset, !outer),
                       preset_row(kCheekyFocusPreset, L"Focus preset", L"DLSS preset for the sharp focus views.",
                                  app.s.cheeky.focusPreset, false)},
-                     L"Applies live while the game runs. In Quad View Foveated Rendering, Sim-QVFR tells Cheeky which "
+                     L"In Quad View Foveated Rendering, Sim-QVFR tells Cheeky which "
                      L"views are outer and which are focus.",
-                     draw);
+                     draw, Applies::Live);
         h += t::kSpace6;
         Row fix, nr;
         const std::wstring fixDesc = L"Cheeky’s workaround for smearing with some presets. Adds GPU work.";
@@ -2934,9 +2963,9 @@ float pane_content(float x, float y, float w, bool draw) {
             choice_row(kCheekyNrPasses, L"DLSS-NR passes", nrPasses, 3, std::clamp(app.s.cheeky.nrPasses, 1, 3) - 1,
                        !app.s.cheeky.nr)};
         h += section(x, y + h, w, L"Experimental: focus views", experimental,
-                     L"Cheeky applies these to the focus views only. Applies live. Each extra DLSS-NR pass costs about "
+                     L"Cheeky applies these to the focus views only. Each extra DLSS-NR pass costs about "
                      L"one more NR evaluation.",
-                     draw);
+                     draw, Applies::Live);
         h += t::kSpace6;
         Row fgOn;
         const bool fgHere = game_has(&games::GameFeatures::frameGeneration);
@@ -2975,8 +3004,8 @@ float pane_content(float x, float y, float w, bool draw) {
                       }(),
                       fgBorder},
                      L"Outside the center region frames are warped with ACE’s motion. Lower scales use less GPU time "
-                     L"and memory. Applies live. With an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
-                     draw);
+                     L"and memory. With an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
+                     draw, Applies::Live);
         const std::wstring license = L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the "
                                      L"GNU GPL v3 (github.com/ClarkCheekyKent/CheekyFoveatedDLSS).";
         const float lh = app.canvas.measure_height(license, t::kCallout, w);
@@ -2995,8 +3024,8 @@ float pane_content(float x, float y, float w, bool draw) {
                       slider_row(kMenuWidth, L"Size", L"Width of the panel, in degrees of your view.", app.s.menuWidth, L"",
                                  false, L"°")},
                      L"The settings menu stays 0.8 m in front of your head, wherever you look. Drag it in the preview, "
-                     L"or move it from the menu itself in the headset. While the game runs, it moves at once.",
-                     draw);
+                     L"or move it from the menu itself in the headset.",
+                     draw, Applies::Live);
         const std::wstring open = L"Ctrl+Alt+arrows while the game has focus (or the keys and wheel buttons set in the Hotkeys "
                                   L"pane), or click the left controller stick. The right stick selects and changes values; "
                                   L"the menu hides after a few seconds.";
@@ -3032,8 +3061,8 @@ float pane_content(float x, float y, float w, bool draw) {
                       slider_row(kOsdSize, L"Size", L"Width of the overlay, in degrees of your view.", app.s.osd.width, L"",
                                  osdOff, L"°")},
                      L"Drag it in the preview, or move it from the headset menu’s Overlay and menu page. Ctrl+Alt+P "
-                     L"while the game has focus turns it on and off. While the game runs, it changes at once.",
-                     draw);
+                     L"while the game has focus turns it on and off.",
+                     draw, Applies::Live);
         break;
     }
     case Pane::Games: h += games_pane(x, y, w, draw); break;
