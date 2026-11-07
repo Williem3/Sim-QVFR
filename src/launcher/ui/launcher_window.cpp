@@ -81,8 +81,9 @@ enum Ctl {
     // The OpenXR layers pane (layer_order.h): the profile, the list (keyboard), each row's switch and moves.
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
     // The Report an issue pane (its kind, the description box, the button, the zip it made to drag into the
-    // issue) and the Diagnostics pane (the CPU capture switch, copying the summary, the logs folder).
-    kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
+    // issue, exporting the logs alone) and the Diagnostics pane (the CPU capture switch, copying the summary, the
+    // logs folder).
+    kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagExport, kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
     // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
@@ -228,6 +229,7 @@ struct App {
     HBRUSH reportBrush = nullptr;
     uint32_t reportBrushRgb = 0;
     std::wstring reportZip;  // the last report's zip (full path): the pane shows it to drag into the issue
+    std::wstring exportZip;  // the last Export logs zip (full path), named under its button
     std::vector<Hit> hits;
     // The OpenXR layers pane: 0 with the launcher (layerPlan, from the ini), 1 Windows' list (layersDraft,
     // edited until applied over layersWindows). layerRow: the keyboard's row.
@@ -809,6 +811,7 @@ std::vector<Ctl> focus_order() {
         order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});
         if (!app.reportZip.empty())
             order.push_back(kDiagZip);
+        order.push_back(kDiagExport);
         break;
     case Pane::About: order.insert(order.end(), {kSupport, kUpdateCheck, kUpdateNow}); break;
     }
@@ -2027,16 +2030,62 @@ bool report_edit_fits() {
     return r.w > 0 && r.y >= app.scrollArea.y && r.bottom() <= app.scrollArea.bottom();
 }
 
+// "<prefix>-<local time>.zip".
+std::wstring zip_name(const wchar_t* prefix) {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    wchar_t name[64];
+    swprintf_s(name, L"%s-%04u%02u%02u-%02u%02u%02u.zip", prefix, now.wYear, now.wMonth, now.wDay, now.wHour,
+               now.wMinute, now.wSecond);
+    return name;
+}
+
+// The files a report zips (report_files): the session logs, the ini files, the CPU captures and hang dumps,
+// the game's crash reports and the OpenXR loader's output.
+std::vector<ReportFile> logs_to_zip() {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    const std::wstring gameCrashes = game_crashes_folder(games::launcher_game().crashReports);
+    return report_files({logs_folder(), runtime_info_path(), app.ini, gameCrashes},
+                        (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
+}
+
+// Explorer, `path` selected in its folder.
+void show_in_explorer(const std::wstring& path) {
+    const std::wstring select = L"/select,\"" + path + L"\"";
+    ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+// Export logs: the files a report zips, in logs\sim-qvfr-logs-<time>.zip with details.md (version, PC,
+// headset, settings, the last session), and Explorer showing it. No issue: for logs asked for directly.
+void export_logs() {
+    const std::wstring logs = logs_folder();
+    CreateDirectoryW(logs.c_str(), nullptr);
+    const std::wstring name = zip_name(L"sim-qvfr-logs");
+    reload_runtime();
+    IssueReport report{widen(SIM_QVFR_VERSION), app.s, app.runtime, system_info(), name};
+    report.causes = likely_causes(app.s, app.runtime);
+    std::vector<ReportFile> files = logs_to_zip();
+    files.push_back({L"details.md", L"", utf8(issue_details(report))});
+    const std::wstring zip = logs + L"\\" + name;
+    const std::wstring error = write_zip(zip, files);
+    if (error.empty()) {
+        app.exportZip = zip;
+        show_in_explorer(zip);
+    } else {
+        app.status = Status::Error;
+        app.error = L"Could not write the logs' zip: " + error;
+        app.exportZip.clear();
+    }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 // Report an issue: the logs zipped into logs\sim-qvfr-report-<time>.zip (with the issue's text as
 // issue.md), Explorer showing it, and a new issue on the kind's form, its fields prefilled (report.h).
 void report_issue() {
     const std::wstring logs = logs_folder();
     CreateDirectoryW(logs.c_str(), nullptr);
-    SYSTEMTIME now;
-    GetLocalTime(&now);
-    wchar_t name[64];
-    swprintf_s(name, L"sim-qvfr-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
-               now.wMinute, now.wSecond);
+    const std::wstring name = zip_name(L"sim-qvfr-report");
     reload_runtime();
     IssueReport report{widen(SIM_QVFR_VERSION), app.s, app.runtime, system_info(), name, app.reportKind};
     const int length = GetWindowTextLengthW(app.reportEdit);
@@ -2045,19 +2094,14 @@ void report_issue() {
     for (size_t at; (at = report.description.find(L"\r\n")) != std::wstring::npos;)  // the edit's line ends
         report.description.erase(at, 1);
     report.causes = likely_causes(app.s, app.runtime);
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    const std::wstring gameCrashes = game_crashes_folder(games::launcher_game().crashReports);
-    std::vector<ReportFile> files = report_files({logs, runtime_info_path(), app.ini, gameCrashes},
-                                                 (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
+    std::vector<ReportFile> files = logs_to_zip();
     files.push_back({L"issue.md", L"", utf8(issue_body(report))});
     const std::wstring zip = logs + L"\\" + name;
     const std::wstring error = write_zip(zip, files);
     if (error.empty()) {
         app.reportZip = zip;
         InvalidateRect(app.hwnd, nullptr, FALSE);
-        const std::wstring select = L"/select,\"" + zip + L"\"";
-        ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
+        show_in_explorer(zip);
     } else {
         app.status = Status::Error;
         app.error = L"Could not write the report's zip: " + error;
@@ -2074,10 +2118,7 @@ void report_issue() {
 }
 
 // The report's zip in Explorer, selected.
-void show_report_zip() {
-    const std::wstring select = L"/select,\"" + app.reportZip + L"\"";
-    ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
-}
+void show_report_zip() { show_in_explorer(app.reportZip); }
 
 // The zip tile held down: dragged, the zip itself (Explorer's data object for it, so a browser's drop takes it
 // as a file, the issue's upload); only clicked, Explorer shows it. GitHub has no API to attach it for the user.
@@ -2110,6 +2151,8 @@ void drag_report_zip(int px, int py) {
     }
     CoTaskMemFree(pidl);
 }
+
+float report_zip_section(float x, float y, float w, bool draw);
 
 // The Report an issue pane: what the last session points to, then the kind of problem, what happened and the
 // button (report_issue).
@@ -2167,9 +2210,29 @@ float report_pane(float x, float y, float w, bool draw) {
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
                  L"Opens a GitHub issue with the details filled in, and zips the logs for you to drag into it.",
                  draw);
-    if (app.reportZip.empty())
-        return h;
-    // The zip, to drag from here onto the issue: the step reports most often miss.
+    if (!app.reportZip.empty()) {
+        h += t::kSpace6;
+        h += report_zip_section(x, y + h, w, draw);
+    }
+    // The logs alone, when they're asked for without an issue.
+    Row exportRow;
+    exportRow.label = L"Export logs";
+    if (app.exportZip.empty()) {
+        exportRow.desc = L"Zips Sim-QVFR’s and the game’s logs, and shows the zip in Explorer.";
+    } else {
+        const size_t slash = app.exportZip.find_last_of(L'\\');
+        exportRow.desc = L"Saved " + (slash == std::wstring::npos ? app.exportZip : app.exportZip.substr(slash + 1));
+    }
+    exportRow.controlW = button_width(L"Export logs");
+    exportRow.controlH = t::kControlHeight;
+    exportRow.control = [](const Rect& r) { button(kDiagExport, r, L"Export logs", false); };
+    h += t::kSpace6;
+    h += section(x, y + h, w, L"Send logs only", {exportRow}, L"When you’ve been asked for logs: no GitHub issue.", draw);
+    return h;
+}
+
+// The report's zip, to drag from here onto the issue: the step reports most often miss.
+float report_zip_section(float x, float y, float w, bool draw) {
     Row zip;
     constexpr float kTileH = 56;
     zip.fullHeight = [](float) { return kTileH; };
@@ -2193,11 +2256,8 @@ float report_pane(float x, float y, float w, bool draw) {
                         {tx, tile.y + 9 + t::kHeadline.lineHeight + 2, tw, t::kCallout.lineHeight}, col(app.c->label_secondary));
         app.hits.push_back({kDiagZip, tile});
     };
-    h += t::kSpace6;
-    h += section(x, y + h, w, L"Attach the logs", {zip},
-                 L"GitHub can’t attach it for you: drop it into the issue’s “Screenshots and logs” box.",
-                 draw);
-    return h;
+    return section(x, y, w, L"Attach the logs", {zip},
+                   L"GitHub can’t attach it for you: drop it into the issue’s “Screenshots and logs” box.", draw);
 }
 
 float diagnostics_pane(float x, float y, float w, bool draw) {
@@ -4789,6 +4849,7 @@ void activate(Ctl id, int option) {
         SetFocus(app.reportEdit);
         return;
     case kDiagReport: report_issue(); return;
+    case kDiagExport: export_logs(); return;
     case kDiagZip: show_report_zip(); return;  // the keyboard's; the mouse drags it (drag_report_zip)
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
@@ -4950,6 +5011,7 @@ bool push_button(Ctl id) {
     case kLaunchBadge:
     case kDiagReport:
     case kDiagZip:
+    case kDiagExport:
     case kDiagCopy:
     case kDiagLogs:
     case kColorReset: return true;
