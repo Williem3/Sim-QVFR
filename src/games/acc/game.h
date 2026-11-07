@@ -1,4 +1,4 @@
-// Assetto Corsa Competizione's identity (../game.h): QVFR through its adapter (adapter.cpp, README.md). VR
+// Assetto Corsa Competizione's identity (../game.h): QVFR through its adapter (adapter.cpp, docs/recon-acc.md). VR
 // reaches OpenXR through OpenComposite.
 #pragma once
 
@@ -19,7 +19,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // QVFR, gaze, the headset menu and overlay, the FOV crop, the helmet, live resolution, Foveated DLSS (Cheeky's
     // runtime on the session's D3D11 device; its quad roles need a Cheeky build that registers D3D11 game views).
     // Not frame generation: Cheeky's layer can't capture our D3D11 frames for it (native passthrough), so ACC was
-    // never paced to the generated rate (README.md).
+    // never paced to the generated rate (docs/recon-acc.md).
     {true, true, true, true, false},
     kBuilds, std::size(kBuilds),
 };

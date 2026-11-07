@@ -1,5 +1,5 @@
 // X-Plane 12's identity (../game.h). Identity only so far: the layer switches on in X-Plane and only logs
-// (README.md). It renders with Vulkan and reaches OpenXR on its own (no OpenComposite).
+// (docs/recon-xplane.md). It renders with Vulkan and reaches OpenXR on its own (no OpenComposite).
 #pragma once
 
 #include <iterator>
@@ -14,12 +14,13 @@ inline constexpr const char* kBuilds[] = {"2ca099b7c6b218e78d02bdbe298be2aebf670
 inline constexpr simqvfr::games::GameInfo kGame = {
     "xplane", L"X-Plane 12", L"X-Plane", L"X-Plane.exe", L"X-Plane 12", L"", L"2014780",
     // OpenXR, its frames handed over in D3D11 swapchains (vr_hardware_openxr_d3d11), which our D3D11 compositor
-    // can work on; --native_vr instead submits Vulkan swapchains (README.md).
+    // can work on; --native_vr instead submits Vulkan swapchains (docs/recon-xplane.md).
     L"--open_xr --d3d11_vr",
     nullptr,  // OpenXR of its own
     nullptr,  // no DLSS
     {false, false, false, false, false},  // identity only: nothing beyond logging yet
     kBuilds, std::size(kBuilds),
+    true,  // early load: X-Plane creates its shader modules at startup, before OpenXR (docs/recon-xplane.md)
 };
 
 }  // namespace xplane

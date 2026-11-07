@@ -86,6 +86,7 @@ struct Dispatch {
     PFN_xrSuggestInteractionProfileBindings SuggestInteractionProfileBindings = nullptr;
     PFN_xrAttachSessionActionSets AttachSessionActionSets = nullptr;
     PFN_xrSyncActions SyncActions = nullptr;
+    PFN_xrPollEvent PollEvent = nullptr;
     PFN_xrCreateActionSpace CreateActionSpace = nullptr;
     PFN_xrLocateSpace LocateSpace = nullptr;
     PFN_xrCreateReferenceSpace CreateReferenceSpace = nullptr;
@@ -93,6 +94,7 @@ struct Dispatch {
     PFN_xrDestroySwapchain DestroySwapchain = nullptr;
     PFN_xrGetActionStateBoolean GetActionStateBoolean = nullptr;
     PFN_xrGetActionStateVector2f GetActionStateVector2f = nullptr;
+    PFN_xrGetActionStatePose GetActionStatePose = nullptr;
     PFN_xrGetCurrentInteractionProfile GetCurrentInteractionProfile = nullptr;
     PFN_xrPathToString PathToString = nullptr;
     PFN_xrGetVisibilityMaskKHR GetVisibilityMaskKHR = nullptr;  // optional (XR_KHR_visibility_mask)
@@ -118,6 +120,7 @@ struct Experiment {
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
+    bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
@@ -185,7 +188,8 @@ struct Experiment {
     std::atomic<double> gazeDeadzone = 1.5;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
-    UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h)
+    UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h;
+                                  // default: the game's hang_watch_s)
 };
 Experiment experiment;
 // The game this process is (games/adapter.h): its QVFR and its own experiments. Elsewhere one that does nothing.
@@ -220,7 +224,9 @@ FovCrop read_crop(const wchar_t* ini) {
 // What the game has beyond QVFR (games/game.h GameFeatures); anything else stays off whatever the ini says.
 games::GameFeatures game_features() {
     const games::GameInfo* g = games::current_game();
-    return g ? g->features : games::GameFeatures{};
+    games::GameFeatures f = g ? g->features : games::GameFeatures{};
+    f.liveResolution = g && game->qvfr_live_resolution();  // the adapter knows it for this run
+    return f;
 }
 
 LiveSettings read_live(const wchar_t* ini) {
@@ -395,6 +401,10 @@ void load_experiment() {
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
     experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
+    // d3d11_capture_hotkey=1: tracked from the start with a frame never reached; the frame capture hotkey arms the next.
+    experiment.d3d11CaptureHotkey = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_hotkey", 0, ini.c_str()) == 1;
+    if (experiment.d3d11CaptureHotkey && experiment.d3d11CaptureFrame == 0)
+        experiment.d3d11CaptureFrame = 0xFFFFFFFFu;
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
     experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
@@ -423,7 +433,7 @@ void load_experiment() {
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
-    experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", 30, ini.c_str());
+    experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
     // resolution the user set before launch (the launcher writes eye_scale for Two-loop and QVFR's fallback,
@@ -535,6 +545,11 @@ struct Gaze {
     XrTime directionTime = 0;
     uint64_t queries = 0, tracked = 0;
     bool firstLogged = false;
+    // The game's own gaze pose action (from its eye gaze suggestion; X-Plane binds one), and a space of it: the
+    // lookups fall back to it while the layer's own action never tracks (its set not synced or not active).
+    XrAction gameAction = XR_NULL_HANDLE;
+    XrSpace gameSpace = XR_NULL_HANDLE;
+    bool syncFailLogged = false, syncLogged = false;
 };
 Gaze gaze;
 constexpr XrDuration kGazeHoldNs = 500'000'000;  // keep the last gaze this long, then recentre
@@ -633,6 +648,9 @@ void gaze_init(XrInstance instance) {
         gaze.set = XR_NULL_HANDLE;
         gaze.action = gaze.menuToggle = gaze.menuNavigate = XR_NULL_HANDLE;
         gaze.profile = gaze.pose = XR_NULL_PATH;
+        gaze.gameAction = XR_NULL_HANDLE;
+        gaze.gameSpace = XR_NULL_HANDLE;
+        gaze.syncFailLogged = false;
         gaze.bindings.clear();
         gaze.profileSuggested.clear();
         gaze.suggested = gaze.attached = false;
@@ -711,6 +729,10 @@ XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
         return next.SuggestInteractionProfileBindings(instance, suggested);
     std::vector<XrActionSuggestedBinding> bindings(suggested->suggestedBindings,
                                                    suggested->suggestedBindings + suggested->countSuggestedBindings);
+    if (suggested->interactionProfile == gaze.profile)
+        for (const XrActionSuggestedBinding& b : bindings)
+            if (b.binding == gaze.pose && b.action != gaze.action)
+                gaze.gameAction = b.action;
     bindings.insert(bindings.end(), own->second.begin(), own->second.end());
     XrInteractionProfileSuggestedBinding merged = *suggested;
     merged.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
@@ -758,17 +780,50 @@ XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSess
     return next.AttachSessionActionSets(session, info);
 }
 
+// Session state and interaction profile changes, for the log (actions are only active while the session is FOCUSED).
+XrResult XRAPI_CALL layerPollEvent(XrInstance instance, XrEventDataBuffer* event) {
+    const XrResult r = next.PollEvent(instance, event);
+    if (r == XR_SUCCESS && event) {
+        if (event->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+            static const char* const kStates[] = {"UNKNOWN", "IDLE", "READY", "SYNCHRONIZED", "VISIBLE",
+                                                  "FOCUSED", "STOPPING", "LOSS_PENDING", "EXITING"};
+            const auto state = reinterpret_cast<const XrEventDataSessionStateChanged*>(event)->state;
+            logf("session state: %s", state >= 0 && state < 9 ? kStates[state] : "?");
+        } else if (event->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            log_line("input: interaction profile changed");
+        }
+    }
+    return r;
+}
+
 XrResult XRAPI_CALL layerSyncActions(XrSession session, const XrActionsSyncInfo* info) {
     std::lock_guard guard(gaze.mutex);
     if (!gaze.attached || !info)
         return next.SyncActions(session, info);
     ++gaze.appSyncs;
+    if (!gaze.syncLogged) {  // what the game syncs: a subaction path other than null leaves that set's other actions out
+        gaze.syncLogged = true;
+        std::string list;
+        for (uint32_t i = 0; i < info->countActiveActionSets; ++i) {
+            const XrActiveActionSet& a = info->activeActionSets[i];
+            char entry[64];
+            std::snprintf(entry, sizeof(entry), "%s%p ", i ? ", " : "", static_cast<void*>(a.actionSet));
+            list += entry;
+            list += a.subactionPath == XR_NULL_PATH ? std::string("(all)") : path_name(gaze.instance, a.subactionPath);
+        }
+        logf("gaze: the game syncs %u action set(s): %s; next %p", info->countActiveActionSets, list.c_str(), info->next);
+    }
     std::vector<XrActiveActionSet> sets(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
     sets.push_back({gaze.set, XR_NULL_PATH});
     XrActionsSyncInfo merged = *info;
     merged.countActiveActionSets = static_cast<uint32_t>(sets.size());
     merged.activeActionSets = sets.data();
     const XrResult r = next.SyncActions(session, &merged);
+    if (XR_FAILED(r) && !gaze.syncFailLogged) {
+        gaze.syncFailLogged = true;
+        logf("gaze: the game's xrSyncActions with the layer's set failed (%d; the game's %u set(s)); synced without it",
+             r, info->countActiveActionSets);
+    }
     return XR_SUCCEEDED(r) ? r : next.SyncActions(session, info);
 }
 
@@ -849,6 +904,49 @@ struct GazeThread {
 };
 GazeThread gazeThread;
 
+// While the layer's own gaze action has never tracked: after kGazeUntrackedLookups lookups, logs why (the lookup's
+// result and flags, whether each gaze action is active), and moves the lookups to a space of the game's own gaze
+// action if it bound one (X-Plane: the layer's action stayed untracked while the game's set and its binding were in
+// place, 2026-11-06). From the gaze thread.
+constexpr uint64_t kGazeUntrackedLookups = 500;
+void gaze_untracked_check(XrSession session, bool ok, XrResult located, XrSpaceLocationFlags flags) {
+    std::lock_guard guard(gaze.mutex);
+    if (ok || gaze.tracked > 0 || gaze.queries + 1 != kGazeUntrackedLookups)
+        return;
+    const auto active = [&](XrAction action) {
+        if (!action || !next.GetActionStatePose)
+            return std::string("none");
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
+        const XrResult r = next.GetActionStatePose(session, &info, &state);
+        return XR_SUCCEEDED(r) ? std::string(state.isActive ? "active" : "inactive") : "error " + std::to_string(r);
+    };
+    std::string eyesProfile = "?";
+    XrPath eyes = XR_NULL_PATH;
+    if (next.GetCurrentInteractionProfile && XR_SUCCEEDED(next.StringToPath(gaze.instance, "/user/eyes_ext", &eyes))) {
+        XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+        const XrResult r = next.GetCurrentInteractionProfile(session, eyes, &state);
+        eyesProfile = XR_FAILED(r) ? "error " + std::to_string(r)
+                      : state.interactionProfile == XR_NULL_PATH ? std::string("none")
+                                                                 : path_name(gaze.instance, state.interactionProfile);
+    }
+    logf("gaze: no tracked sample in %llu lookups (xrLocateSpace %d, flags 0x%llx; the layer's gaze action %s, the "
+         "game's %s; %llu game syncs; /user/eyes_ext profile %s)",
+         static_cast<unsigned long long>(kGazeUntrackedLookups), located, static_cast<unsigned long long>(flags),
+         active(gaze.action).c_str(), active(gaze.gameAction).c_str(), static_cast<unsigned long long>(gaze.appSyncs),
+         eyesProfile.c_str());
+    if (gaze.gameAction && !gaze.gameSpace) {
+        XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        spaceInfo.action = gaze.gameAction;
+        spaceInfo.poseInActionSpace.orientation.w = 1;
+        const XrResult r = next.CreateActionSpace(session, &spaceInfo, &gaze.gameSpace);
+        if (XR_FAILED(r))
+            gaze.gameSpace = XR_NULL_HANDLE;
+        logf("gaze: lookups moved to the game's own gaze action: %d", r);
+    }
+}
+
 void gaze_thread_run() {
     std::unique_lock lock(gazeThread.mutex);
     const auto period = std::chrono::microseconds(1'000'000 / std::max(1, experiment.gazePollHz));
@@ -867,15 +965,17 @@ void gaze_thread_run() {
                 spaceInfo.poseInActionSpace.orientation.w = 1;
                 next.CreateActionSpace(session, &spaceInfo, &gaze.space);
             }
-            space = gaze.attached ? gaze.space : XR_NULL_HANDLE;
+            space = gaze.attached ? (gaze.gameSpace ? gaze.gameSpace : gaze.space) : XR_NULL_HANDLE;
         }
         if (space && base && time) {
             XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
             const auto t0 = std::chrono::steady_clock::now();
-            const bool ok = XR_SUCCEEDED(next.LocateSpace(space, base, time, &location)) &&
+            const XrResult located = next.LocateSpace(space, base, time, &location);
+            const bool ok = XR_SUCCEEDED(located) &&
                             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
                             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
             const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            gaze_untracked_check(session, ok, located, location.locationFlags);
             const XrVector3f direction = rotate(location.pose.orientation, {0, 0, -1});
             bool first = false;
             {
@@ -1544,10 +1644,19 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     // double-wide target holds all four.
     const Views4Layout& layout = experiment.views4Layout;
     const bool columns = experiment.views4 && game->qvfr_eye_columns();  // eye columns: views4_rect_eye_columns
-    const double widthScale =
-        experiment.views4 ? (columns ? layout.column_eye_width() : layout.eye_width()) : experiment.eyeScale;
-    const double heightScale =
-        experiment.views4 ? (columns ? layout.column_eye_height() : layout.eye_height()) : experiment.eyeScale;
+    // One view size (qvfr_one_view_size): every view the larger of the outer and focus sizes, the column two high.
+    const bool oneSize = columns && game->qvfr_one_view_size();
+    const double viewWidth = std::max(layout.outer_width(), layout.focus);
+    const double viewHeight = std::max(layout.outer_height(), layout.focusHeight);
+    const double widthScale = experiment.views4 ? (oneSize ? viewWidth : columns ? layout.column_eye_width() : layout.eye_width())
+                                                : experiment.eyeScale;
+    const double heightScale = experiment.views4
+                                   ? (oneSize ? 2 * viewHeight : columns ? layout.column_eye_height() : layout.eye_height())
+                                   : experiment.eyeScale;
+    if (oneSize && stereo && (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight))
+        logf("views4: the game draws every view at one size: %.2f x %.2f of the native eye (outer asked %.2f x %.2f, "
+             "focus %.2f x %.2f)", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(), layout.focus,
+             layout.focusHeight);
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum.
@@ -1703,7 +1812,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     gaze_thread_stop();  // before the spaces it locates go
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
-        gaze.space = XR_NULL_HANDLE;
+        gaze.space = gaze.gameSpace = XR_NULL_HANDLE;
         gaze.attached = false;
         gaze.appSyncs = 0;
     }
@@ -2787,6 +2896,7 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
 // views4: ACE's two "eyes" are each an outer plus a focus view wide and hold views 0+1 and 2+3 side
 // by side (views4_layout.h). Submit views 0 and 1, the real eyes, as the projection views.
 bool views4RectsLogged = false;
+bool v4EyesOnlyLogged = false;  // views4_submit: an eyes-only frame (Views4Frame::eyesOnly) was reported
 
 // Logs ACE's own submitted FOV next to the one the output is submitted with, once and on a change.
 void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& composed) {
@@ -2992,6 +3102,15 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         }
         Views4Frame latest{};
         game->qvfr_latest_frame(latest);  // the rendered sizes (live resolution)
+        // The game drew only its eyes this frame, each over its whole half (X-Plane's menu): submitted as it is.
+        if (latest.eyesOnly) {
+            if (!v4EyesOnlyLogged) {
+                logf("views4: the game drew its eyes only (no four views): submitted as it is, uncomposed");
+                v4EyesOnlyLogged = true;
+            }
+            continue;
+        }
+        v4EyesOnlyLogged = false;
         const Views4Layout layout = views4_with_live(experiment.views4Layout, latest.live, latest.width, latest.height);
         bool gameLayout = true;
         for (uint32_t v = 0; v < proj->viewCount; ++v)
@@ -3059,12 +3178,15 @@ void live_resolution(const LiveSettings& l) {
     const Views4Layout& launch = experiment.views4Layout;
     const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
     const double cw = l.crop.kept_width(), ch = l.crop.kept_height();  // the outer views take the live crop
-    // Eye columns (ACC): one width for all four views, the outer and focus rows sharing the height.
-    const bool columns = game->qvfr_eye_columns();
-    game->qvfr_set_live_layout(columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
-                                       : views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
-    const Views4Fit fit = columns ? views4_fit_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
-                                  : views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
+    // One view size (X-Plane): periphery and focus each sized on its own inside the launch layers. Eye columns (ACC):
+    // one width for all four views, the outer and focus rows sharing the height.
+    const bool columns = game->qvfr_eye_columns(), oneSize = columns && game->qvfr_one_view_size();
+    game->qvfr_set_live_layout(oneSize   ? views4_live_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
+                               : columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
+                                         : views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
+    const Views4Fit fit = oneSize   ? views4_fit_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
+                          : columns ? views4_fit_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
+                                    : views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
     logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
          "eye; launch %.0f%%, %.0f%% x %.0f%%)%s%s",
          fit.outer * 100, fit.focus / l.focusFraction * 100, fit.focusHeight / experiment.focus_y() * 100,
@@ -3469,7 +3591,8 @@ std::wstring menu_hint() {
 }
 
 // The menu's hotkeys footer ([menu] hotkey_footer): the in-game actions' keys and wheel buttons, those that apply
-// (the visor with the helmet on, the CPU capture with cpu_profile); empty when none is bound.
+// (the visor with the helmet on, the CPU capture with cpu_profile, the frame capture with d3d11_capture_hotkey); empty
+// when none is bound.
 std::wstring hotkey_footer(bool helmetOn) {
     struct Entry {
         HotkeyAction action;
@@ -3478,7 +3601,8 @@ std::wstring hotkey_footer(bool helmetOn) {
     };
     const Entry entries[] = {{HotkeyAction::Overlay, L"Overlay", true},
                              {HotkeyAction::Visor, L"Visor", helmetOn},
-                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile}};
+                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile},
+                             {HotkeyAction::FrameCapture, L"Frame capture", experiment.d3d11CaptureHotkey}};
     std::wstring out;
     for (const Entry& e : entries) {
         const Hotkey& h = hotkeys[static_cast<int>(e.action)];
@@ -4512,6 +4636,7 @@ void optimize_tick(int64_t now) {
 // cpu_profile=1: a capture of the busiest threads (and this one, the render thread) at cpu_profile_frame, and
 // whenever Ctrl+Alt+C is pressed while ACE has focus and none is running.
 bool cpuProfileHotkeyHeld = false;
+bool frameCaptureHotkeyHeld = false;
 // The capture's start and end in the headset: the settings menu's panel shows for a few seconds with a line
 // under its title (QVFR and Two-loop: the panel is theirs; with mode=off only the log says).
 struct ProfileNotice {
@@ -4528,6 +4653,18 @@ void profile_notice(const std::wstring& text, int64_t ms) {
     menu_open(now);
     menu.hideAt = now + qpc_ms(ms);
     profileNotice.until = menu.hideAt;
+}
+
+// The frame capture hotkey (d3d11_capture_hotkey, probe/d3d11_capture.h): each press saves the next frame's swapchain
+// images, the game's and the composed output: what the headset gets at that moment.
+void frame_capture_poll() {
+    if (!experiment.d3d11CaptureHotkey)
+        return;
+    const bool held = hotkey_held(HotkeyAction::FrameCapture);
+    const bool pressed = held && !frameCaptureHotkeyHeld;
+    frameCaptureHotkeyHeld = held;
+    if (pressed && d3d11_capture_arm(endFrames + 1))
+        profile_notice(L"Frame capture: saved to the logs folder (captures)", 2500);
 }
 
 void cpu_profile_poll() {
@@ -4576,6 +4713,7 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
     hang_watch_frame();
     cpu_load_render_thread(GetCurrentThreadId());
     cpu_profile_poll();
+    frame_capture_poll();
     if ((experiment.views4 || experiment.measure) && cpu.msPerTick > 0) {
         const int64_t now = qpc_now();
         if (pacing.lastEnd && pacing.interval.size() < 4 * kCpuReportFrames)
@@ -4724,6 +4862,7 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
         SIMQVFR_INTERCEPT(SuggestInteractionProfileBindings)
         SIMQVFR_INTERCEPT(AttachSessionActionSets)
         SIMQVFR_INTERCEPT(SyncActions)
+        SIMQVFR_INTERCEPT(PollEvent)
         if (next.GetVisibilityMaskKHR)
             SIMQVFR_INTERCEPT(GetVisibilityMaskKHR)
     }
@@ -4839,6 +4978,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     SIMQVFR_LOAD(SuggestInteractionProfileBindings)
     SIMQVFR_LOAD(AttachSessionActionSets)
     SIMQVFR_LOAD(SyncActions)
+    SIMQVFR_LOAD(PollEvent)
     SIMQVFR_LOAD(CreateActionSpace)
     SIMQVFR_LOAD(LocateSpace)
     SIMQVFR_LOAD(CreateReferenceSpace)
@@ -4846,6 +4986,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     SIMQVFR_LOAD(DestroySwapchain)
     SIMQVFR_LOAD(GetActionStateBoolean)
     SIMQVFR_LOAD(GetActionStateVector2f)
+    SIMQVFR_LOAD(GetActionStatePose)
     SIMQVFR_LOAD(GetCurrentInteractionProfile)
     SIMQVFR_LOAD(PathToString)
 #undef SIMQVFR_LOAD

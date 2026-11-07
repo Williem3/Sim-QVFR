@@ -32,4 +32,4 @@ The comments in `abi.h` and `views4.h` explain each patch and the run that calle
 `views4_shadow_view1_plain`, `views4_screen_size_legacy` and `batch_watch` are read by `adapter.cpp`,
 not the layer. `manifest/sim-qvfr.ini` documents them.
 
-The static-analysis notes (`docs/recon.md`) are kept out of the repository.
+The static-analysis notes (`docs/recon-ace.md`) are kept out of the repository.

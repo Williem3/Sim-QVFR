@@ -1,4 +1,4 @@
-// Assetto Corsa EVO facts from static analysis (see ../../docs/recon.md). Pinned to the exe build in game.h.
+// Assetto Corsa EVO facts from static analysis (see ../../docs/recon-ace.md). Pinned to the exe build in game.h.
 #pragma once
 
 #include <cstddef>

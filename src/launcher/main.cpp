@@ -12,6 +12,9 @@
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
 //        sim-qvfr-launcher --apply-system-layers <request>   (elevated, from the window) writes
 //                                            HKLM's part of Windows' layer list (layer_order.h)
+//        sim-qvfr-launcher --hang-dump <pid> <log>   (from the layer's hang watch) stands by while the game
+//                                            runs; if it hangs, logs its modules and writes its minidump
+//                                            (probe/hang_dump.h)
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -26,6 +29,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "../games/game.h"
+#include "../probe/hang_dump.h"
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
@@ -205,6 +209,37 @@ int fail(const std::wstring& why) {
     return 1;
 }
 
+// Loads `library` into the suspended process (a remote thread running LoadLibraryW; kernel32 sits at the same address
+// in every process of a boot). The thread is the process's first to run, so it also does its loader start-up.
+bool load_into(HANDLE process, const std::wstring& library, std::wstring& error) {
+    const SIZE_T bytes = (library.size() + 1) * sizeof(wchar_t);
+    void* remote = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remote) {
+        error = L"VirtualAllocEx failed (error " + std::to_wstring(GetLastError()) + L")";
+        return false;
+    }
+    bool ok = false;
+    if (WriteProcessMemory(process, remote, library.c_str(), bytes, nullptr)) {
+        const auto loadLibrary = reinterpret_cast<LPTHREAD_START_ROUTINE>(
+            reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW")));
+        if (HANDLE thread = CreateRemoteThread(process, nullptr, 0, loadLibrary, remote, 0, nullptr)) {
+            const DWORD wait = WaitForSingleObject(thread, 30000);
+            DWORD loaded = 0;
+            GetExitCodeThread(thread, &loaded);  // the module's address, cut to 32 bits: only nonzero matters
+            ok = wait == WAIT_OBJECT_0 && loaded != 0;
+            if (!ok)
+                error = wait == WAIT_OBJECT_0 ? L"LoadLibraryW failed in the game" : L"loading the layer timed out";
+            CloseHandle(thread);
+        } else {
+            error = L"CreateRemoteThread failed (error " + std::to_wstring(GetLastError()) + L")";
+        }
+    } else {
+        error = L"WriteProcessMemory failed (error " + std::to_wstring(GetLastError()) + L")";
+    }
+    VirtualFreeEx(process, remote, 0, MEM_RELEASE);
+    return ok;
+}
+
 int run(bool dryRun) {
     const fs::path here = exe_folder();
     const fs::path layerFolder = layer_folder();
@@ -245,6 +280,7 @@ int run(bool dryRun) {
 
     say(L"Sim-QVFR launcher " + widen(SIM_QVFR_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
+    say(L"  args:      " + std::wstring(info.launchArgs));
     say(L"  layer:     " + library.wstring());
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
@@ -280,14 +316,26 @@ int run(bool dryRun) {
     if (!steamRunning)
         return fail(L"Steam is not running; start it first (" + std::wstring(info.shortName) + L" needs it)");
 
-    std::wstring block = environment_block(environment, variables);
+    auto launchVariables = variables;
+    if (info.earlyLoad)  // the layer sets the game up when loaded into it, before it runs (early_load.cpp)
+        launchVariables.push_back({L"SIM_QVFR_EARLY", L"1"});
+    std::wstring block = environment_block(environment, launchVariables);
     std::wstring command = L"\"" + exe.wstring() + L"\" " + info.launchArgs;  // the game's OpenXR start
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     const std::wstring workingFolder = exe.parent_path().wstring();
-    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_UNICODE_ENVIRONMENT, block.data(),
-                        workingFolder.c_str(), &si, &pi))
+    const DWORD flags = CREATE_UNICODE_ENVIRONMENT | (info.earlyLoad ? CREATE_SUSPENDED : 0);
+    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, flags, block.data(), workingFolder.c_str(),
+                        &si, &pi))
         return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(GetLastError()) + L")");
+    if (info.earlyLoad) {
+        std::wstring loadError;
+        if (load_into(pi.hProcess, library.wstring(), loadError))
+            say(L"  layer loaded into " + std::wstring(info.shortName) + L" before it runs");
+        else
+            say(L"  layer NOT loaded early (" + loadError + L"); it loads at OpenXR start as usual");
+        ResumeThread(pi.hThread);
+    }
     say(L"Started " + std::wstring(info.name) + L" (pid " + std::to_wstring(pi.dwProcessId) + L").");
     if (baseline)  // one launch only
         WritePrivateProfileStringW(L"launcher", L"baseline_next", L"0", ini.c_str());
@@ -418,6 +466,11 @@ int launch_game(bool dryRun, std::wstring& out) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    int dumpResult = 0;  // the hang dump helper does nothing else (no settings, no window)
+    if (argv && simqvfr::hang_dump_command(argc, argv, dumpResult)) {
+        LocalFree(argv);
+        return dumpResult;
+    }
     bool dryRun = false, launchNow = false;
     std::wstring request;
     for (int i = 1; i < argc; ++i) {

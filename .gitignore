@@ -12,5 +12,10 @@ __pycache__/
 
 # Disassembly and RTTI dumps of the game executable: local only, never committed
 analysis/
-# Reverse-engineering notes on the game engine: local only, never committed
+# Reverse-engineering notes on the games' engines, one file per game: local only, never committed
+docs/recon-ace.md
+docs/recon-acc.md
+docs/recon-xplane.md
+# ... and any later game's (docs/recon-<game>.md), or the old single file
+docs/recon-*.md
 docs/recon.md

@@ -37,11 +37,12 @@ An (i) after a setting's name shows, under the pointer, what it does and what it
   one (in the profiles folder next to the launcher), Share one as a line of text to paste in a chat, or
   Paste one someone shared. The headset menu's first line, Profile, switches between them while you drive.
 - Hotkeys: a key and a wheel, button box or controller button for opening and closing the headset
-  menu, moving through it (up, down, lower, raise), the performance overlay, the helmet's visor and a CPU
-  capture. Click a binding, then press the keys or the wheel button (Esc cancels, Delete clears); the pane
-  lists the wheels and controllers it finds. Keys work while the game window has focus, wheel buttons
-  whenever the game runs; a wheel's menu buttons act only while the menu shows, so bind Open or close too.
-  Changes apply to a running game at once. Defaults: Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C.
+  menu, moving through it (up, down, lower, raise), the performance overlay, the helmet's visor, a CPU
+  capture and a frame capture. Click a binding, then press the keys or the wheel button (Esc cancels,
+  Delete clears); the pane lists the wheels and controllers it finds. Keys work while the game window has
+  focus, wheel buttons whenever the game runs; a wheel's menu buttons act only while the menu shows, so
+  bind Open or close too. Changes apply to a running game at once. Defaults: Ctrl+Alt+arrows, Ctrl+Alt+P,
+  Ctrl+Alt+V, Ctrl+Alt+C, Ctrl+Alt+F.
 - Launch checks: what would stop Sim-QVFR at the next launch, each with a fix: a game update
   (Sim-QVFR supports one AssettoCorsaEVO.exe build; after an update it stays off and the game runs
   as normal, and the headset says so for the first 30 seconds), Steam not running, the game already
@@ -91,6 +92,9 @@ An (i) after a setting's name shows, under the pointer, what it does and what it
   Next launch without QVFR runs the game once with its own two views, still measuring, so the page can
   compare the same race with and without QVFR. CPU capture: at the next launch, its hotkey (Ctrl+Alt+C)
   while driving records for 20 seconds where ACE's busiest threads spend their time, into the logs folder.
+  Frame capture: at the next launch, its hotkey (Ctrl+Alt+F) saves the frame the headset gets, the game's own
+  image and the composed output, as PNG files in the logs folder's captures folder; each press saves one
+  more. For games composed by the D3D11 compositor (X-Plane 12, Assetto Corsa Competizione).
 - Report an issue: pick the kind of problem and describe it; Report an issue zips the newest logs, the
   settings, CPU captures and hang dumps, and opens a GitHub issue with the details filled in, for you to
   attach the zip and send.

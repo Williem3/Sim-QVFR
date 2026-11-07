@@ -1,6 +1,6 @@
 // Hotkeys ([hotkeys]): a keyboard combination and a wheel or controller button for each of the layer's
 // actions in the game: the headset menu's open/close and its four directions, the performance overlay,
-// the helmet's visor and a CPU capture. The launcher's Hotkeys pane sets them; the layer reloads them live.
+// the helmet's visor, a CPU capture and a frame capture. The launcher's Hotkeys pane sets them; the layer reloads them live.
 // Keyboard combinations act while ACE has focus; wheel and controller buttons (DirectInput, pad_input.h)
 // whenever the game runs. A wheel's menu directions act only while the menu shows (its toggle opens it), so
 // a funky switch the game also uses doesn't pop the menu up.
@@ -15,8 +15,8 @@
 
 namespace simqvfr {
 
-enum class HotkeyAction { MenuToggle, MenuUp, MenuDown, MenuLeft, MenuRight, Overlay, Visor, CpuCapture };
-inline constexpr int kHotkeyActions = 8;
+enum class HotkeyAction { MenuToggle, MenuUp, MenuDown, MenuLeft, MenuRight, Overlay, Visor, CpuCapture, FrameCapture };
+inline constexpr int kHotkeyActions = 9;
 
 struct KeyCombo {
     int vk = 0;  // 0: none
@@ -46,7 +46,8 @@ struct Hotkey {
 };
 using Hotkeys = std::array<Hotkey, kHotkeyActions>;
 
-// Ctrl+Alt+arrows for the menu (its first press opens it), Ctrl+Alt+P, Ctrl+Alt+V and Ctrl+Alt+C; no wheel buttons.
+// Ctrl+Alt+arrows for the menu (its first press opens it), Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C and Ctrl+Alt+F; no wheel
+// buttons.
 Hotkeys default_hotkeys();
 Hotkeys read_hotkeys(const wchar_t* ini);
 bool write_hotkeys(const wchar_t* ini, const Hotkeys& hotkeys);

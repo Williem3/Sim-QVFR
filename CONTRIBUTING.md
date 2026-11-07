@@ -27,8 +27,8 @@ SHA-256 and code anchors. `[experiment] mode` in `sim-qvfr.ini` picks the render
 
 With `probes=1` (the default), the layer also logs the views, swapchains and frame submission. It
 puts log-only hooks on ACE's VR functions, which log call stacks and per-frame call order, and runs
-a D3D12 trace. The launcher's QVFR setup writes `probes=0`. See [docs/recon.md](docs/recon.md) for
-the reverse-engineering notes.
+a D3D12 trace. The launcher's QVFR setup writes `probes=0`. The reverse-engineering notes are kept
+out of the repository, one file per game (`docs/recon-<game>.md`, listed in `.gitignore`).
 
 ### Games
 

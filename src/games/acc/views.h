@@ -38,7 +38,7 @@ bool views_focused();
 void views_frame_end();
 // Whether OpenXR's session runs (xrBeginSession until it is destroyed or another is created). Until it does,
 // projections and eye poses come from the last ones SteamVR gave: OpenComposite aborts when asked without
-// views (README.md).
+// views (docs/recon-acc.md).
 void views_session_running(bool running);
 
 }  // namespace acc

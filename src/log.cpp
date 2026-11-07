@@ -67,6 +67,8 @@ void log_line(const char* message) {
 
 std::wstring log_directory() { return logPath().parent_path().wstring(); }
 
+std::wstring log_file() { return logPath().wstring(); }
+
 void logf(const char* format, ...) {
     char message[1536];
     va_list args;

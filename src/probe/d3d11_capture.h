@@ -18,5 +18,8 @@ void d3d11_capture_images(XrSwapchain chain, const XrSwapchainImageD3D11KHR* ima
 void d3d11_capture_acquired(XrSwapchain chain, uint32_t index);
 // From xrReleaseSwapchainImage, before passing it on; `frame`: xrEndFrame calls so far.
 void d3d11_capture_release(XrSwapchain chain, uint64_t frame);
+// [experiment] d3d11_capture_hotkey=1: started with a frame never reached, then armed by the frame capture hotkey to
+// save each swapchain's image once more from `frame` (the next one). False without a D3D11 session.
+bool d3d11_capture_arm(uint64_t frame);
 
 }  // namespace simqvfr

@@ -25,6 +25,9 @@ struct Views4Frame {
     bool live = false;  // `width`/`height`: the view layout in the game's output (live resolution, views4_layout.h)
     double width[4] = {}, height[4] = {};  // what the composition reads; with DLSS, its output layout
     double renderWidth[4] = {}, renderHeight[4] = {};  // the views rendered (DLSS's input; else the same)
+    // The game drew only its two eyes this frame, each over its whole half of the target (X-Plane's menu): nothing to
+    // compose, the layer submits it as it is.
+    bool eyesOnly = false;
 };
 
 namespace games {
@@ -52,13 +55,19 @@ public:
     // runs uncomposed, the headset showing views 0-1.
     virtual bool qvfr_composable() const { return has_qvfr(); }
     // The layer composes this game's views with its D3D11 compositor instead (d3d11_compositor.h): one image
-    // holds all four views in eye columns (qvfr_eye_columns), each focus view centred on its eye (no gaze turn).
+    // holds all four views in eye columns (qvfr_eye_columns), each focus view placed by its record (turned or off-centre).
     virtual bool qvfr_compose_d3d11() const { return false; }
     // Cheeky Foveated DLSS runs in this game (GameInfo::features.foveatedDlss).
     virtual bool loads_cheeky() const { return has_qvfr() && info() && info()->features.foveatedDlss; }
     // The game lays its views out in eye columns (views4_rect_eye_columns) and submits each eye as its half of
     // the target: the layer offers that layout's eye size, and keeps each eye's offset, cut to its outer view.
     virtual bool qvfr_eye_columns() const { return false; }
+    // The game draws all four views at one size (instanced layers in one viewport): each eye column is one view wide
+    // and two high, a view being the larger of the outer and focus sizes asked for (the layer offers that).
+    virtual bool qvfr_one_view_size() const { return false; }
+    // [experiment] hang_watch_s when the ini doesn't set it (probe/hang_watch.h): the longest the game goes
+    // without a frame on its own, when loading, plus a margin.
+    virtual unsigned hang_watch_s() const { return 30; }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the
@@ -69,6 +78,9 @@ public:
     virtual void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample) = 0;
     // Live resolution: `live` (views4_live) from the next frame the game fills on.
     virtual void qvfr_set_live_layout(const Views4Layout& live) = 0;
+    // Live resolution works this run (GameInfo::features.liveResolution, unless the adapter knows better once QVFR
+    // started: a game whose views resize live only with an experiment on).
+    virtual bool qvfr_live_resolution() const { return info() && info()->features.liveResolution; }
     // Live focus box and focus cull, from the next frame the game fills on.
     virtual void qvfr_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze) = 0;
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
@@ -85,6 +97,9 @@ public:
     virtual void qvfr_frame_end() = 0;
 
     // ---- The game's own experiments and watches, each reading its own ini keys ----
+    // The layer was loaded into the game before it ran (GameInfo::earlyLoad, SIM_QVFR_EARLY=1): from DllMain, under the
+    // loader lock, with the game's main thread not yet started. `ini`: SIM_QVFR_INI.
+    virtual void early_start(const wchar_t* ini) { (void)ini; }
     // xrCreateApiLayerInstance, before qvfr_start. `mode`: [experiment] mode in effect (baseline=1: "off").
     virtual void instance_created(const wchar_t* ini, const wchar_t* mode) {
         (void)ini;
@@ -104,6 +119,9 @@ public:
 
 // The adapter for `game` (null: the one that does nothing). Lives for the process.
 GameAdapter& adapter_for(const GameInfo* game);
+
+// The layer DLL was loaded early (SIM_QVFR_EARLY=1): the current game's adapter's early_start. From DllMain.
+void early_load();
 
 }  // namespace games
 }  // namespace simqvfr

@@ -9,5 +9,7 @@ void log_line(const char* message);
 void logf(const char* format, ...);
 // Folder the log file is in (debug captures go next to it).
 std::wstring log_directory();
+// The log file itself.
+std::wstring log_file();
 
 }  // namespace simqvfr

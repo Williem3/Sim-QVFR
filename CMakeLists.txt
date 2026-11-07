@@ -59,7 +59,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/adapters.cpp src/engine/code_patch.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/adapters.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -68,7 +68,7 @@ target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND
 target_compile_options(sim_qvfr_core PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 
-add_library(sim_qvfr SHARED src/xr_layer.cpp)
+add_library(sim_qvfr SHARED src/xr_layer.cpp src/early_load.cpp)
 target_include_directories(sim_qvfr PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr PRIVATE /W4 /permissive- /utf-8)
@@ -213,18 +213,20 @@ target_compile_options(cheeky_host_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cheeky_host_test PRIVATE sim_qvfr_core)
 add_dependencies(cheeky_host_test cheeky_fake_runtime)
 
-# Offline check of the start-up hang watch's module log and minidump (tests/hang_watch_test.cpp).
+# Offline check of the hang watch's module log and its minidump, written by the launcher as the dump helper
+# (tests/hang_watch_test.cpp).
 add_executable(hang_watch_test tests/hang_watch_test.cpp)
 target_include_directories(hang_watch_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(hang_watch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(hang_watch_test PRIVATE sim_qvfr_core)
+add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to the test
 
 # Launcher: starts the chosen game in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
-  src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/launcher/launcher.rc)
+  src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
@@ -258,6 +260,17 @@ target_include_directories(cpu_profile_test PRIVATE src ${THIRD_PARTY}/openxr/in
 target_compile_definitions(cpu_profile_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(cpu_profile_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cpu_profile_test PRIVATE sim_qvfr_core)
+
+# Offline check of X-Plane's focus projections (tests/xplane_focus_test.cpp).
+add_executable(xplane_focus_test tests/xplane_focus_test.cpp src/games/xplane/focus_projection.cpp)
+target_include_directories(xplane_focus_test PRIVATE src)
+target_compile_options(xplane_focus_test PRIVATE /W4 /permissive- /utf-8)
+
+# Offline check of the SPIR-V edit for X-Plane's final resolve shader (tests/xplane_spirv_test.cpp).
+add_executable(xplane_spirv_test tests/xplane_spirv_test.cpp src/games/xplane/spirv_patch.cpp)
+target_include_directories(xplane_spirv_test PRIVATE src)
+target_compile_definitions(xplane_spirv_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+target_compile_options(xplane_spirv_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
 add_executable(acc_views_test tests/acc_views_test.cpp)

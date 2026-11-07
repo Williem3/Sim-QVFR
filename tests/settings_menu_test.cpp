@@ -9,6 +9,7 @@
 
 #include "games/ace/game.h"
 #include "games/acc/game.h"
+#include "games/xplane/game.h"
 #include "quad/menu_panel.h"
 #include "quad/settings_menu.h"
 
@@ -347,6 +348,19 @@ int main() {
                 next |= n.find(L"next launch") != std::wstring::npos;
             check(menu_pages(g).size() == 3 && !crop && !helmet && next,
                   "a game without crop, helmet or live resolution: their pages left out, resolution at the next launch");
+        }
+        {
+            // X-Plane 12, its pages from its GameFeatures as the layer sets them (xr_layer.cpp): no FOV crop, helmet or
+            // Foveated DLSS, and the layer never loads Cheeky there, so no Foveated DLSS or Frame generation page.
+            SettingsMenu g = c;
+            const games::GameFeatures& f = xplane::kGame.features;
+            g.launch.cropPage = f.fovCrop;
+            g.launch.helmetPage = f.helmet;
+            g.launch.fgPage = f.frameGeneration;
+            g.cheeky.available = f.foveatedDlss && g.cheeky.available;
+            check(!f.fovCrop && !f.helmet && !f.foveatedDlss &&
+                      menu_pages(g) == std::vector<MenuPage>{MenuPage::Settings, MenuPage::Shape, MenuPage::Headset},
+                  "X-Plane 12: Settings, Shape and Headset only (no crop, helmet or Foveated DLSS pages)");
         }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
         {
