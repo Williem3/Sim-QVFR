@@ -77,7 +77,9 @@ Settings load_settings(const std::wstring& ini) {
     s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
     s.updateCheck = read_int(ini, L"launcher", L"update_check", 0) != 0;
+    s.updateAsked = read_int(ini, L"launcher", L"update_asked", 0) != 0;
     s.hiddenGames = read_string(ini, L"launcher", L"hidden_games");
+    s.shownGames = read_string(ini, L"launcher", L"shown_games");
     {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);
@@ -127,7 +129,9 @@ Settings restored_defaults(const Settings& current) {
     Settings s;
     s.hotkeys = current.hotkeys;  // the Hotkeys pane's own Reset hotkeys
     s.updateCheck = current.updateCheck;
+    s.updateAsked = current.updateAsked;
     s.hiddenGames = current.hiddenGames;
+    s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
     return s;
 }
@@ -157,7 +161,9 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"update_check", s.updateCheck ? L"1" : L"0");
+    ok &= write(ini, L"launcher", L"update_asked", s.updateAsked ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"hidden_games", s.hiddenGames);
+    ok &= write(ini, L"launcher", L"shown_games", s.shownGames);
     {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);

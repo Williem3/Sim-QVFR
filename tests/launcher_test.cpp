@@ -24,6 +24,7 @@
 #include "launcher/layer_order.h"
 #include "launcher/preflight.h"
 #include "launcher/report.h"
+#include "launcher/session_history.h"
 #include "launcher/settings.h"
 #include "launcher/update_check.h"
 #include "profile/profiles.h"
@@ -281,6 +282,88 @@ void launch_status_checks() {
               "game folder: a folder without the game's exe, or another game's folder, is none");
         fs::remove_all(lib, ec);
     }
+}
+
+// The session history (launcher/session_history.h): records kept per session, pruned, compared.
+void session_history_checks() {
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    const fs::path dir = fs::path(temp) / L"simqvfr-session-history-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    check(session_id(L"C:\\q\\logs\\session-20261107-101500.log") == L"session-20261107-101500" && session_id(L"C:\\q\\ace.log").empty() &&
+              session_id(L"").empty(),
+          "sessions: a session's id is its log's name");
+    check(session_run_ini(L"C:\\q\\logs\\session-20261107-101500.log") == L"C:\\q\\logs\\run-20261107-101500\\sim-qvfr.ini",
+          "sessions: the run folder's ini next to the log");
+    check(baseline_mode(L"Off (the game's own two views)") && !baseline_mode(L"QVFR"), "sessions: a baseline by its mode");
+
+    Settings a;  // the defaults: outer 50, inner 100
+    Settings b = a;
+    b.outer = 40;
+    const std::vector<std::wstring> one = setting_changes(a, b);
+    check(one.size() == 1 && one[0] == L"Outer 50% \u2192 40%", "sessions: one change, as Outer 50% → 40%");
+    check(setting_changes(a, a).empty(), "sessions: no change between the same settings");
+    Settings c = b;
+    c.crop = true;
+    c.inner = 120;
+    c.cheeky.load = true;  // on: its details only once it was on before too
+    const std::vector<std::wstring> three = setting_changes(a, c);
+    check(three.size() == 4 && three[1] == L"Inner 100% \u2192 120%" && three[2] == L"Crop on" && three[3] == L"Cheeky Foveated DLSS on",
+          "sessions: changes in the panes' order, a switch as on or off");
+    check(changes_text(three, 2) == L"Outer 50% \u2192 40%, Inner 100% \u2192 120% and 2 more" &&
+              changes_text({L"A", L"B"}) == L"A and B" && changes_text({L"A"}) == L"A",
+          "sessions: changes as one phrase, the rest counted");
+    Settings hidden = a;
+    hidden.cropTop = 10;  // the crop is off: its sides don't count
+    check(setting_changes(a, hidden).empty(), "sessions: a crop side with the crop off is not a change");
+
+    const auto session = [](const wchar_t* stamp, double fps, double p90, const wchar_t* mode = L"QVFR") {
+        SessionInfo s;
+        s.log = std::wstring(L"C:\\q\\logs\\session-") + stamp + L".log";
+        s.time = L"2026-11-07 10:00";
+        s.mode = mode;
+        s.fps = fps;
+        s.frameP50 = p90 - 2;
+        s.frameP90 = p90;
+        return s;
+    };
+    const std::wstring history = dir.wstring();
+    check(store_session(history, session_record(session(L"20261107-100000", 80, 14), L"ace", a), L"") &&
+              store_session(history, session_record(session(L"20261107-101000", 70, 15, L"Off (the game's own two views)"), L"ace", a), L"") &&
+              store_session(history, session_record(session(L"20261107-102000", 60, 16), L"acc", a), L"") &&
+              store_session(history, session_record(session(L"20261107-103000", 86, 12.8), L"ace", b), L""),
+          "sessions: records written");
+    // The same session's newer numbers replace its record.
+    check(store_session(history, session_record(session(L"20261107-103000", 86.5, 12.8), L"ace", b), L""), "sessions: a record updated");
+    std::vector<SessionRecord> records = load_sessions(history);
+    check(records.size() == 4 && records[0].id == L"session-20261107-103000" && std::fabs(records[0].fps - 86.5) < 1e-6 &&
+              records[0].settings.outer == 40 && records[1].game == L"acc" && records[2].baseline,
+          "sessions: newest first, with their settings and numbers");
+    check(records[0].same_numbers(session(L"20261107-103000", 86.5, 12.8)) && !records[0].same_numbers(session(L"20261107-103000", 87, 12.8)),
+          "sessions: the same numbers aren't stored again");
+    check(previous_session(records, 0) == 3 && other_kind_session(records, 0) == 2 && previous_session(records, 1) == -1 &&
+              other_kind_session(records, 2) == 3,
+          "sessions: the previous of the same game and kind, and of the other kind");
+    check(comparison_text(L"vs previous", records[0], records[3]) ==
+              L"vs previous: +6.5 fps, 90th percentile \u22121.20 ms, after Outer 50% \u2192 40%",
+          "sessions: the comparison line");
+    check(comparison_text(L"vs without QVFR", records[0], records[2]) == L"vs without QVFR: +16.5 fps, 90th percentile \u22122.20 ms",
+          "sessions: against a run without QVFR, without settings");
+    // Settings copied from a file: the game's own as the launcher holds them.
+    const std::wstring source = (dir / L"source.ini").wstring();
+    Settings fromFile;
+    fromFile.inner = 150;
+    save_settings(source, fromFile);
+    check(store_session(history, session_record(session(L"20261107-104000", 90, 12), L"ace", Settings{}), source) &&
+              load_sessions(history)[0].settings.inner == 150,
+          "sessions: a record's settings copied from the game's file");
+    for (int i = 0; i < kSessionHistory + 3; ++i)
+        store_session(history, session_record(session((L"20261108-1" + std::to_wstring(10000 + i)).c_str(), 90, 12), L"ace", a), L"");
+    records = load_sessions(history);
+    check(static_cast<int>(records.size()) == kSessionHistory && records[0].id == L"session-20261108-1" + std::to_wstring(10000 + kSessionHistory + 2),
+          "sessions: only the newest are kept");
+    fs::remove_all(dir, ec);
 }
 
 void game_tabs_checks() {
@@ -1999,6 +2082,7 @@ int main() {
     per_game_settings_checks();
     game_tabs_checks();
     launch_status_checks();
+    session_history_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }

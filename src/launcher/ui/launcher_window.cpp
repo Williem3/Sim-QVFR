@@ -33,6 +33,7 @@
 #include "../report.h"
 #include "../game_tabs.h"
 #include "../settings.h"
+#include "../session_history.h"
 #include "../install.h"
 #include "../update_check.h"
 #include "../../games/game.h"
@@ -86,9 +87,10 @@ enum Ctl {
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
     kHotkeyKey, kHotkeyPad, kHotkeysReset,
-    // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete (option: its index in
-    // app.profileNames), saving the settings as one, adding a shared one from the clipboard.
-    kProfileUse, kProfileShare, kProfileDelete, kProfileSave, kProfilePaste,
+    // The Profiles pane (profile/profiles.h): a profile's Use, Share and Delete, and the one in use's Update and Revert
+    // once the settings differ from it (option: its index in app.profileNames), saving the settings as one, adding a
+    // shared one from the clipboard.
+    kProfileUse, kProfileShare, kProfileDelete, kProfileUpdate, kProfileRevert, kProfileSave, kProfilePaste,
     // The Headset menu pane: the hotkeys footer ([menu] hotkey_footer).
     kHotkeyFooter,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
@@ -100,7 +102,9 @@ enum Ctl {
     kHelpIcon,
     // The action bar: the launched game's status (launch_watch.h; it opens Diagnostics or Report an issue) and
     // Restore Defaults' Undo.
-    kLaunchBadge, kUndoBadge
+    kLaunchBadge, kUndoBadge,
+    // An open sheet (open_sheet): its buttons (option: the button's index) and its name field.
+    kSheetButton, kSheetField
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -149,6 +153,24 @@ struct Popup {
     std::vector<std::wstring> items;
     int selected = 0, hover = -1;
 };
+
+// A sheet (open_sheet): a question or notice over the dimmed window, in the window's theme, in place of a Windows
+// message box. While one shows, only it takes the mouse and the keys: Tab and the arrows move between its buttons,
+// Return and Space press the focused one, Escape presses `cancel`.
+struct Sheet {
+    bool open = false;
+    std::wstring title, text;
+    std::vector<std::wstring> buttons;  // left to right; the last is the main one (the accent, or red when `danger`)
+    int focus = -1;   // the button with the focus when it opens; -1: the main one (the name field, with one)
+    int cancel = 0;   // the button Escape presses
+    bool danger = false;
+    bool field = false;  // a name field above the buttons (Return in it presses the main button)
+    std::wstring fieldLabel, fieldText;
+    std::function<void(int button, const std::wstring& text)> done;  // the button pressed, and the field's text
+};
+void open_sheet(Sheet sheet);
+// A notice with OK; `then` once it's closed.
+void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then = nullptr);
 
 constexpr wchar_t kMethodNames[2][40] = {L"Quad View Foveated Rendering", L"Two-loop Foveated Interlaced (legacy)"};
 constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
@@ -254,6 +276,18 @@ struct App {
     LaunchWatch watch;
     // Restore Defaults: the settings before it, for Undo (the action bar, Ctrl+Z) until the next change.
     std::optional<Settings> undoRestore;
+    // The last few sessions (session_history.h), newest first, each with the settings it ran with: Diagnostics compares
+    // the last session with the one before it.
+    std::vector<SessionRecord> sessions;
+    // Which games are installed, by id (refresh_installed): the others get no tab unless the Games pane gives them one.
+    std::map<std::wstring, bool> installed;
+    // The open sheet, its name field (a native edit over the canvas at sheetEditRect, like the report's), and whether
+    // the next paint gives that field the keyboard.
+    Sheet sheet;
+    HWND sheetEdit = nullptr;
+    Rect sheetEditRect;
+    bool sheetFocusField = false;
+    bool drawingSheet = false;  // paint is drawing the sheet: its controls show hover
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -389,6 +423,25 @@ void update_done(UpdateResult* r) {
                                                                     : Update::Available;
 }
 
+// The first start: whether to check for updates when the launcher starts, asked once ([launcher] update_asked keeps the
+// answer; About's switch changes it).
+void ask_update_check() {
+    Sheet s;
+    s.title = L"Check for updates automatically?";
+    s.text = L"When it starts, the launcher can ask GitHub for the newest Sim-QVFR release and tell you when there is one. "
+             L"Nothing else is sent, and nothing downloads by itself. You can change this in About.";
+    s.buttons = {L"Don’t Check", L"Check Automatically"};
+    s.cancel = 0;
+    s.done = [](int button, const std::wstring&) {
+        app.s.updateAsked = true;
+        app.s.updateCheck = button == 1;
+        changed();
+        if (app.s.updateCheck)
+            start_update_check();
+    };
+    open_sheet(std::move(s));
+}
+
 std::wstring launcher_folder() { return std::filesystem::path(app.ini).parent_path().wstring(); }
 
 // Install is offered for a newer release with a zip GitHub gives a SHA-256 for, in a packaged install.
@@ -481,6 +534,37 @@ void refresh_profiles() {
     Profile p;
     app.profileMatches = !app.profileCurrent.empty() && load_profile(profiles_folder(app.ini), app.profileCurrent, p, app.s.eyeTracking) &&
                          profile_matches(app.ini.c_str(), p);
+}
+
+// The session runtime.ini reports, into the history (session_history.h) when its numbers are new: with the settings
+// its game has now in the launcher's folder (the launcher's ini or the game's copy, where the headset menu also writes).
+void record_session() {
+    const SessionInfo& s = app.runtime.session;
+    if (!app.iniFound || !s.known())
+        return;
+    const std::wstring id = session_id(s.log);
+    if (id.empty())
+        return;
+    for (const SessionRecord& r : app.sessions)
+        if (r.id == id && r.same_numbers(s))
+            return;
+    // Its game: the run folder's copy of the ini names it ([launcher] game, ACE when unset); without one, the game shown.
+    const std::wstring runIni = session_run_ini(s.log);
+    std::wstring game = game_id(games::launcher_game());
+    if (GetFileAttributesW(runIni.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        wchar_t named[32] = {};
+        GetPrivateProfileStringW(L"launcher", L"game", L"ace", named, static_cast<DWORD>(std::size(named)), runIni.c_str());
+        game = named;
+    }
+    const std::wstring source = game_settings_target(app.ini, game);
+    store_session(sessions_folder(app.ini), session_record(s, game, load_settings(source)), source);
+    app.sessions = load_sessions(sessions_folder(app.ini));
+}
+
+// runtime.ini read again (the headset, the last session), and that session kept in the history.
+void reload_runtime() {
+    app.runtime = load_runtime_info(runtime_info_path());
+    record_session();
 }
 
 // The in-headset settings menu saves into the same ini: show what it set (not while a knob is held). A
@@ -771,6 +855,8 @@ void focus_ring(const Rect& r, float radius) {
 bool focused(Ctl id) { return app.keyboard && app.focus == id && !app.popup.open; }
 // The pointer is over `r` (hover states), with no menu open and nothing dragged.
 bool pointer_in(const Rect& r) {
+    if (app.sheet.open && !app.drawingSheet)
+        return false;  // under the sheet
     return app.hover != kNone && !app.popup.open && app.dragging == kNone && r.contains(app.mouseX, app.mouseY);
 }
 
@@ -1135,6 +1221,154 @@ float badge(float x, float y, int tone, const std::wstring& text, float maxWidth
     glyph(tone, x + 8, y + 4, col(fg[tone]));
     app.canvas.text(text, kBadgeStyle, {x + 25, y - 1, w - 25 - 9, 22}, col(fg[tone]));
     return w;
+}
+
+// ---- Sheets ------------------------------------------------------------------------------------
+
+void open_sheet(Sheet sheet) {
+    app.popup.open = false;
+    app.tip = -1;
+    app.pressed = kNone;
+    sheet.open = true;
+    if (sheet.buttons.empty())
+        sheet.buttons = {L"OK"};
+    const int main = static_cast<int>(sheet.buttons.size()) - 1;
+    sheet.cancel = std::clamp(sheet.cancel, 0, main);
+    if (sheet.focus < 0 || sheet.focus > main)
+        sheet.focus = sheet.field ? -1 : main;
+    app.sheet = std::move(sheet);
+    if (app.sheet.field && app.sheetEdit) {
+        SetWindowTextW(app.sheetEdit, app.sheet.fieldText.c_str());
+        SendMessageW(app.sheetEdit, EM_SETSEL, 0, -1);
+        app.sheetFocusField = app.sheet.focus < 0;  // once the paint has placed it
+    }
+    if (GetFocus() != app.hwnd)
+        SetFocus(app.hwnd);  // out of the report's description box
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+void notify(const std::wstring& title, const std::wstring& text, std::function<void()> then) {
+    Sheet s;
+    s.title = title;
+    s.text = text;
+    if (then)
+        s.done = [then](int, const std::wstring&) { then(); };
+    open_sheet(std::move(s));
+}
+
+// Closes the sheet with `button` pressed, then tells its `done` (which may open another).
+void close_sheet(int button) {
+    if (!app.sheet.open)
+        return;
+    std::wstring text;
+    if (app.sheet.field && app.sheetEdit) {
+        text.resize(static_cast<size_t>(std::max(0, GetWindowTextLengthW(app.sheetEdit))));
+        GetWindowTextW(app.sheetEdit, text.data(), static_cast<int>(text.size()) + 1);
+    }
+    const auto done = std::move(app.sheet.done);
+    app.sheet = {};
+    app.sheetFocusField = false;
+    if (app.sheetEdit) {
+        if (GetFocus() == app.sheetEdit)
+            SetFocus(app.hwnd);
+        ShowWindow(app.sheetEdit, SW_HIDE);
+    }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+    if (done)
+        done(button, text);
+}
+
+// Tab and Shift+Tab: the focus to the next or previous of the name field (-1, with one) and the buttons.
+void move_sheet_focus(int step) {
+    Sheet& s = app.sheet;
+    const int n = static_cast<int>(s.buttons.size()), first = s.field ? -1 : 0;
+    int f = s.focus + step;
+    if (f >= n)
+        f = first;
+    if (f < first)
+        f = n - 1;
+    s.focus = f;
+    app.keyboard = true;
+    if (f < 0)
+        SetFocus(app.sheetEdit);
+    else if (GetFocus() == app.sheetEdit)
+        SetFocus(app.hwnd);
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// The window's keys while a sheet shows (its name field has its own: sheet_edit_proc).
+void sheet_key(WPARAM key) {
+    Sheet& s = app.sheet;
+    if (key == VK_ESCAPE)
+        close_sheet(s.cancel);
+    else if ((key == VK_RETURN || key == VK_SPACE) && s.focus >= 0)
+        close_sheet(s.focus);
+    else if (key == VK_TAB)
+        move_sheet_focus(GetKeyState(VK_SHIFT) < 0 ? -1 : 1);
+    else if ((key == VK_LEFT || key == VK_RIGHT) && s.focus >= 0) {  // along the buttons only
+        s.focus = std::clamp(s.focus + (key == VK_RIGHT ? 1 : -1), 0, static_cast<int>(s.buttons.size()) - 1);
+        app.keyboard = true;
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+    }
+}
+
+// The sheet over the window: the window dimmed, a card in its middle with the title, the text, the field and the
+// buttons (trailing, the main one last). Modal: the hits under it go.
+void sheet_card() {
+    Sheet& s = app.sheet;
+    Canvas& cv = app.canvas;
+    const float W = cv.width(), H = cv.height();
+    cv.fill({0, 0, W, H}, {0, app.dark ? 0.55f : 0.32f});
+    app.hits.clear();
+    app.drawingSheet = true;
+    const float w = std::min(460.0f, W - 32), pad = t::kSpace6, inner = w - 2 * pad;
+    const float textH = s.text.empty() ? 0 : cv.measure_height(s.text, t::kBody, inner);
+    constexpr float kFieldH = 32;
+    const float labelH = s.fieldLabel.empty() ? 0 : t::kCallout.lineHeight + t::kSpace2;
+    const float h = pad + t::kTitle3.lineHeight + (textH > 0 ? t::kSpace2 + textH : 0) + (s.field ? t::kSpace4 + labelH + kFieldH : 0) +
+                    t::kSpace6 + t::kControlHeight + pad;
+    const float radius = t::kRadiusGroup + 4;
+    const Rect card{std::round((W - w) / 2), std::round(std::max(16.0f, (H - h) / 2 - 24)), w, h};
+    cv.fill({card.x, card.y + 6, card.w, card.h}, {0, app.dark ? 0.5f : 0.18f}, radius);
+    cv.fill(card, col(app.c->group_bg), radius);  // the panes' cards: their buttons read on it
+    cv.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, radius);
+    float y = card.y + pad;
+    cv.text(s.title, t::kTitle3, {card.x + pad, y, inner, t::kTitle3.lineHeight}, col(app.c->label));
+    y += t::kTitle3.lineHeight;
+    if (textH > 0) {
+        cv.text(s.text, t::kBody, {card.x + pad, y + t::kSpace2, inner, textH + 2}, col(app.c->label_secondary), Align::Leading,
+                false, true);
+        y += t::kSpace2 + textH;
+    }
+    if (s.field) {
+        y += t::kSpace4;
+        if (labelH > 0) {
+            cv.text(s.fieldLabel, t::kCallout, {card.x + pad, y, inner, t::kCallout.lineHeight}, col(app.c->label));
+            y += labelH;
+        }
+        const Rect field{card.x + pad, y, inner, kFieldH};
+        cv.fill(field, col(app.c->field_bg), t::kRadiusControl);
+        cv.stroke(field, col(app.c->control_border), 1, t::kRadiusControl);
+        if (s.focus < 0)
+            focus_ring(field, t::kRadiusControl);
+        app.sheetEditRect = {field.x + 8, field.y + (kFieldH - 20) / 2, field.w - 16, 20};
+        app.hits.push_back({kSheetField, field});
+        y += kFieldH;
+    }
+    y += t::kSpace6;
+    float bx = card.right() - pad;
+    const int main = static_cast<int>(s.buttons.size()) - 1;
+    for (int i = main; i >= 0; --i) {
+        const float bw = std::max(88.0f, button_width(s.buttons[i]));
+        bx -= bw;
+        const Rect r{bx, y, bw, t::kControlHeight};
+        button(kSheetButton, r, s.buttons[i], i == main ? (s.danger ? Btn::Danger : Btn::Primary) : Btn::Secondary);
+        app.hits.back().option = i;
+        if (s.focus == i)  // Return presses it: shown as a dialog's default button is
+            focus_ring(r, t::kRadiusControl);
+        bx -= t::kSpace2;
+    }
+    app.drawingSheet = false;
 }
 
 // ---- Form layout -------------------------------------------------------------------------------
@@ -1592,7 +1826,34 @@ bool copy_text(const std::wstring& text) {
     return false;
 }
 
-void copy_summary() { copy_text(session_summary_text(app.runtime)); }
+// The last session's record in the history (runtime.ini's session), -1: not kept (no ini, or not measured).
+int last_session_index() {
+    const std::wstring id = session_id(app.runtime.session.log);
+    for (size_t i = 0; !id.empty() && i < app.sessions.size(); ++i)
+        if (app.sessions[i].id == id)
+            return static_cast<int>(i);
+    return -1;
+}
+
+// The last session against the one before it, and against the newest of the other kind (with or without QVFR), as
+// lines for the summary: "vs previous: +6.0 fps, 90th percentile −1.20 ms, after Outer 50% → 40%".
+std::wstring comparison_lines() {
+    const int now = last_session_index();
+    if (now < 0)
+        return L"";
+    std::wstring text;
+    const SessionRecord& r = app.sessions[now];
+    if (const int before = previous_session(app.sessions, now); before >= 0)
+        text += comparison_text(L"vs previous (" + app.sessions[before].time + L")", r, app.sessions[before]) + L"\n";
+    if (const int other = other_kind_session(app.sessions, now); other >= 0)
+        text += comparison_text(r.baseline ? L"vs with QVFR (" + app.sessions[other].time + L")"
+                                           : L"vs without QVFR (" + app.sessions[other].time + L")",
+                                r, app.sessions[other]) +
+                L"\n";
+    return text;
+}
+
+void copy_summary() { copy_text(session_summary_text(app.runtime) + comparison_lines()); }
 
 std::wstring clipboard_text() {
     std::wstring text;
@@ -1625,7 +1886,7 @@ void report_issue() {
     wchar_t name[64];
     swprintf_s(name, L"sim-qvfr-report-%04u%02u%02u-%02u%02u%02u.zip", now.wYear, now.wMonth, now.wDay, now.wHour,
                now.wMinute, now.wSecond);
-    app.runtime = load_runtime_info(runtime_info_path());
+    reload_runtime();
     IssueReport report{widen(SIM_QVFR_VERSION), app.s, app.runtime, system_info(), name, app.reportKind};
     const int length = GetWindowTextLengthW(app.reportEdit);
     report.description.resize(static_cast<size_t>(std::max(length, 0)));
@@ -1829,6 +2090,31 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
             value_row(L"CPU in use", L"All of the game's threads together.", s.cores >= 0 ? formatted(L"%.1f cores", s.cores) : dash)};
         h += section(x, y + h, w, L"Last session", rows, L"", draw);
         h += t::kSpace6;
+        // Against the session before it (what changed in between) and a run of the other kind (with or without QVFR).
+        const int now = last_session_index();
+        if (now >= 0) {
+            const SessionRecord& r = app.sessions[now];
+            std::vector<Row> compared;
+            if (const int before = previous_session(app.sessions, now); before >= 0) {
+                const SessionRecord& p = app.sessions[before];
+                std::wstring desc = p.time;
+                if (!r.baseline) {
+                    const std::vector<std::wstring> changes = setting_changes(p.settings, r.settings);
+                    desc += changes.empty() ? L"  ·  same settings" : L"  ·  after " + changes_text(changes);
+                }
+                compared.push_back(value_row(L"Previous session", desc, difference_text(r, p)));
+            }
+            if (const int other = other_kind_session(app.sessions, now); other >= 0) {
+                const SessionRecord& o = app.sessions[other];
+                compared.push_back(value_row(r.baseline ? L"With QVFR" : L"Without QVFR",
+                                             o.time + (r.baseline ? L"" : L"  ·  the game’s own two views"), difference_text(r, o)));
+            }
+            if (!compared.empty()) {
+                h += section(x, y + h, w, L"Compared with", compared,
+                             L"This session’s frame rate and 90th percentile against each, for the same game.", draw);
+                h += t::kSpace6;
+            }
+        }
         std::vector<Row> threads;
         for (const auto& [name, percent] : s.threads)
             threads.push_back(value_row(name, thread_note(name), formatted(L"%.0f%% of a core", percent)));
@@ -1857,6 +2143,37 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
                                           formatted(L" of %.1f GB", app.runtime.vramBudgetMb / 1024)));
         h += section(x, y + h, w, L"Layer and memory", layer, L"", draw);
         h += t::kSpace6;
+    }
+    // The game's last few sessions, each with what changed since the one before it (the last session's game, else the
+    // game shown).
+    {
+        const int now = last_session_index();
+        const std::wstring game = now >= 0 ? app.sessions[now].game : game_id(games::launcher_game());
+        std::vector<Row> recent;
+        for (size_t i = 0; i < app.sessions.size() && recent.size() < kSessionRows; ++i) {
+            const SessionRecord& r = app.sessions[i];
+            if (r.game != game)
+                continue;
+            const int before = previous_session(app.sessions, i);
+            std::wstring desc;
+            if (r.baseline)
+                desc = L"Without QVFR: the game’s own two views.";
+            else if (before < 0)
+                desc = L"The oldest kept.";
+            else if (const std::vector<std::wstring> changes = setting_changes(app.sessions[before].settings, r.settings); changes.empty())
+                desc = L"Same settings as the one before.";
+            else
+                desc = changes_text(changes, 4) + L".";
+            std::wstring value = formatted(L"%.1f fps", r.fps);
+            if (r.frameP90 > 0)
+                value += formatted(L"  ·  %.2f ms", r.frameP90);
+            recent.push_back(value_row(r.time + (static_cast<int>(i) == now ? L"  ·  last" : L""), desc, value));
+        }
+        if (recent.size() > 1) {
+            h += section(x, y + h, w, L"Recent sessions", recent,
+                         L"Frame rate and 90th percentile, with what changed since the session before.", draw);
+            h += t::kSpace6;
+        }
     }
     // Asking for help: the capture switch, copying the numbers above, the logs folder.
     Row capture;
@@ -1927,8 +2244,12 @@ float profiles_pane(float x, float y, float w, bool draw) {
                 if (list[b].first == kNone) {
                     badge(bx, rect.y + (rect.h - 20) / 2, 0, list[b].second);
                 } else {
-                    button(list[b].first, {bx, rect.y, widths[b], rect.h}, list[b].second,
-                           list[b].first == kProfileDelete ? Btn::Danger : list[b].first == kProfileShare ? Btn::Ghost : Btn::Secondary);
+                    const Ctl id = list[b].first;
+                    button(id, {bx, rect.y, widths[b], rect.h}, list[b].second,
+                           id == kProfileDelete ? Btn::Danger
+                           : id == kProfileShare ? Btn::Ghost
+                           : id == kProfileUpdate ? Btn::Tint
+                                                  : Btn::Secondary);
                     app.hits.back().option = static_cast<int>(i);
                 }
                 bx += widths[b] + t::kSpace2;
@@ -1936,21 +2257,28 @@ float profiles_pane(float x, float y, float w, bool draw) {
         };
         return r;
     };
-    // The one in use shows a badge for its Use button while the settings still match it; changed since, it says so.
+    // The one in use shows a badge for its Use button while the settings still match it. Changed since, it says so and
+    // offers Update (a saved profile: the settings now go into it) and Revert (back to what it holds).
     std::vector<Row> presetRows, savedRows;
     for (size_t i = 0; i < app.profileNames.size(); ++i) {
         const std::wstring& name = app.profileNames[i];
-        const bool current = _wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0;
-        const std::pair<Ctl, std::wstring> use =
-            current && app.profileMatches ? std::pair<Ctl, std::wstring>{kNone, L"In use"} : std::pair<Ctl, std::wstring>{kProfileUse, L"Use"};
-        const std::wstring changedNote = current && !app.profileMatches ? L"In use, changed since." : L"";
-        if (i < presets.size()) {
-            Row r = buttons_row(i, {use});
+        const bool current = _wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0, changedSince = current && !app.profileMatches;
+        const bool preset = i < presets.size();
+        std::vector<std::pair<Ctl, std::wstring>> buttons;
+        if (changedSince && !preset)
+            buttons.push_back({kProfileUpdate, L"Update"});
+        buttons.push_back(changedSince ? std::pair<Ctl, std::wstring>{kProfileRevert, L"Revert"}
+                          : current    ? std::pair<Ctl, std::wstring>{kNone, L"In use"}
+                                       : std::pair<Ctl, std::wstring>{kProfileUse, L"Use"});
+        const std::wstring changedNote = changedSince ? L"In use, changed since." : L"";
+        if (preset) {
+            Row r = buttons_row(i, buttons);
             r.label = name;
             r.desc = preset_summary(presets[i]) + L". " + kPresetNotes[i] + (changedNote.empty() ? L"" : L" " + changedNote);
             presetRows.push_back(r);
         } else {
-            Row r = buttons_row(i, {use, {kProfileShare, L"Share"}, {kProfileDelete, L"Delete"}});
+            buttons.insert(buttons.end(), {{kProfileShare, L"Share"}, {kProfileDelete, L"Delete"}});
+            Row r = buttons_row(i, buttons);
             r.label = name;
             r.desc = changedNote;
             savedRows.push_back(r);
@@ -2121,7 +2449,25 @@ float checks_pane(float x, float y, float w, bool draw) {
 
 // ---- Games ------------------------------------------------------------------------------------
 
-bool game_shown(const games::GameInfo& game) { return !game_hidden(app.s.hiddenGames, game_id(game)); }
+// Which games are installed (launcher.h game_installed), by id: looked up when the window opens, comes back to the front
+// or a game's folder is chosen.
+void refresh_installed() {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    for (std::size_t i = 0; i < count; ++i)
+        app.installed[game_id(*all[i])] = game_installed(*all[i]);
+}
+
+bool installed(const games::GameInfo& game) {
+    const auto it = app.installed.find(game_id(game));
+    return it == app.installed.end() || it->second;
+}
+
+// A game has a tab when it is installed and not hidden, or when the user gave it one (one Steam doesn't find, installed
+// elsewhere: its folder is chosen in Launch checks).
+bool game_shown(const games::GameInfo& game) {
+    return installed(game) ? !game_hidden(app.s.hiddenGames, game_id(game)) : game_hidden(app.s.shownGames, game_id(game));
+}
 
 int shown_game_count() {
     std::size_t count = 0;
@@ -2225,9 +2571,12 @@ float games_pane(float x, float y, float w, bool draw) {
     for (std::size_t i = 0; i < count; ++i) {
         const games::GameInfo* game = all[i];
         const bool shown = game_shown(*game), locked = shown && onlyOne;  // the last tab stays
-        const std::wstring desc = locked ? L"The last tab: show another game to hide this one."
-                                         : shown ? L"Has a tab at the top of the window."
-                                                 : L"No tab. Its settings are kept for when you show it again.";
+        const bool found = installed(*game);
+        const std::wstring desc = locked  ? L"The last tab: show another game to hide this one."
+                                  : !found ? shown ? L"Has a tab: choose its folder in Launch checks."
+                                                   : L"Steam doesn’t list it. Turn it on if it’s installed elsewhere."
+                                  : shown  ? L"Has a tab at the top of the window."
+                                           : L"No tab. Its settings are kept for when you show it again.";
         Row row;
         row.fullHeight = [desc](float width) { return checkbox_height(desc, width - 36); };
         row.full = [=](const Rect& r) {
@@ -2244,6 +2593,10 @@ float games_pane(float x, float y, float w, bool draw) {
             const float descH = app.canvas.measure_height(desc, t::kCallout, tw);
             const float ty = rest.y + (rest.h - t::kBody.lineHeight - 2 - descH) / 2;
             app.canvas.text(game->name, t::kBody, {rest.x, ty, tw, t::kBody.lineHeight}, col(app.c->label));
+            if (!found) {  // tagged: Steam doesn't have it
+                const float nx = rest.x + std::ceil(app.canvas.measure(game->name, t::kBody)) + t::kSpace2;
+                badge(nx, ty, 3, L"Not found", std::max(0.0f, rest.x + tw - nx));
+            }
             app.canvas.text(desc, t::kCallout, {rest.x, ty + t::kBody.lineHeight + 2, tw, descH + 2}, col(app.c->label_secondary),
                             Align::Leading, false, true);
             switch_track({rest.right() - kSwitchW, rest.y + (rest.h - kSwitchH) / 2, kSwitchW, kSwitchH}, shown, locked);
@@ -2253,9 +2606,7 @@ float games_pane(float x, float y, float w, bool draw) {
         rows.push_back(row);
     }
     float h = section(x, y, w, L"Game tabs", rows,
-                      L"A hidden game keeps its own settings and colour. If the game you are on is hidden, the first shown "
-                      L"game is selected. Click a game’s colour dot to change its colour below.",
-                      draw);
+                      L"Installed games get a tab; turn one off to hide it. Click a colour dot to change it below.", draw);
     h += t::kSpace6;
     const games::GameInfo& game = color_game();
     const bool custom = app.s.gameColors.count(game_id(game)) > 0;
@@ -3229,6 +3580,25 @@ static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 bool pane_shown(int pane) {
     return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss);
 }
+
+// Each pane's name in [launcher] last_pane, in Pane's order.
+constexpr const wchar_t* kPaneIds[] = {L"checks",  L"profiles", L"resolution", L"foveation",   L"overlay", L"dlss", L"menu",
+                                       L"hotkeys", L"games",    L"layers",     L"diagnostics", L"report",  L"about"};
+static_assert(std::size(kPaneIds) == kPanes, "a name for every pane");
+
+// The pane the window opens on: Launch checks while one finds a problem, else the one last used ([launcher] last_pane,
+// saved as the window closes), else Resolution.
+Pane opening_pane() {
+    if (worst_tone(app.checks) == CheckTone::Bad)
+        return Pane::Checks;
+    wchar_t id[32] = {};
+    if (app.iniFound)
+        GetPrivateProfileStringW(L"launcher", L"last_pane", L"", id, static_cast<DWORD>(std::size(id)), app.ini.c_str());
+    for (int i = 0; i < kPanes; ++i)
+        if (_wcsicmp(id, kPaneIds[i]) == 0 && pane_shown(i))
+            return static_cast<Pane>(i);
+    return Pane::Resolution;
+}
 // The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
 int shown_pane(int pane, int step, int from) {
     for (int p = pane; p >= 0 && p < kPanes; p += step)
@@ -3271,7 +3641,7 @@ std::wstring pane_description(Pane pane) {
     case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
     case Pane::Games: return L"Which games have a tab, and each game’s colour.";
     case Pane::Layers: return L"The OpenXR layers " + game_name() + L" loads, and their order.";
-    case Pane::Diagnostics: return L"The last session’s numbers, and what to share when you ask for help.";
+    case Pane::Diagnostics: return L"The last session’s numbers against the ones before it, and what to share when you ask for help.";
     case Pane::Report: return L"Zips the logs and opens a GitHub issue with the details filled in.";
     case Pane::About: return L"The version, updates and support.";
     }
@@ -3321,27 +3691,35 @@ Rect popup_menu_rect() {
 
 // The description box (a native edit, kept in step with the canvas after each paint): over the field the
 // Diagnostics pane drew; hidden when it is not wholly in view, or a popup is open.
+// The native edits' font (Segoe UI 13 at the window's DPI), made again when the DPI changes: the report's description
+// box and the sheet's name field.
+void edit_font() {
+    const UINT dpi = static_cast<UINT>(std::lround(96 * app.canvas.dpi_scale()));
+    if (app.reportFont && app.reportFontDpi == dpi)
+        return;
+    HFONT font = CreateFontW(-MulDiv(13, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    for (HWND edit : {app.reportEdit, app.sheetEdit})
+        if (edit)
+            SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    if (app.reportFont)
+        DeleteObject(app.reportFont);
+    app.reportFont = font;
+    app.reportFontDpi = dpi;
+}
+
 void place_report_edit() {
     const Rect& r = app.reportEditRect;
     if (!app.reportEdit)
         return;
-    if (!report_edit_fits() || app.popup.open) {
+    if (!report_edit_fits() || app.popup.open || app.sheet.open) {
         if (GetFocus() == app.reportEdit)
             SetFocus(app.hwnd);
         ShowWindow(app.reportEdit, SW_HIDE);
         return;
     }
     const float k = app.canvas.dpi_scale();
-    const UINT dpi = static_cast<UINT>(std::lround(96 * k));
-    if (app.reportFontDpi != dpi) {
-        HFONT font = CreateFontW(-MulDiv(13, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        SendMessageW(app.reportEdit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        if (app.reportFont)
-            DeleteObject(app.reportFont);
-        app.reportFont = font;
-        app.reportFontDpi = dpi;
-    }
+    edit_font();
     const int x = static_cast<int>(std::lround(r.x * k)), y = static_cast<int>(std::lround(r.y * k));
     const int w = static_cast<int>(std::lround(r.w * k)), h = static_cast<int>(std::lround(r.h * k));
     SetWindowPos(app.reportEdit, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -3367,6 +3745,65 @@ LRESULT CALLBACK report_edit_proc(HWND edit, UINT message, WPARAM wParam, LPARAM
     if (message == WM_SETFOCUS || message == WM_KILLFOCUS)
         InvalidateRect(app.hwnd, nullptr, FALSE);  // the field's focus ring
     return CallWindowProcW(base, edit, message, wParam, lParam);
+}
+
+// The sheet's name field over the field sheet_card drew; hidden without one.
+void place_sheet_edit() {
+    if (!app.sheetEdit)
+        return;
+    const Rect& r = app.sheetEditRect;
+    if (!app.sheet.open || !app.sheet.field || r.w <= 0) {
+        if (IsWindowVisible(app.sheetEdit))
+            ShowWindow(app.sheetEdit, SW_HIDE);
+        return;
+    }
+    edit_font();
+    const float k = app.canvas.dpi_scale();
+    SetWindowPos(app.sheetEdit, HWND_TOP, static_cast<int>(std::lround(r.x * k)), static_cast<int>(std::lround(r.y * k)),
+                 static_cast<int>(std::lround(r.w * k)), static_cast<int>(std::lround(r.h * k)), SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (app.reportBrushRgb != app.c->field_bg)
+        InvalidateRect(app.sheetEdit, nullptr, TRUE);
+    if (app.sheetFocusField) {
+        app.sheetFocusField = false;
+        SetFocus(app.sheetEdit);
+    }
+}
+
+// The name field's keys: Return presses the main button, Escape the cancel one, Tab moves on to the buttons.
+LRESULT CALLBACK sheet_edit_proc(HWND edit, UINT message, WPARAM wParam, LPARAM lParam) {
+    static const WNDPROC base = reinterpret_cast<WNDPROC>(GetPropW(edit, L"simqvfr.base"));
+    if (message == WM_KEYDOWN && app.sheet.open) {
+        if (wParam == VK_RETURN) {
+            close_sheet(static_cast<int>(app.sheet.buttons.size()) - 1);
+            return 0;
+        }
+        if (wParam == VK_ESCAPE) {
+            close_sheet(app.sheet.cancel);
+            return 0;
+        }
+        if (wParam == VK_TAB) {
+            move_sheet_focus(GetKeyState(VK_SHIFT) < 0 ? -1 : 1);
+            return 0;
+        }
+    }
+    if (message == WM_CHAR && (wParam == L'\r' || wParam == L'\t' || wParam == 27))  // handled as keys: no beep
+        return 0;
+    if (message == WM_SETFOCUS || message == WM_KILLFOCUS) {
+        if (message == WM_SETFOCUS && app.sheet.open)
+            app.sheet.focus = -1;
+        InvalidateRect(app.hwnd, nullptr, FALSE);  // the field's focus ring
+    }
+    return CallWindowProcW(base, edit, message, wParam, lParam);
+}
+
+void create_sheet_edit() {
+    app.sheetEdit = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | ES_AUTOHSCROLL, 0, 0, 0, 0, app.hwnd, nullptr,
+                                    GetModuleHandleW(nullptr), nullptr);
+    if (!app.sheetEdit)
+        return;
+    SendMessageW(app.sheetEdit, EM_SETLIMITTEXT, 40, 0);  // a profile's name (valid_profile_name)
+    SetPropW(app.sheetEdit, L"simqvfr.base", reinterpret_cast<HANDLE>(GetWindowLongPtrW(app.sheetEdit, GWLP_WNDPROC)));
+    SetWindowLongPtrW(app.sheetEdit, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(sheet_edit_proc));
 }
 
 void create_report_edit() {
@@ -3526,6 +3963,7 @@ void paint() {
         return;
     app.hits.clear();
     app.reportEditRect = {};
+    app.sheetEditRect = {};
     Canvas& cv = app.canvas;
     const float W = cv.width(), Hh = cv.height();
     const float tabH = t::kTabbarHeight, actionH = t::kActionbarHeight;
@@ -3647,7 +4085,10 @@ void paint() {
     else
         button(kLaunch, launchR, launchLabel, Btn::Primary, kIconPlay);
 
-    help_tip();
+    if (app.sheet.open)
+        sheet_card();  // over everything: nothing under it answers
+    else
+        help_tip();
 
     // An open pop-up menu, over everything.
     if (app.popup.open) {
@@ -3670,6 +4111,7 @@ void paint() {
     }
     cv.end();
     place_report_edit();
+    place_sheet_edit();
 }
 
 // ---- Input -------------------------------------------------------------------------------------
@@ -3852,12 +4294,6 @@ int game_index() {
     return 0;
 }
 
-int game_count() {
-    std::size_t count = 0;
-    games::all_games(count);
-    return static_cast<int>(count);
-}
-
 void close_popup(bool accept) {
     if (accept && app.popup.hover >= 0)
         choose(app.popup.owner, app.popup.hover);
@@ -3938,6 +4374,7 @@ void choose_game_folder() {
         return;
     }
     app.iniText = ini_text();
+    refresh_installed();  // found now
     if (app.status == Status::Error)
         app.status = Status::Idle;  // "not found: choose its folder" is answered
 }
@@ -4215,8 +4652,9 @@ void activate(Ctl id, int option) {
             refresh_profiles();
         }
         if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
-            app.runtime = load_runtime_info(runtime_info_path());
+            reload_runtime();
         break;
+    case kSheetButton: close_sheet(option); return;
     case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
     case kUndoBadge: undo_restore(); return;
     case kLaunchBadge: {
@@ -4242,14 +4680,25 @@ void activate(Ctl id, int option) {
         changed();
         return;
     case kProfileUse:
+    case kProfileRevert:
+    case kProfileUpdate:
     case kProfileShare:
     case kProfileDelete: {
         if (option < 0 || option >= static_cast<int>(app.profileNames.size()))
             return;
         const std::wstring name = app.profileNames[option];
         Profile p;
-        if (id == kProfileUse) {
+        if (id == kProfileUse || id == kProfileRevert) {
             use_profile(name);
+            if (id == kProfileRevert && app.profileMatches)
+                app.profileMessage = L"Back to " + name + L".";
+        } else if (id == kProfileUpdate) {  // the settings now, into the profile in use: no question, it's its own button
+            if (save_profile(profiles_folder(app.ini), settings_profile(app.s, name))) {
+                app.profileMessage = L"Updated " + name + L" with the settings you have now.";
+            } else {
+                app.profileMessage = L"Couldn’t update " + name + L".";
+            }
+            refresh_profiles();
         } else if (id == kProfileShare && load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking)) {
             app.profileMessage = copy_text(widen(share_profile(p)))
                                      ? L"Copied " + name + L" to the clipboard: paste it in a chat or a post."
@@ -4328,6 +4777,7 @@ void activate(Ctl id, int option) {
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
     case kUpdateCheck:
         app.s.updateCheck = !app.s.updateCheck;
+        app.s.updateAsked = true;  // a choice: the first start's question is answered
         changed();
         if (app.s.updateCheck && app.update == Update::Off)
             start_update_check();
@@ -4347,7 +4797,11 @@ void activate(Ctl id, int option) {
         const bool hide = game_shown(*all[option]);
         if (hide && shown_game_count() <= 1)
             return;  // the last tab stays
-        app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, game_id(*all[option]), hide);
+        // An installed game is hidden by its listing in hidden_games; one Steam doesn't find is shown by shown_games.
+        if (installed(*all[option]))
+            app.s.hiddenGames = with_game_hidden(app.s.hiddenGames, game_id(*all[option]), hide);
+        else
+            app.s.shownGames = with_game_hidden(app.s.shownGames, game_id(*all[option]), !hide);
         changed();
         if (hide && all[option] == &games::launcher_game())  // the game in use went: the first shown takes over
             for (std::size_t i = 0; i < count; ++i)
@@ -4410,6 +4864,10 @@ float dip(LPARAM lp, bool y) {
 }
 
 void on_key(WPARAM key) {
+    if (app.sheet.open) {
+        sheet_key(key);
+        return;
+    }
     const bool shift = GetKeyState(VK_SHIFT) < 0;
     if (app.popup.open) {
         const int n = static_cast<int>(app.popup.items.size());
@@ -4426,10 +4884,17 @@ void on_key(WPARAM key) {
         undo_restore();
         return;
     }
-    if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game
-        const int n = game_count();
-        if (n > 1)
-            select_game((game_index() + (shift ? n - 1 : 1)) % n);
+    if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game with a tab
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        const int n = static_cast<int>(count);
+        for (int step = 1; step < n; ++step) {
+            const int i = (game_index() + (shift ? n - step : step)) % n;
+            if (game_shown(*all[i])) {
+                select_game(i);
+                break;
+            }
+        }
         return;
     }
     if (key == VK_TAB) {
@@ -4581,11 +5046,25 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         app.iniText = ini_text();
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         create_report_edit();
+        create_sheet_edit();
+        refresh_installed();
+        if (!game_shown(games::launcher_game())) {  // e.g. ACE, the first default, where only another game is installed
+            std::size_t count = 0;
+            const games::GameInfo* const* all = games::all_games(count);
+            for (std::size_t i = 0; i < count; ++i)
+                if (game_shown(*all[i])) {
+                    select_game(static_cast<int>(i));
+                    break;
+                }
+        }
         refresh_checks();
         if (app.iniFound)
             refresh_profiles();
+        activate(kSidebar, static_cast<int>(opening_pane()));  // with what the pane needs when it shows
         if (app.s.updateCheck)
             start_update_check();
+        else if (app.iniFound && !app.s.updateAsked)
+            ask_update_check();  // the first start, once
         return 0;
     case kUpdateMessage:
         update_done(reinterpret_cast<UpdateResult*>(lParam));
@@ -4610,7 +5089,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_CTLCOLOREDIT:  // the description box in the theme's field colours
-        if (reinterpret_cast<HWND>(lParam) == app.reportEdit) {
+        if (reinterpret_cast<HWND>(lParam) == app.reportEdit || reinterpret_cast<HWND>(lParam) == app.sheetEdit) {
             if (!app.reportBrush || app.reportBrushRgb != app.c->field_bg) {
                 if (app.reportBrush)
                     DeleteObject(app.reportBrush);
@@ -4638,14 +5117,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                 refresh_checks();
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
-            // Diagnostics and Report an issue follow a running session: the layer rewrites runtime.ini every ~10 s.
+            // A running session: the layer rewrites runtime.ini every ~10 s. Diagnostics and Report an issue follow it,
+            // and the session history keeps its numbers whichever pane shows.
             static FILETIME seen{};
             WIN32_FILE_ATTRIBUTE_DATA a{};
-            if ((app.pane == Pane::Diagnostics || app.pane == Pane::Report) &&
-                GetFileAttributesExW(runtime_info_path().c_str(), GetFileExInfoStandard, &a) &&
+            if (GetFileAttributesExW(runtime_info_path().c_str(), GetFileExInfoStandard, &a) &&
                 CompareFileTime(&a.ftLastWriteTime, &seen) != 0) {
                 seen = a.ftLastWriteTime;
-                app.runtime = load_runtime_info(runtime_info_path());
+                reload_runtime();
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
         }
@@ -4685,7 +5164,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         return 0;
     case WM_ACTIVATE:
         if (LOWORD(wParam) != WA_INACTIVE) {  // a session may have reported the headset meanwhile
-            app.runtime = load_runtime_info(runtime_info_path());
+            reload_runtime();
+            refresh_installed();  // a game installed or removed meanwhile
             if (app.pane == Pane::Layers)  // a layer may have been installed or switched meanwhile
                 refresh_layers();
             refresh_checks();
@@ -4703,6 +5183,16 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             return 0;
         }
         const Hit* h = hit_at(x, y);
+        if (app.sheet.open) {  // only its buttons (pressed until the button is let go) and its field
+            if (h && h->id == kSheetButton) {
+                app.pressed = kSheetButton;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else if (h && h->id == kSheetField) {
+                SetFocus(app.sheetEdit);
+            }
+            return 0;
+        }
         if (!h)
             return 0;
         app.focus = h->id;
@@ -4797,12 +5287,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             app.pressed = kNone;
             const Hit* h = hit_at(dip(lParam, false), dip(lParam, true));
             if (h && h->id == pressed)
-                activate(pressed, -1);
+                activate(pressed, h->option);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
     }
     case WM_MOUSEWHEEL:
+        if (app.sheet.open)
+            return 0;
         app.tip = -1;  // its ⓘ moves away
         if (app.scrollMax > 0) {
             app.scroll = std::clamp(app.scroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f, app.scrollMax);
@@ -4825,6 +5317,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_GETDLGCODE:
         return DLGC_WANTALLKEYS;
     case WM_DESTROY:
+        if (app.iniFound)  // the pane to open on next time (opening_pane)
+            WritePrivateProfileStringW(L"launcher", L"last_pane", kPaneIds[static_cast<int>(app.pane)], app.ini.c_str());
         PostQuitMessage(0);
         return 0;
     }
@@ -4846,8 +5340,9 @@ int run_window(HINSTANCE instance, int show) {
         // starts from the settings in use, so updating changes nothing until a game's settings are changed.
         seed_game_settings(app.ini);
         app.s = load_settings(app.ini);
+        app.sessions = load_sessions(sessions_folder(app.ini));
     }
-    app.runtime = load_runtime_info(runtime_info_path());
+    reload_runtime();
     app.focus = kLaunch;  // Return launches
 
     WNDCLASSEXW cls{sizeof(cls)};
