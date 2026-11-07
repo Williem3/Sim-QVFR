@@ -236,7 +236,7 @@ add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to 
 # Launcher: starts the chosen game in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
-add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
+add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
   src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -252,7 +252,7 @@ add_custom_command(TARGET sim_qvfr_launcher POST_BUILD
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_if_missing.cmake)
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
-add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/settings.cpp src/launcher/report.cpp src/quad/osd.cpp
+add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/settings.cpp src/launcher/game_tabs.cpp src/launcher/report.cpp src/quad/osd.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp)
 target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)

@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include "../games/game.h"
+#include "game_tabs.h"
 
 namespace simqvfr::launcher {
 namespace {
@@ -74,6 +75,17 @@ Settings load_settings(const std::wstring& ini) {
     s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
     s.updateCheck = read_int(ini, L"launcher", L"update_check", 0) != 0;
+    s.hiddenGames = read_string(ini, L"launcher", L"hidden_games");
+    {
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::wstring id(all[i]->id, all[i]->id + std::strlen(all[i]->id));
+            uint32_t rgb = 0;
+            if (parse_color(read_string(ini, L"launcher", (L"color_" + id).c_str()), rgb))
+                s.gameColors[id] = rgb;
+        }
+    }
     const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
     s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
               : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
@@ -134,6 +146,17 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"update_check", s.updateCheck ? L"1" : L"0");
+    ok &= write(ini, L"launcher", L"hidden_games", s.hiddenGames);
+    {
+        std::size_t count = 0;
+        const games::GameInfo* const* all = games::all_games(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::wstring id(all[i]->id, all[i]->id + std::strlen(all[i]->id)), key = L"color_" + id;
+            const auto it = s.gameColors.find(id);
+            ok &= WritePrivateProfileStringW(L"launcher", key.c_str(), it == s.gameColors.end() ? nullptr : color_text(it->second).c_str(),
+                                             ini.c_str()) != 0 || it == s.gameColors.end();  // no colour: the key goes
+        }
+    }
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, true);
     return save_live_settings(ini, s) && ok;
 }

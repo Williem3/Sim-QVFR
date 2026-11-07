@@ -2,8 +2,10 @@
 // 96 DPI), with the kit's colours (theme_tokens.h) and type styles. One Canvas per window.
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 #include <d2d1.h>
 #include <dwrite.h>
@@ -60,6 +62,9 @@ public:
     void path(const char* d, const Rect& r, float box, Color c, float strokeWidth, bool filled = false);
     void push_clip(const Rect& r);
     void pop_clip();
+    // A `w` x `h` image of premultiplied BGRA pixels (0xAARRGGBB), scaled into `r`. Kept as a bitmap while `key` stays
+    // the same (and the target lives): pass a new key when the pixels change.
+    void image(const Rect& r, const std::vector<uint32_t>& pixels, int w, int h, uint64_t key);
 
     // Text in a kit type style. Returns the drawn width.
     float text(const std::wstring& s, const tokens::TypeStyle& style, const Rect& r, Color c, Align align = Align::Leading,
@@ -83,6 +88,9 @@ private:
     ComPtr<ID2D1HwndRenderTarget> target_;
     ComPtr<ID2D1SolidColorBrush> brush_;
     ComPtr<ID2D1StrokeStyle> round_;
+    ComPtr<ID2D1Bitmap> image_;
+    uint64_t imageKey_ = 0;
+    ID2D1RenderTarget* imageTarget_ = nullptr;  // the target image_ was made for
     std::map<std::wstring, ComPtr<IDWriteTextFormat>> formats_;
     std::wstring systemFamily_, monoFamily_;
 };

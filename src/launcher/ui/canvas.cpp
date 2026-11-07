@@ -256,6 +256,22 @@ void Canvas::path(const char* d, const Rect& r, float box, Color c, float stroke
 void Canvas::push_clip(const Rect& r) { target_->PushAxisAlignedClip(r.d2d(), D2D1_ANTIALIAS_MODE_ALIASED); }
 void Canvas::pop_clip() { target_->PopAxisAlignedClip(); }
 
+void Canvas::image(const Rect& r, const std::vector<uint32_t>& pixels, int w, int h, uint64_t key) {
+    if (!target_ || w <= 0 || h <= 0 || pixels.size() < static_cast<size_t>(w) * static_cast<size_t>(h))
+        return;
+    if (!image_ || imageKey_ != key || imageTarget_ != target_.Get()) {
+        image_.Reset();
+        const D2D1_BITMAP_PROPERTIES props =
+            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+        if (FAILED(target_->CreateBitmap(D2D1::SizeU(static_cast<UINT32>(w), static_cast<UINT32>(h)), pixels.data(),
+                                         static_cast<UINT32>(w) * 4, props, image_.GetAddressOf())))
+            return;
+        imageKey_ = key;
+        imageTarget_ = target_.Get();
+    }
+    target_->DrawBitmap(image_.Get(), r.d2d(), 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+}
+
 IDWriteTextFormat* Canvas::format(const tokens::TypeStyle& style, Align align, bool wrap) {
     const std::wstring key = std::to_wstring(style.size) + L"/" + std::to_wstring(style.weight) + L"/" +
                              (style.mono ? L"m" : L"s") + std::to_wstring(static_cast<int>(align)) + (wrap ? L"w" : L"");

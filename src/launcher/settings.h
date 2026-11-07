@@ -7,6 +7,8 @@
 // `outer`; frame B covers the foveated size, so its density follows from the two and is not set.
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <string>
 
 #include "../cheeky/cheeky_settings.h"
@@ -64,6 +66,10 @@ struct Settings {
     bool baselineNext = false;
     // [launcher] update_check: ask GitHub for the newest release when the launcher starts (About pane; off by default).
     bool updateCheck = false;
+    // The game tabs (Games pane; game_tabs.h), every game's, not per-game settings: [launcher] hidden_games, the ids
+    // without a tab; [launcher] color_<id>, a game's own colour (RRGGBB) in place of its built-in accent.
+    std::wstring hiddenGames;
+    std::map<std::wstring, uint32_t> gameColors;  // game id -> 0xRRGGBB; a game without one keeps its own
 };
 
 struct Range {
