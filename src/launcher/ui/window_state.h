@@ -351,6 +351,7 @@ void place_sheet_edit();
 void create_sheet_edit();
 
 // launcher_window.cpp
+float layers_preview(float x, float y, float w, bool draw);
 std::wstring clipboard_text();
 bool installed(const games::GameInfo& game);
 bool pane_shown(int pane);
@@ -363,6 +364,14 @@ float profiles_pane(float x, float y, float w, bool draw);
 void use_profile(const std::wstring& name);
 void save_current_profile();
 void paste_profile();
+
+// pane_hotkeys.cpp
+void open_pads();
+float hotkeys_pane(float x, float y, float w, bool draw);
+void end_capture();
+void start_capture(int action, bool pad);
+bool capture_key(WPARAM vk);
+void capture_poll();
 
 // pane_checks.cpp
 float checks_pane(float x, float y, float w, bool draw);
@@ -383,5 +392,9 @@ float readouts_card(float x, float y, float w, bool draw);
 
 // pane_dlss.cpp
 float dlss_pane(float x, float y, float w, bool draw);
+
+// pane_menu.cpp
+float menu_pane(float x, float y, float w, bool draw);
+float side_preview(float x, float y, float w, bool draw);
 
 }  // namespace simqvfr::launcher::ui::win
