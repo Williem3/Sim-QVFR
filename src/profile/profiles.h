@@ -38,6 +38,15 @@ std::wstring preset_summary(const Profile& profile);
 
 // <the launcher's ini folder>\profiles.
 std::wstring profiles_folder(const std::wstring& settingsIni);
+
+// Per-game settings: each game keeps its own copy of the keys a profile holds (the launcher's settings_profile), in
+// <the launcher's ini folder>\games\<game id>.ini, with its [profiles] current. The launcher's ini holds the selected
+// game's ([launcher] game); switching games stores it into that game's copy and loads the other's (launcher/settings.h).
+std::wstring game_settings_folder(const std::wstring& settingsIni);
+std::wstring game_settings_file(const std::wstring& settingsIni, const std::wstring& gameId);
+// Where a game's per-game keys are written (the headset menu, a running game): the launcher's ini while that game is
+// the one it shows, else the game's own copy, so a change never lands in another game's settings.
+std::wstring game_settings_target(const std::wstring& settingsIni, const std::wstring& gameId);
 // The presets, then the saved profiles by name.
 std::vector<std::wstring> profile_names(const std::wstring& folder);
 // A preset by name is the one for the mode (`eyeTracked`: [quad] gaze).

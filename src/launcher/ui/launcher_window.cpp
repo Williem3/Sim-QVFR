@@ -3554,9 +3554,13 @@ void select_game(int option) {
     if (option < 0 || static_cast<std::size_t>(option) >= count || all[option] == &games::launcher_game())
         return;
     if (app.iniFound) {
+        // Each game keeps its own settings: this one's go to its copy, the other's come back into the ini.
+        switch_game_settings(app.ini, widen(games::launcher_game().id), widen(all[option]->id));
         WritePrivateProfileStringW(L"launcher", L"game", widen(all[option]->id).c_str(), app.ini.c_str());
         choose_launcher_game();
+        app.s = load_settings(app.ini);
         app.iniText = ini_text();
+        refresh_profiles();  // the profile in use is the game's
     } else {
         games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
     }
@@ -4439,8 +4443,12 @@ int run_window(HINSTANCE instance, int show) {
     app.ini = settings_path();
     app.iniFound = GetFileAttributesW(app.ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     clean_update_folder(std::filesystem::path(app.ini).parent_path().wstring());  // what an install left but its backup
-    if (app.iniFound)
+    if (app.iniFound) {
+        // Per-game settings: a game without its own copy yet (the first start after the update, or a new game)
+        // starts from the settings in use, so updating changes nothing until a game's settings are changed.
+        seed_game_settings(app.ini);
         app.s = load_settings(app.ini);
+    }
     app.runtime = load_runtime_info(runtime_info_path());
     app.focus = kLaunch;  // Return launches
 

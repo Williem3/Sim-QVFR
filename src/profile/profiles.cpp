@@ -158,6 +158,25 @@ std::wstring profiles_folder(const std::wstring& settingsIni) {
     return (fs::path(settingsIni).parent_path() / L"profiles").wstring();
 }
 
+std::wstring game_settings_folder(const std::wstring& settingsIni) {
+    return (fs::path(settingsIni).parent_path() / L"games").wstring();
+}
+
+std::wstring game_settings_file(const std::wstring& settingsIni, const std::wstring& gameId) {
+    return (fs::path(game_settings_folder(settingsIni)) / (gameId + kExtension)).wstring();
+}
+
+std::wstring game_settings_target(const std::wstring& settingsIni, const std::wstring& gameId) {
+    if (settingsIni.empty() || gameId.empty())
+        return settingsIni;
+    std::wstring selected = read_value(settingsIni.c_str(), L"launcher", L"game");
+    if (selected.empty() || selected == L"\x01")  // not set: ACE, as the launcher reads it
+        selected = L"ace";
+    if (_wcsicmp(selected.c_str(), gameId.c_str()) == 0)
+        return settingsIni;
+    return game_settings_file(settingsIni, gameId);
+}
+
 bool is_preset_name(const std::wstring& name) {
     for (const Preset& p : kPresets)
         if (_wcsicmp(p.name, name.c_str()) == 0)

@@ -3705,10 +3705,21 @@ void menu_placement_changed(const MenuPlacement& placement) {
 // Profiles (profile/profiles.h) in the launcher's folder (SIM_QVFR_SETTINGS), else next to the ini the layer reads.
 std::wstring menu_profiles_ini() { return menu.settingsIni.empty() ? live.ini : menu.settingsIni; }
 
+// Where this game's per-game keys go in the launcher's folder (profile/profiles.h game_settings_target): the
+// launcher's ini while it shows this game, else this game's own copy, so a change made in the headset never lands in
+// the settings of the game the launcher shows. Reads the launcher's ini: on the ini worker.
+std::wstring game_settings_ini(const std::wstring& settings) {
+    const games::GameInfo* g = games::current_game();
+    if (settings.empty() || !g)
+        return settings;
+    return game_settings_target(settings, std::wstring(g->id, g->id + std::strlen(g->id)));
+}
+
 void menu_profiles_read() {
     const std::wstring ini = menu_profiles_ini();
     menu.model.profiles = profile_names(profiles_folder(ini));
-    const std::wstring current = current_profile(ini.c_str());
+    // The profile in use from the ini this game runs with: the launcher's may be showing another game's.
+    const std::wstring current = current_profile((live.ini.empty() ? ini : live.ini).c_str());
     menu.model.profile = -1;
     for (size_t i = 0; i < menu.model.profiles.size(); ++i)
         if (_wcsicmp(menu.model.profiles[i].c_str(), current.c_str()) == 0)
@@ -3738,8 +3749,9 @@ void menu_profile_use() {
         apply_profile(live.c_str(), p);
         set_current_profile(live.c_str(), p.name);
         if (!settings.empty()) {
-            apply_profile(settings.c_str(), p);
-            set_current_profile(settings.c_str(), p.name);
+            const std::wstring target = game_settings_ini(settings);
+            apply_profile(target.c_str(), p);
+            set_current_profile(target.c_str(), p.name);
         }
     });
     logf("settings menu: profile %ls (%zu keys)", p.name.c_str(), p.keys.size());
@@ -3825,9 +3837,17 @@ void menu_press(MenuKey key, int64_t now) {
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (!settings.empty()) {
-            write_menu_values(settings.c_str(), values, qvfr, detail);
+            const std::wstring target = game_settings_ini(settings);
+            write_menu_values(target.c_str(), values, qvfr, detail);
             if (cheeky.available)
-                write_cheeky_settings(settings.c_str(), cheeky.values, false);
+                write_cheeky_settings(target.c_str(), cheeky.values, false);
+            if (target != settings) {  // the panels' places and the overlay are every game's: the launcher's ini
+                write_osd_placement(settings.c_str(), values.overlay);
+                WritePrivateProfileStringW(L"menu", L"yaw", std::to_wstring(values.placement.yaw).c_str(), settings.c_str());
+                WritePrivateProfileStringW(L"menu", L"pitch", std::to_wstring(values.placement.pitch).c_str(), settings.c_str());
+                WritePrivateProfileStringW(L"menu", L"width", std::to_wstring(values.placement.width).c_str(), settings.c_str());
+                WritePrivateProfileStringW(L"menu", L"hotkey_footer", values.hotkeyFooter ? L"1" : L"0", settings.c_str());
+            }
         }
     });
 }
@@ -4263,7 +4283,7 @@ void visor_hotkey() {
         ini_write_later([ini = live.ini, settings, h] {
             write_helmet_settings(ini.c_str(), h);
             if (!settings.empty())
-                write_helmet_settings(settings.c_str(), h);
+                write_helmet_settings(game_settings_ini(settings).c_str(), h);
         });
         logf("helmet: visor %ls (hotkey)", kVisorPositionNames[static_cast<int>(h.visor)]);
     }
@@ -4513,7 +4533,7 @@ void optimize_apply(const QvfrValues& q) {
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = v] {
         write_menu_values(ini.c_str(), values, true);
         if (!settings.empty())
-            write_menu_values(settings.c_str(), values, true);
+            write_menu_values(game_settings_ini(settings).c_str(), values, true);
     });
     logf("optimize: periphery %d%%, focus density %d%%, focus box %d%% x %d%%", q.periphery, q.density, q.width,
          q.height);

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 #include <windows.h>
@@ -22,6 +24,7 @@
 #include "launcher/report.h"
 #include "launcher/settings.h"
 #include "launcher/update_check.h"
+#include "profile/profiles.h"
 #include "sha256_file.h"
 
 using namespace simqvfr;
@@ -69,6 +72,91 @@ std::wstring value_of(const std::vector<std::pair<std::wstring, std::wstring>>& 
         if (n == name)
             return v;
     return L"<unset>";
+}
+
+int ini_int(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
+    return static_cast<int>(GetPrivateProfileIntW(section, key, -1, ini.c_str()));
+}
+
+// Per-game settings (settings.h store/restore/seed/switch_game_settings, profiles.h game_settings_target): an update
+// starts every game from the settings in use, then each game's changes stay its own; the shared keys stay shared.
+void per_game_settings_checks() {
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-per-game-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    const std::wstring ini = (dir / L"sim-qvfr.ini").wstring();
+    // A user's ini before the update: one set of settings, ACE selected, no games folder.
+    Settings before;
+    before.mode = RenderMode::Qvfr;
+    before.inner = 160;
+    before.outer = 45;
+    save_settings(ini, before);
+    WritePrivateProfileStringW(L"launcher", L"game", L"ace", ini.c_str());
+    WritePrivateProfileStringW(L"menu", L"yaw", L"7", ini.c_str());
+    set_current_profile(ini.c_str(), L"Balanced");
+    const std::string untouched = [&] {
+        std::ifstream in(ini, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    }();
+
+    std::size_t count = 0;
+    games::all_games(count);
+    check(seed_game_settings(ini) == static_cast<int>(count), "per-game: the first start after the update makes a copy for every game");
+    const std::string afterSeed = [&] {
+        std::ifstream in(ini, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    }();
+    check(afterSeed == untouched, "per-game: seeding leaves the ini as it was (nothing changes for the user)");
+    bool replicated = true;
+    for (const wchar_t* id : {L"ace", L"acc", L"xplane"}) {
+        const std::wstring copy = game_settings_file(ini, id);
+        replicated &= ini_int(copy, L"experiment", L"focus_density") == 160 && ini_int(copy, L"experiment", L"periphery_scale") == 45 &&
+                      current_profile(copy.c_str()) == L"Balanced";
+    }
+    check(replicated, "per-game: every game's copy holds the settings in use, and the profile in use");
+    check(ini_int(game_settings_file(ini, L"xplane"), L"menu", L"yaw") == -1 &&
+              ini_int(game_settings_file(ini, L"xplane"), L"launcher", L"game") == -1,
+          "per-game: a copy holds no shared keys ([menu], [launcher])");
+    check(seed_game_settings(ini) == 0, "per-game: seeding again makes nothing (existing copies are kept)");
+
+    // ACE -> X-Plane: X-Plane starts from the replicated values; a change there stays X-Plane's.
+    check(switch_game_settings(ini, L"ace", L"xplane"), "per-game: switching ACE -> X-Plane works");
+    WritePrivateProfileStringW(L"launcher", L"game", L"xplane", ini.c_str());
+    check(load_settings(ini).inner == 160, "per-game: X-Plane's first values are the replicated ones");
+    Settings x = load_settings(ini);
+    x.inner = 100;
+    x.objectDetail = 50;
+    save_settings(ini, x);
+    set_current_profile(ini.c_str(), L"Performance");
+    check(switch_game_settings(ini, L"xplane", L"ace"), "per-game: switching X-Plane -> ACE works");
+    WritePrivateProfileStringW(L"launcher", L"game", L"ace", ini.c_str());
+    const Settings ace = load_settings(ini);
+    check(ace.inner == 160 && ace.outer == 45, "per-game: back on ACE, its 160% inner is as it was (X-Plane's 100% stayed X-Plane's)");
+    check(current_profile(ini.c_str()) == L"Balanced", "per-game: ACE's profile in use comes back with it");
+    check(ini_int(ini, L"menu", L"yaw") == 7, "per-game: shared keys ([menu]) aren't swapped");
+    check(switch_game_settings(ini, L"ace", L"xplane"), "per-game: and back to X-Plane");
+    const Settings xBack = load_settings(ini);
+    check(xBack.inner == 100 && xBack.objectDetail == 50 && current_profile(ini.c_str()) == L"Performance",
+          "per-game: X-Plane's own 100% inner, 50% object detail and profile come back");
+    WritePrivateProfileStringW(L"launcher", L"game", L"xplane", ini.c_str());
+
+    // A game without a copy (a new game in an update): it starts from the values in use.
+    DeleteFileW(game_settings_file(ini, L"acc").c_str());
+    check(switch_game_settings(ini, L"xplane", L"acc") && load_settings(ini).inner == 100 &&
+              ini_int(game_settings_file(ini, L"acc"), L"experiment", L"focus_density") == 100,
+          "per-game: a game without a copy starts from the settings in use, and gets its copy");
+    WritePrivateProfileStringW(L"launcher", L"game", L"acc", ini.c_str());
+
+    // The headset menu's writes (game_settings_target): the launcher's ini only for the game it shows.
+    check(game_settings_target(ini, L"acc") == ini, "per-game: the game the launcher shows writes to the launcher's ini");
+    check(game_settings_target(ini, L"ace") == game_settings_file(ini, L"ace"),
+          "per-game: another game (running while the launcher shows this one) writes to its own copy");
+    const std::wstring fresh = (dir / L"fresh.ini").wstring();
+    WritePrivateProfileStringW(L"experiment", L"mode", L"views4", fresh.c_str());
+    check(game_settings_target(fresh, L"ace") == fresh && game_settings_target(fresh, L"xplane") == game_settings_file(fresh, L"xplane"),
+          "per-game: an ini without [launcher] game means ACE, as the launcher reads it");
+    fs::remove_all(dir, ec);
 }
 
 }  // namespace
@@ -1631,6 +1719,7 @@ int main() {
     }
 
     fs::remove_all(folder, ec);
+    per_game_settings_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }
