@@ -32,7 +32,7 @@ double qvfr_pixels(const QvfrValues& v, double cropWidth = 100, double cropHeigh
 
 struct QvfrLimits {
     QvfrValues floor{25, 80, 25, 25};     // the least the optimizer lowers to ([optimize] min_*)
-    QvfrValues ceiling{100, 200, 100, 100};  // the most it raises to (live: the launch size)
+    QvfrValues ceiling{100, 400, 100, 100};  // the most it raises to (live: the launch size)
     double cropWidth = 100, cropHeight = 100;  // the FOV crop's kept share of the eye, percent
     int nativeWidth = 0;                       // the native eye in pixels (0: unknown, no target width check)
     int maxTargetWidth = 8192;                 // the runtime's widest image: ACE's target is the four views in a row
