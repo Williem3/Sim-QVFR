@@ -246,6 +246,15 @@ bool system_needs_admin(const std::vector<SystemLayer>& current, const std::vect
     return hive(current) != hive(want);
 }
 
+bool backup_key(HKEY root, const wchar_t* subkey, bool machine, const std::wstring& path) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, subkey, 0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+        return false;
+    const std::vector<RawValue> values = read_values(key);
+    RegCloseKey(key);
+    return write_backup(path, machine, subkey, values);
+}
+
 bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std::vector<SystemLayer>& all,
                        const std::wstring& backup, std::wstring& error) {
     std::vector<SystemLayer> want;

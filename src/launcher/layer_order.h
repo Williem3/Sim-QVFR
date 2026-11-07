@@ -73,6 +73,9 @@ bool system_needs_admin(const std::vector<SystemLayer>& current, const std::vect
 // key is put back as it was. `backup`: a .reg file of the key as it was, written first (empty: none).
 bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std::vector<SystemLayer>& want,
                        const std::wstring& backup, std::wstring& error);
+// A .reg file at `path` of root\subkey's values as they are (`machine`: the file names HKLM, else HKCU). False if
+// the key can't be read or the file can't be written.
+bool backup_key(HKEY root, const wchar_t* subkey, bool machine, const std::wstring& path);
 
 // The elevated helper's request: one "M|U <tab> 1|0 <tab> manifest" line per layer, UTF-8.
 std::string system_request(const std::vector<SystemLayer>& want);

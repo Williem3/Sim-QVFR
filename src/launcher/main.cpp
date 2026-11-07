@@ -7,6 +7,7 @@
 //   off_layers= comma-separated OpenXR layer names to turn off for ACE (e.g. XR_APILAYER_MBUCCHIA_toolkit)
 //   on_layers=  layers switched off in Windows to load for ACE all the same
 //   layer_order= the layers' order below the Sim-QVFR layer (the OpenXR layers pane; layer_order.h)
+//   elevated_registration= 0: running as administrator, don't register the launch's layers in HKLM (explicit_layers.h)
 // Usage: sim-qvfr-launcher               the settings window (window.cpp)
 //        sim-qvfr-launcher --launch      launch now, report on the console it was started from
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
@@ -15,6 +16,8 @@
 //        sim-qvfr-launcher --hang-dump <pid> <log>   (from the layer's hang watch) stands by while the game
 //                                            runs; if it hangs, logs its modules and writes its minidump
 //                                            (probe/hang_dump.h)
+//        sim-qvfr-launcher --unregister-after <handle> <ledger>   (from an elevated launch) waits for the game,
+//                                            then takes out the layers registered for it (explicit_layers.h)
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -30,6 +33,7 @@
 #include "../cheeky/cheeky_settings.h"
 #include "../games/game.h"
 #include "../probe/hang_dump.h"
+#include "explicit_layers.h"
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
@@ -179,6 +183,80 @@ std::wstring stamp_now() {
     return stamp;
 }
 
+// An elevated launch's registrations (explicit_layers.h): one ledger per launch in logs\openxr-registrations, and
+// every value added or taken out, with its time, in logs\openxr-registrations.log.
+fs::path registrations_folder() { return fs::path(exe_folder()) / L"logs" / L"openxr-registrations"; }
+
+void log_registrations(const std::vector<std::wstring>& notes) {
+    if (notes.empty())
+        return;
+    const fs::path path = fs::path(exe_folder()) / L"logs" / L"openxr-registrations.log";
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    const HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    std::string text;
+    for (const std::wstring& note : notes)
+        text += narrow(stamp_now() + L"  " + note) + "\r\n";
+    DWORD written = 0;
+    WriteFile(file, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+    CloseHandle(file);
+}
+
+// Starts a copy of this launcher that waits for `game` to exit, then takes out what `ledger` lists
+// (--unregister-after): the launcher's window may close first, and --launch returns at once.
+bool start_unregister_helper(HANDLE game, const std::wstring& ledger) {
+    HANDLE inherited = nullptr;
+    if (!DuplicateHandle(GetCurrentProcess(), game, GetCurrentProcess(), &inherited, SYNCHRONIZE, TRUE, 0))
+        return false;
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    std::vector<char> attributes(size);
+    auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributes.data());
+    bool ok = false;
+    if (InitializeProcThreadAttributeList(list, 1, 0, &size)) {
+        // The game's handle is the only one it inherits.
+        if (UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherited, sizeof(inherited), nullptr, nullptr)) {
+            wchar_t exe[MAX_PATH] = {};
+            GetModuleFileNameW(nullptr, exe, MAX_PATH);
+            std::wstring command = L"\"" + std::wstring(exe) + L"\" --unregister-after " +
+                                   std::to_wstring(reinterpret_cast<uintptr_t>(inherited)) + L" \"" + ledger + L"\"";
+            STARTUPINFOEXW startup{};
+            startup.StartupInfo.cb = sizeof(startup);
+            startup.lpAttributeList = list;
+            PROCESS_INFORMATION pi{};
+            ok = CreateProcessW(exe, command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+                                nullptr, nullptr, &startup.StartupInfo, &pi) != FALSE;
+            if (ok) {
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+            }
+        }
+        DeleteProcThreadAttributeList(list);
+    }
+    CloseHandle(inherited);
+    return ok;
+}
+
+// --unregister-after <handle> <ledger>: waits for the game (its handle inherited), then takes out its registrations.
+// Only a ledger in this launcher's own logs\openxr-registrations; a failed wait leaves them for the next start's sweep.
+int unregister_after(const wchar_t* handle, const std::wstring& ledger) {
+    const HANDLE game = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(_wcstoui64(handle, nullptr, 10)));
+    const fs::path folder = fs::path(ledger).parent_path().lexically_normal();
+    if (_wcsicmp(folder.c_str(), registrations_folder().lexically_normal().c_str()) != 0)
+        return 2;
+    const DWORD waited = WaitForSingleObject(game, INFINITE);
+    CloseHandle(game);
+    if (waited != WAIT_OBJECT_0)
+        return 3;
+    std::vector<std::wstring> notes;
+    const bool ok = unregister_layers(HKEY_LOCAL_MACHINE, kExplicitLayersKey, ledger, notes);
+    log_registrations(notes);
+    return ok ? 0 : 1;
+}
+
 // Writes one hive of `want`, backed up into logs first.
 bool write_hive(bool machine, const std::vector<SystemLayer>& want, std::wstring& error) {
     const fs::path logs = fs::path(exe_folder()) / L"logs";
@@ -326,16 +404,28 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     if (std::none_of(environment.begin(), environment.end(),
                      [](const std::wstring& e) { return _wcsnicmp(e.c_str(), L"XR_LOADER_DEBUG=", 16) == 0; }))
         variables.emplace_back(L"XR_LOADER_DEBUG", L"warn");
+    // An elevated game's OpenXR loader ignores XR_API_LAYER_PATH and reads explicit layers from HKLM alone, so the
+    // manifests XR_ENABLE_API_LAYERS names are registered there for this launch (explicit_layers.h), unless
+    // [launcher] elevated_registration=0.
+    const bool elevated = launcher_elevated();
+    const bool registerLayers = elevated && ini_string(ini.wstring(), L"launcher", L"elevated_registration") != L"0";
+    std::vector<std::wstring> named;
+    for (const auto& [name, value] : variables)
+        if (name == L"XR_ENABLE_API_LAYERS")
+            for (const std::string& layer : split_layer_names(value))
+                named.push_back((runFolder / (widen(layer) + L".json")).wstring());
 
     say(L"Sim-QVFR launcher " + widen(SIM_QVFR_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
     say(L"  args:      " + std::wstring(info.launchArgs));
     say(L"  layer:     " + library.wstring());
-    // An elevated game's OpenXR loader ignores XR_API_LAYER_PATH (the Launch checks' "elevated" check).
+    const std::wstring parent = parent_process_name();
     say(std::wstring(L"  rights:    ") +
-        (launcher_elevated() ? L"ADMINISTRATOR: the game inherits it and OpenXR won't find the layers (started by "
-                             : L"normal (started by ") +
-        (parent_process_name().empty() ? L"unknown" : parent_process_name()) + L")");
+        (!elevated        ? L"normal"
+         : registerLayers ? L"ADMINISTRATOR: the game inherits it, so its OpenXR loader reads layers from HKLM alone; "
+                            L"this launch's are registered there until the game exits"
+                          : L"ADMINISTRATOR: the game inherits it and OpenXR won't find the layers (elevated_registration=0)") +
+        L" (started by " + (parent.empty() ? L"unknown" : parent) + L")");
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
@@ -363,6 +453,9 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
             say(L"  (" + std::wstring(info.shortName) + L" is running: a real launch would refuse)");
         if (!steamRunning)
             say(L"  (Steam is not running: a real launch would refuse)");
+        if (registerLayers)
+            for (const std::wstring& m : named)
+                say(L"  (a real launch would register " + m + L" in HKLM\\" + kExplicitLayersKey + L" until the game exits)");
         write_file((runFolder / L"launch.txt").wstring(), narrow(report));
         return 0;
     }
@@ -379,10 +472,39 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     PROCESS_INFORMATION pi{};
     const std::wstring workingFolder = exe.parent_path().wstring();
     LoaderOutput output((runFolder / kLoaderOutputName).wstring());
+    // Registered just before the start; a failed start takes them out again.
+    const std::wstring ledger = (registrations_folder() / (L"run-" + stamp + L".txt")).wstring();
+    bool registered = false;
+    if (registerLayers) {
+        std::vector<std::wstring> notes;
+        std::wstring registryError;
+        registered = register_layers(HKEY_LOCAL_MACHINE, kExplicitLayersKey, true, named, ledger,
+                                     (runFolder / L"openxr-explicit-before.reg").wstring(), notes, registryError);
+        for (const std::wstring& note : notes)
+            say(L"  registry:  " + note);
+        if (!registered)
+            say(L"  registry:  NOT registered (" + registryError + L"): the game will likely start flat");
+        log_registrations(notes);
+    }
     const DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | (info.earlyLoad ? CREATE_SUSPENDED : 0);
     if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, output.inherits(), flags, block.data(),
-                        workingFolder.c_str(), &output.startup.StartupInfo, &pi))
-        return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(GetLastError()) + L")");
+                        workingFolder.c_str(), &output.startup.StartupInfo, &pi)) {
+        const DWORD startError = GetLastError();
+        if (registered) {
+            std::vector<std::wstring> notes;
+            unregister_layers(HKEY_LOCAL_MACHINE, kExplicitLayersKey, ledger, notes);
+            for (const std::wstring& note : notes)
+                say(L"  registry:  " + note);
+            log_registrations(notes);
+        }
+        return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(startError) + L")");
+    }
+    if (registered) {
+        ledger_game_started(ledger, process_stamp(pi.hProcess));
+        say(start_unregister_helper(pi.hProcess, ledger)
+                ? L"  registry:  taken out when the game exits (a copy of the launcher waits for it)"
+                : L"  registry:  the copy that takes them out did not start; the next start as administrator does");
+    }
     if (info.earlyLoad) {
         std::wstring loadError;
         if (load_into(pi.hProcess, library.wstring(), loadError))
@@ -493,6 +615,7 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();
     in.elevated = launcher_elevated();
+    in.elevatedRegistration = ini_string(ini, L"launcher", L"elevated_registration") != L"0";
     if (in.elevated)
         in.parent = parent_process_name();
     if (const wchar_t* openvr = games::launcher_game().openComposite) {
@@ -538,6 +661,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         LocalFree(argv);
         return dumpResult;
     }
+    if (argv && argc == 4 && _wcsicmp(argv[1], L"--unregister-after") == 0) {  // nothing else either
+        const std::wstring handle = argv[2], ledger = argv[3];
+        LocalFree(argv);
+        return unregister_after(handle.c_str(), ledger);
+    }
     bool dryRun = false, launchNow = false;
     std::wstring request;
     for (int i = 1; i < argc; ++i) {
@@ -549,6 +677,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     LocalFree(argv);
     if (!request.empty())
         return apply_request(request);
+    // As administrator: an earlier elevated launch whose registrations were never taken out (the PC went off while
+    // its game ran) is cleared from its ledger.
+    if (launcher_elevated()) {
+        std::vector<std::wstring> notes;
+        sweep_ledgers(HKEY_LOCAL_MACHINE, kExplicitLayersKey, registrations_folder().wstring(), notes);
+        log_registrations(notes);
+    }
     choose_launcher_game();
     if (!dryRun && !launchNow)
         return run_window(instance, show);

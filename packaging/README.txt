@@ -22,9 +22,14 @@ Start
 -----
 1. Unzip anywhere (a folder you can write to; logs go to logs\ next to the launcher).
 2. Start Steam and your VR runtime.
-3. Run sim-qvfr-launcher.exe (with a normal double-click, not as administrator). Pick the game by
-   its tab at the top of the window; Launch <game> starts it in VR with Sim-QVFR. Always start the
-   game from the launcher: started from Steam, it runs without Sim-QVFR.
+3. Run sim-qvfr-launcher.exe with a normal double-click. Pick the game by its tab at the top of the
+   window; Launch <game> starts it in VR with Sim-QVFR. Always start the game from the launcher:
+   started from Steam, it runs without Sim-QVFR.
+   As administrator (Run as administrator, or UAC turned off) it works too. The game then starts as
+   administrator as well, and its OpenXR reads layers only from Windows' machine-wide list, so each
+   launch adds Sim-QVFR's own entries to HKLM\SOFTWARE\Khronos\OpenXR\1\ApiLayers\Explicit and takes
+   them out when the game closes. Nothing else there changes; logs\openxr-registrations.log lists
+   each entry added and taken out. elevated_registration=0 in [launcher] of sim-qvfr.ini turns it off.
 4. If the launcher can't find a game, Launch checks offers Choose folder...: pick the game's folder,
    the folder its exe is in, or steamapps\common.
 
@@ -42,7 +47,7 @@ Setup
 - Launch checks: what would stop Sim-QVFR at the next launch, each with a fix: a game update
   (Sim-QVFR supports specific builds of each game; after an update it stays off and the game runs
   as normal), the game not found, Steam not running, the game already running, the launcher running as
-  administrator (a game started from it ignores Sim-QVFR and starts flat), ACC without OpenComposite
+  administrator (a note: each launch registers Sim-QVFR for the game, see Start), ACC without OpenComposite
   or with a DLSS too old for Foveated DLSS, Cheeky's dxgi.dll or version.dll loader in the game
   folder, and with Cheeky Foveated DLSS on: its runtime and OpenXR layer, OpenXR Toolkit's place above
   Cheeky's layer, and Toolkit's Turbo mode with frame generation. The bar at the bottom shows the
