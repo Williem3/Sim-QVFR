@@ -125,7 +125,8 @@ HANDLE start_probe(Probe& probe, void (*work)()) {
 }
 
 // The hang watch fires while this thread holds the loader lock. 0: the helper wrote a dump meanwhile and
-// log_modules ran; 1: no dump while the lock was held; 2: log_modules waited for the lock; 3: no LdrLockLoaderLock.
+// log_modules ran; 1: no dump while the lock was held; 2: log_modules waited for the lock; 3: no LdrLockLoaderLock;
+// 4: the helper never stood by.
 int stall_holding_loader_lock(const std::filesystem::path& dir) {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     const auto lock = reinterpret_cast<LockLoader>(GetProcAddress(ntdll, "LdrLockLoaderLock"));
@@ -133,14 +134,30 @@ int stall_holding_loader_lock(const std::filesystem::path& dir) {
     if (!lock || !unlock)
         return 3;
     const size_t before = dumps(dir);
+    const std::filesystem::path log(log_file());
+    const size_t standing = count(read(log), "dump helper standing by");
     hang_watch_arm(1);
-    hang_watch_frame();
+    // In a game the helper stands by long before the hang, so the lock is taken only once it does: the watch
+    // thread's CreateProcessW, the first in this process, loads sechost.dll under the loader lock (2026-11-06).
+    // Frames keep coming meanwhile, so the watch fires only with the lock held.
+    bool ready = false;
+    for (int i = 0; i < 1000 && !ready; ++i) {  // 10 s
+        hang_watch_frame();
+        ready = count(read(log), "dump helper standing by") > standing;
+        if (!ready)
+            Sleep(10);
+    }
+    if (!ready) {
+        std::printf("  (the dump helper never stood by)\n");
+        return 4;
+    }
     Probe modules, name;
     HANDLE modulesThread = start_probe(modules, [] { log_modules(); });
     HANDLE nameThread = start_probe(name, [] {
         wchar_t path[MAX_PATH];
         GetModuleFileNameW(nullptr, path, MAX_PATH);
     });
+    hang_watch_frame();
     ULONG_PTR cookie = 0;
     lock(0, nullptr, &cookie);
     bool dumped = false;
@@ -223,11 +240,12 @@ int main(int argc, char** argv) {
            "frames stop while a thread holds the loader lock: the helper dumps, log_modules doesn't wait");
     expect(dumps(dir) == 2, "  and that dump is there");
 
+    const size_t before = dumps(dir);  // so a dump missing above isn't counted against this case too
     hang_watch_arm(1);
     hang_watch_arm(1);  // still one watch thread
     Sleep(3000);
     text = read(log);
-    expect(dumps(dir) == 3, "no frame at all: one minidump");
+    expect(dumps(dir) == before + 1, "no frame at all: one minidump");
     expect(text.find("after xrCreateSession; the game looks stuck") != std::string::npos, "the start-up hang is logged");
     expect(dumps_valid(dir), "every dump is a whole minidump");
     expect(!GetModuleHandleW(L"dbghelp.dll"), "dbghelp never loaded in the stuck process");
