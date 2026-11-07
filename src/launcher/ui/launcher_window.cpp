@@ -201,7 +201,7 @@ struct App {
     std::wstring ini;
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Resolution;
+    Pane pane = Pane::Checks;
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -3694,25 +3694,6 @@ static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 bool pane_shown(int pane) {
     return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss);
 }
-
-// Each pane's name in [launcher] last_pane, in Pane's order.
-constexpr const wchar_t* kPaneIds[] = {L"checks",  L"profiles", L"resolution", L"foveation",   L"overlay", L"dlss", L"menu",
-                                       L"hotkeys", L"games",    L"layers",     L"diagnostics", L"report",  L"about"};
-static_assert(std::size(kPaneIds) == kPanes, "a name for every pane");
-
-// The pane the window opens on: Launch checks while one finds a problem, else the one last used ([launcher] last_pane,
-// saved as the window closes), else Resolution.
-Pane opening_pane() {
-    if (worst_tone(app.checks) == CheckTone::Bad)
-        return Pane::Checks;
-    wchar_t id[32] = {};
-    if (app.iniFound)
-        GetPrivateProfileStringW(L"launcher", L"last_pane", L"", id, static_cast<DWORD>(std::size(id)), app.ini.c_str());
-    for (int i = 0; i < kPanes; ++i)
-        if (_wcsicmp(id, kPaneIds[i]) == 0 && pane_shown(i))
-            return static_cast<Pane>(i);
-    return Pane::Resolution;
-}
 // The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
 int shown_pane(int pane, int step, int from) {
     for (int p = pane; p >= 0 && p < kPanes; p += step)
@@ -5183,7 +5164,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         refresh_checks();
         if (app.iniFound)
             refresh_profiles();
-        activate(kSidebar, static_cast<int>(opening_pane()));  // with what the pane needs when it shows
+        // The window opens on Launch checks: what the game, Steam and the layers look like now (often a new day: a game
+        // update, Steam closed). The launcher stays open while the game runs, so a tuning session keeps its pane.
+        activate(kSidebar, static_cast<int>(Pane::Checks));
         if (app.s.updateCheck)
             start_update_check();
         else if (app.iniFound && !app.s.updateAsked)
@@ -5441,8 +5424,6 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_GETDLGCODE:
         return DLGC_WANTALLKEYS;
     case WM_DESTROY:
-        if (app.iniFound)  // the pane to open on next time (opening_pane)
-            WritePrivateProfileStringW(L"launcher", L"last_pane", kPaneIds[static_cast<int>(app.pane)], app.ini.c_str());
         PostQuitMessage(0);
         return 0;
     }
