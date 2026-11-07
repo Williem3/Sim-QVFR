@@ -77,8 +77,11 @@ MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 ```
 ```bash
-cmake --build build --config Release
+cmake --build build --config Release --parallel
 ```
+
+`--parallel` builds the projects side by side, and each project compiles its files in parallel (`/MP`,
+set in `CMakeLists.txt`). Together they cut a clean build from about 4 minutes to under 1 on a 16-core machine.
 
 The offline tests are the `build/Release/*_test.exe` executables (hook stub, code patch, compositor,
 focus outline/cull/turn, launcher settings and plan, two-loop and quad flow, and others). Each one

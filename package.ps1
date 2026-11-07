@@ -67,7 +67,7 @@ Invoke-Native 'git worktree add' { git -C $repo worktree add --detach $work $has
 try {
     Write-Host "Building $short in $work"
     Invoke-Native 'cmake configure' { cmake -S $work -B (Join-Path $work 'build') -A x64 "-DSIM_QVFR_VERSION=$Version ($short)" } | Out-Null
-    $build = Invoke-Native 'cmake build' { cmake --build (Join-Path $work 'build') --config Release }
+    $build = Invoke-Native 'cmake build' { cmake --build (Join-Path $work 'build') --config Release --parallel }
     $warnings = $build | Where-Object { $_ -match ': warning ' }
     if ($warnings) { $warnings | ForEach-Object { Write-Host $_ }; throw 'The build has warnings' }
     $release = Join-Path $work 'build\Release'
