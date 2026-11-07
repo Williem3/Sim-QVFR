@@ -343,7 +343,15 @@ const wchar_t* help_for(const std::wstring& label);
 void help_icon(const std::wstring& label, float x, float y);
 void help_tip();
 
+// sheet.cpp
+void close_sheet(int button);
+void sheet_key(WPARAM key);
+void sheet_card();
+void place_sheet_edit();
+void create_sheet_edit();
+
 // launcher_window.cpp
 bool installed(const games::GameInfo& game);
+void edit_font();
 
 }  // namespace simqvfr::launcher::ui::win
