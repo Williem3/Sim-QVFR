@@ -151,6 +151,7 @@ struct GamePalette {
 inline constexpr GamePalette kGamePalettes[] = {
     {"ace", {0x0064d2, 0x0071e3, 0xffffff, 0x0064d2}, {0x4da3ff, 0x0071e3, 0xffffff, 0x4da3ff}},  // Assetto Corsa EVO
     {"acc", {0xa84400, 0xb84a00, 0xffffff, 0xa84400}, {0xff9f45, 0xb84a00, 0xffffff, 0xff9f45}},  // Assetto Corsa Competizione
+    {"xplane", {0x00756b, 0x007d72, 0xffffff, 0x00756b}, {0x3dd6c6, 0x007d72, 0xffffff, 0x3dd6c6}},  // X-Plane 12
 };
 
 // Type styles: size and line height in DIPs, weight, monospaced family.
