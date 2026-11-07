@@ -351,7 +351,21 @@ void place_sheet_edit();
 void create_sheet_edit();
 
 // launcher_window.cpp
+std::wstring clipboard_text();
 bool installed(const games::GameInfo& game);
+bool pane_shown(int pane);
 void edit_font();
+void choose_game_folder();
+void activate(Ctl id, int option);
+
+// pane_profiles.cpp
+float profiles_pane(float x, float y, float w, bool draw);
+void use_profile(const std::wstring& name);
+void save_current_profile();
+void paste_profile();
+
+// pane_checks.cpp
+float checks_pane(float x, float y, float w, bool draw);
+void fix_check(const Check& c);
 
 }  // namespace simqvfr::launcher::ui::win
