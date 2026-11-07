@@ -122,6 +122,7 @@ struct LodHeightSite {
 static_assert(sizeof(LodHeightSite) == 16 && sizeof(std::atomic<std::uint32_t>) == 4, "the stubs' [r11 + 4n]");
 LodHeightSite g_lodHeight[2];         // the world pass (kWorldLodHeight), the graph setup (kGraphLodHeight)
 std::atomic<bool> g_focusLod{false};  // four_views_set_focus_lod
+std::atomic<int> g_objectDetail{100};  // four_views_set_object_detail: percent of the way to the focus views' density
 // The focus views (four_views_set_focus): off = slots 2-3 copy the eyes (the copies stage).
 std::atomic<bool> g_focus{false};
 
@@ -191,13 +192,15 @@ void store_view_shares(bool on, const double (&share)[2][2]);  // under the latc
 // The LOD width: the eye's width at the finest view's pixel density, so every view's objects and trees take the LOD the
 // finest needs (the cull and its LOD are shared by all four views). W is the layer's width; a focus view spans its share
 // of it over the box's share of the eye (s_focus W / box), the eye view its own share (s_outer W). From the latched
-// frame's size and rects.
+// frame's size and rects. Object detail d (percent) takes the way there in steps of equal ratio: W x finest^(d / 100),
+// so 50% is the geometric middle between X-Plane's own LOD (0%) and the focus views' (100%).
 void update_lod_scale() {
     const FocusFrame frame = g_frame.load();
     const double fx = frame.box[0][2];
     const bool on = g_focusLod.load() && frame.focus && fx > 0.0 && fx < 1.0;
     const double finest = std::max(static_cast<double>(frame.rects[0]), frame.rects[2] / std::max(fx, 0.05));
-    const auto scale = static_cast<std::uint32_t>(on ? 65536.0 * finest + 0.5 : 65536.0);
+    const double detail = std::clamp(g_objectDetail.load(), 0, 100) / 100.0;
+    const auto scale = static_cast<std::uint32_t>(on ? 65536.0 * std::pow(finest, detail) + 0.5 : 65536.0);
     for (LodHeightSite& s : g_lodHeight)
         s.scale = scale;
 }
@@ -1193,9 +1196,10 @@ void four_views_vegetation_log() {
     std::memcpy(&bias, &bits, sizeof(bias));
     const LodHeightSite& w = g_lodHeight[0];
     const LodHeightSite& g = g_lodHeight[1];
-    logf("xplane: LOD width x%.3f (%s): world pass %u scaled, %u kept (last kept W %d); graph setup %u scaled, %u kept "
+    logf("xplane: LOD width x%.3f (%s, object detail %d%%): world pass %u scaled, %u kept (last kept W %d); graph setup %u scaled, %u kept "
          "(last kept W %d); the last stereo vegetation cull's u_lod_bias %.5f",
-         w.scale.load() / 65536.0, g_focusLod.load() ? "the focus views' density" : "off", w.scaled.load(), w.other.load(),
+         w.scale.load() / 65536.0, g_focusLod.load() ? "the focus views' density" : "off", g_objectDetail.load(),
+         w.scaled.load(), w.other.load(),
          w.lastOther.load(), g.scaled.load(), g.other.load(), g.lastOther.load(), bias);
 }
 
@@ -1204,6 +1208,14 @@ void four_views_set_focus_lod(bool on) {
     update_lod_scale();
     logf("xplane: object and tree LOD %s", on ? "for the focus views' pixel density (all four views)"
                                               : "X-Plane's own (the eye view's density)");
+}
+
+void four_views_set_object_detail(int percent) {
+    percent = std::clamp(percent, 0, 100);
+    if (g_objectDetail.exchange(percent) == percent)
+        return;
+    update_lod_scale();
+    logf("xplane: object detail %d%%: LOD width x%.3f (from the next frame)", percent, g_lodHeight[0].scale.load() / 65536.0);
 }
 
 std::uint64_t four_views_draws() { return g_fourViewDraws.load(std::memory_order_relaxed); }

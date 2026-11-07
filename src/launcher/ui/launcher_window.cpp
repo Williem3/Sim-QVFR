@@ -59,7 +59,7 @@ std::wstring not_yet() { return L"Not available for " + short_name() + L" yet.";
 enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Layers, Diagnostics, Report, About };
 constexpr int kPanes = 12;
 enum Ctl {
-    kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
+    kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
     // (FocusCorner's order, across then up or down).
@@ -493,6 +493,7 @@ int* slider_value(Ctl id) {
     switch (id) {
     case kOuter: return &app.s.outer;
     case kInner: return &app.s.inner;
+    case kObjectDetail: return &app.s.objectDetail;
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
     case kFeather: return &app.s.feather;
@@ -537,6 +538,7 @@ Range slider_range(Ctl id) {
     switch (id) {
     case kOuter: return kOuterRange;
     case kInner: return kInnerRange;
+    case kObjectDetail: return kObjectDetailRange;
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
     case kFocusOffset: return kFocusOffsetRange;
@@ -586,6 +588,8 @@ std::vector<Ctl> focus_order() {
         order.push_back(kOuter);
         if (!inner_disabled()) {
             order.push_back(kInner);
+            if (game_has(&games::GameFeatures::objectDetail))
+                order.push_back(kObjectDetail);
             if (game_has(&games::GameFeatures::fovCrop))
                 order.push_back(kCropOn);
             if (app.s.crop && game_has(&games::GameFeatures::fovCrop))
@@ -881,6 +885,11 @@ constexpr Help kHelp[] = {
      L"Pixel density inside the focus area, a share of the headset’s native density. Above 100% it renders more pixels than "
      L"the headset shows where you look: sharper text and edges. Its cost grows with the area’s size, so a small area can "
      L"take a high density cheaply."},
+    {L"Object detail",
+     L"How detailed trees and objects are, and how far away they are still drawn. At 100% they are as sharp in the focus "
+     L"region as its pixel density shows them; lower settings move toward the game’s own detail for the outer resolution. "
+     L"It costs CPU, not GPU: more detail means more objects for X-Plane’s main thread to prepare every frame, often what "
+     L"limits the frame rate with QVFR. Lower it if frames stutter in dense scenery; the focus region shows coarser trees."},
     {L"Foveated width",
      L"The focus area’s width, a share of the view. Wider hides the edge between sharp and soft better; its pixels cost "
      L"density × width × height, so a wide area at a high density costs the most."},
@@ -2065,6 +2074,18 @@ float pane_content(float x, float y, float w, bool draw) {
                        known && qvfr ? px(ro.focus) : L"", !qvfr),
         };
         h += section(x, y, w, L"Per-eye resolution", rows, footer, draw);
+        // Object detail (X-Plane): the LOD the focus views need, or less of it for main-thread time.
+        if (game_has(&games::GameFeatures::objectDetail)) {
+            h += t::kSpace6;
+            h += section(x, y + h, w, L"Scenery",
+                         {slider_row(kObjectDetail, L"Object detail",
+                                     qvfr ? L"Tree and object detail where you look, against CPU time."
+                                          : L"Available in Quad View Foveated Rendering.",
+                                     app.s.objectDetail, L"", !qvfr)},
+                         L"100% keeps trees and objects as detailed in the focus region as at its density; 0% is the "
+                         L"game’s own detail for the outer resolution. Applies live while the game runs.",
+                         draw);
+        }
         // The FOV crop (each side on its own, QVFR only) and the helmet overlay: left out for a game without them.
         if (game_has(&games::GameFeatures::fovCrop)) {
             h += t::kSpace6;

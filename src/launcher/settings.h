@@ -28,6 +28,7 @@ struct Settings {
     bool eyeTracking = true;  // [quad] gaze: Eye tracked, or Fixed (centre)
     int outer = 50;           // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
     int inner = 100;          // focus_density (QVFR): focus pixel density, percent of recommended
+    int objectDetail = 100;   // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
     int width = 39;           // focus_percent: foveated width, percent of the outer view
     int height = 39;          // focus_height_percent: foveated height
     bool outline = false;     // [quad] debug_border
@@ -69,7 +70,7 @@ struct Range {
     int min, max;
 };
 inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 400}, kSizeRange{10, 100}, kFeatherRange{0, 50},
-    kCornerRange{0, 100}, kCropRange{0, 40},  // kCropRange: the layer's kCropMax
+    kCornerRange{0, 100}, kCropRange{0, 40}, kObjectDetailRange{0, 100},  // kCropRange: the layer's kCropMax
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusCornerRange{0, kFocusCornerMax};
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.

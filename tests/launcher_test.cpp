@@ -476,6 +476,16 @@ int main() {
         check(cropBack.crop && cropBack.cropTop == 30 && cropBack.cropBottom == kCropRange.max && cropBack.cropOuter == 12 &&
                   cropBack.cropInner == 0,
               "settings: [crop] round-trips, each side clamped on its own");
+        {
+            Settings detail = cropBack;
+            check(detail.objectDetail == 100, "settings: object detail defaults to 100% (the focus views' LOD)");
+            detail.objectDetail = 40;
+            save_live_settings(ini, detail);
+            check(load_settings(ini).objectDetail == 40, "settings: object detail round-trips, live");
+            detail.objectDetail = 250;  // above kObjectDetailRange: clamped
+            save_settings(ini, detail);
+            check(load_settings(ini).objectDetail == kObjectDetailRange.max, "settings: object detail is clamped to 0-100%");
+        }
         LaunchSizes launched;
         launched.known = true;
         launched.outer = cropBack.outer;

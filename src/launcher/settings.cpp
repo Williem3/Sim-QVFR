@@ -61,6 +61,7 @@ Settings load_settings(const std::wstring& ini) {
     // Unset, the layer derives the density from eye_scale (equal quarters); show that value.
     const int density = read_int(ini, L"experiment", L"focus_density", 0);
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
+    s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
     s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
@@ -153,6 +154,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"crop", L"outer", n(clamp_to(s.cropOuter, kCropRange)));
         ok &= write(ini, L"crop", L"inner", n(clamp_to(s.cropInner, kCropRange)));
         ok &= write_helmet_settings(ini.c_str(), s.helmet);
+        ok &= write(ini, L"experiment", L"object_detail", n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
     }
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));

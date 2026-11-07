@@ -17,6 +17,7 @@ struct GameFeatures {
     bool liveResolution;  // resolution changes while the game runs (otherwise: at the next launch)
     bool fovCrop;         // the field of view crop ([crop])
     bool frameGeneration; // Cheeky's frame generation ([cheeky] fg), within Foveated DLSS
+    bool objectDetail;    // the object and tree detail slider ([experiment] object_detail), live
 };
 
 struct GameInfo {
