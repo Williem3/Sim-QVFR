@@ -603,7 +603,7 @@ std::vector<Ctl> focus_order() {
         order.insert(order.end(), {kMode, kWidth, kHeight});
         if (!app.s.shape.corners)
             order.push_back(kCorner);
-        order.push_back(kFocusOffset);
+        order.insert(order.end(), {kFeather, kFocusOffset});
         if (app.s.eyeTracking)
             order.push_back(kGazeDeadzone);
         order.push_back(kShape);
@@ -615,7 +615,6 @@ std::vector<Ctl> focus_order() {
         order.push_back(kOutline);
         if (app.s.outline)
             order.push_back(kColor);
-        order.push_back(kFeather);
         break;
     case Pane::Dlss:
         if (!game_has(&games::GameFeatures::foveatedDlss))
@@ -2164,6 +2163,7 @@ float pane_content(float x, float y, float w, bool draw) {
                       slider_row(kCorner, L"Corner radius",
                                  app.s.shape.corners ? L"Box shape only." : L"Rounds the corners of the focus region.",
                                  app.s.corner, L"", app.s.shape.corners),
+                      slider_row(kFeather, L"Feather", L"Softens the edge of the focus region.", app.s.feather, L""),
                       app.s.eyeTracking
                           ? slider_row(kFocusOffset, L"Gaze offset",
                                        L"Moves the focus region above (+) or below (−) where you look, if it sits off.",
@@ -2213,7 +2213,7 @@ float pane_content(float x, float y, float w, bool draw) {
         color.controlH = t::kControlHeight;
         color.control = [](const Rect& r) { segmented(kColor, r, static_cast<int>(app.s.color), !app.s.outline); };
         h += section(x, y, w, L"Focus overlay",
-                     {show, color, slider_row(kFeather, L"Feather", L"Softens the edge of the focus region.", app.s.feather, L"")},
+                     {show, color},
                      L"The outline is drawn into the headset image, to show where the focus region is.", draw);
         break;
     }
