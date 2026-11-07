@@ -207,8 +207,8 @@ With DLSS on, resolution changes apply at the next launch (DLSS sizes its views 
 The pane's other settings apply live. The headset menu's Foveated DLSS and Frame generation pages
 set them too.
 
-Assetto Corsa Competizione
---------------------------
+Assetto Corsa Competizione (alpha)
+----------------------------------
 Pick the Assetto Corsa Competizione tab, then Launch. ACC's VR has to run through OpenComposite
 (one-time setup: docs/acc-opencomposite.md on the project page, https://github.com/Williem3/Sim-QVFR);
 Launch checks tells you if it's missing. The field of view crop, the helmet overlay, resolution

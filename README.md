@@ -1,39 +1,51 @@
-# Sim-QVFR for Assetto Corsa EVO
+# Sim-QVFR
 
 **More frames per second in VR, with a sharp picture where you're looking.**
+For Assetto Corsa EVO, Assetto Corsa Competizione and X-Plane 12.
 
-Sim-QVFR makes Assetto Corsa EVO draw the middle of your view (or wherever your eyes are looking,
-if your headset tracks your eyes) at full sharpness, and the rest of the view at a lower resolution.
-You barely notice the difference, but your graphics card does far less work, so you get smoother VR
-or room to turn the graphics up.
+Sim-QVFR makes your sim draw the middle of your view (or wherever your eyes are looking, if your
+headset tracks your eyes) at full sharpness, and the rest of the view at a lower resolution. You
+barely notice the difference, but your graphics card does far less work, so you get smoother VR or
+room to turn the graphics up.
 
 > **Please read first**
-> - **Unofficial and experimental.** Sim-QVFR isn't made or approved by Kunos Simulazioni, the
->   makers of Assetto Corsa EVO. Use it at your own risk: it can crash the game, and a game update can
->   stop it working until Sim-QVFR is updated too.
+> - **Unofficial and experimental.** Sim-QVFR isn't made or approved by the makers of the games it
+>   works with: Kunos Simulazioni (Assetto Corsa EVO and Competizione) and Laminar Research
+>   (X-Plane 12). Use it at your own risk: it can crash the game, and a game update can stop it working
+>   until Sim-QVFR is updated too.
 > - **Offline only.** Use it in single-player sessions, not online.
-> - **Don't report problems to Kunos** that happen while Sim-QVFR is running. Report them here
->   instead (see [Getting help](#getting-help)).
+> - **Don't report problems to the game's makers** that happen while Sim-QVFR is running. Report them
+>   here instead (see [Getting help](#getting-help)).
 
 ## What you need
 
-- **Assetto Corsa EVO** on Steam.
+- **One of the games:**
+  - **Assetto Corsa EVO** on Steam.
+  - **Assetto Corsa Competizione** on Steam, with its VR running through OpenComposite (see
+    [Assetto Corsa Competizione](#assetto-corsa-competizione-alpha)).
+  - **X-Plane 12** (version 12.4.3-r2), from Steam or elsewhere (see [X-Plane 12](#x-plane-12)).
 - **A PC VR headset.** Eye tracking is a bonus: with it, the sharp area follows your eyes. Without it,
   the sharp area stays in the middle of your view.
-- **Steam** running.
+- **Steam** running, for the Steam games.
 
 ## Install and play
 
 1. **Download** the newest `sim-qvfr-….zip` from the
    [Releases page](https://github.com/Williem3/Sim-QVFR/releases).
 2. **Unzip it** into any folder you like (for example `Documents\Sim-QVFR`). There's no installer.
-3. **In the game's own settings, turn off its foveated rendering.** Sim-QVFR does this job instead.
+3. **In Assetto Corsa EVO, turn off the game's own foveated rendering** in its settings. Sim-QVFR does
+   this job instead.
 4. **Start Steam and your VR software** (SteamVR, Virtual Desktop, Pimax Play, and so on).
-5. **Open `sim-qvfr-launcher.exe`** from the folder you unzipped.
-6. **Click Launch ACE.** The game starts in VR with Sim-QVFR turned on.
+5. **Open `sim-qvfr-launcher.exe`** from the folder you unzipped, with a normal double-click (not as
+   administrator: a game started from it ignores Sim-QVFR).
+6. **Pick your game's tab** at the top of the window and **click Launch**. The game starts in VR with
+   Sim-QVFR turned on.
 
 That's it. Always start the game from the launcher when you want Sim-QVFR. If you start the game
 from Steam as normal, it runs without Sim-QVFR.
+
+**Game not found?** If a game isn't installed through Steam, or Steam can't tell the launcher where it
+is, **Launch checks** offers **Choose folder…**: pick the game's folder.
 
 **To remove it**, delete the folder. Nothing else on your PC was changed.
 
@@ -44,19 +56,23 @@ ace-quadview folder.
 
 ## Choosing your settings
 
-Every setting is in the launcher window, and your choices are saved for you. Hover over the **ⓘ** next
-to any setting to see what it does and what it costs.
+Every setting is in the launcher window, and your choices are saved for you. Each game keeps its own
+settings, so switching tabs switches them. Hover over the **ⓘ** next to any setting to see what it does
+and what it costs. Each section is tagged **Live** (it changes the running game straight away) or
+**Next launch**.
 
 - **Not sure where to start?** Open **Profiles** and pick **Performance**, **Balanced** or **Quality**.
-- **Launch checks** lists anything that would stop Sim-QVFR working, with how to fix it. The bar at
-  the bottom of the window shows the first problem.
-- **Resolution** sets how sharp the outer view and the sharp area are. **Foveation** sets the sharp
-  area's size and shape.
+- **Launch checks**, where the launcher opens, lists anything that would stop Sim-QVFR working, with how
+  to fix it. The bar at the bottom of the window shows the first problem, and after you click Launch it
+  tells you whether the game started with Sim-QVFR.
+- **Resolution** sets how sharp the outer view and the sharp area are (**Inner resolution** goes from
+  50% to 400%). **Foveation** sets the sharp area's size and shape, and whether it follows your eyes.
 - **Profiles** also lets you save your own settings, and **Share** or **Paste** them as a line of text
   to swap with friends.
 - **Hotkeys** lets you pick keyboard keys or wheel buttons for the in-game menu and other actions.
+- **Diagnostics** shows how your last session ran and compares it with the one before.
 
-### Changing settings while you drive
+### Changing settings while you play
 
 Press **Ctrl+Alt+arrow keys** (or a wheel button you set in **Hotkeys**) to open the **headset menu**.
 Up and down choose a setting, left and right change it. Changes apply straight away and are saved.
@@ -75,14 +91,16 @@ All of these are off until you turn them on in the launcher:
 
 - **Performance overlay:** a small panel in your headset showing frame rate and how hard your PC is
   working.
-- **View crop:** stops the game drawing the edges of your view that a helmet would hide anyway, for
-  extra speed.
-- **Helmet overlay:** draws a helmet's visor around your view. You can swap in your own helmet images.
+- **View crop** (Assetto Corsa EVO and Competizione): stops the game drawing the edges of your view
+  that a helmet would hide anyway, for extra speed.
+- **Helmet overlay** (Assetto Corsa EVO and Competizione): draws a helmet's visor around your view. You
+  can swap in your own helmet images.
 - **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
 
 ## Foveated DLSS (optional, NVIDIA RTX only)
 
-If you have an NVIDIA RTX graphics card, Sim-QVFR can use
+In Assetto Corsa EVO and Competizione (X-Plane 12 has no DLSS), if you have an NVIDIA RTX graphics card,
+Sim-QVFR can use
 [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS) by
 [ClarkCheekyKent](https://github.com/ClarkCheekyKent), **integrated with his permission**. It adds:
 
@@ -145,8 +163,8 @@ Once an official Cheeky release includes the fixes, its own download will replac
 ## Assetto Corsa Competizione (alpha)
 
 Sim-QVFR runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution
-periphery, the headset menu and the performance overlay. Choose **Assetto Corsa Competizione** under
-**Game** on the launcher's **Rendering** page, then **Launch**.
+periphery, the headset menu and the performance overlay. Pick the **Assetto Corsa Competizione** tab
+at the top of the launcher, then **Launch**. Eye tracking works without another OpenXR layer.
 
 ACC's VR has to run through OpenComposite: [Assetto Corsa Competizione in VR through
 OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Launch checks** tells you
@@ -160,15 +178,35 @@ DLSS than the one ACC comes with (2.2.15): replace ACC's `nvngx_dlss.dll` with D
 DLSS Swapper does it). **Launch checks** tells you when it's too old. Cheeky's frame generation isn't
 available in ACC yet.
 
+## X-Plane 12
+
+Sim-QVFR runs QVFR in X-Plane 12: a sharp focus area that follows your eyes, a lower-resolution
+periphery, the headset menu and the performance overlay. Pick the **X-Plane 12** tab at the top of the
+launcher, then **Launch**.
+
+- **Always start X-Plane from the launcher.** Sim-QVFR has to be loaded before X-Plane starts, so
+  X-Plane started from Steam or its own shortcut runs without QVFR.
+- **Version 12.4.3-r2.** On any other X-Plane build, QVFR stays off and X-Plane runs as usual.
+- **Changes while you fly:** the resolution sliders and the focus size change straight away, in the
+  launcher or the headset menu.
+- **Object detail** (the launcher's **Resolution** page, and the headset menu) sets how much detail
+  trees and objects get. 100%, the default, gives them the detail the sharp area needs. Lower values
+  cost X-Plane's main thread less, which is often what limits the frame rate with QVFR.
+- **Not in X-Plane:** the view crop, the helmet overlay and Foveated DLSS.
+- **Not from Steam?** **Launch checks** asks for X-Plane's folder.
+
 ## Getting help
 
 - **Something not working?** Open the launcher's **Launch checks** first: it explains most problems
   and how to fix them.
-- **Game crashing or acting strangely?** Use the launcher's **Report an issue** page. Pick the kind of
-  problem, describe what happened, and it bundles up the logs and opens a GitHub issue for you. Attach
-  the ZIP it makes, then send.
-- **Can't find the game?** Make sure Assetto Corsa EVO is installed through Steam and Steam is running.
-  If the launcher still can't find it, report an issue as above.
+- **Game crashing, starting on the desktop instead of in VR, or acting strangely?** Use the launcher's
+  **Report an issue** page. Pick the kind of problem, describe what happened, and it bundles up the logs
+  and opens a GitHub issue for you. Drag the ZIP's tile onto the issue to attach it, then send. Names
+  and account IDs are taken out of the game's own crash reports before they go in the ZIP.
+- **Someone asked for your logs?** **Export logs**, on the same page, makes the same ZIP without opening
+  an issue.
+- **Can't find the game?** Make sure the game is installed and, for a Steam game, that Steam is running.
+  If the launcher still can't find it, use **Choose folder…** in **Launch checks**.
 - **After a game update**, Sim-QVFR turns itself off and the game runs as normal until a new version
   comes out. Your headset shows a message for the first 30 seconds to let you know.
 - **Updates:** the launcher's **About** page can check for new versions and install them for you. Your
