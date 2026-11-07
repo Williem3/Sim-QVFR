@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
-set(SIM_QVFR_RELEASE "1.0.0-beta")
+set(SIM_QVFR_RELEASE "1.0.1-beta")
 set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
 
 # Windows version info for a binary (src/version_info.rc.in): numbers from the version's leading digits
