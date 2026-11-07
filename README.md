@@ -36,8 +36,10 @@ room to turn the graphics up.
 3. **In Assetto Corsa EVO, turn off the game's own foveated rendering** in its settings. Sim-QVFR does
    this job instead.
 4. **Start Steam and your VR software** (SteamVR, Virtual Desktop, Pimax Play, and so on).
-5. **Open `sim-qvfr-launcher.exe`** from the folder you unzipped, with a normal double-click (not as
-   administrator: a game started from it ignores Sim-QVFR).
+5. **Open `sim-qvfr-launcher.exe`** from the folder you unzipped, with a normal double-click. Running it
+   as administrator (or with UAC turned off) works too: each launch then adds Sim-QVFR's own entries to
+   Windows' machine-wide OpenXR layer list and takes them out when the game closes. Nothing else in
+   that list changes.
 6. **Pick your game's tab** at the top of the window and **click Launch**. The game starts in VR with
    Sim-QVFR turned on.
 

@@ -178,9 +178,19 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         c.fix = CheckFix::StartSteam;
         c.fixLabel = L"Start Steam";
     }
-    // Administrator rights: the game inherits them, and the OpenXR loader then ignores the launch's layer folder.
-    if (in.elevated) {
-        const bool byShell = in.parent.empty() || _wcsicmp(in.parent.c_str(), L"explorer.exe") == 0;
+    // Administrator rights: the game inherits them, and the OpenXR loader then ignores the launch's layer folder. The
+    // launch registers its layers where that loader looks (explicit_layers.h), unless that is turned off.
+    const bool byShell = in.parent.empty() || _wcsicmp(in.parent.c_str(), L"explorer.exe") == 0;
+    if (in.elevated && in.elevatedRegistration) {
+        add("elevated", CheckTone::Warn, L"Sim-QVFR is running as administrator",
+            shortName + L" starts with administrator rights too, and OpenXR then looks for layers only in Windows’ "
+            L"machine-wide list. Each launch adds Sim-QVFR’s own entries to it and takes them out when " + shortName +
+                L" closes; nothing else in the list changes. To launch with normal rights instead, " +
+                (byShell ? std::wstring(L"open the launcher with a normal double-click, not Run as administrator (and "
+                                        L"untick Run this program as an administrator on the Compatibility tab of "
+                                        L"sim-qvfr-launcher.exe’s Properties, if it is ticked).")
+                         : L"open the launcher with a double-click, not from " + in.parent + L"."));
+    } else if (in.elevated) {
         Check& c = add("elevated", method ? CheckTone::Bad : CheckTone::Warn, L"Sim-QVFR is running as administrator",
                        shortName + L" would start with administrator rights too, and OpenXR then ignores Sim-QVFR: "
                        L"the game starts on the desktop instead of in VR. " +
@@ -190,7 +200,9 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
                                                    L"sim-qvfr-launcher.exe’s Properties, under Change settings for all "
                                                    L"users too.")
                                     : L"It was started by " + in.parent + L", which runs as administrator. Close the "
-                                      L"launcher and open it with a double-click instead."));
+                                      L"launcher and open it with a double-click instead.") +
+                           L" (Registering Sim-QVFR for administrator launches is off: elevated_registration=0 in "
+                           L"sim-qvfr.ini.)");
         c.confirm = method;
     } else {
         add("elevated", CheckTone::Ok, L"Not running as administrator",

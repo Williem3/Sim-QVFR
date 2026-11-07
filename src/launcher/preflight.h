@@ -6,8 +6,9 @@
 // - The game build: Sim-QVFR patches the game builds its addresses were taken from (games/<id>/game.h).
 //   After a game update the layer refuses to patch and ACE runs unchanged; the launcher says so first.
 // - Steam running and ACE closed (the launch refuses otherwise).
-// - The launcher not running as administrator: the game inherits it, and the OpenXR loader in an elevated game
-//   ignores the launch's layer folder (XR_API_LAYER_PATH), so the game starts on the desktop.
+// - The launcher running as administrator: the game inherits it, and the OpenXR loader in an elevated game
+//   ignores the launch's layer folder (XR_API_LAYER_PATH). The launch registers its layers in HKLM for the game
+//   (explicit_layers.h), so it's a note; with that off (elevated_registration=0) the game starts on the desktop.
 // - Cheeky Foveated DLSS's loader (dxgi.dll, version.dll) in the game folder: ACE fails to start with it.
 // - With Cheeky on: its runtime and OpenXR layer found; OpenXR Toolkit nearer ACE than Cheeky's layer
 //   (ACE crashes at start otherwise); with its frame generation, Toolkit's Turbo mode off (ACE crashes).
@@ -68,6 +69,7 @@ struct PreflightInput {
     OpenComposite openComposite = OpenComposite::Unknown;  // only for a game that needs it
     std::wstring dlssPath, dlssVersion;  // the game's nvngx_dlss.dll and its file version ("2.2.15.0"); empty: unknown
     bool elevated = false;  // the launcher runs as administrator (above medium integrity): the game would too
+    bool elevatedRegistration = true;  // then the launch's layers are registered in HKLM for it (explicit_layers.h)
     std::wstring parent;    // the program that started the launcher ("explorer.exe"); empty: unknown
 };
 

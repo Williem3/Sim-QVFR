@@ -19,6 +19,7 @@
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
 #include "launcher/launch_watch.h"
+#include "launcher/explicit_layers.h"
 #include "launcher/game_tabs.h"
 #include "launcher/install.h"
 #include "launcher/layer_order.h"
@@ -507,6 +508,163 @@ void per_game_settings_checks() {
     WritePrivateProfileStringW(L"experiment", L"mode", L"views4", fresh.c_str());
     check(game_settings_target(fresh, L"ace") == fresh && game_settings_target(fresh, L"xplane") == game_settings_file(fresh, L"xplane"),
           "per-game: an ini without [launcher] game means ACE, as the launcher reads it");
+    fs::remove_all(dir, ec);
+}
+
+// An elevated launch's registrations (explicit_layers.h), on a scratch key holding someone else's values: only ours
+// are added and taken out, nothing else changes, the key stays, and only what the ledger lists comes out.
+void explicit_layers_checks() {
+    std::error_code ec;
+    const fs::path dir = fs::temp_directory_path() / L"simqvfr-explicit-test";
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / L"ledgers");
+    const wchar_t* scratch = L"Software\\simqvfr-launcher-test-explicit";
+    RegDeleteTreeW(HKEY_CURRENT_USER, scratch);
+    HKEY base = nullptr, key = nullptr, sub = nullptr;
+    RegCreateKeyExW(HKEY_CURRENT_USER, scratch, 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &base, nullptr);
+    RegCreateKeyExW(base, L"Explicit", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &key, nullptr);
+    const auto put = [&](const std::wstring& name, DWORD v) {
+        RegSetValueExW(key, name.c_str(), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&v), sizeof(v));
+    };
+    const auto value = [&](const std::wstring& name, DWORD& v) {
+        DWORD type = 0, size = sizeof(v);
+        return RegQueryValueExW(key, name.c_str(), nullptr, &type, reinterpret_cast<BYTE*>(&v), &size) == ERROR_SUCCESS &&
+               type == REG_DWORD;
+    };
+    // Every value of the key as stored (name, type, bytes), and its subkeys.
+    const auto snapshot = [&]() {
+        std::vector<std::wstring> out;
+        for (DWORD i = 0;; ++i) {
+            wchar_t name[1024];
+            BYTE data[1024];
+            DWORD nameLength = 1024, type = 0, size = sizeof(data);
+            if (RegEnumValueW(key, i, name, &nameLength, nullptr, &type, data, &size) != ERROR_SUCCESS)
+                break;
+            std::wstring line = std::wstring(name, nameLength) + L"|" + std::to_wstring(type) + L"|";
+            for (DWORD b = 0; b < size; ++b)
+                line += std::to_wstring(data[b]) + L",";
+            out.push_back(line);
+        }
+        for (DWORD i = 0;; ++i) {
+            wchar_t name[256];
+            DWORD length = 256;
+            if (RegEnumKeyExW(key, i, name, &length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS)
+                break;
+            out.push_back(L"[" + std::wstring(name, length) + L"]");
+        }
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    const auto key_exists = [&]() {
+        HKEY k = nullptr;
+        const bool there = RegOpenKeyExW(base, L"Explicit", 0, KEY_READ, &k) == ERROR_SUCCESS;
+        if (there)
+            RegCloseKey(k);
+        return there;
+    };
+
+    // Someone else's: an enabled and a disabled layer, a string value and a subkey.
+    const std::wstring theirs = L"C:\\Program Files\\Other\\layer.json", theirsOff = L"C:\\Other\\off.json";
+    put(theirs, 0);
+    put(theirsOff, 1);
+    const std::wstring text = L"not a layer";
+    RegSetValueExW(key, L"Note", 0, REG_SZ, reinterpret_cast<const BYTE*>(text.c_str()),
+                   static_cast<DWORD>((text.size() + 1) * sizeof(wchar_t)));
+    RegCreateKeyExW(key, L"Sub", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &sub, nullptr);
+    RegCloseKey(sub);
+    const std::vector<std::wstring> before = snapshot();
+
+    const std::wstring ours = (dir / L"run-1" / L"XR_APILAYER_SIM_qvfr.json").wstring(),
+                       below = (dir / L"run-1" / L"XR_APILAYER_MBUCCHIA_toolkit.json").wstring();
+    const std::wstring ledger = (dir / L"ledgers" / L"run-1.txt").wstring(), backup = (dir / L"before.reg").wstring();
+    std::vector<std::wstring> notes;
+    std::wstring error;
+    const bool registered = register_layers(base, L"Explicit", false, {ours, below, theirs}, ledger, backup, notes, error);
+    DWORD v = 1;
+    check(registered && value(ours, v) && v == 0 && value(below, v) && v == 0, "explicit: the launch's manifests added, enabled");
+    std::string ledgerText;
+    Ledger listed;
+    check(read_file(ledger, ledgerText) && parse_ledger(ledgerText, listed) && listed.values == std::vector<std::wstring>{ours, below} &&
+              listed.launcher == process_stamp(GetCurrentProcess()) && listed.game.pid == 0,
+          "explicit: the ledger lists ours and this launcher; a value already there isn't ours, so it isn't listed");
+    check(value(theirs, v) && v == 0 &&
+              std::any_of(notes.begin(), notes.end(), [&](const std::wstring& n) { return n.find(L"not ours") != std::wstring::npos; }),
+          "explicit: a manifest already registered is left as it is, and said");
+    std::vector<std::wstring> now = snapshot();
+    std::vector<std::wstring> others;
+    std::copy_if(now.begin(), now.end(), std::back_inserter(others), [&](const std::wstring& line) {
+        return line.rfind(ours + L"|", 0) != 0 && line.rfind(below + L"|", 0) != 0;
+    });
+    check(others == before, "explicit: every other value and the subkey unchanged, byte for byte");
+    std::string reg;
+    check(read_file(backup, reg) && reg.size() > 2 && reg[0] == '\xff' && reg[1] == '\xfe', "explicit: a .reg backup of the key as it was");
+
+    const ProcessStamp game{4242, 99};
+    check(ledger_game_started(ledger, game) && read_file(ledger, ledgerText) && parse_ledger(ledgerText, listed) && listed.game == game &&
+              listed.values.size() == 2,
+          "explicit: the game written into the ledger, the values kept");
+
+    // The user switched one off meanwhile: that one is theirs now and stays.
+    put(below, 1);
+    notes.clear();
+    check(unregister_layers(base, L"Explicit", ledger, notes) && !value(ours, v) && value(below, v) && v == 1 && !fs::exists(ledger),
+          "explicit: ours taken out; one changed since is left as it is; the ledger goes");
+    RegDeleteValueW(key, below.c_str());
+    check(snapshot() == before && key_exists(), "explicit: after the launch the key holds exactly what it held, and stays");
+    notes.clear();
+    check(unregister_layers(base, L"Explicit", ledger, notes) && snapshot() == before, "explicit: no ledger, nothing to do");
+
+    // A value that looks like ours but no ledger lists: never taken out.
+    const std::wstring lookalike = (dir / L"run-0" / L"XR_APILAYER_SIM_qvfr.json").wstring();
+    put(lookalike, 0);
+    const std::wstring ledger2 = (dir / L"ledgers" / L"run-2.txt").wstring(), ledger3 = (dir / L"ledgers" / L"run-3.txt").wstring();
+    const std::wstring ours2 = (dir / L"run-2" / L"XR_APILAYER_SIM_qvfr.json").wstring(),
+                       ours3 = (dir / L"run-3" / L"XR_APILAYER_SIM_qvfr.json").wstring();
+    notes.clear();
+    check(register_layers(base, L"Explicit", false, {ours2}, ledger2, L"", notes, error) &&
+              register_layers(base, L"Explicit", false, {ours3}, ledger3, L"", notes, error) &&
+              ledger_game_started(ledger2, {1, 1}) && ledger_game_started(ledger3, {2, 2}),
+          "explicit: two launches registered");
+    write_file((dir / L"ledgers" / L"notes.txt").wstring(), "something else\r\nvalue " + narrow(lookalike) + "\r\n");
+    // The sweep: launch 2's game still runs, launch 3's is gone.
+    notes.clear();
+    sweep_ledgers(base, L"Explicit", (dir / L"ledgers").wstring(), notes, [](const ProcessStamp& p) { return p.pid == 1; });
+    check(value(ours2, v) && fs::exists(ledger2) && !value(ours3, v) && !fs::exists(ledger3),
+          "explicit: the sweep takes out a finished launch's values only, and leaves a running one's");
+    check(value(lookalike, v) && fs::exists(dir / L"ledgers" / L"notes.txt"),
+          "explicit: a lookalike value no ledger lists stays, and a file that isn't a ledger is ignored");
+    notes.clear();
+    sweep_ledgers(base, L"Explicit", (dir / L"ledgers").wstring(), notes, [](const ProcessStamp&) { return false; });
+    check(!value(ours2, v) && !fs::exists(ledger2) && value(lookalike, v), "explicit: once its game is gone, the other goes too");
+    RegDeleteValueW(key, lookalike.c_str());
+    check(snapshot() == before, "explicit: the key back to exactly what it held");
+
+    // No key yet: created (never replaced), and it stays after, empty.
+    RegCloseKey(key);
+    RegDeleteTreeW(base, L"Explicit");
+    notes.clear();
+    const std::wstring ledger4 = (dir / L"ledgers" / L"run-4.txt").wstring();
+    check(register_layers(base, L"Explicit", false, {ours}, ledger4, backup + L"2", notes, error) && key_exists() &&
+              !fs::exists(backup + L"2") &&
+              std::any_of(notes.begin(), notes.end(), [](const std::wstring& n) { return n.find(L"created") == 0; }),
+          "explicit: a missing key is created (nothing to back up), and said");
+    notes.clear();
+    RegOpenKeyExW(base, L"Explicit", 0, KEY_ALL_ACCESS, &key);
+    check(unregister_layers(base, L"Explicit", ledger4, notes) && key_exists() && snapshot().empty(),
+          "explicit: the key it created stays, empty");
+    RegCloseKey(key);
+
+    // Ledger text and process stamps.
+    Ledger round{{7, 8}, {9, 10}, {L"C:\\a b\\x.json", L"D:\\y.json"}}, back;
+    check(parse_ledger(ledger_text(round), back) && back == round, "explicit: the ledger round trips");
+    check(!parse_ledger("value C:\\x.json\r\n", back) && !parse_ledger(narrow(L"Sim-QVFR OpenXR registrations\r\nlauncher x\r\n"), back),
+          "explicit: a file without the ledger's header, or a broken line, isn't a ledger");
+    const ProcessStamp self = process_stamp(GetCurrentProcess());
+    check(stamp_running(self) && !stamp_running({self.pid, self.created + 1}) && !stamp_running({}),
+          "explicit: a process is known by its id and start time");
+
+    RegCloseKey(base);
+    RegDeleteTreeW(HKEY_CURRENT_USER, scratch);
     fs::remove_all(dir, ec);
 }
 
@@ -1521,9 +1679,17 @@ int main() {
             e.parent = L"SimHub.exe";
             std::vector<Check> elevatedChecks = preflight_checks(e);
             const Check* elevated = find(elevatedChecks, "elevated");
-            check(elevated && elevated->tone == CheckTone::Bad && elevated->confirm &&
+            check(elevated && elevated->tone == CheckTone::Warn && !elevated->confirm &&
+                      elevated->detail.find(L"machine-wide") != std::wstring::npos &&
                       elevated->detail.find(L"SimHub.exe") != std::wstring::npos,
-                  "preflight: an elevated launcher holds the launch back and names the program that started it");
+                  "preflight: elevated, the launch registers its layers: a note, not held back, naming who started it");
+            e.elevatedRegistration = false;
+            elevatedChecks = preflight_checks(e);
+            elevated = find(elevatedChecks, "elevated");
+            check(elevated && elevated->tone == CheckTone::Bad && elevated->confirm &&
+                      elevated->detail.find(L"SimHub.exe") != std::wstring::npos &&
+                      elevated->detail.find(L"elevated_registration=0") != std::wstring::npos,
+                  "preflight: elevated with registration off holds the launch back and names the program that started it");
             e.parent = L"explorer.exe";
             elevatedChecks = preflight_checks(e);
             elevated = find(elevatedChecks, "elevated");
@@ -2106,6 +2272,7 @@ int main() {
     game_tabs_checks();
     launch_status_checks();
     session_history_checks();
+    explicit_layers_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }
