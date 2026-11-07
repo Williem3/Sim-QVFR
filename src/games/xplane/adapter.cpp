@@ -137,6 +137,8 @@ public:
     bool qvfr_compose_d3d11() const override { return true; }  // X-Plane submits D3D11 (--d3d11_vr)
     bool qvfr_eye_columns() const override { return true; }    // one side-by-side image, each eye a column
     bool qvfr_one_view_size() const override { return true; }  // four instanced layers, one viewport
+    // A flight load draws no frame for 30-60 s (the hang watch fired on every one, 2026-11-06).
+    unsigned hang_watch_s() const override { return 120; }
     bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         if (!qvfr_) {
             simqvfr::logf("xplane: QVFR not started: it needs the launcher's early load with mode=views4 and "

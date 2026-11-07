@@ -65,6 +65,9 @@ public:
     // The game draws all four views at one size (instanced layers in one viewport): each eye column is one view wide
     // and two high, a view being the larger of the outer and focus sizes asked for (the layer offers that).
     virtual bool qvfr_one_view_size() const { return false; }
+    // [experiment] hang_watch_s when the ini doesn't set it (probe/hang_watch.h): the longest the game goes
+    // without a frame on its own, when loading, plus a margin.
+    virtual unsigned hang_watch_s() const { return 30; }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the

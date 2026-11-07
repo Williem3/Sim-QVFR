@@ -213,18 +213,20 @@ target_compile_options(cheeky_host_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cheeky_host_test PRIVATE sim_qvfr_core)
 add_dependencies(cheeky_host_test cheeky_fake_runtime)
 
-# Offline check of the start-up hang watch's module log and minidump (tests/hang_watch_test.cpp).
+# Offline check of the hang watch's module log and its minidump, written by the launcher as the dump helper
+# (tests/hang_watch_test.cpp).
 add_executable(hang_watch_test tests/hang_watch_test.cpp)
 target_include_directories(hang_watch_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(hang_watch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(hang_watch_test PRIVATE sim_qvfr_core)
+add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to the test
 
 # Launcher: starts the chosen game in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
-  src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/launcher/launcher.rc)
+  src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)

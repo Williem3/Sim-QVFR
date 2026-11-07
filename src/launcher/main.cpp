@@ -12,6 +12,9 @@
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
 //        sim-qvfr-launcher --apply-system-layers <request>   (elevated, from the window) writes
 //                                            HKLM's part of Windows' layer list (layer_order.h)
+//        sim-qvfr-launcher --hang-dump <pid> <log>   (from the layer's hang watch) stands by while the game
+//                                            runs; if it hangs, logs its modules and writes its minidump
+//                                            (probe/hang_dump.h)
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -26,6 +29,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "../games/game.h"
+#include "../probe/hang_dump.h"
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
@@ -462,6 +466,11 @@ int launch_game(bool dryRun, std::wstring& out) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     int argc = 0;
     wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    int dumpResult = 0;  // the hang dump helper does nothing else (no settings, no window)
+    if (argv && simqvfr::hang_dump_command(argc, argv, dumpResult)) {
+        LocalFree(argv);
+        return dumpResult;
+    }
     bool dryRun = false, launchNow = false;
     std::wstring request;
     for (int i = 1; i < argc; ++i) {

@@ -188,7 +188,8 @@ struct Experiment {
     std::atomic<double> gazeDeadzone = 1.5;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
-    UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h)
+    UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h;
+                                  // default: the game's hang_watch_s)
 };
 Experiment experiment;
 // The game this process is (games/adapter.h): its QVFR and its own experiments. Elsewhere one that does nothing.
@@ -432,7 +433,7 @@ void load_experiment() {
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
     experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
-    experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", 30, ini.c_str());
+    experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
     // resolution the user set before launch (the launcher writes eye_scale for Two-loop and QVFR's fallback,
