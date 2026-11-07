@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cwchar>
 #include <iterator>
 #include <filesystem>
@@ -190,14 +191,76 @@ Profile settings_profile(const Settings& settings, const std::wstring& name) {
     std::filesystem::remove_all(folder, ec);
     Profile p;
     p.name = name;
-    for (const ProfileKey& k : written.keys) {
-        const bool skip = k.section == L"menu" || k.section == L"osd" || k.section == L"hotkeys" || k.section == L"launcher" ||
-                          k.section == L"profiles" || (k.section == L"experiment" && (k.key == L"cpu_profile" || k.key == L"d3d11_capture_hotkey")) ||
-                          (k.section == L"cheeky" && (k.key == L"runtime" || k.key == L"config_dir"));
-        if (!skip)
+    for (const ProfileKey& k : written.keys)
+        if (per_game_key(k.section, k.key))
             p.keys.push_back(k);
-    }
     return p;
+}
+
+bool per_game_key(const std::wstring& section, const std::wstring& key) {
+    return !(section == L"menu" || section == L"osd" || section == L"hotkeys" || section == L"launcher" ||
+             section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
+             (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")));
+}
+
+namespace {
+
+std::wstring widen_id(const char* id) { return std::wstring(id, id + std::strlen(id)); }
+
+// [profiles] current as stored (an empty value too), so a copy brings back exactly what the game had.
+std::wstring raw_current_profile(const std::wstring& ini) {
+    wchar_t value[256] = {};
+    GetPrivateProfileStringW(L"profiles", L"current", L"\x01", value, static_cast<DWORD>(std::size(value)), ini.c_str());
+    return value;
+}
+
+}  // namespace
+
+bool store_game_settings(const std::wstring& ini, const std::wstring& gameId) {
+    if (gameId.empty() || GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
+        return false;
+    Profile p = settings_profile(load_settings(ini), gameId);
+    if (!save_profile(game_settings_folder(ini), p))
+        return false;
+    const std::wstring current = raw_current_profile(ini);
+    return current == L"\x01" || set_current_profile(game_settings_file(ini, gameId).c_str(), current);
+}
+
+bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) {
+    Profile stored;
+    if (gameId.empty() || is_preset_name(gameId) || !load_profile(game_settings_folder(ini), gameId, stored, true))
+        return false;
+    Profile keys;
+    for (const ProfileKey& k : stored.keys)
+        if (per_game_key(k.section, k.key))
+            keys.keys.push_back(k);
+    bool ok = apply_profile(ini.c_str(), keys);
+    const std::wstring current = raw_current_profile(game_settings_file(ini, gameId));
+    if (current != L"\x01")
+        ok &= set_current_profile(ini.c_str(), current);
+    return ok;
+}
+
+int seed_game_settings(const std::wstring& ini) {
+    if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
+        return 0;
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    int made = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::wstring id = widen_id(all[i]->id);
+        if (GetFileAttributesW(game_settings_file(ini, id).c_str()) == INVALID_FILE_ATTRIBUTES && store_game_settings(ini, id))
+            ++made;
+    }
+    return made;
+}
+
+bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId) {
+    bool ok = store_game_settings(ini, fromId);
+    if (GetFileAttributesW(game_settings_file(ini, toId).c_str()) == INVALID_FILE_ATTRIBUTES)
+        ok &= store_game_settings(ini, toId);  // none yet: it starts from the settings in use
+    ok &= restore_game_settings(ini, toId);
+    return ok;
 }
 
 std::string share_profile(const Profile& profile) {

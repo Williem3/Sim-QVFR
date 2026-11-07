@@ -87,6 +87,22 @@ bool save_live_settings(const std::wstring& ini, const Settings& settings);
 // A profile of `settings` (profile/profiles.h): the keys save_settings writes for the picture, without the
 // panels' places ([menu], [osd]), the hotkeys, the launcher's own keys and the CPU capture switch.
 Profile settings_profile(const Settings& settings, const std::wstring& name);
+// Whether an ini key is one a profile (and a game's own settings) holds: not [menu], [osd], [hotkeys], [launcher],
+// [profiles], the CPU and frame capture switches or Cheeky's install keys.
+bool per_game_key(const std::wstring& section, const std::wstring& key);
+
+// Per-game settings (profile/profiles.h game_settings_file): each game remembers its own resolution, focus area,
+// object detail, crop, helmet, Cheeky settings and profile in use, so a value set for one never changes another.
+// The ini's per-game keys and its [profiles] current, as `gameId`'s copy (written afresh).
+bool store_game_settings(const std::wstring& ini, const std::wstring& gameId);
+// `gameId`'s copy into the ini: its per-game keys and [profiles] current only. False, the ini unchanged, without one.
+bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId);
+// Every game without a copy gets one of the ini's settings: after an update, each game starts from the settings the
+// user had, and only changes made for a game from then on are its own. Returns how many were made.
+int seed_game_settings(const std::wstring& ini);
+// Leaving `fromId` for `toId`: the ini stored as `fromId`'s copy, then `toId`'s loaded (a copy of the ini first if
+// it has none). False if a step failed.
+bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId);
 // A profile as text to share: only its keys that differ from the defaults' profile.
 std::string share_profile(const Profile& profile);
 // A shared profile back: the defaults' profile with the text's keys over it, only keys a profile has (and the
