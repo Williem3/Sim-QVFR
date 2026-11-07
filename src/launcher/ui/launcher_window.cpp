@@ -578,9 +578,18 @@ void record_session() {
         GetPrivateProfileStringW(L"launcher", L"game", L"ace", named, static_cast<DWORD>(std::size(named)), runIni.c_str());
         game = named;
     }
+    // Every ~10 s while the game runs, so the history is kept up to date here rather than read again (12 files of ~100
+    // keys): the shown game's settings are the window's own, kept in step with the ini (follow_ini).
     const std::wstring source = game_settings_target(app.ini, game);
-    store_session(sessions_folder(app.ini), session_record(s, game, load_settings(source)), source);
-    app.sessions = load_sessions(sessions_folder(app.ini));
+    SessionRecord record = session_record(s, game, game == game_id(games::launcher_game()) ? app.s : load_settings(source));
+    if (!store_session(sessions_folder(app.ini), record, source))
+        return;
+    std::vector<SessionRecord>& list = app.sessions;
+    list.erase(std::remove_if(list.begin(), list.end(), [&](const SessionRecord& r) { return r.id == record.id; }), list.end());
+    const auto at = std::find_if(list.begin(), list.end(), [&](const SessionRecord& r) { return r.id < record.id; });  // newest first
+    list.insert(at, std::move(record));
+    if (list.size() > static_cast<size_t>(kSessionHistory))
+        list.resize(kSessionHistory);
 }
 
 // runtime.ini read again (the headset, the last session), and that session kept in the history.
