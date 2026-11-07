@@ -151,17 +151,6 @@ Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int 
     return row;
 }
 
-// A layer nothing here can change: a badge saying so.
-Row locked_row(const std::wstring& label, const std::wstring& desc, const std::wstring& text) {
-    Row row;
-    row.label = label;
-    row.desc = desc;
-    row.controlW = badge_width(text);
-    row.controlH = 20;
-    row.control = [text](const Rect& r) { badge(r.x, r.y, 3, text); };
-    return row;
-}
-
 // The current pane's content at (x, y), width w. Returns its height.
 // ---- Diagnostics -------------------------------------------------------------------------------
 // The last session's measurements (runtime.ini's session_* keys, written by the layer every ~10 s while ACE

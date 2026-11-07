@@ -245,7 +245,7 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp
   src/launcher/ui/controls.cpp src/launcher/ui/help.cpp src/launcher/ui/sheet.cpp src/launcher/ui/form.cpp
   src/launcher/ui/pane_checks.cpp src/launcher/ui/pane_profiles.cpp src/launcher/ui/pane_resolution.cpp
   src/launcher/ui/pane_foveation.cpp src/launcher/ui/pane_dlss.cpp src/launcher/ui/pane_menu.cpp
-  src/launcher/ui/pane_hotkeys.cpp)
+  src/launcher/ui/pane_hotkeys.cpp src/launcher/ui/pane_games.cpp src/launcher/ui/pane_layers.cpp)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)

@@ -37,7 +37,6 @@ std::wstring dims(Size s);
 Row choice_row(Ctl id, const std::wstring& label, const std::wstring* names, int count, int selected, bool disabled);
 Row slider_row(Ctl id, const std::wstring& label, const std::wstring& desc, int value, const std::wstring& detail,
                bool disabled = false, const wchar_t* unit = L"%", bool tenths = false);
-Row locked_row(const std::wstring& label, const std::wstring& desc, const std::wstring& text);
 Row value_row(const std::wstring& label, const std::wstring& desc, const std::wstring& value);
 std::wstring formatted(const wchar_t* format, double v);
 

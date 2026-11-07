@@ -350,10 +350,19 @@ void sheet_card();
 void place_sheet_edit();
 void create_sheet_edit();
 
-// launcher_window.cpp
+// pane_layers.cpp
+void refresh_layers(bool keepDraft = true);
+int layer_rows();
+std::wstring friendly_layer(const std::string& name, const std::wstring& manifest = {});
+void edit_launcher_layers(const std::function<void(LauncherLayers&)>& change);
+void toggle_layer(int i);
+void move_layer(int i, int step);
+void apply_layers();
+float layers_pane(float x, float y, float w, bool draw);
 float layers_preview(float x, float y, float w, bool draw);
+
+// launcher_window.cpp
 std::wstring clipboard_text();
-bool installed(const games::GameInfo& game);
 bool pane_shown(int pane);
 void edit_font();
 void choose_game_folder();
@@ -376,6 +385,17 @@ void capture_poll();
 // pane_checks.cpp
 float checks_pane(float x, float y, float w, bool draw);
 void fix_check(const Check& c);
+
+// pane_games.cpp
+void refresh_installed();
+bool installed(const games::GameInfo& game);
+bool game_shown(const games::GameInfo& game);
+int shown_game_count();
+const games::GameInfo& color_game();
+void load_color_edit();
+void apply_color_edit();
+void set_color_from(float x, float y);
+float games_pane(float x, float y, float w, bool draw);
 
 // pane_resolution.cpp
 float resolution_pane(float x, float y, float w, bool draw);

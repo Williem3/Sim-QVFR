@@ -108,8 +108,6 @@ std::string ini_text() {
     return text;
 }
 
-void apply_color_edit();  // the Games pane's colour into the settings (below)
-
 void changed(bool save) {
     app.status = Status::Idle;
     if (save)
