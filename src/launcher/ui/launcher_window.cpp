@@ -1126,6 +1126,68 @@ constexpr Help kHelp[] = {
      L"GPU time and latency. Turn OpenXR Toolkit’s Turbo mode off with it, and run no other frame generator."},
     {L"Center region", L"The part of the view frame generation makes at full quality (it follows your eyes when eye tracked). "
                        L"Larger looks better and costs more GPU time."},
+    // Sections' reference text, by their titles (their footers keep a line).
+    {L"Load order",
+     L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in Windows can "
+     L"still be loaded for the game alone. Locked switches keep the mod and the game working."},
+    {L"Describe the problem",
+     L"Zips the logs and the game’s crash reports from those sessions (names and account IDs taken out) into the logs "
+     L"folder, then opens a new issue on GitHub with what you wrote, your settings, the last session and your PC filled in. "
+     L"Add the steps there, and drag in the zip (it shows below) and any screenshots."},
+    {L"Busiest threads",
+     L"Each thread is a share of ONE core. A thread near 100% can hold the frame rate back even when Windows shows the whole "
+     L"CPU at 15%; a thread that spins by design looks busy whatever limits it."},
+    {L"Capture and share",
+     L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the issue. Elsewhere, send a "
+     L"screenshot of this page (or paste the summary) and the session’s log, with the latest cpu-profile file if you made one."},
+    {L"CPU capture",
+     L"At the next launch, the CPU capture hotkey (Ctrl+Alt+C) while driving records for 20 s where the game’s busiest "
+     L"threads spend their time, into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; "
+     L"the game may stutter slightly while it records."},
+    {L"Frame capture",
+     L"Saves the game’s own image and the composed output, as PNG files in the captures folder inside the logs folder. Each "
+     L"press saves one more frame, to compare the views where something looks wrong. For games composed by the D3D11 "
+     L"compositor (X-Plane 12, Assetto Corsa Competizione)."},
+    {L"Next launch without QVFR",
+     L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the same race with "
+     L"and without QVFR. It turns itself off after that launch; the next one has QVFR again. The performance overlay works "
+     L"in it, the settings menu does not."},
+    {L"Presets for eye tracked foveation",
+     L"Starting points that put the pixels in the centre: low outer views and a dense focus area. Eye tracked, the area "
+     L"follows your eyes, so it can be small and very sharp. They set the resolution only and keep everything else."},
+    {L"Presets for fixed foveation",
+     L"Starting points that put the pixels in the centre: low outer views and a dense focus area. Fixed, your eyes move off "
+     L"the centre, so the area is larger and a little less dense. They set the resolution only and keep everything else."},
+    {L"Your profiles",
+     L"A profile holds every setting of the picture: resolution, foveation and the focus overlay, and where the game has "
+     L"them the view crop, the helmet and Foveated DLSS. Not the menu’s and overlay’s places, the hotkeys or the OpenXR "
+     L"layers. Share copies one as a line of text to paste in a chat; Paste adds one from the clipboard. The headset menu’s "
+     L"Profile line switches between them while you drive."},
+    {L"Headset menu",
+     L"A key’s first press also opens the menu. A wheel’s directions act only while the menu shows, so a switch the game "
+     L"also uses doesn’t open it: use Open or close first."},
+    {L"In the game",
+     L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever the game runs."},
+    {L"Field of view crop",
+     L"The outer view keeps its sharpness and the focus region its size. Changes reach a running game at once; with DLSS "
+     L"on, or with less crop than at launch, the pixel count follows at the next launch."},
+    {L"Helmet overlay",
+     L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png and visor.png "
+     L"with alpha in the helmet folder next to the layer; the log suggests the crop that matches them."},
+    {L"Focus shape",
+     L"Each corner moves toward the middle of the focus region, percent of its width (in) or height (down, up). Pull the top "
+     L"corners in for a trapezoid: more of the dash sharp, less of the far field. The focus view still renders the whole "
+     L"box, so the cost stays the same."},
+    {L"Cheeky Foveated DLSS",
+     L"No Cheeky loader goes in the game folder: Sim-QVFR loads Cheeky’s runtime into the game itself."},
+    {L"Frame generation (experimental)",
+     L"Outside the center region frames are warped with the game’s motion. Lower scales use less GPU time and memory. With "
+     L"an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer."},
+    {L"Placement", L"The settings menu stays 0.8 m in front of your head, wherever you look."},
+    {L"Updates",
+     L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
+     L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "
+     L"update folder. Download opens the release’s page instead."},
     {L"Live", L"These settings reach the game while it runs, as soon as you change them. Without the game running, they "
               L"apply when it starts."},
     {L"Next launch", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
@@ -1475,9 +1537,14 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
     if (!title.empty()) {
         if (draw) {
             app.canvas.text(title, t::kHeadline, {x + 2, y, w - 2, t::kHeadline.lineHeight}, col(app.c->heading));
+            // Then its ⓘ (the section's reference text, kHelp by its title) and when its settings apply.
+            float tx = x + 2 + std::ceil(app.canvas.measure(title, t::kHeadline)) + 6;
+            if (help_for(title)) {
+                help_icon(title, tx, y + (t::kHeadline.lineHeight - t::kBody.lineHeight) / 2);
+                tx += 14 + 4;
+            }
             if (applies != Applies::None)
-                applies_tag(x + 2 + std::ceil(app.canvas.measure(title, t::kHeadline)) + t::kSpace2,
-                            y + (t::kHeadline.lineHeight - 18) / 2, applies);
+                applies_tag(tx + 2, y + (t::kHeadline.lineHeight - 18) / 2, applies);
         }
         h += t::kHeadline.lineHeight + t::kSpace2;
     }
@@ -1710,11 +1777,9 @@ float layers_pane(float x, float y, float w, bool draw) {
                 desc += (desc.empty() ? L"" : L" · ") + widen(l.name);
             rows.push_back(layer_row(friendly_layer(l.name), desc, i, l.on, !l.lock.empty(), i > 0, i + 1 < n));
         }
-        h += section(x, y + h, w, L"Load order for " + short_name(),
-                     rows,
-                     L"Nearest the game first. Each launch loads these below the Sim-QVFR layer in this order; a layer off in "
-                     L"Windows can still be loaded for the game alone. Locked switches keep the mod and the game working.",
-                     draw, Applies::NextLaunch);
+        h += section(x, y + h, w, L"Load order", rows,
+                     L"Nearest the game first: each launch loads them below the Sim-QVFR layer in this order.", draw,
+                     Applies::NextLaunch);
         Row reset;
         reset.label = L"Windows’ order";
         reset.desc = L"Forget this profile: launches follow Windows’ order and switches again.";
@@ -2083,10 +2148,7 @@ float report_pane(float x, float y, float w, bool draw) {
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Zips the logs and the game's crash reports from those sessions (names and account IDs taken "
-                 L"out) into the logs folder, then opens a new issue on GitHub with what you wrote, your "
-                 L"settings, the last session and your PC filled in. Add the steps there, and drag in the zip "
-                 L"(it shows below) and any screenshots.",
+                 L"Opens a GitHub issue with the details filled in, and zips the logs for you to drag into it.",
                  draw);
     if (app.reportZip.empty())
         return h;
@@ -2116,8 +2178,7 @@ float report_pane(float x, float y, float w, bool draw) {
     };
     h += t::kSpace6;
     h += section(x, y + h, w, L"Attach the logs", {zip},
-                 L"GitHub can't attach it for you: drop it into the issue's \"Screenshots and logs\" box (or a "
-                 L"comment). Without it most problems can't be tracked down.",
+                 L"GitHub can’t attach it for you: drop it into the issue’s “Screenshots and logs” box.",
                  draw);
     return h;
 }
@@ -2190,8 +2251,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         if (threads.empty())
             threads.push_back(value_row(L"Not measured", L"", dash));
         h += section(x, y + h, w, L"Busiest threads", threads,
-                     L"Each thread is a share of ONE core. A thread near 100% can hold the frame rate back even when "
-                     L"Windows shows the whole CPU at 15%; a thread that spins by design looks busy whatever limits it.",
+                     L"Each is a share of one core: near 100%, a thread can hold the frame rate back.",
                      draw);
         h += t::kSpace6;
         const bool toolkit = s.layersBelow.find(L"MBUCCHIA_toolkit") != std::wstring::npos;
@@ -2246,29 +2306,23 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
     }
     // Asking for help: the capture switch, copying the numbers above, the logs folder.
     Row capture;
-    const std::wstring captureDesc =
-        L"At the next launch, Ctrl+Alt+C while driving records for 20 s where the game's busiest threads spend their time, "
-        L"into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; the game may "
-        L"stutter slightly while it records.";
+    const std::wstring captureKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::CpuCapture)].key);
+    const std::wstring captureDesc = L"At the next launch, " + (captureKey.empty() ? std::wstring(L"the CPU capture hotkey") : captureKey) +
+                                     L" while driving records 20 s of where the busiest threads spend their time.";
     capture.fullHeight = [captureDesc](float width) { return checkbox_height(captureDesc, width); };
     capture.full = [captureDesc](const Rect& r) { checkbox(kDiagCapture, r, app.s.cpuProfile, L"CPU capture", captureDesc); };
     // Frame capture (probe/d3d11_capture.h): the frame the headset gets, saved at a key press.
     Row frame;
     const std::wstring frameKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::FrameCapture)].key);
-    const std::wstring frameDesc =
-        L"At the next launch, " + (frameKey.empty() ? std::wstring(L"the Frame capture hotkey") : frameKey) +
-        L" saves the frame the headset gets: the game's own image and the composed output, as PNG files in the "
-        L"captures folder inside the logs folder. Each press saves one more frame, to compare the views where "
-        L"something looks wrong. For games composed by the D3D11 compositor (X-Plane 12, Assetto Corsa Competizione).";
+    const std::wstring frameDesc = L"At the next launch, " + (frameKey.empty() ? std::wstring(L"the Frame capture hotkey") : frameKey) +
+                                   L" saves the frame the headset gets, as PNG files in the logs folder.";
     frame.fullHeight = [frameDesc](float width) { return checkbox_height(frameDesc, width); };
     frame.full = [frameDesc](const Rect& r) {
         checkbox(kDiagFrameCapture, r, app.s.frameCapture, L"Frame capture", frameDesc);
     };
     Row baseline;
-    const std::wstring baselineDesc =
-        L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the "
-        L"same race with and without QVFR. It turns itself off after that launch; the next one has QVFR again. The "
-        L"performance overlay works in it, the settings menu does not.";
+    const std::wstring baselineDesc = L"Starts the game once with QVFR off, still measuring, to compare against. The launch after "
+                                      L"has QVFR again.";
     baseline.fullHeight = [baselineDesc](float width) { return checkbox_height(baselineDesc, width); };
     baseline.full = [baselineDesc](const Rect& r) {
         checkbox(kDiagBaseline, r, app.s.baselineNext, L"Next launch without QVFR", baselineDesc);
@@ -2281,9 +2335,7 @@ float diagnostics_pane(float x, float y, float w, bool draw) {
         button(kDiagCopy, {r.x, r.y, copyW, t::kControlHeight}, L"Copy summary", false);
         button(kDiagLogs, {r.x + copyW + t::kSpace3, r.y, logsW, t::kControlHeight}, L"Open logs folder", false);
     };
-    std::wstring footer = L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the "
-                          L"issue. Elsewhere, send a screenshot of this page (or paste the summary) and the session's ace-*.log";
-    footer += s.cpuProfile.empty() ? L"." : L", with the latest cpu-profile file.";
+    const std::wstring footer = L"To report a problem, use Report an issue: it zips these logs and fills in the issue.";
     h += section(x, y + h, w, L"Capture and share", {capture, frame, baseline, actions}, footer, draw, Applies::NextLaunch);
     return h;
 }
@@ -2355,10 +2407,7 @@ float profiles_pane(float x, float y, float w, bool draw) {
     }
     float h = 0;
     h += section(x, y + h, w, app.s.eyeTracking ? L"Presets for eye tracked foveation" : L"Presets for fixed foveation", presetRows,
-                 std::wstring(L"Starting points that put the pixels in the centre: low outer views and a dense focus area. ") +
-                     (app.s.eyeTracking ? L"Eye tracked, the area follows your eyes, so it can be small and very sharp. "
-                                        : L"Fixed, your eyes move off the centre, so the area is larger and a little less dense. ") +
-                     L"They set the resolution only and keep everything else; the Foveated mode (Foveation) picks the set.",
+                 L"They set the resolution only; the Foveated mode (Foveation) picks the set.",
                  draw) +
          t::kSpace6;
     if (savedRows.empty()) {
@@ -2378,14 +2427,8 @@ float profiles_pane(float x, float y, float w, bool draw) {
     };
     savedRows.push_back(actions);
     h += section(x, y + h, w, L"Your profiles", savedRows,
-                 (app.profileMessage.empty() ? L"" : app.profileMessage + L" ") +
-                     L"A profile holds every setting of the picture: resolution, foveation, the focus overlay" +
-                     std::wstring(game_has(&games::GameFeatures::fovCrop) ? L", the view crop" : L"") +
-                     (game_has(&games::GameFeatures::helmet) ? L", the helmet" : L"") +
-                     (game_has(&games::GameFeatures::foveatedDlss) ? L", Foveated DLSS" : L"") +
-                     L". Not the menu’s and overlay’s places, the hotkeys or the OpenXR layers. Share copies one as a "
-                     L"line of text to paste in a chat; Paste adds one from the clipboard. The headset menu’s Profile line "
-                     L"switches between them while you drive.",
+                 app.profileMessage.empty() ? L"Share copies one as a line of text; the headset menu switches between them."
+                                            : app.profileMessage,
                  draw);
     return h;
 }
@@ -2451,8 +2494,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
     h += section(x, y + h, w, L"Headset menu",
                  {row(HotkeyAction::MenuToggle), row(HotkeyAction::MenuUp), row(HotkeyAction::MenuDown),
                   row(HotkeyAction::MenuLeft), row(HotkeyAction::MenuRight)},
-                 L"A key’s first press also opens the menu. A wheel’s directions act only while the menu shows, so a "
-                 L"switch the game also uses doesn’t open it: use Open or close first. " + pads_found(),
+                 pads_found(),
                  draw, Applies::Live) +
          t::kSpace6;
     std::vector<Row> inGame = {row(HotkeyAction::Overlay)};
@@ -2460,9 +2502,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
         inGame.push_back(row(HotkeyAction::Visor));
     inGame.insert(inGame.end(), {row(HotkeyAction::CpuCapture), row(HotkeyAction::FrameCapture)});
     h += section(x, y + h, w, L"In the game", inGame,
-                 L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever "
-                 L"the game runs. Click a button above, then press the keys or the wheel button: Esc cancels, Delete "
-                 L"clears it.",
+                 L"Click a button, then press the keys or a wheel button: Esc cancels, Delete clears it.",
                  draw, Applies::Live) +
          t::kSpace6;
     Row reset;
@@ -2471,8 +2511,7 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
         const float resetW = button_width(L"Reset hotkeys");
         button(kHotkeysReset, {r.x, r.y, resetW, t::kControlHeight}, L"Reset hotkeys", false);
     };
-    h += section(x, y + h, w, L"", {reset}, L"Back to Ctrl+Alt+arrows, Ctrl+Alt+P, Ctrl+Alt+V, Ctrl+Alt+C and Ctrl+Alt+F, without wheel buttons. "
-                                        L"Restore Defaults leaves the hotkeys as they are.",
+    h += section(x, y + h, w, L"", {reset}, L"Back to the Ctrl+Alt keys, without wheel buttons. Restore Defaults leaves them as they are.",
                  draw);
     return h;
 }
@@ -2763,9 +2802,7 @@ float pane_content(float x, float y, float w, bool draw) {
                           slider_row(kCropOuter, L"Outer side", L"Toward the temple, mirrored for each eye.", app.s.cropOuter, L"",
                                      cropOff),
                           slider_row(kCropInner, L"Inner side", L"Toward the nose.", app.s.cropInner, L"", cropOff)},
-                         L"Share of each eye’s field of view removed at that side; the headset shows black there. The outer "
-                         L"view keeps its sharpness and the focus region its size. With DLSS "
-                         L"on, or with less crop than at launch, the pixel count follows at the next launch.",
+                         L"Share of each eye’s view removed at that side; the headset shows black there.",
                          draw, Applies::Live);
         }
         if (game_has(&games::GameFeatures::helmet)) {
@@ -2805,9 +2842,7 @@ float pane_content(float x, float y, float w, bool draw) {
                               detail.desc = L"Your images only: Detail is sharper, Performance costs less GPU and memory.";
                               return detail;
                           }()},
-                         L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png "
-                         L"and visor.png with alpha in the helmet folder next to the layer; the log suggests the crop that "
-                         L"matches them.",
+                         L"Your own helmet: top.png, bottom.png and visor.png in the helmet folder next to the layer.",
                          draw, Applies::Live);
         }
         break;
@@ -2876,10 +2911,7 @@ float pane_content(float x, float y, float w, bool draw) {
                           corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"),
                           corner(kShapeBottomRightIn, L"Bottom right in"),
                           corner(kShapeBottomRightUp, L"Bottom right up")},
-                         L"Each corner moves toward the middle of the focus region, percent of its width (in) or "
-                         L"height (down, up). Pull the top corners in for a trapezoid: more of the dash sharp, less "
-                         L"of the far field. The focus view still renders the whole box, so the cost stays the same. "
-                         L"Applies live.",
+                         L"Pull the top corners in for a trapezoid: more of the dash sharp, at the same cost.",
                          draw, Applies::Live);
         }
         break;
@@ -2950,7 +2982,7 @@ float pane_content(float x, float y, float w, bool draw) {
                                                          : L"";
         h += section(x, y + h, w, L"Cheeky Foveated DLSS", {use, rt, xr},
                      L"Put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to sim-qvfr.dll, or choose "
-                     L"its runtime. No Cheeky loader goes in the game folder. " + last,
+                     L"its runtime. " + last,
                      draw, Applies::NextLaunch) + t::kSpace6;
         const bool outer = app.s.cheeky.outerDlaa;
         Row on, cheap;
@@ -3043,8 +3075,7 @@ float pane_content(float x, float y, float w, bool draw) {
                           return release;
                       }(),
                       fgBorder},
-                     L"Outside the center region frames are warped with ACE’s motion. Lower scales use less GPU time "
-                     L"and memory. With an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer.",
+                     L"Lower scales use less GPU time and memory.",
                      draw, Applies::Live);
         const std::wstring license = L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the "
                                      L"GNU GPL v3 (github.com/ClarkCheekyKent/CheekyFoveatedDLSS).";
@@ -3063,8 +3094,7 @@ float pane_content(float x, float y, float w, bool draw) {
                                  false, L"°"),
                       slider_row(kMenuWidth, L"Size", L"Width of the panel, in degrees of your view.", app.s.menuWidth, L"",
                                  false, L"°")},
-                     L"The settings menu stays 0.8 m in front of your head, wherever you look. Drag it in the preview, "
-                     L"or move it from the menu itself in the headset.",
+                     L"Drag it in the preview, or move it from the menu itself in the headset.",
                      draw, Applies::Live);
         const std::wstring open = L"Ctrl+Alt+arrows while the game has focus (or the keys and wheel buttons set in the Hotkeys "
                                   L"pane), or click the left controller stick. The right stick selects and changes values; "
@@ -3191,9 +3221,7 @@ float pane_content(float x, float y, float w, bool draw) {
             updateRows.push_back(actions);
         }
         h += section(x, y + h, w, L"Updates", updateRows,
-                     L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the "
-                     L"program files and restarts the launcher; your settings, profiles and changed files stay, and the version "
-                     L"you had is kept in the update folder. Download opens the release’s page instead.",
+                     L"Install keeps your settings, profiles and changed files; Download opens the release’s page.",
                      draw);
         // The same notice as the README's: unofficial, at the user's own risk.
         const std::wstring notice =
