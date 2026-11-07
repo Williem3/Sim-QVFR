@@ -734,6 +734,115 @@ int main() {
                   loader->data.ends_with("xrCreateInstance]"),
               "report: a long loader output goes in as its last part");
 
+        // The game's crash reports (GameInfo::crashReports): only those during a zipped session, the newest
+        // kReportGameCrashes, each as game-crash-<local time>/ with its CrashContext and log redacted.
+        {
+            const fs::path base = folder / L"report-crashes", crashLogs = base / L"logs", crashes = base / L"Crashes";
+            fs::create_directories(crashLogs);
+            fs::create_directories(crashes);
+            const auto stamp = [](fs::file_time_type t) {
+                const uint64_t ticks = static_cast<uint64_t>(t.time_since_epoch().count());
+                const FILETIME ft{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
+                SYSTEMTIME utc{}, local{};
+                FileTimeToSystemTime(&ft, &utc);
+                SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local);
+                wchar_t text[32];
+                swprintf_s(text, L"%04u%02u%02u-%02u%02u%02u", local.wYear, local.wMonth, local.wDay, local.wHour,
+                           local.wMinute, local.wSecond);
+                return std::wstring(text);
+            };
+            using std::chrono::hours, std::chrono::minutes;
+            const auto session = [&](fs::file_time_type::duration startAge, fs::file_time_type::duration endAge) {
+                const fs::path p = crashLogs / (L"session-" + stamp(now - startAge) + L".log");
+                write_file(p.wstring(), "log");
+                fs::last_write_time(p, now - endAge);
+            };
+            session(hours(5), hours(4));
+            session(hours(3), hours(2));
+            session(minutes(50), minutes(40));
+            const std::string gameLog =
+                "LogInit: Computer: GAMING-PC\r\nLogInit: User: al\r\nFile [C:/Users/al/AppData/Local/AC2/Saved]\r\n"
+                "LogKsGamePlatform: UGamePlatformServices::Init() loaded local account: S76561198000000001 Alice Example "
+                "ally#0\r\n"
+                "LogOnline: Warning: STEAM: Failed to obtain steam user stats, user: Ally Cat [0x21873D004C0] has no "
+                "stats entries\r\n"
+                "Check ok with S76561198000000001, Alice Example on GAMING-PC; build 97656119000000001234; also al stays\r\n";
+            // The dump holds the context's ids as Unreal copies them: ASCII in another case, and UTF-16.
+            const auto utf16 = [](const std::string& s) {
+                std::string out;
+                for (char ch : s)
+                    out += std::string(1, ch) + '\0';
+                return out;
+            };
+            const std::string dump = std::string("MDMP\0\0", 6) + "head EBB98300AA11 mid " + utf16("3b18b8ffee22") + " tail";
+            const auto crash = [&](const wchar_t* name, fs::file_time_type::duration age) {
+                const fs::path d = crashes / name;
+                fs::create_directories(d);
+                write_file((d / L"UE4Minidump.dmp").wstring(), dump);
+                write_file((d / kCrashContextName).wstring(),
+                           "<LoginId>ebb98300aa11</LoginId><MachineId>EBB98300AA11</MachineId><ErrorMessage>boom"
+                           "</ErrorMessage><EpicAccountId>3b18b8ffee22</EpicAccountId><UserName></UserName>");
+                write_file((d / L"AC2.log").wstring(), gameLog);
+                write_file((d / L"CrashReportClient.ini").wstring(), "[x]");
+                for (const fs::directory_entry& f : fs::directory_iterator(d))
+                    fs::last_write_time(f.path(), now - age);
+            };
+            crash(L"UE4CC-A", hours(4) - minutes(1));   // just after session 1's last line: in, but the oldest
+            crash(L"UE4CC-B", hours(2) + minutes(30));  // during session 2
+            crash(L"UE4CC-C", minutes(39));             // just after session 3's last line
+            crash(L"UE4CC-D", minutes(20));             // 20 minutes after session 3: the game without Sim-QVFR
+            crash(L"UE4CC-E", hours(3) + minutes(30));  // between sessions 1 and 2
+            const std::vector<ReportFile> got =
+                report_files({crashLogs.wstring(), reportRuntime, settingsIni, crashes.wstring()}, nowTicks);
+            std::vector<std::wstring> chosen;  // the crashes' folders in the zip (by their time), in zip order
+            int crashEntries = 0;
+            const ReportFile* context = nullptr;
+            const ReportFile* gameLogEntry = nullptr;
+            const ReportFile* dumpEntry = nullptr;
+            for (const ReportFile& f : got) {
+                if (!f.name.starts_with(L"game-crash-"))
+                    continue;
+                ++crashEntries;
+                if (f.name.ends_with(L"/UE4Minidump.dmp")) {
+                    chosen.push_back(f.name.substr(0, f.name.find(L'/')));
+                    dumpEntry = dumpEntry ? dumpEntry : &f;
+                }
+                if (f.name.ends_with(kCrashContextName))
+                    context = &f;
+                if (f.name.ends_with(L"/AC2.log"))
+                    gameLogEntry = &f;
+            }
+            const std::vector<std::wstring> wantCrashes = {L"game-crash-" + stamp(now - minutes(39)),
+                                                           L"game-crash-" + stamp(now - hours(2) - minutes(30))};
+            check(chosen == wantCrashes && crashEntries == 6,
+                  "report: the game's two newest crashes during zipped sessions (dump, context, log each), named by "
+                  "their local time; none between or after sessions, no crash reporter ini");
+            const auto has = [](const ReportFile* f, const std::string& text) {
+                return f && f->data.find(text) != std::string::npos;
+            };
+            check(has(context, "<LoginId>redacted</LoginId>") && has(context, "<MachineId>redacted</MachineId>") &&
+                      has(context, "<EpicAccountId>redacted</EpicAccountId>") && has(context, "<UserName></UserName>") &&
+                      has(context, "<ErrorMessage>boom</ErrorMessage>") && !has(context, "ebb983") &&
+                      !has(context, "EBB983") && !has(context, "3b18"),
+                  "report: CrashContext without the login, machine and Epic account ids; the error kept");
+            check(dumpEntry && dumpEntry->path.empty() && dumpEntry->data.size() == dump.size() &&
+                      dumpEntry->data.starts_with(std::string("MDMP\0\0", 6)) && dumpEntry->data.ends_with(" tail") &&
+                      has(dumpEntry, "head 000000000000 mid ") && !has(dumpEntry, "EBB98300AA11") &&
+                      !has(dumpEntry, utf16("3b18b8ffee22")) && has(dumpEntry, utf16("000000000000")),
+                  "report: the dump with the context's ids zeroed, ASCII in any case and UTF-16, its size kept");
+            check(crash_context_ids("<LoginId></LoginId><MachineId>short</MachineId>").empty(),
+                  "report: no ids from empty or short values");
+            check(gameLogEntry && !has(gameLogEntry, "GAMING-PC") && !has(gameLogEntry, "Users/al/") &&
+                      has(gameLogEntry, "C:/Users/<user>/AppData") && has(gameLogEntry, "LogInit: User: <user>") &&
+                      !has(gameLogEntry, "Alice Example") && !has(gameLogEntry, "ally#0") &&
+                      !has(gameLogEntry, "Ally Cat [") && has(gameLogEntry, "user: <steam name> [0x21873D004C0]") &&
+                      !has(gameLogEntry, "76561198000000001") && has(gameLogEntry, "with S<steam id>, <account> on <computer>") &&
+                      has(gameLogEntry, "build 97656119000000001234") && has(gameLogEntry, "also al stays"),
+                  "report: the game's log without the computer, user, account and Steam names or SteamID64s, "
+                  "wherever they appear; longer numbers and a short user name outside paths kept");
+            check(redact_game_log("no names here\r\n") == "no names here\r\n", "report: a log with no names is unchanged");
+        }
+
         check(crc32("123456789", 9) == 0xcbf43926u, "report: CRC-32 check value");
         const std::vector<ReportFile> zipEntries = {{L"runtime.ini", reportRuntime}, {L"issue.md", L"", "# Problem \xc3\xa9"}};
         const std::wstring zip = (folder / L"report" / L"report.zip").wstring();

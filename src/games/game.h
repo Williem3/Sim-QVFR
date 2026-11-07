@@ -41,6 +41,10 @@ struct GameInfo {
     // shaders before it starts OpenXR, so the layer's shader edits reach them (X-Plane). The layer then sets the
     // game up on load (GameAdapter::early_start), not at xrCreateInstance.
     bool earlyLoad = false;
+    // The game's own crash reports, under %LOCALAPPDATA%: Unreal's crash reporter writes a folder per crash (the
+    // minidump, CrashContext.runtime-xml, the game's log), which Report an issue zips when it falls in a session
+    // (src/launcher/report.h). Null: none known.
+    const wchar_t* crashReports = nullptr;
 };
 
 // The games Sim-QVFR supports, in the launcher's order.

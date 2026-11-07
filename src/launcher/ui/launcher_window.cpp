@@ -1560,8 +1560,9 @@ void report_issue() {
     report.causes = likely_causes(app.s, app.runtime);
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
-    std::vector<ReportFile> files =
-        report_files({logs, runtime_info_path(), app.ini}, (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
+    const std::wstring gameCrashes = game_crashes_folder(games::launcher_game().crashReports);
+    std::vector<ReportFile> files = report_files({logs, runtime_info_path(), app.ini, gameCrashes},
+                                                 (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime);
     files.push_back({L"issue.md", L"", utf8(issue_body(report))});
     const std::wstring zip = logs + L"\\" + name;
     const std::wstring error = write_zip(zip, files);
@@ -1677,7 +1678,8 @@ float report_pane(float x, float y, float w, bool draw) {
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Zips the logs into the logs folder, then opens a new issue on GitHub with what you wrote, your "
+                 L"Zips the logs and the game's crash reports from those sessions (names and account IDs taken "
+                 L"out) into the logs folder, then opens a new issue on GitHub with what you wrote, your "
                  L"settings, the last session and your PC filled in. Add the steps there, and drag in the zip "
                  L"(it shows below) and any screenshots.",
                  draw);

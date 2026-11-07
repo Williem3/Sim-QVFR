@@ -55,7 +55,8 @@ body:
       label: Screenshots and logs
       description: |
         Drag in the report zip from the launcher's logs folder (sim-qvfr-report-*.zip): it has the session's
-        logs and any hang dump. Screenshots of an error message help too.
+        logs, any hang dump and the game's own crash report (names and account IDs taken out). Screenshots of
+        an error message help too.
   - type: textarea
     id: checks
     attributes:
