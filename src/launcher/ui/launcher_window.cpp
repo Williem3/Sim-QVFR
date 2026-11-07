@@ -1199,6 +1199,13 @@ constexpr Help kHelp[] = {
      L"update folder. Download opens the release’s page instead."},
     {L"Live", L"These settings reach the game while it runs, as soon as you change them. Without the game running, they "
               L"apply when it starts."},
+    {L"Live when lowered",
+     L"Lowering it reaches a running game at once, and so does raising it back up to what the game started with. Above "
+     L"that, it takes effect at the next launch. With DLSS on in the game, the views keep their launch sizes until the "
+     L"next launch."},
+    {L"Focus region",
+     L"Changes reach a running game at once. A focus area wider or taller than the game started with renders at a lower "
+     L"density until the next launch, which sizes its view to fit."},
     {L"Next launch", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
                      L"what it started with."},
     {L"Show the overlay",
@@ -1488,9 +1495,10 @@ void sheet_card() {
 
 // ---- Form layout -------------------------------------------------------------------------------
 
-// When a section's settings reach the game: at once while it runs (Live), or when it next starts (NextLaunch). The
-// section's title carries it as a tag (section).
-enum class Applies { None, Live, NextLaunch };
+// When a section's settings reach the game: at once while it runs (Live), or when it next starts (NextLaunch); QVFR's
+// resolution live as it goes down, or back up to the size the game started with, and above that at the next launch
+// (LiveLowered: the views can't grow past their launch size). The section's title carries it as a tag (section).
+enum class Applies { None, Live, LiveLowered, NextLaunch };
 
 // One FormRow inside a section box: label (+ description) leading, the control trailing.
 struct Row {
@@ -1522,11 +1530,11 @@ float row_height(const Row& row, float w) {
     return std::max(t::kRowMinHeight, std::max(textH, row.controlH) + 2 * kRowPadY);
 }
 
-// The tag after a section's title: "Live" (green) or "Next launch" (grey), 18 high; under the pointer, what it means
-// (its help, as an ⓘ's).
+// The tag after a section's title: "Live" or "Live when lowered" (green), or "Next launch" (grey), 18 high; under the
+// pointer, what it means (its help, as an ⓘ's).
 void applies_tag(float x, float y, Applies applies) {
-    const bool live = applies == Applies::Live;
-    const std::wstring text = live ? L"Live" : L"Next launch";
+    const bool live = applies != Applies::NextLaunch;
+    const std::wstring text = applies == Applies::Live ? L"Live" : applies == Applies::LiveLowered ? L"Live when lowered" : L"Next launch";
     const Rect r{x, y, std::ceil(app.canvas.measure(text, kBadgeStyle)) + 16, 18};
     app.canvas.fill(r, col(live ? app.c->success_bg : app.c->segment_track), 9);
     app.canvas.text(text, kBadgeStyle, r, col(live ? app.c->success : app.c->label_secondary), Align::Center);
@@ -2783,7 +2791,7 @@ float pane_content(float x, float y, float w, bool draw) {
                        qvfr ? app.s.inner : static_cast<int>(std::lround(ro.focusDensity * 100)),
                        known && qvfr ? px(ro.focus) : L"", !qvfr),
         };
-        h += section(x, y, w, L"Per-eye resolution", rows, footer, draw, Applies::NextLaunch);
+        h += section(x, y, w, L"Per-eye resolution", rows, footer, draw, qvfr ? Applies::LiveLowered : Applies::NextLaunch);
         // Object detail (X-Plane): the LOD the focus views need, or less of it for main-thread time.
         if (game_has(&games::GameFeatures::objectDetail)) {
             h += t::kSpace6;
