@@ -234,8 +234,7 @@ public:
             fourViews_ = true;
             return;
         }
-        apply_all(ini);
-        fourViews_ = GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1;
+        fourViews_ = apply_all(ini);
     }
     // Every xrEndFrame: with four views, exposure fusion stays off (it builds its pyramids for two layers only; abi.h).
     // X-Plane's static initialisers set the control after an early load, so it is checked here, not once.
@@ -255,8 +254,7 @@ public:
             return;
         }
         simqvfr::logf("xplane: layer loaded at xrCreateInstance (not early): shaders X-Plane made at startup are not edited");
-        apply_all(ini);
-        fourViews_ = GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1;
+        fourViews_ = apply_all(ini);
     }
 
 private:
@@ -293,13 +291,20 @@ private:
         }
         return true;
     }
-    static void apply_all(const wchar_t* ini) {
+    // The experiment stages (no QVFR composition). True: X-Plane draws four views (xplane_copies=1). A baseline run
+    // (baseline=1, the launcher's "Next launch without QVFR") patches nothing: X-Plane's own two views, to compare with.
+    static bool apply_all(const wchar_t* ini) {
+        if (GetPrivateProfileIntW(L"experiment", L"baseline", 0, ini) != 0) {
+            simqvfr::logf("xplane: baseline=1: nothing patched, X-Plane renders its own two views");
+            return false;
+        }
         if (GetPrivateProfileIntW(L"experiment", L"xplane_copies", 0, ini) == 1) {
             apply_copies(ini);
-            return;
+            return true;
         }
         apply_layer_count(ini);
         apply_context_layers(ini);
+        return false;
     }
 };
 
