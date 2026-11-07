@@ -368,4 +368,20 @@ void paste_profile();
 float checks_pane(float x, float y, float w, bool draw);
 void fix_check(const Check& c);
 
+// pane_resolution.cpp
+float resolution_pane(float x, float y, float w, bool draw);
+
+// pane_foveation.cpp
+float foveation_pane(float x, float y, float w, bool draw);
+float overlay_pane(float x, float y, float w, bool draw);
+float preview(float x, float y, float w, bool draw);
+float preview_legend(float x, float y, float w, bool draw);
+float readout(float x, float y, float w, const std::wstring& name, const std::wstring& value, bool draw,
+              const std::wstring& of = L"");
+float eyebrow(float x, float y, float w, const std::wstring& text, bool draw);
+float readouts_card(float x, float y, float w, bool draw);
+
+// pane_dlss.cpp
+float dlss_pane(float x, float y, float w, bool draw);
+
 }  // namespace simqvfr::launcher::ui::win
