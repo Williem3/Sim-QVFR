@@ -89,6 +89,7 @@ void rearm(ID3D11DeviceContext* ctx) {
 }
 
 std::atomic<bool> shareSsr{true}, shareAo{true};
+std::atomic<bool> configuredSsr{true}, configuredAo{true};  // view_share_configure's, for view_share_set_off
 std::atomic<bool> active{false};
 std::atomic<ID3D11DeviceContext*> immediate{nullptr};
 
@@ -485,10 +486,17 @@ void report(Counts& c, const char* what) {
 void view_share_configure(bool ssr, bool ao) {
     shareSsr.store(ssr);
     shareAo.store(ao);
+    configuredSsr.store(ssr);
+    configuredAo.store(ao);
     if (!ssr)
         simqvfr::log_line("acc view share: reflections not shared (acc_ssr_share=0): each focus view traces its own");
     if (!ao)
         simqvfr::log_line("acc view share: ambient occlusion not shared (acc_ao_share=0): each focus view computes its own");
+}
+
+void view_share_set_off(bool off) {
+    shareSsr.store(!off && configuredSsr.load());
+    shareAo.store(!off && configuredAo.load());
 }
 
 void view_share_start(ID3D11Device* device) {

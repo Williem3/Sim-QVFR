@@ -33,6 +33,9 @@ void view_share_start(ID3D11Device* device);
 void view_share_stop();
 // Every xrEndFrame while QVFR runs: its counters into the log every 900 frames.
 void view_share_frame_end();
+// Diagnostics (acc_diag=1): `off` stops the sharing live (each focus view keeps its own reflections and occlusion),
+// from the next pass; back on, what acc_ssr_share / acc_ao_share asked for at launch.
+void view_share_set_off(bool off);
 
 // Which view (0-3) a viewport is, given the views' rects (x, y, width, height; have[v] false: unknown); -1: none.
 inline int view_at(const int (&rects)[4][4], const bool (&have)[4], float x, float y, float width, float height) {

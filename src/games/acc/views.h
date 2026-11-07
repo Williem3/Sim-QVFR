@@ -36,6 +36,11 @@ bool views_view_rect(int view, int (&rect)[4]);
 bool views_focused();
 // Every xrEndFrame: which passes UE asked for, logged every 900 frames.
 void views_frame_end();
+// Diagnostics (acc_diag=1; games/diag_switches.h): abi.h kDiagCvars (0 SSR, 1 ambient occlusion, 2 the sun's shadows)
+// held at 0 while switched off, from the next xrEndFrame; switched on again, back to the game's own value. Start: false
+// if their code isn't this build's (the switches then do nothing).
+bool views_diag_start();
+void views_set_diag(int which, bool off);
 // Whether OpenXR's session runs (xrBeginSession until it is destroyed or another is created). Until it does,
 // projections and eye poses come from the last ones SteamVR gave: OpenComposite aborts when asked without
 // views (docs/recon-acc.md).
