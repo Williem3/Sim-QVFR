@@ -863,6 +863,29 @@ int main() {
         const Settings clamped = load_settings(ini);
         check(clamped.outer == kOuterRange.max && clamped.width == kSizeRange.min, "settings: values are clamped to the kit's ranges");
 
+        {
+            // Dragging Inner resolution: 5% steps from 50 to 400, and 100% under some whole pixel at any track width
+            // (a plain 1% drag over ~230 px went 99 -> 101).
+            bool hundred = true, onGrid = true;
+            for (int travel = 120; travel <= 900; ++travel) {
+                bool found = false;
+                for (int px = 0; px <= travel; ++px) {
+                    const int at = slider_value_at(kInnerRange, static_cast<double>(px) / travel, kInnerDragStep);
+                    found |= at == 100;
+                    onGrid &= at >= kInnerRange.min && at <= kInnerRange.max && (at - kInnerRange.min) % kInnerDragStep == 0;
+                }
+                hundred &= found;
+            }
+            check(hundred && onGrid && slider_value_at(kInnerRange, 0.0, kInnerDragStep) == kInnerRange.min &&
+                      slider_value_at(kInnerRange, 1.0, kInnerDragStep) == kInnerRange.max &&
+                      slider_value_at(kInnerRange, 2.0, kInnerDragStep) == kInnerRange.max &&
+                      slider_value_at(kInnerRange, -1.0, kInnerDragStep) == kInnerRange.min,
+                  "slider: Inner resolution drags in 5% steps, 100% reachable at any width, ends at 50% and 400%");
+            check(slider_value_at(kOuterRange, 0.5) == 55 && slider_value_at(kOuterRange, 0.0) == 10 &&
+                      slider_value_at(kOuterRange, 1.0) == 100 && slider_value_at({0, 50}, 0.31) == 16,
+                  "slider: other sliders keep 1% steps");
+        }
+
         Settings placed;
         placed.menuYaw = -20;
         placed.menuPitch = -12;

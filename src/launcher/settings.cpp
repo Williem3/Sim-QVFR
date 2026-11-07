@@ -631,4 +631,10 @@ VramEstimate vram_estimate(const Settings& s, const Readouts& r, const RuntimeIn
     return e;
 }
 
+int slider_value_at(Range range, double share, int step) {
+    step = std::max(step, 1);
+    const double offset = std::clamp(share, 0.0, 1.0) * (range.max - range.min);
+    return std::min(range.min + static_cast<int>(std::lround(offset / step)) * step, range.max);
+}
+
 }  // namespace simqvfr::launcher

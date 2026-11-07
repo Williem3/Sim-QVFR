@@ -1089,7 +1089,7 @@ constexpr Help kHelp[] = {
     {L"Inner resolution",
      L"Pixel density inside the focus area, a share of the headset’s native density. Above 100% it renders more pixels than "
      L"the headset shows where you look: sharper text and edges. Its cost grows with the area’s size, so a small area can "
-     L"take a high density cheaply."},
+     L"take a high density cheaply. Dragging moves it in 5% steps; the arrow keys move it by 1%."},
     {L"Object detail",
      L"How detailed trees and objects are, and how far away they are still drawn. At 100% they are as sharp in the focus "
      L"region as its pixel density shows them; lower settings move toward the game’s own detail for the outer resolution. "
@@ -4285,7 +4285,8 @@ void set_slider_from_x(float x) {
     const float travel = app.dragTrack.w - 18;
     const float f = std::clamp((x - app.dragTrack.x - 9) / travel, 0.0f, 1.0f);
     const int before = *v;
-    *v = app.dragRange.min + static_cast<int>(std::lround(f * (app.dragRange.max - app.dragRange.min)));
+    // Inner resolution in its steps (100% reachable); the arrow keys still move every slider by 1.
+    *v = slider_value_at(app.dragRange, f, app.dragging == kInner ? kInnerDragStep : 1);
     if (app.dragging == kColorValue)
         apply_color_edit();  // the brightness: the edited game's colour follows
     changed(false);
