@@ -12,6 +12,7 @@
 #include "../update_check.h"
 #include "launcher_version.h"
 #include "window_state.h"
+#include "controls.h"
 
 namespace simqvfr::launcher::ui::win {
 

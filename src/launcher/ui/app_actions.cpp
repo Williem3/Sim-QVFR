@@ -19,6 +19,7 @@
 #include "../../games/game.h"
 #include "../../sha256_file.h"
 #include "window_state.h"
+#include "controls.h"
 
 #pragma comment(lib, "dwmapi.lib")
 

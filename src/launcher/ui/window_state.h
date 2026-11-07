@@ -294,10 +294,11 @@ extern App app;
 // The timer follow_ini runs on (app_actions.cpp).
 inline constexpr UINT_PTR kFollowTimer = 1;
 
-// Secondary: a filled grey button. Primary: the game's accent (one per view). Ghost: no fill until the pointer is
-// over it. Tint: the accent at 16% with accent text (an action that adds). Danger: red text, no fill. Support: pink,
-// for Support on Ko-fi.
-enum class Btn { Secondary, Primary, Ghost, Tint, Danger, Support };
+// A setting's help (help.cpp): what it does and what it costs, by its label.
+struct Help {
+    const wchar_t* label;
+    const wchar_t* text;
+};
 
 // window_state.cpp
 std::wstring game_name();
@@ -336,9 +337,13 @@ bool game_running();
 void start_install();
 void install_done(InstallResult* r);
 
+// help.cpp
+extern const Help kHelp[];
+const wchar_t* help_for(const std::wstring& label);
+void help_icon(const std::wstring& label, float x, float y);
+void help_tip();
+
 // launcher_window.cpp
-void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr);
-void button(Ctl id, const Rect& r, const std::wstring& label, bool primary);
 bool installed(const games::GameInfo& game);
 
 }  // namespace simqvfr::launcher::ui::win
