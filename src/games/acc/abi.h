@@ -30,6 +30,10 @@ inline constexpr Slot kGetStereoProjectionMatrix = {kStereoVtable + 20 * 8, 0x7b
 inline constexpr std::uintptr_t kTrackingVtable = 0x3a4ecc0;
 inline constexpr Slot kGetRelativeEyePose = {kTrackingVtable + 12 * 8, 0x7b7290};
 
+// The HMD's visible-area mesh check: its meshes are kept for two views only. [Visible-area mesh]
+inline constexpr std::uintptr_t kHmdVtable = 0x3a4eec0;
+inline constexpr Slot kHasVisibleAreaMesh = {kHmdVtable + 35 * 8, 0x7b8380};
+
 // r.AllowSubPrimitiveQueries: the int it wraps, and its registration. [Sub-primitive queries]
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
