@@ -459,23 +459,8 @@ bool game_running() {
 
 void refresh_checks();  // the launch checks (below)
 
-void start_install() {
-    if (app.installing || !installable())
-        return;
-    refresh_checks();
-    if (game_running()) {
-        MessageBoxW(app.hwnd, (L"Close " + game_name() + L" first: Sim-QVFR’s layer is in use while it runs.").c_str(), L"Sim QVFR Launcher",
-                    MB_OK | MB_ICONINFORMATION);
-        return;
-    }
-    const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
-    if (MessageBoxW(app.hwnd,
-                    (L"Install Sim-QVFR " + app.release.tag + L"?\n\nThe launcher downloads it from GitHub (" + mb +
-                     L" MB), checks it, replaces its program files and restarts. Your settings, profiles, logs and any file "
-                     L"you changed (your own helmet images) stay. The version you have now is kept in the update folder.")
-                        .c_str(),
-                    L"Sim QVFR Launcher", MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
-        return;
+// The install itself, on a worker (install.h): its progress and outcome come back as messages.
+void run_install() {
     app.installing = true;
     app.installError.clear();
     app.installProgress = {L"Starting", 0};
@@ -500,7 +485,32 @@ void start_install() {
     }).detach();
 }
 
-// The install's outcome: on success the new launcher starts and this one closes.
+// Install: asked first, in a sheet.
+void start_install() {
+    if (app.installing || !installable())
+        return;
+    refresh_checks();
+    if (game_running()) {
+        notify(L"Close " + game_name() + L" first", L"Sim-QVFR’s layer is in use while the game runs, so it can’t be replaced yet.");
+        return;
+    }
+    const std::wstring mb = std::to_wstring((app.release.zipSize + (1 << 19)) >> 20);
+    Sheet s;
+    s.title = L"Install Sim-QVFR " + app.release.tag + L"?";
+    s.text = L"The launcher downloads it from GitHub (" + mb + L" MB), checks it, replaces its program files and restarts. "
+             L"Your settings, profiles, logs and any file you changed (your own helmet images) stay. The version you have now "
+             L"is kept in the update folder.";
+    s.buttons = {L"Cancel", L"Install"};
+    s.done = [](int button, const std::wstring&) {
+        if (button == 1)
+            run_install();
+    };
+    open_sheet(std::move(s));
+}
+
+void restart_launcher(const std::wstring& exe);
+
+// The install's outcome: on success a sheet says so, then the new launcher starts and this one closes.
 void install_done(InstallResult* r) {
     const std::unique_ptr<InstallResult> result(r);
     app.installing = false;
@@ -508,18 +518,23 @@ void install_done(InstallResult* r) {
         app.installError = result->error;
         return;
     }
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);  // the new launcher now: the old one moved into the backup
-    MessageBoxW(app.hwnd,
-                (L"Sim-QVFR " + app.release.tag + L" is installed (" + std::to_wstring(result->replaced + result->added) +
-                 L" files; " + std::to_wstring(result->kept) + L" of yours kept). The launcher restarts now.\n\nThe version you had "
-                 L"is in " + result->backup + L".")
-                    .c_str(),
-                L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);  // the new launcher now: the old one moved into the backup
+    Sheet s;
+    s.title = L"Sim-QVFR " + app.release.tag + L" is installed";
+    s.text = std::to_wstring(result->replaced + result->added) + L" files installed, " + std::to_wstring(result->kept) +
+             L" of yours kept. The version you had is in " + result->backup + L".";
+    s.buttons = {L"Restart Now"};
+    s.done = [exe = std::wstring(path)](int, const std::wstring&) { restart_launcher(exe); };
+    open_sheet(std::move(s));
+}
+
+// The new launcher started, this one closed.
+void restart_launcher(const std::wstring& exe) {
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
-    std::wstring command = L"\"" + std::wstring(exe) + L"\"";
-    if (CreateProcessW(exe, command.data(), nullptr, nullptr, FALSE, 0, nullptr, launcher_folder().c_str(), &si, &pi)) {
+    std::wstring command = L"\"" + exe + L"\"";
+    if (CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, launcher_folder().c_str(), &si, &pi)) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         DestroyWindow(app.hwnd);
@@ -785,6 +800,8 @@ std::vector<Ctl> focus_order() {
     return order;
 }
 
+void start_launch();
+
 void launch() {
     if (!app.iniFound) {
         app.status = Status::Error;
@@ -814,19 +831,35 @@ void launch() {
             InvalidateRect(app.hwnd, nullptr, FALSE);
             return;
         }
-    // A launch that would crash the game, or run it without Sim-QVFR: ask first.
+    // A launch that would crash the game, or run it without Sim-QVFR: asked first, Show Checks the focused answer.
     std::wstring problems;
     for (const Check& c : app.checks)
         if (c.confirm)
-            problems += L"\u2022 " + c.title + L"\n";
-    if (!problems.empty() &&
-        MessageBoxW(app.hwnd, (L"The launch checks found:\n\n" + problems + L"\nLaunch " + game_name() + L" anyway?").c_str(),
-                    L"Sim QVFR Launcher", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+            problems += (problems.empty() ? L"" : L"\n") + std::wstring(L"\u2022 ") + c.title;
+    if (problems.empty()) {
+        start_launch();
+        return;
+    }
+    Sheet s;
+    s.title = L"Launch " + game_name() + L" anyway?";
+    s.text = L"The launch checks found:\n" + problems;
+    s.buttons = {L"Show Checks", L"Launch Anyway"};
+    s.focus = 0;
+    s.danger = true;
+    s.done = [](int button, const std::wstring&) {
+        if (button == 1) {
+            start_launch();
+            return;
+        }
         app.pane = Pane::Checks;
         app.scroll = 0;
         InvalidateRect(app.hwnd, nullptr, FALSE);
-        return;
-    }
+    };
+    open_sheet(std::move(s));
+}
+
+// The launch itself (main.cpp's launch_game), then the watch on what becomes of it.
+void start_launch() {
     app.status = Status::Starting;
     RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     std::wstring report;
@@ -4389,17 +4422,13 @@ void choose_game_folder() {
         return;
     const std::wstring folder = game_folder_from(picked, game);
     if (folder.empty()) {
-        MessageBoxW(app.hwnd,
-                    (picked + L" doesn’t hold " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " +
-                     game_name() + L".")
-                        .c_str(),
-                    L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
+        notify(L"That folder doesn’t hold " + game_name(),
+               picked + L" has no " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " + game_name() + L".");
         return;
     }
     if (!app.iniFound || !WritePrivateProfileStringW(L"launcher", (L"game_dir_" + widen(game.id)).c_str(), folder.c_str(),
                                                      app.ini.c_str())) {
-        MessageBoxW(app.hwnd, L"The folder couldn’t be saved: sim-qvfr.ini wasn’t found next to the launcher.", L"Sim QVFR Launcher",
-                    MB_OK | MB_ICONWARNING);
+        notify(L"The folder couldn’t be saved", L"sim-qvfr.ini wasn’t found next to the launcher.");
         return;
     }
     app.iniText = ini_text();
@@ -4429,8 +4458,7 @@ void start_capture(int action, bool pad) {
     if (pad) {
         open_pads();
         if (!app.padsOpen) {
-            MessageBoxW(app.hwnd, L"DirectInput isn’t available, so wheel and controller buttons can’t be read.", L"Sim QVFR Launcher",
-                        MB_OK | MB_ICONWARNING);
+            notify(L"Wheel buttons can’t be read", L"DirectInput isn’t available, so wheel and controller buttons can’t be read.");
             return;
         }
         app.captureHeld = app.pads.poll();
@@ -4494,80 +4522,6 @@ void capture_poll() {
     app.captureHeld = std::move(still);
 }
 
-// A name asked for in a small dialog of its own (built in memory): `text` holds the first value and, on OK,
-// what was typed. False on Cancel.
-INT_PTR CALLBACK prompt_proc(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam) {
-    constexpr int kEdit = 100;
-    switch (message) {
-    case WM_INITDIALOG: {
-        SetWindowLongPtrW(dialog, DWLP_USER, lParam);
-        SetDlgItemTextW(dialog, kEdit, reinterpret_cast<std::wstring*>(lParam)->c_str());
-        SendDlgItemMessageW(dialog, kEdit, EM_SETLIMITTEXT, 40, 0);
-        SendDlgItemMessageW(dialog, kEdit, EM_SETSEL, 0, -1);
-        SetFocus(GetDlgItem(dialog, kEdit));
-        return FALSE;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDOK) {
-            wchar_t text[64] = {};
-            GetDlgItemTextW(dialog, kEdit, text, static_cast<int>(std::size(text)));
-            *reinterpret_cast<std::wstring*>(GetWindowLongPtrW(dialog, DWLP_USER)) = text;
-            EndDialog(dialog, IDOK);
-            return TRUE;
-        }
-        if (LOWORD(wParam) == IDCANCEL) {
-            EndDialog(dialog, IDCANCEL);
-            return TRUE;
-        }
-        break;
-    }
-    return FALSE;
-}
-
-bool prompt_name(const std::wstring& title, const std::wstring& label, std::wstring& text) {
-    std::vector<WORD> t;  // DLGTEMPLATE, then its items, each DWORD-aligned
-    const auto words = [&t](const void* data, size_t bytes) {
-        const auto* w = static_cast<const WORD*>(data);
-        t.insert(t.end(), w, w + bytes / 2);
-    };
-    const auto string = [&t](const std::wstring& s) {
-        t.insert(t.end(), s.begin(), s.end());
-        t.push_back(0);
-    };
-    const auto align = [&t] {
-        if (t.size() % 2)
-            t.push_back(0);
-    };
-    DLGTEMPLATE dlg{DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU, 0, 4, 0, 0, 220, 70};
-    words(&dlg, sizeof(dlg));
-    t.push_back(0);  // no menu
-    t.push_back(0);  // the default class
-    string(title);
-    t.push_back(9);  // the font: 9 pt Segoe UI
-    string(L"Segoe UI");
-    const auto item = [&](DWORD style, short x, short y, short cx, short cy, WORD id, WORD atom, const std::wstring& caption) {
-        align();
-        DLGITEMTEMPLATE it{style | WS_CHILD | WS_VISIBLE, 0, x, y, cx, cy, id};
-        words(&it, sizeof(it));
-        t.push_back(0xFFFF);
-        t.push_back(atom);
-        string(caption);
-        t.push_back(0);  // no creation data
-    };
-    item(SS_LEFT, 8, 8, 204, 10, static_cast<WORD>(-1), 0x0082, label);
-    item(WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, 8, 22, 204, 13, 100, 0x0081, L"");
-    item(BS_DEFPUSHBUTTON | WS_TABSTOP, 106, 46, 50, 14, IDOK, 0x0080, L"Save");
-    item(BS_PUSHBUTTON | WS_TABSTOP, 162, 46, 50, 14, IDCANCEL, 0x0080, L"Cancel");
-    align();
-    std::wstring value = text;
-    const INT_PTR result = DialogBoxIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<LPCDLGTEMPLATEW>(t.data()), app.hwnd,
-                                                   prompt_proc, reinterpret_cast<LPARAM>(&value));
-    if (result != IDOK)
-        return false;
-    text = value;
-    return true;
-}
-
 void use_profile(const std::wstring& name) {
     Profile p;
     if (!load_profile(profiles_folder(app.ini), name, p, app.s.eyeTracking) || !apply_profile(app.ini.c_str(), p)) {
@@ -4581,38 +4535,63 @@ void use_profile(const std::wstring& name) {
     refresh_profiles();
 }
 
-// Saves `p` under its name, asking first when one of that name exists. False if not saved.
-bool store_profile(const Profile& p) {
+// Saves `p` under its name, asking first (a sheet) when one of that name exists; `then` once it is saved.
+void store_profile(const Profile& p, std::function<void()> then) {
     const std::wstring folder = profiles_folder(app.ini);
+    const auto save = [p, folder, then] {
+        if (!save_profile(folder, p)) {
+            notify(L"The profile couldn’t be saved", L"Sim-QVFR couldn’t write it in " + folder + L".");
+            return;
+        }
+        if (then)
+            then();
+    };
     Profile existing;
-    if (load_profile(folder, p.name, existing, app.s.eyeTracking) &&
-        MessageBoxW(app.hwnd, (L"A profile named " + p.name + L" exists. Replace it?").c_str(), L"Sim QVFR Launcher",
-                    MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK)
-        return false;
-    if (!save_profile(folder, p)) {
-        MessageBoxW(app.hwnd, (L"The profile couldn’t be saved in " + folder + L".").c_str(), L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
-        return false;
+    if (!load_profile(folder, p.name, existing, app.s.eyeTracking)) {
+        save();
+        return;
     }
-    return true;
+    Sheet s;
+    s.title = L"Replace " + p.name + L"?";
+    s.text = L"A profile named " + p.name + L" exists. Replacing it puts these settings in its place.";
+    s.buttons = {L"Cancel", L"Replace"};
+    s.focus = 0;
+    s.danger = true;
+    s.done = [save](int button, const std::wstring&) {
+        if (button == 1)
+            save();
+    };
+    open_sheet(std::move(s));
 }
 
-void save_current_profile() {
-    std::wstring name = is_preset_name(app.profileCurrent) ? L"" : app.profileCurrent;
-    while (prompt_name(L"Save profile", L"A name for the settings you have now:", name)) {
-        if (!valid_profile_name(name)) {
-            MessageBoxW(app.hwnd,
-                        L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
-                        L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
-            continue;
+// Save current settings…: a name asked for in a sheet (`name` filled in), then the settings saved under it.
+void ask_profile_name(const std::wstring& name) {
+    Sheet s;
+    s.title = L"Save current settings";
+    s.text = L"A profile holds every setting of the picture. Name the settings you have now.";
+    s.field = true;
+    s.fieldLabel = L"Name";
+    s.fieldText = name;
+    s.buttons = {L"Cancel", L"Save"};
+    s.done = [](int button, const std::wstring& typed) {
+        if (button != 1)
+            return;
+        if (!valid_profile_name(typed)) {
+            notify(L"Choose another name",
+                   L"Use 1 to 40 characters, none of \\ / : * ? \" < > |, and not a preset’s name (Performance, Balanced, Quality).",
+                   [typed] { ask_profile_name(typed); });
+            return;
         }
-        if (store_profile(settings_profile(app.s, name))) {
-            set_current_profile(app.ini.c_str(), name);
-            app.profileMessage = L"Saved " + name + L".";
-        }
-        break;
-    }
-    refresh_profiles();
+        store_profile(settings_profile(app.s, typed), [typed] {
+            set_current_profile(app.ini.c_str(), typed);
+            app.profileMessage = L"Saved " + typed + L".";
+            refresh_profiles();
+        });
+    };
+    open_sheet(std::move(s));
 }
+
+void save_current_profile() { ask_profile_name(is_preset_name(app.profileCurrent) ? L"" : app.profileCurrent); }
 
 void paste_profile() {
     std::string text;
@@ -4620,17 +4599,23 @@ void paste_profile() {
         text += c < 128 ? static_cast<char>(c) : '?';
     Profile p;
     if (!shared_profile(text, p)) {
-        MessageBoxW(app.hwnd, L"The clipboard holds no shared profile. Copy the whole line that starts with QVFR1:, then try again.",
-                    L"Sim QVFR Launcher", MB_OK | MB_ICONINFORMATION);
+        notify(L"No shared profile on the clipboard", L"Copy the whole line that starts with QVFR1:, then try again.");
         return;
     }
-    if (!store_profile(p))
-        return;
-    refresh_profiles();
-    app.profileMessage = L"Added " + p.name + L".";
-    if (MessageBoxW(app.hwnd, (L"Added the profile " + p.name + L". Use it now?").c_str(), L"Sim QVFR Launcher",
-                    MB_YESNO | MB_ICONQUESTION) == IDYES)
-        use_profile(p.name);
+    store_profile(p, [name = p.name] {
+        refresh_profiles();
+        app.profileMessage = L"Added " + name + L".";
+        Sheet s;
+        s.title = L"Use " + name + L" now?";
+        s.text = L"It’s in Your profiles. Using it sets the picture to what it holds.";
+        s.buttons = {L"Not Now", L"Use It"};
+        s.done = [name](int button, const std::wstring&) {
+            if (button == 1)
+                use_profile(name);
+            InvalidateRect(app.hwnd, nullptr, FALSE);
+        };
+        open_sheet(std::move(s));
+    });
 }
 
 // A launch check's button (preflight.h's CheckFix).
@@ -4654,10 +4639,8 @@ void fix_check(const Check& c) {
     case CheckFix::OpenFoveation: activate(kSidebar, static_cast<int>(Pane::Foveation)); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
-            MessageBoxW(app.hwnd,
-                        (L"OpenXR Toolkit’s settings for " + short_name() +
-                         L" could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.").c_str(),
-                        L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
+            notify(L"Turbo mode is still on", L"OpenXR Toolkit’s settings for " + short_name() +
+                                                  L" couldn’t be changed. Turn Turbo mode off in Toolkit’s menu in the game.");
         break;
     case CheckFix::ChooseGameFolder: choose_game_folder(); break;
     case CheckFix::None: return;
@@ -4732,14 +4715,23 @@ void activate(Ctl id, int option) {
             app.profileMessage = copy_text(widen(share_profile(p)))
                                      ? L"Copied " + name + L" to the clipboard: paste it in a chat or a post."
                                      : L"Couldn’t copy to the clipboard.";
-        } else if (id == kProfileDelete &&
-                   MessageBoxW(app.hwnd, (L"Delete the profile " + name + L"?").c_str(), L"Sim QVFR Launcher",
-                               MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK) {
-            delete_profile(profiles_folder(app.ini), name);
-            if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
-                set_current_profile(app.ini.c_str(), L"");
-            app.profileMessage = L"Deleted " + name + L".";
-            refresh_profiles();
+        } else if (id == kProfileDelete) {
+            Sheet s;
+            s.title = L"Delete " + name + L"?";
+            s.text = L"It goes from Your profiles. The settings you have now stay as they are.";
+            s.buttons = {L"Cancel", L"Delete"};
+            s.focus = 0;
+            s.danger = true;
+            s.done = [name](int button, const std::wstring&) {
+                if (button != 1)
+                    return;
+                delete_profile(profiles_folder(app.ini), name);
+                if (_wcsicmp(name.c_str(), app.profileCurrent.c_str()) == 0)
+                    set_current_profile(app.ini.c_str(), L"");
+                app.profileMessage = L"Deleted " + name + L".";
+                refresh_profiles();
+            };
+            open_sheet(std::move(s));
         }
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
