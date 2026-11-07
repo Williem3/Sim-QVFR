@@ -1905,10 +1905,13 @@ float profiles_pane(float x, float y, float w, bool draw) {
     savedRows.push_back(actions);
     h += section(x, y + h, w, L"Your profiles", savedRows,
                  (app.profileMessage.empty() ? L"" : app.profileMessage + L" ") +
-                     L"A profile holds every setting of the picture: resolution, foveation, the focus overlay, the view "
-                     L"crop and helmet, and Foveated DLSS. Not the menu’s and overlay’s places, the hotkeys or the OpenXR "
-                     L"layers. Share copies one as a line of text to paste in a chat; Paste adds one from the clipboard. "
-                     L"The headset menu’s Profile line switches between them while you drive.",
+                     L"A profile holds every setting of the picture: resolution, foveation, the focus overlay" +
+                     std::wstring(game_has(&games::GameFeatures::fovCrop) ? L", the view crop" : L"") +
+                     (game_has(&games::GameFeatures::helmet) ? L", the helmet" : L"") +
+                     (game_has(&games::GameFeatures::foveatedDlss) ? L", Foveated DLSS" : L"") +
+                     L". Not the menu’s and overlay’s places, the hotkeys or the OpenXR layers. Share copies one as a "
+                     L"line of text to paste in a chat; Paste adds one from the clipboard. The headset menu’s Profile line "
+                     L"switches between them while you drive.",
                  draw);
     return h;
 }
@@ -1978,9 +1981,11 @@ float hotkeys_pane(float x, float y, float w, bool draw) {
                  L"switch the game also uses doesn’t open it: use Open or close first. " + pads_found(),
                  draw) +
          t::kSpace6;
-    h += section(x, y + h, w, L"In the game",
-                 {row(HotkeyAction::Overlay), row(HotkeyAction::Visor), row(HotkeyAction::CpuCapture),
-                  row(HotkeyAction::FrameCapture)},
+    std::vector<Row> inGame = {row(HotkeyAction::Overlay)};
+    if (game_has(&games::GameFeatures::helmet))  // the visor steps the helmet overlay
+        inGame.push_back(row(HotkeyAction::Visor));
+    inGame.insert(inGame.end(), {row(HotkeyAction::CpuCapture), row(HotkeyAction::FrameCapture)});
+    h += section(x, y + h, w, L"In the game", inGame,
                  L"Keys work while the game window has focus; wheel, button box and controller buttons work whenever "
                  L"the game runs. Click a button above, then press the keys or the wheel button: Esc cancels, Delete "
                  L"clears it. They apply to a running game at once.",
@@ -2087,70 +2092,68 @@ float pane_content(float x, float y, float w, bool draw) {
                        known && qvfr ? px(ro.focus) : L"", !qvfr),
         };
         h += section(x, y, w, L"Per-eye resolution", rows, footer, draw);
-        h += t::kSpace6;
-        // The FOV crop: each side on its own, QVFR only.
-        Row cropOn;
-        const bool cropHere = game_has(&games::GameFeatures::fovCrop);
-        const std::wstring cropDesc = !cropHere ? not_yet()
-                                      : qvfr    ? L"Skips the edges of each eye that a helmet covers, so they are never rendered."
-                                                : L"Available in Quad View Foveated Rendering.";
-        cropOn.fullHeight = [cropDesc](float width) { return checkbox_height(cropDesc, width); };
-        cropOn.full = [cropDesc, cropHere](const Rect& r) {
-            checkbox(kCropOn, r, app.s.crop && cropHere, L"Crop the view", cropDesc, !cropHere);
-        };
-        const bool cropOff = !qvfr || !app.s.crop || !cropHere;
-        h += section(x, y + h, w, L"Field of view crop",
-                     {cropOn, slider_row(kCropTop, L"Top", L"", app.s.cropTop, L"", cropOff),
-                      slider_row(kCropBottom, L"Bottom", L"", app.s.cropBottom, L"", cropOff),
-                      slider_row(kCropOuter, L"Outer side", L"Toward the temple, mirrored for each eye.", app.s.cropOuter, L"",
-                                 cropOff),
-                      slider_row(kCropInner, L"Inner side", L"Toward the nose.", app.s.cropInner, L"", cropOff)},
-                     L"Share of each eye’s field of view removed at that side; the headset shows black there. The outer "
-                     L"view keeps its sharpness and the focus region its size. Applies live while the game runs; with DLSS "
-                     L"on, or with less crop than at launch, the pixel count follows at the next launch.",
-                     draw);
-        h += t::kSpace6;
-        Row helmetOn;
-        const bool helmetHere = game_has(&games::GameFeatures::helmet);
-        const std::wstring helmetDesc = !helmetHere ? not_yet()
-                                        : qvfr      ? L"Draws a helmet’s visor opening around the view, lit by the scene."
-                                                    : L"Available in Quad View Foveated Rendering.";
-        helmetOn.fullHeight = [helmetDesc](float width) { return checkbox_height(helmetDesc, width); };
-        helmetOn.full = [helmetDesc, helmetHere](const Rect& r) {
-            checkbox(kHelmetOn, r, app.s.helmet.on && helmetHere, L"Show a helmet", helmetDesc, !helmetHere);
-        };
-        const bool helmetOff = !qvfr || !app.s.helmet.on || !helmetHere;
-        h += section(x, y + h, w, L"Helmet overlay",
-                     {helmetOn,
-                      slider_row(kHelmetRim, L"Rim", L"How far the padding reaches into the view.", app.s.helmet.rim, L"",
-                                 helmetOff),
-                      slider_row(kHelmetCorners, L"Corners", L"Rounds the visor opening.", app.s.helmet.corners, L"",
-                                 helmetOff),
-                      slider_row(kHelmetLight, L"Lighting", L"How much the scene lights the helmet.", app.s.helmet.light, L"",
-                                 helmetOff),
-                      [&] {
-                          const std::wstring names[3] = {kVisorPositionNames[0], kVisorPositionNames[1], kVisorPositionNames[2]};
-                          Row visor = choice_row(kVisor, L"Visor", names, 3, static_cast<int>(app.s.helmet.visor), helmetOff);
-                          visor.desc = L"Your images only. Ctrl+Alt+V in the game steps it.";
-                          return visor;
-                      }(),
-                      slider_row(kHelmetSize, L"Size", L"Your images only: how wide they are, in degrees of view.",
-                                 app.s.helmet.size, L"", helmetOff, L"°"),
-                      slider_row(kHelmetHeight, L"Height", L"Your images only: degrees above straight ahead.",
-                                 app.s.helmet.height, L"", helmetOff, L"°"),
-                      slider_row(kHelmetDepth, L"Depth",
-                                 L"Your images only: how far in front of your eyes, in cm. 0 is far away, with no depth.",
-                                 app.s.helmet.depth, L"", helmetOff, L" cm"),
-                      [&] {
-                          const std::wstring names[2] = {L"Performance (2048)", L"Detail (4096)"};
-                          Row detail = choice_row(kHelmetDetail, L"Detail", names, 2, app.s.helmet.detail ? 1 : 0, helmetOff);
-                          detail.desc = L"Your images only: Detail is sharper, Performance costs less GPU and memory.";
-                          return detail;
-                      }()},
-                     L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png "
-                     L"and visor.png with alpha in the helmet folder next to the layer; the log suggests the crop that "
-                     L"matches them. Applies live.",
-                     draw);
+        // The FOV crop (each side on its own, QVFR only) and the helmet overlay: left out for a game without them.
+        if (game_has(&games::GameFeatures::fovCrop)) {
+            h += t::kSpace6;
+            Row cropOn;
+            const std::wstring cropDesc = qvfr ? L"Skips the edges of each eye that a helmet covers, so they are never rendered."
+                                               : L"Available in Quad View Foveated Rendering.";
+            cropOn.fullHeight = [cropDesc](float width) { return checkbox_height(cropDesc, width); };
+            cropOn.full = [cropDesc](const Rect& r) { checkbox(kCropOn, r, app.s.crop, L"Crop the view", cropDesc, false); };
+            const bool cropOff = !qvfr || !app.s.crop;
+            h += section(x, y + h, w, L"Field of view crop",
+                         {cropOn, slider_row(kCropTop, L"Top", L"", app.s.cropTop, L"", cropOff),
+                          slider_row(kCropBottom, L"Bottom", L"", app.s.cropBottom, L"", cropOff),
+                          slider_row(kCropOuter, L"Outer side", L"Toward the temple, mirrored for each eye.", app.s.cropOuter, L"",
+                                     cropOff),
+                          slider_row(kCropInner, L"Inner side", L"Toward the nose.", app.s.cropInner, L"", cropOff)},
+                         L"Share of each eye’s field of view removed at that side; the headset shows black there. The outer "
+                         L"view keeps its sharpness and the focus region its size. Applies live while the game runs; with DLSS "
+                         L"on, or with less crop than at launch, the pixel count follows at the next launch.",
+                         draw);
+        }
+        if (game_has(&games::GameFeatures::helmet)) {
+            h += t::kSpace6;
+            Row helmetOn;
+            const std::wstring helmetDesc = qvfr ? L"Draws a helmet’s visor opening around the view, lit by the scene."
+                                                 : L"Available in Quad View Foveated Rendering.";
+            helmetOn.fullHeight = [helmetDesc](float width) { return checkbox_height(helmetDesc, width); };
+            helmetOn.full = [helmetDesc](const Rect& r) {
+                checkbox(kHelmetOn, r, app.s.helmet.on, L"Show a helmet", helmetDesc, false);
+            };
+            const bool helmetOff = !qvfr || !app.s.helmet.on;
+            h += section(x, y + h, w, L"Helmet overlay",
+                         {helmetOn,
+                          slider_row(kHelmetRim, L"Rim", L"How far the padding reaches into the view.", app.s.helmet.rim, L"",
+                                     helmetOff),
+                          slider_row(kHelmetCorners, L"Corners", L"Rounds the visor opening.", app.s.helmet.corners, L"",
+                                     helmetOff),
+                          slider_row(kHelmetLight, L"Lighting", L"How much the scene lights the helmet.", app.s.helmet.light, L"",
+                                     helmetOff),
+                          [&] {
+                              const std::wstring names[3] = {kVisorPositionNames[0], kVisorPositionNames[1], kVisorPositionNames[2]};
+                              Row visor = choice_row(kVisor, L"Visor", names, 3, static_cast<int>(app.s.helmet.visor), helmetOff);
+                              visor.desc = L"Your images only. Ctrl+Alt+V in the game steps it.";
+                              return visor;
+                          }(),
+                          slider_row(kHelmetSize, L"Size", L"Your images only: how wide they are, in degrees of view.",
+                                     app.s.helmet.size, L"", helmetOff, L"°"),
+                          slider_row(kHelmetHeight, L"Height", L"Your images only: degrees above straight ahead.",
+                                     app.s.helmet.height, L"", helmetOff, L"°"),
+                          slider_row(kHelmetDepth, L"Depth",
+                                     L"Your images only: how far in front of your eyes, in cm. 0 is far away, with no depth.",
+                                     app.s.helmet.depth, L"", helmetOff, L" cm"),
+                          [&] {
+                              const std::wstring names[2] = {L"Performance (2048)", L"Detail (4096)"};
+                              Row detail = choice_row(kHelmetDetail, L"Detail", names, 2, app.s.helmet.detail ? 1 : 0, helmetOff);
+                              detail.desc = L"Your images only: Detail is sharper, Performance costs less GPU and memory.";
+                              return detail;
+                          }()},
+                         L"Built in, the visor opening follows the crop (Rim and Corners). Your own helmet: top.png, bottom.png "
+                         L"and visor.png with alpha in the helmet folder next to the layer; the log suggests the crop that "
+                         L"matches them. Applies live.",
+                         draw);
+        }
         break;
     }
     case Pane::Foveation: {
@@ -2557,10 +2560,11 @@ float preview(float x, float y, float w, bool draw) {
         // offset, roughly: about 100 degrees of view top to bottom.
         const float gx = 0.5f, gy = 0.5f - app.s.offset.for_mode(app.s.eyeTracking) / 100.0f;
         // The kept view (the left eye: its outer side is on the left); the focus region stays inside it.
-        const float cl = W * static_cast<float>(app.s.crop_width() < 1 ? app.s.cropOuter : 0) / 100,
-                    cr = W * static_cast<float>(app.s.crop_width() < 1 ? app.s.cropInner : 0) / 100,
-                    ct = H * static_cast<float>(app.s.crop_height() < 1 ? app.s.cropTop : 0) / 100,
-                    cb = H * static_cast<float>(app.s.crop_height() < 1 ? app.s.cropBottom : 0) / 100;
+        const bool cropHere = game_has(&games::GameFeatures::fovCrop);  // none for a game without the crop
+        const float cl = W * static_cast<float>(cropHere && app.s.crop_width() < 1 ? app.s.cropOuter : 0) / 100,
+                    cr = W * static_cast<float>(cropHere && app.s.crop_width() < 1 ? app.s.cropInner : 0) / 100,
+                    ct = H * static_cast<float>(cropHere && app.s.crop_height() < 1 ? app.s.cropTop : 0) / 100,
+                    cb = H * static_cast<float>(cropHere && app.s.crop_height() < 1 ? app.s.cropBottom : 0) / 100;
         const float fx = std::clamp(gx * W - fw / 2, cl, std::max(cl, W - cr - fw)),
                     fy = std::clamp(gy * H - fh / 2, ct, std::max(ct, H - cb - fh));
         // Grid cell size shows pixel density: 8 in the periphery, 8 / ratio in the focus region.
@@ -2629,7 +2633,7 @@ float preview(float x, float y, float w, bool draw) {
         else if (app.s.outline)
             app.canvas.stroke(R(fx, fy, fw, fh), col(overlay(static_cast<int>(app.s.color))), 2 * k, corner * k);
         // The cropped edges, as the headset shows them; with the helmet, its rim reaches into the view.
-        const bool helmet = app.s.mode == RenderMode::Qvfr && app.s.helmet.on;
+        const bool helmet = app.s.mode == RenderMode::Qvfr && app.s.helmet.on && game_has(&games::GameFeatures::helmet);
         const float rim = helmet ? H * app.s.helmet.rim / 100.0f : 0;
         const Color cropped = col(app.c->preview_canvas, helmet ? 1.0f : 0.9f);
         app.canvas.fill(R(0, 0, W, ct + rim), cropped);
@@ -2961,6 +2965,18 @@ const Item kItems[] = {
 
 static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 
+// A pane the sidebar lists for this game: Foveated DLSS only where the game has it.
+bool pane_shown(int pane) {
+    return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss);
+}
+// The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
+int shown_pane(int pane, int step, int from) {
+    for (int p = pane; p >= 0 && p < kPanes; p += step)
+        if (pane_shown(p))
+            return p;
+    return from;
+}
+
 // The sidebar's groups, each a run of panes in Pane's order; a pane's eyebrow is its group.
 struct Group {
     const wchar_t* label;
@@ -2985,7 +3001,13 @@ std::wstring pane_description(Pane pane) {
         return L"How " + game_name() + L" draws each eye. " +
                (games::launcher_game().openComposite ? L"It reaches your headset through OpenComposite (Launch checks)."
                                                      : L"Launch starts it in VR with Sim-QVFR.");
-    case Pane::Resolution: return L"How many pixels each view draws, the edges it skips and the helmet around it.";
+    case Pane::Resolution: {
+        const bool crop = game_has(&games::GameFeatures::fovCrop), helmet = game_has(&games::GameFeatures::helmet);
+        return std::wstring(L"How many pixels each view draws") + (crop && helmet ? L", the edges it skips and the helmet around it."
+                                                                   : crop       ? L" and the edges it skips."
+                                                                   : helmet     ? L" and the helmet around it."
+                                                                                : L".");
+    }
     case Pane::Foveation: return L"The size, shape and movement of the sharp focus region.";
     case Pane::Overlay: return L"An outline in the headset that shows where the focus region is.";
     case Pane::Dlss: return L"Cheaper outer views, a sharper centre and frame generation, with Cheeky Foveated DLSS.";
@@ -3179,8 +3201,11 @@ void sidebar(float top, float bottom) {
     cv.line(W - 0.5f, top, W - 0.5f, bottom, col(app.c->card_border), 1);
     const float labelH = t::kFootnote.lineHeight + 6, groupGap = 10, rowGap = 2;
     float fullH = 2 * t::kSpace3;
-    for (const Group& g : kGroups)
-        fullH += labelH + (g.end - g.first) * (t::kSidebarRowHeight + rowGap);
+    for (const Group& g : kGroups) {
+        fullH += labelH;
+        for (int i = g.first; i < g.end; ++i)
+            fullH += pane_shown(i) ? t::kSidebarRowHeight + rowGap : 0;
+    }
     fullH += groupGap * (std::size(kGroups) - 1);
     const bool compact = fullH > bottom - top;
     const float rowH = compact ? 28.0f : t::kSidebarRowHeight;
@@ -3192,6 +3217,8 @@ void sidebar(float top, float bottom) {
             sy += labelH;
         }
         for (int i = g.first; i < g.end; ++i) {
+            if (!pane_shown(i))
+                continue;
             const Rect row{12, sy, W - 24, rowH};
             const bool selected = static_cast<int>(app.pane) == i;
             if (selected)
@@ -3521,6 +3548,8 @@ void select_game(int option) {
     } else {
         games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
     }
+    if (!pane_shown(static_cast<int>(app.pane)))
+        app.pane = static_cast<Pane>(shown_pane(static_cast<int>(app.pane), -1, 0));
     apply_theme();
     refresh_checks();
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -3810,7 +3839,10 @@ void fix_check(const Check& c) {
         return;
     }
     case CheckFix::OpenLayers: activate(kSidebar, static_cast<int>(Pane::Layers)); return;
-    case CheckFix::OpenDlss: activate(kSidebar, static_cast<int>(Pane::Dlss)); return;
+    case CheckFix::OpenDlss:
+        if (pane_shown(static_cast<int>(Pane::Dlss)))
+            activate(kSidebar, static_cast<int>(Pane::Dlss));
+        return;
     case CheckFix::OpenRendering: activate(kSidebar, static_cast<int>(Pane::Rendering)); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
@@ -4070,8 +4102,8 @@ void on_key(WPARAM key) {
         break;
     case kSidebar:
         if (key == VK_UP || key == VK_DOWN) {
-            const int p = std::clamp(static_cast<int>(app.pane) + (key == VK_DOWN ? 1 : -1), 0, kPanes - 1);
-            activate(kSidebar, p);
+            const int step = key == VK_DOWN ? 1 : -1, here = static_cast<int>(app.pane);
+            activate(kSidebar, shown_pane(std::clamp(here + step, 0, kPanes - 1), step, here));
         }
         break;
     case kMenuPanel:
