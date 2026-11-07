@@ -3,6 +3,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 #include "input/hotkeys.h"
 #include "quad/settings_menu.h"
@@ -12,17 +13,28 @@
 
 namespace simqvfr::layer {
 
-// xr_layer.cpp
+// gaze_actions.cpp
+bool gaze_skips_space(XrSpace space, XrTime time);
 XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space);
 XrResult XRAPI_CALL layerDestroySpace(XrSpace space);
+XrVector3f rotate(const XrQuaternionf& q, const XrVector3f& v);
 void gaze_init(XrInstance instance);
+std::string path_name(XrInstance instance, XrPath path);
 XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
                                                           const XrInteractionProfileSuggestedBinding* suggested);
 XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttachInfo* info);
 XrResult XRAPI_CALL layerPollEvent(XrInstance instance, XrEventDataBuffer* event);
 XrResult XRAPI_CALL layerSyncActions(XrSession session, const XrActionsSyncInfo* info);
+
+// gaze.cpp
+bool gaze_direction(XrSession session, XrSpace base, XrTime time, XrVector3f& direction);
 void gaze_thread_stop();
 bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& direction);
+void steady_gaze(bool tracked, XrVector3f& direction);
+void gaze_hold_report();
+void gaze_thread_report(double seconds);
+
+// xr_layer.cpp
 int64_t qpc_now();
 double report_pacing();
 void report_load(double frameMs);
