@@ -440,9 +440,23 @@ Rect popup_menu_rect();
 void edit_font();
 void paint();
 
-// launcher_window.cpp
+// pointer.cpp
+const Hit* hit_at(float x, float y);
+void set_slider_from_x(float x);
+std::pair<int*, int*> placement_of(Ctl id);
+void set_panel_from(float x, float y);
+void open_popup(Ctl owner);
+void select_game(int option);
+int game_index();
+void close_popup(bool accept);
+int popup_item_at(float x, float y);
+void choose_cheeky_runtime();
 void choose_game_folder();
+void undo_restore();
+
+// input.cpp
 void activate(Ctl id, int option);
+float dip(LPARAM lp, bool y);
 void on_key(WPARAM key);
 
 }  // namespace simqvfr::launcher::ui::win
