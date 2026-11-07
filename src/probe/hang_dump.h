@@ -4,8 +4,9 @@
 // hang-HHMMSS.dmp next to it. In the game itself MiniDumpWriteDump suspends every other thread and then needs the
 // loader lock: when a suspended thread held it (X-Plane loading the SR22's xlua plugin, 2026-11-06) the game
 // never woke. From outside, nothing in the game has to run while its threads are suspended. The helper is
-// started ahead because CreateProcessW in the game waits for the loader lock too (hang_watch_test); signalling
-// an event doesn't. The launcher builds hang_dump.cpp; the layer only includes this header (no dbghelp in the game).
+// started ahead because CreateProcessW in the game waits for the loader lock too (the first one in a process
+// loads sechost.dll under it); signalling an event doesn't. The launcher builds hang_dump.cpp; the layer only
+// includes this header (no dbghelp in the game).
 #pragma once
 
 #include <cwchar>
