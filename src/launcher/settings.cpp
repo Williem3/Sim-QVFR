@@ -121,6 +121,15 @@ std::wstring crop_key(const Settings& s) {
     return n(s.cropTop) + L"," + n(s.cropBottom) + L"," + n(s.cropOuter) + L"," + n(s.cropInner);
 }
 
+Settings restored_defaults(const Settings& current) {
+    Settings s;
+    s.hotkeys = current.hotkeys;  // the Hotkeys pane's own Reset hotkeys
+    s.updateCheck = current.updateCheck;
+    s.hiddenGames = current.hiddenGames;
+    s.gameColors = current.gameColors;
+    return s;
+}
+
 bool save_settings(const std::wstring& ini, const Settings& in) {
     Settings s = in;
     s.outer = clamp_to(s.outer, kOuterRange);

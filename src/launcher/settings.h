@@ -83,6 +83,9 @@ inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 400}, kSizeRange{10
 inline constexpr Range kMenuYawRange{-35, 35}, kMenuPitchRange{-30, 30}, kMenuWidthRange{20, 60};
 
 Settings load_settings(const std::wstring& ini);
+// Restore Defaults: the defaults for the game's settings, keeping what is the launcher's or the user's own beyond
+// them: the hotkeys, the update check, the game tabs and their colours.
+Settings restored_defaults(const Settings& current);
 // Writes the settings' keys (and the mode's fixed keys). False if the file cannot be written.
 bool save_settings(const std::wstring& ini, const Settings& settings);
 // The keys a running game reloads (the layer's live_reload): the foveated size, feather, corners,

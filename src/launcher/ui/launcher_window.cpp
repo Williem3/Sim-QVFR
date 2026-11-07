@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -96,7 +97,10 @@ enum Ctl {
     // (option the same), the colour wheel, its brightness, and the game's own colour back.
     kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset,
     // A setting's ⓘ: its help shows while the pointer is over it (option: its index in kHelp).
-    kHelpIcon
+    kHelpIcon,
+    // The action bar: the launched game's status (launch_watch.h; it opens Diagnostics or Report an issue) and
+    // Restore Defaults' Undo.
+    kLaunchBadge, kUndoBadge
 };
 
 constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
@@ -246,6 +250,10 @@ struct App {
     Rect colorWheel;
     float colorHue = 0, colorSat = 1;
     int colorValue = 100;
+    // The game launched from here, followed until the next launch (launch_watch.h): the action bar's status.
+    LaunchWatch watch;
+    // Restore Defaults: the settings before it, for Undo (the action bar, Ctrl+Z) until the next change.
+    std::optional<Settings> undoRestore;
 } app;
 
 Color col(uint32_t rgb, float alpha = 1) { return {rgb, alpha}; }
@@ -338,6 +346,8 @@ void apply_color_edit();  // the Games pane's colour into the settings (below)
 
 void changed(bool save = true) {
     app.status = Status::Idle;
+    if (save)
+        app.undoRestore.reset();  // Undo is for Restore Defaults alone: a change since makes it the user's
     if (save && app.iniFound) {
         save_settings(app.ini, app.s);
         app.iniText = ini_text();
@@ -484,6 +494,7 @@ void follow_ini() {
         return;
     app.iniText = std::move(text);
     app.s = load_settings(app.ini);
+    app.undoRestore.reset();
     refresh_profiles();  // the headset menu may have switched profiles (the action bar names the one in use)
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -510,7 +521,13 @@ void refresh_checks() {
         }).detach();
     }
     const bool current = exe == app.hashedExe && stamp == app.hashedStamp;
-    app.checks = preflight_checks(launcher_preflight(exe, build_state(current ? app.exeSha : "", current && app.hashing)));
+    PreflightInput in = launcher_preflight(exe, build_state(current ? app.exeSha : "", current && app.hashing));
+    // The game launched from here: still starting, or Sim-QVFR seen loading in it (its live_pid) though runtime.ini's
+    // live_ini isn't read yet.
+    const LaunchState launchState = app.watch.game() == &games::launcher_game() ? app.watch.outcome().state : LaunchState::Closed;
+    in.gameStarting = launchState == LaunchState::Starting;
+    in.gameHasLayer |= in.gameRunning && launchState == LaunchState::Running;
+    app.checks = preflight_checks(in);
 }
 
 int* slider_value(Ctl id) {
@@ -696,8 +713,24 @@ void launch() {
     app.s = load_settings(app.ini);
     save_settings(app.ini, app.s);
     app.iniText = ini_text();
-    // A launch that would crash the game, or run it without Sim-QVFR: ask first.
     refresh_checks();
+    // Running already (from here or not): Launch checks says how, and Launch starts nothing.
+    if (game_running()) {
+        app.pane = Pane::Checks;
+        app.scroll = 0;
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
+    for (const Check& c : app.checks)
+        if (c.id == "game" && c.tone == CheckTone::Bad) {  // its fix, Choose folder…, is in Launch checks
+            app.status = Status::Error;
+            app.error = game_name() + L" not found: choose its folder in Launch checks.";
+            app.pane = Pane::Checks;
+            app.scroll = 0;
+            InvalidateRect(app.hwnd, nullptr, FALSE);
+            return;
+        }
+    // A launch that would crash the game, or run it without Sim-QVFR: ask first.
     std::wstring problems;
     for (const Check& c : app.checks)
         if (c.confirm)
@@ -713,10 +746,17 @@ void launch() {
     app.status = Status::Starting;
     RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     std::wstring report;
-    if (launch_game(false, report) != 0) {
+    LaunchedGame launched;
+    if (launch_game(false, report, &launched) != 0) {
         app.status = Status::Error;
         const size_t at = report.find(L"ERROR: ");
         app.error = at == std::wstring::npos ? L"Launch failed." : report.substr(at + 7, report.find(L'\n', at) - at - 7);
+    } else {
+        // From here the watch says what became of it: running with Sim-QVFR, without it, closed or crashed.
+        app.status = Status::Idle;
+        app.watch.start(launched, games::launcher_game(), runtime_info_path(),
+                        game_crashes_folder(games::launcher_game().crashReports));
+        refresh_checks();
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -3537,6 +3577,17 @@ void paint() {
     const float badgeMax = restoreR.x - t::kSpace4 - kBarX;
     const float by = barY + (actionH - 20) / 2;
     const Readouts ro = readouts(app.s, app.runtime);
+    // The game launched from here (for the game whose tab is chosen): starting, and what went wrong, come before the
+    // launch checks; running and closed after them, and after what a change did to the running game.
+    const bool watching = app.watch.game() == &games::launcher_game();
+    const LaunchOutcome launchNow = watching ? app.watch.outcome() : LaunchOutcome{};
+    const bool launchFirst = watching && (launchNow.state == LaunchState::Starting || launchNow.tone == 1 || launchNow.tone == 2);
+    const auto launch_badge = [&] {
+        const float w = badge(kBarX, by, launchNow.tone, launchNow.text, badgeMax);
+        if (launchNow.link != LaunchLink::None)
+            app.hits.push_back({kLaunchBadge, {kBarX, by, w, 20}});
+        return w;
+    };
     float bw = 0;
     if (app.status == Status::Starting)
         bw = badge(kBarX, by, 3, L"Starting " + game_name() + L"…", badgeMax);
@@ -3544,6 +3595,11 @@ void paint() {
         bw = badge(kBarX, by, 2, app.error, badgeMax);
     else if (!app.iniFound)
         bw = badge(kBarX, by, 2, L"sim-qvfr.ini not found next to the launcher.", badgeMax);
+    else if (app.undoRestore) {
+        bw = badge(kBarX, by, 3, L"Defaults restored for " + short_name() + L" · Undo", badgeMax);
+        app.hits.push_back({kUndoBadge, {kBarX, by, bw, 20}});
+    } else if (launchFirst)
+        bw = launch_badge();
     else if (const Check* bad = first_with(app.checks, CheckTone::Bad))
         bw = checks_badge(by, 2, *bad, badgeMax);
     else if (eye_warning())
@@ -3559,6 +3615,8 @@ void paint() {
                    badgeMax);
     else if (app.live == Live::Applied)
         bw = badge(kBarX, by, 0, L"Applied to the running game", badgeMax);
+    else if (watching)
+        bw = launch_badge();
     else if (app.update == Update::Available) {
         bw = badge(kBarX, by, 3,
                    app.installing ? L"Installing Sim-QVFR " + app.release.tag + L"…"
@@ -3584,7 +3642,10 @@ void paint() {
         }
     }
     button(kRestore, restoreR, L"Restore Defaults", Btn::Ghost, kIconReset);
-    button(kLaunch, launchR, launchLabel, Btn::Primary, kIconPlay);
+    if (game_running())  // a second launch would start nothing: the game's state is in Launch checks
+        button(kLaunch, launchR, short_name() + L" is running", Btn::Secondary);
+    else
+        button(kLaunch, launchR, launchLabel, Btn::Primary, kIconPlay);
 
     help_tip();
 
@@ -3770,6 +3831,7 @@ void select_game(int option) {
         choose_launcher_game();
         app.s = load_settings(app.ini);
         app.iniText = ini_text();
+        app.undoRestore.reset();  // it held the other game's settings
         refresh_profiles();  // the profile in use is the game's
     } else {
         games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
@@ -3833,6 +3895,60 @@ void choose_cheeky_runtime() {
 }
 
 void activate(Ctl id, int option);
+
+// Launch checks' Choose folder… (a game Steam doesn't list): the game's folder, saved as [launcher] game_dir_<id>.
+void choose_game_folder() {
+    const games::GameInfo& game = games::launcher_game();
+    IFileOpenDialog* dialog = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+        return;
+    DWORD options = 0;
+    dialog->GetOptions(&options);
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    const std::wstring title = L"Choose " + game_name() + L"’s folder";
+    dialog->SetTitle(title.c_str());
+    std::wstring picked;
+    if (SUCCEEDED(dialog->Show(app.hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dialog->GetResult(&item))) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                picked = path;
+                CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+    }
+    dialog->Release();
+    if (picked.empty())
+        return;
+    const std::wstring folder = game_folder_from(picked, game);
+    if (folder.empty()) {
+        MessageBoxW(app.hwnd,
+                    (picked + L" doesn’t hold " + game.exeName + L". Choose the folder Steam’s Browse local files opens for " +
+                     game_name() + L".")
+                        .c_str(),
+                    L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (!app.iniFound || !WritePrivateProfileStringW(L"launcher", (L"game_dir_" + widen(game.id)).c_str(), folder.c_str(),
+                                                     app.ini.c_str())) {
+        MessageBoxW(app.hwnd, L"The folder couldn’t be saved: sim-qvfr.ini wasn’t found next to the launcher.", L"Sim QVFR Launcher",
+                    MB_OK | MB_ICONWARNING);
+        return;
+    }
+    app.iniText = ini_text();
+    if (app.status == Status::Error)
+        app.status = Status::Idle;  // "not found: choose its folder" is answered
+}
+
+// Restore Defaults' Undo: the settings from before it.
+void undo_restore() {
+    if (!app.undoRestore)
+        return;
+    app.s = *app.undoRestore;
+    changed();  // also ends the Undo
+}
 
 void end_capture() {
     if (app.captureAction < 0)
@@ -4077,6 +4193,7 @@ void fix_check(const Check& c) {
                          L" could not be changed. Turn Turbo mode off in Toolkit’s menu in the game.").c_str(),
                         L"Sim QVFR Launcher", MB_OK | MB_ICONWARNING);
         break;
+    case CheckFix::ChooseGameFolder: choose_game_folder(); break;
     case CheckFix::None: return;
     }
     refresh_checks();
@@ -4101,6 +4218,20 @@ void activate(Ctl id, int option) {
             app.runtime = load_runtime_info(runtime_info_path());
         break;
     case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
+    case kUndoBadge: undo_restore(); return;
+    case kLaunchBadge: {
+        const LaunchOutcome o = app.watch.outcome();
+        if (o.link == LaunchLink::Diagnostics) {
+            activate(kSidebar, static_cast<int>(Pane::Diagnostics));
+        } else if (o.link == LaunchLink::Report) {
+            if (o.state == LaunchState::Crashed)
+                app.reportKind = 1;  // kIssueKinds: Crash or freeze
+            activate(kSidebar, static_cast<int>(Pane::Report));
+            if (o.finished())
+                app.watch.stop();  // seen: Report an issue has its logs
+        }
+        return;
+    }
     case kHotkeyKey:
     case kHotkeyPad:
         if (option >= 0 && option < kHotkeyActions)
@@ -4261,10 +4392,10 @@ void activate(Ctl id, int option) {
     case kCheekyRuntime: choose_cheeky_runtime(); return;
     case kColor: app.s.color = static_cast<OutlineColor>(option); changed(); return;
     case kRestore: {
-        const Hotkeys hotkeys = app.s.hotkeys;  // the Hotkeys pane resets those
-        app.s = Settings{};
-        app.s.hotkeys = hotkeys;
+        const Settings before = app.s;
+        app.s = restored_defaults(app.s);
         changed();
+        app.undoRestore = before;  // the action bar offers Undo until the next change
         return;
     }
     case kLaunch: launch(); return;
@@ -4289,6 +4420,10 @@ void on_key(WPARAM key) {
         else if (key == VK_ESCAPE)
             close_popup(false);
         InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
+    if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && app.undoRestore) {  // Ctrl+Z: Restore Defaults' Undo
+        undo_restore();
         return;
     }
     if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game
@@ -4493,6 +4628,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             capture_poll();
         if (wParam == kFollowTimer) {
             follow_ini();
+            if (app.watch.poll()) {  // the launched game's status changed: the checks follow it (running, starting)
+                refresh_checks();
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             // Launch checks: Steam, ACE, the layers and the game folder change outside the launcher.
             static int ticks = 0;
             if (++ticks % 4 == 0) {

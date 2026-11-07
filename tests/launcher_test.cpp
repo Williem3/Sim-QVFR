@@ -18,6 +18,7 @@
 #include "games/xplane/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
+#include "launcher/launch_watch.h"
 #include "launcher/game_tabs.h"
 #include "launcher/install.h"
 #include "launcher/layer_order.h"
@@ -81,6 +82,207 @@ int ini_int(const std::wstring& ini, const wchar_t* section, const wchar_t* key)
 
 // The game tabs (game_tabs.h; the Games pane): the hidden list, the colours as text, HSV, readable accents, and the
 // settings keeping both launcher-wide.
+// After Launch (launch_watch.h): what the action bar says became of the game, from what the watch saw; the watch
+// itself on a real process; Restore Defaults' keeps; Choose folder…'s folder.
+void launch_status_checks() {
+    const std::wstring ace = L"Assetto Corsa EVO";
+    LaunchSeen s;
+    LaunchOutcome o = launch_outcome(s, ace);
+    check(o.state == LaunchState::Starting && o.tone == 3 && o.text == L"Starting Assetto Corsa EVO…" && o.link == LaunchLink::None,
+          "launch status: just launched, starting");
+    s.layerLoaded = true;
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::Running && o.tone == 0 && o.text == L"Assetto Corsa EVO is running with Sim-QVFR" &&
+              o.link == LaunchLink::Diagnostics,
+          "launch status: Sim-QVFR loaded: running with it, leading to Diagnostics");
+    s.loaderError = L"something later";
+    check(launch_outcome(s, ace).state == LaunchState::Running, "launch status: a loader error after Sim-QVFR loaded doesn't count");
+    s = {};
+    s.loaderError = L"xrCreateInstance failed";
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::NoLayer && o.tone == 2 && o.link == LaunchLink::Report &&
+              o.text == L"Assetto Corsa EVO started without Sim-QVFR · OpenXR: xrCreateInstance failed",
+          "launch status: the OpenXR loader's error and no layer: started without Sim-QVFR, with the loader's reason");
+    s = {};
+    s.seconds = kLayerLoadSeconds - 1;
+    check(launch_outcome(s, ace).state == LaunchState::Starting, "launch status: still starting before the wait is up");
+    s.seconds = kLayerLoadSeconds;
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::NotLoaded && o.tone == 1 && o.link == LaunchLink::Report && !o.finished(),
+          "launch status: no layer after the wait: a warning, not yet a verdict");
+
+    s = {};
+    s.exited = true;
+    s.layerLoaded = true;
+    s.ranSeconds = 23 * 60 + 5;
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::Closed && o.tone == 0 && o.finished() && o.text == L"Assetto Corsa EVO closed after 23 min" &&
+              o.link == LaunchLink::Diagnostics,
+          "launch status: closed, how long it ran");
+    s.fps = 88.24;
+    check(launch_outcome(s, ace).text == L"Assetto Corsa EVO closed after 23 min · 88.2 fps",
+          "launch status: closed, with this launch's frame rate");
+    s.exitCode = 0xC0000005;
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::Crashed && o.tone == 2 && o.link == LaunchLink::Report &&
+              o.text == L"Assetto Corsa EVO crashed after 23 min · Report an issue",
+          "launch status: an access violation is a crash");
+    s.exitCode = 0xC000013A;
+    check(launch_outcome(s, ace).state == LaunchState::Closed, "launch status: a closed console isn't a crash");
+    s.exitCode = 0;
+    s.hang = true;
+    check(launch_outcome(s, ace).text == L"Assetto Corsa EVO stopped responding after 23 min · Report an issue",
+          "launch status: a hang dump: stopped responding");
+    s.hang = false;
+    s.layerLoaded = false;
+    s.crashReport = true;
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::Crashed && o.text == L"Assetto Corsa EVO crashed while starting · Report an issue",
+          "launch status: the game's crash report before Sim-QVFR loaded: crashed while starting");
+    s.crashReport = false;
+    o = launch_outcome(s, ace);
+    check(o.state == LaunchState::ClosedNoLayer && o.tone == 1 && o.link == LaunchLink::Report &&
+              o.text == L"Assetto Corsa EVO closed without loading Sim-QVFR · Report an issue",
+          "launch status: closed without Sim-QVFR ever loading");
+    s.loaderError = L"failed to find layer";
+    check(launch_outcome(s, ace).text == L"Assetto Corsa EVO closed without loading Sim-QVFR · OpenXR: failed to find layer",
+          "launch status: closed without it, with the loader's reason");
+
+    check(duration_text(45) == L"45 s" && duration_text(23 * 60 + 5) == L"23 min" && duration_text(65 * 60) == L"1 h 05 min" &&
+              duration_text(-3) == L"0 s",
+          "launch status: durations");
+    check(crash_exit_code(0xC0000005) && crash_exit_code(0xC0000409) && !crash_exit_code(0) && !crash_exit_code(1) &&
+              !crash_exit_code(0xC000013A),
+          "launch status: crash exit codes are NTSTATUS errors");
+
+    // The loader's own error lines only; the game's output is mixed in.
+    check(loader_error("Fossilize ERROR: Failed to parse ApplicationInfoFilter\n"
+                       "Warning [GENERAL |  | OpenXR-Loader] : a warning\n"
+                       "Error: not the loader\n"
+                       "Error [GENERAL | xrCreateInstance | OpenXR-Loader] : xrCreateInstance failed\r\n"
+                       "Error [GENERAL | xrCreateInstance | OpenXR-Loader] : the second\n") == L"xrCreateInstance failed",
+          "loader error: the loader's first Error line, not the game's ERROR or the loader's warnings");
+    check(loader_error("Fossilize ERROR: x\nWarning [GENERAL | | OpenXR-Loader] : y\n").empty() && loader_error("").empty(),
+          "loader error: none in the game's own output");
+    check(loader_error("Error [GENERAL | xrCreateInstance]") == L"Error [GENERAL | xrCreateInstance]",
+          "loader error: a line without a message is kept whole");
+
+    // The watch on real processes: a fake run folder, runtime.ini and logs beside it.
+    const fs::path dir = fs::temp_directory_path() / ("sim-qvfr-launch-watch-" + std::to_string(GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    const fs::path run = dir / "logs" / "run-1";
+    fs::create_directories(run);
+    const std::wstring runtimeIni = (dir / "runtime.ini").wstring(), log = (dir / "logs" / "session-1.log").wstring();
+    const auto start = [&](const wchar_t* commandLine, LaunchWatch& watch) {
+        std::wstring command = commandLine;
+        STARTUPINFOW si{sizeof(si)};
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+            return DWORD(0);
+        CloseHandle(pi.hThread);
+        watch.start({pi.hProcess, pi.dwProcessId, run.wstring(), log}, ace::kGame, runtimeIni, (dir / "crashes").wstring());
+        return pi.dwProcessId;
+    };
+    const auto settle = [](LaunchWatch& watch) {
+        for (int i = 0; i < 200 && !watch.outcome().finished(); ++i) {
+            watch.poll();
+            Sleep(25);
+        }
+        watch.poll();
+    };
+    {
+        // Flat: the loader's error in openxr-loader.log, then a crash exit code.
+        write_file((run / kLoaderOutputName).wstring(),
+                   "game output\nError [GENERAL | xrCreateInstance | OpenXR-Loader] : xrCreateInstance failed\n");
+        LaunchWatch watch;
+        const DWORD pid = start(L"cmd.exe /c exit 3221225477", watch);  // 0xC0000005
+        settle(watch);
+        const LaunchOutcome w = watch.outcome();
+        check(pid != 0 && w.state == LaunchState::Crashed && w.text.find(L"crashed while starting") != std::wstring::npos,
+              "launch watch: a process that exits with an access violation before Sim-QVFR loads crashed while starting");
+    }
+    {
+        // Loaded and closed: runtime.ini names its process and this launch's session.
+        write_file((run / kLoaderOutputName).wstring(), "game output only\n");
+        LaunchWatch watch;
+        const DWORD pid = start(L"cmd.exe /c ping -n 2 127.0.0.1 >nul", watch);
+        WritePrivateProfileStringW(L"runtime", L"live_pid", std::to_wstring(pid).c_str(), runtimeIni.c_str());
+        WritePrivateProfileStringW(L"runtime", L"session_log", log.c_str(), runtimeIni.c_str());
+        WritePrivateProfileStringW(L"runtime", L"session_fps", L"90.0", runtimeIni.c_str());
+        watch.poll();
+        const LaunchOutcome running = watch.outcome();
+        settle(watch);
+        const LaunchOutcome w = watch.outcome();
+        check(pid != 0 && running.state == LaunchState::Running && w.state == LaunchState::Closed &&
+                  w.text.find(L"90.0 fps") != std::wstring::npos,
+              "launch watch: live_pid is the launched process: running, then closed with the session's frame rate");
+        // Another launch's session (another log) doesn't lend it its frame rate.
+        WritePrivateProfileStringW(L"runtime", L"session_log", L"C:\\elsewhere\\session-0.log", runtimeIni.c_str());
+        LaunchWatch other;
+        const DWORD pid2 = start(L"cmd.exe /c exit 0", other);
+        WritePrivateProfileStringW(L"runtime", L"live_pid", std::to_wstring(pid2).c_str(), runtimeIni.c_str());
+        settle(other);
+        check(other.outcome().state == LaunchState::Closed && other.outcome().text.find(L"fps") == std::wstring::npos,
+              "launch watch: the frame rate only from this launch's own session");
+    }
+    {
+        // A crash report folder written since the launch.
+        write_file((run / kLoaderOutputName).wstring(), "");
+        WritePrivateProfileStringW(L"runtime", L"live_pid", L"0", runtimeIni.c_str());
+        LaunchWatch watch;
+        const DWORD pid = start(L"cmd.exe /c exit 0", watch);
+        fs::create_directories(dir / "crashes" / "UE4CC-Windows-1");
+        settle(watch);
+        check(pid != 0 && watch.outcome().state == LaunchState::Crashed, "launch watch: a new crash report folder means it crashed");
+        watch.stop();
+        check(!watch.active(), "launch watch: stopped, it follows nothing");
+    }
+    fs::remove_all(dir, ec);
+
+    // Restore Defaults keeps the hotkeys, the update check and the game tabs; everything else goes back.
+    {
+        Settings mine;
+        mine.outer = 30;
+        mine.menuYaw = 12;
+        mine.cheeky.load = true;
+        mine.crop = true;
+        mine.hotkeys[0].key = KeyCombo{'K', true, false, false};
+        mine.updateCheck = true;
+        mine.hiddenGames = L"acc";
+        mine.gameColors[L"ace"] = 0x123456;
+        const Settings back = restored_defaults(mine);
+        const Settings d;
+        check(back.outer == d.outer && back.menuYaw == d.menuYaw && back.cheeky.load == d.cheeky.load && back.crop == d.crop,
+              "restore defaults: the game's settings go back to the defaults");
+        check(back.hotkeys == mine.hotkeys && back.updateCheck && back.hiddenGames == L"acc" && back.gameColors.size() == 1 &&
+                  back.gameColors.at(L"ace") == 0x123456,
+              "restore defaults: the hotkeys, the update check, the hidden tabs and the colours stay");
+    }
+
+    // Choose folder…: the game's folder from the folder the user picks.
+    {
+        const fs::path lib = fs::temp_directory_path() / ("sim-qvfr-game-folder-" + std::to_string(GetCurrentProcessId()));
+        fs::remove_all(lib, ec);
+        const fs::path game = lib / "steamapps" / "common" / acc::kGame.steamFolder;
+        const fs::path exeDir = game / acc::kGame.exeFolder;
+        fs::create_directories(exeDir);
+        write_file((exeDir / acc::kGame.exeName).wstring(), "MZ");
+        const std::wstring want = game.lexically_normal().wstring();
+        check(game_folder_from(game.wstring(), acc::kGame) == want && game_folder_from(game.wstring() + L"\\", acc::kGame) == want,
+              "game folder: the game's own folder, with or without a trailing backslash");
+        check(game_folder_from(exeDir.wstring(), acc::kGame) == want, "game folder: the exe's folder is taken up to the game's");
+        check(game_folder_from((lib / "steamapps" / "common").wstring(), acc::kGame) == want &&
+                  game_folder_from(lib.wstring(), acc::kGame) == want,
+              "game folder: steamapps\\common, or the Steam library above it");
+        check(game_folder_from((lib / "steamapps").wstring(), acc::kGame).empty() && game_folder_from(L"", acc::kGame).empty() &&
+                  game_folder_from((exeDir / "missing").wstring(), acc::kGame).empty() &&
+                  game_folder_from(game.wstring(), ace::kGame).empty(),
+              "game folder: a folder without the game's exe, or another game's folder, is none");
+        fs::remove_all(lib, ec);
+    }
+}
+
 void game_tabs_checks() {
     check(!game_hidden(L"", L"ace") && game_hidden(L"acc, xplane", L"xplane") && game_hidden(L"ACC", L"acc") &&
               !game_hidden(L"acc", L"ace"),
@@ -1341,6 +1543,12 @@ int main() {
         check(find(checks, "game_running") && find(checks, "game_running")->tone == CheckTone::Ok && !find(checks, "game_running")->confirm,
               "preflight: ACE running with Sim-QVFR (launched from here) is no problem");
         in.gameHasLayer = false;
+        in.gameStarting = true;
+        checks = preflight_checks(in);
+        check(find(checks, "game_running") && find(checks, "game_running")->tone == CheckTone::Ok &&
+                  find(checks, "game_running")->title.find(L"is starting") != std::wstring::npos,
+              "preflight: ACE launched from here, Sim-QVFR not loaded yet: starting, not running without it");
+        in.gameStarting = false;
         in.steamRunning = true;
         in.gameRunning = false;
         in.gameExe.clear();
@@ -1348,6 +1556,9 @@ int main() {
         check(find(checks, "game") && find(checks, "game")->tone == CheckTone::Bad && !find(checks, "build") &&
                   !find(checks, "cheeky_loader"),
               "preflight: no game: no build or game folder check");
+        check(find(checks, "game")->fix == CheckFix::ChooseGameFolder && find(checks, "game")->fixLabel == L"Choose folder…" &&
+                  find(checks, "game")->detail.find(L"game_dir") == std::wstring::npos,
+              "preflight: no game: a Choose folder button, no ini key to edit by hand");
         in.gameExe = L"K:\\Steam\\steamapps\\common\\Assetto Corsa EVO\\AssettoCorsaEVO.exe";
 
         // Cheeky's loader: found by its name in the DLL, a different dxgi.dll left alone.
@@ -1787,6 +1998,7 @@ int main() {
     fs::remove_all(folder, ec);
     per_game_settings_checks();
     game_tabs_checks();
+    launch_status_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }

@@ -283,7 +283,8 @@ bool load_into(HANDLE process, const std::wstring& library, std::wstring& error)
     return ok;
 }
 
-int run(bool dryRun) {
+// `launched`: the started game, its process handle kept open for the caller (the window follows it).
+int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const fs::path here = exe_folder();
     const fs::path layerFolder = layer_folder();
     std::error_code ec;
@@ -396,7 +397,10 @@ int run(bool dryRun) {
     if (baseline)  // one launch only
         WritePrivateProfileStringW(L"launcher", L"baseline_next", L"0", ini.c_str());
     CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+    if (launched)
+        *launched = {pi.hProcess, pi.dwProcessId, runFolder.wstring(), log.wstring()};
+    else
+        CloseHandle(pi.hProcess);
     write_file((runFolder / L"launch.txt").wstring(), narrow(report));
     return 0;
 }
@@ -513,9 +517,9 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     return in;
 }
 
-int launch_game(bool dryRun, std::wstring& out) {
+int launch_game(bool dryRun, std::wstring& out, LaunchedGame* launched) {
     report.clear();
-    const int result = run(dryRun);
+    const int result = run(dryRun, launched);
     out = report;
     return result;
 }
