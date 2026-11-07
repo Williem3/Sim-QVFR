@@ -59,6 +59,9 @@ public:
     // The game lays its views out in eye columns (views4_rect_eye_columns) and submits each eye as its half of
     // the target: the layer offers that layout's eye size, and keeps each eye's offset, cut to its outer view.
     virtual bool qvfr_eye_columns() const { return false; }
+    // [experiment] hang_watch_s when the ini doesn't set it (probe/hang_watch.h): the longest the game goes
+    // without a frame on its own, when loading, plus a margin.
+    virtual unsigned hang_watch_s() const { return 30; }
 
     // ---- QVFR ----
     // At xrCreateInstance, before the game makes its renderer. False: the game's code isn't the build the

@@ -13,9 +13,11 @@ namespace {
 // reverse engineered (the layer then only logs). QVFR never starts and nothing else runs.
 class NoQvfr final : public GameAdapter {
 public:
-    explicit NoQvfr(const GameInfo* game) : game_(game) {}
+    explicit NoQvfr(const GameInfo* game, unsigned hangWatchSeconds = 30)
+        : game_(game), hangWatchSeconds_(hangWatchSeconds) {}
     const GameInfo* info() const override { return game_; }
     bool has_qvfr() const override { return false; }
+    unsigned hang_watch_s() const override { return hangWatchSeconds_; }
     bool qvfr_start(const QvfrStart&) override { return false; }
     void qvfr_set_gaze(const float (&)[2][2], const bool (&)[2], bool) override {}
     void qvfr_set_live_layout(const Views4Layout&) override {}
@@ -31,6 +33,7 @@ public:
 
 private:
     const GameInfo* game_;
+    unsigned hangWatchSeconds_;
 };
 
 }  // namespace
@@ -42,7 +45,8 @@ GameAdapter& adapter_for(const GameInfo* game) {
     if (game == &::acc::kGame)
         return ::acc::adapter();
     if (game == &::xplane::kGame) {  // identity only (xplane/README.md)
-        static NoQvfr xplane(game);
+        // A flight load draws no frame for 30-60 s (the hang watch fired on every one, 2026-11-06).
+        static NoQvfr xplane(game, 120);
         return xplane;
     }
     static NoQvfr none(nullptr);
