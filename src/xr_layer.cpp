@@ -22,6 +22,7 @@
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "games/adapter.h"
+#include "layer_chain.h"
 #include "log.h"
 #include "probe/d3d11_capture.h"
 #include "probe/d3d12_trace.h"
@@ -4914,20 +4915,68 @@ GazeExtension gaze_extension(const XrInstanceCreateInfo& info, PFN_xrGetInstance
     return GazeExtension::Absent;
 }
 
+// Why a game can start flat with this layer loaded: the OpenXR loader negotiates every layer, then can still
+// fail xrCreateInstance before the chain reaches this one (a layer named in XR_ENABLE_API_LAYERS whose manifest
+// it refuses, an extension nobody provides). The loader prints its reason on the game's stderr, which the launcher
+// keeps in the run folder's openxr-loader.log; this log names the layers and says when that happened.
+std::atomic<int> loaderNegotiations{0};
+std::atomic<bool> instanceReachedLayer{false};
+
+void note_loader_negotiation() {
+    const int n = ++loaderNegotiations;
+    if (n == 1) {
+        char enabled[2048] = {};
+        GetEnvironmentVariableA("XR_ENABLE_API_LAYERS", enabled, static_cast<DWORD>(std::size(enabled)));
+        logf("OpenXR layers named for this launch: %s", enabled[0] ? enabled : "(none: implicit layers only)");
+    } else if (!instanceReachedLayer) {
+        log_line("the game's previous xrCreateInstance failed before reaching this layer (no VR: the game starts "
+                 "flat). The OpenXR loader's reason is in this launch's run folder, openxr-loader.log");
+    }
+}
+
+// The layers named in SIM_QVFR_CHAIN, loaded from their manifests in XR_API_LAYER_PATH and linked below
+// `self` (layer_chain.h: the launcher does this for a game whose OpenXR loader can't take a list of layers).
+// A layer that fails to load is left out and logged, as the loader would. `self` when there is none.
+const XrApiLayerNextInfo* chain_layers_below(const XrApiLayerNextInfo* self) {
+    static std::vector<XrApiLayerNextInfo> storage;  // outlives the create call down the chain
+    wchar_t value[4096] = {}, folder[MAX_PATH * 2] = {};
+    const DWORD n = GetEnvironmentVariableW(chain::kChainVariable, value, static_cast<DWORD>(std::size(value)));
+    if (n == 0 || n >= std::size(value))
+        return self;
+    GetEnvironmentVariableW(L"XR_API_LAYER_PATH", folder, static_cast<DWORD>(std::size(folder)));
+    std::vector<chain::Layer> layers;
+    char names[4096] = {};  // layer names are ASCII
+    WideCharToMultiByte(CP_UTF8, 0, value, -1, names, static_cast<int>(std::size(names)), nullptr, nullptr);
+    for (const std::string& name : chain::split_names(names)) {
+        chain::Layer layer;
+        std::string why;
+        if (chain::load(folder, name, layer, why)) {
+            layers.push_back(layer);
+            logf("chain: %s loaded below this layer", name.c_str());
+        } else {
+            logf("chain: %s left out: %s", name.c_str(), why.c_str());
+        }
+    }
+    return chain::link(layers, self, storage);
+}
+
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
                                                 const XrApiLayerCreateInfo* layerInfo, XrInstance* instance) {
     if (!info || !layerInfo || !layerInfo->nextInfo || !instance ||
         std::strcmp(layerInfo->nextInfo->layerName, kLayerName) != 0)
         return XR_ERROR_INITIALIZATION_FAILED;
+    instanceReachedLayer = true;
+    // This layer's node, with the layers the launcher asked it to chain (SIM_QVFR_CHAIN) linked below it.
+    const XrApiLayerNextInfo* own = chain_layers_below(layerInfo->nextInfo);
     XrApiLayerCreateInfo nextLayerInfo = *layerInfo;
-    nextLayerInfo.nextInfo = layerInfo->nextInfo->next;
-    PFN_xrGetInstanceProcAddr gipa = layerInfo->nextInfo->nextGetInstanceProcAddr;
+    nextLayerInfo.nextInfo = own->next;
+    PFN_xrGetInstanceProcAddr gipa = own->nextGetInstanceProcAddr;
     // Registered as an implicit layer, so it loads into every OpenXR app: stay silent and
     // pass-through everywhere except a supported game (src/games).
     const games::GameInfo* thisGame = games::current_game();
     if (!thisGame) {
         next = Dispatch{gipa};
-        return layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
+        return own->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     }
     // Eye tracking needs XR_EXT_eye_gaze_interaction on the instance. ACE and X-Plane ask for it themselves; ACC
     // (through OpenComposite) doesn't, so its gaze worked only with a layer below that adds it (Cheeky, OpenXR Toolkit,
@@ -4942,17 +4991,17 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         XrInstanceCreateInfo withGaze = *info;
         withGaze.enabledExtensionCount = static_cast<uint32_t>(names.size());
         withGaze.enabledExtensionNames = names.data();
-        r = layerInfo->nextInfo->nextCreateApiLayerInstance(&withGaze, &nextLayerInfo, instance);
+        r = own->nextCreateApiLayerInstance(&withGaze, &nextLayerInfo, instance);
     }
     const bool gazeAdded = XR_SUCCEEDED(r);
     if (!gazeAdded)
-        r = layerInfo->nextInfo->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
+        r = own->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     game = &games::adapter_for(thisGame);
     load_experiment();
     // Where the launcher writes live settings while this ACE runs (live_reload).
     runtime_info(L"live_ini", live.ini);
     runtime_info(L"live_pid", std::to_wstring(GetCurrentProcessId()));
-    log_layer_order(layerInfo->nextInfo->next);
+    log_layer_order(own->next);
     logf("xrCreateApiLayerInstance app=%s engine=%s extensions=%u result=%d", info->applicationInfo.applicationName,
          info->applicationInfo.engineName, info->enabledExtensionCount, r);
     for (uint32_t i = 0; i < info->enabledExtensionCount; ++i)
@@ -5079,7 +5128,9 @@ xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, cons
     request->layerApiVersion = XR_API_VERSION_1_0;
     request->getInstanceProcAddr = simqvfr::layerGetInstanceProcAddr;
     request->createApiLayerInstance = simqvfr::layerCreateApiLayerInstance;
-    if (simqvfr::is_game_process())
+    if (simqvfr::is_game_process()) {
         simqvfr::log_line("Loader negotiated API layer interface v1 (Sim-QVFR probe build)");
+        simqvfr::note_loader_negotiation();
+    }
     return XR_SUCCESS;
 }

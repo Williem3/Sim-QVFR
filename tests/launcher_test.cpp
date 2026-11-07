@@ -45,7 +45,7 @@ std::wstring layer(const char* sub, const char* name, const char* disable, const
     const fs::path dir = folder / sub;
     fs::create_directories(dir);
     std::string text = std::string("{\n  \"file_format_version\": \"1.0.0\",\n  \"api_layer\": {\n    \"name\": \"") + name +
-                       "\",\n    \"library_path\": \".\\\\" + name + ".dll\",\n    \"api_version\": \"1.0\"";
+                       "\",\n    \"library_path\": \".\\\\" + name + ".dll\",\n    \"api_version\": \"1.0\",\n    \"implementation_version\": \"1\"";
     if (disable)
         text += std::string(",\n    \"disable_environment\": \"") + disable + "\"";
     if (enable)
@@ -121,6 +121,30 @@ int main() {
     Options gated;
     gated.setVariables = {L"enable_gated"};
     check(names(plan_layers(registrations, gated)).back() == "XR_APILAYER_GATED", "a gated layer with its variable set is moved");
+
+    // A manifest the OpenXR loader refuses is left out: named in XR_ENABLE_API_LAYERS it would fail
+    // xrCreateInstance, and ACC (OpenComposite) would start flat.
+    {
+        const std::wstring bad = layer("bad", "XR_APILAYER_BAD_VERSION", "DISABLE_BAD");
+        std::string text;
+        read_file(bad, text);
+        text.replace(text.find("\"implementation_version\": \"1\""), 29, "\"implementation_version\": \"1.2.0\"");
+        write_file(bad, text);
+        std::vector<Registration> regs = registrations;
+        regs.push_back({bad, true});
+        const LayerPlan p = plan_layers(regs, Options{});
+        check(names(p) == expected && std::any_of(p.notes.begin(), p.notes.end(), [](const std::string& n) {
+                  return n.find("XR_APILAYER_BAD_VERSION: the OpenXR loader rejects its manifest (implementation_version") == 0;
+              }),
+              "a layer whose manifest the loader rejects is left out, with a note");
+        json::Value m;
+        check(json::parse("{\"file_format_version\":\"1.0.0\",\"api_layer\":{\"name\":\"X\",\"library_path\":\"x.dll\","
+                          "\"api_version\":\"1.1\",\"implementation_version\":\"7\"}}", m) && loader_rejects(m).empty(),
+              "a valid manifest (api_version 1.1) passes the loader's checks");
+        check(json::parse("{\"file_format_version\":\"1.0.0\",\"api_layer\":{\"name\":\"X\",\"library_path\":\"x.dll\","
+                          "\"api_version\":\"1.0\",\"implementation_version\":1}}", m) && !loader_rejects(m).empty(),
+              "a numeric implementation_version is refused, as the loader does");
+    }
 
     // mode=quad: frame generation off; off_layers: Toolkit off.
     Options quad;
@@ -255,6 +279,16 @@ int main() {
     check(value_of(quadVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_SIM_qvfr" &&
               value_of(quadVars, L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR") == L"1",
           "mode=quad: only the Sim-QVFR layer, VectorXR silenced");
+    // An OpenComposite game (ACC): its loader keeps only the first and last of a list, so the loader gets the
+    // Sim-QVFR layer alone and the layer chains the rest (SIM_QVFR_CHAIN), still silenced as implicit copies.
+    const auto chainVars = launch_variables(plan, L"C:\\run", L"i", L"l", L"r", {}, true);
+    check(value_of(chainVars, L"XR_ENABLE_API_LAYERS") == L"XR_APILAYER_SIM_qvfr" &&
+              value_of(chainVars, L"SIM_QVFR_CHAIN") == L"XR_APILAYER_MBUCCHIA_toolkit;XR_APILAYER_DIENERTECH_VECTORXR" &&
+              value_of(chainVars, L"DISABLE_XR_APILAYER_MBUCCHIA_toolkit") == L"1",
+          "chained: the loader gets the Sim-QVFR layer alone; SIM_QVFR_CHAIN lists the rest in order");
+    check(value_of(launch_variables(quadPlan, L"C:\\run", L"i", L"l", L"r", {}, true), L"SIM_QVFR_CHAIN") == L"<unset>" &&
+              value_of(vars, L"SIM_QVFR_CHAIN") == L"<unset>",
+          "chained: nothing to chain, or a game whose loader takes the list: no SIM_QVFR_CHAIN");
 
     // Run folder.
     const fs::path run = folder / L"run";
@@ -679,6 +713,27 @@ int main() {
         check(std::count_if(old.begin(), old.end(), [](const ReportFile& f) { return f.name == L"session-20261101-100000.log"; }) == 1,
               "report: only an old session log: the newest one still goes in");
 
+        // A launch the loader failed has no session log: the newest run's plan and loader output go in instead,
+        // only the end of a long output.
+        fs::create_directories(logs / L"run-20261103-120000");
+        fs::create_directories(logs / L"run-20261103-130000");
+        write_file((logs / L"run-20261103-120000" / L"launch.txt").wstring(), "older launch");
+        write_file((logs / L"run-20261103-130000" / L"launch.txt").wstring(), "newest launch");
+        write_file((logs / L"run-20261103-130000" / kLoaderOutputName).wstring(),
+                   std::string(static_cast<size_t>(kReportLoaderOutputBytes), 'x') + "Error [GENERAL | xrCreateInstance]");
+        const std::vector<ReportFile> runs = report_files({logs.wstring(), reportRuntime, settingsIni}, nowTicks);
+        const auto entry = [&](const wchar_t* name) {
+            const auto it = std::find_if(runs.begin(), runs.end(), [&](const ReportFile& f) { return f.name == name; });
+            return it == runs.end() ? nullptr : &*it;
+        };
+        const ReportFile* runPlan = entry(L"launch.txt");
+        const ReportFile* loader = entry(kLoaderOutputName);
+        check(runPlan && runPlan->path.find(L"run-20261103-130000") != std::wstring::npos,
+              "report: the newest run's launch.txt goes in");
+        check(loader && loader->path.empty() && loader->data.size() == kReportLoaderOutputBytes &&
+                  loader->data.ends_with("xrCreateInstance]"),
+              "report: a long loader output goes in as its last part");
+
         check(crc32("123456789", 9) == 0xcbf43926u, "report: CRC-32 check value");
         const std::vector<ReportFile> zipEntries = {{L"runtime.ini", reportRuntime}, {L"issue.md", L"", "# Problem \xc3\xa9"}};
         const std::wstring zip = (folder / L"report" / L"report.zip").wstring();
@@ -875,6 +930,31 @@ int main() {
         check(worst_tone(checks) == CheckTone::Ok && find(checks, "build") && find(checks, "steam") &&
                   find(checks, "cheeky_loader") && !find(checks, "game_running") && !find(checks, "cheeky"),
               "preflight: all clear: build, Steam and the game folder pass; nothing about Cheeky while it is off");
+
+        // Administrator rights: the game would inherit them and its OpenXR loader ignore the layer folder.
+        check(find(checks, "elevated") && find(checks, "elevated")->tone == CheckTone::Ok,
+              "preflight: a launcher with normal rights passes the administrator check");
+        {
+            PreflightInput e = in;
+            e.elevated = true;
+            e.parent = L"SimHub.exe";
+            std::vector<Check> elevatedChecks = preflight_checks(e);
+            const Check* elevated = find(elevatedChecks, "elevated");
+            check(elevated && elevated->tone == CheckTone::Bad && elevated->confirm &&
+                      elevated->detail.find(L"SimHub.exe") != std::wstring::npos,
+                  "preflight: an elevated launcher holds the launch back and names the program that started it");
+            e.parent = L"explorer.exe";
+            elevatedChecks = preflight_checks(e);
+            elevated = find(elevatedChecks, "elevated");
+            check(elevated && elevated->detail.find(L"Compatibility tab") != std::wstring::npos,
+                  "preflight: elevated from Explorer: the answer is a normal double-click or the Compatibility tab");
+            e.mode = LaunchMode::Off;
+            elevatedChecks = preflight_checks(e);
+            check(find(elevatedChecks, "elevated")->tone == CheckTone::Warn && !find(elevatedChecks, "elevated")->confirm,
+                  "preflight: elevated with mode=off is only a warning");
+        }
+        std::printf("info preflight: this test runs %s (started by %ls)\n",
+                    launcher_elevated() ? "as administrator" : "with normal rights", parent_process_name().c_str());
 
         in.build = BuildState::Unsupported;
         checks = preflight_checks(in);

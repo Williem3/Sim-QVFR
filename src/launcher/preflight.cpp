@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include "../games/game.h"
 
@@ -53,6 +54,40 @@ std::wstring toolkit_app_key(const std::wstring& exe) {
 }
 
 }  // namespace
+
+bool launcher_elevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+    alignas(TOKEN_MANDATORY_LABEL) BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE] = {};
+    DWORD size = 0;
+    bool high = false;
+    if (GetTokenInformation(token, TokenIntegrityLevel, buffer, sizeof(buffer), &size)) {
+        const PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer)->Label.Sid;
+        const DWORD level = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+        high = level > SECURITY_MANDATORY_MEDIUM_RID;  // as the OpenXR loader's IsHighIntegrityLevel
+    }
+    CloseHandle(token);
+    return high;
+}
+
+std::wstring parent_process_name() {
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return {};
+    std::vector<PROCESSENTRY32W> processes;
+    PROCESSENTRY32W entry{sizeof(entry)};
+    for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry))
+        processes.push_back(entry);
+    CloseHandle(snapshot);
+    const DWORD self = GetCurrentProcessId();
+    for (const PROCESSENTRY32W& p : processes)
+        if (p.th32ProcessID == self)
+            for (const PROCESSENTRY32W& q : processes)
+                if (q.th32ProcessID == p.th32ParentProcessID)
+                    return q.szExeFile;
+    return {};
+}
 
 BuildState build_state(const std::string& sha, bool hashing) {
     if (sha.empty())
@@ -115,6 +150,25 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
         c.fix = CheckFix::StartSteam;
         c.fixLabel = L"Start Steam";
     }
+    // Administrator rights: the game inherits them, and the OpenXR loader then ignores the launch's layer folder.
+    if (in.elevated) {
+        const bool byShell = in.parent.empty() || _wcsicmp(in.parent.c_str(), L"explorer.exe") == 0;
+        Check& c = add("elevated", method ? CheckTone::Bad : CheckTone::Warn, L"Sim-QVFR is running as administrator",
+                       shortName + L" would start with administrator rights too, and OpenXR then ignores Sim-QVFR: "
+                       L"the game starts on the desktop instead of in VR. " +
+                           (byShell ? std::wstring(L"Close the launcher and open it with a normal double-click, not "
+                                                   L"Run as administrator. If it still shows this, untick Run this "
+                                                   L"program as an administrator on the Compatibility tab of "
+                                                   L"sim-qvfr-launcher.exe’s Properties, under Change settings for all "
+                                                   L"users too.")
+                                    : L"It was started by " + in.parent + L", which runs as administrator. Close the "
+                                      L"launcher and open it with a double-click instead."));
+        c.confirm = method;
+    } else {
+        add("elevated", CheckTone::Ok, L"Not running as administrator",
+            shortName + L" starts with normal rights, as OpenXR needs to load Sim-QVFR.");
+    }
+
     // Running with Sim-QVFR (this launcher's launch, or one before it) is how it should be; running without it,
     // a launch would start a second copy.
     if (in.gameRunning && in.gameHasLayer)

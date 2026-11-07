@@ -34,6 +34,7 @@
 #include "launcher.h"
 #include "launcher_version.h"
 #include "preflight.h"
+#include "report.h"
 #include "settings.h"
 
 using namespace simqvfr::launcher;
@@ -204,6 +205,48 @@ int apply_request(const std::wstring& path) {
     return 1;
 }
 
+// The game's stdout and stderr, into one file: the only handles it inherits (a handle list), so nothing else of
+// the launcher's leaks into the game. Without the file the game starts as before, with no standard handles.
+struct LoaderOutput {
+    STARTUPINFOEXW startup{};
+    HANDLE file = INVALID_HANDLE_VALUE;
+    std::vector<char> attributes;
+
+    explicit LoaderOutput(const std::wstring& path) {
+        startup.StartupInfo.cb = sizeof(startup);
+        SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
+        file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return;
+        SIZE_T size = 0;
+        InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+        attributes.resize(size);
+        auto* list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributes.data());
+        if (!InitializeProcThreadAttributeList(list, 1, 0, &size) ||
+            !UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &file, sizeof(file), nullptr, nullptr)) {
+            CloseHandle(file);
+            file = INVALID_HANDLE_VALUE;
+            attributes.clear();
+            return;
+        }
+        startup.lpAttributeList = list;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = nullptr;
+        startup.StartupInfo.hStdOutput = file;
+        startup.StartupInfo.hStdError = file;
+    }
+    BOOL inherits() const { return file != INVALID_HANDLE_VALUE; }
+    ~LoaderOutput() {
+        if (startup.lpAttributeList)
+            DeleteProcThreadAttributeList(startup.lpAttributeList);
+        if (file != INVALID_HANDLE_VALUE)
+            CloseHandle(file);
+    }
+    LoaderOutput(const LoaderOutput&) = delete;
+    LoaderOutput& operator=(const LoaderOutput&) = delete;
+};
+
 int fail(const std::wstring& why) {
     say(L"ERROR: " + why);
     return 1;
@@ -275,13 +318,25 @@ int run(bool dryRun) {
     const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
     if (baseline)
         WritePrivateProfileStringW(L"experiment", L"baseline", L"1", iniCopy.c_str());
-    const auto variables =
-        launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring());
+    auto variables =
+        launch_variables(plan, runFolder.wstring(), iniCopy.wstring(), log.wstring(), runtime_info_path(), ini.wstring(),
+                         info.openComposite != nullptr);  // OpenComposite's loader mangles a list of layers
+    // The OpenXR loader prints why it refuses a runtime or a layer (errors on stderr, XR_LOADER_DEBUG's levels on
+    // stdout), before any layer runs: a game it fails starts flat with no layer log at all. The game's
+    // stdout and stderr go to the run folder (loader_output) for the report. A user's own level is kept.
+    if (std::none_of(environment.begin(), environment.end(),
+                     [](const std::wstring& e) { return _wcsnicmp(e.c_str(), L"XR_LOADER_DEBUG=", 16) == 0; }))
+        variables.emplace_back(L"XR_LOADER_DEBUG", L"warn");
 
     say(L"Sim-QVFR launcher " + widen(SIM_QVFR_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
     say(L"  args:      " + std::wstring(info.launchArgs));
     say(L"  layer:     " + library.wstring());
+    // An elevated game's OpenXR loader ignores XR_API_LAYER_PATH (the Launch checks' "elevated" check).
+    say(std::wstring(L"  rights:    ") +
+        (launcher_elevated() ? L"ADMINISTRATOR: the game inherits it and OpenXR won't find the layers (started by "
+                             : L"normal (started by ") +
+        (parent_process_name().empty() ? L"unknown" : parent_process_name()) + L")");
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
@@ -290,7 +345,8 @@ int run(bool dryRun) {
     std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);
     for (const MovedLayer& m : plan.below)
         order += L" -> " + widen(m.name);
-    say(L"  OpenXR:    " + order + L" -> runtime");
+    say(L"  OpenXR:    " + order + L" -> runtime" +
+        (info.openComposite && !plan.below.empty() ? L" (the layers below Sim-QVFR chained by it: SIM_QVFR_CHAIN)" : L""));
     for (const PlannedLayer& p : plan.layers)
         if (!p.on)
             say(L"  off:       " + widen(p.name) +
@@ -321,12 +377,12 @@ int run(bool dryRun) {
         launchVariables.push_back({L"SIM_QVFR_EARLY", L"1"});
     std::wstring block = environment_block(environment, launchVariables);
     std::wstring command = L"\"" + exe.wstring() + L"\" " + info.launchArgs;  // the game's OpenXR start
-    STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     const std::wstring workingFolder = exe.parent_path().wstring();
-    const DWORD flags = CREATE_UNICODE_ENVIRONMENT | (info.earlyLoad ? CREATE_SUSPENDED : 0);
-    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, flags, block.data(), workingFolder.c_str(),
-                        &si, &pi))
+    LoaderOutput output((runFolder / kLoaderOutputName).wstring());
+    const DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | (info.earlyLoad ? CREATE_SUSPENDED : 0);
+    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, output.inherits(), flags, block.data(),
+                        workingFolder.c_str(), &output.startup.StartupInfo, &pi))
         return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(GetLastError()) + L")");
     if (info.earlyLoad) {
         std::wstring loadError;
@@ -428,6 +484,9 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();
+    in.elevated = launcher_elevated();
+    if (in.elevated)
+        in.parent = parent_process_name();
     if (const wchar_t* openvr = games::launcher_game().openComposite) {
         const std::wstring folder = game_folder(ini);
         in.openComposite = folder.empty() ? OpenComposite::Unknown : open_composite((fs::path(folder) / openvr).wstring());

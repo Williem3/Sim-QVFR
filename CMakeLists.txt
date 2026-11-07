@@ -55,7 +55,7 @@ target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 # Every source the layer shares with its tests except src/xr_layer.cpp (two_loops_test and quad_flow_test
 # #include it), compiled once. A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
-  src/games/games.cpp src/log.cpp
+  src/games/games.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp
   src/probe/d3d12_vtable_index.c
@@ -82,6 +82,14 @@ add_custom_command(TARGET sim_qvfr POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_CURRENT_SOURCE_DIR}/manifest/XR_APILAYER_SIM_qvfr.json
           $<TARGET_FILE_DIR:sim_qvfr>/XR_APILAYER_SIM_qvfr.json)
+
+# Offline check of the layer chain (tests/layer_chain_test.cpp): it negotiates the built sim-qvfr.dll.
+add_executable(layer_chain_test tests/layer_chain_test.cpp)
+target_include_directories(layer_chain_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(layer_chain_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(layer_chain_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(layer_chain_test PRIVATE sim_qvfr_core)
+add_dependencies(layer_chain_test sim_qvfr)
 
 # Offline check of the hand-assembled probe stub (tests/stub_test.cpp).
 add_executable(stub_test tests/stub_test.cpp)

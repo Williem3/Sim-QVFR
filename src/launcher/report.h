@@ -21,6 +21,11 @@ inline constexpr size_t kIssueUrlMax = 8000;
 // newest session log excepted), anything that would take the zip past kReportMaxBytes left out.
 inline constexpr int kReportLogs = 3, kReportCpuProfiles = 3, kReportDumps = 2, kReportMaxAgeDays = 7;
 inline constexpr uint64_t kReportMaxBytes = 24ull << 20, kReportMaxDumpBytes = 16ull << 20;
+// The game's stdout and stderr at a launch (the OpenXR loader's errors and warnings), in its run folder
+// logs\run-<time>\. The zip takes the newest run's, its last kReportLoaderOutputBytes, and that run's
+// launch.txt (the launch plan).
+inline constexpr wchar_t kLoaderOutputName[] = L"openxr-loader.log";
+inline constexpr uint64_t kReportLoaderOutputBytes = 1ull << 20;
 
 // One entry of the zip: a file on disk (`path`), or `data` when `path` is empty.
 struct ReportFile {

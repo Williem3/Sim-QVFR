@@ -74,6 +74,10 @@ struct LayerPlan {
 // Reads each registered manifest and decides where its layer goes.
 LayerPlan plan_layers(const std::vector<Registration>& registrations, const Options& options);
 
+// Why the OpenXR loader would refuse `manifest` as an explicit layer (empty: it accepts it). Such a layer is
+// left out of a launch: a name in XR_ENABLE_API_LAYERS without a valid manifest fails xrCreateInstance.
+std::string loader_rejects(const json::Value& manifest);
+
 // The explicit copy of a manifest: library_path made absolute (relative paths resolve against the
 // manifest's folder), enable/disable switches removed. False if it is not a single-layer manifest.
 bool explicit_copy(const json::Value& manifest, const std::wstring& manifestPath, json::Value& copy,
@@ -87,10 +91,14 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
 // The variables this launch sets (name, value). `runtimeInfo`: where the layer reports the headset's
 // recommended size and eye tracking for the launcher window (SIM_QVFR_RUNTIME_INFO). `settings`: the
 // launcher's own ini, where the in-headset menu saves its changes (SIM_QVFR_SETTINGS; empty: not set).
+// `layerChains`: the game's OpenXR loader can't take a list of layers (OpenComposite's splits it wrongly), so
+// XR_ENABLE_API_LAYERS names only the Sim-QVFR layer and SIM_QVFR_CHAIN lists the rest for it to load
+// (layer_chain.h); their manifests are in the run folder either way.
 std::vector<std::pair<std::wstring, std::wstring>> launch_variables(const LayerPlan& plan, const std::wstring& runFolder,
                                                                     const std::wstring& ini, const std::wstring& log,
                                                                     const std::wstring& runtimeInfo,
-                                                                    const std::wstring& settings = {});
+                                                                    const std::wstring& settings = {},
+                                                                    bool layerChains = false);
 
 // A CreateProcess environment block: `current` ("NAME=value" strings) without inherited SIM_QVFR_*
 // variables, with `set` applied (case-insensitive names), sorted, double-NUL terminated.
