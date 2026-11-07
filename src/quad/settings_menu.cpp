@@ -19,7 +19,7 @@ struct Spec {
 
 // The launcher's ranges (kOuterRange, kInnerRange, kSizeRange, kFeatherRange, kCornerRange).
 constexpr Spec kSpecs[] = {
-    {MenuItem::Periphery, L"Periphery", 10, 100, 5},  {MenuItem::Density, L"Focus density", 50, 200, 5},
+    {MenuItem::Periphery, L"Periphery", 10, 100, 5},  {MenuItem::Density, L"Focus density", 50, 400, 5},
     {MenuItem::Width, L"Focus width", 10, 100, 1},     {MenuItem::Height, L"Focus height", 10, 100, 1},
     {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
     {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
@@ -362,7 +362,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     const int periphery = read_int(ini, L"experiment", L"periphery_scale", 0);
     v.periphery = std::clamp(periphery ? periphery : eyeScale, 10, 100);
     const int density = read_int(ini, L"experiment", L"focus_density", 0);
-    v.density = std::clamp(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / v.width)), 50, 200);
+    v.density = std::clamp(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / v.width)), 50, 400);
     v.feather = std::clamp(read_int(ini, L"quad", L"feather_percent", v.feather), 0, 50);
     v.corners = std::clamp(read_int(ini, L"quad", L"corner_radius_percent", v.corners), 0, 100);
     v.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;

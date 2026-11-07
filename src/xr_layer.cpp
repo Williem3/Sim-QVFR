@@ -4540,7 +4540,7 @@ void optimize_start(int64_t now) {
     const MenuLaunch& l = menu.model.launch;
     QvfrLimits limits;
     const int minFocus = read(L"min_focus", limits.floor.width, 10, 100);
-    limits.floor = {read(L"min_periphery", limits.floor.periphery, 10, 100), read(L"min_density", limits.floor.density, 50, 200),
+    limits.floor = {read(L"min_periphery", limits.floor.periphery, 10, 100), read(L"min_density", limits.floor.density, 50, 400),
                     minFocus, minFocus};
     limits.cropWidth = v.crop_width();
     limits.cropHeight = v.crop_height();
