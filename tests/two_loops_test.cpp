@@ -178,6 +178,49 @@ int main() {
         std::printf("menu reloads: one older than the last step ignored=%d, a newer one shown=%d\n", keptStep ? 1 : 0,
                     newerShown ? 1 : 0);
         ok &= keptStep && newerShown;
+        // Steps quicker than the worker are written as one: while a write holds the worker, steps queued one behind
+        // another become the newest; a write of another kind between them keeps its place, and the numbers stay in
+        // order (a merged step's number counts as done).
+        {
+            HANDLE gate = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            ini_write_later([gate] { WaitForSingleObject(gate, 5000); });
+            Sleep(30);
+            int steps = 0, other = 0;
+            ini_write_later([&steps] { steps += 1; }, IniWrite::MenuStep);
+            ini_write_later([&steps] { steps += 10; }, IniWrite::MenuStep);
+            ini_write_later([&other] { ++other; });
+            const uint64_t last = ini_write_later([&steps] { steps += 100; }, IniWrite::MenuStep);
+            SetEvent(gate);
+            ini_worker_sync();
+            uint64_t done = 0;
+            {
+                std::lock_guard guard(iniWorker.mutex);
+                done = iniWorker.writesDone;
+            }
+            std::printf("merged menu steps: ran %d (want 110), other write %d, done through %llu of %llu\n", steps, other,
+                        static_cast<unsigned long long>(done), static_cast<unsigned long long>(last));
+            ok &= steps == 110 && other == 1 && done == last;
+            // The menu itself: three steps while the worker is held reach the ini as the last one, and the menu
+            // shows it after the reloads.
+            ResetEvent(gate);
+            ini_write_later([gate] { WaitForSingleObject(gate, 5000); });
+            Sleep(30);
+            menu_press(MenuKey::Left, qpc_now());  // 40 -> 35
+            menu_press(MenuKey::Left, qpc_now());  // 35 -> 30
+            menu_press(MenuKey::Left, qpc_now());  // 30 -> 25
+            SetEvent(gate);
+            bool shown = false;
+            for (int i = 0; i < 200 && !shown; ++i) {
+                Sleep(11);
+                live_reload();
+                shown = menu.model.values.periphery == 25 &&
+                        GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()) == 25;
+            }
+            std::printf("three held steps: the ini has %d, the menu shows %d\n",
+                        GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini.c_str()), menu.model.values.periphery);
+            ok &= shown;
+            CloseHandle(gate);
+        }
         menu.visible = false;
         experiment.views4 = false;
         live = Live{};

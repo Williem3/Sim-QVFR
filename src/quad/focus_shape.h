@@ -11,6 +11,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 
 // Each corner moves at most this far in, percent of the box's width or height: the corners stay in their
@@ -55,10 +57,9 @@ inline FocusShape read_focus_shape(const wchar_t* ini) {
 
 inline bool write_focus_shape(const wchar_t* ini, const FocusShape& s) {
     const auto put = [ini](const wchar_t* key, int value) {
-        return WritePrivateProfileStringW(L"quad", key, std::to_wstring(std::clamp(value, 0, kFocusCornerMax)).c_str(),
-                                          ini) != 0;
+        return ini_put(ini, L"quad", key, std::clamp(value, 0, kFocusCornerMax));
     };
-    bool ok = WritePrivateProfileStringW(L"quad", L"focus_shape", s.corners ? L"corners" : L"box", ini) != 0;
+    bool ok = ini_put(ini, L"quad", L"focus_shape", s.corners ? L"corners" : L"box");
     for (int i = 0; i < kFocusCorners; ++i) {
         ok &= put(focus_corner_key(static_cast<FocusCorner>(i), false), s.in[i]);
         ok &= put(focus_corner_key(static_cast<FocusCorner>(i), true), s.vertical[i]);

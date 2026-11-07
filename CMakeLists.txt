@@ -181,6 +181,8 @@ target_compile_definitions(focus_turn_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 add_executable(settings_menu_test tests/settings_menu_test.cpp)
 target_include_directories(settings_menu_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(settings_menu_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+# The documented ini, for timing a menu step on a file of its size (each ini write rewrites it).
+target_compile_definitions(settings_menu_test PRIVATE SIM_QVFR_DOCUMENTED_INI="${CMAKE_CURRENT_SOURCE_DIR}/manifest/sim-qvfr.ini")
 target_compile_options(settings_menu_test PRIVATE /utf-8)
 target_link_libraries(settings_menu_test PRIVATE sim_qvfr_core)
 

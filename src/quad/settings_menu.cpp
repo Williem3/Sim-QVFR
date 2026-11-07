@@ -8,6 +8,8 @@
 
 #include <windows.h>
 
+#include "../ini_put.h"
+
 namespace simqvfr {
 namespace {
 
@@ -135,8 +137,9 @@ int read_int(const wchar_t* ini, const wchar_t* section, const wchar_t* key, int
     return static_cast<int>(GetPrivateProfileIntW(section, key, fallback, ini));
 }
 
+// Only a value that differs is written: a step changes one key of the ~50 written (ini_put.h).
 bool write(const wchar_t* ini, const wchar_t* section, const wchar_t* key, int value) {
-    return WritePrivateProfileStringW(section, key, std::to_wstring(value).c_str(), ini) != 0;
+    return ini_put(ini, section, key, value);
 }
 
 }  // namespace
