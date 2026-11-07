@@ -82,6 +82,11 @@ inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 400}, kSizeRange{10
     kCornerRange{0, 100}, kCropRange{0, 40}, kObjectDetailRange{0, 100},  // kCropRange: the layer's kCropMax
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusCornerRange{0, kFocusCornerMax};
+// Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its
+// 350 values span fewer pixels than that, so a plain drag skipped round values such as 100% (99, then 101).
+inline constexpr int kInnerDragStep = 5;
+// A slider's value at `share` (0..1) of its travel: on a grid of `step` from range.min, never past range.max.
+int slider_value_at(Range range, double share, int step = 1);
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.
 inline constexpr Range kMenuYawRange{-35, 35}, kMenuPitchRange{-30, 30}, kMenuWidthRange{20, 60};
 
