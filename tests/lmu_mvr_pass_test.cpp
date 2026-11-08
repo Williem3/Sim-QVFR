@@ -250,10 +250,10 @@ int main() {
         context->ClearRenderTargetView(msRtv.Get(), second);
         context->ResolveSubresource(resolved.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
         lmu::mvr_pass_end(2);
-        // The focus region (100..160 x 0..50 of pass 0's) at the top-left (0..60 x 0..50); the rest as pass 0 left it.
-        check(pixel(10, 10) == to_half(0.5f) && pixel(59, 49) == to_half(0.5f) && pixel(200, 100) == to_half(0.5f) &&
-                  lmu::mvr_pass_stats().replacedResolves == 1,
-              "gate D: pass 2's resolve replaced by the kept focus region at the top-left");
+        // The focus region (100..160 x 0..50 of pass 0's) at the top-left (0..60 x 0..50); the rest cleared to black.
+        check(pixel(10, 10) == to_half(0.5f) && pixel(59, 49) == to_half(0.5f) && pixel(60, 10) == 0 &&
+                  pixel(200, 100) == 0 && lmu::mvr_pass_stats().replacedResolves == 1,
+              "gate D: pass 2's resolve replaced by the kept focus region at the top-left, the rest black");
         lmu::mvr_pass_begin(3, nullptr, false, true);  // eye 1's region wasn't kept: a real resolve
         context->ClearRenderTargetView(msRtv.Get(), second);
         context->ResolveSubresource(resolved.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);

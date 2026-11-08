@@ -312,6 +312,25 @@ void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n
 
 bool copy_region(ComPtr<ID3D11Texture2D>& dst, ID3D11Resource* src, unsigned x, unsigned y, unsigned w, unsigned h);
 
+// The resolve target cleared (its view made once: it holds the resource, so the pointer stays its own).
+ComPtr<ID3D11RenderTargetView> clearRtv;
+ID3D11Resource* clearFor = nullptr;
+
+void clear_target(ID3D11Resource* target) {
+    if (clearFor != target) {
+        clearRtv.Reset();
+        clearFor = target;
+        ComPtr<ID3D11Device> device;
+        g.context->GetDevice(&device);
+        if (FAILED(device->CreateRenderTargetView(target, nullptr, &clearRtv)))
+            clearRtv.Reset();
+    }
+    if (clearRtv) {
+        const float black[4] = {0, 0, 0, 0};
+        g.context->ClearRenderTargetView(clearRtv.Get(), black);
+    }
+}
+
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
     bool multisample = false;
@@ -327,8 +346,11 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
     if (multisample)
         stamp(g.pass, 1);  // the scene ends, the post-processing starts
     if (multisample && g.replaceResolve && g.keptOk[eye]) {
-        // Gate D: the scene this pass skipped is the focus view its eye's pass drew: into the top-left instead.
+        // Gate D: the scene this pass skipped is the focus view its eye's pass drew: into the top-left instead. Cleared
+        // first: the post-processing covers the top-left at one scale, beyond the focus view where pass 1's images still
+        // are (they would bloom into it).
         const MvrPassView& v = g.viewOf[eye];
+        clear_target(dst);
         const D3D11_BOX box{0, 0, 0, v.focusW, v.focusH, 1};
         g.context->CopySubresourceRegion(dst, dstSub, 0, 0, 0, g.kept[eye].Get(), 0, &box);
         g.resolved[g.pass] = dst;

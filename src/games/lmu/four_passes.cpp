@@ -586,18 +586,11 @@ float lastWritten = 0;        // what this code last wrote to it
 unsigned passW[4] = {}, passH[4] = {};
 bool liveLogged = false;
 
-// The runtime's recommended size as the game took it (VR_Init). Passes sized per axis write a virtual one per pass
-// (set_next_passes); whatever wants the real one reads it here (it follows the game when the game sets it again).
-std::uint32_t realRec[2] = {}, writtenRec[2] = {};
-
+// The runtime's recommended size as the game took it (VR_Init).
 void real_recommended(std::uint32_t (&out)[2]) {
     const auto* rec = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
-    if (!realRec[0] || rec[0] != writtenRec[0] || rec[1] != writtenRec[1]) {
-        realRec[0] = rec[0];
-        realRec[1] = rec[1];
-    }
-    out[0] = realRec[0];
-    out[1] = realRec[1];
+    out[0] = rec[0];
+    out[1] = rec[1];
 }
 
 int probe_active();  // the render scale probe owns the scale (below)
@@ -629,24 +622,25 @@ void qvfr_before_pass(int p) {
 void set_next_passes(int which) {
     if (probe_active() || gameScale <= 0)
         return;
-    if (cfg.perAxis) {  // its own width and height: the game's scale stays, the recommended size it scales is the pass's
-        float sw, sh;
+    // The focus passes beside their eyes (perAxis): their post-processing at the one scale that covers them (YEBIS
+    // processes the top-left at the render scale on both axes, whatever the render size says: 2026-11-08 09:28 run),
+    // their own width and height recorded (the region their eye's pass drew; they skip the scene, gate D).
+    if (cfg.perAxis && which == 1) {
+        float sw, sh, share;
         {
             std::lock_guard guard(liveMutex);
-            sw = liveAxes[which][0];
-            sh = liveAxes[which][1];
+            sw = liveAxes[1][0];
+            sh = liveAxes[1][1];
+            share = liveScale[1];
         }
-        std::uint32_t real[2];
-        real_recommended(real);
-        auto* rec = reinterpret_cast<std::uint32_t*>(base() + kRecommendedSize);
-        rec[0] = writtenRec[0] = virtual_recommended(scaled_size(real[0], gameScale * sw), gameScale);
-        rec[1] = writtenRec[1] = virtual_recommended(scaled_size(real[1], gameScale * sh), gameScale);
-        const unsigned w = scaled_size(rec[0], gameScale), h = scaled_size(rec[1], gameScale);  // the size it renders at
-        *reinterpret_cast<float*>(base() + kRenderScale) = gameScale;
-        lastWritten = gameScale;
+        const float written = gameScale * share;
+        *reinterpret_cast<float*>(base() + kRenderScale) = written;
+        lastWritten = written;
+        std::uint32_t rec[2];
+        real_recommended(rec);
         auto* size = reinterpret_cast<float*>(base() + kEyeRenderSize);
-        size[0] = static_cast<float>(w);
-        size[1] = static_cast<float>(h);
+        size[0] = static_cast<float>(scaled_size(rec[0], gameScale * sw));
+        size[1] = static_cast<float>(scaled_size(rec[1], gameScale * sh));
         return;
     }
     float share;

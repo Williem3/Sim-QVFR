@@ -184,20 +184,8 @@ int main() {
     cy = 1;
     check(!lmu::clamp_focus_centre(skewed, 0.3, 0.3, cx, cy) && cx == 1 && cy == 1, "and its centre is left alone");
 
-    // Passes sized per axis: the recommended size each pass is given scales back to exactly its size.
-    {
-        bool exact = true, near1 = true;
-        for (const float s : {0.25f, 0.4f, 0.5f, 0.6667f, 0.75f, 0.8f, 0.9f, 1.0f})
-            for (unsigned size = 1; size < 5000; size += 7)
-                exact = exact && lmu::scaled_size(lmu::virtual_recommended(size, s), s) == size;
-        for (const float s : {1.25f, 1.5f, 2.0f})  // supersampling: the smallest reachable, at most a pixel more
-            for (unsigned size = 2; size < 5000; size += 7) {
-                const unsigned r = lmu::virtual_recommended(size, s), got = lmu::scaled_size(r, s);
-                near1 = near1 && got >= size && got <= size + 1 && (r <= 1 || lmu::scaled_size(r - 1, s) < size);
-            }
-        check(exact, "virtual_recommended: at scales up to 1 it scales back to each size exactly");
-        check(near1, "virtual_recommended: above 1, the smallest size reachable, at most one pixel more");
-    }
+    check(lmu::scaled_size(1614, 0.5f) == 807 && lmu::scaled_size(1283, 0.475f) == 610 && lmu::scaled_size(100, 1.0f) == 100,
+          "scaled_size: ceil(recommended x scale), as the game rounds");
     // Room for a second view: beside (twice as wide, each view at most half), or twice each way.
     {
         simqvfr::Views4Layout l = simqvfr::views4_layout(0.40, 0.38, 0.38, 1.0, 0.4);  // outer 0.40 x 0.16 (cropped)
