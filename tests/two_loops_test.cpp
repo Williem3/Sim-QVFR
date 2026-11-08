@@ -1,7 +1,7 @@
 // Offline check of the two_loops frame pairing against a fake runtime that enforces OpenXR's frame
 // rules (wait before begin, begin/end strictly alternating), for ACE's normal call order and for a
 // frame generator above the layer (two ends per begin), which must never arm.
-#include "../src/xr_layer.cpp"
+#include "layer/layer.h"
 #include "../src/games/ace/game.h"
 
 #include <cstdio>
@@ -38,6 +38,7 @@ XrResult XRAPI_CALL fakeEnd(XrSession, const XrFrameEndInfo* info) {
 
 int run(int appFrames, bool frameGenerator) {
     using namespace simqvfr;
+    using namespace simqvfr::layer;
     rt = FakeRuntime{};
     loops.active = loops.broken = false;
     loops.waits = loops.begins = loops.ends = 0;
@@ -62,21 +63,22 @@ int run(int appFrames, bool frameGenerator) {
 }  // namespace
 
 int main() {
-    simqvfr::game = &simqvfr::games::adapter_for(&ace::kGame);  // views4 below is ACE's
+    simqvfr::layer::game = &simqvfr::games::adapter_for(&ace::kGame);  // views4 below is ACE's
     const int errors = run(130, false);
     std::printf("ACE order: runtime waits=%d begins=%d ends=%d violations=%d endErrors=%d active=%d\n", rt.waits,
-                rt.begins, rt.ends, rt.violations, errors, simqvfr::loops.active ? 1 : 0);
+                rt.begins, rt.ends, rt.violations, errors, simqvfr::layer::loops.active ? 1 : 0);
     // 30 unpaired frames, then 100 app frames paired into 50 display frames
     bool ok = rt.waits == 80 && rt.begins == 80 && rt.ends == 80 && rt.violations == 0 && errors == 0;
 
     run(130, true);
-    std::printf("frame generator above: active=%d broken=%d (expected 0 and 1)\n", simqvfr::loops.active ? 1 : 0,
-                simqvfr::loops.broken ? 1 : 0);
-    ok &= !simqvfr::loops.active && simqvfr::loops.broken;
+    std::printf("frame generator above: active=%d broken=%d (expected 0 and 1)\n", simqvfr::layer::loops.active ? 1 : 0,
+                simqvfr::layer::loops.broken ? 1 : 0);
+    ok &= !simqvfr::layer::loops.active && simqvfr::layer::loops.broken;
 
     // Live settings: an edited ini applies at the next xrEndFrame, but never between frames A and B.
     {
         using namespace simqvfr;
+        using namespace simqvfr::layer;
         wchar_t temp[MAX_PATH] = {};
         GetTempPathW(MAX_PATH, temp);
         const std::wstring ini = std::wstring(temp) + L"sim-qvfr-live-test.ini";
@@ -116,6 +118,7 @@ int main() {
     // or panel: the open path takes the layer's locks, so this would hang or throw on a lock taken twice.
     {
         using namespace simqvfr;
+        using namespace simqvfr::layer;
         wchar_t temp[MAX_PATH] = {};
         GetTempPathW(MAX_PATH, temp);
         const std::wstring ini = std::wstring(temp) + L"sim-qvfr-menu-open-test.ini";

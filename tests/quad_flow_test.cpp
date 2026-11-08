@@ -3,7 +3,8 @@
 // images submitted); a fake ACE renders red when it sees the full FOV and green when it sees the
 // narrowed focus FOV. After arming, every submitted frame must be this layer's native-size output
 // with ACE's full FOV, showing red around a green focus box placed where the focus FOV lies.
-#include "../src/xr_layer.cpp"
+#include "layer/layer.h"
+#include "quad/focus_turn.h"
 #include "../src/games/ace/game.h"
 #include "../src/games/ace/views4.h"
 
@@ -312,6 +313,7 @@ XrResult XRAPI_CALL fakeLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* l
 // Fake ACE: one complete frame, red for the full FOV and green for a narrowed one.
 XrResult game_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
     using namespace simqvfr;
+    using namespace simqvfr::layer;
     XrFrameState state{XR_TYPE_FRAME_STATE};
     layerWaitFrame(nullptr, nullptr, &state);
     layerBeginFrame(nullptr, nullptr);
@@ -364,6 +366,7 @@ XrResult game_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
 // does: the two halves of its double-wide target.
 XrResult game_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
     using namespace simqvfr;
+    using namespace simqvfr::layer;
     XrFrameState state{XR_TYPE_FRAME_STATE};
     layerWaitFrame(nullptr, nullptr, &state);
     layerBeginFrame(nullptr, nullptr);
@@ -420,6 +423,7 @@ XrResult game_views4_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH) {
 XrResult game_views4_split_frame(XrSwapchain chain, uint32_t eyeW, uint32_t eyeH, const simqvfr::Views4Frame& frame,
                                 bool vertical, float split) {
     using namespace simqvfr;
+    using namespace simqvfr::layer;
     XrFrameState state{XR_TYPE_FRAME_STATE};
     layerWaitFrame(nullptr, nullptr, &state);
     layerBeginFrame(nullptr, nullptr);
@@ -517,6 +521,7 @@ std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
 
 int main() {
     using namespace simqvfr;
+    using namespace simqvfr::layer;
     game = &games::adapter_for(&ace::kGame);  // views4 below is ACE's
     // The log goes to a file of the test's own (opened at its first line); the pacing check reads it back.
     wchar_t logDir[MAX_PATH] = {};
@@ -954,6 +959,7 @@ int main() {
         // records filled and never composed (2026-11-02, the focus lagging the eyes) put every composition two
         // frames behind; after a while of that the queue resyncs to the newest record.
         using namespace simqvfr;
+        using namespace simqvfr::layer;
         const auto marked = [](float marker) {
             Views4Frame f{};
             f.outerTan[0][0] = marker;
