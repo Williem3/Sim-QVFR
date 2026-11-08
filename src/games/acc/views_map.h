@@ -1,7 +1,8 @@
 // How ACC's four views map onto UE 4.26's stereo passes (pure; views.cpp patches them in, tests check them).
 // Views follow views4_layout.h: 0 and 1 the eyes' outer views, 2 and 3 their focus views, in eye columns of one
-// target (0 | 1 over 2 | 3): instanced stereo needs the eyes side by side from x = 0, and OpenComposite gives
-// each eye only its half of the texture ACC submits.
+// target (0 | 1 over 2 | 3): instanced stereo draws each pair from x = 0, halved, so a pair's views sit side by side
+// from x = 0 at one width; each pair has its own (views.cpp sets each pair's instanced stereo width). OpenComposite
+// copies the whole texture ACC submits into each eye's swapchain, so a view needn't stay in its eye's half.
 // UE's passes: eSSP_FULL 0, eSSP_LEFT_EYE 1, eSSP_RIGHT_EYE 2, eSSP_LEFT_EYE_SIDE 3, eSSP_RIGHT_EYE_SIDE 4,
 // as Epic's 4.26 OpenXR plugin maps them for quad views (pass = eSSP_LEFT_EYE + view).
 #pragma once
@@ -34,6 +35,22 @@ inline PassRect pass_rect(const simqvfr::Views4Layout& layout, int pass, int tar
     const simqvfr::ViewRect r =
         simqvfr::views4_rect_eye_columns(layout, static_cast<int>(view_for_pass(pass)), targetWidth, targetHeight);
     return {r.left, r.top, r.width, r.height};
+}
+
+// Instanced stereo (UE 4.26): a pair draws in one viewport from x = 0 to its InstancedStereoWidth, and its vertex
+// shader halves x and shifts each view into its side: x' = x * P / 2 + (right ? 1 : -1) * (1 - P / 2), P being
+// HMDEyePaddingOffset. P as UE computes it from a pair's final rects (min x, min y, max x, max y): the views' share of
+// the span from the left view's left edge to the right view's right edge (the rest is the gap between them).
+inline double eye_padding_offset(const int (&left)[4], const int (&right)[4]) {
+    const double span = right[2] - left[0], gap = right[0] - left[2];
+    return span > 0 ? (span - gap) / span : 1.0;
+}
+// The pixel columns [x0, x1) view `right` (0 or 1) of a pair lands on, in a viewport `width` wide from x = 0 with
+// padding offset `p`.
+inline void instanced_span(double width, double p, bool right, double& x0, double& x1) {
+    const double s = right ? 1.0 : -1.0, a = -p / 2 + s * (1 - p / 2), b = p / 2 + s * (1 - p / 2);
+    x0 = (a + 1) / 2 * width;
+    x1 = (b + 1) / 2 * width;
 }
 
 // Live resolution: a layout AdjustViewRect handed out (the launch one, or a live one), with its views' sizes in the

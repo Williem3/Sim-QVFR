@@ -60,8 +60,9 @@ public:
     virtual bool qvfr_compose_d3d11() const { return false; }
     // Cheeky Foveated DLSS runs in this game (GameInfo::features.foveatedDlss).
     virtual bool loads_cheeky() const { return has_qvfr() && info() && info()->features.foveatedDlss; }
-    // The game lays its views out in eye columns (views4_rect_eye_columns) and submits each eye as its half of
-    // the target: the layer offers that layout's eye size, and keeps each eye's offset, cut to its outer view.
+    // The game lays its views out in eye columns (views4_rect_eye_columns: outer views over focus views, each pair
+    // side by side from x = 0) and submits each eye as its half of the target: the layer offers that layout's eye
+    // size, and keeps each eye's offset, moved and cut to its outer view.
     virtual bool qvfr_eye_columns() const { return false; }
     // The game draws all four views at one size (instanced layers in one viewport): each eye column is one view wide
     // and two high, a view being the larger of the outer and focus sizes asked for (the layer offers that).

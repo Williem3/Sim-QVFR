@@ -49,10 +49,42 @@ std::atomic<int> finalRect[5][4];
 // views 0-1 alone). The next view the render thread hands over (primary_view) records the frame.
 std::atomic<bool> recordArmed{false};
 std::atomic<unsigned long> renderThread{0}, composeThread{0};
+// Instanced stereo's viewport per pair (abi.h [Instanced width per pair]): UE draws an instanced pair from x = 0,
+// InstancedStereoWidth wide, halved, and gives every view the family's widest right edge (ComputeFamilySize) just
+// before it reports the views' final rects here, in order. Each pair's two views get their own right view's edge
+// instead, so the outer and focus pairs each draw at their own width. `rect` is the FViewInfo's own ViewRect.
+std::atomic<bool> pairWidths{false};
+std::atomic<const int*> pairLeftRect[2];
+std::atomic<int> pairWidth[2];
+std::atomic<std::uint64_t> pairWidthsSet{0}, pairWidthsMissed{0};
+void set_pair_width(int pass, const int* rect) {
+    if (!pairWidths.load(std::memory_order_relaxed) || pass < kPassLeft || pass > kPassRightSide)
+        return;
+    const int pair = pass >= kPassLeftSide ? 1 : 0;
+    if (pass == kPassLeft || pass == kPassLeftSide) {
+        pairLeftRect[pair].store(rect, std::memory_order_relaxed);
+        return;
+    }
+    // The right view of a pair: its left one must be the view reported just before it, the previous FViewInfo.
+    auto* right = reinterpret_cast<unsigned char*>(const_cast<int*>(rect)) - kViewRect;
+    unsigned char* left = right - kViewInfoSize;
+    if (pairLeftRect[pair].exchange(nullptr, std::memory_order_relaxed) != reinterpret_cast<const int*>(left + kViewRect) ||
+        *reinterpret_cast<const int*>(right + kViewStereoPass) != pass ||
+        *reinterpret_cast<const int*>(left + kViewStereoPass) != pass - 1) {
+        pairWidthsMissed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const int width = rect[2];  // the right view's max x: the pair's viewport from x = 0
+    *reinterpret_cast<int*>(left + kViewInstancedStereoWidth) = width;
+    *reinterpret_cast<int*>(right + kViewInstancedStereoWidth) = width;
+    pairWidth[pair].store(width, std::memory_order_relaxed);
+    pairWidthsSet.fetch_add(1, std::memory_order_relaxed);
+}
 void final_view_rect(void*, int pass, const int* rect) {
     if (pass >= 0 && pass < 5)
         for (int i = 0; i < 4; ++i)
             finalRect[pass][i].store(rect[i], std::memory_order_relaxed);
+    set_pair_width(pass, rect);
     if (pass == kPassRightSide) {
         renderThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
         recordArmed.store(true, std::memory_order_release);
@@ -452,6 +484,46 @@ bool counts_match() {
            simqvfr::code_matches(kFoliageRightViewRead, kFoliageRightViewReadAnchor, sizeof(kFoliageRightViewReadAnchor));
 }
 
+// The instanced width per pair's code (abi.h [Instanced width per pair]) is this build's.
+bool width_per_pair_match() {
+    for (const WidthRead& r : kInstancedWidthReads)
+        if (!simqvfr::code_matches(r.rva, r.anchor, r.size)) {
+            simqvfr::logf("acc views: no instanced stereo width read at 0x%llx", static_cast<unsigned long long>(r.rva));
+            return false;
+        }
+    if (!simqvfr::code_matches(kEyePaddingViews, kEyePaddingViewsAnchor, sizeof(kEyePaddingViewsAnchor))) {
+        simqvfr::log_line("acc views: the eye padding's views aren't where this build had them");
+        return false;
+    }
+    return true;
+}
+
+// Each instanced pair at its own width (abi.h [Instanced width per pair]): the renderer-wide width's readers take
+// the view's (set per pair by set_pair_width), and HMDEyePaddingOffset comes from the view's own pair.
+bool width_per_pair() {
+    bool ok = true;
+    for (const WidthRead& r : kInstancedWidthReads)
+        ok = (r.viewSize == r.size ? simqvfr::code_write(r.rva, r.view, r.size)
+                                   : simqvfr::code_redirect(r.rva, r.anchor, r.size, r.view, r.viewSize)) && ok;
+    // HMDEyePaddingOffset = (right.Max.X - left.Min.X - (right.Min.X - left.Max.X)) / (right.Max.X - left.Min.X), from
+    // Family->Views[0] and [1] for every view (rax: Views.Data, r14: the view): a focus view's from Views[2] and [3],
+    // in a family of four.
+    const std::uint8_t pairViews[] = {
+        0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r14 + 0xad0], 3
+        0x72, 0x13,                                      // jb eyes
+        0x49, 0x8b, 0x16,                                // mov rdx, [r14]           (Family)
+        0x83, 0x7a, 0x08, 0x04,                          // cmp dword [rdx + 8], 4   (Views.Num)
+        0x7c, 0x0a,                                      // jl eyes
+        0x48, 0x8b, 0x50, 0x18,                          // mov rdx, [rax + 0x18]    (Views[3])
+        0x48, 0x8b, 0x48, 0x10,                          // mov rcx, [rax + 0x10]    (Views[2])
+        0xeb, 0x07,                                      // jmp done
+        0x48, 0x8b, 0x50, 0x08,                          // eyes: mov rdx, [rax + 8] (Views[1])
+        0x48, 0x8b, 0x08};                               // mov rcx, [rax]           (Views[0]); done
+    ok = simqvfr::code_redirect(kEyePaddingViews, kEyePaddingViewsAnchor, sizeof(kEyePaddingViewsAnchor), pairViews,
+                              sizeof(pairViews)) && ok;
+    return ok;
+}
+
 // Two views per instanced draw (abi.h), so the family's four views draw as two instanced pairs.
 bool pairs_per_draw() {
     bool ok = true;
@@ -561,6 +633,12 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
         simqvfr::log_line("acc views: the views-per-draw code isn't this build's; nothing patched");
         return false;
     }
+    // The layer offered the eye size for a column as wide as the wider pair: without each pair at its own width the
+    // narrower one would be drawn stretched across the wider one's (acc_shared_width=1 lays them out without it).
+    if (!l.sharedColumnWidth && !width_per_pair_match()) {
+        simqvfr::log_line("acc views: the instanced stereo width code isn't this build's; nothing patched");
+        return false;
+    }
     const std::uintptr_t base = simqvfr::module_base();
     // Foliage's per-cluster occlusion results crash with the side views on track (abi.h): one query per proxy.
     auto* subPrimitiveQueries = reinterpret_cast<volatile std::int32_t*>(base + kAllowSubPrimitiveQueries);
@@ -580,6 +658,10 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
     originalEyePose = reinterpret_cast<EyePoseFn>(base + kGetRelativeEyePose.function);
     // Pose, projection, rects and pairs before the count, so no frame sees four views without them.
     bool ok = pairs_per_draw();
+    if (!l.sharedColumnWidth) {
+        ok = width_per_pair() && ok;
+        pairWidths.store(ok, std::memory_order_relaxed);  // before final_view_rect is in its slot
+    }
     ok = ok && simqvfr::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
                                          reinterpret_cast<void*>(&eye_pose));
     ok = ok && simqvfr::vtable_slot_replace(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
@@ -598,11 +680,15 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
                                           reinterpret_cast<void*>(&view_pass));
     ok = ok && simqvfr::vtable_slot_replace(kGetDesiredNumberOfViews.rva, kGetDesiredNumberOfViews.function,
                                           reinterpret_cast<void*>(&desired_views));
-    simqvfr::logf("acc views: %s; layout widths %.3f %.3f %.3f %.3f heights %.3f %.3f %.3f %.3f of the target",
+    simqvfr::logf("acc views: %s; eye columns: outer views %.3f and focus views %.3f of the column wide (%s), outer rows "
+                "%.3f of its height",
                 ok ? (boxX > 0 ? "four views patched in (views 2-3 focus views, centred)"
                                : "four views patched in (views 2-3 copy the eyes)")
-                   : "a slot write failed",
-                l.width[0], l.width[1], l.width[2], l.width[3], l.height[0], l.height[1], l.height[2], l.height[3]);
+                   : "a patch failed",
+                l.column_share(0), l.column_share(2),
+                l.sharedColumnWidth ? "one width for all four views, acc_shared_width=1"
+                                    : "instanced stereo width per pair, HMD eye padding per pair",
+                l.outer_height() / l.column_eye_height());
     started.store(ok);
     return ok;
 }
@@ -740,6 +826,11 @@ void views_frame_end() {
     for (int pass = 1; pass < 5; ++pass)
         simqvfr::logf("acc views: renderer's final rect for pass %d: %d,%d - %d,%d", pass, finalRect[pass][0].load(),
                     finalRect[pass][1].load(), finalRect[pass][2].load(), finalRect[pass][3].load());
+    if (pairWidths.load(std::memory_order_relaxed))
+        simqvfr::logf("acc views: instanced stereo width per pair: eyes %d, focus views %d (pairs set %llu, missed %llu)",
+                    pairWidth[0].load(), pairWidth[1].load(),
+                    static_cast<unsigned long long>(pairWidthsSet.exchange(0)),
+                    static_cast<unsigned long long>(pairWidthsMissed.exchange(0)));
     simqvfr::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));
