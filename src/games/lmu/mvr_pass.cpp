@@ -69,14 +69,19 @@ struct GpuFrame {
 
 // The twin of a game shader by its address, valid until the game creates another vertex shader (a new one may take a
 // released one's address; twins are attached only at creation, mvr_probe.cpp): GetPrivateData once per shader instead of
-// at every bind. Slots by a multiplicative hash of the address (allocations are aligned: its low bits alone collide;
-// the 2026-11-08 10:08 run missed 30% of lookups with them, twice the shaders a frame binds).
+// at every bind. Sets of two by a multiplicative hash of the address (allocations are aligned: its low bits alone
+// collide, 30% missed in the 10:08 run); two per set, as one per slot still missed 7.8% at 10:34 (two shaders sharing a
+// slot, bound in turn, threw each other out).
 struct TwinEntry {
     ID3D11VertexShader* vs = nullptr;
     ID3D11VertexShader* twin = nullptr;  // raw: the game's shader holds it (its private data) while it lives
     uint32_t epoch = 0;
 };
-constexpr unsigned kTwinCacheBits = 10, kTwinCache = 1u << kTwinCacheBits;
+struct TwinSet {
+    TwinEntry entry[2];
+    uint8_t next = 0;  // the entry to replace when both hold another shader (the one not looked up last)
+};
+constexpr unsigned kTwinSetBits = 10, kTwinSets = 1u << kTwinSetBits;
 
 // CPU in this code's context hooks (the calls passed on included), in TSC ticks since the last log line.
 struct HookTime {
@@ -106,7 +111,7 @@ struct State {
     int mode = 0;                // this frame's (mvr_frame_mode)
     double sceneMs[2][4] = {}, postMs[2][4] = {};
     unsigned gpuCounts[2][4] = {};
-    TwinEntry twins[kTwinCache];
+    TwinSet twins[kTwinSets];
     uint32_t twinEpoch = 1;
     uint64_t twinGeneration = 0;
     uint64_t loggedLookups = 0, loggedMisses = 0;  // the stats' counts at the last log line
@@ -228,11 +233,17 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
         g.twinGeneration = generation;
         ++g.twinEpoch;
     }
-    TwinEntry& e = g.twins[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vs)) * 0x9E3779B97F4A7C15ull) >>
-                           (64 - kTwinCacheBits)];
-    if (e.epoch == g.twinEpoch && e.vs == vs)
-        return e.twin;
+    TwinSet& set = g.twins[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vs)) * 0x9E3779B97F4A7C15ull) >>
+                           (64 - kTwinSetBits)];
+    for (uint8_t k = 0; k < 2; ++k)
+        if (set.entry[k].epoch == g.twinEpoch && set.entry[k].vs == vs) {
+            set.next = static_cast<uint8_t>(1 - k);
+            return set.entry[k].twin;
+        }
     ++g.stats.lookupMisses;
+    const uint8_t k = set.entry[0].epoch != g.twinEpoch ? 0 : set.entry[1].epoch != g.twinEpoch ? 1 : set.next;
+    TwinEntry& e = set.entry[k];
+    set.next = static_cast<uint8_t>(1 - k);
     ID3D11VertexShader* twin = nullptr;
     IUnknown* unknown = nullptr;
     UINT size = sizeof(unknown);

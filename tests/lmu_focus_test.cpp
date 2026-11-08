@@ -200,9 +200,27 @@ int main() {
         const simqvfr::Views4Layout bigger = simqvfr::views4_live_one_size(l, 0.60, 0.60, 0.60);
         check(2 * bigger.width[0] <= 0.5 + 1e-9 && 2 * bigger.width[2] <= 0.5 + 1e-9,
               "beside: a live increase is capped at half the width for each");
+        // A live crop that makes the eye taller (31/30 -> 0/0): its height held at half the image, so its one scale
+        // (the larger share) stays at most half and the focus view still fits beside it.
+        const simqvfr::Views4Layout uncropped = simqvfr::views4_live_one_size(l, 0.40, 0.38, 0.38, 1.0, 1.0);
+        const double eyeScale = std::max(2 * uncropped.width[0], 2 * uncropped.height[0]);
+        check(near(2 * uncropped.height[0], 0.5) && eyeScale <= 0.5 + 1e-9 && eyeScale + 2 * uncropped.width[2] <= 1.0 + 1e-9,
+              "beside: the crop removed live: the eye at half the image's height, its one scale 0.5, the focus beside");
         l.secondViewBeside = false;
         check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.76) && near(l.view_room_height(), 0.38),
               "twice each way: the layer twice as high too, one view at most half of each");
+    }
+    {  // Beside without a vertical crop: the image twice the eye's height, the eye exactly a quarter of it.
+        simqvfr::Views4Layout l = simqvfr::views4_layout(0.40, 0.38, 0.38);
+        l.secondViewRoom = l.secondViewBeside = true;
+        check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.80) && near(l.outer_room_height(), 0.40),
+              "beside, no crop: the layer 0.80 x 0.80 (twice the eye's height), the eye's room half of each");
+        const simqvfr::Views4Layout live = simqvfr::views4_live_one_size(l, 0.40, 0.38, 0.38);
+        const double eyeScale = std::max(2 * live.width[0], 2 * live.height[0]);
+        check(near(2 * live.width[0], 0.5) && near(2 * live.height[0], 0.5) && near(eyeScale, 0.5) &&
+                  eyeScale + 2 * live.width[2] <= 1.0 + 1e-9 && near(2 * live.height[2], 0.475),
+              "beside, no crop: the eye 0.5 x 0.5 (its one scale wastes nothing), the focus 0.475 x 0.475 beside it");
+        // Before 2026-11-08 10:34 the layer was 0.80 x 0.40 here: the eye's shares 0.5 x 1.0, one scale 1.0, no room.
     }
 
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);
