@@ -614,13 +614,11 @@ bool four_passes_start(const FourPassesRun& run) {
     if (focusMode)
         simqvfr::logf("lmu focus: on: the eye loop runs four times, passes 2-3 render focus views (a %.0f%% box of each "
                       "eye's tangent span, centred on its forward axis) into the eye targets, set aside before the game "
-                      "submits; the eyes are shown as normal. Focus and eye compared 300 frames into four-pass rendering, "
-                      "then every 3600 frames (four times at most); frame time held: %s",
+                      "submits; the eyes are shown as normal; frame time held: %s",
                       focusFraction * 100, holdExposure ? "yes" : "no");
     else
-        simqvfr::logf("lmu copies: on: the eye loop runs four times, passes 2-3 render eyes 0-1 again; their images are "
-                      "compared 300 frames into four-pass rendering, then every 3600 frames (four times at most); passes "
-                      "2-3's post-effect frame time %s",
+        simqvfr::logf("lmu copies: on: the eye loop runs four times, passes 2-3 render eyes 0-1 again and are compared "
+                      "with them; passes 2-3's post-effect frame time %s",
                       holdExposure ? "held near zero (lmu_copies_hold_exposure=1)" : "as the game sets it (hold off)");
     return true;
 }
