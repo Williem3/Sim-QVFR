@@ -81,10 +81,15 @@ enum class GazeExtension {
     Absent,     // the runtime doesn't list it: leave the request as it is
 };
 
-GazeExtension gaze_extension(const XrInstanceCreateInfo& info, PFN_xrGetInstanceProcAddr gipa) {
+// `runtimeBelow`: no layer between this one and the runtime. The runtime's list is only asked for then: a layer below
+// may not answer before its own xrCreateApiLayerInstance has run (VectorXR forwards the call to a next layer it learns
+// of only there, so LMU crashed on a null call, 2026-11-08), and the Try path needs no list.
+GazeExtension gaze_extension(const XrInstanceCreateInfo& info, PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow) {
     for (uint32_t i = 0; i < info.enabledExtensionCount; ++i)
         if (std::strcmp(info.enabledExtensionNames[i], XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0)
             return GazeExtension::Requested;
+    if (!runtimeBelow)
+        return GazeExtension::Try;
     PFN_xrVoidFunction function = nullptr;
     if (!gipa || XR_FAILED(gipa(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", &function)) || !function)
         return GazeExtension::Try;
@@ -168,7 +173,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     // VectorXR), and failed with none (the eye gaze profile's bindings rejected, XR_ERROR_PATH_UNSUPPORTED). So the
     // layer adds it when the game hasn't and the runtime offers it; with the offer unknown it tries, and creates the
     // instance without it if the runtime refuses.
-    const GazeExtension gazeExtension = gaze_extension(*info, gipa);
+    const GazeExtension gazeExtension = gaze_extension(*info, gipa, own->next == nullptr);
     XrResult r = XR_ERROR_EXTENSION_NOT_PRESENT;
     if (gazeExtension == GazeExtension::Add || gazeExtension == GazeExtension::Try) {
         std::vector<const char*> names(info->enabledExtensionNames, info->enabledExtensionNames + info->enabledExtensionCount);
