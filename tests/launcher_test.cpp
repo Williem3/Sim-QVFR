@@ -15,6 +15,7 @@
 
 #include "games/ace/game.h"
 #include "games/acc/game.h"
+#include "games/lmu/game.h"
 #include "games/xplane/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
@@ -1737,10 +1738,25 @@ int main() {
         // The launcher's game ([launcher] game): by id in any case; ACC's launch and what it has so far.
         std::size_t count = 0;
         const simqvfr::games::GameInfo* const* all = simqvfr::games::all_games(count);
-        check(count == 3 && all[0] == &ace::kGame && all[1] == &acc::kGame && all[2] == &xplane::kGame &&
-                  simqvfr::games::game_by_id("ACC") == &acc::kGame && simqvfr::games::game_by_id("XPlane") == &xplane::kGame &&
+        check(count == 4 && all[0] == &ace::kGame && all[1] == &acc::kGame && all[2] == &xplane::kGame &&
+                  all[3] == &lmu::kGame && simqvfr::games::game_by_id("ACC") == &acc::kGame &&
+                  simqvfr::games::game_by_id("XPlane") == &xplane::kGame && simqvfr::games::game_by_id("LMU") == &lmu::kGame &&
                   simqvfr::games::game_by_id("nope") == nullptr,
               "games: the launcher's list, found by id in any case");
+        // Le Mans Ultimate: started as its own exe (not EasyAntiCheat's bootstrapper) in its own OpenXR, identity only;
+        // its anti-cheat processes listed, none for the other games.
+        {
+            std::wstring found;
+            const bool lmuAntiCheatListed =
+                lmu::kGame.antiCheat && std::wstring(lmu::kGame.antiCheat[0]) == L"start_protected_game.exe" &&
+                !ace::kGame.antiCheat && !acc::kGame.antiCheat && !xplane::kGame.antiCheat &&
+                !simqvfr::games::anticheat_running(ace::kGame, found) && found.empty();
+            check(std::wstring(lmu::kGame.exeName) == L"Le Mans Ultimate.exe" && std::wstring(lmu::kGame.launchArgs) == L"+XR" &&
+                      lmu::kGame.openComposite == nullptr && !lmu::kGame.features.fovCrop &&
+                      !lmu::kGame.features.liveResolution && simqvfr::games::game_for_exe(L"le mans ultimate.exe") == &lmu::kGame &&
+                      simqvfr::games::supported_build(lmu::kGame, lmu::kBuilds[0]) && lmuAntiCheatListed,
+                  "games: Le Mans Ultimate's identity (own OpenXR, +XR, identity only, anti-cheat listed)");
+        }
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
                   acc::kGame.features.foveatedDlss && acc::kGame.features.helmet &&

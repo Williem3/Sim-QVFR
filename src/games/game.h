@@ -46,6 +46,9 @@ struct GameInfo {
     // minidump, CrashContext.runtime-xml, the game's log), which Report an issue zips when it falls in a session
     // (src/launcher/report.h). Null: none known.
     const wchar_t* crashReports = nullptr;
+    // The game's anti-cheat processes (null-terminated; null: none): while one runs, or started the game, the layer only
+    // logs (anticheat_running). Sim-QVFR patches game code, so it never runs in a protected launch.
+    const wchar_t* const* antiCheat = nullptr;
 };
 
 // The games Sim-QVFR supports, in the launcher's order.
@@ -61,5 +64,7 @@ const GameInfo* game_for_exe(const wchar_t* fileName);
 const GameInfo* current_game();
 // `sha256` (lowercase hex) is one of the game's builds.
 bool supported_build(const GameInfo& game, const std::string& sha256);
+// One of the game's anti-cheat processes (GameInfo::antiCheat) is running or started this process; its name in `found`.
+bool anticheat_running(const GameInfo& game, std::wstring& found);
 
 }  // namespace simqvfr::games
