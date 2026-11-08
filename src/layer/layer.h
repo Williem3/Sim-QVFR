@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "cheeky/cheeky_settings.h"
 #include "input/hotkeys.h"
@@ -131,20 +132,29 @@ bool hotkey_held(HotkeyAction action);
 std::wstring menu_hint();
 std::wstring hotkey_footer(bool helmetOn);
 
-// xr_layer.cpp
+// menu.cpp
 int64_t qpc_ms(int64_t ms);
 bool game_focused();
 void menu_values_changed(const IniSnapshot& s);
 void menu_placement_changed(const MenuPlacement& placement);
+std::wstring game_settings_ini(const std::wstring& settings);
+void menu_open(int64_t now);
 void menu_press(MenuKey key, int64_t now);
+const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, XrFrameEndInfo& storage,
+                                 std::vector<const XrCompositionLayerBaseHeader*>& layers);
 void menu_shutdown();
+
+// xr_layer.cpp
+bool notice_pending();
 void osd_waited(XrDuration period);
 bool frame_generation_on();
 bool osd_shown(OsdSummary& out);
 void osd_wait_returned(double waitMs);
 void osd_placement_changed();
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);
+const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);
 void osd_shutdown();
+void optimize_tick(int64_t now);
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo);
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);

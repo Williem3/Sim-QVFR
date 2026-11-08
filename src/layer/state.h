@@ -568,6 +568,8 @@ struct Menu {
     uint64_t lastWrite = 0;  // ini_write_later's number for the latest step
 };
 
+inline constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
+
 // ---- Performance overlay ---------------------------------------------------------------------
 // [osd] (quad/osd.h): a head-locked card where the launcher's Headset menu pane or the menu places it, redrawn every kOsdDrawMs from the
 // frames since the last draw. The numbers are gathered on the frame thread; the card is drawn on a
