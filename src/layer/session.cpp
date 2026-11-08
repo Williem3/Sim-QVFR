@@ -50,8 +50,9 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     const bool oneSize = columns && game->qvfr_one_view_size();
     // Separate views (qvfr_separate_views, LMU): every view an image of its own at one size, each eye offered one view.
     const bool separate = experiment.views4 && game->qvfr_separate_views();
-    const double viewWidth = std::max(layout.outer_width(), layout.focus);
-    const double viewHeight = std::max(layout.outer_height(), layout.focusHeight);
+    // (With separate views at least the layer floor: the game's menus fill the layer, its scene passes render inside it.)
+    const double viewWidth = layout.layer_width();
+    const double viewHeight = layout.layer_height();
     const double widthScale = experiment.views4 ? (separate || oneSize ? viewWidth
                                                    : columns ? layout.column_eye_width() : layout.eye_width())
                                                 : experiment.eyeScale;
@@ -59,10 +60,12 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
                                    ? (separate ? viewHeight : oneSize ? 2 * viewHeight
                                                             : columns ? layout.column_eye_height() : layout.eye_height())
                                    : experiment.eyeScale;
-    if ((oneSize || separate) && stereo && (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight))
+    if ((oneSize || separate) && stereo &&
+        (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight || layout.layerFloor > 0))
         logf("views4: the game draws every view at one size: %.2f x %.2f of the native eye (outer asked %.2f x %.2f, "
-             "focus %.2f x %.2f)%s", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(), layout.focus,
-             layout.focusHeight, separate ? ", each view an image of its own" : "");
+             "focus %.2f x %.2f, layer floor %.2f)%s", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(),
+             layout.focus, layout.focusHeight, layout.layerFloor,
+             separate ? ", each view an image of its own; the scene renders inside it at the views' sizes" : "");
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum (a game with

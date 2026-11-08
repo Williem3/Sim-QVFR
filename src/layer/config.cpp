@@ -251,6 +251,15 @@ void load_experiment() {
     helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),
                                             launchCrop.kept_height());
+    // A game whose views are separate images (LMU) draws its menus into the whole of each: the views are made at least
+    // views4_menu_scale of the native eye (default 100: menus as sharp as without QVFR), and the scene renders inside
+    // them at the periphery and focus sizes (live resolution, from the first frame). 0: the views' own size.
+    if (experiment.views4 && game->qvfr_separate_views()) {
+        const UINT menuPercent = std::min(GetPrivateProfileIntW(L"experiment", L"views4_menu_scale", 100, ini.c_str()), 100u);
+        experiment.views4Layout.layerFloor = menuPercent / 100.0;
+        logf("experiment: views4_menu_scale=%u: the views are made at least %u%% of the native eye for the game's menus%s",
+             menuPercent, menuPercent, menuPercent ? "; the scene renders inside them at the views' sizes" : " (off)");
+    }
     // For the launcher: what live sizes can reach (percent of the native eye).
     runtime_info(L"launch_mode", mode);
     runtime_info(L"launch_outer", std::to_wstring(std::lround((experiment.views4 ? sizes.outer : experiment.eyeScale) * 100)));

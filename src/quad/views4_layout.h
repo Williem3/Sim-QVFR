@@ -36,6 +36,12 @@ struct Views4Layout {
     // The eye size in eye columns (views4_rect_eye_columns): the outer view's width, outer over focus height.
     double column_eye_width() const { return outer_width(); }
     double column_eye_height() const { return outer_height() + focusHeight; }
+    // One view size (views4_live_one_size; separate views): every view a layer this large, in native eye widths and
+    // heights: the larger of the outer and focus sizes, and at least `layerFloor` (LMU: what its menus render at, which
+    // fill the layer; the scene passes then render inside it at their live sizes).
+    double layerFloor = 0;
+    double layer_width() const { return std::max({outer_width(), focus, layerFloor}); }
+    double layer_height() const { return std::max({outer_height(), focusHeight, layerFloor}); }
     // Equal quarters of the target (the old layout, also after a live change).
     bool equal() const {
         for (int v = 0; v < 4; ++v)
@@ -163,8 +169,7 @@ inline Views4Fit views4_fit_one_size(const Views4Layout& launch, double outer, d
                                      double cropWidth = -1, double cropHeight = -1) {
     constexpr double kSlack = 1e-4;
     const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
-    const double layerW = std::max(launch.outer_width(), launch.focus),
-                 layerH = std::max(launch.outer_height(), launch.focusHeight);
+    const double layerW = launch.layer_width(), layerH = launch.layer_height();
     Views4Fit f;
     f.outer = std::clamp(outer, kMinLive * launch.outer, std::min(layerW / cw, layerH / ch));
     f.outerCapped = f.outer < outer - kSlack;
@@ -182,8 +187,7 @@ inline Views4Layout views4_live_one_size(const Views4Layout& launch, double oute
                                          double cropWidth = -1, double cropHeight = -1) {
     const Views4Fit f = views4_fit_one_size(launch, outer, focus, focusHeight, cropWidth, cropHeight);
     const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
-    const double layerW = std::max(launch.outer_width(), launch.focus),
-                 layerH = std::max(launch.outer_height(), launch.focusHeight);
+    const double layerW = launch.layer_width(), layerH = launch.layer_height();
     Views4Layout l = launch;
     for (int v = 0; v < 4; ++v) {
         l.width[v] = 0.5 * std::min(1.0, (v < 2 ? f.outer * cw : f.focus) / layerW);

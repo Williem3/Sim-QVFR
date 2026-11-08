@@ -50,6 +50,10 @@ public:
             run.renderScaleProbe =
                 std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);
         qvfr_ = four_passes_start(run);
+        // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
+        // frame, as a live change would set them.
+        if (qvfr_)
+            set_scales(simqvfr::views4_live_one_size(s.layout, s.layout.outer, s.layout.focus, s.layout.focusHeight));
         return qvfr_;
     }
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override {
@@ -66,10 +70,8 @@ public:
     // `live`: views4_live_one_size's layout (each view's share of its layer, halved). LMU scales both axes together, so
     // each view takes the larger share: at least the density asked on both axes.
     void qvfr_set_live_layout(const simqvfr::Views4Layout& live) override {
-        if (!qvfr_)
-            return;
-        const auto share = [&](int v) { return std::max(2 * live.width[v], 2 * live.height[v]); };
-        four_passes_set_live_scales(share(0), share(2));
+        if (qvfr_)
+            set_scales(live);
     }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
         four_passes_view_size(render);
@@ -128,6 +130,10 @@ public:
     }
 
 private:
+    static void set_scales(const simqvfr::Views4Layout& live) {
+        const auto share = [&](int v) { return std::max(2 * live.width[v], 2 * live.height[v]); };
+        four_passes_set_live_scales(share(0), share(2));
+    }
     bool viewProbe_ = false;
     bool gates_ = false;
     bool qvfr_ = false;
