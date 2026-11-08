@@ -61,7 +61,7 @@ target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 add_library(sim_qvfr_core STATIC
   src/games/games.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
-  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp
+  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
   src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/adapters.cpp src/engine/code_patch.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
@@ -166,6 +166,12 @@ target_include_directories(image_dump_test PRIVATE src)
 target_compile_definitions(image_dump_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(image_dump_test PRIVATE sim_qvfr_core)
 target_link_options(image_dump_test PRIVATE /IGNORE:4078)  # its pointer placed in .text on purpose
+
+# Gate runs that end themselves (probe/run_exit.h): WM_CLOSE to this process's visible top-level windows only.
+add_executable(run_exit_test tests/run_exit_test.cpp)
+target_include_directories(run_exit_test PRIVATE src)
+target_compile_definitions(run_exit_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(run_exit_test PRIVATE sim_qvfr_core)
 
 # LMU's focus projection (games/lmu/focus_math.h) against the projection the game builds.
 add_executable(lmu_focus_test tests/lmu_focus_test.cpp)

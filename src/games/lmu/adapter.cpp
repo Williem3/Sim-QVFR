@@ -24,9 +24,16 @@ public:
         // lmu_focus=1: the focus gate (focus views); lmu_copies=1: the copies gate. Both run the eye loop four times.
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
         const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
-        const bool hold = GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0;
-        const double fraction = GetPrivateProfileIntW(L"experiment", L"focus_percent", 30, ini) / 100.0;
-        copies_ = (focus || copies) && four_passes_start(focus, hold, fraction);
+        FourPassesRun run;
+        run.focus = focus;
+        run.holdExposure = GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0;
+        run.fraction = GetPrivateProfileIntW(L"experiment", L"focus_percent", 30, ini) / 100.0;
+        run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, ini));
+        run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, ini));
+        run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, ini));
+        run.warmup = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_warmup", 60, ini));
+        run.exitWhenDone = GetPrivateProfileIntW(L"experiment", L"exit_when_done", 0, ini) != 0;
+        copies_ = (focus || copies) && four_passes_start(run);
     }
     void frame_end() override {
         if (viewProbe_)

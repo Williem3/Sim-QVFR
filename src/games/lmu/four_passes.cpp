@@ -17,6 +17,7 @@
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
+#include "../../probe/run_exit.h"
 #include "../../sha256_file.h"
 #include "abi.h"
 #include "focus_math.h"
@@ -37,8 +38,27 @@ RenderSceneFn originalRenderScene = nullptr;
 SetDeltaTimeFn originalSetDeltaTime = nullptr;
 MaskDrawFn originalMaskDraw = nullptr;
 bool installed = false;
+FourPassesRun cfg;           // the run's settings (four_passes.h)
 bool focusMode = false;      // passes 2-3 are focus views (else copies of the eyes)
 double focusFraction = 0.3;  // the focus box: share of the eye's tangent width and height
+
+// The eye loop's pass count, switched per frame: two (the stock loop, full frame rate) except in the short windows
+// before each sample, where four. It's the immediate of the tail stub's last `cmp edi, n`, in our own stub memory
+// (read-write-execute), written on the render thread between frames.
+std::uint8_t* countImmediate = nullptr;
+int passTarget = 2;  // the count in effect this frame
+unsigned long long sceneFrames = 0;  // frames that rendered the 3D scene (the eye loop ran)
+bool done = false;
+int exitCountdown = -1;
+std::vector<double> results;  // per sample and eye: focus / eye median (focus), differing pixels % (copies)
+
+void set_pass_count(int n) {
+    if (!countImmediate || passTarget == n)
+        return;
+    *countImmediate = static_cast<std::uint8_t>(n);
+    FlushInstructionCache(GetCurrentProcess(), countImmediate, 1);
+    passTarget = n;
+}
 
 // Passes 2-3 render with YEBIS's frame time held near zero, so its auto exposure (one state for both eyes) isn't
 // advanced again by the extra passes: they use the exposure their eye just had, and a focus view can't pull it toward
@@ -78,7 +98,7 @@ unsigned long renderThread = 0;
 int pass = -1;  // this frame's pass, 0-3
 int passesThisFrame = 0;
 int eyeOfPass[4] = {-1, -1, -1, -1};
-unsigned long long frames = 0, fourPassFrames = 0, comparisons = 0, nextCompare = 0;
+unsigned long long frames = 0, fourPassFrames = 0, comparisons = 0;
 bool armed = false;     // copies: copy each pass's image aside this frame
 unsigned captured = 0;  // copies: bit p, pass p's image copied
 ID3D11Texture2D* copies[4] = {};
@@ -292,7 +312,7 @@ void render_scene(void* arg, char laterEye) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
         eyeOfPass[p] = renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
                                 : -1;
-        if (focusMode)
+        if (focusMode && passTarget == 4)
             focus_after_pass(p);
         else if (armed)
             copy_aside(p);
@@ -368,6 +388,7 @@ void compare_copies() {
                 diff[i + 3] = 255;
             }
         const double total = static_cast<double>(w[a]) * h[a];
+        results.push_back(100.0 * differing / total);
         if (differing == 0)
             simqvfr::logf("lmu copies: frame %llu: pass %d equals eye %d pixel for pixel (%ux%u, eyes rendered %d/%d)", frames,
                           b, eye, w[a], h[a], eyeOfPass[a], eyeOfPass[b]);
@@ -454,6 +475,8 @@ void compare_focus() {
                 }
             }
         std::sort(ratios.begin(), ratios.end());
+        if (!ratios.empty())
+            results.push_back(ratios[ratios.size() / 2]);
         const auto pct = [&](double q) { return ratios.empty() ? 0.0 : ratios[static_cast<std::size_t>(q * (ratios.size() - 1))]; };
         simqvfr::logf("lmu focus: frame %llu: eye %d: focus / eye linear luminance over the box %.3f; per cell median %.3f, "
                       "p10 %.3f, p90 %.3f (%zu cells); box in the eye x %.3f-%.3f y %.3f-%.3f of %ux%u; eye tangents "
@@ -477,12 +500,16 @@ const char* tag() { return focusMode ? "lmu focus" : "lmu copies"; }
 
 }  // namespace
 
-bool four_passes_start(bool focus, bool hold, double fraction) {
+bool four_passes_start(const FourPassesRun& run) {
     if (installed)
         return true;
-    focusMode = focus;
-    holdExposure = hold;
-    focusFraction = std::clamp(fraction, 0.05, 1.0);
+    cfg = run;
+    cfg.count = std::clamp(cfg.count, 1, 16);
+    cfg.every = (std::max)(cfg.every, 1);
+    cfg.warmup = std::clamp(cfg.warmup, 1, 600);
+    focusMode = run.focus;
+    holdExposure = run.holdExposure;
+    focusFraction = std::clamp(run.fraction, 0.05, 1.0);
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     if (!simqvfr::games::supported_build(kGame, simqvfr::sha256_file(exe))) {
@@ -567,7 +594,23 @@ bool four_passes_start(bool focus, bool hold, double fraction) {
         simqvfr::logf("%s: the eye loop tail couldn't be patched; two passes as before", tag());
         return false;
     }
+    // The tail's stub (the jump at the site) ends `cmp edi, 4`: its immediate is the pass count. Start at two.
+    const auto* site = reinterpret_cast<const std::uint8_t*>(base() + kEyeLoopTail);
+    std::int32_t rel = 0;
+    std::memcpy(&rel, site + 1, 4);
+    auto* stub = const_cast<std::uint8_t*>(site + 5 + rel);
+    if (site[0] == 0xE9 && stub[23] == 0x83 && stub[24] == 0xff && stub[25] == 0x04) {
+        countImmediate = stub + 25;
+        passTarget = 4;
+        set_pass_count(2);
+    } else {
+        simqvfr::logf("%s: the loop tail's stub isn't where expected: four passes every frame", tag());
+    }
     installed = true;
+    simqvfr::logf("%s: samples: %d, the first %d scene frames in, then every %d; four passes for %d frames before each "
+                  "(else two, full frame rate)%s",
+                  tag(), cfg.count, cfg.first, cfg.every, cfg.warmup,
+                  cfg.exitWhenDone ? "; the game is asked to close after the last (exit_when_done=1)" : "");
     if (focusMode)
         simqvfr::logf("lmu focus: on: the eye loop runs four times, passes 2-3 render focus views (a %.0f%% box of each "
                       "eye's tangent span, centred on its forward axis) into the eye targets, set aside before the game "
@@ -595,6 +638,8 @@ void four_passes_frame_end() {
         }
     const int passes = passesThisFrame;
     passesThisFrame = 0;
+    if (passes >= 2)
+        ++sceneFrames;
     if (passes >= 4)
         ++fourPassFrames;
     if (fourPassFrames == 1 && passes >= 4)
@@ -607,37 +652,64 @@ void four_passes_frame_end() {
     maskSkippedThisFrame = 0;
     const int held = heldThisFrame;
     heldThisFrame = 0;
-    const bool due = passes >= 4 && fourPassFrames >= 300 && comparisons < 4 && frames >= nextCompare;
-    if (focusMode) {
-        if (due && focusFrameComplete) {
-            if (GetCurrentThreadId() != renderThread)
-                simqvfr::log_line("lmu focus: xrEndFrame isn't on the render thread; images not read back");
-            else
-                compare_focus();
-            nextCompare = frames + 3600;
-        }
-    } else {
-        if (armed) {
+
+    // The sample: due once the scene has run `first + k * every` frames, after `warmup` four-pass frames.
+    const unsigned long long dueAt = cfg.first + static_cast<unsigned long long>(comparisons) * cfg.every;
+    const bool onRenderThread = GetCurrentThreadId() == renderThread;
+    if (!done && passes >= 4 && sceneFrames >= dueAt) {
+        if (focusMode) {
+            if (focusFrameComplete) {
+                if (onRenderThread)
+                    compare_focus();
+                else {
+                    simqvfr::log_line("lmu focus: xrEndFrame isn't on the render thread; images not read back");
+                    ++comparisons;
+                }
+            }
+        } else if (armed) {
             armed = false;
-            if (GetCurrentThreadId() != renderThread)
+            if (!onRenderThread) {
                 simqvfr::log_line("lmu copies: xrEndFrame isn't on the render thread; images not read back");
-            else if (captured == 0xf)
+                ++comparisons;
+            } else if (captured == 0xf) {
                 compare_copies();
-            else
+            } else {
                 simqvfr::logf("lmu copies: frame %llu: only passes 0x%x copied aside (%d passes); not compared", frames,
                               captured, passes);
-        }
-        if (due) {
-            armed = true;
+                ++comparisons;
+            }
+        } else {
+            armed = true;  // the next frame's passes are copied aside
             captured = 0;
-            nextCompare = frames + 3600;
         }
     }
+    if (!done && comparisons >= static_cast<unsigned long long>(cfg.count)) {
+        done = true;
+        double lo = 1e9, hi = -1e9;
+        for (double r : results) {
+            lo = (std::min)(lo, r);
+            hi = (std::max)(hi, r);
+        }
+        if (focusMode)
+            simqvfr::logf("lmu focus: done: %llu samples; focus / eye brightness (median per cell) %.3f-%.3f: %s", comparisons,
+                          results.empty() ? 0.0 : lo, results.empty() ? 0.0 : hi,
+                          !results.empty() && lo >= 0.97 && hi <= 1.03 ? "within 3%" : "OUT OF RANGE (or not measured)");
+        else
+            simqvfr::logf("lmu copies: done: %llu samples; pixels differing %.3f-%.3f%%", comparisons,
+                          results.empty() ? 0.0 : lo, results.empty() ? 0.0 : hi);
+        exitCountdown = cfg.exitWhenDone ? 45 : -1;  // a few frames at two passes first
+    }
+    // Next frame's pass count: four from `warmup` frames before the sample until it's taken, else two.
+    const unsigned long long nextDue = cfg.first + static_cast<unsigned long long>(comparisons) * cfg.every;
+    set_pass_count(!done && sceneFrames + cfg.warmup >= nextDue ? 4 : 2);
+    if (exitCountdown > 0 && --exitCountdown == 0)
+        simqvfr::request_game_exit(focusMode ? "the focus gate has its samples" : "the copies gate has its samples");
+
     if (frames % 1800 == 0)
-        simqvfr::logf("%s: frame %llu: %llu four-pass frames so far; last frame %d passes, eyes %d %d %d %d, "
+        simqvfr::logf("%s: frame %llu: %llu scene frames, %llu four-pass; last frame %d passes, eyes %d %d %d %d, "
                       "frame time held in %d calls, mask skipped in %d",
-                      tag(), frames, fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3], held,
-                      maskSkipped);
+                      tag(), frames, sceneFrames, fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2],
+                      eyeOfPass[3], held, maskSkipped);
 }
 
 }  // namespace lmu
