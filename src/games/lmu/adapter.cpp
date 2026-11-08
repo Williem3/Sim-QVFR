@@ -60,6 +60,17 @@ public:
         if (qvfr_)
             four_passes_set_box(focus, focusY);
     }
+    // Live resolution: each pass at its own render scale inside the launch-size targets (four_passes.h). On for QVFR
+    // runs; GameFeatures::liveResolution stays off until it passes its card.
+    bool qvfr_live_resolution() const override { return has_qvfr(); }
+    // `live`: views4_live_one_size's layout (each view's share of its layer, halved). LMU scales both axes together, so
+    // each view takes the larger share: at least the density asked on both axes.
+    void qvfr_set_live_layout(const simqvfr::Views4Layout& live) override {
+        if (!qvfr_)
+            return;
+        const auto share = [&](int v) { return std::max(2 * live.width[v], 2 * live.height[v]); };
+        four_passes_set_live_scales(share(0), share(2));
+    }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
         four_passes_view_size(render);
         output[0] = render[0];

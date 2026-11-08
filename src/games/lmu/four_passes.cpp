@@ -411,25 +411,86 @@ bool ensure_atlas(ID3D11Texture2D* eyeTexture) {
     return true;
 }
 
-// The view `src` into the atlas at (x, y), or (atlas_out) the atlas's view at (x, y) into `dst`: immediate context.
-void atlas_in(ID3D11Texture2D* src, unsigned x, unsigned y) {
+// ---- QVFR: live resolution ----
+// Each pass renders into the top-left of its launch-size target at LMU's render scale, which this sets per pass: the
+// game's own scale times the outer or focus share (four_passes_set_live_scales). passW/passH: what each pass of this
+// frame rendered, which the copies and the atlas regions use.
+float liveScale[2] = {1, 1};  // outer, focus (under liveMutex)
+float gameScale = 0;          // the game's own render scale (its setting; what the launch-size targets were made with)
+float lastWritten = 0;        // what this code last wrote to it
+unsigned passW[4] = {}, passH[4] = {};
+bool liveLogged = false;
+
+// LMU's size for the scale: ceil(recommended x scale), as GetRenderSize rounds (a float product).
+unsigned scaled_size(unsigned recommended, float scale) {
+    const float x = static_cast<float>(recommended) * scale;
+    const auto i = static_cast<unsigned>(x);
+    return static_cast<float>(i) == x ? i : i + 1;
+}
+
+int probe_active();  // the render scale probe owns the scale (below)
+
+void qvfr_before_pass(int p) {
+    if (p >= 4)
+        return;
+    auto* scale = reinterpret_cast<float*>(base() + kRenderScale);
+    float share;
+    {
+        std::lock_guard guard(liveMutex);
+        share = liveScale[p < 2 ? 0 : 1];
+    }
+    float written = *scale;
+    if (!probe_active()) {
+        if (gameScale <= 0 || (lastWritten > 0 && *scale != lastWritten)) {
+            if (gameScale > 0)
+                simqvfr::logf("lmu qvfr: frame %llu: the game's render scale changed (%.3f -> %.3f): live scales from it",
+                              frames, gameScale, *scale);
+            gameScale = *scale;
+        }
+        written = gameScale * share;
+        *scale = written;
+        lastWritten = written;
+    }
+    const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+    passW[p] = scaled_size(recommended[0], written);
+    passH[p] = scaled_size(recommended[1], written);
+    if (viewW && viewH) {
+        passW[p] = std::clamp(passW[p], 1u, viewW);
+        passH[p] = std::clamp(passH[p], 1u, viewH);
+    }
+}
+
+// The view `src` (its top-left w x h) into the atlas at (x, y), or (atlas_out) the atlas's at (x, y) into `dst`.
+void atlas_in(ID3D11Texture2D* src, unsigned x, unsigned y, unsigned w, unsigned h) {
     ID3D11Device* device = nullptr;
     atlas->GetDevice(&device);
     ID3D11DeviceContext* context = nullptr;
     device->GetImmediateContext(&context);
-    const D3D11_BOX whole{0, 0, 0, viewW, viewH, 1};
-    context->CopySubresourceRegion(atlas, 0, x, y, 0, src, 0, &whole);
+    const D3D11_BOX box{0, 0, 0, std::min(w, viewW), std::min(h, viewH), 1};
+    context->CopySubresourceRegion(atlas, 0, x, y, 0, src, 0, &box);
     context->Release();
     device->Release();
 }
 
-void atlas_out(ID3D11Texture2D* dst, unsigned x, unsigned y) {
+void atlas_out(ID3D11Texture2D* dst, unsigned x, unsigned y, unsigned w, unsigned h) {
     ID3D11Device* device = nullptr;
     atlas->GetDevice(&device);
     ID3D11DeviceContext* context = nullptr;
     device->GetImmediateContext(&context);
-    const D3D11_BOX box{x, y, 0, x + viewW, y + viewH, 1};
+    const D3D11_BOX box{x, y, 0, x + std::min(w, viewW), y + std::min(h, viewH), 1};
     context->CopySubresourceRegion(dst, 0, 0, 0, 0, atlas, 0, &box);
+    context->Release();
+    device->Release();
+}
+
+// `dst` = the top-left w x h of `src` (same size and format family).
+void copy_corner(ID3D11Texture2D* dst, ID3D11Texture2D* src, unsigned w, unsigned h) {
+    ID3D11Device* device = nullptr;
+    dst->GetDevice(&device);
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    const D3D11_BOX box{0, 0, 0, w, h, 1};
+    context->CopySubresourceRegion(dst, 0, 0, 0, 0, src, 0, &box);
     context->Release();
     device->Release();
 }
@@ -565,10 +626,28 @@ void focus_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
 }
 
 void vrui_draw(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
+    // With live resolution the panels go into the part of each target the frame rendered: the panel draws' viewport
+    // (the eye targets' size, kVruiViewport) set to it for this call. Frames without four views keep the game's.
+    const bool pending = focusUiPending && vrui && context && eyes;
+    int* viewport = vrui ? reinterpret_cast<int*>(static_cast<std::uint8_t*>(vrui) + kVruiViewport) : nullptr;
+    const int kept[2] = {viewport ? viewport[0] : 0, viewport ? viewport[1] : 0};
+    const bool scaled = pending && viewW && (passW[0] < viewW || passH[0] < viewH || passW[2] < viewW || passH[2] < viewH);
+    if (scaled) {
+        viewport[0] = static_cast<int>(passW[0]);
+        viewport[1] = static_cast<int>(passH[0]);
+    }
     originalVruiDraw(vrui, context, eyes);
-    if (focusUiPending && vrui && context && eyes) {
+    if (pending) {
         focusUiPending = false;
+        if (scaled) {
+            viewport[0] = static_cast<int>(passW[2]);
+            viewport[1] = static_cast<int>(passH[2]);
+        }
         focus_ui(vrui, context, eyes);
+    }
+    if (scaled) {
+        viewport[0] = kept[0];
+        viewport[1] = kept[1];
     }
 }
 
@@ -587,6 +666,12 @@ void store_record() {
         std::memcpy(f.focusTan[e], focus, sizeof(focus));
         f.turn[e] = {0, 0, 0, 1};
     }
+    // The sizes rendered, as views4_live_one_size lays them out (each view half its layer at most: 0.5 = all of it).
+    f.live = true;
+    for (int v = 0; v < 4; ++v) {
+        f.width[v] = f.renderWidth[v] = viewW ? 0.5 * passW[v] / viewW : 0.5;
+        f.height[v] = f.renderHeight[v] = viewH ? 0.5 * passH[v] / viewH : 0.5;
+    }
     std::lock_guard guard(liveMutex);
     latestRecord = f;
     haveRecord = true;
@@ -601,8 +686,12 @@ void qvfr_after_pass(int p) {
         ID3D11Texture2D* e0 = eye_texture(0);
         ID3D11Texture2D* e1 = eye_texture(1);
         if (e0 && e1 && ensure_atlas(e0) && ensure_focus_textures(e0) && is_view(e1)) {
-            atlas_in(e0, 0, 0);
-            atlas_in(e1, viewW, 0);
+            for (int q = 0; q < 2; ++q) {  // the first frame's sizes were taken before the atlas knew the views
+                passW[q] = std::clamp(passW[q], 1u, viewW);
+                passH[q] = std::clamp(passH[q], 1u, viewH);
+            }
+            atlas_in(e0, 0, 0, passW[0], passH[0]);
+            atlas_in(e1, viewW, 0, passW[1], passH[1]);
             eyesInAtlas = true;
             frameFocusOk = swap_in_focus(0);
         }
@@ -613,7 +702,7 @@ void qvfr_after_pass(int p) {
     } else if (p == 2 && eyesInAtlas) {
         ID3D11Texture2D* t = eye_texture(0);
         if (frameFocusOk && is_view(t))
-            copy_back(focusTex[0], t);
+            copy_corner(focusTex[0], t, passW[2], passH[2]);
         else
             frameFocusOk = false;
         if (t)
@@ -625,14 +714,20 @@ void qvfr_after_pass(int p) {
         ID3D11Texture2D* t0 = eye_texture(0);
         ID3D11Texture2D* t1 = eye_texture(1);
         if (frameFocusOk && is_view(t1))
-            copy_back(focusTex[1], t1);
+            copy_corner(focusTex[1], t1, passW[3], passH[3]);
         else
             frameFocusOk = false;
         restore_projection(1);
         if (is_view(t0))
-            atlas_out(t0, 0, 0);
+            atlas_out(t0, 0, 0, passW[0], passH[0]);
         if (is_view(t1))
-            atlas_out(t1, viewW, 0);
+            atlas_out(t1, viewW, 0, passW[1], passH[1]);
+        // After the loop (VR_UpdateEyes, the desktop mirror) the scale is the eyes'.
+        if (!probe_active() && lastWritten > 0 && gameScale > 0) {
+            std::lock_guard guard(liveMutex);
+            lastWritten = gameScale * liveScale[0];
+            *reinterpret_cast<float*>(base() + kRenderScale) = lastWritten;
+        }
         if (t0)
             t0->Release();
         if (t1)
@@ -666,6 +761,8 @@ void render_scene(void* arg, char laterEye) {
     ++passesThisFrame;
     if (p == 0)
         atlasReady = false;  // a new frame: its own four views, or none
+    if (qvfrMode)
+        qvfr_before_pass(p);  // live resolution: this pass's render scale
     inLaterPass = p >= 2;
     originalRenderScene(arg, laterEye);
     inLaterPass = false;
@@ -867,6 +964,8 @@ constexpr unsigned long long kProbeStart = 600, kProbeShot = 60, kProbeEnd = 120
 float probeOldScale = 0;
 int probeStage = 0;  // 0 waiting, 1 scaled, 2 saved, 3 done
 unsigned long long probeFrom = 0;
+
+int probe_active() { return probeStage == 1 || probeStage == 2; }
 
 void probe_save(ID3D11Texture2D* texture, const wchar_t* what) {
     std::vector<std::uint8_t> px;
@@ -1103,8 +1202,14 @@ void four_passes_frame_end() {
     heldThisFrame = 0;
 
     if (qvfrMode) {
-        if (passes < 4)
+        if (passes < 4) {
             atlasReady = false;  // no four views this frame (menus, loading): the layer submits the eyes as they are
+            // ... so they render at the game's own scale, filling their targets (the next scene pass sets it again).
+            if (!probe_active() && gameScale > 0 && lastWritten != gameScale) {
+                *reinterpret_cast<float*>(base() + kRenderScale) = gameScale;
+                lastWritten = gameScale;
+            }
+        }
         render_scale_probe(passes);
         if (eyesInAtlas) {
             eyesInAtlas = false;
@@ -1239,17 +1344,26 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     }
     // The eyes again, as the game submitted them: with what it drew after its eye loop (the VR UI); the focus views with
     // the UI drawn into them too (vrui_draw).
-    atlas_in(eyes[0], 0, 0);
-    atlas_in(eyes[1], viewW, 0);
-    atlas_in(focusTex[0], 0, viewH);
-    atlas_in(focusTex[1], viewW, viewH);
+    // Each only as far as its pass rendered (live resolution: the top-left of the launch-size targets).
+    atlas_in(eyes[0], 0, 0, passW[0], passH[0]);
+    atlas_in(eyes[1], viewW, 0, passW[1], passH[1]);
+    atlas_in(focusTex[0], 0, viewH, passW[2], passH[2]);
+    atlas_in(focusTex[1], viewW, viewH, passW[3], passH[3]);
+    const float cw = 0.5f / static_cast<float>(viewW), ch = 0.5f / static_cast<float>(viewH);
     for (int e = 0; e < 2; ++e) {
-        const float outer[4] = {0.5f * e, 0.0f, 0.5f, 0.5f}, focus[4] = {0.5f * e, 0.5f, 0.5f, 0.5f};
+        const float outer[4] = {0.5f * e, 0.0f, cw * passW[e], ch * passH[e]};
+        const float focus[4] = {0.5f * e, 0.5f, cw * passW[e + 2], ch * passH[e + 2]};
         std::memcpy(uv[e], outer, sizeof(outer));
         std::memcpy(uv[e + 2], focus, sizeof(focus));
     }
     if (composedFrames++ == 0)
         simqvfr::logf("lmu qvfr: frame %llu: the first four views handed to the compositor", frames);
+    const bool live = passW[0] != viewW || passW[2] != viewW || passH[0] != viewH || passH[2] != viewH;
+    if (live != liveLogged) {
+        liveLogged = live;
+        simqvfr::logf("lmu qvfr: frame %llu: views rendered at outer %ux%u, focus %ux%u of %ux%u%s", frames, passW[0],
+                      passH[0], passW[2], passH[2], viewW, viewH, live ? " (live resolution)" : " (the launch size)");
+    }
     return atlas;
 }
 
@@ -1280,6 +1394,18 @@ void four_passes_mask_taken(uint32_t viewIndex) {
     simqvfr::logf("lmu qvfr: eye %u's lens mask fetched: built with the FOV located last (tangents l %.3f r %.3f d %.3f "
                   "u %.3f)%s",
                   viewIndex, t[0], t[1], t[2], t[3], locatedValid ? "" : " -- none located yet: the mask is always drawn");
+}
+
+void four_passes_set_live_scales(double outer, double focus) {
+    const float o = static_cast<float>(std::clamp(outer, 0.1, 1.0)), f = static_cast<float>(std::clamp(focus, 0.1, 1.0));
+    std::lock_guard guard(liveMutex);
+    if (o == liveScale[0] && f == liveScale[1])
+        return;
+    liveScale[0] = o;
+    liveScale[1] = f;
+    simqvfr::logf("lmu qvfr: live resolution: outer views at %.0f%%, focus views at %.0f%% of the launch size per axis "
+                  "(from the next frame)",
+                  o * 100, f * 100);
 }
 
 void four_passes_view_size(int (&size)[2]) {

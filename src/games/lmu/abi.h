@@ -56,8 +56,10 @@ inline constexpr std::size_t kEyeSlotStride = 0x6c;
 inline constexpr std::size_t kSlotMatrix = 4;  // the row-major 4x4 (left-handed, row vectors) after an int
 // The eye render textures (texture objects), eye e at + e * 8. [Eye textures]
 inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
-// The render scale (float): every VR target is recommended x it; GetRenderSize reads it each call. [Live resolution]
+// The render scale (float): every VR target is recommended x it; GetRenderSize reads it each call, so a pass renders
+// into the top-left ceil(recommended x scale) of the launch-size targets (probe run 2026-11-07). [Live resolution]
 inline constexpr std::uintptr_t kRenderScale = 0x199cc18;
+inline constexpr std::uintptr_t kRecommendedSize = 0x1b1c654;  // uint32 width, height (the runtime's, as offered)
 
 // VRHiddenAreaMask::Draw(this, camera): the lens mask in the eye's screen space, mesh by camera eye (+0x5cc). [Hidden-area mask]
 inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;
@@ -70,6 +72,7 @@ inline constexpr std::uint8_t kVruiDrawAnchor[] = {0x40, 0x53, 0x56, 0x57, 0x48,
 inline constexpr std::uintptr_t kVruiDrawEye = 0x617fb0;  // (vrui, context, eyes, eye): one eye's panel
 inline constexpr std::uint8_t kVruiDrawEyeAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57};
 inline constexpr std::size_t kVruiEyeRtv = 0xd8;     // ID3D11RenderTargetView*: eye e's at + e * 8
+inline constexpr std::size_t kVruiViewport = 0xbc;   // int width, height: the panel draws' viewport (the eye targets')
 inline constexpr std::size_t kVruiEyesSize = 0xdc;   // the eyes block: mode, then each eye's projection x view slot
 inline constexpr std::size_t kVruiEyeMatrix = 8;     // eye e's 4x4 at + e * kEyeSlotStride (right-handed projection)
 
