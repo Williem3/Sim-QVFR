@@ -17,20 +17,20 @@
 namespace lmu {
 namespace {
 
-// QVFR in LMU is in development: on only with [experiment] lmu_qvfr=1 in the launch's ini (SIM_QVFR_INI, which the
-// launcher sets) and mode=views4. Otherwise identity only, the layer logging, with the gates and probes below.
+// QVFR in LMU: on unless [experiment] lmu_qvfr=0 in the launch's ini (SIM_QVFR_INI, which the launcher sets; an ini from
+// before LMU has no key), with mode=views4. lmu_qvfr=0: identity only, the layer logging, with the gates and probes below.
 bool qvfr_wanted() {
     static const bool wanted = [] {
         wchar_t ini[MAX_PATH] = {};
         const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", ini, MAX_PATH);
-        return n > 0 && n < MAX_PATH && GetPrivateProfileIntW(L"experiment", L"lmu_qvfr", 0, ini) != 0;
+        return n > 0 && n < MAX_PATH && GetPrivateProfileIntW(L"experiment", L"lmu_qvfr", 1, ini) != 0;
     }();
     return wanted;
 }
 
-// Identity only unless lmu_qvfr=1: the layer logs, QVFR doesn't start. Its experiments run only when their
-// [experiment] key asks, and never in a launch the anti-cheat protects (adapter_for hands out the plain identity
-// adapter there): the view probe (log only), the copies and focus gates (four passes, docs/recon-lmu.md), and QVFR.
+// Identity only with lmu_qvfr=0: the layer logs, QVFR doesn't start. Its experiments run only when their
+// [experiment] key asks, and not in a launch the anti-cheat protects unless the user chose it ([launcher] anticheat=1;
+// otherwise adapter_for hands out the plain identity adapter there): the view probe (log only), the copies and focus gates (four passes, docs/recon-lmu.md), and QVFR.
 class LmuAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     LmuAdapter() : IdentityAdapter(&kGame) {}
