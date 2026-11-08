@@ -60,6 +60,10 @@ inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
 // into the top-left ceil(recommended x scale) of the launch-size targets (probe run 2026-11-07). [Live resolution]
 inline constexpr std::uintptr_t kRenderScale = 0x199cc18;
 inline constexpr std::uintptr_t kRecommendedSize = 0x1b1c654;  // uint32 width, height (the runtime's, as offered)
+// The frame's eye render size (float width, height = ceil(recommended x scale)), set once per frame by VR_UpdateEyes and
+// copied into the camera at each pass's head (with the VR state block, 0x418 bytes from 0x1b1be30): a pass renders at
+// the size this holds when its camera is set up, not at the scale in effect during the pass (live run 2026-11-08).
+inline constexpr std::uintptr_t kEyeRenderSize = 0x1b1c240;
 
 // VRHiddenAreaMask::Draw(this, camera): the lens mask in the eye's screen space, mesh by camera eye (+0x5cc). [Hidden-area mask]
 inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;

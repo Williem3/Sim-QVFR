@@ -412,9 +412,11 @@ bool ensure_atlas(ID3D11Texture2D* eyeTexture) {
 }
 
 // ---- QVFR: live resolution ----
-// Each pass renders into the top-left of its launch-size target at LMU's render scale, which this sets per pass: the
-// game's own scale times the outer or focus share (four_passes_set_live_scales). passW/passH: what each pass of this
-// frame rendered, which the copies and the atlas regions use.
+// Each pass renders into the top-left of its launch-size target at the eye render size its camera copied at the pass's
+// head (kEyeRenderSize, which VR_UpdateEyes sets once per frame from the render scale). So the size and the scale (which
+// the pass's post-processing reads) are set together at the end of the pass before: the focus share after pass 1, the
+// outer share after pass 3 (and so for the next frame's VR_UpdateEyes), each the game's own scale times the share
+// (four_passes_set_live_scales). passW/passH: what each pass of this frame rendered, for the copies and atlas regions.
 float liveScale[2] = {1, 1};  // outer, focus (under liveMutex)
 float gameScale = 0;          // the game's own render scale (its setting; what the launch-size targets were made with)
 float lastWritten = 0;        // what this code last wrote to it
@@ -430,34 +432,45 @@ unsigned scaled_size(unsigned recommended, float scale) {
 
 int probe_active();  // the render scale probe owns the scale (below)
 
+// At a pass's start: the size its camera copied (what it renders), and the game's own scale (first seen, or changed by
+// the game: its video settings).
 void qvfr_before_pass(int p) {
     if (p >= 4)
         return;
-    auto* scale = reinterpret_cast<float*>(base() + kRenderScale);
-    float share;
-    {
-        std::lock_guard guard(liveMutex);
-        share = liveScale[p < 2 ? 0 : 1];
+    const float scale = *reinterpret_cast<const float*>(base() + kRenderScale);
+    if (!probe_active() && (gameScale <= 0 || (lastWritten > 0 && scale != lastWritten))) {
+        if (gameScale > 0)
+            simqvfr::logf("lmu qvfr: frame %llu: the game's render scale changed (%.3f -> %.3f): live scales from it",
+                          frames, gameScale, scale);
+        gameScale = scale;
+        lastWritten = 0;
     }
-    float written = *scale;
-    if (!probe_active()) {
-        if (gameScale <= 0 || (lastWritten > 0 && *scale != lastWritten)) {
-            if (gameScale > 0)
-                simqvfr::logf("lmu qvfr: frame %llu: the game's render scale changed (%.3f -> %.3f): live scales from it",
-                              frames, gameScale, *scale);
-            gameScale = *scale;
-        }
-        written = gameScale * share;
-        *scale = written;
-        lastWritten = written;
-    }
-    const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
-    passW[p] = scaled_size(recommended[0], written);
-    passH[p] = scaled_size(recommended[1], written);
+    const auto* size = reinterpret_cast<const float*>(base() + kEyeRenderSize);
+    passW[p] = size[0] >= 1 ? static_cast<unsigned>(size[0]) : 1u;
+    passH[p] = size[1] >= 1 ? static_cast<unsigned>(size[1]) : 1u;
     if (viewW && viewH) {
         passW[p] = std::clamp(passW[p], 1u, viewW);
         passH[p] = std::clamp(passH[p], 1u, viewH);
     }
+}
+
+// The next passes' size: render scale and eye render size, the game's own scale times the outer (which = 0) or focus
+// share. At the end of pass 1 (focus) and pass 3 (outer: also what the next frame's VR_UpdateEyes computes).
+void set_next_passes(int which) {
+    if (probe_active() || gameScale <= 0)
+        return;
+    float share;
+    {
+        std::lock_guard guard(liveMutex);
+        share = liveScale[which];
+    }
+    const float written = gameScale * share;
+    *reinterpret_cast<float*>(base() + kRenderScale) = written;
+    lastWritten = written;
+    const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+    auto* size = reinterpret_cast<float*>(base() + kEyeRenderSize);
+    size[0] = static_cast<float>(scaled_size(recommended[0], written));
+    size[1] = static_cast<float>(scaled_size(recommended[1], written));
 }
 
 // The view `src` (its top-left w x h) into the atlas at (x, y), or (atlas_out) the atlas's at (x, y) into `dst`.
@@ -722,12 +735,6 @@ void qvfr_after_pass(int p) {
             atlas_out(t0, 0, 0, passW[0], passH[0]);
         if (is_view(t1))
             atlas_out(t1, viewW, 0, passW[1], passH[1]);
-        // After the loop (VR_UpdateEyes, the desktop mirror) the scale is the eyes'.
-        if (!probe_active() && lastWritten > 0 && gameScale > 0) {
-            std::lock_guard guard(liveMutex);
-            lastWritten = gameScale * liveScale[0];
-            *reinterpret_cast<float*>(base() + kRenderScale) = lastWritten;
-        }
         if (t0)
             t0->Release();
         if (t1)
@@ -762,7 +769,7 @@ void render_scene(void* arg, char laterEye) {
     if (p == 0)
         atlasReady = false;  // a new frame: its own four views, or none
     if (qvfrMode)
-        qvfr_before_pass(p);  // live resolution: this pass's render scale
+        qvfr_before_pass(p);  // live resolution: the size this pass renders at
     inLaterPass = p >= 2;
     originalRenderScene(arg, laterEye);
     inLaterPass = false;
@@ -770,9 +777,11 @@ void render_scene(void* arg, char laterEye) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
         eyeOfPass[p] = renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
                                 : -1;
-        if (qvfrMode)
+        if (qvfrMode) {
             qvfr_after_pass(p);
-        else if (focusMode && passTarget == 4)
+            if (p == 1 || p == 3)  // live resolution: the next passes' size, before their cameras copy it
+                set_next_passes(p == 1 ? 1 : 0);
+        } else if (focusMode && passTarget == 4)
             focus_after_pass(p);
         else if (armed)
             copy_aside(p);
