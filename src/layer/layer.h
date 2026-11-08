@@ -5,6 +5,7 @@
 #include <functional>
 #include <string>
 
+#include "cheeky/cheeky_settings.h"
 #include "input/hotkeys.h"
 #include "quad/compositor.h"
 #include "quad/helmet.h"
@@ -114,22 +115,38 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info);
 XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
                                      uint32_t capacity, uint32_t* countOutput, XrView* views);
 
-// xr_layer.cpp
+// live_ini.cpp
+void cheeky_apply_ini();
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);
 void ini_worker_sync();
 void live_reload();
+
+// hotkey_watch.cpp
+void pad_watch_ensure();
 void pad_watch_stop();
 void hotkeys_changed(const Hotkeys& h);
+bool key_held(const KeyCombo& key);
+bool pad_held(HotkeyAction action);
+bool hotkey_held(HotkeyAction action);
+std::wstring menu_hint();
+std::wstring hotkey_footer(bool helmetOn);
+
+// xr_layer.cpp
 int64_t qpc_ms(int64_t ms);
+bool game_focused();
 void menu_values_changed(const IniSnapshot& s);
+void menu_placement_changed(const MenuPlacement& placement);
 void menu_press(MenuKey key, int64_t now);
 void menu_shutdown();
 void osd_waited(XrDuration period);
 bool frame_generation_on();
 bool osd_shown(OsdSummary& out);
 void osd_wait_returned(double waitMs);
+void osd_placement_changed();
+void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);
 void osd_shutdown();
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
+XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo);
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
                                                 const XrApiLayerCreateInfo* layerInfo, XrInstance* instance);

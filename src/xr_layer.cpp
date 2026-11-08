@@ -8,13 +8,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
-#include <deque>
-#include <functional>
 #include <future>
 #include <mutex>
-#include <optional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -27,7 +23,6 @@
 #include "games/game.h"
 #include "ini_put.h"
 #include "input/hotkeys.h"
-#include "input/pad_input.h"
 #include "layer_chain.h"
 #include "log.h"
 #include "probe/cpu_load.h"
@@ -42,9 +37,7 @@
 #include "probe/pix_capture.h"
 #include "probe/probe.h"
 #include "profile/profiles.h"
-#include "quad/focus_shape.h"
 #include "quad/focus_turn.h"
-#include "quad/fov_crop.h"
 #include "quad/helmet.h"
 #include "quad/menu_panel.h"
 #include "quad/osd.h"
@@ -58,409 +51,7 @@ namespace simqvfr::layer {
 
 namespace {
 
-XrResult end_frame(XrSession session, const XrFrameEndInfo* info);
-
-// Live resolution (views4): periphery_scale and focus_density resize the views inside ACE's target,
-// up to their launch size (views4_live). A larger focus box at the same density needs more pixels;
-// beyond the launch size the density gives.
-void live_resolution(const LiveSettings& l) {
-    const Views4Layout& launch = experiment.views4Layout;
-    const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
-    const double cw = l.crop.kept_width(), ch = l.crop.kept_height();  // the outer views take the live crop
-    // One view size (X-Plane): periphery and focus each sized on its own inside the launch layers. Eye columns (ACC):
-    // one width for all four views, the outer and focus rows sharing the height.
-    const bool columns = game->qvfr_eye_columns(), oneSize = columns && game->qvfr_one_view_size();
-    game->qvfr_set_live_layout(oneSize   ? views4_live_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
-                               : columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
-                                         : views4_live(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch));
-    const Views4Fit fit = oneSize   ? views4_fit_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
-                          : columns ? views4_fit_eye_columns(launch, wanted.outer, wanted.focusHeight, cw, ch)
-                                    : views4_fit(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch);
-    logf("live: periphery %.0f%% of native, focus density %.0f%% x %.0f%% (focus views %.0f%% x %.0f%% of the native "
-         "eye; launch %.0f%%, %.0f%% x %.0f%%)%s%s",
-         fit.outer * 100, fit.focus / l.focusFraction * 100, fit.focusHeight / experiment.focus_y() * 100,
-         fit.focus * 100, fit.focusHeight * 100, launch.outer * 100, launch.focus * 100, launch.focusHeight * 100,
-         fit.focusCapped ? " (focus capped: larger than the launch target allows)" : "",
-         fit.outerCapped ? (fit.outerByRoom ? " (periphery capped: the focus views use the width)"
-                                            : " (periphery capped: larger than the launch target allows)")
-                         : "");
-}
-
-// Live settings: applies the ini's live keys (LiveSettings). Called between display frames.
-void live_apply(const LiveSettings& l) {
-    if (experiment.composing()) {  // the helmet: either compositor
-        std::lock_guard guard(quad.mutex);
-        if (!(helmetSettings == l.helmet))
-            logf("live: helmet %d, rim %d%%, corners %d%%, light %d%%, size %d deg, height %d deg, depth %d cm, visor %ls%s",
-                 l.helmet.on ? 1 : 0, l.helmet.rim, l.helmet.corners, l.helmet.light, l.helmet.size, l.helmet.height,
-                 l.helmet.depth,
-                 kVisorPositionNames[static_cast<int>(l.helmet.visor)], l.helmet.debugLight ? ", showing its light" : "");
-        helmetSettings = l.helmet;
-    }
-    if (experiment.views4) {
-        const FovCrop before = experiment.crop();
-        experiment.set_crop(l.crop);
-        if (before.top != l.crop.top || before.bottom != l.crop.bottom || before.outer != l.crop.outer ||
-            before.inner != l.crop.inner)
-            logf("live: FOV crop top %.0f%%, bottom %.0f%%, outer %.0f%%, inner %.0f%%%s", l.crop.top * 100,
-                 l.crop.bottom * 100, l.crop.outer * 100, l.crop.inner * 100,
-                 game->qvfr_dlss_held() ? " (DLSS is on: the views keep their launch sizes until the next launch)" : "");
-    }
-    experiment.focusFraction = l.focusFraction;
-    experiment.focusFractionY = l.focusFractionY;
-    experiment.feather = l.feather;
-    experiment.cornerRadius = l.cornerRadius;
-    experiment.focusShape = focus_shape_bits(l.shape);
-    std::memcpy(experiment.borderColor, l.borderColor, sizeof(experiment.borderColor));
-    experiment.border = l.border;
-    experiment.gaze = l.gaze;
-    experiment.fixedOffsetY = l.offset.fixed;
-    experiment.gazeOffsetY = l.offset.gaze;
-    experiment.gazeDeadzone = l.gazeDeadzone;
-    bool gazeAvailable;
-    {
-        std::lock_guard guard(gaze.mutex);
-        gazeAvailable = gaze.set != XR_NULL_HANDLE;
-    }
-    if (experiment.views4 && game_features().objectDetail)
-        game->qvfr_set_object_detail(l.objectDetail);  // the adapter logs a change
-    if (experiment.views4 && !experiment.views4EyeCamera)
-        game->qvfr_set_live(experiment.box_x(l.focusFraction),
-                        experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
-                        1.0 + l.feather + experiment.views4FocusCullMargin,
-                        l.gaze && experiment.composing());
-    logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
-         "gaze %d deg, gaze dead-zone %.1f deg",
-         l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
-         l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
-    logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
-    if (experiment.views4 && game_features().liveResolution)
-        live_resolution(l);
-    else if (experiment.views4)
-        logf("live: %ls resizes its views at the next launch (no live resolution yet)", game->info()->shortName);
-    if (l.gaze && !gazeAvailable && (experiment.quad || experiment.composing()))
-        log_line("live: gaze turned on, but eye tracking was off at launch; it starts at the next launch");
-    if (l.border && !experiment.borderAtLaunch && experiment.views4 && !experiment.composing())
-        log_line("live: debug_border without views4_compose starts at the next launch");
-}
-
-// Cheeky's runtime gets [cheeky]'s live settings and, in QVFR, the quad view roles (cheeky_settings.h).
-void cheeky_apply_settings(const CheekySettings& settings, bool gazeOn) {
-    if (!cheeky_running())
-        return;
-    CheekySettings c = settings;
-    c.fg = c.fg && game_features().frameGeneration;  // a game without it: off, whatever the ini says
-    cheeky_apply(cheeky_set_lines(c, experiment.views4, gazeOn, experiment.views4ComposeD3D11));
-}
-
-void cheeky_apply_ini() {
-    if (!live.ini.empty())
-        cheeky_apply_settings(read_cheeky_settings(live.ini.c_str()), read_live(live.ini.c_str()).gaze);
-}
-
-void menu_placement_changed(const MenuPlacement& placement);  // the launcher moved the settings menu's panel (below)
-
-void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);  // the overlay (below)
-
-void osd_placement_changed();
-
-constexpr int64_t kLiveCheckMs = 250;
-
-IniSnapshot read_snapshot(const wchar_t* ini) {
-    IniSnapshot s;
-    s.live = read_live(ini);
-    s.cheeky = read_cheeky_settings(ini);
-    s.menu = read_menu_values(ini);
-    s.menuPlacement = read_menu_placement(ini);
-    s.osd = read_osd_placement(ini);
-    s.hotkeys = read_hotkeys(ini);
-    s.restartKeys = restart_keys(ini, experiment.views4);
-    return s;
-}
-
-void ini_worker_loop() {
-    std::unique_lock lock(iniWorker.mutex);
-    for (;;) {
-        iniWorker.wake.wait_for(lock, std::chrono::milliseconds(kLiveCheckMs),
-                                [] { return iniWorker.poke || !iniWorker.writes.empty(); });
-        iniWorker.poke = false;
-        std::deque<QueuedIniWrite> writes;
-        writes.swap(iniWorker.writes);
-        const std::wstring ini = iniWorker.ini;
-        const FILETIME seen = iniWorker.written;
-        const uint64_t pass = iniWorker.requested;
-        // Numbered in order; a menu step that stood in for an older one skips that one's number.
-        const uint64_t through = writes.empty() ? iniWorker.writesDone : writes.back().number;
-        lock.unlock();
-        for (auto& w : writes)
-            w.write();
-        // After its own writes it reads the ini whatever its write time says (a write can leave it unchanged).
-        std::optional<IniSnapshot> snapshot;
-        WIN32_FILE_ATTRIBUTE_DATA attributes{};
-        const bool stamped = !ini.empty() && GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes);
-        const bool changed = stamped && (!writes.empty() || CompareFileTime(&attributes.ftLastWriteTime, &seen) != 0);
-        if (changed) {
-            snapshot = read_snapshot(ini.c_str());
-            snapshot->writesBefore = through;
-        }
-        lock.lock();
-        iniWorker.writesDone = through;
-        if (snapshot && ini == iniWorker.ini) {
-            iniWorker.ready = std::move(snapshot);
-            iniWorker.written = attributes.ftLastWriteTime;
-        }
-        iniWorker.done = std::max(iniWorker.done, pass);
-        iniWorker.settled.notify_all();
-    }
-}
-
-// Starts the worker (once) and points it at `ini`, read from `written` on (a new path drops what it read).
-// Under iniWorker.mutex.
-void ini_worker_watch(const std::wstring& ini, const FILETIME& written) {
-    if (!iniWorker.started) {
-        iniWorker.started = true;
-        std::thread(ini_worker_loop).detach();  // ends with the process (ExitProcess stops it before teardown)
-    }
-    if (ini != iniWorker.ini) {
-        iniWorker.ini = ini;
-        iniWorker.written = written;
-        iniWorker.ready.reset();
-    }
-}
-
-}  // namespace
-
-// Queues a write to the ini (or the launcher's) and wakes the worker; the live reload follows it. Returns
-// the write's number: snapshots read after it carry writesBefore >= it. A menu step queued right behind another
-// one not yet written replaces it: it writes every value the older one did (only the last in the queue, so a
-// write of another kind between them keeps its order).
-uint64_t ini_write_later(std::function<void()> write, IniWrite kind) {
-    std::lock_guard guard(iniWorker.mutex);
-    ini_worker_watch(live.ini, live.written);
-    const uint64_t number = ++iniWorker.writesQueued;
-    if (kind != IniWrite::Once && !iniWorker.writes.empty() && iniWorker.writes.back().kind == kind)
-        iniWorker.writes.back() = {number, kind, std::move(write)};
-    else
-        iniWorker.writes.push_back({number, kind, std::move(write)});
-    iniWorker.wake.notify_one();
-    return number;
-}
-
-// Waits until the writes queued so far are done and the ini has been read after them (tests; the
-// session's end, so no change is lost).
-void ini_worker_sync() {
-    std::unique_lock lock(iniWorker.mutex);
-    if (!iniWorker.started)
-        return;
-    const uint64_t want = ++iniWorker.requested;
-    iniWorker.poke = true;
-    iniWorker.wake.notify_one();
-    iniWorker.settled.wait(lock, [want] { return iniWorker.done >= want; });
-}
-
-// Applies the ini's live keys when the worker read a change. Only between display frames: with
-// two_loops, never between frame A and frame B. No file access here.
-void live_reload() {
-    if (live.ini.empty())
-        return;
-    {
-        std::lock_guard guard(iniWorker.mutex);
-        ini_worker_watch(live.ini, live.written);
-    }
-    {
-        std::lock_guard guard(loops.mutex);
-        if (loops.active && loops.pairedEnds % 2 != 0)
-            return;  // A ended, B not yet: apply after B
-    }
-    std::optional<IniSnapshot> s;
-    {
-        std::lock_guard guard(iniWorker.mutex);
-        s.swap(iniWorker.ready);
-    }
-    if (!s)
-        return;
-    live_apply(s->live);
-    cheeky_apply_settings(s->cheeky, s->live.gaze);
-    menu_values_changed(*s);
-    menu_placement_changed(s->menuPlacement);
-    osd_placement_changed(s->osd, s->cheeky);
-    hotkeys_changed(s->hotkeys);
-    if (s->restartKeys != live.restartKeys) {
-        logf("live: %ls-> %ls(applies at the next launch)", live.restartKeys.c_str(), s->restartKeys.c_str());
-        live.restartKeys = s->restartKeys;
-    }
-}
-
-namespace {
-
 constexpr int64_t kOptimizeWindowMs = 500;
-
-// ---- Hotkeys ---------------------------------------------------------------------------------
-// [hotkeys] (input/hotkeys.h), reloaded live: each action's keyboard combination, held while ACE has focus,
-// and its wheel or controller button, read by a thread of its own through DirectInput (input/pad_input.h)
-// whenever one is bound. The thread polls every kPadPollMs and publishes the actions held as bits.
-constexpr int kPadPollMs = 8, kPadRescanMs = 3000;
-
-bool pad_bound(const Hotkeys& h) {
-    for (const Hotkey& k : h)
-        if (k.pad.set())
-            return true;
-    return false;
-}
-
-void pad_watch_run() {
-    // DirectInput wants a top-level window of this process; a hidden one of the thread's own.
-    HWND window = CreateWindowExW(0, L"STATIC", L"Sim-QVFR input", WS_POPUP, 0, 0, 0, 0, nullptr, nullptr,
-                                  GetModuleHandleW(nullptr), nullptr);
-    PadInput pads;
-    if (!window || !pads.open(window)) {
-        log_line("hotkeys: DirectInput not available; wheel and controller buttons do nothing");
-        if (window)
-            DestroyWindow(window);
-        return;
-    }
-    {
-        std::wstring found;
-        for (const auto& [id, name] : pads.devices())
-            found += (found.empty() ? L"" : L", ") + name + L" (" + id + L")";
-        logf("hotkeys: game controllers: %ls", found.empty() ? L"none" : found.c_str());
-    }
-    int64_t nextRescan = qpc_now() + qpc_ms(kPadRescanMs);
-    std::unique_lock lock(padWatch.mutex);
-    while (!padWatch.stop) {
-        const Hotkeys bindings = padWatch.bindings;
-        lock.unlock();
-        const std::vector<PadHeld> held = pads.poll();
-        const auto devices = pads.devices();
-        uint32_t bits = 0;
-        bool missing = false;
-        for (int a = 0; a < kHotkeyActions; ++a) {
-            const PadControl& want = bindings[a].pad;
-            if (!want.set())
-                continue;
-            bool connected = false;
-            for (const PadHeld& h : held)
-                if (_wcsicmp(h.device.c_str(), want.device.c_str()) == 0 && h.control == want.control)
-                    bits |= 1u << a;
-            for (const auto& [id, name] : devices)
-                connected |= _wcsicmp(id.c_str(), want.device.c_str()) == 0;
-            missing |= !connected;
-        }
-        padWatch.held.store(bits, std::memory_order_relaxed);
-        if (missing && qpc_now() >= nextRescan) {  // a bound device plugged in since
-            pads.rescan();
-            nextRescan = qpc_now() + qpc_ms(kPadRescanMs);
-        }
-        lock.lock();
-        padWatch.wake.wait_for(lock, std::chrono::milliseconds(kPadPollMs), [] { return padWatch.stop; });
-    }
-    lock.unlock();
-    pads.close();
-    DestroyWindow(window);
-}
-
-// Starts the thread once a wheel or controller button is bound (from the frame thread, each frame).
-void pad_watch_ensure() {
-    if (!pad_bound(hotkeys))
-        return;
-    std::lock_guard guard(padWatch.mutex);
-    if (!padWatch.thread.joinable()) {
-        padWatch.stop = false;
-        padWatch.bindings = hotkeys;
-        padWatch.thread = std::thread(pad_watch_run);
-    }
-}
-
-}  // namespace
-
-void pad_watch_stop() {
-    std::thread thread;
-    {
-        std::lock_guard guard(padWatch.mutex);
-        padWatch.stop = true;
-        thread.swap(padWatch.thread);
-    }
-    padWatch.wake.notify_all();
-    if (thread.joinable())
-        thread.join();
-    padWatch.held.store(0);
-}
-
-void hotkeys_changed(const Hotkeys& h) {
-    if (h == hotkeys)
-        return;
-    hotkeys = h;
-    {
-        std::lock_guard guard(padWatch.mutex);
-        padWatch.bindings = h;
-    }
-    std::wstring line;
-    for (int a = 0; a < kHotkeyActions; ++a) {
-        const std::wstring key = key_text(h[a].key), pad = control_text(h[a].pad.control);
-        line += std::wstring(a ? L", " : L"") + hotkey_ini_key(static_cast<HotkeyAction>(a)) + L"=" + (key.empty() ? L"-" : key) +
-                (pad.empty() ? L"" : L" / " + pad);
-    }
-    logf("hotkeys: %ls", line.c_str());
-}
-
-namespace {
-
-bool game_focused();
-
-// Exactly `key`'s modifiers and its key held, while ACE has focus.
-bool key_held(const KeyCombo& key) {
-    if (!key.set() || !game_focused())
-        return false;
-    const auto down = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
-    return down(key.vk) && down(VK_CONTROL) == key.ctrl && down(VK_MENU) == key.alt && down(VK_SHIFT) == key.shift;
-}
-
-bool pad_held(HotkeyAction action) {
-    return (padWatch.held.load(std::memory_order_relaxed) >> static_cast<int>(action)) & 1;
-}
-
-bool hotkey_held(HotkeyAction action) { return key_held(hotkeys[static_cast<int>(action)].key) || pad_held(action); }
-
-// The settings menu's hint: how to select and change, and how to close.
-std::wstring menu_hint() {
-    const Hotkeys defaults = default_hotkeys();
-    bool defaultKeys = true, padKeys = false;
-    for (int a = static_cast<int>(HotkeyAction::MenuUp); a <= static_cast<int>(HotkeyAction::MenuRight); ++a) {
-        defaultKeys &= hotkeys[a].key == defaults[a].key;
-        padKeys |= hotkeys[a].pad.set();
-    }
-    const Hotkey& toggle = hotkeys[static_cast<int>(HotkeyAction::MenuToggle)];
-    std::wstring hint = defaultKeys ? L"Ctrl+Alt+arrows" : L"Your menu hotkeys";
-    hint += padKeys ? L", wheel buttons or right stick: select and change" : L", or right stick: select and change";
-    hint += toggle.key.set() || toggle.pad.set() ? L" · open/close hotkey or left stick click: close" : L" · left stick click: close";
-    return hint;
-}
-
-// The menu's hotkeys footer ([menu] hotkey_footer): the in-game actions' keys and wheel buttons, those that apply
-// (the visor with the helmet on, the CPU capture with cpu_profile, the frame capture with d3d11_capture_hotkey); empty
-// when none is bound.
-std::wstring hotkey_footer(bool helmetOn) {
-    struct Entry {
-        HotkeyAction action;
-        const wchar_t* name;
-        bool shown;
-    };
-    const Entry entries[] = {{HotkeyAction::Overlay, L"Overlay", true},
-                             {HotkeyAction::Visor, L"Visor", helmetOn},
-                             {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile},
-                             {HotkeyAction::FrameCapture, L"Frame capture", experiment.d3d11CaptureHotkey}};
-    std::wstring out;
-    for (const Entry& e : entries) {
-        const Hotkey& h = hotkeys[static_cast<int>(e.action)];
-        if (!e.shown || (!h.key.set() && !h.pad.set()))
-            continue;
-        std::wstring binding = key_text(h.key);
-        if (h.pad.set())
-            binding += (binding.empty() ? L"" : L" / ") + std::wstring(L"wheel ") + control_text(h.pad.control);
-        out += (out.empty() ? L"" : L"  \u00b7  ") + std::wstring(e.name) + L" " + binding;
-    }
-    return out;
-}
 
 constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
 
@@ -477,13 +68,13 @@ int64_t qpc_ms(int64_t ms) {
     return frequency * ms / 1000;
 }
 
-namespace {
-
 bool game_focused() {
     DWORD pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     return pid == GetCurrentProcessId();
 }
+
+namespace {
 
 double native_center_ppd();  // below
 
@@ -511,6 +102,8 @@ namespace {
 
 void menu_open(int64_t now);
 
+}  // namespace
+
 // Moved from the launcher (its Headset menu pane): the panel goes there and shows, so you can see it.
 void menu_placement_changed(const MenuPlacement& placement) {
     if (placement == live.menuPlacement)
@@ -521,6 +114,8 @@ void menu_placement_changed(const MenuPlacement& placement) {
     if (experiment.views4 || experiment.quad)
         menu_open(qpc_now());
 }
+
+namespace {
 
 // Profiles (profile/profiles.h) in the launcher's folder (SIM_QVFR_SETTINGS), else next to the ini the layer reads.
 std::wstring menu_profiles_ini() { return menu.settingsIni.empty() ? live.ini : menu.settingsIni; }
@@ -1027,6 +622,8 @@ void osd_place() {
     osd.layer.size = {pose.width, pose.height};
 }
 
+}  // namespace
+
 void osd_placement_changed() {
     osd_placement_changed(read_osd_placement(live.ini.c_str()), read_cheeky_settings(live.ini.c_str()));
 }
@@ -1048,6 +645,8 @@ void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& 
     osd.read = true;
     osd_place();
 }
+
+namespace {
 
 // The visor hotkey (Ctrl+Alt+V by default) steps the helmet's visor (closed, half, open, closed), written to the
 // ini the layer reloads from and to the launcher's, as the headset menu writes it.
@@ -1552,8 +1151,6 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
     return r;
 }
 
-namespace {
-
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     XrFrameEndInfo withMenu{};
     std::vector<const XrCompositionLayerBaseHeader*> menuLayers;
@@ -1649,8 +1246,6 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     }
     return r;
 }
-
-}  // namespace
 
 #define SIMQVFR_INTERCEPT(fn)                                              \
     if (std::strcmp(name, "xr" #fn) == 0) {                              \
