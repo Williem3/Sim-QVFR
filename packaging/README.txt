@@ -243,8 +243,9 @@ Pick the LMU tab, then Launch. Started from Steam, LMU runs without QVFR. Sim-QV
 1.4.2.0 (the Steam build of 23 October 2026); on any other build QVFR stays off and LMU runs as usual.
 Eye tracking, the resolution sliders, the focus size, the field of view crop, the helmet overlay, the
 headset menu and the performance overlay work in LMU, and menus and the HUD are drawn sharp in the
-focus area. NVIDIA multi-view rendering (above) is in the Resolution pane. Not in LMU yet: Foveated
-DLSS (LMU has no DLSS of its own).
+focus area. NVIDIA multi-view rendering (above) is in the Resolution pane. VectorXR works below
+Sim-QVFR in LMU (its frame generation and overlay were tested; turn it on in the OpenXR layers pane). Not
+in LMU yet: Foveated DLSS (LMU has no DLSS of its own).
 Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Advanced >
 Games > Run with anti-cheat starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
 launch. AT YOUR OWN RISK: Sim-QVFR hooks into LMU's engine and changes its code while it runs, and the

@@ -214,6 +214,8 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   each eye's pass also draws that eye's focus view, which saved about 2 ms of CPU and 2 ms of GPU time per
   frame in testing. It applies at the next launch. On other graphics cards the option is greyed out and
   every view is rendered on its own.
+- **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
+  the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).
 
 **Anti-cheat.** By default the launcher starts LMU without its anti-cheat (Easy Anti-Cheat), so you can
