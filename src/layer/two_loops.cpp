@@ -216,13 +216,47 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
 // lens mask's black corners in their own frame (ACE: composition run 2; ACC through OpenComposite: a dark rim
 // round the focus area, 2026-11-04). views4_mask=0 answers the hidden
 // mesh with one zero-area triangle: nothing is masked in any view (the lenses hide those pixels anyway).
+// views4_test_visible_mask=1 answers the visible mesh with the whole view, as runtimes that offer one (VDXR) do, to
+// reproduce their path on one that doesn't (SteamVR with the Pimax).
+namespace {
+std::atomic<bool> runtimeMaskLogged[3];  // per XrVisibilityMaskTypeKHR (1-3), the runtime's answer logged once
+XrResult test_visible_mask(XrVisibilityMaskKHR* mask) {
+    mask->vertexCountOutput = 4;
+    mask->indexCountOutput = 6;
+    if (mask->vertexCapacityInput == 0 && mask->indexCapacityInput == 0)
+        return XR_SUCCESS;  // the size query
+    if (mask->vertexCapacityInput < 4 || mask->indexCapacityInput < 6 || !mask->vertices || !mask->indices)
+        return XR_ERROR_SIZE_INSUFFICIENT;
+    // Tangents well past any FOV, counter-clockwise: the whole view is visible.
+    const XrVector2f corners[4] = {{-4.0f, -4.0f}, {4.0f, -4.0f}, {4.0f, 4.0f}, {-4.0f, 4.0f}};
+    const uint32_t indices[6] = {0, 1, 2, 0, 2, 3};
+    std::memcpy(mask->vertices, corners, sizeof(corners));
+    std::memcpy(mask->indices, indices, sizeof(indices));
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true))
+        log_line("views4: visible-area mesh replaced by the whole view (views4_test_visible_mask=1)");
+    return XR_SUCCESS;
+}
+}  // namespace
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask) {
     if (experiment.views4 && maskType == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR && mask &&
         mask->vertexCapacityInput > 0)
         game->visibility_mask_taken(viewIndex);  // the mesh itself, not the size query
-    if (!experiment.views4NoMask || maskType != XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR || !mask)
-        return next.GetVisibilityMaskKHR(session, type, viewIndex, maskType, mask);
+    if (experiment.views4TestVisibleMask && maskType == XR_VISIBILITY_MASK_TYPE_VISIBLE_TRIANGLE_MESH_KHR && mask)
+        return test_visible_mask(mask);
+    if (!experiment.views4NoMask || maskType != XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR || !mask) {
+        const XrResult r = next.GetVisibilityMaskKHR(session, type, viewIndex, maskType, mask);
+        // What the runtime offers, once per type (the size query already has the counts; a game builds its mesh from it).
+        const int t = static_cast<int>(maskType) - 1;
+        if (mask && t >= 0 && t < 3 && !runtimeMaskLogged[t].exchange(true))
+            logf("visibility mask from the runtime: %s, view %u: %u vertices, %u indices, result=%d",
+                 maskType == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR    ? "hidden triangles"
+                 : maskType == XR_VISIBILITY_MASK_TYPE_VISIBLE_TRIANGLE_MESH_KHR ? "visible triangles"
+                                                                                 : "line loop",
+                 viewIndex, mask->vertexCountOutput, mask->indexCountOutput, r);
+        return r;
+    }
     mask->vertexCountOutput = 3;
     mask->indexCountOutput = 3;
     if (mask->vertexCapacityInput == 0 && mask->indexCapacityInput == 0)
