@@ -41,12 +41,14 @@ def main(exe, start, end, limit):
     md.detail = True
     found = {}
     for o in sorted(cand):
-        for back in range(1, 8):  # the instruction starts 1-7 bytes before its displacement
+        # The instruction starts 1-8 bytes before its displacement. Try the longest prefix first and keep only a decode
+        # whose displacement field really sits at `o` (a start inside an instruction decodes as something else).
+        for back in range(8, 0, -1):
             s = o - back
             if s < 0:
                 continue
             ins = next(md.disasm(code[s:s + 16], base + tb + s), None)
-            if ins is None or ins.size < back + 4:
+            if ins is None or ins.size < back + 4 or getattr(ins, "disp_offset", back) != back:
                 continue
             for op in ins.operands:
                 if op.type == capstone.x86.X86_OP_MEM and op.mem.base == capstone.x86.X86_REG_RIP:
