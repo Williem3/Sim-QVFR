@@ -49,9 +49,16 @@ struct GameInfo {
     // (src/launcher/report.h). Null: none known.
     const wchar_t* crashReports = nullptr;
     // The game's anti-cheat processes (null-terminated; null: none): while one runs, or started the game, the layer only
-    // logs (anticheat_running). Sim-QVFR patches game code, so it never runs in a protected launch.
+    // logs (anticheat_running), unless the user chose to run Sim-QVFR with the anti-cheat (antiCheatStart).
     const wchar_t* const* antiCheat = nullptr;
+    // The anti-cheat's bootstrapper next to the exe, which starts the game protected (null: none). With [launcher]
+    // anticheat=1 the launcher starts the game through it and the layer runs as in any launch: Sim-QVFR patches game
+    // code and the anti-cheat sees that as it is, so the user takes the risk of being kicked or banned.
+    const wchar_t* antiCheatStart = nullptr;
 };
+
+// [launcher] anticheat=1 in the ini (the launcher's Games pane): the user runs Sim-QVFR with the game's anti-cheat.
+bool anticheat_chosen(const wchar_t* ini);
 
 // The games Sim-QVFR supports, in the launcher's order.
 const GameInfo* const* all_games(std::size_t& count);

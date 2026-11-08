@@ -67,6 +67,9 @@ struct Settings {
     Hotkeys hotkeys = default_hotkeys();  // [hotkeys] (input/hotkeys.h; the Hotkeys pane): live
     // [launcher] baseline_next: the next launch runs without QVFR (ACE's own two views, measured), once.
     bool baselineNext = false;
+    // [launcher] anticheat (Games pane, a game with GameInfo::antiCheatStart: LMU): start the game through its
+    // anti-cheat's bootstrapper and run Sim-QVFR there too, at the user's risk. Next launch.
+    bool antiCheat = false;
     // [launcher] update_check: ask GitHub for the newest release when the launcher starts (About pane). Off until the
     // user says otherwise: the first start asks once, and [launcher] update_asked keeps the answer from being asked again.
     bool updateCheck = false;

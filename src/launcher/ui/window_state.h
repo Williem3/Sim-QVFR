@@ -72,7 +72,7 @@ enum Ctl {
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
     // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
     // (option the same), the colour wheel, its brightness, and the game's own colour back.
-    kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset,
+    kGameShown, kColorGame, kColorWheel, kColorValue, kColorReset, kAntiCheat,
     // A setting's ⓘ: its help shows while the pointer is over it (option: its index in kHelp).
     kHelpIcon,
     // The action bar: the launched game's status (launch_watch.h; it opens Diagnostics or Report an issue) and

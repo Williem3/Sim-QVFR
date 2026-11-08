@@ -392,7 +392,11 @@ std::vector<Ctl> focus_order() {
         else if (layers_dirty())
             order.insert(order.end(), {kLayerRevert, kLayerApply});
         break;
-    case Pane::Games: order.insert(order.end(), {kColorValue, kColorReset}); break;
+    case Pane::Games:
+        order.insert(order.end(), {kColorValue, kColorReset});
+        if (games::launcher_game().antiCheatStart)
+            order.push_back(kAntiCheat);
+        break;
     case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
     case Pane::Report:
         order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});

@@ -31,7 +31,21 @@ GameAdapter& adapter_for(const GameInfo* game) {
     // A launch the game's anti-cheat protects gets nothing of ours, whatever the game's adapter: the layer only logs
     // (GameInfo::antiCheat). One game per process, so this is decided once.
     static std::wstring antiCheat;
-    static const bool guarded = anticheat_running(*game, antiCheat);
+    static const bool protectedLaunch = anticheat_running(*game, antiCheat);
+    // The user's choice to run with the anti-cheat ([launcher] anticheat=1, in this launch's ini copy): the launcher
+    // started the game through its bootstrapper, and Sim-QVFR runs as in any launch.
+    static const bool chosen = [] {
+        wchar_t ini[MAX_PATH] = {};
+        return GetEnvironmentVariableW(L"SIM_QVFR_INI", ini, MAX_PATH) != 0 && anticheat_chosen(ini);
+    }();
+    static const bool guarded = protectedLaunch && !(chosen && game->antiCheatStart);
+    if (protectedLaunch && !guarded) {
+        static const bool logged = (logf("game: %ls's anti-cheat is running (%ls) and [launcher] anticheat=1: Sim-QVFR "
+                                         "runs with it, as the user chose (the anti-cheat may kick or ban for it).",
+                                         game->name, antiCheat.c_str()),
+                                    true);
+        (void)logged;
+    }
     if (guarded) {
         static IdentityAdapter off(game, 30, false);
         static const bool logged = (logf("game: %ls's anti-cheat is running (%ls): Sim-QVFR stays off in this launch "

@@ -215,6 +215,21 @@ float games_pane(float x, float y, float w, bool draw) {
     h += section(x, y + h, w, L"Colour for " + std::wstring(game.name),
                  {wheel, slider_row(kColorValue, L"Brightness", L"", app.colorValue, L""), reset},
                  L"Drag in the wheel to pick a colour; it applies at once.", draw);
+    // Running with the game's anti-cheat (LMU's Easy Anti-Cheat): the user's choice and risk (games/game.h antiCheatStart).
+    const games::GameInfo& launching = games::launcher_game();
+    if (launching.antiCheatStart) {
+        h += t::kSpace6;
+        const std::wstring desc =
+            L"Starts " + std::wstring(launching.shortName) +
+            L" through its anti-cheat, as Steam does, with Sim-QVFR running. Sim-QVFR changes the game’s code and "
+            L"the anti-cheat may kick you or ban your account for it. Off starts the game without the anti-cheat "
+            L"(offline only).";
+        Row on;
+        on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
+        on.full = [desc](const Rect& r) { checkbox(kAntiCheat, r, app.s.antiCheat, L"Run with anti-cheat", desc, false); };
+        h += section(x, y + h, w, L"Anti-cheat for " + std::wstring(launching.name), {on},
+                     L"At your own risk.", draw, Applies::NextLaunch);
+    }
     return h;
 }
 
