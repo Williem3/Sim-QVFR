@@ -22,6 +22,23 @@ struct FocusBox {
     double rect[4] = {};     // the box in the eye's image: x0, y0, x1, y1 as fractions of width and height (y down)
 };
 
+// The box centre (cx, cy) moved the least so a box of `fractionX` x `fractionY` of the eye's tangent span stays inside
+// the eye (QVFR: the gaze, which can look past the box's reach). A box as wide as the eye is centred on it. False:
+// not a projection of the expected shape (cx, cy unchanged).
+inline bool clamp_focus_centre(const float (&eye)[16], double fractionX, double fractionY, double& cx, double& cy) {
+    if (!projection_shape(eye))
+        return false;
+    const auto clamp_axis = [](double t, double lo, double hi, double fraction) {
+        const double half = (hi - lo) * fraction / 2;
+        if (lo + half >= hi - half)
+            return (lo + hi) / 2;
+        return t < lo + half ? lo + half : t > hi - half ? hi - half : t;
+    };
+    cx = clamp_axis(cx, (-1 - eye[8]) / eye[0], (1 - eye[8]) / eye[0], fractionX);
+    cy = clamp_axis(cy, (-1 - eye[9]) / eye[5], (1 - eye[9]) / eye[5], fractionY);
+    return true;
+}
+
 // `out` = the focus projection for a box of `fractionX` x `fractionY` of the eye's tangent span, centred on tangents
 // (cx, cy); `box` says where it is. False (`out` = `eye`): not a projection of the expected shape.
 inline bool focus_projection(const float (&eye)[16], double fractionX, double fractionY, double cx, double cy, FocusBox& box,

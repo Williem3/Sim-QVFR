@@ -163,9 +163,11 @@ void load_experiment() {
             logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
         experiment.views4Compose = false;
     }
+    // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =
         experiment.views4 &&
-        GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.composing() ? 0 : 1, ini.c_str()) == 0;
+        GetPrivateProfileIntW(L"experiment", L"views4_mask",
+                              experiment.composing() && !game->qvfr_separate_views() ? 0 : 1, ini.c_str()) == 0;
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;

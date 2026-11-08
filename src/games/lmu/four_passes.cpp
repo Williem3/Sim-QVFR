@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -39,8 +40,17 @@ SetDeltaTimeFn originalSetDeltaTime = nullptr;
 MaskDrawFn originalMaskDraw = nullptr;
 bool installed = false;
 FourPassesRun cfg;           // the run's settings (four_passes.h)
+bool qvfrMode = false;       // QVFR: four passes every frame, composed (no samples)
 bool focusMode = false;      // passes 2-3 are focus views (else copies of the eyes)
-double focusFraction = 0.3;  // the focus box: share of the eye's tangent width and height
+
+// The focus box (QVFR: live, from the settings and the gaze; under liveMutex): its share of the eye's tangent width and
+// height (focusFractionY <= 0: as the width), and each eye's centre as tangents of its view (gazeValid false: the
+// eye's forward axis).
+std::mutex liveMutex;
+double focusFraction = 0.3;
+double focusFractionY = 0;
+float gazeTan[2][2] = {};
+bool gazeValid[2] = {};
 
 // The eye loop's pass count, switched per frame: two (the stock loop, full frame rate) except in the short windows
 // before each sample, where four. It's the immediate of the tail stub's last `cmp edi, n`, in our own stub memory
@@ -213,12 +223,23 @@ bool shapeLogged = false;
 bool swap_in_focus(int eye) {
     float eyeM[2][16], focusM[2][16];
     FocusBox box[2];
-    bool ok = true;
-    for (int k = 0; k < 2; ++k) {
-        std::memcpy(eyeM[k], slot_matrix(eye, k), sizeof(eyeM[k]));
-        // As ACC: a share of the eye's tangent span, centred on the eye's forward axis (gaze and offsets come later).
-        ok = focus_projection(eyeM[k], focusFraction, focusFraction, 0, 0, box[k], focusM[k]) && ok;
+    double fx, fy, cx = 0, cy = 0;
+    {
+        std::lock_guard guard(liveMutex);
+        fx = focusFraction;
+        fy = focusFractionY > 0 ? focusFractionY : focusFraction;
+        if (gazeValid[eye]) {
+            cx = gazeTan[eye][0];
+            cy = gazeTan[eye][1];
+        }
     }
+    for (int k = 0; k < 2; ++k)
+        std::memcpy(eyeM[k], slot_matrix(eye, k), sizeof(eyeM[k]));
+    // A share of the eye's tangent span: on the gaze, kept inside the eye (QVFR), else on the eye's forward axis (gates).
+    clamp_focus_centre(eyeM[0], fx, fy, cx, cy);
+    bool ok = true;
+    for (int k = 0; k < 2; ++k)
+        ok = focus_projection(eyeM[k], fx, fy, cx, cy, box[k], focusM[k]) && ok;
     if (!ok) {
         if (!shapeLogged) {
             shapeLogged = true;
@@ -286,6 +307,187 @@ void focus_after_pass(int p) {
     }
 }
 
+// ---- QVFR: the atlas ----
+// All four views of a frame in one texture for the layer's compositor: the eyes in the top row (eye e at x = e W), their
+// focus views below. Typeless: the game's images copy in, and the compositor reads it in the swapchain's format.
+ID3D11Texture2D* atlas = nullptr;
+unsigned viewW = 0, viewH = 0;  // every view's size (the eye targets')
+DXGI_FORMAT atlasFormat = DXGI_FORMAT_UNKNOWN;
+bool eyesInAtlas = false;   // this frame's eyes are in the top row while the focus views use their targets
+bool frameFocusOk = false;  // this frame's focus passes rendered with their focus projections
+bool atlasReady = false;    // this frame's four views are in the atlas, until the layer takes it
+unsigned long long composedFrames = 0, refusedFrames = 0;
+bool atlasRefusalLogged = false, atlasThreadLogged = false;
+
+DXGI_FORMAT typeless_of(DXGI_FORMAT f) {
+    switch (f) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+        return DXGI_FORMAT_R10G10B10A2_TYPELESS;
+    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+    case DXGI_FORMAT_R16G16B16A16_UNORM:
+        return DXGI_FORMAT_R16G16B16A16_TYPELESS;
+    default:
+        return f;
+    }
+}
+
+bool is_view(ID3D11Texture2D* t) {
+    if (!t)
+        return false;
+    D3D11_TEXTURE2D_DESC d;
+    t->GetDesc(&d);
+    return d.Width == viewW && d.Height == viewH && typeless_of(d.Format) == atlasFormat && d.SampleDesc.Count == 1;
+}
+
+// The atlas for views the size and format of `eyeTexture` (made again when they change).
+bool ensure_atlas(ID3D11Texture2D* eyeTexture) {
+    D3D11_TEXTURE2D_DESC desc;
+    eyeTexture->GetDesc(&desc);
+    const DXGI_FORMAT format = typeless_of(desc.Format);
+    if (atlas && viewW == desc.Width && viewH == desc.Height && atlasFormat == format)
+        return true;
+    if (atlas) {
+        atlas->Release();
+        atlas = nullptr;
+    }
+    viewW = viewH = 0;
+    if (desc.SampleDesc.Count != 1 || desc.Width > 8192 || desc.Height > 8192) {
+        simqvfr::logf("lmu qvfr: the eye target is %ux%u with %u samples: no atlas, not composed", desc.Width, desc.Height,
+                      desc.SampleDesc.Count);
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC a{};
+    a.Width = 2 * desc.Width;
+    a.Height = 2 * desc.Height;
+    a.MipLevels = 1;
+    a.ArraySize = 1;
+    a.Format = format;
+    a.SampleDesc = {1, 0};
+    a.Usage = D3D11_USAGE_DEFAULT;
+    a.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    ID3D11Device* device = nullptr;
+    eyeTexture->GetDevice(&device);
+    const HRESULT hr = device->CreateTexture2D(&a, nullptr, &atlas);
+    device->Release();
+    if (FAILED(hr)) {
+        atlas = nullptr;
+        simqvfr::logf("lmu qvfr: the atlas %ux%u (format %d) couldn't be made (0x%08lx): not composed", a.Width, a.Height,
+                      static_cast<int>(format), static_cast<unsigned long>(hr));
+        return false;
+    }
+    viewW = desc.Width;
+    viewH = desc.Height;
+    atlasFormat = format;
+    simqvfr::logf("lmu qvfr: atlas %ux%u, format %d (views %ux%u, the eye targets' format %d)", a.Width, a.Height,
+                  static_cast<int>(format), viewW, viewH, static_cast<int>(desc.Format));
+    return true;
+}
+
+// The view `src` into the atlas at (x, y), or (atlas_out) the atlas's view at (x, y) into `dst`: immediate context.
+void atlas_in(ID3D11Texture2D* src, unsigned x, unsigned y) {
+    ID3D11Device* device = nullptr;
+    atlas->GetDevice(&device);
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    const D3D11_BOX whole{0, 0, 0, viewW, viewH, 1};
+    context->CopySubresourceRegion(atlas, 0, x, y, 0, src, 0, &whole);
+    context->Release();
+    device->Release();
+}
+
+void atlas_out(ID3D11Texture2D* dst, unsigned x, unsigned y) {
+    ID3D11Device* device = nullptr;
+    atlas->GetDevice(&device);
+    ID3D11DeviceContext* context = nullptr;
+    device->GetImmediateContext(&context);
+    const D3D11_BOX box{x, y, 0, x + viewW, y + viewH, 1};
+    context->CopySubresourceRegion(dst, 0, 0, 0, 0, atlas, 0, &box);
+    context->Release();
+    device->Release();
+}
+
+// The frame's record for the layer (adapter.h Views4Frame: tangents left, right, up, down; the focus views off-centre,
+// unturned). Under liveMutex.
+simqvfr::Views4Frame latestRecord{};
+bool haveRecord = false;
+
+void store_record() {
+    simqvfr::Views4Frame f{};
+    for (int e = 0; e < 2; ++e) {
+        const FocusBox& b = boxes[e];
+        const float outer[4] = {b.eyeTan[0], b.eyeTan[1], b.eyeTan[3], b.eyeTan[2]};
+        const float focus[4] = {b.focusTan[0], b.focusTan[1], b.focusTan[3], b.focusTan[2]};
+        std::memcpy(f.outerTan[e], outer, sizeof(outer));
+        std::memcpy(f.focusTan[e], focus, sizeof(focus));
+        f.turn[e] = {0, 0, 0, 1};
+    }
+    std::lock_guard guard(liveMutex);
+    latestRecord = f;
+    haveRecord = true;
+}
+
+// QVFR, after pass p: the eyes go into the atlas's top row while the focus views render into their targets (pass 2 =
+// focus 0 in eye 0's, pass 3 = focus 1 in eye 1's), each focus view into the row below, then the eyes back for the
+// game's HUD and submit.
+void qvfr_after_pass(int p) {
+    if (p == 1) {
+        eyesInAtlas = frameFocusOk = false;
+        ID3D11Texture2D* e0 = eye_texture(0);
+        ID3D11Texture2D* e1 = eye_texture(1);
+        if (e0 && e1 && ensure_atlas(e0) && is_view(e1)) {
+            atlas_in(e0, 0, 0);
+            atlas_in(e1, viewW, 0);
+            eyesInAtlas = true;
+            frameFocusOk = swap_in_focus(0);
+        }
+        if (e0)
+            e0->Release();
+        if (e1)
+            e1->Release();
+    } else if (p == 2 && eyesInAtlas) {
+        ID3D11Texture2D* t = eye_texture(0);
+        if (frameFocusOk && is_view(t))
+            atlas_in(t, 0, viewH);
+        else
+            frameFocusOk = false;
+        if (t)
+            t->Release();
+        restore_projection(0);
+        if (frameFocusOk)
+            frameFocusOk = swap_in_focus(1);
+    } else if (p == 3 && eyesInAtlas) {
+        ID3D11Texture2D* t0 = eye_texture(0);
+        ID3D11Texture2D* t1 = eye_texture(1);
+        if (frameFocusOk && is_view(t1))
+            atlas_in(t1, viewW, viewH);
+        else
+            frameFocusOk = false;
+        restore_projection(1);
+        if (is_view(t0))
+            atlas_out(t0, 0, 0);
+        if (is_view(t1))
+            atlas_out(t1, viewW, 0);
+        if (t0)
+            t0->Release();
+        if (t1)
+            t1->Release();
+        eyesInAtlas = false;
+        atlasReady = frameFocusOk;
+        if (atlasReady)
+            store_record();
+    }
+}
+
 // ---- Copies ----
 
 void copy_aside(int p) {
@@ -305,6 +507,8 @@ void render_scene(void* arg, char laterEye) {
     pass = laterEye ? pass + 1 : 0;
     const int p = pass;
     ++passesThisFrame;
+    if (p == 0)
+        atlasReady = false;  // a new frame: its own four views, or none
     inLaterPass = p >= 2;
     originalRenderScene(arg, laterEye);
     inLaterPass = false;
@@ -312,7 +516,9 @@ void render_scene(void* arg, char laterEye) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
         eyeOfPass[p] = renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
                                 : -1;
-        if (focusMode && passTarget == 4)
+        if (qvfrMode)
+            qvfr_after_pass(p);
+        else if (focusMode && passTarget == 4)
             focus_after_pass(p);
         else if (armed)
             copy_aside(p);
@@ -496,7 +702,7 @@ void compare_focus() {
     }
 }
 
-const char* tag() { return focusMode ? "lmu focus" : "lmu copies"; }
+const char* tag() { return qvfrMode ? "lmu qvfr" : focusMode ? "lmu focus" : "lmu copies"; }
 
 }  // namespace
 
@@ -507,9 +713,10 @@ bool four_passes_start(const FourPassesRun& run) {
     cfg.count = std::clamp(cfg.count, 1, 16);
     cfg.every = (std::max)(cfg.every, 1);
     cfg.warmup = std::clamp(cfg.warmup, 1, 600);
-    focusMode = run.focus;
+    qvfrMode = run.qvfr;
+    focusMode = run.focus || run.qvfr;
     holdExposure = run.holdExposure;
-    focusFraction = std::clamp(run.fraction, 0.05, 1.0);
+    four_passes_set_box(run.fraction, run.fractionY);
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     if (!simqvfr::games::supported_build(kGame, simqvfr::sha256_file(exe))) {
@@ -602,11 +809,21 @@ bool four_passes_start(const FourPassesRun& run) {
     if (site[0] == 0xE9 && stub[23] == 0x83 && stub[24] == 0xff && stub[25] == 0x04) {
         countImmediate = stub + 25;
         passTarget = 4;
-        set_pass_count(2);
-    } else {
+        if (!qvfrMode)  // QVFR: four every frame
+            set_pass_count(2);
+    } else if (!qvfrMode) {
         simqvfr::logf("%s: the loop tail's stub isn't where expected: four passes every frame", tag());
     }
     installed = true;
+    if (qvfrMode) {
+        std::lock_guard guard(liveMutex);
+        simqvfr::logf("lmu qvfr: on: the eye loop runs four times every frame, passes 2-3 render focus views (a %.0f%% x "
+                      "%.0f%% box of each eye's tangent span, on the gaze) into the eye targets, set aside into the atlas the "
+                      "layer composes; post-effect frame time held in passes 2-3: %s; hidden-area mask off in them",
+                      focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100,
+                      holdExposure ? "yes" : "no");
+        return true;
+    }
     simqvfr::logf("%s: samples: %d, the first %d scene frames in, then every %d; four passes for %d frames before each "
                   "(else two, full frame rate)%s",
                   tag(), cfg.count, cfg.first, cfg.every, cfg.warmup,
@@ -615,7 +832,7 @@ bool four_passes_start(const FourPassesRun& run) {
         simqvfr::logf("lmu focus: on: the eye loop runs four times, passes 2-3 render focus views (a %.0f%% box of each "
                       "eye's tangent span, centred on its forward axis) into the eye targets, set aside before the game "
                       "submits; the eyes are shown as normal; frame time held: %s",
-                      focusFraction * 100, holdExposure ? "yes" : "no");
+                      cfg.fraction * 100, holdExposure ? "yes" : "no");
     else
         simqvfr::logf("lmu copies: on: the eye loop runs four times, passes 2-3 render eyes 0-1 again and are compared "
                       "with them; passes 2-3's post-effect frame time %s",
@@ -650,6 +867,22 @@ void four_passes_frame_end() {
     maskSkippedThisFrame = 0;
     const int held = heldThisFrame;
     heldThisFrame = 0;
+
+    if (qvfrMode) {
+        if (passes < 4)
+            atlasReady = false;  // no four views this frame (menus, loading): the layer submits the eyes as they are
+        if (eyesInAtlas) {
+            eyesInAtlas = false;
+            simqvfr::logf("lmu qvfr: frame %llu stopped after %d passes with the eyes set aside", frames, passes);
+        }
+        if (frames % 1800 == 0)
+            simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
+                          "unlike the views); last frame %d passes, frame time held in %d calls, mask skipped in %d; "
+                          "views %ux%u",
+                          frames, sceneFrames, fourPassFrames, composedFrames, refusedFrames, passes, held, maskSkipped,
+                          viewW, viewH);
+        return;
+    }
 
     // The sample: due once the scene has run `first + k * every` frames, after `warmup` four-pass frames.
     const unsigned long long dueAt = cfg.first + static_cast<unsigned long long>(comparisons) * cfg.every;
@@ -708,6 +941,68 @@ void four_passes_frame_end() {
                       "frame time held in %d calls, mask skipped in %d",
                       tag(), frames, sceneFrames, fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2],
                       eyeOfPass[3], held, maskSkipped);
+}
+
+void four_passes_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
+    std::lock_guard guard(liveMutex);
+    for (int e = 0; e < 2; ++e) {
+        gazeValid[e] = valid[e] && std::isfinite(tan[e][0]) && std::isfinite(tan[e][1]);
+        gazeTan[e][0] = tan[e][0];
+        gazeTan[e][1] = tan[e][1];
+    }
+}
+
+void four_passes_set_box(double fractionX, double fractionY) {
+    std::lock_guard guard(liveMutex);
+    focusFraction = std::clamp(fractionX, 0.05, 1.0);
+    focusFractionY = fractionY > 0 ? std::clamp(fractionY, 0.05, 1.0) : 0.0;
+}
+
+bool four_passes_record(simqvfr::Views4Frame& frame) {
+    std::lock_guard guard(liveMutex);
+    if (!haveRecord)
+        return false;
+    frame = latestRecord;
+    return true;
+}
+
+ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+    if (!qvfrMode || !atlasReady || !atlas)
+        return nullptr;
+    atlasReady = false;  // once per frame
+    if (!is_view(eyes[0]) || !is_view(eyes[1])) {
+        ++refusedFrames;
+        if (!atlasRefusalLogged) {
+            atlasRefusalLogged = true;
+            D3D11_TEXTURE2D_DESC d{};
+            if (eyes[0])
+                eyes[0]->GetDesc(&d);
+            simqvfr::logf("lmu qvfr: the game's eye image is %ux%u format %d, the views %ux%u format %d: not composed "
+                          "(the headset shows the eyes)",
+                          d.Width, d.Height, static_cast<int>(d.Format), viewW, viewH, static_cast<int>(atlasFormat));
+        }
+        return nullptr;
+    }
+    if (GetCurrentThreadId() != renderThread && !atlasThreadLogged) {
+        atlasThreadLogged = true;
+        simqvfr::log_line("lmu qvfr: xrEndFrame isn't on the thread that rendered the views (the atlas copies race)");
+    }
+    // The eyes again, as the game submitted them: with what it drew after its eye loop (the HUD).
+    atlas_in(eyes[0], 0, 0);
+    atlas_in(eyes[1], viewW, 0);
+    for (int e = 0; e < 2; ++e) {
+        const float outer[4] = {0.5f * e, 0.0f, 0.5f, 0.5f}, focus[4] = {0.5f * e, 0.5f, 0.5f, 0.5f};
+        std::memcpy(uv[e], outer, sizeof(outer));
+        std::memcpy(uv[e + 2], focus, sizeof(focus));
+    }
+    if (composedFrames++ == 0)
+        simqvfr::logf("lmu qvfr: frame %llu: the first four views handed to the compositor", frames);
+    return atlas;
+}
+
+void four_passes_view_size(int (&size)[2]) {
+    size[0] = static_cast<int>(viewW);
+    size[1] = static_cast<int>(viewH);
 }
 
 }  // namespace lmu

@@ -48,21 +48,27 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     const bool columns = experiment.views4 && game->qvfr_eye_columns();  // eye columns: views4_rect_eye_columns
     // One view size (qvfr_one_view_size): every view the larger of the outer and focus sizes, the column two high.
     const bool oneSize = columns && game->qvfr_one_view_size();
+    // Separate views (qvfr_separate_views, LMU): every view an image of its own at one size, each eye offered one view.
+    const bool separate = experiment.views4 && game->qvfr_separate_views();
     const double viewWidth = std::max(layout.outer_width(), layout.focus);
     const double viewHeight = std::max(layout.outer_height(), layout.focusHeight);
-    const double widthScale = experiment.views4 ? (oneSize ? viewWidth : columns ? layout.column_eye_width() : layout.eye_width())
+    const double widthScale = experiment.views4 ? (separate || oneSize ? viewWidth
+                                                   : columns ? layout.column_eye_width() : layout.eye_width())
                                                 : experiment.eyeScale;
     const double heightScale = experiment.views4
-                                   ? (oneSize ? 2 * viewHeight : columns ? layout.column_eye_height() : layout.eye_height())
+                                   ? (separate ? viewHeight : oneSize ? 2 * viewHeight
+                                                            : columns ? layout.column_eye_height() : layout.eye_height())
                                    : experiment.eyeScale;
-    if (oneSize && stereo && (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight))
+    if ((oneSize || separate) && stereo && (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight))
         logf("views4: the game draws every view at one size: %.2f x %.2f of the native eye (outer asked %.2f x %.2f, "
-             "focus %.2f x %.2f)", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(), layout.focus,
-             layout.focusHeight);
+             "focus %.2f x %.2f)%s", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(), layout.focus,
+             layout.focusHeight, separate ? ", each view an image of its own" : "");
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
-            // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum.
-            const uint32_t maxW = views[i].maxImageRectWidth ? std::max(64u, views[i].maxImageRectWidth / 2) : UINT32_MAX;
+            // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum (a game with
+            // separate views submits one view per eye).
+            const uint32_t maxWidth = views[i].maxImageRectWidth / (separate ? 1 : 2);
+            const uint32_t maxW = views[i].maxImageRectWidth ? std::max(64u, maxWidth) : UINT32_MAX;
             const uint32_t maxH = views[i].maxImageRectHeight ? std::max(64u, views[i].maxImageRectHeight) : UINT32_MAX;
             const auto wanted = static_cast<uint32_t>(views[i].recommendedImageRectWidth * widthScale);
             if (experiment.views4 && wanted > maxW)

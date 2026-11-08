@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include "../../log.h"
 #include "../identity_adapter.h"
 #include "four_passes.h"
 #include "game.h"
@@ -10,20 +11,76 @@
 namespace lmu {
 namespace {
 
-// Identity only: the layer logs, QVFR doesn't start. Its experiments run only when their [experiment] key asks, and
-// never in a launch the anti-cheat protects (adapter_for hands out the plain identity adapter there): the view probe
-// (log only) and the copies gate (four passes, docs/recon-lmu.md).
+// QVFR in LMU is in development: on only with [experiment] lmu_qvfr=1 in the launch's ini (SIM_QVFR_INI, which the
+// launcher sets) and mode=views4. Otherwise identity only, the layer logging, with the gates and probes below.
+bool qvfr_wanted() {
+    static const bool wanted = [] {
+        wchar_t ini[MAX_PATH] = {};
+        const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", ini, MAX_PATH);
+        return n > 0 && n < MAX_PATH && GetPrivateProfileIntW(L"experiment", L"lmu_qvfr", 0, ini) != 0;
+    }();
+    return wanted;
+}
+
+// Identity only unless lmu_qvfr=1: the layer logs, QVFR doesn't start. Its experiments run only when their
+// [experiment] key asks, and never in a launch the anti-cheat protects (adapter_for hands out the plain identity
+// adapter there): the view probe (log only), the copies and focus gates (four passes, docs/recon-lmu.md), and QVFR.
 class LmuAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     LmuAdapter() : IdentityAdapter(&kGame) {}
+
+    // ---- QVFR (lmu_qvfr=1): the eye loop four times, the focus views composed from an atlas by the D3D11 compositor ----
+    bool has_qvfr() const override { return analysis() && qvfr_wanted(); }
+    bool qvfr_composable() const override { return false; }     // not by the D3D12 compositor:
+    bool qvfr_compose_d3d11() const override { return true; }   // LMU is D3D11
+    bool qvfr_separate_views() const override { return true; }  // every view an image of its own, one size
+    bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
+        if (!has_qvfr())
+            return false;
+        FourPassesRun run;
+        run.qvfr = true;
+        run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
+        run.fractionY = s.focusFractionY;
+        run.holdExposure = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, s.ini) != 0;
+        qvfr_ = four_passes_start(run);
+        return qvfr_;
+    }
+    void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override {
+        if (qvfr_)
+            four_passes_set_gaze(tan, valid);
+    }
+    void qvfr_set_live(double focus, double focusY, double, bool) override {
+        if (qvfr_)
+            four_passes_set_box(focus, focusY);
+    }
+    void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
+        four_passes_view_size(render);
+        output[0] = render[0];
+        output[1] = render[1];
+    }
+    bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
+    bool qvfr_latest_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
+    ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) override {
+        return qvfr_ ? four_passes_atlas(eyes, uv) : nullptr;
+    }
+    void qvfr_frame_end() override {
+        if (qvfr_)
+            four_passes_frame_end();
+    }
+
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
         IdentityAdapter::instance_created(ini, mode);
         if (!analysis())
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
-        // lmu_focus=1: the focus gate (focus views); lmu_copies=1: the copies gate. Both run the eye loop four times.
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
         const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
+        if (has_qvfr()) {
+            if (focus || copies)
+                simqvfr::log_line("lmu: lmu_qvfr=1: the copies and focus gates don't run (lmu_copies, lmu_focus ignored)");
+            return;
+        }
+        // lmu_focus=1: the focus gate (focus views); lmu_copies=1: the copies gate. Both run the eye loop four times.
         FourPassesRun run;
         run.focus = focus;
         run.holdExposure = GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0;
@@ -33,18 +90,19 @@ public:
         run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, ini));
         run.warmup = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_warmup", 60, ini));
         run.exitWhenDone = GetPrivateProfileIntW(L"experiment", L"exit_when_done", 0, ini) != 0;
-        copies_ = (focus || copies) && four_passes_start(run);
+        gates_ = (focus || copies) && four_passes_start(run);
     }
     void frame_end() override {
         if (viewProbe_)
             view_probe_frame_end();
-        if (copies_)
+        if (gates_)
             four_passes_frame_end();
     }
 
 private:
     bool viewProbe_ = false;
-    bool copies_ = false;
+    bool gates_ = false;
+    bool qvfr_ = false;
 };
 
 }  // namespace

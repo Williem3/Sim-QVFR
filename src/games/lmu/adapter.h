@@ -1,4 +1,5 @@
-// Le Mans Ultimate's adapter (../adapter.h): identity only so far, with log-only probes (docs/recon-lmu.md).
+// Le Mans Ultimate's adapter (../adapter.h): identity only with its probes and gates, or QVFR in development
+// ([experiment] lmu_qvfr=1; four_passes.h).
 #pragma once
 
 #include "../adapter.h"

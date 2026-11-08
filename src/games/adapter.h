@@ -11,6 +11,7 @@
 #include "game.h"
 
 struct ID3D11Device;
+struct ID3D11Texture2D;
 
 namespace simqvfr {
 
@@ -65,6 +66,19 @@ public:
     // The game draws all four views at one size (instanced layers in one viewport): each eye column is one view wide
     // and two high, a view being the larger of the outer and focus sizes asked for (the layer offers that).
     virtual bool qvfr_one_view_size() const { return false; }
+    // The game renders every view as an image of its own and submits each eye's in a swapchain of its own (LMU: the eye
+    // loop runs four times through targets of one size): the layer offers that one view size as each eye's (the larger of
+    // the outer and focus sizes asked for) and composes from the adapter's atlas (qvfr_views_atlas).
+    virtual bool qvfr_separate_views() const { return false; }
+    // With qvfr_separate_views: the four views of the frame being submitted in one texture, with the game's two submitted
+    // eye images (`eyes`, as the game left them after its eye loop) copied into it, and each view's region in it
+    // (u0, v0, du, dv; view e the outer view of eye e, e + 2 its focus view). Called in xrEndFrame on the game's render
+    // thread (its immediate context). Null: nothing to compose this frame (the eyes are submitted as they are).
+    virtual ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+        (void)eyes;
+        (void)uv;
+        return nullptr;
+    }
     // [experiment] hang_watch_s when the ini doesn't set it (probe/hang_watch.h): the longest the game goes
     // without a frame on its own, when loading, plus a margin.
     virtual unsigned hang_watch_s() const { return 30; }

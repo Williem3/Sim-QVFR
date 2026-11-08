@@ -84,11 +84,34 @@ int main() {
     project(focus, 0.2, -0.1, x, y);
     check(near(x, 0) && near(y, 0), "its centre is the focus view's centre");
 
+    // The gaze centre kept so the box stays inside the eye (QVFR).
+    double cx = 0.2, cy = -0.1;
+    check(lmu::clamp_focus_centre(eye, 0.3, 0.3, cx, cy) && near(cx, 0.2) && near(cy, -0.1),
+          "a gaze well inside the eye moves nothing");
+    cx = 5;
+    cy = -5;
+    check(lmu::clamp_focus_centre(eye, 0.3, 0.3, cx, cy) && near(cx, r - hw) && near(cy, d + hh),
+          "a gaze past the right-bottom edge puts the box against it");
+    lmu::focus_projection(eye, 0.3, 0.3, cx, cy, box, focus);
+    check(near(box.focusTan[1], r) && near(box.focusTan[2], d) && near(box.rect[2], 1) && near(box.rect[3], 1),
+          "that box ends at the eye's own edges");
+    cx = -5;
+    cy = 5;
+    check(lmu::clamp_focus_centre(eye, 0.3, 0.3, cx, cy) && near(cx, l + hw) && near(cy, u - hh),
+          "a gaze past the left-top edge puts the box against it");
+    cx = 0.7;
+    cy = 0.4;
+    check(lmu::clamp_focus_centre(eye, 1.0, 1.0, cx, cy) && near(cx, (l + r) / 2) && near(cy, (u + d) / 2),
+          "a box as large as the eye is centred on it");
+
     float skewed[16];
     for (int i = 0; i < 16; ++i)
         skewed[i] = eye[i];
     skewed[1] = 0.1f;
     check(!lmu::focus_projection(skewed, 0.3, 0.3, 0, 0, box, focus) && !box.valid, "a matrix of another shape is refused");
+    cx = 1;
+    cy = 1;
+    check(!lmu::clamp_focus_centre(skewed, 0.3, 0.3, cx, cy) && cx == 1 && cy == 1, "and its centre is left alone");
 
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);
     return failures ? 1 : 0;

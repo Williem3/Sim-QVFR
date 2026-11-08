@@ -259,6 +259,19 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     if (!v4d3d11_resources(session, it->second.format))
         return false;
     ID3D11Texture2D* views = it->second.images[it->second.acquired];
+    // Separate views (qvfr_separate_views, LMU): each eye's image holds only its outer view; the adapter's atlas holds all
+    // four, the submitted eyes copied in, with each view's region.
+    const bool separate = game->qvfr_separate_views();
+    float atlasUv[4][4] = {};
+    if (separate) {
+        const auto right = v4d3d11.chains.find(proj->views[1].subImage.swapchain);
+        if (right == v4d3d11.chains.end() || right->second.acquired >= right->second.images.size())
+            return fallback("the game's right eye image is unknown");
+        ID3D11Texture2D* const eyeImages[2] = {views, right->second.images[right->second.acquired]};
+        views = game->qvfr_views_atlas(eyeImages, atlasUv);
+        if (!views)
+            return fallback("no four views this frame");
+    }
     D3D11_TEXTURE2D_DESC desc;
     views->GetDesc(&desc);
     const float texW = static_cast<float>(desc.Width), texH = static_cast<float>(desc.Height);
@@ -270,6 +283,10 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     const XrOffset2Di origin = proj->views[0].subImage.imageRect.offset;
     const Views4Layout layout = views4_with_live(experiment.views4Layout, frame.live, frame.width, frame.height);
     const auto source = [&](int view, float (&uv)[4]) {
+        if (separate) {
+            std::memcpy(uv, atlasUv[view], sizeof(uv));
+            return;
+        }
         views4_source(layout, view, true, 2 * eye.width, eye.height, origin, static_cast<int>(desc.Width),
                       static_cast<int>(desc.Height), uv);
     };
@@ -366,6 +383,18 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
                 continue;
             }
+        }
+        // Separate views (qvfr_separate_views, LMU): each eye an image of its own, whole; composed from the adapter's atlas,
+        // or (no four views this frame: menus, loading) submitted as it is. None of the shared-target rects below apply.
+        if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_separate_views()) {
+            if (v4d3d11_compose(session, proj, copy)) {
+                projections.push_back(*proj);
+                projections.back().views = copy.data();
+                layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
+                std::lock_guard guard(quad.mutex);
+                views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
+            }
+            continue;
         }
         Views4Frame latest{};
         game->qvfr_latest_frame(latest);  // the rendered sizes (live resolution)
