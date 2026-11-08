@@ -140,6 +140,25 @@ inline constexpr std::uint8_t kFoliageRightViewAnchor[7] = {0x48, 0x63, 0x46, 0x
 inline constexpr std::uintptr_t kFoliageRightViewRead = 0x2a43737;
 inline constexpr std::uint8_t kFoliageRightViewReadAnchor[5] = {0x48, 0x8b, 0x4c, 0xc1, 0xf8};
 
+// Instanced stereo's viewport width per pair: FViewInfo fields, the renderer-wide reads, the eye padding. [Instanced width per pair]
+inline constexpr std::ptrdiff_t kViewRect = 0x15e0;                  // FViewInfo::ViewRect (min x, min y, max x, max y)
+inline constexpr std::ptrdiff_t kViewInstancedStereoWidth = 0x5910;  // FViewInfo::InstancedStereoWidth
+inline constexpr std::ptrdiff_t kViewInfoSize = 0x5920;              // FSceneRenderer::Views' stride
+struct WidthRead {
+    std::uintptr_t rva;
+    std::uint8_t size;      // the anchor's: `mov eax, [renderer + 0x3e0]`
+    std::uint8_t anchor[7];
+    std::uint8_t viewSize;  // `mov eax, [view + 0x5910]`: written over the anchor, or through a stub when longer
+    std::uint8_t view[7];
+};
+inline constexpr WidthRead kInstancedWidthReads[] = {
+    {0x1c0f91f, 6, {0x8b, 0x86, 0xe0, 0x03, 0x00, 0x00}, 6, {0x8b, 0x87, 0x10, 0x59, 0x00, 0x00}},              // rdi
+    {0x1c845c8, 6, {0x8b, 0x80, 0xe0, 0x03, 0x00, 0x00}, 7, {0x41, 0x8b, 0x86, 0x10, 0x59, 0x00, 0x00}},        // r14
+    {0x1cc2dc7, 7, {0x41, 0x8b, 0x85, 0xe0, 0x03, 0x00, 0x00}, 7, {0x41, 0x8b, 0x86, 0x10, 0x59, 0x00, 0x00}},  // r14
+};
+inline constexpr std::uintptr_t kEyePaddingViews = 0x1c11e3c;
+inline constexpr std::uint8_t kEyePaddingViewsAnchor[7] = {0x48, 0x8b, 0x50, 0x08, 0x48, 0x8b, 0x08};
+
 // Foliage LOD: the focus views take the left eye's projection, on the CPU and in the shader. [Foliage LOD]
 inline constexpr std::uintptr_t kFoliageLodProjection[4] = {0x2a446fb, 0x2a44791, 0x2a44f7d, 0x2a45007};
 inline constexpr std::uint8_t kFoliageLodProjectionAnchor[7] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00};

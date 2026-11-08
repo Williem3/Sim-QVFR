@@ -40,19 +40,79 @@ int main() {
               ls.y == 1500 && ls.width == 4000 && ls.height == 1500 && rs.x == 4000 && rs.y == 1500,
           "eye columns: outer views on top, focus views below, each in its eye's half");
 
-    // Instanced stereo draws both eyes in one viewport from x = 0 to the right eye's edge, halved: the right eye
-    // must start where the left one ends. OpenComposite copies each eye's half: each eye's views stay in it.
+    // Instanced stereo draws a pair in one viewport from x = 0 to the right view's edge, halved: the right view must
+    // start where the left one ends. Each pair has its own width (the instanced stereo width per pair).
     const simqvfr::Views4Layout gate = simqvfr::views4_layout(0.6, 0.4);  // acc-gate.ini
     const int width = 4844, height = 3376;
     const PassRect gl = pass_rect(gate, kPassLeft, width, height), gr = pass_rect(gate, kPassRight, width, height),
                    gls = pass_rect(gate, kPassLeftSide, width, height), grs = pass_rect(gate, kPassRightSide, width, height);
     check(gl.x == 0 && gr.x == gl.width && gr.width == gl.width && gl.width == width / 2,
-          "instanced stereo: the eyes side by side from x = 0, meeting in the middle");
-    check(gls.x == 0 && grs.x == gls.width && gls.width == width / 2 && grs.width == gls.width && gls.y == grs.y &&
-              gls.y >= gl.height && gls.y + gls.height <= height,
-          "instanced stereo, second pair: the focus views side by side from x = 0, below the eyes");
+          "instanced stereo: the eyes (the wider pair) side by side from x = 0, meeting in the middle");
+    check(gls.x == 0 && grs.x == gls.width && gls.width == (width / 2) * 2 / 3 && grs.width == gls.width &&
+              gls.y == grs.y && gls.y >= gl.height && gls.y + gls.height <= height,
+          "instanced stereo, second pair: the focus views side by side from x = 0 at their own width, below the eyes");
     check(gate.column_eye_width() == 0.6 && gate.column_eye_height() == 1.0 && gl.height == 2025 && gls.height == 1351,
           "gate layout: eye 60% wide, outer 60% over focus 40% high");
+    {
+        // acc_shared_width=1: every view the outer view's width, as before the width per pair.
+        simqvfr::Views4Layout shared = gate;
+        shared.sharedColumnWidth = true;
+        const PassRect sls = pass_rect(shared, kPassLeftSide, width, height), srs = pass_rect(shared, kPassRightSide, width, height);
+        check(shared.column_eye_width() == 0.6 && sls.width == width / 2 && srs.x == width / 2 && srs.width == width / 2,
+              "shared width: the focus views as wide as the outer views");
+    }
+    {
+        // A tester's run (2026-11-07, Quest 3 at 3656 x 3448): periphery 25%, focus density 300% over a 60% x 45% box.
+        // The focus views are 1.8 x 1.35 of the native eye; with one shared width they were 914 px wide (42% density
+        // across). With a width per pair the column is the focus views' width and the outer views take their own.
+        const simqvfr::Views4Layout tester = simqvfr::views4_layout(0.25, 1.8, 1.35);
+        const int nativeW = 3656, nativeH = 3448;
+        const int eyeW = static_cast<int>(nativeW * tester.column_eye_width()),
+                  eyeH = static_cast<int>(nativeH * tester.column_eye_height());
+        const PassRect o0 = pass_rect(tester, kPassLeft, 2 * eyeW, eyeH), o1 = pass_rect(tester, kPassRight, 2 * eyeW, eyeH),
+                       f0 = pass_rect(tester, kPassLeftSide, 2 * eyeW, eyeH),
+                       f1 = pass_rect(tester, kPassRightSide, 2 * eyeW, eyeH);
+        check(eyeW == 6580 && eyeH == 5516, "the offered eye: the focus views' width, outer over focus height");
+        check(o0.x == 0 && o0.width == 913 && o1.x == 913 && o1.width == 913 && o0.height == 861,
+              "the outer views at their own 25% (913 px), side by side from x = 0");
+        check(f0.x == 0 && f0.width == 6580 && f1.x == 6580 && f1.y == 861 && f0.height == eyeH - 861,
+              "the focus views at their own width, filling the column");
+        const double densityAcross = f0.width / (0.6 * nativeW);
+        check(std::fabs(densityAcross - 3.0) < 0.01, "the focus views' density across is the 300% asked for, not 42%");
+        // Each pair's instanced viewport from x = 0 to its right view's edge, with its own padding offset, puts each
+        // view exactly on its rect: at UE's 66.7% screen percentage, the right views' left edges rounded up to 4.
+        const auto scaled = [](const PassRect& p, int (&r)[4]) {
+            const int w = static_cast<int>(std::ceil(p.width * 2.0 / 3)), h = static_cast<int>(std::ceil(p.height * 2.0 / 3));
+            const int x = (static_cast<int>(std::ceil(p.x * 2.0 / 3)) + 3) / 4 * 4, y = (static_cast<int>(std::ceil(p.y * 2.0 / 3)) + 3) / 4 * 4;
+            r[0] = x;
+            r[1] = y;
+            r[2] = x + w;
+            r[3] = y + h;
+        };
+        int fr[4][4];
+        scaled(o0, fr[0]);
+        scaled(o1, fr[1]);
+        scaled(f0, fr[2]);
+        scaled(f1, fr[3]);
+        bool onRects = true;
+        double worstShared = 0;
+        for (int pair = 0; pair < 2; ++pair) {
+            const int(&left)[4] = fr[2 * pair];
+            const int(&right)[4] = fr[2 * pair + 1];
+            const double own = right[2], p = eye_padding_offset(left, right);
+            for (int side = 0; side < 2; ++side) {
+                double x0, x1;
+                instanced_span(own, p, side == 1, x0, x1);
+                const int(&rect)[4] = side ? right : left;
+                onRects &= std::fabs(x0 - rect[0]) < 0.01 && std::fabs(x1 - rect[2]) < 0.01;
+                // UE's own: one width for the family (its widest right edge) and the eyes' padding offset.
+                instanced_span(fr[3][2] > fr[1][2] ? fr[3][2] : fr[1][2], eye_padding_offset(fr[0], fr[1]), side == 1, x0, x1);
+                worstShared = std::max(worstShared, std::fabs(x1 - rect[2]));
+            }
+        }
+        check(onRects, "each pair's instanced viewport and padding offset put its views on their rects");
+        check(worstShared > 100, "with UE's one width for the family the outer views would land far off theirs");
+    }
 
     // The layer submits eye e as OpenComposite's half (offset e x W/2) moved and cut to view e: the view UE drew.
     bool same = true;
@@ -180,34 +240,51 @@ int main() {
     {
         // Live resolution in eye columns: launch periphery 0.5, focus 0.3 x 0.3, no crop: the target two 0.5 wide,
         // 0.8 high (2000 x 1600 for a 2000 x 2000 native eye); the launch eyes 1000 x 1000, the focus views
-        // 1000 x 600 under them.
+        // 600 x 600 under them.
         const simqvfr::Views4Layout launch = simqvfr::views4_layout(0.5, 0.3, 0.3);
         constexpr int W = 2000, H = 1600;
         const auto rect = [&](const simqvfr::Views4Layout& lay, int pass) { return pass_rect(lay, pass, W, H); };
-        const simqvfr::Views4Layout atLaunch = simqvfr::views4_live_eye_columns(launch, 0.5, 0.3);
+        const simqvfr::Views4Layout atLaunch = simqvfr::views4_live_eye_columns(launch, 0.5, 0.3, 0.3);
         bool unchanged = atLaunch.live;
         for (int pass = kPassLeft; pass <= kPassRightSide; ++pass) {
             const PassRect a = rect(launch, pass), b = rect(atLaunch, pass);
             unchanged &= a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
         }
-        check(unchanged, "live layout at the launch sizes: the launch rects");
-        // A lower periphery: every view narrower (one width: instanced stereo), the outer rows lower, the focus rows
-        // as tall as before, right under them; each pair side by side from x = 0.
-        const simqvfr::Views4Layout low = simqvfr::views4_live_eye_columns(launch, 0.25, 0.3);
+        check(unchanged && rect(launch, kPassLeftSide).width == 600 && rect(launch, kPassRightSide).x == 600,
+              "live layout at the launch sizes: the launch rects (the focus views 600 wide)");
+        // A lower periphery: the outer views narrower and lower, the focus views as they were, right under them;
+        // each pair side by side from x = 0.
+        const simqvfr::Views4Layout low = simqvfr::views4_live_eye_columns(launch, 0.25, 0.3, 0.3);
         const PassRect lo = rect(low, kPassLeft), ro = rect(low, kPassRight), lf = rect(low, kPassLeftSide),
                        rf = rect(low, kPassRightSide);
         check(lo.x == 0 && lo.width == 500 && lo.height == 500 && ro.x == 500 && ro.width == 500 && lf.x == 0 &&
-                  lf.y == 500 && lf.width == 500 && lf.height == 600 && rf.x == 500 && rf.y == 500,
-              "live periphery 25%: every view 500 wide, eyes 500 high, the focus views 600 high under them");
+                  lf.y == 500 && lf.width == 600 && lf.height == 600 && rf.x == 600 && rf.y == 500,
+              "live periphery 25%: eyes 500 x 500, the focus views keep their 600 x 600 under them");
+        // The focus density live on its own: wider focus views up to the column, the periphery untouched.
+        const simqvfr::Views4Fit denser = simqvfr::views4_fit_eye_columns(launch, 0.25, 0.4, 0.4);
+        check(!denser.focusCapped && std::fabs(denser.focus - 0.4) < 1e-9 && std::fabs(denser.outer - 0.25) < 1e-9,
+              "live focus density up: the focus views wider, the periphery as asked");
+        const simqvfr::Views4Fit widest = simqvfr::views4_fit_eye_columns(launch, 0.5, 0.8, 0.3);
+        check(widest.focusCapped && std::fabs(widest.focus - 0.5) < 1e-9, "live focus views no wider than the column");
         // Caps: the periphery no wider than half the target; a taller focus takes the height first.
-        const simqvfr::Views4Fit wide = simqvfr::views4_fit_eye_columns(launch, 1.0, 0.3);
+        const simqvfr::Views4Fit wide = simqvfr::views4_fit_eye_columns(launch, 1.0, 0.3, 0.3);
         check(wide.outerCapped && !wide.outerByRoom && std::fabs(wide.outer - 0.5) < 1e-9,
               "live periphery above the target's half: capped at it");
-        const simqvfr::Views4Fit tall = simqvfr::views4_fit_eye_columns(launch, 0.5, 0.7);
+        const simqvfr::Views4Fit tall = simqvfr::views4_fit_eye_columns(launch, 0.5, 0.3, 0.7);
         check(!tall.focusCapped && std::fabs(tall.focusHeight - 0.7) < 1e-9 && tall.outerByRoom &&
                   std::fabs(tall.outer - 0.1) < 1e-9,
               "a taller focus view first: the periphery takes the height left (held by room)");
-        const simqvfr::Views4Layout tallLayout = simqvfr::views4_live_eye_columns(launch, 0.5, 0.7);
+        {
+            // acc_shared_width=1: every view the periphery's width, the focus width asked for unused.
+            simqvfr::Views4Layout sharedLaunch = launch;
+            sharedLaunch.sharedColumnWidth = true;
+            const simqvfr::Views4Fit sharedFit = simqvfr::views4_fit_eye_columns(sharedLaunch, 0.25, 0.4, 0.3);
+            const simqvfr::Views4Layout sharedLow = simqvfr::views4_live_eye_columns(sharedLaunch, 0.25, 0.4, 0.3);
+            check(std::fabs(sharedFit.focus - 0.25) < 1e-9 && rect(sharedLow, kPassLeftSide).width == 500 &&
+                      rect(sharedLow, kPassRightSide).x == 500,
+                  "shared width live: the focus views follow the periphery's width");
+        }
+        const simqvfr::Views4Layout tallLayout = simqvfr::views4_live_eye_columns(launch, 0.5, 0.3, 0.7);
         const PassRect tf = rect(tallLayout, kPassLeftSide);
         check(tf.y + tf.height <= H && rect(tallLayout, kPassLeft).height + tf.height <= H,
               "the outer and focus rows fit the target");
