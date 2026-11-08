@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <d3d11.h>
+#include <intrin.h>
 
 #include <MinHook.h>
 
@@ -412,6 +413,128 @@ bool ensure_atlas(ID3D11Texture2D* eyeTexture) {
     return true;
 }
 
+// ---- QVFR: what the four passes cost ----
+// CPU: each pass's time on the render thread, wall clock and the thread's own CPU (its cycle counter), and this code's
+// own work in its hooks. GPU: timestamp queries around this code's copies, read back frames later without stalling.
+// Averages logged every 300 scene frames (four_passes_frame_end).
+double qpcPerMs = 0, tscPerMs = 0;
+long long calibQpc = 0;
+unsigned long long calibTsc = 0;
+
+double now_ms() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    if (qpcPerMs == 0) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        qpcPerMs = static_cast<double>(f.QuadPart) / 1000.0;
+    }
+    return static_cast<double>(t.QuadPart) / qpcPerMs;
+}
+
+unsigned long long thread_cycles() {
+    ULONG64 c = 0;
+    QueryThreadCycleTime(GetCurrentThread(), &c);
+    // The cycle counter's rate (TSC): calibrated against QPC over the first second.
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    if (calibQpc == 0) {
+        calibQpc = t.QuadPart;
+        calibTsc = __rdtsc();
+    } else if (tscPerMs == 0 && qpcPerMs > 0 && static_cast<double>(t.QuadPart - calibQpc) > 1000 * qpcPerMs) {
+        tscPerMs = static_cast<double>(__rdtsc() - calibTsc) / (static_cast<double>(t.QuadPart - calibQpc) / qpcPerMs);
+    }
+    return c;
+}
+
+struct CostWindow {
+    double passWallMs[4] = {}, passCpuCycles[4] = {}, hookCycles = 0;
+    double gpuMs[4] = {};  // spans: eyes set aside, focus 0 copied, focus 1 copied + eyes back, atlas filled
+    unsigned frames = 0, gpuFrames = 0;
+} costWindow;
+
+// GPU spans of one frame: a disjoint query around timestamp pairs, a ring of frames read back when done.
+struct GpuSpans {
+    static constexpr int kSlots = 4, kSpans = 4;
+    ID3D11DeviceContext* context = nullptr;
+    ID3D11Query* disjoint[kSlots] = {};
+    ID3D11Query* stamp[kSlots][kSpans][2] = {};
+    bool used[kSlots][kSpans] = {}, pending[kSlots] = {};
+    int slot = 0;
+    bool open = false, failed = false;
+
+    bool ready(ID3D11Texture2D* any) {
+        if (context)
+            return true;
+        if (failed || !any)
+            return false;
+        ID3D11Device* device = nullptr;
+        any->GetDevice(&device);
+        D3D11_QUERY_DESC dj{D3D11_QUERY_TIMESTAMP_DISJOINT, 0}, ts{D3D11_QUERY_TIMESTAMP, 0};
+        bool ok = true;
+        for (int s = 0; s < kSlots; ++s) {
+            ok = ok && SUCCEEDED(device->CreateQuery(&dj, &disjoint[s]));
+            for (int k = 0; k < kSpans; ++k)
+                for (int w = 0; w < 2; ++w)
+                    ok = ok && SUCCEEDED(device->CreateQuery(&ts, &stamp[s][k][w]));
+        }
+        if (ok)
+            device->GetImmediateContext(&context);
+        device->Release();
+        failed = !ok;
+        if (!ok)
+            simqvfr::log_line("lmu qvfr cost: GPU timestamp queries unavailable: copies not timed");
+        return ok;
+    }
+    void collect(int s) {
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+        if (context->GetData(disjoint[s], &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+            return;  // not done yet (or lost when the slot is reused)
+        pending[s] = false;
+        if (dj.Disjoint || dj.Frequency == 0)
+            return;
+        double ms[kSpans] = {};
+        for (int k = 0; k < kSpans; ++k) {
+            UINT64 b = 0, e = 0;
+            if (!used[s][k])
+                continue;
+            if (context->GetData(stamp[s][k][0], &b, sizeof(b), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+                context->GetData(stamp[s][k][1], &e, sizeof(e), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK || e < b)
+                return;
+            ms[k] = static_cast<double>(e - b) * 1000.0 / static_cast<double>(dj.Frequency);
+        }
+        for (int k = 0; k < kSpans; ++k)
+            costWindow.gpuMs[k] += ms[k];
+        ++costWindow.gpuFrames;
+    }
+    void begin_frame() {
+        if (open)
+            end_frame();
+        for (int s = 0; s < kSlots; ++s)
+            if (pending[s])
+                collect(s);
+        slot = (slot + 1) % kSlots;
+        pending[slot] = false;
+        for (bool& u : used[slot])
+            u = false;
+        context->Begin(disjoint[slot]);
+        open = true;
+    }
+    void mark(int span, int which) {
+        if (!open)
+            return;
+        context->End(stamp[slot][span][which]);
+        used[slot][span] = true;
+    }
+    void end_frame() {
+        if (!open)
+            return;
+        context->End(disjoint[slot]);
+        open = false;
+        pending[slot] = true;
+    }
+} gpuSpans;
+
 // ---- QVFR: live resolution ----
 // Each pass renders into the top-left of its launch-size target at the eye render size its camera copied at the pass's
 // head (kEyeRenderSize, which VR_UpdateEyes sets once per frame from the render scale). So the size and the scale (which
@@ -705,12 +828,14 @@ void vrui_draw(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
     if (menu)
         menu_ui(vrui, context, eyes);
     if (pending) {
+        const unsigned long long c0 = thread_cycles();
         focusUiPending = false;
         if (scaled) {
             viewport[0] = static_cast<int>(passW[2]);
             viewport[1] = static_cast<int>(passH[2]);
         }
         focus_ui(vrui, context, eyes);
+        costWindow.hookCycles += static_cast<double>(thread_cycles() - c0);
     }
     if (scaled) {
         viewport[0] = kept[0];
@@ -900,8 +1025,15 @@ void qvfr_after_pass(int p) {
                 passW[q] = std::clamp(passW[q], 1u, viewW);
                 passH[q] = std::clamp(passH[q], 1u, viewH);
             }
+            const bool timed = gpuSpans.ready(e0);
+            if (timed) {
+                gpuSpans.begin_frame();
+                gpuSpans.mark(0, 0);
+            }
             atlas_in(e0, 0, 0, passW[0], passH[0]);
             atlas_in(e1, viewW, 0, passW[1], passH[1]);
+            if (timed)
+                gpuSpans.mark(0, 1);
             eyesInAtlas = true;
             frameFocusOk = swap_in_focus(0);
         }
@@ -911,10 +1043,12 @@ void qvfr_after_pass(int p) {
             e1->Release();
     } else if (p == 2 && eyesInAtlas) {
         ID3D11Texture2D* t = eye_texture(0);
+        gpuSpans.mark(1, 0);
         if (frameFocusOk && is_view(t))
             copy_corner(focusTex[0], t, passW[2], passH[2]);
         else
             frameFocusOk = false;
+        gpuSpans.mark(1, 1);
         if (t)
             t->Release();
         restore_projection(0);
@@ -923,6 +1057,7 @@ void qvfr_after_pass(int p) {
     } else if (p == 3 && eyesInAtlas) {
         ID3D11Texture2D* t0 = eye_texture(0);
         ID3D11Texture2D* t1 = eye_texture(1);
+        gpuSpans.mark(2, 0);
         if (frameFocusOk && is_view(t1))
             copy_corner(focusTex[1], t1, passW[3], passH[3]);
         else
@@ -932,6 +1067,7 @@ void qvfr_after_pass(int p) {
             atlas_out(t0, 0, 0, passW[0], passH[0]);
         if (is_view(t1))
             atlas_out(t1, viewW, 0, passW[1], passH[1]);
+        gpuSpans.mark(2, 1);
         if (t0)
             t0->Release();
         if (t1)
@@ -965,10 +1101,19 @@ void render_scene(void* arg, char laterEye) {
     ++passesThisFrame;
     if (p == 0)
         atlasReady = menuReady = false;  // a new frame: its own four views, or none
+    unsigned long long hook0 = thread_cycles();
     if (qvfrMode)
         qvfr_before_pass(p);  // live resolution: the size this pass renders at
     inLaterPass = p >= 2;
+    const double wall0 = now_ms();
+    const unsigned long long cpu0 = thread_cycles();
+    costWindow.hookCycles += static_cast<double>(cpu0 - hook0);
     originalRenderScene(arg, laterEye);
+    const unsigned long long cpu1 = thread_cycles();
+    if (qvfrMode && p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
+        costWindow.passWallMs[p] += now_ms() - wall0;
+        costWindow.passCpuCycles[p] += static_cast<double>(cpu1 - cpu0);
+    }
     inLaterPass = false;
     if (p < 4) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
@@ -978,6 +1123,7 @@ void render_scene(void* arg, char laterEye) {
             qvfr_after_pass(p);
             if (p == 1 || p == 3)  // live resolution: the next passes' size, before their cameras copy it
                 set_next_passes(p == 1 ? 1 : 0);
+            costWindow.hookCycles += static_cast<double>(thread_cycles() - cpu1);
         } else if (focusMode && passTarget == 4)
             focus_after_pass(p);
         else if (armed)
@@ -1439,10 +1585,30 @@ void four_passes_frame_end() {
                 simqvfr::logf("lmu qvfr: frame %llu: the located FOV matches the lens mask's again: the mask is on", frames);
         }
         maskStaleThisFrame = 0;
-        // Every 300 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them).
-        if (passes >= 4 && frames % 300 == 0)
+        // Every 300 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them),
+        // and what the frames since cost: each pass's wall and CPU time, this code's own CPU, the GPU time of its copies.
+        if (passes >= 4)
+            ++costWindow.frames;
+        if (passes >= 4 && frames % 300 == 0) {
             simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u targets", frames,
                           passW[0], passH[0], passW[1], passH[1], passW[2], passH[2], passW[3], passH[3], viewW, viewH);
+            const CostWindow& w = costWindow;
+            if (w.frames && tscPerMs > 0) {
+                const double n = w.frames, g = w.gpuFrames ? w.gpuFrames : 1;
+                const auto cpu = [&](double cycles) { return cycles / tscPerMs / n; };
+                simqvfr::logf("lmu qvfr cost: %u frames: passes wall %.2f %.2f %.2f %.2f ms, CPU %.2f %.2f %.2f %.2f ms "
+                              "(eyes %.2f, focus views %.2f ms CPU per frame); this code's CPU %.3f ms per frame; GPU of "
+                              "its copies %.3f + %.3f + %.3f + %.3f = %.3f ms per frame (%u frames timed: eyes aside, focus 0, "
+                              "focus 1 and eyes back, atlas)",
+                              w.frames, w.passWallMs[0] / n, w.passWallMs[1] / n, w.passWallMs[2] / n, w.passWallMs[3] / n,
+                              cpu(w.passCpuCycles[0]), cpu(w.passCpuCycles[1]), cpu(w.passCpuCycles[2]),
+                              cpu(w.passCpuCycles[3]), cpu(w.passCpuCycles[0] + w.passCpuCycles[1]),
+                              cpu(w.passCpuCycles[2] + w.passCpuCycles[3]), cpu(w.hookCycles), w.gpuMs[0] / g,
+                              w.gpuMs[1] / g, w.gpuMs[2] / g, w.gpuMs[3] / g,
+                              (w.gpuMs[0] + w.gpuMs[1] + w.gpuMs[2] + w.gpuMs[3]) / g, w.gpuFrames);
+            }
+            costWindow = CostWindow{};
+        }
         if (frames % 1800 == 0)
             simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
                           "unlike the views); VR UI in the focus views %llu, not %llu; last frame %d passes, frame time "
@@ -1566,10 +1732,15 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     // The eyes again, as the game submitted them: with what it drew after its eye loop (the VR UI); the focus views with
     // the UI drawn into them too (vrui_draw).
     // Each only as far as its pass rendered (live resolution: the top-left of the launch-size targets).
+    const unsigned long long c0 = thread_cycles();
+    gpuSpans.mark(3, 0);
     atlas_in(eyes[0], 0, 0, passW[0], passH[0]);
     atlas_in(eyes[1], viewW, 0, passW[1], passH[1]);
     atlas_in(focusTex[0], 0, viewH, passW[2], passH[2]);
     atlas_in(focusTex[1], viewW, viewH, passW[3], passH[3]);
+    gpuSpans.mark(3, 1);
+    gpuSpans.end_frame();
+    costWindow.hookCycles += static_cast<double>(thread_cycles() - c0);
     const float cw = 0.5f / static_cast<float>(viewW), ch = 0.5f / static_cast<float>(viewH);
     for (int e = 0; e < 2; ++e) {
         const float outer[4] = {0.5f * e, 0.0f, cw * passW[e], ch * passH[e]};
