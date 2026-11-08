@@ -94,6 +94,7 @@ struct Experiment {
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
+    bool views4TestVisibleMask = false;    // views4 test: a full-view visible-area mesh, as VDXR gives (diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)

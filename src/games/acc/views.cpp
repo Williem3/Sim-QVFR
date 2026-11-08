@@ -100,6 +100,9 @@ bool primary_view(void*, const unsigned char* view) {
 }
 int view_pass(const void*, bool stereo, unsigned view) { return pass_for_view(stereo, view); }
 unsigned pass_view(const void*, int pass) { return view_for_pass(pass); }
+// No visible-area mesh (abi.h): its draws index the HMD's two meshes by view, past their end for the focus views, so
+// the renderer draws rectangles instead, as with a runtime that offers no mesh.
+bool no_visible_area_mesh(const void*) { return false; }
 
 // Live resolution (views_set_live_layout): the layout asked for, the one this frame's views get (the game thread
 // latches it at the left eye's rect, the first of a frame's), and the last layouts handed out, for the render thread
@@ -615,7 +618,7 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
         return true;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
                           kGetStereoProjectionMatrix, kGetRelativeEyePose, kDeviceIsAPrimaryPass, kDeviceIsAPrimaryView,
-                          kSetFinalViewRect};
+                          kSetFinalViewRect, kHasVisibleAreaMesh};
     for (const Slot& s : slots)
         if (simqvfr::vtable_slot(s.rva) != s.function) {
             simqvfr::logf("acc views: slot 0x%llx holds 0x%llx, expected 0x%llx: not the build these addresses are "
@@ -662,6 +665,11 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
         ok = width_per_pair() && ok;
         pairWidths.store(ok, std::memory_order_relaxed);  // before final_view_rect is in its slot
     }
+    ok = ok && simqvfr::vtable_slot_replace(kHasVisibleAreaMesh.rva, kHasVisibleAreaMesh.function,
+                                         reinterpret_cast<void*>(&no_visible_area_mesh));
+    if (ok)
+        simqvfr::log_line("acc views: the HMD's visible-area mesh off (it holds two views; post-processing draws "
+                          "rectangles)");
     ok = ok && simqvfr::vtable_slot_replace(kGetRelativeEyePose.rva, kGetRelativeEyePose.function,
                                          reinterpret_cast<void*>(&eye_pose));
     ok = ok && simqvfr::vtable_slot_replace(kGetStereoProjectionMatrix.rva, kGetStereoProjectionMatrix.function,
