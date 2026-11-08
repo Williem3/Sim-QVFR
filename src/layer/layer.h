@@ -6,6 +6,9 @@
 #include <string>
 
 #include "input/hotkeys.h"
+#include "quad/compositor.h"
+#include "quad/osd.h"
+#include "quad/session_graphics.h"
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/state.h"
@@ -34,10 +37,28 @@ void steady_gaze(bool tracked, XrVector3f& direction);
 void gaze_hold_report();
 void gaze_thread_report(double seconds);
 
-// xr_layer.cpp
+// quad_state.cpp
+SessionGraphics session_graphics_now();
+HelmetPieceSet& helmet_set();
+bool views4_outline_on();
+void views4_outline_draw(XrSwapchain swapchain);
+void quad_fail(const char* why);
+bool quad_ready();
+void turn_view(XrView& view, double fractionX, double fractionY, double tanX, double tanY);
+void focus_centre(const EyeComposition& eye, float& tanX, float& tanY);
+bool sampled(uint64_t count);
+
+// reports.cpp
 int64_t qpc_now();
+XrResult XRAPI_CALL timedEndFrameBelow(XrSession session, const XrFrameEndInfo* info);
+XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
+                                          uint32_t capacity, uint32_t* countOutput, XrView* views);
 double report_pacing();
 void report_load(double frameMs);
+void report_cpu_times();
+bool is_game_process();
+
+// xr_layer.cpp
 XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system,
                                                          XrViewConfigurationType type, uint32_t capacity,
                                                          uint32_t* countOutput, XrViewConfigurationView* views);
@@ -62,6 +83,8 @@ void live_reload();
 void hotkeys_changed(const Hotkeys& h);
 void menu_values_changed(const IniSnapshot& s);
 void menu_press(MenuKey key, int64_t now);
+bool frame_generation_on();
+bool osd_shown(OsdSummary& out);
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,

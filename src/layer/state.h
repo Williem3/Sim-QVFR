@@ -438,6 +438,8 @@ struct CpuTimes {
     double msPerTick = 0;
 };
 
+inline constexpr uint64_t kCpuReportFrames = 900;
+
 // views4 frame pacing (render thread): ACE's xrEndFrame-to-xrEndFrame interval, the time it spends in
 // xrWaitFrame (the runtime holding it to the display) and the display period the runtime predicts.
 // Logged with the CPU times as a "views4 pacing:" line: frames that miss their display slot wait a whole
