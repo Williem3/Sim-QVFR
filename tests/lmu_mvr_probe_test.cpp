@@ -85,6 +85,13 @@ int main() {
               nvapi::has_two_views(0x170) && nvapi::has_two_views(0x190) && nvapi::has_two_views(0x1B0) &&
               !nvapi::has_two_views(0xE0000040u) && !nvapi::has_two_views(0),
           "two views from Turing (0x160) on: Volta, Tegra and unknown not");
+    check(nvapi::offers_multi_view(0x160, 2, "NVIDIA GeForce RTX 2080 Ti") &&
+              nvapi::offers_multi_view(0x1B0, 3, "NVIDIA GeForce RTX 5070 Ti") &&
+              !nvapi::offers_multi_view(0x160, 8, "NVIDIA GeForce GTX 1660 SUPER") &&
+              !nvapi::offers_multi_view(0x160, 7, "NVIDIA GeForce GTX 1650") &&
+              !nvapi::offers_multi_view(0x160, 6, "NVIDIA GeForce GTX 1650") &&
+              !nvapi::offers_multi_view(0x150, 0, "NVIDIA TITAN V") && !nvapi::offers_multi_view(0x130, 4, "GTX 1080"),
+          "multi-view offered on RTX 20 and newer only: not the GTX 16 series (TU116, TU117, or named GTX), not Pascal or Volta");
     // The layer's decision (games/multi_view.h) from an ini: multi_view=1 for a game that has it, on such a GPU.
     {
         wchar_t temp[MAX_PATH] = {};

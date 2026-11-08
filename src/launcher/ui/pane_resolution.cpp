@@ -64,11 +64,14 @@ float resolution_pane(float x, float y, float w, bool draw) {
                 found += (found.empty() ? L" This PC has " : L", ") + std::wstring(g.name.begin(), g.name.end());
             desc = L"Needs an NVIDIA RTX 20 series or newer graphics card." + found + (found.empty() ? L"" : L".");
         }
-        const bool unavailable = !qvfr || (!gpu && !app.s.multiView);  // switched on elsewhere: it can be switched off
+        // Without such a GPU it shows off and can't be chosen, even if the ini has multi_view=1 (each launch's copy has
+        // it off then: main.cpp).
+        const bool unavailable = !qvfr || !gpu;
+        const bool shown = app.s.multiView && gpu;
         Row on;
         on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
-        on.full = [desc, unavailable](const Rect& r) {
-            checkbox(kMultiView, r, app.s.multiView, L"Multi-view rendering", desc, unavailable);
+        on.full = [desc, unavailable, shown](const Rect& r) {
+            checkbox(kMultiView, r, shown, L"Multi-view rendering", desc, unavailable);
         };
         h += section(x, y + h, w, L"NVIDIA multi-view rendering", {on},
                      gpu ? L"Saves CPU and GPU time every frame (about 2 ms of each in testing). Off renders every view on "

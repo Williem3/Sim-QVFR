@@ -28,4 +28,9 @@ bool multi_view_on(const GameInfo* game, const wchar_t* ini, std::string* why) {
     return say("off: it needs an NVIDIA RTX 20 series or newer (found " + names + ")", false);
 }
 
+unsigned lmu_mvr_gate(const wchar_t* ini) {
+    const unsigned gate = ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini) : 0;
+    return gate && nvapi::two_views_gpu() ? gate : 0;
+}
+
 }  // namespace simqvfr::games

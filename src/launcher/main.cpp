@@ -31,6 +31,7 @@
 #include <tlhelp32.h>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../engine/nvapi_gpus.h"
 #include "../games/game.h"
 #include "../probe/hang_dump.h"
 #include "explicit_layers.h"
@@ -200,10 +201,13 @@ std::vector<std::wstring> variable_names(const std::vector<std::wstring>& enviro
 Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstring>& environment) {
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
     const simqvfr::CheekySettings cheeky = simqvfr::read_cheeky_settings(ini.c_str());
-    const bool dlss = games::launcher_game().features.foveatedDlss;  // Cheeky only in a game that has it
+    const games::GameInfo& game = games::launcher_game();
+    const bool dlss = game.features.foveatedDlss;  // Cheeky only in a game that has it
+    // Through the game's anti-cheat ([launcher] anticheat=1): Cheeky's layer off (games/game.h antiCheatStart).
+    const bool antiCheat = game.antiCheatStart && games::anticheat_chosen(ini.c_str());
     return launch_options(read_launcher_layers(ini),
                           _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0,
-                          dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment));
+                          dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment), antiCheat);
 }
 
 std::wstring stamp_now() {
@@ -420,6 +424,17 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
     const LayerPlan plan = plan_layers(implicit_registrations(), ini_layer_options(ini.wstring(), environment));
+    // Nothing of Cheeky's runs in a game its anti-cheat protects: its layer is off (ini_layer_options), so the launch
+    // refuses where it can't be kept out (a registration without a disable variable, its loader in the game folder).
+    if (viaAntiCheat) {
+        if (std::find(plan.above.begin(), plan.above.end(), std::string(kCheekyLayer)) != plan.above.end())
+            return fail(L"Cheeky's OpenXR layer is on in Windows and can't be turned off for one launch, and Run with "
+                        L"anti-cheat is on: turn Cheeky's layer off in the OpenXR layers pane (Without the launcher)");
+        const std::vector<std::wstring> loaders = cheeky_loaders(exe.parent_path().wstring());
+        if (!loaders.empty())
+            return fail(L"Cheeky's loader " + loaders.front() + L" is in the game folder, and Run with anti-cheat is on: "
+                        L"move it out of the game folder");
+    }
 
     const std::wstring stamp = stamp_now();
     const fs::path logs = here / L"logs", runFolder = logs / (std::wstring(L"run-") + stamp);
@@ -429,6 +444,13 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
+    // NVIDIA multi-view rendering only on an RTX 20 series or newer (engine/nvapi_gpus.h): on any other GPU this
+    // launch's copy has it off, its experiment gates too, whatever the ini says (the layer checks again).
+    const bool multiViewGpu = simqvfr::nvapi::two_views_gpu() != nullptr;
+    if (!multiViewGpu) {
+        WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", iniCopy.c_str());
+        WritePrivateProfileStringW(L"experiment", L"lmu_mvr", L"0", iniCopy.c_str());
+    }
     // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
     // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
     const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
@@ -471,6 +493,8 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
+    if (info.features.multiView && !multiViewGpu)
+        say(L"  multi-view: off, it needs an NVIDIA RTX 20 series or newer");
     say(L"  run:       " + runFolder.wstring());
     say(L"  layer log: " + log.wstring());
     std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);

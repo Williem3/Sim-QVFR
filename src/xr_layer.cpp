@@ -204,8 +204,13 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     if (XR_FAILED(r))
         return r;
     // Seconds before ACE initialises NGX, so Cheeky's hooks see its DLSS features created. Only in a game
-    // it's made for.
-    if (game->loads_cheeky()) {
+    // it's made for, and never in one its anti-cheat protects (running, or [launcher] anticheat=1 chosen).
+    std::wstring antiCheat;
+    const bool protectedGame = thisGame && ((thisGame->antiCheatStart && games::anticheat_chosen(live.ini.c_str())) ||
+                                            games::anticheat_running(*thisGame, antiCheat));
+    if (protectedGame && game->loads_cheeky())
+        log_line("cheeky: off, the game's anti-cheat protects this launch");
+    if (game->loads_cheeky() && !protectedGame) {
         cheeky_start(cheeky_config(live.ini.c_str(), layer_directory()));
         {  // for the launcher's Foveated DLSS pane
             static const wchar_t* const kStatus[] = {L"off", L"missing", L"refused", L"running"};

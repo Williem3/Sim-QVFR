@@ -802,6 +802,20 @@ int main() {
         p = plan_layers(regs, launch_options(LauncherLayers{}, true, false, false));
         check(!locked(kFrameGenerationLayer).on && locked(kFrameGenerationLayer).lock.find("Two-loop") != std::string::npos,
               "locks: Two-loop keeps VectorXR off");
+        // Run with anti-cheat: Cheeky's layer off, over [cheeky] load and on_layers alike.
+        LauncherLayers wantsCheeky;
+        set_launcher_layer(wantsCheeky, kCheekyLayer, true, false);
+        p = plan_layers(regs, launch_options(wantsCheeky, false, true, true, {}, true));
+        const std::vector<std::string> loaded = names(p);
+        check(!locked(kCheekyLayer).on && locked(kCheekyLayer).lock.find("anti-cheat") != std::string::npos &&
+                  std::find(loaded.begin(), loaded.end(), std::string(kCheekyLayer)) == loaded.end(),
+              "locks: Run with anti-cheat keeps Cheeky's layer off, whatever [cheeky] and the profile say");
+        std::vector<Registration> cheekyOn = registrations;
+        cheekyOn.push_back({layer("cheeky-on", kCheekyLayer, "CHEEKY_OPENXR_LAYER_DISABLE"), true});  // on in Windows
+        p = plan_layers(cheekyOn, launch_options(LauncherLayers{}, false, false, false, {}, true));
+        const auto pc = launch_variables(p, L"C:\run", L"i", L"l", L"r");
+        check(!locked(kCheekyLayer).on && value_of(pc, L"CHEEKY_OPENXR_LAYER_DISABLE") == L"1",
+              "locks: Run with anti-cheat silences Cheeky's layer switched on in Windows");
         // The ini: written and read back; old off_layers files keep working.
         const std::wstring profileIni = (folder / L"profile.ini").wstring();
         write_file(profileIni, "[launcher]\r\noff_layers=A, B;A\r\n");

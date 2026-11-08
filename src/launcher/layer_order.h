@@ -34,8 +34,10 @@ std::vector<std::string> split_layer_names(const std::wstring& list);
 
 // The options of a launch: the profile, and what the launch locks. Two-loop (two ACE frames per headset
 // frame) and Cheeky's frame generation turn VectorXR's frame generation off; Cheeky loaded keeps its layer on.
+// `antiCheat`: the game starts through its anti-cheat ([launcher] anticheat=1): Cheeky's layer is off whatever the
+// profile or [cheeky] say (nothing of Cheeky's runs in a protected game).
 Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLoad, bool cheekyFg,
-                       std::vector<std::wstring> setVariables = {});
+                       std::vector<std::wstring> setVariables = {}, bool antiCheat = false);
 // Moves `name` one place among `plan.layers` (step -1: toward the game, +1: toward the runtime) and
 // writes the whole order into the profile. False when it is already at that end.
 bool move_launcher_layer(LauncherLayers& layers, const LayerPlan& plan, const std::string& name, int step);

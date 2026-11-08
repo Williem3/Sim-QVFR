@@ -225,9 +225,8 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
-    case kMultiView:  // off can always be chosen; on only on a GPU that has it
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView) &&
-            (app.s.multiView || nvapi::two_views_gpu())) {
+    case kMultiView:  // only on a GPU that has it (RTX 20 series or newer); elsewhere it stays off and can't be chosen
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView) && nvapi::two_views_gpu()) {
             app.s.multiView = !app.s.multiView;
             changed();
         }

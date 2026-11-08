@@ -58,7 +58,7 @@ public:
         // Multi-view rendering (mvr_pass.h): passes 0-1 draw their focus views too, beside their eyes, where the layer
         // made room (Views4Layout::secondViewRoom): the launcher's multi_view=1 (games/multi_view.h), as gate D. Or
         // lmu_mvr, its gates: 1 (C: passes 2-3 still render theirs, compared at the samples), 2 (D: they skip the scene).
-        const UINT gate = s.ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) : 0;
+        const UINT gate = simqvfr::games::lmu_mvr_gate(s.ini);
         const UINT mvrLevel = gate ? gate : 2;
         run.mvr = s.layout.secondViewRoom;
         run.mvrSkip = run.mvr && mvrLevel >= 2;  // passes 2-3 skip the scene
@@ -144,7 +144,7 @@ public:
         // lmu_mvr_probe=1: every vertex shader converted for NVIDIA's two-view pass and created through NVAPI, log only.
         // Multi-view rendering (with lmu_qvfr: multi_view=1 on a GPU with it, or lmu_mvr): the probe keeps the converted
         // shaders, attached to the game's (mvr_pass.h). The layer decides the same at xrCreateInstance (config.cpp).
-        const bool mvr = has_qvfr() && (GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini) != 0 ||
+        const bool mvr = has_qvfr() && (simqvfr::games::lmu_mvr_gate(ini) != 0 ||
                                         simqvfr::games::multi_view_on(&kGame, ini));
         mvrProbe_ = (mvr || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0) && mvr_probe_install(ini, mvr);
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
