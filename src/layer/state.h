@@ -223,6 +223,8 @@ struct TwoLoops {
 
 inline constexpr uint64_t kArmAfterFrames = 30;
 
+inline constexpr uint64_t kMaxFallbackRun = 90;  // ~1-2 s of display frames
+
 // Eye gaze for the quad focus box (XR_EXT_eye_gaze_interaction, which ACE enables itself). The
 // layer has its own action set with one gaze pose action. OpenXR allows one attach per session and
 // replaces a profile's suggested bindings on every call, so the set rides along in ACE's own calls:

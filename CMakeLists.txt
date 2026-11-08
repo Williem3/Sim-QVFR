@@ -77,7 +77,7 @@ target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler
 # xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
 add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/layer/config.cpp
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
-  src/layer/helmet_layer.cpp src/layer/views4.cpp)
+  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/two_loops.cpp src/layer/views.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)

@@ -17,6 +17,10 @@
 
 namespace simqvfr::layer {
 
+// two_loops.cpp
+double ms_between(const LARGE_INTEGER& from, const LARGE_INTEGER& to);
+void narrow(float& loAngle, float& hiAngle, double fraction, double centre = 0.0);
+
 // gaze_actions.cpp
 bool gaze_skips_space(XrSpace space, XrTime time);
 XrResult XRAPI_CALL layerCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* info, XrSpace* space);
@@ -92,19 +96,25 @@ void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (
 // views4.cpp
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info);
 
-// xr_layer.cpp
+// two_loops.cpp
+void quad_record_a(const XrFrameEndInfo* info);
 bool quad_capture_due();
 void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
+XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info);
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask);
+
+// views.cpp
 void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& composed);
 
 // views4.cpp
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info);
 
-// xr_layer.cpp
+// views.cpp
 XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
                                      uint32_t capacity, uint32_t* countOutput, XrView* views);
+
+// xr_layer.cpp
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);
 void ini_worker_sync();
 void live_reload();
