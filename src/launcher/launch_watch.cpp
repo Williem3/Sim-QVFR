@@ -83,6 +83,10 @@ std::wstring loader_error(const std::string& output) {
         // The loader's own: "Error [<type> | <command> | <message id>] : <message>".
         if (line.rfind("Error [", 0) != 0)
             continue;
+        // Printed as an error, but harmless: an elevated game ignores XR_API_LAYER_PATH, and the launcher registers
+        // the launch's layers machine-wide instead (it was shown as the reason when LMU crashed below the layer).
+        if (line.find("is being ignored due to running from an elevated context") != std::string::npos)
+            continue;
         const size_t close = line.find(']');
         if (close == std::string::npos || line.find(" | ") > close)
             continue;

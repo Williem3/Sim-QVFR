@@ -169,6 +169,11 @@ void launch_status_checks() {
           "loader error: none in the game's own output");
     check(loader_error("Error [GENERAL | xrCreateInstance]") == L"Error [GENERAL | xrCreateInstance]",
           "loader error: a line without a message is kept whole");
+    check(loader_error("Error [GENERAL | platform_utils | OpenXR-Loader] : !!! WARNING !!! Environment variable "
+                       "XR_API_LAYER_PATH is being ignored due to running from an elevated context. The value 'x' will NOT "
+                       "be used.\n"
+                       "Error [GENERAL | xrCreateInstance | OpenXR-Loader] : the real one\n") == L"the real one",
+          "loader error: the elevated XR_API_LAYER_PATH warning isn't a reason (the launch registers in HKLM)");
 
     // The watch on real processes: a fake run folder, runtime.ini and logs beside it.
     const fs::path dir = fs::temp_directory_path() / ("sim-qvfr-launch-watch-" + std::to_string(GetCurrentProcessId()));
