@@ -125,7 +125,7 @@ bool helmet_layer_resources(XrSession session) {
     for (XrCompositionLayerQuad& l : quad.helmetQuads) {
         l.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;  // premultiplied
         l.space = quad.helmetSpace;
-        l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        l.eyeVisibility = XR_EYE_VISIBILITY_BOTH;  // per quad in helmet_layer_draw
         l.subImage.swapchain = quad.helmetChain;
     }
     quad.helmetSide = side;
@@ -198,21 +198,31 @@ bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2],
                     (views11 ? v4d3d11.compositor.draw_helmet_layer(views11, quad.helmetImages11[index], draw)
                              : quad.compositor.draw_helmet_layer(quad.helmetImages[index], draw));
     next.ReleaseSwapchainImage(quad.helmetChain, &release);
-    // The quads, in VIEW space: the whole quad centred `height` above straight ahead, `distance` away, facing
-    // the eyes; each band its slice of it (along the quad's own up) and of the image.
+    // The quads, in VIEW space: the whole quad centred `height` above straight ahead, facing the eyes; each band its
+    // slice of it (along the quad's own up) and of the image. Always kHelmetFarM away (helmet_far_centre: SteamVR drew
+    // a nearer helmet over the settings menu and the overlay, 2026-11-08); a near depth by one copy per eye.
+    const double scale = helmet_far_scale(distance);
+    const bool perEye = scale > 1.0001;
     const float width = static_cast<float>(2 * distance * coverX), height = static_cast<float>(2 * distance * coverY);
     const int32_t side = static_cast<int32_t>(quad.helmetSide);
     quad.helmetQuadCount = 0;
+    int bandCount = 0;
     for (const HelmetBand& b : bands) {
-        XrCompositionLayerQuad& l = quad.helmetQuads[quad.helmetQuadCount++];
+        if (bandCount++ == 2)
+            break;
         const int32_t top = static_cast<int32_t>(std::floor(b.top * side)), bottom = static_cast<int32_t>(std::ceil(b.bottom * side));
         const float rise = (0.5f - 0.5f * (top + bottom) / side) * height;  // the band's centre above the quad's
-        l.pose.orientation = up;
-        l.pose.position = rotate(up, XrVector3f{0, rise, static_cast<float>(-distance)});
-        l.size = {width, height * (bottom - top) / side};
-        l.subImage.imageRect = {{0, top}, {side, bottom - top}};
-        if (quad.helmetQuadCount == 2)
-            break;
+        for (int e = 0; e < (perEye ? 2 : 1); ++e) {
+            XrCompositionLayerQuad& l = quad.helmetQuads[quad.helmetQuadCount++];
+            const float none[3] = {0, 0, 0};
+            float at[3];
+            helmet_far_centre(distance, rise, perEye ? offset[e] : none, at);
+            l.eyeVisibility = !perEye ? XR_EYE_VISIBILITY_BOTH : e == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT;
+            l.pose.orientation = up;
+            l.pose.position = rotate(up, XrVector3f{at[0], at[1], at[2]});
+            l.size = {static_cast<float>(width * scale), static_cast<float>(height * scale * (bottom - top) / side)};
+            l.subImage.imageRect = {{0, top}, {side, bottom - top}};
+        }
     }
     char text[96] = "whole";
     if (bands.empty()) {
@@ -362,7 +372,8 @@ void views4_helmet_layer(const HelmetSettings& helmet, const V4Helmet& h, const 
 // At the submission of composed projection layer `layer` (under quad.mutex): the helmet layer drawn for it goes
 // over it (`quads`, `count`, `after`); its swapchain goes when its size changed, and is made once there are pieces
 // (drawn from the next composition on).
-void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[2], int& count, int& after) {
+void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[kHelmetQuadsMax], int& count,
+                          int& after) {
     if (quad.helmetDrawn) {
         count = quad.helmetQuadCount;
         std::copy(quad.helmetQuads, quad.helmetQuads + count, quads);

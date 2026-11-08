@@ -330,6 +330,9 @@ struct EyeView {
     XrRect2Di rect{};
 };
 
+// The helmet layer's quads: two bands, each once (far depth) or once per eye (near depth).
+inline constexpr int kHelmetQuadsMax = 4;
+
 struct Quad {
     std::mutex mutex;
     uint32_t nativeW = 0, nativeH = 0;      // runtime's recommended eye size (before eye_scale)
@@ -370,8 +373,10 @@ struct Quad {
     std::vector<ID3D11Texture2D*> helmetImages11;  // the same, for a D3D11 session (ACC)
     bool helmetPiecesLoaded = false;  // the composing compositor holds pieces (helmet_pieces), for the menu and submit
     bool helmetLayerFailed = false, helmetDrawn = false;
-    // Its quads this frame: the bands the pieces draw on (helmet_bands), one or two, from the same image.
-    XrCompositionLayerQuad helmetQuads[2] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
+    // Its quads this frame: the bands the pieces draw on (helmet_bands), one or two, from the same image; with a
+    // near depth each band twice, one per eye (helmet_layer_draw: kept far so it never covers the menu or overlay).
+    XrCompositionLayerQuad helmetQuads[kHelmetQuadsMax] = {{XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD},
+                                                           {XR_TYPE_COMPOSITION_LAYER_QUAD}, {XR_TYPE_COMPOSITION_LAYER_QUAD}};
     int helmetQuadCount = 0;
     uint32_t helmetSide = 0;   // its swapchain's side (helmet_layer_side when made)
     bool helmetResize = false;  // [helmet] detail changed: made again at the next submission

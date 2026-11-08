@@ -94,7 +94,8 @@ void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComp
                        XrExtent2Di& extent);
 void views4_helmet_layer(const HelmetSettings& helmet, const V4Helmet& h, const EyeComposition (&eyes)[2],
                          ID3D11Texture2D* views11);
-void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[2], int& count, int& after);
+void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[kHelmetQuadsMax], int& count,
+                          int& after);
 
 // views4.cpp
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info);

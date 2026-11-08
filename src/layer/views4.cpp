@@ -346,7 +346,7 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
 
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
-    XrCompositionLayerQuad helmetLayers[2] = {};  // the helmet's own layer (its bands), over the composed scene
+    XrCompositionLayerQuad helmetLayers[kHelmetQuadsMax] = {};  // the helmet's own layer (its bands), over the composed scene
     int helmetCount = 0, helmetAfter = -1;
     std::vector<XrCompositionLayerProjection> projections;
     std::vector<std::vector<XrCompositionLayerProjectionView>> views;

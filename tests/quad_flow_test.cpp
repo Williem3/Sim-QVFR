@@ -63,7 +63,9 @@ struct FakeRuntime {
     uint32_t submittedImage = 0;
     XrCompositionLayerProjectionView submittedViews[2] = {};
     int submittedLayers = 0;
-    int submittedProjectionAt = -1, submittedQuadAt = -1;  // layer indices (-1: none)
+    int submittedProjectionAt = -1, submittedQuadAt = -1;  // layer indices (-1: none), the first quad's
+    int submittedQuads = 0, submittedQuadsInRow = 0;       // quad layers, and how many follow the first in a row
+    int submittedQuadEyes = 0;                             // bit per XrEyeVisibility the quads use
     XrCompositionLayerQuad submittedQuad{};                // the last quad layer
     int spaces = 0;
 } rt;
@@ -188,10 +190,16 @@ XrResult XRAPI_CALL fakeEnd(XrSession, const XrFrameEndInfo* info) {
     rt.begun = false;
     rt.submittedLayers = static_cast<int>(info->layerCount);
     rt.submittedProjectionAt = rt.submittedQuadAt = -1;
+    rt.submittedQuads = rt.submittedQuadsInRow = rt.submittedQuadEyes = 0;
     for (uint32_t i = 0; i < info->layerCount; ++i) {
         if (info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
             rt.submittedQuad = *reinterpret_cast<const XrCompositionLayerQuad*>(info->layers[i]);
-            rt.submittedQuadAt = static_cast<int>(i);
+            if (rt.submittedQuadAt < 0)
+                rt.submittedQuadAt = static_cast<int>(i);
+            if (static_cast<int>(i) == rt.submittedQuadAt + rt.submittedQuadsInRow)
+                ++rt.submittedQuadsInRow;
+            ++rt.submittedQuads;
+            rt.submittedQuadEyes |= 1 << rt.submittedQuad.eyeVisibility;
             FakeChain* qc = chain_of(rt.submittedQuad.subImage.swapchain);
             if (!qc || qc->lastReleased == UINT32_MAX || !qc->outstanding.empty())
                 violation("submitted a quad layer whose swapchain has no released image");
@@ -897,15 +905,21 @@ int main() {
             helmetErrors += XR_FAILED(game_views4_frame(helmeted, v4EyeW, v4EyeH)) ? 1 : 0;
         const XrRect2Di& scene = rt.submittedViews[0].subImage.imageRect;
         const XrCompositionLayerQuad& hq = rt.submittedQuad;
-        std::printf("     helmet: scene %dx%d (native %ux%u), quad at layer %d (scene %d), %.3f x %.3f m, %.3f m ahead\n",
-                    scene.extent.width, scene.extent.height, kNativeW, kNativeH, rt.submittedQuadAt,
+        std::printf("     helmet: scene %dx%d (native %ux%u), %d quads from layer %d (scene %d), %.3f x %.3f m, %.3f m ahead\n",
+                    scene.extent.width, scene.extent.height, kNativeW, kNativeH, rt.submittedQuads, rt.submittedQuadAt,
                     rt.submittedProjectionAt, hq.size.width, hq.size.height, -hq.pose.position.z);
+        // At 8 cm it is still kHelmetFarM away (a nearer quad covers the game's menus and our overlay): one copy
+        // per eye, 125 times the size of the 8 cm quad.
         check(helmetErrors == 0 && rt.violations == 0 && quad.helmetChain != XR_NULL_HANDLE &&
-                  rt.submittedQuadAt == rt.submittedProjectionAt + 1 && hq.subImage.swapchain == quad.helmetChain &&
-                  hq.space == quad.helmetSpace && std::fabs(hq.pose.position.z + 0.08f) < 1e-4f && hq.size.width > 0.16f &&
+                  rt.submittedQuadAt == rt.submittedProjectionAt + 1 && rt.submittedQuads >= 2 &&
+                  rt.submittedQuads % 2 == 0 && rt.submittedQuadsInRow == rt.submittedQuads &&
+                  rt.submittedQuadEyes == ((1 << XR_EYE_VISIBILITY_LEFT) | (1 << XR_EYE_VISIBILITY_RIGHT)) &&
+                  hq.subImage.swapchain == quad.helmetChain && hq.space == quad.helmetSpace &&
+                  std::fabs(hq.pose.position.z + static_cast<float>(kHelmetFarM)) < 1e-3f &&
+                  hq.size.width > 0.16f * static_cast<float>(kHelmetFarM / 0.08) &&
                   (hq.layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) &&
                   !(hq.layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT),
-              "helmet: its own premultiplied quad layer over the scene, 8 cm ahead");
+              "helmet: its own premultiplied quads over the scene, at 8 cm one per eye kept far");
         check(scene.extent.height == static_cast<int32_t>(std::lround(kNativeH * 0.6)) &&
                   std::tan(rt.submittedViews[0].fov.angleUp) < std::tan(kFullFov.angleUp) - 0.01f,
               "helmet: the scene is submitted cropped, not over the whole eye");
