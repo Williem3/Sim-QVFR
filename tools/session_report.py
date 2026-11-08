@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 LINE = re.compile(r"^(\d\d:\d\d:\d\d\.\d{3}) \[(\d+)\] (.*)$")
 PROBLEM = re.compile(r"(?i)\b(error|failed|fail|exception|crash|hang|refused|not written|lost|invalid|unsupported|"
                      r"can't|cannot|missing|timeout|timed out|denied|anti-cheat)\b")
-NOT_PROBLEM = re.compile(r"(?i)result=0\b|0 errors|no errors|error\(s\) 0")
+NOT_PROBLEM = re.compile(r"(?i)result=0\b|0 errors|no errors|error\(s\) 0|^hang watch: (\d+ s;|dump helper standing by)|"
+                         r"^probe: not .*; probes refused")
 
 
 def ts(s):
@@ -91,7 +92,9 @@ def report(path, all_problems):
         first_frame = first(r"^xrEndFrame frame=1 ")[0]
         print(f"- Frames: up to {max(frames):,} (first at {first_frame})")
     ended = [m for m in msgs[-40:] if re.search(r"xrDestroySession|EXITING|xrDestroyInstance", m)]
-    print(f"- Ending: {'clean (' + ended[-1][:80] + ')' if ended else 'no session teardown in the last lines: crash, kill or still running'}")
+    no_teardown = ("no session teardown logged: some games quit without destroying the session (LMU); a crash or "
+                   "kill looks the same here, so check the game's own log")
+    print(f"- Ending: {'clean (' + ended[-1][:80] + ')' if ended else no_teardown}")
     print(f"- Last line: `{lines[-1][1]} {lines[-1][3][:200]}`")
 
     print("\n## Settings changed in the run\n")
