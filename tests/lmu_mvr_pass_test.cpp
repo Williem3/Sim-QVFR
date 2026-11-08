@@ -212,7 +212,7 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
-    {  // The twin lookup: once per shader and frame (the cache), a twin attached since seen from the next frame.
+    {  // The twin lookup: once per shader (the cache, across frames); a twin attached since seen once announced.
         lmu::mvr_pass_begin(0, &view, false);
         const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
         for (int i = 0; i < 5; ++i) {
@@ -223,13 +223,22 @@ int main() {
         check(s1.lookups - s0.lookups == 10 && s1.lookupMisses - s0.lookupMisses <= 2 && bound_vs(context.Get()) == twin.Get(),
               "ten binds of two shaders in a frame: at most two lookups not cached, the twin bound");
         lmu::mvr_pass_end(0);
+        lmu::mvr_pass_begin(0, &view, false);  // the next frame (its start looks up the bound shader): still cached
+        context->VSSetShader(b.Get(), nullptr, 0);
+        context->VSSetShader(a.Get(), nullptr, 0);
+        const lmu::MvrPassStats s2 = lmu::mvr_pass_stats();
+        check(s2.lookups - s1.lookups == 3 && s2.lookupMisses == s1.lookupMisses && bound_vs(context.Get()) == twin.Get(),
+              "the next frame: every lookup answered by the cache");
+        lmu::mvr_pass_end(0);
         ComPtr<ID3D11VertexShader> twinB = vertex_shader(device.Get(), "4");
         b->SetPrivateDataInterface(lmu::kMvrTwinGuid, twinB.Get());
-        lmu::mvr_pass_begin(0, &view, false);  // the next frame
+        lmu::mvr_twins_changed();
+        lmu::mvr_pass_begin(0, &view, false);
         context->VSSetShader(b.Get(), nullptr, 0);
-        check(bound_vs(context.Get()) == twinB.Get() && twoViewsOn == 1, "the next frame: b's new twin bound");
+        check(bound_vs(context.Get()) == twinB.Get() && twoViewsOn == 1, "a twin attached and announced: b's twin bound");
         lmu::mvr_pass_end(0);
         b->SetPrivateDataInterface(lmu::kMvrTwinGuid, nullptr);
+        lmu::mvr_twins_changed();
     }
 
     {  // Gate D: pass 0's resolve keeps its focus region; pass 2's resolve becomes a copy of it into the top-left.

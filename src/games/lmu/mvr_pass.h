@@ -45,6 +45,8 @@ void mvr_frame_mode(int mode);
 // Tests: the single-pass stereo switch (NVAPI's by default) and where the comparison's images go.
 using TwoViewsFn = int (*)(ID3D11DeviceContext*, bool);
 void mvr_set_two_views(TwoViewsFn fn);
+// A twin attached to a shader that had none (tests: the probe attaches them at creation, which the cache sees itself).
+void mvr_twins_changed();
 
 struct MvrComparison {
     bool ok = false;

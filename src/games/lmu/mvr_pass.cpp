@@ -67,14 +67,16 @@ struct GpuFrame {
     int mode = 0;  // mvr_frame_mode: 0 MVR, 1 the four passes alone (an A/B run)
 };
 
-// The twin of a game shader by its address, valid for a frame and until the game creates another vertex shader (a new
-// one may take a released one's address): GetPrivateData once per shader and frame instead of at every bind.
+// The twin of a game shader by its address, valid until the game creates another vertex shader (a new one may take a
+// released one's address; twins are attached only at creation, mvr_probe.cpp): GetPrivateData once per shader instead of
+// at every bind. Slots by a multiplicative hash of the address (allocations are aligned: its low bits alone collide;
+// the 2026-11-08 10:08 run missed 30% of lookups with them, twice the shaders a frame binds).
 struct TwinEntry {
     ID3D11VertexShader* vs = nullptr;
     ID3D11VertexShader* twin = nullptr;  // raw: the game's shader holds it (its private data) while it lives
     uint32_t epoch = 0;
 };
-constexpr unsigned kTwinCache = 1024;
+constexpr unsigned kTwinCacheBits = 10, kTwinCache = 1u << kTwinCacheBits;
 
 // CPU in this code's context hooks (the calls passed on included), in TSC ticks since the last log line.
 struct HookTime {
@@ -221,7 +223,8 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
         g.twinGeneration = generation;
         ++g.twinEpoch;
     }
-    TwinEntry& e = g.twins[(reinterpret_cast<uintptr_t>(vs) >> 4) % kTwinCache];
+    TwinEntry& e = g.twins[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(vs)) * 0x9E3779B97F4A7C15ull) >>
+                           (64 - kTwinCacheBits)];
     if (e.epoch == g.twinEpoch && e.vs == vs)
         return e.twin;
     ++g.stats.lookupMisses;
@@ -696,7 +699,6 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
             g.context->Begin(f.disjoint.Get());
             g.gpuSlot = slot;
         }
-        ++g.twinEpoch;  // a new frame: its shaders looked up again
     }
     stamp(pass, 0);
     g.replaceResolve = replaceResolve && pass >= 2 && g.keptOk[pass & 1];
@@ -819,6 +821,8 @@ void mvr_frame_end(unsigned long long frame) {
 void mvr_set_two_views(TwoViewsFn fn) { g.twoViews = fn ? fn : &nvapi_two_views; }
 
 void mvr_frame_mode(int mode) { g.mode = mode ? 1 : 0; }
+
+void mvr_twins_changed() { ++g.twinEpoch; }
 
 MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
                           int range) {
