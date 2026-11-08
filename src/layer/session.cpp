@@ -301,8 +301,11 @@ XrResult XRAPI_CALL layerBeginFrame(XrSession session, const XrFrameBeginInfo* i
 XrResult XRAPI_CALL layerBeginSession(XrSession session, const XrSessionBeginInfo* info) {
     XrResult r = next.BeginSession(session, info);
     logf("xrBeginSession viewConfig=%d result=%d", info->primaryViewConfigurationType, r);
-    if (XR_SUCCEEDED(r))
+    if (XR_SUCCEEDED(r)) {
+        if (!game->attaches_action_sets())  // no OpenXR input of its own (LMU): the gaze set by itself
+            gaze_attach_alone(session);
         game->session_running(true);
+    }
     return r;
 }
 

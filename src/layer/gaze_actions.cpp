@@ -15,6 +15,8 @@ namespace {
 
 constexpr XrDuration kSceneLocateRecentNs = 1'000'000'000;
 
+bool attachedAlone = false;  // gaze_attach_alone attached the layer's set by itself (under gaze.mutex)
+
 }  // namespace
 
 // True when the gaze is not taken from this xrLocateViews: it locates in a head-locked space while the
@@ -106,6 +108,7 @@ void gaze_init(XrInstance instance) {
         gaze.bindings.clear();
         gaze.profileSuggested.clear();
         gaze.suggested = gaze.attached = false;
+        attachedAlone = false;
         gaze.appSyncs = 0;
         gaze.space = XR_NULL_HANDLE;
     }
@@ -199,11 +202,10 @@ XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
     return r;
 }
 
-XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttachInfo* info) {
-    std::lock_guard guard(gaze.mutex);
-    if (!gaze.set || !info)
-        return next.AttachSessionActionSets(session, info);
-    // Profiles ACE suggested nothing for: the layer's bindings alone.
+namespace {
+
+// The layer's own bindings for every profile the game suggested nothing for. Under gaze.mutex.
+void suggest_own_bindings() {
     for (const auto& [profile, bindings] : gaze.bindings) {
         if (gaze.profileSuggested[profile])
             continue;
@@ -218,6 +220,38 @@ XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSess
         logf("input: suggested the layer's own %zu binding(s) for %s, result=%d", bindings.size(),
              path_name(gaze.instance, profile).c_str(), r);
     }
+}
+
+}  // namespace
+
+// A game with no OpenXR input of its own (GameAdapter::attaches_action_sets): the layer's set attached by itself, once
+// per session, at xrBeginSession.
+void gaze_attach_alone(XrSession session) {
+    std::lock_guard guard(gaze.mutex);
+    if (!gaze.set || gaze.attached || !next.AttachSessionActionSets)
+        return;
+    suggest_own_bindings();
+    XrSessionActionSetsAttachInfo info{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+    info.countActionSets = 1;
+    info.actionSets = &gaze.set;
+    const XrResult r = next.AttachSessionActionSets(session, &info);
+    logf("gaze: attached alone (the game uses no OpenXR input), result=%d", r);
+    gaze.attached = attachedAlone = XR_SUCCEEDED(r);
+}
+
+XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttachInfo* info) {
+    std::lock_guard guard(gaze.mutex);
+    if (attachedAlone) {  // the adapter said the game wouldn't: its own attach fails (one per session)
+        const XrResult r = next.AttachSessionActionSets(session, info);
+        logf("gaze: the game attaches %u action set(s) of its own after the layer attached its gaze alone: result=%d "
+             "(GameAdapter::attaches_action_sets is wrong for this game)",
+             info ? info->countActionSets : 0, r);
+        return r;
+    }
+    if (!gaze.set || !info)
+        return next.AttachSessionActionSets(session, info);
+    // Profiles the game suggested nothing for: the layer's bindings alone.
+    suggest_own_bindings();
     std::vector<XrActionSet> sets(info->actionSets, info->actionSets + info->countActionSets);
     sets.push_back(gaze.set);
     XrSessionActionSetsAttachInfo merged = *info;

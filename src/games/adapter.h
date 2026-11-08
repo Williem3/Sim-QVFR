@@ -79,6 +79,9 @@ public:
         (void)uv;
         return nullptr;
     }
+    // False: the game uses no OpenXR input (no xrAttachSessionActionSets, LMU), so the layer attaches its own gaze and
+    // menu actions alone at xrBeginSession; otherwise they ride along with the game's (one attach per session).
+    virtual bool attaches_action_sets() const { return true; }
     // [experiment] hang_watch_s when the ini doesn't set it (probe/hang_watch.h): the longest the game goes
     // without a frame on its own, when loading, plus a margin.
     virtual unsigned hang_watch_s() const { return 30; }

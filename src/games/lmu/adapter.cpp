@@ -34,6 +34,8 @@ public:
     bool qvfr_composable() const override { return false; }     // not by the D3D12 compositor:
     bool qvfr_compose_d3d11() const override { return true; }   // LMU is D3D11
     bool qvfr_separate_views() const override { return true; }  // every view an image of its own, one size
+    // LMU uses no OpenXR input (no attach in a whole session, 2026-11-07 runs): the gaze set is attached alone.
+    bool attaches_action_sets() const override { return false; }
     bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         if (!has_qvfr())
             return false;

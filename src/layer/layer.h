@@ -33,6 +33,7 @@ std::string path_name(XrInstance instance, XrPath path);
 XrResult XRAPI_CALL layerSuggestInteractionProfileBindings(XrInstance instance,
                                                           const XrInteractionProfileSuggestedBinding* suggested);
 XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttachInfo* info);
+void gaze_attach_alone(XrSession session);
 XrResult XRAPI_CALL layerPollEvent(XrInstance instance, XrEventDataBuffer* event);
 XrResult XRAPI_CALL layerSyncActions(XrSession session, const XrActionsSyncInfo* info);
 
