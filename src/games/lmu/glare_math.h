@@ -14,15 +14,29 @@
 
 namespace lmu {
 
-// The top-left region of a YEBIS render texture that a pass uses: its size times the viewport scale plus the offset
-// (YEBIS's SetRenderSceneViewportScale; LMU's render scale), rounded, at least a texel and at most the texture.
-inline simqvfr::ViewRegion yebis_region(unsigned width, unsigned height, const float (&scaleOffset)[4]) {
-    const auto axis = [](unsigned size, float scale, float offset) {
-        const double v = std::isfinite(scale) && std::isfinite(offset) ? size * static_cast<double>(scale) + offset : size;
+// The top-left region of a YEBIS render texture that a pass uses. Its UV scale and offset (+0x90: UV per texel of its
+// size, 1 / width at full size) give the UV extent YEBIS samples, size x scale + offset (1: all of it; LMU's render
+// scale below its launch value: less); the region is that extent of the D3D11 texture (`textureWidth`, `textureHeight`),
+// rounded, at least a texel and at most the texture. A non-finite extent counts as the whole texture.
+inline simqvfr::ViewRegion yebis_region(unsigned textureWidth, unsigned textureHeight, unsigned width, unsigned height,
+                                        const float (&scaleOffset)[4]) {
+    const auto axis = [](unsigned texture, unsigned size, float scale, float offset) {
+        const double uv = size * static_cast<double>(scale) + offset;
+        const double v = std::isfinite(uv) ? uv * texture : texture;
         const double r = std::floor(v + 0.5);
-        return static_cast<int>(r < 1 ? 1 : r > size ? size : r);
+        return static_cast<int>(r < 1 ? 1 : r > texture ? texture : r);
     };
-    return {0, 0, axis(width, scaleOffset[0], scaleOffset[2]), axis(height, scaleOffset[1], scaleOffset[3])};
+    return {0, 0, axis(textureWidth, width, scaleOffset[0], scaleOffset[2]),
+            axis(textureHeight, height, scaleOffset[1], scaleOffset[3])};
+}
+
+// The UV extent itself (for the log: it should be the share of its target the pass rendered).
+inline double yebis_uv_extent(unsigned size, float scale, float offset) { return size * static_cast<double>(scale) + offset; }
+
+// A region a pass can plausibly use: LMU's live resolution goes down to 10% of the launch size; anything under 5% of the
+// texture per axis is a misread layout, and sharing into it would change nothing that shows.
+inline bool yebis_region_plausible(const simqvfr::ViewRegion& r, unsigned textureWidth, unsigned textureHeight) {
+    return r.width * 20 >= static_cast<int>(textureWidth) && r.height * 20 >= static_cast<int>(textureHeight);
 }
 
 // A focus view's glare from its eye's: each focus texel takes the eye's glare in the same direction. The focus projection
@@ -43,15 +57,18 @@ inline simqvfr::ViewMapping glare_mapping(const FocusBox& box) {
     return m;
 }
 
-// CRenderGlare's result after its composite (abi.h [Glare share]): the texture (AddRef'd), its size and viewport scale.
+// CRenderGlare's result after its composite (abi.h [Glare share]): the texture (AddRef'd) and its size, the render
+// texture's own size and UV scale and offset.
 struct YebisGlare {
     ID3D11Texture2D* texture = nullptr;
+    unsigned textureWidth = 0, textureHeight = 0;
     unsigned width = 0, height = 0;
     float scaleOffset[4] = {};
 };
 
 // Reads it under SEH (no C++ objects with destructors here: __try needs a plain frame). 0: read; 1: a pointer on the way
-// is null; 2: unreadable (an access violation); 3: the resource isn't a 2D texture of the size the render texture says.
+// is null; 2: unreadable (an access violation); 3: the resource isn't a 2D texture at least the size the render texture
+// says.
 inline int read_yebis_glare(const void* renderGlare, YebisGlare& out) {
     out = YebisGlare{};
     __try {
@@ -70,11 +87,13 @@ inline int read_yebis_glare(const void* renderGlare, YebisGlare& out) {
             return 3;
         D3D11_TEXTURE2D_DESC d;
         texture->GetDesc(&d);
-        if (d.Width != out.width || d.Height != out.height || d.SampleDesc.Count != 1) {
+        if (d.Width < out.width || d.Height < out.height || out.width == 0 || out.height == 0 || d.SampleDesc.Count != 1) {
             texture->Release();
             return 3;
         }
         out.texture = texture;
+        out.textureWidth = d.Width;
+        out.textureHeight = d.Height;
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         out.texture = nullptr;

@@ -92,21 +92,43 @@ std::vector<std::uint32_t> read_back(ID3D11Device* device, ID3D11DeviceContext* 
     return out;
 }
 
+// A render texture's UV scale and offset (+0x90): UV per texel of its size, so share / size for a pass at that share.
+void uv_scale(float share, unsigned w, unsigned h, float (&out)[4]) {
+    out[0] = share / static_cast<float>(w);
+    out[1] = share / static_cast<float>(h);
+    out[2] = 0;
+    out[3] = 0;
+}
+
 void region_checks() {
-    const float full[4] = {1, 1, 0, 0}, half[4] = {0.5f, 0.5f, 0, 0}, forty[4] = {0.4f, 0.4f, 0, 0};
-    const float none[4] = {0, 0, 0, 0}, over[4] = {1.5f, 2, 0, 0}, nan[4] = {NAN, 1, 0, 0};
-    auto r = lmu::yebis_region(kW, kH, full);
-    check(r.x == 0 && r.y == 0 && r.width == 646 && r.height == 506, "region: viewport scale 1 is the whole texture");
-    r = lmu::yebis_region(kW, kH, half);
-    check(r.width == 323 && r.height == 253, "region: scale 0.5 is the top-left half (646 x 0.5, 506 x 0.5)");
-    r = lmu::yebis_region(kW, kH, forty);
-    check(r.width == 258 && r.height == 202, "region: scale 0.4 rounds to 258x202");
-    r = lmu::yebis_region(kW, kH, none);
-    check(r.width == 1 && r.height == 1, "region: scale 0 keeps a texel");
-    r = lmu::yebis_region(kW, kH, over);
-    check(r.width == 646 && r.height == 506, "region: a scale over 1 stops at the texture");
-    r = lmu::yebis_region(kW, kH, nan);
+    // The values the 2026-11-08 10:42 run logged at full size: 0.0015 0.0020 (1/646, 1/506), offsets 0.
+    float full[4], half[4], forty[4];
+    uv_scale(1, kW, kH, full);
+    uv_scale(0.5f, kW, kH, half);
+    uv_scale(0.4f, kW, kH, forty);
+    const float none[4] = {0, 0, 0, 0}, over[4] = {3.0f / kW, 2.0f / kH, 0, 0}, nan[4] = {NAN, 1.0f / kH, 0, 0};
+    auto r = lmu::yebis_region(kW, kH, kW, kH, full);
+    check(r.x == 0 && r.y == 0 && r.width == 646 && r.height == 506,
+          "region: UV scale 1 / size (the run's 0.0015 x 0.0020) is the whole texture, not one texel");
+    check(lmu::yebis_region_plausible(r, kW, kH), "region: the whole texture is plausible");
+    r = lmu::yebis_region(kW, kH, kW, kH, half);
+    check(r.width == 323 && r.height == 253, "region: a pass at 0.5 uses the top-left half (646 x 0.5, 506 x 0.5)");
+    r = lmu::yebis_region(kW, kH, kW, kH, forty);
+    check(r.width == 258 && r.height == 202, "region: a pass at 0.4 rounds to 258x202");
+    r = lmu::yebis_region(kW, kH, kW / 2, kH / 2, full);
+    check(r.width == 323 && r.height == 253, "region: a render texture half its texture's size, UV per its texel, is half");
+    r = lmu::yebis_region(kW, kH, kW, kH, none);
+    check(r.width == 1 && r.height == 1 && !lmu::yebis_region_plausible(r, kW, kH),
+          "region: UV scale 0 keeps a texel and is refused as implausible");
+    const float asRead[4] = {1, 1, 0, 0};  // the first build's reading: a viewport scale of 1 taken as UV per texel
+    r = lmu::yebis_region(kW, kH, kW, kH, asRead);
+    check(r.width == 646 && r.height == 506, "region: a UV extent over 1 stops at the texture");
+    r = lmu::yebis_region(kW, kH, kW, kH, over);
+    check(r.width == 646 && r.height == 506, "region: UV extents 3 and 2 stop at the texture");
+    r = lmu::yebis_region(kW, kH, kW, kH, nan);
     check(r.width == 646 && r.height == 506, "region: a non-finite scale is the whole axis");
+    const simqvfr::ViewRegion tiny{0, 0, 30, 506};
+    check(!lmu::yebis_region_plausible(tiny, kW, kH), "region: under 5% of the texture on an axis is implausible");
 }
 
 void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
@@ -126,8 +148,13 @@ void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
 
     // The eye's glare at viewport scale 0.8 (live resolution: the eye smaller than the focus view), a halo (a Gaussian,
     // sigma 5 eye texels) at a direction inside the box, near its left edge.
-    const float eyeScale[4] = {0.8f, 0.8f, 0, 0}, focusScale[4] = {1, 1, 0, 0};
-    const simqvfr::ViewRegion er = lmu::yebis_region(kW, kH, eyeScale), fr = lmu::yebis_region(kW, kH, focusScale);
+    float eyeScale[4], focusScale[4];
+    uv_scale(0.8f, kW, kH, eyeScale);
+    uv_scale(1, kW, kH, focusScale);
+    const simqvfr::ViewRegion er = lmu::yebis_region(kW, kH, kW, kH, eyeScale);
+    const simqvfr::ViewRegion fr = lmu::yebis_region(kW, kH, kW, kH, focusScale);
+    check(er.width == 517 && er.height == 405 && fr.width == 646 && fr.height == 506,
+          "regions: the eye's at 0.8 (517x405), the focus view's whole (646x506)");
     const double tx = box.focusTan[0] + 0.15 * (box.focusTan[1] - box.focusTan[0]);
     const double ty = box.focusTan[2] + 0.6 * (box.focusTan[3] - box.focusTan[2]);
     const double ex = (tx - l) / (r - l) * er.width, ey = (u - ty) / (u - d) * er.height;  // eye texels (rows down)
@@ -210,7 +237,7 @@ void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
     check(seamBad == 0, "the focus region's edge column holds the eye's glare at the box edge");
 
     bool beyondKept = true;
-    const simqvfr::ViewRegion inner = lmu::yebis_region(kW, kH, eyeScale);  // a second run into a smaller focus region
+    const simqvfr::ViewRegion inner = lmu::yebis_region(kW, kH, kW, kH, eyeScale);  // into a smaller focus region
     std::vector<std::uint32_t> again(kW * kH, marker);
     auto yebis2 = glare_texture(device, again, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
     resample.resample_target(eyeGlare.Get(), er, yebis2.Get(), inner, m);
@@ -232,7 +259,8 @@ void read_checks(ID3D11Device* device) {
     ID3D11Resource* resource = tex.Get();
     std::memcpy(gpu + lmu::kGpuTextureResource, &resource, sizeof(resource));
     const unsigned size[2] = {kW, kH};
-    const float scale[4] = {0.5f, 0.5f, 0, 0};
+    float scale[4];
+    uv_scale(0.5f, kW, kH, scale);
     std::memcpy(surface + lmu::kRenderTextureSize, size, sizeof(size));
     std::memcpy(surface + lmu::kRenderTextureScale, scale, sizeof(scale));
     const void* gpuPtr = gpu;
@@ -242,15 +270,22 @@ void read_checks(ID3D11Device* device) {
 
     lmu::YebisGlare g;
     int rc = lmu::read_yebis_glare(glare, g);
-    check(rc == 0 && g.texture == tex.Get() && g.width == kW && g.height == kH && g.scaleOffset[0] == 0.5f,
-          "read: the glare result's texture, size and viewport scale");
+    check(rc == 0 && g.texture == tex.Get() && g.width == kW && g.height == kH && g.textureWidth == kW &&
+              g.textureHeight == kH && g.scaleOffset[0] == scale[0],
+          "read: the glare result's texture and its size, the render texture's size and UV scale");
     if (g.texture)
         g.texture->Release();
 
-    const unsigned wrong[2] = {kW / 2, kH};
-    std::memcpy(surface + lmu::kRenderTextureSize, wrong, sizeof(wrong));
+    const unsigned smaller[2] = {kW / 2, kH};
+    std::memcpy(surface + lmu::kRenderTextureSize, smaller, sizeof(smaller));
     rc = lmu::read_yebis_glare(glare, g);
-    check(rc == 3 && !g.texture, "read: a texture of another size than the render texture says is refused");
+    check(rc == 0 && g.width == kW / 2 && g.textureWidth == kW, "read: a render texture smaller than its texture is read");
+    if (g.texture)
+        g.texture->Release();
+    const unsigned bigger[2] = {kW * 2, kH};
+    std::memcpy(surface + lmu::kRenderTextureSize, bigger, sizeof(bigger));
+    rc = lmu::read_yebis_glare(glare, g);
+    check(rc == 3 && !g.texture, "read: a render texture bigger than the texture is refused");
     std::memcpy(surface + lmu::kRenderTextureSize, size, sizeof(size));
 
     const void* null = nullptr;

@@ -3,10 +3,11 @@
 Usage:
     python halo_profile.py --atlas <atlas.png> --eye 0 --box x0 y0 x1 y1 [--light x y] [--out <prefix>]
     python halo_profile.py --eye-image <eye.png> --focus-image <focus.png> --box x0 y0 x1 y1 [...]
---atlas: LMU QVFR's four views as the layer saves them at the frame capture hotkey (lmu-qvfr-frame*-atlas.png: eyes
-in the top row, eye e at x = e W, its focus view below). --box: where the focus view sits in its eye's image, as
-fractions of width and height (y down), as the log line of that capture gives it. --light: the light's centre in the
-eye image (pixels); by default the brightest spot of the focus view (after a small blur).
+--atlas: four views in one image (eyes in the top row, eye e at x = e W, its focus view below). --eye-image and
+--focus-image: the views as LMU QVFR saves them at the frame capture hotkey (lmu-qvfr-frame*-eye0.png, -focus0.png; the
+log line of that capture gives the whole command). --box: where the focus view sits in its eye's image, as fractions of
+width and height (y down). --light: the light's centre in the eye image (pixels), inside or outside the box (outside:
+only the halo reaching into the box is compared); by default the brightest spot of the focus view (after a small blur).
 
 Both images go to eye pixels around the light: the eye's own pixels inside the box (what the periphery would show
 there) and the focus view averaged down to the eye's density. Per ring of radius r (eye pixels) it prints the mean
@@ -80,6 +81,8 @@ def main():
     ap.add_argument("--box", type=float, nargs=4, required=True, metavar=("X0", "Y0", "X1", "Y1"))
     ap.add_argument("--light", type=float, nargs=2, metavar=("X", "Y"))
     ap.add_argument("--step", type=float, default=4, help="ring width, eye pixels")
+    ap.add_argument("--outside-reach", type=float, default=60,
+                    help="a light outside the box: eye pixels of rings compared from the box's nearest pixel")
     ap.add_argument("--out")
     a = ap.parse_args()
 
@@ -125,20 +128,30 @@ def main():
     e_y, _ = rings(eye_yel, radius, a.step, count)
     f_y, _ = rings(foc_yel, radius, a.step, count)
 
-    # The core: rings where the eye's luminance is still above half its peak ring (the light itself, sharper in the
-    # focus view by design); the halo starts after it. The edge: the box's nearest edge from the light.
-    peak = np.nanmax(e_l[:3])
-    core = 0
-    while core + 1 < count and np.isfinite(e_l[core]) and e_l[core] > 0.5 * peak:
-        core += 1
-    # The halo rings: from the core out while the box still holds at least a quarter of each ring.
-    edge_r = min(lx, ly, eye_box8.shape[1] - lx, eye_box8.shape[0] - ly)
-    edge_k = core + 1
-    while edge_k + 1 < count and n[edge_k + 1] >= 0.25 * 2 * np.pi * (edge_k + 1.5) * a.step * a.step:
-        edge_k += 1
-    edge_k = min(edge_k, count - 1)
-    print(f"core: {core * a.step:.0f} eye px; nearest box edge {edge_r:.0f} eye px from the light; halo rings to "
-          f"{edge_k * a.step:.0f} eye px (a quarter of each ring or more inside the box)\n")
+    inside = 0 <= lx < eye_box8.shape[1] and 0 <= ly < eye_box8.shape[0]
+    if inside:
+        # The core: rings where the eye's luminance is still above half its peak ring (the light itself, sharper in the
+        # focus view by design); the halo starts after it. The edge: the box's nearest edge from the light.
+        peak = np.nanmax(e_l[:3])
+        core = 0
+        while core + 1 < count and np.isfinite(e_l[core]) and e_l[core] > 0.5 * peak:
+            core += 1
+        # The halo rings: from the core out while the box still holds at least a quarter of each ring.
+        edge_r = min(lx, ly, eye_box8.shape[1] - lx, eye_box8.shape[0] - ly)
+        edge_k = core + 1
+        while edge_k + 1 < count and n[edge_k + 1] >= 0.25 * 2 * np.pi * (edge_k + 1.5) * a.step * a.step:
+            edge_k += 1
+        edge_k = min(edge_k, count - 1)
+        print(f"core: {core * a.step:.0f} eye px; nearest box edge {edge_r:.0f} eye px from the light; halo rings to "
+              f"{edge_k * a.step:.0f} eye px (a quarter of each ring or more inside the box)\n")
+    else:
+        # A light outside the box: only its halo reaches in. The rings from the box's nearest pixel out, for
+        # --outside-reach eye pixels (where that halo is still above the background).
+        core = int(np.argmax(n > 0))
+        edge_r = core * a.step
+        edge_k = min(count - 1, core + max(1, int(a.outside_reach / a.step)))
+        print(f"the light is outside the box, {edge_r:.0f} eye px from its nearest pixel; rings {edge_r:.0f}-"
+              f"{edge_k * a.step:.0f} eye px compared\n")
     print("  r(eye px)  pixels   eye lum   focus lum  ratio    eye yel   focus yel  ratio")
     for k in range(count):
         if n[k] == 0:

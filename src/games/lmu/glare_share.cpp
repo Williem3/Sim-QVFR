@@ -37,9 +37,9 @@ simqvfr::D3D11ViewResample resample;
 ID3D11Texture2D* lastGlareTexture = nullptr;  // YEBIS's (not held): its views are dropped when it changes
 
 struct Counts {
-    unsigned long long kept = 0, shared = 0, noEye = 0, noBox = 0, unread = 0, failed = 0;
+    unsigned long long kept = 0, shared = 0, noEye = 0, noBox = 0, unread = 0, implausible = 0, failed = 0;
 } counts;
-bool readLogged = false, failLogged = false, firstShareLogged = false;
+bool readLogged = false, implausibleLogged = false, failLogged = false, firstShareLogged = false;
 simqvfr::ViewRegion loggedRegion[2];  // the eyes' and the focus views' regions as last logged
 
 // `dst` (made again when the size or format differs) = the top-left `region` of `src`.
@@ -79,13 +79,14 @@ void log_region(int which, const YebisGlare& g, const simqvfr::ViewRegion& r) {
     last = r;
     D3D11_TEXTURE2D_DESC d;
     g.texture->GetDesc(&d);
-    // YEBIS's viewport scale should be the share of its target the pass rendered (LMU's render scale per pass).
-    const bool agree = std::fabs(g.scaleOffset[0] - currentShare[0]) < 0.01 &&
-                       std::fabs(g.scaleOffset[1] - currentShare[1]) < 0.01;
-    simqvfr::logf("lmu qvfr: glare share: the %s' glare uses %dx%d of YEBIS's %ux%u result (format %d; viewport scale "
-                  "%.4f %.4f, offset %.2f %.2f; the pass rendered %.4f x %.4f of its target%s)",
-                  which ? "focus views" : "eyes", r.width, r.height, g.width, g.height, static_cast<int>(d.Format),
-                  g.scaleOffset[0], g.scaleOffset[1], g.scaleOffset[2], g.scaleOffset[3], currentShare[0], currentShare[1],
+    // The texture's share YEBIS samples should be the share of its target the pass rendered (LMU's render scale per pass).
+    const double sx = static_cast<double>(r.width) / g.textureWidth, sy = static_cast<double>(r.height) / g.textureHeight;
+    const bool agree = std::fabs(sx - currentShare[0]) < 0.01 && std::fabs(sy - currentShare[1]) < 0.01;
+    simqvfr::logf("lmu qvfr: glare share: the %s' glare uses %dx%d of YEBIS's %ux%u texture (format %d; render texture "
+                  "%ux%u, UV extent %.4f x %.4f; the pass rendered %.4f x %.4f of its target%s)",
+                  which ? "focus views" : "eyes", r.width, r.height, g.textureWidth, g.textureHeight,
+                  static_cast<int>(d.Format), g.width, g.height, yebis_uv_extent(g.width, g.scaleOffset[0], g.scaleOffset[2]),
+                  yebis_uv_extent(g.height, g.scaleOffset[1], g.scaleOffset[3]), currentShare[0], currentShare[1],
                   agree ? ": they agree" : ": THEY DIFFER, the glare may be misplaced");
 }
 
@@ -101,11 +102,23 @@ void after_composite(void* renderGlare) {
                           currentPass,
                           error == 1   ? "a null pointer on the way"
                           : error == 2 ? "unreadable memory on the way"
-                                       : "not a 2D texture of the size its render texture says");
+                                       : "not a 2D texture at least the size its render texture says");
         }
         return;
     }
-    const simqvfr::ViewRegion region = yebis_region(g.width, g.height, g.scaleOffset);
+    const simqvfr::ViewRegion region = yebis_region(g.textureWidth, g.textureHeight, g.width, g.height, g.scaleOffset);
+    if (!yebis_region_plausible(region, g.textureWidth, g.textureHeight)) {
+        ++counts.implausible;
+        if (!implausibleLogged) {
+            implausibleLogged = true;
+            simqvfr::logf("lmu qvfr: glare share: pass %d: YEBIS's glare region reads as %dx%d of its %ux%u texture (render "
+                          "texture %ux%u, UV scale %.6f %.6f, offset %.4f %.4f): not plausible, nothing shared",
+                          currentPass, region.width, region.height, g.textureWidth, g.textureHeight, g.width, g.height,
+                          g.scaleOffset[0], g.scaleOffset[1], g.scaleOffset[2], g.scaleOffset[3]);
+        }
+        g.texture->Release();
+        return;
+    }
     if (g.texture != lastGlareTexture) {
         lastGlareTexture = g.texture;
         resample.forget_views();
@@ -207,13 +220,13 @@ void glare_share_pass(int pass, const FocusBox* box, double shareX, double share
 }
 
 void glare_share_frame_end(unsigned long long frame) {
-    if (!installed || frame % 900 != 0 || (counts.kept == 0 && counts.unread == 0))
+    if (!installed || frame % 900 != 0 || (counts.kept == 0 && counts.unread == 0 && counts.implausible == 0))
         return;
     simqvfr::logf("lmu qvfr: glare share: frame %llu (%s): %llu eye glares kept, %llu focus glares replaced by their "
-                  "eye's; not replaced: %llu (no eye glare this frame), %llu (no focus box), %llu (unread), %llu (resample "
-                  "failed)",
+                  "eye's; not replaced: %llu (no eye glare this frame), %llu (no focus box), %llu (unread), %llu (region "
+                  "not plausible), %llu (resample failed)",
                   frame, sharing.load() ? "on" : "off", counts.kept, counts.shared, counts.noEye, counts.noBox,
-                  counts.unread, counts.failed);
+                  counts.unread, counts.implausible, counts.failed);
 }
 
 }  // namespace lmu

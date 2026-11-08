@@ -1622,6 +1622,7 @@ void four_passes_frame_end() {
     if (qvfrMode) {
         if (passes < 4) {
             atlasReady = false;  // no four views this frame (menus, loading): the layer submits the eyes as they are
+            seenCaptureArm = simqvfr::d3d11_capture_armed();  // a frame capture now has no views to save (not later)
             // ... so they render at the game's own scale, filling their targets (the next scene pass sets it again).
             if (!probe_active() && gameScale > 0 && lastWritten != gameScale) {
                 *reinterpret_cast<float*>(base() + kRenderScale) = gameScale;
