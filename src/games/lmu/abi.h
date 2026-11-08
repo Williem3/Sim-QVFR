@@ -49,4 +49,9 @@ inline constexpr unsigned kRenderTargetUsage = 0x2000;
 inline constexpr std::uintptr_t kSurfaceD3D = 0x605220;      // the surface's D3D11 object (not AddRef'd)
 inline constexpr std::uint8_t kSurfaceD3DAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8};
 
+// YEBIS CPostEffect::SetDeltaTime(this, seconds): each pass's post-processing sets it; auto exposure adapts by it. [Post-effect time]
+inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
+inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,
+                                                                 0x83, 0x3d, 0x8f, 0x2e, 0x0c, 0x01};
+
 }  // namespace lmu

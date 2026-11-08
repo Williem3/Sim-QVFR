@@ -28,9 +28,29 @@ using TargetFn = void* (*)(void* renderer);
 using SurfaceFn = void* (*)(void* texture, unsigned usage);
 using D3DObjectFn = void* (*)(void* surface);
 using HistoryCtorFn = void (*)(void* record);
+using SetDeltaTimeFn = long (*)(void* postEffect, float seconds);
 
 RenderSceneFn originalRenderScene = nullptr;
+SetDeltaTimeFn originalSetDeltaTime = nullptr;
 bool installed = false;
+
+// Passes 2-3 render with YEBIS's frame time held near zero, so its auto exposure (one state for both eyes) isn't
+// advanced again by the extra passes: they use the exposure their eye just had. Not 0: YEBIS treats <= 0 as paused and
+// divides by it elsewhere (docs/recon-lmu.md "[Post-effect time]").
+constexpr float kHeldDeltaTime = 1e-5f;
+bool holdExposure = true;
+bool inLaterPass = false;  // passes 2-3 are rendering (render thread)
+int heldThisFrame = 0;
+float lastGameDeltaTime = 0;
+
+long set_delta_time(void* postEffect, float seconds) {
+    if (inLaterPass && holdExposure) {
+        lastGameDeltaTime = seconds;
+        ++heldThisFrame;
+        seconds = kHeldDeltaTime;
+    }
+    return originalSetDeltaTime(postEffect, seconds);
+}
 
 // Passes 2-3's camera history records (the game keeps two on its stack, one per eye).
 alignas(16) std::uint8_t history[2][kCameraHistorySize];
@@ -126,7 +146,9 @@ void render_scene(void* arg, char laterEye) {
     pass = laterEye ? pass + 1 : 0;
     const int p = pass;
     ++passesThisFrame;
+    inLaterPass = p >= 2;
     originalRenderScene(arg, laterEye);
+    inLaterPass = false;
     if (p < 4) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
         eyeOfPass[p] = renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
@@ -241,9 +263,10 @@ void compare() {
 
 }  // namespace
 
-bool four_passes_start_copies() {
+bool four_passes_start_copies(bool hold) {
     if (installed)
         return true;
+    holdExposure = hold;
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     if (!simqvfr::games::supported_build(kGame, simqvfr::sha256_file(exe))) {
@@ -264,6 +287,8 @@ bool four_passes_start_copies() {
         {kGetCurrentEyeTarget, kGetCurrentEyeTargetAnchor, sizeof(kGetCurrentEyeTargetAnchor), "current eye target"},
         {kTextureSurface, kTextureSurfaceAnchor, sizeof(kTextureSurfaceAnchor), "texture surface"},
         {kSurfaceD3D, kSurfaceD3DAnchor, sizeof(kSurfaceD3DAnchor), "surface's D3D11 object"},
+        {kPostEffectSetDeltaTime, kPostEffectSetDeltaTimeAnchor, sizeof(kPostEffectSetDeltaTimeAnchor),
+         "post-effect frame time"},
     };
     for (const Anchor& a : anchors)
         if (!simqvfr::code_matches(a.rva, a.bytes, a.size)) {
@@ -281,6 +306,14 @@ bool four_passes_start_copies() {
             MH_OK ||
         MH_EnableHook(target) != MH_OK) {
         simqvfr::log_line("lmu copies: the scene render couldn't be hooked; not installed");
+        return false;
+    }
+    void* deltaTime = reinterpret_cast<void*>(base() + kPostEffectSetDeltaTime);
+    if (MH_CreateHook(deltaTime, reinterpret_cast<void*>(&set_delta_time),
+                      reinterpret_cast<void**>(&originalSetDeltaTime)) != MH_OK ||
+        MH_EnableHook(deltaTime) != MH_OK) {
+        MH_DisableHook(target);
+        simqvfr::log_line("lmu copies: the post-effect frame time couldn't be hooked; not installed");
         return false;
     }
     // The head first: with two passes `edi & 1` is `edi`, so it changes nothing until the tail counts to four.
@@ -308,8 +341,10 @@ bool four_passes_start_copies() {
         return false;
     }
     installed = true;
-    simqvfr::log_line("lmu copies: on: the eye loop runs four times, passes 2-3 render eyes 0-1 again; their images are "
-                      "compared 300 frames into four-pass rendering, then every 3600 frames (four times at most)");
+    simqvfr::logf("lmu copies: on: the eye loop runs four times, passes 2-3 render eyes 0-1 again; their images are "
+                  "compared 300 frames into four-pass rendering, then every 3600 frames (four times at most); passes 2-3's "
+                  "post-effect frame time %s",
+                  holdExposure ? "held near zero (lmu_copies_hold_exposure=1)" : "as the game sets it (hold off)");
     return true;
 }
 
@@ -322,8 +357,12 @@ void four_passes_frame_end() {
     if (passes >= 4)
         ++fourPassFrames;
     if (fourPassFrames == 1 && passes >= 4)
-        simqvfr::logf("lmu copies: frame %llu: first four-pass frame, eyes rendered %d %d %d %d", frames, eyeOfPass[0],
-                      eyeOfPass[1], eyeOfPass[2], eyeOfPass[3]);
+        simqvfr::logf("lmu copies: frame %llu: first four-pass frame, eyes rendered %d %d %d %d; post-effect frame time "
+                      "held in passes 2-3: %s (%d calls this frame, the game's %.5f s -> %.5f s)",
+                      frames, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3], holdExposure ? "yes" : "no",
+                      heldThisFrame, lastGameDeltaTime, kHeldDeltaTime);
+    const int held = heldThisFrame;
+    heldThisFrame = 0;
     if (armed) {
         armed = false;
         if (GetCurrentThreadId() != renderThread)
@@ -340,8 +379,9 @@ void four_passes_frame_end() {
         nextCompare = frames + 3600;
     }
     if (frames % 1800 == 0)
-        simqvfr::logf("lmu copies: frame %llu: %llu four-pass frames so far; last frame %d passes, eyes %d %d %d %d", frames,
-                      fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3]);
+        simqvfr::logf("lmu copies: frame %llu: %llu four-pass frames so far; last frame %d passes, eyes %d %d %d %d, "
+                      "frame time held in %d calls",
+                      frames, fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3], held);
 }
 
 }  // namespace lmu

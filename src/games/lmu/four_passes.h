@@ -8,7 +8,8 @@
 namespace lmu {
 
 // Installs the four passes as copies on this build (hash and anchors checked); false and a log line otherwise.
-bool four_passes_start_copies();
+// `holdExposure`: passes 2-3 render with YEBIS's frame time held near zero, so they don't advance auto exposure again.
+bool four_passes_start_copies(bool holdExposure);
 // Every xrEndFrame: counts the passes, and at a few frames on track compares passes 2-3 with eyes 0-1.
 void four_passes_frame_end();
 

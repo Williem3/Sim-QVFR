@@ -21,7 +21,8 @@ public:
         if (!analysis())
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
-        copies_ = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0 && four_passes_start_copies();
+        copies_ = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0 &&
+                  four_passes_start_copies(GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0);
     }
     void frame_end() override {
         if (viewProbe_)
