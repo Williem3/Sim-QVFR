@@ -24,4 +24,29 @@ inline constexpr std::size_t kParamsEye = 0x0;   // int
 inline constexpr std::size_t kParamsNear = 0x8;  // float
 inline constexpr std::size_t kParamsFar = 0xc;   // float
 
+// The VR eye loop in the game's frame: its head hands the camera update the eye (edi), its tail counts to 2. [Eye loop]
+inline constexpr std::uintptr_t kEyeLoopHead = 0xcd15f0;
+inline constexpr std::uint8_t kEyeLoopHeadAnchor[] = {0x44, 0x8b, 0xc7, 0xb2, 0x01};  // mov r8d, edi; mov dl, 1
+inline constexpr std::uintptr_t kEyeLoopTail = 0xcd17c1;
+inline constexpr std::uint8_t kEyeLoopTailAnchor[] = {0xff, 0xc7, 0x48, 0x83, 0xc3, 0x6c,  // inc edi; add rbx, 0x6c
+                                                      0x83, 0xff, 0x02};                     // cmp edi, 2
+inline constexpr std::size_t kCameraHistorySize = 0x6c;   // rbx: this eye's record (two on the stack)
+inline constexpr std::uintptr_t kCameraHistoryCtor = 0x3695e0;
+inline constexpr std::uint8_t kCameraHistoryCtorAnchor[] = {0x33, 0xc0, 0x48, 0xc7, 0x41, 0x04, 0x00, 0x00, 0x80, 0x3f};
+
+// One eye's scene render (arg, later eye): a later eye skips the frame's shared Pre Render (shadows, cubemaps). [Scene render]
+inline constexpr std::uintptr_t kRenderScene = 0xd58a70;
+inline constexpr std::uint8_t kRenderSceneAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18};
+
+// The renderer and the eye its view params hold, its current eye target, and that texture's D3D11 object. [Eye target]
+inline constexpr std::uintptr_t kRenderer = 0x1b12be8;      // cubeDirectX11*
+inline constexpr std::size_t kRendererViewEye = 0x77388;    // int: the view params' eye (SetViewParams copies them here)
+inline constexpr std::uintptr_t kGetCurrentEyeTarget = 0x5ad930;  // texture object* (cubeDirectX11*)
+inline constexpr std::uint8_t kGetCurrentEyeTargetAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01};
+inline constexpr std::uintptr_t kTextureSurface = 0x550e60;  // surface* (texture object*, usage)
+inline constexpr std::uint8_t kTextureSurfaceAnchor[] = {0x85, 0xd2, 0x75, 0x02, 0x8b, 0x11, 0x0f, 0xba, 0xe2, 0x09};
+inline constexpr unsigned kRenderTargetUsage = 0x2000;
+inline constexpr std::uintptr_t kSurfaceD3D = 0x605220;      // the surface's D3D11 object (not AddRef'd)
+inline constexpr std::uint8_t kSurfaceD3DAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8};
+
 }  // namespace lmu

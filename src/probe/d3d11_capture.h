@@ -5,10 +5,18 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "../xr.h"
 
 namespace simqvfr {
+
+// An 8-bit RGBA or BGRA texture's pixels as BGRA (alpha forced opaque), read back through a staging copy on its own
+// device's immediate context: call it on the thread that renders with that context. False for other formats or MSAA.
+bool d3d11_read_bgra8(ID3D11Texture2D* texture, std::vector<uint8_t>& bgra, unsigned& width, unsigned& height);
+// BGRA pixels as a PNG file.
+bool write_png_bgra(const std::wstring& path, const std::vector<uint8_t>& bgra, unsigned width, unsigned height);
 
 // From xrCreateSession with a D3D11 binding; `frame` 0: off.
 void d3d11_capture_start(ID3D11Device* device, uint64_t frame);
