@@ -73,6 +73,7 @@ def report(path, all_problems):
     for pat in (r"^xrCreateApiLayerInstance app=", r"^experiment: mode=", r"^experiment: .*periphery",
                 r"^experiment: FOV crop", r"^experiment: focus shape", r"has no QVFR yet", r"anti-cheat is running",
                 r"^layers below this one", r"^gaze: XR_EXT_eye_gaze", r"^cheeky: runtime",
+                r"^views4 dlss: (each|off|NGX)",
                 r"^xrEnumerateViewConfigurationViews .*view=0", r"^xrCreateSession result", r"^image dump:"):
         for t, s, m in all_of(pat)[-1:]:
             print(f"- `{m[:220]}`")
@@ -163,6 +164,19 @@ def report(path, all_problems):
         if key not in probs:
             probs[key] = [s, m, 0]
         probs[key][2] += 1
+    # ACE views4 with Cheeky: a periphery view whose DLSS output Cheeky takes at another size than its rect in the
+    # output layout (ACE leaves the last-made feature's OutWidth in NGX's parameters; recon-ace [dlss-extent]).
+    layout = all_of(r"^views4: viewport layout output=")
+    rects = re.findall(r"(\d): \d+, (\d+x\d+);", layout[-1][2]) if layout else []
+    periphery = {size for view, size in rects if view in "01"}
+    if periphery:
+        for _, s, m in all_of(r"^cheeky: view .* out (\d+x\d+), eye \w+, region Periphery")[-2:]:
+            out = re.search(r" out (\d+x\d+),", m).group(1)
+            if out not in periphery:
+                eye = re.search(r"eye (\w+)", m).group(1)
+                note = (f"cheeky: {eye} periphery view composed at {out}, its rect is {'/'.join(sorted(periphery))}: "
+                        f"the periphery won't match the focus box (stale NGX OutWidth; views4_dlss_extent)")
+                probs.setdefault(f"cheeky periphery {eye} {out}", [s, note, 0])[2] += 1
     if probs:
         items = list(probs.values())
         for s, m, n in items if all_problems else items[:40]:

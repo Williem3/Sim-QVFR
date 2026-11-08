@@ -12,6 +12,7 @@ every address in `abi.h` comes from that build, with how it was found.
 | `stubs.h` | A tiny x64 assembler for the code stubs views4 patches in |
 | `views3.cpp`, `double_render.cpp` | Early research experiments (`mode=views3`, `mode=double_render`, which crashes ACE) |
 | `batch_watch.cpp` | Log-only watch on the instance visibility batch against ACE's limits |
+| `dlss_extent.cpp`, `ngx_extent.h` | Each DLSS feature's own output size in NGX's parameters at its evaluation (views4) |
 
 ## How QVFR works in ACE (views4)
 
@@ -29,7 +30,7 @@ The comments in `abi.h` and `views4.h` explain each patch and the run that calle
 ## ACE-only ini keys
 
 `[experiment]` `views4_callers`, `views4_borrow`, `views4_eyes_only_advance`,
-`views4_shadow_view1_plain`, `views4_screen_size_legacy` and `batch_watch` are read by `adapter.cpp`,
+`views4_shadow_view1_plain`, `views4_screen_size_legacy`, `views4_dlss_extent` and `batch_watch` are read by `adapter.cpp`,
 not the layer. `manifest/sim-qvfr.ini` documents them.
 
 The static-analysis notes (`docs/recon-ace.md`) are kept out of the repository.

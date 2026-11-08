@@ -7,6 +7,7 @@
 
 #include "../../log.h"
 #include "batch_watch.h"
+#include "dlss_extent.h"
 #include "double_render.h"
 #include "game.h"
 #include "views3.h"
@@ -31,6 +32,7 @@ public:
         const bool eyesOnlyAdvance = GetPrivateProfileIntW(L"experiment", L"views4_eyes_only_advance", 0, ini) != 0;
         const bool shadowView1Plain = GetPrivateProfileIntW(L"experiment", L"views4_shadow_view1_plain", 0, ini) != 0;
         const bool screenSizeLegacy = GetPrivateProfileIntW(L"experiment", L"views4_screen_size_legacy", 0, ini) != 0;
+        const bool dlssExtent = GetPrivateProfileIntW(L"experiment", L"views4_dlss_extent", 1, ini) != 0;
         simqvfr::views4_set_borrow(borrow);
         simqvfr::views4_set_layout(s.layout);
         simqvfr::views4_set_screen_size_legacy(screenSizeLegacy);
@@ -40,6 +42,11 @@ public:
             return false;
         if (shadowView1Plain)
             simqvfr::views4_shadow_view1_plain();
+        // Before ACE makes its renderer: the DLSS features are made with it. QVFR runs without it if it fails.
+        if (dlssExtent)
+            simqvfr::dlss_extent_start();
+        else
+            simqvfr::log_line("views4 dlss: off (views4_dlss_extent=0): the DLSS output sizes are left to ACE");
         return true;
     }
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool gazeSample) override {
@@ -54,7 +61,10 @@ public:
     bool qvfr_take_frame(Views4Frame& frame) override { return simqvfr::views4_take_frame(frame); }
     bool qvfr_latest_frame(Views4Frame& frame) override { return simqvfr::views4_latest_frame(frame); }
     void qvfr_note_views(const XrView* views, uint32_t count) override { simqvfr::views4_note_views(views, count); }
-    void qvfr_frame_end() override { simqvfr::views4_frame_end(); }
+    void qvfr_frame_end() override {
+        simqvfr::views4_frame_end();
+        simqvfr::dlss_extent_frame_end();
+    }
 
     // The research experiments (mode=views3, mode=double_render) and the batch watch.
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
