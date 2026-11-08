@@ -112,6 +112,12 @@ void activate(Ctl id, int option) {
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagFrameCapture: app.s.frameCapture = !app.s.frameCapture; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
+    case kAntiCheat:
+        if (games::launcher_game().antiCheatStart) {
+            app.s.antiCheat = !app.s.antiCheat;
+            changed();
+        }
+        return;
     case kDiagKind: open_popup(id); return;
     case kDiagDescription:
         if (!report_edit_fits()) {  // scroll the field into view first: the edit shows only then
@@ -339,6 +345,7 @@ bool space_control(Ctl id) {
     case kDiagBaseline:
     case kDiagKind:
     case kGameShown:
+    case kAntiCheat:
     case kColorGame: return true;
     default: return false;
     }

@@ -12,7 +12,8 @@ namespace lmu {
 inline constexpr const char* kBuilds[] = {"66942337813b301b87d12edfa330f33354a2a4b8cd9b048885cbf77eb6f940cf"};
 
 // Steam starts LMU through EasyAntiCheat's bootstrapper. Sim-QVFR starts the exe itself (offline sessions only), and the
-// layer only logs while either of these runs.
+// layer only logs while either of these runs, unless the user chose to run with EAC ([launcher] anticheat=1): then the
+// launcher starts the bootstrapper and the layer runs as usual.
 inline constexpr const wchar_t* kAntiCheat[] = {L"start_protected_game.exe", L"EasyAntiCheat_EOS.exe", nullptr};
 
 inline constexpr simqvfr::games::GameInfo kGame = {
@@ -27,6 +28,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet
     kAntiCheat,
+    L"start_protected_game.exe",
 };
 
 }  // namespace lmu

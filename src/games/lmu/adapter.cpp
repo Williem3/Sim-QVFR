@@ -29,8 +29,9 @@ bool qvfr_wanted() {
 }
 
 // Identity only with lmu_qvfr=0: the layer logs, QVFR doesn't start. Its experiments run only when their
-// [experiment] key asks, and never in a launch the anti-cheat protects (adapter_for hands out the plain identity
-// adapter there): the view probe (log only), the copies and focus gates (four passes, docs/recon-lmu.md), and QVFR.
+// [experiment] key asks, and not in a launch the anti-cheat protects unless the user chose it ([launcher] anticheat=1;
+// otherwise adapter_for hands out the plain identity adapter there): the view probe (log only), the copies and focus
+// gates (four passes, docs/recon-lmu.md), and QVFR.
 class LmuAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     LmuAdapter() : IdentityAdapter(&kGame) {}

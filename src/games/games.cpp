@@ -62,6 +62,10 @@ bool supported_build(const GameInfo& game, const std::string& sha256) {
     return false;
 }
 
+bool anticheat_chosen(const wchar_t* ini) {
+    return ini && *ini && GetPrivateProfileIntW(L"launcher", L"anticheat", 0, ini) != 0;
+}
+
 bool anticheat_running(const GameInfo& game, std::wstring& found) {
     found.clear();
     if (!game.antiCheat)

@@ -109,6 +109,38 @@ bool process_running(const wchar_t* exe) {
     return found;
 }
 
+// The id of a running `exe`, 0 if none.
+DWORD process_id(const wchar_t* exe) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return 0;
+    PROCESSENTRY32W entry{sizeof(entry)};
+    DWORD pid = 0;
+    for (BOOL more = Process32FirstW(snapshot, &entry); more && !pid; more = Process32NextW(snapshot, &entry))
+        if (_wcsicmp(entry.szExeFile, exe) == 0)
+            pid = entry.th32ProcessID;
+    CloseHandle(snapshot);
+    return pid;
+}
+
+// The game the anti-cheat's bootstrapper (`bootstrapper`, started) goes on to start: waited for up to `seconds`, while
+// the bootstrapper shows its splash. The game wasn't running before the launch (run checks), so the first one is it.
+// Its handle may be refused (the anti-cheat guards it); then only its id.
+PROCESS_INFORMATION started_by_bootstrapper(HANDLE bootstrapper, const wchar_t* exe, int seconds) {
+    PROCESS_INFORMATION game{};
+    for (int i = 0; i < seconds * 4; ++i) {
+        if ((game.dwProcessId = process_id(exe)) != 0)
+            break;
+        DWORD code = STILL_ACTIVE;
+        if (GetExitCodeProcess(bootstrapper, &code) && code != STILL_ACTIVE && code != 0)
+            return {};  // the bootstrapper failed (EAC not installed, a launch it refused)
+        Sleep(250);
+    }
+    if (game.dwProcessId)
+        game.hProcess = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, game.dwProcessId);
+    return game;
+}
+
 // `game`'s folder in Steam's libraries; empty if Steam doesn't have it.
 std::wstring find_game_folder(const games::GameInfo& game) {
     HKEY key = nullptr;
@@ -377,6 +409,13 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     if (game.empty() || !fs::exists(exe, ec))
         return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + widen(info.id) +
                     L" in [launcher] of sim-qvfr.ini");
+    // [launcher] anticheat=1 (the Games pane), for a game with an anti-cheat bootstrapper: the game starts protected,
+    // through the bootstrapper, and the layer runs in it as usual (games/game.h antiCheatStart). The user's risk.
+    const bool viaAntiCheat = info.antiCheatStart && games::anticheat_chosen(ini.c_str());
+    const fs::path bootstrapper = viaAntiCheat ? exe.parent_path() / info.antiCheatStart : fs::path();
+    if (viaAntiCheat && !fs::exists(bootstrapper, ec))
+        return fail(std::wstring(info.antiCheatStart) + L" not found next to " + exe.wstring() +
+                    L" (Run with anti-cheat is on): verify the game's files in Steam");
 
     const std::wstring mode = ini_string(ini.wstring(), L"experiment", L"mode");
     const std::vector<std::wstring> environment = current_environment();
@@ -418,6 +457,9 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"Sim-QVFR launcher " + widen(SIM_QVFR_VERSION) + std::wstring(dryRun ? L" (dry run)" : L""));
     say(L"  game:      " + exe.wstring());
     say(L"  args:      " + std::wstring(info.launchArgs));
+    if (viaAntiCheat)
+        say(L"  anti-cheat: ON, started through " + bootstrapper.filename().wstring() +
+            L" ([launcher] anticheat=1): Sim-QVFR runs with the anti-cheat, at the user's risk");
     say(L"  layer:     " + library.wstring());
     const std::wstring parent = parent_process_name();
     say(std::wstring(L"  rights:    ") +
@@ -468,7 +510,10 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     if (info.earlyLoad)  // the layer sets the game up when loaded into it, before it runs (early_load.cpp)
         launchVariables.push_back({L"SIM_QVFR_EARLY", L"1"});
     std::wstring block = environment_block(environment, launchVariables);
-    std::wstring command = L"\"" + exe.wstring() + L"\" " + info.launchArgs;  // the game's OpenXR start
+    // The game's OpenXR start; through the anti-cheat, the bootstrapper passes the arguments on.
+    const fs::path startExe = viaAntiCheat ? bootstrapper : exe;
+    std::wstring command = L"\"" + startExe.wstring() + L"\" " + info.launchArgs;
+    const bool early = info.earlyLoad && !viaAntiCheat;  // the bootstrapper starts the game: nothing to load into early
     PROCESS_INFORMATION pi{};
     const std::wstring workingFolder = exe.parent_path().wstring();
     LoaderOutput output((runFolder / kLoaderOutputName).wstring());
@@ -486,8 +531,8 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
             say(L"  registry:  NOT registered (" + registryError + L"): the game will likely start flat");
         log_registrations(notes);
     }
-    const DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | (info.earlyLoad ? CREATE_SUSPENDED : 0);
-    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, output.inherits(), flags, block.data(),
+    const DWORD flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | (early ? CREATE_SUSPENDED : 0);
+    if (!CreateProcessW(startExe.c_str(), command.data(), nullptr, nullptr, output.inherits(), flags, block.data(),
                         workingFolder.c_str(), &output.startup.StartupInfo, &pi)) {
         const DWORD startError = GetLastError();
         if (registered) {
@@ -499,13 +544,28 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
         }
         return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(startError) + L")");
     }
-    if (registered) {
+    if (viaAntiCheat) {
+        // From here on the game itself, not the bootstrapper (which exits once the game runs).
+        const PROCESS_INFORMATION protectedGame = started_by_bootstrapper(pi.hProcess, info.exeName, 90);
+        if (!protectedGame.dwProcessId) {
+            say(L"  anti-cheat: " + std::wstring(info.name) + L" did not start within 90 s (the bootstrapper's window says why)");
+        } else {
+            say(L"  anti-cheat: " + std::wstring(info.exeName) + L" started (pid " + std::to_wstring(protectedGame.dwProcessId) + L")" +
+                (protectedGame.hProcess ? L"" : L"; its handle refused, so its exit won't be seen here"));
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            pi = {};
+            pi.hProcess = protectedGame.hProcess;
+            pi.dwProcessId = protectedGame.dwProcessId;
+        }
+    }
+    if (registered && pi.hProcess) {
         ledger_game_started(ledger, process_stamp(pi.hProcess));
         say(start_unregister_helper(pi.hProcess, ledger)
                 ? L"  registry:  taken out when the game exits (a copy of the launcher waits for it)"
                 : L"  registry:  the copy that takes them out did not start; the next start as administrator does");
     }
-    if (info.earlyLoad) {
+    if (early) {
         std::wstring loadError;
         if (load_into(pi.hProcess, library.wstring(), loadError))
             say(L"  layer loaded into " + std::wstring(info.shortName) + L" before it runs");
@@ -516,10 +576,11 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"Started " + std::wstring(info.name) + L" (pid " + std::to_wstring(pi.dwProcessId) + L").");
     if (baseline)  // one launch only
         WritePrivateProfileStringW(L"launcher", L"baseline_next", L"0", ini.c_str());
-    CloseHandle(pi.hThread);
+    if (pi.hThread)
+        CloseHandle(pi.hThread);
     if (launched)
         *launched = {pi.hProcess, pi.dwProcessId, runFolder.wstring(), log.wstring()};
-    else
+    else if (pi.hProcess)
         CloseHandle(pi.hProcess);
     write_file((runFolder / L"launch.txt").wstring(), narrow(report));
     return 0;
