@@ -24,6 +24,10 @@ struct FourPassesRun {
     int count = 3;               // gates: samples
     int warmup = 60;             // gates: four-pass frames before each sample (else two: full frame rate)
     bool exitWhenDone = false;   // gates: ask the game to close after the last sample (probe/run_exit.h)
+    // QVFR diagnostic ([experiment] lmu_render_scale_probe, percent; 0 off): 600 scene frames in, the render scale is
+    // set to this share for 120 frames and then restored, the eye and focus images saved at its middle: what LMU renders
+    // when only the scale changes (the live resolution lever, docs/recon-lmu.md).
+    int renderScaleProbe = 0;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <algorithm>
+
 #include "../../log.h"
 #include "../identity_adapter.h"
 #include "four_passes.h"
@@ -44,6 +46,9 @@ public:
         run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
         run.fractionY = s.focusFractionY;
         run.holdExposure = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, s.ini) != 0;
+        if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
+            run.renderScaleProbe =
+                std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);
         qvfr_ = four_passes_start(run);
         return qvfr_;
     }

@@ -56,6 +56,8 @@ inline constexpr std::size_t kEyeSlotStride = 0x6c;
 inline constexpr std::size_t kSlotMatrix = 4;  // the row-major 4x4 (left-handed, row vectors) after an int
 // The eye render textures (texture objects), eye e at + e * 8. [Eye textures]
 inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
+// The render scale (float): every VR target is recommended x it; GetRenderSize reads it each call. [Live resolution]
+inline constexpr std::uintptr_t kRenderScale = 0x199cc18;
 
 // VRHiddenAreaMask::Draw(this, camera): the lens mask in the eye's screen space, mesh by camera eye (+0x5cc). [Hidden-area mask]
 inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;

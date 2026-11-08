@@ -861,6 +861,72 @@ void compare_focus() {
 
 const char* tag() { return qvfrMode ? "lmu qvfr" : focusMode ? "lmu focus" : "lmu copies"; }
 
+// ---- QVFR diagnostic: the render scale changed live (FourPassesRun::renderScaleProbe) ----
+// Scene frames 600-719 at the probe's share of the scale, the images saved at 660; then the scale as it was.
+constexpr unsigned long long kProbeStart = 600, kProbeShot = 60, kProbeEnd = 120;  // the last two after the start
+float probeOldScale = 0;
+int probeStage = 0;  // 0 waiting, 1 scaled, 2 saved, 3 done
+unsigned long long probeFrom = 0;
+
+void probe_save(ID3D11Texture2D* texture, const wchar_t* what) {
+    std::vector<std::uint8_t> px;
+    unsigned w = 0, h = 0;
+    if (!texture || !simqvfr::d3d11_read_bgra8(texture, px, w, h)) {
+        simqvfr::logf("lmu render scale probe: the %ls image can't be read back", what);
+        return;
+    }
+    // How much of it the frame drew: the bounding box of pixels that aren't black.
+    unsigned x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (unsigned y = 0; y < h; y += 2)
+        for (unsigned x = 0; x < w; x += 2) {
+            const std::size_t i = (static_cast<std::size_t>(y) * w + x) * 4;
+            if (px[i] > 4 || px[i + 1] > 4 || px[i + 2] > 4) {
+                x0 = (std::min)(x0, x);
+                y0 = (std::min)(y0, y);
+                x1 = (std::max)(x1, x);
+                y1 = (std::max)(y1, y);
+            }
+        }
+    wchar_t name[96];
+    swprintf_s(name, L"\\lmu-scale-probe-frame%llu-%ls.png", frames, what);
+    simqvfr::write_png_bgra(captures_folder() + name, px, w, h);
+    simqvfr::logf("lmu render scale probe: %ls image %ux%u saved (%ls); not black within x %u-%u y %u-%u", what, w, h, name + 1,
+                  x0, x1, y0, y1);
+}
+
+void render_scale_probe(int passes) {
+    if (!cfg.renderScaleProbe || probeStage == 3)
+        return;
+    auto* scale = reinterpret_cast<float*>(base() + kRenderScale);
+    if (probeStage == 0) {
+        if (sceneFrames < kProbeStart || passes < 4)
+            return;
+        probeOldScale = *scale;
+        *scale = probeOldScale * static_cast<float>(cfg.renderScaleProbe) / 100.0f;
+        probeFrom = sceneFrames;
+        probeStage = 1;
+        simqvfr::logf("lmu render scale probe: frame %llu: render scale %.3f -> %.3f for %llu scene frames (views %ux%u)",
+                      frames, probeOldScale, *scale, kProbeEnd, viewW, viewH);
+    } else if (probeStage == 1 && sceneFrames >= probeFrom + kProbeShot && passes >= 4) {
+        probeStage = 2;
+        ID3D11Texture2D* e0 = eye_texture(0);
+        if (e0) {
+            D3D11_TEXTURE2D_DESC d;
+            e0->GetDesc(&d);
+            simqvfr::logf("lmu render scale probe: frame %llu: the eye target is %ux%u (the views at launch %ux%u)", frames,
+                          d.Width, d.Height, viewW, viewH);
+        }
+        probe_save(e0, L"eye0");
+        if (e0)
+            e0->Release();
+        probe_save(focusTex[0], L"focus0");
+    } else if (probeStage >= 1 && sceneFrames >= probeFrom + kProbeEnd) {
+        *scale = probeOldScale;
+        probeStage = 3;
+        simqvfr::logf("lmu render scale probe: frame %llu: render scale back to %.3f", frames, probeOldScale);
+    }
+}
+
 }  // namespace
 
 bool four_passes_start(const FourPassesRun& run) {
@@ -1039,6 +1105,7 @@ void four_passes_frame_end() {
     if (qvfrMode) {
         if (passes < 4)
             atlasReady = false;  // no four views this frame (menus, loading): the layer submits the eyes as they are
+        render_scale_probe(passes);
         if (eyesInAtlas) {
             eyesInAtlas = false;
             simqvfr::logf("lmu qvfr: frame %llu stopped after %d passes with the eyes set aside", frames, passes);
