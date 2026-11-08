@@ -104,6 +104,76 @@ int main() {
     check(lmu::clamp_focus_centre(eye, 1.0, 1.0, cx, cy) && near(cx, (l + r) / 2) && near(cy, (u + d) / 2),
           "a box as large as the eye is centred on it");
 
+    // The VR UI's matrix: a world-to-view (turned and moved) times the eye's right-handed projection, row vectors. Its
+    // focus version must put the focus box's corners at the focus view's NDC corners, in either storage order.
+    {
+        lmu::FocusBox ubox;
+        float ufocus[16];
+        const double ucx = 0.15, ucy = -0.05;
+        lmu::focus_projection(eye, 0.3, 0.25, ucx, ucy, ubox, ufocus);
+        const lmu::ClipRemap remap = lmu::clip_remap(eye, ufocus);
+        float rh[16] = {};  // VR_GetEyeProjection: right-handed (w = -z), the LH's row 2 negated
+        for (int i = 0; i < 16; ++i)
+            rh[i] = eye[i];
+        for (int i = 8; i < 12; ++i)
+            rh[i] = -eye[i];
+        // World to view: a turn of 0.4 rad about y then 0.2 about x, and a move.
+        const double ya = 0.4, pa = 0.2;
+        const double ry[9] = {std::cos(ya), 0, -std::sin(ya), 0, 1, 0, std::sin(ya), 0, std::cos(ya)};
+        const double rx[9] = {1, 0, 0, 0, std::cos(pa), std::sin(pa), 0, -std::sin(pa), std::cos(pa)};
+        double r3[9] = {};
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k)
+                    r3[i * 3 + j] += ry[i * 3 + k] * rx[k * 3 + j];
+        const double t3[3] = {0.3, -1.2, 0.7};
+        double view[16] = {r3[0], r3[1], r3[2], 0, r3[3], r3[4], r3[5], 0, r3[6], r3[7], r3[8], 0, t3[0], t3[1], t3[2], 1};
+        float pv[16] = {}, pvT[16] = {};
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j) {
+                double s = 0;
+                for (int k = 0; k < 4; ++k)
+                    s += view[i * 4 + k] * rh[k * 4 + j];
+                pv[i * 4 + j] = static_cast<float>(s);
+                pvT[j * 4 + i] = static_cast<float>(s);
+            }
+        check(lmu::clip_layout(pv) == 1 && lmu::clip_layout(pvT) == 2, "the UI matrix's storage order is recognised");
+        float fpv[16], fpvT[16];
+        for (int i = 0; i < 16; ++i) {
+            fpv[i] = pv[i];
+            fpvT[i] = pvT[i];
+        }
+        lmu::remap_clip(fpv, remap, 1);
+        lmu::remap_clip(fpvT, remap, 2);
+        // A world point seen at view tangents (tx, ty), 3 m ahead: its NDC through either focus matrix.
+        const auto ndc = [&](const float (&m)[16], bool rows, double tx, double ty, double& nx, double& ny) {
+            const double p[3] = {tx * 3, ty * 3, -3};  // view space, right-handed: forward is -z
+            double w4[4] = {0, 0, 0, 1};               // world = (p - t) R^T
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k)
+                    w4[j] += (p[k] - t3[k]) * r3[j * 3 + k];
+            double c[4] = {};
+            for (int o = 0; o < 4; ++o)
+                for (int i = 0; i < 4; ++i)
+                    c[o] += w4[i] * (rows ? m[o * 4 + i] : m[i * 4 + o]);
+            nx = c[0] / c[3];
+            ny = c[1] / c[3];
+        };
+        double nx = 0, ny = 0, mx = 0, my = 0;
+        ndc(fpv, false, ubox.focusTan[0], ubox.focusTan[2], nx, ny);
+        ndc(fpvT, true, ubox.focusTan[0], ubox.focusTan[2], mx, my);
+        const bool lowCorner = near(nx, -1) && near(ny, -1) && near(mx, -1) && near(my, -1);
+        ndc(fpv, false, ubox.focusTan[1], ubox.focusTan[3], nx, ny);
+        ndc(fpvT, true, ubox.focusTan[1], ubox.focusTan[3], mx, my);
+        check(lowCorner && near(nx, 1) && near(ny, 1) && near(mx, 1) && near(my, 1),
+              "the focus UI matrix puts the box's corners at the focus view's NDC corners");
+        ndc(pv, false, ubox.focusTan[0], ubox.focusTan[3], nx, ny);
+        check(near((nx + 1) / 2, ubox.rect[0]) && near((1 - ny) / 2, ubox.rect[1]),
+              "and the eye's UI matrix puts that corner where the box sits in the eye image");
+        float flat[16] = {};
+        check(lmu::clip_layout(flat) == 0, "a matrix of no such shape is refused");
+    }
+
     float skewed[16];
     for (int i = 0; i < 16; ++i)
         skewed[i] = eye[i];

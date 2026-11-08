@@ -72,4 +72,41 @@ inline bool focus_projection(const float (&eye)[16], double fractionX, double fr
     return true;
 }
 
+// ---- The focus view of a matrix that ends in the eye's clip space (the VR UI's projection x view) ----
+// Eye and focus NDC are both affine in the view-space tangent, so the focus view's is the eye's remapped: x' = a x + b,
+// y' = c y + d in NDC, i.e. clip' = (a x + b w, c y + d w, z, w). From the eye's and the focus projection
+// (focus_projection's shape: NDC = m[0] t + m[8], m[5] t + m[9]).
+struct ClipRemap {
+    double a = 1, b = 0, c = 1, d = 0;
+};
+
+inline ClipRemap clip_remap(const float (&eye)[16], const float (&focus)[16]) {
+    ClipRemap r;
+    r.a = static_cast<double>(focus[0]) / eye[0];
+    r.b = focus[8] - r.a * eye[8];
+    r.c = static_cast<double>(focus[5]) / eye[5];
+    r.d = focus[9] - r.c * eye[9];
+    return r;
+}
+
+// Where a projection x view keeps its clip outputs: 1 in its columns (row vectors, clip = v M), 2 in its rows
+// (column vectors), 0 neither. The w output (the view's forward axis in the world, w = +-z) has a unit vector in its
+// first three entries; the other way round those are the translation's, which aren't.
+inline int clip_layout(const float (&m)[16], double tolerance = 0.02) {
+    const auto unit = [&](double x, double y, double z) { return std::fabs(std::sqrt(x * x + y * y + z * z) - 1) < tolerance; };
+    const bool columns = unit(m[3], m[7], m[11]), rows = unit(m[12], m[13], m[14]);
+    return columns == rows ? 0 : columns ? 1 : 2;
+}
+
+// `m` (clip outputs as clip_layout says: 1 columns, 2 rows) remapped to the focus view.
+inline void remap_clip(float (&m)[16], const ClipRemap& r, int layout) {
+    for (int i = 0; i < 4; ++i) {
+        // Output o's entry for input i: columns hold m[i * 4 + o], rows m[o * 4 + i].
+        const auto at = [&](int o) -> float& { return layout == 1 ? m[i * 4 + o] : m[o * 4 + i]; };
+        const double w = at(3);
+        at(0) = static_cast<float>(r.a * at(0) + r.b * w);
+        at(1) = static_cast<float>(r.c * at(1) + r.d * w);
+    }
+}
+
 }  // namespace lmu

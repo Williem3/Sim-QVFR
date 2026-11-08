@@ -62,6 +62,15 @@ inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;
 inline constexpr std::uint8_t kHiddenAreaDrawAnchor[] = {0x48, 0x8b, 0xc4, 0x41, 0x54, 0x41, 0x55,
                                                          0x48, 0x83, 0xec, 0x68, 0x80};
 
+// The VR UI (VRUI.cpp): VR_Present's draw of the HUD canvas onto a curved panel in each eye's final, after the eye loop. [VR UI]
+inline constexpr std::uintptr_t kVruiDraw = 0x617090;  // (vrui, context, eyes): eyes = {int mode; 2 kEyeSlotStride slots}
+inline constexpr std::uint8_t kVruiDrawAnchor[] = {0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0x8b, 0x02};
+inline constexpr std::uintptr_t kVruiDrawEye = 0x617fb0;  // (vrui, context, eyes, eye): one eye's panel
+inline constexpr std::uint8_t kVruiDrawEyeAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57};
+inline constexpr std::size_t kVruiEyeRtv = 0xd8;     // ID3D11RenderTargetView*: eye e's at + e * 8
+inline constexpr std::size_t kVruiEyesSize = 0xdc;   // the eyes block: mode, then each eye's projection x view slot
+inline constexpr std::size_t kVruiEyeMatrix = 8;     // eye e's 4x4 at + e * kEyeSlotStride (right-handed projection)
+
 // YEBIS CPostEffect::SetDeltaTime(this, seconds): each pass's post-processing sets it; auto exposure adapts by it. [Post-effect time]
 inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
 inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,

@@ -216,6 +216,7 @@ float* slot_matrix(int eye, int kind) {
 }
 
 FocusBox boxes[2];
+ClipRemap uiRemap[2];  // each focus view from its eye in clip space (the VR UI's matrices; focus_math.h)
 float saved[2][2][16];
 bool swapped[2] = {};
 bool shapeLogged = false;
@@ -251,6 +252,7 @@ bool swap_in_focus(int eye) {
         return false;
     }
     boxes[eye] = box[0];
+    uiRemap[eye] = clip_remap(eyeM[0], focusM[0]);
     for (int k = 0; k < 2; ++k) {
         std::memcpy(saved[eye][k], eyeM[k], sizeof(saved[eye][k]));
         std::memcpy(slot_matrix(eye, k), focusM[k], sizeof(focusM[k]));
@@ -416,6 +418,144 @@ void atlas_out(ID3D11Texture2D* dst, unsigned x, unsigned y) {
     device->Release();
 }
 
+// The focus views' own images, render targets: the game's VR UI (the HUD, the in-car menus) is drawn into the eyes after
+// the eye loop, and into these too (vrui_draw). The atlas gets them at xrEndFrame.
+ID3D11Texture2D* focusTex[2] = {};
+ID3D11RenderTargetView* focusRtv[2] = {};  // made in vrui_draw, like the game's own eye RTVs
+
+void release_focus_textures() {
+    for (int e = 0; e < 2; ++e) {
+        if (focusRtv[e])
+            focusRtv[e]->Release();
+        if (focusTex[e])
+            focusTex[e]->Release();
+        focusRtv[e] = nullptr;
+        focusTex[e] = nullptr;
+    }
+}
+
+bool ensure_focus_textures(ID3D11Texture2D* eyeTexture) {
+    D3D11_TEXTURE2D_DESC desc;
+    eyeTexture->GetDesc(&desc);
+    if (focusTex[0] && focusTex[1]) {
+        D3D11_TEXTURE2D_DESC have;
+        focusTex[0]->GetDesc(&have);
+        if (have.Width == desc.Width && have.Height == desc.Height && have.Format == desc.Format)
+            return true;
+    }
+    release_focus_textures();
+    if (desc.SampleDesc.Count != 1)
+        return false;
+    D3D11_TEXTURE2D_DESC f = desc;
+    f.MipLevels = 1;
+    f.ArraySize = 1;
+    f.Usage = D3D11_USAGE_DEFAULT;
+    f.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    f.CPUAccessFlags = 0;
+    f.MiscFlags = 0;
+    ID3D11Device* device = nullptr;
+    eyeTexture->GetDevice(&device);
+    bool ok = true;
+    for (int e = 0; e < 2; ++e)
+        ok = ok && SUCCEEDED(device->CreateTexture2D(&f, nullptr, &focusTex[e]));
+    device->Release();
+    if (!ok) {
+        release_focus_textures();
+        simqvfr::logf("lmu qvfr: the focus images (%ux%u, format %d) couldn't be made: not composed", f.Width, f.Height,
+                      static_cast<int>(f.Format));
+    }
+    return ok;
+}
+
+// ---- QVFR: the VR UI in the focus views ----
+// VR_Present draws the HUD canvas onto a curved panel in each eye's final with the eye's projection x view (kVruiDraw);
+// the same draw again into the focus images, with that matrix remapped to the focus view's clip space (uiRemap).
+using VruiDrawFn = void (*)(void* vrui, ID3D11DeviceContext* context, const void* eyes);
+using VruiDrawEyeFn = void (*)(void* vrui, ID3D11DeviceContext* context, const void* eyes, unsigned eye);
+VruiDrawFn originalVruiDraw = nullptr;
+bool vruiHooked = false;
+bool focusUiPending = false;  // this frame's focus images wait for the UI
+unsigned long long uiDrawn = 0, uiSkipped = 0;
+bool uiRefusalLogged = false;
+
+void focus_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
+    auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
+    const auto refuse = [](const char* why) {
+        ++uiSkipped;
+        if (!uiRefusalLogged) {
+            uiRefusalLogged = true;
+            simqvfr::logf("lmu qvfr: frame %llu: the VR UI isn't drawn into the focus views (%s): the HUD and menus are "
+                          "missing inside the focus box",
+                          frames, why);
+        }
+    };
+    if (!rtv[0] || !rtv[1] || !focusTex[0] || !focusTex[1])
+        return refuse("no targets");
+    if (!focusRtv[0] || !focusRtv[1]) {
+        D3D11_RENDER_TARGET_VIEW_DESC d{};
+        rtv[0]->GetDesc(&d);
+        ID3D11Device* device = nullptr;
+        context->GetDevice(&device);
+        bool ok = d.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D;
+        for (int e = 0; e < 2; ++e)
+            ok = ok && !focusRtv[e] && SUCCEEDED(device->CreateRenderTargetView(focusTex[e], &d, &focusRtv[e]));
+        device->Release();
+        if (!ok) {
+            for (auto*& view : focusRtv)
+                if (view) {
+                    view->Release();
+                    view = nullptr;
+                }
+            return refuse("its render target view doesn't fit the focus images");
+        }
+    }
+    std::uint8_t block[kVruiEyesSize];
+    std::memcpy(block, eyes, sizeof(block));
+    int layout = 0;
+    for (int e = 0; e < 2; ++e) {
+        float m[16];
+        std::uint8_t* at = block + kVruiEyeMatrix + e * kEyeSlotStride;
+        std::memcpy(m, at, sizeof(m));
+        layout = clip_layout(m);
+        if (!layout) {
+            if (!uiRefusalLogged)
+                simqvfr::logf("lmu qvfr: eye %d's UI matrix: %g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g", e, m[0],
+                              m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+            return refuse("its matrix isn't a projection x view of the shape expected");
+        }
+        remap_clip(m, uiRemap[e], layout);
+        std::memcpy(at, m, sizeof(m));
+    }
+    ID3D11RenderTargetView* keptRtv = nullptr;
+    ID3D11DepthStencilView* keptDsv = nullptr;
+    context->OMGetRenderTargets(1, &keptRtv, &keptDsv);
+    ID3D11RenderTargetView* const gameRtv[2] = {rtv[0], rtv[1]};
+    rtv[0] = focusRtv[0];
+    rtv[1] = focusRtv[1];
+    const auto drawEye = reinterpret_cast<VruiDrawEyeFn>(base() + kVruiDrawEye);
+    drawEye(vrui, context, block, 0);
+    drawEye(vrui, context, block, 1);
+    rtv[0] = gameRtv[0];
+    rtv[1] = gameRtv[1];
+    context->OMSetRenderTargets(1, &keptRtv, keptDsv);
+    if (keptRtv)
+        keptRtv->Release();
+    if (keptDsv)
+        keptDsv->Release();
+    if (uiDrawn++ == 0)
+        simqvfr::logf("lmu qvfr: frame %llu: the VR UI drawn into the focus views too (mode %d; the UI matrix keeps its clip "
+                      "outputs in its %s)",
+                      frames, *static_cast<const int*>(eyes), layout == 1 ? "columns" : "rows");
+}
+
+void vrui_draw(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
+    originalVruiDraw(vrui, context, eyes);
+    if (focusUiPending && vrui && context && eyes) {
+        focusUiPending = false;
+        focus_ui(vrui, context, eyes);
+    }
+}
+
 // The frame's record for the layer (adapter.h Views4Frame: tangents left, right, up, down; the focus views off-centre,
 // unturned). Under liveMutex.
 simqvfr::Views4Frame latestRecord{};
@@ -437,14 +577,14 @@ void store_record() {
 }
 
 // QVFR, after pass p: the eyes go into the atlas's top row while the focus views render into their targets (pass 2 =
-// focus 0 in eye 0's, pass 3 = focus 1 in eye 1's), each focus view into the row below, then the eyes back for the
-// game's HUD and submit.
+// focus 0 in eye 0's, pass 3 = focus 1 in eye 1's), each focus view into its own image, then the eyes back for the
+// game's VR UI and submit.
 void qvfr_after_pass(int p) {
     if (p == 1) {
         eyesInAtlas = frameFocusOk = false;
         ID3D11Texture2D* e0 = eye_texture(0);
         ID3D11Texture2D* e1 = eye_texture(1);
-        if (e0 && e1 && ensure_atlas(e0) && is_view(e1)) {
+        if (e0 && e1 && ensure_atlas(e0) && ensure_focus_textures(e0) && is_view(e1)) {
             atlas_in(e0, 0, 0);
             atlas_in(e1, viewW, 0);
             eyesInAtlas = true;
@@ -457,7 +597,7 @@ void qvfr_after_pass(int p) {
     } else if (p == 2 && eyesInAtlas) {
         ID3D11Texture2D* t = eye_texture(0);
         if (frameFocusOk && is_view(t))
-            atlas_in(t, 0, viewH);
+            copy_back(focusTex[0], t);
         else
             frameFocusOk = false;
         if (t)
@@ -469,7 +609,7 @@ void qvfr_after_pass(int p) {
         ID3D11Texture2D* t0 = eye_texture(0);
         ID3D11Texture2D* t1 = eye_texture(1);
         if (frameFocusOk && is_view(t1))
-            atlas_in(t1, viewW, viewH);
+            copy_back(focusTex[1], t1);
         else
             frameFocusOk = false;
         restore_projection(1);
@@ -483,6 +623,7 @@ void qvfr_after_pass(int p) {
             t1->Release();
         eyesInAtlas = false;
         atlasReady = frameFocusOk;
+        focusUiPending = atlasReady && vruiHooked;
         if (atlasReady)
             store_record();
     }
@@ -816,12 +957,23 @@ bool four_passes_start(const FourPassesRun& run) {
     }
     installed = true;
     if (qvfrMode) {
+        // The VR UI into the focus views too; without it QVFR still runs, the UI missing inside the focus box.
+        void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
+        vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
+                     simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
+                     MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw), reinterpret_cast<void**>(&originalVruiDraw)) ==
+                         MH_OK &&
+                     MH_EnableHook(vrui) == MH_OK;
+        if (!vruiHooked)
+            simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
+                              "missing inside the focus box");
         std::lock_guard guard(liveMutex);
         simqvfr::logf("lmu qvfr: on: the eye loop runs four times every frame, passes 2-3 render focus views (a %.0f%% x "
-                      "%.0f%% box of each eye's tangent span, on the gaze) into the eye targets, set aside into the atlas the "
-                      "layer composes; post-effect frame time held in passes 2-3: %s; hidden-area mask off in them",
+                      "%.0f%% box of each eye's tangent span, on the gaze) into the eye targets, set aside for the layer "
+                      "to compose; post-effect frame time held in passes 2-3: %s; hidden-area mask off in them; the VR UI "
+                      "drawn into them: %s",
                       focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100,
-                      holdExposure ? "yes" : "no");
+                      holdExposure ? "yes" : "no", vruiHooked ? "yes" : "no");
         return true;
     }
     simqvfr::logf("%s: samples: %d, the first %d scene frames in, then every %d; four passes for %d frames before each "
@@ -875,12 +1027,16 @@ void four_passes_frame_end() {
             eyesInAtlas = false;
             simqvfr::logf("lmu qvfr: frame %llu stopped after %d passes with the eyes set aside", frames, passes);
         }
+        if (focusUiPending) {  // VR_Present didn't draw its UI this frame
+            focusUiPending = false;
+            ++uiSkipped;
+        }
         if (frames % 1800 == 0)
             simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
-                          "unlike the views); last frame %d passes, frame time held in %d calls, mask skipped in %d; "
-                          "views %ux%u",
-                          frames, sceneFrames, fourPassFrames, composedFrames, refusedFrames, passes, held, maskSkipped,
-                          viewW, viewH);
+                          "unlike the views); VR UI in the focus views %llu, not %llu; last frame %d passes, frame time "
+                          "held in %d calls, mask skipped in %d; views %ux%u",
+                          frames, sceneFrames, fourPassFrames, composedFrames, refusedFrames, uiDrawn, uiSkipped, passes,
+                          held, maskSkipped, viewW, viewH);
         return;
     }
 
@@ -987,9 +1143,12 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
         atlasThreadLogged = true;
         simqvfr::log_line("lmu qvfr: xrEndFrame isn't on the thread that rendered the views (the atlas copies race)");
     }
-    // The eyes again, as the game submitted them: with what it drew after its eye loop (the HUD).
+    // The eyes again, as the game submitted them: with what it drew after its eye loop (the VR UI); the focus views with
+    // the UI drawn into them too (vrui_draw).
     atlas_in(eyes[0], 0, 0);
     atlas_in(eyes[1], viewW, 0);
+    atlas_in(focusTex[0], 0, viewH);
+    atlas_in(focusTex[1], viewW, viewH);
     for (int e = 0; e < 2; ++e) {
         const float outer[4] = {0.5f * e, 0.0f, 0.5f, 0.5f}, focus[4] = {0.5f * e, 0.5f, 0.5f, 0.5f};
         std::memcpy(uv[e], outer, sizeof(outer));
