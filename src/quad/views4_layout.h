@@ -44,8 +44,11 @@ struct Views4Layout {
     // heights: the larger of the outer and focus sizes, and at least `layerFloor` (LMU: what its menus render at, which
     // fill the layer; the scene passes then render inside it at their live sizes).
     double layerFloor = 0;
-    double layer_width() const { return std::max({outer_width(), focus, layerFloor}); }
-    double layer_height() const { return std::max({outer_height(), focusHeight, layerFloor}); }
+    // Room for a second view in the same image (LMU's multi-view rendering, [experiment] lmu_mvr=1): the layer twice as
+    // large each way, the focus view drawn beside the eye at the same uniform scale.
+    bool secondViewRoom = false;
+    double layer_width() const { return (secondViewRoom ? 2 : 1) * std::max({outer_width(), focus, layerFloor}); }
+    double layer_height() const { return (secondViewRoom ? 2 : 1) * std::max({outer_height(), focusHeight, layerFloor}); }
     // In eye columns, view `view`'s width as a share of its column (1: the whole column).
     double column_share(int view) const {
         const double column = column_eye_width();

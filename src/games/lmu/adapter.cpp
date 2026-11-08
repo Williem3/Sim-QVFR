@@ -51,6 +51,14 @@ public:
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
         run.layerHeight = s.layout.layer_height();
+        // lmu_mvr=1 (gate C of multi-view rendering): passes 0-1 draw their focus views too, compared with passes 2-3's
+        // at the gate samples (mvr_pass.h); the layer made room (Views4Layout::secondViewRoom).
+        run.mvr = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) != 0 && s.layout.secondViewRoom;
+        if (run.mvr) {
+            run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));
+            run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, s.ini));
+            run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, s.ini));
+        }
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
             run.renderScaleProbe =
                 std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);
@@ -109,7 +117,9 @@ public:
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
         // lmu_mvr_probe=1: every vertex shader converted for NVIDIA's two-view pass and created through NVAPI, log only.
-        mvrProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0 && mvr_probe_install(ini);
+        // lmu_mvr=1 (with lmu_qvfr): the probe keeps the converted shaders, attached to the game's (mvr_pass.h).
+        const bool mvr = has_qvfr() && GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini) != 0;
+        mvrProbe_ = (mvr || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0) && mvr_probe_install(ini, mvr);
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
         const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
         if (has_qvfr()) {

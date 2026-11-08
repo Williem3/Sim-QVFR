@@ -26,6 +26,7 @@
 #include "abi.h"
 #include "focus_math.h"
 #include "game.h"
+#include "mvr_pass.h"
 
 namespace lmu {
 namespace {
@@ -115,7 +116,9 @@ void mask_draw(void* mask, void* camera) {
         ++maskStaleThisFrame;
         return;
     }
+    mvr_suspend(true);  // the lens mask is the eye's (MVR: not its focus view's)
     originalMaskDraw(mask, camera);
+    mvr_suspend(false);
 }
 
 // Passes 2-3's camera history records (the game keeps two on its stack, one per eye).
@@ -239,9 +242,38 @@ float saved[2][2][16];
 bool swapped[2] = {};
 bool shapeLogged = false;
 
+// MVR (lmu_mvr): both eyes' focus projections taken once at pass 0, so the focus view drawn in its eye's pass and the
+// one pass 2/3 renders use the same box (the gaze moves between them).
+float frozenFocus[2][2][16];
+FocusBox frozenBox[2];
+ClipRemap frozenRemap[2];
+bool frozen[2] = {};
+
+bool focus_matrices(int eye, float (&eyeM)[2][16], float (&focusM)[2][16], FocusBox (&box)[2]);
+
 bool swap_in_focus(int eye) {
     float eyeM[2][16], focusM[2][16];
     FocusBox box[2];
+    if (frozen[eye]) {
+        for (int k = 0; k < 2; ++k)
+            std::memcpy(eyeM[k], slot_matrix(eye, k), sizeof(eyeM[k]));
+        std::memcpy(focusM, frozenFocus[eye], sizeof(focusM));
+        box[0] = box[1] = frozenBox[eye];
+    } else if (!focus_matrices(eye, eyeM, focusM, box)) {
+        return false;
+    }
+    boxes[eye] = box[0];
+    uiRemap[eye] = clip_remap(eyeM[0], focusM[0]);
+    for (int k = 0; k < 2; ++k) {
+        std::memcpy(saved[eye][k], eyeM[k], sizeof(saved[eye][k]));
+        std::memcpy(slot_matrix(eye, k), focusM[k], sizeof(focusM[k]));
+    }
+    swapped[eye] = true;
+    return true;
+}
+
+// Eye `eye`'s projections (both slots) and its focus box's: from the live box and the gaze.
+bool focus_matrices(int eye, float (&eyeM)[2][16], float (&focusM)[2][16], FocusBox (&box)[2]) {
     double fx, fy, cx = 0, cy = 0;
     {
         std::lock_guard guard(liveMutex);
@@ -269,14 +301,20 @@ bool swap_in_focus(int eye) {
         }
         return false;
     }
-    boxes[eye] = box[0];
-    uiRemap[eye] = clip_remap(eyeM[0], focusM[0]);
-    for (int k = 0; k < 2; ++k) {
-        std::memcpy(saved[eye][k], eyeM[k], sizeof(saved[eye][k]));
-        std::memcpy(slot_matrix(eye, k), focusM[k], sizeof(focusM[k]));
-    }
-    swapped[eye] = true;
     return true;
+}
+
+// MVR, at pass 0: both eyes' focus boxes for this frame (frozen until it ends).
+void freeze_focus() {
+    for (int e = 0; e < 2; ++e) {
+        float eyeM[2][16];
+        FocusBox box[2];
+        frozen[e] = focus_matrices(e, eyeM, frozenFocus[e], box);
+        if (frozen[e]) {
+            frozenBox[e] = box[0];
+            frozenRemap[e] = clip_remap(eyeM[0], frozenFocus[e][0]);
+        }
+    }
 }
 
 void restore_projection(int eye) {
@@ -595,6 +633,67 @@ void set_next_passes(int which) {
     auto* size = reinterpret_cast<float*>(base() + kEyeRenderSize);
     size[0] = static_cast<float>(scaled_size(recommended[0], written));
     size[1] = static_cast<float>(scaled_size(recommended[1], written));
+}
+
+// ---- MVR (lmu_mvr, mvr_pass.h): passes 0-1 draw their focus views beside the eye ----
+
+bool mvrInstalled = false, mvrRoomLogged = false;
+int mvrSamples = 0;
+
+// Before pass p: the eye's size (qvfr_before_pass took it), its focus view's (as set_next_passes will set pass 2-3's),
+// this frame's remap (frozen at pass 0), and whether this frame is a gate sample.
+void mvr_before_pass(int p) {
+    if (!mvrInstalled) {
+        ID3D11Texture2D* t = eye_texture(0);
+        if (!t)
+            return;
+        ID3D11Device* device = nullptr;
+        t->GetDevice(&device);
+        t->Release();
+        mvrInstalled = device && mvr_pass_install(device);
+        if (device)
+            device->Release();
+        if (!mvrInstalled) {
+            cfg.mvr = false;
+            return;
+        }
+    }
+    bool sample = false;
+    if (p == 0) {
+        freeze_focus();
+        const auto due = static_cast<unsigned long long>(cfg.first);
+        sample = mvrSamples < cfg.count && sceneFrames >= due &&
+                 (sceneFrames - due) % static_cast<unsigned long long>(cfg.every) == 0;
+        mvrSamples += sample ? 1 : 0;
+    }
+    MvrPassView v;
+    bool draw = false;
+    if (p < 2 && frozen[p] && gameScale > 0) {
+        const ClipRemap& r = frozenRemap[p];
+        v.eye = p;
+        v.remap[0] = static_cast<float>(r.a);
+        v.remap[1] = static_cast<float>(r.b);
+        v.remap[2] = static_cast<float>(r.c);
+        v.remap[3] = static_cast<float>(r.d);
+        v.eyeW = passW[p];
+        v.eyeH = passH[p];
+        float share;
+        {
+            std::lock_guard guard(liveMutex);
+            share = liveScale[1];
+        }
+        const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+        v.focusW = scaled_size(recommended[0], gameScale * share);
+        v.focusH = scaled_size(recommended[1], gameScale * share);
+        draw = v.eyeW && v.focusW && (!viewW || (v.eyeW + v.focusW <= viewW && v.focusH <= viewH));
+        if (!draw && !mvrRoomLogged) {
+            mvrRoomLogged = true;
+            simqvfr::logf("lmu mvr: frame %llu: eye %ux%u and focus %ux%u don't fit side by side in %ux%u targets: the "
+                          "focus views from passes 2-3 only",
+                          frames, v.eyeW, v.eyeH, v.focusW, v.focusH, viewW, viewH);
+        }
+    }
+    mvr_pass_begin(p, draw ? &v : nullptr, sample);
 }
 
 // The view `src` (its top-left w x h) into the atlas at (x, y), or (atlas_out) the atlas's at (x, y) into `dst`.
@@ -1104,11 +1203,15 @@ void render_scene(void* arg, char laterEye) {
     unsigned long long hook0 = thread_cycles();
     if (qvfrMode)
         qvfr_before_pass(p);  // live resolution: the size this pass renders at
+    if (qvfrMode && cfg.mvr && p < 4)
+        mvr_before_pass(p);
     inLaterPass = p >= 2;
     const double wall0 = now_ms();
     const unsigned long long cpu0 = thread_cycles();
     costWindow.hookCycles += static_cast<double>(cpu0 - hook0);
     originalRenderScene(arg, laterEye);
+    if (qvfrMode && cfg.mvr && p < 4)
+        mvr_pass_end(p);
     const unsigned long long cpu1 = thread_cycles();
     if (qvfrMode && p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
         costWindow.passWallMs[p] += now_ms() - wall0;
@@ -1532,6 +1635,10 @@ void four_passes_frame_end() {
     if (!installed)
         return;
     ++frames;
+    if (cfg.mvr) {
+        mvr_frame_end(frames);
+        frozen[0] = frozen[1] = false;
+    }
     // Never leave a focus projection in an eye's slot past the frame (a frame that stopped short of pass 3).
     for (int e = 0; e < 2; ++e)
         if (swapped[e]) {

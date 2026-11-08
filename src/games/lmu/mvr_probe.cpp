@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 #include "../../engine/dxbc_patch.h"
 #include "../../engine/nvapi_stereo.h"
@@ -40,6 +41,7 @@ CreateVertexShaderFn originalCreateVertexShader = nullptr;
 std::atomic<bool> shaderHookTried{false};
 std::atomic<bool> supportLogged{false};
 bool dump = false;
+bool attach = false;  // lmu_mvr=1: each game shader gets its converted twin as private data (kMvrTwinGuid)
 bool underRenderDoc = false;
 std::atomic<bool> nvapiUsable{false};
 
@@ -49,6 +51,18 @@ uint64_t loggedCreated = ~0ull;
 int64_t lastLogQpc = 0;
 int failuresLogged = 0;
 thread_local bool inProbe = false;  // NVAPI's own shader creation must not be examined again
+
+// The game creates each of its ~135 vertex shaders many times (3,810 creations in a race, 2026-11-08): one conversion
+// and one NVAPI shader per distinct bytecode, by its checksum (null: refused or not created).
+std::mutex twinMutex;
+std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11VertexShader>> twins;
+
+uint64_t id_of(const uint8_t* code, size_t size) {
+    uint64_t id = 0;
+    if (size >= 12)
+        std::memcpy(&id, code + 4, 8);
+    return id;
+}
 
 double ms_since(const LARGE_INTEGER& from) {
     LARGE_INTEGER now, freq;
@@ -93,9 +107,29 @@ void save(const uint8_t* code, size_t size) {
     }
 }
 
-void examine(ID3D11Device* device, const uint8_t* code, size_t size) {
+void examine(ID3D11Device* device, const uint8_t* code, size_t size, ID3D11VertexShader* original) {
     inProbe = true;
     log_support(device, "first vertex shader");
+    const uint64_t id = id_of(code, size);
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> twin;
+    bool known = false;
+    {
+        std::lock_guard guard(twinMutex);
+        if (const auto it = twins.find(id); it != twins.end()) {
+            twin = it->second;
+            known = true;
+        }
+    }
+    if (known) {  // seen before: its twin (or its refusal) again
+        if (attach && twin && original)
+            original->SetPrivateDataInterface(kMvrTwinGuid, twin.Get());
+        std::lock_guard guard(statsMutex);
+        ++stats.created;
+        ++stats.repeats;
+        stats.attached += attach && twin && original ? 1 : 0;
+        inProbe = false;
+        return;
+    }
     LARGE_INTEGER start;
     QueryPerformanceCounter(&start);
     const dxbc::SecondView sv = dxbc::add_second_view(code, size);
@@ -104,19 +138,27 @@ void examine(ID3D11Device* device, const uint8_t* code, size_t size) {
     double nvapiMs = 0;
     bool tried = false, created = false;
     if (!sv.bytecode.empty() && nvapiUsable) {
-        Microsoft::WRL::ComPtr<ID3D11VertexShader> shader;
         LARGE_INTEGER t;
         QueryPerformanceCounter(&t);
-        status = nvapi::create_second_view_shader(device, sv, &shader);
+        status = nvapi::create_second_view_shader(device, sv, &twin);
         nvapiMs = ms_since(t);
         tried = true;
-        created = status == 0 && shader;
+        created = status == 0 && twin;
+        if (!created)
+            twin.Reset();
     }
+    {
+        std::lock_guard guard(twinMutex);
+        twins[id] = twin;
+    }
+    if (attach && twin && original)
+        original->SetPrivateDataInterface(kMvrTwinGuid, twin.Get());
     if (dump)
         save(code, size);
     {
         std::lock_guard guard(statsMutex);
         ++stats.created;
+        stats.attached += attach && twin && original ? 1 : 0;
         stats.convertMs += convertMs;
         stats.maxConvertMs = std::max(stats.maxConvertMs, convertMs);
         stats.nvapiMs += nvapiMs;
@@ -128,10 +170,9 @@ void examine(ID3D11Device* device, const uint8_t* code, size_t size) {
             ++(created ? stats.nvapiCreated : stats.nvapiFailed);
         if ((sv.bytecode.empty() || (tried && !created)) && failuresLogged < 8) {
             ++failuresLogged;
-            uint32_t id[2] = {};
-            if (size >= 12)
-                std::memcpy(id, code + 4, 8);
-            simqvfr::logf("lmu mvr probe: vertex shader %08x%08x (%zu bytes): %s", id[0], id[1], size,
+            uint32_t name[2] = {};
+            std::memcpy(name, &id, 8);
+            simqvfr::logf("lmu mvr probe: vertex shader %08x%08x (%zu bytes): %s", name[0], name[1], size,
                           sv.bytecode.empty() ? sv.error.c_str() : nvapi::status_name(status));
         }
     }
@@ -142,7 +183,7 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
                                                ID3D11ClassLinkage* linkage, ID3D11VertexShader** shader) {
     const HRESULT hr = originalCreateVertexShader(device, code, size, linkage, shader);
     if (SUCCEEDED(hr) && code && size && !inProbe)
-        examine(device, static_cast<const uint8_t*>(code), size);
+        examine(device, static_cast<const uint8_t*>(code), size, shader ? *shader : nullptr);
     return hr;
 }
 
@@ -179,8 +220,9 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 
 }  // namespace
 
-bool mvr_probe_install(const wchar_t* ini) {
+bool mvr_probe_install(const wchar_t* ini, bool attachTwins) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;
+    attach = attachTwins;
     underRenderDoc = GetModuleHandleW(L"renderdoc.dll") != nullptr;
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         simqvfr::log_line("lmu mvr probe: MH_Initialize failed; probe off");
@@ -194,7 +236,9 @@ bool mvr_probe_install(const wchar_t* ini) {
                                           reinterpret_cast<void*>(&create_device_and_swap_chain),
                                           reinterpret_cast<void**>(&originalCreateDeviceAndSwapChain), &target) == MH_OK &&
                        MH_EnableHook(target) == MH_OK;
-    simqvfr::logf("lmu mvr probe: on (log only)%s; device creation %s%s", dump ? ", shaders dumped to logs\\shaders" : "",
+    simqvfr::logf("lmu mvr probe: on (%s)%s; device creation %s%s",
+                  attach ? "each shader's twin attached for lmu_mvr" : "log only",
+                  dump ? ", shaders dumped to logs\\shaders" : "",
                   device && chain ? "hooked" : "not hooked (the session's device instead)",
                   underRenderDoc ? "; under RenderDoc" : "");
     return true;
@@ -219,12 +263,14 @@ void mvr_probe_frame_end() {
         refused += (refused.empty() ? "" : ", ") + why + " x" + std::to_string(n);
     const double n = stats.created ? static_cast<double>(stats.created) : 1.0;
     const double tried = static_cast<double>(stats.nvapiCreated + stats.nvapiFailed);
-    simqvfr::logf("lmu mvr probe: %llu vertex shaders created, %llu converted%s%s%s; NVAPI created %llu, failed %llu; "
-                  "conversion %.3f ms avg (max %.3f), NVAPI creation %.3f ms avg%s",
-                  static_cast<unsigned long long>(stats.created), static_cast<unsigned long long>(stats.converted),
+    simqvfr::logf("lmu mvr probe: %llu vertex shaders created (%llu distinct), %llu converted%s%s%s; NVAPI created %llu, "
+                  "failed %llu; %llu twins attached; conversion %.3f ms avg (max %.3f), NVAPI creation %.3f ms avg%s",
+                  static_cast<unsigned long long>(stats.created),
+                  static_cast<unsigned long long>(stats.created - stats.repeats),
+                  static_cast<unsigned long long>(stats.converted),
                   refused.empty() ? "" : " (refused: ", refused.c_str(), refused.empty() ? "" : ")",
                   static_cast<unsigned long long>(stats.nvapiCreated), static_cast<unsigned long long>(stats.nvapiFailed),
-                  stats.convertMs / n, stats.maxConvertMs, tried > 0 ? stats.nvapiMs / tried : 0.0,
+                  static_cast<unsigned long long>(stats.attached), stats.convertMs / n, stats.maxConvertMs, tried > 0 ? stats.nvapiMs / tried : 0.0,
                   dump ? (", " + std::to_string(stats.dumped) + " dumped").c_str() : "");
 }
 

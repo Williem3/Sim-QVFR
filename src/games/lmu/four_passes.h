@@ -33,6 +33,9 @@ struct FourPassesRun {
     // is the size offered over it).
     bool menuNative = true;
     double layerWidth = 1, layerHeight = 1;
+    // QVFR gate C of multi-view rendering ([experiment] lmu_mvr=1, mvr_pass.h): passes 0-1 draw their focus views too,
+    // beside the eye; passes 2-3 as before; compared at the gate samples (first, every, count).
+    bool mvr = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
