@@ -7,6 +7,7 @@
 
 #include "input/hotkeys.h"
 #include "quad/compositor.h"
+#include "quad/helmet.h"
 #include "quad/osd.h"
 #include "quad/session_graphics.h"
 #include "quad/settings_menu.h"
@@ -73,13 +74,35 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
 XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo* info,
                                                uint32_t* index);
 
-// xr_layer.cpp
+// helmet_layer.cpp
 void helmet_layer_release();
+
+// views4.cpp
+XrExtent2Di views4_output_extent();
+
+// helmet_layer.cpp
+void log_helmet_light();
+V4Helmet views4_helmet_start(const HelmetSettings& helmet);
+void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComposition& c, XrFovf& submitFov,
+                       XrExtent2Di& extent);
+void views4_helmet_layer(const HelmetSettings& helmet, const V4Helmet& h, const EyeComposition (&eyes)[2],
+                         ID3D11Texture2D* views11);
+void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[2], int& count, int& after);
+
+// views4.cpp
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info);
+
+// xr_layer.cpp
 bool quad_capture_due();
 void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask);
+void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& composed);
+
+// views4.cpp
+XrResult views4_submit(XrSession session, const XrFrameEndInfo* info);
+
+// xr_layer.cpp
 XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
                                      uint32_t capacity, uint32_t* countOutput, XrView* views);
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);

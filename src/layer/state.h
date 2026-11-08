@@ -466,6 +466,16 @@ struct SessionSummary {
 // menu holds, so a newer step queued right behind an older one stands in for it (held keys don't queue for seconds).
 enum class IniWrite { Once, MenuStep };
 
+// The helmet's part of one composition (under quad.mutex; for the D3D11 compositor, under v4d3d11.mutex too), for
+// either compositor: its pieces looked at, the visor's slide, and whether the pieces go into their own layer or
+// (that layer failed) into the scene image over the whole eye. The built-in look draws its lip inside the
+// rendered view.
+struct V4Helmet {
+    bool pieces = false, piecesInScene = false;
+    double visorOffset = 0;
+    float fullView[2][4] = {};  // each eye's uncropped view (the helmet layer covers both)
+};
+
 // Everything the live reload takes from the ini, read in one go (on the ini worker).
 struct IniSnapshot {
     LiveSettings live;
