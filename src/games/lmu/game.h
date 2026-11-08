@@ -20,7 +20,7 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"+XR",   // its own OpenXR (Steam's "openxr" launch option); +VR is OpenVR
     nullptr,  // OpenXR of its own
     nullptr,  // no DLSS (FSR 1 only)
-    {false, false, false, false, false, false},
+    {false, false, false, true, false, false},  // FOV crop (QVFR, lmu_qvfr=1): through the located FOV
     kBuilds, std::size(kBuilds),
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet

@@ -1752,10 +1752,12 @@ int main() {
                 !ace::kGame.antiCheat && !acc::kGame.antiCheat && !xplane::kGame.antiCheat &&
                 !simqvfr::games::anticheat_running(ace::kGame, found) && found.empty();
             check(std::wstring(lmu::kGame.exeName) == L"Le Mans Ultimate.exe" && std::wstring(lmu::kGame.launchArgs) == L"+XR" &&
-                      lmu::kGame.openComposite == nullptr && !lmu::kGame.features.fovCrop &&
-                      !lmu::kGame.features.liveResolution && simqvfr::games::game_for_exe(L"le mans ultimate.exe") == &lmu::kGame &&
+                      lmu::kGame.openComposite == nullptr && lmu::kGame.features.fovCrop &&
+                      !lmu::kGame.features.liveResolution && !lmu::kGame.features.foveatedDlss &&
+                      simqvfr::games::game_for_exe(L"le mans ultimate.exe") == &lmu::kGame &&
                       simqvfr::games::supported_build(lmu::kGame, lmu::kBuilds[0]) && lmuAntiCheatListed,
-                  "games: Le Mans Ultimate's identity (own OpenXR, +XR, identity only, anti-cheat listed)");
+                  "games: Le Mans Ultimate's identity (own OpenXR, +XR, FOV crop, no live resolution yet, anti-cheat "
+                  "listed)");
         }
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&

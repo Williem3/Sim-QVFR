@@ -218,6 +218,9 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
 // mesh with one zero-area triangle: nothing is masked in any view (the lenses hide those pixels anyway).
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask) {
+    if (experiment.views4 && maskType == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR && mask &&
+        mask->vertexCapacityInput > 0)
+        game->visibility_mask_taken(viewIndex);  // the mesh itself, not the size query
     if (!experiment.views4NoMask || maskType != XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR || !mask)
         return next.GetVisibilityMaskKHR(session, type, viewIndex, maskType, mask);
     mask->vertexCountOutput = 3;

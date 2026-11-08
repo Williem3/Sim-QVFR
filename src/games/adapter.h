@@ -111,8 +111,11 @@ public:
     virtual bool qvfr_take_frame(Views4Frame& frame) = 0;
     // The latest record, without taking it.
     virtual bool qvfr_latest_frame(Views4Frame& frame) = 0;
-    // The views the game just located (diagnostics).
+    // The views the game just located (diagnostics; LMU: the FOV its lens mask is built with).
     virtual void qvfr_note_views(const XrView* views, uint32_t count) = 0;
+    // The game fetched view `viewIndex`'s hidden-area mesh (xrGetVisibilityMaskKHR with room for it): a game that turns
+    // it into screen space with the FOV it just located (LMU) has a mask for that FOV only.
+    virtual void visibility_mask_taken(uint32_t viewIndex) { (void)viewIndex; }
     // Every xrEndFrame while QVFR runs (its counters into the log).
     virtual void qvfr_frame_end() = 0;
 

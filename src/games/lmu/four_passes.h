@@ -48,5 +48,10 @@ bool four_passes_record(simqvfr::Views4Frame& frame);
 ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]);
 // The size every view renders at (the eye targets'), 0 before the first four-pass frame.
 void four_passes_view_size(int (&size)[2]);
+// Every xrLocateViews: the FOV the game just located (with the layer's FOV crop). The game builds its lens mask in
+// screen space with the FOV located when it fetches the mesh (VR_Init: four_passes_mask_taken), so while the located
+// FOV differs from that one (a live crop change) the mask draw is skipped: it would black out what the lens shows.
+void four_passes_note_views(const XrView* views, uint32_t count);
+void four_passes_mask_taken(uint32_t viewIndex);
 
 }  // namespace lmu

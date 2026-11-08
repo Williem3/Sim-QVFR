@@ -60,6 +60,16 @@ public:
         output[0] = render[0];
         output[1] = render[1];
     }
+    // The FOV crop reaches LMU through the located FOV; its lens mask is built with the FOV located when it fetches the
+    // mesh, so a live crop change leaves the mask off until the FOV matches again (four_passes.h).
+    void qvfr_note_views(const XrView* views, uint32_t count) override {
+        if (qvfr_)
+            four_passes_note_views(views, count);
+    }
+    void visibility_mask_taken(uint32_t viewIndex) override {
+        if (qvfr_)
+            four_passes_mask_taken(viewIndex);
+    }
     bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
     bool qvfr_latest_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
     ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) override {

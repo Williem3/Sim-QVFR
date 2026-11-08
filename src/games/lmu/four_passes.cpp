@@ -6,6 +6,7 @@
 #include <MinHook.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -92,9 +93,24 @@ long set_delta_time(void* postEffect, float seconds) {
 // run's rounded rectangle; catalogue row 13). Focus passes skip it.
 int maskSkippedThisFrame = 0;
 
+// QVFR: the mask's own FOV. VR_Init turns the runtime's mesh (tangents) into screen space with the FOV it just located,
+// so the mask fits only that FOV: after a live FOV crop change it would black out what the lens shows. Under liveMutex,
+// except maskStale (render thread reads).
+float locatedTan[2][4] = {};  // the latest located FOV per eye: tangents left, right, down, up
+bool locatedValid = false;
+float maskTan[2][4] = {};
+bool maskKnown[2] = {};
+std::atomic<bool> maskStale{false};
+bool maskStaleLogged = false;
+int maskStaleThisFrame = 0;
+
 void mask_draw(void* mask, void* camera) {
     if (focusMode && inLaterPass) {
         ++maskSkippedThisFrame;
+        return;
+    }
+    if (qvfrMode && maskStale.load(std::memory_order_relaxed)) {
+        ++maskStaleThisFrame;
         return;
     }
     originalMaskDraw(mask, camera);
@@ -1031,6 +1047,17 @@ void four_passes_frame_end() {
             focusUiPending = false;
             ++uiSkipped;
         }
+        const bool stale = maskStale.load(std::memory_order_relaxed);
+        if (stale != maskStaleLogged) {
+            maskStaleLogged = stale;
+            if (stale)
+                simqvfr::logf("lmu qvfr: frame %llu: the located FOV no longer matches the lens mask's (a live FOV crop "
+                              "change): the mask is off (%d draws skipped this frame)",
+                              frames, maskStaleThisFrame);
+            else
+                simqvfr::logf("lmu qvfr: frame %llu: the located FOV matches the lens mask's again: the mask is on", frames);
+        }
+        maskStaleThisFrame = 0;
         if (frames % 1800 == 0)
             simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
                           "unlike the views); VR UI in the focus views %llu, not %llu; last frame %d passes, frame time "
@@ -1157,6 +1184,35 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     if (composedFrames++ == 0)
         simqvfr::logf("lmu qvfr: frame %llu: the first four views handed to the compositor", frames);
     return atlas;
+}
+
+void four_passes_note_views(const XrView* views, uint32_t count) {
+    if (!views || count < 2)
+        return;
+    std::lock_guard guard(liveMutex);
+    bool stale = false;
+    for (int e = 0; e < 2; ++e) {
+        const XrFovf& f = views[e].fov;
+        const float t[4] = {std::tan(f.angleLeft), std::tan(f.angleRight), std::tan(f.angleDown), std::tan(f.angleUp)};
+        std::memcpy(locatedTan[e], t, sizeof(t));
+        if (maskKnown[e])
+            for (int k = 0; k < 4; ++k)
+                stale = stale || std::fabs(t[k] - maskTan[e][k]) > 2e-4f;
+    }
+    locatedValid = true;
+    maskStale.store(stale, std::memory_order_relaxed);
+}
+
+void four_passes_mask_taken(uint32_t viewIndex) {
+    if (viewIndex >= 2)
+        return;
+    std::lock_guard guard(liveMutex);
+    maskKnown[viewIndex] = locatedValid;
+    std::memcpy(maskTan[viewIndex], locatedTan[viewIndex], sizeof(maskTan[viewIndex]));
+    const float* t = maskTan[viewIndex];
+    simqvfr::logf("lmu qvfr: eye %u's lens mask fetched: built with the FOV located last (tangents l %.3f r %.3f d %.3f "
+                  "u %.3f)%s",
+                  viewIndex, t[0], t[1], t[2], t[3], locatedValid ? "" : " -- none located yet: the mask is always drawn");
 }
 
 void four_passes_view_size(int (&size)[2]) {
