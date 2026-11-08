@@ -9,8 +9,8 @@
 namespace xplane {
 
 // The focus boxes reach the shaders as data (docs/recon-xplane.md "Gaze: the focus box off the eye's axis", "Live focus
-// size"): a push constant block `vec4 qvfr_focus[3]` at offset 0, which four_views.cpp pushes after every pipeline
-// bind. Entry e (eye 0-1) is that eye's box: its centre tangents in xy, its size as a share of the eye's tangent span
+// size"): a push constant block `vec4 qvfr_focus[3]` at offset 0, which four_views_frame.cpp pushes after every
+// pipeline bind. Entry e (eye 0-1) is that eye's box: its centre tangents in xy, its size as a share of the eye's tangent span
 // in zw. Entry 2 holds the values that follow the box's size: x the periphery's alpha-test mip bias, y the AO edge band;
 // zw 0. Entry 3 holds the views'
 // rects (docs/recon-xplane.md "Design: true per-view sizes"): the outer views' share of their layers in xy, the focus

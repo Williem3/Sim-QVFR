@@ -1,7 +1,10 @@
+// X-Plane's draw path in four views (four_views.h): the code patches four_views_copies_start and
+// four_views_eye_columns_start put in (the multiplier, the viewports, the culls, the LOD width, the per-draw fill of
+// slots 2-3) and their logs. The shader-module hook is in four_views_shaders.cpp, the per-frame focus boxes and their
+// push constants in four_views_frame.cpp.
 #include "four_views.h"
 
 #include <windows.h>
-#include <bcrypt.h>
 
 #include <algorithm>
 #include <cmath>
@@ -10,12 +13,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <mutex>
-#include <set>
 #include <string>
-#include <type_traits>
 #include <vector>
 
 #include "../../engine/code_patch.h"
@@ -23,61 +22,19 @@
 #include "../../log.h"
 #include "abi.h"
 #include "focus_projection.h"
-#include "spirv_patch.h"
+#include "four_views_state.h"
 
 namespace xplane {
+
+using namespace fv;
+
 namespace {
 
 using simqvfr::code_matches;
 using simqvfr::code_redirect;
 using simqvfr::logf;
 
-// VkShaderModuleCreateInfo, as far as needed: sType, pNext, flags, codeSize, pCode (x64 layout).
-struct ShaderModuleCreateInfo {
-    std::uint32_t sType;
-    const void* pNext;
-    std::uint32_t flags;
-    std::size_t codeSize;
-    const std::uint32_t* pCode;
-};
-using CreateShaderModule = std::int32_t (*)(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
-                                           std::uint64_t* module);
-
-std::atomic<int> g_finalResolveEdits{0};
-std::atomic<int> g_eyeArrayModules{0};
-std::atomic<int> g_layerFromZModules{0};
-std::atomic<int> g_inverseModules{0};
-std::atomic<bool> g_eyeColumns{false};  // four_views_set_eye_columns
-std::atomic<double> g_focusFraction{0.2}, g_focusFractionY{0.2};  // four_views_set_focus
-std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
-std::atomic<bool> g_bloomFromEye{false};  // four_views_set_bloom_from_eye
-std::atomic<int> g_eyeMapModules{0}, g_bloomEdits{0}, g_coefficientModules{0}, g_parityModules{0}, g_ssrModules{0};
-std::atomic<bool> g_peripheryAlphaLod{false};  // four_views_set_periphery_alpha_lod
-std::atomic<bool> g_ssrFromEye{true};          // four_views_set_ssr_from_eye
-std::atomic<bool> g_aoEdgesFromEye{true};      // four_views_set_ao_edges_from_eye
-std::atomic<int> g_aoEdgeModules{0};
-// The share of a focus view, from each edge, over which its AO goes from its eye's to its own: CACAO's edge error died
-// out 160 rows (12%) in (capture XPlane_frame2060, docs/recon-xplane.md "Measured: a dark rim at the top of the focus
-// views").
-constexpr float kAoEdgeBand = 0.12f;
-std::atomic<int> g_layerOutModules{0}, g_alphaLodModules{0}, g_tileModules{0};
-std::atomic<bool> g_focusFullRate{false};  // four_views_set_focus_full_rate
-// Per-view sizes (four_views_set_view_sizes): each kind of view's rect, a share of its layers (x, y; 1: the whole
-// layer), the outer views' then the focus views'. Taken into the latched frame.
-struct ViewShares {
-    std::atomic<bool> on{false};
-    std::atomic<double> share[2][2] = {{1.0, 1.0}, {1.0, 1.0}};
-};
-ViewShares g_viewShares;
 std::atomic<int> g_viewRectSets{0};     // set viewports calls given four rects
-std::atomic<int> g_splitOffModules{0};  // blit shaders whose side-by-side split is off in four-view passes
-std::atomic<int> g_histogramModules{0};  // auto exposure histograms bounded by the outer view's rect
-std::atomic<int> g_ssrRectModules{0};    // SSR shaders reading each view's rect
-std::atomic<int> g_viewportSizeModules{0};  // shaders reading u_viewport_size as the layer (u_gbuffer_size)
-std::atomic<int> g_hizRectModules{0};       // depth-chain reductions clamped to each view's rect
-// Diagnostics (four_views_set_diag_edits, four_views_set_diagnostics): the switch edits in, and which outputs are off.
-std::atomic<bool> g_diagEdits{false}, g_diagSsrOff{false}, g_diagAoOff{false}, g_diagShadowOff{false};
-std::atomic<int> g_diagModules{0};
 
 // set viewports(count, multiplier, rects {x, y, w, h} x count) (abi.h kSetViewports). Stereo (multiplier 2) becomes
 // four views; with view rects, a four-view pass's one rect becomes one per view, each view's scaled by its share of
@@ -85,7 +42,6 @@ std::atomic<int> g_diagModules{0};
 // within each viewport (docs/recon-xplane.md "Per-view sizes, stage 2").
 using SetViewports = void (*)(int count, int multiplier, const std::int32_t* rects);
 SetViewports g_setViewportsOriginal = nullptr;
-void latched_rects(float (&rects)[4]);  // this frame's (the latched frame, below)
 void set_viewports(int count, int multiplier, const std::int32_t* rects) {
     if (multiplier == 2)
         multiplier = 4;
@@ -123,71 +79,14 @@ static_assert(sizeof(LodHeightSite) == 16 && sizeof(std::atomic<std::uint32_t>) 
 LodHeightSite g_lodHeight[2];         // the world pass (kWorldLodHeight), the graph setup (kGraphLodHeight)
 std::atomic<bool> g_focusLod{false};  // four_views_set_focus_lod
 std::atomic<int> g_objectDetail{100};  // four_views_set_object_detail: percent of the way to the focus views' density
-// The focus views (four_views_set_focus): off = slots 2-3 copy the eyes (the copies stage).
-std::atomic<bool> g_focus{false};
 
-// ---- One frame's focus boxes (docs/recon-xplane.md "Live focus size") ----
-// What a frame renders with: per eye its focus box (centre tangents; size as shares of the eye's tangent span), the
-// values that follow the size (spirv_patch.h kFocusValuesEntry) and each view's rect in its layers. Settings and gaze
-// reach it only at the latch, once a frame (four_views_latch_frame, at xrEndFrame), so one frame's focus projections,
-// push constants, viewports, LOD and composition record agree however often the size or the gaze changes.
-struct FocusFrame {
-    float box[2][4] = {{0, 0, 1, 1}, {0, 0, 1, 1}};  // eye e: centre x, y; size x, y (the push block's entry e)
-    float values[4] = {};                            // the alpha-test mip bias, the AO edge band, 0, 0 (entry 2)
-    float rects[4] = {1, 1, 1, 1};                   // outer views' share x, y; focus views' (entry 3)
-    float diag[4] = {};                              // diagnostics: SSR off, AO off, sun shadow off, 0 (entry 4)
-    std::uint32_t focus = 0;                         // the focus views are on (else slots 2-3 copy the eyes)
-};
-static_assert(sizeof(FocusFrame) % 4 == 0 && std::is_trivially_copyable_v<FocusFrame>, "copied as words");
-static_assert(sizeof(FocusFrame::box) + sizeof(FocusFrame::values) + sizeof(FocusFrame::rects) +
-                          sizeof(FocusFrame::diag) == kFocusBlockBytes &&
-                  offsetof(FocusFrame, values) == 16 * kFocusValuesEntry &&
-                  offsetof(FocusFrame, rects) == 16 * kViewRectsEntry && offsetof(FocusFrame, diag) == 16 * kDiagEntry,
-              "the push block's layout");
+}  // namespace
 
-// A seqlock: one writer at a time (g_latchMutex); readers on any thread (every draw and pipeline bind) never block it
-// and retry while a store is under way.
-class LatchedFrame {
-public:
-    LatchedFrame() { store(FocusFrame{}); }
-    void store(const FocusFrame& f) {
-        std::uint32_t raw[kWords];
-        std::memcpy(raw, &f, sizeof(raw));
-        const std::uint32_t s = seq_.load(std::memory_order_relaxed);
-        seq_.store(s + 1, std::memory_order_relaxed);
-        std::atomic_thread_fence(std::memory_order_release);
-        for (std::size_t k = 0; k < kWords; ++k)
-            words_[k].store(raw[k], std::memory_order_relaxed);
-        seq_.store(s + 2, std::memory_order_release);
-    }
-    FocusFrame load() const {
-        std::uint32_t raw[kWords];
-        for (;;) {
-            const std::uint32_t before = seq_.load(std::memory_order_acquire);
-            if (before & 1) {
-                YieldProcessor();
-                continue;
-            }
-            for (std::size_t k = 0; k < kWords; ++k)
-                raw[k] = words_[k].load(std::memory_order_relaxed);
-            std::atomic_thread_fence(std::memory_order_acquire);
-            if (seq_.load(std::memory_order_relaxed) == before)
-                break;
-        }
-        FocusFrame f;
-        std::memcpy(&f, raw, sizeof(raw));
-        return f;
-    }
+namespace fv {
 
-private:
-    static constexpr std::size_t kWords = sizeof(FocusFrame) / 4;
-    std::atomic<std::uint32_t> seq_{0};
-    std::atomic<std::uint32_t> words_[kWords];
-};
-LatchedFrame g_frame;
-void latched_rects(float (&rects)[4]) { std::memcpy(rects, g_frame.load().rects, sizeof(rects)); }
-void latch_if_no_frame();  // a setting before the first frame's latch takes effect at once (below)
-void store_view_shares(bool on, const double (&share)[2][2]);  // under the latch's lock (below)
+std::atomic<bool> g_viewRects{false};   // four_views_set_view_rects: one viewport per view
+TangentRecord g_record;
+std::atomic<bool> g_recordWanted{true};
 
 // The LOD width: the eye's width at the finest view's pixel density, so every view's objects and trees take the LOD the
 // finest needs (the cull and its LOD are shared by all four views). W is the layer's width; a focus view spans its share
@@ -204,6 +103,10 @@ void update_lod_scale() {
     for (LodHeightSite& s : g_lodHeight)
         s.scale = scale;
 }
+
+}  // namespace fv
+
+namespace {
 
 // The stub for one LOD width site: the original instructions (which load W into `reg`), then `if (the VR context exists
 // and W is its width) W = W x scale >> 16`, counting either case. `reg`: 0 = rcx, 8 = r8 (W zero-extended in both).
@@ -260,416 +163,7 @@ struct ViewportRing {
 ViewportRing g_viewportRing{};
 static_assert(offsetof(ViewportRing, entry) == 8 && sizeof(ViewportRing::entry[0]) == 16, "the stub's ring layout");
 
-// The uniform blocks with per-eye arrays of two (docs/recon-xplane.md, "Inventory"), by their variables' names.
-const std::vector<std::string> kEyeArrayBlocks = {
-    "u_misc_data_var",          "u_new_sky_data_var",     "u_gbuffer_data_var",       "u_dome_data_var",
-    "u_particle_data_var",      "u_ocean_shading_data_var", "u_line3d_data_var",      "u_ocean_meta_data_var",
-    "u_ssr_data_var",           "u_ogl_light_data_var",   "u_cloud_upscale_data_var", "u_volumetric_apply_data_var",
-    "u_rain_draw_info_var",
-};
-
-std::string sha256_hex(const void* data, std::size_t size) {
-    std::string hex;
-    BCRYPT_ALG_HANDLE alg = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    UCHAR digest[32];
-    if (BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0)) &&
-        BCRYPT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0)) &&
-        BCRYPT_SUCCESS(BCryptHashData(hash, static_cast<PUCHAR>(const_cast<void*>(data)), static_cast<ULONG>(size), 0)) &&
-        BCRYPT_SUCCESS(BCryptFinishHash(hash, digest, sizeof(digest), 0))) {
-        static const char* digits = "0123456789abcdef";
-        for (UCHAR b : digest) {
-            hex += digits[b >> 4];
-            hex += digits[b & 15];
-        }
-    }
-    if (hash)
-        BCryptDestroyHash(hash);
-    if (alg)
-        BCryptCloseAlgorithmProvider(alg, 0);
-    return hex;
-}
-
-// ---- The focus boxes in the shaders: the latched frame's, pushed after every pipeline bind ----
-// The shaders read them from a push constant block (spirv_patch.h kFocusBlockBytes; docs/recon-xplane.md "Gaze: the
-// focus box off the eye's axis", "Live focus size"): every pipeline layout X-Plane makes gets its range, and every
-// pipeline bind is followed by a push. On only when all three call sites are patched, before X-Plane makes any shader
-// or layout; without it the shader edits bake in the launch size, on the eyes' axes.
-std::atomic<bool> g_gazeWanted{true};  // four_views_set_gaze_follow
-std::atomic<bool> g_focusPush{false};
-// VkPipelineLayoutCreateInfo and VkPushConstantRange, as far as needed (x64 layout).
-struct PushConstantRange {
-    std::uint32_t stageFlags, offset, size;
-};
-struct PipelineLayoutCreateInfo {
-    std::uint32_t sType;
-    const void* pNext;
-    std::uint32_t flags;
-    std::uint32_t setLayoutCount;
-    const std::uint64_t* pSetLayouts;
-    std::uint32_t pushConstantRangeCount;
-    const PushConstantRange* pPushConstantRanges;
-};
-using CreatePipelineLayout = std::int32_t (*)(void* device, const PipelineLayoutCreateInfo* info, const void* allocator,
-                                             std::uint64_t* layout);
-using CmdBindPipeline = void (*)(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t pipeline);
-using CmdPushConstants = void (*)(void* commandBuffer, std::uint64_t layout, std::uint32_t stages, std::uint32_t offset,
-                                  std::uint32_t size, const void* values);
-constexpr std::uint32_t kFocusStages = 0x1 | 0x10 | 0x20;  // vertex, fragment, compute
-constexpr PushConstantRange kFocusRange = {kFocusStages, 0, kFocusBlockBytes};
-std::once_flag g_pushLayoutOnce;
-std::uint64_t g_pushLayout = 0;  // ours, with the range alone: pushes through it reach every layout (same ranges)
-std::atomic<int> g_layoutsExtended{0}, g_layoutsOwnRanges{0};
-std::atomic<std::uint64_t> g_focusPushes{0};
-
-// The gaze as the layer last gave it (four_views_set_gaze), for the next latch.
-struct PendingGaze {
-    std::mutex mutex;
-    float tan[2][2] = {};
-    bool valid[2] = {};
-};
-PendingGaze g_pendingGaze;
-
-// X-Plane's vkCreatePipelineLayout call (kPipelineLayoutLoad): the boxes' range added to a layout without ranges of
-// its own (X-Plane's shaders have no push constants; a layout with some is left as it is and counted).
-std::int32_t create_pipeline_layout(void* device, const PipelineLayoutCreateInfo* info, const void* allocator,
-                                    std::uint64_t* layout) {
-    const auto real = *reinterpret_cast<CreatePipelineLayout*>(simqvfr::module_base() + kVkCreatePipelineLayoutSlot);
-    if (!g_focusPush.load(std::memory_order_relaxed) || !info)
-        return real(device, info, allocator, layout);
-    std::call_once(g_pushLayoutOnce, [&] {
-        PipelineLayoutCreateInfo own{};
-        own.sType = info->sType;
-        own.pushConstantRangeCount = 1;
-        own.pPushConstantRanges = &kFocusRange;
-        const std::int32_t r = real(device, &own, nullptr, &g_pushLayout);
-        logf("xplane: focus boxes: own pipeline layout for the pushes: %d", r);
-        if (r != 0)
-            g_pushLayout = 0;
-    });
-    if (info->pushConstantRangeCount != 0) {
-        if (g_layoutsOwnRanges.fetch_add(1) == 0)
-            logf("xplane: focus boxes: a pipeline layout with push constants of its own (left as it is; its shaders "
-                 "would read no boxes)");
-        return real(device, info, allocator, layout);
-    }
-    PipelineLayoutCreateInfo extended = *info;
-    extended.pushConstantRangeCount = 1;
-    extended.pPushConstantRanges = &kFocusRange;
-    g_layoutsExtended.fetch_add(1, std::memory_order_relaxed);
-    return real(device, &extended, allocator, layout);
-}
-
-// X-Plane's vkCmdBindPipeline calls (kBindPipelineCompute, kBindPipelineGraphics): after the bind, the latched frame's
-// boxes and values (spirv_patch.h kFocusBlockEntries).
-void bind_pipeline(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t pipeline) {
-    const auto base = simqvfr::module_base();
-    (*reinterpret_cast<CmdBindPipeline*>(base + kVkCmdBindPipelineSlot))(commandBuffer, bindPoint, pipeline);
-    if (!g_pushLayout)
-        return;
-    const FocusFrame frame = g_frame.load();
-    float values[kFocusBlockBytes / 4];
-    std::memcpy(values, frame.box, sizeof(frame.box));
-    std::memcpy(values + 4 * kFocusValuesEntry, frame.values, sizeof(frame.values));
-    std::memcpy(values + 4 * kViewRectsEntry, frame.rects, sizeof(frame.rects));
-    std::memcpy(values + 4 * kDiagEntry, frame.diag, sizeof(frame.diag));
-    (*reinterpret_cast<CmdPushConstants*>(base + kVkCmdPushConstantsSlot))(commandBuffer, g_pushLayout, kFocusStages, 0,
-                                                                           kFocusBlockBytes, values);
-    g_focusPushes.fetch_add(1, std::memory_order_relaxed);
-}
-
-// Diagnostics: a final resolve variant not in abi.h kFinalResolveFs (a shader using u_y_offset that the eye-columns
-// edit would apply to) stays unedited and breaks the image, as the MSAA variant did (frame saves 9716-9915,
-// 2026-11-06): each is saved once to <logs>\shaders and logged.
-void save_resolve_family(const ShaderModuleCreateInfo* info) {
-    static const char kName[] = "u_y_offset";
-    const auto* bytes = reinterpret_cast<const char*>(info->pCode);
-    if (std::search(bytes, bytes + info->codeSize, kName, kName + sizeof(kName) - 1) == bytes + info->codeSize)
-        return;
-    std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
-    if (!spirv_eye_columns_resolve(words, nullptr))
-        return;
-    const std::string sha = sha256_hex(info->pCode, info->codeSize);
-    static std::mutex mutex;
-    static std::set<std::string> saved;
-    std::lock_guard guard(mutex);
-    if (!saved.insert(sha).second)
-        return;
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"shaders";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    const std::filesystem::path file = dir / ("resolve-family-" + std::to_string(info->codeSize) + "-" + sha.substr(0, 12) + ".spv");
-    std::ofstream out(file, std::ios::binary);
-    out.write(bytes, static_cast<std::streamsize>(info->codeSize));
-    logf("xplane: an UNKNOWN final resolve variant (left unedited: the image breaks if X-Plane uses it): %zu bytes, sha256 "
-         "%s, saved to %ls (%s)",
-         info->codeSize, sha.c_str(), file.c_str(), out ? "written" : "NOT written");
-}
-
-// One of the final resolve's variants (abi.h kFinalResolveFs): X-Plane makes them all when a flight loads and uses one
-// by its settings (FXAA with or without the stencil mask, MSAA; docs/recon-xplane.md "The final resolve's variants").
-bool final_resolve(const ShaderModuleCreateInfo* info) {
-    if (!info || !info->pCode)
-        return false;
-    for (const ShaderHash& h : kFinalResolveFs)
-        if (info->codeSize == h.bytes)
-            return sha256_hex(info->pCode, info->codeSize) == h.sha256;
-    return false;
-}
-
-// X-Plane's vkCreateShaderModule call lands here (kShaderModuleLoad). The final resolve's fragment shader gets
-// v_eye + 2 (it then shows layers 2-3); every other module goes through as it is.
-std::int32_t create_shader_module(void* device, const ShaderModuleCreateInfo* info, const void* allocator,
-                                  std::uint64_t* module) {
-    const auto real = *reinterpret_cast<CreateShaderModule*>(simqvfr::module_base() + kVkCreateShaderModuleSlot);
-    if (final_resolve(info)) {
-        std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
-        std::string why;
-        const bool columns = g_eyeColumns.load();
-        if (columns ? spirv_eye_columns_resolve(words, &why) : spirv_add_to_input(words, "v_eye", 2, &why)) {
-            // Per-view rects (docs/recon-xplane.md "Measured: stage 2's rects"): each view's samples come from its
-            // rect, so it fills its part of the column (the composition reads whole parts).
-            int rectSamples = 0;
-            std::string rectWhy;
-            if (columns && g_focusPush.load() && g_viewRects.load())
-                rectSamples = spirv_sample_view_rects(words, &rectWhy);
-            ShaderModuleCreateInfo edited = *info;
-            edited.codeSize = words.size() * 4;
-            edited.pCode = words.data();
-            const std::int32_t result = real(device, &edited, allocator, module);
-            logf("xplane: final resolve shader (%zu bytes) edited (%s; view rects: %s), vkCreateShaderModule %d, edit %d",
-                 info->codeSize, columns ? "eye columns: each eye's view over its focus view" : "v_eye + 2: layers 2-3",
-                 rectSamples > 0 ? (std::to_string(rectSamples) + " samples from each view's rect").c_str()
-                                 : (columns && g_focusPush.load() && g_viewRects.load() ? ("NOT: " + rectWhy).c_str()
-                                                                                        : "off"),
-                 result, ++g_finalResolveEdits);
-            return result;
-        }
-        logf("xplane: final resolve shader NOT edited: %s", why.c_str());
-    } else if (info && info->pCode && info->codeSize >= 20) {
-        save_resolve_family(info);
-    }
-    // Every shader reading X-Plane's per-eye arrays: views 2-3 read their eye's entry (index & 1).
-    if (info && info->pCode && info->codeSize >= 20) {
-        std::vector<std::uint32_t> words(info->pCode, info->pCode + info->codeSize / 4);
-        // The light billboards' size: projected and un-projected with the eye's pair (docs/recon-xplane.md, "Measured:
-        // focus views darker"), so a light covers the same angle in a focus view as in its eye. The fold then takes the
-        // inverse's index & 1.
-        const int inverted = spirv_eye_projection_beside(words, "u_ogl_light_data", "u_proj_inv",
-                                                         "u_transform_block_fat", "projection_matrix");
-        if (inverted > 0)
-            logf("xplane: light size from the eye's projection in shader module (%d accesses), %d so far", inverted,
-                 ++g_inverseModules);
-        // Shadows (docs/recon-xplane.md "Measured: dark shadow edges in the focus views"): deferred shading's right-eye
-        // test (v_eye == 1) takes v_eye & 1, so the right focus view's shadow lookups come from its eye, not 6 cm off.
-        const int parity = spirv_eye_parity_test(words, "u_shadow_data", "u_eye_right_to_left", "v_eye");
-        if (parity > 0)
-            logf("xplane: shadows: the right-eye test takes v_eye & 1 in shader module (%d tests), %d so far", parity,
-                 ++g_parityModules);
-        int skipped = 0;
-        const int folded = spirv_fold_eye_arrays(words, kEyeArrayBlocks, &skipped);
-        if (folded > 0 || skipped > 0) {
-            const int n = ++g_eyeArrayModules;
-            if (skipped > 0 || n <= 3 || n % 25 == 0)
-                logf("xplane: per-eye arrays folded in shader module %d: %d accesses, %d skipped", n, folded, skipped);
-        }
-        // The focus box's size and centre: this frame's, from the push constants, in every edit that places the box
-        // (docs/recon-xplane.md "Live focus size"). Without them (the pipeline calls not wrapped), the size wanted now
-        // is baked in, the box on the eye's axis.
-        const bool push = g_focusPush.load();
-        const float bakedFx = static_cast<float>(g_focusFraction.load()), bakedFy = static_cast<float>(g_focusFractionY.load());
-        // The projection coefficients (view rays from screen positions): the focus views' own, from their eye's and
-        // the focus box (docs/recon-xplane.md "Measured: the sky and positions in the focus views").
-        int coefSkipped = 0, coefByPixels = 0;
-        const int coefficients =
-            folded > 0 ? spirv_focus_proj_coefficients(words, "u_proj_coefficients", bakedFx, bakedFy, &coefSkipped, push,
-                                                       &coefByPixels)
-                       : 0;
-        if (coefficients > 0 || coefSkipped > 0)
-            logf("xplane: projection coefficients: focus views' own in shader module (%d loads, %d by pixels taking the "
-                 "view rects, %d component reads left), %d so far",
-                 coefficients, coefByPixels, coefSkipped, ++g_coefficientModules);
-        // SSR in the focus views. From the eye (default; docs/recon-xplane.md "Measured: focus views reflect only what
-        // is in the box"): a focus pixel's ray is projected with its eye's u_proj (the fold's) and marched in its eye's
-        // hi-Z and lit history, so it reflects what lies outside the box too. Or in the focus view's own screen
-        // (`xplane_ssr_from_eye=0`; docs/recon-xplane.md "Measured: the wing lit differently in the focus views"):
-        // sharper, but blind to anything outside the box. Only in modules binding u_ssr_data (the hi-Z builder reads
-        // tex_hiZ too).
-        static const char kSsrBlock[] = "u_ssr_data";
-        const auto* bytes = reinterpret_cast<const char*>(words.data());
-        const bool ssrModule =
-            std::search(bytes, bytes + words.size() * 4, kSsrBlock, kSsrBlock + sizeof(kSsrBlock) - 1) != bytes + words.size() * 4;
-        int ssrProjections = 0, ssrRays = 0;
-        int ssrStarts = 0;
-        if (folded > 0 && ssrModule && g_ssrFromEye.load()) {
-            ssrRays = spirv_ray_reads_from_eye(words, {"tex_hiZ", "tex_ssr", "gbuffer_vel"});
-            // ... from their eye pixel's start (docs/recon-xplane.md "Measured: a dot grid on the wing in the focus
-            // views").
-            if (ssrRays > 0)
-                ssrStarts = spirv_ray_start_at_eye_pixel(words);
-        }
-        else if (folded > 0 && ssrModule)
-            ssrProjections = spirv_focus_projection_matrix(words, "u_ssr_data", "u_proj", bakedFx, bakedFy, push);
-        if (ssrRays > 0)
-            logf("xplane: SSR: focus views march in their eye's screen in shader module (%d reads, rays from the eye "
-                 "pixel's start %s), %d so far",
-                 ssrRays, ssrStarts > 0 ? "yes" : "NO: not found", ++g_ssrModules);
-        if (ssrProjections > 0)
-            logf("xplane: SSR: focus views trace with their own projection in shader module (%d loads), %d so far",
-                 ssrProjections, ++g_ssrModules);
-        // SSR over each view's rect (docs/recon-xplane.md "Measured: SSR's saw-tooth at 30%"): its projection takes the
-        // view's place in the layer, so the march runs in the layer's texel grid. After the edits above (the eye's
-        // projection, the eye-pixel start).
-        int ssrRects = 0;
-        if (ssrModule && g_viewRects.load() && push) {
-            ssrRects = spirv_ssr_view_rects(words, ssrRays > 0, nullptr);
-            if (ssrRects > 0)
-                logf("xplane: SSR marches in each view's rect of the layer (%d projections) in shader module, %d so far",
-                     ssrRects, ++g_ssrRectModules);
-        }
-        // Diagnostics ([experiment] xplane_diag=1; docs/recon-xplane.md "Measured: the wing after the SSR edit"): the
-        // SSR results and CACAO's output can be switched off live, to see which pass draws an artefact.
-        int diag = 0;
-        if (g_diagEdits.load() && push) {
-            diag = spirv_diag_override_write(words, "u_ssr_data", "i_output", 0, 0.0f, nullptr) +
-                   spirv_diag_override_write(words, "u_ffx_cacao_data", "g_RwOutput", 1, 1.0f, nullptr) +
-                   spirv_diag_override_sample(words, "u_shadow_data", "tex_smap0", 2, 1.0f, nullptr);
-            if (diag > 0)
-                logf("xplane: diagnostics: switchable output in shader module (%d writes), %d so far", diag,
-                     ++g_diagModules);
-        }
-        // Tiled lights (docs/recon-xplane.md "Measured: right-eye popping near the wing"): the focus views pick the
-        // tile of their pixel's position in the eye. After the coefficient edit, which would otherwise turn the eye's
-        // coefficients this reads into the focus box's.
-        const int tiles = spirv_focus_light_tiles(words, bakedFx, bakedFy, nullptr, push);
-        if (tiles > 0)
-            logf("xplane: tiled lights: focus views take their eye's tile in shader module (%d coordinates), %d so far",
-                 tiles, ++g_tileModules);
-        // AO at the focus views' edges from the eye (docs/recon-xplane.md "Measured: a dark rim at the top of the focus
-        // views").
-        if (g_aoEdgesFromEye.load()) {
-            const int aoEdges = spirv_focus_ao_edges_from_eye(words, bakedFx, bakedFy, kAoEdgeBand, nullptr, push);
-            if (aoEdges > 0)
-                logf("xplane: AO: focus views take their eye's at their edges (%s) in shader module (%d samples), %d so far",
-                     push ? "band following the focus size" : "12% band", aoEdges, ++g_aoEdgeModules);
-        }
-        // One viewport per view (docs/recon-xplane.md "Measured: the zoom with one viewport per view"): X-Plane's blit
-        // vertex shader splits its source into u_viewport_count side-by-side parts; in four-view passes it takes 1.
-        int splitOff = 0;
-        if (g_viewRects.load()) {
-            splitOff = spirv_viewport_split_off(words, nullptr, push);
-            if (splitOff > 0)
-                logf("xplane: view rects: the blit's side-by-side split off in four-view passes (%d loads), module %d",
-                     splitOff, ++g_splitOffModules);
-        }
-        // The auto exposure's histogram over the outer view's rect, not the whole layer (docs/recon-xplane.md
-        // "Measured: the smaller periphery traced"): the undrawn rest of the layer counted as black and raised the
-        // exposure as the periphery shrank.
-        int histogram = 0;
-        if (g_viewRects.load() && push) {
-            histogram = spirv_histogram_view_rect(words, nullptr);
-            if (histogram > 0)
-                logf("xplane: auto exposure histogram reads the outer view's rect (%d fetches), module %d", histogram,
-                     ++g_histogramModules);
-        }
-        // Compute shaders taking their eye from the dispatch depth (the cloud render): write layer z, eye = z & 1.
-        const bool layered = spirv_layer_from_dispatch_z(words);
-        if (layered)
-            logf("xplane: compute shader writes layer = dispatch z (eye from z & 1), module %d", ++g_layerFromZModules);
-        // Bloom from the eye (docs/recon-xplane.md "Measured: bloom per view"): vertex shaders pass each view's map
-        // into its eye's view, and the bloom apply samples the eye's bloom there, so a focus view gets its eye's glow.
-        bool mapped = false, bloom = false;
-        if (g_bloomFromEye.load()) {
-            mapped = spirv_view_to_eye_map_out(words, kEyeMapLocation, nullptr);
-            if (mapped) {
-                const int n = ++g_eyeMapModules;
-                if (n <= 3 || n % 25 == 0)
-                    logf("xplane: vertex shader passes the view-to-eye map, module %d", n);
-            }
-            if (info->codeSize == kBloomApplyFsBytes && sha256_hex(info->pCode, info->codeSize) == kBloomApplyFsSha256) {
-                std::string why;
-                bloom = spirv_sample_eye_box(words, kEyeMapLocation, &why, push);
-                logf("xplane: bloom apply %s%s", bloom ? "samples the eye's bloom in the focus views, edit " : "NOT edited: ",
-                     bloom ? std::to_string(++g_bloomEdits).c_str() : why.c_str());
-            }
-        }
-        // VRS: the focus views shaded at the full rate (docs/recon-xplane.md "Measured: the focus views shaded
-        // coarsely").
-        int fullRate = 0;
-        if (g_focusFullRate.load()) {
-            std::string why;
-            fullRate = spirv_full_rate_from_layer(words, 2, &why);
-            if (fullRate > 0)
-                logf("xplane: shading-rate shader: layers 2-3 at the full rate (%d writes)", fullRate);
-        }
-        // Alpha tests matched across views (docs/recon-xplane.md "Measured: a 'wall' missing in the focus view"):
-        // vertex shaders pass their layer on, and alpha-tested fragment shaders take the alpha of the focus view's mip
-        // in views 0-1.
-        bool layerOut = false;
-        int alphaLod = 0;
-        if (g_peripheryAlphaLod.load()) {
-            layerOut = spirv_layer_out(words, kLayerLocation);
-            if (layerOut) {
-                const int n = ++g_layerOutModules;
-                if (n <= 3 || n % 25 == 0)
-                    logf("xplane: vertex shader passes its layer to the fragment shader, module %d", n);
-            }
-            const float bias = static_cast<float>(0.5 * std::log2(static_cast<double>(bakedFx) * bakedFy));
-            std::string why;
-            alphaLod = spirv_alpha_test_lod_bias(words, kLayerLocation, bias, &why, push);
-            if (alphaLod > 0) {
-                const int n = ++g_alphaLodModules;
-                if (n <= 3 || n % 25 == 0)
-                    logf("xplane: alpha test takes the focus view's mip in the periphery (bias %s %.2f, %d samples), "
-                         "module %d",
-                         push ? "following the focus size, now" : "baked,", push ? g_frame.load().values[0] : bias,
-                         alphaLod, n);
-            }
-        }
-        // The depth chains over each view's rect (docs/recon-xplane.md "Measured: SSR's strip and the depth chain"): the
-        // min/max reductions read only the view, so SSR's and CACAO's coarse cells hold no undrawn depth.
-        int hizRects = 0;
-        if (g_viewRects.load() && push) {
-            hizRects = spirv_hiz_view_rects(words, nullptr);
-            if (hizRects > 0)
-                logf("xplane: depth chain reads each view's rect (%d limits) in shader module, %d so far", hizRects,
-                     ++g_hizRectModules);
-        }
-        // u_viewport_size as the whole layer (docs/recon-xplane.md "Measured: u_viewport_size follows the first rect"):
-        // X-Plane fills it from the pass's first viewport, the outer view's rect once that is smaller. After every edit
-        // above, which reads it too.
-        int viewportSize = 0;
-        if (g_viewRects.load()) {
-            viewportSize = spirv_viewport_size_from_gbuffer(words, nullptr);
-            if (viewportSize > 0) {
-                const int n = ++g_viewportSizeModules;
-                if (n <= 3 || n % 25 == 0)
-                    logf("xplane: u_viewport_size read as the layer (u_gbuffer_size) in shader module (%d reads), %d so far",
-                         viewportSize, n);
-            }
-        }
-        if (inverted > 0 || parity > 0 || folded > 0 || layered || mapped || bloom || fullRate > 0 || coefficients > 0 ||
-            ssrProjections > 0 || ssrRays > 0 || tiles > 0 || layerOut || alphaLod > 0 || splitOff > 0 || histogram > 0 ||
-            ssrRects > 0 || diag > 0 || viewportSize > 0 || hizRects > 0) {
-            ShaderModuleCreateInfo edited = *info;
-            edited.codeSize = words.size() * 4;
-            edited.pCode = words.data();
-            return real(device, &edited, allocator, module);
-        }
-    }
-    return real(device, info, allocator, module);
-}
-
 std::atomic<int> g_fillLogs{0};
-
-// The tangents the views were rendered with (four_views_tangents): taken by the first draw after each request.
-struct TangentRecord {
-    std::mutex mutex;
-    float outer[2][4] = {}, focus[2][4] = {};
-    bool valid = false;
-};
-TangentRecord g_record;
-std::atomic<bool> g_recordWanted{true};
 std::atomic<std::uint64_t> g_fourViewDraws{0};  // draws with four views (fill_views calls)
 
 // (left, right, up, down) from a projection's ascending x and y tangents (projection_tangents).
@@ -1041,62 +535,7 @@ void four_views_set_view_rects(bool on) {
     logf("xplane: view rects %s (one viewport per view)", on ? "on" : "off");
 }
 
-void four_views_set_view_sizes(bool on, double outerWidth, double outerHeight, double focusWidth, double focusHeight) {
-    // The layer is the larger of the two per axis (the size the layer offers X-Plane: qvfr_one_view_size).
-    const double w = std::max(outerWidth, focusWidth), h = std::max(outerHeight, focusHeight);
-    const bool valid = w > 0 && h > 0 && outerWidth > 0 && outerHeight > 0 && focusWidth > 0 && focusHeight > 0;
-    on = on && valid && g_viewRects.load();
-    const double share[2][2] = {{on ? outerWidth / w : 1.0, on ? outerHeight / h : 1.0},
-                                {on ? focusWidth / w : 1.0, on ? focusHeight / h : 1.0}};
-    store_view_shares(on, share);
-    logf("xplane: per-view sizes %s: outer views %.0f%% x %.0f%% of their layers, focus views %.0f%% x %.0f%% (views "
-         "%.2f x %.2f and %.2f x %.2f of the native eye, layers %.2f x %.2f)%s",
-         on ? "on" : "off", share[0][0] * 100, share[0][1] * 100, share[1][0] * 100, share[1][1] * 100, outerWidth,
-         outerHeight, focusWidth, focusHeight, w, h,
-         !g_viewRects.load() ? " (needs view rects)" : !valid ? " (no layout)" : "");
-}
-
 int four_views_view_rect_sets() { return g_viewRectSets.load(); }
-
-void four_views_set_diag_edits(bool on) {
-    g_diagEdits = on;
-    if (on)
-        logf("xplane: diagnostics on: SSR, AO and the sun's shadow switchable live (Ctrl+Alt+1 SSR, Ctrl+Alt+2 AO, "
-             "Ctrl+Alt+3 sun shadow; or xplane_diag_ssr_off, _ao_off, _shadow_off)");
-}
-
-void four_views_set_focus_full_rate(bool on) {
-    g_focusFullRate = on;
-    logf("xplane: focus views at the full shading rate %s", on ? "on" : "off");
-}
-
-void four_views_set_ao_edges_from_eye(bool on) {
-    g_aoEdgesFromEye = on;
-    logf("xplane: AO at the focus views' edges %s", on ? "from their eye's (no rim from CACAO's edges)"
-                                                       : "their own (CACAO's edge rim)");
-}
-
-void four_views_set_ssr_from_eye(bool on) {
-    g_ssrFromEye = on;
-    logf("xplane: SSR in the focus views %s", on ? "marched in the eye's screen (reflects what lies outside the box)"
-                                                 : "traced in the focus view's own screen (sharper, blind outside the box)");
-}
-
-void four_views_set_periphery_alpha_lod(bool on) {
-    g_peripheryAlphaLod = on;
-    logf("xplane: alpha tests in the periphery at the focus view's mip %s (fences and foliage alike in both views)",
-         on ? "on" : "off");
-}
-
-void four_views_set_bloom_from_eye(bool on) {
-    g_bloomFromEye = on;
-    logf("xplane: bloom from the eye %s (focus views take their eye's glow)", on ? "on" : "off");
-}
-
-void four_views_set_eye_columns(bool on) {
-    g_eyeColumns = on;
-    logf("xplane: eye columns %s (the final resolve writes each eye's view over its focus view)", on ? "on" : "off");
-}
 
 bool four_views_eye_columns_start() {
     if (!code_matches(kRenderSizeHeight, kRenderSizeHeightAnchor, sizeof(kRenderSizeHeightAnchor)) ||
@@ -1220,8 +659,6 @@ void four_views_set_object_detail(int percent) {
 
 std::uint64_t four_views_draws() { return g_fourViewDraws.load(std::memory_order_relaxed); }
 
-bool four_views_final_resolve_made() { return g_finalResolveEdits.load() > 0; }
-
 void four_views_viewport_log() {
     std::int32_t seen[64][4];
     int count = 0;
@@ -1260,167 +697,6 @@ bool four_views_tangents(float (&outer)[2][4], float (&focus)[2][4]) {
     std::memcpy(outer, g_record.outer, sizeof(outer));
     std::memcpy(focus, g_record.focus, sizeof(focus));
     return true;
-}
-
-void four_views_set_gaze_follow(bool on) { g_gazeWanted = on; }
-
-bool four_views_gaze_follows() { return g_focusPush.load() && g_gazeWanted.load(); }
-
-void four_views_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
-    std::lock_guard guard(g_pendingGaze.mutex);
-    std::memcpy(g_pendingGaze.tan, tan, sizeof(tan));
-    std::memcpy(g_pendingGaze.valid, valid, sizeof(valid));
-}
-
-namespace {
-
-// The latch's writer lock, and whether a frame has latched yet (until then a setting takes effect at once: the menu
-// and loading screens draw before the first xrEndFrame).
-std::mutex g_latchMutex;
-bool g_latched = false;
-
-// The AO edge band follows the box's size (docs/recon-xplane.md "Live focus size"). CACAO's edge error reached 12% of the
-// focus view in with a 30% box (capture XPlane_frame2060); its sampling radius on screen goes as 1 / tan(half the view's
-// field of view) (FFX CACAO's NDC-to-view scale), i.e. as 1 / the box's size for the same scene. So 12% x 0.3 / f, at
-// most half the view. Only the 30% point is measured.
-constexpr double kAoEdgeBandMeasuredAt = 0.3;
-float ao_edge_band(double fx, double fy) {
-    const double f = std::clamp(std::min(fx, fy), 0.05, 1.0);
-    return static_cast<float>(std::min(0.5, kAoEdgeBand * kAoEdgeBandMeasuredAt / f));
-}
-
-// The settings and the gaze become the boxes of the frames drawn from now on (under g_latchMutex).
-void latch_frame() {
-    float tan[2][2];
-    bool valid[2];
-    {
-        std::lock_guard guard(g_pendingGaze.mutex);
-        std::memcpy(tan, g_pendingGaze.tan, sizeof(tan));
-        std::memcpy(valid, g_pendingGaze.valid, sizeof(valid));
-    }
-    float outer[2][4] = {};
-    bool recorded = false;
-    {
-        std::lock_guard guard(g_record.mutex);
-        recorded = g_record.valid;
-        std::memcpy(outer, g_record.outer, sizeof(outer));
-    }
-    FocusFrame f;
-    f.focus = g_focus.load() ? 1u : 0u;
-    for (int k = 0; k < 2; ++k)
-        for (int a = 0; a < 2; ++a)
-            f.rects[2 * k + a] = static_cast<float>(g_viewShares.on.load() ? g_viewShares.share[k][a].load() : 1.0);
-    const double fx = f.focus ? g_focusFraction.load() : 1.0, fy = f.focus ? g_focusFractionY.load() : 1.0;
-    // The centres move only when the shaders get them pushed: baked edits place the box on the eye's axis.
-    const bool follow = g_focusPush.load() && g_gazeWanted.load();
-    for (int e = 0; e < 2; ++e) {
-        const double l = outer[e][0], r = outer[e][1], u = outer[e][2], d = outer[e][3];
-        double cx = 0, cy = 0;
-        if (!f.focus && recorded && g_focusPush.load()) {
-            // Focus off: the box is the whole eye (its centre the eye's, the span 1), so the edits give views 2-3
-            // their eye's own coefficients, which copy it.
-            cx = 0.5 * (l + r);
-            cy = 0.5 * (u + d);
-        } else if (f.focus && follow && valid[e] && recorded) {
-            // Clamped so the box stays inside its eye's view (left, right, up, down), as focus_turn does for ACE.
-            const double hw = 0.5 * fx * (r - l), hh = 0.5 * fy * (u - d);
-            if (l + hw <= r - hw && d + hh <= u - hh) {
-                cx = std::clamp(static_cast<double>(tan[e][0]), l + hw, r - hw);
-                cy = std::clamp(static_cast<double>(tan[e][1]), d + hh, u - hh);
-            }
-        }
-        const float box[4] = {static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(fx), static_cast<float>(fy)};
-        std::memcpy(f.box[e], box, sizeof(box));
-    }
-    // The periphery's alpha-test mip bias: log2 of a focus pixel's size over a periphery pixel's (spirv_patch.h): the
-    // box's share of the eye, times the outer views' share of their layers over the focus views'.
-    f.values[0] = f.focus ? static_cast<float>(0.5 * std::log2(fx * fy * f.rects[0] * f.rects[1] /
-                                                                (static_cast<double>(f.rects[2]) * f.rects[3])))
-                          : 0.0f;
-    f.values[1] = ao_edge_band(fx, fy);
-    f.diag[0] = g_diagSsrOff.load() ? 1.0f : 0.0f;
-    f.diag[1] = g_diagAoOff.load() ? 1.0f : 0.0f;
-    f.diag[2] = g_diagShadowOff.load() ? 1.0f : 0.0f;
-    g_frame.store(f);
-    update_lod_scale();
-}
-
-// Before the first frame's latch, a setting takes effect at once.
-void latch_if_no_frame() {
-    std::lock_guard lock(g_latchMutex);
-    if (!g_latched)
-        latch_frame();
-}
-
-// The view rects' shares (four_views_set_view_sizes, four_views_set_view_shares), all four under the latch's lock so a
-// frame never latches half of a change; before the first latch, at once.
-void store_view_shares(bool on, const double (&share)[2][2]) {
-    std::lock_guard lock(g_latchMutex);
-    for (int k = 0; k < 2; ++k)
-        for (int a = 0; a < 2; ++a)
-            g_viewShares.share[k][a] = share[k][a];
-    g_viewShares.on = on;
-    if (!g_latched)
-        latch_frame();
-}
-
-}  // namespace
-
-void four_views_latch_frame() {
-    std::lock_guard lock(g_latchMutex);
-    g_latched = true;
-    latch_frame();
-}
-
-void four_views_set_diagnostics(bool ssrOff, bool aoOff, bool shadowOff) {
-    if (ssrOff == g_diagSsrOff.load() && aoOff == g_diagAoOff.load() && shadowOff == g_diagShadowOff.load())
-        return;
-    {
-        std::lock_guard lock(g_latchMutex);
-        g_diagSsrOff = ssrOff;
-        g_diagAoOff = aoOff;
-        g_diagShadowOff = shadowOff;
-        if (!g_latched)
-            latch_frame();
-    }
-    logf("xplane: diagnostics: SSR %s, AO %s, sun shadow %s (from the next frame)%s", ssrOff ? "OFF" : "on",
-         aoOff ? "OFF" : "on", shadowOff ? "OFF" : "on",
-         g_diagModules.load() > 0 ? "" : " (no shader has the switch: xplane_diag=1 wasn't set at launch)");
-}
-
-bool four_views_set_view_shares(double outerX, double outerY, double focusX, double focusY) {
-    if (!g_viewShares.on.load())
-        return false;
-    const auto share = [](double s) { return std::clamp(s, 0.01, 1.0); };
-    const double shares[2][2] = {{share(outerX), share(outerY)}, {share(focusX), share(focusY)}};
-    store_view_shares(true, shares);
-    return true;
-}
-
-void four_views_gaze_log() {
-    const FocusFrame f = g_frame.load();
-    logf("xplane: focus boxes (tangents, shares of the eye) L centre %.3f, %.3f size %.3f x %.3f, R centre %.3f, %.3f "
-         "size %.3f x %.3f; alpha mip bias %.2f, AO edge band %.3f; view rects (shares of the layers) outer %.3f x %.3f, "
-         "focus %.3f x %.3f; %s, %llu pushes so far, %d pipeline layouts given their range, %d with push constants of "
-         "their own",
-         f.box[0][0], f.box[0][1], f.box[0][2], f.box[0][3], f.box[1][0], f.box[1][1], f.box[1][2], f.box[1][3],
-         f.values[0], f.values[1], f.rects[0], f.rects[1], f.rects[2], f.rects[3],
-         g_focusPush.load() ? "pushed" : "NOT pushed (baked into the shaders)",
-         static_cast<unsigned long long>(g_focusPushes.load()), g_layoutsExtended.load(), g_layoutsOwnRanges.load());
-}
-
-void four_views_set_focus(bool on, double fraction, double fractionY) {
-    fractionY = fractionY > 0.0 ? fractionY : fraction;
-    const bool changed = fraction != g_focusFraction.load() || fractionY != g_focusFractionY.load();
-    if (changed && !g_focusPush.load() && g_coefficientModules.load() > 0)
-        logf("xplane: focus size changed after X-Plane made its shaders, which have the launch size baked in (the "
-             "pipeline calls aren't wrapped): the sky and screen-space passes keep it until X-Plane restarts");
-    g_focusFraction = fraction;
-    g_focusFractionY = fractionY;
-    g_focus = on;
-    latch_if_no_frame();
-    logf("xplane: focus views %s (%.0f%% x %.0f%% of each eye, %s; from the next frame)", on ? "on" : "off (copies of the eyes)",
-         fraction * 100.0, fractionY * 100.0, four_views_gaze_follows() ? "centred on the gaze" : "centred on the eye's axis");
 }
 
 }  // namespace xplane
