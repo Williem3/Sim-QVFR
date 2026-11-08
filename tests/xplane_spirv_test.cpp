@@ -512,8 +512,8 @@ int main() {
 
     // SIM_QVFR_SPV_GAZE: shaders reading the per-eye coefficients, tiles, AO or an alpha test (from a capture,
     // ';'-separated, folded), each given the edits that place the focus box, with the box (centre and size) and its
-    // values from the push constants, in four_views.cpp's order; written to <file>.gaze.spv (spirv-val: one push
-    // constant block, listed on the entry point).
+    // values from the push constants, in four_views_shaders.cpp's order; written to <file>.gaze.spv (spirv-val: one
+    // push constant block, listed on the entry point).
     if (const char* list = std::getenv("SIM_QVFR_SPV_GAZE")) {
         int total = 0;
         std::string all = list;
@@ -544,9 +544,9 @@ int main() {
     }
 
     // SIM_QVFR_SPV_ALL: any shaders from a capture (';'-separated, as X-Plane makes them), each given every edit in
-    // four_views.cpp's create_shader_module order with the focus box from the push constants (QVFR's defaults: SSR from
-    // the eye, AO edges, bloom maps, full rate, alpha tests); written to <file>.all.spv when edited (spirv-val: the
-    // whole chain on every module).
+    // four_views_shaders.cpp's create_shader_module order with the focus box from the push constants (QVFR's defaults:
+    // SSR from the eye, AO edges, bloom maps, full rate, alpha tests); written to <file>.all.spv when edited (spirv-val:
+    // the whole chain on every module).
     if (const char* list = std::getenv("SIM_QVFR_SPV_ALL")) {
         const std::vector<std::string> blocks = {
             "u_misc_data_var",          "u_new_sky_data_var",       "u_gbuffer_data_var",   "u_dome_data_var",
