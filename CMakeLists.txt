@@ -78,7 +78,7 @@ target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler
 add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/layer/config.cpp
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
   src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
-  src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp)
+  src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)

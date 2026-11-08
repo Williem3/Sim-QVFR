@@ -162,9 +162,11 @@ void optimize_tick(int64_t now);
 void frame_capture_poll();
 void cpu_profile_poll();
 
-// xr_layer.cpp
+// frame.cpp
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo);
+
+// xr_layer.cpp
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
                                                 const XrApiLayerCreateInfo* layerInfo, XrInstance* instance);
