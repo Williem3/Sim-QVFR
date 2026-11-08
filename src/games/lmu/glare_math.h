@@ -30,8 +30,23 @@ inline simqvfr::ViewRegion yebis_region(unsigned textureWidth, unsigned textureH
             axis(textureHeight, height, scaleOffset[1], scaleOffset[3])};
 }
 
-// The UV extent itself (for the log: it should be the share of its target the pass rendered).
+// The UV extent itself (for the log).
 inline double yebis_uv_extent(unsigned size, float scale, float offset) { return size * static_cast<double>(scale) + offset; }
+
+// The region of the glare texture that holds a pass's view. YEBIS builds the glare from the scene target at the same UV
+// as its tonemap samples it, so with LMU's live resolution (a pass rendering the top-left `shareX` x `shareY` of its
+// target) the view's glare is that share of the region YEBIS uses (whose UV extent is 1 in LMU). Run 2026-11-08 10:52:
+// focus passes at 0.938 of their target, the glare stretched over the whole texture showed a light's halo 21 eye px
+// below the light, as this predicts (24). A share <= 0 (not known yet) is no region (width 0).
+inline simqvfr::ViewRegion yebis_pass_region(const simqvfr::ViewRegion& yebisRegion, double shareX, double shareY) {
+    if (!(shareX > 0) || !(shareY > 0))
+        return {0, 0, 0, 0};
+    const auto axis = [](int size, double share) {
+        const double r = std::floor(size * (share > 1 ? 1.0 : share) + 0.5);
+        return static_cast<int>(r < 1 ? 1 : r);
+    };
+    return {0, 0, axis(yebisRegion.width, shareX), axis(yebisRegion.height, shareY)};
+}
 
 // A region a pass can plausibly use: LMU's live resolution goes down to 10% of the launch size; anything under 5% of the
 // texture per axis is a misread layout, and sharing into it would change nothing that shows.

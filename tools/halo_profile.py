@@ -174,6 +174,29 @@ def main():
     print(f"halo rings {core * a.step:.0f}-{edge_k * a.step:.0f} eye px: median focus/eye luminance {ratio_l:.3f}, "
           f"yellowness {ratio_y:.3f} (1 = the same halo; a box-sized glare is well under 1)")
 
+    # Where the glow sits: the centroid of the luminance above the background, in the rings from the core's edge out to
+    # the eye halo's 10% reach, the same box pixels for both images. Ring averages can't see a halo of the right
+    # strength in the wrong place (a glare region mapped wrong); this can.
+    reach10 = reach(e_l, a.step, core, edge_k)[1] or 70
+    r_in, r_out = (core + 1) * a.step, max(reach10, 3 * a.step + (core + 1) * a.step)
+    ring = (radius >= r_in) & (radius < r_out)
+    bg_ring = (radius >= r_out + 20) & (radius < r_out + 60)
+    centroids = []
+    for img in (eye_lum, foc_lum):
+        bg = np.median(img[bg_ring]) if bg_ring.any() else 0.0
+        w = np.where(ring, np.maximum(img - bg, 0), 0)
+        total = w.sum()
+        centroids.append(((w * (xx + 0.5)).sum() / total - lx, (w * (yy + 0.5)).sum() / total - ly, total) if total > 0
+                         else (np.nan, np.nan, 0.0))
+    (ex_, ey_, et), (fx2, fy2, ft) = centroids
+    dx, dy = fx2 - ex_, fy2 - ey_
+    shift = np.hypot(dx, dy)
+    limit = max(4.0, 0.15 * r_out)
+    print(f"glow {r_in:.0f}-{r_out:.0f} eye px from the light: centroid offset eye {ex_:+.1f},{ey_:+.1f}, focus "
+          f"{fx2:+.1f},{fy2:+.1f}: focus - eye {dx:+.1f},{dy:+.1f} eye px; glow amount focus/eye "
+          f"{ft / et if et > 0 else float('nan'):.2f} -> "
+          f"{'IN PLACE' if shift <= limit else 'DISPLACED'} (limit {limit:.0f} px)")
+
     if a.out:
         scale = max(1, int(round(600 / max(eye_box8.shape))))
         left = Image.fromarray(eye_box8).resize((eye_box8.shape[1] * scale, eye_box8.shape[0] * scale), Image.NEAREST)

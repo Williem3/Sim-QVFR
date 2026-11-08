@@ -129,6 +129,19 @@ void region_checks() {
     check(r.width == 646 && r.height == 506, "region: a non-finite scale is the whole axis");
     const simqvfr::ViewRegion tiny{0, 0, 30, 506};
     check(!lmu::yebis_region_plausible(tiny, kW, kH), "region: under 5% of the texture on an axis is implausible");
+
+    // A pass's view in it (the 10:52 run: textures 646x540 for 1614x1350 targets; focus passes at 1514x1266).
+    float full540[4];
+    uv_scale(1, 646, 540, full540);
+    const simqvfr::ViewRegion whole540 = lmu::yebis_region(646, 540, 646, 540, full540);
+    r = lmu::yebis_pass_region(whole540, 1514.0 / 1614, 1266.0 / 1350);
+    check(r.width == 606 && r.height == 506, "pass region: a focus pass at 1514x1266 of 1614x1350 is 606x506 of 646x540");
+    r = lmu::yebis_pass_region(whole540, 1, 1);
+    check(r.width == 646 && r.height == 540, "pass region: a pass filling its target is the whole region");
+    r = lmu::yebis_pass_region(whole540, 0, 0);
+    check(r.width == 0, "pass region: a share not known yet is no region");
+    r = lmu::yebis_pass_region(whole540, 1.2, 1);
+    check(r.width == 646, "pass region: a share over 1 stops at the region");
 }
 
 void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
@@ -146,15 +159,16 @@ void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
               m.rotation[0] == 1 && m.rotation[4] == 1 && m.rotation[8] == 1 && m.rotation[1] == 0,
           "mapping: tangents reordered to left, right, up, down; no turn");
 
-    // The eye's glare at viewport scale 0.8 (live resolution: the eye smaller than the focus view), a halo (a Gaussian,
-    // sigma 5 eye texels) at a direction inside the box, near its left edge.
-    float eyeScale[4], focusScale[4];
-    uv_scale(0.8f, kW, kH, eyeScale);
-    uv_scale(1, kW, kH, focusScale);
-    const simqvfr::ViewRegion er = lmu::yebis_region(kW, kH, kW, kH, eyeScale);
-    const simqvfr::ViewRegion fr = lmu::yebis_region(kW, kH, kW, kH, focusScale);
-    check(er.width == 517 && er.height == 405 && fr.width == 646 && fr.height == 506,
-          "regions: the eye's at 0.8 (517x405), the focus view's whole (646x506)");
+    // As LMU runs: YEBIS uses its whole glare texture (UV extent 1) and each pass's view is the share of its target the
+    // pass rendered (live resolution): the eye at 0.8 here, the focus view at 0.938 x 0.9378 as in the 10:52 run. A halo
+    // (a Gaussian, sigma 5 eye texels) at a direction inside the box, near its left edge.
+    float full[4];
+    uv_scale(1, kW, kH, full);
+    const simqvfr::ViewRegion whole = lmu::yebis_region(kW, kH, kW, kH, full);
+    const simqvfr::ViewRegion er = lmu::yebis_pass_region(whole, 0.8, 0.8);
+    const simqvfr::ViewRegion fr = lmu::yebis_pass_region(whole, 1514.0 / 1614, 1266.0 / 1350);
+    check(er.width == 517 && er.height == 405 && fr.width == 606 && fr.height == 475,
+          "regions: the eye's at 0.8 (517x405), the focus view's at 0.938 x 0.9378 (606x475)");
     const double tx = box.focusTan[0] + 0.15 * (box.focusTan[1] - box.focusTan[0]);
     const double ty = box.focusTan[2] + 0.6 * (box.focusTan[3] - box.focusTan[2]);
     const double ex = (tx - l) / (r - l) * er.width, ey = (u - ty) / (u - d) * er.height;  // eye texels (rows down)
@@ -237,7 +251,7 @@ void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
     check(seamBad == 0, "the focus region's edge column holds the eye's glare at the box edge");
 
     bool beyondKept = true;
-    const simqvfr::ViewRegion inner = lmu::yebis_region(kW, kH, kW, kH, eyeScale);  // into a smaller focus region
+    const simqvfr::ViewRegion inner = lmu::yebis_pass_region(whole, 0.5, 0.5);  // into a smaller focus region
     std::vector<std::uint32_t> again(kW * kH, marker);
     auto yebis2 = glare_texture(device, again, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
     resample.resample_target(eyeGlare.Get(), er, yebis2.Get(), inner, m);

@@ -18,8 +18,8 @@ void glare_share_set(bool on);
 bool glare_share_on();
 // The render thread, around each pass: the pass about to run (0-1 eyes, 2-3 focus views of eyes 0-1) and, for a focus
 // pass, its box (null: the pass isn't a focus view this frame, its glare stays its own); -1 after the pass.
-// `shareX`, `shareY`: how much of its target the pass renders (live resolution; 0 not known yet), logged next to YEBIS's
-// own region.
+// `shareX`, `shareY`: how much of its target the pass renders (live resolution; 0 not known yet): its view's share of
+// YEBIS's glare too (glare_math.h yebis_pass_region).
 void glare_share_pass(int pass, const FocusBox* box, double shareX = 0, double shareY = 0);
 // Every frame (counts; a summary line every 900 frames while it works).
 void glare_share_frame_end(unsigned long long frame);
