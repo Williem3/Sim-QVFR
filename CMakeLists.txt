@@ -167,6 +167,10 @@ target_compile_definitions(image_dump_test PRIVATE UNICODE _UNICODE WIN32_LEAN_A
 target_link_libraries(image_dump_test PRIVATE sim_qvfr_core)
 target_link_options(image_dump_test PRIVATE /IGNORE:4078)  # its pointer placed in .text on purpose
 
+# LMU's focus projection (games/lmu/focus_math.h) against the projection the game builds.
+add_executable(lmu_focus_test tests/lmu_focus_test.cpp)
+target_include_directories(lmu_focus_test PRIVATE src)
+
 # Offline check of the views4 index-folding trampolines (tests/code_patch_test.cpp).
 add_executable(code_patch_test tests/code_patch_test.cpp)
 target_include_directories(code_patch_test PRIVATE src ${THIRD_PARTY}/openxr/include)

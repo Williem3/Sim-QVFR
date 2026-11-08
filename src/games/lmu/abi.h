@@ -49,6 +49,14 @@ inline constexpr unsigned kRenderTargetUsage = 0x2000;
 inline constexpr std::uintptr_t kSurfaceD3D = 0x605220;      // the surface's D3D11 object (not AddRef'd)
 inline constexpr std::uint8_t kSurfaceD3DAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8};
 
+// The per-eye projections VR_UpdateEyes writes each frame; each pass's camera update copies its eye's into the camera. [Eye projection slots]
+inline constexpr std::uintptr_t kEyeProjection = 0x1b1bf74;     // eye e at + e * kEyeSlotStride: the camera's +0x360
+inline constexpr std::uintptr_t kEyeProjectionFar = 0x1b1c04c;  // the same with a fixed far plane: the camera's +0x58c
+inline constexpr std::size_t kEyeSlotStride = 0x6c;
+inline constexpr std::size_t kSlotMatrix = 4;  // the row-major 4x4 (left-handed, row vectors) after an int
+// The eye render textures (texture objects), eye e at + e * 8. [Eye textures]
+inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
+
 // YEBIS CPostEffect::SetDeltaTime(this, seconds): each pass's post-processing sets it; auto exposure adapts by it. [Post-effect time]
 inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
 inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,

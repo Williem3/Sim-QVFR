@@ -21,8 +21,12 @@ public:
         if (!analysis())
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
-        copies_ = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0 &&
-                  four_passes_start_copies(GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0);
+        // lmu_focus=1: the focus gate (focus views); lmu_copies=1: the copies gate. Both run the eye loop four times.
+        const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
+        const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
+        const bool hold = GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0;
+        const double fraction = GetPrivateProfileIntW(L"experiment", L"focus_percent", 30, ini) / 100.0;
+        copies_ = (focus || copies) && four_passes_start(focus, hold, fraction);
     }
     void frame_end() override {
         if (viewProbe_)
