@@ -343,6 +343,13 @@ inline constexpr std::ptrdiff_t kTileEyeMatrix = 0x224;
 inline constexpr std::ptrdiff_t kPerViewMatrix = 0x640, kPerViewTanX = 0x658, kPerViewTanY = 0x670;
 // Renderer init sizes the per-view vectors (+0x7b8, +0x658, +0x670, +0x640) from viewCount().
 inline constexpr std::uintptr_t kInitViewCountCallSites[] = {0x1d444b5, 0x1d444cc, 0x1d444e3, 0x1d444fa};
+// NGX's NVSDK_NGX_D3D12_CreateFeature and NVSDK_NGX_D3D12_EvaluateFeature_C, linked into ACE [dlss-extent]
+inline constexpr std::uintptr_t kNgxCreateFeatureRva = 0x20b3a00;
+inline constexpr std::uint8_t kNgxCreateFeatureAnchor[16] = {0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                             0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x41};
+inline constexpr std::uintptr_t kNgxEvaluateFeatureRva = 0x20b3bb0;
+inline constexpr std::uint8_t kNgxEvaluateFeatureAnchor[16] = {0x48, 0x83, 0xec, 0x38, 0x48, 0x8b, 0xc1, 0x48,
+                                                               0x8b, 0x0d, 0x82, 0x30, 0x8b, 0x04, 0x48, 0x85};
 
 // Round 3 added D3D12 tracing (probe/d3d12_trace.cpp): which code renders into the swapchain.
 // Round 4 extended it to eye-sized internal render targets and their allocations.
