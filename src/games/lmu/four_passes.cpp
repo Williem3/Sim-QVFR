@@ -20,6 +20,7 @@
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
 #include "../../probe/run_exit.h"
+#include "../../quad/d3d11_view_resample.h"
 #include "../../sha256_file.h"
 #include "abi.h"
 #include "focus_math.h"
@@ -557,6 +558,24 @@ bool ensure_focus_textures(ID3D11Texture2D* eyeTexture) {
     return ok;
 }
 
+// ---- QVFR: the menus at native resolution ----
+// A frame without the eye loop (the main menu, loading) is the game's eye images as they are, at the views' size: its
+// UI as soft as the periphery. Instead each eye's image is scaled up to the native eye into an image of ours before the
+// game draws its UI, the UI panel drawn into that at native after (as into the focus views), and the layer composes a
+// menu atlas of the two (the focus views the same pixels). Kept for the session (the compositor holds views of them).
+bool menuNative = false;        // FourPassesRun::menuNative
+double layerShare[2] = {1, 1};  // the views' layer in native eye widths and heights (FourPassesRun)
+simqvfr::D3D11ViewResample menuResample;
+bool menuResampleTried = false;
+ID3D11Texture2D* menuTex[2] = {};
+ID3D11RenderTargetView* menuRtv[2] = {};
+ID3D11Texture2D* menuAtlas = nullptr;
+unsigned menuW = 0, menuH = 0;
+bool menuReady = false;  // this frame's menu is in the menu atlas, until the layer takes it
+float menuUv[4][4] = {};
+unsigned long long menuFrames = 0;
+bool menuRefusalLogged = false;
+
 // ---- QVFR: the VR UI in the focus views ----
 // VR_Present draws the HUD canvas onto a curved panel in each eye's final with the eye's projection x view (kVruiDraw);
 // the same draw again into the focus images, with that matrix remapped to the focus view's clip space (uiRemap).
@@ -567,6 +586,66 @@ bool vruiHooked = false;
 bool focusUiPending = false;  // this frame's focus images wait for the UI
 unsigned long long uiDrawn = 0, uiSkipped = 0;
 bool uiRefusalLogged = false;
+
+// RTVs on `textures` like the game's eye RTV `like`; false (none made) when they can't be.
+bool make_rtvs(ID3D11DeviceContext* context, ID3D11RenderTargetView* like, ID3D11Texture2D* const (&textures)[2],
+               ID3D11RenderTargetView* (&out)[2]) {
+    for (auto*& view : out)
+        if (view) {
+            view->Release();
+            view = nullptr;
+        }
+    D3D11_RENDER_TARGET_VIEW_DESC d{};
+    like->GetDesc(&d);
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    bool ok = d.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D;
+    for (int e = 0; e < 2; ++e)
+        ok = ok && textures[e] && SUCCEEDED(device->CreateRenderTargetView(textures[e], &d, &out[e]));
+    device->Release();
+    if (!ok)
+        for (auto*& view : out)
+            if (view) {
+                view->Release();
+                view = nullptr;
+            }
+    return ok;
+}
+
+// Both eyes' panels drawn with `block` (the eyes block, its matrices as wanted) into `rtvs`, at a w x h viewport when
+// w > 0 (else the one set); the game's eye RTVs, viewport and bound targets put back.
+void draw_panels(void* vrui, ID3D11DeviceContext* context, const std::uint8_t* block, ID3D11RenderTargetView* const (&rtvs)[2],
+                 int w, int h) {
+    auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
+    int* viewport = reinterpret_cast<int*>(static_cast<std::uint8_t*>(vrui) + kVruiViewport);
+    const int keptViewport[2] = {viewport[0], viewport[1]};
+    ID3D11RenderTargetView* keptRtv = nullptr;
+    ID3D11DepthStencilView* keptDsv = nullptr;
+    context->OMGetRenderTargets(1, &keptRtv, &keptDsv);
+    ID3D11RenderTargetView* const gameRtv[2] = {rtv[0], rtv[1]};
+    rtv[0] = rtvs[0];
+    rtv[1] = rtvs[1];
+    if (w > 0 && h > 0) {
+        viewport[0] = w;
+        viewport[1] = h;
+    }
+    const auto drawEye = reinterpret_cast<VruiDrawEyeFn>(base() + kVruiDrawEye);
+    drawEye(vrui, context, block, 0);
+    drawEye(vrui, context, block, 1);
+    rtv[0] = gameRtv[0];
+    rtv[1] = gameRtv[1];
+    viewport[0] = keptViewport[0];
+    viewport[1] = keptViewport[1];
+    context->OMSetRenderTargets(1, &keptRtv, keptDsv);
+    if (keptRtv)
+        keptRtv->Release();
+    if (keptDsv)
+        keptDsv->Release();
+}
+
+// The menus at native resolution (below): before and after the game's own UI draw in a frame without the eye loop.
+bool menu_background(void* vrui, ID3D11DeviceContext* context);
+void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes);
 
 void focus_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
     auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
@@ -581,24 +660,8 @@ void focus_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
     };
     if (!rtv[0] || !rtv[1] || !focusTex[0] || !focusTex[1])
         return refuse("no targets");
-    if (!focusRtv[0] || !focusRtv[1]) {
-        D3D11_RENDER_TARGET_VIEW_DESC d{};
-        rtv[0]->GetDesc(&d);
-        ID3D11Device* device = nullptr;
-        context->GetDevice(&device);
-        bool ok = d.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D;
-        for (int e = 0; e < 2; ++e)
-            ok = ok && !focusRtv[e] && SUCCEEDED(device->CreateRenderTargetView(focusTex[e], &d, &focusRtv[e]));
-        device->Release();
-        if (!ok) {
-            for (auto*& view : focusRtv)
-                if (view) {
-                    view->Release();
-                    view = nullptr;
-                }
-            return refuse("its render target view doesn't fit the focus images");
-        }
-    }
+    if ((!focusRtv[0] || !focusRtv[1]) && !make_rtvs(context, rtv[0], focusTex, focusRtv))
+        return refuse("its render target view doesn't fit the focus images");
     std::uint8_t block[kVruiEyesSize];
     std::memcpy(block, eyes, sizeof(block));
     int layout = 0;
@@ -616,22 +679,7 @@ void focus_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
         remap_clip(m, uiRemap[e], layout);
         std::memcpy(at, m, sizeof(m));
     }
-    ID3D11RenderTargetView* keptRtv = nullptr;
-    ID3D11DepthStencilView* keptDsv = nullptr;
-    context->OMGetRenderTargets(1, &keptRtv, &keptDsv);
-    ID3D11RenderTargetView* const gameRtv[2] = {rtv[0], rtv[1]};
-    rtv[0] = focusRtv[0];
-    rtv[1] = focusRtv[1];
-    const auto drawEye = reinterpret_cast<VruiDrawEyeFn>(base() + kVruiDrawEye);
-    drawEye(vrui, context, block, 0);
-    drawEye(vrui, context, block, 1);
-    rtv[0] = gameRtv[0];
-    rtv[1] = gameRtv[1];
-    context->OMSetRenderTargets(1, &keptRtv, keptDsv);
-    if (keptRtv)
-        keptRtv->Release();
-    if (keptDsv)
-        keptDsv->Release();
+    draw_panels(vrui, context, block, focusRtv, 0, 0);  // at the viewport vrui_draw set (the focus views' size)
     if (uiDrawn++ == 0)
         simqvfr::logf("lmu qvfr: frame %llu: the VR UI drawn into the focus views too (mode %d; the UI matrix keeps its clip "
                       "outputs in its %s)",
@@ -649,7 +697,13 @@ void vrui_draw(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
         viewport[0] = static_cast<int>(passW[0]);
         viewport[1] = static_cast<int>(passH[0]);
     }
+    // A frame without the eye loop (the main menu, loading): the eyes scaled up to native first, the UI drawn into those
+    // at native after the game's own draw (menu_background, menu_ui).
+    const bool menu = !pending && qvfrMode && menuNative && passesThisFrame == 0 && vrui && context && eyes &&
+                      menu_background(vrui, context);
     originalVruiDraw(vrui, context, eyes);
+    if (menu)
+        menu_ui(vrui, context, eyes);
     if (pending) {
         focusUiPending = false;
         if (scaled) {
@@ -688,6 +742,149 @@ void store_record() {
     std::lock_guard guard(liveMutex);
     latestRecord = f;
     haveRecord = true;
+}
+
+// The menu images (native: w x h, the eye texture `like`'s format) and the menu atlas (2w x h); false if they can't be.
+bool ensure_menu(ID3D11DeviceContext* context, ID3D11Texture2D* like, ID3D11RenderTargetView* likeRtv, unsigned w,
+                 unsigned h) {
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    if (!menuResample.ready() && !menuResampleTried) {
+        menuResampleTried = true;
+        if (!menuResample.initialize(device))
+            simqvfr::log_line("lmu qvfr: the menu's scaler couldn't be made: menus at the views' size");
+    }
+    D3D11_TEXTURE2D_DESC d;
+    like->GetDesc(&d);
+    bool ok = menuResample.ready();
+    if (ok && !(menuTex[0] && menuTex[1] && menuAtlas && menuRtv[0] && menuRtv[1] && menuW == w && menuH == h)) {
+        for (int e = 0; e < 2; ++e) {
+            if (menuRtv[e])
+                menuRtv[e]->Release();
+            if (menuTex[e])
+                menuTex[e]->Release();
+            menuRtv[e] = nullptr;
+            menuTex[e] = nullptr;
+        }
+        if (menuAtlas)
+            menuAtlas->Release();
+        menuAtlas = nullptr;
+        D3D11_TEXTURE2D_DESC t{};
+        t.Width = w;
+        t.Height = h;
+        t.MipLevels = 1;
+        t.ArraySize = 1;
+        t.Format = d.Format;
+        t.SampleDesc = {1, 0};
+        t.Usage = D3D11_USAGE_DEFAULT;
+        t.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        for (int e = 0; e < 2; ++e)
+            ok = ok && SUCCEEDED(device->CreateTexture2D(&t, nullptr, &menuTex[e]));
+        D3D11_TEXTURE2D_DESC a = t;
+        a.Width = 2 * w;
+        a.Format = typeless_of(d.Format);
+        a.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        ok = ok && SUCCEEDED(device->CreateTexture2D(&a, nullptr, &menuAtlas)) && make_rtvs(context, likeRtv, menuTex, menuRtv);
+        menuW = ok ? w : 0;
+        menuH = ok ? h : 0;
+        simqvfr::logf(ok ? "lmu qvfr: menu images %ux%u (the native eye; the views %ux%u), menu atlas %ux%u"
+                         : "lmu qvfr: the menu images %ux%u couldn't be made (the views %ux%u, atlas %ux%u): menus at the "
+                           "views' size",
+                      w, h, d.Width, d.Height, 2 * w, h);
+    }
+    device->Release();
+    return ok;
+}
+
+bool menu_background(void* vrui, ID3D11DeviceContext* context) {
+    auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
+    ID3D11Texture2D* eyes[2] = {eye_texture(0), eye_texture(1)};
+    bool ok = rtv[0] && rtv[1] && eyes[0] && eyes[1];
+    D3D11_TEXTURE2D_DESC d{};
+    unsigned w = 0, h = 0;
+    if (ok) {
+        eyes[0]->GetDesc(&d);
+        // The native eye: the size the layer offered over the layer's share of it.
+        const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+        w = std::min(8192u, static_cast<unsigned>(std::lround(recommended[0] / layerShare[0])));
+        h = std::min(8192u, static_cast<unsigned>(std::lround(recommended[1] / layerShare[1])));
+        ok = d.SampleDesc.Count == 1 && (w > d.Width || h > d.Height);  // else the eyes are as sharp already
+    }
+    ok = ok && ensure_menu(context, eyes[0], rtv[0], w, h);
+    if (ok) {
+        // The same tangents both sides: a straight bilinear scale of the whole eye image.
+        const simqvfr::ViewMapping same{{-1, 1, 1, -1}, {-1, 1, 1, -1}, {1, 0, 0, 0, 1, 0, 0, 0, 1}};
+        for (int e = 0; e < 2; ++e)
+            ok = ok && menuResample.resample_target(eyes[e], {0, 0, static_cast<int>(d.Width), static_cast<int>(d.Height)},
+                                                    menuTex[e], {0, 0, static_cast<int>(menuW), static_cast<int>(menuH)},
+                                                    same);
+        if (!ok && !menuRefusalLogged) {
+            menuRefusalLogged = true;
+            simqvfr::log_line("lmu qvfr: the menu background couldn't be scaled up: menus at the views' size");
+        }
+    }
+    for (ID3D11Texture2D* t : eyes)
+        if (t)
+            t->Release();
+    return ok;
+}
+
+void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
+    // The record: the eyes' own projections, each focus view its box's part of the eye (the same pixels).
+    double fx, fy, cx[2] = {}, cy[2] = {};
+    {
+        std::lock_guard guard(liveMutex);
+        fx = focusFraction;
+        fy = focusFractionY > 0 ? focusFractionY : focusFraction;
+        for (int e = 0; e < 2; ++e)
+            if (gazeValid[e]) {
+                cx[e] = gazeTan[e][0];
+                cy[e] = gazeTan[e][1];
+            }
+    }
+    simqvfr::Views4Frame f{};
+    float uv[4][4];
+    for (int e = 0; e < 2; ++e) {
+        float eyeM[16], focusM[16];
+        std::memcpy(eyeM, slot_matrix(e, 0), sizeof(eyeM));
+        FocusBox box;
+        clamp_focus_centre(eyeM, fx, fy, cx[e], cy[e]);
+        if (!focus_projection(eyeM, fx, fy, cx[e], cy[e], box, focusM))
+            return;  // the eyes as they are
+        const float outer[4] = {box.eyeTan[0], box.eyeTan[1], box.eyeTan[3], box.eyeTan[2]};
+        const float focus[4] = {box.focusTan[0], box.focusTan[1], box.focusTan[3], box.focusTan[2]};
+        std::memcpy(f.outerTan[e], outer, sizeof(outer));
+        std::memcpy(f.focusTan[e], focus, sizeof(focus));
+        f.turn[e] = {0, 0, 0, 1};
+        const float o[4] = {0.5f * e, 0.0f, 0.5f, 1.0f};
+        const float b[4] = {0.5f * e + 0.5f * static_cast<float>(box.rect[0]), static_cast<float>(box.rect[1]),
+                            0.5f * static_cast<float>(box.rect[2] - box.rect[0]), static_cast<float>(box.rect[3] - box.rect[1])};
+        std::memcpy(uv[e], o, sizeof(o));
+        std::memcpy(uv[e + 2], b, sizeof(b));
+    }
+    std::uint8_t block[kVruiEyesSize];
+    std::memcpy(block, eyes, sizeof(block));
+    draw_panels(vrui, context, block, menuRtv, static_cast<int>(menuW), static_cast<int>(menuH));
+    ID3D11Device* device = nullptr;
+    context->GetDevice(&device);
+    ID3D11DeviceContext* immediate = nullptr;
+    device->GetImmediateContext(&immediate);
+    for (int e = 0; e < 2; ++e)
+        immediate->CopySubresourceRegion(menuAtlas, 0, e * menuW, 0, 0, menuTex[e], 0, nullptr);
+    immediate->Release();
+    device->Release();
+    f.live = true;
+    for (int v = 0; v < 4; ++v) {
+        f.width[v] = f.renderWidth[v] = 0.5;
+        f.height[v] = f.renderHeight[v] = 1.0;
+    }
+    std::memcpy(menuUv, uv, sizeof(uv));
+    {
+        std::lock_guard guard(liveMutex);
+        latestRecord = f;
+        haveRecord = true;
+    }
+    menuReady = true;
 }
 
 // QVFR, after pass p: the eyes go into the atlas's top row while the focus views render into their targets (pass 2 =
@@ -767,7 +964,7 @@ void render_scene(void* arg, char laterEye) {
     const int p = pass;
     ++passesThisFrame;
     if (p == 0)
-        atlasReady = false;  // a new frame: its own four views, or none
+        atlasReady = menuReady = false;  // a new frame: its own four views, or none
     if (qvfrMode)
         qvfr_before_pass(p);  // live resolution: the size this pass renders at
     inLaterPass = p >= 2;
@@ -1046,6 +1243,9 @@ bool four_passes_start(const FourPassesRun& run) {
     cfg.warmup = std::clamp(cfg.warmup, 1, 600);
     qvfrMode = run.qvfr;
     focusMode = run.focus || run.qvfr;
+    menuNative = run.qvfr && run.menuNative && run.layerWidth > 0 && run.layerHeight > 0;
+    layerShare[0] = run.layerWidth;
+    layerShare[1] = run.layerHeight;
     holdExposure = run.holdExposure;
     four_passes_set_box(run.fraction, run.fractionY);
     wchar_t exe[MAX_PATH] = {};
@@ -1335,6 +1535,14 @@ bool four_passes_record(simqvfr::Views4Frame& frame) {
 }
 
 ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+    if (qvfrMode && menuReady && menuAtlas) {  // a menu frame, at native (menu_ui)
+        menuReady = false;
+        std::memcpy(uv, menuUv, sizeof(uv));
+        if (menuFrames++ == 0)
+            simqvfr::logf("lmu qvfr: frame %llu: the first menu frame composed at %ux%u (its UI drawn at that size)", frames,
+                          menuW, menuH);
+        return menuAtlas;
+    }
     if (!qvfrMode || !atlasReady || !atlas)
         return nullptr;
     atlasReady = false;  // once per frame

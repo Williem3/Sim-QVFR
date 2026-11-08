@@ -46,6 +46,10 @@ public:
         run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
         run.fractionY = s.focusFractionY;
         run.holdExposure = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, s.ini) != 0;
+        // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (four_passes.h).
+        run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
+        run.layerWidth = s.layout.layer_width();
+        run.layerHeight = s.layout.layer_height();
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
             run.renderScaleProbe =
                 std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);

@@ -28,6 +28,11 @@ struct FourPassesRun {
     // set to this share for 120 frames and then restored, the eye and focus images saved at its middle: what LMU renders
     // when only the scale changes (the live resolution lever, docs/recon-lmu.md).
     int renderScaleProbe = 0;
+    // QVFR: frames without the eye loop (menus) composed at the native eye with the UI drawn at that size
+    // ([experiment] lmu_menu_native, default on); the views' layer in native eye widths and heights (the native size
+    // is the size offered over it).
+    bool menuNative = true;
+    double layerWidth = 1, layerHeight = 1;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
