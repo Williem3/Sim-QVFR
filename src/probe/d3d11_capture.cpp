@@ -140,6 +140,11 @@ bool d3d11_capture_arm(uint64_t frame) {
     return true;
 }
 
+uint64_t d3d11_capture_armed() {
+    std::lock_guard guard(mutex);
+    return device ? captureFrame : 0;
+}
+
 void d3d11_capture_stop() {
     std::lock_guard guard(mutex);
     device = nullptr;
