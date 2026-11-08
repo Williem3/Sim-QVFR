@@ -44,7 +44,8 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
    options and the rendering features it names. Its output starts the game's recon notes (step 5).
 1. Make `src/games/<id>/` with `game.h` (its `GameInfo`, in a namespace named after the game). A game with
    anti-cheat lists its processes in `GameInfo::antiCheat`: while one runs, the layer stays log only.
-2. Add it to `kGames` in `games.cpp`, and give it the identity-only adapter in `adapters.cpp` (`NoQvfr`).
+2. Add it to `kGames` in `games.cpp`, and give it the identity-only adapter in `adapters.cpp`
+   (`IdentityAdapter`, `identity_adapter.h`; derive from it for the game's log-only probes, as `lmu/adapter.cpp` does).
    The layer now switches on in the game but **only logs**: it runs as `mode=off` whatever the ini says,
    turns the session and swapchain logging on, and adds nothing to the game or the headset (no Cheeky,
    menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
