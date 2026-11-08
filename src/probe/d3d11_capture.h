@@ -17,6 +17,13 @@ namespace simqvfr {
 bool d3d11_read_bgra8(ID3D11Texture2D* texture, std::vector<uint8_t>& bgra, unsigned& width, unsigned& height);
 // BGRA pixels as a PNG file.
 bool write_png_bgra(const std::wstring& path, const std::vector<uint8_t>& bgra, unsigned width, unsigned height);
+// A texture of 4-byte texels (R11G11B10_FLOAT, R10G10B10A2, 8-bit RGBA or BGRA) as it is, tight rows, read back like
+// d3d11_read_bgra8 (same thread rule). False for other formats or MSAA.
+bool d3d11_read_texels32(ID3D11Texture2D* texture, std::vector<uint8_t>& texels, unsigned& width, unsigned& height,
+                         DXGI_FORMAT& format);
+// Those texels as an uncompressed DDS file with a DX10 header (the format as is): what tools/dds_read.py reads.
+bool write_dds(const std::wstring& path, const std::vector<uint8_t>& texels, unsigned width, unsigned height,
+               DXGI_FORMAT format);
 
 // From xrCreateSession with a D3D11 binding; `frame` 0: off.
 void d3d11_capture_start(ID3D11Device* device, uint64_t frame);

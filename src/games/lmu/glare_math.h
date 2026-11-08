@@ -38,6 +38,8 @@ inline double yebis_uv_extent(unsigned size, float scale, float offset) { return
 // target) the view's glare is that share of the region YEBIS uses (whose UV extent is 1 in LMU). Run 2026-11-08 10:52:
 // focus passes at 0.938 of their target, the glare stretched over the whole texture showed a light's halo 21 eye px
 // below the light, as this predicts (24). A share <= 0 (not known yet) is no region (width 0).
+// The same holds for MVR's side-by-side passes (yebis_covers): the share is the pass's own width and height over its
+// target's, not YEBIS's one scale.
 inline simqvfr::ViewRegion yebis_pass_region(const simqvfr::ViewRegion& yebisRegion, double shareX, double shareY) {
     if (!(shareX > 0) || !(shareY > 0))
         return {0, 0, 0, 0};
@@ -46,6 +48,18 @@ inline simqvfr::ViewRegion yebis_pass_region(const simqvfr::ViewRegion& yebisReg
         return static_cast<int>(r < 1 ? 1 : r);
     };
     return {0, 0, axis(yebisRegion.width, shareX), axis(yebisRegion.height, shareY)};
+}
+
+// Whether YEBIS post-processed all of a pass's view. It runs on the top-left of its targets at LMU's render scale on
+// both axes (`scale`: the render scale over the one the targets were made at), whatever the pass rendered per axis: MVR's
+// focus passes render 1514x1266 of 3228x1266 targets (0.469 x 1.0) at scale 1.0, their eye passes 0.5 x 0.5 at 0.5.
+// The view's glare is still where its pixels are (yebis_pass_region with the per-axis share), as YEBIS samples the glare
+// at the scene's UV; a view reaching past the processed square would read glare YEBIS didn't make this pass. Rendered
+// sizes round up (focus_math.h scaled_size): a pixel over is allowed.
+inline bool yebis_covers(unsigned passW, unsigned passH, unsigned viewW, unsigned viewH, double scale) {
+    if (!(scale > 0) || viewW == 0 || viewH == 0)
+        return false;
+    return passW <= std::ceil(viewW * scale) + 1 && passH <= std::ceil(viewH * scale) + 1;
 }
 
 // A region a pass can plausibly use: LMU's live resolution goes down to 10% of the launch size; anything under 5% of the

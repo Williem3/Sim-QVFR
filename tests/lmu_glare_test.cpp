@@ -1,7 +1,8 @@
 // Offline check of LMU's glare share (games/lmu/glare_share.h, glare_math.h) on a WARP device. YEBIS's glare result is an
 // R11G11B10_FLOAT texture whose top-left region a pass uses (viewport scale); a focus pass's is replaced by its eye's,
 // resampled through the focus box. Checked here:
-// - the region YEBIS uses, from the render texture's size and viewport scale;
+// - the region YEBIS uses, from the render texture's size and viewport scale; a pass's view in it, MVR's side-by-side
+//   passes too (their own width and height over the target's), and whether YEBIS's one scale covers the view;
 // - a halo in the eye's glare lands in the focus view's glare at the same direction and the same angular size (in
 //   focus texels: the eye's size times the focus magnification, per axis), the texels beyond the focus region untouched,
 //   the focus region's edge carrying the eye's glare at the box edge (no seam), and the game's bound target and viewport
@@ -18,6 +19,7 @@
 #include <wrl/client.h>
 
 #include "games/lmu/glare_math.h"
+#include "probe/d3d11_capture.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -142,6 +144,65 @@ void region_checks() {
     check(r.width == 0, "pass region: a share not known yet is no region");
     r = lmu::yebis_pass_region(whole540, 1.2, 1);
     check(r.width == 646, "pass region: a share over 1 stops at the region");
+
+    // MVR side by side (the 2026-11-08 runs: 3228x1266 targets, glare 1291x506): eye passes 1614x633 at YEBIS scale 0.5,
+    // focus passes 1514x1266 at 1.0 (the one scale that covers them). A view's glare is its own width and height's share
+    // of the target, as YEBIS samples the glare at the scene's UV, not YEBIS's scale.
+    float full1291[4];
+    uv_scale(1, 1291, 506, full1291);
+    const simqvfr::ViewRegion wide = lmu::yebis_region(1291, 506, 1291, 506, full1291);
+    r = lmu::yebis_pass_region(wide, 1614.0 / 3228, 633.0 / 1266);
+    check(r.width == 646 && r.height == 253, "MVR: an eye pass at 1614x633 of 3228x1266 is 646x253 of the 1291x506 glare");
+    r = lmu::yebis_pass_region(wide, 1514.0 / 3228, 1266.0 / 1266);
+    check(r.width == 606 && r.height == 506,
+          "MVR: a focus pass at 1514x1266 of 3228x1266 is 606x506 (its own width's share, not YEBIS's scale 1.0)");
+    check(lmu::yebis_covers(1614, 633, 3228, 1266, 0.5) && lmu::yebis_covers(1514, 1266, 3228, 1266, 1.0),
+          "covers: MVR's eye passes at 0.5 and focus passes at 1.0");
+    check(!lmu::yebis_covers(1514, 1266, 3228, 1266, 1514.0 / 3228),
+          "covers: a focus view 1266 tall isn't covered at its width's share as the scale (side by side v1)");
+    check(lmu::yebis_covers(1514, 1266, 1614, 1350, 0.938), "covers: plain QVFR's focus passes at 0.938 (sizes rounded up)");
+    check(!lmu::yebis_covers(100, 100, 100, 100, 0), "covers: a scale not known yet covers nothing");
+}
+
+// The frame capture's glare files: read back as they are (R11G11B10) and written as DDS the way tools/dds_read.py reads
+// them (height and width at 12 and 16, "DX10" at 84, the DXGI format at 128, tight rows from 148).
+void dds_checks(ID3D11Device* device) {
+    std::vector<std::uint32_t> texels(kW * kH);
+    for (UINT i = 0; i < kW * kH; ++i)
+        texels[i] = pack(static_cast<float>(i % kW) / kW, static_cast<float>(i / kW) / kH, 0.5f);
+    auto tex = glare_texture(device, texels, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+    std::vector<std::uint8_t> bytes;
+    unsigned w = 0, h = 0;
+    DXGI_FORMAT format{};
+    const bool read = simqvfr::d3d11_read_texels32(tex.Get(), bytes, w, h, format);
+    check(read && w == kW && h == kH && format == DXGI_FORMAT_R11G11B10_FLOAT && bytes.size() == kW * kH * 4 &&
+              std::memcmp(bytes.data(), texels.data(), bytes.size()) == 0,
+          "capture: an R11G11B10 texture reads back as it is, tight rows");
+    wchar_t dir[MAX_PATH];
+    GetTempPathW(MAX_PATH, dir);
+    const std::wstring path = std::wstring(dir) + L"lmu_glare_test.dds";
+    check(simqvfr::write_dds(path, bytes, w, h, format), "capture: written as DDS");
+    std::vector<std::uint8_t> file;
+    if (std::FILE* f = nullptr; _wfopen_s(&f, path.c_str(), L"rb") == 0 && f) {
+        std::uint8_t buf[65536];
+        for (std::size_t n; (n = std::fread(buf, 1, sizeof(buf), f)) > 0;)
+            file.insert(file.end(), buf, buf + n);
+        std::fclose(f);
+    }
+    DeleteFileW(path.c_str());
+    const auto u32 = [&](std::size_t at) {
+        std::uint32_t v = 0;
+        if (at + 4 <= file.size())
+            std::memcpy(&v, file.data() + at, 4);
+        return v;
+    };
+    check(file.size() == 148 + bytes.size() && std::memcmp(file.data(), "DDS ", 4) == 0 && u32(4) == 124 &&
+              u32(12) == kH && u32(16) == kW && std::memcmp(file.data() + 84, "DX10", 4) == 0 &&
+              u32(128) == DXGI_FORMAT_R11G11B10_FLOAT && u32(132) == 3 && u32(140) == 1 &&
+              std::memcmp(file.data() + 148, bytes.data(), bytes.size()) == 0,
+          "capture: the DDS header as dds_read.py reads it, then the texels");
+    std::vector<std::uint8_t> rgba;
+    check(!simqvfr::write_dds(path, rgba, 4, 4, DXGI_FORMAT_R8G8B8A8_UNORM), "capture: texels of another size aren't written");
 }
 
 void share_checks(ID3D11Device* device, ID3D11DeviceContext* context) {
@@ -324,6 +385,7 @@ int main() {
     }
     share_checks(device.Get(), context.Get());
     read_checks(device.Get());
+    dds_checks(device.Get());
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

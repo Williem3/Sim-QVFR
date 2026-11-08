@@ -48,6 +48,11 @@ FourPassesRun cfg;           // the run's settings (four_passes.h)
 bool qvfrMode = false;       // QVFR: four passes every frame, composed (no samples)
 bool focusMode = false;      // passes 2-3 are focus views (else copies of the eyes)
 bool glareHooked = false;    // QVFR: the focus views can take their eye's glare (glare_share.h)
+// The frame capture hotkey (d3d11_capture_hotkey=1): the arm last acted on (capture_views), and as this frame's pass 0
+// read it (render_scene), so the views and the glare read back pass by pass are of one frame.
+std::uint64_t seenCaptureArm = 0;
+std::uint64_t frameCaptureArm = 0;
+bool capture_due(std::uint64_t arm) { return arm != seenCaptureArm && arm != 0 && arm != 0xFFFFFFFFull; }
 
 // The focus box (QVFR: live, from the settings and the gaze; under liveMutex): its share of the eye's tangent width and
 // height (focusFractionY <= 0: as the width), and each eye's centre as tangents of its view (gazeValid false: the
@@ -1333,11 +1338,20 @@ void render_scene(void* arg, char laterEye) {
     if (qvfrMode && cfg.mvr && p < 4)
         mvr_before_pass(p);
     inLaterPass = p >= 2;
+    // The frame capture hotkey as this frame's first pass sees it: its views (capture_views) and, read back pass by
+    // pass, its glare (glare_share_capture_frame) come from the same frame.
+    if (qvfrMode && p == 0) {
+        frameCaptureArm = simqvfr::d3d11_capture_armed();
+        if (glareHooked && capture_due(frameCaptureArm))
+            glare_share_capture_frame();
+    }
     // Which view YEBIS's glare belongs to: an eye's is kept; a focus view's (its projection swapped in) replaced by it.
+    // Its region is the view's own width and height over its target's (MVR's side by side too: glare_math.h); YEBIS's
+    // scale (the render scale over the targets') only logged and checked to cover it.
     if (glareHooked && p < 4)
-        glare_share_pass(p, p >= 2 && eyesInAtlas && frameFocusOk ? &boxes[p - 2] : nullptr,
-                         viewW ? static_cast<double>(passW[p]) / viewW : 0.0,
-                         viewH ? static_cast<double>(passH[p]) / viewH : 0.0);
+        glare_share_pass(p, p >= 2 && eyesInAtlas && frameFocusOk ? &boxes[p - 2] : nullptr, passW[p], passH[p], viewW,
+                         viewH,
+                         gameScale > 0 ? *reinterpret_cast<const float*>(base() + kRenderScale) / gameScale : 0.0);
     const double wall0 = now_ms();
     const unsigned long long cpu0 = thread_cycles();
     costWindow.hookCycles += static_cast<double>(cpu0 - hook0);
@@ -1699,10 +1713,8 @@ void render_scale_probe(int passes) {
 // [experiment] d3d11_capture_hotkey=1: each press saves the swapchains' images (probe/d3d11_capture.h); the next composed
 // frame's four views are saved too, each as far as it rendered, and the log gives each focus view's box in its eye:
 // what tools/halo_profile.py and tools/focus_compare.py measure.
-std::uint64_t seenCaptureArm = 0;
-
 void capture_views() {
-    const std::uint64_t arm = simqvfr::d3d11_capture_armed();
+    const std::uint64_t arm = frameCaptureArm;  // as this frame's pass 0 saw it (render_scene)
     if (arm == seenCaptureArm)
         return;
     seenCaptureArm = arm;
@@ -1737,6 +1749,9 @@ void capture_views() {
                       frames, e, e, glare_share_on() ? "on" : "off", paths[e].c_str(), paths[e + 2].c_str(), r[0], r[1],
                       r[2], r[3]);
     }
+    wchar_t stem[64];
+    swprintf_s(stem, L"lmu-qvfr-frame%llu", frames);
+    glare_share_save_capture(dir, stem, paths);
 }
 
 }  // namespace
