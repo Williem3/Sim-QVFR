@@ -5,9 +5,11 @@
 #include <algorithm>
 
 #include "../../log.h"
+#include "../diag_switches.h"
 #include "../identity_adapter.h"
 #include "four_passes.h"
 #include "game.h"
+#include "glare_share.h"
 #include "view_probe.h"
 
 namespace lmu {
@@ -50,9 +52,17 @@ public:
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
         run.layerHeight = s.layout.layer_height();
+        // The focus views take their eye's glare (glare_share.h), so a light's halo doesn't stop at the box edge.
+        run.glareShare = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_glare_share", 1, s.ini) != 0;
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
             run.renderScaleProbe =
                 std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);
+        // Diagnostics (lmu_diag=1; games/diag_switches.h): Ctrl+Alt+1 the glare share (an A/B in one run).
+        if (diag_.start(s.ini, L"lmu", {L"glare_share"}))
+            simqvfr::logf("lmu: diagnostics on: Ctrl+Alt+1 switches the glare share (lmu_diag_glare_share_off=1 in %ls "
+                          "turns it off)",
+                          diag_.ini().c_str());
+        glareAtLaunch_ = run.glareShare;
         qvfr_ = four_passes_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
@@ -98,8 +108,11 @@ public:
         return qvfr_ ? four_passes_atlas(eyes, uv) : nullptr;
     }
     void qvfr_frame_end() override {
-        if (qvfr_)
-            four_passes_frame_end();
+        if (!qvfr_)
+            return;
+        if (diag_.poll())  // a switch off = the launch setting flipped
+            glare_share_set(diag_.off(0) ? !glareAtLaunch_ : glareAtLaunch_);
+        four_passes_frame_end();
     }
 
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
@@ -141,6 +154,8 @@ private:
     bool viewProbe_ = false;
     bool gates_ = false;
     bool qvfr_ = false;
+    simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
+    bool glareAtLaunch_ = true;
 };
 
 }  // namespace

@@ -33,6 +33,8 @@ struct FourPassesRun {
     // is the size offered over it).
     bool menuNative = true;
     double layerWidth = 1, layerHeight = 1;
+    // QVFR: the focus views take their eye's glare (glare_share.h; [experiment] lmu_glare_share, default on).
+    bool glareShare = true;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

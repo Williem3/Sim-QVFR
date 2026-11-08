@@ -26,6 +26,7 @@
 #include "abi.h"
 #include "focus_math.h"
 #include "game.h"
+#include "glare_share.h"
 
 namespace lmu {
 namespace {
@@ -45,6 +46,7 @@ bool installed = false;
 FourPassesRun cfg;           // the run's settings (four_passes.h)
 bool qvfrMode = false;       // QVFR: four passes every frame, composed (no samples)
 bool focusMode = false;      // passes 2-3 are focus views (else copies of the eyes)
+bool glareHooked = false;    // QVFR: the focus views can take their eye's glare (glare_share.h)
 
 // The focus box (QVFR: live, from the settings and the gaze; under liveMutex): its share of the eye's tangent width and
 // height (focusFractionY <= 0: as the width), and each eye's centre as tangents of its view (gazeValid false: the
@@ -1105,11 +1107,18 @@ void render_scene(void* arg, char laterEye) {
     if (qvfrMode)
         qvfr_before_pass(p);  // live resolution: the size this pass renders at
     inLaterPass = p >= 2;
+    // Which view YEBIS's glare belongs to: an eye's is kept; a focus view's (its projection swapped in) replaced by it.
+    if (glareHooked && p < 4)
+        glare_share_pass(p, p >= 2 && eyesInAtlas && frameFocusOk ? &boxes[p - 2] : nullptr,
+                         viewW ? static_cast<double>(passW[p]) / viewW : 0.0,
+                         viewH ? static_cast<double>(passH[p]) / viewH : 0.0);
     const double wall0 = now_ms();
     const unsigned long long cpu0 = thread_cycles();
     costWindow.hookCycles += static_cast<double>(cpu0 - hook0);
     originalRenderScene(arg, laterEye);
     const unsigned long long cpu1 = thread_cycles();
+    if (glareHooked)
+        glare_share_pass(-1, nullptr);
     if (qvfrMode && p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
         costWindow.passWallMs[p] += now_ms() - wall0;
         costWindow.passCpuCycles[p] += static_cast<double>(cpu1 - cpu0);
@@ -1378,6 +1387,50 @@ void render_scale_probe(int passes) {
     }
 }
 
+// ---- QVFR: the four views at the frame capture hotkey ----
+// [experiment] d3d11_capture_hotkey=1: each press saves the swapchains' images (probe/d3d11_capture.h); the next composed
+// frame's four views are saved too, each as far as it rendered, and the log gives each focus view's box in its eye:
+// what tools/halo_profile.py and tools/focus_compare.py measure.
+std::uint64_t seenCaptureArm = 0;
+
+void capture_views() {
+    const std::uint64_t arm = simqvfr::d3d11_capture_armed();
+    if (arm == seenCaptureArm)
+        return;
+    seenCaptureArm = arm;
+    if (arm == 0 || arm == 0xFFFFFFFFull)  // no session, or the hotkey not pressed yet
+        return;
+    std::vector<std::uint8_t> px;
+    unsigned w = 0, h = 0;
+    if (!simqvfr::d3d11_read_bgra8(atlas, px, w, h) || w < 2 * viewW || h < 2 * viewH) {
+        simqvfr::logf("lmu qvfr: frame capture: frame %llu's views couldn't be read back", frames);
+        return;
+    }
+    const std::wstring dir = captures_folder();
+    const wchar_t* names[4] = {L"eye0", L"eye1", L"focus0", L"focus1"};
+    std::wstring paths[4];
+    for (int v = 0; v < 4; ++v) {
+        const unsigned x0 = (v % 2) * viewW, y0 = (v / 2) * viewH;
+        const unsigned cw = std::clamp(passW[v], 1u, viewW), ch = std::clamp(passH[v], 1u, viewH);
+        std::vector<std::uint8_t> view(static_cast<std::size_t>(cw) * ch * 4);
+        for (unsigned y = 0; y < ch; ++y)
+            std::memcpy(view.data() + static_cast<std::size_t>(y) * cw * 4,
+                        px.data() + (static_cast<std::size_t>(y0 + y) * w + x0) * 4, static_cast<std::size_t>(cw) * 4);
+        wchar_t name[64];
+        swprintf_s(name, L"lmu-qvfr-frame%llu-%ls.png", frames, names[v]);
+        paths[v] = (std::filesystem::path(dir) / name).wstring();
+        if (!simqvfr::write_png_bgra(paths[v], view, cw, ch))
+            simqvfr::logf("lmu qvfr: frame capture: %ls not written", paths[v].c_str());
+    }
+    for (int e = 0; e < 2; ++e) {
+        const double* r = boxes[e].rect;
+        simqvfr::logf("lmu qvfr: frame capture %llu: eye %d with focus view %d (glare share %s): python "
+                      "tools/halo_profile.py --eye-image \"%ls\" --focus-image \"%ls\" --box %.5f %.5f %.5f %.5f",
+                      frames, e, e, glare_share_on() ? "on" : "off", paths[e].c_str(), paths[e + 2].c_str(), r[0], r[1],
+                      r[2], r[3]);
+    }
+}
+
 }  // namespace
 
 bool four_passes_start(const FourPassesRun& run) {
@@ -1503,6 +1556,16 @@ bool four_passes_start(const FourPassesRun& run) {
         if (!vruiHooked)
             simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
                               "missing inside the focus box");
+        // The focus views' glare from their eye's (glare_share.h); hooked even when off at launch, for the live switch.
+        glareHooked = glare_share_start();
+        if (glareHooked)
+            glare_share_set(run.glareShare);
+        simqvfr::logf("lmu qvfr: glare share: %s", !glareHooked     ? "not available (each view keeps its own glare)"
+                                                   : run.glareShare ? "on: the focus views take their eye's glare (bloom, "
+                                                                      "star, ghosts) through the box; lmu_glare_share=0 "
+                                                                      "turns it off"
+                                                                    : "off at launch (lmu_glare_share=0): each view's own "
+                                                                      "glare");
         std::lock_guard guard(liveMutex);
         simqvfr::logf("lmu qvfr: on: the eye loop runs four times every frame, passes 2-3 render focus views (a %.0f%% x "
                       "%.0f%% box of each eye's tangent span, on the gaze) into the eye targets, set aside for the layer "
@@ -1585,6 +1648,8 @@ void four_passes_frame_end() {
                 simqvfr::logf("lmu qvfr: frame %llu: the located FOV matches the lens mask's again: the mask is on", frames);
         }
         maskStaleThisFrame = 0;
+        if (glareHooked)
+            glare_share_frame_end(frames);
         // Every 900 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them),
         // and what the frames since cost: each pass's wall and CPU time, this code's own CPU, the GPU time of its copies.
         if (passes >= 4)
@@ -1756,6 +1821,7 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
         simqvfr::logf("lmu qvfr: frame %llu: views rendered at outer %ux%u, focus %ux%u of %ux%u%s", frames, passW[0],
                       passH[0], passW[2], passH[2], viewW, viewH, live ? " (live resolution)" : " (the launch size)");
     }
+    capture_views();
     return atlas;
 }
 

@@ -29,5 +29,8 @@ void d3d11_capture_release(XrSwapchain chain, uint64_t frame);
 // [experiment] d3d11_capture_hotkey=1: started with a frame never reached, then armed by the frame capture hotkey to
 // save each swapchain's image once more from `frame` (the next one). False without a D3D11 session.
 bool d3d11_capture_arm(uint64_t frame);
+// The frame the capture is armed for (each hotkey press arms a new one; never-reached 0xFFFFFFFF until the first), 0
+// without a D3D11 session: a game adapter that saves its own images with the swapchains' watches it change.
+uint64_t d3d11_capture_armed();
 
 }  // namespace simqvfr

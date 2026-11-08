@@ -85,4 +85,16 @@ inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
 inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,
                                                                  0x83, 0x3d, 0x8f, 0x2e, 0x0c, 0x01};
 
+// YEBIS CRenderGlare::GenerateGlare_Composite(this): a pass's glare combined into the result the tonemap adds. [Glare share]
+inline constexpr std::uintptr_t kGlareComposite = 0x994240;
+inline constexpr std::uint8_t kGlareCompositeAnchor[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x70,
+                                                         0x18, 0x48, 0x89, 0x78, 0x20, 0x55, 0x41, 0x54, 0x41, 0x55,
+                                                         0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0xa8, 0xe8, 0xfe, 0xff,
+                                                         0xff, 0x48, 0x81, 0xec, 0x30, 0x02, 0x00, 0x00};
+inline constexpr std::size_t kGlareResult = 0x308;        // CRenderTexture*: the composite's result
+inline constexpr std::size_t kRenderTextureSize = 0x60;   // uint32 width, height
+inline constexpr std::size_t kRenderTextureScale = 0x90;  // float scale x, y, offset x, y: the top-left region in use
+inline constexpr std::size_t kRenderTextureGpu = 0xb0;    // IGPUTexture*
+inline constexpr std::size_t kGpuTextureResource = 0x38;  // ID3D11Resource* (its view's resource)
+
 }  // namespace lmu
