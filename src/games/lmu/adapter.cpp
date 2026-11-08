@@ -8,6 +8,7 @@
 #include "../identity_adapter.h"
 #include "four_passes.h"
 #include "game.h"
+#include "mvr_probe.h"
 #include "view_probe.h"
 
 namespace lmu {
@@ -107,6 +108,8 @@ public:
         if (!analysis())
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
+        // lmu_mvr_probe=1: every vertex shader converted for NVIDIA's two-view pass and created through NVAPI, log only.
+        mvrProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0 && mvr_probe_install(ini);
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
         const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
         if (has_qvfr()) {
@@ -126,7 +129,13 @@ public:
         run.exitWhenDone = GetPrivateProfileIntW(L"experiment", L"exit_when_done", 0, ini) != 0;
         gates_ = (focus || copies) && four_passes_start(run);
     }
+    void d3d11_session(ID3D11Device* device) override {
+        if (mvrProbe_)
+            mvr_probe_device(device);
+    }
     void frame_end() override {
+        if (mvrProbe_)
+            mvr_probe_frame_end();
         if (viewProbe_)
             view_probe_frame_end();
         if (gates_)
@@ -139,6 +148,7 @@ private:
         four_passes_set_live_scales(share(0), share(2));
     }
     bool viewProbe_ = false;
+    bool mvrProbe_ = false;
     bool gates_ = false;
     bool qvfr_ = false;
 };
