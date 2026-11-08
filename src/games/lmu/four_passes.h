@@ -39,6 +39,9 @@ struct FourPassesRun {
     // Gate D (lmu_mvr=2): passes 2-3 skip the scene (its draws, sorting and culling) when their eye's pass drew the focus
     // view, their post-processing run on it; at the gate samples the focus view is compared with its eye's crop.
     bool mvrSkip = false;
+    // Each pass sized per axis (Views4Layout::secondViewBeside: the images twice as wide only): the recommended size the
+    // game scales is set per pass so its render size is the pass's own width and height (four_passes_set_live_axes).
+    bool perAxis = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
@@ -67,6 +70,8 @@ void four_passes_view_size(int (&size)[2]);
 // next frame. LMU's render scale is set per pass, so each pass renders into the top-left of its target; the copies
 // and the atlas regions follow the sizes rendered. Any thread.
 void four_passes_set_live_scales(double outer, double focus);
+// The same per axis (FourPassesRun::perAxis): the outer and focus views' shares of the target's width and height.
+void four_passes_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight);
 // Every xrLocateViews: the FOV the game just located (with the layer's FOV crop). The game builds its lens mask in
 // screen space with the FOV located when it fetches the mesh (VR_Init: four_passes_mask_taken), so while the located
 // FOV differs from that one (a live crop change) the mask draw is skipped: it would black out what the lens shows.

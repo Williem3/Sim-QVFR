@@ -57,8 +57,22 @@ SOSetTargetsFn realSOSetTargets = nullptr;
 
 int nvapi_two_views(ID3D11DeviceContext* context, bool on) { return simqvfr::nvapi::set_two_views(context, on); }
 
+// GPU time per pass, split at its multisample resolve: the scene (pass start to resolve) and the post-processing (resolve
+// to pass end). Timestamps in a ring of frames, read back a few frames later without waiting.
+struct GpuFrame {
+    ComPtr<ID3D11Query> disjoint, stamp[4][3];  // pass start, resolve, pass end
+    bool stamped[4][3] = {};
+    bool pending = false;
+};
+constexpr int kGpuFrames = 4;
+
 struct State {
     ID3D11DeviceContext* context = nullptr;  // the game's immediate context (not referenced: the device keeps it)
+    GpuFrame gpu[kGpuFrames];
+    int gpuSlot = -1;            // this frame's, while it runs
+    unsigned long long gpuFrameNo = 0;
+    double sceneMs[4] = {}, postMs[4] = {};
+    unsigned gpuCounts[4] = {};
     ComPtr<ID3D11Buffer> remapCb;
     TwoViewsFn twoViews = &nvapi_two_views;
     bool broken = false;  // single-pass stereo refused once: off for the session
@@ -93,6 +107,41 @@ struct State {
 } g;
 
 bool ours(ID3D11DeviceContext* context) { return context == g.context && g.pass >= 0; }
+
+void stamp(int pass, int which) {
+    if (g.gpuSlot < 0 || pass < 0 || pass > 3)
+        return;
+    GpuFrame& f = g.gpu[g.gpuSlot];
+    if (f.stamped[pass][which] || !f.stamp[pass][which])
+        return;
+    g.context->End(f.stamp[pass][which].Get());
+    f.stamped[pass][which] = true;
+}
+
+// Frames whose timestamps are in: their scene and post times added up.
+void gpu_collect() {
+    for (GpuFrame& f : g.gpu) {
+        if (!f.pending)
+            continue;
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+        if (g.context->GetData(f.disjoint.Get(), &dj, sizeof(dj), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+            continue;
+        f.pending = false;
+        if (dj.Disjoint || !dj.Frequency)
+            continue;
+        for (int p = 0; p < 4; ++p) {
+            UINT64 t[3] = {};
+            bool ok = f.stamped[p][0] && f.stamped[p][1] && f.stamped[p][2];
+            for (int k = 0; k < 3 && ok; ++k)
+                ok = g.context->GetData(f.stamp[p][k].Get(), &t[k], sizeof(t[k]), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
+            if (!ok || t[1] < t[0] || t[2] < t[1])
+                continue;
+            g.sceneMs[p] += 1000.0 * static_cast<double>(t[1] - t[0]) / static_cast<double>(dj.Frequency);
+            g.postMs[p] += 1000.0 * static_cast<double>(t[2] - t[1]) / static_cast<double>(dj.Frequency);
+            ++g.gpuCounts[p];
+        }
+    }
+}
 
 D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) {
     const float sx = g.view.eyeW ? static_cast<float>(g.view.focusW) / static_cast<float>(g.view.eyeW) : 1.0f;
@@ -275,6 +324,8 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
         }
     }
     const int eye = g.pass & 1;
+    if (multisample)
+        stamp(g.pass, 1);  // the scene ends, the post-processing starts
     if (multisample && g.replaceResolve && g.keptOk[eye]) {
         // Gate D: the scene this pass skipped is the focus view its eye's pass drew: into the top-left instead.
         const MvrPassView& v = g.viewOf[eye];
@@ -483,6 +534,13 @@ bool mvr_pass_install(ID3D11Device* device) {
     const D3D11_SUBRESOURCE_DATA init = {identity, 0, 0};
     if (FAILED(device->CreateBuffer(&cd, &init, &g.remapCb)))
         return false;
+    const D3D11_QUERY_DESC dq = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0}, tq = {D3D11_QUERY_TIMESTAMP, 0};
+    for (GpuFrame& f : g.gpu) {
+        device->CreateQuery(&dq, &f.disjoint);
+        for (auto& pass : f.stamp)
+            for (auto& q : pass)
+                device->CreateQuery(&tq, &q);
+    }
     if (const MH_STATUS s = MH_Initialize(); s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
         return false;
     void** vtable = *reinterpret_cast<void***>(context.Get());
@@ -512,8 +570,7 @@ bool mvr_pass_install(ID3D11Device* device) {
         return false;
     }
     g.context = context.Get();
-    simqvfr::log_line("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye); passes "
-                      "2-3 still render them, compared at sample frames");
+    simqvfr::log_line("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye)");
     return true;
 }
 
@@ -524,6 +581,24 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     g.drawFocus = view != nullptr && !g.broken;
     g.suspended = false;
     g.passTwinBinds = 0;
+    if (pass == 0) {  // this frame's timestamps, in a slot whose last frame has been read
+        if (g.gpuSlot >= 0) {  // the frame before stopped short of pass 3: its timing left out
+            g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
+            g.gpuSlot = -1;
+        }
+        gpu_collect();
+        const int slot = static_cast<int>(g.gpuFrameNo++ % kGpuFrames);
+        GpuFrame& f = g.gpu[slot];
+        g.gpuSlot = -1;
+        if (!f.pending && f.disjoint) {
+            for (auto& p : f.stamped)
+                for (bool& s : p)
+                    s = false;
+            g.context->Begin(f.disjoint.Get());
+            g.gpuSlot = slot;
+        }
+    }
+    stamp(pass, 0);
     g.replaceResolve = replaceResolve && pass >= 2 && g.keptOk[pass & 1];
     if (pass < 2)
         g.keptOk[pass] = false;
@@ -549,6 +624,12 @@ void mvr_pass_end(int pass) {
         return;
     g.drawFocus = false;
     update();  // the game's shader, one view, its own viewports
+    stamp(pass, 2);
+    if (pass == 3 && g.gpuSlot >= 0) {
+        g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
+        g.gpu[g.gpuSlot].pending = true;
+        g.gpuSlot = -1;
+    }
     if (g.sample && !g.keepFocus && pass >= 0 && pass < 4) {  // gate C's comparison (gate D's is four_passes.cpp's)
         const int eye = pass & 1;
         const MvrPassView& v = g.viewOf[eye];
@@ -591,6 +672,18 @@ void mvr_frame_end(unsigned long long frame) {
                       static_cast<unsigned long long>(s.stereoErrors), static_cast<unsigned long long>(s.viewportRewrites),
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
                       static_cast<unsigned long long>(s.replacedResolves));
+        if (g.gpuCounts[0]) {
+            const auto ms = [](double sum, unsigned n) { return n ? sum / n : 0.0; };
+            simqvfr::logf("lmu mvr: GPU per pass, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
+                          "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms (%u frames timed)",
+                          ms(g.sceneMs[0], g.gpuCounts[0]), ms(g.postMs[0], g.gpuCounts[0]), ms(g.sceneMs[1], g.gpuCounts[1]),
+                          ms(g.postMs[1], g.gpuCounts[1]), ms(g.sceneMs[2], g.gpuCounts[2]), ms(g.postMs[2], g.gpuCounts[2]),
+                          ms(g.sceneMs[3], g.gpuCounts[3]), ms(g.postMs[3], g.gpuCounts[3]), g.gpuCounts[0]);
+            for (int p = 0; p < 4; ++p) {
+                g.sceneMs[p] = g.postMs[p] = 0;
+                g.gpuCounts[p] = 0;
+            }
+        }
     }
 }
 

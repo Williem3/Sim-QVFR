@@ -98,6 +98,27 @@ inline int clip_layout(const float (&m)[16], double tolerance = 0.02) {
     return columns == rows ? 0 : columns ? 1 : 2;
 }
 
+// LMU's size for a scale: ceil(recommended x scale), as cubeDX11_GetRenderSize rounds (a float product).
+inline unsigned scaled_size(unsigned recommended, float scale) {
+    const float x = static_cast<float>(recommended) * scale;
+    const auto i = static_cast<unsigned>(x);
+    return static_cast<float>(i) == x ? i : i + 1;
+}
+
+// The smallest recommended size LMU scales to `size` or more at `scale`: what a pass is given so its render size is
+// what it should be on each axis while the game's render scale stays its own. Exact at scales up to 1; above 1 (the
+// game supersampling) some sizes can't be reached, and scaled_size(result, scale) is at most one pixel more.
+inline unsigned virtual_recommended(unsigned size, float scale) {
+    if (!(scale > 0) || size == 0)
+        return size;
+    auto r = static_cast<unsigned>(std::ceil(static_cast<double>(size) / scale));
+    while (r > 1 && scaled_size(r - 1, scale) >= size)
+        --r;
+    while (scaled_size(r, scale) < size)
+        ++r;
+    return r;
+}
+
 // `m` (clip outputs as clip_layout says: 1 columns, 2 rows) remapped to the focus view.
 inline void remap_clip(float (&m)[16], const ClipRemap& r, int layout) {
     for (int i = 0; i < 4; ++i) {

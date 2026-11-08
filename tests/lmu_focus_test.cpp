@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "games/lmu/focus_math.h"
+#include "quad/views4_layout.h"
 
 namespace {
 
@@ -182,6 +183,39 @@ int main() {
     cx = 1;
     cy = 1;
     check(!lmu::clamp_focus_centre(skewed, 0.3, 0.3, cx, cy) && cx == 1 && cy == 1, "and its centre is left alone");
+
+    // Passes sized per axis: the recommended size each pass is given scales back to exactly its size.
+    {
+        bool exact = true, near1 = true;
+        for (const float s : {0.25f, 0.4f, 0.5f, 0.6667f, 0.75f, 0.8f, 0.9f, 1.0f})
+            for (unsigned size = 1; size < 5000; size += 7)
+                exact = exact && lmu::scaled_size(lmu::virtual_recommended(size, s), s) == size;
+        for (const float s : {1.25f, 1.5f, 2.0f})  // supersampling: the smallest reachable, at most a pixel more
+            for (unsigned size = 2; size < 5000; size += 7) {
+                const unsigned r = lmu::virtual_recommended(size, s), got = lmu::scaled_size(r, s);
+                near1 = near1 && got >= size && got <= size + 1 && (r <= 1 || lmu::scaled_size(r - 1, s) < size);
+            }
+        check(exact, "virtual_recommended: at scales up to 1 it scales back to each size exactly");
+        check(near1, "virtual_recommended: above 1, the smallest size reachable, at most one pixel more");
+    }
+    // Room for a second view: beside (twice as wide, each view at most half), or twice each way.
+    {
+        simqvfr::Views4Layout l = simqvfr::views4_layout(0.40, 0.38, 0.38, 1.0, 0.4);  // outer 0.40 x 0.16 (cropped)
+        l.secondViewRoom = l.secondViewBeside = true;
+        check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.38) && near(l.view_room_width(), 0.40) &&
+                  near(l.view_room_height(), 0.38),
+              "beside: the layer twice as wide, as high as the views; one view at most half its width");
+        const simqvfr::Views4Layout live = simqvfr::views4_live_one_size(l, 0.40, 0.38, 0.38);
+        check(near(2 * live.width[0], 0.5) && near(2 * live.height[0], 0.16 / 0.38) && near(2 * live.width[2], 0.475) &&
+                  near(2 * live.height[2], 1.0) && 2 * live.width[0] + 2 * live.width[2] <= 1.0 + 1e-9,
+              "beside: per-axis shares (eye 0.5 x 0.42, focus 0.475 x 1), eye and focus side by side within the width");
+        const simqvfr::Views4Layout bigger = simqvfr::views4_live_one_size(l, 0.60, 0.60, 0.60);
+        check(2 * bigger.width[0] <= 0.5 + 1e-9 && 2 * bigger.width[2] <= 0.5 + 1e-9,
+              "beside: a live increase is capped at half the width for each");
+        l.secondViewBeside = false;
+        check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.76) && near(l.view_room_height(), 0.38),
+              "twice each way: the layer twice as high too, one view at most half of each");
+    }
 
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);
     return failures ? 1 : 0;

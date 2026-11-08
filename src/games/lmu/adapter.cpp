@@ -56,6 +56,7 @@ public:
         const UINT mvrLevel = s.ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) : 0;
         run.mvr = mvrLevel != 0 && s.layout.secondViewRoom;
         run.mvrSkip = run.mvr && mvrLevel >= 2;  // gate D: passes 2-3 skip the scene
+        run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images twice as wide only: each pass sized per axis
         if (run.mvr) {
             run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));
             run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, s.ini));
@@ -158,6 +159,8 @@ private:
     static void set_scales(const simqvfr::Views4Layout& live) {
         const auto share = [&](int v) { return std::max(2 * live.width[v], 2 * live.height[v]); };
         four_passes_set_live_scales(share(0), share(2));
+        // Per axis (side by side for MVR): each view's share of the target's width and height.
+        four_passes_set_live_axes(2 * live.width[0], 2 * live.height[0], 2 * live.width[2], 2 * live.height[2]);
     }
     bool viewProbe_ = false;
     bool mvrProbe_ = false;

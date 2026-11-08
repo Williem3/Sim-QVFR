@@ -580,16 +580,24 @@ struct GpuSpans {
 // outer share after pass 3 (and so for the next frame's VR_UpdateEyes), each the game's own scale times the share
 // (four_passes_set_live_scales). passW/passH: what each pass of this frame rendered, for the copies and atlas regions.
 float liveScale[2] = {1, 1};  // outer, focus (under liveMutex)
+float liveAxes[2][2] = {{1, 1}, {1, 1}};  // per axis (perAxis): outer, focus; width, height shares (under liveMutex)
 float gameScale = 0;          // the game's own render scale (its setting; what the launch-size targets were made with)
 float lastWritten = 0;        // what this code last wrote to it
 unsigned passW[4] = {}, passH[4] = {};
 bool liveLogged = false;
 
-// LMU's size for the scale: ceil(recommended x scale), as GetRenderSize rounds (a float product).
-unsigned scaled_size(unsigned recommended, float scale) {
-    const float x = static_cast<float>(recommended) * scale;
-    const auto i = static_cast<unsigned>(x);
-    return static_cast<float>(i) == x ? i : i + 1;
+// The runtime's recommended size as the game took it (VR_Init). Passes sized per axis write a virtual one per pass
+// (set_next_passes); whatever wants the real one reads it here (it follows the game when the game sets it again).
+std::uint32_t realRec[2] = {}, writtenRec[2] = {};
+
+void real_recommended(std::uint32_t (&out)[2]) {
+    const auto* rec = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+    if (!realRec[0] || rec[0] != writtenRec[0] || rec[1] != writtenRec[1]) {
+        realRec[0] = rec[0];
+        realRec[1] = rec[1];
+    }
+    out[0] = realRec[0];
+    out[1] = realRec[1];
 }
 
 int probe_active();  // the render scale probe owns the scale (below)
@@ -621,6 +629,26 @@ void qvfr_before_pass(int p) {
 void set_next_passes(int which) {
     if (probe_active() || gameScale <= 0)
         return;
+    if (cfg.perAxis) {  // its own width and height: the game's scale stays, the recommended size it scales is the pass's
+        float sw, sh;
+        {
+            std::lock_guard guard(liveMutex);
+            sw = liveAxes[which][0];
+            sh = liveAxes[which][1];
+        }
+        std::uint32_t real[2];
+        real_recommended(real);
+        auto* rec = reinterpret_cast<std::uint32_t*>(base() + kRecommendedSize);
+        rec[0] = writtenRec[0] = virtual_recommended(scaled_size(real[0], gameScale * sw), gameScale);
+        rec[1] = writtenRec[1] = virtual_recommended(scaled_size(real[1], gameScale * sh), gameScale);
+        const unsigned w = scaled_size(rec[0], gameScale), h = scaled_size(rec[1], gameScale);  // the size it renders at
+        *reinterpret_cast<float*>(base() + kRenderScale) = gameScale;
+        lastWritten = gameScale;
+        auto* size = reinterpret_cast<float*>(base() + kEyeRenderSize);
+        size[0] = static_cast<float>(w);
+        size[1] = static_cast<float>(h);
+        return;
+    }
     float share;
     {
         std::lock_guard guard(liveMutex);
@@ -763,14 +791,16 @@ void mvr_before_pass(int p) {
         v.remap[3] = static_cast<float>(r.d);
         v.eyeW = passW[p];
         v.eyeH = passH[p];
-        float share;
+        float shareW, shareH;
         {
             std::lock_guard guard(liveMutex);
-            share = liveScale[1];
+            shareW = cfg.perAxis ? liveAxes[1][0] : liveScale[1];
+            shareH = cfg.perAxis ? liveAxes[1][1] : liveScale[1];
         }
-        const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
-        v.focusW = scaled_size(recommended[0], gameScale * share);
-        v.focusH = scaled_size(recommended[1], gameScale * share);
+        std::uint32_t recommended[2];
+        real_recommended(recommended);
+        v.focusW = scaled_size(recommended[0], gameScale * shareW);
+        v.focusH = scaled_size(recommended[1], gameScale * shareH);
         draw = v.eyeW && v.focusW && (!viewW || (v.eyeW + v.focusW <= viewW && v.focusH <= viewH));
         if (!draw && !mvrRoomLogged) {
             mvrRoomLogged = true;
@@ -1115,7 +1145,8 @@ bool menu_background(void* vrui, ID3D11DeviceContext* context) {
     if (ok) {
         eyes[0]->GetDesc(&d);
         // The native eye: the size the layer offered over the layer's share of it.
-        const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+        std::uint32_t recommended[2];
+        real_recommended(recommended);
         w = std::min(8192u, static_cast<unsigned>(std::lround(recommended[0] / layerShare[0])));
         h = std::min(8192u, static_cast<unsigned>(std::lround(recommended[1] / layerShare[1])));
         ok = d.SampleDesc.Count == 1 && (w > d.Width || h > d.Height);  // else the eyes are as sharp already
@@ -2088,6 +2119,19 @@ void four_passes_set_live_scales(double outer, double focus) {
     simqvfr::logf("lmu qvfr: live resolution: outer views at %.0f%%, focus views at %.0f%% of the launch size per axis "
                   "(from the next frame)",
                   o * 100, f * 100);
+}
+
+void four_passes_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight) {
+    const auto share = [](double v) { return static_cast<float>(std::clamp(v, 0.05, 1.0)); };
+    const float a[2][2] = {{share(outerWidth), share(outerHeight)}, {share(focusWidth), share(focusHeight)}};
+    std::lock_guard guard(liveMutex);
+    if (std::memcmp(a, liveAxes, sizeof(a)) == 0)
+        return;
+    std::memcpy(liveAxes, a, sizeof(a));
+    if (cfg.perAxis)
+        simqvfr::logf("lmu qvfr: live resolution per axis: outer views at %.0f%% x %.0f%%, focus views at %.0f%% x %.0f%% "
+                      "of the target (from the next frame)",
+                      a[0][0] * 100, a[0][1] * 100, a[1][0] * 100, a[1][1] * 100);
 }
 
 void four_passes_view_size(int (&size)[2]) {

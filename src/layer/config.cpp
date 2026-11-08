@@ -262,8 +262,13 @@ void load_experiment() {
              menuPercent, menuPercent, menuPercent ? "; the scene renders inside them at the views' sizes" : " (off)");
         // lmu_mvr=1 (LMU, gate C of its multi-view rendering): room for each focus view beside its eye.
         experiment.views4Layout.secondViewRoom = GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini.c_str()) != 0;
+        // lmu_mvr_beside (default 1): twice as wide only, the game's passes sized per axis; 0: twice each way.
+        experiment.views4Layout.secondViewBeside =
+            experiment.views4Layout.secondViewRoom &&
+            GetPrivateProfileIntW(L"experiment", L"lmu_mvr_beside", 1, ini.c_str()) != 0;
         if (experiment.views4Layout.secondViewRoom)
-            logf("experiment: lmu_mvr=1: the views' images twice as large each way, room for a focus view beside its eye");
+            logf("experiment: lmu_mvr: the views' images twice as %s, room for a focus view beside its eye",
+                 experiment.views4Layout.secondViewBeside ? "wide (each pass sized per axis)" : "large each way");
     }
     // Eye columns (ACC): each instanced pair its own width, unless acc_shared_width=1 (every view the periphery's width,
     // the focus views' horizontal density following it: the layout before 2026-11-08).

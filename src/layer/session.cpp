@@ -67,7 +67,9 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
              "focus %.2f x %.2f, layer floor %.2f)%s%s", viewWidth, viewHeight, layout.outer_width(), layout.outer_height(),
              layout.focus, layout.focusHeight, layout.layerFloor,
              separate ? ", each view an image of its own; the scene renders inside it at the views' sizes" : "",
-             layout.secondViewRoom ? " (twice each way: room for a focus view beside its eye)" : "");
+             !layout.secondViewRoom ? ""
+             : layout.secondViewBeside ? " (twice as wide: room for a focus view beside its eye)"
+                                       : " (twice each way: room for a focus view beside its eye)");
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
             // ACE's swapchain is double-wide, so twice the width must stay within the runtime's maximum (a game with
