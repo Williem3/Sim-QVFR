@@ -2,17 +2,19 @@ Sim-QVFR
 ========
 
 Quad views with eye-tracked foveated rendering in VR for Assetto Corsa EVO, Assetto Corsa
-Competizione and X-Plane 12: the game renders a lower-resolution full view plus a sharp focus view
+Competizione, X-Plane 12 and Le Mans Ultimate: the game renders a lower-resolution full view plus a sharp focus view
 where you look, and Sim-QVFR blends them into the headset image. Nothing is installed: the launcher
 starts the game with Sim-QVFR for that launch only.
 
 OFFLINE ONLY. Sim-QVFR changes how the game renders by patching it in memory. Do not use it
-in online sessions.
+in online sessions. Le Mans Ultimate's opt-in Run with anti-cheat is at your own risk (see Le Mans
+Ultimate below).
 
 Requirements
 ------------
 - One of the games: Assetto Corsa EVO (Steam), Assetto Corsa Competizione (Steam, its VR through
-  OpenComposite: see below) or X-Plane 12 (12.4.3-r2, from Steam or elsewhere).
+  OpenComposite: see below), X-Plane 12 (12.4.3-r2, from Steam or elsewhere) or Le Mans Ultimate
+  (1.4.2.0, Steam).
 - A PC VR headset with an OpenXR runtime. Steam running for the Steam games.
 - Eye tracking (XR_EXT_eye_gaze_interaction) for the focus area to follow your eyes; without it
   the focus area stays in the centre.
@@ -71,12 +73,12 @@ Picture
   Scenery (X-Plane only): Object detail, how much detail trees and objects get. 100% (the default)
   is the detail the sharp focus area needs; lower costs X-Plane's main thread less, which often limits
   the frame rate with QVFR; 0% is X-Plane's own detail for the render size. It applies live.
-  Field of view crop (ACE and ACC, off by default): Top, Bottom, Outer side (toward the temple) and
+  Field of view crop (ACE, ACC and LMU, off by default): Top, Bottom, Outer side (toward the temple) and
   Inner side (toward the nose), each a share of the eye's view and set independently. The game doesn't
   render the cropped edges and the headset shows black there, so pixels a helmet would cover aren't
   wasted. The outer view keeps its sharpness and the focus region its size. It applies live, also from
   the headset menu's View crop page; with DLSS on, the pixel savings follow at the next launch.
-  Helmet overlay (ACE and ACC, off by default): draws a helmet's visor opening around the view,
+  Helmet overlay (ACE, ACC and LMU, off by default): draws a helmet's visor opening around the view,
   following the crop, lit by the scene. Rim (how far the padding reaches into the view), Corners and
   Lighting apply live. A helmet comes in layer\helmet: top.png (brow), bottom.png (chin bar) and
   visor.png, PNGs with alpha of the whole face from inside the helmet. Replace them with your own to
@@ -85,6 +87,9 @@ Picture
   eyes they sit (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096,
   sharper); the Visor is Closed, Half or Open (its hotkey, Ctrl+Alt+V). The headset menu's Helmet page
   has them all. The log suggests the crop that matches their opening.
+  NVIDIA multi-view rendering (LMU only, NVIDIA RTX 20 series or newer, off by default): each eye's
+  pass also draws that eye's focus view, saving about 2 ms of CPU and 2 ms of GPU time per frame in
+  testing. It applies at the next launch. On other graphics cards it's greyed out.
 - Foveation: Mode: Foveated mode, Eye tracked (the focus region follows your gaze) or Fixed (it stays
   at the centre of each lens). A profile still on the legacy Two-loop method shows Rendering method
   here too; once you switch to Quad View Foveated Rendering, Two-loop isn't offered again.
@@ -217,9 +222,8 @@ Assetto Corsa Competizione (alpha)
 Pick the Assetto Corsa Competizione tab, then Launch. ACC's VR has to run through OpenComposite
 (one-time setup: docs/acc-opencomposite.md on the project page, https://github.com/Williem3/Sim-QVFR);
 Launch checks tells you if it's missing. The field of view crop, the helmet overlay, resolution
-changes while the game runs and Foveated DLSS work in ACC; Cheeky's frame generation doesn't yet. In
-ACC the focus area's sharpness across follows the outer view's, so a sharper focus area needs a higher
-outer resolution there. Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own DLSS the
+changes while the game runs and Foveated DLSS work in ACC; Cheeky's frame generation doesn't yet.
+Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own DLSS the
 focus area can look slightly darker or lighter than the rest of the view. Eye tracking works without
 another OpenXR layer.
 
@@ -232,6 +236,24 @@ as usual. The resolution sliders and the focus size change while you fly, and Ob
 trades scenery detail for X-Plane's main thread. Not in X-Plane: the field of view crop, the helmet
 overlay and Foveated DLSS (X-Plane has no DLSS). If X-Plane isn't from Steam, Launch checks asks for
 its folder.
+
+Le Mans Ultimate
+----------------
+Pick the LMU tab, then Launch. Started from Steam, LMU runs without QVFR. Sim-QVFR supports LMU
+1.4.2.0 (the Steam build of 23 October 2026); on any other build QVFR stays off and LMU runs as usual.
+Eye tracking, the resolution sliders, the focus size, the field of view crop, the helmet overlay, the
+headset menu and the performance overlay work in LMU, and menus and the HUD are drawn sharp in the
+focus area. NVIDIA multi-view rendering (above) is in the Resolution pane. Not in LMU yet: Foveated
+DLSS (LMU has no DLSS of its own).
+Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Advanced >
+Games > Run with anti-cheat starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
+launch. AT YOUR OWN RISK: Sim-QVFR hooks into LMU's engine and changes its code while it runs, and the
+anti-cheat may kick you or ban your account for it. Turning it on, you knowingly take responsibility
+for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky stays off with it on.
+LMU-Quad-View-Mod (by Dan Suzuki, https://github.com/DSuzuki35/LMU-Quad-View-Mod) inspired this work;
+Sim-QVFR's LMU support is written separately and works differently (four views rendered in the game
+and composed by Sim-QVFR itself, nothing else to install). Try both on your PC and keep the one that
+runs best; don't run both at once.
 
 Other OpenXR layers (OpenXR Toolkit, VectorXR, ...)
 ---------------------------------------------------

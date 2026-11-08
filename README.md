@@ -1,7 +1,7 @@
 # Sim-QVFR
 
 **More frames per second in VR, with a sharp picture where you're looking.**
-For Assetto Corsa EVO, Assetto Corsa Competizione and X-Plane 12.
+For Assetto Corsa EVO, Assetto Corsa Competizione, X-Plane 12 and Le Mans Ultimate.
 
 Sim-QVFR makes your sim draw the middle of your view (or wherever your eyes are looking, if your
 headset tracks your eyes) at full sharpness, and the rest of the view at a lower resolution. You
@@ -10,10 +10,12 @@ room to turn the graphics up.
 
 > **Please read first**
 > - **Unofficial and experimental.** Sim-QVFR isn't made or approved by the makers of the games it
->   works with: Kunos Simulazioni (Assetto Corsa EVO and Competizione) and Laminar Research
->   (X-Plane 12). Use it at your own risk: it can crash the game, and a game update can stop it working
+>   works with: Kunos Simulazioni (Assetto Corsa EVO and Competizione), Laminar Research
+>   (X-Plane 12) and Studio 397 (Le Mans Ultimate). Use it at your own risk: it can crash the game, and a game update can stop it working
 >   until Sim-QVFR is updated too.
-> - **Offline only.** Use it in single-player sessions, not online.
+> - **Offline only.** Use it in single-player sessions, not online. Le Mans Ultimate has an opt-in
+>   **Run with anti-cheat** option: if you turn it on, you do so at your own risk (see
+>   [Le Mans Ultimate](#le-mans-ultimate)).
 > - **Don't report problems to the game's makers** that happen while Sim-QVFR is running. Report them
 >   here instead (see [Getting help](#getting-help)).
 
@@ -24,6 +26,7 @@ room to turn the graphics up.
   - **Assetto Corsa Competizione** on Steam, with its VR running through OpenComposite (see
     [Assetto Corsa Competizione](#assetto-corsa-competizione-alpha)).
   - **X-Plane 12** (version 12.4.3-r2), from Steam or elsewhere (see [X-Plane 12](#x-plane-12)).
+  - **Le Mans Ultimate** (version 1.4.2.0) on Steam (see [Le Mans Ultimate](#le-mans-ultimate)).
 - **A PC VR headset.** Eye tracking is a bonus: with it, the sharp area follows your eyes. Without it,
   the sharp area stays in the middle of your view.
 - **Steam** running, for the Steam games.
@@ -173,8 +176,7 @@ OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Lau
 if it's missing.
 
 The field of view crop, the helmet overlay, resolution changes while the game runs and Foveated DLSS
-(Cheeky) work in ACC. In ACC the focus area's sharpness across follows the periphery's, so a sharper focus
-area needs a higher periphery there. Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own
+(Cheeky) work in ACC. Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own
 DLSS the sharp area can look slightly darker or lighter than the rest of the view. Foveated DLSS needs a newer
 DLSS than the one ACC comes with (2.2.15): replace ACC's `nvngx_dlss.dll` with DLSS 310 or newer (a tool such as
 DLSS Swapper does it). **Launch checks** tells you when it's too old. Cheeky's frame generation isn't
@@ -196,6 +198,36 @@ launcher, then **Launch**.
   cost X-Plane's main thread less, which is often what limits the frame rate with QVFR.
 - **Not in X-Plane:** the view crop, the helmet overlay and Foveated DLSS.
 - **Not from Steam?** **Launch checks** asks for X-Plane's folder.
+
+## Le Mans Ultimate
+
+Sim-QVFR runs QVFR in Le Mans Ultimate: a sharp focus area that follows your eyes, a lower-resolution
+periphery, the headset menu, the performance overlay, the field of view crop and the helmet overlay.
+Pick the **LMU** tab at the top of the launcher, then **Launch**.
+
+- **Always start LMU from the launcher.** LMU started from Steam runs without QVFR.
+- **Version 1.4.2.0** (the Steam build of 23 October 2026). On any other build, QVFR stays off and LMU
+  runs as usual.
+- **Changes while you drive:** the resolution sliders, the focus size and the crop change straight away,
+  in the launcher or the headset menu. Menus and the HUD are drawn sharp inside the focus area too.
+- **NVIDIA multi-view rendering** (the launcher's **Resolution** page, NVIDIA RTX 20 series or newer):
+  each eye's pass also draws that eye's focus view, which saved about 2 ms of CPU and 2 ms of GPU time per
+  frame in testing. It applies at the next launch. On other graphics cards the option is greyed out and
+  every view is rendered on its own.
+- **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).
+
+**Anti-cheat.** By default the launcher starts LMU without its anti-cheat (Easy Anti-Cheat), so you can
+only drive offline. **Advanced → Games → Run with anti-cheat** starts LMU through Easy Anti-Cheat with
+Sim-QVFR running. **This is at your own risk:** Sim-QVFR hooks into LMU's engine and changes its code while
+it runs, and the anti-cheat may kick you or ban your account for it. By turning the option on you knowingly
+take responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky Foveated
+DLSS always stays off with this option on.
+
+**LMU-Quad-View-Mod.** Dan Suzuki's [LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod)
+inspired this work. Sim-QVFR's LMU support is written separately and works differently: it renders the four
+views inside the game and composes them itself, so you install nothing else, while LMU-Quad-View-Mod hands
+them to a quad-view runtime, or to Quad-Views-Foveated or VectorXR. Try both on your own PC, in the same
+car, track and weather, and use the one that runs best for you. Don't run both at once.
 
 ## Getting help
 
