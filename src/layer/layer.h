@@ -144,17 +144,25 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers);
 void menu_shutdown();
 
-// xr_layer.cpp
+// overlay.cpp
+void notice_set(std::wstring title, std::vector<std::wstring> lines);
 bool notice_pending();
 void osd_waited(XrDuration period);
 bool frame_generation_on();
 bool osd_shown(OsdSummary& out);
 void osd_wait_returned(double waitMs);
+void osd_measure();
 void osd_placement_changed();
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);
 void osd_shutdown();
+
+// optimizer.cpp
 void optimize_tick(int64_t now);
+void frame_capture_poll();
+void cpu_profile_poll();
+
+// xr_layer.cpp
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo);
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
