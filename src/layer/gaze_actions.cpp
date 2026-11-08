@@ -107,7 +107,7 @@ void gaze_init(XrInstance instance) {
         gaze.syncFailLogged = false;
         gaze.bindings.clear();
         gaze.profileSuggested.clear();
-        gaze.suggested = gaze.attached = false;
+        gaze.suggested = gaze.attached = gaze.syncsOwn = false;
         attachedAlone = false;
         gaze.appSyncs = 0;
         gaze.space = XR_NULL_HANDLE;
@@ -236,7 +236,7 @@ void gaze_attach_alone(XrSession session) {
     info.actionSets = &gaze.set;
     const XrResult r = next.AttachSessionActionSets(session, &info);
     logf("gaze: attached alone (the game uses no OpenXR input), result=%d", r);
-    gaze.attached = attachedAlone = XR_SUCCEEDED(r);
+    gaze.attached = attachedAlone = gaze.syncsOwn = XR_SUCCEEDED(r);
 }
 
 XrResult XRAPI_CALL layerAttachSessionActionSets(XrSession session, const XrSessionActionSetsAttachInfo* info) {

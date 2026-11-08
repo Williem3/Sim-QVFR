@@ -244,6 +244,9 @@ struct Gaze {
     std::map<XrPath, std::vector<XrActionSuggestedBinding>> bindings;
     std::map<XrPath, bool> profileSuggested;
     bool suggested = false, attached = false;
+    // Attached alone (a game with no OpenXR input, gaze_attach_alone): nobody else syncs the set, so the gaze thread
+    // syncs it itself before each lookup (and the settings menu before reading its controllers).
+    bool syncsOwn = false;
     uint64_t appSyncs = 0;
     XrSpace space = XR_NULL_HANDLE;
     XrVector3f direction{0, 0, -1};  // last tracked gaze, in the space ACE locates its views in
