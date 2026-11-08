@@ -64,7 +64,8 @@ struct State {
     bool broken = false;  // single-pass stereo refused once: off for the session
     // The pass.
     int pass = -1;
-    bool drawFocus = false, suspended = false, sample = false;
+    bool drawFocus = false, suspended = false, sample = false, replaceResolve = false;
+    uint64_t passTwinBinds = 0;  // this pass's draws that drew the focus view too
     MvrPassView view, viewOf[2];
     // What the game bound (raw: bound objects are kept alive by the pipeline).
     ID3D11VertexShader* gameVs = nullptr;
@@ -83,6 +84,9 @@ struct State {
     // Each pass's multisample resolve target; the sampled regions.
     ComPtr<ID3D11Resource> resolved[4];
     ComPtr<ID3D11Texture2D> mvrImage[2], passImage[2];
+    bool keepFocus = false;           // gate D
+    ComPtr<ID3D11Texture2D> kept[2];  // each eye pass's resolved focus region
+    bool keptOk[2] = {};
     bool have[4] = {};
     unsigned long long lastStatsFrame = 0;
     MvrPassStats stats;
@@ -166,6 +170,7 @@ void update() {
         realVSSetShader(g.context, bind, g.instanceCount ? g.instances : nullptr, g.instanceCount);
         g.boundVs = bind;
         ++(want ? g.stats.twinBinds : g.stats.plainBinds);
+        g.passTwinBinds += want ? 1 : 0;
     }
     if (want != g.on) {
         g.on = want;
@@ -256,19 +261,37 @@ void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n
         apply_scissors();
 }
 
+bool copy_region(ComPtr<ID3D11Texture2D>& dst, ID3D11Resource* src, unsigned x, unsigned y, unsigned w, unsigned h);
+
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
-    realResolveSubresource(context, dst, dstSub, src, srcSub, format);
-    if (!ours(context) || g.pass > 3 || !src || !dst)
-        return;
-    ComPtr<ID3D11Texture2D> source;
-    if (SUCCEEDED(src->QueryInterface(IID_PPV_ARGS(&source)))) {
-        D3D11_TEXTURE2D_DESC d;
-        source->GetDesc(&d);
-        if (d.SampleDesc.Count > 1) {
-            g.resolved[g.pass] = dst;
-            ++g.stats.resolves;
+    bool multisample = false;
+    if (ours(context) && g.pass <= 3 && src && dst) {
+        ComPtr<ID3D11Texture2D> source;
+        if (SUCCEEDED(src->QueryInterface(IID_PPV_ARGS(&source)))) {
+            D3D11_TEXTURE2D_DESC d;
+            source->GetDesc(&d);
+            multisample = d.SampleDesc.Count > 1;
         }
+    }
+    const int eye = g.pass & 1;
+    if (multisample && g.replaceResolve && g.keptOk[eye]) {
+        // Gate D: the scene this pass skipped is the focus view its eye's pass drew: into the top-left instead.
+        const MvrPassView& v = g.viewOf[eye];
+        const D3D11_BOX box{0, 0, 0, v.focusW, v.focusH, 1};
+        g.context->CopySubresourceRegion(dst, dstSub, 0, 0, 0, g.kept[eye].Get(), 0, &box);
+        g.resolved[g.pass] = dst;
+        ++g.stats.replacedResolves;
+        return;
+    }
+    realResolveSubresource(context, dst, dstSub, src, srcSub, format);
+    if (!multisample)
+        return;
+    g.resolved[g.pass] = dst;
+    ++g.stats.resolves;
+    if (g.keepFocus && g.pass < 2 && g.drawFocus && g.passTwinBinds > 0) {
+        g.keptOk[eye] = copy_region(g.kept[eye], dst, g.view.eyeW, 0, g.view.focusW, g.view.focusH);
+        g.stats.keptRegions += g.keptOk[eye] ? 1 : 0;
     }
 }
 
@@ -494,12 +517,16 @@ bool mvr_pass_install(ID3D11Device* device) {
     return true;
 }
 
-void mvr_pass_begin(int pass, const MvrPassView* view, bool sample) {
+void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replaceResolve) {
     if (!g.context)
         return;
     g.pass = pass;
     g.drawFocus = view != nullptr && !g.broken;
     g.suspended = false;
+    g.passTwinBinds = 0;
+    g.replaceResolve = replaceResolve && pass >= 2 && g.keptOk[pass & 1];
+    if (pass < 2)
+        g.keptOk[pass] = false;
     if (pass == 0) {
         g.sample = sample;
         for (bool& h : g.have)
@@ -522,7 +549,7 @@ void mvr_pass_end(int pass) {
         return;
     g.drawFocus = false;
     update();  // the game's shader, one view, its own viewports
-    if (g.sample && pass >= 0 && pass < 4) {
+    if (g.sample && !g.keepFocus && pass >= 0 && pass < 4) {  // gate C's comparison (gate D's is four_passes.cpp's)
         const int eye = pass & 1;
         const MvrPassView& v = g.viewOf[eye];
         if (pass < 2)
@@ -531,7 +558,12 @@ void mvr_pass_end(int pass) {
             g.have[pass] = copy_region(g.passImage[eye], g.resolved[pass].Get(), 0, 0, v.focusW, v.focusH);
     }
     g.pass = -1;
+    g.replaceResolve = false;
 }
+
+void mvr_keep_focus(bool on) { g.keepFocus = on; }
+
+bool mvr_focus_ready(int eye) { return g.context && g.keepFocus && g.keptOk[eye & 1]; }
 
 void mvr_suspend(bool on) {
     if (!g.context || g.pass < 0)
@@ -545,17 +577,20 @@ void mvr_frame_end(unsigned long long frame) {
         return;
     if (g.sample) {
         g.sample = false;
-        compare_sample(frame);
+        if (!g.keepFocus)
+            compare_sample(frame);
     }
     if (frame >= g.lastStatsFrame + 900) {
         g.lastStatsFrame = frame;
         const MvrPassStats& s = g.stats;
         simqvfr::logf("lmu mvr: %llu passes drew their focus view; shader binds %llu twin / %llu plain, %llu stereo "
-                      "switches (%llu refused), viewports %llu and scissors %llu doubled",
+                      "switches (%llu refused), viewports %llu and scissors %llu doubled; focus regions kept %llu, "
+                      "resolves replaced %llu",
                       static_cast<unsigned long long>(s.passesWithFocus), static_cast<unsigned long long>(s.twinBinds),
                       static_cast<unsigned long long>(s.plainBinds), static_cast<unsigned long long>(s.toggles),
                       static_cast<unsigned long long>(s.stereoErrors), static_cast<unsigned long long>(s.viewportRewrites),
-                      static_cast<unsigned long long>(s.scissorRewrites));
+                      static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
+                      static_cast<unsigned long long>(s.replacedResolves));
     }
 }
 

@@ -212,6 +212,57 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
+    {  // Gate D: pass 0's resolve keeps its focus region; pass 2's resolve becomes a copy of it into the top-left.
+        lmu::mvr_keep_focus(true);
+        D3D11_TEXTURE2D_DESC md = {256, 128, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {4, 0}, D3D11_USAGE_DEFAULT,
+                                   D3D11_BIND_RENDER_TARGET, 0, 0};
+        ComPtr<ID3D11Texture2D> ms, resolved, staging;
+        ComPtr<ID3D11RenderTargetView> msRtv;
+        device->CreateTexture2D(&md, nullptr, &ms);
+        device->CreateRenderTargetView(ms.Get(), nullptr, &msRtv);
+        md.SampleDesc.Count = 1;
+        device->CreateTexture2D(&md, nullptr, &resolved);
+        md.Usage = D3D11_USAGE_STAGING;
+        md.BindFlags = 0;
+        md.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        device->CreateTexture2D(&md, nullptr, &staging);
+        const auto pixel = [&](unsigned x, unsigned y) {  // the resolved texture's red, as a half
+            context->CopyResource(staging.Get(), resolved.Get());
+            D3D11_MAPPED_SUBRESOURCE map{};
+            uint16_t red = 0;
+            if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map))) {
+                std::memcpy(&red, static_cast<const uint8_t*>(map.pData) + y * map.RowPitch + x * 8, 2);
+                context->Unmap(staging.Get(), 0);
+            }
+            return red;
+        };
+        const float first[4] = {0.5f, 0, 0, 1}, second[4] = {0.25f, 0, 0, 1};
+        lmu::mvr_set_two_views(&fake_two_views);
+        context->RSSetViewports(1, &eye);
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+        context->VSSetShader(a.Get(), nullptr, 0);
+        lmu::mvr_pass_begin(0, &view, false);  // draws its focus view (the twin bound)
+        context->ClearRenderTargetView(msRtv.Get(), first);
+        context->ResolveSubresource(resolved.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        lmu::mvr_pass_end(0);
+        check(lmu::mvr_focus_ready(0) && !lmu::mvr_focus_ready(1), "gate D: pass 0's focus region kept (eye 0 only)");
+        lmu::mvr_pass_begin(2, nullptr, false, true);
+        context->ClearRenderTargetView(msRtv.Get(), second);
+        context->ResolveSubresource(resolved.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        lmu::mvr_pass_end(2);
+        // The focus region (100..160 x 0..50 of pass 0's) at the top-left (0..60 x 0..50); the rest as pass 0 left it.
+        check(pixel(10, 10) == to_half(0.5f) && pixel(59, 49) == to_half(0.5f) && pixel(200, 100) == to_half(0.5f) &&
+                  lmu::mvr_pass_stats().replacedResolves == 1,
+              "gate D: pass 2's resolve replaced by the kept focus region at the top-left");
+        lmu::mvr_pass_begin(3, nullptr, false, true);  // eye 1's region wasn't kept: a real resolve
+        context->ClearRenderTargetView(msRtv.Get(), second);
+        context->ResolveSubresource(resolved.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        lmu::mvr_pass_end(3);
+        check(pixel(10, 10) == to_half(0.25f) && lmu::mvr_pass_stats().replacedResolves == 1,
+              "gate D: no region kept for eye 1: pass 3 resolves as the game asked");
+        lmu::mvr_keep_focus(false);
+    }
+
     lmu::mvr_set_two_views(&refusing_two_views);
     lmu::mvr_pass_begin(1, &view, false);
     const lmu::MvrPassStats s = lmu::mvr_pass_stats();

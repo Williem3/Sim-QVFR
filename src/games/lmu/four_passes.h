@@ -36,6 +36,9 @@ struct FourPassesRun {
     // QVFR gate C of multi-view rendering ([experiment] lmu_mvr=1, mvr_pass.h): passes 0-1 draw their focus views too,
     // beside the eye; passes 2-3 as before; compared at the gate samples (first, every, count).
     bool mvr = false;
+    // Gate D (lmu_mvr=2): passes 2-3 skip the scene (its draws, sorting and culling) when their eye's pass drew the focus
+    // view, their post-processing run on it; at the gate samples the focus view is compared with its eye's crop.
+    bool mvrSkip = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

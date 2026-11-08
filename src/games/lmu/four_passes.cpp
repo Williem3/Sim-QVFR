@@ -639,6 +639,85 @@ void set_next_passes(int which) {
 
 bool mvrInstalled = false, mvrRoomLogged = false;
 int mvrSamples = 0;
+bool mvrSampleFrame = false;  // this frame is a gate sample
+
+// Gate D (lmu_mvr=2): passes 2-3 skip the scene work before their post-processing (abi.h [MVR]) while skipScene is set
+// (render thread only: Cull_Item is also called from elsewhere).
+using ViewSceneFn = void (*)(void*, void*, void*, unsigned, char);
+using SortMeshBucketFn = std::uintptr_t (*)(void*, void*, std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t);
+using CullItemFn = void (*)(void*, void*, void*, float);
+using CullSceneGraphFn = void (*)(void*, void*, void*);
+ViewSceneFn originalViewScene = nullptr;
+SortMeshBucketFn originalSortMeshBucket = nullptr;
+CullItemFn originalCullItem = nullptr;
+CullSceneGraphFn originalCullSceneGraph = nullptr;
+bool skipScene = false;
+unsigned long long skipped[4] = {};  // view scenes, sort buckets, cull items, scene graph culls: since the last log
+unsigned long long passesSkipped = 0, passesNotSkipped = 0;
+
+bool skipping() { return skipScene && GetCurrentThreadId() == renderThread; }
+
+void view_scene(void* renderer, void* scene, void* view, unsigned flags, char last) {
+    if (skipping()) {
+        ++skipped[0];
+        return;
+    }
+    originalViewScene(renderer, scene, view, flags, last);
+}
+
+std::uintptr_t sort_mesh_bucket(void* bucket, void* scene, std::uintptr_t a, std::uintptr_t b, std::uintptr_t c,
+                                std::uintptr_t d) {
+    if (skipping()) {
+        ++skipped[1];
+        return 0;
+    }
+    return originalSortMeshBucket(bucket, scene, a, b, c, d);
+}
+
+void cull_item(void* item, void* view, void* p, float distance) {
+    if (skipping()) {
+        ++skipped[2];
+        return;
+    }
+    originalCullItem(item, view, p, distance);
+}
+
+void cull_scene_graph(void* graph, void* view, void* p) {
+    if (skipping()) {
+        ++skipped[3];
+        return;
+    }
+    originalCullSceneGraph(graph, view, p);
+}
+
+bool install_skip() {
+    struct Hook {
+        std::uintptr_t rva;
+        const std::uint8_t* anchor;
+        std::size_t size;
+        void* detour;
+        void** original;
+    };
+    const Hook hooks[] = {
+        {kViewScene, kViewSceneAnchor, sizeof(kViewSceneAnchor), reinterpret_cast<void*>(&view_scene),
+         reinterpret_cast<void**>(&originalViewScene)},
+        {kSortMeshBucket, kSortMeshBucketAnchor, sizeof(kSortMeshBucketAnchor), reinterpret_cast<void*>(&sort_mesh_bucket),
+         reinterpret_cast<void**>(&originalSortMeshBucket)},
+        {kCullItem, kCullItemAnchor, sizeof(kCullItemAnchor), reinterpret_cast<void*>(&cull_item),
+         reinterpret_cast<void**>(&originalCullItem)},
+        {kCullSceneGraph, kCullSceneGraphAnchor, sizeof(kCullSceneGraphAnchor), reinterpret_cast<void*>(&cull_scene_graph),
+         reinterpret_cast<void**>(&originalCullSceneGraph)},
+    };
+    for (const Hook& h : hooks)
+        if (!simqvfr::code_matches(h.rva, h.anchor, h.size))
+            return false;
+    for (const Hook& h : hooks) {
+        void* target = reinterpret_cast<void*>(base() + h.rva);
+        if (MH_CreateHook(target, h.detour, h.original) != MH_OK || MH_EnableHook(target) != MH_OK)
+            return false;
+    }
+    return true;
+}
 
 // Before pass p: the eye's size (qvfr_before_pass took it), its focus view's (as set_next_passes will set pass 2-3's),
 // this frame's remap (frozen at pass 0), and whether this frame is a gate sample.
@@ -665,6 +744,13 @@ void mvr_before_pass(int p) {
         sample = mvrSamples < cfg.count && sceneFrames >= due &&
                  (sceneFrames - due) % static_cast<unsigned long long>(cfg.every) == 0;
         mvrSamples += sample ? 1 : 0;
+        mvrSampleFrame = sample;
+    }
+    if (p >= 2) {  // gate D: the scene is skipped when the eye's pass drew this focus view (its region kept)
+        skipScene = cfg.mvrSkip && mvr_focus_ready(p - 2);
+        ++(skipScene ? passesSkipped : passesNotSkipped);
+        mvr_pass_begin(p, nullptr, false, skipScene);
+        return;
     }
     MvrPassView v;
     bool draw = false;
@@ -1212,6 +1298,7 @@ void render_scene(void* arg, char laterEye) {
     originalRenderScene(arg, laterEye);
     if (qvfrMode && cfg.mvr && p < 4)
         mvr_pass_end(p);
+    skipScene = false;
     const unsigned long long cpu1 = thread_cycles();
     if (qvfrMode && p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
         costWindow.passWallMs[p] += now_ms() - wall0;
@@ -1341,6 +1428,83 @@ void compare_copies() {
 double linear(std::uint8_t v) {  // sRGB-encoded 8-bit to linear
     const double c = v / 255.0;
     return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+
+// Gate D (lmu_mvr=2) at a sample: each focus view as composed (its pass's post-processing on the region its eye's pass
+// drew) against the box's crop of its eye: linear luminance per cell, focus / eye; both saved for looking at.
+void compare_mvr_focus() {
+    const std::wstring dir = captures_folder();
+    for (int eye = 0; eye < 2; ++eye) {
+        const FocusBox& b = boxes[eye];
+        ID3D11Texture2D* et = eye_texture(eye);
+        std::vector<std::uint8_t> ep, fp;
+        unsigned ew = 0, eh = 0, fw = 0, fh = 0;
+        const bool read = b.valid && et && focusTex[eye] && simqvfr::d3d11_read_bgra8(et, ep, ew, eh) &&
+                          simqvfr::d3d11_read_bgra8(focusTex[eye], fp, fw, fh);
+        if (et)
+            et->Release();
+        const unsigned vw = std::min(passW[eye], ew), vh = std::min(passH[eye], eh);  // the eye's corner
+        const unsigned cw = std::min(passW[2 + eye], fw), ch = std::min(passH[2 + eye], fh);  // the focus view's
+        if (!read || !vw || !vh || !cw || !ch) {
+            simqvfr::logf("lmu mvr: frame %llu: eye %d's images can't be read back; not compared", frames, eye);
+            continue;
+        }
+        const auto lum = [](const std::vector<std::uint8_t>& px, std::size_t i) {
+            return 0.0722 * linear(px[i]) + 0.7152 * linear(px[i + 1]) + 0.2126 * linear(px[i + 2]);
+        };
+        constexpr int kCells = 16;
+        std::vector<double> ratios;
+        for (int cy = 1; cy < kCells - 1; ++cy)
+            for (int cx = 1; cx < kCells - 1; ++cx) {
+                double le = 0, lf = 0;
+                int ne = 0, nf = 0;
+                const double u0 = static_cast<double>(cx) / kCells, u1 = static_cast<double>(cx + 1) / kCells;
+                const double v0 = static_cast<double>(cy) / kCells, v1 = static_cast<double>(cy + 1) / kCells;
+                for (unsigned y = static_cast<unsigned>(v0 * ch); y < static_cast<unsigned>(v1 * ch); y += 2)
+                    for (unsigned x = static_cast<unsigned>(u0 * cw); x < static_cast<unsigned>(u1 * cw); x += 2) {
+                        lf += lum(fp, (static_cast<std::size_t>(y) * fw + x) * 4);
+                        ++nf;
+                    }
+                const double ex0 = (b.rect[0] + (b.rect[2] - b.rect[0]) * u0) * vw;
+                const double ex1 = (b.rect[0] + (b.rect[2] - b.rect[0]) * u1) * vw;
+                const double ey0 = (b.rect[1] + (b.rect[3] - b.rect[1]) * v0) * vh;
+                const double ey1 = (b.rect[1] + (b.rect[3] - b.rect[1]) * v1) * vh;
+                for (unsigned y = static_cast<unsigned>(ey0); y < static_cast<unsigned>(ey1) && y < vh; ++y)
+                    for (unsigned x = static_cast<unsigned>(ex0); x < static_cast<unsigned>(ex1) && x < vw; ++x) {
+                        le += lum(ep, (static_cast<std::size_t>(y) * ew + x) * 4);
+                        ++ne;
+                    }
+                if (ne && nf && le / ne > 0.002)
+                    ratios.push_back((lf / nf) / (le / ne));
+            }
+        std::sort(ratios.begin(), ratios.end());
+        const auto pct = [&](double q) {
+            return ratios.empty() ? 0.0 : ratios[static_cast<std::size_t>(q * static_cast<double>(ratios.size() - 1))];
+        };
+        simqvfr::logf("lmu mvr: frame %llu: focus %d as composed (its post-processing on the region pass %d drew) vs its "
+                      "eye's crop: focus / eye luminance per cell median %.3f (10%% %.3f, 90%% %.3f, %zu cells)",
+                      frames, eye, eye, pct(0.5), pct(0.1), pct(0.9), ratios.size());
+        // The focus view and the eye's crop of the box (its own pixels), for looking at.
+        std::vector<std::uint8_t> focusOnly(static_cast<std::size_t>(cw) * ch * 4);
+        for (unsigned y = 0; y < ch; ++y)
+            std::memcpy(focusOnly.data() + static_cast<std::size_t>(y) * cw * 4, fp.data() + static_cast<std::size_t>(y) * fw * 4,
+                        static_cast<std::size_t>(cw) * 4);
+        const unsigned bx0 = static_cast<unsigned>(b.rect[0] * vw), by0 = static_cast<unsigned>(b.rect[1] * vh);
+        const unsigned bx1 = std::min(vw, static_cast<unsigned>(b.rect[2] * vw)), by1 = std::min(vh, static_cast<unsigned>(b.rect[3] * vh));
+        if (bx1 > bx0 && by1 > by0) {
+            const unsigned bw = bx1 - bx0, bh = by1 - by0;
+            std::vector<std::uint8_t> crop(static_cast<std::size_t>(bw) * bh * 4);
+            for (unsigned y = 0; y < bh; ++y)
+                std::memcpy(crop.data() + static_cast<std::size_t>(y) * bw * 4,
+                            ep.data() + (static_cast<std::size_t>(by0 + y) * ew + bx0) * 4, static_cast<std::size_t>(bw) * 4);
+            wchar_t name[96];
+            swprintf_s(name, L"\\lmu-mvr-frame%llu-eye%d-crop.png", frames, eye);
+            simqvfr::write_png_bgra(dir + name, crop, bw, bh);
+        }
+        wchar_t name[96];
+        swprintf_s(name, L"\\lmu-mvr-frame%llu-focus%d-composed.png", frames, eye);
+        simqvfr::write_png_bgra(dir + name, focusOnly, cw, ch);
+    }
 }
 
 // The focus view against its eye's crop: linear luminance in a grid of cells over the box, focus / eye per cell.
@@ -1595,6 +1759,14 @@ bool four_passes_start(const FourPassesRun& run) {
         simqvfr::logf("%s: the loop tail's stub isn't where expected: four passes every frame", tag());
     }
     installed = true;
+    if (qvfrMode && cfg.mvr && cfg.mvrSkip) {  // gate D: passes 2-3 may skip the scene; mvr_pass keeps the focus regions
+        cfg.mvrSkip = install_skip();
+        mvr_keep_focus(cfg.mvrSkip);
+        simqvfr::logf("lmu mvr: gate D: %s", cfg.mvrSkip ? "passes 2-3 skip the scene once their eye's pass drew the focus "
+                                                          "view, their post-processing on that region"
+                                                        : "the scene work's functions aren't this build's or couldn't be "
+                                                          "hooked: passes 2-3 render the scene as before");
+    }
     if (qvfrMode) {
         // The VR UI into the focus views too; without it QVFR still runs, the UI missing inside the focus box.
         void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
@@ -1638,6 +1810,17 @@ void four_passes_frame_end() {
     if (cfg.mvr) {
         mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;
+        if (cfg.mvrSkip && mvrSampleFrame && atlasReady)
+            compare_mvr_focus();
+        mvrSampleFrame = false;
+        if (cfg.mvrSkip && frames % 900 == 0) {
+            simqvfr::logf("lmu mvr: passes 2-3 skipped the scene in %llu passes (%llu not: the focus view not drawn by its "
+                          "eye's pass); skipped since the last: %llu view scenes, %llu sort buckets, %llu culled items, "
+                          "%llu scene graph culls",
+                          passesSkipped, passesNotSkipped, skipped[0], skipped[1], skipped[2], skipped[3]);
+            for (unsigned long long& n : skipped)
+                n = 0;
+        }
     }
     // Never leave a focus projection in an eye's slot past the frame (a frame that stopped short of pass 3).
     for (int e = 0; e < 2; ++e)

@@ -70,6 +70,17 @@ inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;
 inline constexpr std::uint8_t kHiddenAreaDrawAnchor[] = {0x48, 0x8b, 0xc4, 0x41, 0x54, 0x41, 0x55,
                                                          0x48, 0x83, 0xec, 0x68, 0x80};
 
+// A view's scene work before cubeDX11_ApplyPostProcess (renderer vtable 0xb00: the MSAA resolve, YEBIS, the eye final),
+// all called from Pipeline_RenderView and child views only: skipped in passes 2-3 once the eye passes drew the focus views. [MVR]
+inline constexpr std::uintptr_t kViewScene = 0x51d8a0;  // Renderer_RenderViewScene(renderer, scene, view, flags, last): every bucket's draws
+inline constexpr std::uint8_t kViewSceneAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55};
+inline constexpr std::uintptr_t kSortMeshBucket = 0x5ddc70;  // SortMesh::Process for one bucket (6 args; the count it returns unused)
+inline constexpr std::uint8_t kSortMeshBucketAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x20, 0x44, 0x88, 0x44, 0x24, 0x18};
+inline constexpr std::uintptr_t kCullItem = 0x5e1140;  // Cull_Item(item, view, ?, float): recursive, void
+inline constexpr std::uint8_t kCullItemAnchor[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x56, 0x48};
+inline constexpr std::uintptr_t kCullSceneGraph = 0x614d70;  // Cull_SceneGraph(graph, view, ?): void
+inline constexpr std::uint8_t kCullSceneGraphAnchor[] = {0x4c, 0x8b, 0xdc, 0x55, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x49, 0x8d};
+
 // The VR UI (VRUI.cpp): VR_Present's draw of the HUD canvas onto a curved panel in each eye's final, after the eye loop. [VR UI]
 inline constexpr std::uintptr_t kVruiDraw = 0x617090;  // (vrui, context, eyes): eyes = {int mode; 2 kEyeSlotStride slots}
 inline constexpr std::uint8_t kVruiDrawAnchor[] = {0x40, 0x53, 0x56, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48, 0x8b, 0x02};

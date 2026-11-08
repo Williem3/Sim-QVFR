@@ -53,7 +53,9 @@ public:
         run.layerHeight = s.layout.layer_height();
         // lmu_mvr=1 (gate C of multi-view rendering): passes 0-1 draw their focus views too, compared with passes 2-3's
         // at the gate samples (mvr_pass.h); the layer made room (Views4Layout::secondViewRoom).
-        run.mvr = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) != 0 && s.layout.secondViewRoom;
+        const UINT mvrLevel = s.ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) : 0;
+        run.mvr = mvrLevel != 0 && s.layout.secondViewRoom;
+        run.mvrSkip = run.mvr && mvrLevel >= 2;  // gate D: passes 2-3 skip the scene
         if (run.mvr) {
             run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));
             run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, s.ini));
