@@ -416,7 +416,7 @@ bool ensure_atlas(ID3D11Texture2D* eyeTexture) {
 // ---- QVFR: what the four passes cost ----
 // CPU: each pass's time on the render thread, wall clock and the thread's own CPU (its cycle counter), and this code's
 // own work in its hooks. GPU: timestamp queries around this code's copies, read back frames later without stalling.
-// Averages logged every 300 scene frames (four_passes_frame_end).
+// Averages logged every 900 frames while the scene runs (four_passes_frame_end).
 double qpcPerMs = 0, tscPerMs = 0;
 long long calibQpc = 0;
 unsigned long long calibTsc = 0;
@@ -1585,11 +1585,11 @@ void four_passes_frame_end() {
                 simqvfr::logf("lmu qvfr: frame %llu: the located FOV matches the lens mask's again: the mask is on", frames);
         }
         maskStaleThisFrame = 0;
-        // Every 300 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them),
+        // Every 900 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them),
         // and what the frames since cost: each pass's wall and CPU time, this code's own CPU, the GPU time of its copies.
         if (passes >= 4)
             ++costWindow.frames;
-        if (passes >= 4 && frames % 300 == 0) {
+        if (passes >= 4 && frames % 900 == 0) {
             simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u targets", frames,
                           passW[0], passH[0], passW[1], passH[1], passW[2], passH[2], passW[3], passH[3], viewW, viewH);
             const CostWindow& w = costWindow;
