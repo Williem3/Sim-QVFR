@@ -662,6 +662,13 @@ void set_next_passes(int which) {
 bool mvrInstalled = false, mvrRoomLogged = false;
 int mvrSamples = 0;
 bool mvrSampleFrame = false;  // this frame is a gate sample
+bool mvrFrame = true;         // this frame uses MVR (false: an A/B run's frame with the four passes alone)
+
+// An A/B run (FourPassesRun::mvrAb): each side's CPU per pass since the last cost line, in thread cycles.
+struct AbWindow {
+    double cpu[2][4] = {};  // [0] with MVR, [1] without
+    unsigned frames[2] = {};
+} ab;
 
 // Gate D (lmu_mvr=2): passes 2-3 skip the scene work before their post-processing (abi.h [MVR]) while skipScene is set
 // (render thread only: Cull_Item is also called from elsewhere).
@@ -761,12 +768,19 @@ void mvr_before_pass(int p) {
     }
     bool sample = false;
     if (p == 0) {
+        mvrFrame = cfg.mvrAb <= 0 || (sceneFrames / static_cast<unsigned long long>(cfg.mvrAb)) % 2 == 0;
+        mvr_frame_mode(mvrFrame ? 0 : 1);
         freeze_focus();
         const auto due = static_cast<unsigned long long>(cfg.first);
-        sample = mvrSamples < cfg.count && sceneFrames >= due &&
+        sample = mvrFrame && mvrSamples < cfg.count && sceneFrames >= due &&
                  (sceneFrames - due) % static_cast<unsigned long long>(cfg.every) == 0;
         mvrSamples += sample ? 1 : 0;
         mvrSampleFrame = sample;
+    }
+    if (!mvrFrame) {  // an A/B run's other side: the eyes alone, passes 2-3 render their scene
+        skipScene = false;
+        mvr_pass_begin(p, nullptr, false, false);
+        return;
     }
     if (p >= 2) {  // gate D: the scene is skipped when the eye's pass drew this focus view (its region kept)
         skipScene = cfg.mvrSkip && mvr_focus_ready(p - 2);
@@ -1328,6 +1342,8 @@ void render_scene(void* arg, char laterEye) {
     if (qvfrMode && p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
         costWindow.passWallMs[p] += now_ms() - wall0;
         costWindow.passCpuCycles[p] += static_cast<double>(cpu1 - cpu0);
+        if (cfg.mvr && cfg.mvrAb > 0)
+            ab.cpu[mvrFrame ? 0 : 1][p] += static_cast<double>(cpu1 - cpu0);
     }
     inLaterPass = false;
     if (p < 4) {
@@ -1787,6 +1803,9 @@ bool four_passes_start(const FourPassesRun& run) {
     if (qvfrMode && cfg.mvr && cfg.mvrSkip) {  // gate D: passes 2-3 may skip the scene; mvr_pass keeps the focus regions
         cfg.mvrSkip = install_skip();
         mvr_keep_focus(cfg.mvrSkip);
+        if (cfg.mvrAb > 0)
+            simqvfr::logf("lmu mvr: A/B run: %d frames with MVR, then %d with the four passes alone, in turn (lmu_mvr_ab)",
+                          cfg.mvrAb, cfg.mvrAb);
         simqvfr::logf("lmu mvr: gate D: %s", cfg.mvrSkip ? "passes 2-3 skip the scene once their eye's pass drew the focus "
                                                           "view, their post-processing on that region"
                                                         : "the scene work's functions aren't this build's or couldn't be "
@@ -1902,8 +1921,11 @@ void four_passes_frame_end() {
         maskStaleThisFrame = 0;
         // Every 900 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them),
         // and what the frames since cost: each pass's wall and CPU time, this code's own CPU, the GPU time of its copies.
-        if (passes >= 4)
+        if (passes >= 4) {
             ++costWindow.frames;
+            if (cfg.mvr && cfg.mvrAb > 0)
+                ++ab.frames[mvrFrame ? 0 : 1];
+        }
         if (passes >= 4 && frames % 900 == 0) {
             simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u targets", frames,
                           passW[0], passH[0], passW[1], passH[1], passW[2], passH[2], passW[3], passH[3], viewW, viewH);
@@ -1922,6 +1944,22 @@ void four_passes_frame_end() {
                               w.gpuMs[1] / g, w.gpuMs[2] / g, w.gpuMs[3] / g,
                               (w.gpuMs[0] + w.gpuMs[1] + w.gpuMs[2] + w.gpuMs[3]) / g, w.gpuFrames);
             }
+            if (cfg.mvr && cfg.mvrAb > 0 && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
+                double c[2][4], eyes[2], focus[2];
+                for (int m = 0; m < 2; ++m) {
+                    for (int q = 0; q < 4; ++q)
+                        c[m][q] = ab.cpu[m][q] / tscPerMs / ab.frames[m];
+                    eyes[m] = c[m][0] + c[m][1];
+                    focus[m] = c[m][2] + c[m][3];
+                }
+                simqvfr::logf("lmu mvr A/B: CPU per pass with MVR %.2f %.2f %.2f %.2f ms (eyes %.2f, focus views %.2f; %u "
+                              "frames), without %.2f %.2f %.2f %.2f ms (eyes %.2f, focus views %.2f; %u frames): MVR %+.2f ms "
+                              "on the eyes, %+.2f on the focus views, %+.2f per frame",
+                              c[0][0], c[0][1], c[0][2], c[0][3], eyes[0], focus[0], ab.frames[0], c[1][0], c[1][1], c[1][2],
+                              c[1][3], eyes[1], focus[1], ab.frames[1], eyes[0] - eyes[1], focus[0] - focus[1],
+                              eyes[0] + focus[0] - eyes[1] - focus[1]);
+            }
+            ab = AbWindow{};
             costWindow = CostWindow{};
         }
         if (frames % 1800 == 0)

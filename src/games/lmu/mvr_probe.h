@@ -42,5 +42,8 @@ void mvr_probe_device(ID3D11Device* device);
 // Every xrEndFrame: a summary when the counts changed (at most every 5 s).
 void mvr_probe_frame_end();
 MvrProbeStats mvr_probe_stats();
+// Counts the vertex shaders created on the hooked device (any thread): a shader looked up by its address before may be
+// a new one since (mvr_pass.cpp's twin cache).
+uint64_t mvr_shader_generation();
 
 }  // namespace lmu

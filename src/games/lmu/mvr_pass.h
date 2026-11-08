@@ -37,8 +37,10 @@ void mvr_suspend(bool on);  // the hidden-area mask: the eye only
 // the focus view), so pass 2/3 may skip the scene and have its resolve replaced (mvr_pass_begin's replaceResolve).
 void mvr_keep_focus(bool on);
 bool mvr_focus_ready(int eye);
-// Every frame: a sampled frame's comparison; the counts every 900 frames.
+// Every frame: a sampled frame's comparison; the counts, the hooks' CPU and each pass's GPU time every 900 frames.
 void mvr_frame_end(unsigned long long frame);
+// Before pass 0 (an A/B run): 0 for a frame with MVR, 1 for one with the four passes alone; GPU times kept apart.
+void mvr_frame_mode(int mode);
 
 // Tests: the single-pass stereo switch (NVAPI's by default) and where the comparison's images go.
 using TwoViewsFn = int (*)(ID3D11DeviceContext*, bool);
@@ -59,6 +61,7 @@ MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint
 struct MvrPassStats {
     uint64_t twinBinds = 0, plainBinds = 0, toggles = 0, viewportRewrites = 0, scissorRewrites = 0, stereoErrors = 0;
     uint64_t passesWithFocus = 0, samples = 0, resolves = 0, keptRegions = 0, replacedResolves = 0;
+    uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
 };
 MvrPassStats mvr_pass_stats();
 

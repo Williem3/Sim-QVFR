@@ -43,6 +43,9 @@ struct FourPassesRun {
     // one scale (the larger of their shares: YEBIS follows the render scale on both axes), the focus views at their own
     // width and height (four_passes_set_live_axes), drawn by their eye's pass, post-processed at the scale that covers them.
     bool perAxis = false;
+    // An A/B run of MVR ([experiment] lmu_mvr_ab=N): N frames with it, then N with the four passes alone (passes 2-3
+    // render their scene), in turn; each side's CPU and GPU per pass logged apart. 0: MVR every frame.
+    int mvrAb = 0;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

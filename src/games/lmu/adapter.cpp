@@ -61,6 +61,8 @@ public:
             run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));
             run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, s.ini));
             run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, s.ini));
+            // lmu_mvr_ab=N: N frames with MVR, N without, in turn, each side's cost logged (four_passes.h).
+            run.mvrAb = (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_ab", 0, s.ini)));
         }
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
             run.renderScaleProbe =

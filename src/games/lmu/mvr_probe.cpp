@@ -179,11 +179,15 @@ void examine(ID3D11Device* device, const uint8_t* code, size_t size, ID3D11Verte
     inProbe = false;
 }
 
+std::atomic<uint64_t> shaderGeneration{0};
+
 HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void* code, SIZE_T size,
                                                ID3D11ClassLinkage* linkage, ID3D11VertexShader** shader) {
     const HRESULT hr = originalCreateVertexShader(device, code, size, linkage, shader);
     if (SUCCEEDED(hr) && code && size && !inProbe)
         examine(device, static_cast<const uint8_t*>(code), size, shader ? *shader : nullptr);
+    if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
+        shaderGeneration.fetch_add(1, std::memory_order_release);
     return hr;
 }
 
@@ -278,5 +282,7 @@ MvrProbeStats mvr_probe_stats() {
     std::lock_guard guard(statsMutex);
     return stats;
 }
+
+uint64_t mvr_shader_generation() { return shaderGeneration.load(std::memory_order_acquire); }
 
 }  // namespace lmu

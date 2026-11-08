@@ -212,6 +212,26 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
+    {  // The twin lookup: once per shader and frame (the cache), a twin attached since seen from the next frame.
+        lmu::mvr_pass_begin(0, &view, false);
+        const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
+        for (int i = 0; i < 5; ++i) {
+            context->VSSetShader(b.Get(), nullptr, 0);
+            context->VSSetShader(a.Get(), nullptr, 0);
+        }
+        const lmu::MvrPassStats s1 = lmu::mvr_pass_stats();
+        check(s1.lookups - s0.lookups == 10 && s1.lookupMisses - s0.lookupMisses <= 2 && bound_vs(context.Get()) == twin.Get(),
+              "ten binds of two shaders in a frame: at most two lookups not cached, the twin bound");
+        lmu::mvr_pass_end(0);
+        ComPtr<ID3D11VertexShader> twinB = vertex_shader(device.Get(), "4");
+        b->SetPrivateDataInterface(lmu::kMvrTwinGuid, twinB.Get());
+        lmu::mvr_pass_begin(0, &view, false);  // the next frame
+        context->VSSetShader(b.Get(), nullptr, 0);
+        check(bound_vs(context.Get()) == twinB.Get() && twoViewsOn == 1, "the next frame: b's new twin bound");
+        lmu::mvr_pass_end(0);
+        b->SetPrivateDataInterface(lmu::kMvrTwinGuid, nullptr);
+    }
+
     {  // Gate D: pass 0's resolve keeps its focus region; pass 2's resolve becomes a copy of it into the top-left.
         lmu::mvr_keep_focus(true);
         D3D11_TEXTURE2D_DESC md = {256, 128, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {4, 0}, D3D11_USAGE_DEFAULT,

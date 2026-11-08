@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <d3d11.h>
+#include <intrin.h>
 #include <wrl/client.h>
 
 #include <MinHook.h>
@@ -63,6 +64,30 @@ struct GpuFrame {
     ComPtr<ID3D11Query> disjoint, stamp[4][3];  // pass start, resolve, pass end
     bool stamped[4][3] = {};
     bool pending = false;
+    int mode = 0;  // mvr_frame_mode: 0 MVR, 1 the four passes alone (an A/B run)
+};
+
+// The twin of a game shader by its address, valid for a frame and until the game creates another vertex shader (a new
+// one may take a released one's address): GetPrivateData once per shader and frame instead of at every bind.
+struct TwinEntry {
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11VertexShader* twin = nullptr;  // raw: the game's shader holds it (its private data) while it lives
+    uint32_t epoch = 0;
+};
+constexpr unsigned kTwinCache = 1024;
+
+// CPU in this code's context hooks (the calls passed on included), in TSC ticks since the last log line.
+struct HookTime {
+    uint64_t hooks = 0, lookups = 0, switches = 0, calls = 0;
+};
+
+struct Timed {
+    uint64_t& sum;
+    const uint64_t t0;
+    explicit Timed(uint64_t& s) : sum(s), t0(__rdtsc()) {}
+    ~Timed() { sum += __rdtsc() - t0; }
+    Timed(const Timed&) = delete;
+    Timed& operator=(const Timed&) = delete;
 };
 constexpr int kGpuFrames = 4;
 
@@ -71,8 +96,16 @@ struct State {
     GpuFrame gpu[kGpuFrames];
     int gpuSlot = -1;            // this frame's, while it runs
     unsigned long long gpuFrameNo = 0;
-    double sceneMs[4] = {}, postMs[4] = {};
-    unsigned gpuCounts[4] = {};
+    int mode = 0;                // this frame's (mvr_frame_mode)
+    double sceneMs[2][4] = {}, postMs[2][4] = {};
+    unsigned gpuCounts[2][4] = {};
+    TwinEntry twins[kTwinCache];
+    uint32_t twinEpoch = 1;
+    uint64_t twinGeneration = 0;
+    uint64_t loggedLookups = 0, loggedMisses = 0;  // the stats' counts at the last log line
+    HookTime time;
+    unsigned long long tscAtLog = 0;
+    long long qpcAtLog = 0;
     ComPtr<ID3D11Buffer> remapCb;
     TwoViewsFn twoViews = &nvapi_two_views;
     bool broken = false;  // single-pass stereo refused once: off for the session
@@ -136,9 +169,9 @@ void gpu_collect() {
                 ok = g.context->GetData(f.stamp[p][k].Get(), &t[k], sizeof(t[k]), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK;
             if (!ok || t[1] < t[0] || t[2] < t[1])
                 continue;
-            g.sceneMs[p] += 1000.0 * static_cast<double>(t[1] - t[0]) / static_cast<double>(dj.Frequency);
-            g.postMs[p] += 1000.0 * static_cast<double>(t[2] - t[1]) / static_cast<double>(dj.Frequency);
-            ++g.gpuCounts[p];
+            g.sceneMs[f.mode][p] += 1000.0 * static_cast<double>(t[1] - t[0]) / static_cast<double>(dj.Frequency);
+            g.postMs[f.mode][p] += 1000.0 * static_cast<double>(t[2] - t[1]) / static_cast<double>(dj.Frequency);
+            ++g.gpuCounts[f.mode][p];
         }
     }
 }
@@ -179,22 +212,35 @@ void apply_scissors() {
     }
 }
 
-ComPtr<ID3D11VertexShader> twin_of(ID3D11VertexShader* vs) {
-    ComPtr<ID3D11VertexShader> twin;
+ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
     if (!vs)
-        return twin;
+        return nullptr;
+    Timed timed(g.time.lookups);
+    ++g.stats.lookups;
+    if (const uint64_t generation = mvr_shader_generation(); generation != g.twinGeneration) {
+        g.twinGeneration = generation;
+        ++g.twinEpoch;
+    }
+    TwinEntry& e = g.twins[(reinterpret_cast<uintptr_t>(vs) >> 4) % kTwinCache];
+    if (e.epoch == g.twinEpoch && e.vs == vs)
+        return e.twin;
+    ++g.stats.lookupMisses;
+    ID3D11VertexShader* twin = nullptr;
     IUnknown* unknown = nullptr;
     UINT size = sizeof(unknown);
     if (SUCCEEDED(vs->GetPrivateData(kMvrTwinGuid, &size, &unknown)) && unknown) {
-        unknown->QueryInterface(IID_PPV_ARGS(&twin));
+        ComPtr<ID3D11VertexShader> t;
+        unknown->QueryInterface(IID_PPV_ARGS(&t));
         unknown->Release();
+        twin = t.Get();
     }
+    e = {vs, twin, g.twinEpoch};
     return twin;
 }
 
 // Twin, two views and the second viewport exactly while a focus-drawing pass has a depth target and a shader with a twin.
 void update() {
-    ComPtr<ID3D11VertexShader> twin;
+    ID3D11VertexShader* twin = nullptr;
     bool want = g.drawFocus && !g.broken && !g.suspended && g.depthBound && g.gameVs && !g.gsBound && !g.hsBound &&
                 !g.dsBound && !g.soBound;
     if (want) {
@@ -202,6 +248,7 @@ void update() {
         want = twin != nullptr;
     }
     if (want != g.stereo) {
+        Timed timed(g.time.switches);
         if (g.twoViews(g.context, want) != 0) {
             ++g.stats.stereoErrors;
             if (want) {
@@ -214,7 +261,7 @@ void update() {
             ++g.stats.toggles;
         }
     }
-    ID3D11VertexShader* bind = want ? twin.Get() : g.gameVs;
+    ID3D11VertexShader* bind = want ? twin : g.gameVs;
     if (bind != g.boundVs) {
         realVSSetShader(g.context, bind, g.instanceCount ? g.instances : nullptr, g.instanceCount);
         g.boundVs = bind;
@@ -236,6 +283,8 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
         realVSSetShader(context, vs, instances, count);
         return;
     }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
     g.gameVs = vs;
     g.instanceCount = std::min<UINT>(count, 256);
     for (UINT i = 0; i < g.instanceCount; ++i)
@@ -247,39 +296,57 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
 template <typename Shader, SetShaderFn<Shader>* real, bool State::*bound>
 void STDMETHODCALLTYPE later_stage(ID3D11DeviceContext* context, Shader* shader, ID3D11ClassInstance* const* instances,
                                    UINT count) {
-    (*real)(context, shader, instances, count);
-    if (ours(context)) {
-        g.*bound = shader != nullptr;
-        update();
+    if (!ours(context)) {
+        (*real)(context, shader, instances, count);
+        return;
     }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
+    (*real)(context, shader, instances, count);
+    g.*bound = shader != nullptr;
+    update();
 }
 
 void STDMETHODCALLTYPE so_set_targets(ID3D11DeviceContext* context, UINT n, ID3D11Buffer* const* buffers,
                                       const UINT* offsets) {
-    realSOSetTargets(context, n, buffers, offsets);
-    if (ours(context)) {
-        g.soBound = false;
-        for (UINT i = 0; i < n && buffers; ++i)
-            g.soBound = g.soBound || buffers[i] != nullptr;
-        update();
+    if (!ours(context)) {
+        realSOSetTargets(context, n, buffers, offsets);
+        return;
     }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
+    realSOSetTargets(context, n, buffers, offsets);
+    g.soBound = false;
+    for (UINT i = 0; i < n && buffers; ++i)
+        g.soBound = g.soBound || buffers[i] != nullptr;
+    update();
 }
 
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
-    realOMSetRenderTargets(context, n, rtvs, dsv);
-    if (ours(context)) {
-        g.depthBound = dsv != nullptr;
-        update();
+    if (!ours(context)) {
+        realOMSetRenderTargets(context, n, rtvs, dsv);
+        return;
     }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
+    realOMSetRenderTargets(context, n, rtvs, dsv);
+    g.depthBound = dsv != nullptr;
+    update();
 }
 
 void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* context, UINT n,
                                                       ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv,
                                                       UINT uavStart, UINT uavCount,
                                                       ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    if (!ours(context)) {
+        realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+        return;
+    }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
     realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
-    if (ours(context) && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
+    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
         update();
     }
@@ -290,6 +357,8 @@ void STDMETHODCALLTYPE rs_set_viewports(ID3D11DeviceContext* context, UINT n, co
         realRSSetViewports(context, n, vps);
         return;
     }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
     g.vpCount = std::min<UINT>(n, kMaxRects);
     if (vps)
         std::memcpy(g.vps, vps, g.vpCount * sizeof(D3D11_VIEWPORT));
@@ -301,6 +370,8 @@ void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n
         realRSSetScissorRects(context, n, rects);
         return;
     }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
     g.scCount = std::min<UINT>(n, kMaxRects);
     if (rects)
         std::memcpy(g.scs, rects, g.scCount * sizeof(D3D11_RECT));
@@ -592,6 +663,10 @@ bool mvr_pass_install(ID3D11Device* device) {
         return false;
     }
     g.context = context.Get();
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    g.qpcAtLog = now.QuadPart;
+    g.tscAtLog = __rdtsc();
     simqvfr::log_line("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye)");
     return true;
 }
@@ -599,6 +674,7 @@ bool mvr_pass_install(ID3D11Device* device) {
 void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replaceResolve) {
     if (!g.context)
         return;
+    Timed timed(g.time.hooks);
     g.pass = pass;
     g.drawFocus = view != nullptr && !g.broken;
     g.suspended = false;
@@ -616,9 +692,11 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
             for (auto& p : f.stamped)
                 for (bool& s : p)
                     s = false;
+            f.mode = g.mode;
             g.context->Begin(f.disjoint.Get());
             g.gpuSlot = slot;
         }
+        ++g.twinEpoch;  // a new frame: its shaders looked up again
     }
     stamp(pass, 0);
     g.replaceResolve = replaceResolve && pass >= 2 && g.keptOk[pass & 1];
@@ -644,6 +722,7 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
 void mvr_pass_end(int pass) {
     if (!g.context || g.pass < 0)
         return;
+    Timed timed(g.time.hooks);
     g.drawFocus = false;
     update();  // the game's shader, one view, its own viewports
     stamp(pass, 2);
@@ -684,7 +763,28 @@ void mvr_frame_end(unsigned long long frame) {
             compare_sample(frame);
     }
     if (frame >= g.lastStatsFrame + 900) {
+        const double frames = static_cast<double>(frame - g.lastStatsFrame);
         g.lastStatsFrame = frame;
+        LARGE_INTEGER now, f;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&f);
+        const unsigned long long tsc = __rdtsc();
+        const double ms = 1000.0 * static_cast<double>(now.QuadPart - g.qpcAtLog) / static_cast<double>(f.QuadPart);
+        if (ms > 0 && tsc > g.tscAtLog && frames > 0) {
+            const double perMs = static_cast<double>(tsc - g.tscAtLog) / ms;
+            const auto per = [&](uint64_t ticks) { return static_cast<double>(ticks) / perMs / frames; };
+            simqvfr::logf("lmu mvr: this code's CPU in the context hooks %.3f ms per frame, the calls passed on included "
+                          "(twin lookups %.3f: %llu, %llu not cached; stereo switches %.3f); %.0f hooked calls per frame",
+                          per(g.time.hooks), per(g.time.lookups),
+                          static_cast<unsigned long long>(g.stats.lookups - g.loggedLookups),
+                          static_cast<unsigned long long>(g.stats.lookupMisses - g.loggedMisses), per(g.time.switches),
+                          static_cast<double>(g.time.calls) / frames);
+        }
+        g.time = HookTime{};
+        g.loggedLookups = g.stats.lookups;
+        g.loggedMisses = g.stats.lookupMisses;
+        g.qpcAtLog = now.QuadPart;
+        g.tscAtLog = tsc;
         const MvrPassStats& s = g.stats;
         simqvfr::logf("lmu mvr: %llu passes drew their focus view; shader binds %llu twin / %llu plain, %llu stereo "
                       "switches (%llu refused), viewports %llu and scissors %llu doubled; focus regions kept %llu, "
@@ -694,22 +794,31 @@ void mvr_frame_end(unsigned long long frame) {
                       static_cast<unsigned long long>(s.stereoErrors), static_cast<unsigned long long>(s.viewportRewrites),
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
                       static_cast<unsigned long long>(s.replacedResolves));
-        if (g.gpuCounts[0]) {
-            const auto ms = [](double sum, unsigned n) { return n ? sum / n : 0.0; };
-            simqvfr::logf("lmu mvr: GPU per pass, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
-                          "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms (%u frames timed)",
-                          ms(g.sceneMs[0], g.gpuCounts[0]), ms(g.postMs[0], g.gpuCounts[0]), ms(g.sceneMs[1], g.gpuCounts[1]),
-                          ms(g.postMs[1], g.gpuCounts[1]), ms(g.sceneMs[2], g.gpuCounts[2]), ms(g.postMs[2], g.gpuCounts[2]),
-                          ms(g.sceneMs[3], g.gpuCounts[3]), ms(g.postMs[3], g.gpuCounts[3]), g.gpuCounts[0]);
+        for (int m = 0; m < 2; ++m) {
+            if (!g.gpuCounts[m][0])
+                continue;
+            const double* sc = g.sceneMs[m];
+            const double* po = g.postMs[m];
+            const unsigned* n = g.gpuCounts[m];
+            const auto avg = [](double sum, unsigned k) { return k ? sum / k : 0.0; };
+            double total = 0;
+            for (int p = 0; p < 4; ++p)
+                total += avg(sc[p] + po[p], n[p]);
+            simqvfr::logf("lmu mvr: GPU per pass%s, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
+                          "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms, %.2f in all (%u frames timed)",
+                          m ? " without MVR (A/B)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
+                          avg(sc[2], n[2]), avg(po[2], n[2]), avg(sc[3], n[3]), avg(po[3], n[3]), total, n[0]);
             for (int p = 0; p < 4; ++p) {
-                g.sceneMs[p] = g.postMs[p] = 0;
-                g.gpuCounts[p] = 0;
+                g.sceneMs[m][p] = g.postMs[m][p] = 0;
+                g.gpuCounts[m][p] = 0;
             }
         }
     }
 }
 
 void mvr_set_two_views(TwoViewsFn fn) { g.twoViews = fn ? fn : &nvapi_two_views; }
+
+void mvr_frame_mode(int mode) { g.mode = mode ? 1 : 0; }
 
 MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
                           int range) {
