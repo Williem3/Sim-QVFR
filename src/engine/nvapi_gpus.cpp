@@ -62,9 +62,11 @@ std::vector<Gpu> ask() {
             gpu.name = name;
         NV_GPU_ARCH_INFO arch = {};
         arch.version = NV_GPU_ARCH_INFO_VER;
-        if (archInfo(handles[i], &arch) == NVAPI_OK)
+        if (archInfo(handles[i], &arch) == NVAPI_OK) {
             gpu.architecture = arch.architecture;
-        gpu.twoViews = has_two_views(gpu.architecture);
+            gpu.implementation = arch.implementation;
+        }
+        gpu.twoViews = offers_multi_view(gpu.architecture, gpu.implementation, gpu.name);
         out.push_back(gpu);
     }
     return out;
@@ -86,6 +88,15 @@ void* function(const char* name, int* status) {
 
 bool has_two_views(unsigned architecture) {
     return architecture >= NV_GPU_ARCHITECTURE_TU100 && architecture < 0xE0000000u;
+}
+
+bool offers_multi_view(unsigned architecture, unsigned implementation, const std::string& name) {
+    if (!has_two_views(architecture))
+        return false;
+    if (architecture == NV_GPU_ARCHITECTURE_TU100 &&
+        (implementation == NV_GPU_ARCH_IMPLEMENTATION_TU116 || implementation == NV_GPU_ARCH_IMPLEMENTATION_TU117))
+        return false;  // GTX 16 series
+    return name.find("GTX") == std::string::npos;
 }
 
 const std::vector<Gpu>& gpus() {

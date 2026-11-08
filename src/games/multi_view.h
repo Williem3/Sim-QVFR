@@ -12,5 +12,7 @@ namespace simqvfr::games {
 
 // On for this run; `why`: the GPU it runs on ("NVIDIA GeForce RTX 5070 Ti"), or why not.
 bool multi_view_on(const GameInfo* game, const wchar_t* ini, std::string* why = nullptr);
+// [experiment] lmu_mvr (LMU's MVR gates, 1 or 2) on a GPU that offers multi-view rendering; 0 on any other GPU.
+unsigned lmu_mvr_gate(const wchar_t* ini);
 
 }  // namespace simqvfr::games

@@ -156,7 +156,9 @@ bool write_launcher_layers(const std::wstring& ini, const LauncherLayers& l) {
 }
 
 Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLoad, bool cheekyFg,
-                       std::vector<std::wstring> setVariables) {
+                       std::vector<std::wstring> setVariables, bool antiCheat) {
+    if (antiCheat)
+        cheekyLoad = cheekyFg = false;
     Options o;
     o.order = layers.order;
     o.offLayers = layers.off;
@@ -168,6 +170,8 @@ Options launch_options(const LauncherLayers& layers, bool twoLoop, bool cheekyLo
         o.forced.push_back({kFrameGenerationLayer, false, "Cheeky's frame generation is on: one frame generation at a time"});
     if (cheekyLoad)
         o.forced.push_back({kCheekyLayer, true, "Cheeky Foveated DLSS is on: its runtime needs its layer"});
+    if (antiCheat)
+        o.forced.push_back({kCheekyLayer, false, "Run with anti-cheat is on: Cheeky stays off"});
     return o;
 }
 
