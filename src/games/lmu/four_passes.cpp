@@ -178,6 +178,7 @@ void compare() {
             continue;
         }
         unsigned long long differing = 0, sum = 0;
+        long long signedSum[3] = {};  // pass minus eye, per channel (B, G, R): one sign everywhere is an exposure shift
         int maxDiff = 0;
         unsigned x0 = w[a], y0 = h[a], x1 = 0, y1 = 0;
         std::vector<std::uint8_t> diff(px[a].size(), 0);
@@ -185,8 +186,11 @@ void compare() {
             for (unsigned x = 0; x < w[a]; ++x) {
                 const std::size_t i = (static_cast<std::size_t>(y) * w[a] + x) * 4;
                 int d = 0;
-                for (int c = 0; c < 3; ++c)
-                    d = (std::max)(d, std::abs(static_cast<int>(px[a][i + c]) - static_cast<int>(px[b][i + c])));
+                for (int c = 0; c < 3; ++c) {
+                    const int s = static_cast<int>(px[b][i + c]) - static_cast<int>(px[a][i + c]);
+                    signedSum[c] += s;
+                    d = (std::max)(d, std::abs(s));
+                }
                 if (d) {
                     ++differing;
                     sum += d;
@@ -206,18 +210,24 @@ void compare() {
                           b, eye, w[a], h[a], eyeOfPass[a], eyeOfPass[b]);
         else
             simqvfr::logf("lmu copies: frame %llu: pass %d DIFFERS from eye %d: %llu pixels (%.3f%%), max %d, mean %.2f where "
-                          "different, within x %u-%u y %u-%u (%ux%u; eyes rendered %d/%d)",
+                          "different, within x %u-%u y %u-%u (%ux%u; eyes rendered %d/%d); pass minus eye summed over "
+                          "the image R %+lld G %+lld B %+lld",
                           frames, b, eye, differing, 100.0 * differing / total, maxDiff,
-                          static_cast<double>(sum) / differing, x0, x1, y0, y1, w[a], h[a], eyeOfPass[a], eyeOfPass[b]);
+                          static_cast<double>(sum) / differing, x0, x1, y0, y1, w[a], h[a], eyeOfPass[a], eyeOfPass[b],
+                          signedSum[2], signedSum[1], signedSum[0]);
         // Images: on the first comparison, and the first time a pair differs.
         static bool wroteDiff[2] = {};
         if (comparisons == 1 || (differing && !wroteDiff[eye])) {
             wchar_t name[96];
             unsigned hw = 0, hh = 0;
+            // The half image first: its size comes back through hw/hh, and argument order is unspecified (the first
+            // build wrote 0-byte eye images, sized 0x0).
+            const std::vector<std::uint8_t> eyeHalf = half(px[a], w[a], h[a], hw, hh);
             swprintf_s(name, L"\\lmu-copies-frame%llu-eye%d.png", frames, eye);
-            simqvfr::write_png_bgra(dir + name, half(px[a], w[a], h[a], hw, hh), hw, hh);
+            simqvfr::write_png_bgra(dir + name, eyeHalf, hw, hh);
+            const std::vector<std::uint8_t> passHalf = half(px[b], w[b], h[b], hw, hh);
             swprintf_s(name, L"\\lmu-copies-frame%llu-pass%d.png", frames, b);
-            simqvfr::write_png_bgra(dir + name, half(px[b], w[b], h[b], hw, hh), hw, hh);
+            simqvfr::write_png_bgra(dir + name, passHalf, hw, hh);
             if (differing) {
                 wroteDiff[eye] = true;
                 swprintf_s(name, L"\\lmu-copies-frame%llu-diff%d.png", frames, eye);
