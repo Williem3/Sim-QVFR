@@ -47,6 +47,8 @@ using TwoViewsFn = int (*)(ID3D11DeviceContext*, bool);
 void mvr_set_two_views(TwoViewsFn fn);
 // A twin attached to a shader that had none (tests: the probe attaches them at creation, which the cache sees itself).
 void mvr_twins_changed();
+// The CPU in the context hooks timed (TSC) and logged with the counts; off by default (it costs a little itself).
+void mvr_time_hooks(bool on);
 
 struct MvrComparison {
     bool ok = false;

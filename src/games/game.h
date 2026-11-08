@@ -18,6 +18,8 @@ struct GameFeatures {
     bool fovCrop;         // the field of view crop ([crop])
     bool frameGeneration; // Cheeky's frame generation ([cheeky] fg), within Foveated DLSS
     bool objectDetail;    // the object and tree detail slider ([experiment] object_detail), live
+    // NVIDIA multi-view rendering ([experiment] multi_view, multi_view.h): each eye's pass draws its focus view too.
+    bool multiView = false;
 };
 
 struct GameInfo {

@@ -46,6 +46,11 @@ struct FourPassesRun {
     // An A/B run of MVR ([experiment] lmu_mvr_ab=N): N frames with it, then N with the four passes alone (passes 2-3
     // render their scene), in turn; each side's CPU and GPU per pass logged apart. 0: MVR every frame.
     int mvrAb = 0;
+    // The gates' samples (lmu_mvr: first, every, count): the focus views compared, their images saved. Off in a player's
+    // run (multi_view): no read-backs.
+    bool mvrCompare = false;
+    // The CPU in the context hooks timed and logged (lmu_mvr_timing, any A/B run).
+    bool mvrTiming = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

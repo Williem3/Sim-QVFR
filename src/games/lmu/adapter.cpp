@@ -6,6 +6,7 @@
 
 #include "../../log.h"
 #include "../identity_adapter.h"
+#include "../multi_view.h"
 #include "four_passes.h"
 #include "game.h"
 #include "mvr_probe.h"
@@ -51,18 +52,23 @@ public:
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
         run.layerHeight = s.layout.layer_height();
-        // lmu_mvr=1 (gate C of multi-view rendering): passes 0-1 draw their focus views too, compared with passes 2-3's
-        // at the gate samples (mvr_pass.h); the layer made room (Views4Layout::secondViewRoom).
-        const UINT mvrLevel = s.ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) : 0;
-        run.mvr = mvrLevel != 0 && s.layout.secondViewRoom;
-        run.mvrSkip = run.mvr && mvrLevel >= 2;  // gate D: passes 2-3 skip the scene
-        run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images twice as wide only: each pass sized per axis
+        // Multi-view rendering (mvr_pass.h): passes 0-1 draw their focus views too, beside their eyes, where the layer
+        // made room (Views4Layout::secondViewRoom): the launcher's multi_view=1 (games/multi_view.h), as gate D. Or
+        // lmu_mvr, its gates: 1 (C: passes 2-3 still render theirs, compared at the samples), 2 (D: they skip the scene).
+        const UINT gate = s.ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, s.ini) : 0;
+        const UINT mvrLevel = gate ? gate : 2;
+        run.mvr = s.layout.secondViewRoom;
+        run.mvrSkip = run.mvr && mvrLevel >= 2;  // passes 2-3 skip the scene
+        run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images twice as wide only, the focus views beside
         if (run.mvr) {
+            run.mvrCompare = gate != 0;  // the gates' samples (images read back and saved): not in a player's run
             run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));
             run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, s.ini));
             run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, s.ini));
             // lmu_mvr_ab=N: N frames with MVR, N without, in turn, each side's cost logged (four_passes.h).
             run.mvrAb = (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_ab", 0, s.ini)));
+            // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
+            run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
         }
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
             run.renderScaleProbe =
@@ -122,8 +128,10 @@ public:
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
         // lmu_mvr_probe=1: every vertex shader converted for NVIDIA's two-view pass and created through NVAPI, log only.
-        // lmu_mvr=1 (with lmu_qvfr): the probe keeps the converted shaders, attached to the game's (mvr_pass.h).
-        const bool mvr = has_qvfr() && GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini) != 0;
+        // Multi-view rendering (with lmu_qvfr: multi_view=1 on a GPU with it, or lmu_mvr): the probe keeps the converted
+        // shaders, attached to the game's (mvr_pass.h). The layer decides the same at xrCreateInstance (config.cpp).
+        const bool mvr = has_qvfr() && (GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini) != 0 ||
+                                        simqvfr::games::multi_view_on(&kGame, ini));
         mvrProbe_ = (mvr || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0) && mvr_probe_install(ini, mvr);
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
         const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;

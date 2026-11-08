@@ -66,6 +66,7 @@ Settings load_settings(const std::wstring& ini) {
     const int density = read_int(ini, L"experiment", L"focus_density", 0);
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
+    s.multiView = read_int(ini, L"experiment", L"multi_view", 0) != 0;
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
     s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
@@ -157,6 +158,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    ok &= write(ini, L"experiment", L"multi_view", s.multiView ? L"1" : L"0");  // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");

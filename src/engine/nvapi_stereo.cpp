@@ -8,8 +8,9 @@
 
 #pragma warning(push, 0)
 #include "../third_party/nvapi/nvapi.h"
-#include "../third_party/nvapi/nvapi_interface.h"
 #pragma warning(pop)
+
+#include "engine/nvapi_gpus.h"
 
 namespace simqvfr::nvapi {
 
@@ -24,33 +25,16 @@ struct Api {
     int initStatus = NVAPI_LIBRARY_NOT_FOUND;
 };
 
-void* function(void* (*queryInterface)(unsigned int), const char* name) {
-    for (const NVAPI_INTERFACE_TABLE& entry : nvapi_interface_table)
-        if (std::strcmp(entry.func, name) == 0)
-            return queryInterface(entry.id);
-    return nullptr;
-}
-
 Api& api() {
     static Api a;
     static std::once_flag once;
     std::call_once(once, [] {
-        HMODULE dll = LoadLibraryW(L"nvapi64.dll");
-        if (!dll)
-            return;
-        auto queryInterface = reinterpret_cast<void* (*)(unsigned int)>(GetProcAddress(dll, "nvapi_QueryInterface"));
-        if (!queryInterface) {
-            a.initStatus = NVAPI_NO_IMPLEMENTATION;
-            return;
-        }
-        auto initialize = reinterpret_cast<decltype(&NvAPI_Initialize)>(function(queryInterface, "NvAPI_Initialize"));
-        a.initStatus = initialize ? initialize() : NVAPI_NO_IMPLEMENTATION;
+        a.querySps = reinterpret_cast<decltype(a.querySps)>(function("NvAPI_D3D_QuerySinglePassStereoSupport", &a.initStatus));
         if (a.initStatus != NVAPI_OK)
             return;
-        a.querySps = reinterpret_cast<decltype(a.querySps)>(function(queryInterface, "NvAPI_D3D_QuerySinglePassStereoSupport"));
-        a.queryMultiView = reinterpret_cast<decltype(a.queryMultiView)>(function(queryInterface, "NvAPI_D3D_QueryMultiViewSupport"));
-        a.setSps = reinterpret_cast<decltype(a.setSps)>(function(queryInterface, "NvAPI_D3D_SetSinglePassStereoMode"));
-        a.createVs = reinterpret_cast<decltype(a.createVs)>(function(queryInterface, "NvAPI_D3D11_CreateVertexShaderEx"));
+        a.queryMultiView = reinterpret_cast<decltype(a.queryMultiView)>(function("NvAPI_D3D_QueryMultiViewSupport"));
+        a.setSps = reinterpret_cast<decltype(a.setSps)>(function("NvAPI_D3D_SetSinglePassStereoMode"));
+        a.createVs = reinterpret_cast<decltype(a.createVs)>(function("NvAPI_D3D11_CreateVertexShaderEx"));
         a.ok = a.querySps && a.setSps && a.createVs;
     });
     return a;

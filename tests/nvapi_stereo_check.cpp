@@ -26,6 +26,7 @@
 #include <wrl/client.h>
 
 #include "engine/dxbc_patch.h"
+#include "engine/nvapi_gpus.h"
 #include "engine/nvapi_stereo.h"
 
 using Microsoft::WRL::ComPtr;
@@ -424,6 +425,9 @@ int main(int argc, char** argv) {
     std::snprintf(what, sizeof(what), "NVAPI: loaded %d, single pass stereo %d, XYZW %d, multi-view %d (status %d %s)",
                   s.loaded, s.singlePassStereo, s.xyzw, s.multiView, s.status, nvapi::status_name(s.status));
     check(s.loaded && s.xyzw, what);
+    for (const nvapi::Gpu& gpu : nvapi::gpus())
+        std::printf("     GPU %s: architecture 0x%x, two views %d\n", gpu.name.c_str(), gpu.architecture, gpu.twoViews);
+    check(nvapi::two_views_gpu() != nullptr, "nvapi_gpus: a GPU with two views found without a device (the launcher's check)");
     if (!s.xyzw)
         return 1;
     if (argc > 1 && std::strcmp(argv[1], "--timing") == 0) {

@@ -772,7 +772,7 @@ void mvr_before_pass(int p) {
         mvr_frame_mode(mvrFrame ? 0 : 1);
         freeze_focus();
         const auto due = static_cast<unsigned long long>(cfg.first);
-        sample = mvrFrame && mvrSamples < cfg.count && sceneFrames >= due &&
+        sample = cfg.mvrCompare && mvrFrame && mvrSamples < cfg.count && sceneFrames >= due &&
                  (sceneFrames - due) % static_cast<unsigned long long>(cfg.every) == 0;
         mvrSamples += sample ? 1 : 0;
         mvrSampleFrame = sample;
@@ -1806,6 +1806,7 @@ bool four_passes_start(const FourPassesRun& run) {
         if (cfg.mvrAb > 0)
             simqvfr::logf("lmu mvr: A/B run: %d frames with MVR, then %d with the four passes alone, in turn (lmu_mvr_ab)",
                           cfg.mvrAb, cfg.mvrAb);
+        mvr_time_hooks(cfg.mvrTiming);
         simqvfr::logf("lmu mvr: gate D: %s", cfg.mvrSkip ? "passes 2-3 skip the scene once their eye's pass drew the focus "
                                                           "view, their post-processing on that region"
                                                         : "the scene work's functions aren't this build's or couldn't be "

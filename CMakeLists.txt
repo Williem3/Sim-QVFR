@@ -59,11 +59,11 @@ target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 # Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
 # A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
-  src/games/games.cpp src/log.cpp src/layer_chain.cpp
+  src/games/games.cpp src/games/multi_view.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -298,6 +298,7 @@ add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to 
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/launch_watch.cpp src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/explicit_layers.cpp src/launcher/session_history.cpp
   src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
+  src/engine/nvapi_gpus.cpp
   src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc
   src/launcher/ui/window_state.cpp src/launcher/ui/app_actions.cpp src/launcher/ui/update_install.cpp
   src/launcher/ui/controls.cpp src/launcher/ui/help.cpp src/launcher/ui/sheet.cpp src/launcher/ui/form.cpp

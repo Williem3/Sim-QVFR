@@ -46,6 +46,8 @@ enum Ctl {
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
+    // NVIDIA multi-view rendering ([experiment] multi_view, Resolution pane).
+    kMultiView,
     // The FOV crop ([crop], Resolution pane).
     kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
     // The helmet overlay ([helmet], Resolution pane).

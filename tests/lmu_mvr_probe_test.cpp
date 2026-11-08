@@ -11,7 +11,11 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include "engine/nvapi_gpus.h"
+#include "games/ace/game.h"
+#include "games/lmu/game.h"
 #include "games/lmu/mvr_probe.h"
+#include "games/multi_view.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -74,6 +78,30 @@ int main() {
           what);
     check(s.nvapiCreated == 0 && s.nvapiFailed == 0, "NVAPI not asked on WARP");
     lmu::mvr_probe_frame_end();  // the summary (log only)
+
+    // Which GPUs draw two full views per draw: Turing (RTX 20) and newer, not Tegra's ids.
+    namespace nvapi = simqvfr::nvapi;
+    check(!nvapi::has_two_views(0x140) && !nvapi::has_two_views(0x150) && nvapi::has_two_views(0x160) &&
+              nvapi::has_two_views(0x170) && nvapi::has_two_views(0x190) && nvapi::has_two_views(0x1B0) &&
+              !nvapi::has_two_views(0xE0000040u) && !nvapi::has_two_views(0),
+          "two views from Turing (0x160) on: Volta, Tegra and unknown not");
+    // The layer's decision (games/multi_view.h) from an ini: multi_view=1 for a game that has it, on such a GPU.
+    {
+        wchar_t temp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"simqvfr-multiview-" + std::to_wstring(GetCurrentProcessId()) + L".ini";
+        WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", ini.c_str());
+        std::string why;
+        check(!simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why) && why == "off (multi_view=0)",
+              "multi_view=0: off");
+        WritePrivateProfileStringW(L"experiment", L"multi_view", L"1", ini.c_str());
+        check(!simqvfr::games::multi_view_on(&ace::kGame, ini.c_str(), &why) && why == "off: not for this game",
+              "multi_view=1 for a game without it (ACE): off");
+        const bool on = simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why);
+        std::snprintf(what, sizeof(what), "multi_view=1 for LMU: %s on this machine's GPU (%s)", on ? "on" : "off", why.c_str());
+        check(on == (nvapi::two_views_gpu() != nullptr) && !why.empty(), what);
+        DeleteFileW(ini.c_str());
+    }
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

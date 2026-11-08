@@ -83,11 +83,16 @@ struct HookTime {
     uint64_t hooks = 0, lookups = 0, switches = 0, calls = 0;
 };
 
+bool timeHooks = false;  // mvr_time_hooks
+
 struct Timed {
-    uint64_t& sum;
+    uint64_t* const sum;
     const uint64_t t0;
-    explicit Timed(uint64_t& s) : sum(s), t0(__rdtsc()) {}
-    ~Timed() { sum += __rdtsc() - t0; }
+    explicit Timed(uint64_t& s) : sum(timeHooks ? &s : nullptr), t0(sum ? __rdtsc() : 0) {}
+    ~Timed() {
+        if (sum)
+            *sum += __rdtsc() - t0;
+    }
     Timed(const Timed&) = delete;
     Timed& operator=(const Timed&) = delete;
 };
@@ -772,7 +777,7 @@ void mvr_frame_end(unsigned long long frame) {
         QueryPerformanceFrequency(&f);
         const unsigned long long tsc = __rdtsc();
         const double ms = 1000.0 * static_cast<double>(now.QuadPart - g.qpcAtLog) / static_cast<double>(f.QuadPart);
-        if (ms > 0 && tsc > g.tscAtLog && frames > 0) {
+        if (timeHooks && ms > 0 && tsc > g.tscAtLog && frames > 0) {
             const double perMs = static_cast<double>(tsc - g.tscAtLog) / ms;
             const auto per = [&](uint64_t ticks) { return static_cast<double>(ticks) / perMs / frames; };
             simqvfr::logf("lmu mvr: this code's CPU in the context hooks %.3f ms per frame, the calls passed on included "
@@ -790,12 +795,13 @@ void mvr_frame_end(unsigned long long frame) {
         const MvrPassStats& s = g.stats;
         simqvfr::logf("lmu mvr: %llu passes drew their focus view; shader binds %llu twin / %llu plain, %llu stereo "
                       "switches (%llu refused), viewports %llu and scissors %llu doubled; focus regions kept %llu, "
-                      "resolves replaced %llu",
+                      "resolves replaced %llu; twin lookups %llu, %llu not cached",
                       static_cast<unsigned long long>(s.passesWithFocus), static_cast<unsigned long long>(s.twinBinds),
                       static_cast<unsigned long long>(s.plainBinds), static_cast<unsigned long long>(s.toggles),
                       static_cast<unsigned long long>(s.stereoErrors), static_cast<unsigned long long>(s.viewportRewrites),
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
-                      static_cast<unsigned long long>(s.replacedResolves));
+                      static_cast<unsigned long long>(s.replacedResolves), static_cast<unsigned long long>(s.lookups),
+                      static_cast<unsigned long long>(s.lookupMisses));
         for (int m = 0; m < 2; ++m) {
             if (!g.gpuCounts[m][0])
                 continue;
@@ -823,6 +829,8 @@ void mvr_set_two_views(TwoViewsFn fn) { g.twoViews = fn ? fn : &nvapi_two_views;
 void mvr_frame_mode(int mode) { g.mode = mode ? 1 : 0; }
 
 void mvr_twins_changed() { ++g.twinEpoch; }
+
+void mvr_time_hooks(bool on) { timeHooks = on; }
 
 MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
                           int range) {

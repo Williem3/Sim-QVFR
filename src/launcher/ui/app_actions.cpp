@@ -335,6 +335,8 @@ std::vector<Ctl> focus_order() {
             order.push_back(kInner);
             if (game_has(&games::GameFeatures::objectDetail))
                 order.push_back(kObjectDetail);
+            if (game_has(&games::GameFeatures::multiView))
+                order.push_back(kMultiView);
             if (game_has(&games::GameFeatures::fovCrop))
                 order.push_back(kCropOn);
             if (app.s.crop && game_has(&games::GameFeatures::fovCrop))
