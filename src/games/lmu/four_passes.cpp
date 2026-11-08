@@ -1239,6 +1239,10 @@ void four_passes_frame_end() {
                 simqvfr::logf("lmu qvfr: frame %llu: the located FOV matches the lens mask's again: the mask is on", frames);
         }
         maskStaleThisFrame = 0;
+        // Every 300 frames while the scene runs: the sizes the passes rendered at (a performance comparison needs them).
+        if (passes >= 4 && frames % 300 == 0)
+            simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u targets", frames,
+                          passW[0], passH[0], passW[1], passH[1], passW[2], passH[2], passW[3], passH[3], viewW, viewH);
         if (frames % 1800 == 0)
             simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
                           "unlike the views); VR UI in the focus views %llu, not %llu; last frame %d passes, frame time "
