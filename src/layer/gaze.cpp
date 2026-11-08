@@ -118,6 +118,15 @@ void gaze_thread_run() {
         XrSpace space = XR_NULL_HANDLE;
         {
             std::lock_guard guard(gaze.mutex);
+            // Attached alone (the game syncs nothing): the set synced here, off the game's thread (under the mutex, as
+            // the settings menu's own sync).
+            if (gaze.attached && gaze.syncsOwn && gaze.appSyncs == 0 && session) {
+                const XrActiveActionSet active{gaze.set, XR_NULL_PATH};
+                XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+                sync.countActiveActionSets = 1;
+                sync.activeActionSets = &active;
+                next.SyncActions(session, &sync);
+            }
             if (gaze.attached && !gaze.space) {
                 XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};
                 spaceInfo.action = gaze.action;
@@ -194,9 +203,12 @@ void gaze_thread_stop() {
 // call), else looked up here. False while not tracked (the last tracked gaze is kept kGazeHoldNs).
 bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& direction) {
     bool threaded = experiment.gazeThread;
+    bool syncsOwn = false;
     if (threaded) {
         std::lock_guard guard(gaze.mutex);
-        threaded = gaze.attached && gaze.appSyncs > 0;
+        // The game syncs its actions (and ours with them), or nobody does and the thread syncs ours itself.
+        syncsOwn = gaze.syncsOwn && gaze.appSyncs == 0;
+        threaded = gaze.attached && (gaze.appSyncs > 0 || syncsOwn);
     }
     if (!threaded)
         return gaze_direction(session, base, time, direction);
@@ -206,7 +218,8 @@ bool gaze_now(XrSession session, XrSpace base, XrTime time, XrVector3f& directio
     gazeThread.time = time;
     if (!gazeThread.thread.joinable() && !gazeThread.stop) {
         gazeThread.thread = std::thread(gaze_thread_run);
-        logf("gaze: looked up on the layer's own thread at %d Hz (gaze_thread)", experiment.gazePollHz);
+        logf("gaze: looked up on the layer's own thread at %d Hz (gaze_thread)%s", experiment.gazePollHz,
+             syncsOwn ? ", which syncs the layer's action set itself (the game syncs none)" : "");
     }
     if (gazeThread.directionTime == 0 || time - gazeThread.directionTime > kGazeHoldNs)
         return false;

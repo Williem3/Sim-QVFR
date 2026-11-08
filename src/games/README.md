@@ -39,12 +39,20 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
 
 ## Adding a game
 
-1. Make `src/games/<id>/` with `game.h` (its `GameInfo`, in a namespace named after the game).
-2. Add it to `kGames` in `games.cpp`, and give it the identity-only adapter in `adapters.cpp` (`NoQvfr`).
+0. Triage the exe: `python tools/triage_exe.py <exe> --strings` prints its build hash, graphics and VR APIs (and
+   OpenXR extensions), anti-cheat, whether its code is encrypted on disk, its engine, upscalers, Steam's launch
+   options and the rendering features it names. Its output starts the game's recon notes (step 5).
+1. Make `src/games/<id>/` with `game.h` (its `GameInfo`, in a namespace named after the game). A game with
+   anti-cheat lists its processes in `GameInfo::antiCheat`: while one runs, the layer stays log only.
+2. Add it to `kGames` in `games.cpp`, and give it the identity-only adapter in `adapters.cpp`
+   (`IdentityAdapter`, `identity_adapter.h`; derive from it for the game's log-only probes, as `lmu/adapter.cpp` does).
    The layer now switches on in the game but **only logs**: it runs as `mode=off` whatever the ini says,
    turns the session and swapchain logging on, and adds nothing to the game or the headset (no Cheeky,
    menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
-   swapchain sizes and formats, frame submission. `acc/` started this way, and `xplane/` is at this stage now.
+   swapchain sizes and formats, frame submission. If the exe's code is encrypted on disk (SteamStub), this
+   run also writes the decrypted image to the log folder (`<exe>-<hash>-image.dump`, `probe/image_dump.h`)
+   for static analysis. `acc/` and `xplane/` started this way, and `lmu/` is at this stage now.
+   `python tools/session_report.py <session log>` sums up any test run's log.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
 4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`sim_qvfr_core`: the layer and the
    tests link it).

@@ -34,9 +34,11 @@ void live_resolution(const LiveSettings& l) {
     const Views4Layout& launch = experiment.views4Layout;
     const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
     const double cw = l.crop.kept_width(), ch = l.crop.kept_height();  // the outer views take the live crop
-    // One view size (X-Plane): periphery and focus each sized on its own inside the launch layers. Eye columns (ACC):
-    // each pair its own width within the launch column, the outer and focus rows sharing the height.
-    const bool columns = game->qvfr_eye_columns(), oneSize = columns && game->qvfr_one_view_size();
+    // One view size (X-Plane) or separate views (LMU): periphery and focus each sized on its own inside the launch
+    // layers. Eye columns (ACC): each pair its own width within the launch column, the outer and focus rows sharing
+    // the height.
+    const bool columns = game->qvfr_eye_columns(),
+               oneSize = (columns && game->qvfr_one_view_size()) || game->qvfr_separate_views();
     game->qvfr_set_live_layout(
         oneSize   ? views4_live_one_size(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)
         : columns ? views4_live_eye_columns(launch, wanted.outer, wanted.focus, wanted.focusHeight, cw, ch)

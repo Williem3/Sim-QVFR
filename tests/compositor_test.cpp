@@ -789,6 +789,35 @@ int main() {
         check(std::abs(coverX - 1.05) < 1e-6 && std::abs(coverY - 1.05) < 1e-6 && std::abs(nearX - 1.4 * 1.05) < 1e-5 &&
                   std::abs(nearY - 1.05) < 1e-6,
               "helmet layer: the quad covers both eyes' views, wider by the parallax when near");
+        // Kept far: each eye's copy of a near quad (8, 30 and 79 cm; a band 0.03 m above the middle) is kHelmetFarM away
+        // and shows that eye every point along the same line as the near quad would.
+        bool sameLines = true, allFar = true;
+        for (const double nearM : {0.08, 0.30, 0.79}) {
+            const float rise = 0.03f;
+            const double scale = helmet_far_scale(nearM);
+            for (const auto& eye : apart) {
+                float at[3];
+                helmet_far_centre(nearM, rise, eye, at);
+                allFar = allFar && std::abs(at[2] + kHelmetFarM) < 1e-4;
+                for (const double u : {-0.2, 0.0, 0.15})
+                    for (const double v : {-0.05, 0.04}) {
+                        const double p[3] = {u, rise + v, -nearM};                                   // on the near quad
+                        const double q[3] = {at[0] + u * scale, at[1] + v * scale, at[2]};           // its far copy
+                        const double a[3] = {p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]};
+                        const double b[3] = {q[0] - eye[0], q[1] - eye[1], q[2] - eye[2]};
+                        const double cross[3] = {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+                                                 a[0] * b[1] - a[1] * b[0]};
+                        const double na = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]),
+                                     nb = std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+                        sameLines = sameLines && std::sqrt(cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]) /
+                                                         (na * nb) < 1e-6;
+                    }
+            }
+        }
+        float farAt[3];
+        helmet_far_centre(kHelmetFarM, 0.5f, apart[0], farAt);
+        check(sameLines && allFar && helmet_far_scale(kHelmetFarM) == 1 && farAt[0] == 0 && farAt[1] == 0.5f,
+              "helmet layer: kept far, each eye sees its copy along the same lines as a near quad (far: as it was)");
         // The crop hint: an image 110 degrees wide and as high, its top piece opaque down to a quarter
         // of its height and its bottom piece up from three quarters, over an eye of tangents +-1.
         HelmetSettings pieces;

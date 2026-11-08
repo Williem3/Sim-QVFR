@@ -163,9 +163,11 @@ void load_experiment() {
             logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
         experiment.views4Compose = false;
     }
+    // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =
         experiment.views4 &&
-        GetPrivateProfileIntW(L"experiment", L"views4_mask", experiment.composing() ? 0 : 1, ini.c_str()) == 0;
+        GetPrivateProfileIntW(L"experiment", L"views4_mask",
+                              experiment.composing() && !game->qvfr_separate_views() ? 0 : 1, ini.c_str()) == 0;
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
@@ -249,6 +251,16 @@ void load_experiment() {
     helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),
                                             launchCrop.kept_height());
+    // A game whose views are separate images (LMU) draws its menus into the whole of each: views4_menu_scale makes the
+    // views at least that share of the native eye (100: menus as sharp as without QVFR), the scene rendering inside them
+    // at the periphery and focus sizes (live resolution, from the first frame). Default 0 (the views' own size): in LMU
+    // native-size targets cost ~3 ms of GPU per frame even with the scene in a corner of them (2026-11-08 runs).
+    if (experiment.views4 && game->qvfr_separate_views()) {
+        const UINT menuPercent = std::min(GetPrivateProfileIntW(L"experiment", L"views4_menu_scale", 0, ini.c_str()), 100u);
+        experiment.views4Layout.layerFloor = menuPercent / 100.0;
+        logf("experiment: views4_menu_scale=%u: the views are made at least %u%% of the native eye for the game's menus%s",
+             menuPercent, menuPercent, menuPercent ? "; the scene renders inside them at the views' sizes" : " (off)");
+    }
     // Eye columns (ACC): each instanced pair its own width, unless acc_shared_width=1 (every view the periphery's width,
     // the focus views' horizontal density following it: the layout before 2026-11-08).
     experiment.views4Layout.sharedColumnWidth =

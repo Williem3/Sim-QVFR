@@ -11,6 +11,7 @@
 #include "game.h"
 
 struct ID3D11Device;
+struct ID3D11Texture2D;
 
 namespace simqvfr {
 
@@ -66,6 +67,22 @@ public:
     // The game draws all four views at one size (instanced layers in one viewport): each eye column is one view wide
     // and two high, a view being the larger of the outer and focus sizes asked for (the layer offers that).
     virtual bool qvfr_one_view_size() const { return false; }
+    // The game renders every view as an image of its own and submits each eye's in a swapchain of its own (LMU: the eye
+    // loop runs four times through targets of one size): the layer offers that one view size as each eye's (the larger of
+    // the outer and focus sizes asked for) and composes from the adapter's atlas (qvfr_views_atlas).
+    virtual bool qvfr_separate_views() const { return false; }
+    // With qvfr_separate_views: the four views of the frame being submitted in one texture, with the game's two submitted
+    // eye images (`eyes`, as the game left them after its eye loop) copied into it, and each view's region in it
+    // (u0, v0, du, dv; view e the outer view of eye e, e + 2 its focus view). Called in xrEndFrame on the game's render
+    // thread (its immediate context). Null: nothing to compose this frame (the eyes are submitted as they are).
+    virtual ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+        (void)eyes;
+        (void)uv;
+        return nullptr;
+    }
+    // False: the game uses no OpenXR input (no xrAttachSessionActionSets, LMU), so the layer attaches its own gaze and
+    // menu actions alone at xrBeginSession; otherwise they ride along with the game's (one attach per session).
+    virtual bool attaches_action_sets() const { return true; }
     // [experiment] hang_watch_s when the ini doesn't set it (probe/hang_watch.h): the longest the game goes
     // without a frame on its own, when loading, plus a margin.
     virtual unsigned hang_watch_s() const { return 30; }
@@ -95,8 +112,11 @@ public:
     virtual bool qvfr_take_frame(Views4Frame& frame) = 0;
     // The latest record, without taking it.
     virtual bool qvfr_latest_frame(Views4Frame& frame) = 0;
-    // The views the game just located (diagnostics).
+    // The views the game just located (diagnostics; LMU: the FOV its lens mask is built with).
     virtual void qvfr_note_views(const XrView* views, uint32_t count) = 0;
+    // The game fetched view `viewIndex`'s hidden-area mesh (xrGetVisibilityMaskKHR with room for it): a game that turns
+    // it into screen space with the FOV it just located (LMU) has a mask for that FOV only.
+    virtual void visibility_mask_taken(uint32_t viewIndex) { (void)viewIndex; }
     // Every xrEndFrame while QVFR runs (its counters into the log).
     virtual void qvfr_frame_end() = 0;
 

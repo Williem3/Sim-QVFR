@@ -96,6 +96,19 @@ inline void helmet_cover(const float (&rotation)[2][9], const float (&offset)[2]
     y = std::min(kHelmetCoverMax, y * 1.05);
 }
 
+// The helmet's quad is always submitted kHelmetFarM away: a runtime that composites quads by their distance
+// (SteamVR) drew a nearer helmet over the settings menu (0.8 m) and the overlay. A near depth `distance` is kept by
+// one copy per eye, `scale` (helmet_far_scale) times as large and centred at `at` (the images' frame, before the
+// tilt): the eye at `offset` (from the eyes' middle) then sees each of its points along the same line as the point on
+// a quad `distance` away (centred at (0, rise, -distance)): P' - o = scale (P - o) for P' = scale P + o (1 - scale).
+inline double helmet_far_scale(double distance) { return std::max(1.0, kHelmetFarM / distance); }
+inline void helmet_far_centre(double distance, float rise, const float (&offset)[3], float (&at)[3]) {
+    const double scale = helmet_far_scale(distance), farDistance = scale * distance;  // (`far` is a Windows macro)
+    at[0] = static_cast<float>(offset[0] * (1 - scale));
+    at[1] = static_cast<float>(rise * scale + offset[1] * (1 - scale));
+    at[2] = static_cast<float>(-farDistance + offset[2] * (1 - scale));
+}
+
 inline HelmetSettings read_helmet_settings(const wchar_t* ini) {
     const auto number = [ini](const wchar_t* key, int fallback) {
         wchar_t text[16] = {};  // as a string: GetPrivateProfileInt reads negative values as 0

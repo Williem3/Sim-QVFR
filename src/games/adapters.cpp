@@ -2,46 +2,45 @@
 
 #include <windows.h>
 
+#include <string>
+
+#include "../log.h"
+#include "../probe/image_dump.h"
+#include "identity_adapter.h"
+
 #include "ace/adapter.h"
 #include "ace/game.h"
 #include "acc/adapter.h"
 #include "acc/game.h"
+#include "lmu/adapter.h"
+#include "lmu/game.h"
 #include "xplane/adapter.h"
 #include "xplane/game.h"
 
 namespace simqvfr::games {
-namespace {
 
-// A game without QVFR: any other process (`game` null), or a game known by its identity alone while it is
-// reverse engineered (the layer then only logs). QVFR never starts and nothing else runs.
-class NoQvfr final : public GameAdapter {
-public:
-    explicit NoQvfr(const GameInfo* game, unsigned hangWatchSeconds = 30)
-        : game_(game), hangWatchSeconds_(hangWatchSeconds) {}
-    const GameInfo* info() const override { return game_; }
-    bool has_qvfr() const override { return false; }
-    unsigned hang_watch_s() const override { return hangWatchSeconds_; }
-    bool qvfr_start(const QvfrStart&) override { return false; }
-    void qvfr_set_gaze(const float (&)[2][2], const bool (&)[2], bool) override {}
-    void qvfr_set_live_layout(const Views4Layout&) override {}
-    void qvfr_set_live(double, double, double, bool) override {}
-    bool qvfr_dlss_held() override { return false; }
-    void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
-        render[0] = render[1] = output[0] = output[1] = 0;
-    }
-    bool qvfr_take_frame(Views4Frame&) override { return false; }
-    bool qvfr_latest_frame(Views4Frame&) override { return false; }
-    void qvfr_note_views(const XrView*, uint32_t) override {}
-    void qvfr_frame_end() override {}
-
-private:
-    const GameInfo* game_;
-    unsigned hangWatchSeconds_;
-};
-
-}  // namespace
+void IdentityAdapter::instance_created(const wchar_t* ini, const wchar_t*) {
+    if (analysis() && GetPrivateProfileIntW(L"experiment", L"image_dump", 1, ini) != 0)
+        image_dump_if_packed();
+}
 
 GameAdapter& adapter_for(const GameInfo* game) {
+    static IdentityAdapter none(nullptr);
+    if (!game)  // the layer's globals, before it knows the game
+        return none;
+    // A launch the game's anti-cheat protects gets nothing of ours, whatever the game's adapter: the layer only logs
+    // (GameInfo::antiCheat). One game per process, so this is decided once.
+    static std::wstring antiCheat;
+    static const bool guarded = anticheat_running(*game, antiCheat);
+    if (guarded) {
+        static IdentityAdapter off(game, 30, false);
+        static const bool logged = (logf("game: %ls's anti-cheat is running (%ls): Sim-QVFR stays off in this launch "
+                                         "and only logs. Start the game from the Sim-QVFR launcher, offline.",
+                                         game->name, antiCheat.c_str()),
+                                    true);
+        (void)logged;
+        return off;
+    }
     // A new game adds its adapter here (src/games/README.md).
     if (game == &::ace::kGame)
         return ::ace::adapter();
@@ -49,7 +48,8 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::acc::adapter();
     if (game == &::xplane::kGame)  // QVFR through the early load (docs/recon-xplane.md)
         return ::xplane::adapter();
-    static NoQvfr none(nullptr);
+    if (game == &::lmu::kGame)  // identity only, with log-only probes (docs/recon-lmu.md)
+        return ::lmu::adapter();
     return none;
 }
 

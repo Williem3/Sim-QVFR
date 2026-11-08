@@ -85,6 +85,23 @@ int main() {
         const simqvfr::Views4Layout fixedLive = simqvfr::views4_live_one_size(fixed, 0.5, 0.9, 0.9);
         check(near(2 * fixedLive.width[0], 0.5 / 0.9) && near(2 * fixedLive.width[2], 1.0),
               "one size, the periphery smaller: its share of the focus-sized layers");
+        // A layer floor (LMU's menus at native): periphery 0.3, focus 0.3 x 0.3 inside native-size layers.
+        simqvfr::Views4Layout floored = simqvfr::views4_layout(0.3, 0.3, 0.3);
+        floored.layerFloor = 1.0;
+        check(near(floored.layer_width(), 1.0) && near(floored.layer_height(), 1.0) && near(fixed.layer_width(), 0.9),
+              "a layer floor sizes the layers (none: the larger view)");
+        const simqvfr::Views4Layout flooredLive = simqvfr::views4_live_one_size(floored, 0.3, 0.3, 0.3);
+        check(near(2 * flooredLive.width[0], 0.3) && near(2 * flooredLive.height[1], 0.3) &&
+                  near(2 * flooredLive.width[2], 0.3) && near(2 * flooredLive.height[3], 0.3),
+              "with the floor the launch sizes are their share of the layer");
+        const simqvfr::Views4Fit up = simqvfr::views4_fit_one_size(floored, 0.8, 0.6, 0.6);
+        check(!up.outerCapped && near(up.outer, 0.8) && !up.focusCapped && near(up.focus, 0.6),
+              "with the floor the views can grow live up to the layer");
+        simqvfr::Views4Layout croppedFloor = simqvfr::views4_layout(0.3, 0.3, 0.3, 0.8, 0.6);
+        croppedFloor.layerFloor = 1.0;
+        const simqvfr::Views4Layout croppedLive = simqvfr::views4_live_one_size(croppedFloor, 0.3, 0.3, 0.3);
+        check(near(2 * croppedLive.width[0], 0.24) && near(2 * croppedLive.height[0], 0.18),
+              "with the floor and a crop the outer views keep their density over the cropped FOV");
     }
     double flat[16] = {};
     double out[16];

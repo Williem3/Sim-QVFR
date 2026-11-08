@@ -49,8 +49,19 @@ bool write_png(const std::wstring& path, const std::vector<uint8_t>& bgra, UINT 
     return ok;
 }
 
-// The image, read back through a staging copy: 8-bit BGRA or RGBA formats, alpha forced opaque.
 bool save(ID3D11Texture2D* texture, const std::wstring& path) {
+    std::vector<uint8_t> pixels;
+    unsigned width = 0, height = 0;
+    return d3d11_read_bgra8(texture, pixels, width, height) && write_png(path, pixels, width, height);
+}
+
+}  // namespace
+
+bool write_png_bgra(const std::wstring& path, const std::vector<uint8_t>& bgra, unsigned width, unsigned height) {
+    return write_png(path, bgra, width, height);
+}
+
+bool d3d11_read_bgra8(ID3D11Texture2D* texture, std::vector<uint8_t>& pixels, unsigned& width, unsigned& height) {
     D3D11_TEXTURE2D_DESC desc;
     texture->GetDesc(&desc);
     const DXGI_FORMAT f = desc.Format;
@@ -70,16 +81,21 @@ bool save(ID3D11Texture2D* texture, const std::wstring& path) {
     staging.BindFlags = 0;
     staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     staging.MiscFlags = 0;
+    ID3D11Device* dev = nullptr;
+    texture->GetDevice(&dev);
     ID3D11Texture2D* copy = nullptr;
-    if (desc.SampleDesc.Count != 1 || FAILED(device->CreateTexture2D(&staging, nullptr, &copy)))
+    if (!dev || desc.SampleDesc.Count != 1 || FAILED(dev->CreateTexture2D(&staging, nullptr, &copy))) {
+        if (dev)
+            dev->Release();
         return false;
+    }
     ID3D11DeviceContext* context = nullptr;
-    device->GetImmediateContext(&context);
+    dev->GetImmediateContext(&context);
     context->CopySubresourceRegion(copy, 0, 0, 0, 0, texture, 0, nullptr);
     D3D11_MAPPED_SUBRESOURCE mapped{};
     bool ok = false;
     if (SUCCEEDED(context->Map(copy, 0, D3D11_MAP_READ, 0, &mapped))) {
-        std::vector<uint8_t> pixels(static_cast<size_t>(desc.Width) * desc.Height * 4);
+        pixels.assign(static_cast<size_t>(desc.Width) * desc.Height * 4, 0);
         for (UINT y = 0; y < desc.Height; ++y) {
             const auto* src = static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch;
             uint8_t* dst = pixels.data() + static_cast<size_t>(y) * desc.Width * 4;
@@ -91,14 +107,15 @@ bool save(ID3D11Texture2D* texture, const std::wstring& path) {
             }
         }
         context->Unmap(copy, 0);
-        ok = write_png(path, pixels, desc.Width, desc.Height);
+        width = desc.Width;
+        height = desc.Height;
+        ok = true;
     }
     context->Release();
     copy->Release();
+    dev->Release();
     return ok;
 }
-
-}  // namespace
 
 void d3d11_capture_start(ID3D11Device* d, uint64_t frame) {
     std::lock_guard guard(mutex);
