@@ -58,7 +58,7 @@ void report_load(double frameMs);
 void report_cpu_times();
 bool is_game_process();
 
-// xr_layer.cpp
+// session.cpp
 XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system,
                                                          XrViewConfigurationType type, uint32_t capacity,
                                                          uint32_t* countOutput, XrViewConfigurationView* views);
@@ -72,7 +72,12 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
                                                   XrSwapchainImageBaseHeader* images);
 XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo* info,
                                                uint32_t* index);
+
+// xr_layer.cpp
+void helmet_layer_release();
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info);
+bool quad_capture_due();
+void views4_capture(ID3D12Resource* views, ID3D12Resource* output);
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask);
 XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
@@ -80,11 +85,17 @@ XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* 
 uint64_t ini_write_later(std::function<void()> write, IniWrite kind = IniWrite::Once);
 void ini_worker_sync();
 void live_reload();
+void pad_watch_stop();
 void hotkeys_changed(const Hotkeys& h);
+int64_t qpc_ms(int64_t ms);
 void menu_values_changed(const IniSnapshot& s);
 void menu_press(MenuKey key, int64_t now);
+void menu_shutdown();
+void osd_waited(XrDuration period);
 bool frame_generation_on();
 bool osd_shown(OsdSummary& out);
+void osd_wait_returned(double waitMs);
+void osd_shutdown();
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,
