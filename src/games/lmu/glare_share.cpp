@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -248,8 +247,9 @@ std::int64_t glare_composite(void* renderGlare) {
     return result;
 }
 
-// One read-back glare as a DDS file and a log line: where the view is in it, and the command that checks it.
-void save_shot(const Shot& s, int pass, const std::wstring& path, const std::wstring& viewPath, const char* what) {
+// One read-back glare as a DDS file (tools/dds_read.py) and a log line: where the view is in it. The texels beyond
+// the view hold another pass's glare (YEBIS reuses the texture), so only the region is this pass's.
+void save_shot(const Shot& s, int pass, const std::wstring& path, const char* what) {
     static const char* const names[4] = {"eye 0", "eye 1", "focus view 0", "focus view 1"};
     if (!s.taken) {
         simqvfr::logf("lmu qvfr: glare capture: pass %d's glare (%s) wasn't read back", pass, what);
@@ -259,14 +259,10 @@ void save_shot(const Shot& s, int pass, const std::wstring& path, const std::wst
         simqvfr::logf("lmu qvfr: glare capture: %ls not written", path.c_str());
         return;
     }
-    char check[2048] = "";
-    if (!viewPath.empty())
-        std::snprintf(check, sizeof(check), ": python tools/glare_place.py --image \"%ls\" --glare \"%ls\" --region %d %d",
-                      viewPath.c_str(), path.c_str(), s.region.width, s.region.height);
     simqvfr::logf("lmu qvfr: glare capture: pass %d (%s), %s: %ls, %ux%u format %d, the view in its top-left %dx%d (the "
-                  "pass rendered %ux%u of %ux%u, YEBIS post-processed %.4f)%s",
+                  "pass rendered %ux%u of %ux%u, YEBIS post-processed %.4f)",
                   pass, names[pass], what, path.c_str(), s.width, s.height, static_cast<int>(s.format), s.region.width,
-                  s.region.height, s.pass[0], s.pass[1], s.view[0], s.view[1], s.scale, check);
+                  s.region.height, s.pass[0], s.pass[1], s.view[0], s.view[1], s.scale);
 }
 
 }  // namespace
@@ -344,7 +340,7 @@ void glare_share_capture_frame() {
         captureNext = true;
 }
 
-void glare_share_save_capture(const std::wstring& dir, const std::wstring& stem, const std::wstring (&viewPaths)[4]) {
+void glare_share_save_capture(const std::wstring& dir, const std::wstring& stem) {
     if (captureFor == 0 || captureFor != frameId)
         return;  // this frame read none
     captureFor = 0;
@@ -354,14 +350,13 @@ void glare_share_save_capture(const std::wstring& dir, const std::wstring& stem,
                            : !s.shareOn ? "its own (share off)"
                            : s.shared ? "after the share (its eye's)"
                                       : "its own (share on but not replaced)";
-        save_shot(s, p, (std::filesystem::path(dir) / (stem + L"-glare" + std::to_wstring(p) + L".dds")).wstring(),
-                  viewPaths[p], what);
+        save_shot(s, p, (std::filesystem::path(dir) / (stem + L"-glare" + std::to_wstring(p) + L".dds")).wstring(), what);
     }
     for (int e = 0; e < 2; ++e)
         if (ownShots[e].taken)
             save_shot(ownShots[e], 2 + e,
                       (std::filesystem::path(dir) / (stem + L"-glare" + std::to_wstring(2 + e) + L"-own.dds")).wstring(),
-                      std::wstring(), "its own, before the share");
+                      "its own, before the share");
 }
 
 }  // namespace lmu

@@ -31,9 +31,8 @@ void glare_share_frame_end(unsigned long long frame);
 // The frame capture hotkey, before pass 0 (render thread): this frame's glare results are read back pass by pass, as
 // YEBIS's tonemap reads them (a focus pass's after the share; with the share on, its own before it too), share on or off.
 void glare_share_capture_frame();
-// After that frame (its views saved as `viewPaths`, eye 0, eye 1, focus 0, focus 1): writes them as
-// <dir>\<stem>-glare<pass>.dds (and -glare<pass>-own.dds), and logs each with its region and the
-// tools/glare_place.py line that checks where the view's glare is. Nothing if this frame read none.
-void glare_share_save_capture(const std::wstring& dir, const std::wstring& stem, const std::wstring (&viewPaths)[4]);
+// After that frame (its views saved): writes them as <dir>\<stem>-glare<pass>.dds (and -glare<pass>-own.dds; read
+// with tools/dds_read.py) and logs each with the region that holds its view. Nothing if this frame read none.
+void glare_share_save_capture(const std::wstring& dir, const std::wstring& stem);
 
 }  // namespace lmu

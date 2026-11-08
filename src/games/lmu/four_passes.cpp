@@ -1751,7 +1751,7 @@ void capture_views() {
     }
     wchar_t stem[64];
     swprintf_s(stem, L"lmu-qvfr-frame%llu", frames);
-    glare_share_save_capture(dir, stem, paths);
+    glare_share_save_capture(dir, stem);
 }
 
 }  // namespace
