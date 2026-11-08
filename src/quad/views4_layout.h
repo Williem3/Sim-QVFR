@@ -44,8 +44,26 @@ struct Views4Layout {
     // heights: the larger of the outer and focus sizes, and at least `layerFloor` (LMU: what its menus render at, which
     // fill the layer; the scene passes then render inside it at their live sizes).
     double layerFloor = 0;
-    double layer_width() const { return std::max({outer_width(), focus, layerFloor}); }
-    double layer_height() const { return std::max({outer_height(), focusHeight, layerFloor}); }
+    // Room for a second view in the same image (LMU's multi-view rendering, multi_view / [experiment] lmu_mvr): the focus
+    // view drawn beside its eye. secondViewBeside: the layer twice as wide, and at least twice the outer view's height.
+    // The game renders an eye at one scale of the whole image on both axes (its post-processing follows that scale), so
+    // the eye's region keeps the image's shape: at most half its width and half its height, the focus view beside it
+    // in the other half of the width, as tall as the image. A vertically cropped eye (as wide as about twice its height)
+    // fills its half with the image as high as the focus view; one without a crop makes the image twice as high (as
+    // large as twice each way). Otherwise: twice as large each way.
+    bool secondViewRoom = false, secondViewBeside = false;
+    double layer_width() const { return (secondViewRoom ? 2 : 1) * std::max({outer_width(), focus, layerFloor}); }
+    double layer_height() const {
+        if (secondViewRoom && secondViewBeside)
+            return std::max({2 * outer_height(), focusHeight, layerFloor});
+        return (secondViewRoom ? 2 : 1) * std::max({outer_height(), focusHeight, layerFloor});
+    }
+    // The most of the layer one view may take: with room for a second view, half its width (and height, unless beside).
+    double view_room_width() const { return layer_width() / (secondViewRoom ? 2 : 1); }
+    double view_room_height() const { return layer_height() / (secondViewRoom && !secondViewBeside ? 2 : 1); }
+    // The outer views' own: beside, half the height too (their one scale at most half the image's, so the focus view
+    // still fits beside them: a live crop that makes them taller lowers their density instead).
+    double outer_room_height() const { return view_room_height() / (secondViewRoom && secondViewBeside ? 2 : 1); }
     // In eye columns, view `view`'s width as a share of its column (1: the whole column).
     double column_share(int view) const {
         const double column = column_eye_width();
@@ -184,9 +202,9 @@ inline Views4Fit views4_fit_one_size(const Views4Layout& launch, double outer, d
                                      double cropWidth = -1, double cropHeight = -1) {
     constexpr double kSlack = 1e-4;
     const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
-    const double layerW = launch.layer_width(), layerH = launch.layer_height();
+    const double layerW = launch.view_room_width(), layerH = launch.view_room_height();  // one view's most
     Views4Fit f;
-    f.outer = std::clamp(outer, kMinLive * launch.outer, std::min(layerW / cw, layerH / ch));
+    f.outer = std::clamp(outer, kMinLive * launch.outer, std::min(layerW / cw, launch.outer_room_height() / ch));
     f.outerCapped = f.outer < outer - kSlack;
     const double fit = std::min({1.0, focus > 0 ? layerW / focus : 1.0, focusHeight > 0 ? layerH / focusHeight : 1.0});
     f.focus = std::clamp(focus * fit, kMinLive * launch.focus, layerW);

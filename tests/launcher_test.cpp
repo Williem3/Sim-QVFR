@@ -250,14 +250,16 @@ void launch_status_checks() {
         mine.menuYaw = 12;
         mine.cheeky.load = true;
         mine.crop = true;
+        mine.multiView = true;
         mine.hotkeys[0].key = KeyCombo{'K', true, false, false};
         mine.updateCheck = true;
         mine.hiddenGames = L"acc";
         mine.gameColors[L"ace"] = 0x123456;
         const Settings back = restored_defaults(mine);
         const Settings d;
-        check(back.outer == d.outer && back.menuYaw == d.menuYaw && back.cheeky.load == d.cheeky.load && back.crop == d.crop,
-              "restore defaults: the game's settings go back to the defaults");
+        check(back.outer == d.outer && back.menuYaw == d.menuYaw && back.cheeky.load == d.cheeky.load && back.crop == d.crop &&
+                  !back.multiView,
+              "restore defaults: the game's settings go back to the defaults (multi-view rendering off)");
         check(back.hotkeys == mine.hotkeys && back.updateCheck && back.hiddenGames == L"acc" && back.gameColors.size() == 1 &&
                   back.gameColors.at(L"ace") == 0x123456,
               "restore defaults: the hotkeys, the update check, the hidden tabs and the colours stay");
@@ -1106,6 +1108,15 @@ int main() {
             detail.objectDetail = 250;  // above kObjectDetailRange: clamped
             save_settings(ini, detail);
             check(load_settings(ini).objectDetail == kObjectDetailRange.max, "settings: object detail is clamped to 0-100%");
+            check(!detail.multiView, "settings: multi-view rendering defaults to off");
+            detail.multiView = true;
+            save_settings(ini, detail);
+            check(load_settings(ini).multiView && ini_int(ini, L"experiment", L"multi_view") == 1,
+                  "settings: multi-view rendering round-trips ([experiment] multi_view=1)");
+            check(per_game_key(L"experiment", L"multi_view"), "settings: multi_view is a per-game key");
+            detail.multiView = false;
+            save_settings(ini, detail);
+            check(ini_int(ini, L"experiment", L"multi_view") == 0, "settings: and off again (multi_view=0)");
         }
         LaunchSizes launched;
         launched.known = true;

@@ -9,6 +9,7 @@
 #include "../launch_plan.h"
 #include "../game_tabs.h"
 #include "../settings.h"
+#include "../../engine/nvapi_gpus.h"
 #include "../../games/game.h"
 #include "window_state.h"
 #include "controls.h"
@@ -218,6 +219,13 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
+    case kMultiView:  // off can always be chosen; on only on a GPU that has it
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView) &&
+            (app.s.multiView || nvapi::two_views_gpu())) {
+            app.s.multiView = !app.s.multiView;
+            changed();
+        }
+        return;
     case kHelmetOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::helmet)) {
             app.s.helmet.on = !app.s.helmet.on;
@@ -318,6 +326,7 @@ bool space_control(Ctl id) {
     case kOsdOn:
     case kHotkeyFooter:
     case kUpdateCheck:
+    case kMultiView:
     case kCropOn:
     case kHelmetOn:
     case kVisor:

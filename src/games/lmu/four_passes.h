@@ -33,6 +33,24 @@ struct FourPassesRun {
     // is the size offered over it).
     bool menuNative = true;
     double layerWidth = 1, layerHeight = 1;
+    // QVFR gate C of multi-view rendering ([experiment] lmu_mvr=1, mvr_pass.h): passes 0-1 draw their focus views too,
+    // beside the eye; passes 2-3 as before; compared at the gate samples (first, every, count).
+    bool mvr = false;
+    // Gate D (lmu_mvr=2): passes 2-3 skip the scene (its draws, sorting and culling) when their eye's pass drew the focus
+    // view, their post-processing run on it; at the gate samples the focus view is compared with its eye's crop.
+    bool mvrSkip = false;
+    // The focus views beside their eyes in images twice as wide only (Views4Layout::secondViewBeside): the eyes render at
+    // one scale (the larger of their shares: YEBIS follows the render scale on both axes), the focus views at their own
+    // width and height (four_passes_set_live_axes), drawn by their eye's pass, post-processed at the scale that covers them.
+    bool perAxis = false;
+    // An A/B run of MVR ([experiment] lmu_mvr_ab=N): N frames with it, then N with the four passes alone (passes 2-3
+    // render their scene), in turn; each side's CPU and GPU per pass logged apart. 0: MVR every frame.
+    int mvrAb = 0;
+    // The gates' samples (lmu_mvr: first, every, count): the focus views compared, their images saved. Off in a player's
+    // run (multi_view): no read-backs.
+    bool mvrCompare = false;
+    // The CPU in the context hooks timed and logged (lmu_mvr_timing, any A/B run).
+    bool mvrTiming = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
@@ -61,6 +79,8 @@ void four_passes_view_size(int (&size)[2]);
 // next frame. LMU's render scale is set per pass, so each pass renders into the top-left of its target; the copies
 // and the atlas regions follow the sizes rendered. Any thread.
 void four_passes_set_live_scales(double outer, double focus);
+// The same per axis (FourPassesRun::perAxis): the outer and focus views' shares of the target's width and height.
+void four_passes_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight);
 // Every xrLocateViews: the FOV the game just located (with the layer's FOV crop). The game builds its lens mask in
 // screen space with the FOV located when it fetches the mesh (VR_Init: four_passes_mask_taken), so while the located
 // FOV differs from that one (a live crop change) the mask draw is skipped: it would black out what the lens shows.

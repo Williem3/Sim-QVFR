@@ -6,6 +6,7 @@
 #include <string>
 
 #include "games/game.h"
+#include "games/multi_view.h"
 #include "ini_put.h"
 #include "input/hotkeys.h"
 #include "log.h"
@@ -260,6 +261,22 @@ void load_experiment() {
         experiment.views4Layout.layerFloor = menuPercent / 100.0;
         logf("experiment: views4_menu_scale=%u: the views are made at least %u%% of the native eye for the game's menus%s",
              menuPercent, menuPercent, menuPercent ? "; the scene renders inside them at the views' sizes" : " (off)");
+        // Room for each focus view beside its eye: NVIDIA multi-view rendering (the launcher's multi_view=1, on an RTX
+        // 20 series or newer: games/multi_view.h), or lmu_mvr (LMU's gates of it, 1 or 2, whatever the GPU).
+        const UINT gate = GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini.c_str());
+        std::string why;
+        const bool multiView = gate == 0 && games::multi_view_on(games::current_game(), ini.c_str(), &why);
+        if (gate == 0 && GetPrivateProfileIntW(L"experiment", L"multi_view", 0, ini.c_str()) != 0)
+            logf("multi_view: %s%s", multiView ? "on, " : "", multiView ? (why + ": each eye's pass draws its focus view too").c_str()
+                                                                       : (why + ": the four passes as without it").c_str());
+        experiment.views4Layout.secondViewRoom = gate != 0 || multiView;
+        // lmu_mvr_beside (default 1): twice as wide only, the focus views at their own width and height; 0: twice each way.
+        experiment.views4Layout.secondViewBeside =
+            experiment.views4Layout.secondViewRoom &&
+            GetPrivateProfileIntW(L"experiment", L"lmu_mvr_beside", 1, ini.c_str()) != 0;
+        if (experiment.views4Layout.secondViewRoom)
+            logf("%s: the views' images twice as %s, room for a focus view beside its eye", gate ? "experiment: lmu_mvr" : "multi_view",
+                 experiment.views4Layout.secondViewBeside ? "wide" : "large each way");
     }
     // Eye columns (ACC): each instanced pair its own width, unless acc_shared_width=1 (every view the periphery's width,
     // the focus views' horizontal density following it: the layout before 2026-11-08).

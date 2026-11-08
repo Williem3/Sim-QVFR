@@ -31,6 +31,9 @@ struct Settings {
     int outer = 50;           // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
     int inner = 100;          // focus_density (QVFR): focus pixel density, percent of recommended
     int objectDetail = 100;   // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
+    // [experiment] multi_view (QVFR, a game with GameFeatures::multiView: LMU): NVIDIA multi-view rendering, each eye's
+    // pass drawing its focus view too (games/multi_view.h). Next launch; the layer checks the GPU itself.
+    bool multiView = false;
     int width = 39;           // focus_percent: foveated width, percent of the outer view
     int height = 39;          // focus_height_percent: foveated height
     bool outline = false;     // [quad] debug_border

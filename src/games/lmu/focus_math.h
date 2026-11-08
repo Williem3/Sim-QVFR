@@ -98,6 +98,14 @@ inline int clip_layout(const float (&m)[16], double tolerance = 0.02) {
     return columns == rows ? 0 : columns ? 1 : 2;
 }
 
+// LMU's size for a scale: ceil(recommended x scale), as cubeDX11_GetRenderSize rounds (a float product).
+inline unsigned scaled_size(unsigned recommended, float scale) {
+    const float x = static_cast<float>(recommended) * scale;
+    const auto i = static_cast<unsigned>(x);
+    return static_cast<float>(i) == x ? i : i + 1;
+}
+
+
 // `m` (clip outputs as clip_layout says: 1 columns, 2 rows) remapped to the focus view.
 inline void remap_clip(float (&m)[16], const ClipRemap& r, int layout) {
     for (int i = 0; i < 4; ++i) {

@@ -183,6 +183,7 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
     if (qvfr && a.mode == RenderMode::Qvfr)  // Two-loop's follows from the outer resolution and the foveated size
         values(L"Inner", percent(a.inner), percent(b.inner));
     values(L"Object detail", percent(a.objectDetail), percent(b.objectDetail));
+    on_off(L"Multi-view rendering", a.multiView, b.multiView);
     on_off(L"Crop", a.crop, b.crop);
     if (a.crop && b.crop) {
         values(L"Crop top", percent(a.cropTop), percent(b.cropTop));

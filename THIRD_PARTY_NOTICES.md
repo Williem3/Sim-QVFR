@@ -2,6 +2,7 @@
 
 - MinHook 1.3.4: BSD 2-Clause, with the bundled HDE notice. See `third_party/minhook/LICENSE.txt`.
 - Khronos OpenXR SDK headers (release-1.1.49): Apache-2.0 OR MIT. See `third_party/openxr/LICENSES/`.
+- NVIDIA NVAPI headers (`70d337d`): MIT. See `third_party/nvapi/License.txt` and each header's SPDX notice.
 
 Versions and upstream commits are in `third_party/README.md`. The repository contains no Assetto
 Corsa EVO executable, assets or memory dumps. Original project code is licensed under PolyForm
