@@ -63,7 +63,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/adapters.cpp src/engine/code_patch.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -130,6 +130,21 @@ add_executable(view_resample_test tests/view_resample_test.cpp)
 target_include_directories(view_resample_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(view_resample_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(view_resample_test PRIVATE sim_qvfr_core d3d11)
+
+# Offline check of the second-view vertex shader edit on a WARP device (tests/dxbc_patch_test.cpp).
+add_executable(dxbc_patch_test tests/dxbc_patch_test.cpp)
+target_include_directories(dxbc_patch_test PRIVATE src)
+target_compile_definitions(dxbc_patch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(dxbc_patch_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(dxbc_patch_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
+# Hardware check of NVIDIA single-pass stereo with converted shaders (tests/nvapi_stereo_check.cpp): not in the suite
+# (no _test suffix; needs an NVIDIA GPU). Optional argument: a folder of a game's vertex shaders, kept local.
+add_executable(nvapi_stereo_check tests/nvapi_stereo_check.cpp)
+target_include_directories(nvapi_stereo_check PRIVATE src)
+target_compile_definitions(nvapi_stereo_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(nvapi_stereo_check PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(nvapi_stereo_check PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of the D3D11 compositor on a WARP device (tests/d3d11_compositor_test.cpp).
 add_executable(d3d11_compositor_test tests/d3d11_compositor_test.cpp)
