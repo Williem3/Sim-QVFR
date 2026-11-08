@@ -19,7 +19,7 @@ public:
     const simqvfr::games::GameInfo* info() const override { return &kGame; }
     bool qvfr_composable() const override { return false; }    // not by the D3D12 compositor:
     bool qvfr_compose_d3d11() const override { return true; }  // ACC is D3D11
-    bool qvfr_eye_columns() const override { return true; }  // instanced stereo; OpenComposite copies each half
+    bool qvfr_eye_columns() const override { return true; }  // instanced stereo pairs, each its own width
 
     bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         return views_start(s.layout, s.focusFraction, s.focusFractionY);

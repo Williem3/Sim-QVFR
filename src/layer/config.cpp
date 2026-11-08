@@ -249,6 +249,13 @@ void load_experiment() {
     helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),
                                             launchCrop.kept_height());
+    // Eye columns (ACC): each instanced pair its own width, unless acc_shared_width=1 (every view the periphery's width,
+    // the focus views' horizontal density following it: the layout before 2026-11-08).
+    experiment.views4Layout.sharedColumnWidth =
+        GetPrivateProfileIntW(L"experiment", L"acc_shared_width", 0, ini.c_str()) != 0;
+    if (experiment.views4 && experiment.views4Layout.sharedColumnWidth && game->qvfr_eye_columns())
+        logf("experiment: acc_shared_width=1: every view the periphery's width (the focus views' horizontal density "
+             "follows the periphery)");
     // For the launcher: what live sizes can reach (percent of the native eye).
     runtime_info(L"launch_mode", mode);
     runtime_info(L"launch_outer", std::to_wstring(std::lround((experiment.views4 ? sizes.outer : experiment.eyeScale) * 100)));

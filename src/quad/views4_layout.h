@@ -27,15 +27,26 @@ struct Views4Layout {
     bool live = false;
     // `outer`, `focus` and `focusHeight` size ACE's target (at launch); live resolution (views4_live)
     // changes only `width` and `height`, laying the views out again inside that target.
+    // Eye columns only: every view as wide as the outer view, so the focus views' horizontal density follows the
+    // periphery (ACC before the instanced width per pair; [experiment] acc_shared_width=1 brings it back).
+    bool sharedColumnWidth = false;
     // The eye size ACE is offered, in native eye widths and heights (its double-wide target is two of these).
     double eye_width() const { return outer_width() + focus; }
     double eye_height() const { return std::max(outer_height(), focusHeight); }
     // The outer views' size, in native eye widths and heights.
     double outer_width() const { return outer * cropWidth; }
     double outer_height() const { return outer * cropHeight; }
-    // The eye size in eye columns (views4_rect_eye_columns): the outer view's width, outer over focus height.
-    double column_eye_width() const { return outer_width(); }
+    // The eye size in eye columns (views4_rect_eye_columns): the wider of the outer and focus views (the outer view's
+    // with a shared width), outer over focus height.
+    double column_eye_width() const { return sharedColumnWidth ? outer_width() : std::max(outer_width(), focus); }
     double column_eye_height() const { return outer_height() + focusHeight; }
+    // In eye columns, view `view`'s width as a share of its column (1: the whole column).
+    double column_share(int view) const {
+        const double column = column_eye_width();
+        if (sharedColumnWidth || !(column > 0))
+            return 1.0;
+        return (view < 2 ? outer_width() : focus) / column;
+    }
     // Equal quarters of the target (the old layout, also after a live change).
     bool equal() const {
         for (int v = 0; v < 4; ++v)
@@ -113,38 +124,42 @@ inline Views4Layout views4_live(const Views4Layout& launch, double outer, double
 }
 
 // Live resolution in eye columns (views4_rect_eye_columns): sizes that fit the target the game made at launch (two
-// column_eye_width() wide, column_eye_height() high). Instanced stereo draws each pair in one viewport the eyes' width
-// wide, halved (ACC: docs/recon-acc.md), so all four views share one width: the periphery's, at most half the target;
-// the outer views' rows and the focus views' rows share the target's height. Focus first: the periphery takes the
-// height the focus views leave. The focus views' horizontal density follows the periphery (their width is its), as at
-// launch; Views4Fit::focus is that width.
-inline Views4Fit views4_fit_eye_columns(const Views4Layout& launch, double outer, double focusHeight,
+// column_eye_width() wide, column_eye_height() high). Instanced stereo draws each pair in one viewport from x = 0,
+// halved (ACC: docs/recon-acc.md), so the two views of a pair share one width; each pair has its own (ACC's instanced
+// width per pair), at most the column's. The outer views' rows and the focus views' rows share the target's height.
+// Focus first: the periphery takes the height the focus views leave. With `sharedColumnWidth` all four views share the
+// periphery's width instead, so the focus views' horizontal density follows the periphery and `focus` is unused.
+inline Views4Fit views4_fit_eye_columns(const Views4Layout& launch, double outer, double focus, double focusHeight,
                                         double cropWidth = -1, double cropHeight = -1) {
     constexpr double kSlack = 1e-4;
     const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
-    const double half = launch.column_eye_width(), tall = launch.column_eye_height();
+    const double column = launch.column_eye_width(), tall = launch.column_eye_height();
     const double minOuterHeight = kMinLive * launch.outer_height();
     Views4Fit f;
     f.focusHeight = std::clamp(focusHeight, kMinLive * launch.focusHeight, tall - minOuterHeight);
-    f.focusCapped = f.focusHeight < focusHeight - kSlack;
-    const double byWidth = half / cw, byRoom = (tall - f.focusHeight) / ch;
+    if (!launch.sharedColumnWidth)
+        f.focus = std::clamp(focus, kMinLive * launch.focus, column);
+    f.focusCapped = f.focusHeight < focusHeight - kSlack || (!launch.sharedColumnWidth && f.focus < focus - kSlack);
+    const double byWidth = column / cw, byRoom = (tall - f.focusHeight) / ch;
     f.outer = std::clamp(outer, kMinLive * launch.outer, std::min(byWidth, byRoom));
     f.outerCapped = f.outer < outer - kSlack;
     f.outerByRoom = f.outerCapped && byRoom < byWidth;
-    f.focus = f.outer * cw;
+    if (launch.sharedColumnWidth)
+        f.focus = f.outer * cw;
     return f;
 }
 
-// The launch layout `launch` with its views at live sizes in eye columns (views4_fit_eye_columns): every view
-// `width` of the target, the outer views `height[0..1]` of it from the top, the focus views `height[2..3]` below.
-inline Views4Layout views4_live_eye_columns(const Views4Layout& launch, double outer, double focusHeight,
+// The launch layout `launch` with its views at live sizes in eye columns (views4_fit_eye_columns): the outer views
+// `width[0..1]` of the target wide and `height[0..1]` of it high from the top, the focus views `width[2..3]` by
+// `height[2..3]` below.
+inline Views4Layout views4_live_eye_columns(const Views4Layout& launch, double outer, double focus, double focusHeight,
                                             double cropWidth = -1, double cropHeight = -1) {
-    const Views4Fit f = views4_fit_eye_columns(launch, outer, focusHeight, cropWidth, cropHeight);
-    const double ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
+    const Views4Fit f = views4_fit_eye_columns(launch, outer, focus, focusHeight, cropWidth, cropHeight);
+    const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
     Views4Layout l = launch;
     const double total = 2 * launch.column_eye_width(), tall = launch.column_eye_height();
     for (int v = 0; v < 4; ++v) {
-        l.width[v] = std::min(0.5, f.focus / total);
+        l.width[v] = std::min(0.5, (v < 2 ? f.outer * cw : f.focus) / total);
         l.height[v] = (v < 2 ? f.outer * ch : f.focusHeight) / tall;
     }
     l.live = true;
@@ -222,14 +237,15 @@ inline ViewRect views4_rect(const Views4Layout& l, int view, int targetWidth, in
     return r;
 }
 
-// The same views in eye columns: each eye's half of the target holds its outer view across the top and its focus
-// view below, 0 | 1 over 2 | 3. For a game that renders with instanced stereo and whose runtime copies each
-// eye's half on its own (ACC through OpenComposite). Instanced stereo draws a pair (the eyes, then the focus
-// views) in one viewport from the pair's left edge, the eyes' combined width wide, halved: so every view is half
-// the target wide, each pair meeting in the middle. The target is two column_eye_width() wide and
-// column_eye_height() high; the focus views' density comes from their narrower FOV. A live layout (`l.live`,
-// views4_live_eye_columns): every view width[v] of the target wide, each pair side by side from x = 0, the outer
-// views height[0] of it from the top, the focus views height[2] below them.
+// The same views in eye columns: the outer views across the top of the target and the focus views below, 0 | 1 over
+// 2 | 3. For a game that renders with instanced stereo (ACC, X-Plane). Instanced stereo draws a pair (the eyes, then
+// the focus views) in one viewport from x = 0, halved: so each pair sits side by side from x = 0, both its views one
+// width. The target is two column_eye_width() wide and column_eye_height() high; the wider pair fills it, its views
+// meeting in the middle, the narrower one leaves the right of its rows unused (ACC's runtime, OpenComposite, copies
+// the whole texture into each eye's swapchain, so a view needn't sit in its eye's half). With `sharedColumnWidth` every
+// view is half the target wide. A live layout (`l.live`, views4_live_eye_columns): every view width[v] of the target
+// wide, each pair side by side from x = 0, the outer views height[0] of it from the top, the focus views height[2]
+// below them.
 inline ViewRect views4_rect_eye_columns(const Views4Layout& l, int view, int targetWidth, int targetHeight) {
     const auto pixels = [](double fraction, int size) { return static_cast<int>(std::floor(fraction * size + 1e-6)); };
     if (l.live) {
@@ -249,13 +265,12 @@ inline ViewRect views4_rect_eye_columns(const Views4Layout& l, int view, int tar
     const int half = targetWidth / 2;
     const double outerRows = l.outer_height() / l.column_eye_height();
     ViewRect r;
-    r.left = (view & 1) * half;
+    r.width = std::clamp(pixels(l.column_share(view), half), 1, std::max(1, half));
+    r.left = (view & 1) * r.width;
     if (view < 2) {
-        r.width = half;
         r.height = std::max(1, pixels(outerRows, targetHeight));
     } else {
         r.top = pixels(outerRows, targetHeight);
-        r.width = half;
         r.height = std::max(1, targetHeight - r.top);
     }
     return r;

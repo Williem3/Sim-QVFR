@@ -395,7 +395,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         }
         for (uint32_t v = 0; v < proj->viewCount; ++v) {
             // ACE submits halves of its target (W/2 x H each): point them at view v (or v + 2). A game in eye
-            // columns (ACC) has eye v's views in its half: keep the offset, move and cut to the view.
+            // columns (ACC) submits the whole texture in each eye's image: keep the offset, move and cut to the view.
             XrRect2Di& rect = copy[v].subImage.imageRect;
             const int shown = static_cast<int>(v + (experiment.views4ShowCopies ? 2 : 0));
             const ViewRect view = game->qvfr_eye_columns()
