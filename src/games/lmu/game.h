@@ -20,7 +20,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"+XR",   // its own OpenXR (Steam's "openxr" launch option); +VR is OpenVR
     nullptr,  // OpenXR of its own
     nullptr,  // no DLSS (FSR 1 only)
-    {false, false, false, true, false, false},  // FOV crop (QVFR, lmu_qvfr=1): through the located FOV
+    // The helmet overlay (the layer's, over the composed views: crop-aware) and the FOV crop (through the located FOV).
+    {false, true, false, true, false, false},
     kBuilds, std::size(kBuilds),
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet
