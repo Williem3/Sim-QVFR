@@ -31,9 +31,11 @@ using SurfaceFn = void* (*)(void* texture, unsigned usage);
 using D3DObjectFn = void* (*)(void* surface);
 using HistoryCtorFn = void (*)(void* record);
 using SetDeltaTimeFn = long (*)(void* postEffect, float seconds);
+using MaskDrawFn = void (*)(void* mask, void* camera);
 
 RenderSceneFn originalRenderScene = nullptr;
 SetDeltaTimeFn originalSetDeltaTime = nullptr;
+MaskDrawFn originalMaskDraw = nullptr;
 bool installed = false;
 bool focusMode = false;      // passes 2-3 are focus views (else copies of the eyes)
 double focusFraction = 0.3;  // the focus box: share of the eye's tangent width and height
@@ -54,6 +56,18 @@ long set_delta_time(void* postEffect, float seconds) {
         seconds = kHeldDeltaTime;
     }
     return originalSetDeltaTime(postEffect, seconds);
+}
+
+// The hidden-area (lens) mask is the eye's: in a focus view it would black out the view's own corners (the first focus
+// run's rounded rectangle; catalogue row 13). Focus passes skip it.
+int maskSkippedThisFrame = 0;
+
+void mask_draw(void* mask, void* camera) {
+    if (focusMode && inLaterPass) {
+        ++maskSkippedThisFrame;
+        return;
+    }
+    originalMaskDraw(mask, camera);
 }
 
 // Passes 2-3's camera history records (the game keeps two on its stack, one per eye).
@@ -518,6 +532,17 @@ bool four_passes_start(bool focus, bool hold, double fraction) {
         simqvfr::logf("%s: the post-effect frame time couldn't be hooked; not installed", tag());
         return false;
     }
+    if (focusMode) {
+        void* mask = reinterpret_cast<void*>(base() + kHiddenAreaDraw);
+        if (!simqvfr::code_matches(kHiddenAreaDraw, kHiddenAreaDrawAnchor, sizeof(kHiddenAreaDrawAnchor)) ||
+            MH_CreateHook(mask, reinterpret_cast<void*>(&mask_draw), reinterpret_cast<void**>(&originalMaskDraw)) != MH_OK ||
+            MH_EnableHook(mask) != MH_OK) {
+            MH_DisableHook(deltaTime);
+            MH_DisableHook(target);
+            simqvfr::log_line("lmu focus: the hidden-area mask's draw isn't this build's or couldn't be hooked; not installed");
+            return false;
+        }
+    }
     // The head first: with two passes `edi & 1` is `edi`, so it changes nothing until the tail counts to four.
     // Head: the camera update gets the eye as edi & 1 (passes 2-3 set up eyes 0-1's cameras, not eyes 2-3).
     static const std::uint8_t head[] = {0x44, 0x8b, 0xc7,        // mov r8d, edi
@@ -574,9 +599,12 @@ void four_passes_frame_end() {
         ++fourPassFrames;
     if (fourPassFrames == 1 && passes >= 4)
         simqvfr::logf("%s: frame %llu: first four-pass frame, eyes rendered %d %d %d %d; post-effect frame time "
-                      "held in passes 2-3: %s (%d calls this frame, the game's %.5f s -> %.5f s)",
+                      "held in passes 2-3: %s (%d calls this frame, the game's %.5f s -> %.5f s); hidden-area mask "
+                      "skipped in %d draws",
                       tag(), frames, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3], holdExposure ? "yes" : "no",
-                      heldThisFrame, lastGameDeltaTime, kHeldDeltaTime);
+                      heldThisFrame, lastGameDeltaTime, kHeldDeltaTime, maskSkippedThisFrame);
+    const int maskSkipped = maskSkippedThisFrame;
+    maskSkippedThisFrame = 0;
     const int held = heldThisFrame;
     heldThisFrame = 0;
     const bool due = passes >= 4 && fourPassFrames >= 300 && comparisons < 4 && frames >= nextCompare;
@@ -607,8 +635,9 @@ void four_passes_frame_end() {
     }
     if (frames % 1800 == 0)
         simqvfr::logf("%s: frame %llu: %llu four-pass frames so far; last frame %d passes, eyes %d %d %d %d, "
-                      "frame time held in %d calls",
-                      tag(), frames, fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3], held);
+                      "frame time held in %d calls, mask skipped in %d",
+                      tag(), frames, fourPassFrames, passes, eyeOfPass[0], eyeOfPass[1], eyeOfPass[2], eyeOfPass[3], held,
+                      maskSkipped);
 }
 
 }  // namespace lmu

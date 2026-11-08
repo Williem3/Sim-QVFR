@@ -57,6 +57,11 @@ inline constexpr std::size_t kSlotMatrix = 4;  // the row-major 4x4 (left-handed
 // The eye render textures (texture objects), eye e at + e * 8. [Eye textures]
 inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
 
+// VRHiddenAreaMask::Draw(this, camera): the lens mask in the eye's screen space, mesh by camera eye (+0x5cc). [Hidden-area mask]
+inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;
+inline constexpr std::uint8_t kHiddenAreaDrawAnchor[] = {0x48, 0x8b, 0xc4, 0x41, 0x54, 0x41, 0x55,
+                                                         0x48, 0x83, 0xec, 0x68, 0x80};
+
 // YEBIS CPostEffect::SetDeltaTime(this, seconds): each pass's post-processing sets it; auto exposure adapts by it. [Post-effect time]
 inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
 inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,
