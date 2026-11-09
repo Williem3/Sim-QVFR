@@ -164,6 +164,16 @@ void load_experiment() {
             logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
         experiment.views4Compose = false;
     }
+    // focus_layer=1: the focus views as a layer of their own over the periphery, nothing composed at native size
+    // (experiment.focusLayer). A D3D11 game with separate views only (LMU) for now.
+    experiment.focusLayer = GetPrivateProfileIntW(L"experiment", L"focus_layer", 0, ini.c_str()) != 0;
+    if (experiment.focusLayer && !(experiment.views4ComposeD3D11 && game->qvfr_separate_views())) {
+        logf("experiment: focus_layer ignored: %ls is not a D3D11 game with separate views (LMU)", game->info()->name);
+        experiment.focusLayer = false;
+    } else if (experiment.focusLayer) {
+        log_line("experiment: focus_layer: the periphery submitted as the game rendered it, the focus views as a second "
+                 "projection layer over it (feather in alpha); composed as before with the helmet on");
+    }
     // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =
         experiment.views4 &&

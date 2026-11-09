@@ -34,6 +34,11 @@ public:
     // `views` (d.outerSource), then the pieces, premultiplied, with alpha = how much of the scene they hide; only
     // d.bands (all of it when empty). False without pieces.
     bool draw_helmet_layer(ID3D11Texture2D* views, ID3D11Texture2D* target, const HelmetLayerDraw& d);
+    // focus_layer: draws each eye's focus view into `target` (a kHelmetLayerFormat swapchain image), eye e at `rects[e]`
+    // (x, y, width, height in pixels: the focus view's own size, so its region of `views` is copied texel for texel),
+    // premultiplied, alpha its feather (FocusLayerPS).
+    bool draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* target, const EyeComposition (&eyes)[2],
+                          const int (&rects)[2][4]);
     void request_light() override { lightWanted_ = true; }
     bool read_light(float (&rgb)[2][4][3]) override;
     void shutdown();
@@ -59,7 +64,7 @@ private:
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> immediate_, deferred_;
     Com<ID3D11VertexShader> vs_;
-    Com<ID3D11PixelShader> ps_, lightPs_, helmetPs_;
+    Com<ID3D11PixelShader> ps_, lightPs_, helmetPs_, focusPs_;
     static constexpr int kLightBuffer = 2, kLayerBuffer = 3;
     Com<ID3D11Buffer> constants_[4];  // one per eye, the light pass, the helmet layer
     Com<ID3D11SamplerState> sampler_;

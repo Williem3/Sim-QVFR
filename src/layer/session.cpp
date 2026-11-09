@@ -174,6 +174,11 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.outChain = XR_NULL_HANDLE;  // the session's: destroyed with it
         v4d3d11.outImages.clear();
         v4d3d11.failed = false;
+        v4d3d11.focusChain = XR_NULL_HANDLE;  // also the session's
+        v4d3d11.focusImages.clear();
+        v4d3d11.focusW = v4d3d11.focusH = 0;
+        v4d3d11.focusFailed = false;
+        v4d3d11.layered = 0;
     }
     {
         std::lock_guard guard(gaze.mutex);

@@ -199,7 +199,7 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
         log_line("views4 d3d11: no D3D11 device or native eye size; the headset shows views 0-1");
         return false;
     }
-    if (!v4d3d11.compositor.initialize(device, static_cast<DXGI_FORMAT>(format))) {
+    if (!v4d3d11.compositor.ready() && !v4d3d11.compositor.initialize(device, static_cast<DXGI_FORMAT>(format))) {
         log_line("views4 d3d11: compositor unavailable; the headset shows views 0-1");
         return false;
     }
@@ -237,6 +237,71 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
     return true;
 }
 
+// focus_layer: the compositor (no output chain: nothing is composed at native size). False: v4d3d11.failed.
+bool v4d3d11_compositor_ready(int64_t format) {
+    if (v4d3d11.compositor.ready())
+        return true;
+    if (v4d3d11.failed)
+        return false;
+    ID3D11Device* device;
+    {
+        std::lock_guard guard(quad.mutex);
+        device = sessionGraphics.d3d11;
+    }
+    if (!device || !v4d3d11.compositor.initialize(device, static_cast<DXGI_FORMAT>(format))) {
+        log_line("views4 d3d11: compositor unavailable; the headset shows views 0-1");
+        v4d3d11.failed = true;
+        return false;
+    }
+    return true;
+}
+
+// focus_layer: the focus views' swapchain, both eyes side by side, each `w` x `h` (the game's view images: no focus
+// view is larger). False: v4d3d11.focusFailed (then composed as without focus_layer), the reason logged once.
+bool v4d3d11_focus_resources(XrSession session, uint32_t w, uint32_t h) {
+    if (v4d3d11.focusChain)
+        return true;
+    if (v4d3d11.focusFailed)
+        return false;
+    v4d3d11.focusFailed = true;  // until it is made
+    if (!w || !h) {
+        log_line("views4 d3d11: focus_layer: the game's view size is unknown; composed as without it");
+        return false;
+    }
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    info.format = kHelmetLayerFormat;  // RGBA8 sRGB: alpha for the feather, whatever the game's format
+    info.sampleCount = info.faceCount = info.arraySize = info.mipCount = 1;
+    info.width = 2 * w;
+    info.height = h;
+    XrSwapchain chain = XR_NULL_HANDLE;
+    XrResult r = next.CreateSwapchain(session, &info, &chain);
+    uint32_t count = 0;
+    if (XR_SUCCEEDED(r))
+        r = next.EnumerateSwapchainImages(chain, 0, &count, nullptr);
+    std::vector<XrSwapchainImageD3D11KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+    if (XR_SUCCEEDED(r) && count)
+        r = next.EnumerateSwapchainImages(chain, count, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(r) || !count) {
+        logf("views4 d3d11: focus_layer: its swapchain %ux%u failed (%d); composed as without it", info.width,
+             info.height, r);
+        if (chain)
+            next.DestroySwapchain(chain);
+        return false;
+    }
+    v4d3d11.focusChain = chain;
+    v4d3d11.focusImages.clear();
+    for (const auto& image : images)
+        v4d3d11.focusImages.push_back(image.texture);
+    v4d3d11.focusW = w;
+    v4d3d11.focusH = h;
+    v4d3d11.focusFailed = false;
+    logf("views4 d3d11: focus_layer: focus views' swapchain %p %ux%u (%u images, RGBA8 sRGB, premultiplied alpha); "
+         "no %ux%u output chain",
+         static_cast<void*>(chain), info.width, info.height, count, 2 * quad.nativeW, quad.nativeH);
+    return true;
+}
+
 }  // namespace
 
 bool v4d3d11_tracks_chains() {
@@ -271,10 +336,78 @@ void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4La
     game->qvfr_game_image(image, rects);
 }
 
+// focus_layer, for a frame with four views (under v4d3d11.mutex and quad.mutex): each focus view drawn texel for
+// texel into the focus chain, its feather in alpha, and `focus` pointed at them with the focus cameras' poses and
+// FOVs; `copy` (the periphery) keeps the game's own images, cut to the outer views as rendered, with their FOV.
+// False: nothing changed (the caller composes as without focus_layer).
+bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj, const Views4Frame& frame,
+                     const EyeComposition (&eyes)[2], ID3D11Texture2D* views, float texW, float texH,
+                     std::vector<XrCompositionLayerProjectionView>& copy, XrCompositionLayerProjectionView (&focus)[2]) {
+    int render[2] = {}, output[2] = {};
+    game->qvfr_target_sizes(render, output);  // the game's view images (LMU: one size for all four)
+    if (!v4d3d11_focus_resources(session, static_cast<uint32_t>(std::max(render[0], 0)),
+                                 static_cast<uint32_t>(std::max(render[1], 0))))
+        return false;
+    // Each view's size as rendered (live resolution), from its region of the views' image.
+    const auto pixels = [](float share, float size, uint32_t most) {
+        return static_cast<int32_t>(std::clamp<long>(std::lround(share * size), 1, static_cast<long>(most)));
+    };
+    int rects[2][4];
+    XrExtent2Di outer[2];
+    for (int e = 0; e < 2; ++e) {
+        rects[e][0] = e * static_cast<int>(v4d3d11.focusW);
+        rects[e][1] = 0;
+        rects[e][2] = pixels(eyes[e].focusSource[2], texW, v4d3d11.focusW);
+        rects[e][3] = pixels(eyes[e].focusSource[3], texH, v4d3d11.focusH);
+        const XrExtent2Di gameRect = proj->views[e].subImage.imageRect.extent;
+        outer[e] = {pixels(eyes[e].outerSource[2], texW, static_cast<uint32_t>(std::max(gameRect.width, 1))),
+                    pixels(eyes[e].outerSource[3], texH, static_cast<uint32_t>(std::max(gameRect.height, 1)))};
+    }
+    uint32_t index = 0;
+    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.focusChain, &acquire, &index)) ||
+        index >= v4d3d11.focusImages.size())
+        return false;
+    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.focusChain, &wait)) &&
+                    v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], eyes, rects);
+    next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
+    if (!ok)
+        return false;
+    for (uint32_t v = 0; v < 2; ++v) {
+        // The periphery: the game's own image (its outer view at the top left), the FOV it was rendered over. The
+        // game's depth info, if any, is dropped as when composed (the proof's: its rect would need cutting too).
+        copy[v].fov = tangents_fov(eyes[v].outerTan);
+        copy[v].next = nullptr;
+        copy[v].subImage.imageRect.extent = outer[v];
+        // The focus view: the eye's position, the focus camera's turn (a direction in the eye's frame is in the
+        // focus view's after the inverse turn, views4_eye), its own FOV and pixels.
+        focus[v] = copy[v];
+        focus[v].pose.orientation = qmul(copy[v].pose.orientation, frame.turn[v]);
+        focus[v].fov = tangents_fov(eyes[v].focusTan);
+        focus[v].subImage.swapchain = v4d3d11.focusChain;
+        focus[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
+        focus[v].subImage.imageArrayIndex = 0;
+    }
+    if (v4d3d11.layered++ == 0 || v4d3d11.lastFallback) {
+        logf("views4 d3d11: focus_layer: two layers (eye 0: periphery %dx%d of the game's image at %d,%d, FOV tangents "
+             "%.3f %.3f %.3f %.3f; focus %dx%d over tangents +-%.3f x +-%.3f, feather %.0f%%)",
+             outer[0].width, outer[0].height, copy[0].subImage.imageRect.offset.x, copy[0].subImage.imageRect.offset.y,
+             eyes[0].outerTan[0], eyes[0].outerTan[1], eyes[0].outerTan[2], eyes[0].outerTan[3], rects[0][2],
+             rects[0][3], eyes[0].focusTan[1], eyes[0].focusTan[2], experiment.feather * 100);
+        v4d3d11.lastFallback = nullptr;
+    }
+    return true;
+}
+
 // Composes both eyes of `proj` (the game's two eye views, eye columns of `layout`) into the output chain and
 // points `copy` (its views) at it. False: nothing changed, the caller submits views 0-1 as they are.
+// With focus_layer (`focus` given, separate views, the helmet off): nothing composed; `copy` the periphery and
+// `focus` the focus views' layer (v4d3d11_layered), `*layered` true.
 bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
-                     std::vector<XrCompositionLayerProjectionView>& copy) {
+                     std::vector<XrCompositionLayerProjectionView>& copy,
+                     XrCompositionLayerProjectionView (*focus)[2] = nullptr, bool* layered = nullptr) {
     // What this frame's views were rendered with (the game's record, frame_records.h), taken before anything can
     // skip the frame, so later compositions stay in step with the frames rendered.
     Views4Frame frame{};
@@ -290,7 +423,11 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     const auto it = v4d3d11.chains.find(proj->views[0].subImage.swapchain);
     if (it == v4d3d11.chains.end() || it->second.acquired >= it->second.images.size())
         return fallback("the game's eye image is unknown");
-    if (!v4d3d11_resources(session, it->second.format))
+    // focus_layer needs only the compositor; the output chain is made at the first frame composed.
+    const bool tryLayered = focus && layered && experiment.focusLayer && !v4d3d11.focusFailed;
+    if (layered)
+        *layered = false;
+    if (!(tryLayered ? v4d3d11_compositor_ready(it->second.format) : v4d3d11_resources(session, it->second.format)))
         return false;
     ID3D11Texture2D* views = it->second.images[it->second.acquired];
     // Separate views (qvfr_separate_views, LMU): each eye's image holds only its outer view; the adapter's atlas holds all
@@ -338,6 +475,16 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     }
     if (helmet.on)
         log_helmet_light();
+    if (tryLayered && separate && !helmet.on && v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, copy, *focus)) {
+        *layered = true;
+        return true;
+    }
+    if (tryLayered && helmet.on && !v4d3d11.helmetComposedLogged) {
+        log_line("views4 d3d11: focus_layer: the helmet is on: composed as without focus_layer while it is");
+        v4d3d11.helmetComposedLogged = true;
+    }
+    if (!v4d3d11_resources(session, it->second.format))
+        return false;
     uint32_t outIndex = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
@@ -382,6 +529,10 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
     XrCompositionLayerQuad helmetLayers[kHelmetQuadsMax] = {};  // the helmet's own layer (its bands), over the composed scene
     int helmetCount = 0, helmetAfter = -1;
+    // focus_layer: the focus views' projection layer, right over the periphery's (`focusAfter`), under the helmet.
+    XrCompositionLayerProjection focusLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    XrCompositionLayerProjectionView focusViews[2] = {};
+    int focusAfter = -1;
     std::vector<XrCompositionLayerProjection> projections;
     std::vector<std::vector<XrCompositionLayerProjectionView>> views;
     projections.reserve(info->layerCount);
@@ -421,10 +572,20 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         // Separate views (qvfr_separate_views, LMU): each eye an image of its own, whole; composed from the adapter's atlas,
         // or (no four views this frame: menus, loading) submitted as it is. None of the shared-target rects below apply.
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_separate_views()) {
-            if (v4d3d11_compose(session, proj, copy)) {
+            bool layered = false;
+            if (v4d3d11_compose(session, proj, copy, focusAfter < 0 ? &focusViews : nullptr, &layered)) {
                 projections.push_back(*proj);
                 projections.back().views = copy.data();
                 layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
+                if (layered) {
+                    // The same space and flags as the game's layer, blended over it by its premultiplied alpha.
+                    focusLayer.layerFlags = proj->layerFlags | XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                    focusLayer.layerFlags &= ~static_cast<XrCompositionLayerFlags>(XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT);
+                    focusLayer.space = proj->space;
+                    focusLayer.viewCount = 2;
+                    focusLayer.views = focusViews;
+                    focusAfter = static_cast<int>(i);
+                }
                 std::lock_guard guard(quad.mutex);
                 views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
             }
@@ -485,6 +646,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     }
     for (int b = helmetCount - 1; b >= 0; --b)  // over the scene, under the overlay and the menu
         layers.insert(layers.begin() + helmetAfter + 1, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&helmetLayers[b]));
+    if (focusAfter >= 0)  // inserted after the helmet's, so it lands directly over the periphery, under them
+        layers.insert(layers.begin() + focusAfter + 1, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&focusLayer));
     XrFrameEndInfo submitted = *info;
     submitted.layers = layers.data();
     submitted.layerCount = static_cast<uint32_t>(layers.size());

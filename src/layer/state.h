@@ -93,6 +93,10 @@ struct Experiment {
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
+    // [experiment] focus_layer=1 (a D3D11 game with separate views: LMU): nothing composed at native size. The periphery
+    // goes to the runtime as the game rendered it, the focus views as a second projection layer over it (their
+    // feather in alpha), so the runtime samples the focus views at their own density (V4D3D11::focusChain).
+    bool focusLayer = false;
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4TestVisibleMask = false;    // views4 test: a full-view visible-area mesh, as VDXR gives (diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
@@ -416,6 +420,14 @@ struct V4D3D11 {
     std::vector<ID3D11Texture2D*> outImages;
     uint32_t outW = 0, outH = 0;  // one eye's size in it
     bool failed = false;          // no compositor or output chain: views 0-1 as they are
+    // experiment.focusLayer: the focus views' own swapchain (kHelmetLayerFormat, alpha the feather), eye e from
+    // x = e x focusW; made at the first frame with four views, the size of the game's view images.
+    XrSwapchain focusChain = XR_NULL_HANDLE;
+    std::vector<ID3D11Texture2D*> focusImages;
+    uint32_t focusW = 0, focusH = 0;
+    bool focusFailed = false;  // its swapchain failed: composed as without focus_layer
+    uint64_t layered = 0;      // frames submitted as two layers
+    bool helmetComposedLogged = false;
     uint64_t composed = 0, fallbacks = 0;
     const char* lastFallback = nullptr;
 };

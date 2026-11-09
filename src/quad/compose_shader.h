@@ -293,6 +293,23 @@ float4 PS(V v) : SV_Target {
         color.rgb = helmet_apply(color.rgb, a.xy, v.uv);
     return color;
 }
+// The focus view as a layer of its own (focus_layer): its target covers exactly the focus view (focusTan), texel for
+// texel its region of the views' image (focusSrc), so nothing is resampled; alpha is the feather weight PS blends
+// with, colour premultiplied by it, the runtime blending it over the periphery's layer. The outline as in PS.
+float4 FocusLayerPS(V v) : SV_Target {
+    float2 size;
+    focusTex.GetDimensions(size.x, size.y);
+    const float2 f = v.uv;
+    const float e = inside_box(f);
+    float w = saturate(e / max(params.x, 1e-4));
+    w = w * w * (3 - 2 * w);
+    float4 color = focusTex.SampleLevel(linearClamp, inside(focusSrc.xy + f * focusSrc.zw, focusSrc, size), 0);
+    if (e < params.y) {
+        color = borderColor;
+        w = 1;
+    }
+    return float4(color.rgb * w, w);
+}
 // The helmet as its own layer: the quad spans tangents +-outerTan.xy of the images' plane, the images
 // +-outerTan.zw; focusTan.x is the visor's slide; helmet as in helmet_apply's looks 2 and 4. Premultiplied
 // colour, alpha how much of the scene the pieces hide (a glass visor: its transmission's brightness).
