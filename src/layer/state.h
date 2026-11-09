@@ -98,6 +98,9 @@ struct Experiment {
     // feather in alpha), so the runtime samples the focus views at their own density (V4D3D11::focusChain).
     // 2: the focus views as two quad layers instead, one per eye (SteamVR misplaced and warped the projection layer).
     int focusLayer = 0;
+    // [experiment] native_quad_views=1: the runtime composes quad views if it can (NativeQuad below); a D3D11 game with
+    // separate views (LMU) only for now. Read before the instance exists (native_quad_wanted).
+    bool nativeQuadViews = false;
     // focus_layer=2: the quads' distance, metres ([experiment] focus_quad_distance, live; quad/focus_quad_distance.h).
     std::atomic<int> focusQuadDistance = 100;
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
@@ -662,8 +665,26 @@ struct ProfileNotice {
     bool wasRunning = false;
 };
 
+// Native quad views (quad/native_quad.h, native_quad.cpp; [experiment] native_quad_views=1): the runtime's quad view
+// support and whether this session uses it. When the instance has the extension, `next`'s BeginSession, LocateViews,
+// GetVisibilityMaskKHR and EndFrame are this file's wrappers, which call the functions kept here.
+struct NativeQuad {
+    std::atomic<bool> extension = false;  // XR_VARJO_quad_views enabled on the game's instance
+    std::atomic<bool> active = false;     // this session was begun as PRIMARY_QUAD_VARJO
+    PFN_xrEnumerateViewConfigurations EnumerateViewConfigurations = nullptr;
+    PFN_xrBeginSession BeginSession = nullptr;
+    PFN_xrLocateViews LocateViews = nullptr;
+    PFN_xrGetVisibilityMaskKHR GetVisibilityMaskKHR = nullptr;
+    PFN_xrEndFrame EndFrame = nullptr;
+    // Counted on the render thread (EndFrame): frames submitted with the focus views as views 2-3, with copies of
+    // the eyes there (no focus views that frame), and projection layers left out (neither two nor four views).
+    uint64_t focusFrames = 0, copyFrames = 0, refusedLayers = 0;
+    bool loggedFirstFocus = false, loggedFirstCopy = false;
+};
+
 // The globals (globals.cpp).
 extern Dispatch next;
+extern NativeQuad nativeQuad;
 extern std::mutex chainMutex;
 extern std::map<XrSwapchain, std::pair<uint32_t, uint32_t>> chainSizes;
 extern Experiment experiment;

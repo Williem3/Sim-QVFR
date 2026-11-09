@@ -174,18 +174,38 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     // layer adds it when the game hasn't and the runtime offers it; with the offer unknown it tries, and creates the
     // instance without it if the runtime refuses.
     const GazeExtension gazeExtension = gaze_extension(*info, gipa, own->next == nullptr);
-    XrResult r = XR_ERROR_EXTENSION_NOT_PRESENT;
-    if (gazeExtension == GazeExtension::Add || gazeExtension == GazeExtension::Try) {
+    // Native quad views ([experiment] native_quad_views=1, layer/native_quad.cpp): XR_VARJO_quad_views on the instance
+    // when the runtime offers it (or its offer is unknown: a layer between), for a game with separate views (LMU). Every
+    // runtime's offer is logged, wanted or not, so a report says whether the runtime could compose quad views.
+    const QuadOffer quadOffer = quad_views_offered(gipa, own->next == nullptr);
+    const bool quadWanted = native_quad_wanted() && games::adapter_for(thisGame).qvfr_separate_views();
+    const bool tryQuad = quadWanted && quadOffer != QuadOffer::No;
+    const bool tryGaze = gazeExtension == GazeExtension::Add || gazeExtension == GazeExtension::Try;
+    const auto create = [&](bool withGaze, bool withQuad) {
         std::vector<const char*> names(info->enabledExtensionNames, info->enabledExtensionNames + info->enabledExtensionCount);
-        names.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
-        XrInstanceCreateInfo withGaze = *info;
-        withGaze.enabledExtensionCount = static_cast<uint32_t>(names.size());
-        withGaze.enabledExtensionNames = names.data();
-        r = own->nextCreateApiLayerInstance(&withGaze, &nextLayerInfo, instance);
+        if (withGaze)
+            names.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
+        if (withQuad)
+            names.push_back(XR_VARJO_QUAD_VIEWS_EXTENSION_NAME);
+        XrInstanceCreateInfo with = *info;
+        with.enabledExtensionCount = static_cast<uint32_t>(names.size());
+        with.enabledExtensionNames = names.data();
+        return own->nextCreateApiLayerInstance(&with, &nextLayerInfo, instance);
+    };
+    XrResult r = XR_ERROR_EXTENSION_NOT_PRESENT;
+    bool quadAdded = false;
+    if (tryQuad) {
+        r = create(tryGaze, true);
+        quadAdded = XR_SUCCEEDED(r);
     }
-    const bool gazeAdded = XR_SUCCEEDED(r);
-    if (!gazeAdded)
+    bool gazeAdded = quadAdded && tryGaze;
+    if (!quadAdded && tryGaze) {
+        r = create(true, false);
+        gazeAdded = XR_SUCCEEDED(r);
+    }
+    if (!quadAdded && !gazeAdded)
         r = own->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
+    nativeQuad.extension = quadAdded;
     game = &games::adapter_for(thisGame);
     load_experiment();
     // Where the launcher writes live settings while this ACE runs (live_reload).
@@ -205,6 +225,14 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
              gazeAdded ? "added for the game" : "NOT added: the runtime refused the instance with it",
              gazeExtension == GazeExtension::Add ? "the runtime offers it" : "the runtime's offer unknown, tried");
         break;
+    }
+    {
+        static const char* const kOffer[] = {"offers them", "doesn't offer them", "offer unknown (a layer between)"};
+        logf("native quad views: the runtime %s (XR_VARJO_quad_views); native_quad_views %s%s",
+             kOffer[static_cast<int>(quadOffer)], quadWanted ? "on" : "off",
+             !tryQuad          ? ""
+             : quadAdded       ? ": the extension added for the game"
+                               : ": NOT added, the runtime refused the instance with it");
     }
     if (XR_FAILED(r))
         return r;
@@ -304,6 +332,10 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         log_line("missing downstream functions; pass-through only");
     else
         gaze_init(*instance);
+    if (ok)
+        native_quad_install(*instance, gipa);  // its wrappers below everything else of this layer's
+    else
+        nativeQuad.extension = false;
     return r;
 }
 

@@ -126,13 +126,22 @@ std::wstring layer_directory() {
     return std::filesystem::path(module).parent_path().wstring();
 }
 
-void load_experiment() {
+std::wstring experiment_ini() {
     // A launcher passes its per-launch settings in SIM_QVFR_INI; otherwise the ini next to the DLL.
     std::wstring ini = (std::filesystem::path(layer_directory()) / L"sim-qvfr.ini").wstring();
     wchar_t env[MAX_PATH] = {};
     const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", env, MAX_PATH);
     if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
         ini = env;
+    return ini;
+}
+
+bool native_quad_wanted() {
+    return GetPrivateProfileIntW(L"experiment", L"native_quad_views", 0, experiment_ini().c_str()) != 0;
+}
+
+void load_experiment() {
+    const std::wstring ini = experiment_ini();
     wchar_t mode[32] = {};
     GetPrivateProfileStringW(L"experiment", L"mode", L"off", mode, 32, ini.c_str());
     // [experiment] baseline=1: mode=off whatever `mode` says (the launcher writes its own mode at every launch),
@@ -178,6 +187,16 @@ void load_experiment() {
              "(feather in alpha); composed as before with the helmet on",
              experiment.focusLayer,
              experiment.focusLayer == 2 ? "a quad layer per eye, 100 m out" : "a second projection layer");
+    }
+    // native_quad_views=1: the runtime composes the four views if it offers quad views (layer/native_quad.cpp). The
+    // instance already asked for the extension (native_quad_wanted); here only whether this game can use it.
+    experiment.nativeQuadViews = GetPrivateProfileIntW(L"experiment", L"native_quad_views", 0, ini.c_str()) != 0;
+    if (experiment.nativeQuadViews && !(experiment.views4ComposeD3D11 && game->qvfr_separate_views())) {
+        logf("experiment: native_quad_views ignored: %ls is not a D3D11 game with separate views (LMU)", game->info()->name);
+        experiment.nativeQuadViews = false;
+    } else if (experiment.nativeQuadViews && experiment.focusLayer) {
+        log_line("experiment: native_quad_views: focus_layer is off with it (the runtime takes the focus views as views 2-3)");
+        experiment.focusLayer = 0;
     }
     // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =

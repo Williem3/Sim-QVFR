@@ -103,6 +103,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
     game->session_running(false);  // no views until it begins
     XrResult r = next.CreateSession(instance, info, session);
     logf("xrCreateSession result=%d bindingType=%d", r, binding ? binding->type : 0);
+    if (XR_SUCCEEDED(r))
+        native_quad_plan(instance, info->systemId);  // begun as a quad view session if the runtime composes them
     if (XR_SUCCEEDED(r)) {
         {
             std::lock_guard guard(quad.mutex);
@@ -159,6 +161,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     game->session_running(false);
+    native_quad_session_ended();
     hang_watch_disarm();
     ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
     menu_shutdown();  // its swapchain and space belong to the session

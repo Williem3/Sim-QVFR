@@ -168,6 +168,17 @@ void cpu_profile_poll();
 XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info);
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo);
 
+// native_quad.cpp (quad/native_quad.h): the runtime composes quad views ([experiment] native_quad_views=1).
+enum class QuadOffer { Yes, No, Unknown };
+// Whether the runtime lists XR_VARJO_quad_views; Unknown with a layer between this one and it (or no answer).
+QuadOffer quad_views_offered(PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow);
+// With the extension on the instance (nativeQuad.extension): the wrappers into `next`, after it is loaded.
+void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa);
+// At xrCreateSession: whether the session will be begun as a quad view one (the system has it, the run wants it).
+void native_quad_plan(XrInstance instance, XrSystemId system);
+// At xrDestroySession: the session's counts logged, the state reset.
+void native_quad_session_ended();
+
 // xr_layer.cpp
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);
 XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info,

@@ -78,7 +78,7 @@ target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler
 add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/layer/config.cpp
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
   src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
-  src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp)
+  src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp src/layer/native_quad.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)
@@ -194,6 +194,13 @@ add_executable(quad_flow_test tests/quad_flow_test.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(quad_flow_test PRIVATE sim_qvfr_layer)
+
+# Offline check of native quad views (quad/native_quad.h, layer/native_quad.cpp) against a fake runtime offering
+# PRIMARY_QUAD_VARJO (tests/native_quad_test.cpp).
+add_executable(native_quad_test tests/native_quad_test.cpp)
+target_include_directories(native_quad_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(native_quad_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(native_quad_test PRIVATE sim_qvfr_layer)
 
 # The decrypted-image dump (probe/image_dump.h): this exe's own code from memory, relocations undone, equals its file.
 add_executable(image_dump_test tests/image_dump_test.cpp)

@@ -369,8 +369,13 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.focusChain, &acquire, &index)) ||
         index >= v4d3d11.focusImages.size())
         return false;
+    // A quad view session: opaque focus views (the runtime blends them into the eyes itself, and takes no alpha from
+    // a projection layer's views 2-3); otherwise the feather in alpha.
+    EyeComposition drawn[2] = {eyes[0], eyes[1]};
+    if (nativeQuad.active)
+        drawn[0].feather = drawn[1].feather = 0;
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.focusChain, &wait)) &&
-                    v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], eyes, rects);
+                    v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
     next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
     if (!ok)
         return false;
@@ -390,11 +395,14 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         focus[v].subImage.imageArrayIndex = 0;
     }
     if (v4d3d11.layered++ == 0 || v4d3d11.lastFallback) {
-        logf("views4 d3d11: focus_layer: two layers (eye 0: periphery %dx%d of the game's image at %d,%d, FOV tangents "
-             "%.3f %.3f %.3f %.3f; focus %dx%d over tangents +-%.3f x +-%.3f, feather %.0f%%)",
+        logf("views4 d3d11: %s (eye 0: periphery %dx%d of the game's image at %d,%d, FOV tangents %.3f %.3f %.3f %.3f; "
+             "focus %dx%d over tangents %.3f %.3f %.3f %.3f, feather %.0f%%)",
+             nativeQuad.active ? "native quad views: the eyes and the focus views as one four-view layer"
+                               : "focus_layer: two layers",
              outer[0].width, outer[0].height, copy[0].subImage.imageRect.offset.x, copy[0].subImage.imageRect.offset.y,
              eyes[0].outerTan[0], eyes[0].outerTan[1], eyes[0].outerTan[2], eyes[0].outerTan[3], rects[0][2],
-             rects[0][3], eyes[0].focusTan[1], eyes[0].focusTan[2], experiment.feather * 100);
+             rects[0][3], eyes[0].focusTan[0], eyes[0].focusTan[1], eyes[0].focusTan[2], eyes[0].focusTan[3],
+             nativeQuad.active ? 0.0 : experiment.feather * 100);
         v4d3d11.lastFallback = nullptr;
     }
     return true;
@@ -424,7 +432,8 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         return fallback("the game's eye image is unknown");
     // focus_layer needs only the compositor; whether this frame is layered is known once its views are (below). The
     // output chain is made there too, before quad.mutex is taken (v4d3d11_resources takes it).
-    const bool tryLayered = focus && layered && experiment.focusLayer && !v4d3d11.focusFailed;
+    const bool tryLayered =
+        focus && layered && (experiment.focusLayer || nativeQuad.active) && !v4d3d11.focusFailed;
     if (layered)
         *layered = false;
     if (!v4d3d11_compositor_ready(it->second.format))
@@ -629,10 +638,16 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_separate_views()) {
             bool layered = false;
             if (v4d3d11_compose(session, proj, copy, focusAfter < 0 ? &focusViews : nullptr, &layered)) {
+                // A quad view session (native_quad.cpp): the focus views are this layer's views 2-3, which the runtime
+                // composes itself (frames without them get copies of the eyes there, at the layer's bottom edge).
+                const bool quadViews = layered && nativeQuad.active;
+                if (quadViews)
+                    copy.insert(copy.end(), {focusViews[0], focusViews[1]});
                 projections.push_back(*proj);
                 projections.back().views = copy.data();
+                projections.back().viewCount = static_cast<uint32_t>(copy.size());
                 layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
-                if (layered) {
+                if (layered && !quadViews) {
                     // The same space and flags as the game's layer, blended over it by its premultiplied alpha.
                     focusLayer.layerFlags = proj->layerFlags | XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
                     focusLayer.layerFlags &= ~static_cast<XrCompositionLayerFlags>(XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT);
