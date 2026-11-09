@@ -105,6 +105,8 @@ struct MenuLaunch {
     bool objectDetail = false;
     // focus_layer=2 in this run: the focus quads' distance on the settings page (focus_quad_distance.h).
     bool focusQuads = false;
+    // The runtime composes the views (native quad views: Pimax, Varjo): the settings page says its own sliders don't apply.
+    bool runtimeComposes = false;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

@@ -296,6 +296,9 @@ float4 PS(V v) : SV_Target {
 // The focus view as a layer of its own (focus_layer): its target covers exactly the focus view (focusTan), texel for
 // texel its region of the views' image (focusSrc), so nothing is resampled; alpha is the feather weight PS blends
 // with, colour premultiplied by it, the runtime blending it over the periphery's layer. The outline as in PS.
+// viewTan.x 1 (native quad views, the runtime blending views 2-3 into the eyes itself): opaque, the outer view blended
+// into the focus view's edge by the feather (the runtime's blend on top of it), the outline viewTan.y in from the edge
+// (the runtime fades the outermost texels).
 float4 FocusLayerPS(V v) : SV_Target {
     float2 size;
     focusTex.GetDimensions(size.x, size.y);
@@ -304,6 +307,21 @@ float4 FocusLayerPS(V v) : SV_Target {
     float w = saturate(e / max(params.x, 1e-4));
     w = w * w * (3 - 2 * w);
     float4 color = focusTex.SampleLevel(linearClamp, inside(focusSrc.xy + f * focusSrc.zw, focusSrc, size), 0);
+    if (viewTan.x > 0.5) {
+        // This texel's direction in the focus view's frame, in the eye's (rot: eye -> focus, so its transpose), then
+        // where it lies in the outer view.
+        const float3 b = float3(lerp(focusTan.x, focusTan.y, f.x), lerp(focusTan.z, focusTan.w, f.y), -1);
+        const float3 a = rot0.xyz * b.x + rot1.xyz * b.y + rot2.xyz * b.z;
+        const float2 t = a.xy / max(-a.z, 1e-6);
+        const float2 o = float2((t.x - outerTan.x) / (outerTan.y - outerTan.x), (outerTan.z - t.y) / (outerTan.z - outerTan.w));
+        float2 outerSize;
+        outerTex.GetDimensions(outerSize.x, outerSize.y);
+        const float4 outer = outerTex.SampleLevel(linearClamp, inside(outerSrc.xy + saturate(o) * outerSrc.zw, outerSrc, outerSize), 0);
+        color = lerp(outer, color, w);
+        if (e >= viewTan.y && e < viewTan.y + params.y)
+            color = borderColor;
+        return float4(color.rgb, 1);
+    }
     if (e < params.y) {
         color = borderColor;
         w = 1;

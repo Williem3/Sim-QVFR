@@ -67,6 +67,7 @@ Settings load_settings(const std::wstring& ini) {
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
     s.multiView = read_int(ini, L"experiment", L"multi_view", 0) != 0;
+    s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
     s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
@@ -160,6 +161,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"multi_view", s.multiView ? L"1" : L"0");  // LMU's, at the next launch
+    ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
@@ -490,6 +492,8 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.eyeTracker = eye == 1 ? EyeTracker::Detected : eye == 0 ? EyeTracker::Missing : EyeTracker::Unknown;
     r.cheekyStatus = read_string(path, L"runtime", L"cheeky_status");
     r.cheekyVersion = read_string(path, L"runtime", L"cheeky_version");
+    r.quadViews = read_string(path, L"runtime", L"quad_views");
+    r.quadViewsUsed = read_int(path, L"runtime", L"quad_views_used", 0) != 0;
     r.vramUsedMb = read_int(path, L"runtime", L"vram_used_mb", 0);
     r.vramBudgetMb = read_int(path, L"runtime", L"vram_budget_mb", 0);
     r.vramScaledMb = read_int(path, L"runtime", L"vram_scaled_mb", 0);

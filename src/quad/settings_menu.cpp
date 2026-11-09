@@ -248,6 +248,9 @@ std::wstring menu_subtitle(const SettingsMenu& menu) {
     if (!menu.notice.empty())
         return menu.notice;
     const MenuPage page = menu_page(menu);
+    // The runtime composing the views (Pimax, Varjo): its own quad view sliders don't apply, these do.
+    if (page == MenuPage::Settings && menu.optimizeDetail.empty() && menu.launch.runtimeComposes)
+        return L"The runtime composes the views: its own quad view settings don’t apply, these do";
     if (page == MenuPage::Settings)
         return menu.optimizeDetail;
     return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";

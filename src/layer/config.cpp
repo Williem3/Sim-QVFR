@@ -136,8 +136,24 @@ std::wstring experiment_ini() {
     return ini;
 }
 
-bool native_quad_wanted() {
-    return GetPrivateProfileIntW(L"experiment", L"native_quad_views", 0, experiment_ini().c_str()) != 0;
+bool native_quad_wanted(std::string* why) {
+    const std::wstring ini = experiment_ini();
+    // Auto (1, the default): wherever the runtime composes quad views; 0: never.
+    if (GetPrivateProfileIntW(L"experiment", L"native_quad_views", 1, ini.c_str()) == 0) {
+        if (why)
+            *why = "off ([experiment] native_quad_views=0)";
+        return false;
+    }
+    // Cheeky's frame generation works on one composed image: composed then, as before.
+    if (GetPrivateProfileIntW(L"cheeky", L"enabled", 0, ini.c_str()) != 0 &&
+        GetPrivateProfileIntW(L"cheeky", L"fg", 0, ini.c_str()) != 0) {
+        if (why)
+            *why = "off with Cheeky's frame generation (it works on one composed image)";
+        return false;
+    }
+    if (why)
+        *why = "auto";
+    return true;
 }
 
 void load_experiment() {
@@ -188,16 +204,12 @@ void load_experiment() {
              experiment.focusLayer,
              experiment.focusLayer == 2 ? "a quad layer per eye, 100 m out" : "a second projection layer");
     }
-    // native_quad_views=1: the runtime composes the four views if it offers quad views (layer/native_quad.cpp). The
-    // instance already asked for the extension (native_quad_wanted); here only whether this game can use it.
-    experiment.nativeQuadViews = GetPrivateProfileIntW(L"experiment", L"native_quad_views", 0, ini.c_str()) != 0;
-    if (experiment.nativeQuadViews && !(experiment.views4ComposeD3D11 && game->qvfr_separate_views())) {
-        logf("experiment: native_quad_views ignored: %ls is not a D3D11 game with separate views (LMU)", game->info()->name);
-        experiment.nativeQuadViews = false;
-    } else if (experiment.nativeQuadViews && experiment.focusLayer) {
-        log_line("experiment: native_quad_views: focus_layer is off with it (the runtime takes the focus views as views 2-3)");
-        experiment.focusLayer = 0;
-    }
+    // native_quad_views (auto by default): the runtime composes the four views if it offers quad views
+    // (layer/native_quad.cpp). The instance already asked for the extension (native_quad_wanted); here only whether this
+    // game can use it (one without the feature: silently not). A quad view session takes the focus views as views 2-3,
+    // which focus_layer's own layers then give way to (views4_submit).
+    experiment.nativeQuadViews = native_quad_wanted(nullptr) && game->info()->features.nativeQuadViews &&
+                                 experiment.views4ComposeD3D11 && game->qvfr_separate_views();
     // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =
         experiment.views4 &&

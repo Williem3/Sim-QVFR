@@ -177,35 +177,60 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     // Native quad views ([experiment] native_quad_views=1, layer/native_quad.cpp): XR_VARJO_quad_views on the instance
     // when the runtime offers it (or its offer is unknown: a layer between), for a game with separate views (LMU). Every
     // runtime's offer is logged, wanted or not, so a report says whether the runtime could compose quad views.
-    const QuadOffer quadOffer = quad_views_offered(gipa, own->next == nullptr);
-    const bool quadWanted = native_quad_wanted() && games::adapter_for(thisGame).qvfr_separate_views();
-    const bool tryQuad = quadWanted && quadOffer != QuadOffer::No;
+    // With it XR_VARJO_foveated_rendering, when offered: the runtime then moves its focus views with the eyes, and the
+    // layer takes the gaze from them where the eye gaze extension gives none (runtime_gaze).
+    // Auto (native_quad_views=1, the default) asks only when the runtime is known to offer them: with a layer between,
+    // an unknown offer would mean a refused instance and a second try on every launch on any runtime; 2 tries then too.
+    // Not with VectorXR below (its frame generation works on one composed image).
+    const bool runtimeBelow = own->next == nullptr;
+    const QuadOffer quadOffer = extension_offered(gipa, runtimeBelow, XR_VARJO_QUAD_VIEWS_EXTENSION_NAME);
+    const QuadOffer foveatedOffer = extension_offered(gipa, runtimeBelow, XR_VARJO_FOVEATED_RENDERING_EXTENSION_NAME);
+    std::string quadWhy;
+    bool quadWanted = native_quad_wanted(&quadWhy) && thisGame->features.nativeQuadViews &&
+                      games::adapter_for(thisGame).qvfr_separate_views();
+    for (const XrApiLayerNextInfo* n = own->next; n && quadWanted; n = n->next)
+        if (std::strstr(n->layerName, "VECTORXR")) {
+            quadWanted = false;
+            quadWhy = "off with VectorXR below (its frame generation works on one composed image)";
+        }
+    const bool forceQuad =
+        GetPrivateProfileIntW(L"experiment", L"native_quad_views", 1, experiment_ini().c_str()) == 2;
+    const bool tryQuad = quadWanted && (quadOffer == QuadOffer::Yes || (forceQuad && quadOffer == QuadOffer::Unknown));
+    const bool tryFoveated = tryQuad && foveatedOffer != QuadOffer::No;
     const bool tryGaze = gazeExtension == GazeExtension::Add || gazeExtension == GazeExtension::Try;
-    const auto create = [&](bool withGaze, bool withQuad) {
+    const auto create = [&](bool withGaze, bool withQuad, bool withFoveated) {
         std::vector<const char*> names(info->enabledExtensionNames, info->enabledExtensionNames + info->enabledExtensionCount);
         if (withGaze)
             names.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
         if (withQuad)
             names.push_back(XR_VARJO_QUAD_VIEWS_EXTENSION_NAME);
+        if (withFoveated)
+            names.push_back(XR_VARJO_FOVEATED_RENDERING_EXTENSION_NAME);
         XrInstanceCreateInfo with = *info;
         with.enabledExtensionCount = static_cast<uint32_t>(names.size());
         with.enabledExtensionNames = names.data();
         return own->nextCreateApiLayerInstance(&with, &nextLayerInfo, instance);
     };
+    // Each refusal drops the last addition: foveated rendering, then quad views, then the gaze extension.
     XrResult r = XR_ERROR_EXTENSION_NOT_PRESENT;
-    bool quadAdded = false;
-    if (tryQuad) {
-        r = create(tryGaze, true);
+    bool quadAdded = false, foveatedAdded = false;
+    if (tryFoveated) {
+        r = create(tryGaze, true, true);
+        quadAdded = foveatedAdded = XR_SUCCEEDED(r);
+    }
+    if (tryQuad && !quadAdded) {
+        r = create(tryGaze, true, false);
         quadAdded = XR_SUCCEEDED(r);
     }
     bool gazeAdded = quadAdded && tryGaze;
     if (!quadAdded && tryGaze) {
-        r = create(true, false);
+        r = create(true, false, false);
         gazeAdded = XR_SUCCEEDED(r);
     }
     if (!quadAdded && !gazeAdded)
         r = own->nextCreateApiLayerInstance(info, &nextLayerInfo, instance);
     nativeQuad.extension = quadAdded;
+    nativeQuad.foveated = foveatedAdded;
     game = &games::adapter_for(thisGame);
     load_experiment();
     // Where the launcher writes live settings while this ACE runs (live_reload).
@@ -228,11 +253,24 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     }
     {
         static const char* const kOffer[] = {"offers them", "doesn't offer them", "offer unknown (a layer between)"};
-        logf("native quad views: the runtime %s (XR_VARJO_quad_views); native_quad_views %s%s",
-             kOffer[static_cast<int>(quadOffer)], quadWanted ? "on" : "off",
-             !tryQuad          ? ""
-             : quadAdded       ? ": the extension added for the game"
-                               : ": NOT added, the runtime refused the instance with it");
+        const bool hasFeature = thisGame->features.nativeQuadViews;
+        logf("native quad views: the runtime %s (XR_VARJO_quad_views); %s%s", kOffer[static_cast<int>(quadOffer)],
+             !hasFeature ? "not for this game yet"
+             : quadWanted ? (forceQuad ? "native_quad_views=2 (tried even with the offer unknown)" : "auto")
+                          : quadWhy.c_str(),
+             !tryQuad
+                 ? (quadWanted && quadOffer == QuadOffer::Unknown ? ": not asked (native_quad_views=2 asks anyway)" : "")
+             : quadAdded ? ": the extension added for the game"
+                         : ": NOT added, the runtime refused the instance with it");
+        // For the launcher: what the runtime offered and whether this launch asked for them.
+        runtime_info(L"quad_views", quadOffer == QuadOffer::Yes ? L"offered" : quadOffer == QuadOffer::No ? L"none" : L"unknown");
+        runtime_info(L"quad_views_used", L"0");  // set to 1 when the session runs as a quad view one (native_quad.cpp)
+        if (tryQuad)
+            logf("native quad views: foveated rendering (XR_VARJO_foveated_rendering, the runtime's own gaze) %s",
+                 foveatedAdded               ? "added"
+                 : !tryFoveated              ? "not offered"
+                 : quadAdded                 ? "refused by the runtime: gaze from the eye gaze extension only"
+                                             : "not added");
     }
     if (XR_FAILED(r))
         return r;

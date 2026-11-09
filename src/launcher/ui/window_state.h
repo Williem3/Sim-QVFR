@@ -48,6 +48,8 @@ enum Ctl {
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // NVIDIA multi-view rendering ([experiment] multi_view, Resolution pane).
     kMultiView,
+    // The runtime composing the views ([experiment] native_quad_views, Resolution pane).
+    kNativeQuad,
     // The FOV crop ([crop], Resolution pane).
     kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
     // The helmet overlay ([helmet], Resolution pane).

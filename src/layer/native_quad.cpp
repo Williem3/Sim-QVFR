@@ -4,7 +4,9 @@
 // session: the wrappers here, installed in `next` when the instance has the extension, translate at the layer's
 // bottom edge (the session's begin, its view locations, its visibility mask, its frames).
 #include <atomic>
+#include <cmath>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #include "log.h"
@@ -27,6 +29,37 @@ const char* view_name(uint32_t v) {
     return v < 4 ? kNames[v] : "?";
 }
 
+// The runtime's gaze (foveated rendering): the direction through the middle of each focus view's FOV, in its own
+// frame, turned into `space`, the two eyes' averaged. Kept for the same locate's gaze lookup (runtime_gaze).
+void note_runtime_gaze(XrSpace space, XrTime time, const XrView (&four)[kQuadViews]) {
+    XrVector3f sum{0, 0, 0};
+    float centre[2] = {};
+    for (uint32_t v = 2; v < kQuadViews; ++v) {
+        const XrFovf& f = four[v].fov;
+        const float cx = 0.5f * (std::tan(f.angleLeft) + std::tan(f.angleRight));
+        const float cy = 0.5f * (std::tan(f.angleUp) + std::tan(f.angleDown));
+        if (v == 2) {
+            centre[0] = cx;
+            centre[1] = cy;
+        }
+        const float n = std::sqrt(cx * cx + cy * cy + 1);
+        const XrVector3f d = rotate(four[v].pose.orientation, {cx / n, cy / n, -1 / n});
+        sum = {sum.x + d.x, sum.y + d.y, sum.z + d.z};
+    }
+    const float n = std::sqrt(sum.x * sum.x + sum.y * sum.y + sum.z * sum.z);
+    if (!(n > 1e-6f))
+        return;
+    std::lock_guard guard(nativeQuad.gazeMutex);
+    nativeQuad.gaze = {sum.x / n, sum.y / n, sum.z / n};
+    nativeQuad.gazeSpace = space;
+    nativeQuad.gazeTime = time;
+    if (nativeQuad.gazeFrames++ > 0 && (std::fabs(centre[0] - nativeQuad.lastCentre[0]) > 1e-4f ||
+                                        std::fabs(centre[1] - nativeQuad.lastCentre[1]) > 1e-4f))
+        ++nativeQuad.gazeMoves;
+    nativeQuad.lastCentre[0] = centre[0];
+    nativeQuad.lastCentre[1] = centre[1];
+}
+
 XrResult XRAPI_CALL quadBeginSession(XrSession session, const XrSessionBeginInfo* info) {
     if (!planned || !info || info->primaryViewConfigurationType != kStereo)
         return nativeQuad.BeginSession(session, info);
@@ -35,6 +68,7 @@ XrResult XRAPI_CALL quadBeginSession(XrSession session, const XrSessionBeginInfo
     const XrResult r = nativeQuad.BeginSession(session, &quadInfo);
     if (XR_SUCCEEDED(r)) {
         nativeQuad.active = true;
+        runtime_info(L"quad_views_used", L"1");  // the launcher's "the runtime composes" line
         log_line("native quad views: the session runs as PRIMARY_QUAD_VARJO: the runtime composes the eyes and the focus "
                  "views (views 2-3), the game sees stereo");
         return r;
@@ -56,6 +90,13 @@ XrResult XRAPI_CALL quadLocateViews(XrSession session, const XrViewLocateInfo* i
         return XR_ERROR_SIZE_INSUFFICIENT;
     XrViewLocateInfo quadInfo = *info;
     quadInfo.viewConfigurationType = kQuad;
+    // With foveated rendering the runtime puts views 2-3 where the eyes look (its own eye tracking).
+    XrViewLocateFoveatedRenderingVARJO foveated{XR_TYPE_VIEW_LOCATE_FOVEATED_RENDERING_VARJO};
+    if (nativeQuad.foveated) {
+        foveated.next = info->next;
+        foveated.foveatedRenderingActive = XR_TRUE;
+        quadInfo.next = &foveated;
+    }
     XrView four[kQuadViews];
     for (uint32_t v = 0; v < kQuadViews; ++v)
         four[v] = {XR_TYPE_VIEW, v < 2 ? views[v].next : nullptr};
@@ -77,6 +118,8 @@ XrResult XRAPI_CALL quadLocateViews(XrSession session, const XrViewLocateInfo* i
         views[v].pose = four[v].pose;
         views[v].fov = four[v].fov;
     }
+    if (nativeQuad.foveated && located >= kQuadViews)
+        note_runtime_gaze(info->space, info->displayTime, four);
     return r;
 }
 
@@ -128,7 +171,22 @@ XrResult XRAPI_CALL quadEndFrame(XrSession session, const XrFrameEndInfo* info) 
 
 }  // namespace
 
-QuadOffer quad_views_offered(PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow) {
+bool runtime_gaze(XrSpace space, XrTime time, XrVector3f& direction) {
+    if (!nativeQuad.active || !nativeQuad.foveated)
+        return false;
+    std::lock_guard guard(nativeQuad.gazeMutex);
+    if (nativeQuad.gazeTime != time || nativeQuad.gazeSpace != space)
+        return false;
+    direction = nativeQuad.gaze;
+    if (!nativeQuad.usedRuntimeGaze) {
+        nativeQuad.usedRuntimeGaze = true;
+        log_line("gaze: from the runtime's foveated rendering (where it puts its focus views), the eye gaze extension "
+                 "giving no samples");
+    }
+    return true;
+}
+
+QuadOffer extension_offered(PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow, const char* name) {
     if (!runtimeBelow || !gipa)
         return QuadOffer::Unknown;  // a layer below may not answer before its own instance exists (gaze_extension)
     PFN_xrVoidFunction function = nullptr;
@@ -142,7 +200,7 @@ QuadOffer quad_views_offered(PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow) 
     if (count && XR_FAILED(enumerate(nullptr, count, &count, properties.data())))
         return QuadOffer::Unknown;
     for (const XrExtensionProperties& p : properties)
-        if (std::strcmp(p.extensionName, XR_VARJO_QUAD_VIEWS_EXTENSION_NAME) == 0)
+        if (std::strcmp(p.extensionName, name) == 0)
             return QuadOffer::Yes;
     return QuadOffer::No;
 }
@@ -213,8 +271,19 @@ void native_quad_session_ended() {
              static_cast<unsigned long long>(nativeQuad.focusFrames),
              static_cast<unsigned long long>(nativeQuad.copyFrames),
              static_cast<unsigned long long>(nativeQuad.refusedLayers));
+    if (nativeQuad.gazeFrames)
+        logf("native quad views: the runtime's foveated rendering moved its focus views on %llu of %llu located frames",
+             static_cast<unsigned long long>(nativeQuad.gazeMoves),
+             static_cast<unsigned long long>(nativeQuad.gazeFrames));
     nativeQuad.focusFrames = nativeQuad.copyFrames = nativeQuad.refusedLayers = 0;
     nativeQuad.loggedFirstFocus = nativeQuad.loggedFirstCopy = false;
+    {
+        std::lock_guard guard(nativeQuad.gazeMutex);
+        nativeQuad.gazeFrames = nativeQuad.gazeMoves = 0;
+        nativeQuad.gazeTime = 0;
+        nativeQuad.gazeSpace = XR_NULL_HANDLE;
+        nativeQuad.usedRuntimeGaze = false;
+    }
 }
 
 }  // namespace simqvfr::layer

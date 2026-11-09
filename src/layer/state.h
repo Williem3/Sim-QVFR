@@ -670,7 +670,18 @@ struct ProfileNotice {
 // GetVisibilityMaskKHR and EndFrame are this file's wrappers, which call the functions kept here.
 struct NativeQuad {
     std::atomic<bool> extension = false;  // XR_VARJO_quad_views enabled on the game's instance
+    std::atomic<bool> foveated = false;   // XR_VARJO_foveated_rendering too: the runtime moves views 2-3 with the eyes
     std::atomic<bool> active = false;     // this session was begun as PRIMARY_QUAD_VARJO
+    // The gaze as the runtime's foveated rendering has it (foveated): the direction through the middle of its views 2-3
+    // in the space and at the time of the last quad xrLocateViews, a fallback for the eye gaze extension (on Pimax's
+    // runtime it can give no samples while the runtime's own foveation tracks: 2026-11-09). Under gazeMutex.
+    std::mutex gazeMutex;
+    XrVector3f gaze{0, 0, -1};
+    XrSpace gazeSpace = XR_NULL_HANDLE;
+    XrTime gazeTime = 0;
+    float lastCentre[2] = {};  // view 2's FOV centre (tangents), to count the frames the runtime moved it
+    uint64_t gazeFrames = 0, gazeMoves = 0;
+    bool usedRuntimeGaze = false;  // logged once, the first time it stood in
     PFN_xrEnumerateViewConfigurations EnumerateViewConfigurations = nullptr;
     PFN_xrBeginSession BeginSession = nullptr;
     PFN_xrLocateViews LocateViews = nullptr;

@@ -777,6 +777,13 @@ std::wstring issue_details(const IssueReport& r) {
     if (s.cheeky.load)
         dlss += s.cheeky.fg ? L", frame generation " + number(s.cheeky.fgMultiplier) + L"x" : L", frame generation off";
     b += L"- **Foveated DLSS:** " + dlss + L"\n";
+    if (qvfr && !rt.quadViews.empty())  // the runtime composing the views (Pimax, Varjo): what the last launch did
+        b += L"- **Runtime composition:** " + std::wstring(s.nativeQuad ? L"auto" : L"off") + L" (last launch: " +
+             (rt.quadViewsUsed               ? L"the runtime composed the views"
+              : rt.quadViews == L"offered"   ? L"offered by the runtime, not used"
+              : rt.quadViews == L"none"      ? L"not offered by the runtime"
+                                             : L"not tried, another OpenXR layer between") +
+             L")\n";
     b += L"\n**Last session**\n```text\n" + without_folders(session_summary_text(rt)) + L"```\n";
     return b;
 }

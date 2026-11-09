@@ -20,6 +20,9 @@ struct GameFeatures {
     bool objectDetail;    // the object and tree detail slider ([experiment] object_detail), live
     // NVIDIA multi-view rendering ([experiment] multi_view, multi_view.h): each eye's pass draws its focus view too.
     bool multiView = false;
+    // Runtime-composed quad views ([experiment] native_quad_views, layer/native_quad.cpp): on a Pimax or Varjo runtime,
+    // the runtime composes the four views (a D3D11 game with separate views: LMU).
+    bool nativeQuadViews = false;
 };
 
 struct GameInfo {

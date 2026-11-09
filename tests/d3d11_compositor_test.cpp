@@ -194,6 +194,38 @@ int main() {
                           "premultiplied", e, a);
             check(a >= 100 && a <= 160 && premultiplied, what);
         }
+        // Native quad views (viewTan.x 1): opaque throughout, the outer view blended into the edge by the feather (the
+        // box's edge shows the outer view's colour), the outline (3% thick) 10% in from the edge.
+        EyeComposition native[2] = {eyes[0], eyes[1]};
+        for (EyeComposition& n : native) {
+            n.viewTan[0] = 1;
+            n.viewTan[1] = 0.10f;
+            n.border = 0.03f;
+            const float magenta[4] = {1, 0, 1, 1};
+            std::memcpy(n.borderColor, magenta, sizeof(magenta));
+        }
+        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), native, rects), "the native focus views");
+        const Image nq = read_image(device.Get(), context.Get(), focusLayer.Get());
+        for (int e = 0; e < 2; ++e) {
+            const UINT x0 = e * 128;
+            char what[160];
+            std::snprintf(what, sizeof(what), "native, eye %d: the focus view in the middle (0x%08x), the outer view at the "
+                          "edge (0x%08x)", e, nq.at(x0 + 64, 32), nq.at(x0, 32));
+            // (the edge texel's centre is half a texel in: a trace of the focus view, a step or two of 255)
+            bool edgeOuter = true;
+            for (int c = 0; c < 4; ++c)
+                edgeOuter &= std::abs(static_cast<int>(nq.channel(x0, 32, c)) - static_cast<int>((kOuter[e] >> (8 * c)) & 0xff)) <= 2;
+            check(nq.at(x0 + 64, 32) == kFocus[e] && edgeOuter, what);
+            bool opaque = true;
+            for (UINT x = x0; x < x0 + 128; x += 3)
+                for (UINT y = 0; y < 64; y += 3)
+                    opaque &= nq.channel(x, y, 3) == 255;
+            std::snprintf(what, sizeof(what), "native, eye %d: opaque everywhere", e);
+            check(opaque, what);
+            std::snprintf(what, sizeof(what), "native, eye %d: the outline 10%% in (0x%08x), not at the edge", e,
+                          nq.at(x0 + 14, 32));
+            check(nq.at(x0 + 14, 32) == 0xffff00ff && nq.at(x0 + 2, 32) != 0xffff00ff, what);
+        }
     }
 
     // The FOV crop: each eye drawn into the top left of its half (outputSize, 75% x 50%); the rest of the half is

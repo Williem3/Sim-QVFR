@@ -335,6 +335,10 @@ void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4La
     game->qvfr_game_image(image, rects);
 }
 
+// Native quad views: the outline this far in from the focus box's edge (its share of the box, inside_box), past the
+// strip the runtime fades into the eyes (Pimax: the outermost lines hardly showed, 2026-11-09).
+constexpr float kNativeOutlineInset = 0.05f;
+
 // focus_layer, for a frame with four views (under v4d3d11.mutex and quad.mutex): each focus view drawn texel for
 // texel into the focus chain, its feather in alpha, and `focus` pointed at them with the focus cameras' poses and
 // FOVs; `copy` (the periphery) keeps the game's own images, cut to the outer views as rendered, with their FOV.
@@ -370,10 +374,15 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         index >= v4d3d11.focusImages.size())
         return false;
     // A quad view session: opaque focus views (the runtime blends them into the eyes itself, and takes no alpha from
-    // a projection layer's views 2-3); otherwise the feather in alpha.
+    // a projection layer's views 2-3), the periphery blended into their edge by the feather and the outline drawn
+    // kNativeOutlineInset in from it (FocusLayerPS); otherwise the feather in alpha.
     EyeComposition drawn[2] = {eyes[0], eyes[1]};
     if (nativeQuad.active)
-        drawn[0].feather = drawn[1].feather = 0;
+        for (EyeComposition& d : drawn) {
+            d.viewTan[0] = 1;
+            d.viewTan[1] = kNativeOutlineInset;
+            d.viewTan[2] = d.viewTan[3] = 0;
+        }
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.focusChain, &wait)) &&
                     v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
     next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
@@ -402,7 +411,7 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
              outer[0].width, outer[0].height, copy[0].subImage.imageRect.offset.x, copy[0].subImage.imageRect.offset.y,
              eyes[0].outerTan[0], eyes[0].outerTan[1], eyes[0].outerTan[2], eyes[0].outerTan[3], rects[0][2],
              rects[0][3], eyes[0].focusTan[0], eyes[0].focusTan[1], eyes[0].focusTan[2], eyes[0].focusTan[3],
-             nativeQuad.active ? 0.0 : experiment.feather * 100);
+             experiment.feather * 100);
         v4d3d11.lastFallback = nullptr;
     }
     return true;

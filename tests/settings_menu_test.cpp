@@ -434,6 +434,17 @@ int main() {
             check(menu_lines(q)[q.selected].value == L"1 m" && !menu_key(q, MenuKey::Left),
                   "Focus quad distance: down to 1 m, and no further");
         }
+        {
+            // The runtime composing the views (Pimax, Varjo): the settings page says its own sliders don't apply, unless
+            // the optimizer has something to say there.
+            SettingsMenu n = c;
+            check(menu_subtitle(n).empty(), "runtime composition off: no note");
+            n.launch.runtimeComposes = true;
+            check(menu_subtitle(n).find(L"quad view settings don’t apply") != std::wstring::npos,
+                  "runtime composing: the settings page notes its own quad view settings don't apply");
+            n.optimizeDetail = L"Measuring… keep driving";
+            check(menu_subtitle(n) == L"Measuring… keep driving", "runtime composing: the optimizer's line comes first");
+        }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
         {
             // A game without Cheeky's frame generation (ACC): its Foveated DLSS page, no Frame generation page.

@@ -3,6 +3,7 @@
 // runtime's four, its visibility mask is asked for as quad, and every frame reaches the runtime with four views per
 // projection layer (copies of the eyes where the layer gave only two). A runtime that refuses the quad session, or a
 // system without the configuration, leaves the session stereo.
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -33,6 +34,8 @@ struct Fake {
     std::vector<uint32_t> endViewCounts;  // each projection layer's view count, last frame
     std::vector<XrSwapchain> endSwapchains;  // the last frame's first projection layer's views' swapchains
     uint32_t endLayers = 0;
+    bool foveatedAsked = false;  // the last locate carried XrViewLocateFoveatedRenderingVARJO, active
+    float innerShift = 0;        // the inner views' FOV moved this far right and up (tangents): the runtime's gaze
 } fake;
 
 XrResult XRAPI_CALL fakeEnumerateConfigs(XrInstance, XrSystemId, uint32_t capacity, uint32_t* count,
@@ -81,6 +84,10 @@ XrResult XRAPI_CALL fakeLocate(XrSession, const XrViewLocateInfo* info, XrViewSt
                                uint32_t* count, XrView* views) {
     fake.located = info->viewConfigurationType;
     fake.locateCapacity = capacity;
+    fake.foveatedAsked = false;
+    for (auto* s = static_cast<const XrBaseInStructure*>(info->next); s; s = s->next)
+        if (s->type == XR_TYPE_VIEW_LOCATE_FOVEATED_RENDERING_VARJO)
+            fake.foveatedAsked = reinterpret_cast<const XrViewLocateFoveatedRenderingVARJO*>(s)->foveatedRenderingActive;
     const bool quad = info->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_QUAD_VARJO;
     if (!quad && fake.begun == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_QUAD_VARJO)
         return XR_ERROR_VALIDATION_FAILURE;  // a quad session is located as one
@@ -92,6 +99,10 @@ XrResult XRAPI_CALL fakeLocate(XrSession, const XrViewLocateInfo* info, XrViewSt
     for (uint32_t v = 0; v < n; ++v) {
         const float w = v < 2 ? 0.9f : 0.3f;
         views[v].fov = {-w - 0.01f * v, w, w, -w};
+        if (v >= 2 && fake.foveatedAsked) {  // foveated: the inner views centred on tangents (shift, shift)
+            const float s = fake.innerShift;
+            views[v].fov = {std::atan(s - 0.3f), std::atan(s + 0.3f), std::atan(s + 0.3f), std::atan(s - 0.3f)};
+        }
         views[v].pose.orientation = {0, 0, 0, 1};
         views[v].pose.position = {v % 2 ? 0.03f : -0.03f, 0, 0};
     }
@@ -247,6 +258,27 @@ int main() {
     check(XR_SUCCEEDED(next.EndFrame(kSession, &end)) && fake.endViewCounts.size() == 1 && fake.endViewCounts[0] == 4 &&
               fake.endSwapchains[2] == kFocus && nativeQuad.focusFrames == 1,
           "a race frame: the focus views as views 2-3, untouched");
+
+    // Foveated rendering: the locate asks for it, and the runtime's focus views (moved right and up by tangent 0.2)
+    // give the gaze for that same call, in its space and at its time only.
+    {
+        XrVector3f none{0, 0, -1};
+        check(!runtime_gaze(locate.space, locate.displayTime, none), "no runtime gaze without foveated rendering");
+        nativeQuad.foveated = true;
+        fake.innerShift = 0.2f;
+        locate.displayTime = 1000;
+        count = 0;
+        check(XR_SUCCEEDED(next.LocateViews(kSession, &locate, &state, 2, &count, views)) && fake.foveatedAsked,
+              "foveated rendering: the locate asks the runtime to move its focus views with the eyes");
+        XrVector3f gazeDir{0, 0, -1};
+        const bool got = runtime_gaze(locate.space, 1000, gazeDir);
+        const double tx = gazeDir.x / -gazeDir.z, ty = gazeDir.y / -gazeDir.z;
+        std::printf("     runtime gaze tangents %.4f, %.4f\n", tx, ty);
+        check(got && std::fabs(tx - 0.2) < 1e-3 && std::fabs(ty - 0.2) < 1e-3,
+              "foveated rendering: the gaze points through the middle of the runtime's focus views");
+        check(!runtime_gaze(locate.space, 999, gazeDir), "foveated rendering: another frame's lookup gets none");
+        nativeQuad.foveated = false;
+    }
 
     // An empty frame (the game's first) passes as it is.
     end.layerCount = 0;

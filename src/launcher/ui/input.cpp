@@ -231,6 +231,12 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
+    case kNativeQuad:  // auto (1) or off (0); a hand-set 2 (asked for behind another layer) becomes off, then auto
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::nativeQuadViews)) {
+            app.s.nativeQuad = app.s.nativeQuad ? 0 : 1;
+            changed();
+        }
+        return;
     case kHelmetOn:
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::helmet)) {
             app.s.helmet.on = !app.s.helmet.on;
@@ -332,6 +338,7 @@ bool space_control(Ctl id) {
     case kHotkeyFooter:
     case kUpdateCheck:
     case kMultiView:
+    case kNativeQuad:
     case kCropOn:
     case kHelmetOn:
     case kVisor:
