@@ -216,7 +216,7 @@ bool D3D11Compositor::compose(ID3D11Texture2D* views, ID3D11Texture2D* output, c
 }
 
 bool D3D11Compositor::draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* output, const EyeComposition (&eyes)[2],
-                                       const int (&rects)[2][4]) {
+                                       const int (&rects)[2][4], const NativeFocusDraw (*native)[2]) {
     if (!ready_ || !views || !output)
         return false;
     ID3D11ShaderResourceView* srv = source(views);
@@ -234,6 +234,8 @@ bool D3D11Compositor::draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* 
     for (int eye = 0; eye < 2; ++eye) {
         float constants[kComposeConstants] = {};
         compose_constants(eyes[eye], eye, constants);
+        if (native)
+            native_focus_constants((*native)[eye], constants);
         if (!set_constants(eye, constants))  // buffers 0-1, one per eye, as compose
             return discard();
         const D3D11_VIEWPORT viewport{static_cast<float>(rects[eye][0]), static_cast<float>(rects[eye][1]),

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "quad/focus_centred.h"
 #include "quad/focus_quad.h"
 #include "quad/focus_turn.h"
 
@@ -224,6 +225,43 @@ int main() {
         expect(exact && worst < 1e-4, "focus quad: its corners on the focus view's FOV edges, seen from the eye");
         expect(std::fabs(q.size.width - 40.0f) < 1e-3f && std::fabs(q.size.height - 30.0f) < 1e-3f,
                "focus quad: as large as the FOV 100 m out (0.40 x 0.30 tangents: 40 x 30 m)");
+    }
+
+    // Native quad views (quad/focus_centred.h): an off-centre focus box re-expressed as a view turned to its middle with
+    // a centred FOV. A centred box stays as it is; an off-centre one has its middle on the turned view's axis, and every
+    // corner inside the centred FOV, the FOV no larger than they need (some corner on its edge, each axis).
+    {
+        const float centred[4] = {-0.3f, 0.3f, 0.25f, -0.25f};
+        const CentredFocus same = centred_focus(centred);
+        expect(std::fabs(same.turn.w - 1) < 1e-6f && std::fabs(same.tan[1] - 0.3f) < 1e-5f &&
+                   std::fabs(same.tan[2] - 0.25f) < 1e-5f && std::fabs(same.scaleX - 1) < 1e-5f,
+               "centred focus: a box on its axis needs no turn and keeps its FOV");
+        const float box[4] = {0.1f, 0.6f, 0.5f, 0.05f};  // right and up of the axis (the gaze looking there)
+        const CentredFocus c = centred_focus(box);
+        const XrQuaternionf inv = qconj(c.turn);
+        const float cx = 0.35f, cy = 0.275f;
+        const XrVector3f mid = rotate(inv, {cx, cy, -1});
+        expect(std::fabs(mid.x / -mid.z) < 1e-5 && std::fabs(mid.y / -mid.z) < 1e-5,
+               "centred focus: the box's middle on the turned view's axis");
+        double maxX = 0, maxY = 0;
+        bool inside = true;
+        for (const float x : {box[0], box[1]})
+            for (const float y : {box[2], box[3]}) {
+                const XrVector3f o = rotate(inv, {x, y, -1});
+                const double tx = o.x / -o.z, ty = o.y / -o.z;
+                inside &= o.z < 0 && std::fabs(tx) <= c.tan[1] + 1e-5 && std::fabs(ty) <= c.tan[2] + 1e-5;
+                maxX = std::fmax(maxX, std::fabs(tx));
+                maxY = std::fmax(maxY, std::fabs(ty));
+            }
+        std::printf("centred focus: FOV +-%.4f x +-%.4f for a %.2f x %.2f box (scale %.3f x %.3f)\n", c.tan[1], c.tan[2],
+                    box[1] - box[0], box[2] - box[3], c.scaleX, c.scaleY);
+        expect(inside && std::fabs(maxX - c.tan[1]) < 1e-5 && std::fabs(maxY - c.tan[2]) < 1e-5 && c.tan[0] == -c.tan[1] &&
+                   c.tan[3] == -c.tan[2],
+               "centred focus: every corner inside the symmetric FOV, which is no larger than they need");
+        // The shader's mapping: a direction in the centred view's frame into the box's (rotation, row-major).
+        const XrVector3f back = rotate(c.turn, {0, 0, -1});
+        expect(std::fabs(back.x / -back.z - cx) < 1e-5 && std::fabs(back.y / -back.z - cy) < 1e-5,
+               "centred focus: the turned view's axis lands on the box's middle in the box's frame");
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
