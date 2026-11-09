@@ -24,7 +24,7 @@ room to turn the graphics up.
 - **One of the games:**
   - **Assetto Corsa EVO** on Steam.
   - **Assetto Corsa Competizione** on Steam, with its VR running through OpenComposite (see
-    [Assetto Corsa Competizione](#assetto-corsa-competizione-alpha)).
+    [Assetto Corsa Competizione](#assetto-corsa-competizione)).
   - **X-Plane 12** (version 12.4.3-r2), from Steam or elsewhere (see [X-Plane 12](#x-plane-12)).
   - **Le Mans Ultimate** (version 1.4.2.0) on Steam (see [Le Mans Ultimate](#le-mans-ultimate)).
 - **A PC VR headset.** Eye tracking is a bonus: with it, the sharp area follows your eyes. Without it,
@@ -165,7 +165,7 @@ Once an official Cheeky release includes the fixes, its own download will replac
 - **Show the center region** draws an outline around the full-quality area, so you can check it
   follows your eyes.
 
-## Assetto Corsa Competizione (alpha)
+## Assetto Corsa Competizione
 
 Sim-QVFR runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution
 periphery, the headset menu and the performance overlay. Pick the **Assetto Corsa Competizione** tab
