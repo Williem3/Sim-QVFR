@@ -13,6 +13,7 @@
 #include "quad/focus_offset.h"
 #include "quad/focus_shape.h"
 #include "quad/fov_crop.h"
+#include "quad/focus_quad_distance.h"
 #include "quad/gaze_deadzone.h"
 #include "quad/helmet.h"
 #include "quad/settings_menu.h"
@@ -69,6 +70,7 @@ LiveSettings read_live(const wchar_t* ini) {
     l.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini) != 0;
     l.offset = read_focus_offset(ini);
     l.gazeDeadzone = read_gaze_deadzone(ini) / 10.0;
+    l.focusQuadDistance = read_focus_quad_distance(ini);
     return l;
 }
 
@@ -250,6 +252,7 @@ void load_experiment() {
     experiment.fixedOffsetY = settings.offset.fixed;
     experiment.gazeOffsetY = settings.offset.gaze;
     experiment.gazeDeadzone = settings.gazeDeadzone;
+    experiment.focusQuadDistance = settings.focusQuadDistance;
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());

@@ -87,6 +87,8 @@ void live_apply(const LiveSettings& l) {
     experiment.fixedOffsetY = l.offset.fixed;
     experiment.gazeOffsetY = l.offset.gaze;
     experiment.gazeDeadzone = l.gazeDeadzone;
+    if (experiment.focusLayer == 2 && experiment.focusQuadDistance.exchange(l.focusQuadDistance) != l.focusQuadDistance)
+        logf("live: focus_layer=2: the focus quads %d m out", l.focusQuadDistance);
     bool gazeAvailable;
     {
         std::lock_guard guard(gaze.mutex);

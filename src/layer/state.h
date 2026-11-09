@@ -98,8 +98,8 @@ struct Experiment {
     // feather in alpha), so the runtime samples the focus views at their own density (V4D3D11::focusChain).
     // 2: the focus views as two quad layers instead, one per eye (SteamVR misplaced and warped the projection layer).
     int focusLayer = 0;
-    // focus_layer=2: the quads' distance, metres (far, so they move with the head as the periphery's image does).
-    static constexpr float kFocusQuadDistance = 100.0f;
+    // focus_layer=2: the quads' distance, metres ([experiment] focus_quad_distance, live; quad/focus_quad_distance.h).
+    std::atomic<int> focusQuadDistance = 100;
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4TestVisibleMask = false;    // views4 test: a full-view visible-area mesh, as VDXR gives (diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
@@ -197,6 +197,7 @@ struct LiveSettings {
     FovCrop crop;  // views4 only
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
+    int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
 };
 
 // views4: the outer and focus views' sizes, linear scales of the native eye (views4_layout.h), from

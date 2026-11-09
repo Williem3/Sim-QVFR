@@ -195,6 +195,14 @@ int main() {
     v.objectDetail = 40;
     write_menu_values(ini.c_str(), v, true, true);
     check(read_menu_values(ini.c_str()).objectDetail == 40, "object detail is written for a game with it, and read back");
+    check(GetPrivateProfileIntW(L"experiment", L"focus_quad_distance", -1, ini.c_str()) == -1 &&
+              read_menu_values(ini.c_str()).focusQuadStep == kFocusQuadSteps - 1,
+          "focus quad distance: not written without focus_layer=2; unset reads as 100 m");
+    v.focusQuadStep = focus_quad_step(5);
+    write_menu_values(ini.c_str(), v, true, false, true);
+    check(GetPrivateProfileIntW(L"experiment", L"focus_quad_distance", -1, ini.c_str()) == 5 &&
+              focus_quad_metres(read_menu_values(ini.c_str()).focusQuadStep) == 5,
+          "focus quad distance: written in metres with focus_layer=2, and read back");
     DeleteFileW(ini.c_str());
     DeleteFileW(loopIni.c_str());
 
@@ -404,6 +412,27 @@ int main() {
             SettingsMenu loop = x;
             loop.launch.qvfr = false;
             check(!has_detail(loop), "Object detail: QVFR only (not in Two-loop)");
+        }
+        {
+            // focus_layer=2's test line: only with launch.focusQuads, right after Gaze dead-zone, in steps of metres.
+            SettingsMenu q = c;
+            const std::vector<MenuItem> plain = menu_page_items(q);
+            check(std::find(plain.begin(), plain.end(), MenuItem::FocusQuadDistance) == plain.end(),
+                  "Focus quad distance: not shown without focus_layer=2");
+            q.launch.focusQuads = true;
+            const std::vector<MenuItem> items = menu_page_items(q);
+            const auto dz = std::find(items.begin(), items.end(), MenuItem::GazeDeadzone);
+            check(dz != items.end() && dz + 1 != items.end() && dz[1] == MenuItem::FocusQuadDistance,
+                  "Focus quad distance: right after Gaze dead-zone with focus_layer=2");
+            q.selected = static_cast<int>(dz - items.begin()) + 1;
+            check(menu_lines(q)[q.selected].label == L"Focus quad distance" && menu_lines(q)[q.selected].value == L"100 m",
+                  "Focus quad distance's line: 100 m by default");
+            check(menu_key(q, MenuKey::Left) && menu_lines(q)[q.selected].value == L"50 m",
+                  "Focus quad distance: Left steps down to 50 m");
+            for (int i = 0; i < 20; ++i)
+                menu_key(q, MenuKey::Left);
+            check(menu_lines(q)[q.selected].value == L"1 m" && !menu_key(q, MenuKey::Left),
+                  "Focus quad distance: down to 1 m, and no further");
         }
         c.cheeky = {true, L"0.6.3-standalone", CheekySettings{}};
         {

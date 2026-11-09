@@ -177,6 +177,7 @@ void menu_open(int64_t now) {
         menu.model.launch.helmetPage = features.helmet;
         menu.model.launch.fgPage = features.frameGeneration;
         menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
+        menu.model.launch.focusQuads = experiment.focusLayer == 2;  // its test: the quads' distance
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);
@@ -222,13 +223,14 @@ void menu_press(MenuKey key, int64_t now) {
     // (the next launch starts from them); the live reload follows within a frame or two. Steps quicker than the
     // worker are written as one (IniWrite::MenuStep).
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
-                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail] {
-        write_menu_values(ini.c_str(), values, qvfr, detail);
+                     cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
+                     quads = menu.model.launch.focusQuads] {
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail);
+            write_menu_values(target.c_str(), values, qvfr, detail, quads);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (target != settings) {  // the panels' places and the overlay are every game's: the launcher's ini

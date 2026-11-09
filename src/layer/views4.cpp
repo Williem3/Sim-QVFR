@@ -556,8 +556,9 @@ namespace {
 // placed by focus_quad (quad/focus_quad.h).
 void views4_focus_quads(const XrCompositionLayerProjectionView (&views)[2], XrCompositionLayerFlags flags, XrSpace space,
                         XrCompositionLayerQuad (&quads)[2]) {
+    const float distance = static_cast<float>(experiment.focusQuadDistance.load(std::memory_order_relaxed));
     for (int v = 0; v < 2; ++v) {
-        const FocusQuad placed = focus_quad(views[v].pose, views[v].fov, Experiment::kFocusQuadDistance);
+        const FocusQuad placed = focus_quad(views[v].pose, views[v].fov, distance);
         XrCompositionLayerQuad& q = quads[v];
         q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
         q.layerFlags = flags;
@@ -567,11 +568,11 @@ void views4_focus_quads(const XrCompositionLayerProjectionView (&views)[2], XrCo
         q.pose = placed.pose;
         q.size = placed.size;
     }
-    static bool logged = false;
-    if (!logged) {
-        logged = true;
+    static float logged = 0;
+    if (logged != distance) {
+        logged = distance;
         logf("views4 d3d11: focus_layer=2: eye 0's quad %.2f x %.2f m, %.0f m out (its image %dx%d)", quads[0].size.width,
-             quads[0].size.height, Experiment::kFocusQuadDistance, quads[0].subImage.imageRect.extent.width,
+             quads[0].size.height, distance, quads[0].subImage.imageRect.extent.width,
              quads[0].subImage.imageRect.extent.height);
     }
 }
