@@ -263,11 +263,9 @@ bool v4d3d11_focus_resources(XrSession session, uint32_t w, uint32_t h) {
         return true;
     if (v4d3d11.focusFailed)
         return false;
+    if (!w || !h)
+        return false;  // not known yet: composed this frame, tried again at the next
     v4d3d11.focusFailed = true;  // until it is made
-    if (!w || !h) {
-        log_line("views4 d3d11: focus_layer: the game's view size is unknown; composed as without it");
-        return false;
-    }
     XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
     info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
     info.format = kHelmetLayerFormat;  // RGBA8 sRGB: alpha for the feather, whatever the game's format
@@ -423,11 +421,12 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     const auto it = v4d3d11.chains.find(proj->views[0].subImage.swapchain);
     if (it == v4d3d11.chains.end() || it->second.acquired >= it->second.images.size())
         return fallback("the game's eye image is unknown");
-    // focus_layer needs only the compositor; the output chain is made at the first frame composed.
+    // focus_layer needs only the compositor; whether this frame is layered is known once its views are (below). The
+    // output chain is made there too, before quad.mutex is taken (v4d3d11_resources takes it).
     const bool tryLayered = focus && layered && experiment.focusLayer && !v4d3d11.focusFailed;
     if (layered)
         *layered = false;
-    if (!(tryLayered ? v4d3d11_compositor_ready(it->second.format) : v4d3d11_resources(session, it->second.format)))
+    if (!v4d3d11_compositor_ready(it->second.format))
         return false;
     ID3D11Texture2D* views = it->second.images[it->second.acquired];
     // Separate views (qvfr_separate_views, LMU): each eye's image holds only its outer view; the adapter's atlas holds all
@@ -446,6 +445,28 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     D3D11_TEXTURE2D_DESC desc;
     views->GetDesc(&desc);
     const float texW = static_cast<float>(desc.Width), texH = static_cast<float>(desc.Height);
+    // focus_layer only for a scene frame (the game's atlas of its four views: two of its view images wide and high)
+    // with the helmet off. The menus (a native-size image of their own) and the helmet are composed as without it.
+    bool useLayered = false;
+    if (tryLayered) {
+        int render[2] = {}, output[2] = {};
+        game->qvfr_target_sizes(render, output);
+        bool helmetOn;
+        {
+            std::lock_guard helmetGuard(quad.mutex);
+            helmetOn = helmetSettings.on;
+        }
+        const bool sceneAtlas = separate && render[0] > 0 && render[1] > 0 &&
+                                desc.Width == 2u * static_cast<UINT>(render[0]) &&
+                                desc.Height == 2u * static_cast<UINT>(render[1]);
+        useLayered = sceneAtlas && !helmetOn;
+        if (sceneAtlas && helmetOn && !v4d3d11.helmetComposedLogged) {
+            log_line("views4 d3d11: focus_layer: the helmet is on: composed as without focus_layer while it is");
+            v4d3d11.helmetComposedLogged = true;
+        }
+    }
+    if (!useLayered && !v4d3d11_resources(session, it->second.format))
+        return false;
     // Before the game's first record (or with no projection in it), the submitted FOVs, centred and unturned.
     if (!recorded || !(frame.outerTan[0][1] > frame.outerTan[0][0]) || !(frame.outerTan[1][1] > frame.outerTan[1][0]))
         frame = views4_unrecorded_frame({proj->views[0].fov, proj->views[1].fov});
@@ -475,16 +496,19 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     }
     if (helmet.on)
         log_helmet_light();
-    if (tryLayered && separate && !helmet.on && v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, copy, *focus)) {
-        *layered = true;
-        return true;
+    if (useLayered) {
+        if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, copy, *focus)) {
+            *layered = true;
+            return true;
+        }
+        // Composed from now on: the output chain can't be made here (under quad.mutex), so this frame only if a menu
+        // made it already; otherwise the next frame makes it.
+        if (!v4d3d11.focusFailed)
+            log_line("views4 d3d11: focus_layer: the focus layer failed; composed as without focus_layer from now on");
+        v4d3d11.focusFailed = true;
+        if (!v4d3d11.outChain)
+            return fallback("focus_layer failed, the output chain is made at the next frame");
     }
-    if (tryLayered && helmet.on && !v4d3d11.helmetComposedLogged) {
-        log_line("views4 d3d11: focus_layer: the helmet is on: composed as without focus_layer while it is");
-        v4d3d11.helmetComposedLogged = true;
-    }
-    if (!v4d3d11_resources(session, it->second.format))
-        return false;
     uint32_t outIndex = 0;
     XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
