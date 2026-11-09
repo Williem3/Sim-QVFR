@@ -7,9 +7,12 @@
 #include <cstring>
 #include <mutex>
 
+#include <windows.h>
+
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "../../quad/frame_records.h"
+#include "../../quad/offaxis_focus.h"
 #include "abi.h"
 #include "views_map.h"
 
@@ -29,6 +32,7 @@ AdjustViewRectFn originalAdjust = nullptr;
 ProjectionFn originalProjection = nullptr;
 EyePoseFn originalEyePose = nullptr;
 simqvfr::Views4Layout layout;
+ViewsFixes fixes;  // views_start's
 std::atomic<double> focusX{0}, focusY{0};  // the focus box (views_set_focus); 0: the focus views copy the eyes
 std::atomic<std::uint64_t> focused{0};      // side-pass projections narrowed to it
 std::atomic<int> targetWidth{0}, targetHeight{0};
@@ -44,6 +48,8 @@ void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
 int desired_views(void*, bool stereo) { return views_for(stereo); }
 // The renderer's final rect per pass (FIntRect: min x, min y, max x, max y), for the log.
 std::atomic<int> finalRect[5][4];
+// Each pass's output rect as adjust_view_rect placed it (x, y, width, height; width 0: not yet).
+std::atomic<int> outputRect[5][4];
 // The render thread's frame boundary: SetFinalViewRect for the right side pass, once per frame, from the main
 // renderer only (FSceneRenderer::PrepareViewRectsForRendering, after the late update; planar reflections render
 // views 0-1 alone). The next view the render thread hands over (primary_view) records the frame.
@@ -80,11 +86,57 @@ void set_pair_width(int pass, const int* rect) {
     pairWidth[pair].store(width, std::memory_order_relaxed);
     pairWidthsSet.fetch_add(1, std::memory_order_relaxed);
 }
+// The focus views' temporal phase (abi.h [Temporal state]): at the right focus view's final rect (PrepareViewRects-
+// ForRendering, before InitViews' PreVisibilityFrameSetup steps each view state's counters), each focus view's state
+// takes its eye's frame index and TAA sample index, so both step from the same values. The family's FViewInfos are one
+// array: the right focus view's, then the three before it, each checked by its StereoPass.
+std::atomic<bool> temporalShare{false};
+std::atomic<std::uint64_t> temporalSynced{0}, temporalMissed{0};
+// Whether the share does anything: focus states whose counters differed from their eye's before being set (frame index,
+// sample index), and the last such difference (focus minus eye).
+std::atomic<std::uint64_t> temporalDiffered{0};
+std::atomic<int> temporalFrameDelta{0}, temporalSampleDelta{0};
+void share_temporal_state(const int* rect) {
+    auto* right = reinterpret_cast<unsigned char*>(const_cast<int*>(rect)) - kViewRect;
+    unsigned char* views[4];
+    for (int v = 0; v < 4; ++v) {
+        views[v] = right - static_cast<std::ptrdiff_t>(3 - v) * kViewInfoSize;
+        if (*reinterpret_cast<const int*>(views[v] + kViewStereoPass) != kPassLeft + v) {
+            temporalMissed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    for (int e = 0; e < 2; ++e) {
+        auto* eye = *reinterpret_cast<unsigned char**>(views[e] + kViewState);
+        auto* focus = *reinterpret_cast<unsigned char**>(views[e + 2] + kViewState);
+        if (!eye || !focus || eye == focus) {
+            temporalMissed.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        std::uint32_t eyeIndex = 0, focusIndex = 0;
+        std::memcpy(&eyeIndex, eye + kStateFrameIndex, 4);
+        std::memcpy(&focusIndex, focus + kStateFrameIndex, 4);
+        const int sampleDelta = static_cast<std::int8_t>(focus[kStateTemporalAASampleIndex]) -
+                                static_cast<std::int8_t>(eye[kStateTemporalAASampleIndex]);
+        if (eyeIndex != focusIndex || sampleDelta != 0) {
+            temporalDiffered.fetch_add(1, std::memory_order_relaxed);
+            temporalFrameDelta.store(static_cast<int>(focusIndex - eyeIndex), std::memory_order_relaxed);
+            temporalSampleDelta.store(sampleDelta, std::memory_order_relaxed);
+        }
+        std::memcpy(focus + kStateFrameIndex, eye + kStateFrameIndex, 4);
+        std::memcpy(focus + kStateTemporalAASampleCount, eye + kStateTemporalAASampleCount, 4);
+        focus[kStateTemporalAASampleIndex] = eye[kStateTemporalAASampleIndex];
+        temporalSynced.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void final_view_rect(void*, int pass, const int* rect) {
     if (pass >= 0 && pass < 5)
         for (int i = 0; i < 4; ++i)
             finalRect[pass][i].store(rect[i], std::memory_order_relaxed);
     set_pair_width(pass, rect);
+    if (pass == kPassRightSide && temporalShare.load(std::memory_order_relaxed))
+        share_temporal_state(rect);
     if (pass == kPassRightSide) {
         renderThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
         recordArmed.store(true, std::memory_order_release);
@@ -163,6 +215,11 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     *y += r.y;
     *sizeX = static_cast<unsigned>(r.width);
     *sizeY = static_cast<unsigned>(r.height);
+    if (pass >= 0 && pass < 5) {
+        const int placed[4] = {*x, *y, r.width, r.height};
+        for (int i = 0; i < 4; ++i)
+            outputRect[pass][i].store(placed[i], std::memory_order_relaxed);
+    }
 }
 
 // A side pass starts from its eye: it takes what its eye got last (the eyes come first in every frame) instead of
@@ -180,17 +237,19 @@ EyeCache cache;
 std::atomic<bool> sessionRunning{false};
 std::atomic<std::uint64_t> served{0};  // answers from the cache while no session ran
 
-// The focus turn (focus_turn.h, as ACE's): each frame's chosen at its first side-pass pose (UE asks for a view's
-// eye pose, then its projection, on the game thread: ULocalPlayer::GetProjectionData), applied to both side passes'
-// poses, until the right side pass's projection (once per frame, after its pose). The late update on the render
-// thread only adds the head's movement since (DefaultXRCamera.cpp), so the turn chosen here is the one rendered;
-// the composition takes it from the rendered views (record_rendered), not from here: the game thread runs a frame
-// or two ahead of the composition by an amount no count tells.
+// The frame's focus boxes: each eye's chosen at the frame's first side pass (UE asks for a view's eye pose, then its
+// projection, on the game thread: ULocalPlayer::GetProjectionData) and kept for both side passes, until the right side
+// pass's projection (once per frame, after its pose). Off-axis (the default): the box centred on the gaze, the camera
+// the eye's. acc_focus_turn=1: the box centred, the camera turned (focus_turn.h, as ACE's), applied to both side passes'
+// poses. The late update on the render thread only adds the head's movement since (DefaultXRCamera.cpp), so the box
+// chosen here is the one rendered; the composition takes it from the rendered views (record_rendered), not from here:
+// the game thread runs a frame or two ahead of the composition by an amount no count tells.
 struct FocusFrame {
     std::mutex mutex;
     float gaze[2][2] = {};  // tangents of each eye's view, the latest from xrLocateViews (views_set_gaze)
     bool gazeValid[2] = {};
     bool latched = false;
+    double centre[2][2] = {};  // off-axis: each eye's box centre this frame, as tangents (kept inside the eye later)
     simqvfr::Views4Frame frame{};
 };
 FocusFrame focusFrame;
@@ -215,10 +274,23 @@ void latch_frame() {
     const double boxX = focusX.load(std::memory_order_relaxed), boxY = focusY.load(std::memory_order_relaxed);
     for (int e = 0; e < 2; ++e) {
         f.turn[e] = {0, 0, 0, 1};
+        focusFrame.centre[e][0] = focusFrame.gazeValid[e] ? focusFrame.gaze[e][0] : 0.0;
+        focusFrame.centre[e][1] = focusFrame.gazeValid[e] ? focusFrame.gaze[e][1] : 0.0;
         if (!have[e] || !ue_projection_tangents(matrix[e], f.outerTan[e]))
             continue;  // no projection yet: an empty record (the composition uses the submitted FOV)
         if (boxX <= 0) {
             std::memcpy(f.focusTan[e], f.outerTan[e], sizeof(f.focusTan[e]));
+            continue;
+        }
+        if (!fixes.turnFocus) {  // off-axis: the box where offaxis_projection puts it (the log's "chosen" line)
+            float eye[16];
+            std::memcpy(eye, matrix[e], sizeof(eye));
+            double cx = focusFrame.centre[e][0], cy = focusFrame.centre[e][1];
+            simqvfr::FocusBox box;
+            float focus[16];
+            if (simqvfr::clamp_focus_centre(eye, boxX, boxY, cx, cy) &&
+                simqvfr::focus_projection(eye, boxX, boxY, cx, cy, box, focus))
+                ue_projection_tangents(focus, f.focusTan[e]);
             continue;
         }
         double hw = 0, hh = 0;
@@ -230,6 +302,33 @@ void latch_frame() {
             f.turn[e] = simqvfr::focus_turn(f.outerTan[e], boxX, boxY, focusFrame.gaze[e][0], focusFrame.gaze[e][1]);
     }
     focusFrame.latched = true;
+}
+
+// Off-axis (the default): the side pass `pass`'s projection, its eye's in `m`, narrowed to the frame's box for that
+// eye, centred on the eye's gaze and kept inside the eye (quad/offaxis_focus.h; UE's projection has that shape, the
+// off-centre terms' signs included: views_map.h ue_projection_tangents). False, `m` unchanged: no box (the focus
+// views copy the eyes) or not such a projection.
+bool offaxis_projection(float (&m)[16], int pass) {
+    const double boxX = focusX.load(std::memory_order_relaxed), boxY = focusY.load(std::memory_order_relaxed);
+    if (!(boxX > 0) || !(boxY > 0))
+        return false;
+    double cx = 0, cy = 0;
+    {
+        std::lock_guard guard(focusFrame.mutex);
+        if (!focusFrame.latched)
+            latch_frame();
+        const int e = eye_pass(pass) - kPassLeft;
+        cx = focusFrame.centre[e][0];
+        cy = focusFrame.centre[e][1];
+    }
+    float eye[16], focus[16];
+    std::memcpy(eye, m, sizeof(eye));
+    simqvfr::FocusBox box;
+    if (!simqvfr::clamp_focus_centre(eye, boxX, boxY, cx, cy) ||
+        !simqvfr::focus_projection(eye, boxX, boxY, cx, cy, box, focus))
+        return false;
+    std::memcpy(m, focus, sizeof(focus));
+    return true;
 }
 
 // Diagnostics: each view's projection as projection() handed it to UE, and as the rendered view holds it (with and
@@ -262,8 +361,10 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
     count(projectionCalls, pass);
     const int eye = eye_pass(pass);
     eye_projection(self, out, pass, eye);
-    if (pass != eye && focus_projection(reinterpret_cast<float(&)[16]>(out->m), focusX.load(std::memory_order_relaxed),
-                                        focusY.load(std::memory_order_relaxed)))
+    auto& m = reinterpret_cast<float(&)[16]>(out->m);
+    if (pass != eye && (fixes.turnFocus ? focus_projection(m, focusX.load(std::memory_order_relaxed),
+                                                           focusY.load(std::memory_order_relaxed))
+                                        : offaxis_projection(m, pass)))
         focused.fetch_add(1, std::memory_order_relaxed);
     if (pass >= kPassLeft && pass <= kPassRightSide) {
         std::lock_guard guard(projectionLog.mutex);
@@ -280,6 +381,7 @@ FMatrix* projection(const void* self, FMatrix* out, int pass) {
 // the game thread chose meanwhile. Only a family of four views is the main one (captures and reflections have one
 // or two); a mirrored or unreadable one is skipped (rendered_frame).
 std::atomic<std::uint64_t> renderedRecords{0}, renderedSkipped{0};
+std::atomic<unsigned long long> renderedTotal{0};  // views_rendered_frames
 std::atomic<bool> familyOrderLogged{false};
 void record_rendered(const unsigned char* view) {
     const auto* family = *reinterpret_cast<const unsigned char* const*>(view);  // FSceneView::Family
@@ -340,6 +442,7 @@ void record_rendered(const unsigned char* view) {
         }
         records.push(frame);
         renderedRecords.fetch_add(1, std::memory_order_relaxed);
+        renderedTotal.fetch_add(1, std::memory_order_relaxed);
     } else {
         renderedSkipped.fetch_add(1, std::memory_order_relaxed);
     }
@@ -372,7 +475,7 @@ bool eye_pose(void* self, int deviceId, int pass, void* orientation, void* posit
             cache.pose[eye] = true;
         }
     }
-    if (hmdEye && pass != eye && ok && focusX.load(std::memory_order_relaxed) > 0) {
+    if (fixes.turnFocus && hmdEye && pass != eye && ok && focusX.load(std::memory_order_relaxed) > 0) {
         UeQuat turn;
         {
             std::lock_guard guard(focusFrame.mutex);
@@ -546,76 +649,163 @@ bool pairs_per_draw() {
     ok = simqvfr::code_redirect(kStereoPassIndexStore, kStereoPassIndexStoreAnchor, sizeof(kStereoPassIndexStoreAnchor),
                               pairEye, sizeof(pairEye)) && ok;
     ok = pair_right_views() && ok;
-    // Exposure (abi.h): every view but the left eye takes its exposure, and only the left eye computes it.
+    simqvfr::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
+                                      "StereoPassIndex the eye within its pair, 12 right-eye picks per pair)"
+                                    : "a views-per-draw patch failed");
+    return ok;
+}
+
+// Contact shadows held off (ViewsFixes::contactShadowsOff): through the diagnostic hold (kDiagCvars[3],
+// r.ContactShadows; its value saved and put back when switched on again), so the gate's A/B and Ctrl+Alt+5 switch it live.
+bool contactOffIn = false;
+
+// The catalogue fixes (ViewsFixes), each one only if asked; logged as one line.
+bool catalogue_fixes() {
+    bool ok = true;
     const std::uint8_t secondary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x02, 0x0f, 0x9d, 0xc0};  // cmp [rcx+ad0],2; setge al
     const std::uint8_t primary[] = {0x83, 0xb9, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x9e, 0xc0};    // cmp [rcx+ad0],1; setle al
-    ok = simqvfr::code_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor), secondary,
-                              sizeof(secondary)) && ok;
-    for (int i = 0; i < 2; ++i)
-        ok = simqvfr::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]), primary,
-                                  sizeof(primary)) && ok;
-    // No tonemapper vignette (abi.h): `xor al, al` and an 8-byte nop in place of the test.
-    const std::uint8_t noVignette[] = {0x32, 0xc0, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
-    ok = simqvfr::code_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
-    // Pre-exposure (abi.h): the left eye's reaches every other view.
-    ok = simqvfr::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
-                              secondary, sizeof(secondary)) && ok;
-    for (int i = 0; i < 2; ++i)
-        ok = simqvfr::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i], sizeof(kPreExposurePrimaryAnchor[i]),
-                                  primary, sizeof(primary)) && ok;
-    // The sun's cascades (abi.h): only the left eye creates them, and every view projects them.
-    const std::uint8_t leftEyeCascades[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x96, 0xc0};
-    ok = simqvfr::code_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
-    ok = simqvfr::code_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
-                              sizeof(kShadowVisibilitySecondaryAnchor), secondary, sizeof(secondary)) && ok;
-    ok = simqvfr::code_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor, sizeof(kShadowVisibilityPrimaryAnchor),
-                              primary, sizeof(primary)) && ok;
-    // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
-    const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
-    const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
-                                 0x48, 0x8b, 0x04, 0xc1,        // mov rax, [rcx + rax*8]
-                                 0x41, 0x0f, 0x28, 0xe7};       // movaps xmm4, xmm15
-    const std::uint8_t right[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
-                                  0x48, 0x83, 0xc0, 0x02,        // add rax, 2
-                                  0x0f, 0x59, 0xc7};             // mulps xmm0, xmm7
-    ok = simqvfr::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
-                              sizeof(gate)) && ok;
-    ok = simqvfr::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
-                              sizeof(left)) && ok;
-    ok = simqvfr::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
-                              sizeof(right)) && ok;
-    // Foliage LOD distances from the left eye's projection in the focus views, on the CPU and in the shader (abi.h).
-    const std::uint8_t cpuLod[] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00,        // lea r8, [r15 + 0x280]
-                                   0x41, 0x83, 0xbf, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r15 + 0xad0], 3
-                                   0x72, 0x10,                                      // jb done
-                                   0x4d, 0x8b, 0x07,                                // mov r8, [r15]  (Family)
-                                   0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views.Data)
-                                   0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views[0])
-                                   0x49, 0x81, 0xc0, 0x80, 0x02, 0x00, 0x00};       // add r8, 0x280
-    for (std::uintptr_t rva : kFoliageLodProjection)
-        ok = simqvfr::code_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
-                                  sizeof(cpuLod)) && ok;
-    const std::uint8_t shaderLod[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r14 + 0xad0], 3
-                                      0x72, 0x09,                                      // jb own
-                                      0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Family)
-                                      0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views.Data)
-                                      0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views[0])
-                                      0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};       // own: add r14, 0x280
-    ok = simqvfr::code_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
-                              sizeof(kFoliageShaderLodProjectionAnchor), shaderLod, sizeof(shaderLod)) && ok;
-    simqvfr::logf("acc views: %s", ok ? "two views per instanced draw (21 count reads, view constants clamped, "
-                                      "StereoPassIndex the eye within its pair, 12 right-eye picks per pair, "
-                                      "foliage culled per pair and its LOD the left eye's in the focus views, "
-                                      "the sun's shadow cascades the left eye's in every view)"
-                                    : "a views-per-draw patch failed");
+    if (fixes.exposure) {
+        // Exposure (abi.h): every view but the left eye takes its exposure, and only the left eye computes it.
+        ok = simqvfr::code_redirect(kExposureSecondary, kExposureSecondaryAnchor, sizeof(kExposureSecondaryAnchor),
+                                    secondary, sizeof(secondary)) && ok;
+        for (int i = 0; i < 2; ++i)
+            ok = simqvfr::code_redirect(kExposurePrimary[i], kExposurePrimaryAnchor[i], sizeof(kExposurePrimaryAnchor[i]),
+                                        primary, sizeof(primary)) && ok;
+        // Pre-exposure (abi.h): the left eye's reaches every other view.
+        ok = simqvfr::code_redirect(kPreExposureSecondary, kPreExposureSecondaryAnchor, sizeof(kPreExposureSecondaryAnchor),
+                                    secondary, sizeof(secondary)) && ok;
+        for (int i = 0; i < 2; ++i)
+            ok = simqvfr::code_redirect(kPreExposurePrimary[i], kPreExposurePrimaryAnchor[i],
+                                        sizeof(kPreExposurePrimaryAnchor[i]), primary, sizeof(primary)) && ok;
+    }
+    if (fixes.vignette) {
+        // No tonemapper vignette (abi.h): `xor al, al` and an 8-byte nop in place of the test.
+        const std::uint8_t noVignette[] = {0x32, 0xc0, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};
+        ok = simqvfr::code_write(kTonemapperVignette, noVignette, sizeof(noVignette)) && ok;
+    }
+    if (fixes.shadows) {
+        // The sun's cascades (abi.h): only the left eye creates them, and every view projects them.
+        const std::uint8_t leftEyeCascades[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x01, 0x0f, 0x96, 0xc0};
+        ok = simqvfr::code_write(kShadowCascadesCreate, leftEyeCascades, sizeof(leftEyeCascades)) && ok;
+        ok = simqvfr::code_redirect(kShadowVisibilitySecondary, kShadowVisibilitySecondaryAnchor,
+                                    sizeof(kShadowVisibilitySecondaryAnchor), secondary, sizeof(secondary)) && ok;
+        ok = simqvfr::code_redirect(kShadowVisibilityPrimary, kShadowVisibilityPrimaryAnchor,
+                                    sizeof(kShadowVisibilityPrimaryAnchor), primary, sizeof(primary)) && ok;
+    }
+    if (fixes.foliageCull) {
+        // Foliage: each pair's primary culls with its own left plane and its partner's right (abi.h).
+        const std::uint8_t gate[] = {0xf7, 0x44, 0x24, 0x38, 0xfd, 0xff, 0xff, 0xff};  // test dword [rsp + 0x38], ~2
+        const std::uint8_t left[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
+                                     0x48, 0x8b, 0x04, 0xc1,        // mov rax, [rcx + rax*8]
+                                     0x41, 0x0f, 0x28, 0xe7};       // movaps xmm4, xmm15
+        const std::uint8_t right[] = {0x48, 0x63, 0x44, 0x24, 0x38,  // movsxd rax, dword [rsp + 0x38]
+                                      0x48, 0x83, 0xc0, 0x02,        // add rax, 2
+                                      0x0f, 0x59, 0xc7};             // mulps xmm0, xmm7
+        ok = simqvfr::code_redirect(kFoliageUnionGate, kFoliageUnionGateAnchor, sizeof(kFoliageUnionGateAnchor), gate,
+                                    sizeof(gate)) && ok;
+        ok = simqvfr::code_redirect(kFoliageLeftView, kFoliageLeftViewAnchor, sizeof(kFoliageLeftViewAnchor), left,
+                                    sizeof(left)) && ok;
+        ok = simqvfr::code_redirect(kFoliageRightView, kFoliageRightViewAnchor, sizeof(kFoliageRightViewAnchor), right,
+                                    sizeof(right)) && ok;
+    }
+    if (fixes.foliageLod) {
+        // Foliage LOD distances from the left eye's projection in the focus views, on the CPU and in the shader (abi.h).
+        const std::uint8_t cpuLod[] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00,        // lea r8, [r15 + 0x280]
+                                       0x41, 0x83, 0xbf, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r15 + 0xad0], 3
+                                       0x72, 0x10,                                      // jb done
+                                       0x4d, 0x8b, 0x07,                                // mov r8, [r15]  (Family)
+                                       0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views.Data)
+                                       0x4d, 0x8b, 0x00,                                // mov r8, [r8]   (Views[0])
+                                       0x49, 0x81, 0xc0, 0x80, 0x02, 0x00, 0x00};       // add r8, 0x280
+        for (std::uintptr_t rva : kFoliageLodProjection)
+            ok = simqvfr::code_redirect(rva, kFoliageLodProjectionAnchor, sizeof(kFoliageLodProjectionAnchor), cpuLod,
+                                        sizeof(cpuLod)) && ok;
+        const std::uint8_t shaderLod[] = {0x41, 0x83, 0xbe, 0xd0, 0x0a, 0x00, 0x00, 0x03,  // cmp dword [r14 + 0xad0], 3
+                                          0x72, 0x09,                                      // jb own
+                                          0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Family)
+                                          0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views.Data)
+                                          0x4d, 0x8b, 0x36,                                // mov r14, [r14]  (Views[0])
+                                          0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};       // own: add r14, 0x280
+        ok = simqvfr::code_redirect(kFoliageShaderLodProjection, kFoliageShaderLodProjectionAnchor,
+                                    sizeof(kFoliageShaderLodProjectionAnchor), shaderLod, sizeof(shaderLod)) && ok;
+    }
+    if (fixes.temporal) {
+        // The view state's counters where this build has them (abi.h [Temporal state]): read and written in
+        // final_view_rect, no code changed.
+        const bool here =
+            simqvfr::code_matches(kViewStateLoad, kViewStateLoadAnchor, sizeof(kViewStateLoadAnchor)) &&
+            simqvfr::code_matches(kFrameIndexStep, kFrameIndexStepAnchor, sizeof(kFrameIndexStepAnchor)) &&
+            simqvfr::code_matches(kSampleCountStep, kSampleCountStepAnchor, sizeof(kSampleCountStepAnchor)) &&
+            simqvfr::code_matches(kSampleIndexStore, kSampleIndexStoreAnchor, sizeof(kSampleIndexStoreAnchor));
+        if (!here)
+            simqvfr::log_line("acc views: the view state's temporal counters aren't where this build had them: the "
+                              "temporal share is off");
+        temporalShare.store(here, std::memory_order_relaxed);
+    }
+    if (fixes.contactShadowsOff) {
+        contactOffIn = views_diag_start();  // false: r.ContactShadows isn't where this build had it (logged)
+        if (contactOffIn)
+            views_set_diag(3, true);
+    }
+    const auto on = [](bool b) { return b ? "on" : "OFF"; };
+    simqvfr::logf("acc views: fixes %s: exposure share %s, vignette off %s, shadow share %s, foliage per pair %s, "
+                  "foliage LOD share %s, bloom and lens flares off %s, temporal share %s, contact shadows off %s; "
+                  "focus views %s",
+                  ok ? "in" : "FAILED", on(fixes.exposure), on(fixes.vignette), on(fixes.shadows), on(fixes.foliageCull),
+                  on(fixes.foliageLod), on(fixes.lensEffects), on(temporalShare.load()), on(contactOffIn),
+                  fixes.turnFocus ? "turned towards the gaze, box centred (acc_focus_turn=1)"
+                                  : "off-axis: the eye's camera, the box at the gaze");
     return ok;
 }
 
 }  // namespace
 
-bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
+ViewsFixes views_fixes(const wchar_t* ini) {
+    ViewsFixes f;
+    if (!ini)
+        return f;
+    const auto key = [&](const wchar_t* name, bool fallback) {
+        return GetPrivateProfileIntW(L"experiment", name, fallback ? 1 : 0, ini) != 0;
+    };
+    f.exposure = key(L"acc_exposure_share", true);
+    f.vignette = key(L"acc_vignette_off", true);
+    f.shadows = key(L"acc_shadow_share", true);
+    f.foliageCull = key(L"acc_foliage_pairs", true);
+    f.foliageLod = key(L"acc_foliage_lod", true);
+    f.lensEffects = key(L"acc_lens_effects_off", false);
+    f.temporal = key(L"acc_temporal_share", true);
+    f.contactShadowsOff = key(L"acc_contact_shadows_off", true);
+    f.turnFocus = key(L"acc_focus_turn", false);
+    return f;
+}
+
+unsigned long long views_rendered_frames() { return renderedTotal.load(std::memory_order_relaxed); }
+
+bool views_contact_shadows_held() { return contactOffIn; }
+
+bool views_eye_projection(int eye, float (&m)[16]) {
+    if (eye < 0 || eye > 1)
+        return false;
+    std::lock_guard guard(cache.mutex);
+    if (!cache.projection[kPassLeft + eye])
+        return false;
+    std::memcpy(m, cache.matrix[kPassLeft + eye].m, sizeof(m));
+    return true;
+}
+
+bool views_eye_gaze(int eye, float (&tan)[2]) {
+    if (eye < 0 || eye > 1)
+        return false;
+    std::lock_guard guard(focusFrame.mutex);
+    tan[0] = focusFrame.gazeValid[eye] ? focusFrame.gaze[eye][0] : 0.0f;
+    tan[1] = focusFrame.gazeValid[eye] ? focusFrame.gaze[eye][1] : 0.0f;
+    return true;
+}
+
+bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY, const ViewsFixes& f) {
     if (started.load())
         return true;
+    fixes = f;
     const Slot slots[] = {kGetDesiredNumberOfViews, kGetViewPassForIndex, kGetViewIndexForPass, kAdjustViewRect,
                           kGetStereoProjectionMatrix, kGetRelativeEyePose, kDeviceIsAPrimaryPass, kDeviceIsAPrimaryView,
                           kSetFinalViewRect, kHasVisibleAreaMesh};
@@ -661,6 +851,7 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
     originalEyePose = reinterpret_cast<EyePoseFn>(base + kGetRelativeEyePose.function);
     // Pose, projection, rects and pairs before the count, so no frame sees four views without them.
     bool ok = pairs_per_draw();
+    ok = catalogue_fixes() && ok;
     if (!l.sharedColumnWidth) {
         ok = width_per_pair() && ok;
         pairWidths.store(ok, std::memory_order_relaxed);  // before final_view_rect is in its slot
@@ -690,7 +881,8 @@ bool views_start(const simqvfr::Views4Layout& l, double boxX, double boxY) {
                                           reinterpret_cast<void*>(&desired_views));
     simqvfr::logf("acc views: %s; eye columns: outer views %.3f and focus views %.3f of the column wide (%s), outer rows "
                 "%.3f of its height",
-                ok ? (boxX > 0 ? "four views patched in (views 2-3 focus views, centred)"
+                ok ? (boxX > 0 ? (fixes.turnFocus ? "four views patched in (views 2-3 focus views, centred, turned)"
+                                                  : "four views patched in (views 2-3 focus views, off-axis)")
                                : "four views patched in (views 2-3 copy the eyes)")
                    : "a patch failed",
                 l.column_share(0), l.column_share(2),
@@ -727,7 +919,8 @@ void views_set_focus(double boxX, double boxY) {
     if (oldX == boxX && oldY == y)
         return;  // the layer passes the live box again now and then
     simqvfr::logf("acc views: focus box %.0f%% x %.0f%% of each eye's tangent extent%s", boxX * 100,
-                y * 100, boxX > 0 ? ", centred" : " (none: the focus views copy the eyes)");
+                y * 100,
+                boxX > 0 ? (fixes.turnFocus ? ", centred" : ", at the gaze") : " (none: the focus views copy the eyes)");
 }
 
 void views_set_live_layout(const simqvfr::Views4Layout& l) {
@@ -753,6 +946,14 @@ void views_target(int (&size)[2]) {
     size[1] = targetHeight.load(std::memory_order_relaxed);
 }
 
+bool views_output_rect(int view, int (&rect)[4]) {
+    if (view < 0 || view >= kViews)
+        return false;
+    for (int i = 0; i < 4; ++i)
+        rect[i] = outputRect[kPassLeft + view][i].load(std::memory_order_relaxed);
+    return rect[2] > 0 && rect[3] > 0;
+}
+
 bool views_view_rect(int view, int (&rect)[4]) {
     if (view < 0 || view >= kViews)
         return false;
@@ -774,7 +975,7 @@ bool views_focused() { return started.load(std::memory_order_relaxed) && focusX.
 // set them whenever they apply. The first change of each is logged.
 std::atomic<bool> cvarLogged[std::size(kHeldCvars)];
 void hold_cvars() {
-    if (!started.load(std::memory_order_relaxed))
+    if (!started.load(std::memory_order_relaxed) || !fixes.lensEffects)
         return;
     for (std::size_t i = 0; i < std::size(kHeldCvars); ++i) {
         const HeldCvar& c = kHeldCvars[i];
@@ -839,6 +1040,13 @@ void views_frame_end() {
                     pairWidth[0].load(), pairWidth[1].load(),
                     static_cast<unsigned long long>(pairWidthsSet.exchange(0)),
                     static_cast<unsigned long long>(pairWidthsMissed.exchange(0)));
+    if (temporalShare.load(std::memory_order_relaxed))
+        simqvfr::logf("acc views: temporal share: %llu focus view states set from their eye's, %llu missed; %llu had "
+                      "differed (last: frame index %+d, sample index %+d, focus minus eye)",
+                      static_cast<unsigned long long>(temporalSynced.exchange(0)),
+                      static_cast<unsigned long long>(temporalMissed.exchange(0)),
+                      static_cast<unsigned long long>(temporalDiffered.exchange(0)), temporalFrameDelta.load(),
+                      temporalSampleDelta.load());
     simqvfr::logf("acc views: target %dx%d over the last 900 frames; %llu projection and %llu eye pose calls reached "
                 "SteamVR", targetWidth.load(), targetHeight.load(), static_cast<unsigned long long>(steamProjections.exchange(0)),
                 static_cast<unsigned long long>(steamPoses.exchange(0)));

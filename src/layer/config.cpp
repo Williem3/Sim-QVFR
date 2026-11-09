@@ -220,6 +220,18 @@ void load_experiment() {
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
     experiment.gaze = settings.gaze;
     experiment.gazeThread = GetPrivateProfileIntW(L"quad", L"gaze_thread", 1, ini.c_str()) != 0;
+    experiment.views4Converge = GetPrivateProfileIntW(L"experiment", L"views4_converge", 1, ini.c_str()) != 0;
+    {
+        wchar_t text[32] = {};
+        GetPrivateProfileStringW(L"quad", L"converge_m", L"0", text, 32, ini.c_str());
+        experiment.convergeM = std::clamp(_wtof(text), 0.0, 1000.0);
+    }
+    if (experiment.views4)
+        logf("experiment: the focus boxes converge %s%s", experiment.views4Converge ? "at the game's fixation distance" : "",
+             experiment.convergeM > 0
+                 ? (std::string(experiment.views4Converge ? ", else at " : "at ") + std::to_string(experiment.convergeM) +
+                    " m ([quad] converge_m)").c_str()
+                 : (experiment.views4Converge ? " where the game gives one, else parallel" : "nowhere: parallel (views4_converge=0)"));
     experiment.gazePollHz =
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"gaze_poll_hz", 250, ini.c_str())), 30, 1000);
     experiment.fixedOffsetY = settings.offset.fixed;
@@ -254,6 +266,15 @@ void load_experiment() {
     helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),
                                             launchCrop.kept_height());
+    // A game's copies gate (GameAdapter::qvfr_copies_layout): views 2-3 at the outer views' size, so each can be compared
+    // with its eye pixel for pixel (the game gives them the eyes' cameras).
+    if (experiment.views4 && game->qvfr_copies_layout(ini.c_str())) {
+        const Views4Layout& o = experiment.views4Layout;
+        experiment.views4Layout =
+            views4_layout(sizes.outer, o.outer_width(), o.outer_height(), launchCrop.kept_width(), launchCrop.kept_height());
+        logf("experiment: %ls's copies gate: views 2-3 at the outer views' size (%.0f%% x %.0f%% of the native eye)",
+             game->info()->name, o.outer_width() * 100, o.outer_height() * 100);
+    }
     // A game whose views are separate images (LMU) draws its menus into the whole of each: views4_menu_scale makes the
     // views at least that share of the native eye (100: menus as sharp as without QVFR), the scene rendering inside them
     // at the periphery and focus sizes (live resolution, from the first frame). Default 0 (the views' own size): in LMU

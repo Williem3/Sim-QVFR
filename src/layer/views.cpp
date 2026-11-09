@@ -1,9 +1,11 @@
 // Locating views: the focus views' FOV, the submitted FOV's log, and the LocateViews hook.
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <mutex>
 
 #include "log.h"
+#include "quad/focus_converge.h"
 #include "quad/focus_offset.h"
 #include "quad/focus_turn.h"
 #include "quad/fov_crop.h"
@@ -13,6 +15,21 @@
 namespace simqvfr::layer {
 
 namespace {
+
+// The convergence now and then in the log: the distance, where from, and the boxes' horizontal tangents.
+void convergence_note(double distance, bool fromGame, const float (&tan)[2][2]) {
+    static std::uint64_t calls = 0;
+    static double minD = 1e9, maxD = 0;
+    minD = std::min(minD, distance);
+    maxD = std::max(maxD, distance);
+    if (++calls % 1800 != 1)
+        return;
+    logf("views4 converge: the focus boxes on a point %.2f m away (%s; %.2f-%.2f m since the last note), boxes at "
+         "x tangent %.4f (left eye) and %.4f (right eye)",
+         distance, fromGame ? "the game's depth at the gaze" : "[quad] converge_m", minD, maxD, tan[0][0], tan[1][0]);
+    minD = 1e9;
+    maxD = 0;
+}
 
 XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewState* state, uint32_t capacity,
                       uint32_t* countOutput, XrView* views) {
@@ -83,9 +100,21 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                     } else {
                         valid[e] = offset != 0;
                     }
+                }
+                // Converging (focus_converge.h): both boxes on the point the eyes look at, the gaze (or the head's
+                // forward axis) out to the fixation distance, each as its eye sees it. Without a distance, parallel.
+                const double fixation = experiment.views4Converge ? game->qvfr_fixation_m() : 0.0;
+                const double distance = fixation > 0 ? fixation : experiment.convergeM;
+                if (distance > 0) {
+                    const XrVector3f eyePos[2] = {views[0].pose.position, views[1].pose.position};
+                    const XrQuaternionf eyeOri[2] = {views[0].pose.orientation, views[1].pose.orientation};
+                    const XrVector3f aim = gazing ? direction : rotate_by(eyes_middle(eyeOri), XrVector3f{0, 0, -1});
+                    converged_tangents(eyePos, eyeOri, eyes_middle(eyePos), aim, distance, tan, valid);
+                    convergence_note(distance, fixation > 0, tan);
+                }
+                for (int e = 0; e < 2; ++e)
                     if (valid[e] && offset != 0)
                         tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
-                }
                 game->qvfr_set_gaze(tan, valid, gazing);
             }
         }

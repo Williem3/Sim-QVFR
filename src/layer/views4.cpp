@@ -237,6 +237,40 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
     return true;
 }
 
+}  // namespace
+
+bool v4d3d11_tracks_chains() {
+    return experiment.views4ComposeD3D11 || (experiment.views4 && game->qvfr_wants_game_image());
+}
+
+namespace {
+
+// The game's image (eye columns: the whole target in the first eye's swapchain) to the game's adapter, with each
+// view's rect in it as views4_source places it (GameAdapter::qvfr_game_image), before anything composes it.
+void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4Layout& layout) {
+    ID3D11Texture2D* image = nullptr;
+    {
+        std::lock_guard guard(v4d3d11.mutex);
+        const auto it = v4d3d11.chains.find(proj->views[0].subImage.swapchain);
+        if (it == v4d3d11.chains.end() || it->second.acquired >= it->second.images.size())
+            return;
+        image = it->second.images[it->second.acquired];
+    }
+    D3D11_TEXTURE2D_DESC desc;
+    image->GetDesc(&desc);
+    const XrExtent2Di eye = proj->views[0].subImage.imageRect.extent;
+    const XrOffset2Di origin = proj->views[0].subImage.imageRect.offset;
+    int rects[4][4];
+    for (int v = 0; v < 4; ++v) {
+        const ViewRect r = views4_rect_eye_columns(layout, v, 2 * eye.width, eye.height);
+        rects[v][0] = origin.x + r.left;
+        rects[v][1] = origin.y + r.top;
+        rects[v][2] = r.width;
+        rects[v][3] = r.height;
+    }
+    game->qvfr_game_image(image, rects);
+}
+
 // Composes both eyes of `proj` (the game's two eye views, eye columns of `layout`) into the output chain and
 // points `copy` (its views) at it. False: nothing changed, the caller submits views 0-1 as they are.
 bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
@@ -413,6 +447,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
             gameLayout &= copy[v].subImage.imageRect.offset.x == static_cast<int32_t>(v) * copy[v].subImage.imageRect.extent.width;
         if (!gameLayout)
             continue;
+        if (proj->viewCount == 2 && game->qvfr_eye_columns() && game->qvfr_wants_game_image())
+            v4d3d11_game_image(proj, layout);
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_eye_columns() &&
             v4d3d11_compose(session, proj, copy)) {
             projections.push_back(*proj);

@@ -112,6 +112,23 @@ public:
     virtual bool qvfr_take_frame(Views4Frame& frame) = 0;
     // The latest record, without taking it.
     virtual bool qvfr_latest_frame(Views4Frame& frame) = 0;
+    // A copies gate this launch (the game's [experiment] keys in `ini`, read before instance_created): the layer lays
+    // views 2-3 out at the outer views' size, so each can be compared with its eye pixel for pixel (ACC's gates.h).
+    virtual bool qvfr_copies_layout(const wchar_t* ini) const {
+        (void)ini;
+        return false;
+    }
+    // How far the eyes look, in metres, from the game's depth at the gaze point (0: unknown): the layer aims both eyes'
+    // focus boxes at that point so they converge where the eyes do (quad/focus_converge.h). Any thread.
+    virtual double qvfr_fixation_m() const { return 0; }
+    // The game's own image at every xrEndFrame (D3D11, eye columns: ACC's gates): the layer keeps track of the game's
+    // swapchain images and hands over the one its projection layer submits, with each view's rect in it (x, y, width,
+    // height) as the layer submits and composes them, before composing. On the game's render thread.
+    virtual bool qvfr_wants_game_image() const { return false; }
+    virtual void qvfr_game_image(ID3D11Texture2D* image, const int (&rects)[4][4]) {
+        (void)image;
+        (void)rects;
+    }
     // The views the game just located (diagnostics; LMU: the FOV its lens mask is built with).
     virtual void qvfr_note_views(const XrView* views, uint32_t count) = 0;
     // The game fetched view `viewIndex`'s hidden-area mesh (xrGetVisibilityMaskKHR with room for it): a game that turns

@@ -280,7 +280,11 @@ inline ViewRect views4_rect_eye_columns(const Views4Layout& l, int view, int tar
             r.height = outerRows;
         } else {
             r.top = outerRows;
-            r.height = std::clamp(pixels(l.height[view], targetHeight), 1, targetHeight - outerRows);
+            // Down to where the outer and focus shares end together, as the launch layout takes the rest of the target
+            // (not the focus share floored on its own): a live layout at the launch sizes hands out the launch rects.
+            // One row less made ACC re-create its focus views' DLSS features at every live change (2026-11-08).
+            const int bottom = pixels(l.height[0] + l.height[view], targetHeight);
+            r.height = std::clamp(bottom - outerRows, 1, targetHeight - outerRows);
         }
         return r;
     }

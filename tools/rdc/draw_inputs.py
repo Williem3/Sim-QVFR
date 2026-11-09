@@ -100,6 +100,13 @@ def run():
         outs = [tname(o) for o in a.outputs if int(o)]
         p(f"## {a.eventId} {a.customName or ''}".rstrip())
         p(f"- targets: {', '.join(outs) or '-'}; depth {tname(a.depthOut) or '-'}")
+        if a.flags & rd.ActionFlags.Drawcall:  # the API call, as a hook on it sees it
+            if a.flags & rd.ActionFlags.Indexed:
+                p(f"- call: DrawIndexed{'Instanced' if a.numInstances > 1 else ''}(indices {a.numIndices}, start index "
+                  f"{a.indexOffset}, base vertex {a.baseVertex}, instances {a.numInstances})")
+            else:
+                p(f"- call: Draw{'Instanced' if a.numInstances > 1 else ''}(vertices {a.numIndices}, start vertex "
+                  f"{a.vertexOffset}, instances {a.numInstances})")
         try:
             v = ps.GetViewport(0)
             p(f"- viewport {v.x:.1f},{v.y:.1f} {v.width:.1f}x{abs(v.height):.1f}; vertices {a.numIndices}")

@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <cstring>
 
+#include "games/acc/gate_compare.h"
 #include "games/acc/views_map.h"
+#include "quad/offaxis_focus.h"
 
 namespace {
 
@@ -235,6 +237,73 @@ int main() {
         check(cropped[9] > 0 && ue_projection_tangents(cropped, t) && std::fabs(t[2] - cu) < 1e-4f &&
                   std::fabs(t[3] - cd) < 1e-4f,
               "a top crop narrows the top of UE's projection, not its bottom");
+
+        // Off-axis focus views (quad/offaxis_focus.h, views.cpp offaxis_projection): UE's matrix has the shared shape
+        // (w = z in [11], depth in [14]), so the eye's projection narrowed to a 30% box at the gaze (0.3, -0.2) reads
+        // back with ue_projection_tangents as exactly that box.
+        check(simqvfr::projection_shape(ue), "UE's eye projection has the off-axis maths' shape");
+        const double fx = 0.3, fy = 0.3;
+        double cx = 0.3, cy = -0.2;
+        simqvfr::FocusBox box;
+        float focus[16];
+        const bool built = simqvfr::clamp_focus_centre(ue, fx, fy, cx, cy) &&
+                           simqvfr::focus_projection(ue, fx, fy, cx, cy, box, focus);
+        const double hw = (eR - eL) * fx / 2, hh = (eU - eD) * fy / 2;
+        float ft[4];
+        check(built && cx == 0.3 && cy == -0.2 && ue_projection_tangents(focus, ft) && std::fabs(ft[0] - (0.3 - hw)) < 1e-4 &&
+                  std::fabs(ft[1] - (0.3 + hw)) < 1e-4 && std::fabs(ft[2] - (-0.2 + hh)) < 1e-4 &&
+                  std::fabs(ft[3] - (-0.2 - hh)) < 1e-4 && focus[10] == ue[10] && focus[11] == ue[11] && focus[14] == ue[14],
+              "an off-axis focus projection is the box at the gaze, depth and w kept");
+        // The box in the eye's image from the two tangent sets (gate_compare.h box_in_eye: what the focus gate crops)
+        // is where the projection puts it.
+        double rect[4];
+        float eyeTan[4];
+        ue_projection_tangents(ue, eyeTan);
+        check(box_in_eye(eyeTan, ft, rect) && std::fabs(rect[0] - box.rect[0]) < 1e-5 && std::fabs(rect[1] - box.rect[1]) < 1e-5 &&
+                  std::fabs(rect[2] - box.rect[2]) < 1e-5 && std::fabs(rect[3] - box.rect[3]) < 1e-5,
+              "the focus gate's box in the eye matches the projection's own");
+        // A gaze past the eye's edge keeps the box inside the eye.
+        double ex = 3.0, ey = -3.0;
+        check(simqvfr::clamp_focus_centre(ue, fx, fy, ex, ey) && std::fabs(ex - (eR - hw)) < 1e-4 &&
+                  std::fabs(ey - (eD + hh)) < 1e-4,
+              "a gaze past the eye's edge: the box held inside it");
+        // A whole-eye box is the eye itself (centred on the eye, not its forward axis).
+        double wx = 0, wy = 0;
+        float whole[16];
+        simqvfr::FocusBox wbox;
+        float wt[4];
+        check(simqvfr::clamp_focus_centre(ue, 1, 1, wx, wy) && simqvfr::focus_projection(ue, 1, 1, wx, wy, wbox, whole) &&
+                  ue_projection_tangents(whole, wt) && std::fabs(wt[0] - eL) < 1e-4f && std::fabs(wt[1] - eR) < 1e-4f &&
+                  std::fabs(wt[2] - eU) < 1e-4f && std::fabs(wt[3] - eD) < 1e-4f,
+              "a box of the whole eye is the eye's own projection");
+        // The record of an off-axis frame (same view matrices for eye and focus view): no turn, the box's tangents.
+        float views[4][16] = {}, projections[4][16];
+        for (int v = 0; v < 4; ++v) {
+            views[v][0] = views[v][5] = views[v][10] = views[v][15] = 1;
+            std::memcpy(projections[v], v < 2 ? ue : focus, sizeof(projections[v]));
+        }
+        simqvfr::Views4Frame frame{};
+        check(rendered_frame(views, projections, frame) && std::fabs(frame.turn[0].w) > 0.99999f &&
+                  std::fabs(frame.turn[1].w) > 0.99999f && std::fabs(frame.focusTan[0][0] - ft[0]) < 1e-5f &&
+                  std::fabs(frame.focusTan[0][3] - ft[3]) < 1e-5f,
+              "an off-axis frame's record: no turn, the box's own tangents");
+    }
+
+    {
+        // A live layout at the launch sizes hands out the launch rects (the Cheeky run of 2026-11-08: periphery 40%, focus
+        // views 37.5% x 37.5% of the native eye, target 3228 x 2616; the live focus rows came out 1265 against the
+        // launch's 1266 and ACC re-created its focus views' DLSS features at every live change).
+        const simqvfr::Views4Layout cheekyLaunch = simqvfr::views4_layout(0.4, 0.375, 0.375);
+        const simqvfr::Views4Layout cheekyLive = simqvfr::views4_live_eye_columns(cheekyLaunch, 0.4, 0.375, 0.375);
+        bool rectsEqual = cheekyLive.live;
+        for (int v = 0; v < 4; ++v) {
+            const simqvfr::ViewRect a = simqvfr::views4_rect_eye_columns(cheekyLaunch, v, 3228, 2616);
+            const simqvfr::ViewRect b = simqvfr::views4_rect_eye_columns(cheekyLive, v, 3228, 2616);
+            rectsEqual &= a.left == b.left && a.top == b.top && a.width == b.width && a.height == b.height;
+        }
+        const simqvfr::ViewRect focusRect = simqvfr::views4_rect_eye_columns(cheekyLive, 2, 3228, 2616);
+        check(rectsEqual && focusRect.top == 1350 && focusRect.height == 1266,
+              "a live layout at the launch sizes: the launch rects");
     }
 
     {

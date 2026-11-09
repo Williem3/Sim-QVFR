@@ -175,12 +175,17 @@ ACC's VR has to run through OpenComposite: [Assetto Corsa Competizione in VR thr
 OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Launch checks** tells you
 if it's missing.
 
-The field of view crop, the helmet overlay, resolution changes while the game runs and Foveated DLSS
-(Cheeky) work in ACC. Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own
-DLSS the sharp area can look slightly darker or lighter than the rest of the view. Foveated DLSS needs a newer
-DLSS than the one ACC comes with (2.2.15): replace ACC's `nvngx_dlss.dll` with DLSS 310 or newer (a tool such as
-DLSS Swapper does it). **Launch checks** tells you when it's too old. Cheeky's frame generation isn't
-available in ACC yet.
+The field of view crop, the helmet overlay, resolution changes while the game runs, ACC's own DLSS and
+Foveated DLSS (Cheeky) work in ACC. Foveated DLSS needs a newer DLSS than the one ACC comes with (2.2.15):
+replace ACC's `nvngx_dlss.dll` with DLSS 310 or newer (a tool such as DLSS Swapper does it). **Launch checks**
+tells you when it's too old. Cheeky's frame generation isn't available in ACC yet.
+
+- **The two sharp areas meet where you look.** Each eye's sharp area points at what you're looking at (ACC
+  measures how far away it is), so they line up on the dash as well as down the track, with or without eye
+  tracking.
+- **Bloom and lens flares** look as they do without QVFR: the sharp area takes its glow from the view around it.
+- **Contact shadows are off** while QVFR runs. Those small shadows came out differently in the sharp area than
+  around it.
 
 ## X-Plane 12
 

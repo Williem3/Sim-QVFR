@@ -1,6 +1,7 @@
-// Assetto Corsa Competizione's adapter (../adapter.h). QVFR stage gate: four views, views 2-3 copies of the
-// eyes (views.h); the layer shows views 0-1, uncomposed (ACC runs D3D11 through OpenComposite, and the
-// composition is D3D12 only so far). No Cheeky.
+// Assetto Corsa Competizione's adapter (../adapter.h): four views from UE 4.26's stereo device, the focus views a second
+// instanced pair (views.h), their screen-space effects shared from their eyes (view_share.h), composed by the D3D11
+// compositor from ACC's own image (eye columns), Cheeky's Foveated DLSS on ACC's DLSS; the copies and focus gates
+// (gates.h). ACC runs D3D11 through OpenComposite.
 #pragma once
 
 #include "../adapter.h"

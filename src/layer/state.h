@@ -165,6 +165,11 @@ struct Experiment {
     // [quad] gaze_deadzone: the focus box holds still while the gaze stays this many degrees of where it
     // aims, so tracker noise does not turn the focus cameras every frame (MSAA shimmer in the box).
     std::atomic<double> gazeDeadzone = 1.5;
+    // The focus boxes converge where the eyes look (quad/focus_converge.h): at the game's fixation distance
+    // (GameAdapter::qvfr_fixation_m; [experiment] views4_converge, default 1), else at [quad] converge_m metres
+    // (0: none, the boxes parallel as before).
+    bool views4Converge = true;
+    double convergeM = 0;
     UINT captureEverySeconds = 0; // quad debug: saves A, B and the output (left eye) as PNGs, 0 = off
     bool probes = true;           // engine probes and D3D12 trace (log-only reverse-engineering aids)
     UINT hangWatchSeconds = 30;   // no frame this long after xrCreateSession: modules and a minidump (probe/hang_watch.h;
@@ -414,6 +419,9 @@ struct V4D3D11 {
     uint64_t composed = 0, fallbacks = 0;
     const char* lastFallback = nullptr;
 };
+// The game's swapchain images are tracked (V4D3D11::chains): to compose them, or to hand the game its own image
+// (GameAdapter::qvfr_wants_game_image).
+bool v4d3d11_tracks_chains();
 
 // views4 debug: the focus region's outline drawn into each outer view (debug_border), on ACE's eye
 // image just before ACE releases it. The chain is the one ACE's projection layer submits.

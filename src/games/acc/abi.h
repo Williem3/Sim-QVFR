@@ -39,7 +39,7 @@ inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
 inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
 
-// Console variables held at a value while QVFR runs: bloom and lens flares off. [Held console variables]
+// Console variables held while QVFR runs with acc_lens_effects_off=1 (bloom, lens flares off). [Held console variables]
 struct HeldCvar {
     const char* name;
     std::uintptr_t ref;
@@ -55,7 +55,7 @@ inline constexpr HeldCvar kHeldCvars[] = {
     {"r.LensFlareQuality", 0x672e94, {0x48, 0x8d, 0x15, 0x4d, 0xbd, 0x7c, 0x03}, 0x672ec3,
      {0x48, 0x89, 0x05, 0xae, 0x10, 0xa9, 0x04}, 0x5103f78, 0},
 };
-// Diagnostic switches (acc_diag=1): SSR, ambient occlusion and the sun's shadows, held at 0 while off. [Diagnostic cvars]
+// Switched off live (acc_diag=1) or held off (contact shadows): SSR, AO, the sun's shadows, contact shadows. [Diagnostic cvars]
 inline constexpr HeldCvar kDiagCvars[] = {
     {"r.SSR.Quality", 0x687dc4, {0x48, 0x8d, 0x15, 0x05, 0x73, 0x7e, 0x03}, 0x687df3,
      {0x48, 0x89, 0x05, 0xfe, 0x11, 0xaa, 0x04}, 0x5128ff8, 0},
@@ -63,6 +63,8 @@ inline constexpr HeldCvar kDiagCvars[] = {
      {0x48, 0x89, 0x05, 0x16, 0xc7, 0xa4, 0x04}, 0x50924a0, 0},
     {"r.ShadowQuality", 0x619884, {0x48, 0x8d, 0x15, 0xfd, 0x3c, 0x70, 0x03}, 0x6198b3,
      {0x48, 0x89, 0x05, 0x76, 0x8d, 0x9f, 0x04}, 0x5012630, 0},
+    {"r.ContactShadows", 0x617684, {0x48, 0x8d, 0x15, 0x75, 0x79, 0x70, 0x03}, 0x6176b3,
+     {0x48, 0x89, 0x05, 0x96, 0xb0, 0x9f, 0x04}, 0x5012750, 0},
 };
 
 // Auto exposure: every view takes the left eye's. [Auto exposure]
@@ -168,5 +170,66 @@ inline constexpr std::uintptr_t kFoliageLodProjection[4] = {0x2a446fb, 0x2a44791
 inline constexpr std::uint8_t kFoliageLodProjectionAnchor[7] = {0x4d, 0x8d, 0x87, 0x80, 0x02, 0x00, 0x00};
 inline constexpr std::uintptr_t kFoliageShaderLodProjection = 0x2a7e01f;
 inline constexpr std::uint8_t kFoliageShaderLodProjectionAnchor[7] = {0x49, 0x81, 0xc6, 0x80, 0x02, 0x00, 0x00};
+
+// The view state's temporal counters: the focus views take their eye's each frame. [Temporal state]
+inline constexpr std::ptrdiff_t kViewState = 0x15f0;                  // FViewInfo::ViewState
+inline constexpr std::ptrdiff_t kStateFrameIndex = 0x4d8;             // uint32
+inline constexpr std::ptrdiff_t kStateTemporalAASampleIndex = 0x4d2;  // int8
+inline constexpr std::ptrdiff_t kStateTemporalAASampleCount = 0x4d4;  // uint32, unclamped
+inline constexpr std::uintptr_t kViewStateLoad = 0x1c4173f;
+inline constexpr std::uint8_t kViewStateLoadAnchor[7] = {0x4c, 0x8b, 0xb7, 0xf0, 0x15, 0x00, 0x00};  // mov r14, [rdi + 0x15f0]
+inline constexpr std::uintptr_t kFrameIndexStep = 0x1c4188e;
+inline constexpr std::uint8_t kFrameIndexStepAnchor[7] = {0x41, 0xff, 0x86, 0xd8, 0x04, 0x00, 0x00};  // inc [r14 + 0x4d8]
+inline constexpr std::uintptr_t kSampleCountStep = 0x1c41966;
+inline constexpr std::uint8_t kSampleCountStepAnchor[7] = {0x41, 0xff, 0x86, 0xd4, 0x04, 0x00, 0x00};  // inc [r14 + 0x4d4]
+inline constexpr std::uintptr_t kSampleIndexStore = 0x1c4196d;
+inline constexpr std::uint8_t kSampleIndexStoreAnchor[7] = {0x45, 0x88, 0xbe, 0xd2, 0x04, 0x00, 0x00};  // mov [r14 + 0x4d2], r15b
+
+// UE's mesh passes per view (setup, dispatch), the scene render and InitViews, for the pass probe. [Mesh passes]
+inline constexpr std::uintptr_t kDispatchPassSetup = 0x1a09300;  // FParallelMeshDrawCommandPass::DispatchPassSetup
+inline constexpr std::uint8_t kDispatchPassSetupAnchor[24] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x55, 0x56, 0x57,
+                                                              0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+                                                              0x48, 0x8d, 0x6c, 0x24, 0xf9, 0x48, 0x81, 0xec};
+inline constexpr std::uintptr_t kDispatchDraw = 0x1a08d00;  // FParallelMeshDrawCommandPass::DispatchDraw
+inline constexpr std::uint8_t kDispatchDrawAnchor[22] = {0x4c, 0x8b, 0xdc, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x56,
+                                                         0x49, 0x8d, 0x6b, 0xb8, 0x48, 0x81, 0xec, 0x18, 0x01, 0x00, 0x00};
+inline constexpr std::uintptr_t kRenderViewFamily = 0x1c0e290;  // RenderViewFamily_RenderThread(RHICmdList, renderer)
+inline constexpr std::uint8_t kRenderViewFamilyAnchor[24] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57,
+                                                             0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+                                                             0x48, 0x8d, 0xac, 0x24, 0x00, 0xfd, 0xff, 0xff};
+inline constexpr std::uintptr_t kInitViews = 0x1c3d670;  // FDeferredShadingSceneRenderer::InitViews
+inline constexpr std::uint8_t kInitViewsAnchor[12] = {0x4c, 0x8b, 0xdc, 0x41, 0x54, 0x48, 0x81, 0xec, 0x10, 0x0c, 0x00, 0x00};
+inline constexpr std::ptrdiff_t kPassView = 0x10;          // FParallelMeshDrawCommandPass: TaskContext.View
+inline constexpr std::ptrdiff_t kPassType = 0x20;          // TaskContext.PassType (EMeshPass)
+inline constexpr std::ptrdiff_t kPassMaxNumDraws = 0x1dc;  // MaxNumDraws
+inline constexpr std::ptrdiff_t kRendererViewCount = 0xd0;  // FSceneRenderer::Views.Num()
+inline constexpr std::ptrdiff_t kArrayNum = 8;             // TArray::ArrayNum
+
+// ComputeViewVisibility and its per-view steps, timed per view by the pass probe. [Visibility]
+inline constexpr std::uintptr_t kComputeViewVisibility = 0x1c2ec40;
+inline constexpr std::uint8_t kComputeViewVisibilityAnchor[24] = {0x4c, 0x89, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44,
+                                                                  0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48,
+                                                                  0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57};
+inline constexpr std::uintptr_t kPrecomputedVisibility = 0x1c06740;  // (ViewState, View, Scene), first per view
+inline constexpr std::uint8_t kPrecomputedVisibilityAnchor[24] = {0x48, 0x8b, 0xc4, 0x4c, 0x89, 0x40, 0x18, 0x48,
+                                                                  0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55,
+                                                                  0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24};
+inline constexpr std::uintptr_t kViewCullStep = 0x1c492c0;  // (Scene, View), after the frustum culling loops
+inline constexpr std::uint8_t kViewCullStepAnchor[24] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08, 0x55,
+                                                         0x41, 0x57, 0x48, 0x8d, 0x68, 0xa1, 0x48, 0x81, 0xec, 0xf8, 0x00, 0x00};
+inline constexpr std::uintptr_t kOcclusionCull = 0x1c3f560;  // (RHICmdList, Scene, View, DynamicVertexBuffer)
+inline constexpr std::uint8_t kOcclusionCullAnchor[24] = {0x4c, 0x89, 0x4c, 0x24, 0x20, 0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56,
+                                                          0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24};
+inline constexpr std::uintptr_t kComputeRelevance = 0x1c2dc10;  // (RHICmdList, Scene, View, ViewCommands, ViewBit, ...)
+inline constexpr std::uint8_t kComputeRelevanceAnchor[24] = {0x4c, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44,
+                                                             0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48,
+                                                             0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x56, 0x57};
+inline constexpr std::uintptr_t kGatherDynamicMeshElements = 0x1c39a00;  // all views at once (10 arguments)
+inline constexpr std::uint8_t kGatherDynamicMeshElementsAnchor[24] = {0x4c, 0x89, 0x4c, 0x24, 0x20, 0x4c, 0x89, 0x44,
+                                                                      0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x48,
+                                                                      0x89, 0x4c, 0x24, 0x08, 0x53, 0x55, 0x56, 0x57};
+inline constexpr std::uintptr_t kSetupMeshPass = 0x1c0fa60;  // (renderer, View, DepthStencil, ViewCommands), primaries
+inline constexpr std::uint8_t kSetupMeshPassAnchor[24] = {0x4c, 0x8b, 0xdc, 0x4d, 0x89, 0x4b, 0x20, 0x45, 0x89, 0x43, 0x18, 0x49,
+                                                          0x89, 0x4b, 0x08, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56};
 
 }  // namespace acc

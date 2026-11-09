@@ -78,6 +78,10 @@ int main() {
         check(acc::view_at(rects, have, 0, 0, 1024, 550) == -1, "another family's viewport is no view");
         have[2] = false;
         check(acc::view_at(rects, have, 0, 1520, 1816, 1013) == -1, "an unreported view is never matched");
+        int bw = 0, bh = 0, fw = 0, fh = 0;
+        acc::bloom_size(1412, 460, bw, bh);
+        acc::bloom_size(1513, 1266, fw, fh);
+        check(bw == 706 && bh == 230 && fw == 757 && fh == 633, "bloom regions: half the view, rounded up (the capture's)");
     }
 
     ComPtr<ID3D11Device> device;
@@ -206,6 +210,54 @@ int main() {
         context->RSGetViewports(&n, &vpAfter);
         check(rtvAfter.Get() == gameRtv.Get() && n == 1 && vpAfter.TopLeftX == 3 && vpAfter.Width == 50,
               "the game's render target and viewport are bound as before");
+    }
+
+    // The render-target path from another texture (ACC's bloom: the eye's copy into the game's bloom texture) and from
+    // a view of the game's own (the dirt mask): the source's coordinates through the focus region of a separate
+    // render target, nothing else of it changed.
+    {
+        D3D11_TEXTURE2D_DESC d{kW, kH, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D11_USAGE_DEFAULT,
+                               D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET};
+        D3D11_SUBRESOURCE_DATA init{dst.data(), kW * 8};
+        ComPtr<ID3D11Texture2D> bloomTarget, dirtTarget;
+        device->CreateTexture2D(&d, &init, &bloomTarget);
+        device->CreateTexture2D(&d, &init, &dirtTarget);
+        D3D11_SHADER_RESOURCE_VIEW_DESC v{DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_SRV_DIMENSION_TEXTURE2D};
+        v.Texture2D.MipLevels = 1;
+        ComPtr<ID3D11ShaderResourceView> gameView;
+        device->CreateShaderResourceView(source.Get(), &v, &gameView);
+        ViewMapping m{{-0.4f, 0.4f, 0.3f, -0.3f}, {-1.2f, 1.0f, 1.0f, -1.0f}, {}};
+        to_matrix(turns[1], m.rotation);
+        check(resample.resample_target(source.Get(), kEye, bloomTarget.Get(), kFocus, m),
+              "a render-target resample from another texture is recorded and run");
+        check(resample.resample_target(gameView.Get(), kW, kH, kEye, dirtTarget.Get(), kFocus, m),
+              "a render-target resample from the game's view is recorded and run");
+        const char* names2[2] = {"from another texture", "from the game's view"};
+        ID3D11Texture2D* outs[2] = {bloomTarget.Get(), dirtTarget.Get()};
+        for (int k = 0; k < 2; ++k) {
+            context->CopyResource(readback.Get(), outs[k]);
+            D3D11_MAPPED_SUBRESOURCE mapped;
+            context->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+            float worst = 0;
+            bool outsideKept = true;
+            for (UINT y = 0; y < kH; ++y)
+                for (UINT x = 0; x < kW; ++x) {
+                    const auto* p = reinterpret_cast<const uint16_t*>(static_cast<const char*>(mapped.pData) + y * mapped.RowPitch) + x * 4;
+                    if (static_cast<int>(y) < kFocus.y) {
+                        outsideKept = outsideKept && from_half(p[0]) == 5 && from_half(p[3]) == 5;
+                        continue;
+                    }
+                    float ex, ey;
+                    expected(m, static_cast<int>(x) - kFocus.x, static_cast<int>(y) - kFocus.y, ex, ey);
+                    worst = std::fmax(worst, std::fmax(std::fabs(from_half(p[0]) - (ex - 0.5f)), std::fabs(from_half(p[1]) - (ey - 0.5f))));
+                }
+            context->Unmap(readback.Get(), 0);
+            char what[128];
+            std::snprintf(what, sizeof(what), "%s: each focus texel reads its direction in the eye (worst %.3f texels)",
+                          names2[k], worst);
+            check(worst < 0.1f, what);
+            check(outsideKept, "nothing outside the focus region changes");
+        }
     }
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;

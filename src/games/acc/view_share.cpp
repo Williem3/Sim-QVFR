@@ -15,6 +15,7 @@
 #include "../../log.h"
 #include "../../quad/d3d11_view_resample.h"
 #include "../../quad/focus_turn.h"
+#include "fixation.h"
 #include "views.h"
 
 namespace acc {
@@ -88,8 +89,9 @@ void rearm(ID3D11DeviceContext* ctx) {
     rearm_slot(vtable, kSlotDispatch, reinterpret_cast<void*>(&dispatch_hook), h->dispatch);
 }
 
-std::atomic<bool> shareSsr{true}, shareAo{true};
-std::atomic<bool> configuredSsr{true}, configuredAo{true};  // view_share_configure's, for view_share_set_off
+std::atomic<bool> shareSsr{true}, shareAo{true}, shareBloom{true};
+// view_share_configure's, for view_share_set_off
+std::atomic<bool> configuredSsr{true}, configuredAo{true}, configuredBloom{true};
 std::atomic<bool> active{false};
 std::atomic<ID3D11DeviceContext*> immediate{nullptr};
 
@@ -138,7 +140,19 @@ struct Counts {
     std::atomic<std::uint64_t> shared[2], eyes{0}, noEye{0}, failed{0}, unplaced{0}, otherTexture{0};
     std::atomic<bool> unplacedLogged{false}, firstLogged{false};
 };
-Counts ssrCounts, aoCounts;
+Counts ssrCounts, aoCounts, bloomCounts;
+
+// Bloom (under `mutex`): each eye's bloom region, copied aside at its tonemapper draw (every view's bloom is drawn
+// into the same texture); each focus view's dirt mask, resampled from the game's through its box at its draw.
+ComPtr<ID3D11Texture2D> eyeBloom[2];
+simqvfr::ViewRegion eyeBloomRegion[2];
+bool eyeBloomFresh[2] = {};
+ComPtr<ID3D11Texture2D> focusDirt[2];
+ComPtr<ID3D11ShaderResourceView> focusDirtView[2];
+std::atomic<std::uint64_t> dirtShared{0}, dirtFailed{0};
+// Three-index draws seen, and those turned down: not into the views' target, no R11G11B10 render target in t1.
+std::atomic<std::uint64_t> tonemapCandidates{0}, notViewsTarget{0}, noBloomTexture{0};
+bool bloomLogged = false, bloomTooSmallLogged = false;
 std::uint64_t frames = 0;
 
 // Whether the hooks run at all, for the report: calls of each, and how many came on the session's context. The
@@ -205,15 +219,17 @@ bool on_immediate(ID3D11DeviceContext* ctx) {
     return ctx == immediate.load(std::memory_order_relaxed) && active.load(std::memory_order_relaxed);
 }
 
-// The view the bound viewport is (-1: none, logged once per effect), its rect in `region`.
-int bound_view(ID3D11DeviceContext* ctx, Counts& counts, const char* what, simqvfr::ViewRegion& region) {
+// The view the bound viewport is (-1: none, logged once per effect), its rect in `region`. `output`: matched against
+// the views' output rects (post-processing after an upscaler), else their rendered ones.
+int bound_view(ID3D11DeviceContext* ctx, Counts& counts, const char* what, simqvfr::ViewRegion& region,
+               bool output = false) {
     D3D11_VIEWPORT vp{};
     UINT n = 1;
     ctx->RSGetViewports(&n, &vp);
     int rects[4][4] = {};
     bool have[4] = {};
     for (int v = 0; v < 4; ++v)
-        have[v] = views_view_rect(v, rects[v]);
+        have[v] = output ? views_output_rect(v, rects[v]) : views_view_rect(v, rects[v]);
     const int view = n ? view_at(rects, have, vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height) : -1;
     if (view < 0) {
         counts.unplaced.fetch_add(1, std::memory_order_relaxed);
@@ -350,14 +366,19 @@ void STDMETHODCALLTYPE set_targets_hook(ID3D11DeviceContext* ctx, UINT count, ID
                                         ID3D11DepthStencilView* dsv) {
     hooked_for(ctx)->setTargets(ctx, count, rtvs, dsv);
     follow_target(ctx, count, rtvs);
+    if (on_immediate(ctx))
+        fixation_targets(count, dsv);  // the base pass's depth: the scene depth (fixation.h)
 }
 
 void STDMETHODCALLTYPE set_targets_and_uavs_hook(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs,
                                                  ID3D11DepthStencilView* dsv, UINT uavStart, UINT uavCount,
                                                  ID3D11UnorderedAccessView* const* uavs, const UINT* initialCounts) {
     hooked_for(ctx)->setTargetsAndUavs(ctx, count, rtvs, dsv, uavStart, uavCount, uavs, initialCounts);
-    if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+    if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         follow_target(ctx, count, rtvs);
+        if (on_immediate(ctx))
+            fixation_targets(count, dsv);
+    }
 }
 
 // A draw into the AO texture (the view's AO, just drawn): after a focus view's, its region from its eye's once ACC
@@ -426,6 +447,8 @@ void flush_ao() {
     }
 }
 
+void on_tonemap(ID3D11DeviceContext* ctx, ComPtr<ID3D11ShaderResourceView>& gameDirt);
+
 void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* ctx, UINT count, UINT start, INT base) {
     // Deferred contexts share the vtable: only the immediate one (the render thread's) touches `armed`, `aoTarget`.
     const bool mine = ctx == immediate.load(std::memory_order_relaxed);
@@ -439,11 +462,179 @@ void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* ctx, UINT count, U
         if (active.load(std::memory_order_relaxed) && views_focused())
             on_composite(ctx, written);
     }
+    ComPtr<ID3D11ShaderResourceView> gameDirt;
+    if (mine && count == 3 && shareBloom.load(std::memory_order_relaxed)) {
+        tonemapCandidates.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard guard(mutex);
+        if (active.load(std::memory_order_relaxed) && views_focused())
+            on_tonemap(ctx, gameDirt);
+    }
     hooked_for(ctx)->drawIndexed(ctx, count, start, base);
+    if (gameDirt) {  // the game's dirt mask back where its state cache has it
+        ID3D11ShaderResourceView* game = gameDirt.Get();
+        ctx->PSSetShaderResources(2, 1, &game);
+    }
     if (mine && aoTarget) {
         std::lock_guard guard(mutex);
         if (active.load(std::memory_order_relaxed) && views_focused())
             on_ao_drawn(ctx, aoTarget);
+    }
+}
+
+// ---- Bloom ----
+
+// The focus view's dirt mask for this draw: the game's (`game`, in t2) resampled through the box into the focus view's
+// own texture, bound in its place; `restore` gets the game's view to put back after the draw.
+void share_dirt(ID3D11DeviceContext* ctx, int e, const ComPtr<ID3D11ShaderResourceView>& game,
+                const simqvfr::ViewMapping& m, ComPtr<ID3D11ShaderResourceView>& restore) {
+    ComPtr<ID3D11Resource> r;
+    game->GetResource(&r);
+    ComPtr<ID3D11Texture2D> texture;
+    if (!r || FAILED(r.As(&texture)))
+        return;
+    D3D11_TEXTURE2D_DESC d;
+    texture->GetDesc(&d);
+    if (d.Width < 8 || d.Height < 8)  // UE's 1x1 dummy: no dirt mask to place
+        return;
+    D3D11_TEXTURE2D_DESC have{};
+    if (focusDirt[e])
+        focusDirt[e]->GetDesc(&have);
+    if (!focusDirt[e] || have.Width != d.Width || have.Height != d.Height) {
+        focusDirt[e].Reset();
+        focusDirtView[e].Reset();
+        resampler.forget_views();
+        ComPtr<ID3D11Device> device;
+        ctx->GetDevice(&device);
+        // sRGB: what the game's view returns (linear) is written and read back as it was, finest in the darks.
+        const D3D11_TEXTURE2D_DESC c{d.Width, d.Height, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, {1, 0}, D3D11_USAGE_DEFAULT,
+                                     D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET};
+        if (FAILED(device->CreateTexture2D(&c, nullptr, &focusDirt[e])) ||
+            FAILED(device->CreateShaderResourceView(focusDirt[e].Get(), nullptr, &focusDirtView[e]))) {
+            focusDirt[e].Reset();
+            focusDirtView[e].Reset();
+            dirtFailed.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    const simqvfr::ViewRegion whole{0, 0, static_cast<int>(d.Width), static_cast<int>(d.Height)};
+    if (!resampler.resample_target(game.Get(), d.Width, d.Height, whole, focusDirt[e].Get(), whole, m)) {
+        dirtFailed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    ID3D11ShaderResourceView* mine = focusDirtView[e].Get();
+    ctx->PSSetShaderResources(2, 1, &mine);
+    restore = game;
+    dirtShared.fetch_add(1, std::memory_order_relaxed);
+}
+
+// A three-index draw (UE's screen triangle: DrawIndexed(3, 6, 0) from its rectangle's index buffer): the tonemapper
+// if it draws into the views' target at a view's output rect with an R11G11B10
+// render target texture in t1 (the bloom). An eye's: its bloom region copied aside. A focus view's: its bloom region
+// refilled from its eye's copy, and its dirt mask swapped (`gameDirt`: the game's, to put back after the draw).
+void on_tonemap(ID3D11DeviceContext* ctx, ComPtr<ID3D11ShaderResourceView>& gameDirt) {
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ctx->OMGetRenderTargets(1, &rtv, nullptr);
+    if (!rtv)
+        return;
+    ComPtr<ID3D11Resource> rt;
+    rtv->GetResource(&rt);
+    ComPtr<ID3D11Texture2D> output;
+    if (!rt || FAILED(rt.As(&output)))
+        return;
+    D3D11_TEXTURE2D_DESC od;
+    output->GetDesc(&od);
+    int target[2];
+    views_target(target);
+    if (static_cast<int>(od.Width) != target[0] || static_cast<int>(od.Height) != target[1]) {
+        notViewsTarget.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    ID3D11ShaderResourceView* srvs[2] = {};
+    ctx->PSGetShaderResources(1, 2, srvs);
+    ComPtr<ID3D11ShaderResourceView> bloomView, dirtView;
+    bloomView.Attach(srvs[0]);
+    dirtView.Attach(srvs[1]);
+    ComPtr<ID3D11Resource> br;
+    if (bloomView)
+        bloomView->GetResource(&br);
+    ComPtr<ID3D11Texture2D> bloom;
+    D3D11_TEXTURE2D_DESC bd{};
+    if (br && SUCCEEDED(br.As(&bloom)))
+        bloom->GetDesc(&bd);
+    if (!bloom || bd.Format != DXGI_FORMAT_R11G11B10_FLOAT || !(bd.BindFlags & D3D11_BIND_RENDER_TARGET) ||
+        bd.SampleDesc.Count != 1) {
+        noBloomTexture.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    simqvfr::ViewRegion rect;
+    const int view = bound_view(ctx, bloomCounts, "a tonemap", rect, true);
+    if (view < 0)
+        return;
+    int bw = 0, bh = 0;
+    bloom_size(rect.width, rect.height, bw, bh);
+    if (bw > static_cast<int>(bd.Width) || bh > static_cast<int>(bd.Height)) {
+        bloomCounts.failed.fetch_add(1, std::memory_order_relaxed);
+        if (!bloomTooSmallLogged) {
+            bloomTooSmallLogged = true;
+            simqvfr::logf("acc view share: view %d's bloom (%dx%d for its %dx%d) is larger than the tonemap's bloom "
+                          "texture %ux%u: left as it is",
+                          view, bw, bh, rect.width, rect.height, bd.Width, bd.Height);
+        }
+        return;
+    }
+    const simqvfr::ViewRegion region{0, 0, bw, bh};
+    if (view < 2) {
+        D3D11_TEXTURE2D_DESC have{};
+        if (eyeBloom[view])
+            eyeBloom[view]->GetDesc(&have);
+        if (!eyeBloom[view] || have.Width != bd.Width || have.Height != bd.Height) {
+            eyeBloom[view].Reset();
+            resampler.forget_views();
+            ComPtr<ID3D11Device> device;
+            ctx->GetDevice(&device);
+            const D3D11_TEXTURE2D_DESC c{bd.Width, bd.Height, 1, 1, bd.Format, {1, 0}, D3D11_USAGE_DEFAULT,
+                                         D3D11_BIND_SHADER_RESOURCE};
+            if (FAILED(device->CreateTexture2D(&c, nullptr, &eyeBloom[view]))) {
+                eyeBloom[view].Reset();
+                bloomCounts.failed.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+        const D3D11_BOX box{0, 0, 0, static_cast<UINT>(bw), static_cast<UINT>(bh), 1};
+        ctx->CopySubresourceRegion(eyeBloom[view].Get(), 0, 0, 0, 0, bloom.Get(), 0, &box);
+        eyeBloomRegion[view] = region;
+        eyeBloomFresh[view] = true;
+        bloomCounts.eyes.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const int e = view - 2;
+    if (!eyeBloomFresh[e] || !eyeBloom[e]) {
+        bloomCounts.noEye.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    eyeBloomFresh[e] = false;
+    simqvfr::ViewMapping m{};
+    if (!focus_mapping(e, m) || !resampler.resample_target(eyeBloom[e].Get(), eyeBloomRegion[e], bloom.Get(), region, m)) {
+        bloomCounts.failed.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    note_shared(bloomCounts, "bloom", view, eyeBloomRegion[e], region);
+    if (dirtView)
+        share_dirt(ctx, e, dirtView, m, gameDirt);
+    if (!bloomLogged) {
+        bloomLogged = true;
+        D3D11_TEXTURE2D_DESC dd{};
+        if (dirtView) {
+            ComPtr<ID3D11Resource> dr;
+            dirtView->GetResource(&dr);
+            ComPtr<ID3D11Texture2D> dt;
+            if (dr && SUCCEEDED(dr.As(&dt)))
+                dt->GetDesc(&dd);
+        }
+        simqvfr::logf("acc view share: bloom texture %ux%u, the tonemap at %d,%d %dx%d (view %d), its bloom %dx%d; dirt "
+                      "mask %ux%u format %d %s",
+                      bd.Width, bd.Height, rect.x, rect.y, rect.width, rect.height, view, bw, bh, dd.Width, dd.Height,
+                      static_cast<int>(dd.Format), gameDirt ? "resampled for the focus views" : "left as it is");
     }
 }
 
@@ -483,24 +674,29 @@ void report(Counts& c, const char* what) {
 
 }  // namespace
 
-void view_share_configure(bool ssr, bool ao) {
+void view_share_configure(bool ssr, bool ao, bool bloom) {
     shareSsr.store(ssr);
     shareAo.store(ao);
+    shareBloom.store(bloom);
     configuredSsr.store(ssr);
     configuredAo.store(ao);
+    configuredBloom.store(bloom);
     if (!ssr)
         simqvfr::log_line("acc view share: reflections not shared (acc_ssr_share=0): each focus view traces its own");
     if (!ao)
         simqvfr::log_line("acc view share: ambient occlusion not shared (acc_ao_share=0): each focus view computes its own");
+    if (!bloom)
+        simqvfr::log_line("acc view share: bloom not shared (acc_bloom_share=0): each focus view blurs its own");
 }
 
-void view_share_set_off(bool off) {
+void view_share_set_off(bool off, bool bloomOff) {
     shareSsr.store(!off && configuredSsr.load());
     shareAo.store(!off && configuredAo.load());
+    shareBloom.store(!off && !bloomOff && configuredBloom.load());
 }
 
 void view_share_start(ID3D11Device* device) {
-    if ((!shareSsr.load() && !shareAo.load()) || !device)
+    if ((!shareSsr.load() && !shareAo.load() && !shareBloom.load()) || !device)
         return;
     std::lock_guard guard(mutex);
     ComPtr<ID3D11DeviceContext> context;
@@ -533,10 +729,8 @@ void view_share_start(ID3D11Device* device) {
                     return narrow;
                 }());
     active.store(true);
-    simqvfr::logf("acc view share: on (the focus views take their eyes' %s)",
-                shareSsr.load() && shareAo.load() ? "reflections and ambient occlusion"
-                : shareSsr.load()                 ? "reflections"
-                                                  : "ambient occlusion");
+    simqvfr::logf("acc view share: on (the focus views take their eyes'%s%s%s)", shareSsr.load() ? " reflections" : "",
+                  shareAo.load() ? " ambient-occlusion" : "", shareBloom.load() ? " bloom" : "");
 }
 
 void view_share_stop() {
@@ -548,6 +742,10 @@ void view_share_stop() {
         eyeSsrFresh[e] = false;
         eyeAo[e] = nullptr;
         aoPending[e] = AoPending{};
+        eyeBloom[e].Reset();
+        eyeBloomFresh[e] = false;
+        focusDirt[e].Reset();
+        focusDirtView[e].Reset();
     }
     resampler.shutdown();
 }
@@ -614,6 +812,16 @@ void view_share_frame_end() {
         report(ssrCounts, "reflections");
     if (shareAo.load(std::memory_order_relaxed))
         report(aoCounts, "ambient occlusion");
+    if (shareBloom.load(std::memory_order_relaxed)) {
+        report(bloomCounts, "bloom");
+        simqvfr::logf("acc view share: dirt mask over the last 900 frames: resampled for a focus view %llu, failed %llu; "
+                      "three-index draws %llu, of them not into the views' target %llu, without a bloom texture in t1 %llu",
+                      static_cast<unsigned long long>(dirtShared.exchange(0)),
+                      static_cast<unsigned long long>(dirtFailed.exchange(0)),
+                      static_cast<unsigned long long>(tonemapCandidates.exchange(0)),
+                      static_cast<unsigned long long>(notViewsTarget.exchange(0)),
+                      static_cast<unsigned long long>(noBloomTexture.exchange(0)));
+    }
 }
 
 }  // namespace acc
