@@ -93,6 +93,16 @@ struct Experiment {
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
+    // [experiment] focus_layer=1 (a D3D11 game with separate views: LMU): nothing composed at native size. The periphery
+    // goes to the runtime as the game rendered it, the focus views as a second projection layer over it (their
+    // feather in alpha), so the runtime samples the focus views at their own density (V4D3D11::focusChain).
+    // 2: the focus views as two quad layers instead, one per eye (SteamVR misplaced and warped the projection layer).
+    int focusLayer = 0;
+    // [experiment] native_quad_views=1: the runtime composes quad views if it can (NativeQuad below); a D3D11 game with
+    // separate views (LMU) only for now. Read before the instance exists (native_quad_wanted).
+    bool nativeQuadViews = false;
+    // focus_layer=2: the quads' distance, metres ([experiment] focus_quad_distance, live; quad/focus_quad_distance.h).
+    std::atomic<int> focusQuadDistance = 100;
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4TestVisibleMask = false;    // views4 test: a full-view visible-area mesh, as VDXR gives (diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
@@ -190,6 +200,7 @@ struct LiveSettings {
     FovCrop crop;  // views4 only
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
+    int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
 };
 
 // views4: the outer and focus views' sizes, linear scales of the native eye (views4_layout.h), from
@@ -416,6 +427,14 @@ struct V4D3D11 {
     std::vector<ID3D11Texture2D*> outImages;
     uint32_t outW = 0, outH = 0;  // one eye's size in it
     bool failed = false;          // no compositor or output chain: views 0-1 as they are
+    // experiment.focusLayer: the focus views' own swapchain (kHelmetLayerFormat, alpha the feather), eye e from
+    // x = e x focusW; made at the first frame with four views, the size of the game's view images.
+    XrSwapchain focusChain = XR_NULL_HANDLE;
+    std::vector<ID3D11Texture2D*> focusImages;
+    uint32_t focusW = 0, focusH = 0;
+    bool focusFailed = false;  // its swapchain failed: composed as without focus_layer
+    uint64_t layered = 0;      // frames submitted as two layers
+    bool helmetComposedLogged = false;
     uint64_t composed = 0, fallbacks = 0;
     const char* lastFallback = nullptr;
 };
@@ -646,8 +665,37 @@ struct ProfileNotice {
     bool wasRunning = false;
 };
 
+// Native quad views (quad/native_quad.h, native_quad.cpp; [experiment] native_quad_views=1): the runtime's quad view
+// support and whether this session uses it. When the instance has the extension, `next`'s BeginSession, LocateViews,
+// GetVisibilityMaskKHR and EndFrame are this file's wrappers, which call the functions kept here.
+struct NativeQuad {
+    std::atomic<bool> extension = false;  // XR_VARJO_quad_views enabled on the game's instance
+    std::atomic<bool> foveated = false;   // XR_VARJO_foveated_rendering too: the runtime moves views 2-3 with the eyes
+    std::atomic<bool> active = false;     // this session was begun as PRIMARY_QUAD_VARJO
+    // The gaze as the runtime's foveated rendering has it (foveated): the direction through the middle of its views 2-3
+    // in the space and at the time of the last quad xrLocateViews, a fallback for the eye gaze extension (on Pimax's
+    // runtime it can give no samples while the runtime's own foveation tracks: 2026-11-09). Under gazeMutex.
+    std::mutex gazeMutex;
+    XrVector3f gaze{0, 0, -1};
+    XrSpace gazeSpace = XR_NULL_HANDLE;
+    XrTime gazeTime = 0;
+    float lastCentre[2] = {};  // view 2's FOV centre (tangents), to count the frames the runtime moved it
+    uint64_t gazeFrames = 0, gazeMoves = 0;
+    bool usedRuntimeGaze = false;  // logged once, the first time it stood in
+    PFN_xrEnumerateViewConfigurations EnumerateViewConfigurations = nullptr;
+    PFN_xrBeginSession BeginSession = nullptr;
+    PFN_xrLocateViews LocateViews = nullptr;
+    PFN_xrGetVisibilityMaskKHR GetVisibilityMaskKHR = nullptr;
+    PFN_xrEndFrame EndFrame = nullptr;
+    // Counted on the render thread (EndFrame): frames submitted with the focus views as views 2-3, with copies of
+    // the eyes there (no focus views that frame), and projection layers left out (neither two nor four views).
+    uint64_t focusFrames = 0, copyFrames = 0, refusedLayers = 0;
+    bool loggedFirstFocus = false, loggedFirstCopy = false;
+};
+
 // The globals (globals.cpp).
 extern Dispatch next;
+extern NativeQuad nativeQuad;
 extern std::mutex chainMutex;
 extern std::map<XrSwapchain, std::pair<uint32_t, uint32_t>> chainSizes;
 extern Experiment experiment;

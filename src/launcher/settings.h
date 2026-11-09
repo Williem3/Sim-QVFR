@@ -34,6 +34,10 @@ struct Settings {
     // [experiment] multi_view (QVFR, a game with GameFeatures::multiView: LMU): NVIDIA multi-view rendering, each eye's
     // pass drawing its focus view too (games/multi_view.h). Next launch; the layer checks the GPU itself.
     bool multiView = false;
+    // [experiment] native_quad_views (QVFR, a game with GameFeatures::nativeQuadViews: LMU): on a Pimax or Varjo runtime,
+    // the runtime composes the four views (layer/native_quad.cpp). 1 auto (the default), 0 off, 2 asked for even with
+    // another OpenXR layer between (the runtime's offer unknown). Next launch.
+    int nativeQuad = 1;
     int width = 39;           // focus_percent: foveated width, percent of the outer view
     int height = 39;          // focus_height_percent: foveated height
     bool outline = false;     // [quad] debug_border
@@ -176,6 +180,10 @@ struct RuntimeInfo {
     EyeTracker eyeTracker = EyeTracker::Unknown;
     // Cheeky at the last launch: off, missing, refused or running (empty: no launch yet), and its version.
     std::wstring cheekyStatus, cheekyVersion;
+    // Quad views at the last launch: the runtime offered them ("offered", "none", "unknown": a layer between; empty: no
+    // launch yet), and whether the session ran as a quad view one (the runtime composing).
+    std::wstring quadViews;
+    bool quadViewsUsed = false;
     // VRAM at the last QVFR launch (the layer's vram census): this process's use and Windows' budget for it,
     // MB; the part of it in render targets that follow ACE's target, and that target's size (0: none yet).
     double vramUsedMb = 0, vramBudgetMb = 0, vramScaledMb = 0;

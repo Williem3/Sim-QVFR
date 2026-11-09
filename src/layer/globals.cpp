@@ -18,6 +18,7 @@
 namespace simqvfr::layer {
 
 Dispatch next;
+NativeQuad nativeQuad;
 
 std::mutex chainMutex;
 

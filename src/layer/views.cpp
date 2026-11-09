@@ -86,7 +86,9 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                 float tan[2][2] = {};
                 bool valid[2] = {};
                 XrVector3f direction{0, 0, -1};
-                const bool gazing = experiment.gaze && gaze_now(session, info->space, info->displayTime, direction);
+                // The eye gaze extension's gaze, else (a quad view session with foveated rendering) the runtime's.
+                const bool gazing = experiment.gaze && (gaze_now(session, info->space, info->displayTime, direction) ||
+                                                        runtime_gaze(info->space, info->displayTime, direction));
                 steady_gaze(gazing, direction);
                 const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
                 for (int e = 0; e < 2; ++e) {

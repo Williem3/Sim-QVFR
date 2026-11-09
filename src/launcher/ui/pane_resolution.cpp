@@ -79,6 +79,39 @@ float resolution_pane(float x, float y, float w, bool draw) {
                          : L"Off renders every view on its own, as on any graphics card.",
                      draw, Applies::NextLaunch);
     }
+    // The runtime composing the views (LMU on a Pimax or Varjo runtime: layer/native_quad.cpp): on by default, used
+    // only where the runtime offers quad views. The description ends with what the last launch found.
+    if (game_has(&games::GameFeatures::nativeQuadViews)) {
+        h += t::kSpace6;
+        std::wstring desc;
+        if (!qvfr) {
+            desc = L"Available in Quad View Foveated Rendering.";
+        } else {
+            desc = L"On a Pimax or Varjo runtime, the runtime puts the focus region on the display at its full "
+                   L"resolution: sharper than Sim-QVFR can compose it. On other runtimes (SteamVR) nothing changes.";
+            const RuntimeInfo& rt = app.runtime;
+            if (rt.quadViewsUsed)
+                desc += L" Last launch: the runtime composed the views.";
+            else if (rt.quadViews == L"offered")
+                desc += L" Last launch: the runtime offers it, but it wasn’t used (off, frame generation, or see the log).";
+            else if (rt.quadViews == L"none")
+                desc += L" Last launch: this runtime doesn’t offer it, so Sim-QVFR composed the views.";
+            else if (rt.quadViews == L"unknown")
+                desc += L" Last launch: another OpenXR layer sits between Sim-QVFR and the runtime, so it wasn’t tried.";
+        }
+        const bool unavailable = !qvfr;
+        const bool shown = app.s.nativeQuad != 0;
+        Row on;
+        on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
+        on.full = [desc, unavailable, shown](const Rect& r) {
+            checkbox(kNativeQuad, r, shown, L"Let the runtime compose (Pimax, Varjo)", desc, unavailable);
+        };
+        h += section(x, y + h, w, L"Runtime composition", {on},
+                     L"With the runtime composing, its own quad view settings (Pimax Play’s resolution and focus area "
+                     L"sliders) don’t apply: the resolution and focus region set here do, and change while you drive. Off "
+                     L"with frame generation (Cheeky’s or VectorXR’s), which needs one composed image.",
+                     draw, Applies::NextLaunch);
+    }
     // The FOV crop (each side on its own, QVFR only) and the helmet overlay: left out for a game without them.
     if (game_has(&games::GameFeatures::fovCrop)) {
         h += t::kSpace6;

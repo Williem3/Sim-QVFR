@@ -162,6 +162,72 @@ int main() {
     }
     context->Unmap(readback.Get(), 0);
 
+    // focus_layer: each eye's focus view (128 x 64 in the views' image) drawn texel for texel into its rect of the
+    // focus layer, premultiplied, alpha its feather: opaque in the middle, clear at the edge, half way through the
+    // feather band (10% of the box) about half.
+    {
+        D3D11_TEXTURE2D_DESC focusDesc{256, 64, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                                       D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET};
+        ComPtr<ID3D11Texture2D> focusLayer;
+        device->CreateTexture2D(&focusDesc, nullptr, &focusLayer);
+        const int rects[2][4] = {{0, 0, 128, 64}, {128, 0, 128, 64}};
+        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), eyes, rects), "the focus layer");
+        UINT n = 1;
+        D3D11_VIEWPORT kept{};
+        context->RSGetViewports(&n, &kept);
+        check(n == 1 && std::memcmp(&kept, &gameViewport, sizeof(kept)) == 0, "focus layer: the game's viewport as it was");
+        const Image fq = read_image(device.Get(), context.Get(), focusLayer.Get());
+        for (int e = 0; e < 2; ++e) {
+            const UINT x0 = e * 128;
+            char what[128];
+            std::snprintf(what, sizeof(what), "focus layer, eye %d: its focus view, opaque, in the middle (0x%08x)", e,
+                          fq.at(x0 + 64, 32));
+            check(fq.at(x0 + 64, 32) == kFocus[e], what);
+            std::snprintf(what, sizeof(what), "focus layer, eye %d: clear at the edge (alpha %u)", e, fq.channel(x0, 32, 3));
+            // (the first texel centre is half a texel in: 1/256 of the width, 1/128 of the height, alpha ~1 and ~5)
+            check(fq.channel(x0, 32, 3) <= 2 && fq.channel(x0 + 64, 0, 3) <= 6, what);
+            const uint8_t a = fq.channel(x0 + 6, 32, 3);
+            bool premultiplied = true;
+            for (int c = 0; c < 3; ++c)
+                premultiplied &= fq.channel(x0 + 6, 32, c) <= a + 1;
+            std::snprintf(what, sizeof(what), "focus layer, eye %d: half way through the feather about half (alpha %u), "
+                          "premultiplied", e, a);
+            check(a >= 100 && a <= 160 && premultiplied, what);
+        }
+        // Native quad views (viewTan.x 1): opaque throughout, the outer view blended into the edge by the feather (the
+        // box's edge shows the outer view's colour), the outline (3% thick) 10% in from the edge.
+        EyeComposition native[2] = {eyes[0], eyes[1]};
+        for (EyeComposition& n : native) {
+            n.viewTan[0] = 1;
+            n.viewTan[1] = 0.10f;
+            n.border = 0.03f;
+            const float magenta[4] = {1, 0, 1, 1};
+            std::memcpy(n.borderColor, magenta, sizeof(magenta));
+        }
+        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), native, rects), "the native focus views");
+        const Image nq = read_image(device.Get(), context.Get(), focusLayer.Get());
+        for (int e = 0; e < 2; ++e) {
+            const UINT x0 = e * 128;
+            char what[160];
+            std::snprintf(what, sizeof(what), "native, eye %d: the focus view in the middle (0x%08x), the outer view at the "
+                          "edge (0x%08x)", e, nq.at(x0 + 64, 32), nq.at(x0, 32));
+            // (the edge texel's centre is half a texel in: a trace of the focus view, a step or two of 255)
+            bool edgeOuter = true;
+            for (int c = 0; c < 4; ++c)
+                edgeOuter &= std::abs(static_cast<int>(nq.channel(x0, 32, c)) - static_cast<int>((kOuter[e] >> (8 * c)) & 0xff)) <= 2;
+            check(nq.at(x0 + 64, 32) == kFocus[e] && edgeOuter, what);
+            bool opaque = true;
+            for (UINT x = x0; x < x0 + 128; x += 3)
+                for (UINT y = 0; y < 64; y += 3)
+                    opaque &= nq.channel(x, y, 3) == 255;
+            std::snprintf(what, sizeof(what), "native, eye %d: opaque everywhere", e);
+            check(opaque, what);
+            std::snprintf(what, sizeof(what), "native, eye %d: the outline 10%% in (0x%08x), not at the edge", e,
+                          nq.at(x0 + 14, 32));
+            check(nq.at(x0 + 14, 32) == 0xffff00ff && nq.at(x0 + 2, 32) != 0xffff00ff, what);
+        }
+    }
+
     // The FOV crop: each eye drawn into the top left of its half (outputSize, 75% x 50%); the rest of the half is
     // left as it was (cleared here to black), the drawn part as before.
     const float black[4] = {0, 0, 0, 0};

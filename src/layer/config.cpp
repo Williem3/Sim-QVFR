@@ -13,6 +13,7 @@
 #include "quad/focus_offset.h"
 #include "quad/focus_shape.h"
 #include "quad/fov_crop.h"
+#include "quad/focus_quad_distance.h"
 #include "quad/gaze_deadzone.h"
 #include "quad/helmet.h"
 #include "quad/settings_menu.h"
@@ -69,6 +70,7 @@ LiveSettings read_live(const wchar_t* ini) {
     l.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini) != 0;
     l.offset = read_focus_offset(ini);
     l.gazeDeadzone = read_gaze_deadzone(ini) / 10.0;
+    l.focusQuadDistance = read_focus_quad_distance(ini);
     return l;
 }
 
@@ -124,13 +126,38 @@ std::wstring layer_directory() {
     return std::filesystem::path(module).parent_path().wstring();
 }
 
-void load_experiment() {
+std::wstring experiment_ini() {
     // A launcher passes its per-launch settings in SIM_QVFR_INI; otherwise the ini next to the DLL.
     std::wstring ini = (std::filesystem::path(layer_directory()) / L"sim-qvfr.ini").wstring();
     wchar_t env[MAX_PATH] = {};
     const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_INI", env, MAX_PATH);
     if (n > 0 && n < MAX_PATH && std::filesystem::path(env).is_absolute())
         ini = env;
+    return ini;
+}
+
+bool native_quad_wanted(std::string* why) {
+    const std::wstring ini = experiment_ini();
+    // Auto (1, the default): wherever the runtime composes quad views; 0: never.
+    if (GetPrivateProfileIntW(L"experiment", L"native_quad_views", 1, ini.c_str()) == 0) {
+        if (why)
+            *why = "off ([experiment] native_quad_views=0)";
+        return false;
+    }
+    // Cheeky's frame generation works on one composed image: composed then, as before.
+    if (GetPrivateProfileIntW(L"cheeky", L"enabled", 0, ini.c_str()) != 0 &&
+        GetPrivateProfileIntW(L"cheeky", L"fg", 0, ini.c_str()) != 0) {
+        if (why)
+            *why = "off with Cheeky's frame generation (it works on one composed image)";
+        return false;
+    }
+    if (why)
+        *why = "auto";
+    return true;
+}
+
+void load_experiment() {
+    const std::wstring ini = experiment_ini();
     wchar_t mode[32] = {};
     GetPrivateProfileStringW(L"experiment", L"mode", L"off", mode, 32, ini.c_str());
     // [experiment] baseline=1: mode=off whatever `mode` says (the launcher writes its own mode at every launch),
@@ -164,6 +191,25 @@ void load_experiment() {
             logf("experiment: %ls can't be composed yet: views4_compose=0, the headset shows views 0-1", game->info()->name);
         experiment.views4Compose = false;
     }
+    // focus_layer=1: the focus views as a layer of their own over the periphery, nothing composed at native size
+    // (experiment.focusLayer); 2: as two quad layers, one per eye. A D3D11 game with separate views only (LMU) for now.
+    experiment.focusLayer =
+        static_cast<int>(std::min(2u, GetPrivateProfileIntW(L"experiment", L"focus_layer", 0, ini.c_str())));
+    if (experiment.focusLayer && !(experiment.views4ComposeD3D11 && game->qvfr_separate_views())) {
+        logf("experiment: focus_layer ignored: %ls is not a D3D11 game with separate views (LMU)", game->info()->name);
+        experiment.focusLayer = 0;
+    } else if (experiment.focusLayer) {
+        logf("experiment: focus_layer=%d: the periphery submitted as the game rendered it, the focus views over it as %s "
+             "(feather in alpha); composed as before with the helmet on",
+             experiment.focusLayer,
+             experiment.focusLayer == 2 ? "a quad layer per eye, 100 m out" : "a second projection layer");
+    }
+    // native_quad_views (auto by default): the runtime composes the four views if it offers quad views
+    // (layer/native_quad.cpp). The instance already asked for the extension (native_quad_wanted); here only whether this
+    // game can use it (one without the feature: silently not). A quad view session takes the focus views as views 2-3,
+    // which focus_layer's own layers then give way to (views4_submit).
+    experiment.nativeQuadViews = native_quad_wanted(nullptr) && game->info()->features.nativeQuadViews &&
+                                 experiment.views4ComposeD3D11 && game->qvfr_separate_views();
     // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =
         experiment.views4 &&
@@ -237,6 +283,7 @@ void load_experiment() {
     experiment.fixedOffsetY = settings.offset.fixed;
     experiment.gazeOffsetY = settings.offset.gaze;
     experiment.gazeDeadzone = settings.gazeDeadzone;
+    experiment.focusQuadDistance = settings.focusQuadDistance;
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());
