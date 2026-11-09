@@ -391,7 +391,7 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
         std::lock_guard guard(v4outline.mutex);
         v4outline.formats[*swapchain] = info->format;
     }
-    if (XR_SUCCEEDED(r) && experiment.views4ComposeD3D11) {
+    if (XR_SUCCEEDED(r) && v4d3d11_tracks_chains()) {
         std::lock_guard guard(v4d3d11.mutex);
         v4d3d11.chains[*swapchain].format = info->format;
     }
@@ -409,7 +409,7 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
         d3d11_capture_images(swapchain, reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images),
                              std::min(*countOutput, capacity));
     if (XR_SUCCEEDED(r) && capacity > 0 && images && images->type == XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR &&
-        experiment.views4ComposeD3D11) {
+        v4d3d11_tracks_chains()) {
         std::lock_guard guard(v4d3d11.mutex);
         if (auto it = v4d3d11.chains.find(swapchain); it != v4d3d11.chains.end()) {
             const auto* d3d11Images = reinterpret_cast<const XrSwapchainImageD3D11KHR*>(images);
@@ -454,7 +454,7 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
     const XrResult r = next.AcquireSwapchainImage(swapchain, info, index);
     if (XR_SUCCEEDED(r) && experiment.d3d11CaptureFrame)
         d3d11_capture_acquired(swapchain, *index);
-    if (XR_SUCCEEDED(r) && experiment.views4ComposeD3D11) {
+    if (XR_SUCCEEDED(r) && v4d3d11_tracks_chains()) {
         std::lock_guard guard(v4d3d11.mutex);
         if (auto it = v4d3d11.chains.find(swapchain); it != v4d3d11.chains.end())
             it->second.acquired = *index;

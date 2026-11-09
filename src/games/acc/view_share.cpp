@@ -15,6 +15,7 @@
 #include "../../log.h"
 #include "../../quad/d3d11_view_resample.h"
 #include "../../quad/focus_turn.h"
+#include "fixation.h"
 #include "views.h"
 
 namespace acc {
@@ -350,14 +351,19 @@ void STDMETHODCALLTYPE set_targets_hook(ID3D11DeviceContext* ctx, UINT count, ID
                                         ID3D11DepthStencilView* dsv) {
     hooked_for(ctx)->setTargets(ctx, count, rtvs, dsv);
     follow_target(ctx, count, rtvs);
+    if (on_immediate(ctx))
+        fixation_targets(count, dsv);  // the base pass's depth: the scene depth (fixation.h)
 }
 
 void STDMETHODCALLTYPE set_targets_and_uavs_hook(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs,
                                                  ID3D11DepthStencilView* dsv, UINT uavStart, UINT uavCount,
                                                  ID3D11UnorderedAccessView* const* uavs, const UINT* initialCounts) {
     hooked_for(ctx)->setTargetsAndUavs(ctx, count, rtvs, dsv, uavStart, uavCount, uavs, initialCounts);
-    if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+    if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         follow_target(ctx, count, rtvs);
+        if (on_immediate(ctx))
+            fixation_targets(count, dsv);
+    }
 }
 
 // A draw into the AO texture (the view's AO, just drawn): after a focus view's, its region from its eye's once ACC
