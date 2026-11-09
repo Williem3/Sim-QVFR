@@ -9,6 +9,7 @@
 #include "fixation.h"
 #include "game.h"
 #include "gates.h"
+#include "mesh_passes.h"
 #include "view_share.h"
 #include "views.h"
 
@@ -28,7 +29,11 @@ public:
     bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         // The copies gate: views 2-3 the eyes' cameras (no box), at the eyes' size (qvfr_copies_layout).
         const double box = gates_.copies ? 0.0 : s.focusFraction;
-        return views_start(s.layout, box, s.focusFractionY, fixes_);
+        if (!views_start(s.layout, box, s.focusFractionY, fixes_))
+            return false;
+        if (passProbe_.on())
+            pass_probe_start(passProbe_);  // diagnostic: the mesh pass probe / A/B (mesh_passes.h)
+        return true;
     }
     // No focus cull yet. Live resolution: the views laid out again in the launch target (views.cpp).
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override { views_set_gaze(tan, valid); }
@@ -66,11 +71,13 @@ public:
         views_frame_end();
         view_share_frame_end();
         fixation_frame_end();
+        pass_probe_frame_end();
     }
     void session_running(bool running) override { views_session_running(running); }
     void instance_created(const wchar_t* ini, const wchar_t*) override {
         fixes_ = views_fixes(ini);
         gates_ = gate_run(ini);
+        passProbe_ = pass_probe_config(ini);
         gates_start(gates_);
         view_share_configure(GetPrivateProfileIntW(L"experiment", L"acc_ssr_share", 1, ini) != 0,
                              GetPrivateProfileIntW(L"experiment", L"acc_ao_share", 1, ini) != 0,
@@ -96,6 +103,7 @@ public:
 private:
     ViewsFixes fixes_;                    // [experiment] acc_* fixes (views.h)
     GateRun gates_;                       // acc_copies / acc_focus (gates.h)
+    PassProbeConfig passProbe_;           // acc_pass_probe / acc_focus_skip_ab (mesh_passes.h)
     bool liveIgnoredLogged_ = false;
     std::atomic<bool> convergeOff_{false};  // acc_diag switch 6
     simqvfr::games::DiagSwitches diag_;  // acc_diag=1

@@ -3,7 +3,9 @@
 Runs inside RenderDoc's UI process (D3D11 or D3D12):
     $env:RDC_IN = '<capture.rdc>'; $env:RDC_OUT = '<report.md>'; $env:RDC_EYES = '<first>-<last>,<first>-<last>'
     & 'C:\\Program Files\\RenderDoc\\qrenderdoc.exe' --python tools\\rdc\\view_census.py
-RDC_EYES: each eye pass's event range (pass_outline.py finds them). For each eye, per pass (a run of draws into the same
+RDC_EYES: each eye pass's event range (pass_outline.py finds them); a view drawn in several spans (ACC: each pass draws
+the eye pair, then the focus pair, into the same targets; viewport_runs.py finds them) joins them with +, as
+6700-8326+11032-14569. For each eye, per pass (a run of draws into the same
 targets): draws, instanced draws, distinct vertex and pixel shaders, hull/domain/geometry stages, pixel shaders that read
 the screen position (SV_Position) or sample a depth target. Then the vertex shaders' outputs, the constant buffers both
 eyes bind at each pass's first draw with every value that differs between the eyes (named from the shader reflection
@@ -20,7 +22,15 @@ import renderdoc as rd
 
 IN = os.environ["RDC_IN"]
 OUT = os.environ["RDC_OUT"]
-EYES = [tuple(int(x) for x in r.split("-")) for r in os.environ["RDC_EYES"].split(",")]
+EYES = [[tuple(int(x) for x in span.split("-")) for span in r.split("+")] for r in os.environ["RDC_EYES"].split(",")]
+
+
+def inside(event, spans):
+    return any(first <= event <= last for first, last in spans)
+
+
+def spans_text(spans):
+    return "+".join(f"{first}-{last}" for first, last in spans)
 DISASM = os.environ.get("RDC_DISASM", "")
 BYTECODE = os.environ.get("RDC_BYTECODE", "")  # optional: a folder for every vertex shader's bytecode
 out = open(OUT, "w", encoding="utf-8")
@@ -78,19 +88,19 @@ def run():
 
     for r in ctl.GetRootActions():
         walk(r)
-    def eye_depths(first, last):  # the depth targets an eye draws into itself (not the shadow map made before it)
-        return {int(a.depthOut) for a in draws if first <= a.eventId <= last and int(a.depthOut)}
+    def eye_depths(spans):  # the depth targets an eye draws into itself (not the shadow map made before it)
+        return {int(a.depthOut) for a in draws if inside(a.eventId, spans) and int(a.depthOut)}
 
     shaders = {}  # id -> info
     p(f"# View census: {os.path.basename(IN)}\n")
-    p(f"- {len(draws)} draws in the frame; eyes {EYES}; disassembly target {targets[0] if targets else '-'}\n")
+    p(f"- {len(draws)} draws in the frame; eyes {', '.join(spans_text(s) for s in EYES)}; disassembly target {targets[0] if targets else '-'}\n")
 
     eyes = []
-    for first, last in EYES:
+    for spans in EYES:
         passes, cur = [], None
-        depth_ids = eye_depths(first, last)
+        depth_ids = eye_depths(spans)
         for a in draws:
-            if not first <= a.eventId <= last:
+            if not inside(a.eventId, spans):
                 continue
             key = (tuple(int(o) for o in a.outputs if int(o)), int(a.depthOut))
             if cur is None or cur["key"] != key:
@@ -161,11 +171,11 @@ def run():
                                                                    [(v.name, v.byteOffset) for v in cb.variables])
                         except Exception as e:
                             cur["cbs"][(sname, cb.name, i)] = (0, b"", [("error " + repr(e), 0)])
-        calls = collections.Counter(sf.chunks[c].name for e, c in all_events if first <= e <= last)
+        calls = collections.Counter(sf.chunks[c].name for e, c in all_events if inside(e, spans))
         eyes.append({"passes": passes, "calls": calls})
 
     for k, eye in enumerate(eyes):
-        p(f"## Eye {k} (events {EYES[k][0]}-{EYES[k][1]})\n")
+        p(f"## Eye {k} (events {spans_text(EYES[k])})\n")
         p("| First event | Targets | Viewport | Draws | Instanced | VS | PS | HS/DS/GS draws | PS reading SV_Position.xy | PS sampling the eye's own depth |")
         p("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
         for q in eye["passes"]:
