@@ -21,7 +21,9 @@ struct ViewsFixes {
     bool shadows = true;      // acc_shadow_share: the left eye's sun cascades, projected in every view
     bool foliageCull = true;  // acc_foliage_pairs: foliage culled per instanced pair (its own left, its partner's right)
     bool foliageLod = true;   // acc_foliage_lod: the focus views take the left eye's foliage LODs (CPU and shader)
-    bool lensEffects = true;  // acc_lens_effects_off: bloom and lens flares held off (each view's own size and place)
+    // acc_lens_effects_off=1: bloom and lens flares held off in every view. Off by default since the focus views take
+    // their eye's bloom, flares and dirt mask (view_share.h, acc_bloom_share); before that each view blurred its own.
+    bool lensEffects = false;
     // acc_temporal_share: each focus view's state takes its eye's frame index and TAA sample index every frame, so
     // its jitter and temporal noise run in step with its eye's (the copies gate's first run: 0.5% of pixels off by
     // more than 16 on edges, the tonemapper's dither a step apart everywhere).
@@ -68,6 +70,9 @@ void views_target(int (&size)[2]);
 // View v's rect in the target (x, y, width, height) as the renderer last reported it (SetFinalViewRect); false
 // before it did.
 bool views_view_rect(int view, int (&rect)[4]);
+// View v's output rect in the target (x, y, width, height) as AdjustViewRect last placed it: where post-processing
+// after an upscaler (ACC's DLSS, Cheeky's) draws it; the same as views_view_rect without one. False before the first.
+bool views_output_rect(int view, int (&rect)[4]);
 // The four views are patched in and views 2-3 narrowed to a focus box (not copies of the eyes).
 bool views_focused();
 // Every xrEndFrame: which passes UE asked for, logged every 900 frames.

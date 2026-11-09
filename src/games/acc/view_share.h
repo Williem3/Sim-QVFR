@@ -7,6 +7,9 @@
 //    and less so at their edges, where samples fall off-screen: the box darker than the periphery, its rim lighter
 //    on a dark floor and darker on a light one. (The focus views' texels are some 2.2 times taller than wide, the
 //    eye column's width over a short box, which UE's AO doesn't expect.)
+//  - bloom (and lens flares): blurred in the view's own pixels, sized as a share of its width, so a focus view's
+//    glow was ~4x narrower in angle than the periphery's and stopped at the box edge (frame saves 2026-11-08: a
+//    taillight's glow 0.3-0.7 of its eye's within ~1.5 deg); the bloom's dirt mask is laid over each view's own screen.
 // Each eye computes them as before; then its focus view's are refilled from its eye's, through the focus camera's
 // geometry (quad/d3d11_view_resample.h), before anything reads them.
 //
@@ -17,6 +20,11 @@
 //    viewport is: just before a focus view's, its SSR texture is refilled from its eye's.
 //  - AO: the one pass drawing into a target-sized R8_UNORM texture (render targets are followed as they are set),
 //    a draw per view into one texture: right after a focus view's, its region is refilled from its eye's.
+//  - Bloom: the tonemapper, a three-index draw (UE's screen triangle, DrawIndexed(3, 6, 0)) into the views' target
+//    at a view's output rect, reading the bloom (with the lens flares) from an R11G11B10 texture in t1, at half the
+//    view's size from 0,0, one texture all views reuse (capture acc_bloom_frame13365, 2026-11-08). At an eye's draw
+//    its bloom region is copied aside; just before a focus view's, the focus view's region is refilled from that
+//    copy, and the dirt mask in t2 is swapped for one resampled through the box for that draw.
 // Dispatch, DrawIndexed and the two OMSetRenderTargets are hooked through the context's vtable; everything else
 // passes straight through.
 #pragma once
@@ -25,8 +33,8 @@ struct ID3D11Device;
 
 namespace acc {
 
-// [experiment] acc_ssr_share, acc_ao_share (default on), read at xrCreateInstance.
-void view_share_configure(bool ssr, bool ao);
+// [experiment] acc_ssr_share, acc_ao_share, acc_bloom_share (default on), read at xrCreateInstance.
+void view_share_configure(bool ssr, bool ao, bool bloom);
 // The session's D3D11 device (xrCreateSession): hooks its immediate context once per vtable, and shares while the
 // four views run with a focus box (views_focused).
 void view_share_start(ID3D11Device* device);
@@ -34,8 +42,16 @@ void view_share_stop();
 // Every xrEndFrame while QVFR runs: its counters into the log every 900 frames.
 void view_share_frame_end();
 // Diagnostics (acc_diag=1): `off` stops the sharing live (each focus view keeps its own reflections and occlusion),
-// from the next pass; back on, what acc_ssr_share / acc_ao_share asked for at launch.
-void view_share_set_off(bool off);
+// from the next pass; back on, what acc_ssr_share / acc_ao_share / acc_bloom_share asked for at launch. `bloomOff`:
+// the bloom alone (its own switch, for an A/B that changes nothing else).
+void view_share_set_off(bool off, bool bloomOff = false);
+
+// A view's bloom region (from 0,0 of the bloom texture) for its output rect: half its size, rounded up (UE's
+// downsample; the capture: 1412x460 -> 706x230, 1513x1266 -> 757x633).
+inline void bloom_size(int viewWidth, int viewHeight, int& width, int& height) {
+    width = (viewWidth + 1) / 2;
+    height = (viewHeight + 1) / 2;
+}
 
 // Which view (0-3) a viewport is, given the views' rects (x, y, width, height; have[v] false: unknown); -1: none.
 inline int view_at(const int (&rects)[4][4], const bool (&have)[4], float x, float y, float width, float height) {

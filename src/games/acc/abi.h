@@ -39,7 +39,7 @@ inline constexpr std::uintptr_t kAllowSubPrimitiveQueries = 0x4c4bc94;
 inline constexpr std::uintptr_t kAllowSubPrimitiveQueriesRef = 0x686c36;
 inline constexpr std::uint8_t kAllowSubPrimitiveQueriesRefAnchor[7] = {0x4c, 0x8d, 0x05, 0x57, 0x50, 0x5c, 0x04};
 
-// Console variables held at a value while QVFR runs: bloom and lens flares off. [Held console variables]
+// Console variables held while QVFR runs with acc_lens_effects_off=1 (bloom, lens flares off). [Held console variables]
 struct HeldCvar {
     const char* name;
     std::uintptr_t ref;

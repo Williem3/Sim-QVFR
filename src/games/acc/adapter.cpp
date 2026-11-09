@@ -73,12 +73,15 @@ public:
         gates_ = gate_run(ini);
         gates_start(gates_);
         view_share_configure(GetPrivateProfileIntW(L"experiment", L"acc_ssr_share", 1, ini) != 0,
-                             GetPrivateProfileIntW(L"experiment", L"acc_ao_share", 1, ini) != 0);
+                             GetPrivateProfileIntW(L"experiment", L"acc_ao_share", 1, ini) != 0,
+                             GetPrivateProfileIntW(L"experiment", L"acc_bloom_share", 1, ini) != 0);
         // Diagnostic switches (acc_diag=1): Ctrl+Alt+1 SSR, 2 ambient occlusion, 3 the sun's shadows, 4 the focus
-        // views' sharing of their eye's SSR and AO, 5 contact shadows, 6 the focus boxes' convergence.
-        if (diag_.start(ini, L"acc", {L"ssr", L"ao", L"shadow", L"share", L"contact", L"converge"}) && views_diag_start())
+        // views' sharing of their eye's SSR, AO and bloom, 5 contact shadows, 6 the focus boxes' convergence, 7 the
+        // bloom share alone.
+        if (diag_.start(ini, L"acc", {L"ssr", L"ao", L"shadow", L"share", L"contact", L"converge", L"bloomshare"}) &&
+            views_diag_start())
             simqvfr::logf("acc diagnostics: switches on (Ctrl+Alt+1 SSR, 2 AO, 3 sun shadows, 4 view share, 5 contact "
-                          "shadows, 6 box convergence), the ini's read from %ls",
+                          "shadows, 6 box convergence, 7 bloom share), the ini's read from %ls",
                           diag_.ini().c_str());
     }
     void d3d11_session(ID3D11Device* device) override {
@@ -101,15 +104,16 @@ private:
             return;
         for (int k = 0; k < 3; ++k)
             views_set_diag(k, diag_.off(k));
-        view_share_set_off(diag_.off(3));
+        view_share_set_off(diag_.off(3), diag_.off(6));
         // Contact shadows (abi.h kDiagCvars[3]): switch 5 flips the launch setting (held off by acc_contact_shadows_off).
         const bool contactOff = views_contact_shadows_held() != diag_.off(4);
         views_set_diag(3, contactOff);
         convergeOff_.store(diag_.off(5), std::memory_order_relaxed);
-        simqvfr::logf("acc diagnostics: SSR %s, AO %s, sun shadows %s, view share %s, contact shadows %s, box convergence %s "
-                      "(from the next frame)",
+        simqvfr::logf("acc diagnostics: SSR %s, AO %s, sun shadows %s, view share %s, contact shadows %s, box convergence %s, "
+                      "bloom share %s (from the next frame)",
                       diag_.off(0) ? "OFF" : "on", diag_.off(1) ? "OFF" : "on", diag_.off(2) ? "OFF" : "on",
-                      diag_.off(3) ? "OFF" : "on", contactOff ? "OFF" : "on", diag_.off(5) ? "OFF (parallel)" : "on");
+                      diag_.off(3) ? "OFF" : "on", contactOff ? "OFF" : "on", diag_.off(5) ? "OFF (parallel)" : "on",
+                      diag_.off(6) ? "OFF" : "on");
     }
 };
 

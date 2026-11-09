@@ -35,9 +35,14 @@ public:
     // the device it was made on: `src` a shader resource, `dst` an unordered access view (another texture).
     bool resample(ID3D11Texture2D* src, const ViewRegion& srcRegion, ID3D11Texture2D* dst, const ViewRegion& dstRegion,
                   const ViewMapping& mapping);
-    // The same into a render target; `src` may be `dst` (regions apart).
+    // The same into a render target; `src` may be `dst` (regions apart). The eye's region is copied aside first,
+    // unless `src` is another texture bound for shader resources (then read in place).
     bool resample_target(ID3D11Texture2D* src, const ViewRegion& srcRegion, ID3D11Texture2D* dst,
                          const ViewRegion& dstRegion, const ViewMapping& mapping);
+    // Into a render target from a shader resource view of the game's own (its format as the game reads it: ACC's
+    // bloom dirt mask is BC1), `srcWidth` x `srcHeight` its texture's size. The view's texture must not be `dst`.
+    bool resample_target(ID3D11ShaderResourceView* src, unsigned srcWidth, unsigned srcHeight, const ViewRegion& srcRegion,
+                         ID3D11Texture2D* dst, const ViewRegion& dstRegion, const ViewMapping& mapping);
     // Drops the views it keeps of textures it was given (they keep those textures alive).
     void forget_views();
     void shutdown();
@@ -50,6 +55,8 @@ private:
     ID3D11Texture2D* scratch(ID3D11Texture2D* src, const ViewRegion& region);
     bool constants(const ViewMapping& m, const ViewRegion& srcRegion, const ViewRegion& dstRegion, UINT srcWidth,
                    UINT srcHeight);
+    // Records the draw of `dstRegion` from `srv` (constants set) into `rtv`.
+    void draw(ID3D11ShaderResourceView* srv, ID3D11RenderTargetView* rtv, const ViewRegion& dstRegion);
     bool execute();
 
     Com<ID3D11Device> device_;

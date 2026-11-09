@@ -341,6 +341,16 @@ add_custom_command(TARGET sim_qvfr_launcher POST_BUILD
   COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/manifest/sim-qvfr.ini
           -DDESTINATION=$<TARGET_FILE_DIR:sim_qvfr_launcher>/sim-qvfr.ini
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_if_missing.cmake)
+# The helmet's pieces beside the layer, as package.ps1 ships them (a build never overwrites a user's own pieces), so a
+# development build (a fresh worktree's too) draws the helmet.
+add_custom_command(TARGET sim_qvfr_launcher POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:sim_qvfr_launcher>/helmet)
+foreach(piece top bottom visor)
+  add_custom_command(TARGET sim_qvfr_launcher POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/assets/helmet/${piece}.png
+            -DDESTINATION=$<TARGET_FILE_DIR:sim_qvfr_launcher>/helmet/${piece}.png
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/copy_if_missing.cmake)
+endforeach()
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
 add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/launcher/session_history.cpp src/launcher/launch_watch.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/explicit_layers.cpp src/launcher/settings.cpp src/launcher/game_tabs.cpp src/launcher/report.cpp src/quad/osd.cpp

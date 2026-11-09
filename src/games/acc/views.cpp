@@ -48,6 +48,8 @@ void count(std::atomic<std::uint64_t> (&calls)[5], int pass) {
 int desired_views(void*, bool stereo) { return views_for(stereo); }
 // The renderer's final rect per pass (FIntRect: min x, min y, max x, max y), for the log.
 std::atomic<int> finalRect[5][4];
+// Each pass's output rect as adjust_view_rect placed it (x, y, width, height; width 0: not yet).
+std::atomic<int> outputRect[5][4];
 // The render thread's frame boundary: SetFinalViewRect for the right side pass, once per frame, from the main
 // renderer only (FSceneRenderer::PrepareViewRectsForRendering, after the late update; planar reflections render
 // views 0-1 alone). The next view the render thread hands over (primary_view) records the frame.
@@ -213,6 +215,11 @@ void adjust_view_rect(void* self, int pass, int* x, int* y, unsigned* sizeX, uns
     *y += r.y;
     *sizeX = static_cast<unsigned>(r.width);
     *sizeY = static_cast<unsigned>(r.height);
+    if (pass >= 0 && pass < 5) {
+        const int placed[4] = {*x, *y, r.width, r.height};
+        for (int i = 0; i < 4; ++i)
+            outputRect[pass][i].store(placed[i], std::memory_order_relaxed);
+    }
 }
 
 // A side pass starts from its eye: it takes what its eye got last (the eyes come first in every frame) instead of
@@ -765,7 +772,7 @@ ViewsFixes views_fixes(const wchar_t* ini) {
     f.shadows = key(L"acc_shadow_share", true);
     f.foliageCull = key(L"acc_foliage_pairs", true);
     f.foliageLod = key(L"acc_foliage_lod", true);
-    f.lensEffects = key(L"acc_lens_effects_off", true);
+    f.lensEffects = key(L"acc_lens_effects_off", false);
     f.temporal = key(L"acc_temporal_share", true);
     f.contactShadowsOff = key(L"acc_contact_shadows_off", true);
     f.turnFocus = key(L"acc_focus_turn", false);
@@ -937,6 +944,14 @@ void views_session_running(bool running) {
 void views_target(int (&size)[2]) {
     size[0] = targetWidth.load(std::memory_order_relaxed);
     size[1] = targetHeight.load(std::memory_order_relaxed);
+}
+
+bool views_output_rect(int view, int (&rect)[4]) {
+    if (view < 0 || view >= kViews)
+        return false;
+    for (int i = 0; i < 4; ++i)
+        rect[i] = outputRect[kPassLeft + view][i].load(std::memory_order_relaxed);
+    return rect[2] > 0 && rect[3] > 0;
 }
 
 bool views_view_rect(int view, int (&rect)[4]) {

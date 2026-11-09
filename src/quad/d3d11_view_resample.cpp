@@ -222,26 +222,8 @@ bool D3D11ViewResample::resample(ID3D11Texture2D* src, const ViewRegion& srcRegi
     return execute();
 }
 
-bool D3D11ViewResample::resample_target(ID3D11Texture2D* src, const ViewRegion& srcRegion, ID3D11Texture2D* dst,
-                                       const ViewRegion& dstRegion, const ViewMapping& m) {
-    if (!ready_ || !src || !dst || !regions_ok(srcRegion, dstRegion))
-        return false;
-    if (sources_.size() + targets_.size() + renderTargets_.size() > 32)
-        forget_views();
-    ID3D11RenderTargetView* rtv = render_target(dst);
-    ID3D11Texture2D* copy = scratch(src, srcRegion);
-    if (!rtv || !copy)
-        return false;
-    D3D11_TEXTURE2D_DESC cd;
-    copy->GetDesc(&cd);
-    const ViewRegion inCopy{0, 0, srcRegion.width, srcRegion.height};
-    if (!constants(m, inCopy, dstRegion, cd.Width, cd.Height))
-        return false;
-    const D3D11_BOX box{UINT(srcRegion.x), UINT(srcRegion.y), 0, UINT(srcRegion.x + srcRegion.width),
-                        UINT(srcRegion.y + srcRegion.height), 1};
-    deferred_->CopySubresourceRegion(copy, 0, 0, 0, 0, src, 0, &box);
+void D3D11ViewResample::draw(ID3D11ShaderResourceView* srv, ID3D11RenderTargetView* rtv, const ViewRegion& dstRegion) {
     const D3D11_VIEWPORT vp{float(dstRegion.x), float(dstRegion.y), float(dstRegion.width), float(dstRegion.height), 0, 1};
-    ID3D11ShaderResourceView* srv = scratchView_.Get();
     deferred_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     deferred_->VSSetShader(vs_.Get(), nullptr, 0);
     deferred_->PSSetShader(ps_.Get(), nullptr, 0);
@@ -252,6 +234,54 @@ bool D3D11ViewResample::resample_target(ID3D11Texture2D* src, const ViewRegion& 
     deferred_->RSSetViewports(1, &vp);
     deferred_->OMSetRenderTargets(1, &rtv, nullptr);
     deferred_->Draw(3, 0);
+}
+
+bool D3D11ViewResample::resample_target(ID3D11Texture2D* src, const ViewRegion& srcRegion, ID3D11Texture2D* dst,
+                                       const ViewRegion& dstRegion, const ViewMapping& m) {
+    if (!ready_ || !src || !dst || !regions_ok(srcRegion, dstRegion))
+        return false;
+    if (sources_.size() + targets_.size() + renderTargets_.size() > 32)
+        forget_views();
+    ID3D11RenderTargetView* rtv = render_target(dst);
+    if (!rtv)
+        return false;
+    D3D11_TEXTURE2D_DESC sd;
+    src->GetDesc(&sd);
+    // Another texture the shaders can read: straight from it (the one scratch texture would be re-made at every switch
+    // of format, AO's R8 and bloom's R11G11B10 in one ACC frame). LMU's eye glare copies have no shader binding.
+    if (src != dst && (sd.BindFlags & D3D11_BIND_SHADER_RESOURCE)) {
+        ID3D11ShaderResourceView* srv = source(src);
+        if (!srv || !constants(m, srcRegion, dstRegion, sd.Width, sd.Height))
+            return false;
+        draw(srv, rtv, dstRegion);
+        return execute();
+    }
+    ID3D11Texture2D* copy = scratch(src, srcRegion);
+    if (!copy)
+        return false;
+    D3D11_TEXTURE2D_DESC cd;
+    copy->GetDesc(&cd);
+    const ViewRegion inCopy{0, 0, srcRegion.width, srcRegion.height};
+    if (!constants(m, inCopy, dstRegion, cd.Width, cd.Height))
+        return false;
+    const D3D11_BOX box{UINT(srcRegion.x), UINT(srcRegion.y), 0, UINT(srcRegion.x + srcRegion.width),
+                        UINT(srcRegion.y + srcRegion.height), 1};
+    deferred_->CopySubresourceRegion(copy, 0, 0, 0, 0, src, 0, &box);
+    draw(scratchView_.Get(), rtv, dstRegion);
+    return execute();
+}
+
+bool D3D11ViewResample::resample_target(ID3D11ShaderResourceView* src, unsigned srcWidth, unsigned srcHeight,
+                                       const ViewRegion& srcRegion, ID3D11Texture2D* dst, const ViewRegion& dstRegion,
+                                       const ViewMapping& m) {
+    if (!ready_ || !src || !dst || !srcWidth || !srcHeight || !regions_ok(srcRegion, dstRegion))
+        return false;
+    if (sources_.size() + targets_.size() + renderTargets_.size() > 32)
+        forget_views();
+    ID3D11RenderTargetView* rtv = render_target(dst);
+    if (!rtv || !constants(m, srcRegion, dstRegion, srcWidth, srcHeight))
+        return false;
+    draw(src, rtv, dstRegion);
     return execute();
 }
 
