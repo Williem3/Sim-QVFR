@@ -165,14 +165,17 @@ void load_experiment() {
         experiment.views4Compose = false;
     }
     // focus_layer=1: the focus views as a layer of their own over the periphery, nothing composed at native size
-    // (experiment.focusLayer). A D3D11 game with separate views only (LMU) for now.
-    experiment.focusLayer = GetPrivateProfileIntW(L"experiment", L"focus_layer", 0, ini.c_str()) != 0;
+    // (experiment.focusLayer); 2: as two quad layers, one per eye. A D3D11 game with separate views only (LMU) for now.
+    experiment.focusLayer =
+        static_cast<int>(std::min(2u, GetPrivateProfileIntW(L"experiment", L"focus_layer", 0, ini.c_str())));
     if (experiment.focusLayer && !(experiment.views4ComposeD3D11 && game->qvfr_separate_views())) {
         logf("experiment: focus_layer ignored: %ls is not a D3D11 game with separate views (LMU)", game->info()->name);
-        experiment.focusLayer = false;
+        experiment.focusLayer = 0;
     } else if (experiment.focusLayer) {
-        log_line("experiment: focus_layer: the periphery submitted as the game rendered it, the focus views as a second "
-                 "projection layer over it (feather in alpha); composed as before with the helmet on");
+        logf("experiment: focus_layer=%d: the periphery submitted as the game rendered it, the focus views over it as %s "
+             "(feather in alpha); composed as before with the helmet on",
+             experiment.focusLayer,
+             experiment.focusLayer == 2 ? "a quad layer per eye, 100 m out" : "a second projection layer");
     }
     // A game with separate views (LMU) keeps its mask on the eyes; its adapter leaves it out of the focus views.
     experiment.views4NoMask =

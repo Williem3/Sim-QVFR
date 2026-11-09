@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "quad/focus_quad.h"
 #include "quad/focus_turn.h"
 
 using namespace simqvfr;
@@ -194,6 +195,35 @@ int main() {
         focus_extents(sym, 0.6, 0.2, hw, hh);
         expect(std::fabs(cx - 0.4) < 1e-4 && std::fabs(cy - 0.8) < 1e-4 && std::fabs(hw - 0.6) < 1e-9 && std::fabs(hh - 0.2) < 1e-9,
                "separate width and height fractions clamp and size each axis on its own");
+    }
+
+    // focus_layer=2 (quad/focus_quad.h): an off-centre focus view of a turned, moved eye as a quad 100 m out. Seen from
+    // the eye, each corner of the quad must lie exactly on the view's FOV edges (top left at left/up, ...), so the quad
+    // shows its image where a projection layer with that FOV would.
+    {
+        const XrQuaternionf yaw{0, std::sin(0.3f), 0, std::cos(0.3f)}, pitch{std::sin(-0.1f), 0, 0, std::cos(-0.1f)};
+        const XrPosef eye{qmul(yaw, pitch), {0.4f, 1.2f, -0.7f}};
+        const XrFovf fov{std::atan(0.15f), std::atan(0.55f), std::atan(0.42f), std::atan(0.12f)};  // right and up of centre
+        const FocusQuad q = focus_quad(eye, fov, 100.0f);
+        const XrQuaternionf inverse = qconj(eye.orientation);
+        bool exact = true;
+        double worst = 0;
+        const float corners[4][2] = {{-0.5f, 0.5f}, {0.5f, 0.5f}, {0.5f, -0.5f}, {-0.5f, -0.5f}};
+        const float want[4][2] = {{0.15f, 0.42f}, {0.55f, 0.42f}, {0.55f, 0.12f}, {0.15f, 0.12f}};
+        for (int k = 0; k < 4; ++k) {
+            const XrVector3f local = rotate(q.pose.orientation,
+                                            {corners[k][0] * q.size.width, corners[k][1] * q.size.height, 0});
+            const XrVector3f world{q.pose.position.x + local.x - eye.position.x, q.pose.position.y + local.y - eye.position.y,
+                                   q.pose.position.z + local.z - eye.position.z};
+            const XrVector3f inEye = rotate(inverse, world);
+            const double tx = inEye.x / -inEye.z, ty = inEye.y / -inEye.z;
+            worst = std::fmax(worst, std::fmax(std::fabs(tx - want[k][0]), std::fabs(ty - want[k][1])));
+            exact &= inEye.z < 0;
+        }
+        std::printf("focus quad: worst corner error %.2e tangent units\n", worst);
+        expect(exact && worst < 1e-4, "focus quad: its corners on the focus view's FOV edges, seen from the eye");
+        expect(std::fabs(q.size.width - 40.0f) < 1e-3f && std::fabs(q.size.height - 30.0f) < 1e-3f,
+               "focus quad: as large as the FOV 100 m out (0.40 x 0.30 tangents: 40 x 30 m)");
     }
 
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

@@ -96,7 +96,10 @@ struct Experiment {
     // [experiment] focus_layer=1 (a D3D11 game with separate views: LMU): nothing composed at native size. The periphery
     // goes to the runtime as the game rendered it, the focus views as a second projection layer over it (their
     // feather in alpha), so the runtime samples the focus views at their own density (V4D3D11::focusChain).
-    bool focusLayer = false;
+    // 2: the focus views as two quad layers instead, one per eye (SteamVR misplaced and warped the projection layer).
+    int focusLayer = 0;
+    // focus_layer=2: the quads' distance, metres (far, so they move with the head as the periphery's image does).
+    static constexpr float kFocusQuadDistance = 100.0f;
     bool views4NoMask = false;             // views4: empty hidden-area mesh (default when composing)
     bool views4TestVisibleMask = false;    // views4 test: a full-view visible-area mesh, as VDXR gives (diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)

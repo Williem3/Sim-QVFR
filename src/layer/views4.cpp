@@ -14,6 +14,7 @@
 #include "probe/gpu_frame_timer.h"
 #include "quad/compositor.h"
 #include "quad/focus_shape.h"
+#include "quad/focus_quad.h"
 #include "quad/focus_turn.h"
 #include "quad/helmet.h"
 #include "xr.h"
@@ -549,6 +550,34 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
 
 }  // namespace
 
+namespace {
+
+// focus_layer=2: each focus view (`views`: its eye's pose, its own FOV and image) as a quad seen by that eye only,
+// placed by focus_quad (quad/focus_quad.h).
+void views4_focus_quads(const XrCompositionLayerProjectionView (&views)[2], XrCompositionLayerFlags flags, XrSpace space,
+                        XrCompositionLayerQuad (&quads)[2]) {
+    for (int v = 0; v < 2; ++v) {
+        const FocusQuad placed = focus_quad(views[v].pose, views[v].fov, Experiment::kFocusQuadDistance);
+        XrCompositionLayerQuad& q = quads[v];
+        q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+        q.layerFlags = flags;
+        q.space = space;
+        q.eyeVisibility = v == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT;
+        q.subImage = views[v].subImage;
+        q.pose = placed.pose;
+        q.size = placed.size;
+    }
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        logf("views4 d3d11: focus_layer=2: eye 0's quad %.2f x %.2f m, %.0f m out (its image %dx%d)", quads[0].size.width,
+             quads[0].size.height, Experiment::kFocusQuadDistance, quads[0].subImage.imageRect.extent.width,
+             quads[0].subImage.imageRect.extent.height);
+    }
+}
+
+}  // namespace
+
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
     XrCompositionLayerQuad helmetLayers[kHelmetQuadsMax] = {};  // the helmet's own layer (its bands), over the composed scene
@@ -556,6 +585,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     // focus_layer: the focus views' projection layer, right over the periphery's (`focusAfter`), under the helmet.
     XrCompositionLayerProjection focusLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
     XrCompositionLayerProjectionView focusViews[2] = {};
+    XrCompositionLayerQuad focusQuads[2] = {};  // focus_layer=2: the same images as a quad per eye
     int focusAfter = -1;
     std::vector<XrCompositionLayerProjection> projections;
     std::vector<std::vector<XrCompositionLayerProjectionView>> views;
@@ -609,6 +639,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                     focusLayer.viewCount = 2;
                     focusLayer.views = focusViews;
                     focusAfter = static_cast<int>(i);
+                    if (experiment.focusLayer == 2)
+                        views4_focus_quads(focusViews, focusLayer.layerFlags, proj->space, focusQuads);
                 }
                 std::lock_guard guard(quad.mutex);
                 views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
@@ -670,8 +702,13 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
     }
     for (int b = helmetCount - 1; b >= 0; --b)  // over the scene, under the overlay and the menu
         layers.insert(layers.begin() + helmetAfter + 1, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&helmetLayers[b]));
-    if (focusAfter >= 0)  // inserted after the helmet's, so it lands directly over the periphery, under them
+    // Inserted after the helmet's, so they land directly over the periphery, under them.
+    if (focusAfter >= 0 && experiment.focusLayer == 2) {
+        layers.insert(layers.begin() + focusAfter + 1, {reinterpret_cast<const XrCompositionLayerBaseHeader*>(&focusQuads[0]),
+                                                         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&focusQuads[1])});
+    } else if (focusAfter >= 0) {
         layers.insert(layers.begin() + focusAfter + 1, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&focusLayer));
+    }
     XrFrameEndInfo submitted = *info;
     submitted.layers = layers.data();
     submitted.layerCount = static_cast<uint32_t>(layers.size());
