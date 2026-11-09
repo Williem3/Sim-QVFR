@@ -219,6 +219,22 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   each eye's pass also draws that eye's focus view, which saved about 2 ms of CPU and 2 ms of GPU time per
   frame in testing. It applies at the next launch. On other graphics cards the option is greyed out and
   every view is rendered on its own.
+- **Runtime composition on Pimax and Varjo headsets** (the launcher's **Resolution** page, on by default):
+  when your headset's own OpenXR runtime composes quad views itself, Sim-QVFR hands it the four views and the
+  runtime puts the focus area on the display at its full resolution. The focus area is then noticeably
+  sharper above 100% inner resolution than when Sim-QVFR composes the image itself, and the periphery a
+  little sharper too. Eye tracking comes from the runtime's own foveated rendering when the usual eye
+  tracking gives nothing.
+  - **Tested on Pimax's OpenXR runtime only.** Varjo's runtime offers the same quad views and should work the
+    same way, but it hasn't been tried on a Varjo headset yet. Reports are welcome.
+  - **Your Sim-QVFR settings apply, not the runtime's.** The resolution sliders and the focus size set in the
+    launcher or the headset menu are the ones used, and they change while you drive. Pimax Play's own quad
+    view sliders don't apply while Sim-QVFR runs.
+  - **On SteamVR and other runtimes nothing changes:** Sim-QVFR composes the image as before. It also does
+    with frame generation (Cheeky's or VectorXR's), which needs one composed image, and when another OpenXR
+    layer sits between Sim-QVFR and the runtime. The page shows what the last launch did.
+  - **Known issue:** with eye tracking, the focus area can seem to turn slightly while you move your head. It
+    doesn't happen with the focus area fixed in the middle. Turn the option off if it bothers you.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).
@@ -232,8 +248,9 @@ DLSS always stays off with this option on.
 
 **LMU-Quad-View-Mod.** Dan Suzuki's [LMU-Quad-View-Mod](https://github.com/DSuzuki35/LMU-Quad-View-Mod)
 inspired this work. Sim-QVFR's LMU support is written separately and works differently: it renders the four
-views inside the game and composes them itself, so you install nothing else, while LMU-Quad-View-Mod hands
-them to a quad-view runtime, or to Quad-Views-Foveated or VectorXR. Try both on your own PC, in the same
+views inside the game and composes them itself, or on Pimax and Varjo hands them to the headset's own
+runtime, so you install nothing else, while LMU-Quad-View-Mod hands them to a quad-view runtime, or to
+Quad-Views-Foveated or VectorXR. Try both on your own PC, in the same
 car, track and weather, and use the one that runs best for you. Don't run both at once.
 
 ## Getting help

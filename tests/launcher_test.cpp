@@ -435,6 +435,18 @@ void game_tabs_checks() {
     switch_game_settings(ini, L"ace", L"xplane");
     const Settings after = load_settings(ini);
     check(after.hiddenGames == L"acc" && after.gameColors.count(L"ace") == 1, "game tabs: switching games keeps them");
+    // Runtime composition (native_quad_views): auto (1) by default, read so from an ini without the key (one from
+    // before the setting), and saved back as it was.
+    {
+        const std::wstring old = (dir / L"before-native.ini").wstring();
+        WritePrivateProfileStringW(L"experiment", L"periphery_scale", L"40", old.c_str());
+        check(Settings{}.nativeQuad == 1 && load_settings(old).nativeQuad == 1,
+              "runtime composition: auto by default, also for an ini from before the setting");
+        Settings off = load_settings(old);
+        off.nativeQuad = 0;
+        save_settings(old, off);
+        check(load_settings(old).nativeQuad == 0, "runtime composition: off saved and read back");
+    }
     fs::remove_all(dir, ec);
 }
 
