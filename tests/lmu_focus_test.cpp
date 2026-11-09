@@ -186,41 +186,85 @@ int main() {
 
     check(lmu::scaled_size(1614, 0.5f) == 807 && lmu::scaled_size(1283, 0.475f) == 610 && lmu::scaled_size(100, 1.0f) == 100,
           "scaled_size: ceil(recommended x scale), as the game rounds");
-    // Room for a second view: beside (twice as wide, each view at most half), or twice each way.
+    // Room for a second view: beside (the image the outer view's shape, the focus view beside the eye), or twice each
+    // way. Every layer kRoomSlack larger than its views need, so the game's rounding up never overruns it.
+    const double slack = 1 + simqvfr::Views4Layout::kRoomSlack;
+    // The pass sizes the game renders in a layer made for a native eye of nativeW x nativeH (session.cpp truncates the
+    // offered size, the game rounds each pass up), and whether the eye and its focus view fit side by side
+    // (four_passes.cpp's MVR check).
+    const auto fits = [](const simqvfr::Views4Layout& launch, const simqvfr::Views4Layout& live, unsigned nativeW,
+                         unsigned nativeH, unsigned (&eye)[2], unsigned (&focus)[2]) {
+        const auto viewW = static_cast<unsigned>(nativeW * launch.layer_width());
+        const auto viewH = static_cast<unsigned>(nativeH * launch.layer_height());
+        const auto eyeScale = static_cast<float>(std::max(2 * live.width[0], 2 * live.height[0]));
+        eye[0] = lmu::scaled_size(viewW, eyeScale);
+        eye[1] = lmu::scaled_size(viewH, eyeScale);
+        focus[0] = lmu::scaled_size(viewW, static_cast<float>(2 * live.width[2]));
+        focus[1] = lmu::scaled_size(viewH, static_cast<float>(2 * live.height[2]));
+        return eye[0] + focus[0] <= viewW && eye[1] <= viewH && focus[1] <= viewH;
+    };
     {
         simqvfr::Views4Layout l = simqvfr::views4_layout(0.40, 0.38, 0.38, 1.0, 0.4);  // outer 0.40 x 0.16 (cropped)
         l.secondViewRoom = l.secondViewBeside = true;
-        check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.38) && near(l.view_room_width(), 0.40) &&
-                  near(l.view_room_height(), 0.38),
-              "beside: the layer twice as wide, as high as the views; one view at most half its width");
+        // The focus view is the taller: the image 0.38 / 0.16 = 2.375 times the outer view each way.
+        check(near(l.beside_scale(), 2.375 * slack) && near(l.layer_width(), 0.95 * slack) &&
+                  near(l.layer_height(), 0.38 * slack) && near(l.outer_room_width(), 0.40) &&
+                  near(l.outer_room_height(), 0.16) && near(l.view_room_width(), 0.95 * slack - 0.40) &&
+                  near(l.view_room_height(), 0.38 * slack),
+              "beside, cropped: the image the outer view's shape, as tall as the focus view; the eye's room the outer view");
         const simqvfr::Views4Layout live = simqvfr::views4_live_one_size(l, 0.40, 0.38, 0.38);
-        check(near(2 * live.width[0], 0.5) && near(2 * live.height[0], 0.16 / 0.38) && near(2 * live.width[2], 0.475) &&
-                  near(2 * live.height[2], 1.0) && 2 * live.width[0] + 2 * live.width[2] <= 1.0 + 1e-9,
-              "beside: per-axis shares (eye 0.5 x 0.42, focus 0.475 x 1), eye and focus side by side within the width");
+        check(near(2 * live.width[0], 2 * live.height[0]) && near(2 * live.width[0], 1 / (2.375 * slack)) &&
+                  near(2 * live.width[2], 0.38 / (0.95 * slack)) && near(2 * live.height[2], 1 / slack) &&
+                  2 * live.width[0] + 2 * live.width[2] <= 1.0 / slack + 1e-9,
+              "beside, cropped: the eye's shares equal (one scale renders it exactly), the focus beside within the width");
         const simqvfr::Views4Layout bigger = simqvfr::views4_live_one_size(l, 0.60, 0.60, 0.60);
-        check(2 * bigger.width[0] <= 0.5 + 1e-9 && 2 * bigger.width[2] <= 0.5 + 1e-9,
-              "beside: a live increase is capped at half the width for each");
-        // A live crop that makes the eye taller (31/30 -> 0/0): its height held at half the image, so its one scale
-        // (the larger share) stays at most half and the focus view still fits beside it.
+        const double biggerEye = std::max(2 * bigger.width[0], 2 * bigger.height[0]);
+        check(biggerEye <= 1 / (2.375 * slack) + 1e-9 && biggerEye + 2 * bigger.width[2] <= 1.0 + 1e-9 &&
+                  2 * bigger.height[2] <= 1.0 + 1e-9,
+              "beside: a live increase keeps the eye in its room and the focus view beside it");
+        // A live crop that makes the eye taller (31/30 -> 0/0): its height held at its room, so its one scale stays
+        // 1 / beside_scale() and the focus view still fits beside it.
         const simqvfr::Views4Layout uncropped = simqvfr::views4_live_one_size(l, 0.40, 0.38, 0.38, 1.0, 1.0);
         const double eyeScale = std::max(2 * uncropped.width[0], 2 * uncropped.height[0]);
-        check(near(2 * uncropped.height[0], 0.5) && eyeScale <= 0.5 + 1e-9 && eyeScale + 2 * uncropped.width[2] <= 1.0 + 1e-9,
-              "beside: the crop removed live: the eye at half the image's height, its one scale 0.5, the focus beside");
+        check(near(eyeScale, 1 / (2.375 * slack)) && eyeScale + 2 * uncropped.width[2] <= 1.0 + 1e-9,
+              "beside: the crop removed live: the eye's one scale unchanged, the focus beside");
         l.secondViewBeside = false;
-        check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.76) && near(l.view_room_height(), 0.38),
+        check(near(l.layer_width(), 0.80 * slack) && near(l.layer_height(), 0.76 * slack) &&
+                  near(l.view_room_height(), 0.38 * slack),
               "twice each way: the layer twice as high too, one view at most half of each");
     }
-    {  // Beside without a vertical crop: the image twice the eye's height, the eye exactly a quarter of it.
+    {  // Beside without a crop, the focus view narrower: the image twice the outer view each way, as before.
         simqvfr::Views4Layout l = simqvfr::views4_layout(0.40, 0.38, 0.38);
         l.secondViewRoom = l.secondViewBeside = true;
-        check(near(l.layer_width(), 0.80) && near(l.layer_height(), 0.80) && near(l.outer_room_height(), 0.40),
-              "beside, no crop: the layer 0.80 x 0.80 (twice the eye's height), the eye's room half of each");
+        check(near(l.layer_width(), 0.80 * slack) && near(l.layer_height(), 0.80 * slack) &&
+                  near(l.outer_room_height(), 0.40),
+              "beside, no crop: the layer 0.80 x 0.80 (twice the eye each way), the eye's room the outer view");
         const simqvfr::Views4Layout live = simqvfr::views4_live_one_size(l, 0.40, 0.38, 0.38);
         const double eyeScale = std::max(2 * live.width[0], 2 * live.height[0]);
-        check(near(2 * live.width[0], 0.5) && near(2 * live.height[0], 0.5) && near(eyeScale, 0.5) &&
-                  eyeScale + 2 * live.width[2] <= 1.0 + 1e-9 && near(2 * live.height[2], 0.475),
-              "beside, no crop: the eye 0.5 x 0.5 (its one scale wastes nothing), the focus 0.475 x 0.475 beside it");
-        // Before 2026-11-08 10:34 the layer was 0.80 x 0.40 here: the eye's shares 0.5 x 1.0, one scale 1.0, no room.
+        check(near(2 * live.width[0], 2 * live.height[0]) && near(eyeScale, 0.5 / slack) &&
+                  eyeScale + 2 * live.width[2] <= 1.0 + 1e-9 && near(2 * live.height[2], 0.475 / slack),
+              "beside, no crop: the eye half each way (its one scale wastes nothing), the focus 0.475 x 0.475 beside it");
+        unsigned eye[2], focus[2];
+        check(fits(l, live, 6812, 6502, eye, focus), "beside, no crop: the rounded passes fit side by side");
+    }
+    {  // The 2026-11-09 Pimax report (issue 11): periphery 30%, focus 200% of a 20% x 20% box: focus 0.40 x 0.40 of a
+       // 6812 x 6502 eye. The image was 0.80 x 0.60 (5449 x 3901): the eye rendered 2725 x 1951 (0.40 x 0.30, a third
+       // wider than asked), and 2725 + 2725 overran 5449, so the eye's pass never drew its focus view.
+        simqvfr::Views4Layout l = simqvfr::views4_layout(0.30, 0.40, 0.40);
+        l.secondViewRoom = l.secondViewBeside = true;
+        check(near(l.beside_scale(), (0.70 / 0.30) * slack) && near(l.layer_width(), 0.70 * slack) &&
+                  near(l.layer_height(), 0.70 * slack),
+              "issue 11: the image 0.70 x 0.70 of the eye (the eye and the focus view side by side, the outer view's shape)");
+        const simqvfr::Views4Layout live = simqvfr::views4_live_one_size(l, 0.30, 0.40, 0.40);
+        unsigned eye[2], focus[2];
+        const bool ok = fits(l, live, 6812, 6502, eye, focus);
+        check(ok, "issue 11: the rounded eye and focus passes fit side by side");
+        check(eye[0] >= 2043 && eye[0] <= 2045 && eye[1] >= 1950 && eye[1] <= 1952,
+              "issue 11: the eye renders 0.30 x 0.30 of the native eye (about 2044 x 1951), not 0.40 x 0.30");
+        check(focus[0] >= 2724 && focus[0] <= 2726 && focus[1] >= 2600 && focus[1] <= 2602,
+              "issue 11: the focus view renders its 0.40 x 0.40 (about 2725 x 2601)");
+        if (!ok)
+            std::printf("  eye %ux%u focus %ux%u\n", eye[0], eye[1], focus[0], focus[1]);
     }
 
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);

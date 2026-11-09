@@ -39,7 +39,7 @@ struct FourPassesRun {
     // Gate D (lmu_mvr=2): passes 2-3 skip the scene (its draws, sorting and culling) when their eye's pass drew the focus
     // view, their post-processing run on it; at the gate samples the focus view is compared with its eye's crop.
     bool mvrSkip = false;
-    // The focus views beside their eyes in images twice as wide only (Views4Layout::secondViewBeside): the eyes render at
+    // The focus views beside their eyes in images of the outer views' shape (Views4Layout::secondViewBeside): the eyes render at
     // one scale (the larger of their shares: YEBIS follows the render scale on both axes), the focus views at their own
     // width and height (four_passes_set_live_axes), drawn by their eye's pass, post-processed at the scale that covers them.
     bool perAxis = false;

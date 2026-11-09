@@ -342,13 +342,14 @@ void load_experiment() {
             logf("multi_view: %s%s", multiView ? "on, " : "", multiView ? (why + ": each eye's pass draws its focus view too").c_str()
                                                                        : (why + ": the four passes as without it").c_str());
         experiment.views4Layout.secondViewRoom = gate != 0 || multiView;
-        // lmu_mvr_beside (default 1): twice as wide only, the focus views at their own width and height; 0: twice each way.
+        // lmu_mvr_beside (default 1): the images the outer views' shape, the focus views at their own width and height
+        // beside them (Views4Layout::beside_scale); 0: twice each way.
         experiment.views4Layout.secondViewBeside =
             experiment.views4Layout.secondViewRoom &&
             GetPrivateProfileIntW(L"experiment", L"lmu_mvr_beside", 1, ini.c_str()) != 0;
         if (experiment.views4Layout.secondViewRoom)
-            logf("%s: the views' images twice as %s, room for a focus view beside its eye", gate ? "experiment: lmu_mvr" : "multi_view",
-                 experiment.views4Layout.secondViewBeside ? "wide" : "large each way");
+            logf("%s: the views' images %s, room for a focus view beside its eye", gate ? "experiment: lmu_mvr" : "multi_view",
+                 experiment.views4Layout.secondViewBeside ? "the outer views' shape" : "twice as large each way");
     }
     // Eye columns (ACC): each instanced pair its own width, unless acc_shared_width=1 (every view the periphery's width,
     // the focus views' horizontal density following it: the layout before 2026-11-08).

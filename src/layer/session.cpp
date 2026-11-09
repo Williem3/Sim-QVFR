@@ -68,7 +68,7 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
              layout.focus, layout.focusHeight, layout.layerFloor,
              separate ? ", each view an image of its own; the scene renders inside it at the views' sizes" : "",
              !layout.secondViewRoom ? ""
-             : layout.secondViewBeside ? " (twice as wide: room for a focus view beside its eye)"
+             : layout.secondViewBeside ? " (the outer view's shape: room for a focus view beside its eye)"
                                        : " (twice each way: room for a focus view beside its eye)");
     if (XR_SUCCEEDED(r) && views && countOutput && (experiment.eyeScale != 1.0 || experiment.views4))
         for (uint32_t i = 0; i < *countOutput && i < capacity; ++i) {
