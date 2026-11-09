@@ -16,7 +16,6 @@
 #include <wrl/client.h>
 
 #include "quad/d3d11_compositor.h"
-#include "quad/focus_centred.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace simqvfr;
@@ -195,20 +194,17 @@ int main() {
                           "premultiplied", e, a);
             check(a >= 100 && a <= 160 && premultiplied, what);
         }
-        // Native quad views (NativeFocusDraw), a centred box (no turn, the centred FOV the box's own): opaque throughout,
-        // the outer view blended into the edge by the feather (the box's edge shows the outer view's colour), the outline
-        // (3% thick) 10% in from the edge.
+        // Native quad views (viewTan.x 1): opaque throughout, the outer view blended into the edge by the feather (the
+        // box's edge shows the outer view's colour), the outline (3% thick) 10% in from the edge.
         EyeComposition native[2] = {eyes[0], eyes[1]};
-        NativeFocusDraw nd[2];
-        for (int e = 0; e < 2; ++e) {
-            EyeComposition& n = native[e];
+        for (EyeComposition& n : native) {
+            n.viewTan[0] = 1;
+            n.viewTan[1] = 0.10f;
             n.border = 0.03f;
             const float magenta[4] = {1, 0, 1, 1};
             std::memcpy(n.borderColor, magenta, sizeof(magenta));
-            std::memcpy(nd[e].tan, n.focusTan, sizeof(nd[e].tan));
-            nd[e].outlineInset = 0.10f;
         }
-        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), native, rects, &nd), "the native focus views");
+        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), native, rects), "the native focus views");
         const Image nq = read_image(device.Get(), context.Get(), focusLayer.Get());
         for (int e = 0; e < 2; ++e) {
             const UINT x0 = e * 128;
@@ -229,30 +225,6 @@ int main() {
             std::snprintf(what, sizeof(what), "native, eye %d: the outline 10%% in (0x%08x), not at the edge", e,
                           nq.at(x0 + 14, 32));
             check(nq.at(x0 + 14, 32) == 0xffff00ff && nq.at(x0 + 2, 32) != 0xffff00ff, what);
-        }
-        // An off-centre box (the gaze right and up), resampled into its centred view (quad/focus_centred.h): the centred
-        // view's middle is the box's middle, so the focus view there; opaque throughout; its corners, outside the box as
-        // the turned view sees it, the outer view.
-        for (int e = 0; e < 2; ++e) {
-            const float offCentre[4] = {0.0f, 0.6f, 0.55f, 0.05f};
-            std::memcpy(native[e].focusTan, offCentre, sizeof(offCentre));
-            const CentredFocus c = centred_focus(offCentre);
-            std::memcpy(nd[e].rotation, c.rotation, sizeof(nd[e].rotation));
-            std::memcpy(nd[e].tan, c.tan, sizeof(nd[e].tan));
-            native[e].border = 0;
-        }
-        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), native, rects, &nd), "the turned native focus views");
-        const Image tq = read_image(device.Get(), context.Get(), focusLayer.Get());
-        for (int e = 0; e < 2; ++e) {
-            const UINT x0 = e * 128;
-            bool opaque = true;
-            for (UINT x = x0; x < x0 + 128; x += 3)
-                for (UINT y = 0; y < 64; y += 3)
-                    opaque &= tq.channel(x, y, 3) == 255;
-            char what[160];
-            std::snprintf(what, sizeof(what), "turned native, eye %d: the focus view in the middle (0x%08x), opaque", e,
-                          tq.at(x0 + 64, 32));
-            check(tq.at(x0 + 64, 32) == kFocus[e] && opaque, what);
         }
     }
 

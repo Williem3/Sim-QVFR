@@ -37,9 +37,8 @@ public:
     // focus_layer: draws each eye's focus view into `target` (a kHelmetLayerFormat swapchain image), eye e at `rects[e]`
     // (x, y, width, height in pixels: the focus view's own size, so its region of `views` is copied texel for texel),
     // premultiplied, alpha its feather (FocusLayerPS).
-    // `native` (native quad views): each eye's focus view resampled into a centred view, opaque (NativeFocusDraw).
     bool draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* target, const EyeComposition (&eyes)[2],
-                          const int (&rects)[2][4], const NativeFocusDraw (*native)[2] = nullptr);
+                          const int (&rects)[2][4]);
     void request_light() override { lightWanted_ = true; }
     bool read_light(float (&rgb)[2][4][3]) override;
     void shutdown();

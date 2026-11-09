@@ -14,7 +14,6 @@
 #include "probe/gpu_frame_timer.h"
 #include "quad/compositor.h"
 #include "quad/focus_shape.h"
-#include "quad/focus_centred.h"
 #include "quad/focus_quad.h"
 #include "quad/focus_turn.h"
 #include "quad/helmet.h"
@@ -356,25 +355,13 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     const auto pixels = [](float share, float size, uint32_t most) {
         return static_cast<int32_t>(std::clamp<long>(std::lround(share * size), 1, static_cast<long>(most)));
     };
-    // A quad view session: each focus view as one centred on its own axis (quad/focus_centred.h), the runtime correcting
-    // views 2-3 for head movement as if they were (an off-centre one seemed to turn with the head, 2026-11-09). Its image
-    // keeps the focus view's density over the centred FOV.
-    const bool centred = nativeQuad.active;
-    CentredFocus centre[2];
-    NativeFocusDraw native[2];
     int rects[2][4];
     XrExtent2Di outer[2];
     for (int e = 0; e < 2; ++e) {
-        if (centred) {
-            centre[e] = centred_focus(eyes[e].focusTan);
-            std::memcpy(native[e].rotation, centre[e].rotation, sizeof(native[e].rotation));
-            std::memcpy(native[e].tan, centre[e].tan, sizeof(native[e].tan));
-            native[e].outlineInset = kNativeOutlineInset;
-        }
         rects[e][0] = e * static_cast<int>(v4d3d11.focusW);
         rects[e][1] = 0;
-        rects[e][2] = pixels(eyes[e].focusSource[2] * (centred ? centre[e].scaleX : 1.0f), texW, v4d3d11.focusW);
-        rects[e][3] = pixels(eyes[e].focusSource[3] * (centred ? centre[e].scaleY : 1.0f), texH, v4d3d11.focusH);
+        rects[e][2] = pixels(eyes[e].focusSource[2], texW, v4d3d11.focusW);
+        rects[e][3] = pixels(eyes[e].focusSource[3], texH, v4d3d11.focusH);
         const XrExtent2Di gameRect = proj->views[e].subImage.imageRect.extent;
         outer[e] = {pixels(eyes[e].outerSource[2], texW, static_cast<uint32_t>(std::max(gameRect.width, 1))),
                     pixels(eyes[e].outerSource[3], texH, static_cast<uint32_t>(std::max(gameRect.height, 1)))};
@@ -386,12 +373,18 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.focusChain, &acquire, &index)) ||
         index >= v4d3d11.focusImages.size())
         return false;
-    // A quad view session: opaque centred focus views (the runtime blends them into the eyes itself, and takes no alpha
-    // from a projection layer's views 2-3), the periphery where the box isn't and blended into its edge by the feather,
-    // the outline kNativeOutlineInset in from it (FocusLayerPS); otherwise the feather in alpha.
+    // A quad view session: opaque focus views (the runtime blends them into the eyes itself, and takes no alpha from
+    // a projection layer's views 2-3), the periphery blended into their edge by the feather and the outline drawn
+    // kNativeOutlineInset in from it (FocusLayerPS); otherwise the feather in alpha.
+    EyeComposition drawn[2] = {eyes[0], eyes[1]};
+    if (nativeQuad.active)
+        for (EyeComposition& d : drawn) {
+            d.viewTan[0] = 1;
+            d.viewTan[1] = kNativeOutlineInset;
+            d.viewTan[2] = d.viewTan[3] = 0;
+        }
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.focusChain, &wait)) &&
-                    v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], eyes, rects,
-                                                        centred ? &native : nullptr);
+                    v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
     next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
     if (!ok)
         return false;
@@ -403,12 +396,9 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         copy[v].subImage.imageRect.extent = outer[v];
         // The focus view: the eye's position, the focus camera's turn (a direction in the eye's frame is in the
         // focus view's after the inverse turn, views4_eye), its own FOV and pixels.
-        // Native quad views: turned further, to the centred view's axis, with its symmetric FOV.
         focus[v] = copy[v];
         focus[v].pose.orientation = qmul(copy[v].pose.orientation, frame.turn[v]);
-        if (centred)
-            focus[v].pose.orientation = qmul(focus[v].pose.orientation, centre[v].turn);
-        focus[v].fov = tangents_fov(centred ? centre[v].tan : eyes[v].focusTan);
+        focus[v].fov = tangents_fov(eyes[v].focusTan);
         focus[v].subImage.swapchain = v4d3d11.focusChain;
         focus[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
         focus[v].subImage.imageArrayIndex = 0;
@@ -423,17 +413,6 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
              rects[0][3], eyes[0].focusTan[0], eyes[0].focusTan[1], eyes[0].focusTan[2], eyes[0].focusTan[3],
              experiment.feather * 100);
         v4d3d11.lastFallback = nullptr;
-    }
-    // Native quad views, every 900 frames: how far the focus views were turned to centre them (the gaze off-axis), so
-    // a report shows the centring ran and with what.
-    static uint64_t centredFrames = 0;
-    if (centred && centredFrames++ % 900 == 0) {
-        const float cx = 0.5f * (eyes[0].focusTan[0] + eyes[0].focusTan[1]);
-        const float cy = 0.5f * (eyes[0].focusTan[2] + eyes[0].focusTan[3]);
-        logf("native quad views: eye 0's focus view centred: turned %.1f deg %s, %.1f deg %s, FOV +-%.3f x +-%.3f, %dx%d",
-             std::fabs(std::atan(cx)) * 57.29578f, cx >= 0 ? "right" : "left",
-             std::fabs(std::atan2(cy, std::sqrt(1 + cx * cx))) * 57.29578f, cy >= 0 ? "up" : "down", centre[0].tan[1],
-             centre[0].tan[2], rects[0][2], rects[0][3]);
     }
     return true;
 }

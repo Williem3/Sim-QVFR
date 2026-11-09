@@ -17,26 +17,6 @@ namespace simqvfr {
 
 inline constexpr unsigned kComposeConstants = 60;
 
-// Native quad views' focus view as FocusLayerPS draws it (helmet.w 1): the centred view (quad/focus_centred.h) the
-// focus view is resampled into, and the outline's inset (its share of the box, inside_box).
-struct NativeFocusDraw {
-    float rotation[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};  // row-major: a direction in the centred view into the box's frame
-    float tan[4] = {};                                // the centred view's FOV: left, right, up, down tangents
-    float outlineInset = 0;
-};
-
-// FocusLayerPS's native constants (36-39 the centred FOV, 44 the inset, 47 the switch, 48-58 the rotation's rows) over
-// compose_constants' for the eye.
-inline void native_focus_constants(const NativeFocusDraw& n, float (&constants)[kComposeConstants]) {
-    for (int i = 0; i < 4; ++i)
-        constants[36 + i] = n.tan[i];
-    constants[44] = n.outlineInset;
-    constants[47] = 1;
-    for (int row = 0; row < 3; ++row)
-        for (int col = 0; col < 3; ++col)
-            constants[48 + row * 4 + col] = n.rotation[row * 3 + col];
-}
-
 // EyeComposition `c` for eye `eye` as the shader's cbuffer, but for the helmet's constants (40-59: 0).
 inline void compose_constants(const EyeComposition& c, int eye, float (&constants)[kComposeConstants]) {
     for (int i = 0; i < 4; ++i) {
@@ -316,43 +296,32 @@ float4 PS(V v) : SV_Target {
 // The focus view as a layer of its own (focus_layer): its target covers exactly the focus view (focusTan), texel for
 // texel its region of the views' image (focusSrc), so nothing is resampled; alpha is the feather weight PS blends
 // with, colour premultiplied by it, the runtime blending it over the periphery's layer. The outline as in PS.
-)"
-    // (two raw strings: MSVC caps one literal at 16 KB; adjacent ones join)
-    R"(
-// helmet.w 1 (native quad views, the runtime blending views 2-3 into the eyes itself; quad/focus_centred.h): the target
-// is a view turned to the box's middle with a centred FOV (viewTan; helmetRot0-2 rows take its directions into the box's
-// frame), the focus view resampled into it; opaque, the outer view where the box isn't and blended into its edge by the
-// feather (the runtime's blend on top of it), the outline helmet.x in from the edge (the runtime fades the outermost
-// texels).
+// viewTan.x 1 (native quad views, the runtime blending views 2-3 into the eyes itself): opaque, the outer view blended
+// into the focus view's edge by the feather (the runtime's blend on top of it), the outline viewTan.y in from the edge
+// (the runtime fades the outermost texels).
 float4 FocusLayerPS(V v) : SV_Target {
     float2 size;
     focusTex.GetDimensions(size.x, size.y);
-    if (helmet.w > 0.5) {
-        const float3 c = float3(lerp(viewTan.x, viewTan.y, v.uv.x), lerp(viewTan.z, viewTan.w, v.uv.y), -1);
-        const float3 b = float3(dot(helmetRot0.xyz, c), dot(helmetRot1.xyz, c), dot(helmetRot2.xyz, c));  // the box's frame
-        const float2 tb = b.xy / max(-b.z, 1e-6);
-        const float2 fb = float2((tb.x - focusTan.x) / (focusTan.y - focusTan.x), (focusTan.z - tb.y) / (focusTan.z - focusTan.w));
-        const float eb = b.z < 0 && all(fb >= 0) && all(fb <= 1) ? inside_box(fb) : -1;
-        // Where it lies in the outer view: into the eye's frame (rot: eye -> box, so its transpose).
-        const float3 a = rot0.xyz * b.x + rot1.xyz * b.y + rot2.xyz * b.z;
-        const float2 ta = a.xy / max(-a.z, 1e-6);
-        const float2 o = float2((ta.x - outerTan.x) / (outerTan.y - outerTan.x), (outerTan.z - ta.y) / (outerTan.z - outerTan.w));
-        float2 outerSize;
-        outerTex.GetDimensions(outerSize.x, outerSize.y);
-        const float4 outer = outerTex.SampleLevel(linearClamp, inside(outerSrc.xy + saturate(o) * outerSrc.zw, outerSrc, outerSize), 0);
-        const float4 focus = focusTex.SampleLevel(linearClamp, inside(focusSrc.xy + saturate(fb) * focusSrc.zw, focusSrc, size), 0);
-        float wb = eb > 0 ? saturate(eb / max(params.x, 1e-4)) : 0;
-        wb = wb * wb * (3 - 2 * wb);
-        float4 color = lerp(outer, focus, wb);
-        if (eb >= helmet.x && eb < helmet.x + params.y)
-            color = borderColor;
-        return float4(color.rgb, 1);
-    }
     const float2 f = v.uv;
     const float e = inside_box(f);
     float w = saturate(e / max(params.x, 1e-4));
     w = w * w * (3 - 2 * w);
     float4 color = focusTex.SampleLevel(linearClamp, inside(focusSrc.xy + f * focusSrc.zw, focusSrc, size), 0);
+    if (viewTan.x > 0.5) {
+        // This texel's direction in the focus view's frame, in the eye's (rot: eye -> focus, so its transpose), then
+        // where it lies in the outer view.
+        const float3 b = float3(lerp(focusTan.x, focusTan.y, f.x), lerp(focusTan.z, focusTan.w, f.y), -1);
+        const float3 a = rot0.xyz * b.x + rot1.xyz * b.y + rot2.xyz * b.z;
+        const float2 t = a.xy / max(-a.z, 1e-6);
+        const float2 o = float2((t.x - outerTan.x) / (outerTan.y - outerTan.x), (outerTan.z - t.y) / (outerTan.z - outerTan.w));
+        float2 outerSize;
+        outerTex.GetDimensions(outerSize.x, outerSize.y);
+        const float4 outer = outerTex.SampleLevel(linearClamp, inside(outerSrc.xy + saturate(o) * outerSrc.zw, outerSrc, outerSize), 0);
+        color = lerp(outer, color, w);
+        if (e >= viewTan.y && e < viewTan.y + params.y)
+            color = borderColor;
+        return float4(color.rgb, 1);
+    }
     if (e < params.y) {
         color = borderColor;
         w = 1;
