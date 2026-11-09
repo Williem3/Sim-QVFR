@@ -62,7 +62,7 @@ public:
         const UINT mvrLevel = gate ? gate : 2;
         run.mvr = s.layout.secondViewRoom;
         run.mvrSkip = run.mvr && mvrLevel >= 2;  // passes 2-3 skip the scene
-        run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images twice as wide only, the focus views beside
+        run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images the outer views' shape, the focus views beside
         if (run.mvr) {
             run.mvrCompare = gate != 0;  // the gates' samples (images read back and saved): not in a player's run
             run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));

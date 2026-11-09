@@ -45,25 +45,51 @@ struct Views4Layout {
     // fill the layer; the scene passes then render inside it at their live sizes).
     double layerFloor = 0;
     // Room for a second view in the same image (LMU's multi-view rendering, multi_view / [experiment] lmu_mvr): the focus
-    // view drawn beside its eye. secondViewBeside: the layer twice as wide, and at least twice the outer view's height.
-    // The game renders an eye at one scale of the whole image on both axes (its post-processing follows that scale), so
-    // the eye's region keeps the image's shape: at most half its width and half its height, the focus view beside it
-    // in the other half of the width, as tall as the image. A vertically cropped eye (as wide as about twice its height)
-    // fills its half with the image as high as the focus view; one without a crop makes the image twice as high (as
-    // large as twice each way). Otherwise: twice as large each way.
+    // view drawn beside its eye. The game renders an eye at one scale of the whole image on both axes (its
+    // post-processing follows that scale), so the eye's region keeps the image's shape.
+    // secondViewBeside: the image is the outer view's shape, beside_scale() times its size, so the eye at one scale of
+    // 1 / beside_scale() renders exactly the outer view (no axis denser than asked), and the focus view fits beside it
+    // in the rest of the width, as tall as the image. Before 2026-11-09 the image was twice the wider view's width and
+    // twice the outer view's height: with the focus view wider than the outer view (focus density x box > periphery)
+    // the eye's region came out wider than the outer view, e.g. 0.40 x 0.30 of the eye for a 0.30 x 0.30 periphery
+    // (a third more periphery pixels). Otherwise: twice as large each way.
+    // Both with kRoomSlack more width and height: the game rounds each pass's size up (focus_math.h scaled_size), so
+    // two views whose shares add up to the whole image overran it by a pixel (5449 wide: eye 2725 + focus 2725) and the
+    // eye's pass never drew its focus view.
     bool secondViewRoom = false, secondViewBeside = false;
-    double layer_width() const { return (secondViewRoom ? 2 : 1) * std::max({outer_width(), focus, layerFloor}); }
-    double layer_height() const {
-        if (secondViewRoom && secondViewBeside)
-            return std::max({2 * outer_height(), focusHeight, layerFloor});
-        return (secondViewRoom ? 2 : 1) * std::max({outer_height(), focusHeight, layerFloor});
+    static constexpr double kRoomSlack = 0.002;  // ~2 px or more in a layer 1000 px or wider
+    // The image's size as a multiple of the outer view's (beside): at least twice it (the eye at most half the image
+    // each way, as before), wide enough for the eye and the focus view side by side, as tall as the focus view, as
+    // large as the menus' floor on both axes; times 1 + kRoomSlack.
+    double beside_scale() const {
+        const double ow = outer_width(), oh = outer_height();
+        if (!(ow > 0) || !(oh > 0))
+            return 2 * (1 + kRoomSlack);
+        return std::max({2.0, (ow + focus) / ow, focusHeight / oh, layerFloor / ow, layerFloor / oh}) * (1 + kRoomSlack);
     }
-    // The most of the layer one view may take: with room for a second view, half its width (and height, unless beside).
-    double view_room_width() const { return layer_width() / (secondViewRoom ? 2 : 1); }
+    bool beside() const { return secondViewRoom && secondViewBeside; }
+    double layer_width() const {
+        if (beside())
+            return beside_scale() * outer_width();
+        return (secondViewRoom ? 2 * (1 + kRoomSlack) : 1) * std::max({outer_width(), focus, layerFloor});
+    }
+    double layer_height() const {
+        if (beside())
+            return beside_scale() * outer_height();
+        return (secondViewRoom ? 2 * (1 + kRoomSlack) : 1) * std::max({outer_height(), focusHeight, layerFloor});
+    }
+    // The most of the layer the focus view may take: beside, the width the eye leaves and the whole height; twice each
+    // way, half of each.
+    double view_room_width() const {
+        if (beside())
+            return layer_width() - outer_room_width();
+        return layer_width() / (secondViewRoom ? 2 : 1);
+    }
     double view_room_height() const { return layer_height() / (secondViewRoom && !secondViewBeside ? 2 : 1); }
-    // The outer views' own: beside, half the height too (their one scale at most half the image's, so the focus view
-    // still fits beside them: a live crop that makes them taller lowers their density instead).
-    double outer_room_height() const { return view_room_height() / (secondViewRoom && secondViewBeside ? 2 : 1); }
+    // The outer views' own: beside, the eye's region at its one scale (1 / beside_scale() of the image each way), so
+    // the focus view still fits beside them (a live crop that makes them taller lowers their density instead).
+    double outer_room_width() const { return beside() ? layer_width() / beside_scale() : view_room_width(); }
+    double outer_room_height() const { return beside() ? layer_height() / beside_scale() : view_room_height(); }
     // In eye columns, view `view`'s width as a share of its column (1: the whole column).
     double column_share(int view) const {
         const double column = column_eye_width();
@@ -204,7 +230,8 @@ inline Views4Fit views4_fit_one_size(const Views4Layout& launch, double outer, d
     const double cw = cropWidth > 0 ? cropWidth : launch.cropWidth, ch = cropHeight > 0 ? cropHeight : launch.cropHeight;
     const double layerW = launch.view_room_width(), layerH = launch.view_room_height();  // one view's most
     Views4Fit f;
-    f.outer = std::clamp(outer, kMinLive * launch.outer, std::min(layerW / cw, launch.outer_room_height() / ch));
+    f.outer = std::clamp(outer, kMinLive * launch.outer,
+                         std::min(launch.outer_room_width() / cw, launch.outer_room_height() / ch));
     f.outerCapped = f.outer < outer - kSlack;
     const double fit = std::min({1.0, focus > 0 ? layerW / focus : 1.0, focusHeight > 0 ? layerH / focusHeight : 1.0});
     f.focus = std::clamp(focus * fit, kMinLive * launch.focus, layerW);
