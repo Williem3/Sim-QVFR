@@ -221,10 +221,10 @@ public:
         }
     }
 
-    // Loaded early (the launcher, GameInfo::earlyLoad): the patches go in before X-Plane's Vulkan startup, so the
-    // shader wrapper sees every module. xrCreateInstance then finds them in.
+    // Loaded early (the launcher, GameInfo::earlyLoad): the patches go in at X-Plane's first vkCreateInstance, before
+    // it makes any shader module, so the shader wrapper sees every module. xrCreateInstance then finds them in.
     void early_start(const wchar_t* ini) override {
-        simqvfr::logf("xplane: layer loaded early (before X-Plane runs): patching now");
+        simqvfr::logf("xplane: layer loaded early (at X-Plane's Vulkan start): patching now");
         patched_ = true;
         if (qvfr_wanted(ini)) {
             qvfr_ = apply_qvfr(ini);
