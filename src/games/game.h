@@ -43,9 +43,9 @@ struct GameInfo {
     GameFeatures features;
     const char* const* builds;   // the exe SHA-256s (lowercase hex) the game's addresses were taken from
     std::size_t buildCount;
-    // The launcher loads the layer into the game before it runs (started suspended): for a game that creates its
-    // shaders before it starts OpenXR, so the layer's shader edits reach them (X-Plane). The layer then sets the
-    // game up on load (GameAdapter::early_start), not at xrCreateInstance.
+    // The launcher has the Vulkan loader load the layer at the game's first vkCreateInstance (vk_early_layer.cpp): for
+    // a game that creates its shaders before it starts OpenXR, so the layer's shader edits reach them (X-Plane). The
+    // layer then sets the game up on load (GameAdapter::early_start), not at xrCreateInstance.
     bool earlyLoad = false;
     // The game's own crash reports, under %LOCALAPPDATA%: Unreal's crash reporter writes a folder per crash (the
     // minidump, CrashContext.runtime-xml, the game's log), which Report an issue zips when it falls in a session

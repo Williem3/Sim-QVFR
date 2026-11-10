@@ -84,7 +84,7 @@ target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AN
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_layer PUBLIC sim_qvfr_core)
 
-add_library(sim_qvfr SHARED src/early_load.cpp)
+add_library(sim_qvfr SHARED src/early_load.cpp src/vk_early_layer.cpp)
 target_include_directories(sim_qvfr PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(sim_qvfr PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr PRIVATE /W4 /permissive- /utf-8)
@@ -97,7 +97,10 @@ target_link_options(sim_qvfr PRIVATE /MAP)
 add_custom_command(TARGET sim_qvfr POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_CURRENT_SOURCE_DIR}/manifest/XR_APILAYER_SIM_qvfr.json
-          $<TARGET_FILE_DIR:sim_qvfr>/XR_APILAYER_SIM_qvfr.json)
+          $<TARGET_FILE_DIR:sim_qvfr>/XR_APILAYER_SIM_qvfr.json
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_CURRENT_SOURCE_DIR}/manifest/VkLayer_SIM_qvfr_early.json
+          $<TARGET_FILE_DIR:sim_qvfr>/vulkan/VkLayer_SIM_qvfr_early.json)
 
 # Offline check of the layer chain (tests/layer_chain_test.cpp): it negotiates the built sim-qvfr.dll.
 add_executable(layer_chain_test tests/layer_chain_test.cpp)
