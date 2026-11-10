@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -765,7 +766,16 @@ void set_next_passes(int which) {
 
 // ---- MVR (lmu_mvr, mvr_pass.h): passes 0-1 draw their focus views beside the eye ----
 
-bool mvrInstalled = false, mvrRoomLogged = false;
+bool mvrInstalled = false;
+// The eye passes' room check (mvr_before_pass). The first scene frame after menus or loading refuses by design: its
+// passes still render at the game's own size (the live resolution is written at its pass 1's end). A refusal on a frame
+// after a scene frame is not expected, so the two are logged apart, once each, and counted for the fallback's summary.
+bool mvrRoomLogged[2] = {};  // [0] the first scene frame after others, [1] a later one
+bool lastFrameScene = false;  // the frame before rendered the scene (its passes at the live resolution)
+unsigned long long mvrRoomRefused = 0, mvrRoomRefusedLater = 0, mvrNoBox = 0;
+char mvrLastRefusal[160] = {};  // the last refusal's sizes
+// Two-pass frames without both focus finals, by the first reason found (after_two_passes); and those with both.
+unsigned long long finalsNoBlit = 0, finalsNoBox = 0, finalsOutside = 0, finalsNoViews = 0, finalsBoth = 0;
 int mvrSamples = 0;
 bool mvrSampleFrame = false;  // this frame is a gate sample
 bool mvrFrame = true;         // this frame uses MVR (false: an A/B run's frame with the four passes alone)
@@ -1026,13 +1036,28 @@ void mvr_before_pass(int p) {
         }
         draw = v.eyeW && v.focusW && (!room[0] || (v.eyeW + v.focusW <= room[0] && v.focusH <= room[1])) &&
                (!viewW || (v.finalEyeW + v.focusW <= viewW && v.focusH <= viewH));
-        if (!draw && !mvrRoomLogged) {
-            mvrRoomLogged = true;
-            simqvfr::logf("lmu mvr: frame %llu: eye %ux%u and focus %ux%u don't fit side by side in %ux%u targets (the "
-                          "eye %ux%u of its %ux%u final): the focus views from passes 2-3 only",
-                          frames, v.eyeW, v.eyeH, v.focusW, v.focusH, room[0], room[1], v.finalEyeW, v.finalEyeH, viewW,
+        if (!draw) {
+            const int later = lastFrameScene ? 1 : 0;
+            ++mvrRoomRefused;
+            mvrRoomRefusedLater += later;
+            std::snprintf(mvrLastRefusal, sizeof(mvrLastRefusal),
+                          "frame %llu pass %d: eye %ux%u, focus %ux%u, targets %ux%u, the eye %ux%u of its %ux%u final",
+                          frames, p, v.eyeW, v.eyeH, v.focusW, v.focusH, room[0], room[1], v.finalEyeW, v.finalEyeH, viewW,
                           viewH);
+            if (!mvrRoomLogged[later]) {
+                mvrRoomLogged[later] = true;
+                simqvfr::logf("lmu mvr: frame %llu: eye %ux%u and focus %ux%u don't fit side by side in %ux%u targets (the "
+                              "eye %ux%u of its %ux%u final)%s: %s",
+                              frames, v.eyeW, v.eyeH, v.focusW, v.focusH, room[0], room[1], v.finalEyeW, v.finalEyeH, viewW,
+                              viewH,
+                              later ? ", on a frame after a scene frame (its passes at the live resolution: not expected)"
+                                    : ", the first scene frame after menus or loading (its passes at the game's own size "
+                                      "until the live resolution applies: expected)",
+                              twoPassFrame ? "no focus views this frame" : "the focus views from passes 2-3 only");
+            }
         }
+    } else {
+        ++mvrNoBox;  // no focus box this frame (its projection, or the game's scale not known yet)
     }
     mvr_pass_begin(p, draw ? &v : nullptr, sample);
 }
@@ -1736,7 +1761,10 @@ void after_two_passes() {
         bool ok = true;
         for (int e = 0; e < 2 && ok; ++e) {
             unsigned x = 0, y = 0, w = 0, h = 0;
-            ok = mvr_focus_final(e, x, y, w, h) && frozen[e] && x + w <= viewW && y + h <= viewH && w && h;
+            const bool final = mvr_focus_final(e, x, y, w, h);
+            ok = final && frozen[e] && x + w <= viewW && y + h <= viewH && w && h;
+            if (!ok)  // the fallback's summary: the first reason found
+                ++(!final ? finalsNoBlit : !frozen[e] ? finalsNoBox : finalsOutside);
             if (ok) {
                 finalAt[e][0] = x;
                 finalAt[e][1] = y;
@@ -1749,6 +1777,7 @@ void after_two_passes() {
         }
         frameFinalsOk = ok;
         if (ok) {
+            ++finalsBoth;
             atlasReady = atlasFromFinals = true;
             uiScaleOnly = vruiHooked;  // the VR UI's eye viewports still cut for live resolution; no focus_ui
             store_record();
@@ -1763,6 +1792,8 @@ void after_two_passes() {
                               frames);
             }
         }
+    } else {
+        ++finalsNoViews;  // the eye images not found, or not the views' size
     }
     if (e0)
         e0->Release();
@@ -2505,10 +2536,34 @@ void install_four_pass_extras() {
 // the rest of the session: at xrCreateSession when the device can't do it, or at a frame end (render thread, between
 // frames) when MVR fails while running. Logged once with `why`.
 bool fellBack = false;
+
+// What the multi-view path did before it stopped, step by step, so a log shows which one the focus views didn't get past:
+// the eye passes' room check and focus box (mvr_before_pass), drawing the focus view, the focus post's copy, composite
+// and final blit (mvr_pass), and the frame's two focus finals (after_two_passes). Session totals.
+void log_multi_view_summary() {
+    const MvrPassStats s = mvr_pass_stats();
+    const MvrProbeStats probe = mvr_probe_stats();
+    const auto u = [](unsigned long long v) { return v; };
+    simqvfr::logf("lmu mvr: before it stopped: %llu two-pass frames, %llu with both focus finals; without them: %llu no "
+                  "final blit beside an eye, %llu no focus box, %llu a final outside the image, %llu the eye images not "
+                  "the views; eye passes: %llu refused for room (%llu on a frame after a scene frame)%s%s, %llu without a "
+                  "focus box, %llu drew their focus view (%llu twin binds, %llu stereo switches refused); focus post: %llu "
+                  "copies, %llu composites (%llu by their bindings), %llu final blits, %llu steps failed, %llu passes "
+                  "without the composite after the copy, %llu draws into the resolve's target by another shader; YEBIS's "
+                  "copy, composite and final blit pixel shaders marked %llu, %llu and %llu times",
+                  twoPassFrames, finalsBoth, finalsNoBlit, finalsNoBox, finalsOutside, finalsNoViews, mvrRoomRefused,
+                  mvrRoomRefusedLater, mvrLastRefusal[0] ? "; the last: " : "", mvrLastRefusal, mvrNoBox,
+                  u(s.passesWithFocus), u(s.twinBinds), u(s.stereoErrors), u(s.focusCopies), u(s.focusComposites),
+                  u(s.focusCompositesByBindings), u(s.focusBlits), u(s.focusFailures), u(s.focusNoComposite),
+                  u(s.focusUnknownComposites), u(probe.yebisCopies), u(probe.yebisComposites), u(probe.finalBlits));
+}
+
 void fallback_to_four_passes(const char* why) {
     if (fellBack || !cfg.trackerDrives)
         return;
     fellBack = true;
+    if (twoPassFrames)  // it ran (not the session start's fallback, where the device can't)
+        log_multi_view_summary();
     mvr_track_drive(nullptr, nullptr);
     mvr_track_passes(false);
     mvr_focus_replay(false);
@@ -2698,6 +2753,7 @@ void four_passes_frame_end() {
     passesThisFrame = 0;
     if (passes >= 2)
         ++sceneFrames;
+    lastFrameScene = passes >= 2;  // the next frame's room check: its passes at the live resolution
     if (passes >= 4)
         ++fourPassFrames;
     if (twoPassFrame && passes >= 2 && twoPassFrames++ == 0)
