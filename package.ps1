@@ -81,11 +81,12 @@ try {
     }
     Remove-Item Env:SIM_QVFR_LOG
 
-    New-Item -ItemType Directory -Path $stage, (Join-Path $stage 'layer'), (Join-Path $stage 'layer\helmet'), (Join-Path $stage 'licenses') | Out-Null
+    New-Item -ItemType Directory -Path $stage, (Join-Path $stage 'layer'), (Join-Path $stage 'layer\helmet'), (Join-Path $stage 'layer\vulkan'), (Join-Path $stage 'licenses') | Out-Null
     $files = [ordered]@{
         'build\Release\sim-qvfr-launcher.exe'              = 'sim-qvfr-launcher.exe'
         'build\Release\sim-qvfr.dll'                       = 'layer\sim-qvfr.dll'
         'manifest\XR_APILAYER_SIM_qvfr.json'               = 'layer\XR_APILAYER_SIM_qvfr.json'
+        'manifest\VkLayer_SIM_qvfr_early.json'             = 'layer\vulkan\VkLayer_SIM_qvfr_early.json'
         'assets\helmet\top.png'                            = 'layer\helmet\top.png'
         'assets\helmet\bottom.png'                         = 'layer\helmet\bottom.png'
         'assets\helmet\visor.png'                          = 'layer\helmet\visor.png'

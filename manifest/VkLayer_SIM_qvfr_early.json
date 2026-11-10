@@ -1,0 +1,14 @@
+{
+  "file_format_version": "1.1.2",
+  "layer": {
+    "name": "VK_LAYER_SIM_qvfr_early",
+    "type": "GLOBAL",
+    "library_path": "..\\sim-qvfr.dll",
+    "api_version": "1.3.0",
+    "implementation_version": "1",
+    "description": "Sim-QVFR early load: loads the layer at the game's vkCreateInstance, then passes every call on (enabled only by the launcher, for X-Plane)",
+    "functions": {
+      "vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+    }
+  }
+}
