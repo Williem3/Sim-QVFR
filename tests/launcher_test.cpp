@@ -1655,6 +1655,15 @@ int main() {
         check(titles(likely_causes(healthy, gpu)).find(L"GPU was busy all the time (98%)") != std::wstring::npos &&
                   titles(likely_causes(healthy, cpu)).find(L"CPU work limited") != std::wstring::npos,
               "causes: a busy GPU, and ACE's game thread near a whole core");
+        RuntimeInfo halfRate = fine;
+        halfRate.session.limited = L"Pacing (the runtime ran the game at half rate)";
+        halfRate.session.halfRatePercent = 8;
+        halfRate.session.latePercent = 9;
+        const std::wstring halfFound = titles(likely_causes(healthy, halfRate));
+        check(halfFound.find(L"half rate for 8% of the session") != std::wstring::npos &&
+                  halfFound.find(L"were late") == std::wstring::npos &&
+                  session_summary_text(halfRate).find(L"Runtime at half rate: 8.0%") != std::wstring::npos,
+              "causes: the runtime's half rate (Varjo), in place of the plain late-frames one, and in the summary");
 
         // The title: the kind, then the description's first line, cut at a word.
         report.kind = 2;  // Performance

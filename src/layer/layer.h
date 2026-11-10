@@ -62,6 +62,7 @@ XrResult XRAPI_CALL timedEndFrameBelow(XrSession session, const XrFrameEndInfo* 
 XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
                                           uint32_t capacity, uint32_t* countOutput, XrView* views);
 double report_pacing();
+XrDuration pacing_waited(XrDuration predicted);
 void report_load(double frameMs);
 void report_cpu_times();
 bool is_game_process();

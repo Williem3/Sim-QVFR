@@ -242,11 +242,12 @@ XrResult XRAPI_CALL layerWaitFrame(XrSession session, const XrFrameWaitInfo* inf
         const int64_t t0 = qpc_now();
         const XrResult r = next.WaitFrame(session, info, state);
         if (XR_SUCCEEDED(r)) {
-            osd_waited(state->predictedDisplayPeriod);
+            const XrDuration period = pacing_waited(state->predictedDisplayPeriod);
+            osd_waited(period);  // the overlay's and the optimizer's budget: the steady period, not a half-rate spell
             const double waitMs = (qpc_now() - t0) * cpu.msPerTick;
             if ((experiment.views4 || experiment.measure) && pacing.wait.size() < 4 * kCpuReportFrames) {
                 pacing.wait.push_back(static_cast<float>(waitMs));
-                pacing.periodMs = state->predictedDisplayPeriod / 1e6;
+                pacing.periodMs = static_cast<double>(period) / 1e6;
             }
             osd_wait_returned(waitMs);
         }

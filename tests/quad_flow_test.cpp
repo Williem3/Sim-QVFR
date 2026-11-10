@@ -947,6 +947,43 @@ int main() {
         check(line.find("frames of 1/2/3/4+ display periods 1/2/1/1") != std::string::npos &&
                   line.find("display period 11.10 ms") != std::string::npos && pacing.interval.empty(),
               "pacing: frames counted by the display periods they took, then reset");
+        // Varjo's half rate: the runtime gives a doubled period for a while; the budget stays the refresh's,
+        // those frames are counted as half rate and their intervals as two periods each.
+        pacing = Pacing{};
+        constexpr XrDuration kRefresh = 11'111'111, kHalf = 2 * kRefresh;
+        XrDuration steady = 0;
+        for (int i = 0; i < 10; ++i)
+            steady = pacing_waited(kRefresh);
+        bool held = steady == kRefresh;
+        for (int i = 0; i < 5; ++i)
+            held = held && pacing_waited(kHalf) == kRefresh;
+        check(held && pacing.slowFrames == 5 && pacing.sessionFrames == 15,
+              "pacing: a doubled period from the runtime is not taken as the budget, and is counted");
+        pacing.periodMs = static_cast<double>(kRefresh) / 1e6;
+        pacing.interval = {11.1f, 11.1f, 22.2f, 22.2f};
+        pacing.wait = {3.0f, 3.0f, 14.0f, 14.0f};
+        report_pacing();
+        std::string halfLogged;
+        if (FILE* f = _wfopen(logPath.c_str(), L"rb")) {
+            char buffer[4096];
+            for (size_t n; (n = fread(buffer, 1, sizeof(buffer), f)) > 0;)
+                halfLogged.append(buffer, n);
+            fclose(f);
+        }
+        const size_t halfAt = halfLogged.rfind("views4 pacing: the runtime gave");
+        const std::string halfLine =
+            halfAt == std::string::npos ? "" : halfLogged.substr(halfAt, halfLogged.find('\n', halfAt) - halfAt);
+        std::printf("     %s\n", halfLine.c_str());
+        check(halfLine.find("5 of these frames a display period of up to 22.22 ms") != std::string::npos &&
+                  halfLogged.find("display periods 2/2/0/0") != std::string::npos && summary.latePercent == 50 &&
+                  std::fabs(summary.halfRatePercent - 100.0 / 3) < 0.1 && pacing.slowFrames == 0,
+              "pacing: the half-rate frames logged and in the summary, late counted against the refresh");
+        // A lasting change of the refresh is taken within two runs of waits.
+        pacing = Pacing{};
+        for (uint64_t i = 0; i < 3 * kCpuReportFrames; ++i)
+            steady = pacing_waited(i < 10 ? kRefresh : kHalf);
+        check(steady == kHalf, "pacing: a lasting longer period becomes the budget after two runs");
+        pacing = Pacing{};
         // The load line: ACE's threads sampled (a second's worth), reported once, the window emptied.
         cpu_load_start();
         Sleep(1200);

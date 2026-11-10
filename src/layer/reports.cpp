@@ -42,6 +42,35 @@ XrResult XRAPI_CALL timedLocateViewsBelow(XrSession session, const XrViewLocateI
     return r;
 }
 
+// The display period ACE's frames are measured against, from xrWaitFrame's predicted one: the shortest over the
+// last one or two runs of kCpuReportFrames waits. Varjo's runtime gives ACE a doubled period (22.2 ms at 90 Hz)
+// for a few seconds when frames run late, and back; taking that as the budget hid those frames from the late
+// count and gave the overlay and the optimizer twice the budget (2026-11-09 report: 81 fps, "2.8% late",
+// "Neither"). Frame generation switching on or off starts afresh: its layer gives ACE the multiplied period.
+XrDuration pacing_waited(XrDuration predicted) {
+    if (predicted <= 0)
+        return predicted;
+    if (const bool fg = frame_generation_on(); fg != pacing.frameGeneration) {
+        pacing.frameGeneration = fg;
+        pacing.shortestNs = pacing.previousShortestNs = 0;
+    }
+    if (pacing.waits++ % kCpuReportFrames == 0 && pacing.waits > 1) {
+        pacing.previousShortestNs = pacing.shortestNs;
+        pacing.shortestNs = 0;
+    }
+    if (!pacing.shortestNs || predicted < pacing.shortestNs)
+        pacing.shortestNs = predicted;
+    const XrDuration steady =
+        pacing.previousShortestNs ? std::min(pacing.shortestNs, pacing.previousShortestNs) : pacing.shortestNs;
+    ++pacing.sessionFrames;
+    if (2 * predicted >= 3 * steady) {
+        ++pacing.slowFrames;
+        ++pacing.sessionSlowFrames;
+        pacing.slowestNs = std::max(pacing.slowestNs, predicted);
+    }
+    return steady;
+}
+
 double report_pacing() {
     if (pacing.interval.empty())
         return 0;
@@ -70,6 +99,17 @@ double report_pacing() {
          pacing.periodMs, at(pacing.interval, 0.5), at(pacing.interval, 0.9), longest, mean > 0 ? 1000 / mean : 0,
          pacing.interval.size(), at(pacing.wait, 0.5), at(pacing.wait, 0.9), at(outside, 0.5), at(outside, 0.9),
          periods[0], periods[1], periods[2], periods[3]);
+    if (pacing.slowFrames)
+        logf("views4 pacing: the runtime gave %llu of these frames a display period of up to %.2f ms (%.0f fps: half "
+             "rate or less, its motion smoothing or reprojection), %.1f%% of the session's",
+             static_cast<unsigned long long>(pacing.slowFrames), static_cast<double>(pacing.slowestNs) / 1e6,
+             1e9 / static_cast<double>(pacing.slowestNs),
+             100.0 * static_cast<double>(pacing.sessionSlowFrames) / static_cast<double>(pacing.sessionFrames));
+    pacing.slowFrames = 0;
+    pacing.slowestNs = 0;
+    summary.halfRatePercent = pacing.sessionFrames ? 100.0 * static_cast<double>(pacing.sessionSlowFrames) /
+                                                         static_cast<double>(pacing.sessionFrames)
+                                                   : 0;
     summary.fps = mean > 0 ? 1000 / mean : 0;
     summary.frameP50 = at(pacing.interval, 0.5);
     summary.frameP90 = at(pacing.interval, 0.9);
@@ -180,6 +220,7 @@ void write_session_summary(double layerMs) {
     // spinning Physics and eye-tracker threads are not counted: they look busy whatever limits the frame).
     const wchar_t* limited = s.gpuBusy >= 95                                ? L"GPU"
                              : s.cpuMs >= 0 && s.cpuMs >= 0.9 * s.periodMs ? L"CPU (render thread)"
+                             : s.halfRatePercent >= 1                      ? L"Pacing (the runtime ran the game at half rate)"
                              : s.latePercent > 5                           ? L"Pacing (frames late, neither saturated)"
                                                                            : L"Neither (headroom)";
     std::wstring threads;
@@ -224,6 +265,7 @@ void write_session_summary(double layerMs) {
         runtime_info(L"session_frame_p50_ms", number(s.frameP50, 2));
         runtime_info(L"session_frame_p90_ms", number(s.frameP90, 2));
         runtime_info(L"session_late_percent", number(s.latePercent, 1));
+        runtime_info(L"session_half_rate_percent", number(s.halfRatePercent, 1));
         runtime_info(L"session_refresh_hz", number(s.periodMs > 0 ? 1000 / s.periodMs : -1, 0));
         runtime_info(L"session_cpu_ms", number(s.cpuMs, 2));
         runtime_info(L"session_gpu_ms", number(s.gpuMs, 2));

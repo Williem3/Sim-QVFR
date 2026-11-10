@@ -538,6 +538,7 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     s.frameP90 = number(L"session_frame_p90_ms");
     s.latePercent = number(L"session_late_percent");
     s.refreshHz = number(L"session_refresh_hz");
+    s.halfRatePercent = number(L"session_half_rate_percent");
     s.cpuMs = number(L"session_cpu_ms");
     s.gpuMs = number(L"session_gpu_ms");
     s.gpuBusy = number(L"session_gpu_busy");
@@ -580,6 +581,8 @@ std::wstring session_summary_text(const RuntimeInfo& r) {
     if (s.latePercent >= 0)
         t += f(L"; %.1f%% of frames late", s.latePercent);
     t += L"\n";
+    if (s.halfRatePercent > 0)
+        t += f(L"Runtime at half rate: %.1f%% of the session's frames\n", s.halfRatePercent);
     if (s.cpuMs >= 0)
         t += f(L"CPU frame time (render thread): %.2f ms\n", s.cpuMs);
     if (s.gpuMs >= 0)
