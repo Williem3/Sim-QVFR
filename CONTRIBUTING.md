@@ -71,24 +71,85 @@ matches the images' opening.
 
 ## Build
 
-MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).
+### Requirements
+
+- Windows 10 or 11, x64.
+- **Visual Studio 2026**, or the free **Build Tools for Visual Studio 2026**, with the **Desktop development
+  with C++** workload, including these components (check they're ticked in the installer):
+  - MSVC v14.50 x64/x86 build tools,
+  - a Windows 11 SDK,
+  - **C++ CMake tools for Windows**: the CMake and **Ninja** the build uses.
+
+Nothing else: MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).
+A separately installed CMake (3.24 or newer) works too.
+
+### Building
+
+From any PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1 -Test
+```
+
+The first command builds Release into `build\Release`. The second also runs the offline tests.
+
+Ninja needs Visual Studio's build environment (`cl.exe`, the SDK's headers and libraries on `PATH`, `INCLUDE`
+and `LIB`), which an ordinary shell doesn't have, so `build.ps1` loads it itself (`tools\vs_env.ps1`):
+- It finds Visual Studio with `vswhere`, runs `vcvars64.bat` and keeps what it changed in
+  `%LOCALAPPDATA%\sim-qvfr-dev`, so later builds start in under a second.
+- It configures `build\` with the `Ninja Multi-Config` generator on the first run.
+- It builds and tests at below-normal priority, so a game in the headset keeps its frames.
+
+Options:
+- `-Filter lmu` runs only the tests whose names match.
+- `-Target sim_qvfr_launcher` builds one target.
+- `-Jobs 8` caps the parallel jobs.
+
+A `build\` folder made by the Visual Studio generator is switched to Ninja: only CMake's cache
+(`CMakeCache.txt`, `CMakeFiles\`) is removed, so `build\Release` keeps the development launcher's settings,
+logs and profiles.
+
+In a **Developer PowerShell for VS 2026** or an **x64 Native Tools Command Prompt**, the environment is
+already there, and plain CMake works the same way:
 
 ```bash
-cmake -S . -B build -G "Visual Studio 18 2026" -A x64
+cmake -S . -B build -G "Ninja Multi-Config"
 ```
 ```bash
-cmake --build build --config Release --parallel
+cmake --build build --config Release
+```
+```bash
+ctest --test-dir build -C Release -j 16 --output-on-failure
 ```
 
-`--parallel` builds the projects side by side, and each project compiles its files in parallel (`/MP`,
-set in `CMakeLists.txt`). Together they cut a clean build from about 4 minutes to under 1 on a 16-core machine.
+The Visual Studio generator (`-G "Visual Studio 18 2026" -A x64`) still works, but rebuilds more slowly.
+
+On an 8-core, 16-thread machine:
+- a clean build takes under a minute,
+- a change to one source file rebuilds in 2 to 3 seconds,
+- a no-op build takes under a second.
+
+Ninja runs about one job per logical processor across the whole build. The big targets precompile the
+standard and Windows headers.
+
+### Tests
 
 The offline tests are the `build/Release/*_test.exe` executables (hook stub, code patch, compositor,
 focus outline/cull/turn, launcher settings and plan, two-loop and quad flow, and others). Each one
-exits non-zero on failure.
+exits non-zero on failure. ctest runs them all side by side, in about 12 seconds.
+
+Each test gets its own TEMP folder and log, under `%TEMP%\sim-qvfr-tests\`. A test executable's first
+run after it changes takes about a second longer, because Windows Defender checks every new executable.
+The tests link deterministically, so only the ones a change reaches are new.
+
+### Packages
 
 `package.ps1 -Version <version>` builds a release zip in `dist\` from a clean checkout of a commit,
-after running every test. `packaging/README.txt` is the user guide that ships in the zip. Without
+after running every test. It needs the same Visual Studio setup and loads its environment the same way.
+`packaging/README.txt` is the user guide that ships in the zip. Without
 `-Version` it packages the release planned in `CMakeLists.txt` (`SIM_QVFR_RELEASE`), the one the
 launcher's About pane names in a development build. Update that line when the next release is planned.
 

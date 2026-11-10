@@ -8,10 +8,15 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-# Each project compiles its sources in parallel; with `cmake --build --parallel` the projects build in parallel too.
-if(MSVC)
-  add_compile_options(/MP)
-endif()
+# The build uses Ninja (build.ps1, CONTRIBUTING.md), which runs about one job per logical processor across the
+# whole build. A Visual Studio generator still works, and gets the same cap here (MSBuild's multi-tool task, enforced
+# across projects); /MP per project, which this replaced, started up to one compiler per file per project at once and
+# ran the machine out of memory.
+set(CMAKE_VS_GLOBALS "UseMultiToolTask=true" "EnforceProcessCountAcrossBuilds=true")
+# The standard and Windows headers most sources include, precompiled once per big target (sim_qvfr_core, sim_qvfr_layer,
+# the launcher's two): a clean build takes about a fifth less. A source that sets macros before its own includes skips it.
+set(SIM_QVFR_PCH <algorithm> <atomic> <cmath> <cstdint> <cstdio> <cstring> <filesystem> <map> <mutex> <string> <vector>
+  <windows.h>)
 
 # The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
 set(SIM_QVFR_RELEASE "1.0.3-beta")
@@ -71,6 +76,10 @@ target_include_directories(sim_qvfr_core PRIVATE src ${THIRD_PARTY}/openxr/inclu
 target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_core PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
+target_precompile_headers(sim_qvfr_core PRIVATE ${SIM_QVFR_PCH})
+# C, and C-style COM declarations (CINTERFACE before its includes).
+set_source_files_properties(src/probe/d3d12_vtable_index.c src/engine/d3d11_vtables.cpp
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # The layer (src/xr_layer.cpp and src/layer/), for the DLL and for two_loops_test and quad_flow_test. An OBJECT
 # library, not a static one: every object is linked in, including xr_layer.cpp's exported
@@ -83,6 +92,7 @@ target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/incl
 target_compile_definitions(sim_qvfr_layer PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_layer PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_layer PUBLIC sim_qvfr_core)
+target_precompile_headers(sim_qvfr_layer PRIVATE ${SIM_QVFR_PCH})
 
 add_library(sim_qvfr SHARED src/early_load.cpp src/vk_early_layer.cpp)
 target_include_directories(sim_qvfr PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -344,10 +354,20 @@ add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to 
 # Launcher: starts the chosen game in VR with this layer for one launch, above every implicit layer it can move
 # (src/launcher/launch_plan.h). No OpenXR, MinHook or D3D dependency.
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
-add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp src/launcher/settings.cpp src/launcher/launch_watch.cpp src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/explicit_layers.cpp src/launcher/session_history.cpp
-  src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp src/launcher/update_check.cpp src/launcher/install.cpp
-  src/engine/nvapi_gpus.cpp
-  src/quad/osd.cpp src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc
+# The launcher's code that launcher_test checks, compiled once for both. An OBJECT library, so the launcher links every
+# object as it did when they were its own sources (none has a static initializer, so their order doesn't matter).
+add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp src/launcher/launch_watch.cpp
+  src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
+  src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
+  src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp src/quad/osd.cpp)
+target_include_directories(sim_qvfr_launcher_shared PRIVATE src)
+target_compile_definitions(sim_qvfr_launcher_shared PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(sim_qvfr_launcher_shared PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(sim_qvfr_launcher_shared PUBLIC bcrypt winhttp version)
+target_precompile_headers(sim_qvfr_launcher_shared PRIVATE ${SIM_QVFR_PCH})
+
+add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input.cpp src/engine/nvapi_gpus.cpp
+  src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc
   src/launcher/ui/window_state.cpp src/launcher/ui/app_actions.cpp src/launcher/ui/update_install.cpp
   src/launcher/ui/controls.cpp src/launcher/ui/help.cpp src/launcher/ui/sheet.cpp src/launcher/ui/form.cpp
   src/launcher/ui/pane_checks.cpp src/launcher/ui/pane_profiles.cpp src/launcher/ui/pane_resolution.cpp
@@ -358,7 +378,8 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/games/games.cpp
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(sim_qvfr_launcher PRIVATE shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32)
+target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32)
+target_precompile_headers(sim_qvfr_launcher PRIVATE ${SIM_QVFR_PCH})
 set_target_properties(sim_qvfr_launcher PROPERTIES OUTPUT_NAME sim-qvfr-launcher)
 sim_qvfr_version_info(sim_qvfr_launcher sim-qvfr-launcher.exe VFT_APP "Sim-QVFR launcher")
 # A development build gets the default settings next to the launcher, once: an edited copy is kept.
@@ -378,12 +399,11 @@ foreach(piece top bottom visor)
 endforeach()
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
-add_executable(launcher_test tests/launcher_test.cpp src/games/games.cpp src/launcher/session_history.cpp src/launcher/launch_watch.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp src/launcher/explicit_layers.cpp src/launcher/settings.cpp src/launcher/game_tabs.cpp src/launcher/report.cpp src/quad/osd.cpp
-  src/launcher/preflight.cpp src/input/hotkeys.cpp src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp)
+add_executable(launcher_test tests/launcher_test.cpp)
 target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(launcher_test PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(launcher_test PRIVATE bcrypt winhttp version)
+target_link_libraries(launcher_test PRIVATE sim_qvfr_launcher_shared)
 
 # Offline check of the VRAM census on a WARP device: textures recorded, sorted and taken off when freed
 # (tests/vram_census_test.cpp).
@@ -420,3 +440,32 @@ target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)
 add_executable(acc_gates_test tests/acc_gates_test.cpp)
 target_include_directories(acc_gates_test PRIVATE src)
 target_compile_options(acc_gates_test PRIVATE /W4 /permissive- /utf-8)
+
+# The offline suite for ctest: every *_test executable above, side by side
+# (`ctest --test-dir build -C Release -j 16 --output-on-failure`, `-R lmu` for some). Each test gets its own TEMP folder
+# and log, so tests that use the same file names never meet, in one run or in two worktrees' runs at once. The folders
+# are under the user's TEMP, not the build folder: some tests compare file times, which an exFAT drive keeps coarser.
+enable_testing()
+string(MD5 _build_hash ${CMAKE_CURRENT_BINARY_DIR})
+string(SUBSTRING ${_build_hash} 0 8 _build_hash)
+file(TO_CMAKE_PATH "$ENV{TEMP}" _temp)
+set(_scratch_root ${_temp}/sim-qvfr-tests/${_build_hash})
+set(_scratch_folders)
+get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_target IN LISTS _targets)
+  get_target_property(_type ${_target} TYPE)
+  if(_target MATCHES "_test$" AND _type STREQUAL "EXECUTABLE")
+    # Deterministic links (no time stamp in the exe): a test the change didn't touch relinks to the same bytes, which
+    # Windows Defender has already checked, instead of a new exe it checks for about a second on its first run.
+    target_link_options(${_target} PRIVATE /Brepro)
+    file(TO_NATIVE_PATH ${_scratch_root}/${_target} _scratch)
+    list(APPEND _scratch_folders ${_scratch})
+    add_test(NAME ${_target} COMMAND ${_target})
+    set_tests_properties(${_target} PROPERTIES
+      ENVIRONMENT "TEMP=${_scratch};TMP=${_scratch};SIM_QVFR_LOG=${_scratch}\\test.log"
+      FIXTURES_REQUIRED test_scratch
+      TIMEOUT 120)
+  endif()
+endforeach()
+add_test(NAME test_scratch COMMAND ${CMAKE_COMMAND} -E make_directory ${_scratch_folders})
+set_tests_properties(test_scratch PROPERTIES FIXTURES_SETUP test_scratch)
