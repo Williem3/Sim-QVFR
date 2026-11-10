@@ -28,6 +28,7 @@
 #include "game.h"
 #include "glare_share.h"
 #include "mvr_pass.h"
+#include "tag_viewport.h"
 
 namespace lmu {
 namespace {
@@ -87,6 +88,7 @@ void set_pass_count(int n) {
 constexpr float kHeldDeltaTime = 1e-5f;
 bool holdExposure = true;
 bool inLaterPass = false;  // passes 2-3 are rendering (render thread)
+bool inPass = false;       // a pass of the eye loop is rendering (render thread)
 int heldThisFrame = 0;
 float lastGameDeltaTime = 0;
 
@@ -929,6 +931,104 @@ float menuUv[4][4] = {};
 unsigned long long menuFrames = 0;
 bool menuRefusalLogged = false;
 
+// ---- QVFR: the driver tags under live resolution (tag_viewport.h) ----
+// The tags are drawn after each pass's post-processing with a viewport of the whole eye target; a pass rendered smaller
+// (live resolution) gets them too far out and too large. For that draw the viewport is cut to what the pass rendered.
+using LabelsDrawFn = void (*)(void* camera, void* labels);
+LabelsDrawFn originalLabelsDraw = nullptr;
+bool labelsHooked = false;
+ID3D11DeviceContext* labelsContext = nullptr;  // the game's immediate context (from an eye target's device)
+unsigned long long labelsCut = 0, labelsKept = 0;
+bool labelsCutLogged = false, labelsKeptLogged = false, labelsResetLogged = false;
+
+// The size of the render target bound as the first, 0 x 0 if none.
+void bound_target_size(ID3D11DeviceContext* context, unsigned& w, unsigned& h) {
+    w = h = 0;
+    ID3D11RenderTargetView* rtv = nullptr;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    if (!rtv)
+        return;
+    ID3D11Resource* resource = nullptr;
+    rtv->GetResource(&resource);
+    rtv->Release();
+    if (!resource)
+        return;
+    ID3D11Texture2D* texture = nullptr;
+    if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&texture)))) {
+        D3D11_TEXTURE2D_DESC d;
+        texture->GetDesc(&d);
+        w = d.Width;
+        h = d.Height;
+        texture->Release();
+    }
+    resource->Release();
+}
+
+void labels_draw(void* camera, void* labels) {
+    const int p = pass;
+    if (!qvfrMode || !inPass || p < 0 || p >= 4 || GetCurrentThreadId() != renderThread) {
+        originalLabelsDraw(camera, labels);
+        return;
+    }
+    if (!labelsContext) {
+        if (ID3D11Texture2D* t = eye_texture(0)) {
+            ID3D11Device* device = nullptr;
+            t->GetDevice(&device);
+            device->GetImmediateContext(&labelsContext);
+            device->Release();
+            t->Release();
+        }
+        if (!labelsContext) {
+            originalLabelsDraw(camera, labels);
+            return;
+        }
+    }
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT n = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    labelsContext->RSGetViewports(&n, vps);
+    unsigned tw = 0, th = 0;
+    bound_target_size(labelsContext, tw, th);
+    TagViewport cut{};
+    const bool cutting = n >= 1 && tw == viewW && th == viewH &&
+                         tag_viewport_cut({vps[0].TopLeftX, vps[0].TopLeftY, vps[0].Width, vps[0].Height}, viewW, viewH,
+                                          passW[p], passH[p], cut);
+    if (!cutting) {
+        ++labelsKept;
+        if (!labelsKeptLogged && n >= 1 && (passW[p] < viewW || passH[p] < viewH)) {
+            labelsKeptLogged = true;
+            simqvfr::logf("lmu qvfr: driver tags: frame %llu pass %d: viewport %.0fx%.0f at %.0f,%.0f on a %ux%u target "
+                          "(views %ux%u, the pass rendered %ux%u): left as the game set it",
+                          frames, p, vps[0].Width, vps[0].Height, vps[0].TopLeftX, vps[0].TopLeftY, tw, th, viewW, viewH,
+                          passW[p], passH[p]);
+        }
+        originalLabelsDraw(camera, labels);
+        return;
+    }
+    D3D11_VIEWPORT v = vps[0];
+    v.Width = cut.width;
+    v.Height = cut.height;
+    labelsContext->RSSetViewports(1, &v);  // through MVR's hook when it runs: its second viewport follows
+    originalLabelsDraw(camera, labels);
+    D3D11_VIEWPORT after[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT m = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    labelsContext->RSGetViewports(&m, after);
+    if (!labelsResetLogged && (m < 1 || after[0].Width != v.Width || after[0].Height != v.Height)) {
+        labelsResetLogged = true;
+        simqvfr::logf("lmu qvfr: driver tags: frame %llu pass %d: the draw set its own viewport (%.0fx%.0f): the cut had no "
+                      "effect",
+                      frames, p, m ? after[0].Width : 0.0f, m ? after[0].Height : 0.0f);
+    }
+    // The game's viewports back: MVR doubles one viewport itself, so with it the game's one is restored.
+    labelsContext->RSSetViewports(cfg.mvr ? 1 : n, vps);
+    ++labelsCut;
+    if (!labelsCutLogged) {
+        labelsCutLogged = true;
+        simqvfr::logf("lmu qvfr: driver tags: frame %llu pass %d: drawn in the %.0fx%.0f the pass rendered, not the whole "
+                      "%ux%u target",
+                      frames, p, cut.width, cut.height, viewW, viewH);
+    }
+}
+
 // ---- QVFR: the VR UI in the focus views ----
 // VR_Present draws the HUD canvas onto a curved panel in each eye's final with the eye's projection x view (kVruiDraw);
 // the same draw again into the focus images, with that matrix remapped to the focus view's clip space (uiRemap).
@@ -1355,7 +1455,9 @@ void render_scene(void* arg, char laterEye) {
     const double wall0 = now_ms();
     const unsigned long long cpu0 = thread_cycles();
     costWindow.hookCycles += static_cast<double>(cpu0 - hook0);
+    inPass = true;
     originalRenderScene(arg, laterEye);
+    inPass = false;
     if (qvfrMode && cfg.mvr && p < 4)
         mvr_pass_end(p);
     skipScene = false;
@@ -1891,6 +1993,16 @@ bool four_passes_start(const FourPassesRun& run) {
         if (!vruiHooked)
             simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
                               "missing inside the focus box");
+        // The driver tags in the part of each target the pass rendered (live resolution); without it a pass rendered
+        // smaller draws them too far out and too large.
+        void* labelsDraw = reinterpret_cast<void*>(base() + kLabelsDraw);
+        labelsHooked = simqvfr::code_matches(kLabelsDraw, kLabelsDrawAnchor, sizeof(kLabelsDrawAnchor)) &&
+                       MH_CreateHook(labelsDraw, reinterpret_cast<void*>(&labels_draw),
+                                     reinterpret_cast<void**>(&originalLabelsDraw)) == MH_OK &&
+                       MH_EnableHook(labelsDraw) == MH_OK;
+        if (!labelsHooked)
+            simqvfr::log_line("lmu qvfr: the driver tags' draw isn't this build's or couldn't be hooked: with live "
+                              "resolution below 100% they show a second time in the periphery");
         // The focus views' glare from their eye's (glare_share.h); hooked even when off at launch, for the live switch.
         glareHooked = glare_share_start();
         if (glareHooked)
@@ -2047,9 +2159,9 @@ void four_passes_frame_end() {
         if (frames % 1800 == 0)
             simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
                           "unlike the views); VR UI in the focus views %llu, not %llu; last frame %d passes, frame time "
-                          "held in %d calls, mask skipped in %d; views %ux%u",
+                          "held in %d calls, mask skipped in %d; views %ux%u; driver tag draws cut %llu, kept %llu",
                           frames, sceneFrames, fourPassFrames, composedFrames, refusedFrames, uiDrawn, uiSkipped, passes,
-                          held, maskSkipped, viewW, viewH);
+                          held, maskSkipped, viewW, viewH, labelsCut, labelsKept);
         return;
     }
 
