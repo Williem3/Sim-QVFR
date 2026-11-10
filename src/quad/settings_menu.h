@@ -43,7 +43,9 @@ enum class MenuItem {
     // The settings page, after Focus density, for a game with it (MenuLaunch::objectDetail: X-Plane): object detail.
     ObjectDetail,
     // The settings page, after Gaze dead-zone, with focus_layer=2 (MenuLaunch::focusQuads): the quads' distance.
-    FocusQuadDistance
+    FocusQuadDistance,
+    // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
+    Sharpening
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -78,6 +80,7 @@ struct MenuValues {
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)
     int objectDetail = 100;   // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
+    int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     // The outer views' kept share of the eye (percent; 100 without a crop).
     double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }
@@ -103,6 +106,8 @@ struct MenuLaunch {
     // Object detail on the settings page (GameFeatures::objectDetail): off unless the layer says the game has it, so
     // no other game ever shows it.
     bool objectDetail = false;
+    // Sharpening on the settings page (GameFeatures::sharpening), as objectDetail.
+    bool sharpening = false;
     // focus_layer=2 in this run: the focus quads' distance on the settings page (focus_quad_distance.h).
     bool focusQuads = false;
     // The runtime composes the views (native quad views: Pimax, Varjo): the settings page says its own sliders don't apply.
@@ -154,9 +159,9 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
 // Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
-// a game that has it). False if the file cannot be written.
+// sharpening only with `sharpening`, a game that has it). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
-                       bool focusQuads = false);
+                       bool focusQuads = false, bool sharpening = false);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus

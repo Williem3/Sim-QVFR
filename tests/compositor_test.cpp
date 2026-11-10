@@ -829,6 +829,54 @@ int main() {
         c4.shutdown();
     }
 
+    // Sharpening on D3D12 (ACE): the same shader and root constants as the D3D11 compositor's (cas_sharpen_test checks
+    // the filter itself). Flat views at 100% give the plain composition's pixels exactly; mid-grey stripes in the outer
+    // view (4 texels each, upscaled 2x) come out with more contrast, the stripes' middles unchanged.
+    {
+        clear_eyes(gpu, frameA.Get(), red, blue);
+        bool same = compositor.capture_outer(frameA.Get());
+        EyeComposition sharp[2] = {eyes[0], eyes[1]};
+        for (EyeComposition& e : sharp)
+            e.sharpness = 1.0f;
+        same = same && compositor.compose(frameB.Get(), output.Get(), sharp);
+        const Pixels flat = read_back(gpu, output.Get());
+        same = same && compositor.compose(frameB.Get(), output.Get(), eyes);
+        const Pixels plainFlat = read_back(gpu, output.Get());
+        for (UINT y = 0; y < kOutH; ++y)
+            same = same && std::memcmp(flat.at(0, y), plainFlat.at(0, y), kOutW * 4) == 0;
+        check(same, "sharpening (D3D12): flat views at 100% give the plain composition exactly");
+
+        const float dark[4] = {0.2f, 0.2f, 0.2f, 1}, lighter[4] = {0.5f, 0.5f, 0.5f, 1};
+        D3D12_RECT stripes[16];
+        float colors[16][4];
+        for (int i = 0; i < 16; ++i) {
+            stripes[i] = {i * 8, 0, i * 8 + 4, static_cast<LONG>(kAppH)};
+            std::memcpy(colors[i], lighter, sizeof(lighter));
+        }
+        clear_rects(gpu, frameA.Get(), dark, stripes, colors, 16);
+        Pixels rows[2];
+        bool composed = compositor.capture_outer(frameA.Get());
+        for (int pass = 0; pass < 2; ++pass) {
+            composed = composed && compositor.compose(frameB.Get(), output.Get(), pass ? sharp : eyes);
+            rows[pass] = read_back(gpu, output.Get());
+        }
+        // Eye 0's row 6, above its focus box: all outer view.
+        const UINT y = 6;
+        int variation[2] = {}, middleOff = 0;
+        for (int pass = 0; pass < 2; ++pass)
+            for (UINT x = 1; x < kOutW / 2; ++x)
+                variation[pass] += std::abs(static_cast<int>(rows[pass].at(x, y)[1]) - static_cast<int>(rows[pass].at(x - 1, y)[1]));
+        // The output pixels between a stripe's second and third texels (x = 2s + 3, 2s + 4 for a stripe from s): all
+        // their taps inside the stripe, so CAS leaves them as bilinear does.
+        for (UINT s = 8; s + 8 < kAppW / 2; s += 8)
+            for (const UINT x : {2 * s + 3, 2 * s + 4})
+                middleOff = std::max(middleOff, std::abs(static_cast<int>(rows[1].at(x, y)[1]) - static_cast<int>(rows[0].at(x, y)[1])));
+        char what[160];
+        std::snprintf(what, sizeof(what), "sharpening (D3D12): stripes' contrast up (variation %d against %d), their middles "
+                      "as bilinear's (off by %d at most)", variation[1], variation[0], middleOff);
+        check(composed && variation[1] > variation[0] * 11 / 10 && middleOff <= 1, what);
+    }
+
     compositor.shutdown();
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

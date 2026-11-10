@@ -541,13 +541,13 @@ VsRole role_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).role : VsR
 bool take_over_with_instancing() {
     if (!g.canInstance || g.instanced) {
         g.broken = true;
-        simqvfr::log_line("lmu mvr: single-pass stereo refused: the focus views are drawn by passes 2-3 only");
+        simqvfr::log_line("lmu mvr: NVIDIA's multi-view rendering refused: only passes 2-3 draw the focus views");
         return false;
     }
     g.instanced = true;
     ++g.stats.instancedTakeovers;
-    simqvfr::log_line("lmu mvr: NVIDIA's single-pass stereo refused: instancing draws the focus views from now on (each "
-                      "draw twice, the vertex shader picking the viewport)");
+    simqvfr::log_line("lmu mvr: NVIDIA's multi-view rendering refused: instancing draws the focus views from now on "
+                      "(each draw twice, the vertex shader picking the viewport)");
     return true;
 }
 
@@ -2051,7 +2051,7 @@ void mvr_frame_end(unsigned long long frame) {
                           "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect)%s",
                           static_cast<unsigned long long>(s.doubledDraws), static_cast<unsigned long long>(s.layoutSwaps),
                           static_cast<unsigned long long>(s.eyeOnlyDraws),
-                          s.instancedTakeovers ? "; took over from single-pass stereo, which the driver refused" : "");
+                          s.instancedTakeovers ? "; took over from NVIDIA's MVR, which the driver refused" : "");
         if (s.maskDraws || s.maskDropped || s.panelReplays)
             simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "
                           "draws replayed at the menus' native size: %llu",

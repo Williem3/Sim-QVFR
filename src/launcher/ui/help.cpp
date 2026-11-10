@@ -31,6 +31,12 @@ constexpr Help kHelp[] = {
      L"region as its pixel density shows them; lower settings move toward the game’s own detail for the outer resolution. "
      L"It costs CPU, not GPU: more detail means more objects for X-Plane’s main thread to prepare every frame, often what "
      L"limits the frame rate with QVFR. Lower it if frames stutter in dense scenery; the focus region shows coarser trees."},
+    {L"Sharpening",
+     L"AMD FidelityFX Contrast Adaptive Sharpening, applied as Sim-QVFR resamples the outer and focus views for the headset "
+     L"(when the runtime composes them, on a copy of the outer view). Each pixel is sharpened by how much contrast room it "
+     L"has, so soft detail gains the most and edges already sharp gain little. Both views get the same strength, so the focus "
+     L"area’s edge stays even. It costs a little GPU time, and the low outer resolution shimmers more with it. 0% is off; "
+     L"it changes while you drive."},
     {L"Brightness",
      L"How light or dark the game’s colour is. The wheel picks its hue and how strong it is; the launcher keeps "
      L"its text and edges readable in light and dark mode."},

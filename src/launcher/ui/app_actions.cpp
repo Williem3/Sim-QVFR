@@ -232,6 +232,7 @@ int* slider_value(Ctl id) {
     case kOuter: return &app.s.outer;
     case kInner: return &app.s.inner;
     case kObjectDetail: return &app.s.objectDetail;
+    case kSharpen: return &app.s.sharpen;
     case kColorValue: return &app.colorValue;
     case kWidth: return &app.s.width;
     case kHeight: return &app.s.height;
@@ -278,6 +279,7 @@ Range slider_range(Ctl id) {
     case kOuter: return kOuterRange;
     case kInner: return kInnerRange;
     case kObjectDetail: return kObjectDetailRange;
+    case kSharpen: return kSharpenRange;
     case kColorValue: return {0, 100};
     case kFeather: return kFeatherRange;
     case kCorner: return kCornerRange;
@@ -335,6 +337,8 @@ std::vector<Ctl> focus_order() {
             order.push_back(kInner);
             if (game_has(&games::GameFeatures::objectDetail))
                 order.push_back(kObjectDetail);
+            if (game_has(&games::GameFeatures::sharpening))
+                order.push_back(kSharpen);
             if (game_has(&games::GameFeatures::multiView))
                 order.push_back(kMultiView);
             if (game_has(&games::GameFeatures::nativeQuadViews))

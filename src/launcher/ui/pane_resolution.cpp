@@ -1,4 +1,4 @@
-// The Resolution pane: per-eye resolution, object detail, multi-view rendering, the FOV crop and the helmet overlay.
+// The Resolution pane: per-eye resolution, object detail, sharpening, multi-view rendering, the FOV crop and the helmet overlay.
 #include <cmath>
 #include <string>
 #include <vector>
@@ -45,6 +45,19 @@ float resolution_pane(float x, float y, float w, bool draw) {
                      L"100% keeps trees and objects as detailed in the focus region as at its density; 0% is the "
                      L"game’s own detail for the outer resolution.",
                      draw, Applies::Live);
+    }
+    // Sharpening (every game's compositor): AMD's CAS as the compositor resamples the views (compose_shader.h), on the periphery's copy when
+    // the runtime composes.
+    if (game_has(&games::GameFeatures::sharpening)) {
+        h += t::kSpace6;
+        h += section(x, y + h, w, L"Image",
+                     {slider_row(kSharpen, L"Sharpening",
+                                 qvfr ? L"AMD’s Contrast Adaptive Sharpening as Sim-QVFR puts the views together: more "
+                                        L"where the image is soft, less at edges already sharp."
+                                      : L"Available in Quad View Foveated Rendering.",
+                                 app.s.sharpen, app.s.sharpen == 0 ? L"Off" : L"", !qvfr)},
+                     L"0% is off. The soft outer resolution gains the most from it, and shimmers more with it.", draw,
+                     Applies::Live);
     }
     // Multi-view rendering (LMU): each eye's pass draws and finishes its focus view (two passes instead of four). On any
     // graphics card: NVIDIA's multi-view rendering on an RTX 20 series or newer (asked of the driver once), Sim-QVFR's own

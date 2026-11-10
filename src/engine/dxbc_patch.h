@@ -1,5 +1,5 @@
-// DXBC (D3D11 shader model 4 and 5 bytecode) edits for drawing a second view in the same pass: for NVIDIA's single-pass
-// stereo (add_second_view) or for any GPU by instancing (add_instanced_view, below).
+// DXBC (D3D11 shader model 4 and 5 bytecode) edits for drawing a second view in the same pass: for NVIDIA's multi-view
+// rendering (add_second_view) or for any GPU by instancing (add_instanced_view, below).
 //
 // add_second_view turns a vertex shader into one that also writes the second view's clip position, for NVIDIA's
 // single-pass stereo with a full XYZW second position (NV_XYZW_RIGHT): second = (a x + b w, c y + d w, z, w) of its

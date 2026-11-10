@@ -954,12 +954,13 @@ void mvr_before_pass(int p) {
                     backendAbLogged = true;
                     backendAbOk = mvr_probe_backend() == MvrBackend::nvapi && mvr_probe_instanced();
                     if (backendAbOk)
-                        simqvfr::logf("lmu mvr: backend A/B: %d frames with NVIDIA's single-pass stereo, then %d with "
-                                      "instancing, in turn (lmu_mvr_backend_ab)",
+                        simqvfr::logf("lmu mvr: backend A/B: %d frames with NVIDIA's multi-view rendering, then %d "
+                                      "with instancing, in turn (lmu_mvr_backend_ab)",
                                       cfg.backendAb, cfg.backendAb);
                     else
-                        simqvfr::logf("lmu mvr: lmu_mvr_backend_ab=%d ignored: it needs NVIDIA's single-pass stereo and the "
-                                      "instanced twins (an RTX 20 series or newer, without multi_view_software=1)",
+                        simqvfr::logf("lmu mvr: lmu_mvr_backend_ab=%d ignored: it needs NVIDIA's multi-view rendering "
+                                      "and the instanced twins (an RTX 20 series or newer, without "
+                                      "multi_view_software=1)",
                                       cfg.backendAb);
                 }
                 if (backendAbOk && !mvr_broken()) {
@@ -2652,7 +2653,7 @@ void four_passes_device(ID3D11Device* device) {
     sessionDevice = device;
     // R5: the device decides; the game is still in its menus, the eye loop not yet run.
     if (installed && cfg.trackerDrives && !mvr_probe_usable())
-        fallback_to_four_passes("the game's device can't draw two views a pass (no NVIDIA single-pass stereo, and no "
+        fallback_to_four_passes("the game's device can't draw two views a pass (no NVIDIA multi-view rendering, and no "
                                 "vertex shader picking the viewport), or multi-view's shader probe is off");
     else if (installed && cfg.trackerDrives)
         simqvfr::logf("lmu qvfr: multi-view rendering by %s%s", mvr_backend_name(mvr_probe_backend()),
@@ -2709,7 +2710,8 @@ void four_passes_frame_end() {
             noFinalsRun = frameFinalsOk ? 0 : noFinalsRun + 1;
         // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit, which the focus
         // final beside the eye is drawn with; the four passes take FSR's upscale for every view.
-        const char* why = mvr_broken()           ? "the driver refused single-pass stereo (and instancing couldn't take over)"
+        const char* why = mvr_broken()           ? "the driver refused NVIDIA's multi-view rendering (and instancing "
+                                                   "couldn't take over)"
                           : fsr_on()             ? "LMU's FSR upscaling is on: it replaces the final blit the focus views "
                                                    "are drawn beside the eyes with"
                           : noFinalsRun >= 90     ? "no focus views made in 90 frames in a row"
@@ -2822,7 +2824,7 @@ void four_passes_frame_end() {
                     for (int q = 0; q < 2; ++q)
                         c[m][q] = ab.cpu[m][q] / tscPerMs / ab.frames[m];
                 const MvrPassStats ms = mvr_pass_stats();
-                simqvfr::logf("lmu mvr A/B (NVIDIA's vs instancing): CPU per pass with NVIDIA's single-pass stereo %.2f %.2f "
+                simqvfr::logf("lmu mvr A/B (NVIDIA's vs instancing): CPU per pass with NVIDIA's %.2f %.2f "
                               "ms (%.2f; %u frames), with instancing %.2f %.2f ms (%.2f; %u frames): instancing %+.2f ms "
                               "per frame; %llu draws doubled so far, %llu into the eye alone",
                               c[0][0], c[0][1], c[0][0] + c[0][1], ab.frames[0], c[1][0], c[1][1], c[1][0] + c[1][1],
