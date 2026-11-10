@@ -11,6 +11,7 @@
 
 #include "games/ace/game.h"
 #include "games/acc/game.h"
+#include "games/lmu/game.h"
 #include "games/xplane/game.h"
 #include "ini_put.h"
 #include "quad/menu_panel.h"
@@ -195,6 +196,13 @@ int main() {
     v.objectDetail = 40;
     write_menu_values(ini.c_str(), v, true, true);
     check(read_menu_values(ini.c_str()).objectDetail == 40, "object detail is written for a game with it, and read back");
+    check(GetPrivateProfileIntW(L"quad", L"sharpen_percent", -1, ini.c_str()) == -1 && read_menu_values(ini.c_str()).sharpen == 0,
+          "sharpening: not written for a game without it; unset reads as off");
+    v.sharpen = 35;
+    write_menu_values(ini.c_str(), v, true, false, false, true);
+    check(GetPrivateProfileIntW(L"quad", L"sharpen_percent", -1, ini.c_str()) == 35 && read_menu_values(ini.c_str()).sharpen == 35,
+          "sharpening: written for a game with it ([quad] sharpen_percent), and read back");
+    v.sharpen = 0;
     check(GetPrivateProfileIntW(L"experiment", L"focus_quad_distance", -1, ini.c_str()) == -1 &&
               read_menu_values(ini.c_str()).focusQuadStep == kFocusQuadSteps - 1,
           "focus quad distance: not written without focus_layer=2; unset reads as 100 m");
@@ -412,6 +420,42 @@ int main() {
             SettingsMenu loop = x;
             loop.launch.qvfr = false;
             check(!has_detail(loop), "Object detail: QVFR only (not in Two-loop)");
+        }
+        {
+            // Sharpening: only a game whose GameFeatures has it (LMU so far), after Focus density (and Object detail).
+            const auto find = [](const SettingsMenu& s, MenuItem item) {
+                const std::vector<MenuItem> items = menu_page_items(s);
+                return std::find(items.begin(), items.end(), item) - items.begin();
+            };
+            const auto shown = [&](const SettingsMenu& s) {
+                return find(s, MenuItem::Sharpening) < static_cast<std::ptrdiff_t>(menu_page_items(s).size());
+            };
+            check(lmu::kGame.features.sharpening && !ace::kGame.features.sharpening && !acc::kGame.features.sharpening &&
+                      !xplane::kGame.features.sharpening,
+                  "games: only LMU has Sharpening so far");
+            SettingsMenu other = c;
+            check(!other.launch.sharpening && !shown(other), "Sharpening: off by default, so no other game shows it");
+            SettingsMenu l = c;
+            l.launch.sharpening = lmu::kGame.features.sharpening;
+            check(shown(l) && find(l, MenuItem::Sharpening) == find(l, MenuItem::Density) + 1 &&
+                      menu_page_items(l).size() == menu_page_items(other).size() + 1,
+                  "LMU: Sharpening on the settings page, right after Focus density");
+            SettingsMenu both = l;
+            both.launch.objectDetail = true;
+            check(find(both, MenuItem::Sharpening) == find(both, MenuItem::ObjectDetail) + 1,
+                  "Sharpening: after Object detail when a game has both");
+            l.selected = static_cast<int>(find(l, MenuItem::Sharpening));
+            check(menu_lines(l)[l.selected].label == L"Sharpening" && menu_lines(l)[l.selected].value == L"Off",
+                  "Sharpening's line: Off by default");
+            check(!menu_key(l, MenuKey::Left) && l.values.sharpen == 0, "Sharpening: Left at Off stays there");
+            check(menu_key(l, MenuKey::Right) && l.values.sharpen == 5 && menu_lines(l)[l.selected].value == L"5%",
+                  "Sharpening: Right steps 5%, shown in percent");
+            for (int i = 0; i < 30; ++i)
+                menu_key(l, MenuKey::Right);
+            check(l.values.sharpen == 100, "Sharpening: up to 100%, no higher");
+            SettingsMenu loop = l;
+            loop.launch.qvfr = false;
+            check(!shown(loop), "Sharpening: QVFR only (not in Two-loop)");
         }
         {
             // focus_layer=2's test line: only with launch.focusQuads, right after Gaze dead-zone, in steps of metres.

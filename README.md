@@ -249,6 +249,11 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   - **On SteamVR and other runtimes nothing changes:** Sim-QVFR composes the image as before. It also does
     with frame generation (Cheeky's or VectorXR's), which needs one composed image, and when another OpenXR
     layer sits between Sim-QVFR and the runtime. The page shows what the last launch did.
+- **Sharpening** (the launcher's **Resolution** page, or the headset menu; off by default): AMD FidelityFX
+  Contrast Adaptive Sharpening as Sim-QVFR puts the views together, the same strength in the focus area and
+  the periphery. It sharpens soft detail most and edges that are already sharp least, and changes while you
+  drive. The low-resolution periphery shimmers a little more with it. With runtime composition (Pimax,
+  Varjo) the periphery is sharpened on a copy, which costs a little more.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).

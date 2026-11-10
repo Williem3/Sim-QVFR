@@ -1181,6 +1181,26 @@ int main() {
             detail.objectDetail = 250;  // above kObjectDetailRange: clamped
             save_settings(ini, detail);
             check(load_settings(ini).objectDetail == kObjectDetailRange.max, "settings: object detail is clamped to 0-100%");
+            check(detail.sharpen == 0, "settings: sharpening defaults to off");
+            detail.sharpen = 45;
+            save_live_settings(ini, detail);
+            check(load_settings(ini).sharpen == 45 && ini_int(ini, L"quad", L"sharpen_percent") == 45,
+                  "settings: sharpening round-trips, live ([quad] sharpen_percent)");
+            detail.sharpen = 150;  // above kSharpenRange: clamped
+            save_settings(ini, detail);
+            check(load_settings(ini).sharpen == kSharpenRange.max, "settings: sharpening is clamped to 0-100%");
+            check(per_game_key(L"quad", L"sharpen_percent"), "settings: sharpen_percent is a per-game key");
+            {
+                Settings sharp;
+                sharp.sharpen = 60;
+                bool inProfile = false;
+                for (const ProfileKey& k : settings_profile(sharp, L"sharp").keys)
+                    inProfile |= k.section == L"quad" && k.key == L"sharpen_percent" && k.value == L"60";
+                check(inProfile, "settings: a profile holds the sharpening");
+                check(restored_defaults(sharp).sharpen == 0, "settings: Restore Defaults turns sharpening off");
+            }
+            detail.sharpen = 0;
+            save_settings(ini, detail);
             check(Settings{}.multiView, "settings: multi-view rendering defaults to on");
             detail.multiView = false;
             save_settings(ini, detail);

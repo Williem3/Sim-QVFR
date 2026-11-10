@@ -50,6 +50,8 @@ LiveSettings read_live(const wchar_t* ini) {
     l.helmet.on = l.helmet.on && features.helmet;
     if (features.objectDetail)
         l.objectDetail = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"object_detail", 100, ini)), 0, 100);
+    if (features.sharpening)
+        l.sharpen = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"sharpen_percent", 0, ini)), 0, 100);
     l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
     const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
     l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
@@ -286,6 +288,7 @@ void load_experiment() {
     experiment.gazeOffsetY = settings.offset.gaze;
     experiment.gazeDeadzone = settings.gazeDeadzone;
     experiment.focusQuadDistance = settings.focusQuadDistance;
+    experiment.sharpen = settings.sharpen;
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());
@@ -380,6 +383,8 @@ void load_experiment() {
          experiment.cornerRadius * 100,
          experiment.border ? 1 : 0, experiment.gaze ? 1 : 0, settings.offset.fixed, settings.offset.gaze, ini.c_str());
     logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
+    if (game_features().sharpening)
+        logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS as the views are composed)" : " (off)");
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
              "(focus views %.0f%% x %.0f%% of the native eye)%s",

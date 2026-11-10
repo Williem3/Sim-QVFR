@@ -39,6 +39,11 @@ public:
     // premultiplied, alpha its feather (FocusLayerPS).
     bool draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* target, const EyeComposition (&eyes)[2],
                           const int (&rects)[2][4]);
+    // Sharpening without composition (focus_layer, native quad views): each eye's view `sources[e]` (a region of
+    // `views`, u0, v0, du, dv) copied texel for texel into `target` (the views' format) at `rects[e]` (as
+    // draw_focus_layer's), sharpened by `sharpness` (EyeComposition's; ViewCopyPS).
+    bool draw_view_copies(ID3D11Texture2D* views, ID3D11Texture2D* target, const float (&sources)[2][4],
+                          const int (&rects)[2][4], float sharpness);
     void request_light() override { lightWanted_ = true; }
     bool read_light(float (&rgb)[2][4][3]) override;
     void shutdown();
@@ -64,7 +69,7 @@ private:
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> immediate_, deferred_;
     Com<ID3D11VertexShader> vs_;
-    Com<ID3D11PixelShader> ps_, lightPs_, helmetPs_, focusPs_;
+    Com<ID3D11PixelShader> ps_, lightPs_, helmetPs_, focusPs_, copyPs_;
     static constexpr int kLightBuffer = 2, kLayerBuffer = 3;
     Com<ID3D11Buffer> constants_[4];  // one per eye, the light pass, the helmet layer
     Com<ID3D11SamplerState> sampler_;
