@@ -14,8 +14,11 @@
 #include <cstdint>
 #include <vector>
 
+#include "focus_math.h"
+
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+struct ID3D11Texture2D;
 
 namespace lmu {
 
@@ -24,6 +27,7 @@ struct MvrPassView {
     float remap[4] = {1, 0, 1, 0};    // a, b, c, d: the focus view's clip x = a x + b w, y = c y + d w (focus_math.h)
     unsigned eyeW = 0, eyeH = 0;      // the size the eye renders at (its corner of the targets)
     unsigned focusW = 0, focusH = 0;  // the focus view's
+    FocusBox box{};                   // its tangents and the eye's (the focus post's glare mapping; valid: known)
 };
 
 // The immediate context's vtable entries the hooks use (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
@@ -32,13 +36,13 @@ struct MvrPassView {
 // A hook on one function an entry held misses the calls through the others, so the hooks are on every function each
 // entry is seen holding (mvr_pass.cpp). nvapi_stereo_check lists what d3d11 rewrites.
 namespace context_slot {
-inline constexpr unsigned kVSSetShader = 11, kGSSetShader = 23, kOMSetRenderTargets = 33, kOMSetRenderTargetsAndUavs = 34,
-                          kSOSetTargets = 37, kRSSetViewports = 44, kRSSetScissorRects = 45, kResolveSubresource = 57,
-                          kHSSetShader = 60, kDSSetShader = 64;
+inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kGSSetShader = 23, kOMSetRenderTargets = 33,
+                          kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kRSSetViewports = 44,
+                          kRSSetScissorRects = 45, kResolveSubresource = 57, kHSSetShader = 60, kDSSetShader = 64;
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
-                                       kDSSetShader};
+                                       kDSSetShader,       kDrawIndexed};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -64,6 +68,14 @@ void mvr_set_two_views(TwoViewsFn fn);
 void mvr_twins_changed();
 // The CPU in the context hooks timed (TSC) and logged with the counts; off by default (it costs a little itself).
 void mvr_time_hooks(bool on);
+// The focus post (focus_post.h; [experiment] lmu_focus_replay): in passes 0-1 that drew their focus view, YEBIS's copy and
+// composite run once more for it right after the eye's (the game's pixel shaders recognised at creation, mvr_probe.cpp;
+// the draws seen through DrawIndexed after the pass's multisample resolve, the bound pixel shader read there). Before
+// mvr_pass_install: DrawIndexed is hooked only with it on (turned on later, its functions are hooked as pass starts see
+// them).
+void mvr_focus_replay(bool on);
+// Eye `eye`'s focus image from the focus post and the composites into it so far (null, 0: none yet).
+ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites);
 
 struct MvrComparison {
     bool ok = false;
@@ -72,17 +84,29 @@ struct MvrComparison {
     double brightness = 0;       // mean luminance b / a
     double cellMedian = 0;       // median over 16 x 16 cells of b / a
     double differingPct = 0;     // pixels whose luminance differs by more than 10%
+    // mvr_compare_bgra8 only, at that offset: the largest and mean colour-channel difference (of 255), and the pixels
+    // with a channel more than 4 off.
+    int maxByte = 0;
+    double meanByte = 0, bytesOverPct = 0;
 };
 // a and b: RGBA16F as halves, w x h each; b searched +-range pixels for the best alignment (on every 4th pixel).
 MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
                           int range = 4);
+// The same for two gamma-encoded 8-bit BGRA images (as d3d11_read_bgra8 gives them; luminance after sRGB decoding).
+MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, unsigned w, unsigned h,
+                                int range = 4);
 
 struct MvrPassStats {
     uint64_t twinBinds = 0, plainBinds = 0, toggles = 0, viewportRewrites = 0, scissorRewrites = 0, stereoErrors = 0;
     uint64_t passesWithFocus = 0, samples = 0, resolves = 0, keptRegions = 0, replacedResolves = 0;
     uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
+    uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
     uint64_t resolveFunctions = 0;           // of those, ResolveSubresource's
+    uint64_t focusCopies = 0, focusComposites = 0, focusFailures = 0;  // the focus post's steps (mvr_focus_replay)
+    // Passes whose copy ran but no composite we know followed, and draws into the resolve's target after the copy with
+    // another pixel shader (the log names them).
+    uint64_t focusNoComposite = 0, focusUnknownComposites = 0;
 };
 MvrPassStats mvr_pass_stats();
 

@@ -20,7 +20,10 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
+#include "focus_post.h"
+#include "glare_math.h"
 #include "mvr_probe.h"
+#include "yebis_shaders.h"
 
 namespace lmu {
 namespace {
@@ -36,14 +39,17 @@ constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_P
 // holding is hooked in d3d11's code (MinHook), a detour of its own each: those found at install (the entries as they
 // are, with multithread protection on if it was off, each after a flush and after a command) and any new one at a
 // pass's start. Our own calls and the calls passed on go to the original of the function the entry holds now.
-enum Hook : int { kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHooks };
+enum Hook : int {
+    kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
+    kHooks
+};
 constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
                                       kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
-                                      kHSSetShader,   kDSSetShader};
+                                      kHSSetShader,   kDSSetShader,    kDrawIndexed};
 constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
                                            "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
                                            "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
-                                           "HSSetShader",    "DSSetShader"};
+                                           "HSSetShader",    "DSSetShader",       "DrawIndexed"};
 // Per entry: 4 seen for each on WARP and on an RTX 5070 Ti (2026-11-09: idle and busy, multithread protection off, on,
 // and off again after it was on), room for more.
 constexpr int kFunctions = 8;
@@ -187,6 +193,15 @@ struct State {
     bool keepFocus = false;           // gate D
     ComPtr<ID3D11Texture2D> kept[2];  // each eye pass's resolved focus region
     bool keptOk[2] = {};
+    // The focus post (mvr_focus_replay): on; this pass's post-processing has begun (its multisample resolve is done);
+    // its copy and composite replayed.
+    bool focusReplay = false, postWindow = false, focusCopied = false, focusComposited = false;
+    FocusPost focusPost;
+    bool focusPostFailed = false;  // couldn't be made: off for the session
+    std::string postTrace;         // this pass's draws after the copy (trace_post_draw)
+    int tracesLogged = 0;
+    uint32_t unknown[16][4] = {};  // pixel shaders seen drawing into the resolve's target instead of the composite
+    int unknownCount = 0;
     bool have[4] = {};
     unsigned long long lastStatsFrame = 0;
     MvrPassStats stats;
@@ -497,6 +512,150 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
         g.keptOk[eye] = copy_region(g.kept[eye], dst, g.view.eyeW, 0, g.view.focusW, g.view.focusH);
         g.stats.keptRegions += g.keptOk[eye] ? 1 : 0;
     }
+    if (g.focusReplay && g.pass < 2 && g.drawFocus && g.passTwinBinds > 0 && g.view.box.valid && !g.focusPostFailed) {
+        if (!g.focusPost.ready()) {
+            ComPtr<ID3D11Device> device;
+            g.context->GetDevice(&device);
+            if (!g.focusPost.initialize(device.Get())) {
+                g.focusPostFailed = true;
+                simqvfr::log_line("lmu mvr: the focus post couldn't be made (shaders, states, deferred context); off");
+            }
+        }
+        g.postWindow = g.focusPost.ready();
+    }
+}
+
+// The focus post at one of the pass's post-processing draws (the post window open): after YEBIS's copy of the resolved
+// scene (the copy's pixel shader reading the resolve's target; its downsamples read other textures) the focus view's part
+// copied likewise; after its composite (with the eye's glare and exposure bound) the focus view's composite.
+// A texture's size and format for the log ("2076x1667 f10"), "-" for none.
+std::string describe(ID3D11Resource* resource) {
+    ComPtr<ID3D11Texture2D> t;
+    if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(&t))))
+        return "-";
+    D3D11_TEXTURE2D_DESC d;
+    t->GetDesc(&d);
+    char s[48];
+    std::snprintf(s, sizeof(s), "%ux%u f%d", d.Width, d.Height, static_cast<int>(d.Format));
+    return s;
+}
+
+// After the copy and before a composite is seen: each draw's pixel shader (its checksum, from the probe) and target,
+// for the log when the pass ends without one ("r" marks the resolve's target); a draw into the resolve's target with
+// a shader that isn't the composite we know logged with its inputs, once per shader.
+void trace_post_draw(ID3D11DeviceContext* context, ID3D11PixelShader* ps) {
+    uint32_t c[4] = {};
+    UINT size = sizeof(c);
+    const bool named = ps && SUCCEEDED(ps->GetPrivateData(kPsChecksumGuid, &size, c)) && size == sizeof(c);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    const bool intoResolved = target && target.Get() == g.resolved[g.pass].Get();
+    if (g.postTrace.size() < 3000) {
+        char s[96];
+        std::snprintf(s, sizeof(s), " %08x%s>%s%s", named ? c[0] : 0, named ? "" : "?", describe(target.Get()).c_str(),
+                      intoResolved ? " r" : "");
+        g.postTrace += s;
+    }
+    if (!intoResolved)
+        return;
+    ++g.stats.focusUnknownComposites;
+    for (int i = 0; i < g.unknownCount; ++i)
+        if (std::memcmp(g.unknown[i], c, sizeof(c)) == 0)
+            return;
+    if (g.unknownCount == static_cast<int>(std::size(g.unknown)))
+        return;
+    std::memcpy(g.unknown[g.unknownCount++], c, sizeof(c));
+    std::string inputs;
+    ID3D11ShaderResourceView* srvs[8] = {};
+    context->PSGetShaderResources(0, 8, srvs);
+    for (int i = 0; i < 8; ++i) {
+        ComPtr<ID3D11Resource> r;
+        if (srvs[i]) {
+            srvs[i]->GetResource(&r);
+            srvs[i]->Release();
+        }
+        if (r)
+            inputs += " t" + std::to_string(i) + " " + describe(r.Get()) + (r.Get() == g.resolved[g.pass].Get() ? " r" : "");
+    }
+    ID3D11SamplerState* samplers[8] = {};
+    context->PSGetSamplers(0, 8, samplers);
+    int samplerCount = 0;
+    for (ID3D11SamplerState* s : samplers)
+        if (s) {
+            ++samplerCount;
+            s->Release();
+        }
+    simqvfr::logf("lmu mvr: focus post: pass %d: after the copy, pixel shader %08x-%08x-%08x-%08x%s draws into the "
+                  "resolve's target (%s), not the composite we know; inputs:%s; %d samplers%s",
+                  g.pass, c[0], c[1], c[2], c[3], named ? "" : " (not named: created before the probe?)",
+                  describe(target.Get()).c_str(), inputs.c_str(), samplerCount,
+                  g.unknownCount == static_cast<int>(std::size(g.unknown)) ? "; no more of these logged" : "");
+}
+
+void focus_post_draw(ID3D11DeviceContext* context) {
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || size != sizeof(role))
+        role = 0;
+    if (g.focusCopied && !g.focusComposited && role != static_cast<UINT>(YebisRole::composite))
+        trace_post_draw(context, ps.Get());
+    if (!role)
+        return;
+    const int eye = g.pass & 1;
+    if (role == static_cast<UINT>(YebisRole::copy) && !g.focusCopied) {
+        ComPtr<ID3D11ShaderResourceView> srv;
+        context->PSGetShaderResources(0, 1, &srv);
+        ComPtr<ID3D11Resource> resource;
+        if (srv)
+            srv->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> texture;
+        if (!resource || resource.Get() != g.resolved[g.pass].Get() || FAILED(resource.As(&texture)))
+            return;
+        D3D11_TEXTURE2D_DESC d;
+        texture->GetDesc(&d);
+        g.focusCopied = g.focusPost.after_copy(context, eye, srv.Get(), d.Width, d.Height,
+                                               {g.view.eyeW, 0, g.view.focusW, g.view.focusH});
+        if (g.focusCopied) {
+            ++g.stats.focusCopies;
+        } else {
+            ++g.stats.focusFailures;
+            g.postWindow = false;
+        }
+    } else if (role == static_cast<UINT>(YebisRole::composite) && g.focusCopied && !g.focusComposited) {
+        g.focusComposited = true;
+        g.postWindow = false;  // nothing more this pass
+        ComPtr<ID3D11ShaderResourceView> glare;
+        context->PSGetShaderResources(1, 1, &glare);
+        ComPtr<ID3D11Resource> resource;
+        if (glare)
+            glare->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> glareTexture, scene;
+        D3D11_TEXTURE2D_DESC gd{}, sd{};
+        bool ok = resource && SUCCEEDED(resource.As(&glareTexture)) && g.resolved[g.pass] &&
+                  SUCCEEDED(g.resolved[g.pass].As(&scene));
+        if (ok) {
+            glareTexture->GetDesc(&gd);
+            scene->GetDesc(&sd);
+            // The eye's glare is the eye's share of the glare texture (YEBIS builds it at the scene's UV: glare_math.h).
+            const simqvfr::ViewRegion region = yebis_pass_region(
+                {0, 0, static_cast<int>(gd.Width), static_cast<int>(gd.Height)},
+                static_cast<double>(g.view.eyeW) / sd.Width, static_cast<double>(g.view.eyeH) / sd.Height);
+            ok = g.focusPost.after_composite(context, eye, region, glare_mapping(g.view.box));
+        }
+        ++(ok ? g.stats.focusComposites : g.stats.focusFailures);
+    }
+}
+
+void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
+    call_real<kHookDrawIndexed>(context, count, start, base);
+    if (!g.postWindow || !ours(context))
+        return;
+    Timed timed(g.time.hooks);
+    focus_post_draw(context);
 }
 
 // The detours of hook H's functions, one per function (N): straight through inside the handling of one (depth), else
@@ -543,15 +702,22 @@ void* detour_for(int h, int n) {
         case kHookHS:
             return Detours<kHookHS, &later_stage<kHookHS, ID3D11HullShader, &State::hsBound>, ID3D11HullShader*,
                            Instances, UINT>::get(n);
-        default:
+        case kHookDS:
             return Detours<kHookDS, &later_stage<kHookDS, ID3D11DomainShader, &State::dsBound>, ID3D11DomainShader*,
                            Instances, UINT>::get(n);
+        case kHookDrawIndexed: return Detours<kHookDrawIndexed, &draw_indexed, UINT, UINT, INT>::get(n);
+        default: return nullptr;
     }
 }
+
+// DrawIndexed only for the focus post (mvr_focus_replay): without it MVR's hooks are as before, nothing on the draws.
+bool wanted(int h) { return h != kHookDrawIndexed || g.focusReplay; }
 
 // The function the context's entry for hook `h` holds now, hooked in d3d11's code if not seen before (render thread).
 // True: a new one.
 bool hook_entry(int h) {
+    if (!wanted(h))
+        return false;
     void* fn = (*reinterpret_cast<void** const*>(g.context))[kSlotOf[h]];
     Functions& f = functions[h];
     for (int i = 0; i < f.count; ++i)
@@ -809,7 +975,7 @@ bool mvr_pass_install(ID3D11Device* device) {
         hook_entries();
     }
     for (int h = 0; h < kHooks; ++h)
-        if (!functions[h].hooked) {
+        if (wanted(h) && !functions[h].hooked) {
             unhook_entries();
             g.context = nullptr;
             g.multithread.Reset();
@@ -822,7 +988,10 @@ bool mvr_pass_install(ID3D11Device* device) {
     g.tscAtLog = __rdtsc();
     std::string counts;
     for (int h = 0; h < kHooks; ++h)
-        counts += (h ? ", " : "") + std::string(kHookName[h]) + " " + std::to_string(functions[h].hooked);
+        if (wanted(h)) {
+            counts += (h ? ", " : "") + std::string(kHookName[h]) + " " + std::to_string(functions[h].hooked);
+            ++g.stats.contextEntries;
+        }
     simqvfr::logf("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye); the context's "
                   "hooks on %llu functions in d3d11's code (%s); multithread protection %s",
                   static_cast<unsigned long long>(g.stats.contextFunctions), counts.c_str(),
@@ -851,6 +1020,8 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     g.drawFocus = view != nullptr && !g.broken;
     g.suspended = false;
     g.passTwinBinds = 0;
+    g.postWindow = g.focusCopied = g.focusComposited = false;
+    g.postTrace.clear();
     if (pass == 0) {  // this frame's timestamps, in a slot whose last frame has been read
         if (g.gpuSlot >= 0) {  // the frame before stopped short of pass 3: its timing left out
             g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
@@ -910,11 +1081,29 @@ void mvr_pass_end(int pass) {
         else
             g.have[pass] = copy_region(g.passImage[eye], g.resolved[pass].Get(), 0, 0, v.focusW, v.focusH);
     }
+    if (g.focusCopied && !g.focusComposited) {  // the focus post's copy ran, its composite didn't (no composite seen)
+        ++g.stats.focusNoComposite;
+        if (g.tracesLogged < 4) {
+            ++g.tracesLogged;
+            simqvfr::logf("lmu mvr: focus post: pass %d ended without the composite; its draws (DrawIndexed) after the copy, "
+                          "pixel shader > target:%s",
+                          pass, g.postTrace.empty() ? " none" : g.postTrace.c_str());
+        }
+    }
+    g.focusCopied = false;
     g.pass = -1;
     g.replaceResolve = false;
+    g.postWindow = false;
 }
 
 void mvr_keep_focus(bool on) { g.keepFocus = on; }
+
+void mvr_focus_replay(bool on) { g.focusReplay = on; }
+
+ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites) {
+    composites = g.focusPost.composites(eye);
+    return g.focusPost.image(eye);
+}
 
 bool mvr_focus_ready(int eye) { return g.context && g.keepFocus && g.keptOk[eye & 1]; }
 
@@ -966,6 +1155,19 @@ void mvr_frame_end(unsigned long long frame) {
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
                       static_cast<unsigned long long>(s.replacedResolves), static_cast<unsigned long long>(s.lookups),
                       static_cast<unsigned long long>(s.lookupMisses));
+        if (g.focusReplay) {
+            const MvrProbeStats probe = mvr_probe_stats();
+            simqvfr::logf("lmu mvr: focus post: %llu copies, %llu composites, %llu steps failed; %llu passes without the "
+                          "composite after the copy, %llu draws into the resolve's target by another shader (YEBIS's copy "
+                          "and composite pixel shaders marked %llu and %llu times)",
+                          static_cast<unsigned long long>(s.focusCopies),
+                          static_cast<unsigned long long>(s.focusComposites),
+                          static_cast<unsigned long long>(s.focusFailures),
+                          static_cast<unsigned long long>(s.focusNoComposite),
+                          static_cast<unsigned long long>(s.focusUnknownComposites),
+                          static_cast<unsigned long long>(probe.yebisCopies),
+                          static_cast<unsigned long long>(probe.yebisComposites));
+        }
         for (int m = 0; m < 2; ++m) {
             if (!g.gpuCounts[m][0])
                 continue;
@@ -996,12 +1198,12 @@ void mvr_twins_changed() { ++g.twinEpoch; }
 
 void mvr_time_hooks(bool on) { timeHooks = on; }
 
-MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
-                          int range) {
+namespace {
+
+// mvr_compare's measures on two luminance images.
+MvrComparison compare_luminance(const std::vector<float>& la, const std::vector<float>& lb, unsigned w, unsigned h,
+                                int range) {
     MvrComparison c;
-    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
-        return c;
-    const std::vector<float> la = luminance(a, w, h), lb = luminance(b, w, h);
     const int border = range + 8;
     double best = -1, bestMeanA = 0;
     for (int dy = -range; dy <= range; ++dy)
@@ -1048,6 +1250,57 @@ MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint
     c.cellMedian = ratios.empty() ? 0 : ratios[ratios.size() / 2];
     c.differingPct = counted ? 100.0 * static_cast<double>(differing) / static_cast<double>(counted) : 0;
     c.ok = true;
+    return c;
+}
+
+float srgb_to_linear(uint8_t v) {
+    const float x = static_cast<float>(v) / 255.0f;
+    return x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
+}
+
+}  // namespace
+
+MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
+                          int range) {
+    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
+        return {};
+    return compare_luminance(luminance(a, w, h), luminance(b, w, h), w, h, range);
+}
+
+MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, unsigned w, unsigned h,
+                                int range) {
+    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
+        return {};
+    float table[256];
+    for (int i = 0; i < 256; ++i)
+        table[i] = srgb_to_linear(static_cast<uint8_t>(i));
+    const auto lum = [&](const std::vector<uint8_t>& px) {
+        std::vector<float> l(static_cast<size_t>(w) * h);
+        for (size_t i = 0; i < l.size(); ++i)
+            l[i] = 0.0722f * table[px[i * 4]] + 0.7152f * table[px[i * 4 + 1]] + 0.2126f * table[px[i * 4 + 2]];
+        return l;
+    };
+    MvrComparison c = compare_luminance(lum(a), lum(b), w, h, range);
+    // The bytes themselves at that offset (colour channels; alpha left out).
+    const int border = range + 8;
+    double sum = 0;
+    size_t counted = 0, over = 0;
+    for (int y = border; y < static_cast<int>(h) - border; ++y)
+        for (int x = border; x < static_cast<int>(w) - border; ++x) {
+            const size_t ia = (static_cast<size_t>(y) * w + x) * 4;
+            const size_t ib = (static_cast<size_t>(y + c.shiftY) * w + (x + c.shiftX)) * 4;
+            int most = 0;
+            for (int k = 0; k < 3; ++k) {
+                const int d = std::abs(static_cast<int>(a[ia + k]) - static_cast<int>(b[ib + k]));
+                most = std::max(most, d);
+                sum += d;
+            }
+            c.maxByte = std::max(c.maxByte, most);
+            over += most > 4 ? 1 : 0;
+            ++counted;
+        }
+    c.meanByte = counted ? sum / (3.0 * static_cast<double>(counted)) : 0;
+    c.bytesOverPct = counted ? 100.0 * static_cast<double>(over) / static_cast<double>(counted) : 0;
     return c;
 }
 

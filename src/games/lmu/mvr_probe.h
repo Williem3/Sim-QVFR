@@ -27,6 +27,7 @@ struct MvrProbeStats {
     uint64_t dumped = 0;
     uint64_t repeats = 0;       // created again with a bytecode seen before (its twin reused)
     uint64_t attached = 0;      // game shaders given their twin (lmu_mvr)
+    uint64_t yebisCopies = 0, yebisComposites = 0;  // YEBIS's copy and composite pixel shaders marked (yebis_shaders.h)
     double convertMs = 0, maxConvertMs = 0, nvapiMs = 0;
     std::map<std::string, uint64_t> refused;  // why a shader wasn't converted, and how often
 };

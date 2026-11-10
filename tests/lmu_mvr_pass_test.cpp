@@ -99,17 +99,20 @@ int main() {
     }
     lmu::mvr_set_two_views(&fake_two_views);
     // The hooks are on every function the context's ten entries hold (with multithread protection off and on, idle and
-    // busy), in d3d11's code; the context's vtable pointer as it was (its entries are d3d11's to rewrite).
+    // busy), in d3d11's code; DrawIndexed's eleventh only with the focus post (lmu_focus_post_test). The context's vtable
+    // pointer as it was (its entries are d3d11's to rewrite).
     void** const ownVtable = *reinterpret_cast<void***>(context.Get());
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
     check(*reinterpret_cast<void***>(context.Get()) == ownVtable, "the context's vtable pointer as it was");
     char what[200];
+    const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
     std::snprintf(what, sizeof(what),
-                  "%llu functions hooked for the ten entries (two each at least: protection off and on), %llu of them "
-                  "ResolveSubresource's",
-                  static_cast<unsigned long long>(lmu::mvr_pass_stats().contextFunctions),
-                  static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
-    check(lmu::mvr_pass_stats().contextFunctions >= 20 && lmu::mvr_pass_stats().resolveFunctions >= 2, what);
+                  "%llu functions hooked for %llu entries (ten: no DrawIndexed without the focus post; two each at least: "
+                  "protection off and on), %llu of them ResolveSubresource's",
+                  static_cast<unsigned long long>(installed.contextFunctions),
+                  static_cast<unsigned long long>(installed.contextEntries),
+                  static_cast<unsigned long long>(installed.resolveFunctions));
+    check(installed.contextEntries == 10 && installed.contextFunctions >= 20 && installed.resolveFunctions >= 2, what);
     ComPtr<ID3D11DeviceContext4> context4;
     check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
           "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");
@@ -360,6 +363,39 @@ int main() {
     std::snprintf(what, sizeof(what), "compare: 10%% brighter: brightness %.4f, cell median %.4f", bright.brightness,
                   bright.cellMedian);
     check(bright.ok && std::fabs(bright.brightness - 1.1) < 0.005 && std::fabs(bright.cellMedian - 1.1) < 0.005, what);
+
+    {  // The 8-bit comparison (the focus post's images against passes 2-3's: gamma-encoded BGRA).
+        const auto bgra = [&](int shiftX, int shiftY, int add) {
+            std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+            for (unsigned y = 0; y < h; ++y)
+                for (unsigned x = 0; x < w; ++x) {
+                    const double sx = static_cast<double>(x) - shiftX, sy = static_cast<double>(y) - shiftY;
+                    const double v = 128 + 60 * std::sin(sx * 0.21) * std::cos(sy * 0.17) + 30 * std::sin((sx + sy) * 0.05);
+                    for (int c = 0; c < 3; ++c)
+                        px[(static_cast<size_t>(y) * w + x) * 4 + c] =
+                            static_cast<uint8_t>(std::lround(std::min(255.0, std::max(0.0, v - 10 * c + add))));
+                    px[(static_cast<size_t>(y) * w + x) * 4 + 3] = 255;
+                }
+            return px;
+        };
+        const std::vector<uint8_t> b8 = bgra(0, 0, 0);
+        const lmu::MvrComparison s8 = lmu::mvr_compare_bgra8(b8, b8, w, h);
+        check(s8.ok && s8.shiftX == 0 && s8.shiftY == 0 && s8.maxByte == 0 && s8.meanByte == 0 &&
+                  std::fabs(s8.brightness - 1) < 1e-9,
+              "compare 8-bit: an image with itself: aligned, brightness 1, no byte differs");
+        const lmu::MvrComparison m8 = lmu::mvr_compare_bgra8(b8, bgra(-3, 2, 0), w, h);
+        std::snprintf(what, sizeof(what), "compare 8-bit: moved by (-3, 2): found at %+d,%+d, largest byte difference %d",
+                      m8.shiftX, m8.shiftY, m8.maxByte);
+        check(m8.ok && m8.shiftX == -3 && m8.shiftY == 2 && m8.maxByte <= 1, what);
+        const lmu::MvrComparison p8 = lmu::mvr_compare_bgra8(b8, bgra(0, 0, 3), w, h);
+        std::snprintf(what, sizeof(what),
+                      "compare 8-bit: 3 added to every channel: bytes largest %d, mean %.2f, %.1f%% over 4; brightness %.4f",
+                      p8.maxByte, p8.meanByte, p8.bytesOverPct, p8.brightness);
+        check(p8.ok && p8.maxByte == 3 && std::fabs(p8.meanByte - 3) < 0.05 && p8.bytesOverPct == 0 && p8.brightness > 1.01 &&
+                  p8.brightness < 1.06,
+              what);
+        check(!lmu::mvr_compare_bgra8(b8, b8, w, h - 1).ok, "compare 8-bit: sizes that don't match the images: not ok");
+    }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

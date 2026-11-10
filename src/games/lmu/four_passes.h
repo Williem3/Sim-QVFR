@@ -53,6 +53,9 @@ struct FourPassesRun {
     bool mvrTiming = false;
     // QVFR: the focus views take their eye's glare (glare_share.h; [experiment] lmu_glare_share, default on).
     bool glareShare = true;
+    // MVR ([experiment] lmu_focus_replay, default off): each eye pass also post-processes its focus view (focus_post.h:
+    // YEBIS's copy and composite once more, with the eye's glare and exposure). Passes 2-3 unchanged for now (R1-R2).
+    bool focusReplay = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

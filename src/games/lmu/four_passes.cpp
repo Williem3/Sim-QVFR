@@ -767,6 +767,7 @@ void mvr_before_pass(int p) {
         ID3D11Device* device = nullptr;
         t->GetDevice(&device);
         t->Release();
+        mvr_focus_replay(cfg.focusReplay);  // before the install: DrawIndexed hooked for it only
         mvrInstalled = device && mvr_pass_install(device);
         if (device)
             device->Release();
@@ -774,6 +775,9 @@ void mvr_before_pass(int p) {
             cfg.mvr = false;
             return;
         }
+        if (cfg.focusReplay)
+            simqvfr::log_line("lmu mvr: focus post on (lmu_focus_replay=1): after each eye pass's YEBIS copy and composite, "
+                              "the same for its focus view, with the eye's glare and exposure (passes 2-3 unchanged)");
     }
     bool sample = false;
     if (p == 0) {
@@ -808,6 +812,7 @@ void mvr_before_pass(int p) {
         v.remap[3] = static_cast<float>(r.d);
         v.eyeW = passW[p];
         v.eyeH = passH[p];
+        v.box = frozenBox[p];
         float shareW, shareH;
         {
             std::lock_guard guard(liveMutex);
@@ -1673,6 +1678,66 @@ void compare_mvr_focus() {
     }
 }
 
+// R2 of the focus post (lmu_focus_replay with gate D's samples): each eye's focus image from the post replayed in its
+// eye's pass (mvr_focus_image) against the one pass 2/3 made of the same region (its own post-processing, as composed
+// now). Expected: aligned at 0,0, brightness ~1.00, differences only where pass 2/3 drew what the replay doesn't (the
+// driver tags) and from the exposure (pass 0's composite reads the exposure before pass 1 meters this frame's). The
+// first images compared for each eye saved: replay, pass, and their difference x8.
+unsigned long long replayCompositesBefore[2] = {};  // each eye's focus post composites at the last frame's end
+bool replaySaved[2] = {};  // each eye's first compared images saved
+void compare_focus_replay() {
+    const std::wstring dir = captures_folder();
+    for (int eye = 0; eye < 2; ++eye) {
+        unsigned long long composites = 0;
+        ID3D11Texture2D* replay = mvr_focus_image(eye, composites);
+        const bool fresh = replay && composites != replayCompositesBefore[eye];  // composited in this frame's pass
+        std::vector<std::uint8_t> rp, pp;
+        unsigned rw = 0, rh = 0, pw = 0, ph = 0;
+        if (!fresh || !focusTex[eye] || !simqvfr::d3d11_read_bgra8(replay, rp, rw, rh) ||
+            !simqvfr::d3d11_read_bgra8(focusTex[eye], pp, pw, ph)) {
+            simqvfr::logf("lmu mvr: frame %llu: focus post %d: %s; not compared", frames, eye,
+                          !replay   ? "no image yet"
+                          : !fresh  ? "not composited this frame (its composite not seen in pass 0/1)"
+                                    : "the images can't be read back");
+            continue;
+        }
+        // The pass's view is the top-left passW x passH of its image; the replay's is all of its own.
+        const unsigned w = std::min({rw, pw, passW[2 + eye]}), h = std::min({rh, ph, passH[2 + eye]});
+        const auto crop = [&](const std::vector<std::uint8_t>& px, unsigned stride) {
+            std::vector<std::uint8_t> out(static_cast<std::size_t>(w) * h * 4);
+            for (unsigned y = 0; y < h; ++y)
+                std::memcpy(out.data() + static_cast<std::size_t>(y) * w * 4, px.data() + static_cast<std::size_t>(y) * stride * 4,
+                            static_cast<std::size_t>(w) * 4);
+            return out;
+        };
+        const std::vector<std::uint8_t> a = crop(pp, pw), b = crop(rp, rw);
+        const MvrComparison c = mvr_compare_bgra8(a, b, w, h);
+        simqvfr::logf("lmu mvr: frame %llu: focus post %d (replayed in pass %d, %ux%u) vs pass %d's own (%ux%u of %ux%u), "
+                      "%ux%u compared: %s aligned at %+d,%+d px; brightness %.4f (cell median %.4f); mean luminance "
+                      "difference %.2f%%, %.2f%% of pixels >10%%; bytes: largest %d, mean %.2f, %.2f%% of pixels >4",
+                      frames, eye, eye, rw, rh, 2 + eye, passW[2 + eye], passH[2 + eye], pw, ph, w, h,
+                      c.ok ? "" : "(too small) ", c.shiftX, c.shiftY, c.brightness, c.cellMedian, 100 * c.meanDiff,
+                      c.differingPct, c.maxByte, c.meanByte, c.bytesOverPct);
+        if (!replaySaved[eye]) {
+            replaySaved[eye] = true;
+            std::vector<std::uint8_t> diff(a.size());
+            for (std::size_t i = 0; i < a.size(); ++i)
+                diff[i] = i % 4 == 3 ? 255
+                                     : static_cast<std::uint8_t>(std::min(255, 8 * std::abs(static_cast<int>(a[i]) -
+                                                                                             static_cast<int>(b[i]))));
+            wchar_t name[96];
+            swprintf_s(name, L"\\lmu-replay-frame%llu-focus%d-replay.png", frames, eye);
+            simqvfr::write_png_bgra(dir + name, b, w, h);
+            swprintf_s(name, L"\\lmu-replay-frame%llu-focus%d-pass.png", frames, eye);
+            simqvfr::write_png_bgra(dir + name, a, w, h);
+            swprintf_s(name, L"\\lmu-replay-frame%llu-focus%d-diff8.png", frames, eye);
+            simqvfr::write_png_bgra(dir + name, diff, w, h);
+            simqvfr::logf("lmu mvr: images in %ls (lmu-replay-frame%llu-focus%d-replay/pass/diff8.png)", dir.c_str(),
+                          frames, eye);
+        }
+    }
+}
+
 // The focus view against its eye's crop: linear luminance in a grid of cells over the box, focus / eye per cell.
 void compare_focus() {
     ++comparisons;
@@ -2045,8 +2110,14 @@ void four_passes_frame_end() {
     if (cfg.mvr) {
         mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;
-        if (cfg.mvrSkip && mvrSampleFrame && atlasReady)
+        if (cfg.mvrSkip && mvrSampleFrame && atlasReady) {
             compare_mvr_focus();
+            if (cfg.focusReplay)
+                compare_focus_replay();
+        }
+        if (cfg.focusReplay)
+            for (int eye = 0; eye < 2; ++eye)
+                mvr_focus_image(eye, replayCompositesBefore[eye]);
         mvrSampleFrame = false;
         if (cfg.mvrSkip && frames % 900 == 0) {
             simqvfr::logf("lmu mvr: passes 2-3 skipped the scene in %llu passes (%llu not: the focus view not drawn by its "
