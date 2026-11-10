@@ -249,6 +249,10 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   - **On SteamVR and other runtimes nothing changes:** Sim-QVFR composes the image as before. It also does
     with frame generation (Cheeky's or VectorXR's), which needs one composed image, and when another OpenXR
     layer sits between Sim-QVFR and the runtime. The page shows what the last launch did.
+- **LMU's own render scale and FSR** (LMU's VR graphics settings) work with QVFR. They lower every view's
+  resolution on top of Sim-QVFR's sliders, and FSR upscales each view as it does without Sim-QVFR. With FSR
+  on, multi-view rendering stops for the session (FSR replaces the step it draws the focus views with) and
+  LMU renders the four views on their own; the log says so.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).

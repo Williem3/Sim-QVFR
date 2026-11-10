@@ -287,6 +287,31 @@ int main() {
         check(!lmu::tag_viewport_cut(whole, 0, 0, 1557, 1251, out), "tags: no target size known yet: left alone");
     }
 
+    // The game's render scale below 1 (games/lmu/focus_math.h final_extent): the tester's FSR run 2026-11-09 18:08,
+    // recommended 1562 x 1407, RenderScale 0.77 (FSR Ultra Quality). The main targets were 1203 x 1084; the outer views
+    // rendered 860 x 774 of them (live 71%), the focus views all of them. FSR stretched each main target over the whole
+    // eye target, so the views cover 1.3 times what they rendered; the atlas had copied only what they rendered (the
+    // zoomed "picture in picture").
+    {
+        const unsigned mainW = lmu::scaled_size(1562, 0.77f), mainH = lmu::scaled_size(1407, 0.77f);
+        check(mainW == 1203 && mainH == 1084, "render scale 0.77: main targets 1203 x 1084, as the tester's log");
+        const double ow = lmu::final_extent(860, mainW, 1562), oh = lmu::final_extent(774, mainH, 1407);
+        check(near(ow, 860.0 * 1562 / 1203) && near(oh, 774.0 * 1407 / 1084) && ow > 1116 && ow < 1117,
+              "render scale 0.77: an outer view's 860 x 774 covers 1116.6 x 1004.6 of the eye target");
+        check(lmu::final_texels(ow, 1562) == 1117 && lmu::final_texels(oh, 1407) == 1005,
+              "render scale 0.77: its eye target's texels round up (1117 x 1005)");
+        check(lmu::final_texels(lmu::final_extent(1203, mainW, 1562), 1562) == 1562 &&
+                  lmu::final_texels(lmu::final_extent(1084, mainH, 1407), 1407) == 1407,
+              "render scale 0.77: a focus view that rendered its whole main target covers the whole eye target");
+        check(near(860.0 / mainW, ow / 1562) && near(774.0 / mainH, oh / 1407),
+              "render scale 0.77: a view's share of the eye target is its share of the main target");
+        check(lmu::final_extent(860, 1562, 1562) == 860 && lmu::final_texels(860, 1562) == 860,
+              "render scale 1: a view covers what it rendered (no change)");
+        check(lmu::final_extent(860, 0, 1562) == 860, "main size not known yet: what it rendered");
+        check(lmu::final_texels(3000, 1562) == 1562 && lmu::final_texels(0.2, 1562) == 1,
+              "final texels: at most the target, at least one");
+    }
+
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);
     return failures ? 1 : 0;
 }
