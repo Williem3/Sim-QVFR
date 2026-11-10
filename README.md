@@ -232,6 +232,9 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
     cameras, the eye being drawn, the render size) and writes just two, the render scale and the eye render size, which set each
     view's resolution and let it change while you drive. Without multi-view rendering (or if it stops during a
     session, which the log explains), Sim-QVFR renders the four views by changing LMU's code, as before.
+  - **How it works:** two diagrams show every part of LMU, Direct3D 11 and OpenXR that multi-view rendering
+    touches: [with NVIDIA's multi-view rendering](docs/architecture/LMU-MVR-ARCHITECTURE.svg) and
+    [with Sim-QVFR's own, on any graphics card](docs/architecture/LMU-NEUTRAL-MVR-ARCHITECTURE.svg).
 - **Runtime composition on Pimax and Varjo headsets** (the launcher's **Resolution** page, on by default):
   when your headset's own OpenXR runtime composes quad views itself, Sim-QVFR hands it the four views and the
   runtime puts the focus area on the display at its full resolution. The focus area is then noticeably
