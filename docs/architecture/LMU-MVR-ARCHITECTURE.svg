@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 934" width="1120" height="934" role="img" aria-labelledby="title">
+<title id="title">LMU multi-view rendering with NVIDIA’s single-pass stereo</title>
+<style>
+:root { --window-bg:#f2f2f5; --group-bg:#ffffff; --control-bg:#e9e9ee; --control-border:#c2c2c9; --separator:#dcdce2;
+ --label:#1d1d1f; --label-secondary:#55555c; --label-muted:#6e6e75; --success:#1f7a34; --success-bg:#e3f4e7;
+ --warning:#8f5500; --overlay-teal:#0e8a9e; --overlay-magenta:#c026b8; --preview-canvas:#1c1c1e;
+ --preview-periphery:#2c2c30; --preview-focus:#5a5a62; --preview-label:#f5f5f7; }
+@media (prefers-color-scheme: dark) { :root { --window-bg:#1c1c1e; --group-bg:#232326; --control-bg:#333338;
+ --control-border:#4a4a50; --separator:#2e2e31; --label:#f2f2f4; --label-secondary:#a1a1aa; --label-muted:#8e8e93;
+ --success:#4cd964; --success-bg:#1b3522; --warning:#ffcc66; --overlay-teal:#40c8e0; --overlay-magenta:#f272e6;
+ --preview-canvas:#111113; --preview-periphery:#1d1d21; --preview-focus:#3c4a5c; --preview-label:#f5f5f7; } }
+text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+.h1 { fill:var(--label); font-size:22px; font-weight:700; }
+.sub { fill:var(--label-secondary); font-size:13px; }
+.t { fill:var(--label); font-size:13px; font-weight:600; }
+.s { fill:var(--label-secondary); font-size:12px; }
+.m, .ms { font-family:"SF Mono","Cascadia Mono",ui-monospace,Consolas,monospace; }
+.m { fill:var(--label); font-size:11.5px; }
+.ms { fill:var(--label-secondary); font-size:11px; }
+.hdr { fill:var(--label-secondary); font-size:11px; font-weight:600; }
+.lab { font-size:11px; font-weight:500; paint-order:stroke; stroke:var(--window-bg); stroke-width:5px; stroke-linejoin:round; }
+.bt { font-size:10.5px; font-weight:600; }
+.pv { fill:var(--preview-label); font-size:12px; font-weight:600; }
+.pvs { fill:var(--preview-label); font-size:11px; opacity:.75; font-family:"SF Mono","Cascadia Mono",ui-monospace,Consolas,monospace; }
+.foot { fill:var(--label-secondary); font-size:11.5px; }
+</style>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
+<rect width="1120" height="934" fill="var(--window-bg)"/>
+<text class="h1" x="20" y="40">LMU multi-view rendering with NVIDIA’s single-pass stereo</text>
+<text class="sub" x="20" y="66">NVIDIA RTX 20 series and newer. LMU runs its own two eye passes as shipped; each scene draw in them also draws that eye’s</text>
+<text class="sub" x="20" y="84">focus view beside the eye. LMU’s code isn’t changed, hooked or called. Five values in its memory are read and two are written.</text>
+<circle cx="25" cy="112" r="5" fill="var(--label-muted)"/>
+<text class="s" x="36" y="116">LMU, unchanged</text>
+<circle cx="155.39999999999998" cy="112" r="5" fill="var(--overlay-teal)"/>
+<text class="s" x="166.39999999999998" y="116">Sim-QVFR</text>
+<circle cx="246.2" cy="112" r="5" fill="var(--overlay-magenta)"/>
+<text class="s" x="257.2" y="116">Detours in Microsoft’s d3d11.dll</text>
+<circle cx="495.4" cy="112" r="5" fill="var(--label-secondary)"/>
+<text class="s" x="506.4" y="116">Read</text>
+<circle cx="559.8" cy="112" r="5" fill="var(--warning)"/>
+<text class="s" x="570.8" y="116">Written</text>
+<g transform="translate(20,160)">
+<text class="hdr" x="0" y="-14">LMU.exe</text>
+<text class="hdr" x="400" y="-14">Sim-QVFR, loaded as an OpenXR API layer</text>
+<text class="hdr" x="780" y="-14">Runtime and graphics card</text>
+<rect x="0" y="0" width="320" height="664" rx="12" fill="var(--window-bg)" stroke="var(--separator)"/>
+<rect x="16" y="18" width="288" height="252" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="32" y="44">Game code</text>
+<rect x="216" y="30" width="74" height="20" rx="10" fill="var(--success-bg)"/>
+<text class="bt" x="253" y="44" text-anchor="middle" fill="var(--success)">Unchanged</text>
+<text class="s" x="32" y="66">No bytes changed, nothing hooked,</text>
+<text class="s" x="32" y="82">no function called.</text>
+<text class="m" x="32" y="112">VR eye loop: its own two passes</text>
+<text class="m" x="32" y="130">Scene, lens mask, YEBIS post</text>
+<text class="m" x="32" y="148">Final blit, driver tags</text>
+<text class="m" x="32" y="166">VR UI panel, menus</text>
+<text class="m" x="32" y="184">Submit: CopySubresourceRegion</text>
+<line x1="32" y1="206" x2="288" y2="206" stroke="var(--separator)"/>
+<circle cx="42" cy="232" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="42" y="236" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="s" x="60" y="228">Read once at start: a few byte strings</text>
+<text class="s" x="60" y="244">confirm the build is 1.4.2.0.</text>
+<rect x="16" y="290" width="288" height="358" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="32" y="316">Game data</text>
+<text class="s" x="32" y="334">Plain reads and writes of values</text>
+<rect x="28" y="348" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
+<circle cx="48" cy="373" r="9" fill="var(--warning)"/>
+<text class="bt" x="48" y="377" text-anchor="middle" fill="var(--group-bg)">W</text>
+<text class="t" x="66" y="368">Render scale</text>
+<text class="ms" x="66" y="386">0x199cc18 · float</text>
+<rect x="28" y="406" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
+<circle cx="48" cy="431" r="9" fill="var(--warning)"/>
+<text class="bt" x="48" y="435" text-anchor="middle" fill="var(--group-bg)">W</text>
+<text class="t" x="66" y="426">Eye render size</text>
+<text class="ms" x="66" y="444">0x1b1c240 · width, height</text>
+<rect x="28" y="464" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="489" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="493" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="484">Recommended size</text>
+<text class="ms" x="66" y="502">0x1b1c654 · width, height</text>
+<rect x="28" y="522" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="547" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="551" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="542">Eye projections</text>
+<text class="ms" x="66" y="560">0x1b1bf74, 0x1b1c04c</text>
+<rect x="28" y="580" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="605" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="609" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="600">Eye being drawn</text>
+<text class="ms" x="66" y="618">Renderer +0x77388 · int</text>
+<rect x="400" y="0" width="320" height="246" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
+<text class="t" x="416" y="26">OpenXR layer</text>
+<text class="m" x="416" y="54">xrEnumerateViewConfigurationViews</text>
+<text class="s" x="416" y="71">A larger recommended size, so LMU makes</text>
+<text class="s" x="416" y="87">eye targets with room beside the eye.</text>
+<text class="m" x="416" y="115">xrLocateViews</text>
+<text class="s" x="416" y="132">The eye views with your FOV crop. Your</text>
+<text class="s" x="416" y="148">gaze places each eye’s focus region.</text>
+<text class="m" x="416" y="176">xrEndFrame</text>
+<text class="s" x="416" y="193">Takes the eye and its focus view from each</text>
+<text class="s" x="416" y="209">eye image, composes the four views and</text>
+<text class="s" x="416" y="225">submits an ordinary frame.</text>
+<rect x="400" y="266" width="320" height="394" rx="12" fill="var(--group-bg)" stroke="var(--overlay-magenta)" stroke-width="1.5"/>
+<text class="t" x="416" y="292">Direct3D 11</text>
+<text class="s" x="416" y="310">On Microsoft’s d3d11.dll objects, not LMU’s</text>
+<rect x="412" y="324" width="296" height="128" rx="8" fill="var(--control-bg)"/>
+<text class="t" x="426" y="346">Device: a copy of its function table</text>
+<text class="s" x="426" y="364">The device points at the copy. The code in</text>
+<text class="s" x="426" y="380">d3d11.dll stays as it is.</text>
+<text class="m" x="426" y="402">CreateVertexShader → twin, via NVAPI</text>
+<text class="m" x="426" y="420">CreatePixelShader → role by checksum</text>
+<text class="ms" x="426" y="440">D3D11CreateDevice detoured until session</text>
+<rect x="412" y="462" width="296" height="186" rx="8" fill="var(--control-bg)"/>
+<text class="t" x="426" y="484">Immediate context: detours</text>
+<text class="s" x="426" y="502">On each function its 15 entries are seen</text>
+<text class="s" x="426" y="518">holding, in d3d11.dll (MinHook)</text>
+<text class="m" x="426" y="542">OMSetRenderTargets → pass bounds</text>
+<text class="m" x="426" y="560">VSSetShader → twin, two views on</text>
+<text class="m" x="426" y="578">RSSetViewports → + focus viewport</text>
+<text class="m" x="426" y="596">Draw* → focus post, mask, VR UI</text>
+<text class="m" x="426" y="614">ResolveSubresource → pass bounds</text>
+<text class="m" x="426" y="632">CopySubresourceRegion → eye images</text>
+<rect x="780" y="0" width="300" height="246" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="796" y="26">OpenXR runtime and headset</text>
+<text class="s" x="796" y="50">SteamVR, Pimax, Varjo, Virtual Desktop</text>
+<text class="s" x="796" y="78">Gets an ordinary stereo frame. With</text>
+<text class="s" x="796" y="94">runtime composition on Pimax and Varjo,</text>
+<text class="s" x="796" y="110">it gets the four views as quad views.</text>
+<text class="s" x="796" y="138">You install nothing else.</text>
+<rect x="780" y="266" width="300" height="394" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="796" y="292">Graphics card</text>
+<text class="m" x="796" y="312">NVIDIA RTX 20 series and newer</text>
+<text class="s" x="796" y="336">Each twin writes the eye’s position and</text>
+<text class="s" x="796" y="352">the focus view’s: the eye’s clip space</text>
+<text class="s" x="796" y="368">remapped to the focus region (cb13).</text>
+<text class="s" x="796" y="394">Single-pass stereo through NVAPI: one</text>
+<text class="s" x="796" y="410">draw rasterises into both viewports.</text>
+<rect x="796" y="450" width="268" height="152" rx="8" fill="var(--preview-canvas)"/>
+<rect x="806" y="460" width="128" height="104" rx="3" fill="var(--preview-periphery)"/>
+<text class="pv" x="870" y="510" text-anchor="middle">Eye</text>
+<text class="pvs" x="870" y="527" text-anchor="middle">viewport 0</text>
+<rect x="940" y="460" width="114" height="132" rx="3" fill="var(--preview-focus)"/>
+<text class="pv" x="997" y="522" text-anchor="middle">Focus view</text>
+<text class="pvs" x="997" y="539" text-anchor="middle">viewport 1</text>
+<text class="s" x="796" y="622">LMU’s own eye target, in one pass. The</text>
+<text class="s" x="796" y="638">render scale keeps the eye in its corner.</text>
+<path d="M304,110 L398,110" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="352" y="102" text-anchor="middle" fill="var(--label-secondary)">OpenXR</text>
+<path d="M304,174 C354,174 352,390 398,390" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="352" y="282" text-anchor="middle" fill="var(--label-secondary)">D3D11</text>
+<text class="lab" x="352" y="298" text-anchor="middle" fill="var(--label-secondary)">calls</text>
+<path d="M400,430 C356,430 350,400 306,400" stroke="var(--warning)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="428" text-anchor="middle" fill="var(--warning)">Writes 2</text>
+<path d="M400,522 C356,522 350,548 306,548" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="529.0" text-anchor="middle" fill="var(--label-secondary)">Reads 3</text>
+<path d="M400,150 C350,150 352,480 306,490" stroke="var(--label-secondary)" stroke-width="1.4" fill="none" stroke-dasharray="2 4" marker-end="url(#ah)"/>
+<path d="M720,140 L778,140" stroke="var(--overlay-teal)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="749" y="132" text-anchor="middle" fill="var(--overlay-teal)">Frame</text>
+<path d="M708,402 L778,402" stroke="var(--overlay-magenta)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="744" y="394" text-anchor="middle" fill="var(--overlay-magenta)">NVAPI</text>
+</g>
+<text class="foot" x="20" y="852">Grey arrows are calls LMU makes anyway. Dashed arrows are Sim-QVFR reading and writing values in LMU’s data; the dotted one is</text>
+<text class="foot" x="20" y="869">the layer reading the recommended size LMU took. No arrow points into LMU’s code.</text>
+<text class="foot" x="20" y="886">If NVIDIA’s driver refuses single-pass stereo, Sim-QVFR’s own multi-view takes over (LMU-NEUTRAL-MVR-ARCHITECTURE.svg). If neither can</text>
+<text class="foot" x="20" y="903">run, Sim-QVFR renders the four views in passes of their own, which changes LMU’s code. From src/games/lmu/ on development (35ce98c).</text>
+</svg>
