@@ -101,9 +101,12 @@ Picture
   Turning it off applies at the next launch.
   Runtime composition (LMU only, on by default): on a Pimax or Varjo OpenXR runtime, which composes
   quad views itself, Sim-QVFR hands it the four views and the focus area reaches the display at its
-  full resolution (sharper above 100% inner resolution). Sim-QVFR's resolution and focus settings
-  apply, not Pimax Play's quad view sliders. On SteamVR, with frame generation, or with another layer
-  between Sim-QVFR and the runtime, Sim-QVFR composes the image as before. Applies at the next launch.
+  full resolution (sharper above 100% inner resolution). Sim-QVFR's resolution settings apply; its
+  focus area is drawn inside the runtime's own focus region, centred where the runtime puts it (its
+  eye tracking), so keep the runtime's focus area (Pimax Play, Varjo Base) at least as large as
+  Sim-QVFR's: Diagnostics says when it isn't. The gaze dead-zone and vertical offset don't apply
+  then. On SteamVR, with frame generation, or with another layer between Sim-QVFR and the runtime,
+  Sim-QVFR composes the image as before. Applies at the next launch.
 - Foveation: Mode: Foveated mode, Eye tracked (the focus region follows your gaze) or Fixed (it stays
   at the centre of each lens). A profile still on the legacy Two-loop method shows Rendering method
   here too; once you switch to Quad View Foveated Rendering, Two-loop isn't offered again.
