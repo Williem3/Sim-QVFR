@@ -34,10 +34,12 @@ struct MvrProbeStats {
 // The private data a game vertex shader carries its converted twin under (an ID3D11VertexShader).
 inline constexpr GUID kMvrTwinGuid = {0x6d1c4a52, 0x3b8e, 0x4f61, {0x9a, 0x27, 0x5e, 0x10, 0xc3, 0x7b, 0x44, 0xd9}};
 
-// xrCreateInstance: hooks D3D11 device creation, so the shaders the game creates before its OpenXR session are seen.
+// xrCreateInstance: hooks D3D11 device creation (until mvr_probe_device), so the shaders the game creates before its
+// OpenXR session are seen. The device's shader creation is an entry of a vtable copy it points at (object_vtable.h).
 // `attachTwins` (lmu_mvr=1): the converted shaders are kept and attached to the game's.
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins = false);
-// xrCreateSession with the game's device: NVAPI's flags on it; its shader creation hooked if device creation wasn't.
+// xrCreateSession with the game's device: device creation unhooked; NVAPI's flags on the device; its shader creation
+// hooked if device creation wasn't.
 void mvr_probe_device(ID3D11Device* device);
 // Every xrEndFrame: a summary when the counts changed (at most every 5 s).
 void mvr_probe_frame_end();

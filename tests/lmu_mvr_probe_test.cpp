@@ -50,6 +50,23 @@ std::string outputs(int n) {
 }  // namespace
 
 int main() {
+    // d3d11.dll's code before the probe: device creation (hooked until mvr_probe_device) and a device's shader creation
+    // (never: an entry of a vtable copy the game's device points at).
+    const auto* exportCode = reinterpret_cast<const uint8_t*>(GetProcAddress(GetModuleHandleW(L"d3d11.dll"), "D3D11CreateDevice"));
+    uint8_t exportBefore[16] = {}, shaderCodeBefore[16] = {};
+    const uint8_t* shaderCode = nullptr;
+    void** ownVtable = nullptr;
+    {
+        ComPtr<ID3D11Device> before;
+        if (exportCode && SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                                                      D3D11_SDK_VERSION, &before, nullptr, nullptr))) {
+            ownVtable = *reinterpret_cast<void***>(before.Get());
+            shaderCode = static_cast<const uint8_t*>(ownVtable[12]);
+            std::memcpy(shaderCodeBefore, shaderCode, sizeof(shaderCodeBefore));
+            std::memcpy(exportBefore, exportCode, sizeof(exportBefore));
+        }
+    }
+    check(shaderCode != nullptr, "d3d11.dll's code read before the probe");
     check(lmu::mvr_probe_install(nullptr), "installed at instance creation");
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
@@ -58,6 +75,9 @@ int main() {
         std::printf("FAIL no WARP device\n");
         return 1;
     }
+    check(shaderCode && *reinterpret_cast<void***>(device.Get()) != ownVtable &&
+              std::memcmp(shaderCodeBefore, shaderCode, sizeof(shaderCodeBefore)) == 0,
+          "the device on a vtable copy: d3d11.dll's CreateVertexShader code as it was");
     const std::vector<uint8_t> plain = compile(outputs(2), "vs_4_0");
     const std::vector<uint8_t> full = compile(outputs(14), "vs_4_0");
     const std::vector<uint8_t> pixel = compile("float4 main() : SV_Target { return 1; }", "ps_4_0");
@@ -78,6 +98,16 @@ int main() {
           what);
     check(s.nvapiCreated == 0 && s.nvapiFailed == 0, "NVAPI not asked on WARP");
     lmu::mvr_probe_frame_end();  // the summary (log only)
+    // xrCreateSession: device creation unhooked, its code as it was; the device's shader creation still seen.
+    check(exportCode && std::memcmp(exportBefore, exportCode, sizeof(exportBefore)) != 0,
+          "device creation hooked before the session");
+    lmu::mvr_probe_device(device.Get());
+    check(exportCode && std::memcmp(exportBefore, exportCode, sizeof(exportBefore)) == 0,
+          "device creation unhooked at the session: D3D11CreateDevice's code as it was");
+    ComPtr<ID3D11VertexShader> c;
+    check(SUCCEEDED(device->CreateVertexShader(plain.data(), plain.size(), nullptr, &c)) && c &&
+              lmu::mvr_probe_stats().created == 3,
+          "the device's shader creation still seen after the session starts");
 
     // Which GPUs draw two full views per draw: Turing (RTX 20) and newer, not Tegra's ids.
     namespace nvapi = simqvfr::nvapi;

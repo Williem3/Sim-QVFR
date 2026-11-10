@@ -26,6 +26,21 @@ struct MvrPassView {
     unsigned focusW = 0, focusH = 0;  // the focus view's
 };
 
+// The immediate context's vtable entries the hooks use (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
+// The vtable is inside the context and d3d11 rewrites its entries as it runs: every command's as the context goes idle
+// (a flush) and busy (a command), and 130 of them, all of these among them, as multithread protection goes on or off.
+// A hook on one function an entry held misses the calls through the others, so the hooks are on every function each
+// entry is seen holding (mvr_pass.cpp). nvapi_stereo_check lists what d3d11 rewrites.
+namespace context_slot {
+inline constexpr unsigned kVSSetShader = 11, kGSSetShader = 23, kOMSetRenderTargets = 33, kOMSetRenderTargetsAndUavs = 34,
+                          kSOSetTargets = 37, kRSSetViewports = 44, kRSSetScissorRects = 45, kResolveSubresource = 57,
+                          kHSSetShader = 60, kDSSetShader = 64;
+inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
+                                       kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
+                                       kRSSetScissorRects, kResolveSubresource, kHSSetShader,
+                                       kDSSetShader};
+}  // namespace context_slot
+
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
 bool mvr_pass_install(ID3D11Device* device);
 // Every pass: `view` for a pass that also draws its focus view (0-1), null otherwise. `sample` (pass 0): this frame's
@@ -66,6 +81,8 @@ struct MvrPassStats {
     uint64_t twinBinds = 0, plainBinds = 0, toggles = 0, viewportRewrites = 0, scissorRewrites = 0, stereoErrors = 0;
     uint64_t passesWithFocus = 0, samples = 0, resolves = 0, keptRegions = 0, replacedResolves = 0;
     uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
+    uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
+    uint64_t resolveFunctions = 0;           // of those, ResolveSubresource's
 };
 MvrPassStats mvr_pass_stats();
 

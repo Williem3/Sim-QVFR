@@ -16,6 +16,7 @@
 
 #include "../../engine/dxbc_patch.h"
 #include "../../engine/nvapi_stereo.h"
+#include "../../engine/object_vtable.h"
 #include "../../log.h"
 #include "MinHook.h"
 
@@ -181,6 +182,13 @@ void examine(ID3D11Device* device, const uint8_t* code, size_t size, ID3D11Verte
 
 std::atomic<uint64_t> shaderGeneration{0};
 
+// The game's device points at a vtable copy with our shader creation (engine/object_vtable.h): d3d11.dll's code stays
+// as it is. D3D11's device creation is hooked only from xrCreateInstance to xrCreateSession (the game creates its first
+// shaders before its session), then removed.
+simqvfr::ObjectVtable deviceVtable;
+ID3D11Device* hookedDevice = nullptr;  // not referenced: compared only
+void* deviceCreation[2] = {};          // D3D11CreateDevice, D3D11CreateDeviceAndSwapChain while hooked
+
 HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void* code, SIZE_T size,
                                                ID3D11ClassLinkage* linkage, ID3D11VertexShader** shader) {
     const HRESULT hr = originalCreateVertexShader(device, code, size, linkage, shader);
@@ -194,11 +202,25 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
 void hook_shaders(ID3D11Device* device, const char* when) {
     if (!device || shaderHookTried.exchange(true))
         return;
-    void* target = (*reinterpret_cast<void***>(device))[kCreateVertexShaderSlot];
-    const bool ok = MH_CreateHook(target, reinterpret_cast<void*>(&create_vertex_shader),
-                                  reinterpret_cast<void**>(&originalCreateVertexShader)) == MH_OK &&
-                    MH_EnableHook(target) == MH_OK;
-    simqvfr::logf("lmu mvr probe: vertex shader creation %s (%s)", ok ? "hooked" : "NOT hooked", when);
+    const bool ok = deviceVtable.install(device, simqvfr::kD3D11DeviceSlots,
+                                         {{kCreateVertexShaderSlot, reinterpret_cast<void*>(&create_vertex_shader),
+                                           reinterpret_cast<void**>(&originalCreateVertexShader)}});
+    if (ok)
+        hookedDevice = device;
+    simqvfr::logf("lmu mvr probe: vertex shader creation %s (%s; the device on a vtable copy, %zu entries)",
+                  ok ? "hooked" : "NOT hooked", when, deviceVtable.slots());
+}
+
+void unhook_device_creation() {
+    int removed = 0, hooked = 0;
+    for (void*& target : deviceCreation)
+        if (target) {
+            ++hooked;
+            removed += MH_RemoveHook(target) == MH_OK ? 1 : 0;
+            target = nullptr;
+        }
+    if (hooked)
+        simqvfr::logf("lmu mvr probe: device creation unhooked (%d of %d)", removed, hooked);
 }
 
 HRESULT WINAPI create_device(IDXGIAdapter* adapter, D3D_DRIVER_TYPE type, HMODULE software, UINT flags,
@@ -232,14 +254,14 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins) {
         simqvfr::log_line("lmu mvr probe: MH_Initialize failed; probe off");
         return false;
     }
-    void* target = nullptr;
     const bool device = MH_CreateHookApiEx(L"d3d11.dll", "D3D11CreateDevice", reinterpret_cast<void*>(&create_device),
-                                           reinterpret_cast<void**>(&originalCreateDevice), &target) == MH_OK &&
-                        MH_EnableHook(target) == MH_OK;
+                                           reinterpret_cast<void**>(&originalCreateDevice), &deviceCreation[0]) == MH_OK &&
+                        MH_EnableHook(deviceCreation[0]) == MH_OK;
     const bool chain = MH_CreateHookApiEx(L"d3d11.dll", "D3D11CreateDeviceAndSwapChain",
                                           reinterpret_cast<void*>(&create_device_and_swap_chain),
-                                          reinterpret_cast<void**>(&originalCreateDeviceAndSwapChain), &target) == MH_OK &&
-                       MH_EnableHook(target) == MH_OK;
+                                          reinterpret_cast<void**>(&originalCreateDeviceAndSwapChain),
+                                          &deviceCreation[1]) == MH_OK &&
+                       MH_EnableHook(deviceCreation[1]) == MH_OK;
     simqvfr::logf("lmu mvr probe: on (%s)%s; device creation %s%s",
                   attach ? "each shader's twin attached for lmu_mvr" : "log only",
                   dump ? ", shaders dumped to logs\\shaders" : "",
@@ -249,11 +271,22 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins) {
 }
 
 void mvr_probe_device(ID3D11Device* device) {
+    unhook_device_creation();
     log_support(device, "xrCreateSession");
+    if (hookedDevice && device != hookedDevice)
+        simqvfr::log_line("lmu mvr probe: the session's device isn't the first one created (the one hooked): its "
+                          "shaders aren't seen");
     hook_shaders(device, "at xrCreateSession: shaders created before it aren't seen");
 }
 
 void mvr_probe_frame_end() {
+    // The device's vtable is d3d11's and never changes (unlike the context's): its pointer replaced means another tool.
+    static bool copyLostLogged = false;
+    if (hookedDevice && !copyLostLogged && !deviceVtable.installed()) {
+        copyLostLogged = true;
+        simqvfr::log_line("lmu mvr probe: the device's vtable pointer was replaced since (another tool?): vertex shaders "
+                          "created from now on get no twin");
+    }
     LARGE_INTEGER now, freq;
     QueryPerformanceCounter(&now);
     QueryPerformanceFrequency(&freq);

@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
@@ -98,7 +98,21 @@ int main() {
         return 1;
     }
     lmu::mvr_set_two_views(&fake_two_views);
+    // The hooks are on every function the context's ten entries hold (with multithread protection off and on, idle and
+    // busy), in d3d11's code; the context's vtable pointer as it was (its entries are d3d11's to rewrite).
+    void** const ownVtable = *reinterpret_cast<void***>(context.Get());
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
+    check(*reinterpret_cast<void***>(context.Get()) == ownVtable, "the context's vtable pointer as it was");
+    char what[200];
+    std::snprintf(what, sizeof(what),
+                  "%llu functions hooked for the ten entries (two each at least: protection off and on), %llu of them "
+                  "ResolveSubresource's",
+                  static_cast<unsigned long long>(lmu::mvr_pass_stats().contextFunctions),
+                  static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
+    check(lmu::mvr_pass_stats().contextFunctions >= 20 && lmu::mvr_pass_stats().resolveFunctions >= 2, what);
+    ComPtr<ID3D11DeviceContext4> context4;
+    check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
+          "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");
 
     ComPtr<ID3D11VertexShader> a = vertex_shader(device.Get(), "1"), twin = vertex_shader(device.Get(), "2"),
                                b = vertex_shader(device.Get(), "3");
@@ -212,6 +226,39 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
+    {  // Multithread protection on: d3d11 puts other functions in the context's entries; the hooks are on those too.
+        ComPtr<ID3D11Multithread> mt;
+        check(SUCCEEDED(context.As(&mt)), "the context's multithread protection");
+        void* const plainEntry = ownVtable[lmu::context_slot::kRSSetViewports];
+        const BOOL was = mt ? mt->SetMultithreadProtected(TRUE) : FALSE;
+        check(mt && ownVtable[lmu::context_slot::kRSSetViewports] != plainEntry,
+              "protection on: d3d11 rewrote the context's entries");
+        for (int round = 0; round < 2; ++round) {  // protection on, then off again
+            const uint64_t functions = lmu::mvr_pass_stats().contextFunctions;
+            context->RSSetViewports(1, &eye);
+            context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+            context->VSSetShader(b.Get(), nullptr, 0);
+            lmu::mvr_pass_begin(0, &view, false);
+            context->VSSetShader(a.Get(), nullptr, 0);
+            n = viewports(context.Get(), vps);
+            const bool twinned = bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && n == 2 &&
+                                 same(vps[1], 100, 0, 60, 50);
+            context->RSSetViewports(1, &quarter);
+            n = viewports(context.Get(), vps);
+            const bool quartered = n == 2 && same(vps[1], 25, 0, 15, 12.5f);
+            context->VSSetShader(b.Get(), nullptr, 0);
+            const bool plain = bound_vs(context.Get()) == b.Get() && twoViewsOn == 0;
+            lmu::mvr_pass_end(0);
+            std::snprintf(what, sizeof(what),
+                          "protection %s: the game's shader and viewport calls still seen (twin and focus viewport %d, "
+                          "quarter size %d, a shader without a twin %d); no function new since install",
+                          round == 0 ? "on" : "off again", twinned, quartered, plain);
+            check(twinned && quartered && plain && lmu::mvr_pass_stats().contextFunctions == functions, what);
+            if (mt && round == 0)
+                mt->SetMultithreadProtected(was);
+        }
+    }
+
     {  // The twin lookup: once per shader (the cache, across frames); a twin attached since seen once announced.
         lmu::mvr_pass_begin(0, &view, false);
         const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
@@ -306,7 +353,6 @@ int main() {
               std::fabs(same0.brightness - 1) < 1e-6 && same0.differingPct == 0,
           "compare: an image with itself: aligned, brightness 1, nothing differs");
     const lmu::MvrComparison moved = lmu::mvr_compare(base, image(w, h, 2, -1, 1.0f), w, h);
-    char what[160];
     std::snprintf(what, sizeof(what), "compare: moved by (2, -1): found at %+d,%+d, mean difference %.4f", moved.shiftX,
                   moved.shiftY, moved.meanDiff);
     check(moved.ok && moved.shiftX == 2 && moved.shiftY == -1 && moved.meanDiff < 0.002, what);

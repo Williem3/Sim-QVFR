@@ -1,9 +1,10 @@
 // LMU's multi-view rendering in the eye passes (mvr_pass.h). Render thread only: the hooks act on the game's
-// immediate context while a pass runs and pass everything else straight through.
+// immediate context while a pass runs and pass everything else straight through. They are on every function the
+// context's entries hold in d3d11's modes (MinHook; "How the hooks are reached" below).
 #include "mvr_pass.h"
 
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <intrin.h>
 #include <wrl/client.h>
 
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <utility>
 
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
@@ -25,36 +27,73 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-using VSSetShaderFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11VertexShader*, ID3D11ClassInstance* const*,
-                                               UINT);
-using OMSetRenderTargetsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*,
-                                                      ID3D11DepthStencilView*);
-using OMSetRenderTargetsAndUavsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*,
-                                                             ID3D11DepthStencilView*, UINT, UINT,
-                                                             ID3D11UnorderedAccessView* const*, const UINT*);
-using RSSetViewportsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, const D3D11_VIEWPORT*);
-using RSSetScissorRectsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, const D3D11_RECT*);
-using ResolveSubresourceFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, ID3D11Resource*, UINT,
-                                                      DXGI_FORMAT);
-template <typename Shader>
-using SetShaderFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, Shader*, ID3D11ClassInstance* const*, UINT);
-using SOSetTargetsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11Buffer* const*, const UINT*);
-// ID3D11DeviceContext's vtable (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
-constexpr int kVSSetShader = 11, kGSSetShader = 23, kOMSetRenderTargets = 33, kOMSetRenderTargetsAndUavs = 34,
-              kSOSetTargets = 37, kRSSetViewports = 44, kRSSetScissorRects = 45, kResolveSubresource = 57,
-              kHSSetShader = 60, kDSSetShader = 64;
+using namespace context_slot;
 constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
-VSSetShaderFn realVSSetShader = nullptr;
-OMSetRenderTargetsFn realOMSetRenderTargets = nullptr;
-OMSetRenderTargetsAndUavsFn realOMSetRenderTargetsAndUavs = nullptr;
-RSSetViewportsFn realRSSetViewports = nullptr;
-RSSetScissorRectsFn realRSSetScissorRects = nullptr;
-ResolveSubresourceFn realResolveSubresource = nullptr;
-SetShaderFn<ID3D11GeometryShader> realGSSetShader = nullptr;
-SetShaderFn<ID3D11HullShader> realHSSetShader = nullptr;
-SetShaderFn<ID3D11DomainShader> realDSSetShader = nullptr;
-SOSetTargetsFn realSOSetTargets = nullptr;
+// How the hooks are reached (mvr_pass.h context_slot): d3d11 rewrites the context's vtable entries as it runs, and a
+// hook on one function an entry held misses the calls through the others (nvapi_stereo_check 6: once protection has
+// been on, the plain functions are other ones, which the locking ones don't call), so each function an entry is seen
+// holding is hooked in d3d11's code (MinHook), a detour of its own each: those found at install (the entries as they
+// are, with multithread protection on if it was off, each after a flush and after a command) and any new one at a
+// pass's start. Our own calls and the calls passed on go to the original of the function the entry holds now.
+enum Hook : int { kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHooks };
+constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
+                                      kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
+                                      kHSSetShader,   kDSSetShader};
+constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
+                                           "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
+                                           "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
+                                           "HSSetShader",    "DSSetShader"};
+// Per entry: 4 seen for each on WARP and on an RTX 5070 Ti (2026-11-09: idle and busy, multithread protection off, on,
+// and off again after it was on), room for more.
+constexpr int kFunctions = 8;
+struct Functions {
+    void* target[kFunctions] = {};  // d3d11's
+    void* real[kFunctions] = {};    // its original (MinHook's trampoline; the function itself if it couldn't be hooked)
+    int count = 0, hooked = 0;
+    bool full = false;  // a fifth seen (logged once)
+};
+Functions functions[kHooks];
+// Calls of a hooked function inside the handling of one: ours, the one passed on, and one function of an entry calling
+// another (a locking one calling the plain one) go straight through.
+thread_local int depth[kHooks] = {};
+
+template <int H, typename... A>
+void call_real(ID3D11DeviceContext* context, A... a) {
+    void* fn = (*reinterpret_cast<void** const*>(context))[kSlotOf[H]];
+    void* real = fn;  // a function not hooked (yet): d3d11's own
+    const Functions& f = functions[H];
+    for (int i = 0; i < f.count; ++i)
+        if (f.target[i] == fn) {
+            real = f.real[i];
+            break;
+        }
+    ++depth[H];
+    reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...)>(real)(context, a...);
+    --depth[H];
+}
+
+void realVSSetShader(ID3D11DeviceContext* c, ID3D11VertexShader* vs, ID3D11ClassInstance* const* i, UINT n) {
+    call_real<kHookVS>(c, vs, i, n);
+}
+void realOMSetRenderTargets(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtvs,
+                            ID3D11DepthStencilView* dsv) {
+    call_real<kHookOM>(c, n, rtvs, dsv);
+}
+void realOMSetRenderTargetsAndUavs(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtvs,
+                                   ID3D11DepthStencilView* dsv, UINT uavStart, UINT uavCount,
+                                   ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    call_real<kHookOMUav>(c, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+}
+void realRSSetViewports(ID3D11DeviceContext* c, UINT n, const D3D11_VIEWPORT* vps) { call_real<kHookVP>(c, n, vps); }
+void realRSSetScissorRects(ID3D11DeviceContext* c, UINT n, const D3D11_RECT* rects) { call_real<kHookSC>(c, n, rects); }
+void realSOSetTargets(ID3D11DeviceContext* c, UINT n, ID3D11Buffer* const* buffers, const UINT* offsets) {
+    call_real<kHookSO>(c, n, buffers, offsets);
+}
+void realResolveSubresource(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub,
+                            DXGI_FORMAT format) {
+    call_real<kHookResolve>(c, dst, dstSub, src, srcSub, format);
+}
 
 int nvapi_two_views(ID3D11DeviceContext* context, bool on) { return simqvfr::nvapi::set_two_views(context, on); }
 
@@ -105,6 +144,8 @@ constexpr int kGpuFrames = 4;
 
 struct State {
     ID3D11DeviceContext* context = nullptr;  // the game's immediate context (not referenced: the device keeps it)
+    ComPtr<ID3D11Multithread> multithread;   // its multithread protection (logged when it changes)
+    bool protectedNow = false;
     GpuFrame gpu[kGpuFrames];
     int gpuSlot = -1;            // this frame's, while it runs
     unsigned long long gpuFrameNo = 0;
@@ -312,16 +353,16 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
     update();
 }
 
-template <typename Shader, SetShaderFn<Shader>* real, bool State::*bound>
+template <int H, typename Shader, bool State::*bound>
 void STDMETHODCALLTYPE later_stage(ID3D11DeviceContext* context, Shader* shader, ID3D11ClassInstance* const* instances,
                                    UINT count) {
     if (!ours(context)) {
-        (*real)(context, shader, instances, count);
+        call_real<H>(context, shader, instances, count);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    (*real)(context, shader, instances, count);
+    call_real<H>(context, shader, instances, count);
     g.*bound = shader != nullptr;
     update();
 }
@@ -458,8 +499,100 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
     }
 }
 
-bool hook(void* target, void* detour, void** original) {
-    return MH_CreateHook(target, detour, original) == MH_OK && MH_EnableHook(target) == MH_OK;
+// The detours of hook H's functions, one per function (N): straight through inside the handling of one (depth), else
+// the handler, which passes the call on through call_real.
+template <int H, auto Handler, typename... A>
+struct Detours {
+    template <int N>
+    static void STDMETHODCALLTYPE fn(ID3D11DeviceContext* context, A... a) {
+        if (depth[H] > 0) {
+            reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...)>(functions[H].real[N])(context, a...);
+            return;
+        }
+        ++depth[H];
+        Handler(context, a...);
+        --depth[H];
+    }
+    template <std::size_t... N>
+    static void* get(int n, std::index_sequence<N...>) {
+        void* const table[] = {reinterpret_cast<void*>(&fn<static_cast<int>(N)>)...};
+        return table[n];
+    }
+    static void* get(int n) { return get(n, std::make_index_sequence<kFunctions>{}); }
+};
+
+void* detour_for(int h, int n) {
+    using Instances = ID3D11ClassInstance* const*;
+    switch (h) {
+        case kHookVS: return Detours<kHookVS, &vs_set_shader, ID3D11VertexShader*, Instances, UINT>::get(n);
+        case kHookGS:
+            return Detours<kHookGS, &later_stage<kHookGS, ID3D11GeometryShader, &State::gsBound>, ID3D11GeometryShader*,
+                           Instances, UINT>::get(n);
+        case kHookOM:
+            return Detours<kHookOM, &om_set_render_targets, UINT, ID3D11RenderTargetView* const*,
+                           ID3D11DepthStencilView*>::get(n);
+        case kHookOMUav:
+            return Detours<kHookOMUav, &om_set_render_targets_and_uavs, UINT, ID3D11RenderTargetView* const*,
+                           ID3D11DepthStencilView*, UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*>::get(n);
+        case kHookSO: return Detours<kHookSO, &so_set_targets, UINT, ID3D11Buffer* const*, const UINT*>::get(n);
+        case kHookVP: return Detours<kHookVP, &rs_set_viewports, UINT, const D3D11_VIEWPORT*>::get(n);
+        case kHookSC: return Detours<kHookSC, &rs_set_scissor_rects, UINT, const D3D11_RECT*>::get(n);
+        case kHookResolve:
+            return Detours<kHookResolve, &resolve_subresource, ID3D11Resource*, UINT, ID3D11Resource*, UINT,
+                           DXGI_FORMAT>::get(n);
+        case kHookHS:
+            return Detours<kHookHS, &later_stage<kHookHS, ID3D11HullShader, &State::hsBound>, ID3D11HullShader*,
+                           Instances, UINT>::get(n);
+        default:
+            return Detours<kHookDS, &later_stage<kHookDS, ID3D11DomainShader, &State::dsBound>, ID3D11DomainShader*,
+                           Instances, UINT>::get(n);
+    }
+}
+
+// The function the context's entry for hook `h` holds now, hooked in d3d11's code if not seen before (render thread).
+// True: a new one.
+bool hook_entry(int h) {
+    void* fn = (*reinterpret_cast<void** const*>(g.context))[kSlotOf[h]];
+    Functions& f = functions[h];
+    for (int i = 0; i < f.count; ++i)
+        if (f.target[i] == fn)
+            return false;
+    if (f.count == kFunctions) {
+        if (!f.full)
+            simqvfr::logf("lmu mvr: the context's %s entry holds a fifth function: calls through it aren't seen",
+                          kHookName[h]);
+        f.full = true;
+        return false;
+    }
+    const int n = f.count;
+    f.target[n] = fn;
+    if (MH_CreateHook(fn, detour_for(h, n), &f.real[n]) == MH_OK && MH_EnableHook(fn) == MH_OK) {
+        ++f.hooked;
+        ++g.stats.contextFunctions;
+        if (h == kHookResolve)
+            ++g.stats.resolveFunctions;
+    } else {
+        f.real[n] = fn;  // passed on as it is, not tried again
+        simqvfr::logf("lmu mvr: the context's %s function %p couldn't be hooked", kHookName[h], fn);
+    }
+    ++f.count;  // last: call_real reads target and real up to it
+    return true;
+}
+
+int hook_entries() {
+    int fresh = 0;
+    for (int h = 0; h < kHooks; ++h)
+        fresh += hook_entry(h) ? 1 : 0;
+    return fresh;
+}
+
+void unhook_entries() {
+    for (Functions& f : functions) {
+        for (int i = 0; i < f.count; ++i)
+            if (f.real[i] != f.target[i])
+                MH_RemoveHook(f.target[i]);
+        f = Functions{};
+    }
 }
 
 // The game's bindings as the pass starts (the hooks only see later changes).
@@ -655,38 +788,45 @@ bool mvr_pass_install(ID3D11Device* device) {
     }
     if (const MH_STATUS s = MH_Initialize(); s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
         return false;
-    void** vtable = *reinterpret_cast<void***>(context.Get());
-    const bool ok =
-        hook(vtable[kVSSetShader], reinterpret_cast<void*>(&vs_set_shader), reinterpret_cast<void**>(&realVSSetShader)) &&
-        hook(vtable[kOMSetRenderTargets], reinterpret_cast<void*>(&om_set_render_targets),
-             reinterpret_cast<void**>(&realOMSetRenderTargets)) &&
-        hook(vtable[kOMSetRenderTargetsAndUavs], reinterpret_cast<void*>(&om_set_render_targets_and_uavs),
-             reinterpret_cast<void**>(&realOMSetRenderTargetsAndUavs)) &&
-        hook(vtable[kRSSetViewports], reinterpret_cast<void*>(&rs_set_viewports),
-             reinterpret_cast<void**>(&realRSSetViewports)) &&
-        hook(vtable[kRSSetScissorRects], reinterpret_cast<void*>(&rs_set_scissor_rects),
-             reinterpret_cast<void**>(&realRSSetScissorRects)) &&
-        hook(vtable[kResolveSubresource], reinterpret_cast<void*>(&resolve_subresource),
-             reinterpret_cast<void**>(&realResolveSubresource)) &&
-        hook(vtable[kGSSetShader],
-             reinterpret_cast<void*>(&later_stage<ID3D11GeometryShader, &realGSSetShader, &State::gsBound>),
-             reinterpret_cast<void**>(&realGSSetShader)) &&
-        hook(vtable[kHSSetShader], reinterpret_cast<void*>(&later_stage<ID3D11HullShader, &realHSSetShader, &State::hsBound>),
-             reinterpret_cast<void**>(&realHSSetShader)) &&
-        hook(vtable[kDSSetShader],
-             reinterpret_cast<void*>(&later_stage<ID3D11DomainShader, &realDSSetShader, &State::dsBound>),
-             reinterpret_cast<void**>(&realDSSetShader)) &&
-        hook(vtable[kSOSetTargets], reinterpret_cast<void*>(&so_set_targets), reinterpret_cast<void**>(&realSOSetTargets));
-    if (!ok) {
-        simqvfr::log_line("lmu mvr: the context couldn't be hooked; off");
-        return false;
-    }
     g.context = context.Get();
+    context.As(&g.multithread);
+    // Every function the entries hold: as they are; once idle (a flush) and busy (a command of ours); and the same with
+    // multithread protection on when it is off (on, then off again: it only adds locking meanwhile). With protection on
+    // already, turning it off here could race another thread: its plain functions are hooked when they first appear.
+    const auto idle_and_busy = [&] {
+        hook_entries();
+        g.context->Flush();
+        hook_entries();
+        g.context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, identity, 0, 0);
+        hook_entries();
+    };
+    idle_and_busy();
+    g.protectedNow = g.multithread && g.multithread->GetMultithreadProtected();
+    if (g.multithread && !g.protectedNow) {
+        g.multithread->SetMultithreadProtected(TRUE);
+        idle_and_busy();
+        g.multithread->SetMultithreadProtected(FALSE);
+        hook_entries();
+    }
+    for (int h = 0; h < kHooks; ++h)
+        if (!functions[h].hooked) {
+            unhook_entries();
+            g.context = nullptr;
+            g.multithread.Reset();
+            simqvfr::logf("lmu mvr: the context's %s couldn't be hooked; off", kHookName[h]);
+            return false;
+        }
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     g.qpcAtLog = now.QuadPart;
     g.tscAtLog = __rdtsc();
-    simqvfr::log_line("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye)");
+    std::string counts;
+    for (int h = 0; h < kHooks; ++h)
+        counts += (h ? ", " : "") + std::string(kHookName[h]) + " " + std::to_string(functions[h].hooked);
+    simqvfr::logf("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye); the context's "
+                  "hooks on %llu functions in d3d11's code (%s); multithread protection %s",
+                  static_cast<unsigned long long>(g.stats.contextFunctions), counts.c_str(),
+                  !g.multithread ? "not known" : g.protectedNow ? "on" : "off");
     return true;
 }
 
@@ -694,6 +834,19 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     if (!g.context)
         return;
     Timed timed(g.time.hooks);
+    // A function an entry holds that wasn't seen at install (a mode of d3d11's not met there): hooked from this pass on.
+    for (int h = 0; h < kHooks; ++h)
+        if (hook_entry(h))
+            simqvfr::logf("lmu mvr: the context's %s entry holds a function not seen before: hooked (%d for it now)",
+                          kHookName[h], functions[h].count);
+    if (pass == 0 && g.multithread) {  // who turns multithread protection on or off, and when (once per frame)
+        const bool on = g.multithread->GetMultithreadProtected() != FALSE;
+        if (on != g.protectedNow) {
+            g.protectedNow = on;
+            simqvfr::logf("lmu mvr: the immediate context's multithread protection went %s (game frame %llu)",
+                          on ? "on" : "off", g.gpuFrameNo);
+        }
+    }
     g.pass = pass;
     g.drawFocus = view != nullptr && !g.broken;
     g.suspended = false;
