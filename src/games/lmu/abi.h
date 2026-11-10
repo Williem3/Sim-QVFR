@@ -56,14 +56,18 @@ inline constexpr std::size_t kEyeSlotStride = 0x6c;
 inline constexpr std::size_t kSlotMatrix = 4;  // the row-major 4x4 (left-handed, row vectors) after an int
 // The eye render textures (texture objects), eye e at + e * 8. [Eye textures]
 inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
-// The render scale (float): every VR target is recommended x it; GetRenderSize reads it each call, so a pass renders
-// into the top-left ceil(recommended x scale) of the launch-size targets (probe run 2026-11-07). [Live resolution]
+// The render scale (float): the main targets are recommended x it, the eye targets recommended; GetRenderSize reads it
+// each call, so a pass renders into the top-left ceil(recommended x scale) of the launch-size targets (probe run
+// 2026-11-07); the final blit or FSR stretches the main target over the eye target (focus_math.h). [Live resolution]
 inline constexpr std::uintptr_t kRenderScale = 0x199cc18;
 inline constexpr std::uintptr_t kRecommendedSize = 0x1b1c654;  // uint32 width, height (the runtime's, as offered)
 // The frame's eye render size (float width, height = ceil(recommended x scale)), set once per frame by VR_UpdateEyes and
 // copied into the camera at each pass's head (with the VR state block, 0x418 bytes from 0x1b1be30): a pass renders at
 // the size this holds when its camera is set up, not at the scale in effect during the pass (live run 2026-11-08).
 inline constexpr std::uintptr_t kEyeRenderSize = 0x1b1c240;
+// The renderer's FSR 1 (FSR.cpp, made at device init); method != 0: the post's end upscales, no final blit. [FSR]
+inline constexpr std::size_t kRendererFsr = 0x1778;  // FSR object*
+inline constexpr std::size_t kFsrMethod = 0x40;      // int: UpscaleMethod (0 off)
 
 // VRHiddenAreaMask::Draw(this, camera): the lens mask in the eye's screen space, mesh by camera eye (+0x5cc). [Hidden-area mask]
 inline constexpr std::uintptr_t kHiddenAreaDraw = 0x6188d0;

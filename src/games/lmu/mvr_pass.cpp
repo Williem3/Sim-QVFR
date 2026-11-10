@@ -430,20 +430,28 @@ void gpu_collect() {
     }
 }
 
-D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v) {
-    const float sx = view.eyeW ? static_cast<float>(view.focusW) / static_cast<float>(view.eyeW) : 1.0f;
-    const float sy = view.eyeH ? static_cast<float>(view.focusH) / static_cast<float>(view.eyeH) : 1.0f;
+// The eye's corner of its final (the overlays' and the focus final's space): the rendered corner stretched by the game's
+// final blit when its render scale isn't 1 (MvrPassView::finalEyeW).
+unsigned final_eye_w(const MvrPassView& view) { return view.finalEyeW ? view.finalEyeW : view.eyeW; }
+unsigned final_eye_h(const MvrPassView& view) { return view.finalEyeH ? view.finalEyeH : view.eyeH; }
+
+// The focus view's viewport beside the eye's `v`: in the scene the eye's rendered size scaled to the focus view's; for an
+// overlay into the eye's final (`overlay`), the eye's corner of the final to the focus final's (the focus size, 1:1).
+D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v, bool overlay = false) {
+    const unsigned ew = overlay ? final_eye_w(view) : view.eyeW, eh = overlay ? final_eye_h(view) : view.eyeH;
+    const float sx = ew ? static_cast<float>(view.focusW) / static_cast<float>(ew) : 1.0f;
+    const float sy = eh ? static_cast<float>(view.focusH) / static_cast<float>(eh) : 1.0f;
     return {v.TopLeftX + v.Width, v.TopLeftY, v.Width * sx, v.Height * sy, v.MinDepth, v.MaxDepth};
 }
 
-D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) { return focus_viewport_of(g.view, v); }
+D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) { return focus_viewport_of(g.view, v, g.overlayTarget); }
 
-// An overlay's viewport into eye `eye`'s final: the whole target cut to the part the eye rendered (as the driver tags'
+// An overlay's viewport into eye `eye`'s final: the whole target cut to the eye's corner of it (as the driver tags'
 // under live resolution: tag_viewport.h), so its second viewport lands on the focus view beside it.
 D3D11_VIEWPORT overlay_viewport(int eye, const MvrPassView& view, const D3D11_VIEWPORT& v) {
     TagViewport cut{};
-    if (!tag_viewport_cut({v.TopLeftX, v.TopLeftY, v.Width, v.Height}, g.finalW[eye], g.finalH[eye], view.eyeW, view.eyeH,
-                          cut))
+    if (!tag_viewport_cut({v.TopLeftX, v.TopLeftY, v.Width, v.Height}, g.finalW[eye], g.finalH[eye], final_eye_w(view),
+                          final_eye_h(view), cut))
         return v;
     return {cut.x, cut.y, cut.width, cut.height, v.MinDepth, v.MaxDepth};
 }
@@ -1006,18 +1014,21 @@ void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
         texture->GetDesc(&d);
     const MvrPassView& v = g.view;
     const int eye = g.pass & 1;  // as the focus post's (after_copy, after_composite)
-    if (!texture || v.eyeW + v.focusW > d.Width || v.focusH > d.Height) {
+    // The eye's corner of its final: its rendered corner, stretched when the game's render scale isn't 1 (the blit maps
+    // the whole main target over the whole final). The focus final beside it at the focus image's own size.
+    const unsigned ew = final_eye_w(v), eh = final_eye_h(v);
+    if (!texture || ew + v.focusW > d.Width || v.focusH > d.Height) {
         ++g.stats.focusFailures;
         if (!g.blitRefusalLogged) {
             g.blitRefusalLogged = true;
             simqvfr::logf("lmu mvr: focus post: pass %d: the eye's final (%ux%u) has no room for the focus view %ux%u beside "
                           "the eye's %u: no focus final there",
-                          g.pass, d.Width, d.Height, v.focusW, v.focusH, v.eyeW);
+                          g.pass, d.Width, d.Height, v.focusW, v.focusH, ew);
         }
         return;
     }
     g.replaying = true;
-    const bool ok = g.focusPost.blit_final(context, eye, count, start, {0, 0, v.eyeW, v.eyeH}, {v.eyeW, 0, v.focusW, v.focusH});
+    const bool ok = g.focusPost.blit_final(context, eye, count, start, {0, 0, ew, eh}, {ew, 0, v.focusW, v.focusH});
     g.replaying = false;
     if (!ok) {
         ++g.stats.focusFailures;
@@ -1126,7 +1137,7 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
     bool doubled = false;
     if (g.instanced || g.twoViews(context, true) == 0) {
         const D3D11_VIEWPORT first = overlay_viewport(eye, v, vps[0]);
-        const D3D11_VIEWPORT two[2] = {first, focus_viewport_of(v, first)};
+        const D3D11_VIEWPORT two[2] = {first, focus_viewport_of(v, first, true)};
         realVSSetShader(context, twin, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, 2, two);
         if (g.instanced) {
@@ -1860,7 +1871,7 @@ bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigne
     if (eye < 0 || eye > 1 || !g.finalThisFrame[eye])
         return false;
     const MvrPassView& v = g.viewOf[eye];
-    x = v.eyeW;
+    x = final_eye_w(v);  // as focus_blit put it
     y = 0;
     width = v.focusW;
     height = v.focusH;

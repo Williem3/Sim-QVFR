@@ -34,7 +34,10 @@ struct MvrPassView {
     float remap[4] = {1, 0, 1, 0};    // a, b, c, d: the focus view's clip x = a x + b w, y = c y + d w (focus_math.h)
     unsigned eyeW = 0, eyeH = 0;      // the size the eye renders at (its corner of the targets)
     unsigned focusW = 0, focusH = 0;  // the focus view's
-    FocusBox box{};                   // its tangents and the eye's (the focus post's glare mapping; valid: known)
+    // The eye's corner of its final (the eye target): eyeW x eyeH stretched by the game's final blit when its render
+    // scale isn't 1 (focus_math.h final_extent); 0: as eyeW x eyeH. The focus final goes beside it, at the focus size.
+    unsigned finalEyeW = 0, finalEyeH = 0;
+    FocusBox box{};                 // its tangents and the eye's (the focus post's glare mapping; valid: known)
 };
 
 // The immediate context's vtable entries the hooks use (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).

@@ -625,19 +625,63 @@ struct GpuSpans {
 // head (kEyeRenderSize, which VR_UpdateEyes sets once per frame from the render scale). So the size and the scale (which
 // the pass's post-processing reads) are set together at the end of the pass before: the focus share after pass 1, the
 // outer share after pass 3 (and so for the next frame's VR_UpdateEyes), each the game's own scale times the share
-// (four_passes_set_live_scales). passW/passH: what each pass of this frame rendered, for the copies and atlas regions.
+// (four_passes_set_live_scales).
+// Two sizes per pass (focus_math.h final_extent): sceneW/sceneH, what it rendered of the main targets (the scene, the
+// resolve, YEBIS: glare share and MVR's side-by-side viewports work there); passW/passH, the part of its eye target
+// that holds its view after the final blit or FSR stretched the main target over it (the copies, the atlas regions, the
+// driver tags and the VR UI). The same at the game's render scale 1; below it (FSR's presets) the eye target's part is
+// larger by recommended / main. extentW/extentH: passW/passH unrounded, for the layer's record.
 float liveScale[2] = {1, 1};  // outer, focus (under liveMutex)
 float liveAxes[2][2] = {{1, 1}, {1, 1}};  // per axis (perAxis): outer, focus; width, height shares (under liveMutex)
 float gameScale = 0;          // the game's own render scale (its setting; what the launch-size targets were made with)
 float lastWritten = 0;        // what this code last wrote to it
 unsigned passW[4] = {}, passH[4] = {};
-bool liveLogged = false;
+unsigned sceneW[4] = {}, sceneH[4] = {};
+double extentW[4] = {}, extentH[4] = {};
+bool liveLogged = false, stretchLogged = false;
 
 // The runtime's recommended size as the game took it (VR_Init).
 void real_recommended(std::uint32_t (&out)[2]) {
     const auto* rec = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
     out[0] = rec[0];
     out[1] = rec[1];
+}
+
+// The main targets' size: the recommended size at the game's own render scale, as cubeDX11_CreateVRMainTargets makes
+// them; 0 x 0 before the game's scale is known.
+void main_size(unsigned (&out)[2]) {
+    out[0] = out[1] = 0;
+    if (gameScale <= 0)
+        return;
+    std::uint32_t rec[2];
+    real_recommended(rec);
+    out[0] = scaled_size(rec[0], gameScale);
+    out[1] = scaled_size(rec[1], gameScale);
+}
+
+// LMU's FSR 1 is on (its UpscaleMethod): each view's post-processing ends in FSR's upscale, not in the final blit.
+bool fsr_on() {
+    const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base() + kRenderer);
+    if (!renderer)
+        return false;
+    const auto* fsr = *reinterpret_cast<const std::uint8_t* const*>(renderer + kRendererFsr);
+    return fsr && *reinterpret_cast<const int*>(fsr + kFsrMethod) != 0;
+}
+
+// Pass p's part of its eye target from what it rendered of the main targets (passW from sceneW), at most the target.
+void set_final_size(int p) {
+    unsigned m[2];
+    main_size(m);
+    std::uint32_t rec[2];
+    real_recommended(rec);
+    extentW[p] = final_extent(sceneW[p], m[0], rec[0]);
+    extentH[p] = final_extent(sceneH[p], m[1], rec[1]);
+    passW[p] = final_texels(extentW[p], viewW);
+    passH[p] = final_texels(extentH[p], viewH);
+    if (viewW && extentW[p] > viewW)
+        extentW[p] = viewW;
+    if (viewH && extentH[p] > viewH)
+        extentH[p] = viewH;
 }
 
 int probe_active();  // the render scale probe owns the scale (below)
@@ -654,13 +698,28 @@ void qvfr_before_pass(int p) {
                           frames, gameScale, scale);
         gameScale = scale;
         lastWritten = 0;
+        stretchLogged = false;
     }
     const auto* size = reinterpret_cast<const float*>(base() + kEyeRenderSize);
-    passW[p] = size[0] >= 1 ? static_cast<unsigned>(size[0]) : 1u;
-    passH[p] = size[1] >= 1 ? static_cast<unsigned>(size[1]) : 1u;
-    if (viewW && viewH) {
-        passW[p] = std::clamp(passW[p], 1u, viewW);
-        passH[p] = std::clamp(passH[p], 1u, viewH);
+    unsigned m[2];
+    main_size(m);
+    sceneW[p] = size[0] >= 1 ? static_cast<unsigned>(size[0]) : 1u;
+    sceneH[p] = size[1] >= 1 ? static_cast<unsigned>(size[1]) : 1u;
+    if (m[0] && m[1]) {
+        sceneW[p] = std::min(sceneW[p], m[0]);
+        sceneH[p] = std::min(sceneH[p], m[1]);
+    }
+    set_final_size(p);
+    if (!stretchLogged && m[0] && viewW) {
+        stretchLogged = true;
+        std::uint32_t rec[2];
+        real_recommended(rec);
+        if (m[0] != rec[0] || m[1] != rec[1])
+            simqvfr::logf("lmu qvfr: frame %llu: the game's render scale is %.3f (FSR %s): its main targets are %ux%u, "
+                          "stretched over the %ux%u eye targets by %s; each view is taken from the part of its eye target "
+                          "it covers (pass %d: %ux%u rendered, %ux%u in the eye target)",
+                          frames, gameScale, fsr_on() ? "on" : "off", m[0], m[1], viewW, viewH,
+                          fsr_on() ? "FSR's upscale" : "the final blit", p, sceneW[p], sceneH[p], passW[p], passH[p]);
     }
 }
 
@@ -943,8 +1002,10 @@ void mvr_before_pass(int p) {
         v.remap[1] = static_cast<float>(r.b);
         v.remap[2] = static_cast<float>(r.c);
         v.remap[3] = static_cast<float>(r.d);
-        v.eyeW = passW[p];
-        v.eyeH = passH[p];
+        v.eyeW = sceneW[p];  // its corner of the main targets, where the focus view goes beside it
+        v.eyeH = sceneH[p];
+        v.finalEyeW = passW[p];  // that corner in its final (stretched by the game's blit below render scale 1)
+        v.finalEyeH = passH[p];
         v.box = frozenBox[p];
         float shareW, shareH;
         {
@@ -956,12 +1017,21 @@ void mvr_before_pass(int p) {
         real_recommended(recommended);
         v.focusW = scaled_size(recommended[0], gameScale * shareW);
         v.focusH = scaled_size(recommended[1], gameScale * shareH);
-        draw = v.eyeW && v.focusW && (!viewW || (v.eyeW + v.focusW <= viewW && v.focusH <= viewH));
+        // Side by side in the main targets (the scene's), and the focus final beside the eye's corner of its final.
+        unsigned room[2];
+        main_size(room);
+        if (!room[0] || !room[1]) {
+            room[0] = viewW;
+            room[1] = viewH;
+        }
+        draw = v.eyeW && v.focusW && (!room[0] || (v.eyeW + v.focusW <= room[0] && v.focusH <= room[1])) &&
+               (!viewW || (v.finalEyeW + v.focusW <= viewW && v.focusH <= viewH));
         if (!draw && !mvrRoomLogged) {
             mvrRoomLogged = true;
-            simqvfr::logf("lmu mvr: frame %llu: eye %ux%u and focus %ux%u don't fit side by side in %ux%u targets: the "
-                          "focus views from passes 2-3 only",
-                          frames, v.eyeW, v.eyeH, v.focusW, v.focusH, viewW, viewH);
+            simqvfr::logf("lmu mvr: frame %llu: eye %ux%u and focus %ux%u don't fit side by side in %ux%u targets (the "
+                          "eye %ux%u of its %ux%u final): the focus views from passes 2-3 only",
+                          frames, v.eyeW, v.eyeH, v.focusW, v.focusH, room[0], room[1], v.finalEyeW, v.finalEyeH, viewW,
+                          viewH);
         }
     }
     mvr_pass_begin(p, draw ? &v : nullptr, sample);
@@ -1413,11 +1483,12 @@ void store_record() {
         std::memcpy(f.focusTan[e], focus, sizeof(focus));
         f.turn[e] = {0, 0, 0, 1};
     }
-    // The sizes rendered, as views4_live_one_size lays them out (each view half its layer at most: 0.5 = all of it).
+    // The sizes rendered, as views4_live_one_size lays them out (each view half its layer at most: 0.5 = all of it): each
+    // view's exact part of its eye target (extentW: the stretched one below the game's render scale 1).
     f.live = true;
     for (int v = 0; v < 4; ++v) {
-        f.width[v] = f.renderWidth[v] = viewW ? 0.5 * passW[v] / viewW : 0.5;
-        f.height[v] = f.renderHeight[v] = viewH ? 0.5 * passH[v] / viewH : 0.5;
+        f.width[v] = f.renderWidth[v] = viewW ? 0.5 * extentW[v] / viewW : 0.5;
+        f.height[v] = f.renderHeight[v] = viewH ? 0.5 * extentH[v] / viewH : 0.5;
     }
     std::lock_guard guard(liveMutex);
     latestRecord = f;
@@ -1660,10 +1731,8 @@ void after_two_passes() {
                       frames, same ? "are" : "are NOT");
     }
     if (e0 && e1 && ensure_atlas(e0) && is_view(e1)) {
-        for (int q = 0; q < 2; ++q) {
-            passW[q] = std::clamp(passW[q], 1u, viewW);
-            passH[q] = std::clamp(passH[q], 1u, viewH);
-        }
+        for (int q = 0; q < 2; ++q)  // the first frame's sizes were taken before the atlas knew the views
+            set_final_size(q);
         bool ok = true;
         for (int e = 0; e < 2 && ok; ++e) {
             unsigned x = 0, y = 0, w = 0, h = 0;
@@ -1671,8 +1740,10 @@ void after_two_passes() {
             if (ok) {
                 finalAt[e][0] = x;
                 finalAt[e][1] = y;
-                passW[2 + e] = w;
+                passW[2 + e] = w;  // the focus final: the focus image 1:1 beside the eye
                 passH[2 + e] = h;
+                extentW[2 + e] = w;
+                extentH[2 + e] = h;
                 boxes[e] = frozenBox[e];
             }
         }
@@ -1709,10 +1780,8 @@ void qvfr_after_pass(int p) {
         ID3D11Texture2D* e0 = eye_texture(0);
         ID3D11Texture2D* e1 = eye_texture(1);
         if (e0 && e1 && ensure_atlas(e0) && ensure_focus_textures(e0) && is_view(e1)) {
-            for (int q = 0; q < 2; ++q) {  // the first frame's sizes were taken before the atlas knew the views
-                passW[q] = std::clamp(passW[q], 1u, viewW);
-                passH[q] = std::clamp(passH[q], 1u, viewH);
-            }
+            for (int q = 0; q < 2; ++q)  // the first frame's sizes were taken before the atlas knew the views
+                set_final_size(q);
             const bool timed = gpuSpans.ready(e0);
             if (timed) {
                 gpuSpans.begin_frame();
@@ -1819,12 +1888,19 @@ void pass_begin(int p) {
             glare_share_capture_frame();
     }
     // Which view YEBIS's glare belongs to: an eye's is kept; a focus view's (its projection swapped in) replaced by it.
-    // Its region is the view's own width and height over its target's (MVR's side by side too: glare_math.h); YEBIS's
-    // scale (the render scale over the targets') only logged and checked to cover it.
-    if (glareHooked && p < 4)
-        glare_share_pass(p, p >= 2 && eyesInAtlas && frameFocusOk ? &boxes[p - 2] : nullptr, passW[p], passH[p], viewW,
-                         viewH,
-                         gameScale > 0 ? *reinterpret_cast<const float*>(base() + kRenderScale) / gameScale : 0.0);
+    // Its region is the view's own width and height over its target's (MVR's side by side too: glare_math.h), both in
+    // the main targets YEBIS runs in; YEBIS's scale (the render scale over the targets') only logged and checked to
+    // cover it.
+    if (glareHooked && p < 4) {
+        unsigned m[2];
+        main_size(m);
+        if (!m[0] || !m[1]) {
+            m[0] = viewW;
+            m[1] = viewH;
+        }
+        glare_share_pass(p, p >= 2 && eyesInAtlas && frameFocusOk ? &boxes[p - 2] : nullptr, sceneW[p], sceneH[p], m[0],
+                         m[1], gameScale > 0 ? *reinterpret_cast<const float*>(base() + kRenderScale) / gameScale : 0.0);
+    }
     passWall0 = now_ms();
     passCpu0 = thread_cycles();
     costWindow.hookCycles += static_cast<double>(passCpu0 - hook0);
@@ -2632,8 +2708,12 @@ void four_passes_frame_end() {
     if (cfg.trackerDrives) {
         if (passes >= 1)
             noFinalsRun = frameFinalsOk ? 0 : noFinalsRun + 1;
+        // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit, which the focus
+        // final beside the eye is drawn with; the four passes take FSR's upscale for every view.
         const char* why = mvr_broken()           ? "the driver refused NVIDIA's multi-view rendering (and instancing "
                                                    "couldn't take over)"
+                          : fsr_on()             ? "LMU's FSR upscaling is on: it replaces the final blit the focus views "
+                                                   "are drawn beside the eyes with"
                           : noFinalsRun >= 90     ? "no focus views made in 90 frames in a row"
                           : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
                               ? "forced by lmu_mvr_fallback_at"
@@ -2698,8 +2778,19 @@ void four_passes_frame_end() {
                 ++ab.frames[ab_side()];
         }
         if (passes >= fullPasses && frames % 900 == 0) {
-            simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u targets", frames,
-                          passW[0], passH[0], passW[1], passH[1], passW[2], passH[2], passW[3], passH[3], viewW, viewH);
+            unsigned mainWH[2];
+            main_size(mainWH);
+            std::uint32_t rec[2];
+            real_recommended(rec);
+            if (mainWH[0] && (mainWH[0] != rec[0] || mainWH[1] != rec[1]))  // render scale not 1: scene and eye target apart
+                simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u main targets "
+                              "(render scale %.3f, FSR %s), in the %ux%u eye targets %ux%u %ux%u %ux%u %ux%u",
+                              frames, sceneW[0], sceneH[0], sceneW[1], sceneH[1], sceneW[2], sceneH[2], sceneW[3], sceneH[3],
+                              mainWH[0], mainWH[1], gameScale, fsr_on() ? "on" : "off", viewW, viewH, passW[0], passH[0],
+                              passW[1], passH[1], passW[2], passH[2], passW[3], passH[3]);
+            else
+                simqvfr::logf("lmu qvfr: frame %llu: passes rendered at %ux%u %ux%u %ux%u %ux%u in %ux%u targets", frames,
+                              passW[0], passH[0], passW[1], passH[1], passW[2], passH[2], passW[3], passH[3], viewW, viewH);
             const CostWindow& w = costWindow;
             if (w.frames && tscPerMs > 0) {
                 const double n = w.frames, g = w.gpuFrames ? w.gpuFrames : 1;
@@ -2899,10 +2990,12 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     gpuSpans.mark(3, 1);
     gpuSpans.end_frame();
     costWindow.hookCycles += static_cast<double>(thread_cycles() - c0);
-    const float cw = 0.5f / static_cast<float>(viewW), ch = 0.5f / static_cast<float>(viewH);
+    // Each view's exact part of the atlas cell (extentW: below the game's render scale 1, the stretched part).
+    const double cw = 0.5 / viewW, ch = 0.5 / viewH;
     for (int e = 0; e < 2; ++e) {
-        const float outer[4] = {0.5f * e, 0.0f, cw * passW[e], ch * passH[e]};
-        const float focus[4] = {0.5f * e, 0.5f, cw * passW[e + 2], ch * passH[e + 2]};
+        const float outer[4] = {0.5f * e, 0.0f, static_cast<float>(cw * extentW[e]), static_cast<float>(ch * extentH[e])};
+        const float focus[4] = {0.5f * e, 0.5f, static_cast<float>(cw * extentW[e + 2]),
+                                static_cast<float>(ch * extentH[e + 2])};
         std::memcpy(uv[e], outer, sizeof(outer));
         std::memcpy(uv[e + 2], focus, sizeof(focus));
     }
