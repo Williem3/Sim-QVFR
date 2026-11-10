@@ -407,7 +407,7 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
                        MH_EnableHook(deviceCreation[1]) == MH_OK;
     simqvfr::logf("lmu mvr probe: on (%s)%s%s%s; device creation %s%s",
                   attach ? "each shader's twin attached for lmu_mvr" : "log only",
-                  forceInstanced ? "; instancing even if NVIDIA's single-pass stereo is there (multi_view_software=1)" : "",
+                  forceInstanced ? "; instancing, not NVIDIA's multi-view rendering (multi_view_software=1)" : "",
                   dump ? (markChecksums ? ", vertex and pixel shaders dumped to logs\\shaders" : ", shaders dumped to logs\\shaders")
                        : "",
                   markChecksums ? "; shaders named by checksum for the log's traces" : "",
@@ -487,7 +487,7 @@ bool mvr_probe_instanced() { return attach && instancedUsable; }
 uint64_t mvr_probe_instanced_layouts() { return perInstanceLayouts.load(std::memory_order_acquire); }
 
 const char* mvr_backend_name(MvrBackend backend) {
-    return backend == MvrBackend::nvapi       ? "NVIDIA's single-pass stereo"
+    return backend == MvrBackend::nvapi       ? "NVIDIA's multi-view rendering"
            : backend == MvrBackend::instanced ? "instancing (each draw twice, the vertex shader picking the viewport)"
                                               : "none";
 }

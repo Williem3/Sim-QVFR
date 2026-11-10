@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 934" width="1120" height="934" role="img" aria-labelledby="title">
-<title id="title">LMU multi-view rendering with NVIDIA’s single-pass stereo</title>
+<title id="title">LMU with NVIDIA’s multi-view rendering</title>
 <style>
 :root { --window-bg:#f2f2f5; --group-bg:#ffffff; --control-bg:#e9e9ee; --control-border:#c2c2c9; --separator:#dcdce2;
  --label:#1d1d1f; --label-secondary:#55555c; --label-muted:#6e6e75; --success:#1f7a34; --success-bg:#e3f4e7;
@@ -26,7 +26,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 </style>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
 <rect width="1120" height="934" fill="var(--window-bg)"/>
-<text class="h1" x="20" y="40">LMU multi-view rendering with NVIDIA’s single-pass stereo</text>
+<text class="h1" x="20" y="40">LMU with NVIDIA’s multi-view rendering</text>
 <text class="sub" x="20" y="66">NVIDIA RTX 20 series and newer. LMU runs its own two eye passes as shipped; each scene draw in them also draws that eye’s</text>
 <text class="sub" x="20" y="84">focus view beside the eye. LMU’s code isn’t changed, hooked or called. Five values in its memory are read and two are written.</text>
 <circle cx="25" cy="112" r="5" fill="var(--label-muted)"/>
@@ -133,8 +133,8 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="s" x="796" y="336">Each twin writes the eye’s position and</text>
 <text class="s" x="796" y="352">the focus view’s: the eye’s clip space</text>
 <text class="s" x="796" y="368">remapped to the focus region (cb13).</text>
-<text class="s" x="796" y="394">Single-pass stereo through NVAPI: one</text>
-<text class="s" x="796" y="410">draw rasterises into both viewports.</text>
+<text class="s" x="796" y="394">NVIDIA’s multi-view rendering (NVAPI):</text>
+<text class="s" x="796" y="410">one draw rasterises to both viewports.</text>
 <rect x="796" y="450" width="268" height="152" rx="8" fill="var(--preview-canvas)"/>
 <rect x="806" y="460" width="128" height="104" rx="3" fill="var(--preview-periphery)"/>
 <text class="pv" x="870" y="510" text-anchor="middle">Eye</text>
@@ -161,6 +161,6 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 </g>
 <text class="foot" x="20" y="852">Grey arrows are calls LMU makes anyway. Dashed arrows are Sim-QVFR reading and writing values in LMU’s data; the dotted one is</text>
 <text class="foot" x="20" y="869">the layer reading the recommended size LMU took. No arrow points into LMU’s code.</text>
-<text class="foot" x="20" y="886">If NVIDIA’s driver refuses single-pass stereo, Sim-QVFR’s own multi-view takes over (LMU-NEUTRAL-MVR-ARCHITECTURE.svg). If neither can</text>
+<text class="foot" x="20" y="886">If NVIDIA’s driver refuses its multi-view rendering, Sim-QVFR’s own takes over (LMU-NEUTRAL-MVR-ARCHITECTURE.svg). If neither can</text>
 <text class="foot" x="20" y="903">run, Sim-QVFR renders the four views in passes of their own, which changes LMU’s code. From src/games/lmu/ on development (35ce98c).</text>
 </svg>

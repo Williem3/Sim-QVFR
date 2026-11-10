@@ -20,13 +20,15 @@ bool multi_view_on(const GameInfo* game, const wchar_t* ini, std::string* why) {
     const bool software = GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
     if (const nvapi::Gpu* gpu = nvapi::two_views_gpu())
         return say((gpu->name.empty() ? std::string("an NVIDIA GPU") : gpu->name) +
-                       (software ? ": Sim-QVFR's own (instancing; multi_view_software=1)" : ": NVIDIA's single-pass stereo"),
+                       (software ? ": Sim-QVFR's own (instancing; multi_view_software=1)"
+                                 : ": NVIDIA's multi-view rendering"),
                    true);
     std::string names;
     for (const nvapi::Gpu& gpu : nvapi::gpus())
         names += (names.empty() ? "" : ", ") + (gpu.name.empty() ? std::string("unnamed") : gpu.name);
     return say(std::string("Sim-QVFR's own (instancing)") +
-                   (names.empty() ? "" : "; no NVIDIA single-pass stereo with full positions on " + names),
+                   (names.empty() ? ""
+                                  : "; NVIDIA's multi-view rendering needs an RTX 20 series or newer, not " + names),
                true);
 }
 

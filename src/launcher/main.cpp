@@ -474,7 +474,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     if (info.features.multiView && GetPrivateProfileIntW(L"experiment", L"multi_view", 1, iniCopy.c_str()) != 0)
         say(std::wstring(L"  multi-view: on, ") +
             (multiViewGpu && ini_string(iniCopy.wstring(), L"experiment", L"multi_view_software") != L"1"
-                 ? L"NVIDIA's single-pass stereo"
+                 ? L"NVIDIA's multi-view rendering"
                  : L"Sim-QVFR's own (instancing)") +
             L" (the game's device decides at launch)");
     say(L"  run:       " + runFolder.wstring());

@@ -182,7 +182,7 @@ int main() {
         const bool on = simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why);
         std::snprintf(what, sizeof(what), "multi_view=1 for LMU: on whatever the GPU (%s)", why.c_str());
         check(on && !why.empty() &&
-                  (why.find("single-pass stereo") != std::string::npos) == (nvapi::two_views_gpu() != nullptr),
+                  (why.find("Sim-QVFR's own") == std::string::npos) == (nvapi::two_views_gpu() != nullptr),
               what);
         WritePrivateProfileStringW(L"experiment", L"multi_view_software", L"1", ini.c_str());
         const bool sw = simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why);
