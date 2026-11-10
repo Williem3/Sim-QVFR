@@ -181,6 +181,10 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.focusImages.clear();
         v4d3d11.focusW = v4d3d11.focusH = 0;
         v4d3d11.focusFailed = false;
+        v4d3d11.peripheryChain = XR_NULL_HANDLE;  // also the session's
+        v4d3d11.peripheryImages.clear();
+        v4d3d11.peripheryFailed = v4d3d11.peripheryDrawFailed = v4d3d11.peripherySharpened = false;
+        v4d3d11.loggedTexelsPerPixel = 0;
         v4d3d11.layered = 0;
     }
     {

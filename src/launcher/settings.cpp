@@ -66,6 +66,7 @@ Settings load_settings(const std::wstring& ini) {
     const int density = read_int(ini, L"experiment", L"focus_density", 0);
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
+    s.sharpen = clamp_to(read_int(ini, L"quad", L"sharpen_percent", s.sharpen), kSharpenRange);
     s.multiView = read_int(ini, L"experiment", L"multi_view", 1) != 0;  // on by default (migrate_settings)
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
@@ -202,6 +203,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"crop", L"inner", n(clamp_to(s.cropInner, kCropRange)));
         ok &= write_helmet_settings(ini.c_str(), s.helmet);
         ok &= write(ini, L"experiment", L"object_detail", n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
+        ok &= write(ini, L"quad", L"sharpen_percent", n(clamp_to(s.sharpen, kSharpenRange)));  // LMU's so far
     }
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));

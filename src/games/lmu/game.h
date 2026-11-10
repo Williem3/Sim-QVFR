@@ -22,8 +22,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     nullptr,  // OpenXR of its own
     nullptr,  // no DLSS (FSR 1 only)
     // The helmet overlay (the layer's, over the composed views: crop-aware), the FOV crop (through the located FOV) and
-    // NVIDIA multi-view rendering (mvr_pass.h), and runtime-composed quad views on a Pimax or Varjo runtime.
-    {false, true, false, true, false, false, true, true},
+    // NVIDIA multi-view rendering (mvr_pass.h), runtime-composed quad views on a Pimax or Varjo runtime, and sharpening.
+    {false, true, false, true, false, false, true, true, true},
     kBuilds, std::size(kBuilds),
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet

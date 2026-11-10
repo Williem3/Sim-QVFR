@@ -200,6 +200,12 @@ target_include_directories(d3d11_compositor_test PRIVATE src ${THIRD_PARTY}/open
 target_compile_definitions(d3d11_compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(d3d11_compositor_test PRIVATE sim_qvfr_core d3d11)
 
+# Offline check of the compositor's sharpening (CAS) on a WARP device (tests/cas_sharpen_test.cpp).
+add_executable(cas_sharpen_test tests/cas_sharpen_test.cpp)
+target_include_directories(cas_sharpen_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(cas_sharpen_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(cas_sharpen_test PRIVATE sim_qvfr_core d3d11)
+
 # Offline check of the panels' D3D11 upload on a WARP device (tests/panel_upload_test.cpp).
 add_executable(panel_upload_test tests/panel_upload_test.cpp)
 target_include_directories(panel_upload_test PRIVATE src ${THIRD_PARTY}/openxr/include)

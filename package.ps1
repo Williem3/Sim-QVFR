@@ -106,6 +106,7 @@ try {
         'third_party\minhook\LICENSE.txt'                  = 'licenses\MinHook-LICENSE.txt'
         'third_party\openxr\LICENSES\Apache-2.0.txt'       = 'licenses\OpenXR-Apache-2.0.txt'
         'third_party\openxr\LICENSES\MIT.txt'              = 'licenses\OpenXR-MIT.txt'
+        'third_party\fidelityfx-cas\LICENSE.txt'           = 'licenses\FidelityFX-CAS-LICENSE.txt'
     }
     foreach ($source in $files.Keys) {
         Copy-Item -LiteralPath (Join-Path $work $source) -Destination (Join-Path $stage $files[$source])

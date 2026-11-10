@@ -31,6 +31,9 @@ struct Settings {
     int outer = 50;           // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
     int inner = 100;          // focus_density (QVFR): focus pixel density, percent of recommended
     int objectDetail = 100;   // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
+    // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: LMU): CAS sharpening as the views are composed,
+    // 0 off (the default) to 100 the strongest (live).
+    int sharpen = 0;
     // [experiment] multi_view (QVFR, a game with GameFeatures::multiView: LMU): multi-view rendering, each eye's pass
     // drawing its focus view too (games/multi_view.h): NVIDIA's on an RTX 20 series or newer, Sim-QVFR's own (instancing)
     // on any other GPU. On by default (2026-11-10; migrate_settings switches older settings over once). Next launch;
@@ -92,6 +95,7 @@ struct Range {
 };
 inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 400}, kSizeRange{10, 100}, kFeatherRange{0, 50},
     kCornerRange{0, 100}, kCropRange{0, 40}, kObjectDetailRange{0, 100},  // kCropRange: the layer's kCropMax
+    kSharpenRange{0, 100},
     kFocusOffsetRange{-kFocusOffsetMax, kFocusOffsetMax}, kGazeDeadzoneRange{0, kGazeDeadzoneMax},
     kFocusCornerRange{0, kFocusCornerMax};
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its

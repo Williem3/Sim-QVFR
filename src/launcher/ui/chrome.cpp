@@ -101,11 +101,19 @@ std::wstring pane_description(Pane pane) {
     case Pane::Checks: return L"What would stop Sim-QVFR at the next launch, each with its fix.";
     case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
     case Pane::Resolution: {
-        const bool crop = game_has(&games::GameFeatures::fovCrop), helmet = game_has(&games::GameFeatures::helmet);
-        return std::wstring(L"How many pixels each view draws") + (crop && helmet ? L", the edges it skips and the helmet around it."
-                                                                   : crop       ? L" and the edges it skips."
-                                                                   : helmet     ? L" and the helmet around it."
-                                                                                : L".");
+        // The game's own parts of the pane, joined as "a, b and c".
+        const wchar_t* parts[3];
+        int n = 0;
+        if (game_has(&games::GameFeatures::sharpening))
+            parts[n++] = L"how sharp it looks";
+        if (game_has(&games::GameFeatures::fovCrop))
+            parts[n++] = L"the edges it skips";
+        if (game_has(&games::GameFeatures::helmet))
+            parts[n++] = L"the helmet around it";
+        std::wstring text = L"How many pixels each view draws";
+        for (int i = 0; i < n; ++i)
+            text += std::wstring(i == n - 1 ? L" and " : L", ") + parts[i];
+        return text + L".";
     }
     case Pane::Foveation: return L"The size, shape and movement of the sharp focus region.";
     case Pane::Overlay: return L"An outline in the headset that shows where the focus region is.";

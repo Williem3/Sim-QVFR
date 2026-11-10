@@ -64,7 +64,7 @@ void views4_source(const Views4Layout& layout, int view, bool eyeColumns, int ta
 
 // One eye's composition, for either compositor: what its views were rendered with (the frame's record: outer and
 // focus tangents, the focus turn), where they sit in the game's image (`source`: the outer view e, the focus view
-// e + 2), and the look from the live settings (feather, outline, corners, shape).
+// e + 2), and the look from the live settings (feather, outline, corners, shape, sharpening).
 template <class Source>
 void views4_eye(const Views4Frame& frame, int e, const Source& source, EyeComposition& c) {
     std::memcpy(c.outerTan, frame.outerTan[e], sizeof(c.outerTan));
@@ -81,6 +81,7 @@ void views4_eye(const Views4Frame& frame, int e, const Source& source, EyeCompos
     std::memcpy(c.borderColor, experiment.borderColor, sizeof(c.borderColor));
     c.cornerRadius = static_cast<float>(experiment.cornerRadius);
     focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
+    c.sharpness = static_cast<float>(experiment.sharpen.load(std::memory_order_relaxed)) / 100.0f;
 }
 
 // views4: ACE's eye image holds the outer views as views 0-1 and the focus views as views 2-3 of the
@@ -301,6 +302,88 @@ bool v4d3d11_focus_resources(XrSession session, uint32_t w, uint32_t h) {
     return true;
 }
 
+// Sharpening with focus_layer (native quad views): the periphery's own swapchain, the focus chain's size in the game's
+// `format`, made the first time sharpening is on. False: v4d3d11.peripheryFailed (the periphery then goes unsharpened,
+// the game's own image), the reason logged once.
+bool v4d3d11_periphery_resources(XrSession session, int64_t format) {
+    if (v4d3d11.peripheryChain)
+        return true;
+    if (v4d3d11.peripheryFailed || !v4d3d11.focusW || !v4d3d11.focusH)
+        return false;
+    v4d3d11.peripheryFailed = true;  // until it is made
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    info.format = format;
+    info.sampleCount = info.faceCount = info.arraySize = info.mipCount = 1;
+    info.width = 2 * v4d3d11.focusW;
+    info.height = v4d3d11.focusH;
+    XrSwapchain chain = XR_NULL_HANDLE;
+    XrResult r = next.CreateSwapchain(session, &info, &chain);
+    uint32_t count = 0;
+    if (XR_SUCCEEDED(r))
+        r = next.EnumerateSwapchainImages(chain, 0, &count, nullptr);
+    std::vector<XrSwapchainImageD3D11KHR> images(count, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+    if (XR_SUCCEEDED(r) && count)
+        r = next.EnumerateSwapchainImages(chain, count, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+    if (XR_FAILED(r) || !count) {
+        logf("views4 d3d11: sharpening: the periphery's swapchain %ux%u failed (%d); the periphery goes unsharpened",
+             info.width, info.height, r);
+        if (chain)
+            next.DestroySwapchain(chain);
+        return false;
+    }
+    v4d3d11.peripheryChain = chain;
+    v4d3d11.peripheryImages.clear();
+    for (const auto& image : images)
+        v4d3d11.peripheryImages.push_back(image.texture);
+    v4d3d11.peripheryFailed = false;
+    logf("views4 d3d11: sharpening: the periphery's swapchain %p %ux%u (%u images, format %lld)", static_cast<void*>(chain),
+         info.width, info.height, count, static_cast<long long>(format));
+    return true;
+}
+
+// Sharpening with focus_layer (native quad views): each eye's outer view (its region of `views`) copied texel for texel
+// into the periphery's chain, sharpened, at x = e x focusW, `outer[e]` in size; `copy` pointed at it. False: nothing
+// changed (the periphery stays the game's image), the reason logged once.
+bool v4d3d11_sharpened_periphery(XrSession session, int64_t format, ID3D11Texture2D* views, const EyeComposition (&eyes)[2],
+                                 const XrExtent2Di (&outer)[2], std::vector<XrCompositionLayerProjectionView>& copy) {
+    if (!v4d3d11_periphery_resources(session, format))
+        return false;
+    int rects[2][4];
+    for (int e = 0; e < 2; ++e) {
+        rects[e][0] = e * static_cast<int>(v4d3d11.focusW);
+        rects[e][1] = 0;
+        rects[e][2] = std::min(outer[e].width, static_cast<int32_t>(v4d3d11.focusW));
+        rects[e][3] = std::min(outer[e].height, static_cast<int32_t>(v4d3d11.focusH));
+    }
+    const float sources[2][4] = {{eyes[0].outerSource[0], eyes[0].outerSource[1], eyes[0].outerSource[2], eyes[0].outerSource[3]},
+                                 {eyes[1].outerSource[0], eyes[1].outerSource[1], eyes[1].outerSource[2], eyes[1].outerSource[3]}};
+    uint32_t index = 0;
+    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.peripheryChain, &acquire, &index)) ||
+        index >= v4d3d11.peripheryImages.size())
+        return false;
+    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.peripheryChain, &wait)) &&
+                    v4d3d11.compositor.draw_view_copies(views, v4d3d11.peripheryImages[index], sources, rects,
+                                                        eyes[0].sharpness);
+    next.ReleaseSwapchainImage(v4d3d11.peripheryChain, &release);
+    if (!ok) {
+        if (!v4d3d11.peripheryDrawFailed)
+            log_line("views4 d3d11: sharpening: the periphery's copy failed; it goes unsharpened this frame");
+        v4d3d11.peripheryDrawFailed = true;
+        return false;
+    }
+    v4d3d11.peripheryDrawFailed = false;
+    for (int v = 0; v < 2; ++v) {
+        copy[v].subImage.swapchain = v4d3d11.peripheryChain;
+        copy[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
+        copy[v].subImage.imageArrayIndex = 0;
+    }
+    return true;
+}
+
 }  // namespace
 
 bool v4d3d11_tracks_chains() {
@@ -341,11 +424,13 @@ constexpr float kNativeOutlineInset = 0.05f;
 
 // focus_layer, for a frame with four views (under v4d3d11.mutex and quad.mutex): each focus view drawn texel for
 // texel into the focus chain, its feather in alpha, and `focus` pointed at them with the focus cameras' poses and
-// FOVs; `copy` (the periphery) keeps the game's own images, cut to the outer views as rendered, with their FOV.
+// FOVs; `copy` (the periphery) keeps the game's own images, cut to the outer views as rendered, with their FOV (with
+// sharpening on, a sharpened copy of them in the game's `format`: v4d3d11_sharpened_periphery).
 // False: nothing changed (the caller composes as without focus_layer).
 bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj, const Views4Frame& frame,
-                     const EyeComposition (&eyes)[2], ID3D11Texture2D* views, float texW, float texH,
-                     std::vector<XrCompositionLayerProjectionView>& copy, XrCompositionLayerProjectionView (&focus)[2]) {
+                     const EyeComposition (&eyes)[2], ID3D11Texture2D* views, float texW, float texH, int64_t format,
+                     const float (&texelsPerPixel)[2], std::vector<XrCompositionLayerProjectionView>& copy,
+                     XrCompositionLayerProjectionView (&focus)[2]) {
     int render[2] = {}, output[2] = {};
     game->qvfr_target_sizes(render, output);  // the game's view images (LMU: one size for all four)
     if (!v4d3d11_focus_resources(session, static_cast<uint32_t>(std::max(render[0], 0)),
@@ -383,6 +468,9 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
             d.viewTan[1] = kNativeOutlineInset;
             d.viewTan[2] = d.viewTan[3] = 0;
         }
+    // Sharpening: the focus views' texels per display pixel (FocusLayerPS sharpens at the display's scale above 1.25).
+    for (int e = 0; e < 2; ++e)
+        drawn[e].viewTan[2] = texelsPerPixel[e];
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.focusChain, &wait)) &&
                     v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
     next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
@@ -402,6 +490,13 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         focus[v].subImage.swapchain = v4d3d11.focusChain;
         focus[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
         focus[v].subImage.imageArrayIndex = 0;
+    }
+    // Sharpening: the focus views were drawn sharpened (FocusLayerPS); the periphery a sharpened copy of its own.
+    const bool sharpened = eyes[0].sharpness > 0 && v4d3d11_sharpened_periphery(session, format, views, eyes, outer, copy);
+    if (sharpened != v4d3d11.peripherySharpened) {
+        logf("views4 d3d11: sharpening %.0f%%: the periphery %s", eyes[0].sharpness * 100,
+             sharpened ? "a sharpened copy of the game's image" : "the game's own image");
+        v4d3d11.peripherySharpened = sharpened;
     }
     if (v4d3d11.layered++ == 0 || v4d3d11.lastFallback) {
         logf("views4 d3d11: %s (eye 0: periphery %dx%d of the game's image at %d,%d, FOV tangents %.3f %.3f %.3f %.3f; "
@@ -516,7 +611,23 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     if (helmet.on)
         log_helmet_light();
     if (useLayered) {
-        if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, copy, *focus)) {
+        // The focus views' texels per display pixel across: their pixels per tangent over the native eye's (the
+        // output's size over the FOV it covers, as composed), for the runtime that shows them (FocusLayerPS).
+        float texelsPerPixel[2] = {};
+        for (int e = 0; e < 2; ++e) {
+            float fov[4];
+            fov_tangents(submitFov[e], fov);
+            const float focusPerTan = eyes[e].focusSource[2] * texW / std::max(eyes[e].focusTan[1] - eyes[e].focusTan[0], 1e-6f);
+            const float nativePerTan = static_cast<float>(extent[e].width) / std::max(fov[1] - fov[0], 1e-6f);
+            texelsPerPixel[e] = nativePerTan > 0 ? focusPerTan / nativePerTan : 0.0f;
+        }
+        if (eyes[0].sharpness > 0 && std::abs(texelsPerPixel[0] - v4d3d11.loggedTexelsPerPixel) > 0.05f) {
+            logf("views4 d3d11: sharpening: the focus views at %.2f texels per display pixel%s", texelsPerPixel[0],
+                 texelsPerPixel[0] > 1.25f ? " (sharpened at the display's scale)" : "");
+            v4d3d11.loggedTexelsPerPixel = texelsPerPixel[0];
+        }
+        if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, it->second.format, texelsPerPixel, copy,
+                            *focus)) {
             *layered = true;
             return true;
         }

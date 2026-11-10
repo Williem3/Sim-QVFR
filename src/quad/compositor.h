@@ -54,6 +54,8 @@ struct EyeComposition {
     // The visor: 0 auto (a tint when its image has no transparency, else blended as drawn), 1 always a tint
     // (the scene filtered by its colour, like glass), 2 always blended as drawn.
     int visorBlend;
+    // Sharpening (compose_shader.h's cas_sample, AMD's CAS): 0 off (the views resampled bilinear, as before), 1 the most.
+    float sharpness = 0;
 };
 
 // The helmet as its own layer (helmet.h): the pieces, lit by the frame, drawn into a head-locked quad that

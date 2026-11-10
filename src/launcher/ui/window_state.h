@@ -50,6 +50,8 @@ enum Ctl {
     kMultiView,
     // The runtime composing the views ([experiment] native_quad_views, Resolution pane).
     kNativeQuad,
+    // Sharpening ([quad] sharpen_percent, Resolution pane).
+    kSharpen,
     // The FOV crop ([crop], Resolution pane).
     kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
     // The helmet overlay ([helmet], Resolution pane).
