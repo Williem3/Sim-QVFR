@@ -255,7 +255,7 @@ void launch_status_checks() {
         mine.menuYaw = 12;
         mine.cheeky.load = true;
         mine.crop = true;
-        mine.multiView = true;
+        mine.multiView = false;
         mine.hotkeys[0].key = KeyCombo{'K', true, false, false};
         mine.updateCheck = true;
         mine.hiddenGames = L"acc";
@@ -263,8 +263,8 @@ void launch_status_checks() {
         const Settings back = restored_defaults(mine);
         const Settings d;
         check(back.outer == d.outer && back.menuYaw == d.menuYaw && back.cheeky.load == d.cheeky.load && back.crop == d.crop &&
-                  !back.multiView,
-              "restore defaults: the game's settings go back to the defaults (multi-view rendering off)");
+                  back.multiView,
+              "restore defaults: the game's settings go back to the defaults (multi-view rendering on)");
         check(back.hotkeys == mine.hotkeys && back.updateCheck && back.hiddenGames == L"acc" && back.gameColors.size() == 1 &&
                   back.gameColors.at(L"ace") == 0x123456,
               "restore defaults: the hotkeys, the update check, the hidden tabs and the colours stay");
@@ -528,6 +528,48 @@ void per_game_settings_checks() {
     WritePrivateProfileStringW(L"experiment", L"mode", L"views4", fresh.c_str());
     check(game_settings_target(fresh, L"ace") == fresh && game_settings_target(fresh, L"xplane") == game_settings_file(fresh, L"xplane"),
           "per-game: an ini without [launcher] game means ACE, as the launcher reads it");
+    fs::remove_all(dir, ec);
+}
+
+// Multi-view rendering on by default (settings.h migrate_settings): settings from before, where the launcher wrote
+// multi_view=0 for everyone, switched once in the ini, the games' copies and the saved profiles; a choice made after it
+// kept; nothing else in the files changed.
+void migrate_settings_checks() {
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-migrate-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / L"games");
+    fs::create_directories(dir / L"profiles");
+    const std::wstring ini = (dir / L"sim-qvfr.ini").wstring();
+    const std::wstring lmu = (dir / L"games" / L"lmu.ini").wstring(), ace = (dir / L"games" / L"ace.ini").wstring();
+    const std::wstring mine = (dir / L"profiles" / L"Mine.ini").wstring(), on = (dir / L"profiles" / L"On.ini").wstring();
+    for (const std::wstring& f : {ini, lmu, mine}) {
+        WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", f.c_str());
+        WritePrivateProfileStringW(L"experiment", L"periphery_scale", L"40", f.c_str());
+    }
+    WritePrivateProfileStringW(L"experiment", L"periphery_scale", L"55", ace.c_str());  // no multi_view key
+    WritePrivateProfileStringW(L"experiment", L"multi_view", L"1", on.c_str());
+    WritePrivateProfileStringW(L"launcher", L"game", L"lmu", ini.c_str());
+    check(!load_settings(ini).multiView && Settings{}.multiView && load_settings(ace).multiView,
+          "migrate: multi_view=0 reads as off; the default (and a file without the key) is on");
+    const int changed = migrate_settings(ini);
+    char what[200];
+    std::snprintf(what, sizeof(what), "migrate: %d files switched on (the ini, LMU's copy, a saved profile), the marker set",
+                  changed);
+    check(changed == 3 && ini_int(ini, L"experiment", L"multi_view") == 1 && ini_int(lmu, L"experiment", L"multi_view") == 1 &&
+              ini_int(mine, L"experiment", L"multi_view") == 1 && ini_int(on, L"experiment", L"multi_view") == 1 &&
+              ini_int(ace, L"experiment", L"multi_view") == -1 && ini_int(ini, L"launcher", kMultiViewDefaultOn) == 1,
+          what);
+    wchar_t game[16] = {};
+    GetPrivateProfileStringW(L"launcher", L"game", L"", game, 16, ini.c_str());
+    check(ini_int(ini, L"experiment", L"periphery_scale") == 40 && ini_int(lmu, L"experiment", L"periphery_scale") == 40 &&
+              ini_int(mine, L"experiment", L"periphery_scale") == 40 && ini_int(ace, L"experiment", L"periphery_scale") == 55 &&
+              std::wstring(game) == L"lmu",
+          "migrate: the files' other keys as they were");
+    // The user turns it off afterwards: kept at every later start.
+    WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", ini.c_str());
+    check(migrate_settings(ini) == 0 && ini_int(ini, L"experiment", L"multi_view") == 0 && !load_settings(ini).multiView,
+          "migrate: once only: multi_view=0 chosen after it stays off");
     fs::remove_all(dir, ec);
 }
 
@@ -1139,15 +1181,16 @@ int main() {
             detail.objectDetail = 250;  // above kObjectDetailRange: clamped
             save_settings(ini, detail);
             check(load_settings(ini).objectDetail == kObjectDetailRange.max, "settings: object detail is clamped to 0-100%");
-            check(!detail.multiView, "settings: multi-view rendering defaults to off");
+            check(Settings{}.multiView, "settings: multi-view rendering defaults to on");
+            detail.multiView = false;
+            save_settings(ini, detail);
+            check(!load_settings(ini).multiView && ini_int(ini, L"experiment", L"multi_view") == 0,
+                  "settings: multi-view rendering off round-trips ([experiment] multi_view=0)");
+            check(per_game_key(L"experiment", L"multi_view"), "settings: multi_view is a per-game key");
             detail.multiView = true;
             save_settings(ini, detail);
             check(load_settings(ini).multiView && ini_int(ini, L"experiment", L"multi_view") == 1,
-                  "settings: multi-view rendering round-trips ([experiment] multi_view=1)");
-            check(per_game_key(L"experiment", L"multi_view"), "settings: multi_view is a per-game key");
-            detail.multiView = false;
-            save_settings(ini, detail);
-            check(ini_int(ini, L"experiment", L"multi_view") == 0, "settings: and off again (multi_view=0)");
+                  "settings: and on again (multi_view=1)");
         }
         LaunchSizes launched;
         launched.known = true;
@@ -2329,6 +2372,7 @@ int main() {
 
     fs::remove_all(folder, ec);
     per_game_settings_checks();
+    migrate_settings_checks();
     game_tabs_checks();
     launch_status_checks();
     session_history_checks();

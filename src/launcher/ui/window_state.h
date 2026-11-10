@@ -46,7 +46,7 @@ enum Ctl {
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
-    // NVIDIA multi-view rendering ([experiment] multi_view, Resolution pane).
+    // Multi-view rendering ([experiment] multi_view, Resolution pane): NVIDIA's or Sim-QVFR's own.
     kMultiView,
     // The runtime composing the views ([experiment] native_quad_views, Resolution pane).
     kNativeQuad,

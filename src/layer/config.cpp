@@ -333,14 +333,17 @@ void load_experiment() {
         experiment.views4Layout.layerFloor = menuPercent / 100.0;
         logf("experiment: views4_menu_scale=%u: the views are made at least %u%% of the native eye for the game's menus%s",
              menuPercent, menuPercent, menuPercent ? "; the scene renders inside them at the views' sizes" : " (off)");
-        // Room for each focus view beside its eye: NVIDIA multi-view rendering (the launcher's multi_view=1, on an RTX
-        // 20 series or newer: games/multi_view.h), or lmu_mvr (LMU's gates of it, 1 or 2, on such a GPU too).
+        // Room for each focus view beside its eye: multi-view rendering (the launcher's multi_view=1, NVIDIA's on an RTX
+        // 20 series or newer, instancing on any other GPU: games/multi_view.h), or lmu_mvr (LMU's gates of NVIDIA's, 1
+        // or 2, on such a GPU).
         const UINT gate = games::lmu_mvr_gate(ini.c_str());
         if (!gate && GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini.c_str()) != 0)
             log_line("experiment: lmu_mvr ignored: it needs an NVIDIA RTX 20 series or newer");
         std::string why;
         const bool multiView = gate == 0 && games::multi_view_on(games::current_game(), ini.c_str(), &why);
-        if (gate == 0 && GetPrivateProfileIntW(L"experiment", L"multi_view", 0, ini.c_str()) != 0)
+        const games::GameInfo* current = games::current_game();
+        if (gate == 0 && current && current->features.multiView &&
+            GetPrivateProfileIntW(L"experiment", L"multi_view", 1, ini.c_str()) != 0)
             logf("multi_view: %s%s", multiView ? "on, " : "", multiView ? (why + ": each eye's pass draws its focus view too").c_str()
                                                                        : (why + ": the four passes as without it").c_str());
         experiment.views4Layout.secondViewRoom = gate != 0 || multiView;

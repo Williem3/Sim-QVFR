@@ -225,8 +225,8 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
-    case kMultiView:  // only on a GPU that has it (RTX 20 series or newer); elsewhere it stays off and can't be chosen
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView) && nvapi::two_views_gpu()) {
+    case kMultiView:  // any GPU: NVIDIA's on an RTX 20 series or newer, Sim-QVFR's own (instancing) on others
+        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView)) {
             app.s.multiView = !app.s.multiView;
             changed();
         }

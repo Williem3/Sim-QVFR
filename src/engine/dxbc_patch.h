@@ -1,4 +1,5 @@
-// DXBC (D3D11 shader model 4 and 5 bytecode) edits for drawing a second view in the same pass.
+// DXBC (D3D11 shader model 4 and 5 bytecode) edits for drawing a second view in the same pass: for NVIDIA's single-pass
+// stereo (add_second_view) or for any GPU by instancing (add_instanced_view, below).
 //
 // add_second_view turns a vertex shader into one that also writes the second view's clip position, for NVIDIA's
 // single-pass stereo with a full XYZW second position (NV_XYZW_RIGHT): second = (a x + b w, c y + d w, z, w) of its
@@ -47,5 +48,39 @@ struct SecondView {
 };
 
 SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOptions& options = {});
+
+// add_instanced_view is the vendor-neutral way to the same two views (any D3D11.3 GPU that lets a vertex shader pick
+// the viewport: D3D11_FEATURE_DATA_D3D11_OPTIONS3::VPAndRTArrayIndexFromAnyShaderFeedingRasterizer). The caller draws
+// every draw with twice its instances; the converted shader takes view = SV_InstanceID & 1 and, for any use of the
+// instance it had, the game's own instance SV_InstanceID >> 1 (per-instance vertex data needs its step rate doubled in
+// the input layout, which is the caller's). View 0 writes SV_Position exactly as before, view 1 the clip remap of it
+// (cbSlot's first vector, as add_second_view); SV_ViewportArrayIndex = view, so view 0 lands in viewport 0 and view 1
+// in viewport 1.
+//
+// How: every instruction that wrote SV_Position writes a new temp instead; before each ret SV_Position is that temp or
+// its remap, chosen by the view (movc), and the viewport index is written. SV_InstanceID joins the input signature after
+// its last register if the shader didn't read it (a system value: the input layout needn't change); a shader that did
+// reads the halved one from a temp. SV_ViewportArrayIndex joins the output signature after its last register (a pixel
+// shader linked to the original still links). The SFI0 chunk gains the feature's flag, as the compiler sets it.
+inline constexpr const char* kViewportIndexSemantic = "SV_ViewportArrayIndex";
+inline constexpr const char* kInstanceIdSemantic = "SV_InstanceID";
+inline constexpr uint64_t kRequiresViewportIndexFromAnyShader = 0x2000;  // SFI0: ..._FROM_ANY_SHADER_FEEDING_RASTERIZER
+
+struct InstancedViewOptions {
+    uint32_t cbSlot = 13;  // the remap's constant buffer: its first vector is (a, b, c, d)
+};
+
+struct InstancedView {
+    std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
+    std::string error;
+    uint32_t positionRegister = 0;  // the shader's SV_Position output register
+    int positionWrites = 0;         // instructions that wrote it (each redirected)
+    uint32_t viewportRegister = 0;  // SV_ViewportArrayIndex's output register (.x)
+    uint32_t instanceRegister = 0;  // SV_InstanceID's input register (.x)
+    bool hadInstance = false;       // the shader read SV_InstanceID itself
+    int instanceReads = 0;          // its instructions reading it (now the halved one)
+};
+
+InstancedView add_instanced_view(const uint8_t* data, size_t size, const InstancedViewOptions& options = {});
 
 }  // namespace simqvfr::dxbc

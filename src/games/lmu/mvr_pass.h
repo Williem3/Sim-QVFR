@@ -1,8 +1,11 @@
 // LMU's multi-view rendering in the eye passes (gate C of docs/recon-lmu.md "Multi-view rendering"; [experiment]
 // lmu_mvr=1 with lmu_qvfr=1). In passes 0 and 1 every draw with a depth target bound (and no geometry, tessellation or
-// stream output stage) runs the game shader's converted twin (mvr_probe.h) with NVIDIA's single-pass stereo on, so it
-// also draws that eye's focus view beside the eye: the clip remap in cb13, a second viewport (and scissor) right of the
-// game's, scaled from the eye's size to the focus view's (so the quarter-resolution pass gets its own). The lens mask
+// stream output stage) runs the game shader's converted twin (mvr_probe.h) with NVIDIA's single-pass stereo on, or with
+// instancing (mvr_probe.h MvrBackend: the draw made with twice its instances, the instanced twin picking the viewport
+// by the instance's parity), so it also draws that eye's focus view beside the eye: the clip remap in cb13, a second
+// viewport (and scissor) right of the game's, scaled from the eye's size to the focus view's (so the
+// quarter-resolution pass gets its own). If NVIDIA's driver refuses single-pass stereo, instancing takes over for the
+// rest of the session where the probe attached its twins. The lens mask
 // draws with two views too (its mesh is in the eye's clip space, so the twin puts it where the focus view sees the hidden
 // area: docs/recon-lmu.md "R6a run"). Gate C (lmu_mvr=1): passes 2-3 still render the focus views and the headset shows
 // those; at sample frames the focus region of pass 0/1's resolved scene is compared with pass 2/3's own (alignment,
@@ -42,15 +45,18 @@ struct MvrPassView {
 namespace context_slot {
 inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
                           kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
-                          kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kRSSetViewports = 44,
+                          kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kDrawAuto = 38,
+                          kDrawIndexedInstancedIndirect = 39, kDrawInstancedIndirect = 40, kRSSetViewports = 44,
                           kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57, kHSSetShader = 60,
                           kDSSetShader = 64;
-// The last five (the draws, CopySubresourceRegion) only with the focus post (mvr_focus_replay).
+// The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
+// DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone).
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
                                        kDSSetShader,       kDrawIndexed,        kDraw,
-                                       kDrawIndexedInstanced, kDrawInstanced, kCopySubresourceRegion};
+                                       kDrawIndexedInstanced, kDrawInstanced, kCopySubresourceRegion,
+                                       kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -91,6 +97,10 @@ void mvr_frame_mode(int mode);
 // Tests: the single-pass stereo switch (NVAPI's by default) and where the comparison's images go.
 using TwoViewsFn = int (*)(ID3D11DeviceContext*, bool);
 void mvr_set_two_views(TwoViewsFn fn);
+// Instancing instead of NVIDIA's single-pass stereo (the probe's backend at mvr_pass_install; tests set it), and whether
+// it may take over when single-pass stereo is refused. True: the passes draw with instancing now.
+void mvr_use_instanced(bool on, bool fallback = true);
+bool mvr_instanced();
 // A twin attached to a shader that had none (tests: the probe attaches them at creation, which the cache sees itself).
 void mvr_twins_changed();
 // The CPU in the context hooks timed (TSC) and logged with the counts; off by default (it costs a little itself).
@@ -145,9 +155,14 @@ struct MvrPassStats {
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
     // draws replayed for the menus (mvr_redraw_panel).
     uint64_t maskDraws = 0, maskDrawsTwo = 0, maskDropped = 0, panelReplays = 0;
+    // Instancing: the game's draws made with twice their instances; those with a per-instance layout's twin bound around
+    // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double).
+    uint64_t doubledDraws = 0, layoutSwaps = 0, eyeOnlyDraws = 0;
+    uint64_t instancedTakeovers = 0;  // single-pass stereo refused and instancing took over (once a session)
 };
 MvrPassStats mvr_pass_stats();
-// Single-pass stereo was refused at a draw (off for the session since): no focus views from the eye passes.
+// Single-pass stereo was refused at a draw and instancing couldn't take over (off for the session since): no focus
+// views from the eye passes.
 bool mvr_broken();
 
 // R4b (docs/recon-lmu.md "R4 plan"): the eye passes as the d3d11 calls show them, without the game's scene render hook.
