@@ -197,6 +197,9 @@ struct RuntimeInfo {
     // launch yet), and whether the session ran as a quad view one (the runtime composing).
     std::wstring quadViews;
     bool quadViewsUsed = false;
+    // The runtime's own focus views (quad_runtime_focus) when it composed them: percent of the eye's view across and
+    // up/down (0: not known). Sim-QVFR's focus area shows only inside them.
+    int quadFocusWidth = 0, quadFocusHeight = 0;
     // VRAM at the last QVFR launch (the layer's vram census): this process's use and Windows' budget for it,
     // MB; the part of it in render targets that follow ACE's target, and that target's size (0: none yet).
     double vramUsedMb = 0, vramBudgetMb = 0, vramScaledMb = 0;

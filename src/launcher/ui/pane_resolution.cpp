@@ -98,7 +98,10 @@ float resolution_pane(float x, float y, float w, bool draw) {
             desc = L"On a Pimax or Varjo runtime, the runtime puts the focus region on the display at its full "
                    L"resolution: sharper than Sim-QVFR can compose it. On other runtimes (SteamVR) nothing changes.";
             const RuntimeInfo& rt = app.runtime;
-            if (rt.quadViewsUsed)
+            if (rt.quadViewsUsed && rt.quadFocusWidth > 0 && rt.quadFocusHeight > 0)
+                desc += L" Last launch: the runtime composed the views, its focus region " + std::to_wstring(rt.quadFocusWidth) +
+                        L"% × " + std::to_wstring(rt.quadFocusHeight) + L"% of the view.";
+            else if (rt.quadViewsUsed)
                 desc += L" Last launch: the runtime composed the views.";
             else if (rt.quadViews == L"offered")
                 desc += L" Last launch: the runtime offers it, but it wasn’t used (off, frame generation, or see the log).";
@@ -115,9 +118,10 @@ float resolution_pane(float x, float y, float w, bool draw) {
             checkbox(kNativeQuad, r, shown, L"Let the runtime compose (Pimax, Varjo)", desc, unavailable);
         };
         h += section(x, y + h, w, L"Runtime composition", {on},
-                     L"With the runtime composing, its own quad view settings (Pimax Play’s resolution and focus area "
-                     L"sliders) don’t apply: the resolution and focus region set here do, and change while you drive. Off "
-                     L"with frame generation (Cheeky’s or VectorXR’s), which needs one composed image.",
+                     L"With the runtime composing, the resolution set here applies and changes while you drive. The "
+                     L"focus area shows inside the runtime’s own focus region (Pimax Play’s or Varjo Base’s focus area), "
+                     L"centred where the runtime puts it: keep that at least as large as the focus area here. Off with "
+                     L"frame generation (Cheeky’s or VectorXR’s), which needs one composed image.",
                      draw, Applies::NextLaunch);
     }
     // The FOV crop (each side on its own, QVFR only) and the helmet overlay: left out for a game without them.

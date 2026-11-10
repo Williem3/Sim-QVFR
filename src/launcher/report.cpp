@@ -682,6 +682,15 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
     if (rt.known() && readouts(s, rt).overRuntimeLimit)
         out.push_back({L"The view is larger than the headset runtime allows",
                        L"Lower the outer resolution or the focus density in Resolution."});
+    // The runtime composing (Pimax, Varjo): Sim-QVFR's focus area shows only inside the runtime's own focus views.
+    if (s.mode == RenderMode::Qvfr && rt.quadViewsUsed && rt.quadFocusWidth > 0 && rt.quadFocusHeight > 0 &&
+        (s.width > rt.quadFocusWidth + 1 || s.height > rt.quadFocusHeight + 1))
+        out.push_back({L"The focus area (" + std::to_wstring(s.width) + L"% × " + std::to_wstring(s.height) +
+                           L"%) is larger than the runtime's own focus region (" + std::to_wstring(rt.quadFocusWidth) +
+                           L"% × " + std::to_wstring(rt.quadFocusHeight) + L"%)",
+                       L"With the runtime composing the views (Pimax, Varjo), the focus area shows only inside its own "
+                       L"focus region; past it, the outer resolution shows. Make the runtime's focus area larger (Pimax "
+                       L"Play, Varjo Base), or Sim-QVFR's no larger than it, in Resolution."});
     if (rt.vramUsedMb > 0 && rt.vramBudgetMb > 0 && rt.vramUsedMb >= 0.9 * rt.vramBudgetMb)
         out.push_back({formatted(L"VRAM was nearly full (%.0f%% of what Windows allows the game)", 100 * rt.vramUsedMb / rt.vramBudgetMb),
                        L"Stutter and hitches follow when it runs out. Lower the outer resolution or the focus density, "

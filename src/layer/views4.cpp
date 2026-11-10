@@ -17,6 +17,7 @@
 #include "quad/focus_quad.h"
 #include "quad/focus_turn.h"
 #include "quad/helmet.h"
+#include "quad/native_quad.h"
 #include "xr.h"
 #include "layer/layer.h"
 
@@ -422,31 +423,99 @@ void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4La
 // strip the runtime fades into the eyes (Pimax: the outermost lines hardly showed, 2026-11-09).
 constexpr float kNativeOutlineInset = 0.05f;
 
+// Native quad views: each eye's focus image over the runtime's focus view `region` (tangents, eye frame) for a box of
+// `boxW` x `boxH` texels (the focus view as rendered): on the box's own texel grid when the focus camera is the eye's
+// unturned (copied texel for texel, focus_region_image), else the region at the box's density. False: no image.
+bool v4d3d11_region_image(const EyeComposition& eye, int boxW, int boxH, const float (&region)[4], RegionImage& out,
+                          bool& aligned) {
+    aligned = true;
+    for (int i = 0; i < 9; ++i)
+        aligned &= std::fabs(eye.rotation[i] - (i % 4 == 0 ? 1.0f : 0.0f)) < 1e-5f;
+    if (aligned)
+        return focus_region_image(eye.focusTan, boxW, boxH, region, out);
+    const double sx = boxW / std::max(1e-6, static_cast<double>(eye.focusTan[1]) - eye.focusTan[0]);
+    const double sy = boxH / std::max(1e-6, static_cast<double>(eye.focusTan[2]) - eye.focusTan[3]);
+    out = {};
+    std::memcpy(out.tan, region, sizeof(out.tan));
+    out.width = static_cast<int>(std::ceil((region[1] - region[0]) * sx));
+    out.height = static_cast<int>(std::ceil((region[2] - region[3]) * sy));
+    return out.width >= 1 && out.height >= 1 && out.width <= 65536 && out.height <= 65536;
+}
+
+// Native quad views, every 900 race frames: how the focus views sat in the runtime's (v4d3d11.region*).
+void v4d3d11_region_note() {
+    const uint64_t frames = v4d3d11.regionFrames + v4d3d11.regionNone;
+    if (frames < 900)
+        return;
+    if (v4d3d11.regionFrames)
+        logf("native quad views: %llu race frames over the runtime's focus views: the focus box %.1f%% inside them on "
+             "average, %.1f%% at the least (the rest shows at the periphery's density); %llu drawn smaller (larger "
+             "than the focus chain), %llu not texel for texel (a turned focus camera); %llu without the runtime's "
+             "focus views (the box alone)",
+             static_cast<unsigned long long>(v4d3d11.regionFrames),
+             100.0 * v4d3d11.regionShareSum / static_cast<double>(v4d3d11.regionFrames), 100.0 * v4d3d11.regionShareMin,
+             static_cast<unsigned long long>(v4d3d11.regionScaled),
+             static_cast<unsigned long long>(v4d3d11.regionUnaligned),
+             static_cast<unsigned long long>(v4d3d11.regionNone));
+    else
+        logf("native quad views: %llu race frames without the runtime's focus views located: the box alone, at the FOV "
+             "of the focus camera (a runtime that draws views 2-3 into its own focus region shows it misplaced)",
+             static_cast<unsigned long long>(v4d3d11.regionNone));
+    v4d3d11.regionFrames = v4d3d11.regionScaled = v4d3d11.regionUnaligned = v4d3d11.regionNone = 0;
+    v4d3d11.regionShareSum = 0;
+    v4d3d11.regionShareMin = 1;
+}
+
 // focus_layer, for a frame with four views (under v4d3d11.mutex and quad.mutex): each focus view drawn texel for
 // texel into the focus chain, its feather in alpha, and `focus` pointed at them with the focus cameras' poses and
 // FOVs; `copy` (the periphery) keeps the game's own images, cut to the outer views as rendered, with their FOV (with
 // sharpening on, a sharpened copy of them in the game's `format`: v4d3d11_sharpened_periphery).
+// Native quad views: views 2-3 cover exactly the runtime's focus views located for `displayTime` (a runtime may draw
+// them into its own focus region whatever FOV they carry): the focus box drawn inside, the periphery around it.
 // False: nothing changed (the caller composes as without focus_layer).
 bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj, const Views4Frame& frame,
                      const EyeComposition (&eyes)[2], ID3D11Texture2D* views, float texW, float texH, int64_t format,
-                     const float (&texelsPerPixel)[2], std::vector<XrCompositionLayerProjectionView>& copy,
-                     XrCompositionLayerProjectionView (&focus)[2]) {
+                     const float (&texelsPerPixel)[2], XrTime displayTime,
+                     std::vector<XrCompositionLayerProjectionView>& copy, XrCompositionLayerProjectionView (&focus)[2]) {
     int render[2] = {}, output[2] = {};
     game->qvfr_target_sizes(render, output);  // the game's view images (LMU: one size for all four)
-    if (!v4d3d11_focus_resources(session, static_cast<uint32_t>(std::max(render[0], 0)),
-                                 static_cast<uint32_t>(std::max(render[1], 0))))
-        return false;
     // Each view's size as rendered (live resolution), from its region of the views' image.
     const auto pixels = [](float share, float size, uint32_t most) {
         return static_cast<int32_t>(std::clamp<long>(std::lround(share * size), 1, static_cast<long>(most)));
     };
+    const uint32_t most[2] = {static_cast<uint32_t>(std::max(render[0], 1)), static_cast<uint32_t>(std::max(render[1], 1))};
+    int boxPx[2][2];
+    for (int e = 0; e < 2; ++e) {
+        boxPx[e][0] = pixels(eyes[e].focusSource[2], texW, most[0]);
+        boxPx[e][1] = pixels(eyes[e].focusSource[3], texH, most[1]);
+    }
+    // Native quad views: the image over the runtime's focus views, each eye's.
+    float regions[2][4];
+    RegionImage regionImage[2];
+    bool aligned[2] = {true, true};
+    bool overRegion = nativeQuad.active && runtime_focus_regions(displayTime, regions);
+    for (int e = 0; overRegion && e < 2; ++e)
+        overRegion = v4d3d11_region_image(eyes[e], boxPx[e][0], boxPx[e][1], regions[e], regionImage[e], aligned[e]);
+    // The focus chain, made at the first such frame: the game's view images, or the runtime's focus views at the
+    // focus density (the launch density: live changes stay at or under it) and a few texels more, within 8192 per eye
+    // across. Not made while the game's view size is unknown.
+    uint32_t chainW = render[0] > 0 && render[1] > 0 ? most[0] : 0, chainH = chainW ? most[1] : 0;
+    if (overRegion && chainW)
+        for (const RegionImage& r : regionImage) {
+            chainW = std::max(chainW, static_cast<uint32_t>(std::min(8192, r.width + 16)));
+            chainH = std::max(chainH, static_cast<uint32_t>(std::min(16384, r.height + 16)));
+        }
+    if (!v4d3d11_focus_resources(session, chainW, chainH))
+        return false;
     int rects[2][4];
     XrExtent2Di outer[2];
+    bool scaled = false;
     for (int e = 0; e < 2; ++e) {
         rects[e][0] = e * static_cast<int>(v4d3d11.focusW);
         rects[e][1] = 0;
-        rects[e][2] = pixels(eyes[e].focusSource[2], texW, v4d3d11.focusW);
-        rects[e][3] = pixels(eyes[e].focusSource[3], texH, v4d3d11.focusH);
+        rects[e][2] = std::min(overRegion ? regionImage[e].width : boxPx[e][0], static_cast<int>(v4d3d11.focusW));
+        rects[e][3] = std::min(overRegion ? regionImage[e].height : boxPx[e][1], static_cast<int>(v4d3d11.focusH));
+        scaled |= overRegion && (rects[e][2] < regionImage[e].width || rects[e][3] < regionImage[e].height);
         const XrExtent2Di gameRect = proj->views[e].subImage.imageRect.extent;
         outer[e] = {pixels(eyes[e].outerSource[2], texW, static_cast<uint32_t>(std::max(gameRect.width, 1))),
                     pixels(eyes[e].outerSource[3], texH, static_cast<uint32_t>(std::max(gameRect.height, 1)))};
@@ -463,10 +532,13 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     // kNativeOutlineInset in from it (FocusLayerPS); otherwise the feather in alpha.
     EyeComposition drawn[2] = {eyes[0], eyes[1]};
     if (nativeQuad.active)
-        for (EyeComposition& d : drawn) {
+        for (int e = 0; e < 2; ++e) {
+            EyeComposition& d = drawn[e];
             d.viewTan[0] = 1;
             d.viewTan[1] = kNativeOutlineInset;
             d.viewTan[2] = d.viewTan[3] = 0;
+            if (overRegion)
+                std::memcpy(d.regionTan, regionImage[e].tan, sizeof(d.regionTan));
         }
     // Sharpening: the focus views' texels per display pixel (FocusLayerPS sharpens at the display's scale above 1.25).
     for (int e = 0; e < 2; ++e)
@@ -484,12 +556,40 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
         copy[v].subImage.imageRect.extent = outer[v];
         // The focus view: the eye's position, the focus camera's turn (a direction in the eye's frame is in the
         // focus view's after the inverse turn, views4_eye), its own FOV and pixels.
+        // Over the runtime's focus view: the eye's own pose and the region image's FOV (the runtime's, out to whole
+        // texels of the box's grid).
         focus[v] = copy[v];
-        focus[v].pose.orientation = qmul(copy[v].pose.orientation, frame.turn[v]);
-        focus[v].fov = tangents_fov(eyes[v].focusTan);
+        focus[v].pose.orientation = overRegion ? copy[v].pose.orientation : qmul(copy[v].pose.orientation, frame.turn[v]);
+        focus[v].fov = overRegion ? tangents_fov(regionImage[v].tan) : tangents_fov(eyes[v].focusTan);
         focus[v].subImage.swapchain = v4d3d11.focusChain;
         focus[v].subImage.imageRect = {{rects[v][0], rects[v][1]}, {rects[v][2], rects[v][3]}};
         focus[v].subImage.imageArrayIndex = 0;
+    }
+    if (nativeQuad.active) {
+        if (overRegion) {
+            ++v4d3d11.regionFrames;
+            v4d3d11.regionScaled += scaled;
+            v4d3d11.regionUnaligned += !(aligned[0] && aligned[1]);
+            for (int e = 0; e < 2; ++e) {
+                const double share = box_share_in_region(eyes[e].focusTan, regions[e]);
+                v4d3d11.regionShareSum += 0.5 * share;
+                v4d3d11.regionShareMin = std::min(v4d3d11.regionShareMin, share);
+            }
+            if (!v4d3d11.regionLogged) {
+                v4d3d11.regionLogged = true;
+                logf("native quad views: the first race frame over the runtime's focus views (eye 0: the runtime's "
+                     "%.3f %.3f %.3f %.3f, the box %.3f %.3f %.3f %.3f in tangents; the image %dx%d, the box's %dx%d "
+                     "texels at %d,%d in it%s; the focus chain %ux%u per eye)",
+                     regions[0][0], regions[0][1], regions[0][2], regions[0][3], eyes[0].focusTan[0], eyes[0].focusTan[1],
+                     eyes[0].focusTan[2], eyes[0].focusTan[3], regionImage[0].width, regionImage[0].height,
+                     boxPx[0][0], boxPx[0][1], regionImage[0].boxX, regionImage[0].boxY,
+                     aligned[0] ? ", texel for texel" : ", resampled (a turned focus camera)", v4d3d11.focusW,
+                     v4d3d11.focusH);
+            }
+        } else {
+            ++v4d3d11.regionNone;
+        }
+        v4d3d11_region_note();
     }
     // Sharpening: the focus views were drawn sharpened (FocusLayerPS); the periphery a sharpened copy of its own.
     const bool sharpened = eyes[0].sharpness > 0 && v4d3d11_sharpened_periphery(session, format, views, eyes, outer, copy);
@@ -515,10 +615,12 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
 // Composes both eyes of `proj` (the game's two eye views, eye columns of `layout`) into the output chain and
 // points `copy` (its views) at it. False: nothing changed, the caller submits views 0-1 as they are.
 // With focus_layer (`focus` given, separate views, the helmet off): nothing composed; `copy` the periphery and
-// `focus` the focus views' layer (v4d3d11_layered), `*layered` true.
+// `focus` the focus views' layer (v4d3d11_layered, over the runtime's focus views for `displayTime` under native quad
+// views), `*layered` true.
 bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
                      std::vector<XrCompositionLayerProjectionView>& copy,
-                     XrCompositionLayerProjectionView (*focus)[2] = nullptr, bool* layered = nullptr) {
+                     XrCompositionLayerProjectionView (*focus)[2] = nullptr, bool* layered = nullptr,
+                     XrTime displayTime = 0) {
     // What this frame's views were rendered with (the game's record, frame_records.h), taken before anything can
     // skip the frame, so later compositions stay in step with the frames rendered.
     Views4Frame frame{};
@@ -626,8 +728,8 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
                  texelsPerPixel[0] > 1.25f ? " (sharpened at the display's scale)" : "");
             v4d3d11.loggedTexelsPerPixel = texelsPerPixel[0];
         }
-        if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, it->second.format, texelsPerPixel, copy,
-                            *focus)) {
+        if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, it->second.format, texelsPerPixel,
+                            displayTime, copy, *focus)) {
             *layered = true;
             return true;
         }
@@ -757,7 +859,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         // or (no four views this frame: menus, loading) submitted as it is. None of the shared-target rects below apply.
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_separate_views()) {
             bool layered = false;
-            if (v4d3d11_compose(session, proj, copy, focusAfter < 0 ? &focusViews : nullptr, &layered)) {
+            if (v4d3d11_compose(session, proj, copy, focusAfter < 0 ? &focusViews : nullptr, &layered,
+                                info->displayTime)) {
                 // A quad view session (native_quad.cpp): the focus views are this layer's views 2-3, which the runtime
                 // composes itself (frames without them get copies of the eyes there, at the layer's bottom edge).
                 const bool quadViews = layered && nativeQuad.active;

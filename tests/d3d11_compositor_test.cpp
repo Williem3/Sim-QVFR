@@ -3,7 +3,8 @@
 // composed into a double-wide output. Each eye must show its own outer view at its edges and its own focus view
 // in the middle (the focus box, centred), and the game's pipeline state must be as it was. With the FOV crop
 // (outputSize) each eye is drawn into the top left of its half only. The helmet: its built-in look lit by the
-// frame's light, the light read back, the loaded pieces, and its own layer (only its bands).
+// frame's light, the light read back, the loaded pieces, and its own layer (only its bands). Native quad views'
+// focus views over the runtime's focus view: the box inside, texel for texel, the outer view around it.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -16,6 +17,7 @@
 #include <wrl/client.h>
 
 #include "quad/d3d11_compositor.h"
+#include "quad/native_quad.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace simqvfr;
@@ -225,6 +227,85 @@ int main() {
             std::snprintf(what, sizeof(what), "native, eye %d: the outline 10%% in (0x%08x), not at the edge", e,
                           nq.at(x0 + 14, 32));
             check(nq.at(x0 + 14, 32) == 0xffff00ff && nq.at(x0 + 2, 32) != 0xffff00ff, what);
+        }
+
+        // Native quad views over the runtime's focus view (regionTan, eye frame), wider than the box (+-0.4, 128 x 64
+        // texels: 160 and 80 per tangent): -0.6..0.2 across, 0.5..-0.3 up/down. On the box's grid the image is 128 x 64,
+        // the box from texel 32, 8: the focus view there texel for texel, the outer view left of and above it, the
+        // outline 10% in from the box's edge (not the image's), opaque throughout.
+        const float region[4] = {-0.6f, 0.2f, 0.5f, -0.3f};
+        RegionImage image;
+        check(focus_region_image(eyes[0].focusTan, 128, 64, region, image) && image.width == 128 && image.height == 64 &&
+                  image.boxX == 32 && image.boxY == 8,
+              "region: the image on the box's grid, the box at 32, 8");
+        EyeComposition over[2] = {native[0], native[1]};
+        for (EyeComposition& o : over)
+            std::memcpy(o.regionTan, image.tan, sizeof(o.regionTan));
+        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), over, rects), "the focus views over the region");
+        const Image rq = read_image(device.Get(), context.Get(), focusLayer.Get());
+        for (int e = 0; e < 2; ++e) {
+            const UINT x0 = e * 128;
+            char what[200];
+            std::snprintf(what, sizeof(what), "region, eye %d: the focus view in the box (0x%08x), the outer view left "
+                          "of it (0x%08x) and above it (0x%08x)", e, rq.at(x0 + 32 + 64, 8 + 32), rq.at(x0 + 16, 40),
+                          rq.at(x0 + 100, 4));
+            check(rq.at(x0 + 32 + 64, 8 + 32) == kFocus[e] && rq.at(x0 + 16, 40) == kOuter[e] &&
+                      rq.at(x0 + 100, 4) == kOuter[e],
+                  what);
+            std::snprintf(what, sizeof(what), "region, eye %d: the outline 10%% in from the box's edge (0x%08x), not "
+                          "the image's (0x%08x)", e, rq.at(x0 + 32 + 14, 40), rq.at(x0 + 14, 40));
+            check(rq.at(x0 + 32 + 14, 40) == 0xffff00ff && rq.at(x0 + 14, 40) != 0xffff00ff, what);
+            bool opaque = true;
+            for (UINT x = x0; x < x0 + 128; x += 3)
+                for (UINT y = 0; y < 64; y += 3)
+                    opaque &= rq.channel(x, y, 3) == 255;
+            std::snprintf(what, sizeof(what), "region, eye %d: opaque everywhere", e);
+            check(opaque, what);
+        }
+        // Texel for texel: each focus view a pattern (its texel's column and row in red and green); inside the box, past
+        // the feather and the outline, the image over the region holds exactly the focus view's texels, shifted by the
+        // box's place in it (no resampling).
+        {
+            std::vector<uint32_t> patterned(pixels);
+            for (UINT y = 128; y < kH; ++y)
+                for (UINT x = 0; x < kW; ++x)
+                    patterned[y * kW + x] = 0xff000000u | ((x % 128) * 2) | (((y - 128) * 4) << 8) | ((x / 128) << 16);
+            D3D11_TEXTURE2D_DESC patternDesc{kW, kH, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                                             D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET};
+            D3D11_SUBRESOURCE_DATA patternInit{patterned.data(), kW * 4};
+            ComPtr<ID3D11Texture2D> pattern;
+            device->CreateTexture2D(&patternDesc, &patternInit, &pattern);
+            check(compositor.draw_focus_layer(pattern.Get(), focusLayer.Get(), over, rects), "the patterned focus views");
+            const Image tq = read_image(device.Get(), context.Get(), focusLayer.Get());
+            for (int e = 0; e < 2; ++e) {
+                int wrong = 0, checked = 0;
+                for (UINT j = 10; j < 54; ++j)
+                    for (UINT i = 20; i < 96; ++i, ++checked) {  // the region ends 96 texels into the box
+                        const uint32_t got = tq.at(e * 128 + 32 + i, 8 + j), want = patterned[(128 + j) * kW + e * 128 + i];
+                        if (got != want && wrong++ < 6)
+                            std::printf("     eye %d texel %u,%u: 0x%08x, the focus view's 0x%08x\n", e, i, j, got, want);
+                    }
+                char what[128];
+                std::snprintf(what, sizeof(what), "region, eye %d: the box texel for texel (%d of %d texels differ)", e,
+                              wrong, checked);
+                check(wrong == 0, what);
+            }
+        }
+        // A region reaching past the eye's rendered FOV (tangent -1): black there, the outer view inside it.
+        const float past[4] = {-1.4f, -0.6f, 0.3f, -0.3f};
+        check(focus_region_image(eyes[0].focusTan, 128, 64, past, image) && image.width == 128 && image.height == 48,
+              "region past the eye: the image on the box's grid");
+        for (EyeComposition& o : over)
+            std::memcpy(o.regionTan, image.tan, sizeof(o.regionTan));
+        const int pastRects[2][4] = {{0, 0, 128, 48}, {128, 0, 128, 48}};
+        check(compositor.draw_focus_layer(views.Get(), focusLayer.Get(), over, pastRects), "the focus views past the eye");
+        const Image pq = read_image(device.Get(), context.Get(), focusLayer.Get());
+        for (int e = 0; e < 2; ++e) {
+            const UINT x0 = e * 128;
+            char what[160];
+            std::snprintf(what, sizeof(what), "region past the eye, eye %d: black past it (0x%08x), the outer view "
+                          "inside (0x%08x)", e, pq.at(x0 + 16, 20), pq.at(x0 + 100, 20));
+            check(pq.at(x0 + 16, 20) == 0xff000000 && pq.at(x0 + 100, 20) == kOuter[e], what);
         }
     }
 

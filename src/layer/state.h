@@ -447,6 +447,13 @@ struct V4D3D11 {
     bool peripherySharpened = false;   // the last layered frame's periphery was the sharpened copy
     float loggedTexelsPerPixel = 0;    // the focus views' texels per display pixel last logged (sharpening)
     uint64_t layered = 0;      // frames submitted as two layers
+    // Native quad views: race frames whose views 2-3 covered the runtime's focus views (FocusLayerPS's region), how
+    // much of the focus box they showed (its area's share, summed, and the lowest), those whose image was drawn
+    // smaller than its texels (larger than the focus chain), those not texel for texel (a turned focus camera), and
+    // those without the runtime's focus views (the box alone, as before). Counted since the last note.
+    uint64_t regionFrames = 0, regionScaled = 0, regionUnaligned = 0, regionNone = 0;
+    double regionShareSum = 0, regionShareMin = 1;
+    bool regionLogged = false;  // the first region frame's geometry logged
     bool helmetComposedLogged = false;
     uint64_t composed = 0, fallbacks = 0;
     const char* lastFallback = nullptr;
@@ -716,6 +723,22 @@ struct NativeQuad {
     // the eyes there (no focus views that frame), and projection layers left out (neither two nor four views).
     uint64_t focusFrames = 0, copyFrames = 0, refusedLayers = 0;
     bool loggedFirstFocus = false, loggedFirstCopy = false;
+    // The runtime's focus views (2-3) as located, the last few display times': each eye's region in its own frame
+    // (quad/native_quad.h FocusRegion: tangents left, right, up, down). Views 2-3 are submitted over them
+    // (runtime_focus_regions). Under regionMutex.
+    struct Located {
+        XrTime time = 0;
+        float tan[2][4] = {};
+        bool valid = false;
+    };
+    std::mutex regionMutex;
+    Located located[8];
+    uint32_t locatedNext = 0;
+    bool loggedRegions = false;  // the first located regions' sizes, logged and written to runtime.ini
+    bool loggedTurned = false;   // a focus view turned against its eye: its bounding box used, logged once
+    // Render thread: copy frames whose copies were cut to the runtime's focus views; frames that took the latest
+    // located views (none at their display time).
+    uint64_t croppedFrames = 0, regionMisses = 0;
 };
 
 // The globals (globals.cpp).

@@ -479,13 +479,13 @@ int main() {
                   "Focus quad distance: down to 1 m, and no further");
         }
         {
-            // The runtime composing the views (Pimax, Varjo): the settings page says its own sliders don't apply, unless
-            // the optimizer has something to say there.
+            // The runtime composing the views (Pimax, Varjo): the settings page says the focus area shows inside the
+            // runtime's focus region, unless the optimizer has something to say there.
             SettingsMenu n = c;
             check(menu_subtitle(n).empty(), "runtime composition off: no note");
             n.launch.runtimeComposes = true;
-            check(menu_subtitle(n).find(L"quad view settings don’t apply") != std::wstring::npos,
-                  "runtime composing: the settings page notes its own quad view settings don't apply");
+            check(menu_subtitle(n).find(L"inside its own focus region") != std::wstring::npos,
+                  "runtime composing: the settings page notes the focus area shows inside the runtime's focus region");
             n.optimizeDetail = L"Measuring… keep driving";
             check(menu_subtitle(n) == L"Measuring… keep driving", "runtime composing: the optimizer's line comes first");
         }

@@ -245,13 +245,15 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   when your headset's own OpenXR runtime composes quad views itself, Sim-QVFR hands it the four views and the
   runtime puts the focus area on the display at its full resolution. The focus area is then noticeably
   sharper above 100% inner resolution than when Sim-QVFR composes the image itself, and the periphery a
-  little sharper too. Eye tracking comes from the runtime's own foveated rendering when the usual eye
-  tracking gives nothing.
+  little sharper too. The focus area follows the runtime's own eye tracking (its foveated rendering).
   - **Tested on Pimax's OpenXR runtime only.** Varjo's runtime offers the same quad views and should work the
     same way, but it hasn't been tried on a Varjo headset yet. Reports are welcome.
-  - **Your Sim-QVFR settings apply, not the runtime's.** The resolution sliders and the focus size set in the
-    launcher or the headset menu are the ones used, and they change while you drive. Pimax Play's own quad
-    view sliders don't apply while Sim-QVFR runs.
+  - **The focus area sits inside the runtime's own focus region.** Sim-QVFR's resolution sliders apply and
+    change while you drive, and its focus area is drawn centred where the runtime puts its focus region (the
+    runtime's own eye tracking). The runtime shows the focus area only inside that region, so keep the
+    runtime's focus area (Pimax Play, Varjo Base) at least as large as Sim-QVFR's: the launcher's Diagnostics
+    page says when it isn't. The gaze dead-zone and the vertical offset don't apply here; the runtime places
+    the region.
   - **On SteamVR and other runtimes nothing changes:** Sim-QVFR composes the image as before. It also does
     with frame generation (Cheeky's or VectorXR's), which needs one composed image, and when another OpenXR
     layer sits between Sim-QVFR and the runtime. The page shows what the last launch did.

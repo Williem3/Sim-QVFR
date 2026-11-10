@@ -529,6 +529,7 @@ RuntimeInfo load_runtime_info(const std::wstring& path) {
     r.cheekyVersion = read_string(path, L"runtime", L"cheeky_version");
     r.quadViews = read_string(path, L"runtime", L"quad_views");
     r.quadViewsUsed = read_int(path, L"runtime", L"quad_views_used", 0) != 0;
+    swscanf_s(read_string(path, L"runtime", L"quad_runtime_focus").c_str(), L"%dx%d", &r.quadFocusWidth, &r.quadFocusHeight);
     r.vramUsedMb = read_int(path, L"runtime", L"vram_used_mb", 0);
     r.vramBudgetMb = read_int(path, L"runtime", L"vram_budget_mb", 0);
     r.vramScaledMb = read_int(path, L"runtime", L"vram_scaled_mb", 0);

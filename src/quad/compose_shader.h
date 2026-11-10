@@ -396,10 +396,29 @@ float3 helmet_apply(float3 scene, float2 a, float2 p) {
 // (the runtime fades the outermost texels). Sharpening (rot2.w) with viewTan.z > 1.25, the focus view's texels per
 // display pixel (the runtime shows it supersampled): CAS's change at the display's pixel scale (footprint_sharpened),
 // added to the view's own texel, so the runtime's averaging keeps it.
+// Native quad views over the runtime's focus view (helmetOpening's slot, unused here as the helmet is off: its
+// tangents in the eye's frame, left right up down, right > left): the target covers that region instead of the box,
+// the focus view inside the box (texel for texel where the region image's grid is the box's: native_quad.h
+// focus_region_image), the outer view around it, black past what the eye rendered.
 float4 FocusLayerPS(V v) : SV_Target {
     float2 size;
     focusTex.GetDimensions(size.x, size.y);
-    const float2 f = v.uv;
+    const bool region = viewTan.x > 0.5 && helmetOpening.y > helmetOpening.x;
+    // f: where this texel lies in the box (0..1 inside); a: its direction in the eye's frame (native quad views).
+    float2 f = v.uv;
+    float3 a;
+    if (region) {
+        // Across the region in the eye's frame, then in the focus view's (rot: eye -> focus), where it lies in the box.
+        a = float3(lerp(helmetOpening.x, helmetOpening.y, v.uv.x), lerp(helmetOpening.z, helmetOpening.w, v.uv.y), -1);
+        const float3 b = float3(dot(rot0.xyz, a), dot(rot1.xyz, a), dot(rot2.xyz, a));
+        const float2 t = b.xy / max(-b.z, 1e-6);
+        f = b.z < 0 ? float2((t.x - focusTan.x) / (focusTan.y - focusTan.x), (focusTan.z - t.y) / (focusTan.z - focusTan.w))
+                    : float2(-1, -1);
+    } else {
+        // Across the box in the focus view's frame, in the eye's (rot's transpose).
+        const float3 b = float3(lerp(focusTan.x, focusTan.y, f.x), lerp(focusTan.z, focusTan.w, f.y), -1);
+        a = rot0.xyz * b.x + rot1.xyz * b.y + rot2.xyz * b.z;
+    }
     const float e = inside_box(f);
     float w = saturate(e / max(params.x, 1e-4));
     w = w * w * (3 - 2 * w);
@@ -415,15 +434,14 @@ float4 FocusLayerPS(V v) : SV_Target {
         color = view_sample(focusTex, uv, focusSrc, size);
     }
     if (viewTan.x > 0.5) {
-        // This texel's direction in the focus view's frame, in the eye's (rot: eye -> focus, so its transpose), then
-        // where it lies in the outer view.
-        const float3 b = float3(lerp(focusTan.x, focusTan.y, f.x), lerp(focusTan.z, focusTan.w, f.y), -1);
-        const float3 a = rot0.xyz * b.x + rot1.xyz * b.y + rot2.xyz * b.z;
+        // Where this texel lies in the outer view.
         const float2 t = a.xy / max(-a.z, 1e-6);
         const float2 o = float2((t.x - outerTan.x) / (outerTan.y - outerTan.x), (outerTan.z - t.y) / (outerTan.z - outerTan.w));
         float2 outerSize;
         outerTex.GetDimensions(outerSize.x, outerSize.y);
-        const float4 outer = view_sample(outerTex, outerSrc.xy + saturate(o) * outerSrc.zw, outerSrc, outerSize);
+        float4 outer = view_sample(outerTex, outerSrc.xy + saturate(o) * outerSrc.zw, outerSrc, outerSize);
+        if (region && (any(o < 0) || any(o > 1)))
+            outer = float4(0, 0, 0, 1);
         color = lerp(outer, color, w);
         if (e >= viewTan.y && e < viewTan.y + params.y)
             color = borderColor;

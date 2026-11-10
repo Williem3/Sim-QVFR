@@ -39,6 +39,9 @@ struct EyeComposition {
     // The helmet overlay (helmet.h). viewTan: the tangents the eye's output covers (left, right, up, down;
     // all 0 = outerTan); with the helmet on, the uncropped eye, and what ACE did not render is the shell.
     float viewTan[4];
+    // The focus layer under native quad views (draw_focus_layer, FocusLayerPS; viewTan.x 1): the tangents its target
+    // covers in the eye's frame (left, right, up, down), the runtime's focus view, the box inside; all 0: the box.
+    float regionTan[4];
     float helmetOpening[4];  // the visor opening's tangents (left, right, up, down)
     float helmetRim, helmetRadius;  // the lip's width into the opening and the opening's corner radius, in tangents
     float helmetLight;     // how much the frame lights it (0..1)
