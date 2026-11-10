@@ -54,8 +54,14 @@ struct FourPassesRun {
     // QVFR: the focus views take their eye's glare (glare_share.h; [experiment] lmu_glare_share, default on).
     bool glareShare = true;
     // MVR ([experiment] lmu_focus_replay, default off): each eye pass also post-processes its focus view (focus_post.h:
-    // YEBIS's copy and composite once more, with the eye's glare and exposure). Passes 2-3 unchanged for now (R1-R2).
+    // YEBIS's copy and composite once more, with the eye's glare and exposure), its final blit beside the eye and the
+    // overlays doubled into it (R3).
     bool focusReplay = false;
+    // R4a ([experiment] lmu_focus_final, with focusReplay): the game's two eye passes only; the focus views are those
+    // focus finals beside the eyes. lmu_focus_final_ab=N: N frames like that, then N with the four passes (gate D), in
+    // turn, each side's CPU and GPU per pass logged apart.
+    bool focusFinal = false;
+    int focusFinalAb = 0;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

@@ -74,6 +74,15 @@ public:
             run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
             // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
             run.focusReplay = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0;
+            // lmu_focus_final=1 (with it): two eye passes, the focus views from beside the eyes (four_passes.h).
+            run.focusFinal = run.focusReplay && run.mvrSkip &&
+                             GetPrivateProfileIntW(L"experiment", L"lmu_focus_final", 0, s.ini) != 0;
+            if (run.focusFinal) {
+                run.focusFinalAb =
+                    (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_focus_final_ab", 0, s.ini)));
+                run.mvrAb = 0;  // one A/B at a time
+                run.mvrTiming = run.mvrTiming || run.focusFinalAb > 0;
+            }
         }
         // The focus views take their eye's glare (glare_share.h), so a light's halo doesn't stop at the box edge.
         run.glareShare = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_glare_share", 1, s.ini) != 0;

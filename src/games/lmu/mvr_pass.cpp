@@ -1461,6 +1461,11 @@ void mvr_suspend(bool on) {
 void mvr_frame_end(unsigned long long frame) {
     if (!g.context)
         return;
+    if (g.gpuSlot >= 0) {  // a frame of fewer than four passes (two, with the focus finals): its timing complete now
+        g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
+        g.gpu[g.gpuSlot].pending = true;
+        g.gpuSlot = -1;
+    }
     // The overlay trace: the frames 600, 2400 and 4200 frame ends after the install, each from the frame end before.
     ++g.framesSinceInstall;
     if (g.tracing) {
@@ -1544,7 +1549,7 @@ void mvr_frame_end(unsigned long long frame) {
                 total += avg(sc[p] + po[p], n[p]);
             simqvfr::logf("lmu mvr: GPU per pass%s, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
                           "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms, %.2f in all (%u frames timed)",
-                          m ? " without MVR (A/B)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
+                          m ? " on the A/B's other side (without MVR, or the four passes)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
                           avg(sc[2], n[2]), avg(po[2], n[2]), avg(sc[3], n[3]), avg(po[3], n[3]), total, n[0]);
             for (int p = 0; p < 4; ++p) {
                 g.sceneMs[m][p] = g.postMs[m][p] = 0;
