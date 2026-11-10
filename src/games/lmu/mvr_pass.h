@@ -121,4 +121,23 @@ struct MvrPassStats {
 };
 MvrPassStats mvr_pass_stats();
 
+// R4b (docs/recon-lmu.md "R4 plan"): the eye passes as the d3d11 calls show them, without the game's scene render hook.
+// A pass begins at the first bind of a multisample render target with a depth target after the frame's start or the
+// previous pass's end; it ends at the first bind of another render target after its final blit (the focus post's,
+// mvr_focus_final), at the next pass's scene, or at the frame end. Observe only: each frame's tracked passes compared
+// with the game's (mvr_pass_begin / mvr_pass_end), by the draws between their bounds; passes found in frames without the
+// game's (menus) counted. Needs the focus post (the draws hooked).
+void mvr_track_passes(bool on);
+// R4b-2: the tracker drives the passes: `begin(p)` at a tracked pass's begin (before its draws), `end(p)` at its end, on
+// the render thread inside the context's hooks; their work calls mvr_pass_begin / mvr_pass_end as the game's scene
+// render hook did. Null: observe only.
+using TrackFn = void (*)(int pass);
+void mvr_track_drive(TrackFn begin, TrackFn end);
+struct MvrTrackStats {
+    uint64_t frames = 0, matched = 0, countDiffers = 0, beganBefore = 0, endedAfter = 0, passesCompared = 0;
+    uint64_t startGapSum = 0, startGapMax = 0, endGapSum = 0, endGapMax = 0;  // draws of the game's pass left out
+    uint64_t framesWithoutGame = 0, passesWithoutGame = 0;                    // false finds (menus)
+};
+MvrTrackStats mvr_track_stats();
+
 }  // namespace lmu

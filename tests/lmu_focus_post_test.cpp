@@ -48,6 +48,18 @@ ID3D11VertexShader* bound_vs(ID3D11DeviceContext* context) {
     return vs;
 }
 
+// R4b-2: the tracker's calls when it drives the passes (as four_passes' pass_begin / pass_end would).
+const lmu::MvrPassView* driveViews[2] = {};
+std::string driveLog;
+void drive_begin(int pass) {
+    driveLog += " b" + std::to_string(pass);
+    lmu::mvr_pass_begin(pass, driveViews[pass & 1], false);
+}
+void drive_end(int pass) {
+    driveLog += " e" + std::to_string(pass);
+    lmu::mvr_pass_end(pass);
+}
+
 bool same_vp(const D3D11_VIEWPORT& v, float x, float y, float w, float h) {
     return std::fabs(v.TopLeftX - x) < 1e-3f && std::fabs(v.TopLeftY - y) < 1e-3f && std::fabs(v.Width - w) < 1e-3f &&
            std::fabs(v.Height - h) < 1e-3f;
@@ -414,10 +426,11 @@ int main(int argc, char** argv) {
                          copyConstants,   sizeof(copyConstants),  downConstants,        sizeof(downConstants),
                          compositeConstants, sizeof(compositeConstants), blitVs.Get(), blitPs.Get()};
     const auto eye_pass = [&](int pass, const lmu::MvrPassView* v, bool checkState, const Kit& k,
-                              bool overlayCheck = false) {
+                              bool overlayCheck = false, bool driven = false) {
+        if (!driven)  // driven: the tracker begins it at the scene's bind below
+            lmu::mvr_pass_begin(pass, v, false);  // as the game's scene render: the pass begins, then its scene's bind
         context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), dsv.Get());
         context->VSSetShader(twinned.Get(), nullptr, 0);
-        lmu::mvr_pass_begin(pass, v, false);
         const D3D11_VIEWPORT whole = {0, 0, static_cast<float>(W), static_cast<float>(H), 0, 1};
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), nullptr);
@@ -556,7 +569,8 @@ int main(int argc, char** argv) {
                       same_vp(vp[1], eyeW, 0, focusW, focusH) && lmu::mvr_pass_stats().overlayDraws == before + 1,
                   what);
         }
-        lmu::mvr_pass_end(pass);
+        if (!driven)  // driven: the tracker ends it (another target after the blit, the next scene, the frame end)
+            lmu::mvr_pass_end(pass);
         context->PSSetShaderResources(0, 3, std::vector<ID3D11ShaderResourceView*>(3, nullptr).data());
         context->IASetInputLayout(nullptr);
     };
@@ -781,6 +795,76 @@ int main(int argc, char** argv) {
         lmu::mvr_frame_end(600);
         check(lmu::mvr_pass_stats().focusComposites == before.focusComposites + 1,
               "a traced frame: the focus post as before (the trace's lines in SIM_QVFR_LOG)");
+    }
+
+    {  // R4b's pass tracker (observe only): a frame of two eye passes found where the game's are; a frame without the
+       // game's passes (a menu) with a multisample bind reported as a false find.
+        lmu::mvr_track_passes(true);
+        lmu::mvr_frame_end(100000);  // a fresh frame for the tracker
+        const lmu::MvrTrackStats before = lmu::mvr_track_stats();
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        eye_pass(0, &view, false, standIn);
+        eye_pass(1, &view1, false, standIn);
+        lmu::mvr_frame_end(100001);
+        const lmu::MvrTrackStats after = lmu::mvr_track_stats();
+        std::snprintf(what, sizeof(what),
+                      "pass tracker: the game's two passes found as its own (%llu frame matched, %llu passes compared; "
+                      "draws left out at the start %llu, at the end %llu)",
+                      static_cast<unsigned long long>(after.matched - before.matched),
+                      static_cast<unsigned long long>(after.passesCompared - before.passesCompared),
+                      static_cast<unsigned long long>(after.startGapSum - before.startGapSum),
+                      static_cast<unsigned long long>(after.endGapSum - before.endGapSum));
+        check(after.frames == before.frames + 1 && after.matched == before.matched + 1 &&
+                  after.passesCompared == before.passesCompared + 2 && after.beganBefore == before.beganBefore &&
+                  after.endedAfter == before.endedAfter && after.countDiffers == before.countDiffers &&
+                  after.startGapSum == before.startGapSum && after.endGapSum == before.endGapSum,
+              what);
+        context->VSSetShader(plainVs.Get(), nullptr, 0);
+        context->PSSetShader(scenePs.Get(), nullptr, 0);
+        context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), dsv.Get());
+        context->Draw(3, 0);
+        context->OMSetRenderTargets(1, sceneRtv.GetAddressOf(), nullptr);
+        lmu::mvr_frame_end(100002);
+        const lmu::MvrTrackStats menu = lmu::mvr_track_stats();
+        check(menu.framesWithoutGame == after.framesWithoutGame + 1 && menu.passesWithoutGame == after.passesWithoutGame + 1,
+              "pass tracker: a frame without the game's passes with a multisample scene bind: counted as a false find");
+        lmu::mvr_track_passes(false);
+    }
+
+    {  // R4b-2: the tracker drives the passes: begun at the scene's bind, ended after the blit or at the frame end, the
+       // focus post and finals as with the game's bounds.
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100010);
+        driveLog.clear();
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        eye_pass(0, nullptr, false, standIn, false, true);
+        eye_pass(1, nullptr, false, standIn, false, true);
+        lmu::mvr_frame_end(100011);
+        const lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        unsigned x = 0, y = 0, fw = 0, fh = 0;
+        const bool finals = lmu::mvr_focus_final(0, x, y, fw, fh) && lmu::mvr_focus_final(1, x, y, fw, fh);
+        std::snprintf(what, sizeof(what),
+                      "the tracker drives the passes:%s; %llu composites and %llu final blits, both eyes' focus finals made",
+                      driveLog.c_str(), static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusBlits - before.focusBlits));
+        check(driveLog == " b0 e0 b1 e1" && after.focusComposites == before.focusComposites + 2 &&
+                  after.focusBlits == before.focusBlits + 2 && finals,
+              what);
+        driveLog.clear();
+        context->VSSetShader(plainVs.Get(), nullptr, 0);
+        context->PSSetShader(scenePs.Get(), nullptr, 0);
+        context->OMSetRenderTargets(1, sceneRtv.GetAddressOf(), nullptr);
+        context->Draw(3, 0);
+        lmu::mvr_frame_end(100012);
+        check(driveLog.empty(), "the tracker drives no pass in a frame without a multisample scene bind (a menu)");
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
     }
 
     if (!folder.empty()) {  // YEBIS's own copy and composite with a capture's constants

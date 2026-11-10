@@ -237,6 +237,134 @@ struct State {
 
 bool ours(ID3D11DeviceContext* context) { return context == g.context && g.pass >= 0 && !g.replaying; }
 
+// R4b's pass tracker (mvr_track_passes): the eye passes as the d3d11 calls show them, compared with the game's bounds.
+struct Tracker {
+    bool on = false;
+    bool open = false, resolved = false, blitSeen = false;
+    int pass = -1, passes = 0;            // the open tracked pass; tracked passes begun this frame (at most two)
+    uint64_t draws = 0;                   // draws on the immediate context this frame (the four draw calls)
+    uint64_t begin[2] = {}, end[2] = {};  // the draw count at each tracked pass's begin and end
+    const char* endWhy[2] = {};
+    int actual = 0;                                   // the game's passes 0-1 begun this frame (mvr_pass_begin)
+    uint64_t actualBegin[2] = {}, actualEnd[2] = {};  // the draw count at their begin and end
+    std::string firstBind;  // a frame without the game's passes: the first tracked pass's target (the log)
+    MvrTrackStats stats;
+    TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
+    uint64_t loggedFrames = 0;
+    int detailsLogged = 0;
+    bool menuLogged = false;
+} tr;
+
+void track_begin(const char* what) {
+    tr.open = true;
+    tr.pass = tr.passes++;
+    tr.resolved = tr.blitSeen = false;
+    tr.begin[tr.pass] = tr.draws;
+    if (tr.actual == 0 && tr.firstBind.empty())
+        tr.firstBind = what;
+    if (tr.driveBegin)
+        tr.driveBegin(tr.pass);  // R4b: the pass's work (mvr_pass_begin among it) now, before its draws
+}
+
+void track_end(const char* why) {
+    if (!tr.open)
+        return;
+    tr.open = false;
+    tr.end[tr.pass] = tr.draws;
+    tr.endWhy[tr.pass] = why;
+    if (tr.driveEnd)
+        tr.driveEnd(tr.pass);  // R4b: after the pass's draws (mvr_pass_end among it)
+}
+
+// A render target bind on the game's immediate context: a pass begins at the first multisample target bound with a
+// depth target (after the frame's start or the previous pass's end); the open one ends at another target bound after
+// its final blit, or at the next pass's scene (a multisample bind after its resolve).
+void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
+    ComPtr<ID3D11Resource> r0;
+    if (n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0])
+        rtvs[0]->GetResource(&r0);
+    bool msaa = false;
+    D3D11_TEXTURE2D_DESC d{};
+    if (dsv && r0) {
+        ComPtr<ID3D11Texture2D> texture;
+        if (SUCCEEDED(r0.As(&texture))) {
+            texture->GetDesc(&d);
+            msaa = d.SampleDesc.Count > 1;
+        }
+    }
+    if (tr.open) {
+        if (tr.blitSeen && r0 && r0.Get() != g.eyeFinal[tr.pass].Get())
+            track_end("another target after its final blit");
+        else if (msaa && tr.resolved)
+            track_end("the next pass's scene");
+    }
+    if (!tr.open && msaa && tr.passes < 2) {
+        char what[96];
+        std::snprintf(what, sizeof(what), "%ux%u format %d x%u", d.Width, d.Height, static_cast<int>(d.Format),
+                      d.SampleDesc.Count);
+        track_begin(what);
+    }
+}
+
+// The frame end: the open pass ends; this frame's tracked passes against the game's.
+void track_frame_end(unsigned long long frame) {
+    track_end("the frame end");
+    MvrTrackStats& s = tr.stats;
+    ++s.frames;
+    if (tr.actual == 0) {
+        if (tr.passes) {
+            ++s.framesWithoutGame;
+            s.passesWithoutGame += static_cast<uint64_t>(tr.passes);
+            if (!tr.menuLogged) {
+                tr.menuLogged = true;
+                simqvfr::logf("lmu mvr: pass tracker: frame %llu has no eye passes of the game's, yet %d found (the first on %s)",
+                              frame, tr.passes, tr.firstBind.c_str());
+            }
+        }
+    } else if (tr.passes != tr.actual) {
+        ++s.countDiffers;
+        if (tr.detailsLogged < 6) {
+            ++tr.detailsLogged;
+            simqvfr::logf("lmu mvr: pass tracker: frame %llu: %d passes found, the game's %d", frame, tr.passes, tr.actual);
+        }
+    } else {
+        bool ok = true;
+        std::string detail;
+        for (int q = 0; q < tr.passes; ++q) {
+            const long long startGap = static_cast<long long>(tr.begin[q]) - static_cast<long long>(tr.actualBegin[q]);
+            const long long endGap = static_cast<long long>(tr.actualEnd[q]) - static_cast<long long>(tr.end[q]);
+            if (startGap < 0) {
+                ++s.beganBefore;
+                ok = false;
+            } else {
+                s.startGapSum += static_cast<uint64_t>(startGap);
+                s.startGapMax = (std::max)(s.startGapMax, static_cast<uint64_t>(startGap));
+            }
+            if (endGap < 0) {
+                ++s.endedAfter;
+                ok = false;
+            } else {
+                s.endGapSum += static_cast<uint64_t>(endGap);
+                s.endGapMax = (std::max)(s.endGapMax, static_cast<uint64_t>(endGap));
+            }
+            ++s.passesCompared;
+            char part[200];
+            std::snprintf(part, sizeof(part), "%spass %d: began %lld draws into the game's, ended %lld draws before its end (%s)",
+                          q ? "; " : "", q, startGap, endGap, tr.endWhy[q] ? tr.endWhy[q] : "?");
+            detail += part;
+        }
+        if (ok)
+            ++s.matched;
+        if (tr.detailsLogged < 6) {
+            ++tr.detailsLogged;
+            simqvfr::logf("lmu mvr: pass tracker: frame %llu: %s", frame, detail.c_str());
+        }
+    }
+    tr.passes = tr.actual = 0;
+    tr.draws = 0;
+    tr.firstBind.clear();
+}
+
 void stamp(int pass, int which) {
     if (g.gpuSlot < 0 || pass < 0 || pass > 3)
         return;
@@ -292,7 +420,7 @@ D3D11_VIEWPORT overlay_viewport(int eye, const MvrPassView& view, const D3D11_VI
 
 // The eye's viewport as applied with two views: the game's, or its cut for an overlay (R3c).
 D3D11_VIEWPORT first_viewport() {
-    return g.overlayTarget ? overlay_viewport(g.view.eye & 1, g.view, g.vps[0]) : g.vps[0];
+    return g.overlayTarget ? overlay_viewport(g.pass & 1, g.view, g.vps[0]) : g.vps[0];
 }
 
 // The game's scissor mapped like its viewport onto the focus viewport.
@@ -450,18 +578,22 @@ bool overlay_target(UINT n, ID3D11RenderTargetView* const* rtvs) {
         return false;
     ComPtr<ID3D11Resource> r;
     rtvs[0]->GetResource(&r);
-    return r && r.Get() == g.eyeFinal[g.view.eye & 1].Get();
+    return r && r.Get() == g.eyeFinal[g.pass & 1].Get();
 }
 
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
     if (!ours(context)) {
         realOMSetRenderTargets(context, n, rtvs, dsv);
+        if (tr.on && context == g.context && !g.replaying)
+            track_bind(n, rtvs, dsv);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
     realOMSetRenderTargets(context, n, rtvs, dsv);
+    if (tr.on)
+        track_bind(n, rtvs, dsv);
     g.depthBound = dsv != nullptr;
     g.overlayTarget = overlay_target(n, rtvs);
     update();
@@ -473,11 +605,15 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
                                                       ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
     if (!ours(context)) {
         realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+        if (tr.on && context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+            track_bind(n, rtvs, dsv);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
     realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+    if (tr.on && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        track_bind(n, rtvs, dsv);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
         g.overlayTarget = overlay_target(n, rtvs);
@@ -537,6 +673,14 @@ void clear_target(ID3D11Resource* target) {
 
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
+    if (tr.on && tr.open && context == g.context && !g.replaying && src) {
+        ComPtr<ID3D11Texture2D> source;
+        D3D11_TEXTURE2D_DESC sd{};
+        if (SUCCEEDED(src->QueryInterface(IID_PPV_ARGS(&source)))) {
+            source->GetDesc(&sd);
+            tr.resolved = tr.resolved || sd.SampleDesc.Count > 1;
+        }
+    }
     bool multisample = false;
     if (ours(context) && g.pass <= 3 && src && dst) {
         ComPtr<ID3D11Texture2D> source;
@@ -795,7 +939,7 @@ void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
     if (target && SUCCEEDED(target.As(&texture)))
         texture->GetDesc(&d);
     const MvrPassView& v = g.view;
-    const int eye = v.eye & 1;
+    const int eye = g.pass & 1;  // as the focus post's (after_copy, after_composite)
     if (!texture || v.eyeW + v.focusW > d.Width || v.focusH > d.Height) {
         ++g.stats.focusFailures;
         if (!g.blitRefusalLogged) {
@@ -814,6 +958,8 @@ void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
         return;
     }
     ++g.stats.focusBlits;
+    if (tr.open)
+        tr.blitSeen = true;
     g.eyeFinal[eye] = target;
     g.finalW[eye] = d.Width;
     g.finalH[eye] = d.Height;
@@ -942,6 +1088,8 @@ void trace_draw(ID3D11DeviceContext* context, const char* call, long long a, lon
 }
 
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
+    if (context == g.context && !g.replaying)
+        ++tr.draws;
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
     if (!outside || !double_outside<kHookDrawIndexed>(context, count, start, base))
         call_real<kHookDrawIndexed>(context, count, start, base);
@@ -959,6 +1107,8 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
 // Draw also the final blit's replay (focus_blit).
 template <int H, typename... A>
 void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
+    if (context == g.context && !g.replaying)
+        ++tr.draws;
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
     if (!outside || !double_outside<H>(context, a...))
         call_real<H>(context, a...);
@@ -1343,6 +1493,10 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         }
     }
     g.pass = pass;
+    if (pass < 2) {  // the tracker's comparison
+        tr.actualBegin[pass] = tr.draws;
+        tr.actual = (std::max)(tr.actual, pass + 1);
+    }
     g.drawFocus = view != nullptr && !g.broken;
     g.suspended = false;
     g.passTwinBinds = 0;
@@ -1423,6 +1577,8 @@ void mvr_pass_end(int pass) {
         }
     }
     g.focusCopied = false;
+    if (pass >= 0 && pass < 2)
+        tr.actualEnd[pass] = tr.draws;
     g.pass = -1;
     g.replaceResolve = false;
     g.postWindow = false;
@@ -1465,6 +1621,12 @@ void mvr_frame_end(unsigned long long frame) {
         g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
         g.gpu[g.gpuSlot].pending = true;
         g.gpuSlot = -1;
+    }
+    if (tr.on) {
+        track_frame_end(frame);
+    } else {  // the counts start afresh each frame either way
+        tr.passes = tr.actual = 0;
+        tr.draws = 0;
     }
     // The overlay trace: the frames 600, 2400 and 4200 frame ends after the install, each from the frame end before.
     ++g.framesSinceInstall;
@@ -1519,6 +1681,21 @@ void mvr_frame_end(unsigned long long frame) {
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
                       static_cast<unsigned long long>(s.replacedResolves), static_cast<unsigned long long>(s.lookups),
                       static_cast<unsigned long long>(s.lookupMisses));
+        if (tr.on) {
+            const MvrTrackStats& ts = tr.stats;
+            const uint64_t compared = ts.passesCompared ? ts.passesCompared : 1;
+            simqvfr::logf("lmu mvr: pass tracker: %llu frames: the game's two passes found as its own in %llu (began %llu "
+                          "times before the game's, ended %llu after; draws of the game's pass left out at the start %.1f "
+                          "on average, %llu at most, at the end %.1f, %llu at most); %llu frames with another count; frames "
+                          "without the game's passes: %llu with %llu found",
+                          static_cast<unsigned long long>(ts.frames), static_cast<unsigned long long>(ts.matched),
+                          static_cast<unsigned long long>(ts.beganBefore), static_cast<unsigned long long>(ts.endedAfter),
+                          static_cast<double>(ts.startGapSum) / compared, static_cast<unsigned long long>(ts.startGapMax),
+                          static_cast<double>(ts.endGapSum) / compared, static_cast<unsigned long long>(ts.endGapMax),
+                          static_cast<unsigned long long>(ts.countDiffers),
+                          static_cast<unsigned long long>(ts.framesWithoutGame),
+                          static_cast<unsigned long long>(ts.passesWithoutGame));
+        }
         if (g.focusReplay) {
             const MvrProbeStats probe = mvr_probe_stats();
             simqvfr::logf("lmu mvr: focus post: %llu copies, %llu composites (%llu by their bindings), %llu final blits; "
@@ -1674,5 +1851,19 @@ MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector
 }
 
 MvrPassStats mvr_pass_stats() { return g.stats; }
+
+void mvr_track_drive(TrackFn begin, TrackFn end) {
+    tr.driveBegin = begin;
+    tr.driveEnd = end;
+}
+
+void mvr_track_passes(bool on) {
+    tr.on = on;
+    tr.open = false;
+    tr.passes = tr.actual = 0;
+    tr.draws = 0;
+}
+
+MvrTrackStats mvr_track_stats() { return tr.stats; }
 
 }  // namespace lmu

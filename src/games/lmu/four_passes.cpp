@@ -769,6 +769,42 @@ bool install_skip() {
 
 // Before pass p: the eye's size (qvfr_before_pass took it), its focus view's (as set_next_passes will set pass 2-3's),
 // this frame's remap (frozen at pass 0), and whether this frame is a gate sample.
+// MVR's context hooks on `device` (at the first pass, or with the pass tracker at the session's first frame end, so menus
+// are seen too). False: MVR off for the session.
+ID3D11Device* sessionDevice = nullptr;  // four_passes_device (not referenced: the session keeps it)
+void pass_begin(int p);
+void pass_end(int p);
+bool install_mvr(ID3D11Device* device) {
+    mvr_focus_replay(cfg.focusReplay);  // before the install: the draws hooked for it only
+    mvrInstalled = device && mvr_pass_install(device);
+    if (!mvrInstalled) {
+        cfg.mvr = false;
+        return false;
+    }
+    if (cfg.passTracker) {
+        mvr_track_passes(true);
+        if (cfg.trackerDrives)
+            mvr_track_drive(&pass_begin, &pass_end);
+        simqvfr::log_line(cfg.trackerDrives
+                              ? "lmu mvr: pass tracker drives the eye passes (lmu_pass_tracker=2): their bounds from the d3d11 "
+                                "calls alone; the game's scene render, eye loop, post-effect time, scene skip, glare and "
+                                "driver tag hooks not installed"
+                              : "lmu mvr: pass tracker on (lmu_pass_tracker=1, observe only): the eye passes as the d3d11 "
+                                "calls show them, compared with the game's in the log");
+    }
+    if (cfg.focusReplay)
+        simqvfr::log_line("lmu mvr: focus post on (lmu_focus_replay=1): after each eye pass's YEBIS copy and composite, "
+                          "the same for its focus view, with the eye's glare and exposure; its final beside the eye");
+    if (cfg.focusFinal)
+        simqvfr::logf("lmu mvr: focus finals on (lmu_focus_final=1): the game's two eye passes, the focus views from "
+                      "beside the eyes%s",
+                      cfg.focusFinalAb > 0 ? (", A/B: " + std::to_string(cfg.focusFinalAb) +
+                                              " frames like that, then as many with the four passes, in turn")
+                                                 .c_str()
+                                           : "");
+    return true;
+}
+
 void mvr_before_pass(int p) {
     if (!mvrInstalled) {
         ID3D11Texture2D* t = eye_texture(0);
@@ -777,24 +813,11 @@ void mvr_before_pass(int p) {
         ID3D11Device* device = nullptr;
         t->GetDevice(&device);
         t->Release();
-        mvr_focus_replay(cfg.focusReplay);  // before the install: DrawIndexed hooked for it only
-        mvrInstalled = device && mvr_pass_install(device);
+        const bool ok = install_mvr(device);
         if (device)
             device->Release();
-        if (!mvrInstalled) {
-            cfg.mvr = false;
+        if (!ok)
             return;
-        }
-        if (cfg.focusReplay)
-            simqvfr::log_line("lmu mvr: focus post on (lmu_focus_replay=1): after each eye pass's YEBIS copy and composite, "
-                              "the same for its focus view, with the eye's glare and exposure; its final beside the eye");
-        if (cfg.focusFinal)
-            simqvfr::logf("lmu mvr: focus finals on (lmu_focus_final=1): the game's two eye passes, the focus views from "
-                          "beside the eyes%s",
-                          cfg.focusFinalAb > 0 ? (", A/B: " + std::to_string(cfg.focusFinalAb) +
-                                                  " frames like that, then as many with the four passes, in turn")
-                                                     .c_str()
-                                               : "");
     }
     bool sample = false;
     if (p == 0) {
@@ -802,9 +825,10 @@ void mvr_before_pass(int p) {
         mvr_frame_mode(mvrFrame ? 0 : 1);
         if (cfg.focusFinal) {  // R4a: two passes (or, in an A/B run, every other N frames four)
             twoPassFrame =
-                countImmediate &&
-                (cfg.focusFinalAb <= 0 || (sceneFrames / static_cast<unsigned long long>(cfg.focusFinalAb)) % 2 == 0);
-            if (!countImmediate && !countLogged) {
+                cfg.trackerDrives ||  // R4b: the game's own two passes (no loop patch)
+                (countImmediate &&
+                 (cfg.focusFinalAb <= 0 || (sceneFrames / static_cast<unsigned long long>(cfg.focusFinalAb)) % 2 == 0));
+            if (!countImmediate && !cfg.trackerDrives && !countLogged) {
                 countLogged = true;
                 simqvfr::log_line("lmu mvr: focus finals: the eye loop's count can't be set (its stub isn't where "
                                   "expected): four passes as before");
@@ -1600,10 +1624,16 @@ void copy_aside(int p) {
     source->Release();
 }
 
-void render_scene(void* arg, char laterEye) {
+// The work around one eye pass: render_scene's (the game's scene render, hooked), or with R4b's pass tracker driving
+// (FourPassesRun::trackerDrives) the d3d11 bounds' (mvr_pass.h mvr_track_drive): pass_begin before the pass's draws,
+// pass_end after them, on the render thread.
+double passWall0 = 0;
+unsigned long long passCpu0 = 0;
+bool trackedEyeLogged = false;
+
+void pass_begin(int p) {
     renderThread = GetCurrentThreadId();
-    pass = laterEye ? pass + 1 : 0;
-    const int p = pass;
+    pass = p;
     ++passesThisFrame;
     if (p == 0)
         atlasReady = menuReady = false;  // a new frame: its own four views, or none
@@ -1627,11 +1657,15 @@ void render_scene(void* arg, char laterEye) {
         glare_share_pass(p, p >= 2 && eyesInAtlas && frameFocusOk ? &boxes[p - 2] : nullptr, passW[p], passH[p], viewW,
                          viewH,
                          gameScale > 0 ? *reinterpret_cast<const float*>(base() + kRenderScale) / gameScale : 0.0);
-    const double wall0 = now_ms();
-    const unsigned long long cpu0 = thread_cycles();
-    costWindow.hookCycles += static_cast<double>(cpu0 - hook0);
+    passWall0 = now_ms();
+    passCpu0 = thread_cycles();
+    costWindow.hookCycles += static_cast<double>(passCpu0 - hook0);
     inPass = true;
-    originalRenderScene(arg, laterEye);
+}
+
+void pass_end(int p) {
+    const double wall0 = passWall0;
+    const unsigned long long cpu0 = passCpu0;
     inPass = false;
     if (qvfrMode && cfg.mvr && p < 4)
         mvr_pass_end(p);
@@ -1650,6 +1684,11 @@ void render_scene(void* arg, char laterEye) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
         eyeOfPass[p] = renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
                                 : -1;
+        if (cfg.trackerDrives && eyeOfPass[p] != p && !trackedEyeLogged) {
+            trackedEyeLogged = true;
+            simqvfr::logf("lmu mvr: pass tracker: frame %llu: the tracked pass %d rendered the game's eye %d", frames, p,
+                          eyeOfPass[p]);
+        }
         if (qvfrMode) {
             qvfr_after_pass(p);
             if (p == 1 || p == 3)  // live resolution: the next passes' size, before their cameras copy it
@@ -1660,6 +1699,13 @@ void render_scene(void* arg, char laterEye) {
         else if (armed)
             copy_aside(p);
     }
+}
+
+void render_scene(void* arg, char laterEye) {
+    const int p = laterEye ? pass + 1 : 0;
+    pass_begin(p);
+    originalRenderScene(arg, laterEye);
+    pass_end(p);
 }
 
 std::wstring captures_folder() {
@@ -2141,37 +2187,65 @@ bool four_passes_start(const FourPassesRun& run) {
             simqvfr::logf("%s: the %s isn't this build's; not installed", tag(), a.name);
             return false;
         }
-    for (auto& record : history)
-        reinterpret_cast<HistoryCtorFn>(base() + kCameraHistoryCtor)(record);
+    // R4b (cfg.trackerDrives): the game's own two eye passes, found at the d3d11 level; of the game's code only the lens
+    // mask's draw (MVR leaves it to the eye) and the VR UI's (native menus, the eyes' panel fit) are hooked.
+    const bool driven = cfg.trackerDrives;
+    if (!driven)
+        for (auto& record : history)
+            reinterpret_cast<HistoryCtorFn>(base() + kCameraHistoryCtor)(record);
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         simqvfr::logf("%s: MH_Initialize failed", tag());
         return false;
     }
     void* target = reinterpret_cast<void*>(base() + kRenderScene);
-    if (MH_CreateHook(target, reinterpret_cast<void*>(&render_scene), reinterpret_cast<void**>(&originalRenderScene)) !=
-            MH_OK ||
-        MH_EnableHook(target) != MH_OK) {
-        simqvfr::logf("%s: the scene render couldn't be hooked; not installed", tag());
-        return false;
-    }
     void* deltaTime = reinterpret_cast<void*>(base() + kPostEffectSetDeltaTime);
-    if (MH_CreateHook(deltaTime, reinterpret_cast<void*>(&set_delta_time),
-                      reinterpret_cast<void**>(&originalSetDeltaTime)) != MH_OK ||
-        MH_EnableHook(deltaTime) != MH_OK) {
-        MH_DisableHook(target);
-        simqvfr::logf("%s: the post-effect frame time couldn't be hooked; not installed", tag());
-        return false;
+    if (!driven) {
+        if (MH_CreateHook(target, reinterpret_cast<void*>(&render_scene), reinterpret_cast<void**>(&originalRenderScene)) !=
+                MH_OK ||
+            MH_EnableHook(target) != MH_OK) {
+            simqvfr::logf("%s: the scene render couldn't be hooked; not installed", tag());
+            return false;
+        }
+        if (MH_CreateHook(deltaTime, reinterpret_cast<void*>(&set_delta_time),
+                          reinterpret_cast<void**>(&originalSetDeltaTime)) != MH_OK ||
+            MH_EnableHook(deltaTime) != MH_OK) {
+            MH_DisableHook(target);
+            simqvfr::logf("%s: the post-effect frame time couldn't be hooked; not installed", tag());
+            return false;
+        }
     }
     if (focusMode) {
         void* mask = reinterpret_cast<void*>(base() + kHiddenAreaDraw);
         if (!simqvfr::code_matches(kHiddenAreaDraw, kHiddenAreaDrawAnchor, sizeof(kHiddenAreaDrawAnchor)) ||
             MH_CreateHook(mask, reinterpret_cast<void*>(&mask_draw), reinterpret_cast<void**>(&originalMaskDraw)) != MH_OK ||
             MH_EnableHook(mask) != MH_OK) {
-            MH_DisableHook(deltaTime);
-            MH_DisableHook(target);
+            if (!driven) {
+                MH_DisableHook(deltaTime);
+                MH_DisableHook(target);
+            }
             simqvfr::log_line("lmu focus: the hidden-area mask's draw isn't this build's or couldn't be hooked; not installed");
             return false;
         }
+    }
+    if (driven) {
+        installed = true;
+        mvr_time_hooks(cfg.mvrTiming);
+        if (qvfrMode) {
+            void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
+            vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
+                         simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
+                         MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw),
+                                       reinterpret_cast<void**>(&originalVruiDraw)) == MH_OK &&
+                         MH_EnableHook(vrui) == MH_OK;
+            std::lock_guard guard(liveMutex);
+            simqvfr::logf("lmu qvfr: on with the pass tracker (lmu_pass_tracker=2): the game's own two eye passes draw the "
+                          "focus views beside the eyes (multi-view), a %.0f%% x %.0f%% box of each eye's tangent span on "
+                          "the gaze; game code hooked: the lens mask's draw%s; the eye loop, the scene render, the "
+                          "post-effect time, the scene skip, glare share and the driver tags untouched",
+                          focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100,
+                          vruiHooked ? " and the VR UI's (native menus)" : "");
+        }
+        return true;
     }
     // The head first: with two passes `edi & 1` is `edi`, so it changes nothing until the tail counts to four.
     // Head: the camera update gets the eye as edi & 1 (passes 2-3 set up eyes 0-1's cameras, not eyes 2-3).
@@ -2279,10 +2353,14 @@ bool four_passes_start(const FourPassesRun& run) {
     return true;
 }
 
+void four_passes_device(ID3D11Device* device) { sessionDevice = device; }
+
 void four_passes_frame_end() {
     if (!installed)
         return;
     ++frames;
+    if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice)  // the tracker sees the menus too
+        install_mvr(sessionDevice);
     if (cfg.mvr) {
         mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;

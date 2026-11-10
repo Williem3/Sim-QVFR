@@ -62,6 +62,14 @@ struct FourPassesRun {
     // turn, each side's CPU and GPU per pass logged apart.
     bool focusFinal = false;
     int focusFinalAb = 0;
+    // R4b's pass tracker, observe only ([experiment] lmu_pass_tracker, with focusReplay): the eye passes found at the
+    // d3d11 level compared with the game's in the log (mvr_pass.h mvr_track_passes); MVR's hooks from the session's
+    // first frame end, so the menus are seen too.
+    bool passTracker = false;
+    // R4b-2 ([experiment] lmu_pass_tracker=2, with focusFinal): the tracker drives the passes; of the game's code only the
+    // lens mask's draw and the VR UI's are hooked (no scene render, eye loop, post-effect time, scene skip, glare or
+    // driver tags hooks; no A/B: the game's own two passes).
+    bool trackerDrives = false;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
@@ -71,6 +79,8 @@ bool four_passes_start(const FourPassesRun& run);
 // Every xrEndFrame: counts the passes; gates: at a few frames on track compares passes 2-3 with eyes 0-1 (copies: pixel
 // for pixel; focus: each focus view with its eye's crop).
 void four_passes_frame_end();
+// xrCreateSession with a D3D11 binding: the game's device (the pass tracker installs MVR's hooks on it at a frame end).
+void four_passes_device(ID3D11Device* device);
 
 // ---- QVFR (run.qvfr) ----
 // Where each eye's focus box is centred, as tangents of that eye's view (`valid[e]` false: its forward axis), from the

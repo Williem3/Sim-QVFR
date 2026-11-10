@@ -83,6 +83,12 @@ public:
                 run.mvrAb = 0;  // one A/B at a time
                 run.mvrTiming = run.mvrTiming || run.focusFinalAb > 0;
             }
+            // lmu_pass_tracker=1 (with the focus post): R4b's d3d11 pass bounds, observe only (four_passes.h).
+            const UINT tracker = run.focusReplay ? GetPrivateProfileIntW(L"experiment", L"lmu_pass_tracker", 0, s.ini) : 0;
+            run.passTracker = tracker != 0;
+            run.trackerDrives = tracker >= 2 && run.focusFinal;  // =2: it drives the passes, the game hooks off (R4b-2)
+            if (run.trackerDrives)
+                run.focusFinalAb = 0;  // the game's own two passes: nothing to alternate with
         }
         // The focus views take their eye's glare (glare_share.h), so a light's halo doesn't stop at the box edge.
         run.glareShare = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_glare_share", 1, s.ini) != 0;
@@ -180,6 +186,7 @@ public:
     void d3d11_session(ID3D11Device* device) override {
         if (mvrProbe_)
             mvr_probe_device(device);
+        four_passes_device(device);
     }
     void frame_end() override {
         if (mvrProbe_)
