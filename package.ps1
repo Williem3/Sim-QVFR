@@ -29,6 +29,9 @@ if ($Sign) {
 }
 $repo = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'dist' }
+# Visual Studio's build environment for Ninja and the MSVC x64 tools, checked before anything is checked out.
+. (Join-Path $repo 'tools\vs_env.ps1')
+Import-VsEnvironment
 
 function Invoke-Native([string]$What, [scriptblock]$Command) {
     # Native tools write progress to stderr; only the exit code decides.
@@ -60,26 +63,32 @@ $stage = Join-Path $OutputDirectory $name
 $archive = "$stage.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $archive)) { throw "$stage(.zip) already exists" }
 
-# Outside the repo's folder tree (so a sibling folder cannot stand in for a missing file) and not
-# under %TEMP%, which MSBuild warns about (MSB8029).
+# Outside the repo's folder tree, so a sibling folder cannot stand in for a missing file.
 $work = Join-Path (Join-Path $env:LOCALAPPDATA 'sim-qvfr-package') ([Guid]::NewGuid().ToString('N').Substring(0, 8))
 Invoke-Native 'git worktree add' { git -C $repo worktree add --detach $work $hash } | Out-Null
 try {
     Write-Host "Building $short in $work"
-    Invoke-Native 'cmake configure' { cmake -S $work -B (Join-Path $work 'build') -A x64 "-DSIM_QVFR_VERSION=$Version ($short)" } | Out-Null
-    $build = Invoke-Native 'cmake build' { cmake --build (Join-Path $work 'build') --config Release --parallel }
-    $warnings = $build | Where-Object { $_ -match ': warning ' }
-    if ($warnings) { $warnings | ForEach-Object { Write-Host $_ }; throw 'The build has warnings' }
-    $release = Join-Path $work 'build\Release'
+    # The build and the tests at below-normal priority (the compilers and tests inherit it), so a game running in
+    # the headset meanwhile keeps its frames.
+    $self = [Diagnostics.Process]::GetCurrentProcess()
+    $priority = $self.PriorityClass
+    $self.PriorityClass = 'BelowNormal'
+    try {
+        Invoke-Native 'cmake configure' {
+            cmake -S $work -B (Join-Path $work 'build') -G 'Ninja Multi-Config' "-DSIM_QVFR_VERSION=$Version ($short)"
+        } | Out-Null
+        $build = Invoke-Native 'cmake build' { cmake --build (Join-Path $work 'build') --config Release }
+        $warnings = $build | Where-Object { $_ -match ': warning ' }
+        if ($warnings) { $warnings | ForEach-Object { Write-Host $_ }; throw 'The build has warnings' }
 
-    # Every offline test, with a fresh log (some tests read it back).
-    $env:SIM_QVFR_LOG = Join-Path $work 'tests.log'
-    foreach ($test in Get-ChildItem -LiteralPath $release -Filter '*_test.exe') {
-        $null = & $test.FullName 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "$($test.Name) failed (exit $LASTEXITCODE)" }
-        Write-Host "  $($test.Name) passed"
+        # Every offline test, side by side, each with its own TEMP folder and log (the ctest suite in CMakeLists.txt).
+        $tests = Invoke-Native 'ctest' {
+            ctest --test-dir (Join-Path $work 'build') -C Release -j $env:NUMBER_OF_PROCESSORS --output-on-failure --no-tests=error
+        }
+        $tests | Where-Object { $_ -match 'Test +#|tests passed' } | ForEach-Object { Write-Host "  $($_.ToString().Trim())" }
+    } finally {
+        $self.PriorityClass = $priority
     }
-    Remove-Item Env:SIM_QVFR_LOG
 
     New-Item -ItemType Directory -Path $stage, (Join-Path $stage 'layer'), (Join-Path $stage 'layer\helmet'), (Join-Path $stage 'layer\vulkan'), (Join-Path $stage 'licenses') | Out-Null
     $files = [ordered]@{

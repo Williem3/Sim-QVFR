@@ -57,7 +57,10 @@ constexpr GameLabels kGameLabels[] = {
 
 // Frame ends (cpu_profile_mark_frame), QPC ticks, while a capture runs: a quarter million is over 45 minutes at 90 fps.
 constexpr size_t kMaxMarks = size_t{1} << 18;
-std::atomic<uint64_t> g_marks[kMaxMarks];
+// Plain words, read and written through std::atomic_ref (mark): an array of std::atomic this size cost MSVC 4.6 s of
+// every compile of this file, initializing each element.
+alignas(std::atomic_ref<uint64_t>::required_alignment) uint64_t g_marks[kMaxMarks];
+std::atomic_ref<uint64_t> mark(size_t i) { return std::atomic_ref<uint64_t>(g_marks[i]); }
 std::atomic<size_t> g_markCount{0};
 std::atomic<bool> g_marking{false};
 
@@ -340,7 +343,7 @@ std::vector<uint64_t> taken_marks() {
     std::vector<uint64_t> marks;
     marks.reserve(n);
     for (size_t i = 0; i < n; ++i)
-        if (const uint64_t m = g_marks[i].load(std::memory_order_relaxed))
+        if (const uint64_t m = mark(i).load(std::memory_order_relaxed))
             marks.push_back(m);
     std::sort(marks.begin(), marks.end());
     return marks;
@@ -703,7 +706,7 @@ bool cpu_profile_start(const CpuProfileRequest& request) {
     logf("cpu profile: sampling threads %s every %d ms for %d s", ids.c_str(), kCpuProfileSampleMs, request.seconds);
     // The last capture's marks cleared, so an entry not yet stored reads 0 (left out), never an old frame end.
     for (size_t i = 0, n = std::min(g_markCount.load(), kMaxMarks); i < n; ++i)
-        g_marks[i].store(0, std::memory_order_relaxed);
+        mark(i).store(0, std::memory_order_relaxed);
     g_markCount = 0;
     g_marking = true;
     state.running = true;
@@ -716,7 +719,7 @@ void cpu_profile_mark_frame() {
         return;
     const size_t i = g_markCount.fetch_add(1, std::memory_order_relaxed);
     if (i < kMaxMarks)
-        g_marks[i].store(qpc(), std::memory_order_relaxed);
+        mark(i).store(qpc(), std::memory_order_relaxed);
 }
 
 bool cpu_profile_running() { return state.running; }

@@ -1,5 +1,6 @@
 // Offline check of the hang watch (probe/hang_watch.h) and its dump helper (probe/hang_dump.h: the launcher,
-// built next to this test, standing by from the first arm), each case in a child process (the watch fires once per process): frames keep coming,
+// built next to this test, standing by from the first arm), each case in a child process (the watch fires once per process)
+// with a folder of its own, all at once: frames keep coming,
 // or the session ends, so no dump; frames stop mid-session, so the helper writes a dump; no helper, or one that
 // can't start, so no dump (never one from inside); frames stop while another thread holds the loader lock (X-Plane
 // loading a plugin, 2026-11-06), so a dump all the same, and log_modules doesn't wait for the lock; and in this
@@ -80,20 +81,30 @@ size_t count(const std::string& text, const char* what) {
     return n;
 }
 
-// The child's exit code; -1 if it didn't finish in time.
-int child(const wchar_t* self, const wchar_t* mode) {
+// A child case started in a folder of its own, for its log (SIM_QVFR_LOG, inherited) and any dump, so the cases
+// run side by side.
+HANDLE start_child(const wchar_t* self, const wchar_t* mode, const std::filesystem::path& dir) {
+    std::filesystem::create_directories(dir);
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", (dir / L"test.log").c_str());
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     std::wstring command = L"\"" + std::wstring(self) + L"\" " + mode;
     if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi))
+        return nullptr;
+    CloseHandle(pi.hThread);
+    return pi.hProcess;
+}
+
+// The child's exit code; -1 if it didn't start or finish in time.
+int finish_child(HANDLE process) {
+    if (!process)
         return -1;
     DWORD code = static_cast<DWORD>(-1);
-    if (WaitForSingleObject(pi.hProcess, 30000) == WAIT_OBJECT_0)
-        GetExitCodeProcess(pi.hProcess, &code);
+    if (WaitForSingleObject(process, 30000) == WAIT_OBJECT_0)
+        GetExitCodeProcess(process, &code);
     else
-        TerminateProcess(pi.hProcess, static_cast<UINT>(-1));
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
+        TerminateProcess(process, static_cast<UINT>(-1));
+    CloseHandle(process);
     return static_cast<int>(code);
 }
 
@@ -193,8 +204,10 @@ int main(int argc, char** argv) {
             return stall_holding_loader_lock(std::filesystem::path(log_directory()));
         if (std::strcmp(argv[1], "--no-helper") == 0)
             hang_watch_set_helper(L"C:\\no-such-folder\\sim-qvfr-launcher.exe");
-        if (std::strcmp(argv[1], "--bad-helper") == 0)  // there, but not a program
+        if (std::strcmp(argv[1], "--bad-helper") == 0) {  // there, but not a program
+            log_line("hang watch test: this log as the helper");  // the case's own folder starts empty
             hang_watch_set_helper(log_file().c_str());
+        }
         hang_watch_arm(1);
         hang_watch_frame();
         if (std::strcmp(argv[1], "--framing") == 0) {  // frames keep coming until the process ends
@@ -212,42 +225,52 @@ int main(int argc, char** argv) {
     const std::filesystem::path dir = std::filesystem::path(self).parent_path() / L"hang_watch_test";
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
-    std::filesystem::create_directories(dir);
-    const std::filesystem::path log = dir / L"test.log";
-    SetEnvironmentVariableW(L"SIM_QVFR_LOG", log.c_str());
 
-    child(self, L"--framing");
-    child(self, L"--ended");
-    expect(dumps(dir) == 0, "frames keep coming, or the session ended: no dump");
-    child(self, L"--stall");
-    std::string text = read(log);
-    expect(dumps(dir) == 1 && text.find("mid-session") != std::string::npos,
+    // Every case at once, each in its own folder: the children, then this process's own case.
+    const wchar_t* const modes[] = {L"framing", L"ended", L"stall", L"no-helper", L"bad-helper", L"loader-lock"};
+    HANDLE children[std::size(modes)] = {};
+    for (size_t i = 0; i < std::size(modes); ++i)
+        children[i] = start_child(self, (L"--" + std::wstring(modes[i])).c_str(), dir / modes[i]);
+    const std::filesystem::path own = dir / L"main";
+    std::filesystem::create_directories(own);
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", (own / L"test.log").c_str());  // before this process's first log line
+    hang_watch_arm(1);
+    hang_watch_arm(1);  // still one watch thread
+    Sleep(3000);
+    int exits[std::size(modes)] = {};
+    for (size_t i = 0; i < std::size(modes); ++i)
+        exits[i] = finish_child(children[i]);
+    const auto folder = [&](const wchar_t* mode) { return dir / mode; };
+    const auto log_of = [&](const wchar_t* mode) { return read(folder(mode) / L"test.log"); };
+
+    expect(dumps(folder(L"framing")) == 0 && dumps(folder(L"ended")) == 0,
+           "frames keep coming, or the session ended: no dump");
+    std::string text = log_of(L"stall");
+    expect(dumps(folder(L"stall")) == 1 && text.find("mid-session") != std::string::npos,
            "frames stop mid-session: a dump, logged as mid-session");
     expect(count(text, "written (helper exit 0") == 1 && count(text, "written from outside the game") == 1,
            "the helper wrote it and logged it");
     expect(text.find("hang_watch_test.exe") != std::string::npos && text.find("ntdll.dll") != std::string::npos,
            "the helper logged the stuck process's modules");
 
-    child(self, L"--no-helper");
-    child(self, L"--bad-helper");
-    text = read(log);
-    expect(dumps(dir) == 1, "no helper, or one that can't start: no dump");
-    expect(text.find("modules from here, no minidump") != std::string::npos, "no helper: logged, modules from here");
+    expect(dumps(folder(L"no-helper")) == 0 && dumps(folder(L"bad-helper")) == 0,
+           "no helper, or one that can't start: no dump");
+    expect(log_of(L"no-helper").find("modules from here, no minidump") != std::string::npos,
+           "no helper: logged, modules from here");
+    text = log_of(L"bad-helper");
     expect(text.find("cannot start") != std::string::npos && text.find("; no minidump") != std::string::npos,
            "a helper that can't start: logged");
 
-    expect(child(self, L"--loader-lock") == 0,
-           "frames stop while a thread holds the loader lock: the helper dumps, log_modules doesn't wait");
-    expect(dumps(dir) == 2, "  and that dump is there");
+    expect(exits[5] == 0, "frames stop while a thread holds the loader lock: the helper dumps, log_modules doesn't wait");
+    expect(dumps(folder(L"loader-lock")) == 1, "  and that dump is there");
 
-    const size_t before = dumps(dir);  // so a dump missing above isn't counted against this case too
-    hang_watch_arm(1);
-    hang_watch_arm(1);  // still one watch thread
-    Sleep(3000);
-    text = read(log);
-    expect(dumps(dir) == before + 1, "no frame at all: one minidump");
+    text = read(own / L"test.log");
+    expect(dumps(own) == 1, "no frame at all: one minidump");
     expect(text.find("after xrCreateSession; the game looks stuck") != std::string::npos, "the start-up hang is logged");
-    expect(dumps_valid(dir), "every dump is a whole minidump");
+    bool valid = dumps_valid(own);
+    for (const wchar_t* mode : modes)
+        valid = dumps_valid(folder(mode)) && valid;
+    expect(valid, "every dump is a whole minidump");
     expect(!GetModuleHandleW(L"dbghelp.dll"), "dbghelp never loaded in the stuck process");
 
     std::printf(failures ? "FAILED (%d)\n" : "all ok\n", failures);
