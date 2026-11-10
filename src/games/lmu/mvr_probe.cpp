@@ -49,7 +49,7 @@ std::atomic<bool> shaderHookTried{false};
 std::atomic<bool> supportLogged{false};
 bool dump = false;
 bool attach = false;  // lmu_mvr=1: each game shader gets its converted twin as private data (kMvrTwinGuid)
-bool markChecksums = false;  // with the focus post (lmu_focus_replay): every pixel shader's checksum as private data
+bool markChecksums = false;  // with the focus post: every shader's checksum as private data (the traces' names)
 bool underRenderDoc = false;
 std::atomic<bool> nvapiUsable{false};
 
@@ -204,6 +204,14 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
     uint32_t checksum[4];
     if (SUCCEEDED(hr) && markChecksums && !inProbe && shader && *shader && dxbc_checksum(code, size, checksum))
         (*shader)->SetPrivateData(kShaderChecksumGuid, sizeof(checksum), checksum);  // the overlay trace's names
+    // The lens mask's and the VR UI panel's: their draws handled at the d3d11 level (mvr_pass.cpp, R6).
+    if (const VsRole role = SUCCEEDED(hr) && !inProbe && shader && *shader ? vs_role(code, size) : VsRole::none;
+        role != VsRole::none) {
+        const UINT value = static_cast<UINT>(role);
+        (*shader)->SetPrivateData(kVsRoleGuid, sizeof(value), &value);
+        std::lock_guard guard(statsMutex);
+        ++(role == VsRole::lensMask ? stats.lensMasks : stats.vruiPanels);
+    }
     if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
         shaderGeneration.fetch_add(1, std::memory_order_release);
     return hr;
@@ -281,10 +289,11 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 
 }  // namespace
 
-bool mvr_probe_install(const wchar_t* ini, bool attachTwins) {
+bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;
     attach = attachTwins;
-    markChecksums = attach && ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0;
+    markChecksums =
+        attach && (nameShaders || (ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0));
     underRenderDoc = GetModuleHandleW(L"renderdoc.dll") != nullptr;
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         simqvfr::log_line("lmu mvr probe: MH_Initialize failed; probe off");
@@ -302,7 +311,7 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins) {
                   attach ? "each shader's twin attached for lmu_mvr" : "log only",
                   dump ? (markChecksums ? ", vertex and pixel shaders dumped to logs\\shaders" : ", shaders dumped to logs\\shaders")
                        : "",
-                  markChecksums ? "; pixel shaders named by checksum for the focus post's log" : "",
+                  markChecksums ? "; shaders named by checksum for the log's traces" : "",
                   device && chain ? "hooked" : "not hooked (the session's device instead)",
                   underRenderDoc ? "; under RenderDoc" : "");
     return true;

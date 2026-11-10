@@ -103,7 +103,8 @@ long set_delta_time(void* postEffect, float seconds) {
 }
 
 // The hidden-area (lens) mask is the eye's: in a focus view it would black out the view's own corners (the first focus
-// run's rounded rectangle; catalogue row 13). Focus passes skip it.
+// run's rounded rectangle; catalogue row 13). Focus passes skip it. The four passes' hook; the multi-view path handles
+// the mask's draw at the d3d11 level instead (mvr_pass.h mvr_mask_stale).
 int maskSkippedThisFrame = 0;
 
 // QVFR: the mask's own FOV. VR_Init turns the runtime's mesh (tangents) into screen space with the FOV it just located,
@@ -126,9 +127,8 @@ void mask_draw(void* mask, void* camera) {
         ++maskStaleThisFrame;
         return;
     }
-    mvr_suspend(true);  // the lens mask is the eye's (MVR: not its focus view's)
+    // With multi-view rendering its twin draws it into the focus view too, where that view sees the hidden area (R6a).
     originalMaskDraw(mask, camera);
-    mvr_suspend(false);
 }
 
 // Passes 2-3's camera history records (the game keeps two on its stack, one per eye).
@@ -180,6 +180,43 @@ ID3D11Texture2D* current_target(int& eye) {
 
 // Eye e's render texture (the eye-texture array), AddRef'd.
 ID3D11Texture2D* eye_texture(int e) { return d3d_texture(*reinterpret_cast<void**>(base() + kEyeTextures + e * 8)); }
+
+// The multi-view path's eye images, without calling the game's code: LMU's submit copies each eye's image into that eye's
+// swapchain image (CopySubresourceRegion), so at xrEndFrame the copy into the submitted image names eye e's
+// (learn_eye_images, mvr_pass.h mvr_copy_source). Held (AddRef'd) until another is seen. Null until the first.
+ID3D11Texture2D* eyeImage[2] = {};
+bool eyeImagesLogged = false, eyeImagesChecked = false;
+
+void learn_eye_images(ID3D11Texture2D* const (&eyes)[2]) {
+    for (int e = 0; e < 2; ++e) {
+        ID3D11Resource* src = mvr_copy_source(eyes[e]);
+        ID3D11Texture2D* t = nullptr;
+        if (!src || FAILED(src->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&t))))
+            continue;
+        if (t == eyeImage[e]) {
+            t->Release();
+            continue;
+        }
+        if (eyeImage[e])
+            eyeImage[e]->Release();
+        eyeImage[e] = t;  // our reference
+        D3D11_TEXTURE2D_DESC d{};
+        t->GetDesc(&d);
+        simqvfr::logf("lmu qvfr: frame %llu: eye %d's image %ux%u format %d, %s from its copy into the swapchain image "
+                      "(no call into the game)",
+                      frames, e, d.Width, d.Height, static_cast<int>(d.Format), eyeImagesLogged ? "again" : "found");
+    }
+    eyeImagesLogged = eyeImagesLogged || (eyeImage[0] && eyeImage[1]);
+}
+
+// The game's eye image e, AddRef'd (null if not known): on the multi-view path the one its copy named, else the game's.
+ID3D11Texture2D* game_eye_image(int e) {
+    if (!cfg.trackerDrives)
+        return eye_texture(e);
+    if (eyeImage[e])
+        eyeImage[e]->AddRef();
+    return eyeImage[e];
+}
 
 // `dst` (created or re-created to match) = `src`, on the immediate context.
 bool copy_texture(ID3D11Texture2D*& dst, ID3D11Texture2D* src) {
@@ -777,6 +814,7 @@ bool install_skip() {
 ID3D11Device* sessionDevice = nullptr;  // four_passes_device (not referenced: the session keeps it)
 void pass_begin(int p);
 void pass_end(int p);
+void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start);
 bool install_mvr(ID3D11Device* device) {
     mvr_focus_replay(cfg.focusReplay);  // before the install: the draws hooked for it only
     mvrInstalled = device && mvr_pass_install(device);
@@ -786,8 +824,12 @@ bool install_mvr(ID3D11Device* device) {
     }
     if (cfg.passTracker) {
         mvr_track_passes(true);
-        if (cfg.trackerDrives)
+        if (cfg.trackerDrives) {
             mvr_track_drive(&pass_begin, &pass_end);
+            mvr_mask_stale(&maskStale);  // R6c: the lens mask's draw dropped while stale
+            if (qvfrMode)
+                mvr_panel_draws(&panel_draw);  // R6b: the menus at native from the VR UI panel's draws
+        }
         simqvfr::log_line(cfg.trackerDrives
                               ? "lmu mvr: pass tracker drives the eye passes (lmu_pass_tracker=2): their bounds from the d3d11 "
                                 "calls alone; the game's scene render, eye loop, post-effect time, scene skip, glare and "
@@ -802,7 +844,9 @@ bool install_mvr(ID3D11Device* device) {
         simqvfr::logf("lmu mvr: focus finals on (lmu_focus_final=1): the game's two eye passes, the focus views from "
                       "beside the eyes%s",
                       cfg.focusFinalAb > 0 ? (", A/B: " + std::to_string(cfg.focusFinalAb) +
-                                              " frames like that, then as many with the four passes, in turn")
+                                              " frames like that, then as many with the four passes" +
+                                              (cfg.focusFinalAbPlain ? " as plain QVFR (no multi-view)" : " (gate D)") +
+                                              ", in turn")
                                                  .c_str()
                                            : "");
     return true;
@@ -838,7 +882,10 @@ void mvr_before_pass(int p) {
             }
             set_pass_count(twoPassFrame ? 2 : 4);
             mvr_frame_mode(twoPassFrame ? 0 : 1);
-            mvr_keep_focus(cfg.mvrSkip && !twoPassFrame);  // gate D's kept regions only for passes 2-3
+            // R5c: the four-pass side as plain QVFR (no multi-view: the branch below for every pass) or gate D.
+            if (cfg.focusFinalAbPlain && !twoPassFrame)
+                mvrFrame = false;
+            mvr_keep_focus(cfg.mvrSkip && !twoPassFrame && mvrFrame);  // gate D's kept regions only for passes 2-3
         }
         freeze_focus();
         const auto due = static_cast<unsigned long long>(cfg.first);
@@ -1237,8 +1284,14 @@ void draw_panels(void* vrui, ID3D11DeviceContext* context, const std::uint8_t* b
 }
 
 // The menus at native resolution (below): before and after the game's own UI draw in a frame without the eye loop.
-bool menu_background(void* vrui, ID3D11DeviceContext* context);
+bool menu_background(ID3D11DeviceContext* context, ID3D11RenderTargetView* like);
 void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes);
+
+// The VR UI object's RTV of eye 0, when it has both eyes' (menu_background's `like`).
+ID3D11RenderTargetView* vrui_eye_rtv(void* vrui) {
+    auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
+    return rtv[0] && rtv[1] ? rtv[0] : nullptr;
+}
 
 void focus_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
     auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
@@ -1296,7 +1349,7 @@ void vrui_draw(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
     // A frame without the eye loop (the main menu, loading): the eyes scaled up to native first, the UI drawn into those
     // at native after the game's own draw (menu_background, menu_ui).
     const bool menu = !pending && qvfrMode && menuNative && passesThisFrame == 0 && vrui && context && eyes &&
-                      menu_background(vrui, context);
+                      menu_background(context, vrui_eye_rtv(vrui));
     originalVruiDraw(vrui, context, eyes);
     if (menu)
         menu_ui(vrui, context, eyes);
@@ -1394,10 +1447,9 @@ bool ensure_menu(ID3D11DeviceContext* context, ID3D11Texture2D* like, ID3D11Rend
     return ok;
 }
 
-bool menu_background(void* vrui, ID3D11DeviceContext* context) {
-    auto** rtv = reinterpret_cast<ID3D11RenderTargetView**>(static_cast<std::uint8_t*>(vrui) + kVruiEyeRtv);
-    ID3D11Texture2D* eyes[2] = {eye_texture(0), eye_texture(1)};
-    bool ok = rtv[0] && rtv[1] && eyes[0] && eyes[1];
+bool menu_background(ID3D11DeviceContext* context, ID3D11RenderTargetView* like) {
+    ID3D11Texture2D* eyes[2] = {game_eye_image(0), game_eye_image(1)};
+    bool ok = like && eyes[0] && eyes[1];
     D3D11_TEXTURE2D_DESC d{};
     unsigned w = 0, h = 0;
     if (ok) {
@@ -1409,7 +1461,7 @@ bool menu_background(void* vrui, ID3D11DeviceContext* context) {
         h = std::min(8192u, static_cast<unsigned>(std::lround(recommended[1] / layerShare[1])));
         ok = d.SampleDesc.Count == 1 && (w > d.Width || h > d.Height);  // else the eyes are as sharp already
     }
-    ok = ok && ensure_menu(context, eyes[0], rtv[0], w, h);
+    ok = ok && ensure_menu(context, eyes[0], like, w, h);
     if (ok) {
         // The same tangents both sides: a straight bilinear scale of the whole eye image.
         const simqvfr::ViewMapping same{{-1, 1, 1, -1}, {-1, 1, 1, -1}, {1, 0, 0, 0, 1, 0, 0, 0, 1}};
@@ -1428,8 +1480,9 @@ bool menu_background(void* vrui, ID3D11DeviceContext* context) {
     return ok;
 }
 
-void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
-    // The record: the eyes' own projections, each focus view its box's part of the eye (the same pixels).
+// A menu frame's record: the eyes' own projections, each focus view its box's part of the eye (the same pixels), and
+// the views' places in the menu atlas. False: the eyes as they are.
+bool menu_record(simqvfr::Views4Frame& f, float (&uv)[4][4]) {
     double fx, fy, cx[2] = {}, cy[2] = {};
     {
         std::lock_guard guard(liveMutex);
@@ -1441,15 +1494,14 @@ void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
                 cy[e] = gazeTan[e][1];
             }
     }
-    simqvfr::Views4Frame f{};
-    float uv[4][4];
+    f = {};
     for (int e = 0; e < 2; ++e) {
         float eyeM[16], focusM[16];
         std::memcpy(eyeM, slot_matrix(e, 0), sizeof(eyeM));
         FocusBox box;
         clamp_focus_centre(eyeM, fx, fy, cx[e], cy[e]);
         if (!focus_projection(eyeM, fx, fy, cx[e], cy[e], box, focusM))
-            return;  // the eyes as they are
+            return false;
         const float outer[4] = {box.eyeTan[0], box.eyeTan[1], box.eyeTan[3], box.eyeTan[2]};
         const float focus[4] = {box.focusTan[0], box.focusTan[1], box.focusTan[3], box.focusTan[2]};
         std::memcpy(f.outerTan[e], outer, sizeof(outer));
@@ -1461,22 +1513,24 @@ void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
         std::memcpy(uv[e], o, sizeof(o));
         std::memcpy(uv[e + 2], b, sizeof(b));
     }
-    std::uint8_t block[kVruiEyesSize];
-    std::memcpy(block, eyes, sizeof(block));
-    draw_panels(vrui, context, block, menuRtv, static_cast<int>(menuW), static_cast<int>(menuH));
+    f.live = true;
+    for (int v = 0; v < 4; ++v) {
+        f.width[v] = f.renderWidth[v] = 0.5;
+        f.height[v] = f.renderHeight[v] = 1.0;
+    }
+    return true;
+}
+
+// The menu images (their UI drawn) into the menu atlas, the record stored: the layer composes the menu (four_passes_atlas).
+void menu_publish(const simqvfr::Views4Frame& f, const float (&uv)[4][4]) {
     ID3D11Device* device = nullptr;
-    context->GetDevice(&device);
+    menuAtlas->GetDevice(&device);
     ID3D11DeviceContext* immediate = nullptr;
     device->GetImmediateContext(&immediate);
     for (int e = 0; e < 2; ++e)
         immediate->CopySubresourceRegion(menuAtlas, 0, e * menuW, 0, 0, menuTex[e], 0, nullptr);
     immediate->Release();
     device->Release();
-    f.live = true;
-    for (int v = 0; v < 4; ++v) {
-        f.width[v] = f.renderWidth[v] = 0.5;
-        f.height[v] = f.renderHeight[v] = 1.0;
-    }
     std::memcpy(menuUv, uv, sizeof(uv));
     {
         std::lock_guard guard(liveMutex);
@@ -1484,6 +1538,77 @@ void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
         haveRecord = true;
     }
     menuReady = true;
+}
+
+// The four passes' hook (vrui_draw): the panels drawn again into the menu images at native, by the game's drawEye.
+void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
+    simqvfr::Views4Frame f{};
+    float uv[4][4];
+    if (!menu_record(f, uv))
+        return;  // the eyes as they are
+    std::uint8_t block[kVruiEyesSize];
+    std::memcpy(block, eyes, sizeof(block));
+    draw_panels(vrui, context, block, menuRtv, static_cast<int>(menuW), static_cast<int>(menuH));
+    menu_publish(f, uv);
+}
+
+// R6b, the multi-view path: the menus at native from the d3d11 calls alone (mvr_pass.h mvr_panel_draws), no call into
+// the game's code. In a frame without passes, before the first VR UI panel draw into an eye's image the eyes are scaled
+// up into the menu images (menu_background); after each panel draw the same draw into that eye's menu image at its size
+// (mvr_redraw_panel); at the frame's end, both eyes' drawn, the atlas and the record (menu_finish).
+bool menuFrameStarted = false, menuBackgroundOk = false, menuPanelDrawn[2] = {};
+unsigned long long menuPanelReplays = 0, menuPanelMisses = 0;
+bool menuPanelLogged = false;
+
+void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start) {
+    if (!qvfrMode || !menuNative || passesThisFrame != 0)
+        return;
+    ID3D11RenderTargetView* rtv = nullptr;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    if (!rtv)
+        return;
+    ID3D11Resource* target = nullptr;
+    rtv->GetResource(&target);
+    int eye = -1;
+    for (int e = 0; e < 2; ++e) {
+        ID3D11Texture2D* t = game_eye_image(e);
+        if (t && target && static_cast<ID3D11Resource*>(t) == target)
+            eye = e;
+        if (t)
+            t->Release();
+    }
+    if (target)
+        target->Release();
+    if (eye >= 0 && !after && !menuFrameStarted) {
+        menuFrameStarted = true;
+        menuBackgroundOk = menu_background(context, rtv);
+    } else if (eye >= 0 && after && menuBackgroundOk && menuRtv[eye]) {
+        mvr_redraw_panel(context, menuRtv[eye], menuW, menuH, count, start);
+        menuPanelDrawn[eye] = true;
+        ++menuPanelReplays;
+        if (!menuPanelLogged) {
+            menuPanelLogged = true;
+            simqvfr::logf("lmu qvfr: frame %llu: the VR UI's panel drawn again into the menu images at %ux%u (from its "
+                          "d3d11 draw)",
+                          frames, menuW, menuH);
+        }
+    } else if (eye < 0 && after) {
+        ++menuPanelMisses;  // a panel into something else than an eye's image
+    }
+    rtv->Release();
+}
+
+// At the frame's end (xrEndFrame, before the layer takes the atlas): a menu frame whose panels were drawn into both menu
+// images is published.
+void menu_finish() {
+    const bool both = menuPanelDrawn[0] && menuPanelDrawn[1];
+    menuFrameStarted = menuBackgroundOk = menuPanelDrawn[0] = menuPanelDrawn[1] = false;
+    if (!both || !menuAtlas)
+        return;
+    simqvfr::Views4Frame f{};
+    float uv[4][4];
+    if (menu_record(f, uv))
+        menu_publish(f, uv);
 }
 
 // QVFR, after pass p: the eyes go into the atlas's top row while the focus views render into their targets (pass 2 =
@@ -1495,8 +1620,16 @@ void menu_ui(void* vrui, ID3D11DeviceContext* context, const void* eyes) {
 void after_two_passes() {
     eyesInAtlas = frameFocusOk = false;
     atlasFromFinals = false;
-    ID3D11Texture2D* e0 = eye_texture(0);
-    ID3D11Texture2D* e1 = eye_texture(1);
+    ID3D11Texture2D* e0 = game_eye_image(0);
+    ID3D11Texture2D* e1 = game_eye_image(1);
+    // The multi-view path, once: the copies' eye images are the targets the passes' final blits drew into.
+    if (cfg.trackerDrives && !eyeImagesChecked && e0 && e1 && mvr_eye_final(0) && mvr_eye_final(1)) {
+        eyeImagesChecked = true;
+        const bool same = mvr_eye_final(0) == e0 && mvr_eye_final(1) == e1;
+        simqvfr::logf("lmu qvfr: frame %llu: the eye images from the submit's copies %s the final blits' targets "
+                      "(passes 0 and 1)",
+                      frames, same ? "are" : "are NOT");
+    }
     if (e0 && e1 && ensure_atlas(e0) && is_view(e1)) {
         for (int q = 0; q < 2; ++q) {
             passW[q] = std::clamp(passW[q], 1u, viewW);
@@ -2214,6 +2347,31 @@ bool install_four_pass_hooks() {
     return true;
 }
 
+// The lens mask's draw hooked (the four passes: focus passes skip it; a stale mask skipped). Before the eye loop is changed.
+bool install_mask_hook() {
+    void* mask = reinterpret_cast<void*>(base() + kHiddenAreaDraw);
+    if (!simqvfr::code_matches(kHiddenAreaDraw, kHiddenAreaDrawAnchor, sizeof(kHiddenAreaDrawAnchor)) ||
+        MH_CreateHook(mask, reinterpret_cast<void*>(&mask_draw), reinterpret_cast<void**>(&originalMaskDraw)) != MH_OK ||
+        MH_EnableHook(mask) != MH_OK) {
+        simqvfr::log_line("lmu focus: the hidden-area mask's draw isn't this build's or couldn't be hooked; not installed");
+        return false;
+    }
+    return true;
+}
+
+// The VR UI's draw hooked (the four passes: into the focus views too; menus at native).
+void install_vrui_hook() {
+    void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
+    vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
+                 simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
+                 MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw), reinterpret_cast<void**>(&originalVruiDraw)) ==
+                     MH_OK &&
+                 MH_EnableHook(vrui) == MH_OK;
+    if (!vruiHooked)
+        simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
+                          "missing inside the focus box");
+}
+
 // QVFR with the four passes: the driver tags' viewport cut and the focus views' glare from their eyes'.
 void install_four_pass_extras() {
     // The driver tags in the part of each target the pass rendered (live resolution); without it a pass rendered
@@ -2249,17 +2407,28 @@ void fallback_to_four_passes(const char* why) {
     mvr_track_drive(nullptr, nullptr);
     mvr_track_passes(false);
     mvr_focus_replay(false);
+    mvr_panel_draws(nullptr);  // the menus by the VR UI's hook from now on
+    mvr_mask_stale(nullptr);   // and the mask by its own
     cfg.trackerDrives = cfg.focusFinal = cfg.focusReplay = cfg.passTracker = false;
     cfg.mvr = cfg.mvrSkip = false;
     twoPassFrame = false;
+    menuFrameStarted = menuBackgroundOk = menuPanelDrawn[0] = menuPanelDrawn[1] = false;
+    if (focusMode && !install_mask_hook()) {
+        simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s) and the lens mask couldn't be hooked for the "
+                      "four passes: the eyes only (no focus views) for the rest of the session",
+                      frames, why);
+        return;
+    }
     if (!install_four_pass_hooks()) {
         simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s) and the four passes couldn't be installed: "
                       "the eyes only (no focus views) for the rest of the session",
                       frames, why);
         return;
     }
-    if (qvfrMode)
+    if (qvfrMode) {
+        install_vrui_hook();
         install_four_pass_extras();
+    }
     simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s): the four passes from the next frame (the focus "
                   "views rendered by passes 2-3), for the rest of the session",
                   frames, why);
@@ -2307,50 +2476,35 @@ bool four_passes_start(const FourPassesRun& run) {
             simqvfr::logf("%s: the %s isn't this build's; not installed", tag(), a.name);
             return false;
         }
-    // R4b (cfg.trackerDrives): the game's own two eye passes, found at the d3d11 level; of the game's code only the lens
-    // mask's draw (MVR leaves it to the eye) and the VR UI's (native menus, the eyes' panel fit) are hooked. The four
-    // passes' hooks (install_four_pass_hooks) only if it falls back to them (fallback_to_four_passes).
+    // R4b (cfg.trackerDrives): the game's own two eye passes, found at the d3d11 level, and (R6) the lens mask and the VR
+    // UI from their d3d11 draws: no game code hooked. The four passes' hooks (the mask's, install_four_pass_hooks, the VR
+    // UI's, the extras) only if it falls back to them (fallback_to_four_passes).
     const bool driven = cfg.trackerDrives;
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         simqvfr::logf("%s: MH_Initialize failed", tag());
         return false;
     }
-    if (focusMode) {  // first: nothing of the eye loop is changed before it is in
-        void* mask = reinterpret_cast<void*>(base() + kHiddenAreaDraw);
-        if (!simqvfr::code_matches(kHiddenAreaDraw, kHiddenAreaDrawAnchor, sizeof(kHiddenAreaDrawAnchor)) ||
-            MH_CreateHook(mask, reinterpret_cast<void*>(&mask_draw), reinterpret_cast<void**>(&originalMaskDraw)) != MH_OK ||
-            MH_EnableHook(mask) != MH_OK) {
-            simqvfr::log_line("lmu focus: the hidden-area mask's draw isn't this build's or couldn't be hooked; not installed");
-            return false;
-        }
-    }
-    if (!driven && !install_four_pass_hooks())
-        return false;
-    installed = true;
-    if (qvfrMode) {
-        void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
-        vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
-                     simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
-                     MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw), reinterpret_cast<void**>(&originalVruiDraw)) ==
-                         MH_OK &&
-                     MH_EnableHook(vrui) == MH_OK;
-        if (!vruiHooked)
-            simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
-                              "missing inside the focus box");
-    }
     if (driven) {
+        installed = true;
         mvr_time_hooks(cfg.mvrTiming);
         if (qvfrMode) {
             std::lock_guard guard(liveMutex);
             simqvfr::logf("lmu qvfr: on with multi-view rendering and the pass tracker: the game's own two eye passes draw "
                           "the focus views beside the eyes, a %.0f%% x %.0f%% box of each eye's tangent span on the gaze; "
-                          "game code hooked: the lens mask's draw%s; the eye loop, the scene render, the post-effect time, "
-                          "the scene skip, glare share and the driver tags untouched unless it falls back to the four passes",
-                          focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100,
-                          vruiHooked ? " and the VR UI's (native menus)" : "");
+                          "game code hooked: none (the lens mask and the VR UI handled at their d3d11 draws); the eye "
+                          "loop, the scene render, the post-effect time, the scene skip, glare share, the driver tags, the "
+                          "mask and the VR UI hooked only if it falls back to the four passes",
+                          focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100);
         }
         return true;
     }
+    if (focusMode && !install_mask_hook())  // first: nothing of the eye loop is changed before it is in
+        return false;
+    if (!install_four_pass_hooks())
+        return false;
+    installed = true;
+    if (qvfrMode)
+        install_vrui_hook();
     if (qvfrMode && cfg.mvr && cfg.mvrSkip) {  // gate D: passes 2-3 may skip the scene; mvr_pass keeps the focus regions
         cfg.mvrSkip = install_skip();
         mvr_keep_focus(cfg.mvrSkip);
@@ -2483,6 +2637,10 @@ void four_passes_frame_end() {
             ++uiSkipped;
         }
         uiScaleOnly = false;
+        if (cfg.trackerDrives) {
+            menu_finish();  // R6b: before the layer takes the atlas (views4_submit, after this)
+            maskStaleThisFrame += mvr_mask_dropped();
+        }
         const bool stale = maskStale.load(std::memory_order_relaxed);
         if (stale != maskStaleLogged) {
             maskStaleLogged = stale;
@@ -2527,11 +2685,11 @@ void four_passes_frame_end() {
                     for (int q = 0; q < 4; ++q)
                         c[m][q] = ab.cpu[m][q] / tscPerMs / ab.frames[m];
                 const double two = c[0][0] + c[0][1] + c[0][2] + c[0][3], four = c[1][0] + c[1][1] + c[1][2] + c[1][3];
-                simqvfr::logf("lmu mvr A/B (focus finals): CPU per pass with two passes %.2f %.2f ms (%.2f; %u frames), "
+                simqvfr::logf("lmu mvr A/B (focus finals%s): CPU per pass with two passes %.2f %.2f ms (%.2f; %u frames), "
                               "with four %.2f %.2f %.2f %.2f ms (%.2f; %u frames): %+.2f ms per frame; %llu two-pass frames "
                               "without both focus finals so far",
-                              c[0][0], c[0][1], two, ab.frames[0], c[1][0], c[1][1], c[1][2], c[1][3], four, ab.frames[1],
-                              two - four, finalsMissing);
+                              cfg.focusFinalAbPlain ? " vs plain QVFR" : " vs gate D", c[0][0], c[0][1], two, ab.frames[0],
+                              c[1][0], c[1][1], c[1][2], c[1][3], four, ab.frames[1], two - four, finalsMissing);
             }
             if (cfg.mvr && cfg.mvrAb > 0 && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
                 double c[2][4], eyes[2], focus[2];
@@ -2643,6 +2801,8 @@ bool four_passes_record(simqvfr::Views4Frame& frame) {
 }
 
 ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+    if (cfg.trackerDrives)
+        learn_eye_images(eyes);  // this frame's submit copies: the next frame's eye images
     if (qvfrMode && menuReady && menuAtlas) {  // a menu frame, at native (menu_ui)
         menuReady = false;
         std::memcpy(uv, menuUv, sizeof(uv));

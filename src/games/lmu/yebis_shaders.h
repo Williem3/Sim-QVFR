@@ -38,6 +38,24 @@ inline bool dxbc_checksum(const void* code, std::size_t size, std::uint32_t (&ou
     return true;
 }
 
+// Game vertex shaders the multi-view path knows by checksum, marked with their role at creation (mvr_probe.cpp, under
+// kVsRoleGuid) and read back at their binds (mvr_pass.cpp; docs/recon-lmu.md "R6a run"): the lens mask's (its mesh
+// already in the eye's clip space: `mov o0, v0`) and the VR UI panel's (the HUD and menus onto each eye's image).
+enum class VsRole : unsigned { none = 0, lensMask = 1, vruiPanel = 2 };
+inline constexpr std::uint32_t kLensMaskVs[4] = {0x4b92f26a, 0x3208d4b1, 0x46b29820, 0x43c439df};
+inline constexpr std::uint32_t kVruiPanelVs[4] = {0x794627d7, 0x0ceee05e, 0x76cbc5c8, 0xc0d5d119};
+inline constexpr GUID kVsRoleGuid = {0x5c81d2e7, 0x3a4f, 0x4e19, {0x9b, 0x62, 0x1d, 0xa8, 0x47, 0xc3, 0x0e, 0x95}};
+inline VsRole vs_role(const void* code, std::size_t size) {
+    std::uint32_t c[4];
+    if (!dxbc_checksum(code, size, c))
+        return VsRole::none;
+    if (std::memcmp(c, kLensMaskVs, sizeof(c)) == 0)
+        return VsRole::lensMask;
+    if (std::memcmp(c, kVruiPanelVs, sizeof(c)) == 0)
+        return VsRole::vruiPanel;
+    return VsRole::none;
+}
+
 inline YebisRole yebis_role(const void* code, std::size_t size) {
     std::uint32_t c[4];
     if (!dxbc_checksum(code, size, c))

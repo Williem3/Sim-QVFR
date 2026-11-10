@@ -6,6 +6,7 @@
 // is exactly that crop, so the focus post's image must equal the eye's own composite over it: the copy's region, the
 // constants as bound for the eye (the game rewrites its buffer right after), the glare resampled through the box and
 // the exposure all show there. And the game's state after each step as it set it, nothing replayed outside passes 0-1.
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -51,6 +52,7 @@ ID3D11VertexShader* bound_vs(ID3D11DeviceContext* context) {
 // R4b-2: the tracker's calls when it drives the passes (as four_passes' pass_begin / pass_end would).
 const lmu::MvrPassView* driveViews[2] = {};
 std::string driveLog;
+bool driveFinals = false;  // both eyes' focus finals there at pass 1's end (as four_passes' after_two_passes reads them)
 void drive_begin(int pass) {
     driveLog += " b" + std::to_string(pass);
     lmu::mvr_pass_begin(pass, driveViews[pass & 1], false);
@@ -58,6 +60,19 @@ void drive_begin(int pass) {
 void drive_end(int pass) {
     driveLog += " e" + std::to_string(pass);
     lmu::mvr_pass_end(pass);
+    unsigned x = 0, y = 0, w = 0, h = 0;
+    if (pass == 1)
+        driveFinals = lmu::mvr_focus_final(0, x, y, w, h) && lmu::mvr_focus_final(1, x, y, w, h);
+}
+
+// R6b: the panel callback (as four_passes' panel_draw): logs before/after; after, the panel again into panelTarget.
+std::string panelLog;
+ID3D11RenderTargetView* panelTarget = nullptr;
+unsigned panelW = 0, panelH = 0;
+void panel_cb(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start) {
+    panelLog += after ? " a" : " b";
+    if (after && panelTarget)
+        lmu::mvr_redraw_panel(context, panelTarget, panelW, panelH, count, start);
 }
 
 bool same_vp(const D3D11_VIEWPORT& v, float x, float y, float w, float h) {
@@ -296,6 +311,17 @@ int main(int argc, char** argv) {
                   lmu::yebis_role(code, sizeof(code)) == lmu::YebisRole::none && lmu::yebis_role(code, 12) == lmu::YebisRole::none,
               "roles by DXBC checksum: YEBIS's copy and composite known, any other shader none");
     }
+    {  // R6: the vertex shaders' roles (the probe's marking at creation).
+        unsigned char code[24] = {'D', 'X', 'B', 'C'};
+        std::memcpy(code + 4, lmu::kLensMaskVs, 16);
+        const lmu::VsRole mask = lmu::vs_role(code, sizeof(code));
+        std::memcpy(code + 4, lmu::kVruiPanelVs, 16);
+        const lmu::VsRole panel = lmu::vs_role(code, sizeof(code));
+        code[5] ^= 1;
+        check(mask == lmu::VsRole::lensMask && panel == lmu::VsRole::vruiPanel &&
+                  lmu::vs_role(code, sizeof(code)) == lmu::VsRole::none,
+              "vertex shader roles by DXBC checksum: the lens mask's and the VR UI panel's known, any other none");
+    }
 
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
@@ -314,8 +340,8 @@ int main(int argc, char** argv) {
         std::printf("     the debug layer: %s\n", infoQueue ? "on" : "not installed (no linkage check)");
     lmu::mvr_set_two_views(&fake_two_views);
     lmu::mvr_focus_replay(true);  // before the install: DrawIndexed hooked too
-    check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 14,
-          "the immediate context hooked, the four draws among its entries (the focus post on)");
+    check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 15,
+          "the immediate context hooked, the four draws and CopySubresourceRegion among its entries (the focus post on)");
 
     // The targets: the eye 100x80 at the top-left of 256x128, its focus view 60x50 beside it at (100, 0).
     constexpr unsigned W = 256, H = 128, eyeW = 100, eyeH = 80, focusW = 60, focusH = 50, glareW = 102, glareH = 51;
@@ -845,10 +871,10 @@ int main(int argc, char** argv) {
         const lmu::MvrPassStats before = lmu::mvr_pass_stats();
         eye_pass(0, nullptr, false, standIn, false, true);
         eye_pass(1, nullptr, false, standIn, false, true);
-        lmu::mvr_frame_end(100011);
+        driveFinals = false;
+        lmu::mvr_frame_end(100011);  // pass 1 ends here (no other target after its blit)
         const lmu::MvrPassStats after = lmu::mvr_pass_stats();
-        unsigned x = 0, y = 0, fw = 0, fh = 0;
-        const bool finals = lmu::mvr_focus_final(0, x, y, fw, fh) && lmu::mvr_focus_final(1, x, y, fw, fh);
+        const bool finals = driveFinals;
         std::snprintf(what, sizeof(what),
                       "the tracker drives the passes:%s; %llu composites and %llu final blits, both eyes' focus finals made",
                       driveLog.c_str(), static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
@@ -865,6 +891,138 @@ int main(int argc, char** argv) {
         check(driveLog.empty(), "the tracker drives no pass in a frame without a multisample scene bind (a menu)");
         lmu::mvr_track_drive(nullptr, nullptr);
         lmu::mvr_track_passes(false);
+    }
+
+    const auto marked = [&](lmu::VsRole role) {  // a vertex shader with a role, as the probe marks the game's
+        ComPtr<ID3D11VertexShader> s = vs(device.Get(), kPlainVs);
+        const UINT r = static_cast<UINT>(role);
+        if (s)
+            s->SetPrivateData(lmu::kVsRoleGuid, sizeof(r), &r);
+        return s;
+    };
+    {  // R6c: the lens mask's draw by its vertex shader's role: in a pass drawing its focus view, like the scene's (the
+       // twin, two views); while the mask is stale, not drawn at all.
+        lmu::mvr_frame_end(100030);
+        ComPtr<ID3D11VertexShader> maskVs = marked(lmu::VsRole::lensMask), maskTwin = vs(device.Get(), kPlainVs);
+        maskVs->SetPrivateDataInterface(lmu::kMvrTwinGuid, maskTwin.Get());
+        lmu::mvr_twins_changed();
+        std::atomic<bool> stale{false};
+        lmu::mvr_mask_stale(&stale);
+        ComPtr<ID3D11Query> query;
+        const D3D11_QUERY_DESC qd = {D3D11_QUERY_PIPELINE_STATISTICS, 0};
+        device->CreateQuery(&qd, &query);
+        const auto vertices_drawn = [&]() -> UINT64 {
+            context->Begin(query.Get());
+            context->Draw(3, 0);
+            context->End(query.Get());
+            D3D11_QUERY_DATA_PIPELINE_STATISTICS s{};
+            while (context->GetData(query.Get(), &s, sizeof(s), 0) == S_FALSE) {
+            }
+            return s.IAVertices;
+        };
+        lmu::mvr_pass_begin(0, &view, false);
+        context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), dsv.Get());
+        context->IASetInputLayout(nullptr);
+        context->VSSetShader(maskVs.Get(), nullptr, 0);
+        context->PSSetShader(scenePs.Get(), nullptr, 0);
+        context->RSSetViewports(1, &eyeVp);
+        const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
+        const UINT64 drawn = vertices_drawn();
+        const bool twoViews = bound_vs(context.Get()) == maskTwin.Get() && twoViewsOn == 1;
+        stale = true;
+        const UINT64 dropped = vertices_drawn();
+        stale = false;
+        const lmu::MvrPassStats s1 = lmu::mvr_pass_stats();
+        lmu::mvr_pass_end(0);
+        lmu::mvr_mask_stale(nullptr);
+        std::snprintf(what, sizeof(what),
+                      "R6c: the lens mask's draw (its shader's role) drawn with two views like the scene's (%llu vertices), "
+                      "not at all while stale (%llu); counted %llu drawn, %llu with two views, %llu dropped",
+                      static_cast<unsigned long long>(drawn), static_cast<unsigned long long>(dropped),
+                      static_cast<unsigned long long>(s1.maskDraws - s0.maskDraws),
+                      static_cast<unsigned long long>(s1.maskDrawsTwo - s0.maskDrawsTwo),
+                      static_cast<unsigned long long>(s1.maskDropped - s0.maskDropped));
+        check(drawn == 3 && twoViews && dropped == 0 && s1.maskDraws == s0.maskDraws + 1 &&
+                  s1.maskDrawsTwo == s0.maskDrawsTwo + 1 && s1.maskDropped == s0.maskDropped + 1,
+              what);
+    }
+    {  // R6b: a VR UI panel's draw outside the passes in a frame without focus finals (a menu): the callback right before
+       // and right after it; mvr_redraw_panel draws it again into another image at that image's size, the game's target,
+       // viewport and scissor put back. Another shader's draw: no callback.
+        lmu::mvr_frame_end(100031);  // a frame without focus finals
+        ComPtr<ID3D11VertexShader> panelVs = marked(lmu::VsRole::vruiPanel), otherVs = vs(device.Get(), kPlainVs);
+        lmu::mvr_twins_changed();
+        ComPtr<ID3D11PixelShader> panelPs =
+            ps(device.Get(), "float4 main() : SV_Target { return float4(0.25, 0.5, 0.75, 1); }");
+        constexpr unsigned mw = 64, mh = 32;
+        ComPtr<ID3D11Texture2D> menu = texture(device.Get(), mw, mh, DXGI_FORMAT_R8G8B8A8_UNORM);
+        ComPtr<ID3D11RenderTargetView> menuRtv;
+        device->CreateRenderTargetView(menu.Get(), nullptr, &menuRtv);
+        const float zero[4] = {};
+        context->ClearRenderTargetView(menuRtv.Get(), zero);
+        panelLog.clear();
+        panelTarget = menuRtv.Get();
+        panelW = mw;
+        panelH = mh;
+        lmu::mvr_panel_draws(&panel_cb);
+        const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
+        const D3D11_VIEWPORT gameVp = {0, 0, static_cast<float>(W), static_cast<float>(H), 0, 1};  // the eye's image
+        const D3D11_RECT gameSc = {0, 0, static_cast<LONG>(W), static_cast<LONG>(H)};
+        context->OMSetRenderTargets(1, eyeFinalRtv.GetAddressOf(), nullptr);
+        context->IASetInputLayout(nullptr);
+        context->VSSetShader(panelVs.Get(), nullptr, 0);
+        context->PSSetShader(panelPs.Get(), nullptr, 0);
+        context->RSSetViewports(1, &gameVp);
+        context->RSSetScissorRects(1, &gameSc);
+        context->Draw(3, 0);
+        ID3D11RenderTargetView* r = nullptr;
+        context->OMGetRenderTargets(1, &r, nullptr);
+        D3D11_VIEWPORT vp[16];
+        UINT n = 16;
+        context->RSGetViewports(&n, vp);
+        D3D11_RECT sc[16];
+        UINT sn = 16;
+        context->RSGetScissorRects(&sn, sc);
+        const std::vector<uint8_t> px = read_rgba8(device.Get(), context.Get(), menu.Get(), mw, mh);
+        bool filled = px.size() == static_cast<size_t>(mw) * mh * 4;
+        const int want[4] = {64, 128, 191, 255};
+        for (size_t i = 0; filled && i < px.size(); ++i)
+            filled = std::abs(static_cast<int>(px[i]) - want[i % 4]) <= 1;
+        const std::string first = panelLog;
+        context->VSSetShader(otherVs.Get(), nullptr, 0);
+        context->Draw(3, 0);
+        const lmu::MvrPassStats s1 = lmu::mvr_pass_stats();
+        lmu::mvr_panel_draws(nullptr);
+        panelTarget = nullptr;
+        std::snprintf(what, sizeof(what),
+                      "R6b: a menu frame's VR UI panel draw: the callback before and after it ('%s', then '%s' with another "
+                      "shader), drawn again over the whole %ux%u image, the game's target, viewport and scissor back",
+                      first.c_str(), panelLog.c_str(), mw, mh);
+        check(first == " b a" && panelLog == first && filled && bound(r) == eyeFinalRtv.Get() && n == 1 &&
+                  same_vp(vp[0], 0, 0, W, H) && sn == 1 && sc[0].right == static_cast<LONG>(W) &&
+                  sc[0].bottom == static_cast<LONG>(H) && s1.panelReplays == s0.panelReplays + 1,
+              what);
+    }
+
+    {  // R5c: the game's CopySubresourceRegion remembered: its source found by the destination (LMU's submit names its eye
+       // images this way, at an offset into the swapchain image), only this frame's or the one before's.
+        ComPtr<ID3D11Texture2D> image0 = texture(device.Get(), 16, 16, DXGI_FORMAT_R8G8B8A8_UNORM),
+                                image1 = texture(device.Get(), 16, 16, DXGI_FORMAT_R8G8B8A8_UNORM),
+                                chain0 = texture(device.Get(), 16, 16, DXGI_FORMAT_R8G8B8A8_UNORM),
+                                chain1 = texture(device.Get(), 16, 16, DXGI_FORMAT_R8G8B8A8_UNORM),
+                                other = texture(device.Get(), 16, 16, DXGI_FORMAT_R8G8B8A8_UNORM);
+        lmu::mvr_frame_end(100040);
+        context->CopySubresourceRegion(chain0.Get(), 0, 0, 0, 0, image0.Get(), 0, nullptr);
+        context->CopySubresourceRegion(chain1.Get(), 0, 0, 0, 0, image1.Get(), 0, nullptr);
+        const bool found = lmu::mvr_copy_source(chain0.Get()) == image0.Get() &&
+                           lmu::mvr_copy_source(chain1.Get()) == image1.Get() && !lmu::mvr_copy_source(other.Get());
+        lmu::mvr_frame_end(100041);
+        const bool lastFrame = lmu::mvr_copy_source(chain0.Get()) == image0.Get();
+        lmu::mvr_frame_end(100042);
+        const bool old = lmu::mvr_copy_source(chain0.Get()) == nullptr;
+        check(found && lastFrame && old,
+              "R5c: the game's CopySubresourceRegion into a swapchain image names its source (this frame's or the one "
+              "before's, not older)");
     }
 
     if (!folder.empty()) {  // YEBIS's own copy and composite with a capture's constants

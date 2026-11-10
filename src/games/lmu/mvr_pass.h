@@ -3,7 +3,8 @@
 // stream output stage) runs the game shader's converted twin (mvr_probe.h) with NVIDIA's single-pass stereo on, so it
 // also draws that eye's focus view beside the eye: the clip remap in cb13, a second viewport (and scissor) right of the
 // game's, scaled from the eye's size to the focus view's (so the quarter-resolution pass gets its own). The lens mask
-// draws the eye only (mvr_suspend). Gate C (lmu_mvr=1): passes 2-3 still render the focus views and the headset shows
+// draws with two views too (its mesh is in the eye's clip space, so the twin puts it where the focus view sees the hidden
+// area: docs/recon-lmu.md "R6a run"). Gate C (lmu_mvr=1): passes 2-3 still render the focus views and the headset shows
 // those; at sample frames the focus region of pass 0/1's resolved scene is compared with pass 2/3's own (alignment,
 // brightness), the images saved in logs\captures. Gate D (lmu_mvr=2, mvr_keep_focus): the focus region is kept after
 // pass 0/1's resolve, and pass 2/3's resolve (in cubeDX11_ApplyPostProcess) becomes a copy of it into the top-left, so
@@ -11,6 +12,7 @@
 // eyes' post-processing reads only their own corner of the targets.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -18,6 +20,8 @@
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+struct ID3D11RenderTargetView;
+struct ID3D11Resource;
 struct ID3D11Texture2D;
 
 namespace lmu {
@@ -39,13 +43,14 @@ namespace context_slot {
 inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
                           kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
                           kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kRSSetViewports = 44,
-                          kRSSetScissorRects = 45, kResolveSubresource = 57, kHSSetShader = 60, kDSSetShader = 64;
-// The last four (the draws) only with the focus post (mvr_focus_replay).
+                          kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57, kHSSetShader = 60,
+                          kDSSetShader = 64;
+// The last five (the draws, CopySubresourceRegion) only with the focus post (mvr_focus_replay).
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
                                        kDSSetShader,       kDrawIndexed,        kDraw,
-                                       kDrawIndexedInstanced, kDrawInstanced};
+                                       kDrawIndexedInstanced, kDrawInstanced, kCopySubresourceRegion};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -54,7 +59,26 @@ bool mvr_pass_install(ID3D11Device* device);
 // focus views are compared (the regions copied at each pass's end).
 void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replaceResolve = false);
 void mvr_pass_end(int pass);
-void mvr_suspend(bool on);  // the hidden-area mask: the eye only
+// R6c: the lens mask's draws (its vertex shader's role, yebis_shaders.h VsRole) are drawn like the scene's, or dropped
+// while `*stale` (a live FOV crop change since the game built the mask: four_passes.cpp maskStale). Null: never dropped.
+void mvr_mask_stale(const std::atomic<bool>* stale);
+// The lens mask's draws dropped since the last call (four_passes' log).
+int mvr_mask_dropped();
+// R6b: a Draw with the VR UI panel's vertex shader outside the passes in a frame without focus finals (the menus): `fn`
+// right before it (after = false) and right after it (true), the game's state bound; it may draw the panel again
+// elsewhere with mvr_redraw_panel. Null: none.
+using PanelFn = void (*)(ID3D11DeviceContext* context, bool after, unsigned vertexCount, unsigned startVertex);
+void mvr_panel_draws(PanelFn fn);
+// The source of the game's latest CopySubresourceRegion into `dst` in this frame or the one before (raw, compared only),
+// null if none: LMU's submit copies each eye's image into that eye's swapchain image that way, which names the eye images
+// from the d3d11 calls. Hooked with the focus post.
+ID3D11Resource* mvr_copy_source(ID3D11Resource* dst);
+// Eye `eye`'s final as its pass's final blit last drew into it (raw), null if none yet.
+ID3D11Texture2D* mvr_eye_final(int eye);
+// From a PanelFn: the panel's draw again into `rtv`, a width x height image, with the game's viewport and scissors
+// scaled from its bound target's size to that; its targets, viewports and scissors put back.
+void mvr_redraw_panel(ID3D11DeviceContext* context, ID3D11RenderTargetView* rtv, unsigned width, unsigned height,
+                      unsigned vertexCount, unsigned startVertex);
 // Gate D: keep each focus region after its eye pass's resolve; true once eye `eye`'s is kept this frame (its pass drew
 // the focus view), so pass 2/3 may skip the scene and have its resolve replaced (mvr_pass_begin's replaceResolve).
 void mvr_keep_focus(bool on);
@@ -118,6 +142,9 @@ struct MvrPassStats {
     // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
     // and after them (the VR UI).
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
+    // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
+    // draws replayed for the menus (mvr_redraw_panel).
+    uint64_t maskDraws = 0, maskDrawsTwo = 0, maskDropped = 0, panelReplays = 0;
 };
 MvrPassStats mvr_pass_stats();
 // Single-pass stereo was refused at a draw (off for the session since): no focus views from the eye passes.

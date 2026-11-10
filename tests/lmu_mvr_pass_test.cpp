@@ -209,12 +209,6 @@ int main() {
         context->ResolveSubresource(single.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
         check(ms && single && lmu::mvr_pass_stats().resolves == before + 1, "a multisample resolve in the pass is seen");
     }
-    lmu::mvr_suspend(true);
-    check(bound_vs(context.Get()) == a.Get() && twoViewsOn == 0 && viewports(context.Get(), vps) == 1,
-          "suspended (the lens mask): the eye only");
-    lmu::mvr_suspend(false);
-    check(bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && viewports(context.Get(), vps) == 2,
-          "resumed: the twin and two viewports again");
     lmu::mvr_pass_end(0);
     n = viewports(context.Get(), vps);
     rn = 16;
@@ -270,14 +264,15 @@ int main() {
             context->VSSetShader(a.Get(), nullptr, 0);
         }
         const lmu::MvrPassStats s1 = lmu::mvr_pass_stats();
-        check(s1.lookups - s0.lookups == 10 && s1.lookupMisses - s0.lookupMisses <= 2 && bound_vs(context.Get()) == twin.Get(),
+        // Two lookups per bind (its role, R6, then its twin), one entry per shader.
+        check(s1.lookups - s0.lookups == 20 && s1.lookupMisses - s0.lookupMisses <= 2 && bound_vs(context.Get()) == twin.Get(),
               "ten binds of two shaders in a frame: at most two lookups not cached, the twin bound");
         lmu::mvr_pass_end(0);
         lmu::mvr_pass_begin(0, &view, false);  // the next frame (its start looks up the bound shader): still cached
         context->VSSetShader(b.Get(), nullptr, 0);
         context->VSSetShader(a.Get(), nullptr, 0);
         const lmu::MvrPassStats s2 = lmu::mvr_pass_stats();
-        check(s2.lookups - s1.lookups == 3 && s2.lookupMisses == s1.lookupMisses && bound_vs(context.Get()) == twin.Get(),
+        check(s2.lookups - s1.lookups == 6 && s2.lookupMisses == s1.lookupMisses && bound_vs(context.Get()) == twin.Get(),
               "the next frame: every lookup answered by the cache");
         lmu::mvr_pass_end(0);
         ComPtr<ID3D11VertexShader> twinB = vertex_shader(device.Get(), "4");

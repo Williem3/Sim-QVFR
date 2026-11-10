@@ -43,17 +43,18 @@ constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_P
 // pass's start. Our own calls and the calls passed on go to the original of the function the entry holds now.
 enum Hook : int {
     kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
-    kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHooks
+    kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHooks
 };
 constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
                                       kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
                                       kHSSetShader,   kDSSetShader,    kDrawIndexed,        kDraw,
-                                      kDrawIndexedInstanced,           kDrawInstanced};
+                                      kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion};
 constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
                                            "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
                                            "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
                                            "HSSetShader",    "DSSetShader",       "DrawIndexed",
-                                           "Draw",           "DrawIndexedInstanced", "DrawInstanced"};
+                                           "Draw",           "DrawIndexedInstanced", "DrawInstanced",
+                                           "CopySubresourceRegion"};
 // The draws: hooked only with the focus post (DrawIndexed: its copy and composite; all four: the overlay trace).
 constexpr bool is_draw(int h) {
     return h == kHookDrawIndexed || h == kHookDraw || h == kHookDrawIndexedInstanced || h == kHookDrawInstanced;
@@ -129,6 +130,7 @@ struct TwinEntry {
     ID3D11VertexShader* vs = nullptr;
     ID3D11VertexShader* twin = nullptr;  // raw: the game's shader holds it (its private data) while it lives
     uint32_t epoch = 0;
+    VsRole role = VsRole::none;  // the probe's marking (yebis_shaders.h)
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -178,11 +180,12 @@ struct State {
     bool broken = false;  // single-pass stereo refused once: off for the session
     // The pass.
     int pass = -1;
-    bool drawFocus = false, suspended = false, sample = false, replaceResolve = false;
+    bool drawFocus = false, sample = false, replaceResolve = false;
     uint64_t passTwinBinds = 0;  // this pass's draws that drew the focus view too
     MvrPassView view, viewOf[2];
     // What the game bound (raw: bound objects are kept alive by the pipeline).
     ID3D11VertexShader* gameVs = nullptr;
+    VsRole vsRole = VsRole::none;  // the game's bound vertex shader's role, in and outside the passes (R6)
     ID3D11ClassInstance* instances[256] = {};
     UINT instanceCount = 0;
     bool depthBound = false;
@@ -213,6 +216,19 @@ struct State {
     bool finalThisFrame[2] = {};
     unsigned finalW[2] = {}, finalH[2] = {};
     bool blitRefusalLogged = false;
+    int maskDrawsLogged = 0;  // the first lens mask draws logged with their state
+    const std::atomic<bool>* maskStale = nullptr;  // mvr_mask_stale
+    int maskDroppedSince = 0;                       // mvr_mask_dropped
+    PanelFn panelFn = nullptr;                      // mvr_panel_draws
+    // The game's latest CopySubresourceRegions (mvr_copy_source): raw, compared only; the frame count when seen.
+    struct CopySeen {
+        ID3D11Resource* dst = nullptr;
+        ID3D11Resource* src = nullptr;
+        unsigned long long frame = 0;
+    };
+    static constexpr unsigned kCopiesKept = 16;
+    CopySeen copies[kCopiesKept];
+    unsigned copyNext = 0;
     FocusPost focusPost;
     bool focusPostFailed = false;  // couldn't be made: off for the session
     std::string postTrace;         // this pass's draws after the copy (trace_post_draw)
@@ -454,9 +470,7 @@ void apply_scissors() {
     }
 }
 
-ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
-    if (!vs)
-        return nullptr;
+const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
     Timed timed(g.time.lookups);
     ++g.stats.lookups;
     if (const uint64_t generation = mvr_shader_generation(); generation != g.twinGeneration) {
@@ -468,7 +482,7 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
     for (uint8_t k = 0; k < 2; ++k)
         if (set.entry[k].epoch == g.twinEpoch && set.entry[k].vs == vs) {
             set.next = static_cast<uint8_t>(1 - k);
-            return set.entry[k].twin;
+            return set.entry[k];
         }
     ++g.stats.lookupMisses;
     const uint8_t k = set.entry[0].epoch != g.twinEpoch ? 0 : set.entry[1].epoch != g.twinEpoch ? 1 : set.next;
@@ -483,15 +497,22 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
         unknown->Release();
         twin = t.Get();
     }
-    e = {vs, twin, g.twinEpoch};
-    return twin;
+    UINT role = 0;
+    size = sizeof(role);
+    if (FAILED(vs->GetPrivateData(kVsRoleGuid, &size, &role)) || size != sizeof(role))
+        role = 0;
+    e = {vs, twin, g.twinEpoch, static_cast<VsRole>(role)};
+    return e;
 }
+
+ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).twin : nullptr; }
+VsRole role_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).role : VsRole::none; }
 
 // Twin, two views and the second viewport exactly while a focus-drawing pass has a depth target and a shader with a twin.
 void update() {
     ID3D11VertexShader* twin = nullptr;
     // The scene's draws (a depth target bound) and, after the focus view's final blit, the overlays into the eye's final.
-    bool want = g.drawFocus && !g.broken && !g.suspended && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
+    bool want = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
                 !g.hsBound && !g.dsBound && !g.soBound;
     if (want) {
         twin = twin_of(g.gameVs);
@@ -529,6 +550,8 @@ void update() {
 
 void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexShader* vs,
                                      ID3D11ClassInstance* const* instances, UINT count) {
+    if (context == g.context && !g.replaying)  // every game bind, so a draw anywhere knows its shader's role (R6)
+        g.vsRole = role_of(vs);
     if (!ours(context)) {
         realVSSetShader(context, vs, instances, count);
         return;
@@ -1055,7 +1078,7 @@ std::string shader_name(Shader* shader) {
 // The overlay trace's line for one draw (the state it ran with).
 void trace_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
     const bool inPass = g.pass >= 0;
-    const char* phase = !inPass ? "outside" : g.suspended ? "mask" : g.afterResolve ? "post" : nullptr;
+    const char* phase = !inPass ? "outside" : g.vsRole == VsRole::lensMask ? "mask" : g.afterResolve ? "post" : nullptr;
     if (!phase)
         return;  // a pass's scene: not traced
     if (g.traceDraws >= 800) {
@@ -1087,9 +1110,75 @@ void trace_draw(ID3D11DeviceContext* context, const char* call, long long a, lon
                   inPass && g.on ? " two views" : "");
 }
 
+// R6c: a draw with the lens mask's vertex shader (its role): counted, drawn like the scene's (with two views in a pass
+// that draws its focus view: the twin puts the hidden area where the focus view sees it, R6a), or dropped while the mask
+// is stale (mvr_mask_stale). The first two logged with the state they ran with. True: dropped (the caller skips it).
+bool lens_mask_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    const bool drop = g.maskStale && g.maskStale->load(std::memory_order_relaxed);
+    if (drop) {
+        ++g.stats.maskDropped;
+        ++g.maskDroppedSince;
+    } else {
+        ++g.stats.maskDraws;
+        if (g.on)
+            ++g.stats.maskDrawsTwo;
+    }
+    if (g.maskDrawsLogged >= 2)
+        return drop;
+    ++g.maskDrawsLogged;
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11DepthStencilView> dsv;
+    context->OMGetRenderTargets(1, &rtv, &dsv);
+    ComPtr<ID3D11Resource> target, depthTarget;
+    if (rtv)
+        rtv->GetResource(&target);
+    if (dsv)
+        dsv->GetResource(&depthTarget);
+    D3D11_VIEWPORT vps[kMaxRects];
+    UINT n = kMaxRects;
+    context->RSGetViewports(&n, vps);
+    simqvfr::logf("lmu mvr: lens mask draw: f%llu p%d %s(%lld,%lld) ps %s > %s depth %s vp %u: %.0f,%.0f %.0fx%.0f; %s",
+                  g.gpuFrameNo, g.pass, call, a, b, shader_name(ps.Get()).c_str(),
+                  target ? describe(target.Get()).c_str() : "none",
+                  depthTarget ? describe(depthTarget.Get()).c_str() : "none", n, n ? vps[0].TopLeftX : 0.0f,
+                  n ? vps[0].TopLeftY : 0.0f, n ? vps[0].Width : 0.0f, n ? vps[0].Height : 0.0f,
+                  drop ? "dropped (the mask is stale: a live FOV crop change)"
+                  : g.on ? "two views (into the focus view too)"
+                         : "the eye only");
+    return drop;
+}
+
+// R6b: the VR UI panel's draw outside the passes in a frame without focus finals (the menus): the PanelFn around it.
+bool panel_draw_here(ID3D11DeviceContext* context) {
+    return g.panelFn && context == g.context && !g.replaying && g.pass < 0 && g.vsRole == VsRole::vruiPanel &&
+           !g.finalThisFrame[0] && !g.finalThisFrame[1];
+}
+void call_panel_fn(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start) {
+    g.replaying = true;  // its work (a resample executed on this context, the redraw) passes the hooks
+    g.panelFn(context, after, count, start);
+    g.replaying = false;
+}
+
+// The game's CopySubresourceRegion: passed on, remembered (mvr_copy_source).
+void STDMETHODCALLTYPE copy_subresource_region(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub, UINT x, UINT y, UINT z,
+                                              ID3D11Resource* src, UINT srcSub, const D3D11_BOX* box) {
+    call_real<kHookCopy>(context, dst, dstSub, x, y, z, src, srcSub, box);
+    if (context != g.context || g.replaying)
+        return;
+    State::CopySeen& c = g.copies[g.copyNext++ % State::kCopiesKept];
+    c.dst = dst;
+    c.src = src;
+    c.frame = g.framesSinceInstall;
+}
+
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
-    if (context == g.context && !g.replaying)
+    if (context == g.context && !g.replaying) {
         ++tr.draws;
+        if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, "DrawIndexed", count, start))
+            return;
+    }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
     if (!outside || !double_outside<kHookDrawIndexed>(context, count, start, base))
         call_real<kHookDrawIndexed>(context, count, start, base);
@@ -1107,11 +1196,29 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
 // Draw also the final blit's replay (focus_blit).
 template <int H, typename... A>
 void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
-    if (context == g.context && !g.replaying)
+    if (context == g.context && !g.replaying) {
         ++tr.draws;
+        const long long args[] = {static_cast<long long>(a)...};
+        if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, kHookName[H], args[0], args[1]))
+            return;
+    }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
+    bool panel = false;
+    if constexpr (H == kHookDraw) {  // R6b: the menus' panel (Draw: vertex count, start)
+        panel = panel_draw_here(context);
+        if (panel) {
+            const long long args[] = {static_cast<long long>(a)...};
+            call_panel_fn(context, false, static_cast<unsigned>(args[0]), static_cast<unsigned>(args[1]));
+        }
+    }
     if (!outside || !double_outside<H>(context, a...))
         call_real<H>(context, a...);
+    if constexpr (H == kHookDraw) {
+        if (panel) {
+            const long long args[] = {static_cast<long long>(a)...};
+            call_panel_fn(context, true, static_cast<unsigned>(args[0]), static_cast<unsigned>(args[1]));
+        }
+    }
     if (g.tracing && context == g.context && !g.replaying) {
         const long long args[] = {static_cast<long long>(a)...};
         trace_draw(context, kHookName[H], args[0], args[1]);
@@ -1174,6 +1281,9 @@ void* detour_for(int h, int n) {
         case kHookDS:
             return Detours<kHookDS, &later_stage<kHookDS, ID3D11DomainShader, &State::dsBound>, ID3D11DomainShader*,
                            Instances, UINT>::get(n);
+        case kHookCopy:
+            return Detours<kHookCopy, &copy_subresource_region, ID3D11Resource*, UINT, UINT, UINT, UINT, ID3D11Resource*, UINT,
+                           const D3D11_BOX*>::get(n);
         case kHookDrawIndexed: return Detours<kHookDrawIndexed, &draw_indexed, UINT, UINT, INT>::get(n);
         case kHookDraw: return Detours<kHookDraw, &draw_traced<kHookDraw, UINT, UINT>, UINT, UINT>::get(n);
         case kHookDrawIndexedInstanced:
@@ -1186,8 +1296,8 @@ void* detour_for(int h, int n) {
     }
 }
 
-// The draws only for the focus post (mvr_focus_replay): without it MVR's hooks are as before, nothing on the draws.
-bool wanted(int h) { return !is_draw(h) || g.focusReplay; }
+// The draws and CopySubresourceRegion only for the focus post (mvr_focus_replay): without it MVR's hooks are as before.
+bool wanted(int h) { return (!is_draw(h) && h != kHookCopy) || g.focusReplay; }
 
 // The function the context's entry for hook `h` holds now, hooked in d3d11's code if not seen before (render thread).
 // True: a new one.
@@ -1249,6 +1359,7 @@ void read_bindings() {
     if (vs)
         vs->Release();
     g.gameVs = g.boundVs = vs;
+    g.vsRole = role_of(vs);
     ID3D11DepthStencilView* dsv = nullptr;
     g.context->OMGetRenderTargets(0, nullptr, &dsv);
     g.depthBound = dsv != nullptr;
@@ -1498,7 +1609,6 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         tr.actual = (std::max)(tr.actual, pass + 1);
     }
     g.drawFocus = view != nullptr && !g.broken;
-    g.suspended = false;
     g.passTwinBinds = 0;
     g.postWindow = g.focusCopied = g.focusComposited = false;
     g.postTrace.clear();
@@ -1613,11 +1723,87 @@ bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigne
 
 bool mvr_focus_ready(int eye) { return g.context && g.keepFocus && g.keptOk[eye & 1]; }
 
-void mvr_suspend(bool on) {
-    if (!g.context || g.pass < 0)
+void mvr_mask_stale(const std::atomic<bool>* stale) { g.maskStale = stale; }
+
+int mvr_mask_dropped() {
+    const int n = g.maskDroppedSince;
+    g.maskDroppedSince = 0;
+    return n;
+}
+
+void mvr_panel_draws(PanelFn fn) { g.panelFn = fn; }
+
+ID3D11Resource* mvr_copy_source(ID3D11Resource* dst) {
+    if (!dst)
+        return nullptr;
+    for (unsigned i = 1; i <= State::kCopiesKept; ++i) {
+        const State::CopySeen& c = g.copies[(g.copyNext - i) % State::kCopiesKept];
+        if (c.dst == dst && c.frame + 1 >= g.framesSinceInstall)  // this frame's or the one before's (a frame end since)
+            return c.src;
+    }
+    return nullptr;
+}
+
+ID3D11Texture2D* mvr_eye_final(int eye) {
+    if (eye < 0 || eye > 1 || !g.eyeFinal[eye])
+        return nullptr;
+    ComPtr<ID3D11Texture2D> t;
+    return SUCCEEDED(g.eyeFinal[eye].As(&t)) ? t.Get() : nullptr;  // raw: eyeFinal holds it
+}
+
+void mvr_redraw_panel(ID3D11DeviceContext* context, ID3D11RenderTargetView* rtv, unsigned width, unsigned height,
+                      unsigned vertexCount, unsigned startVertex) {
+    if (!context || !rtv || !width || !height)
         return;
-    g.suspended = on;
-    update();
+    ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    ID3D11DepthStencilView* dsv = nullptr;
+    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+    D3D11_VIEWPORT vps[kMaxRects];
+    UINT n = kMaxRects;
+    context->RSGetViewports(&n, vps);
+    D3D11_RECT scs[kMaxRects];
+    UINT sn = kMaxRects;
+    context->RSGetScissorRects(&sn, scs);
+    // The game's target's size: its viewport and scissors scaled from that to the image's.
+    float sx = 1, sy = 1;
+    if (rtvs[0]) {
+        ComPtr<ID3D11Resource> resource;
+        rtvs[0]->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> texture;
+        D3D11_TEXTURE2D_DESC d{};
+        if (resource && SUCCEEDED(resource.As(&texture))) {
+            texture->GetDesc(&d);
+            sx = d.Width ? static_cast<float>(width) / static_cast<float>(d.Width) : 1.0f;
+            sy = d.Height ? static_cast<float>(height) / static_cast<float>(d.Height) : 1.0f;
+        }
+    }
+    D3D11_VIEWPORT vp = n ? vps[0] : D3D11_VIEWPORT{0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
+    if (n) {
+        vp.TopLeftX *= sx;
+        vp.TopLeftY *= sy;
+        vp.Width *= sx;
+        vp.Height *= sy;
+    }
+    D3D11_RECT sc = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    if (sn)
+        sc = {static_cast<LONG>(std::lround(scs[0].left * sx)), static_cast<LONG>(std::lround(scs[0].top * sy)),
+              static_cast<LONG>(std::lround(scs[0].right * sx)), static_cast<LONG>(std::lround(scs[0].bottom * sy))};
+    const bool was = g.replaying;
+    g.replaying = true;
+    realOMSetRenderTargets(context, 1, &rtv, nullptr);
+    realRSSetViewports(context, 1, &vp);
+    realRSSetScissorRects(context, 1, &sc);
+    call_real<kHookDraw>(context, static_cast<UINT>(vertexCount), static_cast<UINT>(startVertex));
+    realOMSetRenderTargets(context, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
+    realRSSetViewports(context, n, vps);
+    realRSSetScissorRects(context, sn, scs);
+    g.replaying = was;
+    for (ID3D11RenderTargetView* r : rtvs)
+        if (r)
+            r->Release();
+    if (dsv)
+        dsv->Release();
+    ++g.stats.panelReplays;
 }
 
 void mvr_frame_end(unsigned long long frame) {
@@ -1629,11 +1815,12 @@ void mvr_frame_end(unsigned long long frame) {
         g.gpuSlot = -1;
     }
     if (tr.on) {
-        track_frame_end(frame);
+        track_frame_end(frame);  // a pass the tracker ends here reads its focus final (mvr_focus_final) first
     } else {  // the counts start afresh each frame either way
         tr.passes = tr.actual = 0;
         tr.draws = 0;
     }
+    g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // the next frame's are its own (a menu frame has none)
     // The overlay trace: the frames 600, 2400 and 4200 frame ends after the install, each from the frame end before.
     ++g.framesSinceInstall;
     if (g.tracing) {
@@ -1702,6 +1889,12 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(ts.framesWithoutGame),
                           static_cast<unsigned long long>(ts.passesWithoutGame));
         }
+        if (s.maskDraws || s.maskDropped || s.panelReplays)
+            simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "
+                          "draws replayed at the menus' native size: %llu",
+                          static_cast<unsigned long long>(s.maskDraws), static_cast<unsigned long long>(s.maskDrawsTwo),
+                          static_cast<unsigned long long>(s.maskDropped),
+                          static_cast<unsigned long long>(s.panelReplays));
         if (g.focusReplay) {
             const MvrProbeStats probe = mvr_probe_stats();
             simqvfr::logf("lmu mvr: focus post: %llu copies, %llu composites (%llu by their bindings), %llu final blits; "

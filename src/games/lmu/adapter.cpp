@@ -87,6 +87,8 @@ public:
                     (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_focus_final_ab", 0, s.ini)));
                 run.mvrAb = 0;  // one A/B at a time
                 run.mvrTiming = run.mvrTiming || run.focusFinalAb > 0;
+                run.focusFinalAbPlain =
+                    run.focusFinalAb > 0 && GetPrivateProfileIntW(L"experiment", L"lmu_focus_final_ab_plain", 0, s.ini) != 0;
             }
             // lmu_pass_tracker=1 (with the focus post): R4b's d3d11 pass bounds, observe only (four_passes.h).
             const UINT tracker =
@@ -174,7 +176,11 @@ public:
         // shaders, attached to the game's (mvr_pass.h). The layer decides the same at xrCreateInstance (config.cpp).
         const bool mvr = has_qvfr() && (simqvfr::games::lmu_mvr_gate(ini) != 0 ||
                                         simqvfr::games::multi_view_on(&kGame, ini));
-        mvrProbe_ = (mvr || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0) && mvr_probe_install(ini, mvr);
+        // The player path (multi_view=1, no gate or legacy key): its shaders named too, for the traces (R6).
+        const bool player = mvr && simqvfr::games::lmu_mvr_gate(ini) == 0 &&
+                            GetPrivateProfileIntW(L"experiment", L"lmu_mvr_legacy", 0, ini) == 0;
+        mvrProbe_ = (mvr || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0) &&
+                    mvr_probe_install(ini, mvr, player);
         const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
         const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
         if (has_qvfr()) {

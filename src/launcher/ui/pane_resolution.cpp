@@ -74,8 +74,8 @@ float resolution_pane(float x, float y, float w, bool draw) {
             checkbox(kMultiView, r, shown, L"Multi-view rendering", desc, unavailable);
         };
         h += section(x, y + h, w, L"NVIDIA multi-view rendering", {on},
-                     gpu ? L"Saves CPU and GPU time every frame (2 ms or more of each in testing). Off renders every view on "
-                           L"its own, as on any graphics card."
+                     gpu ? L"Saves CPU and GPU time every frame (about 1.5 ms of CPU and 1 ms of GPU in testing). Off "
+                           L"renders every view on its own, as on any graphics card."
                          : L"Off renders every view on its own, as on any graphics card.",
                      draw, Applies::NextLaunch);
     }

@@ -62,13 +62,16 @@ struct FourPassesRun {
     // turn, each side's CPU and GPU per pass logged apart.
     bool focusFinal = false;
     int focusFinalAb = 0;
+    // R5c ([experiment] lmu_focus_final_ab_plain=1, with focusFinalAb): the A/B's four-pass side is plain QVFR (no
+    // multi-view: passes 2-3 render their scene, no focus post), as a player without multi-view has it, instead of gate D.
+    bool focusFinalAbPlain = false;
     // R4b's pass tracker, observe only ([experiment] lmu_pass_tracker, with focusReplay): the eye passes found at the
     // d3d11 level compared with the game's in the log (mvr_pass.h mvr_track_passes); MVR's hooks from the session's
     // first frame end, so the menus are seen too.
     bool passTracker = false;
-    // R4b-2 ([experiment] lmu_pass_tracker=2, with focusFinal): the tracker drives the passes; of the game's code only the
-    // lens mask's draw and the VR UI's are hooked (no scene render, eye loop, post-effect time, scene skip, glare or
-    // driver tags hooks; no A/B: the game's own two passes).
+    // R4b-2 ([experiment] lmu_pass_tracker=2, with focusFinal): the tracker drives the passes; no game code hooked (R6:
+    // the lens mask and the VR UI from their d3d11 draws; no scene render, eye loop, post-effect time, scene skip, glare
+    // or driver tags hooks; no A/B: the game's own two passes).
     bool trackerDrives = false;
     // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
     // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.

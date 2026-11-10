@@ -216,9 +216,15 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
 - **Changes while you drive:** the resolution sliders, the focus size and the crop change straight away,
   in the launcher or the headset menu. Menus and the HUD are drawn sharp inside the focus area too.
 - **NVIDIA multi-view rendering** (the launcher's **Resolution** page, NVIDIA RTX 20 series or newer):
-  each eye's pass also draws that eye's focus view, which saved about 2 ms of CPU and 2 ms of GPU time per
-  frame in testing. It applies at the next launch. On other graphics cards the option is greyed out and
-  every view is rendered on its own.
+  each eye's pass also draws and finishes that eye's focus view, so LMU renders only its own two eye passes
+  a frame instead of four. In testing (Ryzen 7 5800X3D, RTX 5070 Ti; periphery 40%, focus density 200%,
+  focus area 20%) that saved about 1.5 ms of CPU and 1 ms of GPU time per frame. It applies at the next
+  launch. On other graphics cards the option is greyed out and every view is rendered on its own.
+  - **It doesn't patch LMU's code.** With multi-view rendering, Sim-QVFR works through OpenXR and Direct3D 11
+    only: it doesn't change, hook or call any of LMU's own code. In LMU's memory it reads a few values (the
+    cameras, the eye being drawn, the render size) and writes just two, the render scale and the eye render size, which set each
+    view's resolution and let it change while you drive. Without multi-view rendering (or if it stops during a
+    session, which the log explains), Sim-QVFR renders the four views by changing LMU's code, as before.
 - **Runtime composition on Pimax and Varjo headsets** (the launcher's **Resolution** page, on by default):
   when your headset's own OpenXR runtime composes quad views itself, Sim-QVFR hands it the four views and the
   runtime puts the focus area on the display at its full resolution. The focus area is then noticeably
@@ -239,8 +245,10 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
 
 **Anti-cheat.** By default the launcher starts LMU without its anti-cheat (Easy Anti-Cheat), so you can
 only drive offline. **Advanced → Games → Run with anti-cheat** starts LMU through Easy Anti-Cheat with
-Sim-QVFR running. **This is at your own risk:** Sim-QVFR hooks into LMU's engine and changes its code while
-it runs, and the anti-cheat may kick you or ban your account for it. By turning the option on you knowingly
+Sim-QVFR running. **This is at your own risk:** Sim-QVFR works inside LMU while it runs. Without
+multi-view rendering it hooks into LMU's engine and changes its code. With multi-view rendering it leaves
+LMU's code unchanged, but still hooks LMU's graphics calls and reads and writes LMU's memory. The
+anti-cheat may kick you or ban your account for either. By turning the option on you knowingly
 take responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky Foveated
 DLSS always stays off with this option on.
 

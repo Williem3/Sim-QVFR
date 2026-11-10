@@ -29,6 +29,7 @@ struct MvrProbeStats {
     uint64_t attached = 0;      // game shaders given their twin (lmu_mvr)
     uint64_t yebisCopies = 0, yebisComposites = 0;  // YEBIS's copy and composite pixel shaders marked (yebis_shaders.h)
     uint64_t finalBlits = 0;  // the game's final blit pixel shaders marked (yebis_shaders.h)
+    uint64_t lensMasks = 0, vruiPanels = 0;  // the lens mask's and VR UI panel's vertex shaders marked (VsRole)
     double convertMs = 0, maxConvertMs = 0, nvapiMs = 0;
     std::map<std::string, uint64_t> refused;  // why a shader wasn't converted, and how often
 };
@@ -39,7 +40,7 @@ inline constexpr GUID kMvrTwinGuid = {0x6d1c4a52, 0x3b8e, 0x4f61, {0x9a, 0x27, 0
 // xrCreateInstance: hooks D3D11 device creation (until mvr_probe_device), so the shaders the game creates before its
 // OpenXR session are seen. The device's shader creation is an entry of a vtable copy it points at (object_vtable.h).
 // `attachTwins` (lmu_mvr=1): the converted shaders are kept and attached to the game's.
-bool mvr_probe_install(const wchar_t* ini, bool attachTwins = false);
+bool mvr_probe_install(const wchar_t* ini, bool attachTwins = false, bool nameShaders = false);
 // xrCreateSession with the game's device: device creation unhooked; NVAPI's flags on the device; its shader creation
 // hooked if device creation wasn't.
 void mvr_probe_device(ID3D11Device* device);
