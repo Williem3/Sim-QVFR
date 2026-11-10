@@ -19,8 +19,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // QVFR, gaze, the headset menu and overlay, the FOV crop, the helmet, live resolution, Foveated DLSS (Cheeky's
     // runtime on the session's D3D11 device; its quad roles need a Cheeky build that registers D3D11 game views).
     // Not frame generation: Cheeky's layer can't capture our D3D11 frames for it (native passthrough), so ACC was
-    // never paced to the generated rate (docs/recon-acc.md).
-    {true, true, true, true, false, false},
+    // never paced to the generated rate (docs/recon-acc.md). Sharpening (the D3D11 compositor's CAS).
+    {true, true, true, true, false, false, false, false, true},
     kBuilds, std::size(kBuilds),
     false,
     L"AC2\\Saved\\Crashes",  // UE4CC-Windows-<id>_0000\: UE4Minidump.dmp, CrashContext.runtime-xml, AC2.log

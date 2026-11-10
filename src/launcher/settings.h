@@ -31,7 +31,7 @@ struct Settings {
     int outer = 50;           // periphery_scale (QVFR) / eye_scale (Two-loop): percent of recommended
     int inner = 100;          // focus_density (QVFR): focus pixel density, percent of recommended
     int objectDetail = 100;   // object_detail (QVFR, X-Plane): object and tree LOD, percent of the focus views' (live)
-    // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: LMU): CAS sharpening as the views are composed,
+    // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening as the views are composed,
     // 0 off (the default) to 100 the strongest (live).
     int sharpen = 0;
     // [experiment] multi_view (QVFR, a game with GameFeatures::multiView: LMU): multi-view rendering, each eye's pass

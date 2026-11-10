@@ -214,7 +214,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
         if (menu.launch.qvfr && menu.launch.objectDetail)  // only a game with it (X-Plane), after Focus density
             method.insert(std::find(method.begin(), method.end(), MenuItem::Density) + 1, MenuItem::ObjectDetail);
-        if (menu.launch.qvfr && menu.launch.sharpening) {  // only a game with it (LMU), after Focus density (and detail)
+        if (menu.launch.qvfr && menu.launch.sharpening) {  // a game with it, after Focus density (and detail)
             auto at = std::find(method.begin(), method.end(), MenuItem::ObjectDetail);
             if (at == method.end())
                 at = std::find(method.begin(), method.end(), MenuItem::Density);

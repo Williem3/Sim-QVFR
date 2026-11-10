@@ -422,7 +422,7 @@ int main() {
             check(!has_detail(loop), "Object detail: QVFR only (not in Two-loop)");
         }
         {
-            // Sharpening: only a game whose GameFeatures has it (LMU so far), after Focus density (and Object detail).
+            // Sharpening: a game whose GameFeatures has it (all four), after Focus density (and Object detail).
             const auto find = [](const SettingsMenu& s, MenuItem item) {
                 const std::vector<MenuItem> items = menu_page_items(s);
                 return std::find(items.begin(), items.end(), item) - items.begin();
@@ -430,11 +430,11 @@ int main() {
             const auto shown = [&](const SettingsMenu& s) {
                 return find(s, MenuItem::Sharpening) < static_cast<std::ptrdiff_t>(menu_page_items(s).size());
             };
-            check(lmu::kGame.features.sharpening && !ace::kGame.features.sharpening && !acc::kGame.features.sharpening &&
-                      !xplane::kGame.features.sharpening,
-                  "games: only LMU has Sharpening so far");
+            check(lmu::kGame.features.sharpening && ace::kGame.features.sharpening && acc::kGame.features.sharpening &&
+                      xplane::kGame.features.sharpening,
+                  "games: all four have Sharpening");
             SettingsMenu other = c;
-            check(!other.launch.sharpening && !shown(other), "Sharpening: off by default, so no other game shows it");
+            check(!other.launch.sharpening && !shown(other), "Sharpening: off by default, so a game without it doesn't show it");
             SettingsMenu l = c;
             l.launch.sharpening = lmu::kGame.features.sharpening;
             check(shown(l) && find(l, MenuItem::Sharpening) == find(l, MenuItem::Density) + 1 &&

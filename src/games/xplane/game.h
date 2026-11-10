@@ -18,8 +18,9 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"--open_xr --d3d11_vr",
     nullptr,  // OpenXR of its own
     nullptr,  // no DLSS
-    // Live resolution and object detail only; the adapter decides it per run (per-view sizes, qvfr_live_resolution).
-    {false, false, true, false, false, true},
+    // Live resolution and object detail; the adapter decides it per run (per-view sizes, qvfr_live_resolution). And
+    // sharpening (the D3D11 compositor's CAS), on top of X-Plane's own FSR sharpening pass if its settings run one.
+    {false, false, true, false, false, true, false, false, true},
     kBuilds, std::size(kBuilds),
     true,  // early load: X-Plane creates its shader modules at startup, before OpenXR (docs/recon-xplane.md)
 };
