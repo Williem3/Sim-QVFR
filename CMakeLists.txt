@@ -19,7 +19,7 @@ set(SIM_QVFR_PCH <algorithm> <atomic> <cmath> <cstdint> <cstdio> <cstring> <file
   <windows.h>)
 
 # The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
-set(SIM_QVFR_RELEASE "1.0.3-beta")
+set(SIM_QVFR_RELEASE "1.0.4-beta")
 set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
 
 # Windows version info for a binary (src/version_info.rc.in): numbers from the version's leading digits

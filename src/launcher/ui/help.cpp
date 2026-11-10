@@ -101,7 +101,7 @@ constexpr Help kHelp[] = {
     {L"Frame capture",
      L"Saves the game’s own image and the composed output, as PNG files in the captures folder inside the logs folder. Each "
      L"press saves one more frame, to compare the views where something looks wrong. For games composed by the D3D11 "
-     L"compositor (X-Plane 12, Assetto Corsa Competizione)."},
+     L"compositor (X-Plane 12, Assetto Corsa Competizione, Le Mans Ultimate)."},
     {L"Next launch without QVFR",
      L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the same race with "
      L"and without QVFR. It turns itself off after that launch; the next one has QVFR again. The performance overlay works "

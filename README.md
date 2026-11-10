@@ -96,10 +96,10 @@ All of these are off until you turn them on in the launcher:
 
 - **Performance overlay:** a small panel in your headset showing frame rate and how hard your PC is
   working.
-- **View crop** (Assetto Corsa EVO and Competizione): stops the game drawing the edges of your view
-  that a helmet would hide anyway, for extra speed.
-- **Helmet overlay** (Assetto Corsa EVO and Competizione): draws a helmet's visor around your view. You
-  can swap in your own helmet images.
+- **View crop** (Assetto Corsa EVO, Assetto Corsa Competizione and Le Mans Ultimate): stops the game drawing
+  the edges of your view that a helmet would hide anyway, for extra speed.
+- **Helmet overlay** (Assetto Corsa EVO, Assetto Corsa Competizione and Le Mans Ultimate): draws a helmet's
+  visor around your view. You can swap in your own helmet images.
 - **Sharpening** (all four games; the launcher's **Resolution** page, or the headset menu): AMD FidelityFX
   Contrast Adaptive Sharpening as Sim-QVFR puts the views together, the same strength in the focus area and
   the periphery. It sharpens soft detail most and edges that are already sharp least, and changes while you

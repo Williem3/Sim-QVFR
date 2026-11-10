@@ -87,9 +87,23 @@ Picture
   eyes they sit (0 = far away, no depth), Detail picks Performance (2048, cheaper) or Detail (4096,
   sharper); the Visor is Closed, Half or Open (its hotkey, Ctrl+Alt+V). The headset menu's Helmet page
   has them all. The log suggests the crop that matches their opening.
-  NVIDIA multi-view rendering (LMU only, NVIDIA RTX 20 series or newer, off by default): each eye's
-  pass also draws that eye's focus view, saving about 2 ms of CPU and 2 ms of GPU time per frame in
-  testing. It applies at the next launch. On other graphics cards it's greyed out.
+  Image: Sharpening (every game, 0% = off, the default): AMD FidelityFX Contrast Adaptive Sharpening
+  as Sim-QVFR puts the views together, the same strength in the focus area and the periphery. It
+  sharpens soft detail most and edges already sharp least, and shows most on a soft image (a low
+  inner resolution, a lower-resolution headset); the periphery shimmers a little more with it.
+  X-Plane runs an FSR sharpening pass of its own, so start low there. It applies live, also from the
+  headset menu.
+  Multi-view rendering (LMU only, on by default): each eye's pass also draws and finishes that eye's
+  focus view, so LMU renders two passes a frame instead of four, saving about 1.5 ms of CPU and 0.65-1
+  ms of GPU time per frame in testing. NVIDIA RTX 20 series and newer use NVIDIA's multi-view
+  rendering; other cards (AMD, Intel, older NVIDIA) use Sim-QVFR's own, which draws each draw twice in
+  one call (instancing) and needs a driver with Direct3D 11.3's viewport choice in the vertex shader.
+  Turning it off applies at the next launch.
+  Runtime composition (LMU only, on by default): on a Pimax or Varjo OpenXR runtime, which composes
+  quad views itself, Sim-QVFR hands it the four views and the focus area reaches the display at its
+  full resolution (sharper above 100% inner resolution). Sim-QVFR's resolution and focus settings
+  apply, not Pimax Play's quad view sliders. On SteamVR, with frame generation, or with another layer
+  between Sim-QVFR and the runtime, Sim-QVFR composes the image as before. Applies at the next launch.
 - Foveation: Mode: Foveated mode, Eye tracked (the focus region follows your gaze) or Fixed (it stays
   at the centre of each lens). A profile still on the legacy Two-loop method shows Rendering method
   here too; once you switch to Quad View Foveated Rendering, Two-loop isn't offered again.
@@ -129,15 +143,16 @@ Advanced
   them below Sim-QVFR, each on or off for the game. With the launcher changes them for its launches
   only; Without the launcher (Windows) edits Windows' own list, which a game started from Steam uses.
 - Diagnostics: the last session's numbers (frame rate, frame time, CPU and GPU time, what limited the
-  frame, the game's busiest threads), to compare settings or to ask for help. Compared with sets the
-  last session against the one before it (for example "+6.5 fps, after Outer 60% -> 40%") and against
+  frame, the game's busiest threads, and how much of the session the headset runtime ran the game at
+  half rate, as Varjo's motion smoothing does), to compare settings or to ask for help. Compared
+  with sets the last session against the one before it (for example "+6.5 fps, after Outer 60% -> 40%") and against
   the newest run without QVFR; Recent sessions lists the last 12 and what changed each time. Copy
   summary and Open logs folder share them. Next launch without QVFR runs the game once with its own
   two views, still measuring, so the page can compare the same session with and without QVFR.
   CPU capture: at the next launch, its hotkey (Ctrl+Alt+C) while playing records for 20 seconds where
   the game's busiest threads spend their time, into the logs folder; its Slow frames part shows what
   each thread spends the extra time on in the frames that take longer than the rest.
-  Frame capture (ACC and X-Plane): at the next launch, its hotkey (Ctrl+Alt+F) saves the frame the
+  Frame capture (ACC, X-Plane and LMU): at the next launch, its hotkey (Ctrl+Alt+F) saves the frame the
   headset gets, the game's own image and the composed output, as PNG files in the logs folder's
   captures folder; each press saves one more.
 
@@ -170,9 +185,9 @@ The headset menu
 ----------------
 Ctrl+Alt+arrows (or your hotkeys) while the game has focus, or a click of the left controller stick,
 opens it; up and down select, left and right change the value; it hides after a few seconds. Its pages:
-the method's settings (with Profile first, Object detail after Focus density in X-Plane, and Optimize
-for frame rate last: Right measures while you play and finds the resolution that holds the frame rate,
-Left undoes it), Focus shape, View crop, Helmet, Foveated DLSS and Frame generation (with Cheeky
+the method's settings (with Profile first, Object detail after Focus density in X-Plane, Sharpening
+after them, and Optimize for frame rate last: Right measures while you play and finds the resolution
+that holds the frame rate, Left undoes it), Focus shape, View crop, Helmet, Foveated DLSS and Frame generation (with Cheeky
 running), and Overlay and menu. A game shows only the pages it has (X-Plane: the settings, Focus shape,
 and Overlay and menu). Changes apply at once and save to the game's settings.
 
@@ -217,15 +232,17 @@ With DLSS on, resolution changes apply at the next launch (DLSS sizes its views 
 The pane's other settings apply live. The headset menu's Foveated DLSS and Frame generation pages
 set them too.
 
-Assetto Corsa Competizione (alpha)
-----------------------------------
+Assetto Corsa Competizione
+--------------------------
 Pick the Assetto Corsa Competizione tab, then Launch. ACC's VR has to run through OpenComposite
 (one-time setup: docs/acc-opencomposite.md on the project page, https://github.com/Williem3/Sim-QVFR);
 Launch checks tells you if it's missing. The field of view crop, the helmet overlay, resolution
-changes while the game runs and Foveated DLSS work in ACC; Cheeky's frame generation doesn't yet.
-Without Foveated DLSS, turn DLSS off in ACC's settings: with ACC's own DLSS the
-focus area can look slightly darker or lighter than the rest of the view. Eye tracking works without
-another OpenXR layer.
+changes while the game runs, ACC's own DLSS and Foveated DLSS work in ACC; Cheeky's frame generation
+doesn't yet. Eye tracking works without another OpenXR layer.
+The two eyes' focus areas point at what you're looking at (ACC measures how far away it is), so
+they line up on the dash as well as down the track. Bloom and lens flares look as they do without
+QVFR (the focus area takes its glow from the view around it). Contact shadows are off while QVFR
+runs: they came out differently in the focus area than around it.
 
 X-Plane 12
 ----------
@@ -243,18 +260,27 @@ Pick the LMU tab, then Launch. Started from Steam, LMU runs without QVFR. Sim-QV
 1.4.2.0 (the Steam build of 23 October 2026); on any other build QVFR stays off and LMU runs as usual.
 Eye tracking, the resolution sliders, the focus size, the field of view crop, the helmet overlay, the
 headset menu and the performance overlay work in LMU, and menus and the HUD are drawn sharp in the
-focus area. NVIDIA multi-view rendering (above) is in the Resolution pane. VectorXR works below
-Sim-QVFR in LMU (its frame generation and overlay were tested; turn it on in the OpenXR layers pane). Not
-in LMU yet: Foveated DLSS (LMU has no DLSS of its own).
+focus area. Multi-view rendering and Runtime composition (above) are in the Resolution pane.
+With multi-view rendering, Sim-QVFR doesn't change, hook or call LMU's own code: it works through
+OpenXR and Direct3D 11, reads a few values in LMU's memory (the cameras, the eye being drawn, the
+render size) and writes two (the render scale and the eye render size). Without it, or if it stops
+during a session (the log says why), Sim-QVFR renders the four views by changing LMU's code.
+LMU's own render scale and FSR (its VR graphics settings) work with QVFR: they lower every view's
+resolution on top of Sim-QVFR's sliders. With FSR on, multi-view rendering stops for the session and
+LMU renders the four views on their own. VectorXR works below Sim-QVFR in LMU (its frame generation
+and overlay were tested; turn it on in the OpenXR layers pane). Not in LMU yet: Foveated DLSS (LMU
+has no DLSS of its own).
 Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Advanced >
 Games > Run with anti-cheat starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
-launch. AT YOUR OWN RISK: Sim-QVFR hooks into LMU's engine and changes its code while it runs, and the
-anti-cheat may kick you or ban your account for it. Turning it on, you knowingly take responsibility
-for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky stays off with it on.
+launch. AT YOUR OWN RISK: Sim-QVFR works inside LMU while it runs. Without multi-view rendering it
+hooks into LMU's engine and changes its code; with it, LMU's code stays unchanged, but Sim-QVFR still
+hooks LMU's graphics calls and reads and writes LMU's memory. The anti-cheat may kick you or ban your
+account for either. Turning it on, you knowingly take responsibility for that. Sim-QVFR doesn't hide
+from, bypass or change the anti-cheat. Cheeky stays off with it on.
 LMU-Quad-View-Mod (by Dan Suzuki, https://github.com/DSuzuki35/LMU-Quad-View-Mod) inspired this work;
 Sim-QVFR's LMU support is written separately and works differently (four views rendered in the game
-and composed by Sim-QVFR itself, nothing else to install). Try both on your PC and keep the one that
-runs best; don't run both at once.
+and composed by Sim-QVFR itself, or by a Pimax or Varjo runtime, nothing else to install). Try both
+on your PC and keep the one that runs best; don't run both at once.
 
 Other OpenXR layers (OpenXR Toolkit, VectorXR, ...)
 ---------------------------------------------------
