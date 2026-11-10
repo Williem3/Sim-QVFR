@@ -520,6 +520,17 @@ void per_game_settings_checks() {
           "per-game: a game without a copy starts from the settings in use, and gets its copy");
     WritePrivateProfileStringW(L"launcher", L"game", L"acc", ini.c_str());
 
+    // A copy older than a setting (ACE's, saved before [quad] sharpen_percent): switching to it gives that setting its
+    // default, not the value the last game left in the ini; the last game keeps its own.
+    WritePrivateProfileStringW(L"quad", L"sharpen_percent", nullptr, game_settings_file(ini, L"ace").c_str());
+    Settings sharp = load_settings(ini);
+    sharp.sharpen = 100;
+    save_settings(ini, sharp);
+    check(switch_game_settings(ini, L"acc", L"ace") && load_settings(ini).sharpen == 0 && load_settings(ini).inner == 160,
+          "per-game: a setting newer than the game's copy comes back at its default (ACC's 100% sharpening stays ACC's)");
+    check(switch_game_settings(ini, L"ace", L"acc") && load_settings(ini).sharpen == 100,
+          "per-game: and ACC's own 100% sharpening comes back with it");
+
     // The headset menu's writes (game_settings_target): the launcher's ini only for the game it shows.
     check(game_settings_target(ini, L"acc") == ini, "per-game: the game the launcher shows writes to the launcher's ini");
     check(game_settings_target(ini, L"ace") == game_settings_file(ini, L"ace"),

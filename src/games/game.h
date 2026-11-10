@@ -24,7 +24,7 @@ struct GameFeatures {
     // the runtime composes the four views (a D3D11 game with separate views: LMU).
     bool nativeQuadViews = false;
     // Sharpening ([quad] sharpen_percent, live): AMD's CAS as the compositor resamples the views (compose_shader.h), and on
-    // the periphery's copy when the runtime composes (focus_layer, native quad views).
+    // the periphery's copy when the runtime composes (focus_layer, native quad views). Every game's compositor has it.
     bool sharpening = false;
 };
 

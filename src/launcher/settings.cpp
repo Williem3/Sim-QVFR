@@ -203,7 +203,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"crop", L"inner", n(clamp_to(s.cropInner, kCropRange)));
         ok &= write_helmet_settings(ini.c_str(), s.helmet);
         ok &= write(ini, L"experiment", L"object_detail", n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
-        ok &= write(ini, L"quad", L"sharpen_percent", n(clamp_to(s.sharpen, kSharpenRange)));  // LMU's so far
+        ok &= write(ini, L"quad", L"sharpen_percent", n(clamp_to(s.sharpen, kSharpenRange)));
     }
     ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
     ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
@@ -326,6 +326,16 @@ bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) 
         if ((per_game_key(k.section, k.key) || (k.section == L"profiles" && k.key == L"current")) &&
             ini_value(ini, k.section, k.key) != k.value)
             ok &= WritePrivateProfileStringW(k.section.c_str(), k.key.c_str(), k.value.c_str(), ini.c_str()) != 0;
+    // A per-game key the copy doesn't hold (a setting newer than the copy, such as [quad] sharpen_percent): its default,
+    // not the value the last game left in the ini, which would otherwise carry over into this game.
+    static const std::vector<ProfileKey> defaults = settings_profile(Settings{}, L"defaults").keys;
+    for (const ProfileKey& d : defaults) {
+        const bool held = std::any_of(stored.keys.begin(), stored.keys.end(), [&](const ProfileKey& k) {
+            return _wcsicmp(k.section.c_str(), d.section.c_str()) == 0 && _wcsicmp(k.key.c_str(), d.key.c_str()) == 0;
+        });
+        if (!held && per_game_key(d.section, d.key) && ini_value(ini, d.section, d.key) != d.value)
+            ok &= WritePrivateProfileStringW(d.section.c_str(), d.key.c_str(), d.value.c_str(), ini.c_str()) != 0;
+    }
     return ok;
 }
 

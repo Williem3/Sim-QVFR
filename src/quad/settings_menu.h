@@ -44,7 +44,7 @@ enum class MenuItem {
     ObjectDetail,
     // The settings page, after Gaze dead-zone, with focus_layer=2 (MenuLaunch::focusQuads): the quads' distance.
     FocusQuadDistance,
-    // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening: LMU).
+    // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
     Sharpening
 };
 
@@ -80,7 +80,7 @@ struct MenuValues {
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)
     int objectDetail = 100;   // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
-    int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it: LMU), percent; 0 off
+    int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     // The outer views' kept share of the eye (percent; 100 without a crop).
     double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }

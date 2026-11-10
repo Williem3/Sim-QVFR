@@ -46,7 +46,7 @@ float resolution_pane(float x, float y, float w, bool draw) {
                      L"game’s own detail for the outer resolution.",
                      draw, Applies::Live);
     }
-    // Sharpening (LMU): AMD's CAS as the compositor resamples the views (compose_shader.h), on the periphery's copy when
+    // Sharpening (every game's compositor): AMD's CAS as the compositor resamples the views (compose_shader.h), on the periphery's copy when
     // the runtime composes.
     if (game_has(&games::GameFeatures::sharpening)) {
         h += t::kSpace6;

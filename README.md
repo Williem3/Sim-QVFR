@@ -100,6 +100,12 @@ All of these are off until you turn them on in the launcher:
   that a helmet would hide anyway, for extra speed.
 - **Helmet overlay** (Assetto Corsa EVO and Competizione): draws a helmet's visor around your view. You
   can swap in your own helmet images.
+- **Sharpening** (all four games; the launcher's **Resolution** page, or the headset menu): AMD FidelityFX
+  Contrast Adaptive Sharpening as Sim-QVFR puts the views together, the same strength in the focus area and
+  the periphery. It sharpens soft detail most and edges that are already sharp least, and changes while you
+  drive. It shows most on a soft image (a low inner resolution, a lower-resolution headset); the
+  low-resolution periphery shimmers a little more with it. X-Plane 12 also runs an FSR sharpening pass of
+  its own, so start low there.
 - **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
 
 ## Foveated DLSS (optional, NVIDIA RTX only)
@@ -249,11 +255,8 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   - **On SteamVR and other runtimes nothing changes:** Sim-QVFR composes the image as before. It also does
     with frame generation (Cheeky's or VectorXR's), which needs one composed image, and when another OpenXR
     layer sits between Sim-QVFR and the runtime. The page shows what the last launch did.
-- **Sharpening** (the launcher's **Resolution** page, or the headset menu; off by default): AMD FidelityFX
-  Contrast Adaptive Sharpening as Sim-QVFR puts the views together, the same strength in the focus area and
-  the periphery. It sharpens soft detail most and edges that are already sharp least, and changes while you
-  drive. The low-resolution periphery shimmers a little more with it. With runtime composition (Pimax,
-  Varjo) the periphery is sharpened on a copy, which costs a little more.
+- **Sharpening with runtime composition** (Pimax, Varjo): the periphery is sharpened on a copy, which costs a
+  little more than when Sim-QVFR composes the image.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).
