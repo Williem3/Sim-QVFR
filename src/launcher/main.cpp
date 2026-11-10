@@ -384,6 +384,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const fs::path ini = here / L"sim-qvfr.ini";
     if (!fs::exists(ini, ec))
         return fail(L"sim-qvfr.ini not found next to the launcher (" + ini.wstring() + L")");
+    migrate_settings(ini.wstring());  // a launch from the command line too (the window's start did it already)
 
     const std::wstring game = game_folder(ini.wstring());
     const games::GameInfo& info = games::launcher_game();
@@ -422,13 +423,12 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
         return fail(error);
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
-    // NVIDIA multi-view rendering only on an RTX 20 series or newer (engine/nvapi_gpus.h): on any other GPU this
-    // launch's copy has it off, its experiment gates too, whatever the ini says (the layer checks again).
+    // Multi-view rendering on any GPU: NVIDIA's on an RTX 20 series or newer (engine/nvapi_gpus.h), Sim-QVFR's own
+    // (instancing) on others (the layer checks the game's device). LMU's MVR gates (lmu_mvr) are NVIDIA's alone: off
+    // in this launch's copy on any other GPU, whatever the ini says.
     const bool multiViewGpu = simqvfr::nvapi::two_views_gpu() != nullptr;
-    if (!multiViewGpu) {
-        WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", iniCopy.c_str());
+    if (!multiViewGpu)
         WritePrivateProfileStringW(L"experiment", L"lmu_mvr", L"0", iniCopy.c_str());
-    }
     // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
     // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
     const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
@@ -471,8 +471,12 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
-    if (info.features.multiView && !multiViewGpu)
-        say(L"  multi-view: off, it needs an NVIDIA RTX 20 series or newer");
+    if (info.features.multiView && GetPrivateProfileIntW(L"experiment", L"multi_view", 1, iniCopy.c_str()) != 0)
+        say(std::wstring(L"  multi-view: on, ") +
+            (multiViewGpu && ini_string(iniCopy.wstring(), L"experiment", L"multi_view_software") != L"1"
+                 ? L"NVIDIA's single-pass stereo"
+                 : L"Sim-QVFR's own (instancing)") +
+            L" (the game's device decides at launch)");
     say(L"  run:       " + runFolder.wstring());
     say(L"  layer log: " + log.wstring());
     std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);

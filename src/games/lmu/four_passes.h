@@ -76,6 +76,10 @@ struct FourPassesRun {
     // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
     // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.
     int fallbackAt = 0;
+    // The two ways to draw the focus views, compared in one run ([experiment] lmu_mvr_backend_ab=N, with trackerDrives on
+    // an NVIDIA RTX 20+ card, where both twins are attached): N frames with NVIDIA's single-pass stereo, then N with
+    // instancing, in turn; each side's CPU per pass logged apart, its GPU per pass by mvr_pass's per-mode lines.
+    int backendAb = 0;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

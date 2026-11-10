@@ -1,5 +1,4 @@
-// The Resolution pane: per-eye resolution, object detail, NVIDIA multi-view rendering, the FOV crop and the helmet
-// overlay.
+// The Resolution pane: per-eye resolution, object detail, multi-view rendering, the FOV crop and the helmet overlay.
 #include <cmath>
 #include <string>
 #include <vector>
@@ -47,36 +46,32 @@ float resolution_pane(float x, float y, float w, bool draw) {
                      L"game’s own detail for the outer resolution.",
                      draw, Applies::Live);
     }
-    // NVIDIA multi-view rendering (LMU): each eye's pass draws and finishes its focus view (two passes instead of four).
-    // Only on a GPU that has it (asked of the driver once); the layer checks again at launch.
+    // Multi-view rendering (LMU): each eye's pass draws and finishes its focus view (two passes instead of four). On any
+    // graphics card: NVIDIA's multi-view rendering on an RTX 20 series or newer (asked of the driver once), Sim-QVFR's own
+    // (instancing) on others; the layer checks the game's device at launch.
     if (game_has(&games::GameFeatures::multiView)) {
         h += t::kSpace6;
         const nvapi::Gpu* gpu = nvapi::two_views_gpu();
         std::wstring desc;
         if (!qvfr) {
             desc = L"Available in Quad View Foveated Rendering.";
-        } else if (gpu) {
-            desc = L"Each eye’s pass also draws and finishes its focus view, so the game renders only its own two eye passes "
-                   L"a frame instead of four.";
         } else {
-            std::wstring found;
-            for (const nvapi::Gpu& g : nvapi::gpus())
-                found += (found.empty() ? L" This PC has " : L", ") + std::wstring(g.name.begin(), g.name.end());
-            desc = L"Needs an NVIDIA RTX 20 series or newer graphics card." + found + (found.empty() ? L"" : L".");
+            desc = L"Each eye’s pass also draws and finishes its focus view, so the game renders only its own two eye passes "
+                   L"a frame instead of four, and Sim-QVFR changes none of the game’s code.";
+            desc += gpu ? L" On this graphics card with NVIDIA’s multi-view rendering."
+                        : L" On this graphics card with Sim-QVFR’s own (each draw drawn twice by instancing).";
         }
-        // Without such a GPU it shows off and can't be chosen, even if the ini has multi_view=1 (each launch's copy has
-        // it off then: main.cpp).
-        const bool unavailable = !qvfr || !gpu;
-        const bool shown = app.s.multiView && gpu;
+        const bool unavailable = !qvfr;
+        const bool shown = app.s.multiView;
         Row on;
         on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
         on.full = [desc, unavailable, shown](const Rect& r) {
             checkbox(kMultiView, r, shown, L"Multi-view rendering", desc, unavailable);
         };
-        h += section(x, y + h, w, L"NVIDIA multi-view rendering", {on},
-                     gpu ? L"Saves CPU and GPU time every frame (about 1.5 ms of CPU and 1 ms of GPU in testing). Off "
-                           L"renders every view on its own, as on any graphics card."
-                         : L"Off renders every view on its own, as on any graphics card.",
+        h += section(x, y + h, w, L"Multi-view rendering", {on},
+                     L"On by default. Saves CPU and GPU time every frame (in testing about 1.5 ms of CPU, and 1 ms of GPU "
+                     L"with NVIDIA’s or 0.65 ms with Sim-QVFR’s own). Off renders every view in a pass of its own, "
+                     L"changing the game’s code to do it.",
                      draw, Applies::NextLaunch);
     }
     // The runtime composing the views (LMU on a Pimax or Varjo runtime: layer/native_quad.cpp): on by default, used

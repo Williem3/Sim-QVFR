@@ -61,11 +61,15 @@ void md5_block(uint32_t (&s)[4], const uint8_t* block) {
 // ---- tokens ----
 
 enum : uint32_t {
-    kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMul = 56, kOpRet = 62, kOpRetc = 63,
-    kOpDclConstantBuffer = 89, kOpDclIndexRange = 91, kOpDclOutput = 101, kOpDclOutputSgv = 102,
-    kOpDclOutputSiv = 103, kOpDclTemps = 104, kOpDclGlobalFlags = 106,
+    kOpAnd = 1, kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMovc = 55, kOpMul = 56, kOpRet = 62, kOpRetc = 63,
+    kOpUshr = 85, kOpDclConstantBuffer = 89, kOpDclIndexRange = 91, kOpDclInput = 95, kOpDclInputSgv = 96,
+    kOpDclInputSiv = 97, kOpDclOutput = 101, kOpDclOutputSgv = 102, kOpDclOutputSiv = 103, kOpDclTemps = 104,
+    kOpDclGlobalFlags = 106,
 };
-enum : uint32_t { kTemp = 0, kOutput = 2, kImm32 = 4, kImm64 = 5, kConstantBuffer = 8 };
+enum : uint32_t { kTemp = 0, kInput = 1, kOutput = 2, kImm32 = 4, kImm64 = 5, kConstantBuffer = 8 };
+// System value names (declarations' name tokens and the signatures' system values share them).
+enum : uint32_t { kNamePosition = 1, kNameRenderTargetArrayIndex = 4, kNameViewportArrayIndex = 5, kNameInstanceId = 8 };
+enum : uint32_t { kComponentUint32 = 1 };
 
 uint32_t opcode_of(uint32_t token) { return token & 0x7ff; }
 uint32_t length_of(const uint32_t* t) { return opcode_of(t[0]) == kOpCustomData ? t[1] : (t[0] >> 24) & 0x7f; }
@@ -510,6 +514,291 @@ SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOpt
     program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
                          reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
     signature->data = write_signature(outputs);
+    r.bytecode = write_chunks(chunks);
+    return r;
+}
+
+InstancedView add_instanced_view(const uint8_t* data, size_t size, const InstancedViewOptions& options) {
+    InstancedView r;
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks)) {
+        r.error = "not a DXBC container";
+        return r;
+    }
+    int programAt = -1, inputsAt = -1, outputsAt = -1, featuresAt = -1;
+    for (size_t i = 0; i < chunks.size(); ++i) {
+        const uint32_t cc = chunks[i].fourcc;
+        if (cc == fourcc("SHDR") || cc == fourcc("SHEX"))
+            programAt = static_cast<int>(i);
+        else if (cc == fourcc("ISGN"))
+            inputsAt = static_cast<int>(i);
+        else if (cc == fourcc("OSGN"))
+            outputsAt = static_cast<int>(i);
+        else if (cc == fourcc("SFI0"))
+            featuresAt = static_cast<int>(i);
+    }
+    if (programAt < 0 || outputsAt < 0 || inputsAt < 0 || chunks[programAt].data.size() < 8) {
+        r.error = programAt < 0   ? "no SHDR/SHEX"
+                  : outputsAt < 0 ? "no OSGN (OSG5/OSG1 not handled)"
+                  : inputsAt < 0  ? "no ISGN (ISG1 not handled)"
+                                  : "program length";
+        return r;
+    }
+    std::vector<Element> outputs, inputs;
+    if (!read_signature(chunks[outputsAt].data, outputs) || !read_signature(chunks[inputsAt].data, inputs)) {
+        r.error = "unreadable signature";
+        return r;
+    }
+    bool havePosition = false;
+    uint8_t positionMask = 0xf;
+    uint32_t nextOut = 0, nextIn = 0;
+    for (const Element& el : outputs) {
+        if (el.systemValue == kNamePosition) {
+            r.positionRegister = el.reg;
+            positionMask = el.mask ? el.mask : 0xf;
+            havePosition = true;
+        }
+        if (el.systemValue == kNameViewportArrayIndex || el.systemValue == kNameRenderTargetArrayIndex) {
+            r.error = "already writes a viewport or render target array index";
+            return r;
+        }
+        nextOut = std::max(nextOut, el.reg + 1);
+    }
+    for (const Element& el : inputs) {
+        if (el.systemValue == kNameInstanceId) {
+            r.hadInstance = true;
+            r.instanceRegister = el.reg;
+        }
+        nextIn = std::max(nextIn, el.reg + 1);
+    }
+    if (!havePosition) {
+        r.error = "no SV_Position output";
+        return r;
+    }
+    const auto* tokens = reinterpret_cast<const uint32_t*>(chunks[programAt].data.data());
+    const uint32_t version = tokens[0], length = tokens[1];
+    if ((version >> 16) != 1) {
+        r.error = "not a vertex shader";
+        return r;
+    }
+    if (size_t{length} * 4 > chunks[programAt].data.size() || length < 2) {
+        r.error = "program length";
+        return r;
+    }
+    const uint32_t registers = ((version >> 4) & 0xf) >= 5 ? 32u : 16u;  // inputs and outputs: vs_4_x 16, vs_5_0 32
+
+    // First pass: the declarations (temps, where inputs, outputs and constant buffers end), the program's soundness, the
+    // position's writes and the instance's reads.
+    uint32_t temps = 0;
+    size_t tempsAt = 0, lastInputDcl = 0, lastOutputDcl = 0, lastCbDcl = 0, firstInstruction = 0, globalFlagsEnd = 2;
+    for (size_t i = 2; i < length;) {
+        const uint32_t n = length_of(tokens + i);
+        if (n == 0 || i + n > length) {
+            r.error = "instruction walk";
+            return r;
+        }
+        const uint32_t op = opcode_of(tokens[i]);
+        if (!firstInstruction && !is_declaration(op))
+            firstInstruction = i;
+        if (op == kOpDclTemps) {
+            temps = tokens[i + 1];
+            tempsAt = i;
+        } else if (op == kOpDclInput || op == kOpDclInputSgv || op == kOpDclInputSiv) {
+            lastInputDcl = i + n;
+            Operand o;
+            if (read_operand(tokens + i + 1, n - 1, o) && o.type == kInput && o.index0Immediate)
+                nextIn = std::max(nextIn, o.index0 + 1);
+        } else if (op == kOpDclOutput || op == kOpDclOutputSiv || op == kOpDclOutputSgv) {
+            lastOutputDcl = i + n;
+            Operand o;
+            if (read_operand(tokens + i + 1, n - 1, o) && o.type == kOutput && o.index0Immediate)
+                nextOut = std::max(nextOut, o.index0 + 1);
+        } else if (op == kOpDclConstantBuffer) {
+            lastCbDcl = i + n;
+            Operand o;
+            if (read_operand(tokens + i + 1, n - 1, o) && tokens[i + 2] == options.cbSlot) {
+                r.error = "the remap's constant buffer slot is in use";
+                return r;
+            }
+        } else if (op == kOpDclGlobalFlags) {
+            globalFlagsEnd = i + n;
+        } else if (op == kOpDclIndexRange) {
+            Operand o;
+            if (read_operand(tokens + i + 1, n - 1, o)) {
+                const uint32_t count = tokens[i + n - 1];
+                if (o.type == kOutput && o.index0 <= r.positionRegister && r.positionRegister < o.index0 + count) {
+                    r.error = "SV_Position in an index range";
+                    return r;
+                }
+                if (o.type == kInput && r.hadInstance && o.index0 <= r.instanceRegister &&
+                    r.instanceRegister < o.index0 + count) {
+                    r.error = "SV_InstanceID in an index range";
+                    return r;
+                }
+            }
+        } else if (!is_declaration(op)) {
+            size_t at = i + 1;
+            for (bool extended = (tokens[i] >> 31) != 0; extended; ++at)
+                extended = (tokens[at] >> 31) != 0;
+            for (int k = 0; at < i + n; ++k) {
+                Operand o;
+                const size_t len = read_operand(tokens + at, i + n - at, o);
+                if (!len) {
+                    r.error = "unreadable operand (opcode " + std::to_string(op) + ")";
+                    return r;
+                }
+                if (o.type == kOutput && (!o.index0Immediate || o.index0 == r.positionRegister)) {
+                    if (k != 0 || !o.index0Immediate) {
+                        r.error = "SV_Position written other than as a first operand";
+                        return r;
+                    }
+                    ++r.positionWrites;
+                }
+                if (o.type == kInput && r.hadInstance) {
+                    if (!o.index0Immediate) {
+                        r.error = "an input read by a relative index";
+                        return r;
+                    }
+                    r.instanceReads += o.index0 == r.instanceRegister ? 1 : 0;
+                }
+                at += len;
+            }
+        }
+        i += n;
+    }
+    if (!firstInstruction || r.positionWrites == 0) {
+        r.error = r.positionWrites ? "no instructions" : "SV_Position never written";
+        return r;
+    }
+    if (!r.hadInstance)
+        r.instanceRegister = nextIn;
+    r.viewportRegister = nextOut;
+    if (r.viewportRegister + 1 > registers || r.instanceRegister + 1 > registers) {
+        r.error = r.viewportRegister + 1 > registers ? "no free output register" : "no free input register";
+        return r;
+    }
+    const uint32_t tempT = temps, tempU = temps + 1, tempI = temps + 2;  // the position; its remap; instance and view
+
+    // The new declarations.
+    std::vector<uint32_t> inputDcl;
+    if (!r.hadInstance)  // dcl_input_sgv v<i>.x, instance_id
+        inputDcl = {instruction(kOpDclInputSgv, 4), operand(2, 0, 0x1, kInput, 1), r.instanceRegister, kNameInstanceId};
+    // dcl_output_siv o<vp>.x, viewport_array_index
+    const std::vector<uint32_t> outputDcl = {instruction(kOpDclOutputSiv, 4), operand(2, 0, 0x1, kOutput, 1),
+                                             r.viewportRegister, kNameViewportArrayIndex};
+    const std::vector<uint32_t> cbDcl = {instruction(kOpDclConstantBuffer, 4),
+                                         operand(2, 1, swizzle(0, 1, 2, 3), kConstantBuffer, 2), options.cbSlot, 1};
+    // At the start: I.x = instance >> 1 (the game's own instance), I.y = instance & 1 (the view).
+    std::vector<uint32_t> prologue;
+    const auto instance_and_one = [&] {
+        prologue.push_back(operand(2, 1, swizzle(0, 0, 0, 0), kInput, 1));
+        prologue.push_back(r.instanceRegister);
+        prologue.insert(prologue.end(), {operand(1, 0, 0, kImm32, 0), 1u});
+    };
+    prologue.push_back(instruction(kOpUshr, 7));
+    dst(prologue, kTemp, tempI, 0x1);
+    instance_and_one();
+    prologue.push_back(instruction(kOpAnd, 7));
+    dst(prologue, kTemp, tempI, 0x2);
+    instance_and_one();
+    // Before each ret: U.xy = T.ww * (b, d); U.xy = T.xy * (a, c) + U.xy; U.zw = T.zw; position = view ? U : T;
+    // viewport index = view.
+    std::vector<uint32_t> epilogue;
+    epilogue.push_back(instruction(kOpMul, 8));
+    dst(epilogue, kTemp, tempU, 0x3);
+    src_temp(epilogue, tempT, swizzle(3, 3, 3, 3));
+    src_cb(epilogue, options.cbSlot, 0, swizzle(1, 3, 1, 1));
+    epilogue.push_back(instruction(kOpMad, 10));
+    dst(epilogue, kTemp, tempU, 0x3);
+    src_temp(epilogue, tempT, swizzle(0, 1, 0, 0));
+    src_cb(epilogue, options.cbSlot, 0, swizzle(0, 2, 0, 0));
+    src_temp(epilogue, tempU, swizzle(0, 1, 0, 0));
+    epilogue.push_back(instruction(kOpMov, 5));
+    dst(epilogue, kTemp, tempU, 0xc);
+    src_temp(epilogue, tempT, swizzle(2, 2, 2, 3));
+    epilogue.push_back(instruction(kOpMovc, 9));
+    dst(epilogue, kOutput, r.positionRegister, positionMask);
+    src_temp(epilogue, tempI, swizzle(1, 1, 1, 1));
+    src_temp(epilogue, tempU, swizzle(0, 1, 2, 3));
+    src_temp(epilogue, tempT, swizzle(0, 1, 2, 3));
+    epilogue.push_back(instruction(kOpMov, 5));
+    dst(epilogue, kOutput, r.viewportRegister, 0x1);
+    src_temp(epilogue, tempI, swizzle(1, 1, 1, 1));
+
+    // Second pass: copy, inserting the declarations, the prologue and the epilogues; the position's writes go to T and
+    // the instance's reads come from I.x.
+    const size_t cbAt = lastCbDcl ? lastCbDcl : globalFlagsEnd;
+    const size_t outputsAt2 = lastOutputDcl ? lastOutputDcl : firstInstruction;
+    const size_t inputsAt2 = lastInputDcl ? lastInputDcl : outputsAt2;
+    // An operand (at `at` in `code`) made a register of `type` numbered `index`: its type bits and its first index (the
+    // token after the operand token and any extended operand tokens).
+    const auto retarget = [](std::vector<uint32_t>& code, size_t at, uint32_t type, uint32_t index) {
+        code[at] = (code[at] & ~(0xffu << 12)) | (type << 12);
+        size_t idx = at + 1;
+        for (bool extended = (code[at] >> 31) != 0; extended; ++idx)
+            extended = (code[idx] >> 31) != 0;
+        code[idx] = index;
+    };
+    std::vector<uint32_t> out(tokens, tokens + 2);
+    for (size_t i = 2; i < length;) {
+        if (i == cbAt)
+            out.insert(out.end(), cbDcl.begin(), cbDcl.end());
+        if (i == inputsAt2)
+            out.insert(out.end(), inputDcl.begin(), inputDcl.end());
+        if (i == outputsAt2) {
+            out.insert(out.end(), outputDcl.begin(), outputDcl.end());
+            if (!tempsAt)
+                out.insert(out.end(), {instruction(kOpDclTemps, 2), 3u});
+        }
+        if (i == firstInstruction)
+            out.insert(out.end(), prologue.begin(), prologue.end());
+        const uint32_t n = length_of(tokens + i);
+        const uint32_t op = opcode_of(tokens[i]);
+        if (op == kOpRet || op == kOpRetc)
+            out.insert(out.end(), epilogue.begin(), epilogue.end());
+        const size_t start = out.size();
+        out.insert(out.end(), tokens + i, tokens + i + n);
+        if (i == tempsAt)
+            out[start + 1] = temps + 3;
+        if (!is_declaration(op)) {
+            size_t at = 1;
+            for (bool extended = (tokens[i] >> 31) != 0; extended; ++at)
+                extended = (tokens[i + at] >> 31) != 0;
+            for (int k = 0; at < n; ++k) {
+                Operand o;
+                const size_t len = read_operand(tokens + i + at, n - at, o);
+                if (!len)
+                    break;  // not reached: the first pass read every operand
+                if (k == 0 && o.type == kOutput && o.index0Immediate && o.index0 == r.positionRegister)
+                    retarget(out, start + at, kTemp, tempT);
+                else if (r.hadInstance && o.type == kInput && o.index0Immediate && o.index0 == r.instanceRegister)
+                    retarget(out, start + at, kTemp, tempI);  // its swizzle picks .x: the halved instance is there
+                at += len;
+            }
+        }
+        i += n;
+    }
+    if (cbAt >= length)
+        out.insert(out.end(), cbDcl.begin(), cbDcl.end());
+    out[1] = static_cast<uint32_t>(out.size());
+
+    outputs.push_back({kViewportIndexSemantic, 0, kNameViewportArrayIndex, kComponentUint32, r.viewportRegister, 0x1, 0xe});
+    if (!r.hadInstance)
+        inputs.push_back({kInstanceIdSemantic, 0, kNameInstanceId, kComponentUint32, r.instanceRegister, 0x1, 0x1});
+    chunks[programAt].data.assign(reinterpret_cast<const uint8_t*>(out.data()),
+                                  reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
+    chunks[outputsAt].data = write_signature(outputs);
+    chunks[inputsAt].data = write_signature(inputs);
+    uint64_t flags = 0;
+    if (featuresAt >= 0 && chunks[featuresAt].data.size() >= 8)
+        std::memcpy(&flags, chunks[featuresAt].data.data(), 8);
+    flags |= kRequiresViewportIndexFromAnyShader;
+    std::vector<uint8_t> sfi0(8);
+    std::memcpy(sfi0.data(), &flags, 8);
+    if (featuresAt >= 0)
+        chunks[featuresAt].data = sfi0;
+    else  // after the program, where the compiler puts it
+        chunks.insert(chunks.begin() + programAt + 1, Chunk{fourcc("SFI0"), sfi0});
     r.bytecode = write_chunks(chunks);
     return r;
 }

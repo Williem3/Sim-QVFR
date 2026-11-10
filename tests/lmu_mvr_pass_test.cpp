@@ -13,6 +13,7 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include "engine/dxbc_patch.h"
 #include "games/lmu/mvr_pass.h"
 #include "games/lmu/mvr_probe.h"
 
@@ -337,11 +338,268 @@ int main() {
         lmu::mvr_keep_focus(false);
     }
 
+    {  // Instancing (any GPU): the instanced twin bound with no stereo switch, the game's draws made with twice their
+       // instances (pipeline statistics: vertices read), indirect draws into the eye alone; and its takeover when
+       // single-pass stereo is refused.
+        const char* src = "float4 main(uint id : SV_VertexID) : SV_Position { return float4(id * 0.1, 0, 0.5, 1); }";
+        ComPtr<ID3DBlob> code, errors;
+        ComPtr<ID3D11VertexShader> game, gameTwin, instTwin;
+        D3DCompile(src, std::strlen(src), "i", nullptr, nullptr, "main", "vs_4_0", 0, 0, &code, &errors);
+        const simqvfr::dxbc::InstancedView iv = simqvfr::dxbc::add_instanced_view(
+            static_cast<const uint8_t*>(code->GetBufferPointer()), code->GetBufferSize());
+        device->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &game);
+        device->CreateVertexShader(iv.bytecode.data(), iv.bytecode.size(), nullptr, &instTwin);
+        gameTwin = vertex_shader(device.Get(), "5");  // single-pass stereo's (a stand-in)
+        check(game && instTwin && gameTwin, "instancing: a game shader with both twins");
+        game->SetPrivateDataInterface(lmu::kMvrTwinGuid, gameTwin.Get());
+        game->SetPrivateDataInterface(lmu::kMvrInstancedTwinGuid, instTwin.Get());
+        lmu::mvr_twins_changed();
+        const D3D11_QUERY_DESC qd = {D3D11_QUERY_PIPELINE_STATISTICS, 0};
+        ComPtr<ID3D11Query> query;
+        device->CreateQuery(&qd, &query);
+        const auto vertices = [&](auto&& draw) {  // the vertices the input assembler read for one draw
+            context->Begin(query.Get());
+            draw();
+            context->End(query.Get());
+            D3D11_QUERY_DATA_PIPELINE_STATISTICS st{};
+            while (context->GetData(query.Get(), &st, sizeof(st), 0) == S_FALSE) {
+            }
+            return st.IAVertices;
+        };
+        const uint16_t indices[3] = {0, 1, 2};
+        D3D11_BUFFER_DESC ibd = {sizeof(indices), D3D11_USAGE_DEFAULT, D3D11_BIND_INDEX_BUFFER, 0, 0, 0};
+        const D3D11_SUBRESOURCE_DATA ii = {indices, 0, 0};
+        ComPtr<ID3D11Buffer> ib, args;
+        device->CreateBuffer(&ibd, &ii, &ib);
+        const UINT drawArgs[4] = {3, 1, 0, 0};
+        D3D11_BUFFER_DESC ad = {sizeof(drawArgs), D3D11_USAGE_DEFAULT, 0, 0, D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS, 0};
+        const D3D11_SUBRESOURCE_DATA ai = {drawArgs, 0, 0};
+        device->CreateBuffer(&ad, &ai, &args);
+        context->IASetInputLayout(nullptr);
+        context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->RSSetViewports(1, &eye);
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+
+        lmu::mvr_use_instanced(true);
+        const int stereoCalls = twoViewsCalls;
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        lmu::mvr_pass_begin(0, &view, false);  // its start hooks the draws instancing needs
+        context->VSSetShader(game.Get(), nullptr, 0);
+        n = viewports(context.Get(), vps);
+        check(lmu::mvr_instanced() && bound_vs(context.Get()) == instTwin.Get() && twoViewsCalls == stereoCalls && n == 2 &&
+                  same(vps[1], 100, 0, 60, 50),
+              "instancing: the instanced twin bound, no stereo switch, the focus viewport beside the eye");
+        const UINT64 draw = vertices([&] { context->Draw(3, 0); });
+        const UINT64 indexed = vertices([&] { context->DrawIndexed(3, 0, 0); });
+        const UINT64 inst = vertices([&] { context->DrawInstanced(3, 2, 0, 0); });
+        const UINT64 indexedInst = vertices([&] { context->DrawIndexedInstanced(3, 2, 0, 0, 0); });
+        std::snprintf(what, sizeof(what), "instancing: the game's draws doubled: Draw(3) read %llu vertices, DrawIndexed(3) "
+                      "%llu, DrawInstanced(3, 2) %llu, DrawIndexedInstanced(3, 2) %llu",
+                      static_cast<unsigned long long>(draw), static_cast<unsigned long long>(indexed),
+                      static_cast<unsigned long long>(inst), static_cast<unsigned long long>(indexedInst));
+        check(draw == 6 && indexed == 6 && inst == 12 && indexedInst == 12, what);
+        const UINT64 indirect = vertices([&] { context->DrawInstancedIndirect(args.Get(), 0); });
+        const lmu::MvrPassStats mid = lmu::mvr_pass_stats();
+        std::snprintf(what, sizeof(what), "instancing: an indirect draw drawn by the game's shader into the eye alone (%llu "
+                      "vertices), the twin bound again after",
+                      static_cast<unsigned long long>(indirect));
+        check(indirect == 3 && mid.eyeOnlyDraws == before.eyeOnlyDraws + 1 && bound_vs(context.Get()) == instTwin.Get(), what);
+        ComPtr<ID3D11VertexShader> lone;  // no twin, no inputs either (no layout is bound)
+        {
+            const char* loneSrc = "float4 main(uint id : SV_VertexID) : SV_Position { return float4(0, id, 0.5, 1); }";
+            ComPtr<ID3DBlob> lc;
+            D3DCompile(loneSrc, std::strlen(loneSrc), "l", nullptr, nullptr, "main", "vs_4_0", 0, 0, &lc, nullptr);
+            device->CreateVertexShader(lc->GetBufferPointer(), lc->GetBufferSize(), nullptr, &lone);
+        }
+        context->VSSetShader(lone.Get(), nullptr, 0);
+        const UINT64 plain = vertices([&] { context->Draw(3, 0); });
+        check(plain == 3 && bound_vs(context.Get()) == lone.Get(), "instancing: a shader without a twin draws once");
+        context->VSSetShader(game.Get(), nullptr, 0);
+        lmu::mvr_pass_end(0);
+        const UINT64 outside = vertices([&] { context->Draw(3, 0); });
+        check(outside == 3 && bound_vs(context.Get()) == game.Get() && viewports(context.Get(), vps) == 1,
+              "instancing: after the pass, the game's shader and one viewport, its draws once");
+        check(lmu::mvr_pass_stats().doubledDraws == before.doubledDraws + 4, "instancing: four draws doubled");
+
+        // End to end: a scene drawn in pass 0 through the hooks with the instanced twin. The eye's region must be what the
+        // game's shader alone draws, pixel for pixel; the focus view's region beside it what the focus view's own
+        // projection draws (the remap folded into the matrix, as passes 2-3 rendered it), but for edge pixels.
+        {
+            const char* sceneVs = R"(
+cbuffer C : register(b0) { float4 r0, r1, r2, r3; }
+struct O { float4 pos : SV_Position; float4 col : COLOR0; };
+O main(float4 p : POSITION, float4 c : COLOR0) {
+    O o; o.pos = float4(dot(r0, p), dot(r1, p), dot(r2, p), dot(r3, p)); o.col = c; return o; })";
+            const char* scenePs = "float4 main(float4 pos : SV_Position, float4 col : COLOR0) : SV_Target { return col; }";
+            ComPtr<ID3DBlob> vc, pc;
+            D3DCompile(sceneVs, std::strlen(sceneVs), "sv", nullptr, nullptr, "main", "vs_4_0", 0, 0, &vc, nullptr);
+            D3DCompile(scenePs, std::strlen(scenePs), "sp", nullptr, nullptr, "main", "ps_4_0", 0, 0, &pc, nullptr);
+            const simqvfr::dxbc::InstancedView sv = simqvfr::dxbc::add_instanced_view(
+                static_cast<const uint8_t*>(vc->GetBufferPointer()), vc->GetBufferSize());
+            ComPtr<ID3D11VertexShader> svs, stwin;
+            ComPtr<ID3D11PixelShader> sps;
+            ComPtr<ID3D11InputLayout> layout;
+            const D3D11_INPUT_ELEMENT_DESC el[2] = {
+                {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0}};
+            device->CreateVertexShader(vc->GetBufferPointer(), vc->GetBufferSize(), nullptr, &svs);
+            device->CreateVertexShader(sv.bytecode.data(), sv.bytecode.size(), nullptr, &stwin);
+            device->CreatePixelShader(pc->GetBufferPointer(), pc->GetBufferSize(), nullptr, &sps);
+            device->CreateInputLayout(el, 2, vc->GetBufferPointer(), vc->GetBufferSize(), &layout);  // the game's bytecode
+            svs->SetPrivateDataInterface(lmu::kMvrInstancedTwinGuid, stwin.Get());
+            lmu::mvr_twins_changed();
+            // A grid of 8 x 6 quads over the eye, each its own colour, depth and w (a perspective), as a triangle list.
+            std::vector<float> verts;
+            std::vector<uint16_t> idx;
+            for (int j = 0; j < 6; ++j)
+                for (int i = 0; i < 8; ++i) {
+                    const float x0 = -1.1f + 2.2f * i / 8, x1 = -1.1f + 2.2f * (i + 1) / 8;
+                    const float y0 = -1.1f + 2.2f * j / 6, y1 = -1.1f + 2.2f * (j + 1) / 6;
+                    const float z = 0.2f + 0.07f * static_cast<float>((i * 5 + j * 3) % 9);
+                    const float col[4] = {(i * 37 % 256) / 255.0f, (j * 53 % 256) / 255.0f, ((i + j) * 29 % 256) / 255.0f, 1};
+                    const uint16_t base = static_cast<uint16_t>(verts.size() / 8);
+                    for (const auto& [x, y] : {std::pair{x0, y0}, std::pair{x1, y0}, std::pair{x1, y1}, std::pair{x0, y1}}) {
+                        verts.insert(verts.end(), {x, y, z, 1, col[0], col[1], col[2], col[3]});
+                    }
+                    // Clockwise on screen (the default rasterizer's front faces).
+                    idx.insert(idx.end(), {base, static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 1), base,
+                                           static_cast<uint16_t>(base + 3), static_cast<uint16_t>(base + 2)});
+                }
+            D3D11_BUFFER_DESC vbd = {static_cast<UINT>(verts.size() * 4), D3D11_USAGE_DEFAULT, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+            D3D11_BUFFER_DESC sibd = {static_cast<UINT>(idx.size() * 2), D3D11_USAGE_DEFAULT, D3D11_BIND_INDEX_BUFFER, 0, 0, 0};
+            const D3D11_SUBRESOURCE_DATA vi = {verts.data(), 0, 0}, si = {idx.data(), 0, 0};
+            ComPtr<ID3D11Buffer> svb, sib;
+            device->CreateBuffer(&vbd, &vi, &svb);
+            device->CreateBuffer(&sibd, &si, &sib);
+            // The eye's camera rows (a mild perspective: w = 1 + 0.25 z) and the focus box's remap.
+            const float rows[16] = {0.9f, 0.05f, 0, 0.02f, -0.03f, 0.95f, 0, -0.01f, 0, 0, 0.8f, 0.1f, 0, 0, 0.25f, 1};
+            lmu::MvrPassView fv = view;  // eye 100 x 80, focus 60 x 50 beside it
+            fv.remap[0] = 1 / 0.3f;
+            fv.remap[1] = -0.1f / 0.3f;
+            fv.remap[2] = 1 / 0.3f;
+            fv.remap[3] = -0.2f / 0.3f;
+            float focusRows[16];
+            std::memcpy(focusRows, rows, sizeof(rows));
+            for (int k = 0; k < 4; ++k) {
+                focusRows[k] = fv.remap[0] * rows[k] + fv.remap[1] * rows[12 + k];
+                focusRows[4 + k] = fv.remap[2] * rows[4 + k] + fv.remap[3] * rows[12 + k];
+            }
+            const auto cbuffer = [&](const float* data) {
+                D3D11_BUFFER_DESC cd = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+                const D3D11_SUBRESOURCE_DATA c = {data, 0, 0};
+                ComPtr<ID3D11Buffer> b;
+                device->CreateBuffer(&cd, &c, &b);
+                return b;
+            };
+            const ComPtr<ID3D11Buffer> eyeCb = cbuffer(rows), focusCb = cbuffer(focusRows);
+            const auto target = [&](UINT w, UINT h, ComPtr<ID3D11Texture2D>& t, ComPtr<ID3D11RenderTargetView>& r,
+                                    ComPtr<ID3D11DepthStencilView>& d) {
+                D3D11_TEXTURE2D_DESC td2 = {w, h, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                                            D3D11_BIND_RENDER_TARGET, 0, 0};
+                device->CreateTexture2D(&td2, nullptr, &t);
+                device->CreateRenderTargetView(t.Get(), nullptr, &r);
+                td2.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+                td2.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+                ComPtr<ID3D11Texture2D> dt;
+                device->CreateTexture2D(&td2, nullptr, &dt);
+                device->CreateDepthStencilView(dt.Get(), nullptr, &d);
+                const float black[4] = {0, 0, 0, 0};
+                context->ClearRenderTargetView(r.Get(), black);
+                context->ClearDepthStencilView(d.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
+            };
+            const auto read = [&](ID3D11Texture2D* t, UINT w, UINT h) {
+                D3D11_TEXTURE2D_DESC sd2 = {w, h, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_STAGING, 0,
+                                            D3D11_CPU_ACCESS_READ, 0};
+                ComPtr<ID3D11Texture2D> st;
+                device->CreateTexture2D(&sd2, nullptr, &st);
+                context->CopyResource(st.Get(), t);
+                std::vector<uint32_t> px(static_cast<size_t>(w) * h);
+                D3D11_MAPPED_SUBRESOURCE m{};
+                if (SUCCEEDED(context->Map(st.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                    for (UINT y = 0; y < h; ++y)
+                        std::memcpy(px.data() + static_cast<size_t>(y) * w, static_cast<const uint8_t*>(m.pData) + y * m.RowPitch,
+                                    w * 4);
+                    context->Unmap(st.Get(), 0);
+                }
+                return px;
+            };
+            const UINT sceneStride = 32, zero = 0;
+            const auto draw_scene = [&](ID3D11Buffer* cb) {
+                context->IASetInputLayout(layout.Get());
+                context->IASetVertexBuffers(0, 1, svb.GetAddressOf(), &sceneStride, &zero);
+                context->IASetIndexBuffer(sib.Get(), DXGI_FORMAT_R16_UINT, 0);
+                context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                context->VSSetConstantBuffers(0, 1, &cb);
+                context->PSSetShader(sps.Get(), nullptr, 0);
+                context->DrawIndexed(static_cast<UINT>(idx.size()), 0, 0);
+            };
+            ComPtr<ID3D11Texture2D> mvT, eyeT, focusT;
+            ComPtr<ID3D11RenderTargetView> mvR, eyeR, focusR;
+            ComPtr<ID3D11DepthStencilView> mvD, eyeD, focusD;
+            target(256, 128, mvT, mvR, mvD);
+            target(256, 128, eyeT, eyeR, eyeD);
+            target(60, 50, focusT, focusR, focusD);
+            // The eye pass: both views through the hooks.
+            context->RSSetViewports(1, &eye);
+            context->OMSetRenderTargets(1, mvR.GetAddressOf(), mvD.Get());
+            context->VSSetShader(svs.Get(), nullptr, 0);
+            lmu::mvr_pass_begin(0, &fv, false);
+            check(bound_vs(context.Get()) == stwin.Get(), "instancing end to end: the scene's instanced twin bound in pass 0");
+            draw_scene(eyeCb.Get());
+            lmu::mvr_pass_end(0);
+            // The references, outside any pass: the eye with the game's shader; the focus view with its own projection.
+            context->OMSetRenderTargets(1, eyeR.GetAddressOf(), eyeD.Get());
+            context->RSSetViewports(1, &eye);
+            context->VSSetShader(svs.Get(), nullptr, 0);
+            draw_scene(eyeCb.Get());
+            const D3D11_VIEWPORT focusVp = {0, 0, 60, 50, 0, 1};
+            context->OMSetRenderTargets(1, focusR.GetAddressOf(), focusD.Get());
+            context->RSSetViewports(1, &focusVp);
+            draw_scene(focusCb.Get());
+            const std::vector<uint32_t> mv = read(mvT.Get(), 256, 128), eyePx = read(eyeT.Get(), 256, 128),
+                                        focusPx = read(focusT.Get(), 60, 50);
+            int eyeDiff = 0, focusDiff = 0, lit = 0;
+            for (UINT y = 0; y < 80; ++y)
+                for (UINT x = 0; x < 100; ++x)
+                    eyeDiff += mv[y * 256 + x] != eyePx[y * 256 + x] ? 1 : 0;
+            for (UINT y = 0; y < 50; ++y)
+                for (UINT x = 0; x < 60; ++x) {
+                    focusDiff += mv[y * 256 + 100 + x] != focusPx[y * 60 + x] ? 1 : 0;
+                    lit += focusPx[y * 60 + x] != 0 ? 1 : 0;
+                }
+            std::snprintf(what, sizeof(what), "instancing end to end: the eye's region as the game's shader draws it (%d of 8000 "
+                          "pixels differ), the focus view's as its own projection draws it (%d of 3000 differ: edges; %d lit)",
+                          eyeDiff, focusDiff, lit);
+            check(eyeDiff == 0 && focusDiff <= 60 && lit > 2500, what);  // gaps where neighbours' w differ, in both
+            context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+            context->IASetInputLayout(nullptr);
+            context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+        }
+
+        // Single-pass stereo refused while instancing may take over: the instanced twin from that bind on.
+        lmu::mvr_use_instanced(false, true);
+        lmu::mvr_set_two_views(&refusing_two_views);
+        lmu::mvr_pass_begin(0, &view, false);
+        context->VSSetShader(game.Get(), nullptr, 0);
+        const UINT64 takenOver = vertices([&] { context->Draw(3, 0); });
+        const lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        check(lmu::mvr_instanced() && !lmu::mvr_broken() && after.instancedTakeovers == 1 &&
+                  bound_vs(context.Get()) == instTwin.Get() && takenOver == 6 && viewports(context.Get(), vps) == 2,
+              "single-pass stereo refused: instancing took over (its twin, the draw doubled, two viewports), not broken");
+        lmu::mvr_pass_end(0);
+        lmu::mvr_use_instanced(false, false);
+        lmu::mvr_set_two_views(&fake_two_views);
+        context->VSSetShader(a.Get(), nullptr, 0);
+    }
+
+    const uint64_t errorsBefore = lmu::mvr_pass_stats().stereoErrors;
     lmu::mvr_set_two_views(&refusing_two_views);
     lmu::mvr_pass_begin(1, &view, false);
     const lmu::MvrPassStats s = lmu::mvr_pass_stats();
-    check(bound_vs(context.Get()) == a.Get() && viewports(context.Get(), vps) == 1 && s.stereoErrors == 1,
-          "single-pass stereo refused: the game's state, off for the session");
+    check(bound_vs(context.Get()) == a.Get() && viewports(context.Get(), vps) == 1 && s.stereoErrors == errorsBefore + 1 &&
+              lmu::mvr_broken(),
+          "single-pass stereo refused with no instancing to take over: the game's state, off for the session");
     lmu::mvr_pass_end(1);
 
     const unsigned w = 160, h = 120;

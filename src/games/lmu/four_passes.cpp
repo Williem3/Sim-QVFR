@@ -720,8 +720,16 @@ unsigned finalAt[2][2] = {};  // each focus final's top-left in its eye's textur
 bool finalsMissingLogged = false, twoPassLogged = false, countLogged = false;
 unsigned long long twoPassFrames = 0, finalsMissing = 0;
 
-// The A/B side of this frame: lmu_focus_final_ab's (0 two passes, 1 four) or lmu_mvr_ab's (0 MVR, 1 without).
-int ab_side() { return cfg.focusFinalAb > 0 ? (twoPassFrame ? 0 : 1) : (mvrFrame ? 0 : 1); }
+// lmu_mvr_backend_ab's side of this frame: 0 NVIDIA's single-pass stereo, 1 instancing.
+int backendSide = 0;
+bool backendAbOk = false, backendAbLogged = false;
+
+// The A/B side of this frame: lmu_focus_final_ab's (0 two passes, 1 four), lmu_mvr_backend_ab's (0 NVIDIA's, 1
+// instancing) or lmu_mvr_ab's (0 MVR, 1 without).
+int ab_side() {
+    return cfg.focusFinalAb > 0 ? (twoPassFrame ? 0 : 1) : cfg.backendAb > 0 ? backendSide : (mvrFrame ? 0 : 1);
+}
+bool ab_run() { return cfg.mvrAb > 0 || cfg.focusFinalAb > 0 || (cfg.backendAb > 0 && backendAbOk); }
 
 // An A/B run (FourPassesRun::mvrAb): each side's CPU per pass since the last cost line, in thread cycles.
 struct AbWindow {
@@ -882,6 +890,26 @@ void mvr_before_pass(int p) {
             }
             set_pass_count(twoPassFrame ? 2 : 4);
             mvr_frame_mode(twoPassFrame ? 0 : 1);
+            if (cfg.backendAb > 0 && cfg.trackerDrives) {  // NVIDIA's or instancing this frame (between passes)
+                if (!backendAbLogged) {
+                    backendAbLogged = true;
+                    backendAbOk = mvr_probe_backend() == MvrBackend::nvapi && mvr_probe_instanced();
+                    if (backendAbOk)
+                        simqvfr::logf("lmu mvr: backend A/B: %d frames with NVIDIA's single-pass stereo, then %d with "
+                                      "instancing, in turn (lmu_mvr_backend_ab)",
+                                      cfg.backendAb, cfg.backendAb);
+                    else
+                        simqvfr::logf("lmu mvr: lmu_mvr_backend_ab=%d ignored: it needs NVIDIA's single-pass stereo and the "
+                                      "instanced twins (an RTX 20 series or newer, without multi_view_software=1)",
+                                      cfg.backendAb);
+                }
+                if (backendAbOk && !mvr_broken()) {
+                    backendSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.backendAb)) % 2);
+                    if (mvr_instanced() != (backendSide == 1))
+                        mvr_use_instanced(backendSide == 1, true);
+                    mvr_frame_mode(backendSide);
+                }
+            }
             // R5c: the four-pass side as plain QVFR (no multi-view: the branch below for every pass) or gate D.
             if (cfg.focusFinalAbPlain && !twoPassFrame)
                 mvrFrame = false;
@@ -1815,7 +1843,7 @@ void pass_end(int p) {
     if (qvfrMode && p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
         costWindow.passWallMs[p] += now_ms() - wall0;
         costWindow.passCpuCycles[p] += static_cast<double>(cpu1 - cpu0);
-        if (cfg.mvr && (cfg.mvrAb > 0 || cfg.focusFinalAb > 0))
+        if (cfg.mvr && ab_run())
             ab.cpu[ab_side()][p] += static_cast<double>(cpu1 - cpu0);
     }
     inLaterPass = false;
@@ -2548,7 +2576,13 @@ void four_passes_device(ID3D11Device* device) {
     sessionDevice = device;
     // R5: the device decides; the game is still in its menus, the eye loop not yet run.
     if (installed && cfg.trackerDrives && !mvr_probe_usable())
-        fallback_to_four_passes("the game's device has no single-pass stereo, or multi-view's shader probe is off");
+        fallback_to_four_passes("the game's device can't draw two views a pass (no NVIDIA single-pass stereo, and no "
+                                "vertex shader picking the viewport), or multi-view's shader probe is off");
+    else if (installed && cfg.trackerDrives)
+        simqvfr::logf("lmu qvfr: multi-view rendering by %s%s", mvr_backend_name(mvr_probe_backend()),
+                      mvr_probe_backend() == MvrBackend::nvapi && mvr_probe_instanced()
+                          ? "; instancing takes over if the driver ever refuses it"
+                          : "");
 }
 
 void four_passes_frame_end() {
@@ -2597,7 +2631,7 @@ void four_passes_frame_end() {
     if (cfg.trackerDrives) {
         if (passes >= 1)
             noFinalsRun = frameFinalsOk ? 0 : noFinalsRun + 1;
-        const char* why = mvr_broken()           ? "the driver refused single-pass stereo"
+        const char* why = mvr_broken()           ? "the driver refused single-pass stereo (and instancing couldn't take over)"
                           : noFinalsRun >= 90     ? "no focus views made in 90 frames in a row"
                           : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
                               ? "forced by lmu_mvr_fallback_at"
@@ -2658,7 +2692,7 @@ void four_passes_frame_end() {
         // and what the frames since cost: each pass's wall and CPU time, this code's own CPU, the GPU time of its copies.
         if (passes >= fullPasses) {
             ++costWindow.frames;
-            if (cfg.mvr && (cfg.mvrAb > 0 || cfg.focusFinalAb > 0))
+            if (cfg.mvr && ab_run())
                 ++ab.frames[ab_side()];
         }
         if (passes >= fullPasses && frames % 900 == 0) {
@@ -2690,6 +2724,20 @@ void four_passes_frame_end() {
                               "without both focus finals so far",
                               cfg.focusFinalAbPlain ? " vs plain QVFR" : " vs gate D", c[0][0], c[0][1], two, ab.frames[0],
                               c[1][0], c[1][1], c[1][2], c[1][3], four, ab.frames[1], two - four, finalsMissing);
+            }
+            if (cfg.mvr && cfg.backendAb > 0 && backendAbOk && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
+                double c[2][2];
+                for (int m = 0; m < 2; ++m)
+                    for (int q = 0; q < 2; ++q)
+                        c[m][q] = ab.cpu[m][q] / tscPerMs / ab.frames[m];
+                const MvrPassStats ms = mvr_pass_stats();
+                simqvfr::logf("lmu mvr A/B (NVIDIA's vs instancing): CPU per pass with NVIDIA's single-pass stereo %.2f %.2f "
+                              "ms (%.2f; %u frames), with instancing %.2f %.2f ms (%.2f; %u frames): instancing %+.2f ms "
+                              "per frame; %llu draws doubled so far, %llu into the eye alone",
+                              c[0][0], c[0][1], c[0][0] + c[0][1], ab.frames[0], c[1][0], c[1][1], c[1][0] + c[1][1],
+                              ab.frames[1], c[1][0] + c[1][1] - c[0][0] - c[0][1],
+                              static_cast<unsigned long long>(ms.doubledDraws),
+                              static_cast<unsigned long long>(ms.eyeOnlyDraws));
             }
             if (cfg.mvr && cfg.mvrAb > 0 && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
                 double c[2][4], eyes[2], focus[2];

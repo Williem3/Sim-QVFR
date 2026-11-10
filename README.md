@@ -215,11 +215,18 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   runs as usual.
 - **Changes while you drive:** the resolution sliders, the focus size and the crop change straight away,
   in the launcher or the headset menu. Menus and the HUD are drawn sharp inside the focus area too.
-- **NVIDIA multi-view rendering** (the launcher's **Resolution** page, NVIDIA RTX 20 series or newer):
-  each eye's pass also draws and finishes that eye's focus view, so LMU renders only its own two eye passes
-  a frame instead of four. In testing (Ryzen 7 5800X3D, RTX 5070 Ti; periphery 40%, focus density 200%,
-  focus area 20%) that saved about 1.5 ms of CPU and 1 ms of GPU time per frame. It applies at the next
-  launch. On other graphics cards the option is greyed out and every view is rendered on its own.
+- **Multi-view rendering** (the launcher's **Resolution** page): each eye's pass also draws and finishes that
+  eye's focus view, so LMU renders only its own two eye passes a frame instead of four. In testing (Ryzen 7
+  5800X3D, RTX 5070 Ti; periphery 40%, focus density 200%, focus area 20%) that saved about 1.5 ms of CPU and
+  1 ms of GPU time per frame. It's on by default (settings from earlier versions are switched on once); turning
+  it off applies at the next launch.
+  - **On any graphics card.** NVIDIA RTX 20 series and newer use NVIDIA's multi-view rendering. Other cards
+    (AMD, Intel, older NVIDIA) use Sim-QVFR's own: every draw is drawn twice in one call (instancing), once for
+    the eye and once for its focus view. It needs a graphics driver that lets a vertex shader choose the
+    viewport (Direct3D 11.3); without it, every view is rendered on its own. If NVIDIA's driver ever refuses its
+    own during a session, Sim-QVFR's takes over. Sim-QVFR's own draws each vertex twice, so it costs a little more
+    GPU time: on the RTX 5070 Ti above it saved the same CPU time and about 0.65 ms of GPU time per frame. It has
+    been tested on that card only so far; reports from AMD and Intel cards are welcome.
   - **It doesn't patch LMU's code.** With multi-view rendering, Sim-QVFR works through OpenXR and Direct3D 11
     only: it doesn't change, hook or call any of LMU's own code. In LMU's memory it reads a few values (the
     cameras, the eye being drawn, the render size) and writes just two, the render scale and the eye render size, which set each

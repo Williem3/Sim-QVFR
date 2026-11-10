@@ -98,6 +98,10 @@ public:
             if (run.trackerDrives) {
                 run.focusFinalAb = 0;  // the game's own two passes: nothing to alternate with
                 run.mvrAb = 0;
+                // lmu_mvr_backend_ab=N: N frames NVIDIA's single-pass stereo, N instancing, in turn (four_passes.h).
+                run.backendAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_backend_ab", 0,
+                                                                                      s.ini)));
+                run.mvrTiming = run.mvrTiming || run.backendAb > 0;
                 // lmu_mvr_fallback_at=N: the fallback to the four passes forced at scene frame N (its test).
                 run.fallbackAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_fallback_at", 0,
                                                                                       s.ini)));

@@ -67,7 +67,7 @@ int main() {
         }
     }
     check(shaderCode != nullptr, "d3d11.dll's code read before the probe");
-    check(lmu::mvr_probe_install(nullptr), "installed at instance creation");
+    check(lmu::mvr_probe_install(nullptr, true), "installed at instance creation (twins attached, as for multi-view)");
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,
@@ -97,6 +97,49 @@ int main() {
               s.refused.at("no free output register") == 1,
           what);
     check(s.nvapiCreated == 0 && s.nvapiFailed == 0, "NVAPI not asked on WARP");
+    // Instancing on WARP (a vertex shader may pick the viewport there): both shaders get an instanced twin (one free
+    // register is enough), attached under its own GUID; no single-pass stereo twin.
+    {
+        const auto twin = [](ID3D11VertexShader* vs, const GUID& guid) {
+            IUnknown* u = nullptr;
+            UINT size = sizeof(u);
+            const bool has = SUCCEEDED(vs->GetPrivateData(guid, &size, &u)) && u;
+            if (u)
+                u->Release();
+            return has;
+        };
+        std::snprintf(what, sizeof(what), "instancing: %llu instanced twins converted, %llu created, %llu failed; attached "
+                      "to both, no single-pass stereo twin; the backend is instancing",
+                      static_cast<unsigned long long>(s.instancedConverted),
+                      static_cast<unsigned long long>(s.instancedCreated), static_cast<unsigned long long>(s.instancedFailed));
+        check(s.instancedConverted == 2 && s.instancedCreated == 2 && s.instancedFailed == 0 && created &&
+                  twin(a.Get(), lmu::kMvrInstancedTwinGuid) && twin(b.Get(), lmu::kMvrInstancedTwinGuid) &&
+                  !twin(a.Get(), lmu::kMvrTwinGuid) && lmu::mvr_probe_usable() &&
+                  lmu::mvr_probe_backend() == lmu::MvrBackend::instanced && lmu::mvr_probe_instanced(),
+              what);
+        // Input layouts: one with per-instance data gets a twin with its step rate doubled; a per-vertex one doesn't.
+        const std::vector<uint8_t> perInstance =
+            compile("float4 main(float4 p : POSITION, float4 o : OFFSET) : SV_Position { return p + o; }", "vs_4_0");
+        const D3D11_INPUT_ELEMENT_DESC el[2] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            {"OFFSET", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 3}};
+        const std::vector<uint8_t> perVertex = compile("float4 main(float4 p : POSITION) : SV_Position { return p; }", "vs_4_0");
+        ComPtr<ID3D11InputLayout> vertexOnly, instanceData;
+        device->CreateInputLayout(el, 1, perVertex.data(), perVertex.size(), &vertexOnly);
+        device->CreateInputLayout(el, 2, perInstance.data(), perInstance.size(), &instanceData);
+        const auto layoutTwin = [](ID3D11InputLayout* l) {
+            IUnknown* u = nullptr;
+            UINT size = sizeof(u);
+            const bool has = l && SUCCEEDED(l->GetPrivateData(lmu::kMvrInstancedLayoutGuid, &size, &u)) && u;
+            if (u)
+                u->Release();
+            return has;
+        };
+        const lmu::MvrProbeStats ls = lmu::mvr_probe_stats();
+        check(vertexOnly && instanceData && !layoutTwin(vertexOnly.Get()) && layoutTwin(instanceData.Get()) &&
+                  ls.layouts == 2 && ls.instancedLayouts == 1 && lmu::mvr_probe_instanced_layouts() == 1,
+              "instancing: the layout with per-instance data twinned (step rate doubled), the per-vertex one not");
+    }
     lmu::mvr_probe_frame_end();  // the summary (log only)
     // xrCreateSession: device creation unhooked, its code as it was; the device's shader creation still seen.
     check(exportCode && std::memcmp(exportBefore, exportCode, sizeof(exportBefore)) != 0,
@@ -127,16 +170,24 @@ int main() {
         wchar_t temp[MAX_PATH] = {};
         GetTempPathW(MAX_PATH, temp);
         const std::wstring ini = std::wstring(temp) + L"simqvfr-multiview-" + std::to_wstring(GetCurrentProcessId()) + L".ini";
-        WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", ini.c_str());
+        WritePrivateProfileStringW(L"experiment", L"cpu_profile", L"0", ini.c_str());  // an ini without multi_view
         std::string why;
+        check(simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why), "no multi_view key: on (the default)");
+        WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", ini.c_str());
         check(!simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why) && why == "off (multi_view=0)",
               "multi_view=0: off");
         WritePrivateProfileStringW(L"experiment", L"multi_view", L"1", ini.c_str());
         check(!simqvfr::games::multi_view_on(&ace::kGame, ini.c_str(), &why) && why == "off: not for this game",
               "multi_view=1 for a game without it (ACE): off");
         const bool on = simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why);
-        std::snprintf(what, sizeof(what), "multi_view=1 for LMU: %s on this machine's GPU (%s)", on ? "on" : "off", why.c_str());
-        check(on == (nvapi::two_views_gpu() != nullptr) && !why.empty(), what);
+        std::snprintf(what, sizeof(what), "multi_view=1 for LMU: on whatever the GPU (%s)", why.c_str());
+        check(on && !why.empty() &&
+                  (why.find("single-pass stereo") != std::string::npos) == (nvapi::two_views_gpu() != nullptr),
+              what);
+        WritePrivateProfileStringW(L"experiment", L"multi_view_software", L"1", ini.c_str());
+        const bool sw = simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why);
+        std::snprintf(what, sizeof(what), "multi_view_software=1: instancing (%s)", why.c_str());
+        check(sw && why.find("instancing") != std::string::npos, what);
         DeleteFileW(ini.c_str());
     }
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

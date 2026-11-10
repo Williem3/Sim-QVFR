@@ -15,6 +15,7 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -43,21 +44,29 @@ constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_P
 // pass's start. Our own calls and the calls passed on go to the original of the function the entry holds now.
 enum Hook : int {
     kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
-    kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHooks
+    kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHookDrawAuto, kHookDrawIndexedIndirect,
+    kHookDrawInstancedIndirect, kHooks
 };
 constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
                                       kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
                                       kHSSetShader,   kDSSetShader,    kDrawIndexed,        kDraw,
-                                      kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion};
+                                      kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion,
+                                      kDrawAuto,      kDrawIndexedInstancedIndirect,        kDrawInstancedIndirect};
 constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
                                            "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
                                            "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
                                            "HSSetShader",    "DSSetShader",       "DrawIndexed",
                                            "Draw",           "DrawIndexedInstanced", "DrawInstanced",
-                                           "CopySubresourceRegion"};
-// The draws: hooked only with the focus post (DrawIndexed: its copy and composite; all four: the overlay trace).
+                                           "CopySubresourceRegion", "DrawAuto", "DrawIndexedInstancedIndirect",
+                                           "DrawInstancedIndirect"};
+// The draws: hooked only with the focus post (DrawIndexed: its copy and composite; all four: the overlay trace) or
+// with instancing (they're doubled).
 constexpr bool is_draw(int h) {
     return h == kHookDrawIndexed || h == kHookDraw || h == kHookDrawIndexedInstanced || h == kHookDrawInstanced;
+}
+// The draws instancing can't double (no instance count to set): only with it.
+constexpr bool is_undoubled_draw(int h) {
+    return h == kHookDrawAuto || h == kHookDrawIndexedIndirect || h == kHookDrawInstancedIndirect;
 }
 // Per entry: 4 seen for each on WARP and on an RTX 5070 Ti (2026-11-09: idle and busy, multithread protection off, on,
 // and off again after it was on), room for more.
@@ -128,7 +137,8 @@ struct GpuFrame {
 // slot, bound in turn, threw each other out).
 struct TwinEntry {
     ID3D11VertexShader* vs = nullptr;
-    ID3D11VertexShader* twin = nullptr;  // raw: the game's shader holds it (its private data) while it lives
+    ID3D11VertexShader* twin = nullptr;       // raw: the game's shader holds it (its private data) while it lives
+    ID3D11VertexShader* instanced = nullptr;  // its instanced twin, likewise
     uint32_t epoch = 0;
     VsRole role = VsRole::none;  // the probe's marking (yebis_shaders.h)
 };
@@ -177,7 +187,11 @@ struct State {
     long long qpcAtLog = 0;
     ComPtr<ID3D11Buffer> remapCb;
     TwoViewsFn twoViews = &nvapi_two_views;
-    bool broken = false;  // single-pass stereo refused once: off for the session
+    bool broken = false;  // single-pass stereo refused once and instancing couldn't take over: off for the session
+    // Instancing instead of single-pass stereo (mvr_use_instanced): the instanced twins bound, the game's draws doubled,
+    // no stereo switch. canInstance: it may take over when single-pass stereo is refused.
+    bool instanced = false, canInstance = false;
+    bool undoubledLogged = false;
     // The pass.
     int pass = -1;
     bool drawFocus = false, sample = false, replaceResolve = false;
@@ -488,44 +502,73 @@ const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
     const uint8_t k = set.entry[0].epoch != g.twinEpoch ? 0 : set.entry[1].epoch != g.twinEpoch ? 1 : set.next;
     TwinEntry& e = set.entry[k];
     set.next = static_cast<uint8_t>(1 - k);
-    ID3D11VertexShader* twin = nullptr;
-    IUnknown* unknown = nullptr;
-    UINT size = sizeof(unknown);
-    if (SUCCEEDED(vs->GetPrivateData(kMvrTwinGuid, &size, &unknown)) && unknown) {
+    const auto twin_under = [&](const GUID& guid) -> ID3D11VertexShader* {
+        IUnknown* unknown = nullptr;
+        UINT size = sizeof(unknown);
+        if (FAILED(vs->GetPrivateData(guid, &size, &unknown)) || !unknown)
+            return nullptr;
         ComPtr<ID3D11VertexShader> t;
         unknown->QueryInterface(IID_PPV_ARGS(&t));
         unknown->Release();
-        twin = t.Get();
-    }
-    UINT role = 0;
-    size = sizeof(role);
+        return t.Get();  // raw: the game's shader holds it
+    };
+    UINT role = 0, size = sizeof(role);
     if (FAILED(vs->GetPrivateData(kVsRoleGuid, &size, &role)) || size != sizeof(role))
         role = 0;
-    e = {vs, twin, g.twinEpoch, static_cast<VsRole>(role)};
+    e = {vs, twin_under(kMvrTwinGuid), twin_under(kMvrInstancedTwinGuid), g.twinEpoch, static_cast<VsRole>(role)};
     return e;
 }
 
-ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).twin : nullptr; }
+// The twin for the way the passes draw now: single-pass stereo's or the instanced one.
+ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
+    if (!vs)
+        return nullptr;
+    const TwinEntry& e = shader_entry(vs);
+    return g.instanced ? e.instanced : e.twin;
+}
 VsRole role_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).role : VsRole::none; }
+
+// Single-pass stereo refused: instancing for the rest of the session if its twins are there (the next pass's start
+// hooks the draws it needs), else no focus views from the eye passes. True: instancing took over.
+bool take_over_with_instancing() {
+    if (!g.canInstance || g.instanced) {
+        g.broken = true;
+        simqvfr::log_line("lmu mvr: single-pass stereo refused: the focus views are drawn by passes 2-3 only");
+        return false;
+    }
+    g.instanced = true;
+    ++g.stats.instancedTakeovers;
+    simqvfr::log_line("lmu mvr: NVIDIA's single-pass stereo refused: instancing draws the focus views from now on (each "
+                      "draw twice, the vertex shader picking the viewport)");
+    return true;
+}
 
 // Twin, two views and the second viewport exactly while a focus-drawing pass has a depth target and a shader with a twin.
 void update() {
     ID3D11VertexShader* twin = nullptr;
     // The scene's draws (a depth target bound) and, after the focus view's final blit, the overlays into the eye's final.
-    bool want = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
-                !g.hsBound && !g.dsBound && !g.soBound;
+    const bool can = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
+                     !g.hsBound && !g.dsBound && !g.soBound;
+    bool want = can;
     if (want) {
         twin = twin_of(g.gameVs);
         want = twin != nullptr;
     }
-    if (want != g.stereo) {
+    if (want != g.stereo && g.instanced) {  // no mode to switch: the draws are doubled while the twin is bound
+        g.stereo = want;
+        ++g.stats.toggles;
+    } else if (want != g.stereo) {
         Timed timed(g.time.switches);
         if (g.twoViews(g.context, want) != 0) {
             ++g.stats.stereoErrors;
             if (want) {
-                g.broken = true;
                 want = false;
-                simqvfr::log_line("lmu mvr: single-pass stereo refused: the focus views are drawn by passes 2-3 only");
+                twin = nullptr;
+                if (take_over_with_instancing() && can) {
+                    twin = twin_of(g.gameVs);
+                    want = twin != nullptr;
+                    g.stereo = want;
+                }
             }
         } else {
             g.stereo = want;
@@ -991,6 +1034,53 @@ void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
     update();
 }
 
+// Instancing: draw H made with twice its instances (the instanced twin bound: each instance's even copy into the eye's
+// viewport, its odd one into the focus view's); with input layouts that read per-instance data, the bound one's twin
+// (step rates doubled, mvr_probe.cpp) around it, so a pair reads its instance's data.
+template <int H, typename... A>
+void doubled_draw(ID3D11DeviceContext* context, A... a) {
+    const std::tuple<A...> t(a...);
+    ID3D11InputLayout* layout = nullptr;
+    ComPtr<ID3D11InputLayout> twinLayout;
+    if (mvr_probe_instanced_layouts() > 0) {
+        context->IAGetInputLayout(&layout);
+        IUnknown* unknown = nullptr;
+        UINT size = sizeof(unknown);
+        if (layout && SUCCEEDED(layout->GetPrivateData(kMvrInstancedLayoutGuid, &size, &unknown)) && unknown) {
+            unknown->QueryInterface(IID_PPV_ARGS(&twinLayout));
+            unknown->Release();
+        }
+        if (twinLayout) {
+            context->IASetInputLayout(twinLayout.Get());
+            ++g.stats.layoutSwaps;
+        }
+    }
+    ++g.stats.doubledDraws;
+    if constexpr (H == kHookDrawIndexed)
+        call_real<kHookDrawIndexedInstanced>(context, std::get<0>(t), UINT{2}, std::get<1>(t), std::get<2>(t), UINT{0});
+    else if constexpr (H == kHookDraw)
+        call_real<kHookDrawInstanced>(context, std::get<0>(t), UINT{2}, std::get<1>(t), UINT{0});
+    else if constexpr (H == kHookDrawIndexedInstanced)
+        call_real<H>(context, std::get<0>(t), std::get<1>(t) * 2, std::get<2>(t), std::get<3>(t), std::get<4>(t));
+    else if constexpr (H == kHookDrawInstanced)
+        call_real<H>(context, std::get<0>(t), std::get<1>(t) * 2, std::get<2>(t), std::get<3>(t));
+    else
+        static_assert(H == kHookDraw, "a draw with an instance count");
+    if (twinLayout)
+        context->IASetInputLayout(layout);
+    if (layout)
+        layout->Release();
+}
+
+// The game's draw H in a pass as it reaches d3d11: doubled with instancing while two views are on, else as it was.
+template <int H, typename... A>
+void game_draw(ID3D11DeviceContext* context, A... a) {
+    if (g.instanced && g.on && ours(context))
+        doubled_draw<H>(context, a...);
+    else
+        call_real<H>(context, a...);
+}
+
 // R3c: after the passes, a draw into an eye's final whose focus final was made this frame, with a vertex shader that has
 // a twin (the VR UI's panel): drawn with two views, the eye's remap and the focus viewport beside its own (cut to the
 // part the eye rendered when it is the whole target), the state put back. False: not doubled (the caller draws it).
@@ -1034,13 +1124,17 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
     context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, v.remap, 0, 0);
     context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
     bool doubled = false;
-    if (g.twoViews(context, true) == 0) {
+    if (g.instanced || g.twoViews(context, true) == 0) {
         const D3D11_VIEWPORT first = overlay_viewport(eye, v, vps[0]);
         const D3D11_VIEWPORT two[2] = {first, focus_viewport_of(v, first)};
         realVSSetShader(context, twin, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, 2, two);
-        call_real<H>(context, a...);
-        g.twoViews(context, false);
+        if (g.instanced) {
+            doubled_draw<H>(context, a...);
+        } else {
+            call_real<H>(context, a...);
+            g.twoViews(context, false);
+        }
         realVSSetShader(context, vs, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, n, vps);
         doubled = true;
@@ -1069,7 +1163,8 @@ std::string shader_name(Shader* shader) {
     std::string name = s;
     if constexpr (std::is_same_v<Shader, ID3D11VertexShader>) {
         UINT twinSize = 0;
-        if (shader->GetPrivateData(kMvrTwinGuid, &twinSize, nullptr) == S_OK && twinSize)
+        if (shader->GetPrivateData(g.instanced ? kMvrInstancedTwinGuid : kMvrTwinGuid, &twinSize, nullptr) == S_OK &&
+            twinSize)
             name += "*";
     }
     return name;
@@ -1181,7 +1276,7 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
     }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
     if (!outside || !double_outside<kHookDrawIndexed>(context, count, start, base))
-        call_real<kHookDrawIndexed>(context, count, start, base);
+        game_draw<kHookDrawIndexed>(context, count, start, base);
     if (g.tracing && context == g.context && !g.replaying)
         trace_draw(context, "DrawIndexed", count, start);
     if (ours(context) && g.overlayTarget && g.on)
@@ -1212,7 +1307,7 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         }
     }
     if (!outside || !double_outside<H>(context, a...))
-        call_real<H>(context, a...);
+        game_draw<H>(context, a...);
     if constexpr (H == kHookDraw) {
         if (panel) {
             const long long args[] = {static_cast<long long>(a)...};
@@ -1232,6 +1327,28 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
             focus_blit(context, static_cast<UINT>(args[0]), static_cast<UINT>(args[1]));
         }
     }
+}
+
+// DrawAuto and the indirect draws with instancing: no instance count to double (it's in a buffer, or there is none), so
+// while two views are on the game's own shader draws it, into the eye's viewport alone; logged once.
+template <int H, typename... A>
+void STDMETHODCALLTYPE undoubled_draw(ID3D11DeviceContext* context, A... a) {
+    if (context == g.context && !g.replaying)
+        ++tr.draws;
+    if (!(g.instanced && g.on && ours(context))) {
+        call_real<H>(context, a...);
+        return;
+    }
+    ++g.stats.eyeOnlyDraws;
+    if (!g.undoubledLogged) {
+        g.undoubledLogged = true;
+        simqvfr::logf("lmu mvr: pass %d: a %s with two views on: drawn into the eye alone (instancing can't double it; "
+                      "counted from now on)",
+                      g.pass, kHookName[H]);
+    }
+    realVSSetShader(context, g.gameVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
+    call_real<H>(context, a...);
+    realVSSetShader(context, g.boundVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
 }
 
 // The detours of hook H's functions, one per function (N): straight through inside the handling of one (depth), else
@@ -1292,12 +1409,28 @@ void* detour_for(int h, int n) {
         case kHookDrawInstanced:
             return Detours<kHookDrawInstanced, &draw_traced<kHookDrawInstanced, UINT, UINT, UINT, UINT>, UINT, UINT, UINT,
                            UINT>::get(n);
+        case kHookDrawAuto: return Detours<kHookDrawAuto, &undoubled_draw<kHookDrawAuto>>::get(n);
+        case kHookDrawIndexedIndirect:
+            return Detours<kHookDrawIndexedIndirect, &undoubled_draw<kHookDrawIndexedIndirect, ID3D11Buffer*, UINT>,
+                           ID3D11Buffer*, UINT>::get(n);
+        case kHookDrawInstancedIndirect:
+            return Detours<kHookDrawInstancedIndirect, &undoubled_draw<kHookDrawInstancedIndirect, ID3D11Buffer*, UINT>,
+                           ID3D11Buffer*, UINT>::get(n);
         default: return nullptr;
     }
 }
 
-// The draws and CopySubresourceRegion only for the focus post (mvr_focus_replay): without it MVR's hooks are as before.
-bool wanted(int h) { return (!is_draw(h) && h != kHookCopy) || g.focusReplay; }
+// The draws and CopySubresourceRegion only for the focus post (mvr_focus_replay), the draws also for instancing (doubled
+// there), DrawAuto and the indirect draws only for instancing; both kinds of draw already where instancing may take over
+// from single-pass stereo (it happens mid-pass, where d3d11's other modes can't be looked for): without either MVR's
+// hooks are as before.
+bool wanted(int h) {
+    if (is_undoubled_draw(h))
+        return g.instanced || g.canInstance;
+    if (is_draw(h))
+        return g.focusReplay || g.instanced || g.canInstance;
+    return h != kHookCopy || g.focusReplay;
+}
 
 // The function the context's entry for hook `h` holds now, hooked in d3d11's code if not seen before (render thread).
 // True: a new one.
@@ -1336,6 +1469,29 @@ int hook_entries() {
     for (int h = 0; h < kHooks; ++h)
         fresh += hook_entry(h) ? 1 : 0;
     return fresh;
+}
+
+// Every function the wanted entries hold: as they are; once idle (a flush) and busy (a command of ours); and the same
+// with multithread protection on when it is off (on, then off again: it only adds locking meanwhile). With protection on
+// already, turning it off here could race another thread: its plain functions are hooked when they first appear (a
+// pass's start). At install, and when more entries are wanted later (instancing turned on between passes).
+void hook_every_mode() {
+    const float identity[4] = {1, 0, 1, 0};
+    const auto idle_and_busy = [&] {
+        hook_entries();
+        g.context->Flush();
+        hook_entries();
+        g.context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, identity, 0, 0);
+        hook_entries();
+    };
+    idle_and_busy();
+    g.protectedNow = g.multithread && g.multithread->GetMultithreadProtected();
+    if (g.multithread && !g.protectedNow) {
+        g.multithread->SetMultithreadProtected(TRUE);
+        idle_and_busy();
+        g.multithread->SetMultithreadProtected(FALSE);
+        hook_entries();
+    }
 }
 
 void unhook_entries() {
@@ -1541,26 +1697,14 @@ bool mvr_pass_install(ID3D11Device* device) {
     }
     if (const MH_STATUS s = MH_Initialize(); s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
         return false;
+    // The probe's way to the two views (tests set it with mvr_use_instanced): instancing hooks the draws too.
+    if (mvr_probe_backend() == MvrBackend::instanced)
+        g.instanced = true;
+    if (mvr_probe_instanced())
+        g.canInstance = true;
     g.context = context.Get();
     context.As(&g.multithread);
-    // Every function the entries hold: as they are; once idle (a flush) and busy (a command of ours); and the same with
-    // multithread protection on when it is off (on, then off again: it only adds locking meanwhile). With protection on
-    // already, turning it off here could race another thread: its plain functions are hooked when they first appear.
-    const auto idle_and_busy = [&] {
-        hook_entries();
-        g.context->Flush();
-        hook_entries();
-        g.context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, identity, 0, 0);
-        hook_entries();
-    };
-    idle_and_busy();
-    g.protectedNow = g.multithread && g.multithread->GetMultithreadProtected();
-    if (g.multithread && !g.protectedNow) {
-        g.multithread->SetMultithreadProtected(TRUE);
-        idle_and_busy();
-        g.multithread->SetMultithreadProtected(FALSE);
-        hook_entries();
-    }
+    hook_every_mode();
     for (int h = 0; h < kHooks; ++h)
         if (wanted(h) && !functions[h].hooked) {
             unhook_entries();
@@ -1579,8 +1723,10 @@ bool mvr_pass_install(ID3D11Device* device) {
             counts += (h ? ", " : "") + std::string(kHookName[h]) + " " + std::to_string(functions[h].hooked);
             ++g.stats.contextEntries;
         }
-    simqvfr::logf("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye); the context's "
-                  "hooks on %llu functions in d3d11's code (%s); multithread protection %s",
+    simqvfr::logf("lmu mvr: on: passes 0-1 draw their focus views too (%s, beside the eye%s); the context's hooks on %llu "
+                  "functions in d3d11's code (%s); multithread protection %s",
+                  g.instanced ? mvr_backend_name(MvrBackend::instanced) : mvr_backend_name(MvrBackend::nvapi),
+                  !g.instanced && g.canInstance ? "; instancing if the driver refuses it" : "",
                   static_cast<unsigned long long>(g.stats.contextFunctions), counts.c_str(),
                   !g.multithread ? "not known" : g.protectedNow ? "on" : "off");
     return true;
@@ -1889,6 +2035,12 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(ts.framesWithoutGame),
                           static_cast<unsigned long long>(ts.passesWithoutGame));
         }
+        if (g.instanced)
+            simqvfr::logf("lmu mvr: instancing: %llu draws made with twice their instances (%llu with a per-instance "
+                          "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect)%s",
+                          static_cast<unsigned long long>(s.doubledDraws), static_cast<unsigned long long>(s.layoutSwaps),
+                          static_cast<unsigned long long>(s.eyeOnlyDraws),
+                          s.instancedTakeovers ? "; took over from single-pass stereo, which the driver refused" : "");
         if (s.maskDraws || s.maskDropped || s.panelReplays)
             simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "
                           "draws replayed at the menus' native size: %llu",
@@ -1925,7 +2077,7 @@ void mvr_frame_end(unsigned long long frame) {
                 total += avg(sc[p] + po[p], n[p]);
             simqvfr::logf("lmu mvr: GPU per pass%s, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
                           "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms, %.2f in all (%u frames timed)",
-                          m ? " on the A/B's other side (without MVR, or the four passes)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
+                          m ? " on the A/B's other side (without MVR, the four passes, or instancing)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
                           avg(sc[2], n[2]), avg(po[2], n[2]), avg(sc[3], n[3]), avg(po[3], n[3]), total, n[0]);
             for (int p = 0; p < 4; ++p) {
                 g.sceneMs[m][p] = g.postMs[m][p] = 0;
@@ -1936,6 +2088,20 @@ void mvr_frame_end(unsigned long long frame) {
 }
 
 void mvr_set_two_views(TwoViewsFn fn) { g.twoViews = fn ? fn : &nvapi_two_views; }
+
+void mvr_use_instanced(bool on, bool fallback) {
+    g.instanced = on;
+    g.canInstance = on || fallback;
+    if (!on)
+        g.stereo = false;  // the next update() switches single-pass stereo as needed
+    bool missing = false;  // an entry now wanted with none of its functions hooked (installed before it was wanted)
+    for (int h = 0; h < kHooks; ++h)
+        missing = missing || (wanted(h) && functions[h].count == 0);
+    if (g.context && g.pass < 0 && missing)  // the draws it needs hooked in every mode of d3d11's (between passes)
+        hook_every_mode();
+}
+
+bool mvr_instanced() { return g.instanced; }
 
 void mvr_frame_mode(int mode) { g.mode = mode ? 1 : 0; }
 
