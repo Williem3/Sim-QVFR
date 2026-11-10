@@ -7,7 +7,7 @@
 // converted shader isn't released: each game shader carries it as private data (kMvrTwinGuid), one NVAPI
 // shader per distinct bytecode.
 //
-// Two ways to the two views (MvrBackend): NVIDIA's single-pass stereo (RTX 20 series and newer) or Sim-QVFR's own,
+// Two ways to the two views (MvrBackend): NVIDIA's multi-view rendering (RTX 20 series and newer) or Sim-QVFR's own,
 // instancing (dxbc::add_instanced_view: every draw drawn twice as instances, the vertex shader picking the viewport;
 // any GPU whose D3D11 driver lets a vertex shader do that, D3D11_OPTIONS3, which RenderDoc passes on too). With twins
 // attached, every game shader also carries its instanced twin (kMvrInstancedTwinGuid) where the device can, so a

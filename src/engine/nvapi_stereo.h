@@ -1,5 +1,9 @@
-// NVIDIA single-pass stereo through NVAPI (third_party/nvapi headers; the functions come from nvapi64.dll, which every
-// NVIDIA driver installs, through nvapi_QueryInterface: nothing for players to install, nothing linked).
+// NVIDIA's multi-view rendering (MVR) through NVAPI (third_party/nvapi headers; the functions come from nvapi64.dll,
+// which every NVIDIA driver installs, through nvapi_QueryInterface: nothing for players to install, nothing linked).
+// On D3D11, NVAPI offers two-view MVR through its single-pass stereo functions (NvAPI_D3D_SetSinglePassStereoMode)
+// with Turing's full XYZW second position; the name is NVAPI's, not what is drawn: the eyes keep their own passes and
+// each pass's second view is its focus view. Pascal's single-pass stereo (a second view differing in x only) isn't
+// enough for a focus view.
 //
 // Two views per draw: a vertex shader converted by dxbc::add_second_view writes the second view's clip position
 // (NV_XYZW_RIGHT) and the viewport mask (low 16 bits view 0's viewports, high 16 bits view 1's); set_two_views turns

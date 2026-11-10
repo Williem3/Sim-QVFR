@@ -165,6 +165,6 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 </g>
 <text class="foot" x="20" y="884">Grey arrows are calls LMU makes anyway. Dashed arrows are Sim-QVFR reading and writing values in LMU’s data; the dotted one is</text>
 <text class="foot" x="20" y="901">the layer reading the recommended size LMU took. No arrow points into LMU’s code.</text>
-<text class="foot" x="20" y="918">On an NVIDIA RTX card NVIDIA’s single-pass stereo is used instead (LMU-MVR-ARCHITECTURE.svg). If the device can’t let a vertex shader pick</text>
+<text class="foot" x="20" y="918">On an NVIDIA RTX card NVIDIA’s multi-view rendering is used instead (LMU-MVR-ARCHITECTURE.svg). If the device can’t let a vertex shader pick</text>
 <text class="foot" x="20" y="935">the viewport, Sim-QVFR renders the four views in passes of their own, which changes LMU’s code. From src/games/lmu/ on development (35ce98c).</text>
 </svg>
