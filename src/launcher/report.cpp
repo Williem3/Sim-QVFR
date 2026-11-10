@@ -704,7 +704,12 @@ std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {
         out.push_back({L"The game's CPU work limited the frame rate",
                        L"QVFR lowers the GPU's work, not the CPU's. Lower the game's CPU-heavy settings (opponents, "
                        L"mirrors, shadows)."});
-    if (session.limited.starts_with(L"Pacing"))
+    if (session.halfRatePercent >= 1)
+        out.push_back({formatted(L"The headset runtime ran the game at half rate for %.0f%% of the session", session.halfRatePercent),
+                       L"When frames come close to the budget, the runtime's motion smoothing halves the frame rate for a "
+                       L"few seconds (Varjo does this). Turn motion smoothing off in the runtime's software (Varjo Base) to "
+                       L"compare, and give the CPU room: lower the game's CPU-heavy settings (opponents, mirrors, shadows)."});
+    else if (session.limited.starts_with(L"Pacing"))
         out.push_back({formatted(L"%.0f%% of frames were late with neither the CPU nor the GPU full", session.latePercent),
                        L"Often something else in the chain: another OpenXR layer, an overlay, or the runtime's motion "
                        L"smoothing. Try with them off."});

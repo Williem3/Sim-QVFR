@@ -485,10 +485,21 @@ inline constexpr uint64_t kCpuReportFrames = 900;
 // xrWaitFrame (the runtime holding it to the display) and the display period the runtime predicts.
 // Logged with the CPU times as a "views4 pacing:" line: frames that miss their display slot wait a whole
 // extra period, so the frame rate falls below the refresh even with headroom on average.
+// The display period is the headset's steady one (pacing_waited): some runtimes (Varjo's) give a doubled period
+// for a while when frames run late, running ACE at half rate; those frames are counted, not taken as the budget.
 struct Pacing {
     std::vector<float> interval, wait;  // ms
     int64_t lastEnd = 0;
     double periodMs = 0;
+    // pacing_waited's state: the shortest period over this run of waits and the one before (a refresh rate change
+    // is taken within two runs), whether frame generation was on (its layer gives ACE a multiplied period).
+    XrDuration shortestNs = 0, previousShortestNs = 0;
+    uint64_t waits = 0;
+    bool frameGeneration = false;
+    // Frames the runtime gave a period half again or more beyond the steady one, and the longest: this report
+    // window's, and the whole session's (with all its frames).
+    uint64_t slowFrames = 0, sessionSlowFrames = 0, sessionFrames = 0;
+    XrDuration slowestNs = 0;
 };
 
 // The pacing line, and resets: ACE's frame interval and its time in and outside xrWaitFrame (p50, p90),
@@ -497,6 +508,7 @@ struct Pacing {
 // The latest report's numbers, for the launcher's Diagnostics pane (write_session_summary).
 struct SessionSummary {
     double fps = 0, frameP50 = 0, frameP90 = 0, latePercent = 0, periodMs = 0;
+    double halfRatePercent = 0;  // the session's frames the runtime ran ACE at a longer period than its refresh
     double cpuMs = -1, gpuMs = -1, gpuBusy = -1, cores = -1;  // the render thread's CPU and the whole GPU per frame
     std::vector<ThreadLoad> threads;
 };

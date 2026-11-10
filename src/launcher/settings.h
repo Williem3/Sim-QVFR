@@ -173,6 +173,7 @@ struct Size {
 struct SessionInfo {
     std::wstring time, mode, limited, layersBelow, log, cpuProfile;
     double fps = -1, frameP50 = -1, frameP90 = -1, latePercent = -1, refreshHz = -1;
+    double halfRatePercent = -1;  // the session's frames the runtime ran the game at half rate (or slower)
     double cpuMs = -1, gpuMs = -1, gpuBusy = -1, cores = -1, gazeMs = -1, layerMs = -1;
     bool frameGeneration = false;
     std::vector<std::pair<std::wstring, double>> threads;  // name, share of one core (percent), busiest first
