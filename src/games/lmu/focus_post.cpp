@@ -35,6 +35,18 @@ CompositeOut composite_vs(uint id : SV_VertexID) {
 }
 )";
 
+// The final blit's pixel shader for the focus view: drawn with the game's blit vertex shader and vertices (its quad
+// mapped onto the focus region by the viewport), so its inputs are that shader's outputs (SV_Position, COLOR0: the
+// game's final blit's own signature, PS 0a09af97). The focus image read by pixel (no sampler), times the game's vertex
+// colour (its fades).
+constexpr char kBlitShader[] = R"(
+Texture2D<float4> focusImage : register(t0);
+cbuffer Origin : register(b0) { float4 origin; };  // xy: the focus region's top-left in the target
+float4 blit_ps(float4 pos : SV_Position, float4 colour : COLOR0) : SV_Target {
+    return focusImage.Load(int3(int2(pos.xy - origin.xy), 0)) * colour;
+}
+)";
+
 template <class T> using Com = Microsoft::WRL::ComPtr<T>;
 
 bool compile_vs(ID3D11Device* device, const char* entry, Com<ID3D11VertexShader>& out) {
@@ -44,15 +56,24 @@ bool compile_vs(ID3D11Device* device, const char* entry, Com<ID3D11VertexShader>
            SUCCEEDED(device->CreateVertexShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &out));
 }
 
+bool compile_blit(ID3D11Device* device, Com<ID3D11PixelShader>& out) {
+    Com<ID3DBlob> code, errors;
+    return SUCCEEDED(D3DCompile(kBlitShader, sizeof(kBlitShader) - 1, "focus-blit", nullptr, nullptr, "blit_ps", "ps_5_0", 0,
+                                0, &code, &errors)) &&
+           SUCCEEDED(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &out));
+}
+
 }  // namespace
 
 bool FocusPost::initialize(ID3D11Device* device) {
     if (ready_)
         return true;
     if (!device || FAILED(device->CreateDeferredContext(0, &deferred_)) || !compile_vs(device, "copy_vs", copyVs_) ||
-        !compile_vs(device, "composite_vs", compositeVs_))
+        !compile_vs(device, "composite_vs", compositeVs_) || !compile_blit(device, blitPs_))
         return false;
     const D3D11_BUFFER_DESC rd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    if (FAILED(device->CreateBuffer(&rd, nullptr, &origin_)))
+        return false;
     D3D11_RASTERIZER_DESC rs = {};
     rs.FillMode = D3D11_FILL_SOLID;
     rs.CullMode = D3D11_CULL_NONE;
@@ -195,7 +216,7 @@ bool FocusPost::after_composite(ID3D11DeviceContext* context, int eye, const sim
                                            {0, 0, static_cast<int>(glareW), static_cast<int>(glareH)}, mapping);
         }
     }
-    ok = ok && ensure(v.focus, v.scene.width, v.scene.height, DXGI_FORMAT_R8G8B8A8_UNORM);
+    ok = ok && ensure(v.focus, v.scene.width, v.scene.height, DXGI_FORMAT_R16G16B16A16_FLOAT);  // as the eye's
     if (ok) {
         ID3D11DeviceContext* d = deferred_.Get();
         d->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -218,7 +239,67 @@ bool FocusPost::after_composite(ID3D11DeviceContext* context, int eye, const sim
     if (ok) {
         v.image = v.focus.texture;
         ++v.composites;
+        v.composited = true;  // for blit_final
     }
+    return ok;
+}
+
+bool FocusPost::blit_final(ID3D11DeviceContext* context, int eye, UINT vertexCount, UINT startVertex,
+                           const FocusPostRegion& eyeRegion, const FocusPostRegion& focus) {
+    if (!ready_ || eye < 0 || eye > 1 || !eyeRegion.width || !eyeRegion.height || !focus.width || !focus.height)
+        return false;
+    View& v = views_[eye];
+    if (!v.composited || !v.focus.srv || v.focus.width != focus.width || v.focus.height != focus.height)
+        return false;
+    v.composited = false;
+    // What this changes, kept: the pixel shader, t0, b0, the viewports and scissors.
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11ClassInstance* instances[256] = {};
+    UINT instanceCount = 256;
+    context->PSGetShader(&ps, instances, &instanceCount);
+    ID3D11ShaderResourceView* srv = nullptr;
+    context->PSGetShaderResources(0, 1, &srv);
+    ID3D11Buffer* cb = nullptr;
+    context->PSGetConstantBuffers(0, 1, &cb);
+    D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT vpCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    context->RSGetViewports(&vpCount, vps);
+    D3D11_RECT scs[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT scCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    context->RSGetScissorRects(&scCount, scs);
+    bool ok = vpCount >= 1;
+    if (ok) {
+        // The game's quad covers the eye's region of the target through its viewport: the same viewport scaled about the
+        // eye's top-left by focus / eye and moved to the focus region puts it exactly over the focus view.
+        const float sx = static_cast<float>(focus.width) / eyeRegion.width;
+        const float sy = static_cast<float>(focus.height) / eyeRegion.height;
+        const D3D11_VIEWPORT vp = {focus.x + (vps[0].TopLeftX - eyeRegion.x) * sx, focus.y + (vps[0].TopLeftY - eyeRegion.y) * sy,
+                                   vps[0].Width * sx, vps[0].Height * sy, vps[0].MinDepth, vps[0].MaxDepth};
+        const D3D11_RECT sc = {static_cast<LONG>(focus.x), static_cast<LONG>(focus.y),
+                               static_cast<LONG>(focus.x + focus.width), static_cast<LONG>(focus.y + focus.height)};
+        const float origin[4] = {static_cast<float>(focus.x), static_cast<float>(focus.y), 0, 0};
+        context->UpdateSubresource(origin_.Get(), 0, nullptr, origin, 0, 0);
+        context->PSSetShader(blitPs_.Get(), nullptr, 0);
+        context->PSSetShaderResources(0, 1, v.focus.srv.GetAddressOf());
+        context->PSSetConstantBuffers(0, 1, origin_.GetAddressOf());
+        context->RSSetViewports(1, &vp);
+        context->RSSetScissorRects(1, &sc);
+        context->Draw(vertexCount, startVertex);
+    }
+    // The game's state back.
+    context->PSSetShader(ps, instanceCount ? instances : nullptr, instanceCount);
+    context->PSSetShaderResources(0, 1, &srv);
+    context->PSSetConstantBuffers(0, 1, &cb);
+    context->RSSetViewports(vpCount, vps);
+    context->RSSetScissorRects(scCount, scCount ? scs : nullptr);
+    for (IUnknown* u : {static_cast<IUnknown*>(ps), static_cast<IUnknown*>(srv), static_cast<IUnknown*>(cb)})
+        if (u)
+            u->Release();
+    for (UINT i = 0; i < instanceCount && i < 256; ++i)
+        if (instances[i])
+            instances[i]->Release();
+    if (ok)
+        ++v.blits;
     return ok;
 }
 
@@ -230,6 +311,8 @@ void FocusPost::shutdown() {
     copyVs_.Reset();
     compositeVs_.Reset();
     rects_.Reset();
+    blitPs_.Reset();
+    origin_.Reset();
     copyConstants_.Reset();
     compositeConstants_.Reset();
     raster_.Reset();

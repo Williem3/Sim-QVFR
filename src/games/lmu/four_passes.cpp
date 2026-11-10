@@ -869,6 +869,71 @@ void copy_corner(ID3D11Texture2D* dst, ID3D11Texture2D* src, unsigned w, unsigne
     device->Release();
 }
 
+// R3's gate (lmu_focus_replay): each eye pass's focus final (the focus view beside the eye in the eye's final,
+// mvr_focus_final) kept aside before pass 2 renders into the eye target over it, put back after pass 3 so the VR UI is
+// doubled onto it, compared with passes 2-3's at the samples (compare_focus_final).
+ID3D11Texture2D* mvrFinal[2] = {};
+bool mvrFinalKept[2] = {};
+unsigned mvrFinalAt[2][4] = {};  // x, y, width, height in the eye target
+
+void keep_focus_finals(ID3D11Texture2D* const (&eyes)[2]) {
+    for (int e = 0; e < 2; ++e) {
+        mvrFinalKept[e] = false;
+        unsigned x = 0, y = 0, w = 0, h = 0;
+        if (!eyes[e] || !mvr_focus_final(e, x, y, w, h))
+            continue;
+        D3D11_TEXTURE2D_DESC d;
+        eyes[e]->GetDesc(&d);
+        if (x + w > d.Width || y + h > d.Height || d.SampleDesc.Count != 1)
+            continue;
+        if (mvrFinal[e]) {
+            D3D11_TEXTURE2D_DESC have;
+            mvrFinal[e]->GetDesc(&have);
+            if (have.Width != w || have.Height != h || have.Format != d.Format) {
+                mvrFinal[e]->Release();
+                mvrFinal[e] = nullptr;
+            }
+        }
+        ID3D11Device* device = nullptr;
+        eyes[e]->GetDevice(&device);
+        if (!mvrFinal[e]) {
+            D3D11_TEXTURE2D_DESC c = d;
+            c.Width = w;
+            c.Height = h;
+            c.MipLevels = c.ArraySize = 1;
+            c.Usage = D3D11_USAGE_DEFAULT;
+            c.BindFlags = 0;
+            c.CPUAccessFlags = c.MiscFlags = 0;
+            device->CreateTexture2D(&c, nullptr, &mvrFinal[e]);
+        }
+        if (mvrFinal[e]) {
+            ID3D11DeviceContext* context = nullptr;
+            device->GetImmediateContext(&context);
+            const D3D11_BOX box{x, y, 0, x + w, y + h, 1};
+            context->CopySubresourceRegion(mvrFinal[e], 0, 0, 0, 0, eyes[e], 0, &box);
+            context->Release();
+            mvrFinalKept[e] = true;
+            const unsigned at[4] = {x, y, w, h};
+            std::memcpy(mvrFinalAt[e], at, sizeof(at));
+        }
+        device->Release();
+    }
+}
+
+void put_back_focus_finals(ID3D11Texture2D* const (&eyes)[2]) {
+    for (int e = 0; e < 2; ++e) {
+        if (!mvrFinalKept[e] || !eyes[e] || !mvrFinal[e])
+            continue;
+        ID3D11Device* device = nullptr;
+        eyes[e]->GetDevice(&device);
+        ID3D11DeviceContext* context = nullptr;
+        device->GetImmediateContext(&context);
+        context->CopySubresourceRegion(eyes[e], 0, mvrFinalAt[e][0], mvrFinalAt[e][1], 0, mvrFinal[e], 0, nullptr);
+        context->Release();
+        device->Release();
+    }
+}
+
 // The focus views' own images, render targets: the game's VR UI (the HUD, the in-car menus) is drawn into the eyes after
 // the eye loop, and into these too (vrui_draw). The atlas gets them at xrEndFrame.
 ID3D11Texture2D* focusTex[2] = {};
@@ -1366,6 +1431,10 @@ void qvfr_after_pass(int p) {
                 gpuSpans.begin_frame();
                 gpuSpans.mark(0, 0);
             }
+            if (cfg.focusReplay) {
+                ID3D11Texture2D* const eyes[2] = {e0, e1};
+                keep_focus_finals(eyes);
+            }
             atlas_in(e0, 0, 0, passW[0], passH[0]);
             atlas_in(e1, viewW, 0, passW[1], passH[1]);
             if (timed)
@@ -1403,6 +1472,10 @@ void qvfr_after_pass(int p) {
             atlas_out(t0, 0, 0, passW[0], passH[0]);
         if (is_view(t1))
             atlas_out(t1, viewW, 0, passW[1], passH[1]);
+        if (cfg.focusReplay) {  // R3: the focus finals back beside the eyes, for the VR UI's doubling
+            ID3D11Texture2D* const eyes[2] = {is_view(t0) ? t0 : nullptr, is_view(t1) ? t1 : nullptr};
+            put_back_focus_finals(eyes);
+        }
         gpuSpans.mark(2, 1);
         if (t0)
             t0->Release();
@@ -1678,62 +1751,64 @@ void compare_mvr_focus() {
     }
 }
 
-// R2 of the focus post (lmu_focus_replay with gate D's samples): each eye's focus image from the post replayed in its
-// eye's pass (mvr_focus_image) against the one pass 2/3 made of the same region (its own post-processing, as composed
-// now). Expected: aligned at 0,0, brightness ~1.00, differences only where pass 2/3 drew what the replay doesn't (the
-// driver tags) and from the exposure (pass 0's composite reads the exposure before pass 1 meters this frame's). The
-// first images compared for each eye saved: replay, pass, and their difference x8.
-unsigned long long replayCompositesBefore[2] = {};  // each eye's focus post composites at the last frame's end
-bool replaySaved[2] = {};  // each eye's first compared images saved
-void compare_focus_replay() {
+// R3's gate (lmu_focus_replay with gate D's samples): each eye's focus final (its pass's focus post, the final blit and
+// the overlays doubled beside the eye; the VR UI after the passes) against pass 2/3's own focus view as composed (its
+// post-processing, blit, driver tags and the VR UI by focus_ui). Expected: aligned 0,0, brightness ~1.00; the driver
+// tags drawn at the eye's scale (remapped) where pass 2/3 draws them at its own. The first images compared for each eye
+// saved: final, pass, and their difference x8.
+bool finalSaved[2] = {};
+void compare_focus_final() {
     const std::wstring dir = captures_folder();
     for (int eye = 0; eye < 2; ++eye) {
-        unsigned long long composites = 0;
-        ID3D11Texture2D* replay = mvr_focus_image(eye, composites);
-        const bool fresh = replay && composites != replayCompositesBefore[eye];  // composited in this frame's pass
-        std::vector<std::uint8_t> rp, pp;
-        unsigned rw = 0, rh = 0, pw = 0, ph = 0;
-        if (!fresh || !focusTex[eye] || !simqvfr::d3d11_read_bgra8(replay, rp, rw, rh) ||
-            !simqvfr::d3d11_read_bgra8(focusTex[eye], pp, pw, ph)) {
-            simqvfr::logf("lmu mvr: frame %llu: focus post %d: %s; not compared", frames, eye,
-                          !replay   ? "no image yet"
-                          : !fresh  ? "not composited this frame (its composite not seen in pass 0/1)"
-                                    : "the images can't be read back");
+        if (!mvrFinalKept[eye]) {
+            simqvfr::logf("lmu mvr: frame %llu: focus final %d: none this frame (no final blit replayed); not compared", frames,
+                          eye);
             continue;
         }
-        // The pass's view is the top-left passW x passH of its image; the replay's is all of its own.
-        const unsigned w = std::min({rw, pw, passW[2 + eye]}), h = std::min({rh, ph, passH[2 + eye]});
-        const auto crop = [&](const std::vector<std::uint8_t>& px, unsigned stride) {
+        ID3D11Texture2D* et = eye_texture(eye);
+        std::vector<std::uint8_t> ep, pp;
+        unsigned ew = 0, eh = 0, pw = 0, ph = 0;
+        const bool read = et && focusTex[eye] && simqvfr::d3d11_read_bgra8(et, ep, ew, eh) &&
+                          simqvfr::d3d11_read_bgra8(focusTex[eye], pp, pw, ph);
+        if (et)
+            et->Release();
+        const unsigned* at = mvrFinalAt[eye];
+        if (!read || at[0] + at[2] > ew || at[1] + at[3] > eh) {
+            simqvfr::logf("lmu mvr: frame %llu: focus final %d: the images can't be read back; not compared", frames, eye);
+            continue;
+        }
+        const unsigned w = std::min({at[2], pw, passW[2 + eye]}), h = std::min({at[3], ph, passH[2 + eye]});
+        const auto crop = [&](const std::vector<std::uint8_t>& px, unsigned stride, unsigned x0, unsigned y0) {
             std::vector<std::uint8_t> out(static_cast<std::size_t>(w) * h * 4);
             for (unsigned y = 0; y < h; ++y)
-                std::memcpy(out.data() + static_cast<std::size_t>(y) * w * 4, px.data() + static_cast<std::size_t>(y) * stride * 4,
-                            static_cast<std::size_t>(w) * 4);
+                std::memcpy(out.data() + static_cast<std::size_t>(y) * w * 4,
+                            px.data() + (static_cast<std::size_t>(y0 + y) * stride + x0) * 4, static_cast<std::size_t>(w) * 4);
             return out;
         };
-        const std::vector<std::uint8_t> a = crop(pp, pw), b = crop(rp, rw);
+        const std::vector<std::uint8_t> a = crop(pp, pw, 0, 0), b = crop(ep, ew, at[0], at[1]);
         const MvrComparison c = mvr_compare_bgra8(a, b, w, h);
-        simqvfr::logf("lmu mvr: frame %llu: focus post %d (replayed in pass %d, %ux%u) vs pass %d's own (%ux%u of %ux%u), "
-                      "%ux%u compared: %s aligned at %+d,%+d px; brightness %.4f (cell median %.4f); mean luminance "
-                      "difference %.2f%%, %.2f%% of pixels >10%%; bytes: largest %d, mean %.2f, %.2f%% of pixels >4",
-                      frames, eye, eye, rw, rh, 2 + eye, passW[2 + eye], passH[2 + eye], pw, ph, w, h,
+        simqvfr::logf("lmu mvr: frame %llu: focus final %d (beside eye %d at %u,%u, %ux%u) vs pass %d's own (%ux%u), %ux%u "
+                      "compared: %saligned at %+d,%+d px; brightness %.4f (cell median %.4f); mean luminance difference "
+                      "%.2f%%, %.2f%% of pixels >10%%; bytes: largest %d, mean %.2f, %.2f%% of pixels >4",
+                      frames, eye, eye, at[0], at[1], at[2], at[3], 2 + eye, passW[2 + eye], passH[2 + eye], w, h,
                       c.ok ? "" : "(too small) ", c.shiftX, c.shiftY, c.brightness, c.cellMedian, 100 * c.meanDiff,
                       c.differingPct, c.maxByte, c.meanByte, c.bytesOverPct);
-        if (!replaySaved[eye]) {
-            replaySaved[eye] = true;
+        if (!finalSaved[eye]) {
+            finalSaved[eye] = true;
             std::vector<std::uint8_t> diff(a.size());
             for (std::size_t i = 0; i < a.size(); ++i)
                 diff[i] = i % 4 == 3 ? 255
                                      : static_cast<std::uint8_t>(std::min(255, 8 * std::abs(static_cast<int>(a[i]) -
                                                                                              static_cast<int>(b[i]))));
             wchar_t name[96];
-            swprintf_s(name, L"\\lmu-replay-frame%llu-focus%d-replay.png", frames, eye);
+            swprintf_s(name, L"\\lmu-final-frame%llu-focus%d-final.png", frames, eye);
             simqvfr::write_png_bgra(dir + name, b, w, h);
-            swprintf_s(name, L"\\lmu-replay-frame%llu-focus%d-pass.png", frames, eye);
+            swprintf_s(name, L"\\lmu-final-frame%llu-focus%d-pass.png", frames, eye);
             simqvfr::write_png_bgra(dir + name, a, w, h);
-            swprintf_s(name, L"\\lmu-replay-frame%llu-focus%d-diff8.png", frames, eye);
+            swprintf_s(name, L"\\lmu-final-frame%llu-focus%d-diff8.png", frames, eye);
             simqvfr::write_png_bgra(dir + name, diff, w, h);
-            simqvfr::logf("lmu mvr: images in %ls (lmu-replay-frame%llu-focus%d-replay/pass/diff8.png)", dir.c_str(),
-                          frames, eye);
+            simqvfr::logf("lmu mvr: images in %ls (lmu-final-frame%llu-focus%d-final/pass/diff8.png)", dir.c_str(), frames,
+                          eye);
         }
     }
 }
@@ -2113,11 +2188,8 @@ void four_passes_frame_end() {
         if (cfg.mvrSkip && mvrSampleFrame && atlasReady) {
             compare_mvr_focus();
             if (cfg.focusReplay)
-                compare_focus_replay();
+                compare_focus_final();
         }
-        if (cfg.focusReplay)
-            for (int eye = 0; eye < 2; ++eye)
-                mvr_focus_image(eye, replayCompositesBefore[eye]);
         mvrSampleFrame = false;
         if (cfg.mvrSkip && frames % 900 == 0) {
             simqvfr::logf("lmu mvr: passes 2-3 skipped the scene in %llu passes (%llu not: the focus view not drawn by its "

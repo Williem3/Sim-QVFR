@@ -654,7 +654,7 @@ int main(int argc, char** argv) {
             const std::vector<void*> lockedSet(vt, vt + n);
             const std::string list = rewritten(idleAgain, lockedSet, ours);
             std::printf("     entries d3d11 rewrites as multithread protection goes on: %s\n", list.c_str());
-            std::snprintf(what, sizeof(what), "multithread protection on: d3d11 rewrites %d of the layer's eleven entries",
+            std::snprintf(what, sizeof(what), "multithread protection on: d3d11 rewrites %d of the layer's entries (the draws' with the focus post)",
                           ours);
             check(ours > 0, what);
             mt->SetMultithreadProtected(FALSE);
@@ -683,20 +683,20 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 7. The layer's own install on this device (games/lmu/mvr_pass.h), with the focus post (DrawIndexed too): every
-    //    function the eleven entries are seen holding hooked; with multithread protection on, the entries hold none it
+    // 7. The layer's own install on this device (games/lmu/mvr_pass.h), with the focus post (the draws too): every
+    //    function the fourteen entries are seen holding hooked; with multithread protection on, the entries hold none it
     //    hasn't seen.
     {
         lmu::mvr_focus_replay(true);
         const bool installed = lmu::mvr_pass_install(device.Get());
         const uint64_t hookedNow = lmu::mvr_pass_stats().contextFunctions;
         std::snprintf(what, sizeof(what),
-                      "the layer's install: %llu functions hooked for %llu entries (eleven with the focus post; two each "
+                      "the layer's install: %llu functions hooked for %llu entries (fourteen with the focus post; two each "
                       "at least), %llu of them ResolveSubresource's",
                       static_cast<unsigned long long>(hookedNow),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().contextEntries),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
-        check(installed && lmu::mvr_pass_stats().contextEntries == 11 && hookedNow >= 22, what);
+        check(installed && lmu::mvr_pass_stats().contextEntries == 14 && hookedNow >= 28, what);
         ComPtr<ID3D11Multithread> mt;
         if (SUCCEEDED(context.As(&mt))) {
             const BOOL was = mt->SetMultithreadProtected(TRUE);

@@ -201,6 +201,9 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
     const HRESULT hr = originalCreateVertexShader(device, code, size, linkage, shader);
     if (SUCCEEDED(hr) && code && size && !inProbe)
         examine(device, static_cast<const uint8_t*>(code), size, shader ? *shader : nullptr);
+    uint32_t checksum[4];
+    if (SUCCEEDED(hr) && markChecksums && !inProbe && shader && *shader && dxbc_checksum(code, size, checksum))
+        (*shader)->SetPrivateData(kShaderChecksumGuid, sizeof(checksum), checksum);  // the overlay trace's names
     if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
         shaderGeneration.fetch_add(1, std::memory_order_release);
     return hr;
@@ -217,12 +220,12 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         const UINT value = static_cast<UINT>(role);
         (*shader)->SetPrivateData(kYebisRoleGuid, sizeof(value), &value);
         std::lock_guard guard(statsMutex);
-        ++(role == YebisRole::copy ? stats.yebisCopies : stats.yebisComposites);
+        ++(role == YebisRole::copy ? stats.yebisCopies : role == YebisRole::composite ? stats.yebisComposites : stats.finalBlits);
     }
     if (markChecksums) {  // the focus post's diagnostics (lmu_focus_replay): which shaders the post-processing runs
         uint32_t checksum[4];
         if (dxbc_checksum(code, size, checksum))
-            (*shader)->SetPrivateData(kPsChecksumGuid, sizeof(checksum), checksum);
+            (*shader)->SetPrivateData(kShaderChecksumGuid, sizeof(checksum), checksum);
         if (dump)
             save(static_cast<const uint8_t*>(code), size, "PS");
     }

@@ -36,13 +36,16 @@ struct MvrPassView {
 // A hook on one function an entry held misses the calls through the others, so the hooks are on every function each
 // entry is seen holding (mvr_pass.cpp). nvapi_stereo_check lists what d3d11 rewrites.
 namespace context_slot {
-inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kGSSetShader = 23, kOMSetRenderTargets = 33,
+inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
+                          kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
                           kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kRSSetViewports = 44,
                           kRSSetScissorRects = 45, kResolveSubresource = 57, kHSSetShader = 60, kDSSetShader = 64;
+// The last four (the draws) only with the focus post (mvr_focus_replay).
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
-                                       kDSSetShader,       kDrawIndexed};
+                                       kDSSetShader,       kDrawIndexed,        kDraw,
+                                       kDrawIndexedInstanced, kDrawInstanced};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -74,8 +77,12 @@ void mvr_time_hooks(bool on);
 // mvr_pass_install: DrawIndexed is hooked only with it on (turned on later, its functions are hooked as pass starts see
 // them).
 void mvr_focus_replay(bool on);
-// Eye `eye`'s focus image from the focus post and the composites into it so far (null, 0: none yet).
+// Eye `eye`'s focus image from the focus post (RGBA16F, as the eye's composite) and the composites into it so far
+// (null, 0: none yet).
 ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites);
+// R3: true when this frame's eye `eye` pass put its focus view's final into the eye's final target, beside the eye
+// (the game's final blit replayed, its overlays doubled into it): that region of the target.
+bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigned& height);
 
 struct MvrComparison {
     bool ok = false;
@@ -107,6 +114,10 @@ struct MvrPassStats {
     // Passes whose copy ran but no composite we know followed, and draws into the resolve's target after the copy with
     // another pixel shader (the log names them).
     uint64_t focusNoComposite = 0, focusUnknownComposites = 0;
+    uint64_t focusCompositesByBindings = 0;  // of the composites, those not of a known checksum (another variant)
+    // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
+    // and after them (the VR UI).
+    uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
 };
 MvrPassStats mvr_pass_stats();
 

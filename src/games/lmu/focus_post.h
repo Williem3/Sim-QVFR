@@ -4,7 +4,9 @@
 // composite (scene, glare, the 1x1 exposure: tone curve, colour matrix, gamma; per pixel), with the game's own pixel
 // shaders, constants and samplers as bound for the eye, its glare resampled through the focus box (as glare_share.h does
 // in the focus passes) and its exposure. So the focus view matches its eye by construction, and the game's code runs as
-// it is: no extra pass. The draws are recorded on a deferred context and executed with the game's state restored.
+// it is: no extra pass. The draws are recorded on a deferred context and executed with the game's state restored. Then,
+// after the game's final blit, the same blit quad over the focus region beside the eye in the eye's final (blit_final,
+// docs/recon-lmu.md "R3b/R3c design"): the focus view's final there, with the game's fades.
 #pragma once
 
 #include <d3d11.h>
@@ -31,13 +33,21 @@ public:
     // Right after the eye pass's YEBIS composite, its pixel shader, constant buffer 0, samplers 0-2 and resources still
     // bound (t1 the eye's glare, t2 its 1x1 exposure): the glare's `glareRegion` (the eye's part) resampled through the
     // focus box (`mapping`) into eye `eye`'s glare image, then the composite of the scene image (after_copy, this frame)
-    // and that glare into eye `eye`'s focus image (RGBA8, as the eye's final). False: no scene image this frame, or a
-    // step failed.
+    // and that glare into eye `eye`'s focus image (RGBA16F, as the eye's composite). False: no scene image this frame,
+    // or a step failed.
     bool after_composite(ID3D11DeviceContext* context, int eye, const simqvfr::ViewRegion& glareRegion,
                          const simqvfr::ViewMapping& mapping);
+    // Right after the game's final blit (its Draw(vertexCount, startVertex) with its vertex shader, vertices and target
+    // still bound: the eye's composite into the eye's final, the quad over `eyeRegion` of the target): the same quad
+    // once more over `focus` (the focus view's region of the same target, beside the eye), with our pixel shader: the
+    // focus image (after_composite, this frame) times the game's vertex colour. Directly on `context`, the state it
+    // changes put back. False: no composite this frame.
+    bool blit_final(ID3D11DeviceContext* context, int eye, UINT vertexCount, UINT startVertex,
+                    const FocusPostRegion& eyeRegion, const FocusPostRegion& focus);
     // Eye `eye`'s focus image (after_composite) and the count of composites into it so far (0: none yet).
     ID3D11Texture2D* image(int eye) const { return eye == 0 || eye == 1 ? views_[eye].image.Get() : nullptr; }
     unsigned long long composites(int eye) const { return eye == 0 || eye == 1 ? views_[eye].composites : 0; }
+    unsigned long long blits(int eye) const { return eye == 0 || eye == 1 ? views_[eye].blits : 0; }
     void shutdown();
 
 private:
@@ -49,11 +59,12 @@ private:
         unsigned width = 0, height = 0;
     };
     struct View {
-        Image scene, glare, focus;  // the copy's output (RGBA16F), the glare (RGBA16F), the composite's (RGBA8)
+        Image scene, glare, focus;  // the copy's output, the glare, the composite's (all RGBA16F)
         Com<ID3D11Texture2D> image;  // = focus.texture
         bool sceneReady = false;    // after_copy ran since the last composite
+        bool composited = false;    // after_composite ran since the last blit
         unsigned sceneWidth = 0, sceneHeight = 0;
-        unsigned long long composites = 0;
+        unsigned long long composites = 0, blits = 0;
     };
     bool ensure(Image& image, unsigned width, unsigned height, DXGI_FORMAT format);
     // The game's constant buffer 0 as bound now, copied (the game rewrites its buffer for every draw).
@@ -64,7 +75,9 @@ private:
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> deferred_;
     Com<ID3D11VertexShader> copyVs_, compositeVs_;
-    Com<ID3D11Buffer> rects_;  // the copy's source rect in UV (offset, size)
+    Com<ID3D11PixelShader> blitPs_;
+    Com<ID3D11Buffer> rects_;   // the copy's source rect in UV (offset, size)
+    Com<ID3D11Buffer> origin_;  // blit_final: the focus region's top-left
     Com<ID3D11Buffer> copyConstants_, compositeConstants_;
     Com<ID3D11RasterizerState> raster_;
     Com<ID3D11BlendState> blend_;
