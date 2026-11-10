@@ -91,6 +91,12 @@ inline constexpr std::size_t kVruiViewport = 0xbc;   // int width, height: the p
 inline constexpr std::size_t kVruiEyesSize = 0xdc;   // the eyes block: mode, then each eye's projection x view slot
 inline constexpr std::size_t kVruiEyeMatrix = 8;     // eye e's 4x4 at + e * kEyeSlotStride (right-handed projection)
 
+// DriverLabels' draw callback (camera, labels), in each camera's after-post list (+0x480): its viewport is the whole eye
+// target, not the part the pass rendered (tag_viewport.h). [Driver labels]
+inline constexpr std::uintptr_t kLabelsDraw = 0xe78a90;
+inline constexpr std::uint8_t kLabelsDrawAnchor[] = {0x48, 0x8b, 0xc2, 0x4c, 0x8b, 0xc1, 0x48, 0x8b, 0x92, 0xc8,
+                                                     0x06, 0x00, 0x00, 0x48, 0x8b, 0x88, 0xd8, 0x06, 0x00, 0x00};
+
 // YEBIS CPostEffect::SetDeltaTime(this, seconds): each pass's post-processing sets it; auto exposure adapts by it. [Post-effect time]
 inline constexpr std::uintptr_t kPostEffectSetDeltaTime = 0x924b10;
 inline constexpr std::uint8_t kPostEffectSetDeltaTimeAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30,

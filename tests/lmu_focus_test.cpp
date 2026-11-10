@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "games/lmu/focus_math.h"
+#include "games/lmu/tag_viewport.h"
 #include "quad/views4_layout.h"
 
 namespace {
@@ -265,6 +266,25 @@ int main() {
               "issue 11: the focus view renders its 0.40 x 0.40 (about 2725 x 2601)");
         if (!ok)
             std::printf("  eye %ux%u focus %ux%u\n", eye[0], eye[1], focus[0], focus[1]);
+    }
+
+    // Driver tags under live resolution (games/lmu/tag_viewport.h): the 2026-11-09 run, 2076 x 1667 targets, the eyes at
+    // 75% (1557 x 1251), the focus views at 100%. The eyes' tag draw had the whole target: tags 1.33x out and too large.
+    {
+        lmu::TagViewport out{};
+        const lmu::TagViewport whole{0, 0, 2076, 1667};
+        check(lmu::tag_viewport_cut(whole, 2076, 1667, 1557, 1251, out) && out.x == 0 && out.y == 0 &&
+                  out.width == 1557 && out.height == 1251,
+              "tags: an eye pass at 75% draws them in its rendered 1557 x 1251");
+        check(!lmu::tag_viewport_cut(whole, 2076, 1667, 2076, 1667, out),
+              "tags: a pass that rendered the whole target keeps its viewport");
+        check(!lmu::tag_viewport_cut({0, 0, 1024, 512}, 2076, 1667, 1557, 1251, out),
+              "tags: another target's viewport (a mirror's) is left alone");
+        check(!lmu::tag_viewport_cut({1557, 0, 2076, 1667}, 2076, 1667, 1557, 1251, out),
+              "tags: a viewport not at the target's top-left is left alone");
+        check(lmu::tag_viewport_cut(whole, 2076, 1667, 3000, 1251, out) && out.width == 2076 && out.height == 1251,
+              "tags: the cut never exceeds the target");
+        check(!lmu::tag_viewport_cut(whole, 0, 0, 1557, 1251, out), "tags: no target size known yet: left alone");
     }
 
     std::printf(failures ? "lmu_focus_test: %d failure(s)\n" : "lmu_focus_test: ok\n", failures);
