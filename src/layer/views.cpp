@@ -82,7 +82,30 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             // (focus_offset.h) moves the tracked gaze, or the fixed box off each eye's forward axis.
             // A head-locked call (OpenComposite's eyes-to-head query) leaves the gaze to the scene-space one
             // (gaze_skips_space).
-            if (!(experiment.gaze && gaze_skips_space(info->space, info->displayTime))) {
+            // A quad view session: each eye's box centred in the runtime's focus view just located (its own eye
+            // tracking with the gaze on, where it keeps them with it off), so the box sits inside what the runtime
+            // shows of views 2-3; the gaze dead-zone, convergence and offset don't apply (the runtime places them).
+            float regions[2][4];
+            bool exactRegion = false;
+            const bool inRuntimeFocus = runtime_focus_regions(info->displayTime, regions, &exactRegion) && exactRegion;
+            if (inRuntimeFocus) {
+                float tan[2][2];
+                const bool valid[2] = {true, true};
+                for (int e = 0; e < 2; ++e) {
+                    tan[e][0] = 0.5f * (regions[e][0] + regions[e][1]);
+                    tan[e][1] = 0.5f * (regions[e][2] + regions[e][3]);
+                }
+                static bool logged = false;
+                if (!logged) {
+                    logged = true;
+                    logf("native quad views: the focus boxes centred in the runtime's focus views (left eye at "
+                         "tangents %.3f, %.3f; %s); the gaze dead-zone, convergence and offset don't apply",
+                         tan[0][0], tan[0][1],
+                         experiment.gaze ? "its eye tracking" : "the gaze off: where it keeps them unfoveated");
+                }
+                game->qvfr_set_gaze(tan, valid, experiment.gaze);
+            }
+            if (!inRuntimeFocus && !(experiment.gaze && gaze_skips_space(info->space, info->displayTime))) {
                 float tan[2][2] = {};
                 bool valid[2] = {};
                 XrVector3f direction{0, 0, -1};

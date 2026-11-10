@@ -177,6 +177,10 @@ QuadOffer extension_offered(PFN_xrGetInstanceProcAddr gipa, bool runtimeBelow, c
 // The gaze from the runtime's foveated rendering (NativeQuad::gaze) for a xrLocateViews in `space` at `time`; false
 // without it (no quad view session, no foveated rendering, another call).
 bool runtime_gaze(XrSpace space, XrTime time, XrVector3f& direction);
+// A quad view session: the runtime's focus views (2-3) as located for `time`, each eye's region in that eye's frame
+// (tangents left, right, up, down); the latest located when none was for `time` (`exact` false). False: none located
+// (no quad view session, or before its first locate). Views 2-3 go to the runtime over exactly these.
+bool runtime_focus_regions(XrTime time, float (&tan)[2][4], bool* exact = nullptr);
 // With the extension on the instance (nativeQuad.extension): the wrappers into `next`, after it is loaded.
 void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa);
 // At xrCreateSession: whether the session will be begun as a quad view one (the system has it, the run wants it).

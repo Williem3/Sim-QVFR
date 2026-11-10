@@ -236,6 +236,11 @@ bool D3D11Compositor::draw_focus_layer(ID3D11Texture2D* views, ID3D11Texture2D* 
     for (int eye = 0; eye < 2; ++eye) {
         float constants[kComposeConstants] = {};
         compose_constants(eyes[eye], eye, constants);
+        // Native quad views over the runtime's focus view: its tangents in the helmet opening's slot (the helmet is
+        // off in the focus layer; FocusLayerPS).
+        if (eyes[eye].viewTan[0] > 0.5f)
+            for (int i = 0; i < 4; ++i)
+                constants[40 + i] = eyes[eye].regionTan[i];
         if (!set_constants(eye, constants))  // buffers 0-1, one per eye, as compose
             return discard();
         const D3D11_VIEWPORT viewport{static_cast<float>(rects[eye][0]), static_cast<float>(rects[eye][1]),

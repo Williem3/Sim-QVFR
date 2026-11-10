@@ -1696,6 +1696,26 @@ int main() {
                   session_summary_text(halfRate).find(L"Runtime at half rate: 8.0%") != std::wstring::npos,
               "causes: the runtime's half rate (Varjo), in place of the plain late-frames one, and in the summary");
 
+        // The runtime composing with a focus region smaller than the focus area: named, with the two sizes; not when
+        // it is as large (within a point), nor when the runtime didn't compose.
+        RuntimeInfo pimax = fine;
+        pimax.quadViewsUsed = true;
+        pimax.quadFocusWidth = 20;
+        pimax.quadFocusHeight = 20;
+        Settings wide;
+        wide.width = 30;
+        wide.height = 21;
+        Settings matched;
+        matched.width = 21;
+        matched.height = 20;
+        RuntimeInfo stereo = pimax;
+        stereo.quadViewsUsed = false;
+        check(titles(likely_causes(wide, pimax)).find(L"focus area (30% × 21%) is larger than the runtime's own focus "
+                                                      L"region (20% × 20%)") != std::wstring::npos &&
+                  titles(likely_causes(matched, pimax)).find(L"focus region") == std::wstring::npos &&
+                  titles(likely_causes(wide, stereo)).find(L"focus region") == std::wstring::npos,
+              "causes: the focus area larger than the runtime's own focus region, when the runtime composed");
+
         // The title: the kind, then the description's first line, cut at a word.
         report.kind = 2;  // Performance
         report.description = L"  Stutters every few seconds on Monza  \nSecond line";

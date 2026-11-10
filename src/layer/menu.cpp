@@ -179,7 +179,7 @@ void menu_open(int64_t now) {
         menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
         menu.model.launch.sharpening = features.sharpening;
         menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
-        menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: their own quad view sliders don't apply
+        menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
         menu.model.launch.liveResolution = features.liveResolution;
         {
             std::lock_guard guard(quad.mutex);

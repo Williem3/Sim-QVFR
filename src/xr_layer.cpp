@@ -265,6 +265,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         // For the launcher: what the runtime offered and whether this launch asked for them.
         runtime_info(L"quad_views", quadOffer == QuadOffer::Yes ? L"offered" : quadOffer == QuadOffer::No ? L"none" : L"unknown");
         runtime_info(L"quad_views_used", L"0");  // set to 1 when the session runs as a quad view one (native_quad.cpp)
+        runtime_info(L"quad_runtime_focus", L"");  // the runtime's own focus views' size, at the first locate (native_quad.cpp)
         if (tryQuad)
             logf("native quad views: foveated rendering (XR_VARJO_foveated_rendering, the runtime's own gaze) %s",
                  foveatedAdded               ? "added"
