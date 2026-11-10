@@ -1,9 +1,10 @@
 // LMU's multi-view rendering in the eye passes (mvr_pass.h). Render thread only: the hooks act on the game's
-// immediate context while a pass runs and pass everything else straight through.
+// immediate context while a pass runs and pass everything else straight through. They are on every function the
+// context's entries hold in d3d11's modes (MinHook; "How the hooks are reached" below).
 #include "mvr_pass.h"
 
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <intrin.h>
 #include <wrl/client.h>
 
@@ -14,47 +15,100 @@
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
+#include "focus_post.h"
+#include "glare_math.h"
 #include "mvr_probe.h"
+#include "tag_viewport.h"
+#include "yebis_shaders.h"
 
 namespace lmu {
 namespace {
 
 using Microsoft::WRL::ComPtr;
 
-using VSSetShaderFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11VertexShader*, ID3D11ClassInstance* const*,
-                                               UINT);
-using OMSetRenderTargetsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*,
-                                                      ID3D11DepthStencilView*);
-using OMSetRenderTargetsAndUavsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*,
-                                                             ID3D11DepthStencilView*, UINT, UINT,
-                                                             ID3D11UnorderedAccessView* const*, const UINT*);
-using RSSetViewportsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, const D3D11_VIEWPORT*);
-using RSSetScissorRectsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, const D3D11_RECT*);
-using ResolveSubresourceFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, UINT, ID3D11Resource*, UINT,
-                                                      DXGI_FORMAT);
-template <typename Shader>
-using SetShaderFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, Shader*, ID3D11ClassInstance* const*, UINT);
-using SOSetTargetsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, ID3D11Buffer* const*, const UINT*);
-// ID3D11DeviceContext's vtable (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
-constexpr int kVSSetShader = 11, kGSSetShader = 23, kOMSetRenderTargets = 33, kOMSetRenderTargetsAndUavs = 34,
-              kSOSetTargets = 37, kRSSetViewports = 44, kRSSetScissorRects = 45, kResolveSubresource = 57,
-              kHSSetShader = 60, kDSSetShader = 64;
+using namespace context_slot;
 constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
-VSSetShaderFn realVSSetShader = nullptr;
-OMSetRenderTargetsFn realOMSetRenderTargets = nullptr;
-OMSetRenderTargetsAndUavsFn realOMSetRenderTargetsAndUavs = nullptr;
-RSSetViewportsFn realRSSetViewports = nullptr;
-RSSetScissorRectsFn realRSSetScissorRects = nullptr;
-ResolveSubresourceFn realResolveSubresource = nullptr;
-SetShaderFn<ID3D11GeometryShader> realGSSetShader = nullptr;
-SetShaderFn<ID3D11HullShader> realHSSetShader = nullptr;
-SetShaderFn<ID3D11DomainShader> realDSSetShader = nullptr;
-SOSetTargetsFn realSOSetTargets = nullptr;
+// How the hooks are reached (mvr_pass.h context_slot): d3d11 rewrites the context's vtable entries as it runs, and a
+// hook on one function an entry held misses the calls through the others (nvapi_stereo_check 6: once protection has
+// been on, the plain functions are other ones, which the locking ones don't call), so each function an entry is seen
+// holding is hooked in d3d11's code (MinHook), a detour of its own each: those found at install (the entries as they
+// are, with multithread protection on if it was off, each after a flush and after a command) and any new one at a
+// pass's start. Our own calls and the calls passed on go to the original of the function the entry holds now.
+enum Hook : int {
+    kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
+    kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHooks
+};
+constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
+                                      kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
+                                      kHSSetShader,   kDSSetShader,    kDrawIndexed,        kDraw,
+                                      kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion};
+constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
+                                           "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
+                                           "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
+                                           "HSSetShader",    "DSSetShader",       "DrawIndexed",
+                                           "Draw",           "DrawIndexedInstanced", "DrawInstanced",
+                                           "CopySubresourceRegion"};
+// The draws: hooked only with the focus post (DrawIndexed: its copy and composite; all four: the overlay trace).
+constexpr bool is_draw(int h) {
+    return h == kHookDrawIndexed || h == kHookDraw || h == kHookDrawIndexedInstanced || h == kHookDrawInstanced;
+}
+// Per entry: 4 seen for each on WARP and on an RTX 5070 Ti (2026-11-09: idle and busy, multithread protection off, on,
+// and off again after it was on), room for more.
+constexpr int kFunctions = 8;
+struct Functions {
+    void* target[kFunctions] = {};  // d3d11's
+    void* real[kFunctions] = {};    // its original (MinHook's trampoline; the function itself if it couldn't be hooked)
+    int count = 0, hooked = 0;
+    bool full = false;  // a fifth seen (logged once)
+};
+Functions functions[kHooks];
+// Calls of a hooked function inside the handling of one: ours, the one passed on, and one function of an entry calling
+// another (a locking one calling the plain one) go straight through.
+thread_local int depth[kHooks] = {};
+
+template <int H, typename... A>
+void call_real(ID3D11DeviceContext* context, A... a) {
+    void* fn = (*reinterpret_cast<void** const*>(context))[kSlotOf[H]];
+    void* real = fn;  // a function not hooked (yet): d3d11's own
+    const Functions& f = functions[H];
+    for (int i = 0; i < f.count; ++i)
+        if (f.target[i] == fn) {
+            real = f.real[i];
+            break;
+        }
+    ++depth[H];
+    reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...)>(real)(context, a...);
+    --depth[H];
+}
+
+void realVSSetShader(ID3D11DeviceContext* c, ID3D11VertexShader* vs, ID3D11ClassInstance* const* i, UINT n) {
+    call_real<kHookVS>(c, vs, i, n);
+}
+void realOMSetRenderTargets(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtvs,
+                            ID3D11DepthStencilView* dsv) {
+    call_real<kHookOM>(c, n, rtvs, dsv);
+}
+void realOMSetRenderTargetsAndUavs(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtvs,
+                                   ID3D11DepthStencilView* dsv, UINT uavStart, UINT uavCount,
+                                   ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    call_real<kHookOMUav>(c, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+}
+void realRSSetViewports(ID3D11DeviceContext* c, UINT n, const D3D11_VIEWPORT* vps) { call_real<kHookVP>(c, n, vps); }
+void realRSSetScissorRects(ID3D11DeviceContext* c, UINT n, const D3D11_RECT* rects) { call_real<kHookSC>(c, n, rects); }
+void realSOSetTargets(ID3D11DeviceContext* c, UINT n, ID3D11Buffer* const* buffers, const UINT* offsets) {
+    call_real<kHookSO>(c, n, buffers, offsets);
+}
+void realResolveSubresource(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub,
+                            DXGI_FORMAT format) {
+    call_real<kHookResolve>(c, dst, dstSub, src, srcSub, format);
+}
 
 int nvapi_two_views(ID3D11DeviceContext* context, bool on) { return simqvfr::nvapi::set_two_views(context, on); }
 
@@ -76,6 +130,7 @@ struct TwinEntry {
     ID3D11VertexShader* vs = nullptr;
     ID3D11VertexShader* twin = nullptr;  // raw: the game's shader holds it (its private data) while it lives
     uint32_t epoch = 0;
+    VsRole role = VsRole::none;  // the probe's marking (yebis_shaders.h)
 };
 struct TwinSet {
     TwinEntry entry[2];
@@ -105,6 +160,8 @@ constexpr int kGpuFrames = 4;
 
 struct State {
     ID3D11DeviceContext* context = nullptr;  // the game's immediate context (not referenced: the device keeps it)
+    ComPtr<ID3D11Multithread> multithread;   // its multithread protection (logged when it changes)
+    bool protectedNow = false;
     GpuFrame gpu[kGpuFrames];
     int gpuSlot = -1;            // this frame's, while it runs
     unsigned long long gpuFrameNo = 0;
@@ -123,11 +180,12 @@ struct State {
     bool broken = false;  // single-pass stereo refused once: off for the session
     // The pass.
     int pass = -1;
-    bool drawFocus = false, suspended = false, sample = false, replaceResolve = false;
+    bool drawFocus = false, sample = false, replaceResolve = false;
     uint64_t passTwinBinds = 0;  // this pass's draws that drew the focus view too
     MvrPassView view, viewOf[2];
     // What the game bound (raw: bound objects are kept alive by the pipeline).
     ID3D11VertexShader* gameVs = nullptr;
+    VsRole vsRole = VsRole::none;  // the game's bound vertex shader's role, in and outside the passes (R6)
     ID3D11ClassInstance* instances[256] = {};
     UINT instanceCount = 0;
     bool depthBound = false;
@@ -146,12 +204,182 @@ struct State {
     bool keepFocus = false;           // gate D
     ComPtr<ID3D11Texture2D> kept[2];  // each eye pass's resolved focus region
     bool keptOk[2] = {};
+    // The focus post (mvr_focus_replay): on; this pass's post-processing has begun (its multisample resolve is done);
+    // its copy and composite replayed.
+    bool focusReplay = false, postWindow = false, focusCopied = false, focusComposited = false;
+    bool compositeOk = false;  // this pass's focus composite made (the blit's input)
+    // R3 (docs/recon-lmu.md "R3b/R3c design"): the focus view's final beside the eye in the eye's final target. This
+    // pass's blit replayed; draws into the eye's final after it are overlays MVR doubles (the driver tags); the eye
+    // finals of this frame (the VR UI after the passes is doubled into them too) and their sizes.
+    bool focusBlitted = false, overlayTarget = false;
+    ComPtr<ID3D11Resource> eyeFinal[2];
+    bool finalThisFrame[2] = {};
+    unsigned finalW[2] = {}, finalH[2] = {};
+    bool blitRefusalLogged = false;
+    int maskDrawsLogged = 0;  // the first lens mask draws logged with their state
+    const std::atomic<bool>* maskStale = nullptr;  // mvr_mask_stale
+    int maskDroppedSince = 0;                       // mvr_mask_dropped
+    PanelFn panelFn = nullptr;                      // mvr_panel_draws
+    // The game's latest CopySubresourceRegions (mvr_copy_source): raw, compared only; the frame count when seen.
+    struct CopySeen {
+        ID3D11Resource* dst = nullptr;
+        ID3D11Resource* src = nullptr;
+        unsigned long long frame = 0;
+    };
+    static constexpr unsigned kCopiesKept = 16;
+    CopySeen copies[kCopiesKept];
+    unsigned copyNext = 0;
+    FocusPost focusPost;
+    bool focusPostFailed = false;  // couldn't be made: off for the session
+    std::string postTrace;         // this pass's draws after the copy (trace_post_draw)
+    int tracesLogged = 0;
+    uint32_t unknown[16][4] = {};  // pixel shaders seen drawing into the resolve's target instead of the composite
+    int unknownCount = 0;
+    ComPtr<ID3D11Resource> copyTarget;  // this pass's YEBIS copy's output (the composite's t0)
+    uint32_t byBindings[8][4] = {};     // composites taken by their bindings (logged once each)
+    int bindingCount = 0;
+    // The overlay trace (with the focus post; docs/recon-lmu.md "R3 plan"): every draw of a few frames from each pass's
+    // multisample resolve to its end, during the lens mask and outside the passes.
+    bool tracing = false, afterResolve = false;
+    // The focus post executing its command list: d3d11 may replay it through the immediate context's own functions
+    // (WARP does), so its state and draws reach these hooks as if they were the game's; ignored meanwhile.
+    bool replaying = false;
+    int framesTraced = 0, traceDraws = 0, traceDropped = 0;
+    unsigned long long framesSinceInstall = 0;
     bool have[4] = {};
     unsigned long long lastStatsFrame = 0;
     MvrPassStats stats;
 } g;
 
-bool ours(ID3D11DeviceContext* context) { return context == g.context && g.pass >= 0; }
+bool ours(ID3D11DeviceContext* context) { return context == g.context && g.pass >= 0 && !g.replaying; }
+
+// R4b's pass tracker (mvr_track_passes): the eye passes as the d3d11 calls show them, compared with the game's bounds.
+struct Tracker {
+    bool on = false;
+    bool open = false, resolved = false, blitSeen = false;
+    int pass = -1, passes = 0;            // the open tracked pass; tracked passes begun this frame (at most two)
+    uint64_t draws = 0;                   // draws on the immediate context this frame (the four draw calls)
+    uint64_t begin[2] = {}, end[2] = {};  // the draw count at each tracked pass's begin and end
+    const char* endWhy[2] = {};
+    int actual = 0;                                   // the game's passes 0-1 begun this frame (mvr_pass_begin)
+    uint64_t actualBegin[2] = {}, actualEnd[2] = {};  // the draw count at their begin and end
+    std::string firstBind;  // a frame without the game's passes: the first tracked pass's target (the log)
+    MvrTrackStats stats;
+    TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
+    uint64_t loggedFrames = 0;
+    int detailsLogged = 0;
+    bool menuLogged = false;
+} tr;
+
+void track_begin(const char* what) {
+    tr.open = true;
+    tr.pass = tr.passes++;
+    tr.resolved = tr.blitSeen = false;
+    tr.begin[tr.pass] = tr.draws;
+    if (tr.actual == 0 && tr.firstBind.empty())
+        tr.firstBind = what;
+    if (tr.driveBegin)
+        tr.driveBegin(tr.pass);  // R4b: the pass's work (mvr_pass_begin among it) now, before its draws
+}
+
+void track_end(const char* why) {
+    if (!tr.open)
+        return;
+    tr.open = false;
+    tr.end[tr.pass] = tr.draws;
+    tr.endWhy[tr.pass] = why;
+    if (tr.driveEnd)
+        tr.driveEnd(tr.pass);  // R4b: after the pass's draws (mvr_pass_end among it)
+}
+
+// A render target bind on the game's immediate context: a pass begins at the first multisample target bound with a
+// depth target (after the frame's start or the previous pass's end); the open one ends at another target bound after
+// its final blit, or at the next pass's scene (a multisample bind after its resolve).
+void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
+    ComPtr<ID3D11Resource> r0;
+    if (n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0])
+        rtvs[0]->GetResource(&r0);
+    bool msaa = false;
+    D3D11_TEXTURE2D_DESC d{};
+    if (dsv && r0) {
+        ComPtr<ID3D11Texture2D> texture;
+        if (SUCCEEDED(r0.As(&texture))) {
+            texture->GetDesc(&d);
+            msaa = d.SampleDesc.Count > 1;
+        }
+    }
+    if (tr.open) {
+        if (tr.blitSeen && r0 && r0.Get() != g.eyeFinal[tr.pass].Get())
+            track_end("another target after its final blit");
+        else if (msaa && tr.resolved)
+            track_end("the next pass's scene");
+    }
+    if (!tr.open && msaa && tr.passes < 2) {
+        char what[96];
+        std::snprintf(what, sizeof(what), "%ux%u format %d x%u", d.Width, d.Height, static_cast<int>(d.Format),
+                      d.SampleDesc.Count);
+        track_begin(what);
+    }
+}
+
+// The frame end: the open pass ends; this frame's tracked passes against the game's.
+void track_frame_end(unsigned long long frame) {
+    track_end("the frame end");
+    MvrTrackStats& s = tr.stats;
+    ++s.frames;
+    if (tr.actual == 0) {
+        if (tr.passes) {
+            ++s.framesWithoutGame;
+            s.passesWithoutGame += static_cast<uint64_t>(tr.passes);
+            if (!tr.menuLogged) {
+                tr.menuLogged = true;
+                simqvfr::logf("lmu mvr: pass tracker: frame %llu has no eye passes of the game's, yet %d found (the first on %s)",
+                              frame, tr.passes, tr.firstBind.c_str());
+            }
+        }
+    } else if (tr.passes != tr.actual) {
+        ++s.countDiffers;
+        if (tr.detailsLogged < 6) {
+            ++tr.detailsLogged;
+            simqvfr::logf("lmu mvr: pass tracker: frame %llu: %d passes found, the game's %d", frame, tr.passes, tr.actual);
+        }
+    } else {
+        bool ok = true;
+        std::string detail;
+        for (int q = 0; q < tr.passes; ++q) {
+            const long long startGap = static_cast<long long>(tr.begin[q]) - static_cast<long long>(tr.actualBegin[q]);
+            const long long endGap = static_cast<long long>(tr.actualEnd[q]) - static_cast<long long>(tr.end[q]);
+            if (startGap < 0) {
+                ++s.beganBefore;
+                ok = false;
+            } else {
+                s.startGapSum += static_cast<uint64_t>(startGap);
+                s.startGapMax = (std::max)(s.startGapMax, static_cast<uint64_t>(startGap));
+            }
+            if (endGap < 0) {
+                ++s.endedAfter;
+                ok = false;
+            } else {
+                s.endGapSum += static_cast<uint64_t>(endGap);
+                s.endGapMax = (std::max)(s.endGapMax, static_cast<uint64_t>(endGap));
+            }
+            ++s.passesCompared;
+            char part[200];
+            std::snprintf(part, sizeof(part), "%spass %d: began %lld draws into the game's, ended %lld draws before its end (%s)",
+                          q ? "; " : "", q, startGap, endGap, tr.endWhy[q] ? tr.endWhy[q] : "?");
+            detail += part;
+        }
+        if (ok)
+            ++s.matched;
+        if (tr.detailsLogged < 6) {
+            ++tr.detailsLogged;
+            simqvfr::logf("lmu mvr: pass tracker: frame %llu: %s", frame, detail.c_str());
+        }
+    }
+    tr.passes = tr.actual = 0;
+    tr.draws = 0;
+    tr.firstBind.clear();
+}
 
 void stamp(int pass, int which) {
     if (g.gpuSlot < 0 || pass < 0 || pass > 3)
@@ -188,15 +416,32 @@ void gpu_collect() {
     }
 }
 
-D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) {
-    const float sx = g.view.eyeW ? static_cast<float>(g.view.focusW) / static_cast<float>(g.view.eyeW) : 1.0f;
-    const float sy = g.view.eyeH ? static_cast<float>(g.view.focusH) / static_cast<float>(g.view.eyeH) : 1.0f;
+D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v) {
+    const float sx = view.eyeW ? static_cast<float>(view.focusW) / static_cast<float>(view.eyeW) : 1.0f;
+    const float sy = view.eyeH ? static_cast<float>(view.focusH) / static_cast<float>(view.eyeH) : 1.0f;
     return {v.TopLeftX + v.Width, v.TopLeftY, v.Width * sx, v.Height * sy, v.MinDepth, v.MaxDepth};
+}
+
+D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) { return focus_viewport_of(g.view, v); }
+
+// An overlay's viewport into eye `eye`'s final: the whole target cut to the part the eye rendered (as the driver tags'
+// under live resolution: tag_viewport.h), so its second viewport lands on the focus view beside it.
+D3D11_VIEWPORT overlay_viewport(int eye, const MvrPassView& view, const D3D11_VIEWPORT& v) {
+    TagViewport cut{};
+    if (!tag_viewport_cut({v.TopLeftX, v.TopLeftY, v.Width, v.Height}, g.finalW[eye], g.finalH[eye], view.eyeW, view.eyeH,
+                          cut))
+        return v;
+    return {cut.x, cut.y, cut.width, cut.height, v.MinDepth, v.MaxDepth};
+}
+
+// The eye's viewport as applied with two views: the game's, or its cut for an overlay (R3c).
+D3D11_VIEWPORT first_viewport() {
+    return g.overlayTarget ? overlay_viewport(g.pass & 1, g.view, g.vps[0]) : g.vps[0];
 }
 
 // The game's scissor mapped like its viewport onto the focus viewport.
 D3D11_RECT focus_scissor(const D3D11_RECT& r) {
-    const D3D11_VIEWPORT& v = g.vps[0];
+    const D3D11_VIEWPORT v = first_viewport();
     const D3D11_VIEWPORT f = focus_viewport(v);
     const float sx = v.Width > 0 ? f.Width / v.Width : 1.0f, sy = v.Height > 0 ? f.Height / v.Height : 1.0f;
     const auto x = [&](LONG at) { return static_cast<LONG>(std::lround(f.TopLeftX + (static_cast<float>(at) - v.TopLeftX) * sx)); };
@@ -206,7 +451,8 @@ D3D11_RECT focus_scissor(const D3D11_RECT& r) {
 
 void apply_viewports() {
     if (g.on && g.vpCount == 1) {
-        const D3D11_VIEWPORT two[2] = {g.vps[0], focus_viewport(g.vps[0])};
+        const D3D11_VIEWPORT first = first_viewport();
+        const D3D11_VIEWPORT two[2] = {first, focus_viewport(first)};
         realRSSetViewports(g.context, 2, two);
         ++g.stats.viewportRewrites;
     } else {
@@ -224,9 +470,7 @@ void apply_scissors() {
     }
 }
 
-ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
-    if (!vs)
-        return nullptr;
+const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
     Timed timed(g.time.lookups);
     ++g.stats.lookups;
     if (const uint64_t generation = mvr_shader_generation(); generation != g.twinGeneration) {
@@ -238,7 +482,7 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
     for (uint8_t k = 0; k < 2; ++k)
         if (set.entry[k].epoch == g.twinEpoch && set.entry[k].vs == vs) {
             set.next = static_cast<uint8_t>(1 - k);
-            return set.entry[k].twin;
+            return set.entry[k];
         }
     ++g.stats.lookupMisses;
     const uint8_t k = set.entry[0].epoch != g.twinEpoch ? 0 : set.entry[1].epoch != g.twinEpoch ? 1 : set.next;
@@ -253,15 +497,23 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
         unknown->Release();
         twin = t.Get();
     }
-    e = {vs, twin, g.twinEpoch};
-    return twin;
+    UINT role = 0;
+    size = sizeof(role);
+    if (FAILED(vs->GetPrivateData(kVsRoleGuid, &size, &role)) || size != sizeof(role))
+        role = 0;
+    e = {vs, twin, g.twinEpoch, static_cast<VsRole>(role)};
+    return e;
 }
+
+ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).twin : nullptr; }
+VsRole role_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).role : VsRole::none; }
 
 // Twin, two views and the second viewport exactly while a focus-drawing pass has a depth target and a shader with a twin.
 void update() {
     ID3D11VertexShader* twin = nullptr;
-    bool want = g.drawFocus && !g.broken && !g.suspended && g.depthBound && g.gameVs && !g.gsBound && !g.hsBound &&
-                !g.dsBound && !g.soBound;
+    // The scene's draws (a depth target bound) and, after the focus view's final blit, the overlays into the eye's final.
+    bool want = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
+                !g.hsBound && !g.dsBound && !g.soBound;
     if (want) {
         twin = twin_of(g.gameVs);
         want = twin != nullptr;
@@ -298,6 +550,8 @@ void update() {
 
 void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexShader* vs,
                                      ID3D11ClassInstance* const* instances, UINT count) {
+    if (context == g.context && !g.replaying)  // every game bind, so a draw anywhere knows its shader's role (R6)
+        g.vsRole = role_of(vs);
     if (!ours(context)) {
         realVSSetShader(context, vs, instances, count);
         return;
@@ -312,16 +566,16 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
     update();
 }
 
-template <typename Shader, SetShaderFn<Shader>* real, bool State::*bound>
+template <int H, typename Shader, bool State::*bound>
 void STDMETHODCALLTYPE later_stage(ID3D11DeviceContext* context, Shader* shader, ID3D11ClassInstance* const* instances,
                                    UINT count) {
     if (!ours(context)) {
-        (*real)(context, shader, instances, count);
+        call_real<H>(context, shader, instances, count);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    (*real)(context, shader, instances, count);
+    call_real<H>(context, shader, instances, count);
     g.*bound = shader != nullptr;
     update();
 }
@@ -341,16 +595,30 @@ void STDMETHODCALLTYPE so_set_targets(ID3D11DeviceContext* context, UINT n, ID3D
     update();
 }
 
+// After this pass's focus final blit (R3c): whether the first render target is the eye's final (an overlay's draw).
+bool overlay_target(UINT n, ID3D11RenderTargetView* const* rtvs) {
+    if (!g.focusBlitted || !n || !rtvs || !rtvs[0])
+        return false;
+    ComPtr<ID3D11Resource> r;
+    rtvs[0]->GetResource(&r);
+    return r && r.Get() == g.eyeFinal[g.pass & 1].Get();
+}
+
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
     if (!ours(context)) {
         realOMSetRenderTargets(context, n, rtvs, dsv);
+        if (tr.on && context == g.context && !g.replaying)
+            track_bind(n, rtvs, dsv);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
     realOMSetRenderTargets(context, n, rtvs, dsv);
+    if (tr.on)
+        track_bind(n, rtvs, dsv);
     g.depthBound = dsv != nullptr;
+    g.overlayTarget = overlay_target(n, rtvs);
     update();
 }
 
@@ -360,13 +628,18 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
                                                       ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
     if (!ours(context)) {
         realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+        if (tr.on && context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+            track_bind(n, rtvs, dsv);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
     realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
+    if (tr.on && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        track_bind(n, rtvs, dsv);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
+        g.overlayTarget = overlay_target(n, rtvs);
         update();
     }
 }
@@ -423,6 +696,14 @@ void clear_target(ID3D11Resource* target) {
 
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
+    if (tr.on && tr.open && context == g.context && !g.replaying && src) {
+        ComPtr<ID3D11Texture2D> source;
+        D3D11_TEXTURE2D_DESC sd{};
+        if (SUCCEEDED(src->QueryInterface(IID_PPV_ARGS(&source)))) {
+            source->GetDesc(&sd);
+            tr.resolved = tr.resolved || sd.SampleDesc.Count > 1;
+        }
+    }
     bool multisample = false;
     if (ours(context) && g.pass <= 3 && src && dst) {
         ComPtr<ID3D11Texture2D> source;
@@ -433,8 +714,10 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
         }
     }
     const int eye = g.pass & 1;
-    if (multisample)
+    if (multisample) {
         stamp(g.pass, 1);  // the scene ends, the post-processing starts
+        g.afterResolve = true;
+    }
     if (multisample && g.replaceResolve && g.keptOk[eye]) {
         // Gate D: the scene this pass skipped is the focus view its eye's pass drew: into the top-left instead. Cleared
         // first: the post-processing covers the top-left at one scale, beyond the focus view where pass 1's images still
@@ -456,10 +739,612 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
         g.keptOk[eye] = copy_region(g.kept[eye], dst, g.view.eyeW, 0, g.view.focusW, g.view.focusH);
         g.stats.keptRegions += g.keptOk[eye] ? 1 : 0;
     }
+    if (g.focusReplay && g.pass < 2 && g.drawFocus && g.passTwinBinds > 0 && g.view.box.valid && !g.focusPostFailed) {
+        if (!g.focusPost.ready()) {
+            ComPtr<ID3D11Device> device;
+            g.context->GetDevice(&device);
+            if (!g.focusPost.initialize(device.Get())) {
+                g.focusPostFailed = true;
+                simqvfr::log_line("lmu mvr: the focus post couldn't be made (shaders, states, deferred context); off");
+            }
+        }
+        g.postWindow = g.focusPost.ready();
+    }
 }
 
-bool hook(void* target, void* detour, void** original) {
-    return MH_CreateHook(target, detour, original) == MH_OK && MH_EnableHook(target) == MH_OK;
+// The focus post at one of the pass's post-processing draws (the post window open): after YEBIS's copy of the resolved
+// scene (the copy's pixel shader reading the resolve's target; its downsamples read other textures) the focus view's part
+// copied likewise; after its composite (with the eye's glare and exposure bound) the focus view's composite.
+// A texture's size and format for the log ("2076x1667 f10"), "-" for none.
+std::string describe(ID3D11Resource* resource) {
+    ComPtr<ID3D11Texture2D> t;
+    if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(&t))))
+        return "-";
+    D3D11_TEXTURE2D_DESC d;
+    t->GetDesc(&d);
+    char s[48];
+    std::snprintf(s, sizeof(s), "%ux%u f%d", d.Width, d.Height, static_cast<int>(d.Format));
+    return s;
+}
+
+// After the copy and before a composite is seen: each draw's pixel shader (its checksum, from the probe) and target,
+// for the log when the pass ends without one ("r" marks the resolve's target); a draw into the resolve's target with
+// a shader that isn't the composite we know logged with its inputs, once per shader.
+void trace_post_draw(ID3D11DeviceContext* context, ID3D11PixelShader* ps) {
+    uint32_t c[4] = {};
+    UINT size = sizeof(c);
+    const bool named = ps && SUCCEEDED(ps->GetPrivateData(kShaderChecksumGuid, &size, c)) && size == sizeof(c);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    const bool intoResolved = target && target.Get() == g.resolved[g.pass].Get();
+    if (g.postTrace.size() < 3000) {
+        char s[96];
+        std::snprintf(s, sizeof(s), " %08x%s>%s%s", named ? c[0] : 0, named ? "" : "?", describe(target.Get()).c_str(),
+                      intoResolved ? " r" : "");
+        g.postTrace += s;
+    }
+    if (!intoResolved)
+        return;
+    ++g.stats.focusUnknownComposites;
+    for (int i = 0; i < g.unknownCount; ++i)
+        if (std::memcmp(g.unknown[i], c, sizeof(c)) == 0)
+            return;
+    if (g.unknownCount == static_cast<int>(std::size(g.unknown)))
+        return;
+    std::memcpy(g.unknown[g.unknownCount++], c, sizeof(c));
+    std::string inputs;
+    ID3D11ShaderResourceView* srvs[8] = {};
+    context->PSGetShaderResources(0, 8, srvs);
+    for (int i = 0; i < 8; ++i) {
+        ComPtr<ID3D11Resource> r;
+        if (srvs[i]) {
+            srvs[i]->GetResource(&r);
+            srvs[i]->Release();
+        }
+        if (r)
+            inputs += " t" + std::to_string(i) + " " + describe(r.Get()) + (r.Get() == g.resolved[g.pass].Get() ? " r" : "");
+    }
+    ID3D11SamplerState* samplers[8] = {};
+    context->PSGetSamplers(0, 8, samplers);
+    int samplerCount = 0;
+    for (ID3D11SamplerState* s : samplers)
+        if (s) {
+            ++samplerCount;
+            s->Release();
+        }
+    simqvfr::logf("lmu mvr: focus post: pass %d: after the copy, pixel shader %08x-%08x-%08x-%08x%s draws into the "
+                  "resolve's target (%s), not the composite we know; inputs:%s; %d samplers%s",
+                  g.pass, c[0], c[1], c[2], c[3], named ? "" : " (not named: created before the probe?)",
+                  describe(target.Get()).c_str(), inputs.c_str(), samplerCount,
+                  g.unknownCount == static_cast<int>(std::size(g.unknown)) ? "; no more of these logged" : "");
+}
+
+// After the copy: YEBIS's composite by what it does, whatever its tone curve (LMU switches between variants, e.g. in the
+// pits and on track: 60678228, b7eb8877, 2026-11-09): a draw into the resolve's target reading the copy's output (t0),
+// a glare (t1) and the 1x1 exposure (t2).
+bool composite_by_bindings(ID3D11DeviceContext* context) {
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    if (!target || target.Get() != g.resolved[g.pass].Get() || !g.copyTarget)
+        return false;
+    ID3D11ShaderResourceView* srvs[3] = {};
+    context->PSGetShaderResources(0, 3, srvs);
+    ComPtr<ID3D11Resource> r[3];
+    for (int i = 0; i < 3; ++i)
+        if (srvs[i]) {
+            srvs[i]->GetResource(&r[i]);
+            srvs[i]->Release();
+        }
+    ComPtr<ID3D11Texture2D> exposure;
+    D3D11_TEXTURE2D_DESC ed{};
+    if (!r[0] || r[0].Get() != g.copyTarget.Get() || !r[1] || !r[2] || FAILED(r[2].As(&exposure)))
+        return false;
+    exposure->GetDesc(&ed);
+    return ed.Width == 1 && ed.Height == 1;
+}
+
+void focus_post_draw(ID3D11DeviceContext* context) {
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || size != sizeof(role))
+        role = 0;
+    if (g.focusCopied && !g.focusComposited && role != static_cast<UINT>(YebisRole::composite)) {
+        if (composite_by_bindings(context)) {
+            role = static_cast<UINT>(YebisRole::composite);
+            ++g.stats.focusCompositesByBindings;
+            uint32_t c[4] = {};
+            UINT cs = sizeof(c);
+            if (ps && SUCCEEDED(ps->GetPrivateData(kShaderChecksumGuid, &cs, c)) && cs == sizeof(c)) {
+                bool seen = false;
+                for (int i = 0; i < g.bindingCount && !seen; ++i)
+                    seen = std::memcmp(g.byBindings[i], c, sizeof(c)) == 0;
+                if (!seen && g.bindingCount < static_cast<int>(std::size(g.byBindings))) {
+                    std::memcpy(g.byBindings[g.bindingCount++], c, sizeof(c));
+                    simqvfr::logf("lmu mvr: focus post: pass %d: YEBIS's composite by its bindings (the copy's output, a "
+                                  "glare, the 1x1 exposure into the resolve's target): pixel shader "
+                                  "%08x-%08x-%08x-%08x",
+                                  g.pass, c[0], c[1], c[2], c[3]);
+                }
+            }
+        } else {
+            trace_post_draw(context, ps.Get());
+        }
+    }
+    if (!role)
+        return;
+    const int eye = g.pass & 1;
+    if (role == static_cast<UINT>(YebisRole::copy) && !g.focusCopied) {
+        ComPtr<ID3D11ShaderResourceView> srv;
+        context->PSGetShaderResources(0, 1, &srv);
+        ComPtr<ID3D11Resource> resource;
+        if (srv)
+            srv->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> texture;
+        if (!resource || resource.Get() != g.resolved[g.pass].Get() || FAILED(resource.As(&texture)))
+            return;
+        D3D11_TEXTURE2D_DESC d;
+        texture->GetDesc(&d);
+        ComPtr<ID3D11RenderTargetView> copyRtv;
+        context->OMGetRenderTargets(1, &copyRtv, nullptr);
+        g.copyTarget.Reset();
+        if (copyRtv)
+            copyRtv->GetResource(&g.copyTarget);  // the composite reads it (composite_by_bindings)
+        g.replaying = true;
+        g.focusCopied = g.focusPost.after_copy(context, eye, srv.Get(), d.Width, d.Height,
+                                               {g.view.eyeW, 0, g.view.focusW, g.view.focusH});
+        g.replaying = false;
+        if (g.focusCopied) {
+            ++g.stats.focusCopies;
+        } else {
+            ++g.stats.focusFailures;
+            g.postWindow = false;
+        }
+    } else if (role == static_cast<UINT>(YebisRole::composite) && g.focusCopied && !g.focusComposited) {
+        g.focusComposited = true;
+        g.postWindow = false;  // nothing more this pass
+        ComPtr<ID3D11ShaderResourceView> glare;
+        context->PSGetShaderResources(1, 1, &glare);
+        ComPtr<ID3D11Resource> resource;
+        if (glare)
+            glare->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> glareTexture, scene;
+        D3D11_TEXTURE2D_DESC gd{}, sd{};
+        bool ok = resource && SUCCEEDED(resource.As(&glareTexture)) && g.resolved[g.pass] &&
+                  SUCCEEDED(g.resolved[g.pass].As(&scene));
+        if (ok) {
+            glareTexture->GetDesc(&gd);
+            scene->GetDesc(&sd);
+            // The eye's glare is the eye's share of the glare texture (YEBIS builds it at the scene's UV: glare_math.h).
+            const simqvfr::ViewRegion region = yebis_pass_region(
+                {0, 0, static_cast<int>(gd.Width), static_cast<int>(gd.Height)},
+                static_cast<double>(g.view.eyeW) / sd.Width, static_cast<double>(g.view.eyeH) / sd.Height);
+            g.replaying = true;
+            ok = g.focusPost.after_composite(context, eye, region, glare_mapping(g.view.box));
+            g.replaying = false;
+        }
+        g.compositeOk = ok;
+        ++(ok ? g.stats.focusComposites : g.stats.focusFailures);
+    }
+}
+
+// R3b: right after the game's final blit in a pass that made its focus composite (its pixel shader known by checksum,
+// reading the resolve's target into the eye's final): the same quad once more over the focus view's region beside the
+// eye (FocusPost::blit_final), with the game's vertex colour. From then on the pass's draws into the eye's final are
+// overlays, doubled by MVR (update(), overlay_target).
+void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || role != static_cast<UINT>(YebisRole::blit))
+        return;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    context->PSGetShaderResources(0, 1, &srv);
+    ComPtr<ID3D11Resource> source;
+    if (srv)
+        srv->GetResource(&source);
+    if (!source || source.Get() != g.resolved[g.pass].Get())
+        return;  // the blit of something else (the desktop mirror's is outside the passes)
+    g.focusBlitted = true;  // tried once a pass
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    ComPtr<ID3D11Texture2D> texture;
+    if (rtv)
+        rtv->GetResource(&target);
+    D3D11_TEXTURE2D_DESC d{};
+    if (target && SUCCEEDED(target.As(&texture)))
+        texture->GetDesc(&d);
+    const MvrPassView& v = g.view;
+    const int eye = g.pass & 1;  // as the focus post's (after_copy, after_composite)
+    if (!texture || v.eyeW + v.focusW > d.Width || v.focusH > d.Height) {
+        ++g.stats.focusFailures;
+        if (!g.blitRefusalLogged) {
+            g.blitRefusalLogged = true;
+            simqvfr::logf("lmu mvr: focus post: pass %d: the eye's final (%ux%u) has no room for the focus view %ux%u beside "
+                          "the eye's %u: no focus final there",
+                          g.pass, d.Width, d.Height, v.focusW, v.focusH, v.eyeW);
+        }
+        return;
+    }
+    g.replaying = true;
+    const bool ok = g.focusPost.blit_final(context, eye, count, start, {0, 0, v.eyeW, v.eyeH}, {v.eyeW, 0, v.focusW, v.focusH});
+    g.replaying = false;
+    if (!ok) {
+        ++g.stats.focusFailures;
+        return;
+    }
+    ++g.stats.focusBlits;
+    if (tr.open)
+        tr.blitSeen = true;
+    g.eyeFinal[eye] = target;
+    g.finalW[eye] = d.Width;
+    g.finalH[eye] = d.Height;
+    g.finalThisFrame[eye] = true;
+    g.overlayTarget = true;  // the eye's final is bound
+    update();
+}
+
+// R3c: after the passes, a draw into an eye's final whose focus final was made this frame, with a vertex shader that has
+// a twin (the VR UI's panel): drawn with two views, the eye's remap and the focus viewport beside its own (cut to the
+// part the eye rendered when it is the whole target), the state put back. False: not doubled (the caller draws it).
+template <int H, typename... A>
+bool double_outside(ID3D11DeviceContext* context, A... a) {
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    int eye = -1;
+    for (int e = 0; e < 2 && target; ++e)
+        if (g.finalThisFrame[e] && target.Get() == g.eyeFinal[e].Get())
+            eye = e;
+    if (eye < 0)
+        return false;
+    ID3D11VertexShader* vs = nullptr;
+    ID3D11ClassInstance* instances[256] = {};
+    UINT instanceCount = 256;
+    context->VSGetShader(&vs, instances, &instanceCount);
+    const auto release = [&] {
+        if (vs)
+            vs->Release();
+        for (UINT i = 0; i < instanceCount && i < 256; ++i)
+            if (instances[i])
+                instances[i]->Release();
+    };
+    ID3D11VertexShader* twin = twin_of(vs);
+    D3D11_VIEWPORT vps[kMaxRects];
+    UINT n = kMaxRects;
+    context->RSGetViewports(&n, vps);
+    ComPtr<ID3D11GeometryShader> gs;
+    context->GSGetShader(&gs, nullptr, nullptr);
+    if (!twin || gs || n != 1 || g.broken) {
+        release();
+        return false;
+    }
+    const MvrPassView& v = g.viewOf[eye];
+    ID3D11Buffer* kept = nullptr;
+    context->VSGetConstantBuffers(13, 1, &kept);
+    context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, v.remap, 0, 0);
+    context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
+    bool doubled = false;
+    if (g.twoViews(context, true) == 0) {
+        const D3D11_VIEWPORT first = overlay_viewport(eye, v, vps[0]);
+        const D3D11_VIEWPORT two[2] = {first, focus_viewport_of(v, first)};
+        realVSSetShader(context, twin, instanceCount ? instances : nullptr, instanceCount);
+        realRSSetViewports(context, 2, two);
+        call_real<H>(context, a...);
+        g.twoViews(context, false);
+        realVSSetShader(context, vs, instanceCount ? instances : nullptr, instanceCount);
+        realRSSetViewports(context, n, vps);
+        doubled = true;
+        ++g.stats.overlaysOutside;
+    }
+    context->VSSetConstantBuffers(13, 1, &kept);
+    if (kept)
+        kept->Release();
+    release();
+    return doubled;
+}
+
+// A shader's name for the trace: its checksum's first word (the probe's private data), "*" for a vertex shader with a
+// twin, "-" for none, "?" for one not named.
+template <class Shader>
+std::string shader_name(Shader* shader) {
+    if (!shader)
+        return "-";
+    uint32_t c[4] = {};
+    UINT size = sizeof(c);
+    char s[16];
+    if (FAILED(shader->GetPrivateData(kShaderChecksumGuid, &size, c)) || size != sizeof(c))
+        std::snprintf(s, sizeof(s), "?%04x", static_cast<unsigned>(reinterpret_cast<uintptr_t>(shader) & 0xffff));
+    else
+        std::snprintf(s, sizeof(s), "%08x", c[0]);
+    std::string name = s;
+    if constexpr (std::is_same_v<Shader, ID3D11VertexShader>) {
+        UINT twinSize = 0;
+        if (shader->GetPrivateData(kMvrTwinGuid, &twinSize, nullptr) == S_OK && twinSize)
+            name += "*";
+    }
+    return name;
+}
+
+// The overlay trace's line for one draw (the state it ran with).
+void trace_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    const bool inPass = g.pass >= 0;
+    const char* phase = !inPass ? "outside" : g.vsRole == VsRole::lensMask ? "mask" : g.afterResolve ? "post" : nullptr;
+    if (!phase)
+        return;  // a pass's scene: not traced
+    if (g.traceDraws >= 800) {
+        ++g.traceDropped;
+        return;
+    }
+    ++g.traceDraws;
+    ComPtr<ID3D11VertexShader> boundVs;
+    context->VSGetShader(&boundVs, nullptr, nullptr);
+    ID3D11VertexShader* vs = inPass ? g.gameVs : boundVs.Get();  // in a pass the twin may be bound: the game's named
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11DepthStencilView> dsv;
+    context->OMGetRenderTargets(1, &rtv, &dsv);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    D3D11_VIEWPORT vps[kMaxRects];
+    UINT n = kMaxRects;
+    context->RSGetViewports(&n, vps);
+    const bool resolvedTarget = inPass && target && target.Get() == g.resolved[g.pass].Get();
+    simqvfr::logf("lmu mvr trace: f%llu p%d %s %s(%lld,%lld) vs %s ps %s > %s #%06x%s depth %s vp %u: %.0f,%.0f %.0fx%.0f%s",
+                  g.gpuFrameNo, g.pass, phase, call, a, b, shader_name(vs).c_str(), shader_name(ps.Get()).c_str(),
+                  describe(target.Get()).c_str(),
+                  static_cast<unsigned>(reinterpret_cast<uintptr_t>(target.Get()) & 0xffffff),
+                  resolvedTarget ? " (resolved)" : "", dsv ? "yes" : "no", n, n ? vps[0].TopLeftX : 0.0f,
+                  n ? vps[0].TopLeftY : 0.0f, n ? vps[0].Width : 0.0f, n ? vps[0].Height : 0.0f,
+                  inPass && g.on ? " two views" : "");
+}
+
+// R6c: a draw with the lens mask's vertex shader (its role): counted, drawn like the scene's (with two views in a pass
+// that draws its focus view: the twin puts the hidden area where the focus view sees it, R6a), or dropped while the mask
+// is stale (mvr_mask_stale). The first two logged with the state they ran with. True: dropped (the caller skips it).
+bool lens_mask_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    const bool drop = g.maskStale && g.maskStale->load(std::memory_order_relaxed);
+    if (drop) {
+        ++g.stats.maskDropped;
+        ++g.maskDroppedSince;
+    } else {
+        ++g.stats.maskDraws;
+        if (g.on)
+            ++g.stats.maskDrawsTwo;
+    }
+    if (g.maskDrawsLogged >= 2)
+        return drop;
+    ++g.maskDrawsLogged;
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11DepthStencilView> dsv;
+    context->OMGetRenderTargets(1, &rtv, &dsv);
+    ComPtr<ID3D11Resource> target, depthTarget;
+    if (rtv)
+        rtv->GetResource(&target);
+    if (dsv)
+        dsv->GetResource(&depthTarget);
+    D3D11_VIEWPORT vps[kMaxRects];
+    UINT n = kMaxRects;
+    context->RSGetViewports(&n, vps);
+    simqvfr::logf("lmu mvr: lens mask draw: f%llu p%d %s(%lld,%lld) ps %s > %s depth %s vp %u: %.0f,%.0f %.0fx%.0f; %s",
+                  g.gpuFrameNo, g.pass, call, a, b, shader_name(ps.Get()).c_str(),
+                  target ? describe(target.Get()).c_str() : "none",
+                  depthTarget ? describe(depthTarget.Get()).c_str() : "none", n, n ? vps[0].TopLeftX : 0.0f,
+                  n ? vps[0].TopLeftY : 0.0f, n ? vps[0].Width : 0.0f, n ? vps[0].Height : 0.0f,
+                  drop ? "dropped (the mask is stale: a live FOV crop change)"
+                  : g.on ? "two views (into the focus view too)"
+                         : "the eye only");
+    return drop;
+}
+
+// R6b: the VR UI panel's draw outside the passes in a frame without focus finals (the menus): the PanelFn around it.
+bool panel_draw_here(ID3D11DeviceContext* context) {
+    return g.panelFn && context == g.context && !g.replaying && g.pass < 0 && g.vsRole == VsRole::vruiPanel &&
+           !g.finalThisFrame[0] && !g.finalThisFrame[1];
+}
+void call_panel_fn(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start) {
+    g.replaying = true;  // its work (a resample executed on this context, the redraw) passes the hooks
+    g.panelFn(context, after, count, start);
+    g.replaying = false;
+}
+
+// The game's CopySubresourceRegion: passed on, remembered (mvr_copy_source).
+void STDMETHODCALLTYPE copy_subresource_region(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub, UINT x, UINT y, UINT z,
+                                              ID3D11Resource* src, UINT srcSub, const D3D11_BOX* box) {
+    call_real<kHookCopy>(context, dst, dstSub, x, y, z, src, srcSub, box);
+    if (context != g.context || g.replaying)
+        return;
+    State::CopySeen& c = g.copies[g.copyNext++ % State::kCopiesKept];
+    c.dst = dst;
+    c.src = src;
+    c.frame = g.framesSinceInstall;
+}
+
+void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
+    if (context == g.context && !g.replaying) {
+        ++tr.draws;
+        if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, "DrawIndexed", count, start))
+            return;
+    }
+    const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
+    if (!outside || !double_outside<kHookDrawIndexed>(context, count, start, base))
+        call_real<kHookDrawIndexed>(context, count, start, base);
+    if (g.tracing && context == g.context && !g.replaying)
+        trace_draw(context, "DrawIndexed", count, start);
+    if (ours(context) && g.overlayTarget && g.on)
+        ++g.stats.overlayDraws;
+    if (!g.postWindow || !ours(context))
+        return;
+    Timed timed(g.time.hooks);
+    focus_post_draw(context);
+}
+
+// Draw and the instanced draws: the real call (an overlay after the passes doubled: double_outside), the trace's line;
+// Draw also the final blit's replay (focus_blit).
+template <int H, typename... A>
+void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
+    if (context == g.context && !g.replaying) {
+        ++tr.draws;
+        const long long args[] = {static_cast<long long>(a)...};
+        if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, kHookName[H], args[0], args[1]))
+            return;
+    }
+    const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
+    bool panel = false;
+    if constexpr (H == kHookDraw) {  // R6b: the menus' panel (Draw: vertex count, start)
+        panel = panel_draw_here(context);
+        if (panel) {
+            const long long args[] = {static_cast<long long>(a)...};
+            call_panel_fn(context, false, static_cast<unsigned>(args[0]), static_cast<unsigned>(args[1]));
+        }
+    }
+    if (!outside || !double_outside<H>(context, a...))
+        call_real<H>(context, a...);
+    if constexpr (H == kHookDraw) {
+        if (panel) {
+            const long long args[] = {static_cast<long long>(a)...};
+            call_panel_fn(context, true, static_cast<unsigned>(args[0]), static_cast<unsigned>(args[1]));
+        }
+    }
+    if (g.tracing && context == g.context && !g.replaying) {
+        const long long args[] = {static_cast<long long>(a)...};
+        trace_draw(context, kHookName[H], args[0], args[1]);
+    }
+    if (ours(context) && g.overlayTarget && g.on)
+        ++g.stats.overlayDraws;
+    if constexpr (H == kHookDraw) {
+        if (ours(context) && g.compositeOk && !g.focusBlitted && g.pass < 2 && g.drawFocus) {
+            Timed timed(g.time.hooks);
+            const long long args[] = {static_cast<long long>(a)...};
+            focus_blit(context, static_cast<UINT>(args[0]), static_cast<UINT>(args[1]));
+        }
+    }
+}
+
+// The detours of hook H's functions, one per function (N): straight through inside the handling of one (depth), else
+// the handler, which passes the call on through call_real.
+template <int H, auto Handler, typename... A>
+struct Detours {
+    template <int N>
+    static void STDMETHODCALLTYPE fn(ID3D11DeviceContext* context, A... a) {
+        if (depth[H] > 0) {
+            reinterpret_cast<void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...)>(functions[H].real[N])(context, a...);
+            return;
+        }
+        ++depth[H];
+        Handler(context, a...);
+        --depth[H];
+    }
+    template <std::size_t... N>
+    static void* get(int n, std::index_sequence<N...>) {
+        void* const table[] = {reinterpret_cast<void*>(&fn<static_cast<int>(N)>)...};
+        return table[n];
+    }
+    static void* get(int n) { return get(n, std::make_index_sequence<kFunctions>{}); }
+};
+
+void* detour_for(int h, int n) {
+    using Instances = ID3D11ClassInstance* const*;
+    switch (h) {
+        case kHookVS: return Detours<kHookVS, &vs_set_shader, ID3D11VertexShader*, Instances, UINT>::get(n);
+        case kHookGS:
+            return Detours<kHookGS, &later_stage<kHookGS, ID3D11GeometryShader, &State::gsBound>, ID3D11GeometryShader*,
+                           Instances, UINT>::get(n);
+        case kHookOM:
+            return Detours<kHookOM, &om_set_render_targets, UINT, ID3D11RenderTargetView* const*,
+                           ID3D11DepthStencilView*>::get(n);
+        case kHookOMUav:
+            return Detours<kHookOMUav, &om_set_render_targets_and_uavs, UINT, ID3D11RenderTargetView* const*,
+                           ID3D11DepthStencilView*, UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*>::get(n);
+        case kHookSO: return Detours<kHookSO, &so_set_targets, UINT, ID3D11Buffer* const*, const UINT*>::get(n);
+        case kHookVP: return Detours<kHookVP, &rs_set_viewports, UINT, const D3D11_VIEWPORT*>::get(n);
+        case kHookSC: return Detours<kHookSC, &rs_set_scissor_rects, UINT, const D3D11_RECT*>::get(n);
+        case kHookResolve:
+            return Detours<kHookResolve, &resolve_subresource, ID3D11Resource*, UINT, ID3D11Resource*, UINT,
+                           DXGI_FORMAT>::get(n);
+        case kHookHS:
+            return Detours<kHookHS, &later_stage<kHookHS, ID3D11HullShader, &State::hsBound>, ID3D11HullShader*,
+                           Instances, UINT>::get(n);
+        case kHookDS:
+            return Detours<kHookDS, &later_stage<kHookDS, ID3D11DomainShader, &State::dsBound>, ID3D11DomainShader*,
+                           Instances, UINT>::get(n);
+        case kHookCopy:
+            return Detours<kHookCopy, &copy_subresource_region, ID3D11Resource*, UINT, UINT, UINT, UINT, ID3D11Resource*, UINT,
+                           const D3D11_BOX*>::get(n);
+        case kHookDrawIndexed: return Detours<kHookDrawIndexed, &draw_indexed, UINT, UINT, INT>::get(n);
+        case kHookDraw: return Detours<kHookDraw, &draw_traced<kHookDraw, UINT, UINT>, UINT, UINT>::get(n);
+        case kHookDrawIndexedInstanced:
+            return Detours<kHookDrawIndexedInstanced, &draw_traced<kHookDrawIndexedInstanced, UINT, UINT, UINT, INT, UINT>,
+                           UINT, UINT, UINT, INT, UINT>::get(n);
+        case kHookDrawInstanced:
+            return Detours<kHookDrawInstanced, &draw_traced<kHookDrawInstanced, UINT, UINT, UINT, UINT>, UINT, UINT, UINT,
+                           UINT>::get(n);
+        default: return nullptr;
+    }
+}
+
+// The draws and CopySubresourceRegion only for the focus post (mvr_focus_replay): without it MVR's hooks are as before.
+bool wanted(int h) { return (!is_draw(h) && h != kHookCopy) || g.focusReplay; }
+
+// The function the context's entry for hook `h` holds now, hooked in d3d11's code if not seen before (render thread).
+// True: a new one.
+bool hook_entry(int h) {
+    if (!wanted(h))
+        return false;
+    void* fn = (*reinterpret_cast<void** const*>(g.context))[kSlotOf[h]];
+    Functions& f = functions[h];
+    for (int i = 0; i < f.count; ++i)
+        if (f.target[i] == fn)
+            return false;
+    if (f.count == kFunctions) {
+        if (!f.full)
+            simqvfr::logf("lmu mvr: the context's %s entry holds a fifth function: calls through it aren't seen",
+                          kHookName[h]);
+        f.full = true;
+        return false;
+    }
+    const int n = f.count;
+    f.target[n] = fn;
+    if (MH_CreateHook(fn, detour_for(h, n), &f.real[n]) == MH_OK && MH_EnableHook(fn) == MH_OK) {
+        ++f.hooked;
+        ++g.stats.contextFunctions;
+        if (h == kHookResolve)
+            ++g.stats.resolveFunctions;
+    } else {
+        f.real[n] = fn;  // passed on as it is, not tried again
+        simqvfr::logf("lmu mvr: the context's %s function %p couldn't be hooked", kHookName[h], fn);
+    }
+    ++f.count;  // last: call_real reads target and real up to it
+    return true;
+}
+
+int hook_entries() {
+    int fresh = 0;
+    for (int h = 0; h < kHooks; ++h)
+        fresh += hook_entry(h) ? 1 : 0;
+    return fresh;
+}
+
+void unhook_entries() {
+    for (Functions& f : functions) {
+        for (int i = 0; i < f.count; ++i)
+            if (f.real[i] != f.target[i])
+                MH_RemoveHook(f.target[i]);
+        f = Functions{};
+    }
 }
 
 // The game's bindings as the pass starts (the hooks only see later changes).
@@ -474,6 +1359,7 @@ void read_bindings() {
     if (vs)
         vs->Release();
     g.gameVs = g.boundVs = vs;
+    g.vsRole = role_of(vs);
     ID3D11DepthStencilView* dsv = nullptr;
     g.context->OMGetRenderTargets(0, nullptr, &dsv);
     g.depthBound = dsv != nullptr;
@@ -655,38 +1541,48 @@ bool mvr_pass_install(ID3D11Device* device) {
     }
     if (const MH_STATUS s = MH_Initialize(); s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
         return false;
-    void** vtable = *reinterpret_cast<void***>(context.Get());
-    const bool ok =
-        hook(vtable[kVSSetShader], reinterpret_cast<void*>(&vs_set_shader), reinterpret_cast<void**>(&realVSSetShader)) &&
-        hook(vtable[kOMSetRenderTargets], reinterpret_cast<void*>(&om_set_render_targets),
-             reinterpret_cast<void**>(&realOMSetRenderTargets)) &&
-        hook(vtable[kOMSetRenderTargetsAndUavs], reinterpret_cast<void*>(&om_set_render_targets_and_uavs),
-             reinterpret_cast<void**>(&realOMSetRenderTargetsAndUavs)) &&
-        hook(vtable[kRSSetViewports], reinterpret_cast<void*>(&rs_set_viewports),
-             reinterpret_cast<void**>(&realRSSetViewports)) &&
-        hook(vtable[kRSSetScissorRects], reinterpret_cast<void*>(&rs_set_scissor_rects),
-             reinterpret_cast<void**>(&realRSSetScissorRects)) &&
-        hook(vtable[kResolveSubresource], reinterpret_cast<void*>(&resolve_subresource),
-             reinterpret_cast<void**>(&realResolveSubresource)) &&
-        hook(vtable[kGSSetShader],
-             reinterpret_cast<void*>(&later_stage<ID3D11GeometryShader, &realGSSetShader, &State::gsBound>),
-             reinterpret_cast<void**>(&realGSSetShader)) &&
-        hook(vtable[kHSSetShader], reinterpret_cast<void*>(&later_stage<ID3D11HullShader, &realHSSetShader, &State::hsBound>),
-             reinterpret_cast<void**>(&realHSSetShader)) &&
-        hook(vtable[kDSSetShader],
-             reinterpret_cast<void*>(&later_stage<ID3D11DomainShader, &realDSSetShader, &State::dsBound>),
-             reinterpret_cast<void**>(&realDSSetShader)) &&
-        hook(vtable[kSOSetTargets], reinterpret_cast<void*>(&so_set_targets), reinterpret_cast<void**>(&realSOSetTargets));
-    if (!ok) {
-        simqvfr::log_line("lmu mvr: the context couldn't be hooked; off");
-        return false;
-    }
     g.context = context.Get();
+    context.As(&g.multithread);
+    // Every function the entries hold: as they are; once idle (a flush) and busy (a command of ours); and the same with
+    // multithread protection on when it is off (on, then off again: it only adds locking meanwhile). With protection on
+    // already, turning it off here could race another thread: its plain functions are hooked when they first appear.
+    const auto idle_and_busy = [&] {
+        hook_entries();
+        g.context->Flush();
+        hook_entries();
+        g.context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, identity, 0, 0);
+        hook_entries();
+    };
+    idle_and_busy();
+    g.protectedNow = g.multithread && g.multithread->GetMultithreadProtected();
+    if (g.multithread && !g.protectedNow) {
+        g.multithread->SetMultithreadProtected(TRUE);
+        idle_and_busy();
+        g.multithread->SetMultithreadProtected(FALSE);
+        hook_entries();
+    }
+    for (int h = 0; h < kHooks; ++h)
+        if (wanted(h) && !functions[h].hooked) {
+            unhook_entries();
+            g.context = nullptr;
+            g.multithread.Reset();
+            simqvfr::logf("lmu mvr: the context's %s couldn't be hooked; off", kHookName[h]);
+            return false;
+        }
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     g.qpcAtLog = now.QuadPart;
     g.tscAtLog = __rdtsc();
-    simqvfr::log_line("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye)");
+    std::string counts;
+    for (int h = 0; h < kHooks; ++h)
+        if (wanted(h)) {
+            counts += (h ? ", " : "") + std::string(kHookName[h]) + " " + std::to_string(functions[h].hooked);
+            ++g.stats.contextEntries;
+        }
+    simqvfr::logf("lmu mvr: on: passes 0-1 draw their focus views too (single-pass stereo, beside the eye); the context's "
+                  "hooks on %llu functions in d3d11's code (%s); multithread protection %s",
+                  static_cast<unsigned long long>(g.stats.contextFunctions), counts.c_str(),
+                  !g.multithread ? "not known" : g.protectedNow ? "on" : "off");
     return true;
 }
 
@@ -694,10 +1590,33 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     if (!g.context)
         return;
     Timed timed(g.time.hooks);
+    // A function an entry holds that wasn't seen at install (a mode of d3d11's not met there): hooked from this pass on.
+    for (int h = 0; h < kHooks; ++h)
+        if (hook_entry(h))
+            simqvfr::logf("lmu mvr: the context's %s entry holds a function not seen before: hooked (%d for it now)",
+                          kHookName[h], functions[h].count);
+    if (pass == 0 && g.multithread) {  // who turns multithread protection on or off, and when (once per frame)
+        const bool on = g.multithread->GetMultithreadProtected() != FALSE;
+        if (on != g.protectedNow) {
+            g.protectedNow = on;
+            simqvfr::logf("lmu mvr: the immediate context's multithread protection went %s (game frame %llu)",
+                          on ? "on" : "off", g.gpuFrameNo);
+        }
+    }
     g.pass = pass;
+    if (pass < 2) {  // the tracker's comparison
+        tr.actualBegin[pass] = tr.draws;
+        tr.actual = (std::max)(tr.actual, pass + 1);
+    }
     g.drawFocus = view != nullptr && !g.broken;
-    g.suspended = false;
     g.passTwinBinds = 0;
+    g.postWindow = g.focusCopied = g.focusComposited = false;
+    g.postTrace.clear();
+    g.copyTarget.Reset();
+    g.compositeOk = g.focusBlitted = g.overlayTarget = false;
+    if (pass == 0)
+        g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // a new frame: its own focus finals
+    g.afterResolve = false;
     if (pass == 0) {  // this frame's timestamps, in a slot whose last frame has been read
         if (g.gpuSlot >= 0) {  // the frame before stopped short of pass 3: its timing left out
             g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
@@ -742,6 +1661,7 @@ void mvr_pass_end(int pass) {
         return;
     Timed timed(g.time.hooks);
     g.drawFocus = false;
+    g.overlayTarget = false;
     update();  // the game's shader, one view, its own viewports
     stamp(pass, 2);
     if (pass == 3 && g.gpuSlot >= 0) {
@@ -757,24 +1677,165 @@ void mvr_pass_end(int pass) {
         else
             g.have[pass] = copy_region(g.passImage[eye], g.resolved[pass].Get(), 0, 0, v.focusW, v.focusH);
     }
+    if (g.focusCopied && !g.focusComposited) {  // the focus post's copy ran, its composite didn't (no composite seen)
+        ++g.stats.focusNoComposite;
+        if (g.tracesLogged < 4) {
+            ++g.tracesLogged;
+            simqvfr::logf("lmu mvr: focus post: pass %d ended without the composite; its draws (DrawIndexed) after the copy, "
+                          "pixel shader > target:%s",
+                          pass, g.postTrace.empty() ? " none" : g.postTrace.c_str());
+        }
+    }
+    g.focusCopied = false;
+    if (pass >= 0 && pass < 2)
+        tr.actualEnd[pass] = tr.draws;
     g.pass = -1;
     g.replaceResolve = false;
+    g.postWindow = false;
+    g.afterResolve = false;
 }
 
 void mvr_keep_focus(bool on) { g.keepFocus = on; }
 
+void mvr_focus_replay(bool on) {
+    g.focusReplay = on;
+    if (!on) {  // nothing doubled after the passes any more (R5's fallback switches it off mid-session)
+        g.finalThisFrame[0] = g.finalThisFrame[1] = false;
+        g.postWindow = false;
+    }
+}
+
+ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites) {
+    composites = g.focusPost.composites(eye);
+    return g.focusPost.image(eye);
+}
+
+bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigned& height) {
+    if (eye < 0 || eye > 1 || !g.finalThisFrame[eye])
+        return false;
+    const MvrPassView& v = g.viewOf[eye];
+    x = v.eyeW;
+    y = 0;
+    width = v.focusW;
+    height = v.focusH;
+    return true;
+}
+
 bool mvr_focus_ready(int eye) { return g.context && g.keepFocus && g.keptOk[eye & 1]; }
 
-void mvr_suspend(bool on) {
-    if (!g.context || g.pass < 0)
+void mvr_mask_stale(const std::atomic<bool>* stale) { g.maskStale = stale; }
+
+int mvr_mask_dropped() {
+    const int n = g.maskDroppedSince;
+    g.maskDroppedSince = 0;
+    return n;
+}
+
+void mvr_panel_draws(PanelFn fn) { g.panelFn = fn; }
+
+ID3D11Resource* mvr_copy_source(ID3D11Resource* dst) {
+    if (!dst)
+        return nullptr;
+    for (unsigned i = 1; i <= State::kCopiesKept; ++i) {
+        const State::CopySeen& c = g.copies[(g.copyNext - i) % State::kCopiesKept];
+        if (c.dst == dst && c.frame + 1 >= g.framesSinceInstall)  // this frame's or the one before's (a frame end since)
+            return c.src;
+    }
+    return nullptr;
+}
+
+ID3D11Texture2D* mvr_eye_final(int eye) {
+    if (eye < 0 || eye > 1 || !g.eyeFinal[eye])
+        return nullptr;
+    ComPtr<ID3D11Texture2D> t;
+    return SUCCEEDED(g.eyeFinal[eye].As(&t)) ? t.Get() : nullptr;  // raw: eyeFinal holds it
+}
+
+void mvr_redraw_panel(ID3D11DeviceContext* context, ID3D11RenderTargetView* rtv, unsigned width, unsigned height,
+                      unsigned vertexCount, unsigned startVertex) {
+    if (!context || !rtv || !width || !height)
         return;
-    g.suspended = on;
-    update();
+    ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+    ID3D11DepthStencilView* dsv = nullptr;
+    context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
+    D3D11_VIEWPORT vps[kMaxRects];
+    UINT n = kMaxRects;
+    context->RSGetViewports(&n, vps);
+    D3D11_RECT scs[kMaxRects];
+    UINT sn = kMaxRects;
+    context->RSGetScissorRects(&sn, scs);
+    // The game's target's size: its viewport and scissors scaled from that to the image's.
+    float sx = 1, sy = 1;
+    if (rtvs[0]) {
+        ComPtr<ID3D11Resource> resource;
+        rtvs[0]->GetResource(&resource);
+        ComPtr<ID3D11Texture2D> texture;
+        D3D11_TEXTURE2D_DESC d{};
+        if (resource && SUCCEEDED(resource.As(&texture))) {
+            texture->GetDesc(&d);
+            sx = d.Width ? static_cast<float>(width) / static_cast<float>(d.Width) : 1.0f;
+            sy = d.Height ? static_cast<float>(height) / static_cast<float>(d.Height) : 1.0f;
+        }
+    }
+    D3D11_VIEWPORT vp = n ? vps[0] : D3D11_VIEWPORT{0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
+    if (n) {
+        vp.TopLeftX *= sx;
+        vp.TopLeftY *= sy;
+        vp.Width *= sx;
+        vp.Height *= sy;
+    }
+    D3D11_RECT sc = {0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    if (sn)
+        sc = {static_cast<LONG>(std::lround(scs[0].left * sx)), static_cast<LONG>(std::lround(scs[0].top * sy)),
+              static_cast<LONG>(std::lround(scs[0].right * sx)), static_cast<LONG>(std::lround(scs[0].bottom * sy))};
+    const bool was = g.replaying;
+    g.replaying = true;
+    realOMSetRenderTargets(context, 1, &rtv, nullptr);
+    realRSSetViewports(context, 1, &vp);
+    realRSSetScissorRects(context, 1, &sc);
+    call_real<kHookDraw>(context, static_cast<UINT>(vertexCount), static_cast<UINT>(startVertex));
+    realOMSetRenderTargets(context, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
+    realRSSetViewports(context, n, vps);
+    realRSSetScissorRects(context, sn, scs);
+    g.replaying = was;
+    for (ID3D11RenderTargetView* r : rtvs)
+        if (r)
+            r->Release();
+    if (dsv)
+        dsv->Release();
+    ++g.stats.panelReplays;
 }
 
 void mvr_frame_end(unsigned long long frame) {
     if (!g.context)
         return;
+    if (g.gpuSlot >= 0) {  // a frame of fewer than four passes (two, with the focus finals): its timing complete now
+        g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
+        g.gpu[g.gpuSlot].pending = true;
+        g.gpuSlot = -1;
+    }
+    if (tr.on) {
+        track_frame_end(frame);  // a pass the tracker ends here reads its focus final (mvr_focus_final) first
+    } else {  // the counts start afresh each frame either way
+        tr.passes = tr.actual = 0;
+        tr.draws = 0;
+    }
+    g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // the next frame's are its own (a menu frame has none)
+    // The overlay trace: the frames 600, 2400 and 4200 frame ends after the install, each from the frame end before.
+    ++g.framesSinceInstall;
+    if (g.tracing) {
+        g.tracing = false;
+        simqvfr::logf("lmu mvr trace: frame %llu traced (from the frame end before): %d draws logged, %d not (over 800); "
+                      "the layer's own draws on the game's context (composition, overlay) may be among the outside ones",
+                      g.gpuFrameNo, g.traceDraws, g.traceDropped);
+    }
+    constexpr unsigned long long kTraceAt[] = {600, 2400, 4200};
+    if (g.focusReplay && g.framesTraced < static_cast<int>(std::size(kTraceAt)) &&
+        g.framesSinceInstall + 1 == kTraceAt[g.framesTraced]) {
+        g.tracing = true;
+        ++g.framesTraced;
+        g.traceDraws = g.traceDropped = 0;
+    }
     if (g.sample) {
         g.sample = false;
         if (!g.keepFocus)
@@ -813,6 +1874,45 @@ void mvr_frame_end(unsigned long long frame) {
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
                       static_cast<unsigned long long>(s.replacedResolves), static_cast<unsigned long long>(s.lookups),
                       static_cast<unsigned long long>(s.lookupMisses));
+        if (tr.on) {
+            const MvrTrackStats& ts = tr.stats;
+            const uint64_t compared = ts.passesCompared ? ts.passesCompared : 1;
+            simqvfr::logf("lmu mvr: pass tracker: %llu frames: the game's two passes found as its own in %llu (began %llu "
+                          "times before the game's, ended %llu after; draws of the game's pass left out at the start %.1f "
+                          "on average, %llu at most, at the end %.1f, %llu at most); %llu frames with another count; frames "
+                          "without the game's passes: %llu with %llu found",
+                          static_cast<unsigned long long>(ts.frames), static_cast<unsigned long long>(ts.matched),
+                          static_cast<unsigned long long>(ts.beganBefore), static_cast<unsigned long long>(ts.endedAfter),
+                          static_cast<double>(ts.startGapSum) / compared, static_cast<unsigned long long>(ts.startGapMax),
+                          static_cast<double>(ts.endGapSum) / compared, static_cast<unsigned long long>(ts.endGapMax),
+                          static_cast<unsigned long long>(ts.countDiffers),
+                          static_cast<unsigned long long>(ts.framesWithoutGame),
+                          static_cast<unsigned long long>(ts.passesWithoutGame));
+        }
+        if (s.maskDraws || s.maskDropped || s.panelReplays)
+            simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "
+                          "draws replayed at the menus' native size: %llu",
+                          static_cast<unsigned long long>(s.maskDraws), static_cast<unsigned long long>(s.maskDrawsTwo),
+                          static_cast<unsigned long long>(s.maskDropped),
+                          static_cast<unsigned long long>(s.panelReplays));
+        if (g.focusReplay) {
+            const MvrProbeStats probe = mvr_probe_stats();
+            simqvfr::logf("lmu mvr: focus post: %llu copies, %llu composites (%llu by their bindings), %llu final blits; "
+                          "overlays doubled: %llu draws in the passes, %llu after them; %llu steps failed; %llu passes "
+                          "without the composite after the copy, %llu draws into the resolve's target by another shader "
+                          "(YEBIS's copy and composite pixel shaders marked %llu and %llu times)",
+                          static_cast<unsigned long long>(s.focusCopies),
+                          static_cast<unsigned long long>(s.focusComposites),
+                          static_cast<unsigned long long>(s.focusCompositesByBindings),
+                          static_cast<unsigned long long>(s.focusBlits),
+                          static_cast<unsigned long long>(s.overlayDraws),
+                          static_cast<unsigned long long>(s.overlaysOutside),
+                          static_cast<unsigned long long>(s.focusFailures),
+                          static_cast<unsigned long long>(s.focusNoComposite),
+                          static_cast<unsigned long long>(s.focusUnknownComposites),
+                          static_cast<unsigned long long>(probe.yebisCopies),
+                          static_cast<unsigned long long>(probe.yebisComposites));
+        }
         for (int m = 0; m < 2; ++m) {
             if (!g.gpuCounts[m][0])
                 continue;
@@ -825,7 +1925,7 @@ void mvr_frame_end(unsigned long long frame) {
                 total += avg(sc[p] + po[p], n[p]);
             simqvfr::logf("lmu mvr: GPU per pass%s, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
                           "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms, %.2f in all (%u frames timed)",
-                          m ? " without MVR (A/B)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
+                          m ? " on the A/B's other side (without MVR, or the four passes)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
                           avg(sc[2], n[2]), avg(po[2], n[2]), avg(sc[3], n[3]), avg(po[3], n[3]), total, n[0]);
             for (int p = 0; p < 4; ++p) {
                 g.sceneMs[m][p] = g.postMs[m][p] = 0;
@@ -843,12 +1943,12 @@ void mvr_twins_changed() { ++g.twinEpoch; }
 
 void mvr_time_hooks(bool on) { timeHooks = on; }
 
-MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
-                          int range) {
+namespace {
+
+// mvr_compare's measures on two luminance images.
+MvrComparison compare_luminance(const std::vector<float>& la, const std::vector<float>& lb, unsigned w, unsigned h,
+                                int range) {
     MvrComparison c;
-    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
-        return c;
-    const std::vector<float> la = luminance(a, w, h), lb = luminance(b, w, h);
     const int border = range + 8;
     double best = -1, bestMeanA = 0;
     for (int dy = -range; dy <= range; ++dy)
@@ -898,6 +1998,73 @@ MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint
     return c;
 }
 
+float srgb_to_linear(uint8_t v) {
+    const float x = static_cast<float>(v) / 255.0f;
+    return x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
+}
+
+}  // namespace
+
+MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
+                          int range) {
+    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
+        return {};
+    return compare_luminance(luminance(a, w, h), luminance(b, w, h), w, h, range);
+}
+
+MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, unsigned w, unsigned h,
+                                int range) {
+    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
+        return {};
+    float table[256];
+    for (int i = 0; i < 256; ++i)
+        table[i] = srgb_to_linear(static_cast<uint8_t>(i));
+    const auto lum = [&](const std::vector<uint8_t>& px) {
+        std::vector<float> l(static_cast<size_t>(w) * h);
+        for (size_t i = 0; i < l.size(); ++i)
+            l[i] = 0.0722f * table[px[i * 4]] + 0.7152f * table[px[i * 4 + 1]] + 0.2126f * table[px[i * 4 + 2]];
+        return l;
+    };
+    MvrComparison c = compare_luminance(lum(a), lum(b), w, h, range);
+    // The bytes themselves at that offset (colour channels; alpha left out).
+    const int border = range + 8;
+    double sum = 0;
+    size_t counted = 0, over = 0;
+    for (int y = border; y < static_cast<int>(h) - border; ++y)
+        for (int x = border; x < static_cast<int>(w) - border; ++x) {
+            const size_t ia = (static_cast<size_t>(y) * w + x) * 4;
+            const size_t ib = (static_cast<size_t>(y + c.shiftY) * w + (x + c.shiftX)) * 4;
+            int most = 0;
+            for (int k = 0; k < 3; ++k) {
+                const int d = std::abs(static_cast<int>(a[ia + k]) - static_cast<int>(b[ib + k]));
+                most = std::max(most, d);
+                sum += d;
+            }
+            c.maxByte = std::max(c.maxByte, most);
+            over += most > 4 ? 1 : 0;
+            ++counted;
+        }
+    c.meanByte = counted ? sum / (3.0 * static_cast<double>(counted)) : 0;
+    c.bytesOverPct = counted ? 100.0 * static_cast<double>(over) / static_cast<double>(counted) : 0;
+    return c;
+}
+
 MvrPassStats mvr_pass_stats() { return g.stats; }
+
+bool mvr_broken() { return g.context && g.broken; }
+
+void mvr_track_drive(TrackFn begin, TrackFn end) {
+    tr.driveBegin = begin;
+    tr.driveEnd = end;
+}
+
+void mvr_track_passes(bool on) {
+    tr.on = on;
+    tr.open = false;
+    tr.passes = tr.actual = 0;
+    tr.draws = 0;
+}
+
+MvrTrackStats mvr_track_stats() { return tr.stats; }
 
 }  // namespace lmu

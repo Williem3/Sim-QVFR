@@ -217,6 +217,8 @@ void load_experiment() {
                               experiment.composing() && !game->qvfr_separate_views() ? 0 : 1, ini.c_str()) == 0;
     experiment.views4TestVisibleMask =
         experiment.views4 && GetPrivateProfileIntW(L"experiment", L"views4_test_visible_mask", 0, ini.c_str()) != 0;
+    experiment.views4TestHiddenMask =
+        experiment.views4 && GetPrivateProfileIntW(L"experiment", L"views4_test_hidden_mask", 0, ini.c_str()) != 0;
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;

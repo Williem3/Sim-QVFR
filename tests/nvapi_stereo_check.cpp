@@ -11,6 +11,13 @@
 // 3. Two-view draws: one triangle through a converted pass-through shader into a 256x128 target with two viewports,
 //    against a control with the mode off: the layer's routing (independent viewport mask 0x00020001: view 1 in the
 //    right viewport of the same target), the mask swapped, and the classic one (view 1 a render target slice on).
+// 4. (--timing) The render thread's CPU for the eye-pass hooks' work, and for how a hook is reached (a MinHook jump, a
+//    vtable copy).
+// 5. The layer's routing again with the device on a vtable copy (engine/object_vtable.h), as the probe leaves the
+//    game's: NVAPI's flags, its shader creation and the draw as on the original.
+// 6. What d3d11 does to the immediate context's vtable: the entries it rewrites between idle and busy and as multithread
+//    protection goes on, and what a hook on one function an entry held misses then.
+// 7. The layer's own context hooks installed on this device (games/lmu/mvr_pass.h): every function the entries hold.
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -18,16 +25,21 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
+
+#include <MinHook.h>
 
 #include "engine/dxbc_patch.h"
 #include "engine/nvapi_gpus.h"
 #include "engine/nvapi_stereo.h"
+#include "engine/object_vtable.h"
+#include "games/lmu/mvr_pass.h"
 
 using Microsoft::WRL::ComPtr;
 namespace dxbc = simqvfr::dxbc;
@@ -407,6 +419,104 @@ void timing(ID3D11Device* device, ID3D11DeviceContext* context) {
     std::printf("     %-56s %.3f us per call\n", "GetPrivateData + QueryInterface (twin_of)", 1000.0 * (c1 - c0) / 20000 / rate);
     wait();
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "timing: device fine afterwards");
+
+    // How a hook is reached: the same pass (a VSSetShader bind and a draw, 400 times) with VSSetShader passed straight
+    // on by a detour reached by a MinHook jump in d3d11.dll's code (the layer's), or through a vtable copy (not for the
+    // context: d3d11 rewrites its commands' entries, which a copy freezes, slowing every call); and no hook. Rounds in a
+    // rotating order, the median pass of each.
+    using VSSetShaderFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11VertexShader*,
+                                                   ID3D11ClassInstance* const*, UINT);
+    static VSSetShaderFn viaJump = nullptr, viaCopy = nullptr;
+    struct Detours {
+        static void STDMETHODCALLTYPE jump(ID3D11DeviceContext* c, ID3D11VertexShader* vs, ID3D11ClassInstance* const* i,
+                                           UINT n) {
+            viaJump(c, vs, i, n);
+        }
+        static void STDMETHODCALLTYPE copy(ID3D11DeviceContext* c, ID3D11VertexShader* vs, ID3D11ClassInstance* const* i,
+                                           UINT n) {
+            viaCopy(c, vs, i, n);
+        }
+    };
+    constexpr unsigned kVs = lmu::context_slot::kVSSetShader;
+    void* const vsSetShader = (*reinterpret_cast<void***>(context))[kVs];
+    constexpr int kModes = 3;
+    std::vector<double> passes[kModes];
+    for (int round = 0; round < 40; ++round)
+        for (int k = 0; k < kModes; ++k) {
+            const int mode = (k + round) % kModes;
+            simqvfr::ObjectVtable copy;
+            bool hooked = true;
+            if (mode == 1) {
+                const MH_STATUS init = MH_Initialize();
+                hooked = (init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED) &&
+                         MH_CreateHook(vsSetShader, reinterpret_cast<void*>(&Detours::jump),
+                                       reinterpret_cast<void**>(&viaJump)) == MH_OK &&
+                         MH_EnableHook(vsSetShader) == MH_OK;
+            }
+            if (mode == 2)
+                hooked = copy.install(context, simqvfr::kD3D11ContextSlots,
+                                      {{kVs, reinterpret_cast<void*>(&Detours::copy), reinterpret_cast<void**>(&viaCopy)}});
+            if (!hooked) {
+                check(false, "timing: a hook for the comparison");
+                return;
+            }
+            wait();
+            setup(false);
+            for (int pass = 0; pass < 40; ++pass) {
+                ULONG64 p0 = 0, p1 = 0;
+                QueryThreadCycleTime(GetCurrentThread(), &p0);
+                for (int d = 0; d < kDraws; ++d) {
+                    context->VSSetShader(plain[d % kShaders].Get(), nullptr, 0);
+                    context->Draw(3, 0);
+                }
+                QueryThreadCycleTime(GetCurrentThread(), &p1);
+                passes[mode].push_back(static_cast<double>(p1 - p0) / rate);
+                if (pass % 20 == 19)
+                    wait();
+            }
+            copy.remove();
+            if (mode == 1)
+                MH_RemoveHook(vsSetShader);
+        }
+    const auto median = [](std::vector<double> v) {
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    };
+    const char* names[kModes] = {"no hook", "VSSetShader through a MinHook jump (the layer's)",
+                                 "VSSetShader through a vtable copy (not for the context)"};
+    double ms[kModes];
+    for (int mode = 0; mode < kModes; ++mode)
+        ms[mode] = median(passes[mode]);
+    for (int mode = 0; mode < kModes; ++mode)
+        std::printf("     %-64s CPU %.4f ms per pass (%+.4f; %+.1f ns per bind and draw)\n", names[mode], ms[mode],
+                    ms[mode] - ms[0], 1e6 * (ms[mode] - ms[0]) / kDraws);
+    char what[200];
+    // 0.8-2.6 ns on an RTX 5070 Ti (2026-11-09, by the CPU's clock state): under 10 us a frame at LMU's ~1,700 calls.
+    std::snprintf(what, sizeof(what), "timing: the layer's hook costs at most 5 ns per bind and draw (%+.1f)",
+                  1e6 * (ms[1] - ms[0]) / kDraws);
+    check(ms[1] - ms[0] <= 5e-6 * kDraws, what);
+    check(SUCCEEDED(device->GetDeviceRemovedReason()), "timing: device fine after the hook comparison");
+}
+
+// The device's shader creation through a vtable copy, as the probe leaves the game's device. Counted: it passes on.
+using CreateVertexShaderFn = HRESULT(STDMETHODCALLTYPE*)(ID3D11Device*, const void*, SIZE_T, ID3D11ClassLinkage*,
+                                                         ID3D11VertexShader**);
+CreateVertexShaderFn realCreateVertexShader = nullptr;
+int creates = 0;
+HRESULT STDMETHODCALLTYPE counted_create(ID3D11Device* d, const void* code, SIZE_T size, ID3D11ClassLinkage* l,
+                                         ID3D11VertexShader** vs) {
+    ++creates;
+    return realCreateVertexShader(d, code, size, l, vs);
+}
+
+// RSSetViewports as one MinHook hook on the function its entry holds with multithread protection off (the layer's
+// hooks before 2026-11-09): counted, to show what such a hook misses once protection is on.
+using RSSetViewportsFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, const D3D11_VIEWPORT*);
+RSSetViewportsFn realRSSetViewports = nullptr;
+int viewportSets = 0;
+void STDMETHODCALLTYPE counted_viewports(ID3D11DeviceContext* c, UINT n, const D3D11_VIEWPORT* vps) {
+    ++viewportSets;
+    realRSSetViewports(c, n, vps);
 }
 
 }  // namespace
@@ -461,6 +571,146 @@ int main(int argc, char** argv) {
     print(slices, rl);
     check(rl.ok && std::abs(rl.half[0][0].count - area0) <= area0 / 50 && view1_at(rl.half[1][0], 0, area0),
           "two views into two slices: view 1 in slice 1");
+
+    // 5. The device on a vtable copy, as the probe leaves the game's (engine/object_vtable.h): NVAPI's flags, its shader
+    //    creation and the layer's two-view draw as on the original.
+    {
+        simqvfr::ObjectVtable deviceCopy;
+        const bool copied = deviceCopy.install(device.Get(), simqvfr::kD3D11DeviceSlots,
+                                               {{12, reinterpret_cast<void*>(&counted_create),
+                                                 reinterpret_cast<void**>(&realCreateVertexShader)}});
+        std::snprintf(what, sizeof(what), "the device on a vtable copy (%zu entries)", deviceCopy.slots());
+        check(copied, what);
+        const nvapi::Support sc = nvapi::query(device.Get());
+        check(sc.loaded && sc.xyzw && sc.singlePassStereo == s.singlePassStereo,
+              "the device on a copy: NVAPI's flags as before");
+        Variant onCopy = viewports;
+        onCopy.name = "independent mask 0x00020001, device on a copy";
+        const Result rc = draw(device.Get(), context.Get(), onCopy);
+        print(onCopy, rc);
+        std::snprintf(what, sizeof(what),
+                      "the device on a copy: the two-view draw lands as before (NVAPI's shader creation called the "
+                      "device's entry %d times)",
+                      creates);
+        check(rc.ok && std::abs(rc.half[0][0].count - r.half[0][0].count) <= area0 / 50 &&
+                  std::abs(rc.half[0][1].count - r.half[0][1].count) <= area0 / 50 && view1_at(rc.half[0][1], 128, area0),
+              what);
+        deviceCopy.remove();
+    }
+
+    // 6. What d3d11 does to the immediate context's vtable (it lives inside the context): the entries it rewrites as the
+    //    context goes idle (a flush, the GPU done) and busy (a command), and as multithread protection goes on; and what
+    //    a MinHook hook on one function an entry held misses then (why the layer hooks every function each entry is seen
+    //    holding, games/lmu/mvr_pass.cpp). 2026-11-09, RTX 5070 Ti: 24 entries (every command's) between idle and busy,
+    //    130 with protection, all of the layer's ten among those. Once protection has been on, the entries hold other
+    //    plain functions than at first; a hook on one of those saw no call with protection on (its locking function calls
+    //    the first plain one instead).
+    {
+        void** vt = *reinterpret_cast<void***>(context.Get());
+        const std::size_t n = simqvfr::kD3D11ContextSlots;
+        ComPtr<ID3D11Query> done;
+        ComPtr<ID3D11Buffer> buffer;
+        ComPtr<ID3D11Multithread> mt;
+        const D3D11_QUERY_DESC qd = {D3D11_QUERY_EVENT, 0};
+        const D3D11_BUFFER_DESC bd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        const float zero[4] = {};
+        const auto idle = [&] {
+            context->End(done.Get());
+            context->Flush();
+            BOOL finished = FALSE;
+            while (context->GetData(done.Get(), &finished, sizeof(finished), 0) != S_OK || !finished)
+                Sleep(0);
+        };
+        // The entries that differ between two snapshots, and how many of them are the layer's.
+        const auto rewritten = [&](const std::vector<void*>& a, const std::vector<void*>& b, int& ours) {
+            std::string list;
+            int count = 0;
+            ours = 0;
+            for (std::size_t i = 0; i < n; ++i)
+                if (a[i] != b[i]) {
+                    ++count;
+                    if (list.size() < 200)
+                        list += " " + std::to_string(i);
+                    for (unsigned slot : lmu::context_slot::kHooked)
+                        ours += i == slot ? 1 : 0;
+                }
+            return std::to_string(count) + (count ? ":" + list : "");
+        };
+        if (SUCCEEDED(device->CreateQuery(&qd, &done)) && SUCCEEDED(device->CreateBuffer(&bd, nullptr, &buffer)) &&
+            SUCCEEDED(context.As(&mt))) {
+            const BOOL was = mt->SetMultithreadProtected(FALSE);
+            idle();
+            const std::vector<void*> idleSet(vt, vt + n);
+            context->UpdateSubresource(buffer.Get(), 0, nullptr, zero, 0, 0);
+            const std::vector<void*> busySet(vt, vt + n);
+            idle();
+            const std::vector<void*> idleAgain(vt, vt + n);
+            int ours = 0;
+            std::printf("     entries d3d11 rewrites between idle and busy: %s\n",
+                        rewritten(idleSet, busySet, ours).c_str());
+            check(idleAgain == idleSet && idleSet != busySet, "d3d11 rewrites its context's vtable between idle and busy");
+            void* const firstPlain = vt[lmu::context_slot::kRSSetViewports];
+            mt->SetMultithreadProtected(TRUE);
+            const std::vector<void*> lockedSet(vt, vt + n);
+            const std::string list = rewritten(idleAgain, lockedSet, ours);
+            std::printf("     entries d3d11 rewrites as multithread protection goes on: %s\n", list.c_str());
+            std::snprintf(what, sizeof(what), "multithread protection on: d3d11 rewrites %d of the layer's entries (the draws' with the focus post)",
+                          ours);
+            check(ours > 0, what);
+            mt->SetMultithreadProtected(FALSE);
+            // The way before: one hook, on the function RSSetViewports' entry holds now (protection off, after it was on).
+            void* const plain = vt[lmu::context_slot::kRSSetViewports];
+            const D3D11_VIEWPORT vp = {0, 0, 64, 64, 0, 1};
+            const MH_STATUS init = MH_Initialize();
+            const bool hooked = (init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED) &&
+                                MH_CreateHook(plain, reinterpret_cast<void*>(&counted_viewports),
+                                              reinterpret_cast<void**>(&realRSSetViewports)) == MH_OK &&
+                                MH_EnableHook(plain) == MH_OK;
+            context->RSSetViewports(1, &vp);
+            const int off = viewportSets;
+            mt->SetMultithreadProtected(TRUE);
+            context->RSSetViewports(1, &vp);
+            const int on = viewportSets - off;
+            std::printf("     one hook on RSSetViewports' plain function (%s the first one): it sees %d of 1 call with "
+                        "protection off, %d of 1 with it on\n",
+                        plain == firstPlain ? "still" : "not", off, on);
+            check(hooked, "one hook on RSSetViewports' plain function");
+            mt->SetMultithreadProtected(was);
+            if (hooked)
+                MH_RemoveHook(plain);
+        } else {
+            check(false, "the context's vtable: a query, a buffer and its multithread protection");
+        }
+    }
+
+    // 7. The layer's own install on this device (games/lmu/mvr_pass.h), with the focus post (the draws too): every
+    //    function the fifteen entries are seen holding hooked; with multithread protection on, the entries hold none it
+    //    hasn't seen.
+    {
+        lmu::mvr_focus_replay(true);
+        const bool installed = lmu::mvr_pass_install(device.Get());
+        const uint64_t hookedNow = lmu::mvr_pass_stats().contextFunctions;
+        std::snprintf(what, sizeof(what),
+                      "the layer's install: %llu functions hooked for %llu entries (fifteen with the focus post; two each "
+                      "at least), %llu of them ResolveSubresource's",
+                      static_cast<unsigned long long>(hookedNow),
+                      static_cast<unsigned long long>(lmu::mvr_pass_stats().contextEntries),
+                      static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
+        check(installed && lmu::mvr_pass_stats().contextEntries == 15 && hookedNow >= 30, what);
+        ComPtr<ID3D11Multithread> mt;
+        if (SUCCEEDED(context.As(&mt))) {
+            const BOOL was = mt->SetMultithreadProtected(TRUE);
+            lmu::mvr_pass_begin(0, nullptr, false);  // a pass's start hooks any function not seen before
+            lmu::mvr_pass_end(0);
+            context->Flush();
+            lmu::mvr_pass_begin(0, nullptr, false);
+            lmu::mvr_pass_end(0);
+            mt->SetMultithreadProtected(was);
+            check(lmu::mvr_pass_stats().contextFunctions == hookedNow,
+                  "the layer's install: protection on, idle and busy: no function it hadn't hooked");
+        }
+        check(SUCCEEDED(device->GetDeviceRemovedReason()), "the layer's install: device fine");
+    }
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

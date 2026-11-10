@@ -221,9 +221,9 @@ float games_pane(float x, float y, float w, bool draw) {
         h += t::kSpace6;
         const std::wstring desc =
             L"Starts " + std::wstring(launching.shortName) +
-            L" through its anti-cheat, as Steam does, with Sim-QVFR running. Sim-QVFR changes the game’s code and "
-            L"the anti-cheat may kick you or ban your account for it. Off starts the game without the anti-cheat "
-            L"(offline only).";
+            L" through its anti-cheat, as Steam does, with Sim-QVFR running. Sim-QVFR works inside the game "
+            L"(without multi-view rendering it also changes the game’s code), and the anti-cheat may kick you or ban "
+            L"your account for it. Off starts the game without the anti-cheat (offline only).";
         Row on;
         on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
         on.full = [desc](const Rect& r) { checkbox(kAntiCheat, r, app.s.antiCheat, L"Run with anti-cheat", desc, false); };

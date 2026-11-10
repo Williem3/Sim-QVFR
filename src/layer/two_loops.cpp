@@ -218,6 +218,9 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
 // mesh with one zero-area triangle: nothing is masked in any view (the lenses hide those pixels anyway).
 // views4_test_visible_mask=1 answers the visible mesh with the whole view, as runtimes that offer one (VDXR) do, to
 // reproduce their path on one that doesn't (SteamVR with the Pimax).
+// views4_test_hidden_mask=1 answers the hidden mesh with one of ours, so a game's lens mask can be seen where the runtime
+// gives none (SteamVR on the user's headset): each corner of the view's located FOV cut off by a triangle a quarter of
+// each side long, and a small triangle straight ahead (inside the focus box when the eyes look at it).
 namespace {
 std::atomic<bool> runtimeMaskLogged[3];  // per XrVisibilityMaskTypeKHR (1-3), the runtime's answer logged once
 XrResult test_visible_mask(XrVisibilityMaskKHR* mask) {
@@ -237,12 +240,52 @@ XrResult test_visible_mask(XrVisibilityMaskKHR* mask) {
         log_line("views4: visible-area mesh replaced by the whole view (views4_test_visible_mask=1)");
     return XR_SUCCESS;
 }
+
+XrResult test_hidden_mask(uint32_t viewIndex, XrVisibilityMaskKHR* mask) {
+    constexpr uint32_t kCount = 15;  // five triangles, each its own three vertices
+    mask->vertexCountOutput = kCount;
+    mask->indexCountOutput = kCount;
+    if (mask->vertexCapacityInput == 0 && mask->indexCapacityInput == 0)
+        return XR_SUCCESS;  // the size query
+    if (mask->vertexCapacityInput < kCount || mask->indexCapacityInput < kCount || !mask->vertices || !mask->indices)
+        return XR_ERROR_SIZE_INSUFFICIENT;
+    // The view's FOV as the game located it (cropped, if a crop is set); tangents.
+    float l = -1, r = 1, d = -1, u = 1;
+    {
+        std::lock_guard guard(quad.mutex);
+        if (viewIndex < 2) {
+            const XrFovf& fov = quad.v4Fov[viewIndex];
+            if (fov.angleRight > fov.angleLeft && fov.angleUp > fov.angleDown) {
+                l = std::tan(fov.angleLeft);
+                r = std::tan(fov.angleRight);
+                d = std::tan(fov.angleDown);
+                u = std::tan(fov.angleUp);
+            }
+        }
+    }
+    const float a = 0.25f * (r - l), b = 0.25f * (u - d), s = 0.04f;
+    // Counter-clockwise (x right, y up).
+    const XrVector2f v[kCount] = {{l, d},  {l + a, d}, {l, d + b},    // bottom left
+                                  {r, d},  {r, d + b}, {r - a, d},    // bottom right
+                                  {r, u},  {r - a, u}, {r, u - b},    // top right
+                                  {l, u},  {l, u - b}, {l + a, u},    // top left
+                                  {-s, -s}, {s, -s},   {0.0f, s}};    // straight ahead
+    std::memcpy(mask->vertices, v, sizeof(v));
+    for (uint32_t i = 0; i < kCount; ++i)
+        mask->indices[i] = i;
+    logf("views4: hidden-area mesh of view %u replaced by a test one (views4_test_hidden_mask=1): the corners of its FOV "
+         "(tangents %.3f/%.3f/%.3f/%.3f) cut a quarter of each side, a triangle %.2f wide straight ahead",
+         viewIndex, l, r, d, u, 2 * s);
+    return XR_SUCCESS;
+}
 }  // namespace
 XrResult XRAPI_CALL layerGetVisibilityMaskKHR(XrSession session, XrViewConfigurationType type, uint32_t viewIndex,
                                               XrVisibilityMaskTypeKHR maskType, XrVisibilityMaskKHR* mask) {
     if (experiment.views4 && maskType == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR && mask &&
         mask->vertexCapacityInput > 0)
         game->visibility_mask_taken(viewIndex);  // the mesh itself, not the size query
+    if (experiment.views4TestHiddenMask && maskType == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR && mask)
+        return test_hidden_mask(viewIndex, mask);
     if (experiment.views4TestVisibleMask && maskType == XR_VISIBILITY_MASK_TYPE_VISIBLE_TRIANGLE_MESH_KHR && mask)
         return test_visible_mask(mask);
     if (!experiment.views4NoMask || maskType != XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR || !mask) {

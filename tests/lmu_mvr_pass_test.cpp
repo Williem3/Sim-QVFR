@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <windows.h>
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
@@ -98,7 +98,24 @@ int main() {
         return 1;
     }
     lmu::mvr_set_two_views(&fake_two_views);
+    // The hooks are on every function the context's ten entries hold (with multithread protection off and on, idle and
+    // busy), in d3d11's code; DrawIndexed's eleventh only with the focus post (lmu_focus_post_test). The context's vtable
+    // pointer as it was (its entries are d3d11's to rewrite).
+    void** const ownVtable = *reinterpret_cast<void***>(context.Get());
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
+    check(*reinterpret_cast<void***>(context.Get()) == ownVtable, "the context's vtable pointer as it was");
+    char what[200];
+    const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
+    std::snprintf(what, sizeof(what),
+                  "%llu functions hooked for %llu entries (ten: no DrawIndexed without the focus post; two each at least: "
+                  "protection off and on), %llu of them ResolveSubresource's",
+                  static_cast<unsigned long long>(installed.contextFunctions),
+                  static_cast<unsigned long long>(installed.contextEntries),
+                  static_cast<unsigned long long>(installed.resolveFunctions));
+    check(installed.contextEntries == 10 && installed.contextFunctions >= 20 && installed.resolveFunctions >= 2, what);
+    ComPtr<ID3D11DeviceContext4> context4;
+    check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
+          "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");
 
     ComPtr<ID3D11VertexShader> a = vertex_shader(device.Get(), "1"), twin = vertex_shader(device.Get(), "2"),
                                b = vertex_shader(device.Get(), "3");
@@ -192,12 +209,6 @@ int main() {
         context->ResolveSubresource(single.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
         check(ms && single && lmu::mvr_pass_stats().resolves == before + 1, "a multisample resolve in the pass is seen");
     }
-    lmu::mvr_suspend(true);
-    check(bound_vs(context.Get()) == a.Get() && twoViewsOn == 0 && viewports(context.Get(), vps) == 1,
-          "suspended (the lens mask): the eye only");
-    lmu::mvr_suspend(false);
-    check(bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && viewports(context.Get(), vps) == 2,
-          "resumed: the twin and two viewports again");
     lmu::mvr_pass_end(0);
     n = viewports(context.Get(), vps);
     rn = 16;
@@ -212,6 +223,39 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
+    {  // Multithread protection on: d3d11 puts other functions in the context's entries; the hooks are on those too.
+        ComPtr<ID3D11Multithread> mt;
+        check(SUCCEEDED(context.As(&mt)), "the context's multithread protection");
+        void* const plainEntry = ownVtable[lmu::context_slot::kRSSetViewports];
+        const BOOL was = mt ? mt->SetMultithreadProtected(TRUE) : FALSE;
+        check(mt && ownVtable[lmu::context_slot::kRSSetViewports] != plainEntry,
+              "protection on: d3d11 rewrote the context's entries");
+        for (int round = 0; round < 2; ++round) {  // protection on, then off again
+            const uint64_t functions = lmu::mvr_pass_stats().contextFunctions;
+            context->RSSetViewports(1, &eye);
+            context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+            context->VSSetShader(b.Get(), nullptr, 0);
+            lmu::mvr_pass_begin(0, &view, false);
+            context->VSSetShader(a.Get(), nullptr, 0);
+            n = viewports(context.Get(), vps);
+            const bool twinned = bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && n == 2 &&
+                                 same(vps[1], 100, 0, 60, 50);
+            context->RSSetViewports(1, &quarter);
+            n = viewports(context.Get(), vps);
+            const bool quartered = n == 2 && same(vps[1], 25, 0, 15, 12.5f);
+            context->VSSetShader(b.Get(), nullptr, 0);
+            const bool plain = bound_vs(context.Get()) == b.Get() && twoViewsOn == 0;
+            lmu::mvr_pass_end(0);
+            std::snprintf(what, sizeof(what),
+                          "protection %s: the game's shader and viewport calls still seen (twin and focus viewport %d, "
+                          "quarter size %d, a shader without a twin %d); no function new since install",
+                          round == 0 ? "on" : "off again", twinned, quartered, plain);
+            check(twinned && quartered && plain && lmu::mvr_pass_stats().contextFunctions == functions, what);
+            if (mt && round == 0)
+                mt->SetMultithreadProtected(was);
+        }
+    }
+
     {  // The twin lookup: once per shader (the cache, across frames); a twin attached since seen once announced.
         lmu::mvr_pass_begin(0, &view, false);
         const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
@@ -220,14 +264,15 @@ int main() {
             context->VSSetShader(a.Get(), nullptr, 0);
         }
         const lmu::MvrPassStats s1 = lmu::mvr_pass_stats();
-        check(s1.lookups - s0.lookups == 10 && s1.lookupMisses - s0.lookupMisses <= 2 && bound_vs(context.Get()) == twin.Get(),
+        // Two lookups per bind (its role, R6, then its twin), one entry per shader.
+        check(s1.lookups - s0.lookups == 20 && s1.lookupMisses - s0.lookupMisses <= 2 && bound_vs(context.Get()) == twin.Get(),
               "ten binds of two shaders in a frame: at most two lookups not cached, the twin bound");
         lmu::mvr_pass_end(0);
         lmu::mvr_pass_begin(0, &view, false);  // the next frame (its start looks up the bound shader): still cached
         context->VSSetShader(b.Get(), nullptr, 0);
         context->VSSetShader(a.Get(), nullptr, 0);
         const lmu::MvrPassStats s2 = lmu::mvr_pass_stats();
-        check(s2.lookups - s1.lookups == 3 && s2.lookupMisses == s1.lookupMisses && bound_vs(context.Get()) == twin.Get(),
+        check(s2.lookups - s1.lookups == 6 && s2.lookupMisses == s1.lookupMisses && bound_vs(context.Get()) == twin.Get(),
               "the next frame: every lookup answered by the cache");
         lmu::mvr_pass_end(0);
         ComPtr<ID3D11VertexShader> twinB = vertex_shader(device.Get(), "4");
@@ -306,7 +351,6 @@ int main() {
               std::fabs(same0.brightness - 1) < 1e-6 && same0.differingPct == 0,
           "compare: an image with itself: aligned, brightness 1, nothing differs");
     const lmu::MvrComparison moved = lmu::mvr_compare(base, image(w, h, 2, -1, 1.0f), w, h);
-    char what[160];
     std::snprintf(what, sizeof(what), "compare: moved by (2, -1): found at %+d,%+d, mean difference %.4f", moved.shiftX,
                   moved.shiftY, moved.meanDiff);
     check(moved.ok && moved.shiftX == 2 && moved.shiftY == -1 && moved.meanDiff < 0.002, what);
@@ -314,6 +358,39 @@ int main() {
     std::snprintf(what, sizeof(what), "compare: 10%% brighter: brightness %.4f, cell median %.4f", bright.brightness,
                   bright.cellMedian);
     check(bright.ok && std::fabs(bright.brightness - 1.1) < 0.005 && std::fabs(bright.cellMedian - 1.1) < 0.005, what);
+
+    {  // The 8-bit comparison (the focus post's images against passes 2-3's: gamma-encoded BGRA).
+        const auto bgra = [&](int shiftX, int shiftY, int add) {
+            std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+            for (unsigned y = 0; y < h; ++y)
+                for (unsigned x = 0; x < w; ++x) {
+                    const double sx = static_cast<double>(x) - shiftX, sy = static_cast<double>(y) - shiftY;
+                    const double v = 128 + 60 * std::sin(sx * 0.21) * std::cos(sy * 0.17) + 30 * std::sin((sx + sy) * 0.05);
+                    for (int c = 0; c < 3; ++c)
+                        px[(static_cast<size_t>(y) * w + x) * 4 + c] =
+                            static_cast<uint8_t>(std::lround(std::min(255.0, std::max(0.0, v - 10 * c + add))));
+                    px[(static_cast<size_t>(y) * w + x) * 4 + 3] = 255;
+                }
+            return px;
+        };
+        const std::vector<uint8_t> b8 = bgra(0, 0, 0);
+        const lmu::MvrComparison s8 = lmu::mvr_compare_bgra8(b8, b8, w, h);
+        check(s8.ok && s8.shiftX == 0 && s8.shiftY == 0 && s8.maxByte == 0 && s8.meanByte == 0 &&
+                  std::fabs(s8.brightness - 1) < 1e-9,
+              "compare 8-bit: an image with itself: aligned, brightness 1, no byte differs");
+        const lmu::MvrComparison m8 = lmu::mvr_compare_bgra8(b8, bgra(-3, 2, 0), w, h);
+        std::snprintf(what, sizeof(what), "compare 8-bit: moved by (-3, 2): found at %+d,%+d, largest byte difference %d",
+                      m8.shiftX, m8.shiftY, m8.maxByte);
+        check(m8.ok && m8.shiftX == -3 && m8.shiftY == 2 && m8.maxByte <= 1, what);
+        const lmu::MvrComparison p8 = lmu::mvr_compare_bgra8(b8, bgra(0, 0, 3), w, h);
+        std::snprintf(what, sizeof(what),
+                      "compare 8-bit: 3 added to every channel: bytes largest %d, mean %.2f, %.1f%% over 4; brightness %.4f",
+                      p8.maxByte, p8.meanByte, p8.bytesOverPct, p8.brightness);
+        check(p8.ok && p8.maxByte == 3 && std::fabs(p8.meanByte - 3) < 0.05 && p8.bytesOverPct == 0 && p8.brightness > 1.01 &&
+                  p8.brightness < 1.06,
+              what);
+        check(!lmu::mvr_compare_bgra8(b8, b8, w, h - 1).ok, "compare 8-bit: sizes that don't match the images: not ok");
+    }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
