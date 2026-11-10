@@ -351,6 +351,8 @@ void mvr_probe_frame_end() {
                   static_cast<unsigned long long>(stats.yebisCopies), static_cast<unsigned long long>(stats.yebisComposites));
 }
 
+bool mvr_probe_usable() { return attach && nvapiUsable; }
+
 MvrProbeStats mvr_probe_stats() {
     std::lock_guard guard(statsMutex);
     return stats;

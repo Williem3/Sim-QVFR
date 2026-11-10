@@ -1587,7 +1587,13 @@ void mvr_pass_end(int pass) {
 
 void mvr_keep_focus(bool on) { g.keepFocus = on; }
 
-void mvr_focus_replay(bool on) { g.focusReplay = on; }
+void mvr_focus_replay(bool on) {
+    g.focusReplay = on;
+    if (!on) {  // nothing doubled after the passes any more (R5's fallback switches it off mid-session)
+        g.finalThisFrame[0] = g.finalThisFrame[1] = false;
+        g.postWindow = false;
+    }
+}
 
 ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites) {
     composites = g.focusPost.composites(eye);
@@ -1851,6 +1857,8 @@ MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector
 }
 
 MvrPassStats mvr_pass_stats() { return g.stats; }
+
+bool mvr_broken() { return g.context && g.broken; }
 
 void mvr_track_drive(TrackFn begin, TrackFn end) {
     tr.driveBegin = begin;

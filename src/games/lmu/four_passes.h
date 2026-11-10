@@ -70,6 +70,9 @@ struct FourPassesRun {
     // lens mask's draw and the VR UI's are hooked (no scene render, eye loop, post-effect time, scene skip, glare or
     // driver tags hooks; no A/B: the game's own two passes).
     bool trackerDrives = false;
+    // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
+    // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.
+    int fallbackAt = 0;
 };
 
 // Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render

@@ -56,9 +56,13 @@ public:
         run.layerWidth = s.layout.layer_width();
         run.layerHeight = s.layout.layer_height();
         // Multi-view rendering (mvr_pass.h): passes 0-1 draw their focus views too, beside their eyes, where the layer
-        // made room (Views4Layout::secondViewRoom): the launcher's multi_view=1 (games/multi_view.h), as gate D. Or
-        // lmu_mvr, its gates: 1 (C: passes 2-3 still render theirs, compared at the samples), 2 (D: they skip the scene).
+        // made room (Views4Layout::secondViewRoom). The launcher's multi_view=1 (games/multi_view.h): the game's own two
+        // eye passes make the focus views (focus post, focus finals, the d3d11 pass tracker), falling back to the four
+        // passes if it can't (four_passes.h); [experiment] lmu_mvr_legacy=1: the four passes with MVR (gate D) as
+        // before. Or lmu_mvr, its gates: 1 (C: passes 2-3 still render theirs, compared at the samples), 2 (D: they skip
+        // the scene); with those and lmu_mvr_legacy the steps' own keys (lmu_focus_replay and on) apply.
         const UINT gate = simqvfr::games::lmu_mvr_gate(s.ini);
+        const bool legacy = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_legacy", 0, s.ini) != 0;
         const UINT mvrLevel = gate ? gate : 2;
         run.mvr = s.layout.secondViewRoom;
         run.mvrSkip = run.mvr && mvrLevel >= 2;  // passes 2-3 skip the scene
@@ -72,11 +76,12 @@ public:
             run.mvrAb = (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_ab", 0, s.ini)));
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
             run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
+            const bool player = gate == 0 && !legacy;  // multi_view=1: the two-pass path
             // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
-            run.focusReplay = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0;
+            run.focusReplay = player || (s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0);
             // lmu_focus_final=1 (with it): two eye passes, the focus views from beside the eyes (four_passes.h).
             run.focusFinal = run.focusReplay && run.mvrSkip &&
-                             GetPrivateProfileIntW(L"experiment", L"lmu_focus_final", 0, s.ini) != 0;
+                             (player || GetPrivateProfileIntW(L"experiment", L"lmu_focus_final", 0, s.ini) != 0);
             if (run.focusFinal) {
                 run.focusFinalAb =
                     (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_focus_final_ab", 0, s.ini)));
@@ -84,11 +89,17 @@ public:
                 run.mvrTiming = run.mvrTiming || run.focusFinalAb > 0;
             }
             // lmu_pass_tracker=1 (with the focus post): R4b's d3d11 pass bounds, observe only (four_passes.h).
-            const UINT tracker = run.focusReplay ? GetPrivateProfileIntW(L"experiment", L"lmu_pass_tracker", 0, s.ini) : 0;
+            const UINT tracker =
+                player ? 2 : run.focusReplay ? GetPrivateProfileIntW(L"experiment", L"lmu_pass_tracker", 0, s.ini) : 0;
             run.passTracker = tracker != 0;
             run.trackerDrives = tracker >= 2 && run.focusFinal;  // =2: it drives the passes, the game hooks off (R4b-2)
-            if (run.trackerDrives)
+            if (run.trackerDrives) {
                 run.focusFinalAb = 0;  // the game's own two passes: nothing to alternate with
+                run.mvrAb = 0;
+                // lmu_mvr_fallback_at=N: the fallback to the four passes forced at scene frame N (its test).
+                run.fallbackAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_fallback_at", 0,
+                                                                                      s.ini)));
+            }
         }
         // The focus views take their eye's glare (glare_share.h), so a light's halo doesn't stop at the box edge.
         run.glareShare = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_glare_share", 1, s.ini) != 0;

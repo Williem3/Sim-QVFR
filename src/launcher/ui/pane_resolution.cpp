@@ -47,8 +47,8 @@ float resolution_pane(float x, float y, float w, bool draw) {
                      L"game’s own detail for the outer resolution.",
                      draw, Applies::Live);
     }
-    // NVIDIA multi-view rendering (LMU): each eye's pass draws its focus view too. Only on a GPU that has it (asked of
-    // the driver once); the layer checks again at launch.
+    // NVIDIA multi-view rendering (LMU): each eye's pass draws and finishes its focus view (two passes instead of four).
+    // Only on a GPU that has it (asked of the driver once); the layer checks again at launch.
     if (game_has(&games::GameFeatures::multiView)) {
         h += t::kSpace6;
         const nvapi::Gpu* gpu = nvapi::two_views_gpu();
@@ -56,8 +56,8 @@ float resolution_pane(float x, float y, float w, bool draw) {
         if (!qvfr) {
             desc = L"Available in Quad View Foveated Rendering.";
         } else if (gpu) {
-            desc = L"Each eye’s pass also draws its focus view, so the game prepares its scene twice a frame instead of four "
-                   L"times.";
+            desc = L"Each eye’s pass also draws and finishes its focus view, so the game renders only its own two eye passes "
+                   L"a frame instead of four.";
         } else {
             std::wstring found;
             for (const nvapi::Gpu& g : nvapi::gpus())
@@ -74,7 +74,7 @@ float resolution_pane(float x, float y, float w, bool draw) {
             checkbox(kMultiView, r, shown, L"Multi-view rendering", desc, unavailable);
         };
         h += section(x, y + h, w, L"NVIDIA multi-view rendering", {on},
-                     gpu ? L"Saves CPU and GPU time every frame (about 2 ms of each in testing). Off renders every view on "
+                     gpu ? L"Saves CPU and GPU time every frame (2 ms or more of each in testing). Off renders every view on "
                            L"its own, as on any graphics card."
                          : L"Off renders every view on its own, as on any graphics card.",
                      draw, Applies::NextLaunch);

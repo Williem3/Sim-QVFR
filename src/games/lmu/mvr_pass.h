@@ -120,6 +120,8 @@ struct MvrPassStats {
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
 };
 MvrPassStats mvr_pass_stats();
+// Single-pass stereo was refused at a draw (off for the session since): no focus views from the eye passes.
+bool mvr_broken();
 
 // R4b (docs/recon-lmu.md "R4 plan"): the eye passes as the d3d11 calls show them, without the game's scene render hook.
 // A pass begins at the first bind of a multisample render target with a depth target after the frame's start or the

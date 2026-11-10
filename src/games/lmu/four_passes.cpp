@@ -28,6 +28,7 @@
 #include "game.h"
 #include "glare_share.h"
 #include "mvr_pass.h"
+#include "mvr_probe.h"
 #include "tag_viewport.h"
 
 namespace lmu {
@@ -676,6 +677,8 @@ bool mvrFrame = true;         // this frame uses MVR (false: an A/B run's frame 
 // focus views the focus finals beside the eyes (mvr_focus_final); the atlas takes them from there.
 bool twoPassFrame = false;
 bool atlasFromFinals = false;
+bool frameFinalsOk = false;          // this frame's focus finals both made (after_two_passes)
+unsigned long long noFinalsRun = 0;  // two-pass frames in a row without them (R5's fallback)
 unsigned finalAt[2][2] = {};  // each focus final's top-left in its eye's texture
 bool finalsMissingLogged = false, twoPassLogged = false, countLogged = false;
 unsigned long long twoPassFrames = 0, finalsMissing = 0;
@@ -1511,6 +1514,7 @@ void after_two_passes() {
                 boxes[e] = frozenBox[e];
             }
         }
+        frameFinalsOk = ok;
         if (ok) {
             atlasReady = atlasFromFinals = true;
             uiScaleOnly = vruiHooked;  // the VR UI's eye viewports still cut for live resolution; no focus_ui
@@ -1635,8 +1639,10 @@ void pass_begin(int p) {
     renderThread = GetCurrentThreadId();
     pass = p;
     ++passesThisFrame;
-    if (p == 0)
+    if (p == 0) {
         atlasReady = menuReady = false;  // a new frame: its own four views, or none
+        frameFinalsOk = false;
+    }
     unsigned long long hook0 = thread_cycles();
     if (qvfrMode)
         qvfr_before_pass(p);  // live resolution: the size this pass renders at
@@ -2145,6 +2151,120 @@ void capture_views() {
 
 }  // namespace
 
+// The eye loop four times: the camera history records, the scene render and post-effect time hooks, the loop head and
+// tail patches (the tail's count immediate). At start, or later when the multi-view path falls back
+// (fallback_to_four_passes: between frames, on the render thread, so the eye loop isn't running). False: not installed
+// (anything done undone that can be).
+bool install_four_pass_hooks() {
+    for (auto& record : history)
+        reinterpret_cast<HistoryCtorFn>(base() + kCameraHistoryCtor)(record);
+    void* target = reinterpret_cast<void*>(base() + kRenderScene);
+    void* deltaTime = reinterpret_cast<void*>(base() + kPostEffectSetDeltaTime);
+    if (MH_CreateHook(target, reinterpret_cast<void*>(&render_scene), reinterpret_cast<void**>(&originalRenderScene)) !=
+            MH_OK ||
+        MH_EnableHook(target) != MH_OK) {
+        simqvfr::logf("%s: the scene render couldn't be hooked; not installed", tag());
+        return false;
+    }
+    if (MH_CreateHook(deltaTime, reinterpret_cast<void*>(&set_delta_time),
+                      reinterpret_cast<void**>(&originalSetDeltaTime)) != MH_OK ||
+        MH_EnableHook(deltaTime) != MH_OK) {
+        MH_DisableHook(target);
+        simqvfr::logf("%s: the post-effect frame time couldn't be hooked; not installed", tag());
+        return false;
+    }
+    // The head first: with two passes `edi & 1` is `edi`, so it changes nothing until the tail counts to four.
+    // Head: the camera update gets the eye as edi & 1 (passes 2-3 set up eyes 0-1's cameras, not eyes 2-3).
+    static const std::uint8_t head[] = {0x44, 0x8b, 0xc7,        // mov r8d, edi
+                                        0x41, 0x83, 0xe0, 0x01,  // and r8d, 1
+                                        0xb2, 0x01};             // mov dl, 1
+    // Tail: count to four; from pass 2 on, rbx points at our history records instead of past the game's two.
+    std::uint8_t tail[] = {0xff, 0xc7,                          // inc edi
+                           0x83, 0xff, 0x02,                    // cmp edi, 2
+                           0x75, 0x0c,                          // jne add
+                           0x48, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0,  // mov rbx, history
+                           0xeb, 0x04,                          // jmp cmp4
+                           0x48, 0x83, 0xc3, 0x6c,              // add: add rbx, 0x6c
+                           0x83, 0xff, 0x04};                   // cmp4: cmp edi, 4 (the game's jl follows)
+    const auto records = reinterpret_cast<std::uint64_t>(&history[0][0]);
+    std::memcpy(tail + 9, &records, 8);
+    if (!simqvfr::code_redirect(kEyeLoopHead, kEyeLoopHeadAnchor, sizeof(kEyeLoopHeadAnchor), head, sizeof(head))) {
+        MH_DisableHook(deltaTime);
+        MH_DisableHook(target);
+        simqvfr::logf("%s: the eye loop head couldn't be patched; not installed", tag());
+        return false;
+    }
+    if (!simqvfr::code_redirect(kEyeLoopTail, kEyeLoopTailAnchor, sizeof(kEyeLoopTailAnchor), tail, sizeof(tail))) {
+        simqvfr::logf("%s: the eye loop tail couldn't be patched; two passes as before", tag());
+        return false;
+    }
+    // The tail's stub (the jump at the site) ends `cmp edi, 4`: its immediate is the pass count. Start at two.
+    const auto* site = reinterpret_cast<const std::uint8_t*>(base() + kEyeLoopTail);
+    std::int32_t rel = 0;
+    std::memcpy(&rel, site + 1, 4);
+    auto* stub = const_cast<std::uint8_t*>(site + 5 + rel);
+    if (site[0] == 0xE9 && stub[23] == 0x83 && stub[24] == 0xff && stub[25] == 0x04) {
+        countImmediate = stub + 25;
+        passTarget = 4;
+        if (!qvfrMode)  // QVFR: four every frame
+            set_pass_count(2);
+    } else if (!qvfrMode) {
+        simqvfr::logf("%s: the loop tail's stub isn't where expected: four passes every frame", tag());
+    }
+    return true;
+}
+
+// QVFR with the four passes: the driver tags' viewport cut and the focus views' glare from their eyes'.
+void install_four_pass_extras() {
+    // The driver tags in the part of each target the pass rendered (live resolution); without it a pass rendered
+    // smaller draws them too far out and too large.
+    void* labelsDraw = reinterpret_cast<void*>(base() + kLabelsDraw);
+    labelsHooked = simqvfr::code_matches(kLabelsDraw, kLabelsDrawAnchor, sizeof(kLabelsDrawAnchor)) &&
+                   MH_CreateHook(labelsDraw, reinterpret_cast<void*>(&labels_draw),
+                                 reinterpret_cast<void**>(&originalLabelsDraw)) == MH_OK &&
+                   MH_EnableHook(labelsDraw) == MH_OK;
+    if (!labelsHooked)
+        simqvfr::log_line("lmu qvfr: the driver tags' draw isn't this build's or couldn't be hooked: with live "
+                          "resolution below 100% they show a second time in the periphery");
+    // The focus views' glare from their eye's (glare_share.h); hooked even when off at launch, for the live switch.
+    glareHooked = glare_share_start();
+    if (glareHooked)
+        glare_share_set(cfg.glareShare);
+    simqvfr::logf("lmu qvfr: glare share: %s", !glareHooked     ? "not available (each view keeps its own glare)"
+                                               : cfg.glareShare ? "on: the focus views take their eye's glare (bloom, "
+                                                                  "star, ghosts) through the box; lmu_glare_share=0 "
+                                                                  "turns it off"
+                                                                : "off at launch (lmu_glare_share=0): each view's own "
+                                                                  "glare");
+}
+
+// R5: the multi-view path (the tracker driving the game's two passes) gives way to the four passes without MVR, for
+// the rest of the session: at xrCreateSession when the device can't do it, or at a frame end (render thread, between
+// frames) when MVR fails while running. Logged once with `why`.
+bool fellBack = false;
+void fallback_to_four_passes(const char* why) {
+    if (fellBack || !cfg.trackerDrives)
+        return;
+    fellBack = true;
+    mvr_track_drive(nullptr, nullptr);
+    mvr_track_passes(false);
+    mvr_focus_replay(false);
+    cfg.trackerDrives = cfg.focusFinal = cfg.focusReplay = cfg.passTracker = false;
+    cfg.mvr = cfg.mvrSkip = false;
+    twoPassFrame = false;
+    if (!install_four_pass_hooks()) {
+        simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s) and the four passes couldn't be installed: "
+                      "the eyes only (no focus views) for the rest of the session",
+                      frames, why);
+        return;
+    }
+    if (qvfrMode)
+        install_four_pass_extras();
+    simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s): the four passes from the next frame (the focus "
+                  "views rendered by passes 2-3), for the rest of the session",
+                  frames, why);
+}
+
 bool four_passes_start(const FourPassesRun& run) {
     if (installed)
         return true;
@@ -2188,103 +2308,49 @@ bool four_passes_start(const FourPassesRun& run) {
             return false;
         }
     // R4b (cfg.trackerDrives): the game's own two eye passes, found at the d3d11 level; of the game's code only the lens
-    // mask's draw (MVR leaves it to the eye) and the VR UI's (native menus, the eyes' panel fit) are hooked.
+    // mask's draw (MVR leaves it to the eye) and the VR UI's (native menus, the eyes' panel fit) are hooked. The four
+    // passes' hooks (install_four_pass_hooks) only if it falls back to them (fallback_to_four_passes).
     const bool driven = cfg.trackerDrives;
-    if (!driven)
-        for (auto& record : history)
-            reinterpret_cast<HistoryCtorFn>(base() + kCameraHistoryCtor)(record);
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         simqvfr::logf("%s: MH_Initialize failed", tag());
         return false;
     }
-    void* target = reinterpret_cast<void*>(base() + kRenderScene);
-    void* deltaTime = reinterpret_cast<void*>(base() + kPostEffectSetDeltaTime);
-    if (!driven) {
-        if (MH_CreateHook(target, reinterpret_cast<void*>(&render_scene), reinterpret_cast<void**>(&originalRenderScene)) !=
-                MH_OK ||
-            MH_EnableHook(target) != MH_OK) {
-            simqvfr::logf("%s: the scene render couldn't be hooked; not installed", tag());
-            return false;
-        }
-        if (MH_CreateHook(deltaTime, reinterpret_cast<void*>(&set_delta_time),
-                          reinterpret_cast<void**>(&originalSetDeltaTime)) != MH_OK ||
-            MH_EnableHook(deltaTime) != MH_OK) {
-            MH_DisableHook(target);
-            simqvfr::logf("%s: the post-effect frame time couldn't be hooked; not installed", tag());
-            return false;
-        }
-    }
-    if (focusMode) {
+    if (focusMode) {  // first: nothing of the eye loop is changed before it is in
         void* mask = reinterpret_cast<void*>(base() + kHiddenAreaDraw);
         if (!simqvfr::code_matches(kHiddenAreaDraw, kHiddenAreaDrawAnchor, sizeof(kHiddenAreaDrawAnchor)) ||
             MH_CreateHook(mask, reinterpret_cast<void*>(&mask_draw), reinterpret_cast<void**>(&originalMaskDraw)) != MH_OK ||
             MH_EnableHook(mask) != MH_OK) {
-            if (!driven) {
-                MH_DisableHook(deltaTime);
-                MH_DisableHook(target);
-            }
             simqvfr::log_line("lmu focus: the hidden-area mask's draw isn't this build's or couldn't be hooked; not installed");
             return false;
         }
     }
+    if (!driven && !install_four_pass_hooks())
+        return false;
+    installed = true;
+    if (qvfrMode) {
+        void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
+        vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
+                     simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
+                     MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw), reinterpret_cast<void**>(&originalVruiDraw)) ==
+                         MH_OK &&
+                     MH_EnableHook(vrui) == MH_OK;
+        if (!vruiHooked)
+            simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
+                              "missing inside the focus box");
+    }
     if (driven) {
-        installed = true;
         mvr_time_hooks(cfg.mvrTiming);
         if (qvfrMode) {
-            void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
-            vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
-                         simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
-                         MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw),
-                                       reinterpret_cast<void**>(&originalVruiDraw)) == MH_OK &&
-                         MH_EnableHook(vrui) == MH_OK;
             std::lock_guard guard(liveMutex);
-            simqvfr::logf("lmu qvfr: on with the pass tracker (lmu_pass_tracker=2): the game's own two eye passes draw the "
-                          "focus views beside the eyes (multi-view), a %.0f%% x %.0f%% box of each eye's tangent span on "
-                          "the gaze; game code hooked: the lens mask's draw%s; the eye loop, the scene render, the "
-                          "post-effect time, the scene skip, glare share and the driver tags untouched",
+            simqvfr::logf("lmu qvfr: on with multi-view rendering and the pass tracker: the game's own two eye passes draw "
+                          "the focus views beside the eyes, a %.0f%% x %.0f%% box of each eye's tangent span on the gaze; "
+                          "game code hooked: the lens mask's draw%s; the eye loop, the scene render, the post-effect time, "
+                          "the scene skip, glare share and the driver tags untouched unless it falls back to the four passes",
                           focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100,
                           vruiHooked ? " and the VR UI's (native menus)" : "");
         }
         return true;
     }
-    // The head first: with two passes `edi & 1` is `edi`, so it changes nothing until the tail counts to four.
-    // Head: the camera update gets the eye as edi & 1 (passes 2-3 set up eyes 0-1's cameras, not eyes 2-3).
-    static const std::uint8_t head[] = {0x44, 0x8b, 0xc7,        // mov r8d, edi
-                                        0x41, 0x83, 0xe0, 0x01,  // and r8d, 1
-                                        0xb2, 0x01};             // mov dl, 1
-    // Tail: count to four; from pass 2 on, rbx points at our history records instead of past the game's two.
-    std::uint8_t tail[] = {0xff, 0xc7,                          // inc edi
-                           0x83, 0xff, 0x02,                    // cmp edi, 2
-                           0x75, 0x0c,                          // jne add
-                           0x48, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0,  // mov rbx, history
-                           0xeb, 0x04,                          // jmp cmp4
-                           0x48, 0x83, 0xc3, 0x6c,              // add: add rbx, 0x6c
-                           0x83, 0xff, 0x04};                   // cmp4: cmp edi, 4 (the game's jl follows)
-    const auto records = reinterpret_cast<std::uint64_t>(&history[0][0]);
-    std::memcpy(tail + 9, &records, 8);
-    if (!simqvfr::code_redirect(kEyeLoopHead, kEyeLoopHeadAnchor, sizeof(kEyeLoopHeadAnchor), head, sizeof(head))) {
-        MH_DisableHook(target);
-        simqvfr::logf("%s: the eye loop head couldn't be patched; not installed", tag());
-        return false;
-    }
-    if (!simqvfr::code_redirect(kEyeLoopTail, kEyeLoopTailAnchor, sizeof(kEyeLoopTailAnchor), tail, sizeof(tail))) {
-        simqvfr::logf("%s: the eye loop tail couldn't be patched; two passes as before", tag());
-        return false;
-    }
-    // The tail's stub (the jump at the site) ends `cmp edi, 4`: its immediate is the pass count. Start at two.
-    const auto* site = reinterpret_cast<const std::uint8_t*>(base() + kEyeLoopTail);
-    std::int32_t rel = 0;
-    std::memcpy(&rel, site + 1, 4);
-    auto* stub = const_cast<std::uint8_t*>(site + 5 + rel);
-    if (site[0] == 0xE9 && stub[23] == 0x83 && stub[24] == 0xff && stub[25] == 0x04) {
-        countImmediate = stub + 25;
-        passTarget = 4;
-        if (!qvfrMode)  // QVFR: four every frame
-            set_pass_count(2);
-    } else if (!qvfrMode) {
-        simqvfr::logf("%s: the loop tail's stub isn't where expected: four passes every frame", tag());
-    }
-    installed = true;
     if (qvfrMode && cfg.mvr && cfg.mvrSkip) {  // gate D: passes 2-3 may skip the scene; mvr_pass keeps the focus regions
         cfg.mvrSkip = install_skip();
         mvr_keep_focus(cfg.mvrSkip);
@@ -2298,36 +2364,7 @@ bool four_passes_start(const FourPassesRun& run) {
                                                           "hooked: passes 2-3 render the scene as before");
     }
     if (qvfrMode) {
-        // The VR UI into the focus views too; without it QVFR still runs, the UI missing inside the focus box.
-        void* vrui = reinterpret_cast<void*>(base() + kVruiDraw);
-        vruiHooked = simqvfr::code_matches(kVruiDraw, kVruiDrawAnchor, sizeof(kVruiDrawAnchor)) &&
-                     simqvfr::code_matches(kVruiDrawEye, kVruiDrawEyeAnchor, sizeof(kVruiDrawEyeAnchor)) &&
-                     MH_CreateHook(vrui, reinterpret_cast<void*>(&vrui_draw), reinterpret_cast<void**>(&originalVruiDraw)) ==
-                         MH_OK &&
-                     MH_EnableHook(vrui) == MH_OK;
-        if (!vruiHooked)
-            simqvfr::log_line("lmu qvfr: the VR UI's draw isn't this build's or couldn't be hooked: the HUD and menus are "
-                              "missing inside the focus box");
-        // The driver tags in the part of each target the pass rendered (live resolution); without it a pass rendered
-        // smaller draws them too far out and too large.
-        void* labelsDraw = reinterpret_cast<void*>(base() + kLabelsDraw);
-        labelsHooked = simqvfr::code_matches(kLabelsDraw, kLabelsDrawAnchor, sizeof(kLabelsDrawAnchor)) &&
-                       MH_CreateHook(labelsDraw, reinterpret_cast<void*>(&labels_draw),
-                                     reinterpret_cast<void**>(&originalLabelsDraw)) == MH_OK &&
-                       MH_EnableHook(labelsDraw) == MH_OK;
-        if (!labelsHooked)
-            simqvfr::log_line("lmu qvfr: the driver tags' draw isn't this build's or couldn't be hooked: with live "
-                              "resolution below 100% they show a second time in the periphery");
-        // The focus views' glare from their eye's (glare_share.h); hooked even when off at launch, for the live switch.
-        glareHooked = glare_share_start();
-        if (glareHooked)
-            glare_share_set(run.glareShare);
-        simqvfr::logf("lmu qvfr: glare share: %s", !glareHooked     ? "not available (each view keeps its own glare)"
-                                                   : run.glareShare ? "on: the focus views take their eye's glare (bloom, "
-                                                                      "star, ghosts) through the box; lmu_glare_share=0 "
-                                                                      "turns it off"
-                                                                    : "off at launch (lmu_glare_share=0): each view's own "
-                                                                      "glare");
+        install_four_pass_extras();
         std::lock_guard guard(liveMutex);
         simqvfr::logf("lmu qvfr: on: the eye loop runs four times every frame, passes 2-3 render focus views (a %.0f%% x "
                       "%.0f%% box of each eye's tangent span, on the gaze) into the eye targets, set aside for the layer "
@@ -2353,14 +2390,20 @@ bool four_passes_start(const FourPassesRun& run) {
     return true;
 }
 
-void four_passes_device(ID3D11Device* device) { sessionDevice = device; }
+void four_passes_device(ID3D11Device* device) {
+    sessionDevice = device;
+    // R5: the device decides; the game is still in its menus, the eye loop not yet run.
+    if (installed && cfg.trackerDrives && !mvr_probe_usable())
+        fallback_to_four_passes("the game's device has no single-pass stereo, or multi-view's shader probe is off");
+}
 
 void four_passes_frame_end() {
     if (!installed)
         return;
     ++frames;
     if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice)  // the tracker sees the menus too
-        install_mvr(sessionDevice);
+        if (!install_mvr(sessionDevice))
+            fallback_to_four_passes("multi-view's context hooks couldn't be installed");
     if (cfg.mvr) {
         mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;
@@ -2395,6 +2438,19 @@ void four_passes_frame_end() {
     if (twoPassFrame && passes >= 2 && twoPassFrames++ == 0)
         simqvfr::logf("%s: frame %llu: first two-pass frame (focus finals), eyes rendered %d %d", tag(), frames, eyeOfPass[0],
                       eyeOfPass[1]);
+    // R5: the multi-view path's health, between frames on the render thread; it gives way to the four passes when MVR
+    // fails while running (fallback_to_four_passes).
+    if (cfg.trackerDrives) {
+        if (passes >= 1)
+            noFinalsRun = frameFinalsOk ? 0 : noFinalsRun + 1;
+        const char* why = mvr_broken()           ? "the driver refused single-pass stereo"
+                          : noFinalsRun >= 90     ? "no focus views made in 90 frames in a row"
+                          : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
+                              ? "forced by lmu_mvr_fallback_at"
+                              : nullptr;
+        if (why)
+            fallback_to_four_passes(why);
+    }
     if (fourPassFrames == 1 && passes >= 4)
         simqvfr::logf("%s: frame %llu: first four-pass frame, eyes rendered %d %d %d %d; post-effect frame time "
                       "held in passes 2-3: %s (%d calls this frame, the game's %.5f s -> %.5f s); hidden-area mask "

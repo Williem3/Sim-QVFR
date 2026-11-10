@@ -46,6 +46,10 @@ void mvr_probe_device(ID3D11Device* device);
 // Every xrEndFrame: a summary when the counts changed (at most every 5 s).
 void mvr_probe_frame_end();
 MvrProbeStats mvr_probe_stats();
+// The game's device can draw two views (NVAPI's single-pass stereo with XYZW, seen at its first vertex shader or at
+// xrCreateSession) and the probe attaches the converted shaders: MVR can run. False before either, under RenderDoc,
+// or with the probe off.
+bool mvr_probe_usable();
 // Counts the vertex shaders created on the hooked device (any thread): a shader looked up by its address before may be
 // a new one since (mvr_pass.cpp's twin cache).
 uint64_t mvr_shader_generation();
