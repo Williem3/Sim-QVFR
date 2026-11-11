@@ -50,6 +50,7 @@ function(sim_qvfr_version_info target file_name file_type description)
   set(rc ${CMAKE_CURRENT_BINARY_DIR}/generated/${target}_version.rc)
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/version_info.rc.in ${rc} @ONLY)
   target_sources(${target} PRIVATE ${rc})
+  set_property(TARGET ${target} PROPERTY SIM_QVFR_VERSION_INFO TRUE)
 endfunction()
 
 # MinHook 1.3.4 and the OpenXR SDK headers, vendored (third_party/README.md).
@@ -446,6 +447,23 @@ target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)
 add_executable(acc_gates_test tests/acc_gates_test.cpp)
 target_include_directories(acc_gates_test PRIVATE src)
 target_compile_options(acc_gates_test PRIVATE /W4 /permissive- /utf-8)
+
+# The tests, checks and test helpers: version info like the shipped binaries, and no manifest. Windows Defender
+# quarantined small unsigned test exes (Program:Win32/Wacapew.A!ml, Trojan:Win32/Cloxer). Scans of variants of the
+# same exe: the linker's default manifest is what got them flagged (with or without version info); with no manifest
+# they are clean. Their manifest only asked to run as the invoker, which an x64 console exe does without one.
+get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_target IN LISTS _targets)
+  get_target_property(_type ${_target} TYPE)
+  get_target_property(_has_version_info ${_target} SIM_QVFR_VERSION_INFO)
+  if(NOT _has_version_info AND _type STREQUAL "EXECUTABLE")
+    sim_qvfr_version_info(${_target} ${_target}.exe VFT_APP "Sim-QVFR test (${_target})")
+    target_link_options(${_target} PRIVATE /MANIFEST:NO)
+  elseif(NOT _has_version_info AND _type STREQUAL "SHARED_LIBRARY")
+    sim_qvfr_version_info(${_target} ${_target}.dll VFT_DLL "Sim-QVFR test helper (${_target})")
+    target_link_options(${_target} PRIVATE /MANIFEST:NO)
+  endif()
+endforeach()
 
 # The offline suite for ctest: every *_test executable above, side by side
 # (`ctest --test-dir build -C Release -j 16 --output-on-failure`, `-R lmu` for some). Each test gets its own TEMP folder
