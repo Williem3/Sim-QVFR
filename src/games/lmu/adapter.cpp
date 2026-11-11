@@ -8,7 +8,8 @@
 #include "../diag_switches.h"
 #include "../identity_adapter.h"
 #include "../multi_view.h"
-#include "dlss_views.h"
+#include "../../engine/dlss_views.h"
+#include "dlss_inputs.h"
 #include "four_passes.h"
 #include "game.h"
 #include "glare_share.h"
@@ -121,12 +122,13 @@ public:
                           "turns it off)",
                           diag_.ini().c_str());
         glareAtLaunch_ = run.glareShare;
-        // DLAA through NGX on the views ([experiment] lmu_dlss=1 the eyes, 2 the eyes and the focus views; dlss_views.h):
+        // DLAA through NGX on the views ([experiment] lmu_dlss=1 the eyes, 2 the eyes and the focus views; engine/dlss_views.h):
         // with the multi-view path only (its eye passes found at the d3d11 level). lmu_dlss_folder: where nvngx_dlss.dll
         // is; lmu_dlss_preset: NGX's preset number; lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a
         // comparison); lmu_dlss_view_inverse, lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's
         // gate (lmu_dlss_gate=1) or the picture say they are the other way round.
-        DlssRun dlss;
+        simqvfr::DlssRun dlss;
+        dlss.tag = "lmu dlss";
         if (s.ini) {
             const auto key = [&](const wchar_t* name, int fallback) {
                 return static_cast<int>(GetPrivateProfileIntW(L"experiment", name, fallback, s.ini));
@@ -141,7 +143,7 @@ public:
             dlss.viewInverse = key(L"lmu_dlss_view_inverse", 0) != 0;
             dlss.depthReversed = key(L"lmu_dlss_depth_reversed", 1) != 0;
             // lmu_dlss_car=0: the cockpit treated as the world. lmu_dlss_car_box_cm: the car's box about the head, in
-            // centimetres to the left, right, down, up, front and back (dlss_views.h).
+            // centimetres to the left, right, down, up, front and back (engine/dlss_views.h).
             dlss.car = key(L"lmu_dlss_car", 1) != 0;
             wchar_t box[96] = {};
             GetPrivateProfileStringW(L"experiment", L"lmu_dlss_car_box_cm", L"", box, 96, s.ini);
@@ -157,7 +159,8 @@ public:
                 dlss.views = 0;
             }
         }
-        dlss_start(dlss);
+        dlss_use_lmu_inputs();  // the pass's matrices from the game's renderer
+        simqvfr::dlss_start(dlss);
         qvfr_ = four_passes_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
@@ -195,12 +198,12 @@ public:
     }
     void session_destroyed() override {
         IdentityAdapter::session_destroyed();
-        dlss_shutdown();  // its features and NGX belong to the session's device
+        simqvfr::dlss_shutdown();  // its features and NGX belong to the session's device
     }
-    // DLAA's jitter (dlss_views.h): the last thing done to the FOV the game locates.
+    // DLAA's jitter (engine/dlss_views.h): the last thing done to the FOV the game locates.
     void qvfr_jitter_views(XrView* views, uint32_t count) override {
         if (qvfr_)
-            dlss_jitter_views(views, count);
+            simqvfr::dlss_jitter_views(views, count);
     }
     void visibility_mask_taken(uint32_t viewIndex) override {
         if (qvfr_)

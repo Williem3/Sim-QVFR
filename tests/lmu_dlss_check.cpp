@@ -1,4 +1,4 @@
-// Hardware check of LMU's DLAA module (games/lmu/dlss_views.h) outside the game: its whole path on a real D3D11 device
+// Hardware check of the DLAA module (engine/dlss_views.h) as LMU uses it outside the game: its whole path on a real D3D11 device
 // with a stand-in for the game's side. Not part of the test suite (no _test suffix): it needs an NVIDIA RTX GPU, a build
 // with the NGX SDK and a folder holding nvngx_dlss.dll.
 //
@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -26,8 +27,8 @@
 #include <DirectXPackedVector.h>
 #include <wrl/client.h>
 
-#include "games/lmu/dlss_math.h"
-#include "games/lmu/dlss_views.h"
+#include "engine/dlss_math.h"
+#include "engine/dlss_views.h"
 #include "log.h"
 
 using Microsoft::WRL::ComPtr;
@@ -197,11 +198,11 @@ bool make_scene(Scene& s) {
 // One view of the scene through `rendered` (the world -> its clip as rendered; `view` the camera's view matrix, for
 // the window frame with `frame`): its colour into `colour`, its depth into the multisample depth target (with the
 // multisample colour target, which takes the colour too and is not read).
-bool draw_scene_view(const Scene& s, const lmu::dlss::M4& rendered, const float (&view)[16], bool frame, float x, float y,
+bool draw_scene_view(const Scene& s, const simqvfr::dlss::M4& rendered, const float (&view)[16], bool frame, float x, float y,
                      float w, float h, ID3D11RenderTargetView* colour, ID3D11RenderTargetView* msColour,
                      ID3D11DepthStencilView* dsv) {
-    lmu::dlss::M4 inverse;
-    if (!lmu::dlss::invert(rendered, inverse))
+    simqvfr::dlss::M4 inverse;
+    if (!simqvfr::dlss::invert(rendered, inverse))
         return false;
     SceneConstants c{};
     for (int i = 0; i < 16; ++i) {
@@ -246,6 +247,15 @@ void eye_projection(const XrFovf& fov, float (&projection)[16]) {
     projection[10] = static_cast<float>(fz / (fz - n));
     projection[11] = 1;
     projection[14] = static_cast<float>(-n * fz / (fz - n));
+}
+
+// The game's side's view and projection for the pass about to be called (each frame below sets them), handed to the
+// module as a game's matrices callback would (simqvfr::dlss_set_matrices).
+float view[16], projection[16];
+bool check_matrices(int, float (&v)[16], float (&p)[16]) {
+    std::memcpy(v, view, sizeof(v));
+    std::memcpy(p, projection, sizeof(p));
+    return true;
 }
 
 }  // namespace
@@ -309,15 +319,15 @@ int wmain(int argc, wchar_t** argv) {
     // (0.6 m up from the head) and its top rows are outside it: both of the gate's classes get points.
     context->ClearDepthStencilView(dsv.Get(), D3D11_CLEAR_DEPTH, 0.0625f, 0);
 
-    lmu::DlssRun run;
+    simqvfr::DlssRun run;
+    run.tag = "lmu dlss";  // LMU's, as the log lines below are read
     run.views = 2;
     run.dllFolder = argv[1];
     run.gate = true;
-    lmu::dlss_start(run);
-    check(lmu::dlss_wanted(), "the module takes the run (a build with the NGX SDK)");
+    simqvfr::dlss_start(run);
+    check(simqvfr::dlss_wanted(), "the module takes the run (a build with the NGX SDK)");
 
-    float view[16], projection[16];
-    lmu::dlss_test_matrices(view, projection);
+    simqvfr::dlss_set_matrices(&check_matrices);
     bool stateKept = true, rewritten = true, restLeft = true;
     int stateLost = 0;
     for (int f = 0; f < frames; ++f) {
@@ -327,24 +337,24 @@ int wmain(int argc, wchar_t** argv) {
             v.pose.orientation = {0, std::sin(0.001f * f), 0, std::cos(0.001f * f)};  // the head turning a little
             v.pose.position = {0.03f, 1.2f, 0.0f};
         }
-        lmu::dlss_jitter_views(views, 2);
+        simqvfr::dlss_jitter_views(views, 2);
         // The camera drives along z and turns a little: a world matrix inverted into the view.
         const double yaw = 0.002 * f, c = std::cos(yaw), s = std::sin(yaw);
-        const lmu::dlss::M4 world = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 100.0, 1.2, 0.5 * f, 1};
-        lmu::dlss::M4 v;
-        lmu::dlss::invert(world, v);
+        const simqvfr::dlss::M4 world = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 100.0, 1.2, 0.5 * f, 1};
+        simqvfr::dlss::M4 v;
+        simqvfr::dlss::invert(world, v);
         for (int i = 0; i < 16; ++i)
             view[i] = static_cast<float>(v[i]);
         for (int eye = 0; eye < 2; ++eye) {
             eye_projection(views[eye].fov, projection);
 
-            lmu::DlssPass pass;
+            simqvfr::DlssPass pass;
             pass.eye = eye;
             pass.eyeWidth = eyeW, pass.eyeHeight = eyeH;
             pass.focus = true;
             pass.focusWidth = focusW, pass.focusHeight = focusH;
             pass.remap[0] = 4, pass.remap[1] = -0.3f, pass.remap[2] = 1.6f, pass.remap[3] = -0.08f;
-            lmu::dlss_focus_jitter(eye, focusW, focusH, pass.remap[1], pass.remap[3]);
+            simqvfr::dlss_focus_jitter(eye, focusW, focusH, pass.remap[1], pass.remap[3]);
 
             context->UpdateSubresource(resolved.Get(), 0, nullptr, noise.data(), W * 8, 0);
             // The caller's state: a target and a viewport the module must leave bound.
@@ -361,7 +371,7 @@ int wmain(int argc, wchar_t** argv) {
                 before[1] = row_of(resolved.Get(), eyeW, focusH / 2, focusW);
                 before[2] = row_of(resolved.Get(), 0, eyeH + 10, eyeW);  // under the eye: no view's
             }
-            lmu::dlss_after_resolve(context.Get(), resolved.Get(), dsv.Get(), pass);
+            simqvfr::dlss_after_resolve(context.Get(), resolved.Get(), dsv.Get(), pass);
             ComPtr<ID3D11RenderTargetView> rtvNow;
             ComPtr<ID3D11DepthStencilView> dsvNow;
             context->OMGetRenderTargets(1, &rtvNow, &dsvNow);
@@ -390,16 +400,16 @@ int wmain(int argc, wchar_t** argv) {
                 restLeft = restDiff == 0;
             }
         }
-        lmu::dlss_frame_end(static_cast<unsigned long long>(f + 1));
+        simqvfr::dlss_frame_end(static_cast<unsigned long long>(f + 1));
     }
-    std::printf("     %llu evaluations in %d frames\n", lmu::dlss_evaluations_total(), frames);
-    check(lmu::dlss_wanted(), "the module is still on at the end");
-    check(lmu::dlss_evaluations_total() == static_cast<unsigned long long>(frames) * 4, "every view of every frame was evaluated");
+    std::printf("     %llu evaluations in %d frames\n", simqvfr::dlss_evaluations_total(), frames);
+    check(simqvfr::dlss_wanted(), "the module is still on at the end");
+    check(simqvfr::dlss_evaluations_total() == static_cast<unsigned long long>(frames) * 4, "every view of every frame was evaluated");
     std::printf("     the caller's state differed after %d of %d calls\n", stateLost, frames * 2);
     check(stateKept, "the caller's render target, depth target, shader input and viewport are bound as before after every call");
     check(rewritten, "the eye's and the focus view's parts of the scene are rewritten");
     check(restLeft, "the scene outside the views is untouched");
-    lmu::dlss_shutdown();
+    simqvfr::dlss_shutdown();
 
     // The second part: the scene that moves with the camera. A small eye (as the game's periphery at 10-20% of native)
     // and a large focus view; the car's box off, so every point takes the world's vectors (the gate's classes then split
@@ -429,13 +439,13 @@ int wmain(int argc, wchar_t** argv) {
         const bool control = part == 1, frame = part == 3, single = part == 4;
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
-        lmu::DlssRun moving = run;
+        simqvfr::DlssRun moving = run;
         moving.car = part == 2 || part == 3;  // part 2: the box alone (nothing in it), part 3: with the frame in it
         const double box[6] = {0.8, 0.8, 0.6, 0.6, 1.0, 1.0};  // the frame inside, the floor and the posts outside
         for (int i = 0; i < 6; ++i)
             moving.carBox[i] = box[i];
         moving.viewInverse = control;
-        lmu::dlss_start(moving);
+        simqvfr::dlss_start(moving);
         for (unsigned f = 0; f < sceneFrames && scene.ps && resolvedRtv; ++f) {
             XrView views[2]{};
             for (XrView& v : views) {
@@ -443,19 +453,19 @@ int wmain(int argc, wchar_t** argv) {
                 v.pose.orientation = {0, 0, 0, 1};
                 v.pose.position = {0.03f, 1.2f, 0.0f};
             }
-            lmu::dlss_jitter_views(views, 2);
+            simqvfr::dlss_jitter_views(views, 2);
             // 0.5 m a frame (45 m/s at 90 fps) along z, turning a little, 1.2 m above the floor.
             const double yaw = 0.002 * f, c = std::cos(yaw), s = std::sin(yaw);
-            const lmu::dlss::M4 world = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 100.0, 1.2, 0.5 * f, 1};
-            lmu::dlss::M4 v;
-            lmu::dlss::invert(world, v);
+            const simqvfr::dlss::M4 world = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 100.0, 1.2, 0.5 * f, 1};
+            simqvfr::dlss::M4 v;
+            simqvfr::dlss::invert(world, v);
             for (int i = 0; i < 16; ++i)
                 view[i] = static_cast<float>(v[i]);
             for (int eye = 0; eye < 2; ++eye) {
                 float plain[16];
                 eye_projection({-0.9512f, 0.8814f, 0.8290f, -0.8290f}, plain);
                 eye_projection(views[eye].fov, projection);
-                lmu::DlssPass pass;
+                simqvfr::DlssPass pass;
                 pass.eye = eye;
                 pass.eyeWidth = sceneEyeW, pass.eyeHeight = sceneEyeH;
                 pass.focus = true;
@@ -464,13 +474,13 @@ int wmain(int argc, wchar_t** argv) {
                 // (its NDC shift, the projection's third row) taken back out, so the focus view carries only its own.
                 const float shiftX = projection[8] - plain[8], shiftY = projection[9] - plain[9];
                 pass.remap[0] = 4, pass.remap[1] = -0.3f - 4 * shiftX, pass.remap[2] = 1.6f, pass.remap[3] = -0.08f - 1.6f * shiftY;
-                lmu::dlss_focus_jitter(eye, focusW, focusH, pass.remap[1], pass.remap[3]);
+                simqvfr::dlss_focus_jitter(eye, focusW, focusH, pass.remap[1], pass.remap[3]);
                 // The scene as the game draws it: the eye through its projection as rendered, the focus view through the
                 // eye's clip remapped (its jitter included), each into its corner of the targets.
-                const lmu::dlss::M4 eyeClip =
-                    lmu::dlss::mul(lmu::dlss::from_floats(view), lmu::dlss::reversed_depth(lmu::dlss::from_floats(projection)));
-                const lmu::dlss::M4 focusClip = lmu::dlss::mul(
-                    eyeClip, lmu::dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]));
+                const simqvfr::dlss::M4 eyeClip =
+                    simqvfr::dlss::mul(simqvfr::dlss::from_floats(view), simqvfr::dlss::reversed_depth(simqvfr::dlss::from_floats(projection)));
+                const simqvfr::dlss::M4 focusClip = simqvfr::dlss::mul(
+                    eyeClip, simqvfr::dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]));
                 draw_scene_view(scene, eyeClip, view, frame, 0, 0, static_cast<float>(sceneEyeW),
                                 static_cast<float>(sceneEyeH), resolvedRtv.Get(), partColour, partDsv);
                 draw_scene_view(scene, focusClip, view, frame, static_cast<float>(sceneEyeW), 0, static_cast<float>(focusW),
@@ -483,11 +493,11 @@ int wmain(int argc, wchar_t** argv) {
                     context->OMSetRenderTargets(1, otherRtv.GetAddressOf(), dsv.Get());
                 }
                 context->PSSetShaderResources(0, 1, resolvedSrv.GetAddressOf());
-                lmu::dlss_after_resolve(context.Get(), resolved.Get(), partDsv, pass);
+                simqvfr::dlss_after_resolve(context.Get(), resolved.Get(), partDsv, pass);
             }
-            lmu::dlss_frame_end(static_cast<unsigned long long>(frames) + part * sceneFrames + f + 1);
+            simqvfr::dlss_frame_end(static_cast<unsigned long long>(frames) + part * sceneFrames + f + 1);
         }
-        lmu::dlss_shutdown();
+        simqvfr::dlss_shutdown();
     }
 
     context->ClearState();

@@ -1,4 +1,4 @@
-// LMU's DLAA at the API level (dlss_views.h).
+// DLAA at the API level (dlss_views.h).
 #include "dlss_views.h"
 
 #include <windows.h>
@@ -8,20 +8,19 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
 
-#include "../../engine/code_patch.h"
-#include "../../engine/ngx_dlss.h"
-#include "../../log.h"
-#include "abi.h"
+#include "../log.h"
 #include "dlss_math.h"
+#include "ngx_dlss.h"
 
 using Microsoft::WRL::ComPtr;
 
-namespace lmu {
+namespace simqvfr {
 namespace {
 
 using dlss::M4;
@@ -258,7 +257,7 @@ struct State {
     bool depthMs = false, depthRefusedLogged = false;
     Slot slots[4];
     int createFailures = 0;
-    bool dataLogged = false, firstLogged = false;
+    bool firstLogged = false;
     // Jitter (the mutex: xrLocateViews may run on another thread than the passes).
     std::mutex mutex;
     unsigned phase = 0;
@@ -279,20 +278,29 @@ struct State {
     bool evaluated[2] = {};
     unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0;
     unsigned long long evaluationsTotal = 0;
-    const float* testView = nullptr;  // dlss_test_matrices
-    const float* testProjection = nullptr;
+    PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
 } d;
+
+// A log line with the run's tag in front ("lmu dlss: ...").
+void say(const char* format, ...) {
+    char text[1024];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(text, sizeof(text), format, args);
+    va_end(args);
+    simqvfr::logf("%s: %s", d.cfg.tag ? d.cfg.tag : "dlss", text);
+}
 
 void give_up(const char* why) {
     if (!d.off)
-        simqvfr::logf("lmu dlss: off for this session: %s", why);
+        say("off for this session: %s", why);
     d.off = true;
 }
 
 ComPtr<ID3DBlob> compile(const char* source, const char* entry, const char* profile, const D3D_SHADER_MACRO* macros) {
     ComPtr<ID3DBlob> code, errors;
-    if (FAILED(D3DCompile(source, std::strlen(source), "lmu_dlss", macros, nullptr, entry, profile, 0, 0, &code, &errors))) {
-        simqvfr::logf("lmu dlss: shader %s: %s", entry, errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
+    if (FAILED(D3DCompile(source, std::strlen(source), "dlss", macros, nullptr, entry, profile, 0, 0, &code, &errors))) {
+        say("shader %s: %s", entry, errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return nullptr;
     }
     return code;
@@ -353,7 +361,7 @@ bool initialize(ID3D11DeviceContext* context) {
         give_up(why.c_str());
         return false;
     }
-    simqvfr::logf("lmu dlss: NGX started on the game's device (nvngx_dlss.dll from %ls); views: the eyes%s; jitter %s; "
+    say("NGX started on the game's device (nvngx_dlss.dll from %ls); views: the eyes%s; jitter %s; "
                   "preset %d",
                   d.cfg.dllFolder.empty() ? L"the game's folder" : d.cfg.dllFolder.c_str(),
                   d.cfg.views >= 2 ? " and the focus views" : "", d.cfg.jitter ? "on" : "off", d.cfg.preset);
@@ -395,12 +403,12 @@ bool depth_view(ID3D11DepthStencilView* dsv, unsigned& width, unsigned& height) 
         d.depthSrv.Reset();
         if (!d.depthRefusedLogged) {
             d.depthRefusedLogged = true;
-            simqvfr::logf("lmu dlss: the scene's depth target can't be read (%ux%u format %d x%u, bind flags 0x%x)", td.Width,
+            say("the scene's depth target can't be read (%ux%u format %d x%u, bind flags 0x%x)", td.Width,
                           td.Height, static_cast<int>(td.Format), td.SampleDesc.Count, td.BindFlags);
         }
         return false;
     }
-    simqvfr::logf("lmu dlss: depth from the scene's depth target (%ux%u format %d x%u)", td.Width, td.Height,
+    say("depth from the scene's depth target (%ux%u format %d x%u)", td.Width, td.Height,
                   static_cast<int>(td.Format), td.SampleDesc.Count);
     return true;
 }
@@ -448,13 +456,13 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
         s.feature = ngx::create(context, w, h, inverted, d.cfg.preset, result);
     if (!s.feature) {
         s.refused = true;
-        simqvfr::logf("lmu dlss: view %d's feature at %ux%u (format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
+        say("view %d's feature at %ux%u (format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
                       static_cast<int>(format), ok ? "NGX refused" : "its textures", result);
         if (++d.createFailures >= 4)
             give_up("the features can't be made");
         return false;
     }
-    simqvfr::logf("lmu dlss: view %d's DLAA feature made at %ux%u (format %d, depth %s)", index, w, h,
+    say("view %d's DLAA feature made at %ux%u (format %d, depth %s)", index, w, h,
                   static_cast<int>(format), inverted ? "inverted" : "0 near");
     return true;
 }
@@ -464,38 +472,14 @@ void to_floats(const M4& m, float* out) {
         out[i] = static_cast<float>(m[i]);
 }
 
-// The pass's view and projection as the game's renderer holds them (its view parameters: a read).
+// The pass's view and projection, from the game (dlss_set_matrices): a rigid view and a projection of the shape.
 bool pass_matrices(int eye, M4& view, M4& projection) {
-    if (d.testView && d.testProjection) {
-        view = dlss::from_floats(d.testView);
-        projection = dlss::from_floats(d.testProjection);
-        return dlss::projection(projection) && dlss::rigid(view);
-    }
-    const std::uintptr_t base = simqvfr::module_base();
-    const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer);
-    if (!renderer)
+    float v[16], p[16];
+    if (!d.matrices || !d.matrices(eye, v, p))
         return false;
-    const std::uint8_t* params = renderer + kRendererViewEye;
-    view = dlss::from_floats(reinterpret_cast<const float*>(params + kParamsView));
-    projection = dlss::from_floats(reinterpret_cast<const float*>(params + kParamsProjection));
-    bool fromSlot = false;
-    if (!dlss::projection(projection)) {  // not where expected: the eye's projection slot (docs/recon-lmu.md)
-        projection = dlss::from_floats(
-            reinterpret_cast<const float*>(base + kEyeProjection + static_cast<std::size_t>(eye) * kEyeSlotStride + kSlotMatrix));
-        fromSlot = true;
-    }
-    const bool ok = dlss::projection(projection) && dlss::rigid(view);
-    if (!d.dataLogged) {
-        d.dataLogged = true;
-        const float* v = reinterpret_cast<const float*>(params + kParamsView);
-        simqvfr::logf("lmu dlss: the renderer's view matrix %s (rows %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f "
-                      "%.4f %.4f | %.3f %.3f %.3f %.4f); projection %s%s (m0 %.5f m5 %.5f m8 %.5f m9 %.5f m10 %.6f m14 %.6f)",
-                      dlss::rigid(view) ? "is rigid" : "ISN'T rigid", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8],
-                      v[9], v[10], v[11], v[12], v[13], v[14], v[15], dlss::projection(projection) ? "has the shape" : "HASN'T the shape",
-                      fromSlot ? " (from the eye's slot)" : "", projection[0], projection[5], projection[8], projection[9],
-                      projection[10], projection[14]);
-    }
-    return ok;
+    view = dlss::from_floats(v);
+    projection = dlss::from_floats(p);
+    return dlss::projection(projection) && dlss::rigid(view);
 }
 
 // The eye's jitter as it reached the projection: the third row's step from the frame before against the step asked for.
@@ -522,7 +506,7 @@ void note_projection(int eye, const M4& projection, const Jitter& asked) {
         return;
     if (d.signMoved[0] < 1e-14 && d.signMoved[1] < 1e-14) {
         d.jitterDead = true;
-        simqvfr::logf("lmu dlss: the located FOV's jitter doesn't reach the game's projection (its third row stood still "
+        say("the located FOV's jitter doesn't reach the game's projection (its third row stood still "
                       "over %d frames): jitter off",
                       d.signSamples);
         return;
@@ -530,7 +514,7 @@ void note_projection(int eye, const M4& projection, const Jitter& asked) {
     d.signDecided = true;
     for (int a = 0; a < 2; ++a)
         d.sign[a] = d.signSame[a] <= d.signOpposite[a] ? 1 : -1;
-    simqvfr::logf("lmu dlss: the jitter reaches the game's projection: x %s (misfit %.3g as asked, %.3g negated), y %s (%.3g, "
+    say("the jitter reaches the game's projection: x %s (misfit %.3g as asked, %.3g negated), y %s (%.3g, "
                   "%.3g), over %d frames",
                   d.sign[0] > 0 ? "as asked" : "NEGATED", d.signSame[0], d.signOpposite[0],
                   d.sign[1] > 0 ? "as asked" : "NEGATED", d.signSame[1], d.signOpposite[1], d.signSamples);
@@ -740,11 +724,11 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
                       n, length, depth, still, along, off, dlss::gate_verdict(still, along, off));
     }
     if (car)
-        simqvfr::logf("lmu dlss: gate: frame %llu view %d (%ux%u): the world: %s; the car (its box, moved with the head "
+        say("gate: frame %llu view %d (%ux%u): the world: %s; the car (its box, moved with the head "
                       "alone): %s",
                       d.frame, index, s.width, s.height, text[0], text[1]);
     else
-        simqvfr::logf("lmu dlss: gate: frame %llu view %d (%ux%u): the world beyond 8 m: %s; nearer (the car, the world's "
+        say("gate: frame %llu view %d (%ux%u): the world beyond 8 m: %s; nearer (the car, the world's "
                       "vectors): %s",
                       d.frame, index, s.width, s.height, text[0], text[1]);
 }
@@ -840,7 +824,7 @@ void run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         ++d.evaluationsTotal;
     } else {
         if (d.failures < 5)
-            simqvfr::logf("lmu dlss: frame %llu view %d: the evaluation failed (NGX 0x%08x)", d.frame, index, result);
+            say("frame %llu view %d: the evaluation failed (NGX 0x%08x)", d.frame, index, result);
         ++d.failures;
     }
     s.beforeUnjittered[0] = unjittered[0];
@@ -856,12 +840,12 @@ void run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
 void dlss_start(const DlssRun& run) {
     d.cfg = run;
     if (run.views && !ngx::built_in()) {
-        simqvfr::log_line("lmu dlss: asked for, but this build has no NGX SDK (CMake: NGX_SDK_DIR): off");
+        say("asked for, but this build has no NGX SDK (CMake: NGX_SDK_DIR): off");
         d.cfg.views = 0;
     }
     if (d.cfg.views)
-        simqvfr::logf("lmu dlss: DLAA on the eyes%s after each eye pass's scene (its multisample resolve, or with MSAA off "
-                      "before YEBIS's copy) (jitter %s, vectors %s, depth "
+        say("DLAA on the eyes%s after each eye pass's scene (its multisample resolve, or with MSAA off "
+                      "before the post-processing reads it) (jitter %s, vectors %s, depth "
                       "%s, the car %s: a box %.2f m left, %.2f right, %.2f down, %.2f up, %.2f front, %.2f back of the "
                       "head%s%s)",
                       d.cfg.views >= 2 ? " and the focus views" : "", d.cfg.jitter ? "on" : "off",
@@ -950,14 +934,14 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     if (!depth_view(depth, depthW, depthH)) {
         if (!depth && !d.depthRefusedLogged) {
             d.depthRefusedLogged = true;
-            simqvfr::log_line("lmu dlss: no depth target was bound with the pass's scene");
+            say("no depth target was bound with the pass's scene");
         }
         ++d.failures;
         return;
     }
     M4 view, projection;
     if (!pass_matrices(pass.eye, view, projection)) {
-        give_up("the renderer's view parameters aren't a rigid view and a projection where expected (the log line above)");
+        give_up("the game's view and projection for the pass aren't a rigid view and a projection (its log lines say more)");
         return;
     }
     Jitter eyeJitter, focusJitter;
@@ -978,7 +962,7 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     eyeJitter.cx *= d.sign[0];
     eyeJitter.sy *= d.sign[1];
     eyeJitter.cy *= d.sign[1];
-    // The renderer's matrix is world -> view as read (run 3's gate; lmu_dlss_view_inverse: the camera's world matrix).
+    // The game's matrix is world -> view as given (LMU's: run 3's gate; DlssRun::viewInverse: the camera's world matrix).
     if (d.cfg.viewInverse) {
         M4 viewInverse;
         if (!dlss::invert(view, viewInverse))
@@ -1015,7 +999,7 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     }
     if (!d.firstLogged) {
         d.firstLogged = true;
-        simqvfr::logf("lmu dlss: first pass: eye %d %ux%u%s in a %ux%u scene (format %d), depth %ux%u x%s", pass.eye,
+        say("first pass: eye %d %ux%u%s in a %ux%u scene (format %d), depth %ux%u x%s", pass.eye,
                       pass.eyeWidth, pass.eyeHeight, focus ? " with its focus view beside" : "", sd.Width, sd.Height,
                       static_cast<int>(sd.Format), depthW, depthH, d.depthMs ? "multisample" : "1");
     }
@@ -1080,13 +1064,10 @@ void dlss_shutdown() {
         d.eye[0] = d.eye[1] = d.focus[0] = d.focus[1] = Jitter{};
     }
     d.firstLogged = false;
-    simqvfr::log_line("lmu dlss: shut down (features released, NGX stopped)");
+    say("shut down (features released, NGX stopped)");
 }
 
-void dlss_test_matrices(const float* view, const float* projection) {
-    d.testView = view;
-    d.testProjection = projection;
-}
+void dlss_set_matrices(PassMatricesFn fn) { d.matrices = fn; }
 
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
 
@@ -1102,7 +1083,7 @@ void dlss_frame_end(unsigned long long frame) {
     if (frame - d.statsFrame >= 900) {
         d.statsFrame = frame;
         if (d.evaluations || d.failures)
-            simqvfr::logf("lmu dlss: %llu evaluations, %llu failed, %llu features made again, %llu frames with jitter since the "
+            say("%llu evaluations, %llu failed, %llu features made again, %llu frames with jitter since the "
                           "last line; views %ux%u %ux%u, focus %ux%u %ux%u; jitter sign %s",
                           d.evaluations, d.failures, d.recreated, d.jitteredFrames, d.slots[0].width, d.slots[0].height,
                           d.slots[1].width, d.slots[1].height, d.slots[2].width, d.slots[2].height, d.slots[3].width,
@@ -1113,4 +1094,4 @@ void dlss_frame_end(unsigned long long frame) {
     }
 }
 
-}  // namespace lmu
+}  // namespace simqvfr

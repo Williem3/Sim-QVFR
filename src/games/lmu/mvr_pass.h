@@ -38,7 +38,7 @@ struct MvrPassView {
     // scale isn't 1 (focus_math.h final_extent); 0: as eyeW x eyeH. The focus final goes beside it, at the focus size.
     unsigned finalEyeW = 0, finalEyeH = 0;
     FocusBox box{};                 // its tangents and the eye's (the focus post's glare mapping; valid: known)
-    // DLAA (dlss_views.h): the clip shift (x += s[0] w, y += s[1] w) the eye's [0] and the focus view's [1] draws carry
+    // DLAA (engine/dlss_views.h): the clip shift (x += s[0] w, y += s[1] w) the eye's [0] and the focus view's [1] draws carry
     // this frame, which their images lose in DLAA. The overlays drawn after the post (the driver tags, the VR UI) are
     // drawn with their viewports moved back by it, so they land where the world is in the image. Zero: no jitter.
     double overlayShift[2][2] = {};

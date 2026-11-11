@@ -22,7 +22,7 @@
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
-#include "dlss_views.h"
+#include "../../engine/dlss_views.h"
 #include "focus_post.h"
 #include "glare_math.h"
 #include "mvr_probe.h"
@@ -244,7 +244,7 @@ struct State {
     static constexpr unsigned kCopiesKept = 16;
     CopySeen copies[kCopiesKept];
     unsigned copyNext = 0;
-    // DLAA (dlss_views.h): the latest depth target bound with each render target of this pass (the resolve hook finds
+    // DLAA (engine/dlss_views.h): the latest depth target bound with each render target of this pass (the resolve hook finds
     // the scene's by the render target it resolves).
     struct SceneBind {
         ComPtr<ID3D11RenderTargetView> rtv;
@@ -599,7 +599,7 @@ D3D11_VIEWPORT first_viewport() {
     return g.overlayTarget ? overlay_viewport(g.pass & 1, g.view, g.vps[0]) : g.vps[0];
 }
 
-// DLAA (dlss_views.h): an overlay's viewport moved back by the clip shift its view's draws carry (a shift of s moves
+// DLAA (engine/dlss_views.h): an overlay's viewport moved back by the clip shift its view's draws carry (a shift of s moves
 // the drawing s[0] x width / 2 pixels right and s[1] x height / 2 up), so the overlay lands where the post's image,
 // which DLAA left without the jitter, has the world.
 D3D11_VIEWPORT unshifted(D3D11_VIEWPORT v, const double (&shift)[2]) {
@@ -808,7 +808,7 @@ bool overlay_target(UINT n, ID3D11RenderTargetView* const* rtvs) {
 
 // DLAA: which depth target a pass's render targets are drawn with (inside the tracked passes only: the views are held).
 void note_scene_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
-    if (!dsv || !n || n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL || !rtvs || !rtvs[0] || !dlss_wanted())
+    if (!dsv || !n || n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL || !rtvs || !rtvs[0] || !simqvfr::dlss_wanted())
         return;
     for (State::SceneBind& b : g.sceneBinds)
         if (b.rtv.Get() == rtvs[0]) {
@@ -986,10 +986,10 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
     ID3D11Resource* const dst = scene;
     const int eye = g.pass & 1;
     g.resolved[g.pass] = dst;
-    if (g.pass < 2 && dlss_wanted() && g.view.eyeW && g.view.eyeH) {
+    if (g.pass < 2 && simqvfr::dlss_wanted() && g.view.eyeW && g.view.eyeH) {
         // DLAA on the eye (and its focus view beside it) before anything reads the resolved scene. Its draws and copies
         // pass these hooks untouched; single-pass stereo is off meanwhile (the scene's last shader may have left it on).
-        DlssPass dp;
+        simqvfr::DlssPass dp;
         dp.eye = eye;
         dp.eyeWidth = g.view.eyeW;
         dp.eyeHeight = g.view.eyeH;
@@ -1002,7 +1002,7 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
             g.twoViews(g.context, false);
         const bool was = g.replaying;
         g.replaying = true;
-        dlss_after_resolve(context, dst, scene_depth(drawn), dp);
+        simqvfr::dlss_after_resolve(context, dst, scene_depth(drawn), dp);
         g.replaying = was;
         if (stereo)
             g.twoViews(g.context, true);

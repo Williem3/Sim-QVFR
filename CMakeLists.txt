@@ -77,7 +77,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/glare_share.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_views.cpp src/engine/ngx_dlss.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/glare_share.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -287,7 +287,7 @@ target_link_libraries(run_exit_test PRIVATE sim_qvfr_core)
 add_executable(lmu_focus_test tests/lmu_focus_test.cpp)
 target_include_directories(lmu_focus_test PRIVATE src)
 
-# The maths of LMU's DLAA inputs (games/lmu/dlss_math.h): the FOV jitter and the depth reprojection's vectors.
+# The maths of the DLAA inputs (engine/dlss_math.h): the FOV jitter and the depth reprojection's vectors.
 add_executable(lmu_dlss_test tests/lmu_dlss_test.cpp)
 target_include_directories(lmu_dlss_test PRIVATE src)
 target_compile_options(lmu_dlss_test PRIVATE /W4 /permissive- /utf-8)

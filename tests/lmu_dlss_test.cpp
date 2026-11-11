@@ -1,16 +1,16 @@
-// Offline check of the maths behind LMU's DLAA inputs (games/lmu/dlss_math.h): the jitter put into the located FOV
-// moves the image by the pixels asked, and depth reprojection gives a still world's motion vectors, with the eye's and
-// the focus view's jitter taken out. The projection is LMU's (tests/lmu_focus_test.cpp; docs/recon-lmu.md A2).
+// Offline check of the maths behind the DLAA inputs (engine/dlss_math.h), as LMU has them: the jitter put into the
+// located FOV moves the image by the pixels asked, and depth reprojection gives a still world's motion vectors, with the
+// eye's and the focus view's jitter taken out. The projection is LMU's (tests/lmu_focus_test.cpp; docs/recon-lmu.md A2).
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 
-#include "games/lmu/dlss_math.h"
+#include "engine/dlss_math.h"
 #include "quad/offaxis_focus.h"
 
 namespace {
 
-using namespace lmu::dlss;
+using namespace simqvfr::dlss;
 
 int failures = 0;
 

@@ -1,12 +1,12 @@
-// The maths of LMU's DLAA inputs (dlss_views.h): the projection jitter applied through the located FOV, and the
+// The maths of the DLAA inputs (dlss_views.h): the projection jitter applied through the located FOV, and the
 // reprojection that gives a static world's motion vectors from depth. Matrices are 4x4 row-major with row vectors
-// (clip = v M), as LMU's own. Header-only, for tests/lmu_dlss_test.cpp.
+// (clip = v M), left-handed view space (+z forward), as LMU's (the first game). Header-only, for tests/lmu_dlss_test.cpp.
 #pragma once
 
 #include <array>
 #include <cmath>
 
-namespace lmu::dlss {
+namespace simqvfr::dlss {
 
 using M4 = std::array<double, 16>;
 
@@ -271,4 +271,4 @@ inline void unshift_box(Box& box, double cx, double cy) {
     box.rect[3] += cy / 2;
 }
 
-}  // namespace lmu::dlss
+}  // namespace simqvfr::dlss

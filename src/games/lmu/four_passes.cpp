@@ -25,8 +25,8 @@
 #include "../../quad/d3d11_view_resample.h"
 #include "../../sha256_file.h"
 #include "abi.h"
-#include "dlss_math.h"
-#include "dlss_views.h"
+#include "../../engine/dlss_math.h"
+#include "../../engine/dlss_views.h"
 #include "focus_math.h"
 #include "game.h"
 #include "glare_share.h"
@@ -341,13 +341,13 @@ bool focus_matrices(int eye, float (&eyeM)[2][16], float (&focusM)[2][16], Focus
     bool ok = true;
     for (int k = 0; k < 2; ++k)
         ok = focus_projection(eyeM[k], fx, fy, cx, cy, box[k], focusM[k]) && ok;
-    // DLAA (dlss_views.h): the eye's projection carries this frame's jitter and its DLAA output doesn't. The box's eye
+    // DLAA (engine/dlss_views.h): the eye's projection carries this frame's jitter and its DLAA output doesn't. The box's eye
     // tangents and place in the eye's image as the output has them: the frame's record (what the layer composes and
     // submits the periphery with) and the focus post's glare mapping read the output. The matrices stay as rendered.
     double shiftX, shiftY;
-    if (ok && dlss_eye_clip_shift(eye, shiftX, shiftY))
+    if (ok && simqvfr::dlss_eye_clip_shift(eye, shiftX, shiftY))
         for (int k = 0; k < 2; ++k)
-            dlss::unshift_box(box[k], shiftX, shiftY);
+            simqvfr::dlss::unshift_box(box[k], shiftX, shiftY);
     if (!ok) {
         if (!shapeLogged) {
             shapeLogged = true;
@@ -1038,13 +1038,13 @@ void mvr_before_pass(int p) {
         real_recommended(recommended);
         v.focusW = scaled_size(recommended[0], gameScale * shareW);
         v.focusH = scaled_size(recommended[1], gameScale * shareH);
-        // DLAA (dlss_views.h): the focus view's own jitter, through its remap; the eye's is in its projection. Both are
+        // DLAA (engine/dlss_views.h): the focus view's own jitter, through its remap; the eye's is in its projection. Both are
         // what the overlays after the post are drawn moved back by (MvrPassView::overlayShift).
         const float remapB = v.remap[1], remapD = v.remap[3];
-        dlss_focus_jitter(p, v.focusW, v.focusH, v.remap[1], v.remap[3]);
+        simqvfr::dlss_focus_jitter(p, v.focusW, v.focusH, v.remap[1], v.remap[3]);
         v.overlayShift[1][0] = v.remap[1] - remapB;
         v.overlayShift[1][1] = v.remap[3] - remapD;
-        dlss_eye_clip_shift(p, v.overlayShift[0][0], v.overlayShift[0][1]);
+        simqvfr::dlss_eye_clip_shift(p, v.overlayShift[0][0], v.overlayShift[0][1]);
         // Side by side in the main targets (the scene's), and the focus final beside the eye's corner of its final.
         unsigned room[2];
         main_size(room);
@@ -2747,7 +2747,7 @@ void four_passes_frame_end() {
     if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice)  // the tracker sees the menus too
         if (!install_mvr(sessionDevice))
             fallback_to_four_passes("multi-view's context hooks couldn't be installed");
-    dlss_frame_end(frames);
+    simqvfr::dlss_frame_end(frames);
     if (cfg.mvr) {
         mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;
