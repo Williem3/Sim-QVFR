@@ -161,6 +161,9 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
 
 XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     game->session_running(false);
+    // First: the gaze thread locates spaces in the runtime; nothing of the session may go while it still runs (it crashed
+    // inside the runtime at a game exit, 2026-11-10 15:56, with the teardown below under way).
+    gaze_thread_stop();
     native_quad_session_ended();
     hang_watch_disarm();
     ini_worker_sync();  // the menu's and hotkeys' last changes reach the ini
@@ -229,7 +232,6 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     gpu_load_stop();
     cpu_load_stop();
     pad_watch_stop();
-    gaze_thread_stop();  // before the spaces it locates go
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it
         gaze.space = gaze.gameSpace = XR_NULL_HANDLE;
