@@ -334,6 +334,8 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         case OsdGaze::Tracking: r.value = L"Tracking"; r.tone = OsdTone::Good; break;
         case OsdGaze::Partial: r.value = L"Partial"; r.tone = OsdTone::Warn; break;
         case OsdGaze::Lost: r.value = L"Lost"; r.tone = OsdTone::Bad; break;
+        case OsdGaze::Runtime: r.value = L"Tracking · runtime"; r.tone = OsdTone::Good; break;
+        case OsdGaze::RuntimeStill: r.value = L"Runtime · still"; r.tone = OsdTone::Warn; break;
         }
         rows.push_back(r);
     }

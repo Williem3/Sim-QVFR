@@ -30,6 +30,9 @@ namespace simqvfr::layer {
 namespace {
 
 constexpr int64_t kOsdDrawMs = 500, kOsdCheekyMs = 1000;
+// The runtime's focus views held still this long: the card says so (a steady gaze still jitters them a little; on
+// Pimax's runtime they moved on ~60% of frames while menus were looked at, 2026-11-11).
+constexpr int64_t kOsdRuntimeGazeStillMs = 3000;
 
 constexpr int64_t kNoticeMs = 30000;
 
@@ -268,15 +271,35 @@ OsdInput osd_input(int64_t now) {
             in.vramBudget = memory.Budget;
         }
     }
+    // The runtime composes quad views with its own foveated rendering: its eye tracking puts the focus views (and the
+    // box) where the eyes look, and the layer may never ask the eye gaze extension (on Pimax's runtime it can even give
+    // no samples while the runtime tracks: 2026-11-09). The card then says whether the runtime moves its focus views.
+    const bool runtimeGaze = experiment.gaze && nativeQuad.active && nativeQuad.foveated;
+    if (runtimeGaze) {
+        uint64_t moves = 0;
+        {
+            std::lock_guard guard(nativeQuad.gazeMutex);
+            moves = nativeQuad.gazeMoves;
+        }
+        if (moves != osd.runtimeGazeMoves || osd.runtimeGazeMoved == 0)  // moved (or the first card: not yet judged)
+            osd.runtimeGazeMoved = now;
+        osd.runtimeGazeMoves = moves;
+        in.gaze = now - osd.runtimeGazeMoved < qpc_ms(kOsdRuntimeGazeStillMs) ? OsdGaze::Runtime : OsdGaze::RuntimeStill;
+    } else {
+        osd.runtimeGazeMoved = 0;
+    }
     {
         std::lock_guard guard(gaze.mutex);
         const uint64_t queries = gaze.queries - osd.gazeQueries, tracked = gaze.tracked - osd.gazeTracked;
         osd.gazeQueries = gaze.queries;
         osd.gazeTracked = gaze.tracked;
-        if (!experiment.gaze || queries == 0)  // off, or not asked (the focus does not follow the eyes here)
+        if (runtimeGaze) {
+            // the runtime's eye tracking, above: these lookups (if any) don't steer the box
+        } else if (!experiment.gaze || queries == 0) {  // off, or not asked (the focus does not follow the eyes here)
             in.gaze = gaze.action || !experiment.gaze ? OsdGaze::Off : OsdGaze::Unavailable;
-        else
+        } else {
             in.gaze = tracked * 10 >= queries * 9 ? OsdGaze::Tracking : tracked * 2 >= queries ? OsdGaze::Partial : OsdGaze::Lost;
+        }
     }
     // Frame generation: Cheeky's, when the layer runs it with [cheeky] fg on.
     const CheekySettings& cheeky = osd.cheeky;

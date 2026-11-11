@@ -666,6 +666,8 @@ struct Osd {
     std::deque<double> history;    // the graph: the last kOsdHistory frame times
     int64_t nextDraw = 0;
     uint64_t gazeQueries = 0, gazeTracked = 0;  // at the last draw
+    uint64_t runtimeGazeMoves = 0;  // nativeQuad.gazeMoves at the last draw
+    int64_t runtimeGazeMoved = 0;   // QPC of the last draw that saw the runtime move its focus views
     std::future<std::vector<uint32_t>> drawing;  // the card being drawn
     CheekySettings cheeky;                         // [cheeky] when last read
     std::string cheekySnapshot;
