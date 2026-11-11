@@ -12,6 +12,7 @@
 #include <string>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../engine/dlss_settings.h"
 #include "../input/hotkeys.h"
 #include "../profile/profiles.h"
 #include "../quad/focus_offset.h"
@@ -69,6 +70,9 @@ struct Settings {
     double crop_height() const;
     // Cheeky Foveated DLSS ([cheeky], cheeky_settings.h); its keys but `load` apply live.
     CheekySettings cheeky;
+    // Sim-QVFR's own DLSS ([dlss], engine/dlss_settings.h; a game with GameFeatures::sideLoadedDlss: LMU); its keys but
+    // the DLL's folder apply live. The folder is every game's (not in a game's copy or a profile).
+    DlssSettings dlss;
     bool cpuProfile = false;  // [experiment] cpu_profile: the CPU capture hotkey records one (Diagnostics pane)
     // [experiment] d3d11_capture_hotkey: the frame capture hotkey saves the next frame's swapchain images (Diagnostics
     // pane; games composed by the D3D11 compositor).
@@ -216,6 +220,9 @@ bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime);
 // Cheeky's OpenXR layer (CheekyOpenXRSetup.exe): registered as an implicit layer, and enabled.
 enum class CheekyLayer { Missing, Disabled, Enabled };
 CheekyLayer cheeky_layer_state();
+// Sim-QVFR's own DLSS: the nvngx_dlss.dll the game will load, [dlss] folder's, or beside the game's exe without one
+// (empty: neither known). Whether it's there is the caller's to check.
+std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& gameExe);
 RuntimeInfo load_runtime_info(const std::wstring& path);
 
 // The kit's readouts for a recommended per-eye size: view sizes in px, ACE's double-wide target and

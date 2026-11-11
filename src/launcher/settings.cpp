@@ -103,6 +103,7 @@ Settings load_settings(const std::wstring& ini) {
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
     s.hotkeyFooter = read_int(ini, L"menu", L"hotkey_footer", 1) != 0;
     s.cheeky = read_cheeky_settings(ini.c_str());
+    s.dlss = read_dlss_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
     s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
     s.cropTop = clamp_to(read_int(ini, L"crop", L"top", 0), kCropRange);
@@ -137,6 +138,7 @@ Settings restored_defaults(const Settings& current) {
     s.hiddenGames = current.hiddenGames;
     s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
+    s.dlss.folder = current.dlss.folder;  // where nvngx_dlss.dll is: the user's install, not a setting
     return s;
 }
 
@@ -220,6 +222,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
     ok &= write(ini, L"menu", L"hotkey_footer", s.hotkeyFooter ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
+    ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
     ok &= write_osd_placement(ini.c_str(), s.osd);
     ok &= write_hotkeys(ini.c_str(), s.hotkeys);
     return ok;
@@ -248,7 +251,8 @@ Profile settings_profile(const Settings& settings, const std::wstring& name) {
 bool per_game_key(const std::wstring& section, const std::wstring& key) {
     return !(section == L"menu" || section == L"osd" || section == L"hotkeys" || section == L"launcher" ||
              section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
-             (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")));
+             (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")) ||
+             (section == L"dlss" && key == L"folder"));
 }
 
 namespace {
@@ -432,6 +436,14 @@ std::wstring cheeky_runtime_path(const std::wstring& ini, const std::wstring& la
 
 bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime) {
     return write(ini, L"cheeky", L"runtime", runtime);
+}
+
+std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& gameExe) {
+    if (!folder.empty())
+        return (std::filesystem::path(folder) / L"nvngx_dlss.dll").wstring();
+    if (gameExe.empty())
+        return L"";
+    return (std::filesystem::path(gameExe).parent_path() / L"nvngx_dlss.dll").wstring();
 }
 
 CheekyLayer cheeky_layer_state() {

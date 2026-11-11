@@ -22,8 +22,9 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
 
 struct Feature;
 // A DLSS feature for a view rendered at up to renderWidth x renderHeight and shown at outputWidth x outputHeight: DLAA
-// when they are the same, else super resolution (its quality mode the nearest to the ratio: ultra quality 77%, quality
-// 67%, balanced 58%, performance 50%, ultra performance 33%; any ratio between works, the mode only names it). HDR
+// when they are the same, else super resolution (its quality mode the nearest to the ratio: quality 67% and anything
+// above it, as NGX has no ultra quality mode for it; balanced 58%, performance 50%, ultra performance 33%; any ratio
+// between works, the mode only names it). HDR
 // colour in, NGX's own exposure, motion vectors at the render size. `preset`: NGX's render preset number for whichever
 // mode (0: its default). Null with NGX's result in `result`.
 Feature* create(ID3D11DeviceContext* context, unsigned renderWidth, unsigned renderHeight, unsigned outputWidth,

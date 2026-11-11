@@ -116,8 +116,9 @@ inline unsigned jitter_phases(double scale) {
     return n > kJitterPhases ? static_cast<unsigned>(n) : kJitterPhases;
 }
 
-// The DLSS mode a render scale (percent of the output each way) is nearest: NVIDIA's ultra quality 77%, quality 67%,
-// balanced 58%, performance 50%, ultra performance 33%; 100: DLAA (ngx_dlss.cpp picks NGX's mode the same way).
+// The mode a render scale (percent of the output each way) is nearest, as Sim-QVFR names it: ultra quality 77%, quality
+// 67%, balanced 58%, performance 50%, ultra performance 33%; 100: DLAA. NVIDIA's names but the first: NGX has no ultra
+// quality mode for super resolution, so ngx_dlss.cpp runs 77% in its quality mode.
 inline const char* focus_mode_name(int percent) {
     return percent >= 100 ? "DLAA"
            : percent >= 72 ? "ultra quality"

@@ -253,6 +253,8 @@ void live_reload() {
         return;
     live_apply(s->live);
     cheeky_apply_settings(s->cheeky, s->live.gaze);
+    if (experiment.views4 && game_features().sideLoadedDlss)
+        game->qvfr_set_dlss(s->menu.dlss);  // [dlss], read with the menu's values: the adapter applies a change
     menu_values_changed(*s);
     menu_placement_changed(s->menuPlacement);
     osd_placement_changed(s->osd, s->cheeky);

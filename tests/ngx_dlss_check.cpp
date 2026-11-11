@@ -358,6 +358,24 @@ int wmain(int argc, wchar_t** argv) {
         for (Case& k : cases) run_case(k, params, frames);
         run_subrects(params, 1600, 1280, 1280, 1300);
 
+        // A render at 77% each way (LMU's focus views 1947x1563 drawn at 1499x1204, the menu's "ultra quality"): NGX
+        // refuses its UltraQuality mode for DLSS super resolution (run 2026-11-11 00:08: 0xbad00010, unsupported
+        // parameter, every time); its quality mode takes the same sizes (the mode names the preset; the sizes are what
+        // it works at).
+        {
+            View ultra{1499, 1204, 1947, 1563}, asQuality{1499, 1204, 1947, 1563};
+            const bool ultraMade = create(ultra, params, NVSDK_NGX_PerfQuality_Value_UltraQuality, 0, false);
+            const bool qualityMade = create(asQuality, params, NVSDK_NGX_PerfQuality_Value_MaxQuality, 0, false);
+            std::printf("     77%% render: UltraQuality %s, MaxQuality %s\n", ultraMade ? "made" : "refused",
+                        qualityMade ? "made" : "refused");
+            check(qualityMade, "a 77% render upscales in NGX's quality mode");
+            if (ultra.handle) NVSDK_NGX_D3D11_ReleaseFeature(ultra.handle);
+            if (asQuality.handle) NVSDK_NGX_D3D11_ReleaseFeature(asQuality.handle);
+            const double q77 = time_pair(params, quality, 0, 1499, 1204, 1947, 1563, frames);
+            std::printf("     focus pair at 77%% in the quality mode, default preset: GPU %.2f ms per frame\n", q77);
+            check(q77 > 0, "77% in the quality mode: every evaluation succeeded");
+        }
+
         // Per pair and preset at LMU run 14's sizes (eyes 1038x834, focus views 1947x1563 drawn at 50%): what each
         // preset costs the eyes (the periphery) and the focus views apart. Hinted for every mode at once, as the
         // module does; 0 is NGX's default for the mode (K for DLAA, quality and balanced; M for performance).

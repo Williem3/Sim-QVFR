@@ -113,10 +113,11 @@ Feature* create(ID3D11DeviceContext* context, unsigned renderWidth, unsigned ren
     c.Feature.InHeight = renderHeight;
     c.Feature.InTargetWidth = outputWidth;
     c.Feature.InTargetHeight = outputHeight;
-    // The mode nearest the ratio (it names the preset NGX picks; the sizes are what it works at).
+    // The mode nearest the ratio (it names the preset NGX picks; the sizes are what it works at). NGX refuses its
+    // UltraQuality mode for super resolution (0xbad00010, unsupported: LMU run 2026-11-11 00:08 and ngx_dlss_check),
+    // so a render above quality's 67% (Sim-QVFR's "ultra quality", 77%) runs in the quality mode, which takes it.
     const double ratio = static_cast<double>(renderWidth) / outputWidth;
     c.Feature.InPerfQualityValue = renderWidth == outputWidth && renderHeight == outputHeight ? NVSDK_NGX_PerfQuality_Value_DLAA
-                                   : ratio >= 0.72 ? NVSDK_NGX_PerfQuality_Value_UltraQuality
                                    : ratio >= 0.62 ? NVSDK_NGX_PerfQuality_Value_MaxQuality
                                    : ratio >= 0.54 ? NVSDK_NGX_PerfQuality_Value_Balanced
                                    : ratio >= 0.42 ? NVSDK_NGX_PerfQuality_Value_MaxPerf

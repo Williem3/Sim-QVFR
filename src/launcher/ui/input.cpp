@@ -161,7 +161,17 @@ void activate(Ctl id, int option) {
     case kFgRelease:
     case kVisor:
     case kShape:
+    case kDlssFocusMode:
+    case kDlssFocusPreset:
+    case kDlssEyePreset:
     case kHelmetDetail: open_popup(id); return;
+    case kDlssOn:
+        if (own_dlss_available()) {  // greyed out without QVFR, an RTX card or multi-view rendering
+            app.s.dlss.on = !app.s.dlss.on;
+            changed();
+        }
+        return;
+    case kDlssFolder: choose_dlss_dll(); return;
     case kFgOn:
         if (game_has(&games::GameFeatures::frameGeneration)) {  // greyed out for a game without it
             app.s.cheeky.fg = !app.s.cheeky.fg;
@@ -277,6 +287,7 @@ namespace {
 bool push_button(Ctl id) {
     switch (id) {
     case kCheekyRuntime:
+    case kDlssFolder:
     case kUpdateNow:
     case kUpdateDownload:
     case kUpdateInstall:
@@ -334,6 +345,10 @@ bool space_control(Ctl id) {
     case kFgScale:
     case kFgPeriphery:
     case kFgRelease:
+    case kDlssOn:
+    case kDlssFocusMode:
+    case kDlssFocusPreset:
+    case kDlssEyePreset:
     case kOsdOn:
     case kHotkeyFooter:
     case kUpdateCheck:

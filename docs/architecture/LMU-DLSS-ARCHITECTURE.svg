@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1330" width="1120" height="1330" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1346" width="1120" height="1346" role="img" aria-labelledby="title">
 <title id="title">LMU with DLSS through NVIDIA’s NGX</title>
 <style>
 :root { --window-bg:#f2f2f5; --group-bg:#ffffff; --control-bg:#e9e9ee; --control-border:#c2c2c9; --separator:#dcdce2;
@@ -29,9 +29,9 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 .foot { fill:var(--label-secondary); font-size:11.5px; }
 </style>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
-<rect width="1120" height="1330" fill="var(--window-bg)"/>
+<rect width="1120" height="1346" fill="var(--window-bg)"/>
 <text class="h1" x="20" y="40">LMU with DLSS through NVIDIA’s NGX</text>
-<text class="sub" x="20" y="66">Experimental (lmu_dlss). LMU ships no DLSS; Sim-QVFR calls NGX on LMU’s own device, on top of the multi-view path. Every input</text>
+<text class="sub" x="20" y="66">Experimental (the launcher’s DLSS pane). LMU ships no DLSS; Sim-QVFR calls NGX on LMU’s own device, on top of the multi-view path. Every input</text>
 <text class="sub" x="20" y="84">comes from the OpenXR and D3D11 calls LMU makes anyway and two more matrix reads. LMU’s code isn’t changed, hooked or called.</text>
 <circle cx="25" cy="112" r="5" fill="var(--label-muted)"/>
 <text class="s" x="36" y="116">LMU, unchanged</text>
@@ -170,7 +170,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <rect x="780" y="250" width="300" height="510" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
 <text class="t" x="796" y="276">Graphics card</text>
 <text class="m" x="796" y="296">NVIDIA RTX, through NGX</text>
-<text class="s" x="796" y="320">nvngx_dlss.dll from lmu_dlss_folder or</text>
+<text class="s" x="796" y="320">nvngx_dlss.dll chosen in the launcher, or</text>
 <text class="s" x="796" y="336">beside LMU.exe: not shipped with Sim-QVFR.</text>
 <text class="s" x="796" y="352">Only in builds with the NGX SDK linked.</text>
 <text class="s" x="796" y="378">A feature per view, each with its own</text>
@@ -194,7 +194,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="sd" x="796" y="680">scene before YEBIS’s post reads it; a</text>
 <text class="sd" x="796" y="696">focus view drawn smaller is upscaled into</text>
 <text class="sd" x="796" y="712">its whole region.</text>
-<text class="ms" x="796" y="740">lmu_dlss=1 eyes, 2 focus views too</text>
+<text class="ms" x="796" y="740">[dlss] on=1: eyes and focus views</text>
 
 <!-- Arrows -->
 <path d="M304,110 L398,110" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
@@ -218,7 +218,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="lab" x="749" y="652" text-anchor="middle" fill="var(--dlss)">NGX</text>
 
 <!-- One eye pass, in order -->
-<text class="hdr" x="0" y="790">One eye pass with lmu_dlss on, in order</text>
+<text class="hdr" x="0" y="790">One eye pass with DLSS on, in order</text>
 <rect x="0" y="800" width="142" height="92" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
 <text class="t" x="12" y="824">1 xrLocateViews</text>
 <text class="s" x="12" y="844">FOV moved by the</text>
@@ -261,7 +261,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <path d="M923,846 L934,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
 
 <!-- Per view -->
-<text class="hdr" x="0" y="924">Per view, with lmu_dlss=2</text>
+<text class="hdr" x="0" y="924">Per view: the launcher’s DLSS pane or the headset menu’s DLSS page, [dlss] in sim-qvfr.ini, live</text>
 <rect x="0" y="934" width="1080" height="128" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
 <text class="hdr" x="16" y="956">View</text>
 <text class="hdr" x="176" y="956">DLSS</text>
@@ -271,22 +271,23 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="t" x="16" y="988">Eyes</text>
 <text class="ms" x="16" y="1004">the periphery</text>
 <text class="s" x="176" y="988">DLAA</text>
-<text class="ms" x="176" y="1004">lmu_dlss=1 or 2</text>
+<text class="ms" x="176" y="1004">Use DLSS (on)</text>
 <text class="s" x="396" y="988">their own size</text>
 <text class="s" x="636" y="988">K (NGX’s DLAA default), the steadier; or F, about half the cost</text>
-<text class="ms" x="636" y="1004">lmu_dlss_eye_preset=F: more aliasing, suits eye tracking</text>
+<text class="ms" x="636" y="1004">Periphery preset (eye_preset): F aliases more, suits eye tracking</text>
 <line x1="16" y1="1014" x2="1064" y2="1014" stroke="var(--separator)"/>
 <text class="t" x="16" y="1036">Focus views</text>
 <text class="ms" x="16" y="1052">the inner region</text>
 <text class="s" x="176" y="1036">DLAA, or super resolution</text>
-<text class="ms" x="176" y="1052">lmu_dlss=2</text>
+<text class="ms" x="176" y="1052">Use DLSS (on)</text>
 <text class="s" x="396" y="1036">100, 77, 67, 58 or 50 %</text>
-<text class="ms" x="396" y="1052">lmu_dlss_focus_scale (100: DLAA)</text>
-<text class="s" x="636" y="1036">NGX’s default for the mode: K; M in performance</text>
-<text class="ms" x="636" y="1052">lmu_dlss_preset: a letter (F, J, K, L, M) instead</text>
+<text class="ms" x="396" y="1052">Focus views (focus_scale)</text>
+<text class="s" x="636" y="1036">NGX’s default for the mode: K; M at Performance; 77% runs as Quality</text>
+<text class="ms" x="636" y="1052">Focus preset (focus_preset): Default, K or M</text>
 </g>
 <text class="foot" x="20" y="1252">Violet marks what DLSS adds to the multi-view path (LMU-MVR-ARCHITECTURE.svg); the rest is as there. Still no arrow points into LMU’s code:</text>
-<text class="foot" x="20" y="1269">the jitter reaches LMU through the FOV it asks for, and DLSS runs between LMU’s own D3D11 calls. Needs multi_view=1; lmu_dlss=0 by default.</text>
+<text class="foot" x="20" y="1269">the jitter reaches LMU through the FOV it asks for, and DLSS runs between LMU’s own D3D11 calls. Needs multi-view rendering; off by default.</text>
 <text class="foot" x="20" y="1286">Known limits: the motion vectors come from depth, so other cars smear; a focus view drawn smaller picks its texture mips for that size (no per-view</text>
-<text class="foot" x="20" y="1303">mip bias at the API level). The VR UI’s canvas with mips (lmu_ui_mips) is on with or without DLSS. Design as of 2026-11-10, branch lmu-dlss.</text>
+<text class="foot" x="20" y="1303">mip bias at the API level). The VR UI’s canvas with mips (lmu_ui_mips) is on with or without DLSS. A setting changed while LMU runs reaches the</text>
+<text class="foot" x="20" y="1320">module through the layer’s ini reload and LMU’s adapter, taken between frames; each change rebuilds DLSS (a short stutter). Design as of 2026-11-11, branch lmu-dlss.</text>
 </svg>

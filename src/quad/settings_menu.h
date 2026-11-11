@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../cheeky/cheeky_settings.h"
+#include "../engine/dlss_settings.h"
 #include "focus_offset.h"
 #include "focus_quad_distance.h"
 #include "focus_shape.h"
@@ -45,7 +46,10 @@ enum class MenuItem {
     // The settings page, after Gaze dead-zone, with focus_layer=2 (MenuLaunch::focusQuads): the quads' distance.
     FocusQuadDistance,
     // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
-    Sharpening
+    Sharpening,
+    // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
+    // the focus views' mode and preset, the eyes' preset.
+    DlssOn, DlssFocusMode, DlssFocusPreset, DlssEyePreset
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -82,6 +86,7 @@ struct MenuValues {
     int objectDetail = 100;   // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
+    DlssSettings dlss;        // [dlss]: Sim-QVFR's own DLSS (a game with it: LMU; the DLSS page)
     // The outer views' kept share of the eye (percent; 100 without a crop).
     double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }
     double crop_height() const { return crop ? 100.0 - cropTop - cropBottom : 100.0; }
@@ -112,6 +117,9 @@ struct MenuLaunch {
     bool focusQuads = false;
     // The runtime composes the views (native quad views: Pimax, Varjo): the settings page says its own sliders don't apply.
     bool runtimeComposes = false;  // the runtime composes the views: the focus area inside its own focus region
+    // Sim-QVFR's own DLSS can run in this launch (GameFeatures::sideLoadedDlss, QVFR with the multi-view path, a build
+    // with the NGX SDK): its DLSS page ([dlss]), live.
+    bool ownDlss = false;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.
@@ -141,7 +149,7 @@ struct SettingsMenu {
 
 // The menu's pages: the method's settings, the focus area's shape, for QVFR the view crop and the helmet, with
 // Cheeky running Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
-enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, Headset };
+enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, OwnDlss, Headset };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 

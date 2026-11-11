@@ -138,6 +138,13 @@ constexpr Help kHelp[] = {
      L"Outside the center region frames are warped with the game’s motion. Lower scales use less GPU time and memory. With "
      L"an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer."},
     {L"Placement", L"The settings menu stays 0.8 m in front of your head, wherever you look."},
+    {L"Use DLSS",
+     L"Sim-QVFR evaluates NVIDIA’s DLSS on each view, with depth and motion it works out from the game’s own frames, "
+     L"before the game’s post-processing. The game’s code isn’t changed or called. Needs an NVIDIA RTX graphics card and "
+     L"an nvngx_dlss.dll, which you choose: Sim-QVFR doesn’t include one."},
+    {L"Periphery preset",
+     L"The DLSS model for the outer views. K is steadier at a higher cost; F, the older model, costs about half as much and "
+     L"aliases more. With eye tracking you rarely look there, so F’s savings come cheap; with a fixed focus, K."},
     {L"Updates",
      L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
      L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "

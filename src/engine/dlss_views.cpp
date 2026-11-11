@@ -303,6 +303,9 @@ struct State {
     unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0, stretched = 0;
     unsigned long long evaluationsTotal = 0, stretchedTotal = 0;
     PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
+    // The player's latest change (dlss_live; under the mutex), taken at the next frame end.
+    bool livePending = false;
+    DlssLive live;
 } d;
 
 // A log line with the run's tag in front ("lmu dlss: ...").
@@ -959,6 +962,10 @@ template <class F> OnExit(F) -> OnExit<F>;
 }  // namespace
 
 void dlss_start(const DlssRun& run) {
+    {
+        std::lock_guard guard(d.mutex);
+        d.livePending = false;
+    }
     d.cfg = run;
     d.off = d.focusSrOff = false;
     d.cfg.focusScale = (std::max)(33, (std::min)(100, run.focusScale));
@@ -1229,10 +1236,70 @@ void dlss_shutdown() {
 
 void dlss_set_matrices(PassMatricesFn fn) { d.matrices = fn; }
 
+void dlss_live(const DlssLive& live) {
+    std::lock_guard guard(d.mutex);
+    d.live = live;
+    d.livePending = true;
+}
+
+namespace {
+
+// The player's change, between frames on the render thread (dlss_frame_end).
+void apply_live(const DlssLive& l) {
+    const int views = l.on ? 2 : 0;
+    const int scale = (std::max)(33, (std::min)(100, l.focusScale));
+    const bool was = d.cfg.views > 0 && !d.off;
+    if (views == d.cfg.views && scale == d.cfg.focusScale && l.preset == d.cfg.preset && l.eyePreset == d.cfg.eyePreset)
+        return;
+    if (!views && d.cfg.views) {  // off: the features go (NGX stays started until the session ends)
+        for (int i = 0; i < 4; ++i) {
+            Slot& s = d.slots[i];
+            if (s.feature)
+                ngx::release(s.feature);
+            s = Slot{};
+        }
+    }
+    {
+        std::lock_guard guard(d.mutex);  // the jitter reads these on xrLocateViews' thread
+        if (views && !was)
+            d.off = false;  // on again: a session's earlier refusal (NGX, the features) is tried once more
+        d.cfg.views = views;
+        d.cfg.focusScale = scale;
+        d.cfg.preset = l.preset;
+        d.cfg.eyePreset = l.eyePreset;
+        d.phases = views >= 2 ? dlss::jitter_phases(scale / 100.0) : dlss::kJitterPhases;
+        d.focusSrOff = false;  // a new mode is tried afresh
+        if (!views) {
+            d.lastFrameOk = false;
+            d.eye[0] = d.eye[1] = d.focus[0] = d.focus[1] = Jitter{};
+        }
+        d.evaluated[0] = d.evaluated[1] = false;
+    }
+    d.createFailures = 0;
+    if (!views)
+        say("live: off (the features released)");
+    else
+        say("live: %s on the eyes (preset %s), the focus views %s (%d%%, preset %s), %u jitter phases", was ? "DLAA" : "on: DLAA",
+            dlss::preset_name(l.eyePreset >= 0 ? l.eyePreset : l.preset), dlss::focus_mode_name(scale), scale,
+            dlss::preset_name(l.preset), d.phases);
+}
+
+}  // namespace
+
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
 unsigned long long dlss_stretched_total() { return d.stretchedTotal; }
 
 void dlss_frame_end(unsigned long long frame) {
+    DlssLive live;
+    bool pending;
+    {
+        std::lock_guard guard(d.mutex);
+        pending = d.livePending;
+        live = d.live;
+        d.livePending = false;
+    }
+    if (pending)
+        apply_live(live);
     if (!d.cfg.views)
         return;
     {

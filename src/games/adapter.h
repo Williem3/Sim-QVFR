@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../engine/dlss_settings.h"
 #include "../quad/views4_layout.h"
 #include "../xr.h"
 #include "game.h"
@@ -104,6 +105,9 @@ public:
     // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and
     // live. 100: the LOD the focus views' pixel density needs, 0: the game's own for its render size.
     virtual void qvfr_set_object_detail(int percent) { (void)percent; }
+    // QVFR: Sim-QVFR's own DLSS ([dlss], GameFeatures::sideLoadedDlss; engine/dlss_settings.h), live: called with the
+    // ini's at every reload; the adapter applies what changed (the DLL's folder at the next launch).
+    virtual void qvfr_set_dlss(const DlssSettings& settings) { (void)settings; }
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
     virtual bool qvfr_dlss_held() = 0;
     // The game's render and output target sizes (width, height) as last laid out (0 before the first frame).

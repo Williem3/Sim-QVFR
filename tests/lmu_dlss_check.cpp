@@ -485,8 +485,14 @@ int wmain(int argc, wchar_t** argv) {
     check(SUCCEEDED(device->CreateTexture2D(&sd1, nullptr, &depth1)) &&
               SUCCEEDED(device->CreateDepthStencilView(depth1.Get(), &dd1, &dsv1)),
           "the single-sample depth target (MSAA off) is made");
-    for (int part = 0; part < 6; ++part) {
-        const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5;
+    // The live part (the player's settings changed while the game runs, dlss_live): DLAA on everything, then off at
+    // frame 30, on again at frame 60 with the focus views at quality (67%) and the eyes on F, at frame 90 the focus views
+    // at DLAA on preset M, at frame 105 at 77% ("ultra quality"); each change taken at that frame's end.
+    unsigned long long liveAt[4] = {};
+    double liveScaleOff = -1, liveScaleOn = -1;
+    bool liveWantedOff = true;
+    for (int part = 0; part < 7; ++part) {
+        const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5, liveTest = part == 6;
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
         simqvfr::DlssRun moving = run;
@@ -500,8 +506,32 @@ int wmain(int argc, wchar_t** argv) {
         simqvfr::dlss_start(moving);
         // The super resolution part drives as the others (its gate at the 60th and 300th frames), then stands still for
         // 90 frames (its history converges over the 32 jitter phases) before the reference frame and the give-up frame.
-        const unsigned partFrames = sr ? 400 : sceneFrames, stopAt = 310;
+        const unsigned partFrames = sr ? 400 : liveTest ? 120 : sceneFrames, stopAt = 310;
         for (unsigned f = 0; f < partFrames && scene.ps && resolvedRtv; ++f) {
+            if (liveTest) {
+                simqvfr::DlssLive change;
+                if (f == 30) {
+                    change.on = false;
+                    simqvfr::dlss_live(change);
+                } else if (f == 60) {
+                    change.on = true, change.focusScale = 67, change.preset = 0, change.eyePreset = 6;
+                    simqvfr::dlss_live(change);
+                } else if (f == 90) {
+                    change.on = true, change.focusScale = 100, change.preset = 13, change.eyePreset = 11;
+                    simqvfr::dlss_live(change);
+                } else if (f == 105) {  // "ultra quality": NGX has no such mode for an upscale; its quality mode takes 77%
+                    change.on = true, change.focusScale = 77, change.preset = 0, change.eyePreset = 11;
+                    simqvfr::dlss_live(change);
+                }
+                if (f == 31 || f == 61 || f == 90 || f == 119)  // the evaluations so far at each stretch's ends
+                    liveAt[f == 31 ? 0 : f == 61 ? 1 : f == 90 ? 2 : 3] = simqvfr::dlss_evaluations_total();
+                if (f == 45) {
+                    liveScaleOff = simqvfr::dlss_focus_scale();
+                    liveWantedOff = simqvfr::dlss_wanted();
+                }
+                if (f == 75)
+                    liveScaleOn = simqvfr::dlss_focus_scale();
+            }
             const bool referenceFrame = sr && f == partFrames - 2, giveUpFrame = sr && f == partFrames - 1;
             matricesFail = giveUpFrame;
             if (giveUpFrame)
@@ -684,9 +714,9 @@ int wmain(int argc, wchar_t** argv) {
         }
         return v;
     };
-    size_t starts[8] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos,
-                        std::string::npos, std::string::npos, std::string::npos, std::string::npos};
-    for (int i = 1; i < 7 && starts[i - 1] != std::string::npos; ++i)
+    size_t starts[9] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos,
+                        std::string::npos, std::string::npos, std::string::npos, std::string::npos, std::string::npos};
+    for (int i = 1; i < 8 && starts[i - 1] != std::string::npos; ++i)
         starts[i] = all.find("lmu dlss: DLAA on", starts[i - 1] + 1);
     const auto part_verdicts = [&](int i) {
         return starts[i] == std::string::npos ? Verdicts{} : verdicts(starts[i], starts[i + 1]);
@@ -719,7 +749,7 @@ int wmain(int argc, wchar_t** argv) {
           "MSAA off: the depth read from a single-sample target, the vectors fit as with MSAA");
 
     // The focus views in DLSS performance mode.
-    const std::string srPart = starts[6] == std::string::npos ? "" : all.substr(starts[6]);
+    const std::string srPart = starts[6] == std::string::npos ? "" : all.substr(starts[6], starts[7] - starts[6]);
     char made[96];
     std::snprintf(made, sizeof(made), "view 2's DLSS feature made at %ux%u up to %ux%u (performance", focusW / 2, focusH / 2,
                   focusW, focusH);
@@ -779,6 +809,35 @@ int wmain(int argc, wchar_t** argv) {
     check(stretchedAfter - stretchedBefore == 2 && stretchFilled && stretchDiff >= 0 && stretchDiff < placement[2][4] &&
               stretchOff,
           "super resolution: when DLSS gives up, both focus views are stretched over their region; then their size again");
+
+    // The live part.
+    const std::string livePart = starts[7] == std::string::npos ? "" : all.substr(starts[7]);
+    char liveFocus[96];
+    std::snprintf(liveFocus, sizeof(liveFocus), "view 2's DLSS feature made at %ux%u up to %ux%u (quality, preset default",
+                  simqvfr::dlss::render_size(focusW, 0.67), simqvfr::dlss::render_size(focusH, 0.67), focusW, focusH);
+    char liveFocusM[80];
+    std::snprintf(liveFocusM, sizeof(liveFocusM), "view 2's DLAA feature made at %ux%u (preset M", focusW, focusH);
+    char liveEye[80];
+    std::snprintf(liveEye, sizeof(liveEye), "view 0's DLAA feature made at %ux%u (preset F", sceneEyeW, sceneEyeH);
+    std::printf("     live: evaluations %llu at the off, %llu at the on again, %llu at the switch to DLAA M, %llu at the end; "
+                "focus scale %.2f while off, %.2f after\n",
+                liveAt[0], liveAt[1], liveAt[2], liveAt[3], liveScaleOff, liveScaleOn);
+    check(livePart.find("live: off (the features released)") != std::string::npos && liveAt[1] == liveAt[0] &&
+              !liveWantedOff && liveScaleOff == 1.0,
+          "live: off takes at the frame's end: no evaluations, the focus views at their size");
+    check(livePart.find("live: on: DLAA on the eyes (preset F), the focus views quality (67%, preset default)") != std::string::npos &&
+              livePart.find(liveEye) != std::string::npos && livePart.find(liveFocus) != std::string::npos &&
+              std::fabs(liveScaleOn - 0.67) < 1e-9 && liveAt[2] - liveAt[1] == 4 * 29,
+          "live: on again at quality with F on the eyes: features made with them, every view evaluated each frame");
+    char liveFocus77[96];
+    std::snprintf(liveFocus77, sizeof(liveFocus77), "view 2's DLSS feature made at %ux%u up to %ux%u (ultra quality",
+                  simqvfr::dlss::render_size(focusW, 0.77), simqvfr::dlss::render_size(focusH, 0.77), focusW, focusH);
+    check(livePart.find(liveFocusM) != std::string::npos && livePart.find("ngx: (DLAA) Using App hint Preset M") != std::string::npos &&
+              liveAt[3] - liveAt[2] == 4 * 29,
+          "live: the focus views to DLAA on preset M (NGX took M), then 77%: every view still evaluated each frame");
+    check(livePart.find(liveFocus77) != std::string::npos && livePart.find("couldn't be made") == std::string::npos &&
+              livePart.find("ngx: (Quality) App hint Preset Unspecified or Overridden, using title default Preset K") != std::string::npos,
+          "live: 77% (\"ultra quality\") made in NGX's quality mode, nothing refused");
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

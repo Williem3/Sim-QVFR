@@ -26,6 +26,9 @@ struct GameFeatures {
     // Sharpening ([quad] sharpen_percent, live): AMD's CAS as the compositor resamples the views (compose_shader.h), and on
     // the periphery's copy when the runtime composes (focus_layer, native quad views). Every game's compositor has it.
     bool sharpening = false;
+    // Sim-QVFR's own DLSS for a game that ships none, "side-loaded" ([dlss], engine/dlss_settings.h, live): NGX called
+    // at the API level on the game's views (engine/dlss_views.h); needs the multi-view path (LMU).
+    bool sideLoadedDlss = false;
 };
 
 struct GameInfo {

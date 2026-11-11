@@ -62,6 +62,18 @@ void dlss_set_matrices(PassMatricesFn fn);
 
 void dlss_start(const DlssRun& run);
 bool dlss_wanted();
+
+// The player's settings changed while the game runs (engine/dlss_settings.h), from any thread: taken at the next
+// dlss_frame_end, on the render thread, between frames. On or off (off releases the features; NGX stays started until
+// the session ends; on again starts NGX if it never did); the focus views' mode; the focus views' and the eyes' presets.
+// A changed mode or preset makes each view's feature again at its next pass: a short hitch.
+struct DlssLive {
+    bool on = false;      // the eyes and the focus views (DlssRun::views 2), or none
+    int focusScale = 100; // DlssRun::focusScale
+    int preset = 0;       // DlssRun::preset (the focus views')
+    int eyePreset = -1;   // DlssRun::eyePreset
+};
+void dlss_live(const DlssLive& live);
 // The end of xrLocateViews for the game's stereo views: this frame's jitter put into their FOV.
 void dlss_jitter_views(XrView* views, uint32_t count);
 // The focus views' render scale for the frame being set up: a focus view w x h is drawn at dlss::render_size(w, s) x

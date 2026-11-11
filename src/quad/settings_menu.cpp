@@ -88,6 +88,11 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Optimize, L"Optimize for frame rate", 0, 0, 1},
     {MenuItem::Profile, L"Profile", 0, 0, 1},
     {MenuItem::HotkeyFooter, L"Hotkeys footer", 0, 1, 1},
+    // The DLSS page (Sim-QVFR's own; engine/dlss_settings.h's choices).
+    {MenuItem::DlssOn, L"DLSS", 0, 1, 1},
+    {MenuItem::DlssFocusMode, L"Focus views", 0, 0, 1},
+    {MenuItem::DlssFocusPreset, L"Focus preset", 0, 0, 1},
+    {MenuItem::DlssEyePreset, L"Periphery preset", 0, 0, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -168,6 +173,8 @@ std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
         if (menu.launch.fgPage)
             pages.push_back(MenuPage::Fg);
     }
+    if (menu.launch.qvfr && menu.launch.ownDlss)
+        pages.push_back(MenuPage::OwnDlss);
     pages.push_back(MenuPage::Headset);
     return pages;
 }
@@ -203,6 +210,10 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
                                        MenuItem::HelmetDetail, MenuItem::HelmetLight, MenuItem::HelmetDebug});
         else if (menu.values.helmet.on)
             items.insert(items.end(), {MenuItem::HelmetRim, MenuItem::HelmetCorners, MenuItem::HelmetLight, MenuItem::HelmetDebug});
+    } else if (page == MenuPage::OwnDlss) {
+        items.push_back(MenuItem::DlssOn);
+        if (menu.values.dlss.on)
+            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset});
     } else if (page == MenuPage::Dlss) {
         items.insert(items.end(), {MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
                                    MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
@@ -236,6 +247,7 @@ namespace {
 std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     switch (page) {
     case MenuPage::Dlss: return L"Foveated DLSS";
+    case MenuPage::OwnDlss: return L"DLSS";
     case MenuPage::Fg: return L"Frame generation";
     case MenuPage::Headset: return L"Overlay and menu";
     case MenuPage::Shape: return L"Focus shape";
@@ -261,6 +273,8 @@ std::wstring menu_subtitle(const SettingsMenu& menu) {
         return L"The runtime composes the views: the focus area shows inside its own focus region";
     if (page == MenuPage::Settings)
         return menu.optimizeDetail;
+    if (page == MenuPage::OwnDlss)
+        return L"Sim-QVFR's DLSS through NVIDIA's NGX: changes apply at once";
     return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";
 }
 
@@ -294,7 +308,24 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     }
     CheekySettings& c = menu.cheeky.values;
     const int step = key == MenuKey::Right ? 1 : -1;
+    DlssSettings& dl = menu.values.dlss;
     switch (item) {
+    case MenuItem::DlssOn: dl.on = !dl.on; return true;
+    case MenuItem::DlssFocusMode: {  // DLAA, then each smaller render (no wrap)
+        const int before = dl.focusScale;
+        dl.focusScale = dlss_choice_step(kDlssFocusModes, dl.focusScale, step);
+        return dl.focusScale != before;
+    }
+    case MenuItem::DlssFocusPreset: {
+        const int before = dl.focusPreset;
+        dl.focusPreset = dlss_choice_step(kDlssFocusPresets, dl.focusPreset, step);
+        return dl.focusPreset != before;
+    }
+    case MenuItem::DlssEyePreset: {
+        const int before = dl.eyePreset;
+        dl.eyePreset = dlss_choice_step(kDlssEyePresets, dl.eyePreset, step);
+        return dl.eyePreset != before;
+    }
     case MenuItem::CheekyProcessing: c.processing = !c.processing; return true;
     case MenuItem::CheekyOuterDlaa: c.outerDlaa = !c.outerDlaa; return true;
     case MenuItem::CheekyOuterScale: {
@@ -407,6 +438,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.objectDetail = std::clamp(read_int(ini, L"experiment", L"object_detail", v.objectDetail), 0, 100);
     v.sharpen = std::clamp(read_int(ini, L"quad", L"sharpen_percent", v.sharpen), 0, 100);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
+    v.dlss = read_dlss_settings(ini);
     return v;
 }
 
@@ -569,6 +601,13 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
             notes.push_back(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off");
         return notes;
     }
+    if (page == MenuPage::OwnDlss) {
+        if (menu.values.dlss.on)
+            notes.push_back(menu.values.dlss.eyePreset == 6 ? L"Periphery F: cheaper, more aliasing; suits eye tracking"
+                                                            : L"Periphery K: steadier; F is cheaper and suits eye tracking");
+        notes.push_back(L"Each change rebuilds DLSS: a short stutter");
+        return notes;
+    }
     if (page == MenuPage::Dlss || page == MenuPage::Helmet)
         return notes;
     if (page == MenuPage::Shape) {
@@ -628,6 +667,16 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = menu.profile < 0 || menu.profile >= static_cast<int>(menu.profiles.size())
                              ? L"Your own"
                              : menu.profiles[menu.profile] + (menu.profileChanged ? L" (changed)" : L"");
+        else if (items[i] == MenuItem::DlssOn)
+            line.value = v.dlss.on ? L"On" : L"Off";
+        else if (items[i] == MenuItem::DlssFocusMode)
+            line.value = std::wstring(dlss_choice_name(kDlssFocusModes, v.dlss.focusScale)) +
+                         (v.dlss.focusScale < 100 ? L" (" + std::to_wstring(v.dlss.focusScale) + L"%)" : L"");
+        else if (items[i] == MenuItem::DlssFocusPreset)
+            line.value = v.dlss.focusPreset ? dlss_choice_name(kDlssFocusPresets, v.dlss.focusPreset)
+                                            : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
+        else if (items[i] == MenuItem::DlssEyePreset)
+            line.value = dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset);
         else if (items[i] == MenuItem::FgOn)
             line.value = c.fg ? L"On" : L"Off";
         else if (items[i] == MenuItem::FgMultiplier)

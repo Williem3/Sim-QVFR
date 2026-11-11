@@ -123,27 +123,26 @@ public:
                           "turns it off)",
                           diag_.ini().c_str());
         glareAtLaunch_ = run.glareShare;
-        // DLAA through NGX on the views ([experiment] lmu_dlss=1 the eyes, 2 the eyes and the focus views; engine/dlss_views.h):
-        // with the multi-view path only (its eye passes found at the d3d11 level). lmu_dlss_folder: where nvngx_dlss.dll
-        // is; lmu_dlss_preset: NGX's preset (a letter or its number; empty or 0: NGX's default for the mode) for the
-        // focus views, and the eyes unless lmu_dlss_eye_preset gives theirs; lmu_dlss_jitter=0, lmu_dlss_vectors=0:
-        // without that input (a comparison); lmu_dlss_view_inverse, lmu_dlss_jitter_flip_x/_y: the inputs'
-        // conventions, should the log's gate (lmu_dlss_gate=1) or the picture say they are the other way round.
+        // Sim-QVFR's own DLSS on the views (engine/dlss_views.h): the player's [dlss] (engine/dlss_settings.h: on, the
+        // nvngx_dlss.dll folder, the focus views' mode and preset, the eyes' preset), live through qvfr_set_dlss; with
+        // the multi-view path only (its eye passes found at the d3d11 level). The inputs' diagnostics are [experiment]
+        // keys: lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a comparison); lmu_dlss_view_inverse,
+        // lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's gate (lmu_dlss_gate=1) or the picture
+        // say they are the other way round.
         simqvfr::DlssRun dlss;
         dlss.tag = "lmu dlss";
+        dlssPossible_ = run.trackerDrives;
         if (s.ini) {
             const auto key = [&](const wchar_t* name, int fallback) {
                 return static_cast<int>(GetPrivateProfileIntW(L"experiment", name, fallback, s.ini));
             };
-            dlss.views = std::clamp(key(L"lmu_dlss", 0), 0, 2);
-            wchar_t folder[MAX_PATH] = {};
-            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_folder", L"", folder, MAX_PATH, s.ini);
-            dlss.dllFolder = folder;
-            wchar_t preset[16] = {};
-            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_preset", L"", preset, 16, s.ini);
-            dlss.preset = simqvfr::dlss::preset_from_text(preset, 0);
-            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_eye_preset", L"", preset, 16, s.ini);
-            dlss.eyePreset = simqvfr::dlss::preset_from_text(preset, -1);
+            const simqvfr::DlssSettings player = simqvfr::read_dlss_settings(s.ini);
+            dlss.views = player.on ? 2 : 0;
+            dlss.dllFolder = player.folder;
+            dlss.preset = player.focusPreset;
+            dlss.eyePreset = player.eyePreset;
+            dlss.focusScale = player.focusScale;
+            dlssSettings_ = player;
             dlss.jitter = key(L"lmu_dlss_jitter", 1) != 0;
             dlss.vectors = key(L"lmu_dlss_vectors", 1) != 0;
             dlss.viewInverse = key(L"lmu_dlss_view_inverse", 0) != 0;
@@ -160,9 +159,6 @@ public:
             dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
             dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
             dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
-            // lmu_dlss_focus_scale: the focus views' DLSS mode with lmu_dlss=2, the percent of their size each way they
-            // are drawn at and upscaled from (100 DLAA, 77 ultra quality, 67 quality, 58 balanced, 50 performance).
-            dlss.focusScale = std::clamp(key(L"lmu_dlss_focus_scale", 100), 33, 100);
             if (dlss.views && !run.trackerDrives) {
                 simqvfr::log_line("lmu dlss: asked for, but it needs the multi-view path (multi_view=1): off");
                 dlss.views = 0;
@@ -213,6 +209,28 @@ public:
     void qvfr_jitter_views(XrView* views, uint32_t count) override {
         if (qvfr_)
             simqvfr::dlss_jitter_views(views, count);
+    }
+    // The player's DLSS settings changed in the launcher or the headset menu: the module takes them between frames.
+    void qvfr_set_dlss(const simqvfr::DlssSettings& settings) override {
+        if (!qvfr_ || settings == dlssSettings_)
+            return;
+        if (settings.on && !dlssPossible_) {
+            if (!dlssRefusedLogged_)
+                simqvfr::log_line("lmu dlss: turned on, but this run has no multi-view path (multi_view=1, at the next "
+                                  "launch): off");
+            dlssRefusedLogged_ = true;
+            dlssSettings_ = settings;
+            return;
+        }
+        if (settings.folder != dlssSettings_.folder)
+            simqvfr::log_line("lmu dlss: the nvngx_dlss.dll folder changed: it applies at the next launch");
+        dlssSettings_ = settings;
+        simqvfr::DlssLive live;
+        live.on = settings.on;
+        live.focusScale = settings.focusScale;
+        live.preset = settings.focusPreset;
+        live.eyePreset = settings.eyePreset;
+        simqvfr::dlss_live(live);
     }
     void visibility_mask_taken(uint32_t viewIndex) override {
         if (qvfr_)
@@ -292,6 +310,9 @@ private:
     bool qvfr_ = false;
     simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
     bool glareAtLaunch_ = true;
+    // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
+    simqvfr::DlssSettings dlssSettings_;
+    bool dlssPossible_ = false, dlssRefusedLogged_ = false;
 };
 
 }  // namespace
