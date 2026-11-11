@@ -1078,6 +1078,19 @@ void dlss_focus_jitter(int eye, unsigned focusWidth, unsigned focusHeight, float
     d.focus[eye] = j;
 }
 
+bool dlss_mip_bias(int eye, float& focus, float& eyeBias) {
+    focus = eyeBias = 0;
+    if (eye < 0 || eye > 1 || !dlss_wanted() || d.cfg.textureSharpening <= 0)
+        return false;
+    const double scale = dlss_focus_scale();  // render over output: 1 under DLAA
+    std::lock_guard guard(d.mutex);
+    if (d.cfg.views >= 2 && d.focusOk[eye])
+        focus = static_cast<float>(std::log2(scale) - 1.0);
+    if (d.cfg.textureSharpening >= 2 && d.lastFrameOk)
+        eyeBias = -1.0f;
+    return focus != 0 || eyeBias != 0;
+}
+
 bool dlss_eye_clip_shift(int eye, double& cx, double& cy) {
     cx = cy = 0;
     if (eye < 0 || eye > 1 || !dlss_wanted())
@@ -1283,6 +1296,12 @@ void apply_live(const DlssLive& l) {
     const int views = l.on ? 2 : 0;
     const int scale = (std::max)(33, (std::min)(100, l.focusScale));
     const bool was = d.cfg.views > 0 && !d.off;
+    if (l.textureSharpening != d.cfg.textureSharpening) {  // no feature to make again: from the next pass
+        d.cfg.textureSharpening = l.textureSharpening;
+        say("live: texture sharpening %s", l.textureSharpening >= 2   ? "on the focus views and the eyes"
+                                           : l.textureSharpening == 1 ? "on the focus views"
+                                                                      : "off");
+    }
     if (views == d.cfg.views && scale == d.cfg.focusScale && l.preset == d.cfg.preset && l.eyePreset == d.cfg.eyePreset)
         return;
     if (!views && d.cfg.views) {  // off: the features go (NGX stays started until the session ends)

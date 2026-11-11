@@ -983,9 +983,9 @@ int main() {
         check(menu_title(dm) == L"DLSS" && menu_page_items(dm).size() == 2 && menu_page_items(dm)[1] == MenuItem::DlssOn,
               "DLSS page: off, only its switch");
         dm.selected = 1;
-        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.on && menu_page_items(dm).size() == 5 &&
+        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.on && menu_page_items(dm).size() == 6 &&
                   menu_lines(dm)[1].value == L"On",
-              "DLSS page: on, then the focus views' mode and preset and the eyes' preset");
+              "DLSS page: on, then the focus views' mode and preset, the eyes' preset and texture sharpening");
         dm.selected = 2;  // Focus views: DLAA, then smaller renders; the ends hold
         check(!menu_key(dm, MenuKey::Left) && dm.values.dlss.focusScale == 100 && menu_lines(dm)[2].value == L"DLAA",
               "DLSS page: Left from DLAA stays at DLAA");
@@ -1002,14 +1002,32 @@ int main() {
         check(dm.values.dlss.eyePreset == 11 && menu_key(dm, MenuKey::Right) && dm.values.dlss.eyePreset == 6 &&
                   menu_lines(dm)[4].value == L"F (cheaper)",
               "DLSS page: the eyes' preset K by default, F a step on");
+        dm.selected = 5;  // texture sharpening: off by default, then the focus views, then the eyes too; the ends hold
+        check(dm.values.dlss.textureSharpening == 0 && menu_lines(dm)[5].value == L"Off" && !menu_key(dm, MenuKey::Left),
+              "DLSS page: texture sharpening off by default, Left from Off stays there");
+        check(menu_key(dm, MenuKey::Right) && dm.values.dlss.textureSharpening == 1 && menu_lines(dm)[5].value == L"Focus only" &&
+                  menu_key(dm, MenuKey::Right) && dm.values.dlss.textureSharpening == 2 &&
+                  menu_lines(dm)[5].value == L"Focus and periphery" && !menu_key(dm, MenuKey::Right),
+              "DLSS page: texture sharpening steps to Focus only, then Focus and periphery, the last");
+        const auto has_note = [&](const wchar_t* start) {
+            for (const std::wstring& n : menu_notes(dm))
+                if (n.rfind(start, 0) == 0)
+                    return true;
+            return false;
+        };
+        check(has_note(L"Texture sharpening was off at launch"),
+              "DLSS page: texture sharpening turned on with it off at launch: the note says the next launch");
+        dm.launch.sharpeningReady = true;
+        check(!has_note(L"Texture sharpening was off at launch"), "DLSS page: on at launch: no such note (its settings live)");
 
         wchar_t temp[MAX_PATH];
         GetTempPathW(MAX_PATH, temp);
         const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-dlss.ini";
         DeleteFileW(ini.c_str());
         DlssSettings fresh = read_dlss_settings(ini.c_str());
-        check(!fresh.on && fresh.folder.empty() && fresh.focusScale == 100 && fresh.focusPreset == 0 && fresh.eyePreset == 11,
-              "[dlss]: an empty file reads off, DLAA, NGX's default, K");
+        check(!fresh.on && fresh.folder.empty() && fresh.focusScale == 100 && fresh.focusPreset == 0 && fresh.eyePreset == 11 &&
+                  fresh.textureSharpening == 0,
+              "[dlss]: an empty file reads off, DLAA, NGX's default, K, no texture sharpening");
         // An older file: [experiment] lmu_dlss=2, its folder, 50%, preset 0, the eyes on F.
         WritePrivateProfileStringW(L"experiment", L"lmu_dlss", L"2", ini.c_str());
         WritePrivateProfileStringW(L"experiment", L"lmu_dlss_folder", L"K:\\Games\\X", ini.c_str());
@@ -1024,6 +1042,7 @@ int main() {
         mine.focusScale = 67;
         mine.focusPreset = 13;
         mine.eyePreset = 11;
+        mine.textureSharpening = 2;
         check(write_dlss_settings(ini.c_str(), mine) && read_dlss_settings(ini.c_str()) == mine,
               "[dlss]: written and read back, ahead of the older keys");
         wchar_t text[16] = {};
@@ -1033,9 +1052,11 @@ int main() {
         check(focusText == L"M" && std::wstring(text) == L"K", "[dlss]: presets written as their letters");
         WritePrivateProfileStringW(L"dlss", L"focus_scale", L"60", ini.c_str());
         WritePrivateProfileStringW(L"dlss", L"focus_preset", L"J", ini.c_str());
+        WritePrivateProfileStringW(L"dlss", L"texture_sharpening", L"7", ini.c_str());
         const DlssSettings odd = read_dlss_settings(ini.c_str());
-        check(odd.focusScale == 58 && odd.focusPreset == 0,
-              "[dlss]: a scale between modes snaps to the nearest; a preset not offered reads as NGX's default");
+        check(odd.focusScale == 58 && odd.focusPreset == 0 && odd.textureSharpening == 2,
+              "[dlss]: a scale between modes snaps to the nearest; a preset not offered reads as NGX's default; a "
+              "sharpening past the last reads as the last");
         check(read_menu_values(ini.c_str()).dlss == odd, "[dlss]: the menu's values read it");
         DeleteFileW(ini.c_str());
     }

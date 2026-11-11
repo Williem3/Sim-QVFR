@@ -81,7 +81,9 @@ float own_dlss_pane(float x, float y, float w, bool draw) {
          t::kSpace6;
     const bool off = !available || !d.on;
     std::wstring modes[std::size(kDlssFocusModes)], focusPresets[std::size(kDlssFocusPresets)],
-        eyePresets[std::size(kDlssEyePresets)];
+        eyePresets[std::size(kDlssEyePresets)], sharpenings[std::size(kDlssTextureSharpening)];
+    for (size_t i = 0; i < std::size(kDlssTextureSharpening); ++i)
+        sharpenings[i] = kDlssTextureSharpening[i].name;
     for (size_t i = 0; i < std::size(kDlssFocusModes); ++i)
         modes[i] = kDlssFocusModes[i].name;
     for (size_t i = 0; i < std::size(kDlssFocusPresets); ++i)
@@ -101,7 +103,18 @@ float own_dlss_pane(float x, float y, float w, bool draw) {
     eyePreset.desc = L"K is the steadier. F costs about half as much with more aliasing: with eye tracking it stays out of "
                      L"where you look; K suits a fixed focus.";
     h += section(x, y + h, w, L"DLSS on the views", {mode, focusPreset, eyePreset},
-                 L"Each change rebuilds DLSS in the running game: a short stutter.", draw, Applies::Live);
+                 L"Each change rebuilds DLSS in the running game: a short stutter.", draw, Applies::Live) +
+         t::kSpace6;
+    Row sharpening = choice_row(kDlssSharpening, L"Texture sharpening", sharpenings,
+                                static_cast<int>(std::size(sharpenings)),
+                                dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true), off);
+    sharpening.desc = L"Samples textures sharper where DLSS works (the mip bias DLSS asks for). Focus only acts on the focus "
+                      L"area, Focus and periphery on the periphery too, where it shows most. Subtle; if fine patterns "
+                      L"shimmer or show moiré, go back a step.";
+    h += section(x, y + h, w, L"Textures", {sharpening},
+                 L"On at launch, its changes apply at once, without a stutter. Turned on from Off while the game runs, it "
+                 L"starts at the next launch (off, it costs nothing).",
+                 draw, Applies::Live);
     return h;
 }
 

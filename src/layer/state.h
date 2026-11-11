@@ -113,6 +113,7 @@ struct Experiment {
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
     double views4FocusCullMargin = 0.25;   // focus cull: extra extent beyond the feather band (gaze latency)
     bool views4DlssLive = true;            // live resolution below DLSS (views4.h); views4_dlss_live=0 holds the sizes
+    bool textureSharpeningAtLaunch = false;  // [dlss] texture_sharpening on at launch: its hook made (LMU), its settings live
     bool uavBarriers = false;              // diagnostic: UAV barrier after every dispatch (probe/pass_census.h)
     bool gpuFrameTiming = false;           // views4: timestamps time ACE's frame on its queue (probe/gpu_frame_timer.h)
     // CPU sampling profiler (probe/cpu_profile.h): on (Ctrl+Alt+C starts a capture), seconds per capture, the

@@ -48,8 +48,8 @@ enum class MenuItem {
     // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
     Sharpening,
     // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
-    // the focus views' mode and preset, the eyes' preset.
-    DlssOn, DlssFocusMode, DlssFocusPreset, DlssEyePreset
+    // the focus views' mode and preset, the eyes' preset, texture sharpening.
+    DlssOn, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -120,6 +120,9 @@ struct MenuLaunch {
     // Sim-QVFR's own DLSS can run in this launch (GameFeatures::sideLoadedDlss, QVFR with the multi-view path, a build
     // with the NGX SDK): its DLSS page ([dlss]), live.
     bool ownDlss = false;
+    // Texture sharpening was on at launch, so its hook and shader twins were made: its settings are live. Off at launch,
+    // turning it on applies at the next launch (the page says so).
+    bool sharpeningReady = false;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

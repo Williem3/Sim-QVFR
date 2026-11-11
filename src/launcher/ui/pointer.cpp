@@ -89,7 +89,8 @@ void open_popup(Ctl owner) {
                     app.popup.selected = static_cast<int>(app.popup.items.size());
                 app.popup.items.push_back(p.name);
             }
-    } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset) {  // Sim-QVFR's DLSS
+    } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
+               owner == kDlssSharpening) {  // DLSS in LMU
         const auto fill = [](const auto& list, int value) {
             app.popup.items.clear();
             for (const DlssChoice& c : list)
@@ -100,8 +101,10 @@ void open_popup(Ctl owner) {
             fill(kDlssFocusModes, app.s.dlss.focusScale);
         else if (owner == kDlssFocusPreset)
             fill(kDlssFocusPresets, app.s.dlss.focusPreset);
-        else
+        else if (owner == kDlssEyePreset)
             fill(kDlssEyePresets, app.s.dlss.eyePreset);
+        else
+            fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
     } else if (owner == kCheekyNrPreset) {
         app.popup.items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
         app.popup.selected = app.s.cheeky.nrPreset;
@@ -163,6 +166,9 @@ void choose(Ctl owner, int option) {
         app.s.dlss.focusPreset = kDlssFocusPresets[std::clamp(option, 0, static_cast<int>(std::size(kDlssFocusPresets)) - 1)].value;
     else if (owner == kDlssEyePreset)
         app.s.dlss.eyePreset = kDlssEyePresets[std::clamp(option, 0, static_cast<int>(std::size(kDlssEyePresets)) - 1)].value;
+    else if (owner == kDlssSharpening)
+        app.s.dlss.textureSharpening =
+            kDlssTextureSharpening[std::clamp(option, 0, static_cast<int>(std::size(kDlssTextureSharpening)) - 1)].value;
     else if (owner == kCheekyNrPreset)
         app.s.cheeky.nrPreset = option;
     else if (owner == kCheekyNrPasses)

@@ -15,6 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../../engine/dlss_settings.h"
 #include "../../engine/dxbc_patch.h"
 #include "../../engine/nvapi_stereo.h"
 #include "../../engine/object_vtable.h"
@@ -53,6 +54,7 @@ std::atomic<bool> shaderHookTried{false};
 std::atomic<bool> supportLogged{false};
 bool dump = false;
 bool attach = false;  // lmu_mvr=1: each game shader gets its converted twin as private data (kMvrTwinGuid)
+bool makeBiasTwins = false;  // texture sharpening on at launch ([dlss] texture_sharpening): pixel shaders' mip bias twins
 bool markChecksums = false;  // with the focus post: every shader's checksum as private data (the traces' names)
 bool underRenderDoc = false;
 bool forceInstanced = false;  // [experiment] multi_view_software=1: instancing even where NVIDIA's is there
@@ -71,6 +73,8 @@ thread_local bool inProbe = false;  // NVAPI's own shader creation must not be e
 // and one NVAPI shader per distinct bytecode, by its checksum (null: refused or not created).
 std::mutex twinMutex;
 std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11VertexShader>> twins, instancedTwins;
+std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11PixelShader>> biasTwins;  // the pixel shaders' (or null)
+std::atomic<uint64_t> pixelGeneration{0};
 
 uint64_t id_of(const uint8_t* code, size_t size) {
     uint64_t id = 0;
@@ -331,6 +335,41 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         if (dump)
             save(static_cast<const uint8_t*>(code), size, "PS");
     }
+    // Texture sharpening (mvr_pass.cpp): the mip bias twin, one per distinct bytecode, made when it is first seen.
+    if (attach && makeBiasTwins && !inProbe && role == YebisRole::none && code && size) {
+        const auto* bytes = static_cast<const uint8_t*>(code);
+        const uint64_t id = id_of(bytes, size);
+        Microsoft::WRL::ComPtr<ID3D11PixelShader> twin;
+        bool seen = false;
+        {
+            std::lock_guard guard(twinMutex);
+            if (const auto it = biasTwins.find(id); it != biasTwins.end()) {
+                twin = it->second;
+                seen = true;
+            }
+        }
+        std::string refusedWhy;
+        bool failed = false;
+        if (!seen) {
+            const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(bytes, size);
+            if (b.bytecode.empty())
+                refusedWhy = b.error;
+            else if (FAILED(originalCreatePixelShader(device, b.bytecode.data(), b.bytecode.size(), nullptr, &twin)))
+                failed = true;
+            std::lock_guard guard(twinMutex);
+            biasTwins[id] = twin;
+        }
+        if (twin)
+            (*shader)->SetPrivateDataInterface(kMvrMipBiasTwinGuid, twin.Get());
+        std::lock_guard guard(statsMutex);
+        ++stats.pixelCreated;
+        stats.pixelRepeats += seen ? 1 : 0;
+        stats.pixelTwinned += twin ? 1 : 0;
+        stats.pixelFailed += failed ? 1 : 0;
+        if (!refusedWhy.empty())
+            ++stats.pixelRefused[refusedWhy];
+    }
+    pixelGeneration.fetch_add(1, std::memory_order_release);  // after its twin is attached (as for vertex shaders)
     return hr;
 }
 
@@ -389,6 +428,8 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;
     attach = attachTwins;
+    // Texture sharpening's twins only when it's on at launch (as its hook, four_passes.cpp install_mvr).
+    makeBiasTwins = attach && ini && simqvfr::read_dlss_settings(ini).textureSharpening != 0;
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
     markChecksums =
         attach && (nameShaders || (ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0));
@@ -471,6 +512,18 @@ void mvr_probe_frame_end() {
                   tried > 0 ? stats.nvapiMs / tried : 0.0,
                   dump ? (", " + std::to_string(stats.dumped) + " dumped").c_str() : "",
                   static_cast<unsigned long long>(stats.yebisCopies), static_cast<unsigned long long>(stats.yebisComposites));
+    if (stats.pixelCreated) {
+        std::string pixelRefused;
+        for (const auto& [why, count] : stats.pixelRefused)
+            pixelRefused += (pixelRefused.empty() ? "" : ", ") + why + " x" + std::to_string(count);
+        simqvfr::logf("lmu mvr probe: %llu pixel shaders created (%llu distinct), %llu given a mip bias twin (texture "
+                      "sharpening)%s%s%s, %llu twins not created",
+                      static_cast<unsigned long long>(stats.pixelCreated),
+                      static_cast<unsigned long long>(stats.pixelCreated - stats.pixelRepeats),
+                      static_cast<unsigned long long>(stats.pixelTwinned), pixelRefused.empty() ? "" : " (refused: ",
+                      pixelRefused.c_str(), pixelRefused.empty() ? "" : ")",
+                      static_cast<unsigned long long>(stats.pixelFailed));
+    }
 }
 
 bool mvr_probe_usable() { return attach && (nvapiUsable || instancedUsable); }
@@ -498,5 +551,6 @@ MvrProbeStats mvr_probe_stats() {
 }
 
 uint64_t mvr_shader_generation() { return shaderGeneration.load(std::memory_order_acquire); }
+uint64_t mvr_pixel_shader_generation() { return pixelGeneration.load(std::memory_order_acquire); }
 
 }  // namespace lmu

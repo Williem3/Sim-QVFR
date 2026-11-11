@@ -146,6 +146,11 @@ constexpr Help kHelp[] = {
     {L"Periphery preset",
      L"The DLSS model for the outer views. K is steadier at a higher cost; F, the older model, costs about half as much and "
      L"aliases more. With eye tracking you rarely look there, so F’s savings come cheap; with a fixed focus, K."},
+    {L"Texture sharpening",
+     L"DLSS rebuilds detail from frames drawn at a lower resolution, so textures are best sampled a step sharper while it "
+     L"runs. Sim-QVFR does that through copies of the game’s shaders, in the focus area alone or in the periphery too. "
+     L"Measured gains are modest (most in the periphery and on distant textures). Off at launch, nothing is installed for "
+     L"it; turned on then, it starts at the next launch. Fine patterns may shimmer: then a step lower."},
     {L"Updates",
      L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
      L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "

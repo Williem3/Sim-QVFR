@@ -76,6 +76,9 @@ struct FourPassesRun {
     // the lens mask and the VR UI from their d3d11 draws; no scene render, eye loop, post-effect time, scene skip, glare
     // or driver tags hooks; no A/B: the game's own two passes).
     bool trackerDrives = false;
+    // Texture sharpening ([dlss] texture_sharpening) on at launch: its pixel shader hook is installed (mvr_pass.h
+    // mvr_mip_bias_hooks), and the probe makes the twins. Off at launch: neither, at no cost; turned on, the next launch.
+    bool textureSharpening = false;
     // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
     // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.
     int fallbackAt = 0;

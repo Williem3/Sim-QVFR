@@ -164,6 +164,7 @@ void activate(Ctl id, int option) {
     case kDlssFocusMode:
     case kDlssFocusPreset:
     case kDlssEyePreset:
+    case kDlssSharpening:
     case kHelmetDetail: open_popup(id); return;
     case kDlssOn:
         if (own_dlss_available()) {  // greyed out without QVFR, an RTX card or multi-view rendering
@@ -351,6 +352,7 @@ bool space_control(Ctl id) {
     case kDlssFocusMode:
     case kDlssFocusPreset:
     case kDlssEyePreset:
+    case kDlssSharpening:
     case kOsdOn:
     case kHotkeyFooter:
     case kUpdateCheck:

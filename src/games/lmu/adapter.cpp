@@ -79,6 +79,7 @@ public:
             run.mvrAb = (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_ab", 0, s.ini)));
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
             run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
+            run.textureSharpening = s.ini && simqvfr::read_dlss_settings(s.ini).textureSharpening != 0;
             const bool player = gate == 0 && !legacy;  // multi_view=1: the two-pass path
             // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
             run.focusReplay = player || (s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0);
@@ -142,6 +143,7 @@ public:
             dlss.preset = player.focusPreset;
             dlss.eyePreset = player.eyePreset;
             dlss.focusScale = player.focusScale;
+            dlss.textureSharpening = player.textureSharpening;
             dlssSettings_ = player;
             dlss.jitter = key(L"lmu_dlss_jitter", 1) != 0;
             dlss.vectors = key(L"lmu_dlss_vectors", 1) != 0;
@@ -230,6 +232,7 @@ public:
         live.focusScale = settings.focusScale;
         live.preset = settings.focusPreset;
         live.eyePreset = settings.eyePreset;
+        live.textureSharpening = settings.textureSharpening;
         simqvfr::dlss_live(live);
     }
     void visibility_mask_taken(uint32_t viewIndex) override {

@@ -27,6 +27,8 @@
 #include "abi.h"
 #include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
+#include "../../engine/ngx_dlss.h"
+#include "../../engine/nvapi_gpus.h"
 #include "focus_math.h"
 #include "game.h"
 #include "glare_share.h"
@@ -905,6 +907,11 @@ void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsign
 bool install_mvr(ID3D11Device* device) {
     mvr_focus_replay(cfg.focusReplay);  // before the install: the draws hooked for it only
     mvr_ui_mips(cfg.uiMips);
+    // Texture sharpening's pixel shader hook only when it's on at launch (no cost otherwise; its three settings are live
+    // from then on) and where DLSS can run: a build with NGX, an NVIDIA GPU that draws two views, the passes the
+    // tracker drives (DLSS's only way in).
+    mvr_mip_bias_hooks(cfg.textureSharpening && simqvfr::ngx::built_in() && simqvfr::nvapi::two_views_gpu() != nullptr &&
+                       cfg.trackerDrives);
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
         cfg.mvr = false;
@@ -1051,6 +1058,15 @@ void mvr_before_pass(int p) {
         v.overlayShift[1][0] = v.remap[1] - remapB;
         v.overlayShift[1][1] = v.remap[3] - remapD;
         simqvfr::dlss_eye_clip_shift(p, v.overlayShift[0][0], v.overlayShift[0][1]);
+        simqvfr::dlss_mip_bias(p, v.mipBias[1], v.mipBias[0]);
+        if ((v.mipBias[0] != 0 || v.mipBias[1] != 0) && !mvr_mip_bias_ready()) {  // turned on while the game runs
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                simqvfr::log_line("lmu mvr: texture sharpening turned on, but it was off at launch (its hook and shader "
+                                  "twins weren't made): it starts at the next launch");
+            }
+        }
         // Side by side in the main targets (the scene's), and the focus final beside the eye's corner of its final.
         unsigned room[2];
         main_size(room);

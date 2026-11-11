@@ -124,17 +124,17 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <!-- Sim-QVFR: Direct3D 11 -->
 <rect x="400" y="250" width="320" height="262" rx="12" fill="var(--group-bg)" stroke="var(--overlay-magenta)" stroke-width="1.5"/>
 <text class="t" x="416" y="276">Direct3D 11: the multi-view detours</text>
-<text class="s" x="416" y="294">The same entries as with MVR, none new</text>
+<text class="s" x="416" y="294">MVR’s entries; PSSetShader if sharpening</text>
 <text class="m" x="416" y="320">OMSetRenderTargets → <tspan fill="var(--dlss)">+ scene depth</tspan></text>
 <text class="m" x="416" y="339">RSSetViewports → <tspan fill="var(--dlss)">focus at render size,</tspan></text>
 <text class="md" x="533" y="356">overlays moved back</text>
 <text class="m" x="416" y="380">ResolveSubresource → <tspan fill="var(--dlss)">DLSS (MSAA on)</tspan></text>
 <text class="m" x="416" y="399">Draw* YEBIS copy → <tspan fill="var(--dlss)">DLSS (MSAA off)</tspan></text>
 <text class="m" x="416" y="418">Draw* VR UI → canvas with mips</text>
-<text class="s" x="416" y="446">The module’s own draws and copies pass</text>
-<text class="s" x="416" y="462">through these detours untouched; NVIDIA’s</text>
-<text class="s" x="416" y="478">multi-view is off while it runs, and the</text>
-<text class="s" x="416" y="494">context’s state is put back call by call.</text>
+<text class="m" x="416" y="437">PSSetShader → <tspan fill="var(--dlss)">twin, mip bias by view</tspan></text>
+<text class="s" x="416" y="462">The module’s own draws pass these detours</text>
+<text class="s" x="416" y="478">untouched; multi-view is off while it runs,</text>
+<text class="s" x="416" y="494">the context’s state put back call by call.</text>
 
 <!-- Sim-QVFR: engine DLSS module -->
 <rect x="400" y="532" width="320" height="228" rx="12" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
@@ -194,7 +194,8 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="sd" x="796" y="680">scene before YEBIS’s post reads it; a</text>
 <text class="sd" x="796" y="696">focus view drawn smaller is upscaled into</text>
 <text class="sd" x="796" y="712">its whole region.</text>
-<text class="ms" x="796" y="740">[dlss] on=1: eyes and focus views</text>
+<text class="ms" x="796" y="730">[dlss] on=1: eyes and focus views</text>
+<text class="ms" x="796" y="746">texture_sharpening (on at launch): twins</text>
 
 <!-- Arrows -->
 <path d="M304,110 L398,110" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>

@@ -53,6 +53,8 @@ struct DlssRun {
     // The focus views' DLSS mode: drawn at this percent of their size each way and upscaled to it by DLSS super resolution
     // (77 ultra quality, 67 quality, 58 balanced, 50 performance; 33..100), 100 DLAA. The eyes stay DLAA.
     int focusScale = 100;
+    // Textures sampled sharper (dlss_mip_bias): 0 off, 1 the focus views, 2 the focus views and the eyes.
+    int textureSharpening = 0;
 };
 
 // The game's side: eye `eye`'s pass's view matrix (world -> view, row vectors) and projection as rendered (jitter
@@ -72,6 +74,7 @@ struct DlssLive {
     int focusScale = 100; // DlssRun::focusScale
     int preset = 0;       // DlssRun::preset (the focus views')
     int eyePreset = -1;   // DlssRun::eyePreset
+    int textureSharpening = 0;  // DlssRun::textureSharpening (no new feature: taken at once)
 };
 void dlss_live(const DlssLive& live);
 // The end of xrLocateViews for the game's stereo views: this frame's jitter put into their FOV.
@@ -89,6 +92,11 @@ void dlss_focus_jitter(int eye, unsigned focusWidth, unsigned focusHeight, float
 // projection (the focus box's eye tangents, which the layer composes the periphery with) is moved back by it; what is
 // drawn with it after the post (a VR UI, labels) is drawn moved back by it. False: no jitter this frame.
 bool dlss_eye_clip_shift(int eye, double& cx, double& cy);
+// The mip bias eye `eye`'s pass samples its textures with (DlssRun::textureSharpening), NVIDIA's (DLSS programming
+// guide 3.5): log2(render width / output width) - 1, so -1 under DLAA and -2 at performance. Only for a view DLSS
+// processed last frame (as the jitter): a view left as drawn keeps the game's sampling. `focus` the focus view's, `eye`
+// the eye's (0 under "focus only"). False: both 0 (off, or nothing processed).
+bool dlss_mip_bias(int eye, float& focus, float& eyeBias);
 
 struct DlssPass {
     int eye = 0;

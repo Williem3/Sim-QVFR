@@ -40,6 +40,9 @@ struct MvrProbeStats {
     uint64_t yebisCopies = 0, yebisComposites = 0;  // YEBIS's copy and composite pixel shaders marked (yebis_shaders.h)
     uint64_t finalBlits = 0;  // the game's final blit pixel shaders marked (yebis_shaders.h)
     uint64_t lensMasks = 0, vruiPanels = 0;  // the lens mask's and VR UI panel's vertex shaders marked (VsRole)
+    // Pixel shaders (lmu_mvr): created, given a mip bias twin (dxbc::add_focus_mip_bias; texture sharpening), and why not.
+    uint64_t pixelCreated = 0, pixelTwinned = 0, pixelRepeats = 0, pixelFailed = 0;
+    std::map<std::string, uint64_t> pixelRefused;
     double convertMs = 0, maxConvertMs = 0, nvapiMs = 0, instancedMs = 0;
     std::map<std::string, uint64_t> refused;           // why add_second_view didn't convert a shader, and how often
     std::map<std::string, uint64_t> instancedRefused;  // add_instanced_view's
@@ -49,6 +52,9 @@ struct MvrProbeStats {
 // single-pass stereo's and the instanced one.
 inline constexpr GUID kMvrTwinGuid = {0x6d1c4a52, 0x3b8e, 0x4f61, {0x9a, 0x27, 0x5e, 0x10, 0xc3, 0x7b, 0x44, 0xd9}};
 inline constexpr GUID kMvrInstancedTwinGuid = {0x2f7c9e14, 0x58a1, 0x4b3d, {0x8e, 0x06, 0xc1, 0x9d, 0x4a, 0x72, 0x35, 0xb0}};
+// A game pixel shader's twin whose plain samples take a mip bias in the focus view's viewport and another outside it
+// (engine/dxbc_patch.h add_focus_mip_bias; an ID3D11PixelShader): texture sharpening under DLSS (mvr_pass.cpp).
+inline constexpr GUID kMvrMipBiasTwinGuid = {0x5a8e2c71, 0x0d4f, 0x4b96, {0xb1, 0x3e, 0x72, 0x9c, 0x05, 0xd8, 0x6e, 0x2a}};
 // An input layout with per-instance data: its twin with every per-instance step rate doubled (an ID3D11InputLayout).
 inline constexpr GUID kMvrInstancedLayoutGuid = {0x91e3b6d0, 0x7c42, 0x4e85, {0xa3, 0x5f, 0x0d, 0x28, 0xe6, 0x19, 0xbc, 0x47}};
 
@@ -80,5 +86,7 @@ uint64_t mvr_probe_instanced_layouts();
 // Counts the vertex shaders created on the hooked device (any thread): a shader looked up by its address before may be
 // a new one since (mvr_pass.cpp's twin cache).
 uint64_t mvr_shader_generation();
+// Likewise for the pixel shaders (mvr_pass.cpp's mip bias twin cache).
+uint64_t mvr_pixel_shader_generation();
 
 }  // namespace lmu

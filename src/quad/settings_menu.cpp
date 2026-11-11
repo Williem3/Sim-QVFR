@@ -93,6 +93,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::DlssFocusMode, L"Focus views", 0, 0, 1},
     {MenuItem::DlssFocusPreset, L"Focus preset", 0, 0, 1},
     {MenuItem::DlssEyePreset, L"Periphery preset", 0, 0, 1},
+    {MenuItem::DlssSharpening, L"Texture sharpening", 0, 0, 1},
 };
 
 const Spec& spec(MenuItem item) {
@@ -213,7 +214,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     } else if (page == MenuPage::OwnDlss) {
         items.push_back(MenuItem::DlssOn);
         if (menu.values.dlss.on)
-            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset});
+            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset,
+                                       MenuItem::DlssSharpening});
     } else if (page == MenuPage::Dlss) {
         items.insert(items.end(), {MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
                                    MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
@@ -325,6 +327,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
         const int before = dl.eyePreset;
         dl.eyePreset = dlss_choice_step(kDlssEyePresets, dl.eyePreset, step);
         return dl.eyePreset != before;
+    }
+    case MenuItem::DlssSharpening: {  // off, the focus views, the eyes too (no wrap)
+        const int before = dl.textureSharpening;
+        dl.textureSharpening = dlss_choice_step(kDlssTextureSharpening, dl.textureSharpening, step);
+        return dl.textureSharpening != before;
     }
     case MenuItem::CheekyProcessing: c.processing = !c.processing; return true;
     case MenuItem::CheekyOuterDlaa: c.outerDlaa = !c.outerDlaa; return true;
@@ -605,7 +612,9 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         if (menu.values.dlss.on)
             notes.push_back(menu.values.dlss.eyePreset == 6 ? L"Periphery F: cheaper, more aliasing; suits eye tracking"
                                                             : L"Periphery K: steadier; F is cheaper and suits eye tracking");
-        notes.push_back(L"Each change rebuilds DLSS: a short stutter");
+        if (menu.values.dlss.on && menu.values.dlss.textureSharpening != 0 && !menu.launch.sharpeningReady)
+            notes.push_back(L"Texture sharpening was off at launch: it starts at the next launch");
+        notes.push_back(L"Each change rebuilds DLSS: a short stutter (not texture sharpening)");
         return notes;
     }
     if (page == MenuPage::Dlss || page == MenuPage::Helmet)
@@ -677,6 +686,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
                                             : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
         else if (items[i] == MenuItem::DlssEyePreset)
             line.value = dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset);
+        else if (items[i] == MenuItem::DlssSharpening)
+            line.value = dlss_choice_name(kDlssTextureSharpening, v.dlss.textureSharpening);
         else if (items[i] == MenuItem::FgOn)
             line.value = c.fg ? L"On" : L"Off";
         else if (items[i] == MenuItem::FgMultiplier)

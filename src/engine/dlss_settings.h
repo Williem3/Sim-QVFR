@@ -23,6 +23,9 @@ struct DlssSettings {
     int focusScale = 100;  // focus_scale: the focus views' mode, percent of their size each way (kDlssFocusModes; live)
     int focusPreset = 0;   // focus_preset: their NGX preset, 0 NGX's default for the mode (kDlssFocusPresets; live)
     int eyePreset = 11;    // eye_preset: the eyes' (the periphery's) NGX preset, K or F (kDlssEyePresets; live)
+    // texture_sharpening: textures sampled sharper under DLSS, NVIDIA's mip bias (kDlssTextureSharpening; live): 0 off,
+    // 1 the focus views, 2 the focus views and the eyes (engine/dlss_views.h dlss_mip_bias).
+    int textureSharpening = 0;
     bool operator==(const DlssSettings&) const = default;
 };
 
@@ -38,6 +41,8 @@ inline constexpr DlssChoice kDlssFocusPresets[] = {{0, L"Default"}, {11, L"K"}, 
 // The eyes': K, the steadier, or F, the older model at about half the cost with more aliasing (eye tracking keeps that
 // out of where you look; K suits a fixed focus).
 inline constexpr DlssChoice kDlssEyePresets[] = {{11, L"K (steadier)"}, {6, L"F (cheaper)"}};
+// Textures sampled sharper where DLSS works (NVIDIA's mip bias): off, the focus views only, or the eyes too.
+inline constexpr DlssChoice kDlssTextureSharpening[] = {{0, L"Off"}, {1, L"Focus only"}, {2, L"Focus and periphery"}};
 
 // `value`'s place in `list`: the exact one, else (`nearest`) the closest value, else the first.
 template <size_t N>
@@ -112,6 +117,10 @@ inline DlssSettings read_dlss_settings(const wchar_t* ini) {
     if (eye < 0)  // the old empty lmu_dlss_eye_preset: as the focus views' (NGX's default for DLAA: K)
         eye = focus == 6 ? 6 : 11;
     s.eyePreset = eye == 6 ? 6 : 11;
+    const std::wstring sharpening = dlss_detail::read_text(ini, L"dlss", L"texture_sharpening", found);
+    if (found && !sharpening.empty())
+        s.textureSharpening =
+            kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, _wtoi(sharpening.c_str()), true)].value;
     return s;
 }
 
@@ -122,6 +131,8 @@ inline bool write_dlss_settings(const wchar_t* ini, const DlssSettings& s) {
     const int focus = kDlssFocusPresets[dlss_choice_index(kDlssFocusPresets, s.focusPreset)].value;
     ok &= ini_put(ini, L"dlss", L"focus_preset", focus ? dlss_preset_letter(focus) : L"");
     ok &= ini_put(ini, L"dlss", L"eye_preset", dlss_preset_letter(s.eyePreset == 6 ? 6 : 11));
+    ok &= ini_put(ini, L"dlss", L"texture_sharpening",
+                  kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, s.textureSharpening, true)].value);
     return ok;
 }
 

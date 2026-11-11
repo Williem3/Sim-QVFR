@@ -242,6 +242,7 @@ void load_experiment() {
         100.0;
     experiment.uavBarriers = GetPrivateProfileIntW(L"experiment", L"pass_census_uav_barriers", 0, ini.c_str()) != 0;
     experiment.views4DlssLive = GetPrivateProfileIntW(L"experiment", L"views4_dlss_live", 1, ini.c_str()) != 0;
+    experiment.textureSharpeningAtLaunch = simqvfr::read_dlss_settings(ini.c_str()).textureSharpening != 0;
     {
         wchar_t watch[512] = {};
         GetPrivateProfileStringW(L"experiment", L"pass_census_watch", L"", watch, 512, ini.c_str());

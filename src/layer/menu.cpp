@@ -187,6 +187,7 @@ void menu_open(int64_t now) {
         // with the NGX SDK.
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&
                                     experiment.views4Layout.secondViewRoom && ngx::built_in();
+        menu.model.launch.sharpeningReady = menu.model.launch.ownDlss && experiment.textureSharpeningAtLaunch;
         {
             std::lock_guard guard(quad.mutex);
             menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;

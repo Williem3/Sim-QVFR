@@ -279,6 +279,10 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
     which eye tracking keeps out of where you look. **Focus preset:** NVIDIA's default for the mode (K, or M at
     Performance), or K or M.
   - **LMU's MSAA can go off** with DLSS on: DLSS then does all the anti-aliasing, for less GPU time.
+  - **Texture sharpening** (off by default; **Focus only** or **Focus and periphery**): textures sampled sharper
+    where DLSS works (the mip bias DLSS asks for). The gain is subtle, most in the periphery. On at launch, it
+    changes while you drive without a stutter; turned on from Off, it starts at the next launch (off, it costs
+    nothing). If fine patterns shimmer, a step lower.
   - **Known limits:** other cars smear a little (their own motion isn't known yet), and below DLAA distant
     textures in the focus area are softer. Tested on SteamVR and Pimax's runtime.
   - **How it works:** [the diagram](docs/architecture/LMU-DLSS-ARCHITECTURE.svg).

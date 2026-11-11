@@ -45,8 +45,8 @@ enum Ctl {
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
     // Sim-QVFR's own DLSS ([dlss], DLSS pane; a game with GameFeatures::sideLoadedDlss): on, another nvngx_dlss.dll's
-    // folder (Choose…, Use included), the focus views' mode and preset, the eyes' preset.
-    kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset,
+    // folder (Choose…, Use included), the focus views' mode and preset, the eyes' preset, texture sharpening.
+    kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // Multi-view rendering ([experiment] multi_view, Resolution pane): NVIDIA's or Sim-QVFR's own.

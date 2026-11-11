@@ -45,6 +45,10 @@ struct MvrPassView {
     // this frame, which their images lose in DLAA. The overlays drawn after the post (the driver tags, the VR UI) are
     // drawn with their viewports moved back by it, so they land where the world is in the image. Zero: no jitter.
     double overlayShift[2][2] = {};
+    // Texture sharpening (engine/dlss_views.h dlss_mip_bias): the mip bias the eye's [0] and the focus view's [1]
+    // pixels sample with, through the game's pixel shaders' biased twins (engine/dxbc_patch.h add_focus_mip_bias). Both
+    // 0: the game's own pixel shaders.
+    float mipBias[2] = {};
 };
 
 // The immediate context's vtable entries the hooks use (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
@@ -53,20 +57,22 @@ struct MvrPassView {
 // A hook on one function an entry held misses the calls through the others, so the hooks are on every function each
 // entry is seen holding (mvr_pass.cpp). nvapi_stereo_check lists what d3d11 rewrites.
 namespace context_slot {
-inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
+inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
                           kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
                           kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kDrawAuto = 38,
                           kDrawIndexedInstancedIndirect = 39, kDrawInstancedIndirect = 40, kRSSetViewports = 44,
                           kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57, kHSSetShader = 60,
                           kDSSetShader = 64;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
-// DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone).
+// DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
+// PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks).
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
                                        kDSSetShader,       kDrawIndexed,        kDraw,
                                        kDrawIndexedInstanced, kDrawInstanced, kCopySubresourceRegion,
-                                       kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect};
+                                       kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
+                                       kPSSetShader};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -126,6 +132,13 @@ void mvr_focus_replay(bool on);
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips
 // (copied and its mips made once a frame, bound for those draws only).
 void mvr_ui_mips(bool on);
+// Texture sharpening under DLSS (MvrPassView::mipBias): the game's pixel shader binds are hooked (before the install;
+// only when DLSS can run, as each bind then passes through this code) and, while a pass draws two views with a bias,
+// the game's pixel shaders are swapped for their mip bias twins (mvr_probe.h kMvrMipBiasTwinGuid) with the focus
+// viewport and the two biases in pixel shader constant buffer 13.
+void mvr_mip_bias_hooks(bool on);
+// Those hooks are installed (texture sharpening was on at launch and its buffer could be made).
+bool mvr_mip_bias_ready();
 // Eye `eye`'s focus image from the focus post (RGBA16F, as the eye's composite) and the composites into it so far
 // (null, 0: none yet).
 ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites);
@@ -176,6 +189,10 @@ struct MvrPassStats {
     // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double).
     uint64_t doubledDraws = 0, layoutSwaps = 0, eyeOnlyDraws = 0;
     uint64_t instancedTakeovers = 0;  // single-pass stereo refused and instancing took over (once a session)
+    // Texture sharpening: passes with a mip bias; pixel shader binds of a twin, of a game shader with none while it
+    // was wanted, and the twin lookups (and those not cached).
+    uint64_t biasPasses = 0, psTwinBinds = 0, psNoTwin = 0, psLookups = 0, psLookupMisses = 0;
+    uint64_t biasCbLost = 0;  // checks that found the bias buffer unbound by the game while a twin was in use (rebound)
 };
 MvrPassStats mvr_pass_stats();
 // Single-pass stereo was refused at a draw and instancing couldn't take over (off for the session since): no focus

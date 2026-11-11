@@ -46,20 +46,21 @@ constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_P
 enum Hook : int {
     kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
     kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHookDrawAuto, kHookDrawIndexedIndirect,
-    kHookDrawInstancedIndirect, kHooks
+    kHookDrawInstancedIndirect, kHookPS, kHooks
 };
 constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
                                       kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
                                       kHSSetShader,   kDSSetShader,    kDrawIndexed,        kDraw,
                                       kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion,
-                                      kDrawAuto,      kDrawIndexedInstancedIndirect,        kDrawInstancedIndirect};
+                                      kDrawAuto,      kDrawIndexedInstancedIndirect,        kDrawInstancedIndirect,
+                                      kPSSetShader};
 constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
                                            "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
                                            "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
                                            "HSSetShader",    "DSSetShader",       "DrawIndexed",
                                            "Draw",           "DrawIndexedInstanced", "DrawInstanced",
                                            "CopySubresourceRegion", "DrawAuto", "DrawIndexedInstancedIndirect",
-                                           "DrawInstancedIndirect"};
+                                           "DrawInstancedIndirect", "PSSetShader"};
 // The draws: hooked only with the focus post (DrawIndexed: its copy and composite; all four: the overlay trace) or
 // with instancing (they're doubled).
 constexpr bool is_draw(int h) {
@@ -100,6 +101,9 @@ void call_real(ID3D11DeviceContext* context, A... a) {
 
 void realVSSetShader(ID3D11DeviceContext* c, ID3D11VertexShader* vs, ID3D11ClassInstance* const* i, UINT n) {
     call_real<kHookVS>(c, vs, i, n);
+}
+void realPSSetShader(ID3D11DeviceContext* c, ID3D11PixelShader* ps, ID3D11ClassInstance* const* i, UINT n) {
+    call_real<kHookPS>(c, ps, i, n);
 }
 void realOMSetRenderTargets(ID3D11DeviceContext* c, UINT n, ID3D11RenderTargetView* const* rtvs,
                             ID3D11DepthStencilView* dsv) {
@@ -148,6 +152,16 @@ struct TwinSet {
     uint8_t next = 0;  // the entry to replace when both hold another shader (the one not looked up last)
 };
 constexpr unsigned kTwinSetBits = 10, kTwinSets = 1u << kTwinSetBits;
+// The same for the pixel shaders' mip bias twins (texture sharpening).
+struct PsTwinEntry {
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11PixelShader* twin = nullptr;  // raw: the game's shader holds it
+    uint32_t epoch = 0;
+};
+struct PsTwinSet {
+    PsTwinEntry entry[2];
+    uint8_t next = 0;
+};
 
 // CPU in this code's context hooks (the calls passed on included), in TSC ticks since the last log line.
 struct HookTime {
@@ -213,6 +227,19 @@ struct State {
     // What is applied.
     ID3D11VertexShader* boundVs = nullptr;
     bool on = false, stereo = false;
+    // Texture sharpening (mvr_mip_bias_hooks, MvrPassView::mipBias): the game's pixel shader as it bound it, what is
+    // bound, this pass's bias (from its view), and the constants (focus viewport, focus and eye bias) as uploaded.
+    bool biasHooks = false, bias = false, biasCbBound = false;
+    uint32_t biasChecks = 0;  // twin binds, every 16th checking the buffer is still bound
+    ID3D11PixelShader* gamePs = nullptr;
+    ID3D11PixelShader* boundPs = nullptr;
+    ID3D11ClassInstance* psInstances[256] = {};
+    UINT psInstanceCount = 0;
+    PsTwinSet psTwins[kTwinSets];
+    uint32_t psEpoch = 1;
+    uint64_t psGeneration = 0;
+    ComPtr<ID3D11Buffer> biasCb;
+    float biasConstants[8] = {};
     // Each pass's multisample resolve target; the sampled regions.
     ComPtr<ID3D11Resource> resolved[4];
     ComPtr<ID3D11Texture2D> mvrImage[2], passImage[2];
@@ -625,10 +652,30 @@ D3D11_RECT focus_scissor(const D3D11_RECT& r) {
     return {x(r.left), y(r.top), x(r.right), y(r.bottom)};
 }
 
+// Texture sharpening's constants for the pixel shader twins (pixel shader buffer 13): the focus view's viewport as
+// apply_viewports gives it (the focus bias inside it, the eye's outside: dxbc::add_focus_mip_bias), uploaded when they
+// change. Without two viewports, no rectangle: the eye's bias everywhere.
+void update_bias_constants(const D3D11_VIEWPORT* focus) {
+    if (!g.bias || !g.biasCb)
+        return;
+    float c[8] = {0, 0, 0, 0, g.view.mipBias[1], g.view.mipBias[0], 0, 0};
+    if (focus) {
+        c[0] = focus->TopLeftX;
+        c[1] = focus->TopLeftY;
+        c[2] = focus->TopLeftX + focus->Width;
+        c[3] = focus->TopLeftY + focus->Height;
+    }
+    if (std::memcmp(c, g.biasConstants, sizeof(c)) != 0) {
+        std::memcpy(g.biasConstants, c, sizeof(c));
+        g.context->UpdateSubresource(g.biasCb.Get(), 0, nullptr, c, 0, 0);
+    }
+}
+
 void apply_viewports() {
     if (g.on && g.vpCount == 1) {
         const D3D11_VIEWPORT first = first_viewport();
         D3D11_VIEWPORT two[2] = {first, focus_viewport(first)};
+        update_bias_constants(&two[1]);
         if (g.overlayTarget) {  // after the post: drawn moved back by the jitter DLAA took out
             two[0] = unshifted(two[0], g.view.overlayShift[0]);
             two[1] = unshifted(two[1], g.view.overlayShift[1]);
@@ -636,6 +683,8 @@ void apply_viewports() {
         realRSSetViewports(g.context, 2, two);
         ++g.stats.viewportRewrites;
     } else {
+        if (g.on)
+            update_bias_constants(nullptr);
         realRSSetViewports(g.context, g.vpCount, g.vps);
     }
 }
@@ -694,6 +743,91 @@ ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
 }
 VsRole role_of(ID3D11VertexShader* vs) { return vs ? shader_entry(vs).role : VsRole::none; }
 
+// A game pixel shader's mip bias twin (null: none), cached by its address like the vertex shaders' (shader_entry).
+ID3D11PixelShader* ps_twin_of(ID3D11PixelShader* ps) {
+    if (!ps)
+        return nullptr;
+    Timed timed(g.time.lookups);
+    ++g.stats.psLookups;
+    if (const uint64_t generation = mvr_pixel_shader_generation(); generation != g.psGeneration) {
+        g.psGeneration = generation;
+        ++g.psEpoch;
+    }
+    PsTwinSet& set = g.psTwins[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(ps)) * 0x9E3779B97F4A7C15ull) >>
+                               (64 - kTwinSetBits)];
+    for (uint8_t k = 0; k < 2; ++k)
+        if (set.entry[k].epoch == g.psEpoch && set.entry[k].ps == ps) {
+            set.next = static_cast<uint8_t>(1 - k);
+            return set.entry[k].twin;
+        }
+    ++g.stats.psLookupMisses;
+    const uint8_t k = set.entry[0].epoch != g.psEpoch ? 0 : set.entry[1].epoch != g.psEpoch ? 1 : set.next;
+    set.next = static_cast<uint8_t>(1 - k);
+    ID3D11PixelShader* twin = nullptr;
+    IUnknown* unknown = nullptr;
+    UINT size = sizeof(unknown);
+    if (SUCCEEDED(ps->GetPrivateData(kMvrMipBiasTwinGuid, &size, &unknown)) && unknown) {
+        ComPtr<ID3D11PixelShader> t;
+        unknown->QueryInterface(IID_PPV_ARGS(&t));
+        unknown->Release();
+        twin = t.Get();  // raw: the game's shader holds it
+    }
+    set.entry[k] = {ps, twin, g.psEpoch};
+    return twin;
+}
+
+// The game's pixel shader, or its mip bias twin while this pass draws two views with a bias (the scene's draws; not
+// the overlays drawn into the eye's final after the post, which DLSS never sees).
+void update_ps() {
+    if (!g.biasHooks)
+        return;
+    ID3D11PixelShader* bind = g.gamePs;
+    if (g.on && g.bias && !g.overlayTarget && g.gamePs) {
+        if (ID3D11PixelShader* twin = ps_twin_of(g.gamePs)) {
+            bind = twin;
+            // The game's pixel shaders read buffers 0 and 2-7, but it unbinds all 14 now and then (LMU: once early in
+            // each eye pass, PSSetConstantBuffers(0, 14) in lmu_frame10312.rdc), which left the twins reading zeros
+            // (no rectangle, no bias): bound again as two views go on, and now and then checked.
+            bool rebind = !g.biasCbBound;
+            if (!rebind && (++g.biasChecks & 15) == 0) {
+                ID3D11Buffer* bound = nullptr;
+                g.context->PSGetConstantBuffers(13, 1, &bound);
+                rebind = bound != g.biasCb.Get();
+                if (bound)
+                    bound->Release();
+                g.stats.biasCbLost += rebind ? 1 : 0;
+            }
+            if (rebind) {
+                g.context->PSSetConstantBuffers(13, 1, g.biasCb.GetAddressOf());
+                g.biasCbBound = true;
+            }
+        } else {
+            ++g.stats.psNoTwin;
+        }
+    }
+    if (bind != g.boundPs) {
+        realPSSetShader(g.context, bind, g.psInstanceCount ? g.psInstances : nullptr, g.psInstanceCount);
+        g.boundPs = bind;
+        g.stats.psTwinBinds += bind != g.gamePs ? 1 : 0;
+    }
+}
+
+void STDMETHODCALLTYPE ps_set_shader(ID3D11DeviceContext* context, ID3D11PixelShader* ps,
+                                     ID3D11ClassInstance* const* instances, UINT count) {
+    if (!ours(context) || !g.biasHooks) {
+        realPSSetShader(context, ps, instances, count);
+        return;
+    }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
+    g.gamePs = ps;
+    g.psInstanceCount = std::min<UINT>(count, 256);
+    for (UINT i = 0; i < g.psInstanceCount; ++i)
+        g.psInstances[i] = instances ? instances[i] : nullptr;
+    g.boundPs = reinterpret_cast<ID3D11PixelShader*>(~uintptr_t{0});  // the game's call always takes effect
+    update_ps();
+}
+
 // Single-pass stereo refused: instancing for the rest of the session if its twins are there (the next pass's start
 // hooks the draws it needs), else no focus views from the eye passes. True: instancing took over.
 bool take_over_with_instancing() {
@@ -750,10 +884,13 @@ void update() {
     }
     if (want != g.on) {
         g.on = want;
-        if (want)
+        if (want) {
             g.context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
+            g.biasCbBound = false;  // texture sharpening's buffer bound again with the next twin (the game unbinds it)
+        }
         apply_viewports();
         apply_scissors();
+        update_ps();  // texture sharpening: the twin exactly while two views are on
     }
 }
 
@@ -1801,6 +1938,7 @@ void* detour_for(int h, int n) {
         case kHookDrawInstancedIndirect:
             return Detours<kHookDrawInstancedIndirect, &undoubled_draw<kHookDrawInstancedIndirect, ID3D11Buffer*, UINT>,
                            ID3D11Buffer*, UINT>::get(n);
+        case kHookPS: return Detours<kHookPS, &ps_set_shader, ID3D11PixelShader*, Instances, UINT>::get(n);
         default: return nullptr;
     }
 }
@@ -1810,6 +1948,8 @@ void* detour_for(int h, int n) {
 // from single-pass stereo (it happens mid-pass, where d3d11's other modes can't be looked for): without either MVR's
 // hooks are as before.
 bool wanted(int h) {
+    if (h == kHookPS)
+        return g.biasHooks;
     if (is_undoubled_draw(h))
         return g.instanced || g.canInstance;
     if (is_draw(h))
@@ -1901,6 +2041,18 @@ void read_bindings() {
         vs->Release();
     g.gameVs = g.boundVs = vs;
     g.vsRole = role_of(vs);
+    if (g.biasHooks) {  // texture sharpening: the pixel shader the pass starts with
+        ID3D11PixelShader* ps = nullptr;
+        UINT psCount = 256;
+        g.context->PSGetShader(&ps, g.psInstances, &psCount);
+        g.psInstanceCount = ps ? psCount : 0;
+        for (UINT i = 0; i < g.psInstanceCount; ++i)
+            if (g.psInstances[i])
+                g.psInstances[i]->Release();
+        if (ps)
+            ps->Release();
+        g.gamePs = g.boundPs = ps;
+    }
     ID3D11DepthStencilView* dsv = nullptr;
     g.context->OMGetRenderTargets(0, nullptr, &dsv);
     g.depthBound = dsv != nullptr;
@@ -2073,6 +2225,12 @@ bool mvr_pass_install(ID3D11Device* device) {
     const D3D11_SUBRESOURCE_DATA init = {identity, 0, 0};
     if (FAILED(device->CreateBuffer(&cd, &init, &g.remapCb)))
         return false;
+    if (g.biasHooks) {  // texture sharpening's constants (no rectangle, no bias until a pass sets them)
+        const D3D11_BUFFER_DESC bd = {sizeof(g.biasConstants), D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        const D3D11_SUBRESOURCE_DATA zero = {g.biasConstants, 0, 0};
+        if (FAILED(device->CreateBuffer(&bd, &zero, &g.biasCb)))
+            g.biasHooks = false;
+    }
     const D3D11_QUERY_DESC dq = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0}, tq = {D3D11_QUERY_TIMESTAMP, 0};
     for (GpuFrame& f : g.gpu) {
         device->CreateQuery(&dq, &f.disjoint);
@@ -2183,6 +2341,10 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         g.context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, view->remap, 0, 0);
         ++g.stats.passesWithFocus;
     }
+    // Texture sharpening: this pass's biases (its view's), the twins bound with two views on.
+    g.bias = g.biasHooks && g.biasCb && view && (view->mipBias[0] != 0 || view->mipBias[1] != 0);
+    g.biasCbBound = false;
+    g.stats.biasPasses += g.bias ? 1 : 0;
     read_bindings();
     update();
 }
@@ -2194,6 +2356,8 @@ void mvr_pass_end(int pass) {
     g.drawFocus = false;
     g.overlayTarget = false;
     update();  // the game's shader, one view, its own viewports
+    g.bias = false;
+    update_ps();  // the game's pixel shader (update() put it back if two views were on)
     stamp(pass, 2);
     if (pass == 3 && g.gpuSlot >= 0) {
         g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
@@ -2229,6 +2393,13 @@ void mvr_pass_end(int pass) {
 void mvr_keep_focus(bool on) { g.keepFocus = on; }
 
 void mvr_ui_mips(bool on) { g.uiMips.on = on; }
+
+void mvr_mip_bias_hooks(bool on) {
+    if (!g.context)  // before the install only: its hooks are chosen there
+        g.biasHooks = on;
+}
+
+bool mvr_mip_bias_ready() { return g.context && g.biasHooks; }
 
 void mvr_focus_replay(bool on) {
     g.focusReplay = on;
@@ -2409,6 +2580,15 @@ void mvr_frame_end(unsigned long long frame) {
                       static_cast<unsigned long long>(s.scissorRewrites), static_cast<unsigned long long>(s.keptRegions),
                       static_cast<unsigned long long>(s.replacedResolves), static_cast<unsigned long long>(s.lookups),
                       static_cast<unsigned long long>(s.lookupMisses));
+        if (g.biasHooks)
+            simqvfr::logf("lmu mvr: texture sharpening: %llu passes with a mip bias; pixel shader twin binds %llu, binds of "
+                          "shaders without one %llu; twin lookups %llu, %llu not cached; its buffer found unbound %llu "
+                          "times (rebound); focus rectangle %.0f,%.0f-%.0f,%.0f, bias focus %.2f, eye %.2f now",
+                          static_cast<unsigned long long>(s.biasPasses), static_cast<unsigned long long>(s.psTwinBinds),
+                          static_cast<unsigned long long>(s.psNoTwin), static_cast<unsigned long long>(s.psLookups),
+                          static_cast<unsigned long long>(s.psLookupMisses), static_cast<unsigned long long>(s.biasCbLost),
+                          g.biasConstants[0], g.biasConstants[1], g.biasConstants[2], g.biasConstants[3],
+                          g.biasConstants[4], g.biasConstants[5]);
         if (tr.on) {
             const MvrTrackStats& ts = tr.stats;
             const uint64_t compared = ts.passesCompared ? ts.passesCompared : 1;

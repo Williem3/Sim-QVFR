@@ -280,7 +280,11 @@ The DLSS pane (or the headset menu's DLSS page) turns it on and picks the focus 
 drawn smaller and upscaled (Ultra quality 77%, Quality 67%, Balanced 58%, Performance 50% each way: less
 GPU time, softer distant textures), and the presets: the periphery K (steadier) or F (about half the
 cost, more aliasing; suits eye tracking). Changes apply while you drive, each with a short stutter.
-With it on, LMU's MSAA can go off. Other cars smear a little (their motion isn't known yet).
+Texture sharpening (off by default; Focus only, or Focus and periphery) samples textures sharper where
+DLSS works; the gain is subtle, most in the periphery. On at launch it changes while you drive, without
+a stutter; turned on from Off it starts at the next launch (off, it costs nothing). If fine patterns
+shimmer, a step lower.
+With DLSS on, LMU's MSAA can go off. Other cars smear a little (their motion isn't known yet).
 NVIDIA's nvngx_dlss.dll is included (layer\nvngx_dlss.dll, DLSS 310.9.1). To use a newer one, Choose...
 it in a game's folder in the DLSS pane (DLSS 310 or newer); Use included goes back. Launch checks says
 when the one chosen is missing or too old.
