@@ -1,5 +1,6 @@
-// Windows version info (Properties > Details) for the launcher and the layer DLL. CMake configures one
-// copy per binary from this file: the version comes from SIM_QVFR_VERSION, or SIM_QVFR_RELEASE in a "dev" build.
+// Windows version info (Properties > Details) for every binary the build makes: the launcher, the layer DLL, and the
+// tests and their helpers. CMake configures one copy per binary from this file: the version comes from
+// SIM_QVFR_VERSION, or SIM_QVFR_RELEASE in a "dev" build.
 #include <winver.h>
 
 1 VERSIONINFO
