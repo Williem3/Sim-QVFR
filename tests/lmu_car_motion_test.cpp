@@ -7,11 +7,7 @@
 #include <cstring>
 #include <iterator>
 #include <map>
-#include <unordered_map>
 #include <vector>
-
-#include <windows.h>
-#include <intrin.h>
 
 #include "games/lmu/car_motion.h"
 
@@ -31,159 +27,9 @@ struct M {
 
 bool same(const float* a, const M& b) { return a && std::memcmp(a, b.m, sizeof(b.m)) == 0; }
 
-// The table as it was before the flat one (std::unordered_map, an entry per node), kept for --bench's comparison.
-class NodeTable {
-public:
-    NodeTable() : slots_(4096, nullptr) {
-        for (size_t i = 4096; i > 0; --i)
-            free_.push_back(static_cast<int>(i - 1));
-        keys_.reserve(4096);
-    }
-    void frame_begin(uint64_t frame) {
-        frame_ = frame;
-        if (frame % 64 != 0)
-            return;
-        for (auto it = keys_.begin(); it != keys_.end();)
-            if (frame > it->second.frame + 120) {
-                slots_[it->second.slot] = nullptr;
-                free_.push_back(it->second.slot);
-                it = keys_.erase(it);
-            } else {
-                ++it;
-            }
-    }
-    int draw(const lmu::CarDrawKey& key, const float (&m)[16], bool& moved) {
-        moved = false;
-        if (lmu::car_matrix_identity(m))
-            return -1;
-        auto it = keys_.find(key);
-        if (it == keys_.end()) {
-            if (free_.empty())
-                return -1;
-            Entry e;
-            e.slot = free_.back();
-            free_.pop_back();
-            e.frame = frame_;
-            std::memcpy(e.now, m, sizeof(e.now));
-            it = keys_.emplace(key, e).first;
-            slots_[it->second.slot] = &it->second;
-            return it->second.slot;
-        }
-        Entry& e = it->second;
-        if (e.frame != frame_) {
-            e.moved = e.frame + 1 == frame_;
-            std::memcpy(e.before, e.now, sizeof(e.before));
-            e.frame = frame_;
-        }
-        std::memcpy(e.now, m, sizeof(e.now));
-        moved = e.moved;
-        return e.slot;
-    }
-    size_t live() const { return keys_.size(); }
-
-private:
-    struct Hash {
-        size_t operator()(const lmu::CarDrawKey& k) const {
-            uint64_t h = reinterpret_cast<uintptr_t>(k.vb) * 0x9E3779B97F4A7C15ull;
-            const auto mix = [&](uint64_t v) { h = (h ^ v) * 0xBF58476D1CE4E5B9ull + (h >> 29); };
-            mix(reinterpret_cast<uintptr_t>(k.ib));
-            mix((static_cast<uint64_t>(k.vbOffset) << 32) | k.ibOffset);
-            mix((static_cast<uint64_t>(k.start) << 32) | k.count);
-            mix(static_cast<uint32_t>(k.base));
-            return static_cast<size_t>(h ^ (h >> 31));
-        }
-    };
-    struct Entry {
-        int slot = -1;
-        uint64_t frame = 0;
-        bool moved = false;
-        float now[16] = {}, before[16] = {};
-    };
-    std::unordered_map<lmu::CarDrawKey, Entry, Hash> keys_;
-    std::vector<Entry*> slots_;
-    std::vector<int> free_;
-    uint64_t frame_ = 0;
-};
-
-// --bench: a table's draw() at run 21's sizes on track (per eye 850 part draws and 750 of the static world, interleaved;
-// both eyes a frame; one level of detail switch a frame), ns per draw, only the draws timed. Warm: nothing else between
-// them. Cold: 8 MB of other memory read before each eye pass (in the game each part's entry is met once per eye pass,
-// megabytes of the game's and d3d11's work apart), so the table starts each pass outside the CPU's own caches.
-template <typename Table>
-double bench_one(bool cold) {
-    constexpr int kParts = 850, kWorld = 750, kFrames = 600;
-    static int vbs[40];
-    static std::vector<uint8_t> other(8u << 20, 1);
-    int ib = 0;
-    std::vector<lmu::CarDrawKey> parts(kParts);
-    for (int i = 0; i < kParts; ++i)
-        parts[i] = {&vbs[i % 40], &ib, 0, 0, static_cast<uint32_t>(i * 97), static_cast<uint32_t>(60 + i % 500), i % 7};
-    Table table;
-    bool moved = false;
-    const M world;
-    M part(1);
-    uint32_t lod = 1000000;
-    uint64_t sink = 0;
-    LARGE_INTEGER f, t0, t1;
-    QueryPerformanceFrequency(&f);
-    double ns = 0;
-    for (int frame = 1; frame <= kFrames; ++frame) {
-        parts[static_cast<size_t>(frame) * 31 % kParts].start = lod++;  // a level of detail switch: a new key
-        part.m[12] = static_cast<float>(frame);
-        for (int eye = 0; eye < 2; ++eye) {
-            if (cold)
-                for (size_t at = 0; at < other.size(); at += 64)
-                    sink += other[at] + (other[at] ^= 1);  // read and written: the caches hold this instead
-            QueryPerformanceCounter(&t0);
-            if (eye == 0)
-                table.frame_begin(static_cast<uint64_t>(frame));
-            for (int i = 0, w = 0; i < kParts; ++i) {
-                sink += static_cast<uint64_t>(table.draw(parts[i], part.m, moved));
-                if (w < kWorld && i % 8 < 7) {  // the static world between the parts (~7 in 8)
-                    sink += static_cast<uint64_t>(table.draw(parts[i], world.m, moved));
-                    ++w;
-                }
-            }
-            QueryPerformanceCounter(&t1);
-            ns += 1e9 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(f.QuadPart);
-        }
-    }
-    if (sink == 42)
-        std::printf(" ");
-    return ns / (static_cast<double>(kFrames) * 2 * (kParts + kWorld));
-}
-
-int bench() {
-    {  // what one timed section of the layer's (two timestamp reads, mvr_pass.cpp Timed) costs on this CPU
-        constexpr int kPairs = 2000000;
-        uint64_t sum = 0;
-        LARGE_INTEGER f, t0, t1;
-        QueryPerformanceFrequency(&f);
-        QueryPerformanceCounter(&t0);
-        for (int i = 0; i < kPairs; ++i) {
-            const uint64_t a = __rdtsc();
-            sum += __rdtsc() - a;
-        }
-        QueryPerformanceCounter(&t1);
-        std::printf("bench: a timed section's own cost %.1f ns (two timestamp reads; %llu ticks inside on average)\n",
-                    1e9 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(f.QuadPart) / kPairs,
-                    static_cast<unsigned long long>(sum / kPairs));
-    }
-    for (int round = 0; round < 3; ++round) {
-        const double nodeWarm = bench_one<NodeTable>(false), flatWarm = bench_one<lmu::CarMotion>(false);
-        const double nodeCold = bench_one<NodeTable>(true), flatCold = bench_one<lmu::CarMotion>(true);
-        std::printf("bench: ns per draw (3,200 a frame), warm: node table %.1f, flat %.1f; cold: node table %.1f, flat "
-                    "%.1f (%.3f vs %.3f ms a frame)\n",
-                    nodeWarm, flatWarm, nodeCold, flatCold, nodeCold * 3200 / 1e6, flatCold * 3200 / 1e6);
-    }
-    return 0;
-}
-
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc > 1 && std::strcmp(argv[1], "--bench") == 0)
-        return bench();
+int main() {
     using lmu::CarDrawKey;
     using lmu::CarMotion;
     int vbA = 0, vbB = 0, ib = 0;

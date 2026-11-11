@@ -85,6 +85,11 @@ struct FourPassesRun {
     // Stage 3 ([experiment] lmu_car_vectors, with carTrack): 1 the parts' slots written beside the scene and a gate
     // image; 2 DLSS's vectors take the parts' motion too (mvr_pass.h mvr_car_slots).
     int carSlots = 0;
+    // The player's [dlss] car_vectors go on only where DLSS can run (a build with NGX, an RTX card, the tracker's
+    // passes); the [experiment] keys (carForced) as they say. carAb (lmu_car_vectors_ab=N): N frames with the cars'
+    // motion, N without (mvr_pass.h mvr_car_active), in turn; each side's CPU per pass logged, GPU per mvr_pass's modes.
+    bool carForced = false;
+    int carAb = 0;
     // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
     // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.
     int fallbackAt = 0;

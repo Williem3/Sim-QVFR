@@ -283,6 +283,7 @@ struct State {
     // pass's views cleared; the game's blend state as bound (its factor and mask), whether a twin is bound in its place,
     // the depth state's writing; the default blend state's twins ([0] target 1 kept, [1] written); each slot's motion.
     int slotsLevel = 0;
+    bool carActive = true;  // mvr_car_active (an A/B's side)
     bool slotsOn = false, slotsBound = false, slotsCleared = false;
     ComPtr<ID3D11DeviceContext1> context1;
     ComPtr<ID3D11Texture2D> slotTex;
@@ -979,7 +980,7 @@ inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Reso
 inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Resource* resource, UINT sub) {
     if (timeHooks)
         ++g.time.carCalls;
-    if (resource == g.worldRes && g.worldMapped && context == g.context) {
+    if (resource == g.worldRes && g.worldMapped && g.carActive && context == g.context) {
         SampledTimed timed(g.time.cars, carSampleRead);
         std::memcpy(g.matrix, static_cast<const uint8_t*>(g.worldMapped) + g.worldCbOffset, sizeof(g.matrix));
         g.worldMapped = nullptr;
@@ -1174,7 +1175,7 @@ void slot_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilVi
         return;
     const bool was = g.slotsBound;
     g.slotsBound = false;
-    if (n == 1 && rtvs && rtvs[0] && dsv && is_scene_rtv(rtvs[0]) && ensure_slot_target()) {
+    if (n == 1 && rtvs && rtvs[0] && dsv && g.carActive && is_scene_rtv(rtvs[0]) && ensure_slot_target()) {
         if (!g.slotsCleared && g.context1) {
             const UINT fw = g.view.focusRenderW ? g.view.focusRenderW : g.view.focusW;
             const UINT fh = g.view.focusRenderH ? g.view.focusRenderH : g.view.focusH;
@@ -2284,7 +2285,7 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
             copy_before(context);
     }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
-    if (g.carTrack && ours(context)) {
+    if (g.carTrack && g.carActive && ours(context)) {
         int slot = -1;
         {
             SampledTimed timed(g.time.cars, carSampleDraw);
@@ -3144,6 +3145,8 @@ void mvr_test_scene_target(ID3D11Resource* scene) {
 
 ID3D11Texture2D* mvr_car_slot_texture() { return g.slotTex.Get(); }
 
+void mvr_car_active(bool on) { g.carActive = on; }
+
 void mvr_car_slots(int level) {
     if (!g.context) {  // before the install only (and after mvr_car_track: the slots need the tracking)
         g.slotsLevel = level;
@@ -3447,7 +3450,9 @@ void mvr_frame_end(unsigned long long frame) {
                 total += avg(sc[p] + po[p], n[p]);
             simqvfr::logf("lmu mvr: GPU per pass%s, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
                           "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms, %.2f in all (%u frames timed)",
-                          m ? " on the A/B's other side (without MVR, the four passes, or instancing)" : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
+                          m ? " on the A/B's other side (without MVR, the four passes, instancing, or without the other "
+                              "cars' motion)"
+                            : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
                           avg(sc[2], n[2]), avg(po[2], n[2]), avg(sc[3], n[3]), avg(po[3], n[3]), total, n[0]);
             for (int p = 0; p < 4; ++p) {
                 g.sceneMs[m][p] = g.postMs[m][p] = 0;

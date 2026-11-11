@@ -80,10 +80,26 @@ public:
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
             run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
             run.textureSharpening = s.ini && simqvfr::read_dlss_settings(s.ini).textureSharpening != 0;
-            // lmu_car_track=1: other cars' parts tracked from the eye passes' draws, log only (four_passes.h carTrack).
-            run.carTrack = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, s.ini) != 0;
-            // lmu_car_vectors=1/2 (with it): the parts' slots and a gate image; 2 DLSS uses their motion.
-            run.carSlots = run.carTrack ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, s.ini)) : 0;
+            // Other cars' motion in DLSS's vectors (four_passes.h carTrack, carSlots): the player's [dlss] car_vectors
+            // with DLSS on at launch; or as a diagnostic, [experiment] lmu_car_track=1 (the tracking, log only with
+            // car_vectors=0) and lmu_car_vectors=1 (the slots and a gate image) or 2 (DLSS takes them); 0 (the shipped
+            // ini's): as the player's.
+            {
+                const simqvfr::DlssSettings player = s.ini ? simqvfr::read_dlss_settings(s.ini) : simqvfr::DlssSettings{};
+                const bool playerCars = player.on && player.carVectors;
+                const int track = s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, s.ini))
+                                        : 0;
+                const int slots =
+                    s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, s.ini)) : 0;
+                run.carForced = track > 0 || slots > 0;
+                run.carTrack = track > 0 || slots > 0 || playerCars;
+                run.carSlots = slots > 0 ? slots : playerCars ? 2 : 0;
+                // lmu_car_vectors_ab=N (with them, a measurement): N frames with the cars' motion, N without, in turn.
+                run.carAb = s.ini ? (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment",
+                                                                                         L"lmu_car_vectors_ab", 0, s.ini)))
+                                  : 0;
+                run.mvrTiming = run.mvrTiming || run.carAb > 0;  // its GPU per pass by side
+            }
             const bool player = gate == 0 && !legacy;  // multi_view=1: the two-pass path
             // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
             run.focusReplay = player || (s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0);

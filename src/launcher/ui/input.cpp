@@ -172,6 +172,12 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
+    case kDlssCarVectors:
+        if (own_dlss_available() && app.s.dlss.on) {  // greyed out while DLSS is off
+            app.s.dlss.carVectors = !app.s.dlss.carVectors;
+            changed();
+        }
+        return;
     case kDlssFolder: choose_dlss_dll(); return;
     case kDlssIncluded: use_included_dlss(); return;
     case kFgOn:
@@ -349,6 +355,7 @@ bool space_control(Ctl id) {
     case kFgPeriphery:
     case kFgRelease:
     case kDlssOn:
+    case kDlssCarVectors:
     case kDlssFocusMode:
     case kDlssFocusPreset:
     case kDlssEyePreset:

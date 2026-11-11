@@ -381,7 +381,8 @@ std::vector<Ctl> focus_order() {
                 order.push_back(kDlssIncluded);
             order.push_back(kDlssFolder);
             if (own_dlss_available() && app.s.dlss.on)
-                order.insert(order.end(), {kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening});
+                order.insert(order.end(), {kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
+                                           kDlssCarVectors});
             break;
         }
         if (!game_has(&games::GameFeatures::foveatedDlss))

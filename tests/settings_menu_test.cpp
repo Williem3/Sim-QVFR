@@ -1026,8 +1026,8 @@ int main() {
         DeleteFileW(ini.c_str());
         DlssSettings fresh = read_dlss_settings(ini.c_str());
         check(!fresh.on && fresh.folder.empty() && fresh.focusScale == 100 && fresh.focusPreset == 0 && fresh.eyePreset == 11 &&
-                  fresh.textureSharpening == 0,
-              "[dlss]: an empty file reads off, DLAA, NGX's default, K, no texture sharpening");
+                  fresh.textureSharpening == 0 && fresh.carVectors,
+              "[dlss]: an empty file reads off, DLAA, NGX's default, K, no texture sharpening, the other cars' motion on");
         // An older file: [experiment] lmu_dlss=2, its folder, 50%, preset 0, the eyes on F.
         WritePrivateProfileStringW(L"experiment", L"lmu_dlss", L"2", ini.c_str());
         WritePrivateProfileStringW(L"experiment", L"lmu_dlss_folder", L"K:\\Games\\X", ini.c_str());
@@ -1043,8 +1043,9 @@ int main() {
         mine.focusPreset = 13;
         mine.eyePreset = 11;
         mine.textureSharpening = 2;
+        mine.carVectors = false;
         check(write_dlss_settings(ini.c_str(), mine) && read_dlss_settings(ini.c_str()) == mine,
-              "[dlss]: written and read back, ahead of the older keys");
+              "[dlss]: written and read back (the other cars' motion off too), ahead of the older keys");
         wchar_t text[16] = {};
         GetPrivateProfileStringW(L"dlss", L"focus_preset", L"", text, 16, ini.c_str());
         const std::wstring focusText = text;

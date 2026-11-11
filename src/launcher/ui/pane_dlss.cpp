@@ -114,7 +114,20 @@ float own_dlss_pane(float x, float y, float w, bool draw) {
     h += section(x, y + h, w, L"Textures", {sharpening},
                  L"On at launch, its changes apply at once, without a stutter. Turned on from Off while the game runs, it "
                  L"starts at the next launch (off, it costs nothing).",
-                 draw, Applies::Live);
+                 draw, Applies::Live) +
+         t::kSpace6;
+    Row cars;
+    const std::wstring carsDesc =
+        L"Gives DLSS each other car’s own motion, so cars passing, alongside or ahead stay clean instead of smearing. "
+        L"Turn it off for more headroom: in a field of cars it costs about 0.5 ms of CPU and 0.2 to 0.5 ms of GPU a "
+        L"frame.";
+    cars.fullHeight = [carsDesc](float width) { return checkbox_height(carsDesc, width); };
+    cars.full = [carsDesc, off, on = d.carVectors](const Rect& r) {
+        checkbox(kDlssCarVectors, r, on, L"Other cars’ motion", carsDesc, off);
+    };
+    h += section(x, y + h, w, L"Advanced", {cars},
+                 L"Applies at the next launch, with DLSS on at launch; with DLSS off it costs nothing.", draw,
+                 Applies::NextLaunch);
     return h;
 }
 

@@ -527,8 +527,15 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     attach = attachTwins;
     // Texture sharpening's twins only when it's on at launch (as its hook, four_passes.cpp install_mvr).
     makeBiasTwins = attach && ini && simqvfr::read_dlss_settings(ini).textureSharpening != 0;
-    markWorldMatrix = attach && ini && GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, ini) != 0;
-    makeSlotTwins = markWorldMatrix && GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, ini) >= 1;
+    {  // other cars' motion: as the adapter decides it (games/lmu/adapter.cpp): the player's [dlss] car_vectors with
+       // DLSS on, or the diagnostics' lmu_car_track / lmu_car_vectors above 0
+        const simqvfr::DlssSettings player = ini ? simqvfr::read_dlss_settings(ini) : simqvfr::DlssSettings{};
+        const bool playerCars = player.on && player.carVectors;
+        const int track = ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, ini)) : 0;
+        const int slots = ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, ini)) : 0;
+        markWorldMatrix = attach && ini && (track > 0 || slots > 0 || playerCars);
+        makeSlotTwins = markWorldMatrix && (slots > 0 || playerCars);
+    }
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
     markChecksums =
         attach && (nameShaders || (ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0));

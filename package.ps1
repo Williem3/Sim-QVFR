@@ -206,6 +206,13 @@ try {
         $relative = $_.FullName.Substring($stage.Length).TrimStart('\', '/').Replace('\', '/')
         '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $relative
     } | Set-Content -LiteralPath (Join-Path $stage 'SHA256.txt') -Encoding ASCII
+    # Windows Defender's verdict on what ships and on the build the suite ran (this repository's
+    # tools\defender_scan.ps1, whichever commit is packaged): a flagged file stops the package, false positive or not.
+    $scanner = Join-Path $PSScriptRoot 'tools\defender_scan.ps1'
+    foreach ($scanned in @($stage, (Join-Path $work 'build\Release'))) {
+        & $scanner -Folder $scanned
+        if ($LASTEXITCODE -ne 0) { throw "Windows Defender flagged a file under $scanned (defender_scan above)" }
+    }
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive
 } finally {
     Invoke-Native 'git worktree remove' { git -C $repo worktree remove --force $work } | Out-Null

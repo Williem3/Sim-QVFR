@@ -161,6 +161,9 @@ CarMotionStats mvr_car_stats();
 // frame's world) x the frame before's, uploaded; DlssPass carries both. Level 1: the slots and a gate image (logs\car-
 // slots-*.png), DLSS as before; 2: DLSS's vectors take the parts' motion.
 void mvr_car_slots(int level);
+// The cars' motion this frame or not (an A/B of its cost, FourPassesRun::carAb; between frames): off, no tracking work,
+// no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
+void mvr_car_active(bool on);
 // Tests: the scene's target as the tracker would learn it (MSAA off; null forgets it), and the slot target (null
 // before its first bind).
 void mvr_test_scene_target(ID3D11Resource* scene);

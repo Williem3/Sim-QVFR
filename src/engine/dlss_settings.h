@@ -26,6 +26,9 @@ struct DlssSettings {
     // texture_sharpening: textures sampled sharper under DLSS, NVIDIA's mip bias (kDlssTextureSharpening; live): 0 off,
     // 1 the focus views, 2 the focus views and the eyes (engine/dlss_views.h dlss_mip_bias).
     int textureSharpening = 0;
+    // car_vectors: the game's other cars' own motion in DLSS's vectors where the game's side tracks them (LMU:
+    // games/lmu/mvr_pass.h mvr_car_slots); with DLSS on at launch only (next launch). On: moving cars stay clean.
+    bool carVectors = true;
     bool operator==(const DlssSettings&) const = default;
 };
 
@@ -121,6 +124,8 @@ inline DlssSettings read_dlss_settings(const wchar_t* ini) {
     if (found && !sharpening.empty())
         s.textureSharpening =
             kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, _wtoi(sharpening.c_str()), true)].value;
+    const std::wstring cars = dlss_detail::read_text(ini, L"dlss", L"car_vectors", found);
+    s.carVectors = !found || cars.empty() || _wtoi(cars.c_str()) != 0;
     return s;
 }
 
@@ -133,6 +138,7 @@ inline bool write_dlss_settings(const wchar_t* ini, const DlssSettings& s) {
     ok &= ini_put(ini, L"dlss", L"eye_preset", dlss_preset_letter(s.eyePreset == 6 ? 6 : 11));
     ok &= ini_put(ini, L"dlss", L"texture_sharpening",
                   kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, s.textureSharpening, true)].value);
+    ok &= ini_put(ini, L"dlss", L"car_vectors", s.carVectors ? 1 : 0);
     return ok;
 }
 

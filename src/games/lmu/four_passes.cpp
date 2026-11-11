@@ -804,13 +804,22 @@ unsigned long long twoPassFrames = 0, finalsMissing = 0;
 // lmu_mvr_backend_ab's side of this frame: 0 NVIDIA's single-pass stereo, 1 instancing.
 int backendSide = 0;
 bool backendAbOk = false, backendAbLogged = false;
+// lmu_car_vectors_ab's: 0 with the other cars' motion, 1 without; the cars' motion went on at the install.
+int carSide = 0;
+bool carAbLogged = false, carsOn = false;
+bool car_ab_on() { return cfg.carAb > 0 && carsOn; }
 
 // The A/B side of this frame: lmu_focus_final_ab's (0 two passes, 1 four), lmu_mvr_backend_ab's (0 NVIDIA's, 1
 // instancing) or lmu_mvr_ab's (0 MVR, 1 without).
 int ab_side() {
-    return cfg.focusFinalAb > 0 ? (twoPassFrame ? 0 : 1) : cfg.backendAb > 0 ? backendSide : (mvrFrame ? 0 : 1);
+    return cfg.focusFinalAb > 0 ? (twoPassFrame ? 0 : 1)
+           : cfg.backendAb > 0  ? backendSide
+           : cfg.carAb > 0      ? carSide
+                                : (mvrFrame ? 0 : 1);
 }
-bool ab_run() { return cfg.mvrAb > 0 || cfg.focusFinalAb > 0 || (cfg.backendAb > 0 && backendAbOk); }
+bool ab_run() {
+    return cfg.mvrAb > 0 || cfg.focusFinalAb > 0 || (cfg.backendAb > 0 && backendAbOk) || car_ab_on();
+}
 
 // An A/B run (FourPassesRun::mvrAb): each side's CPU per pass since the last cost line, in thread cycles.
 struct AbWindow {
@@ -912,8 +921,13 @@ bool install_mvr(ID3D11Device* device) {
     // tracker drives (DLSS's only way in).
     mvr_mip_bias_hooks(cfg.textureSharpening && simqvfr::ngx::built_in() && simqvfr::nvapi::two_views_gpu() != nullptr &&
                        cfg.trackerDrives);
-    mvr_car_track(cfg.carTrack);  // log only (stage 2): its hooks only when on
-    mvr_car_slots(cfg.carTrack ? cfg.carSlots : 0);  // stage 3 (after the tracking: it needs it)
+    // Other cars' motion: the player's where DLSS can run (as texture sharpening's), the diagnostics' as they say; their
+    // hooks only when on (the tracking before the slots: they need it).
+    const bool cars = cfg.carTrack && (cfg.carForced || (simqvfr::ngx::built_in() &&
+                                                         simqvfr::nvapi::two_views_gpu() != nullptr && cfg.trackerDrives));
+    mvr_car_track(cars);
+    mvr_car_slots(cars ? cfg.carSlots : 0);
+    carsOn = cars && cfg.carSlots >= 2;  // the A/B measures what players get (DLSS taking the motion)
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
         cfg.mvr = false;
@@ -999,6 +1013,17 @@ void mvr_before_pass(int p) {
                         mvr_use_instanced(backendSide == 1, true);
                     mvr_frame_mode(backendSide);
                 }
+            }
+            if (car_ab_on()) {  // the other cars' motion this frame or not (between frames)
+                if (!carAbLogged) {
+                    carAbLogged = true;
+                    simqvfr::logf("lmu mvr: other cars' motion A/B: %d frames with it, then %d without, in turn "
+                                  "(lmu_car_vectors_ab)",
+                                  cfg.carAb, cfg.carAb);
+                }
+                carSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.carAb)) % 2);
+                mvr_car_active(carSide == 0);
+                mvr_frame_mode(carSide);
             }
             // R5c: the four-pass side as plain QVFR (no multi-view: the branch below for every pass) or gate D.
             if (cfg.focusFinalAbPlain && !twoPassFrame)
@@ -2947,6 +2972,17 @@ void four_passes_frame_end() {
                               ab.frames[1], c[1][0] + c[1][1] - c[0][0] - c[0][1],
                               static_cast<unsigned long long>(ms.doubledDraws),
                               static_cast<unsigned long long>(ms.eyeOnlyDraws));
+            }
+            if (cfg.mvr && car_ab_on() && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
+                double c[2][2];
+                for (int m = 0; m < 2; ++m)
+                    for (int q = 0; q < 2; ++q)
+                        c[m][q] = ab.cpu[m][q] / tscPerMs / ab.frames[m];
+                simqvfr::logf("lmu mvr A/B (other cars' motion): CPU per pass with it %.2f %.2f ms (%.2f; %u frames), "
+                              "without %.2f %.2f ms (%.2f; %u frames): the cars' motion %+.3f ms per frame (the hooks' "
+                              "detours on both sides)",
+                              c[0][0], c[0][1], c[0][0] + c[0][1], ab.frames[0], c[1][0], c[1][1], c[1][0] + c[1][1],
+                              ab.frames[1], c[0][0] + c[0][1] - c[1][0] - c[1][1]);
             }
             if (cfg.mvr && cfg.mvrAb > 0 && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
                 double c[2][4], eyes[2], focus[2];
