@@ -7,6 +7,10 @@ RDC_EYE: one eye pass's event range (pass_outline.py finds it). For every draw w
 `worldMatrix` constant: the matrix, its distance from the eye (`worldEye`), the targets. The report groups draws by
 matrix (one group = one rigid object, or the static world when the matrix is the identity), per pass, with the groups
 near the eye listed (the player's car and cockpit) and how the groups sit in the draw order (runs).
+RDC_CSV (optional): every draw of the range as a row, for matching draws between two captures of one session (RenderDoc
+keeps a resource's id for the session): its event, pass, shaders, vertex and index buffers with their offsets and
+ranges, the constant buffer the matrix came from (buffer, offset), the matrix and its distance. Other cars' motion
+vectors need to know which draws are one car, frame to frame, and how its matrix reaches the GPU.
 """
 import collections
 import math
@@ -20,6 +24,7 @@ IN = os.environ["RDC_IN"]
 OUT = os.environ["RDC_OUT"]
 FIRST, LAST = (int(x) for x in os.environ["RDC_EYE"].split("-"))
 NEAR = float(os.environ.get("RDC_NEAR", "4"))  # metres from the eye: the player's car
+CSV = os.environ.get("RDC_CSV", "")
 out = open(OUT, "w", encoding="utf-8")
 
 
@@ -85,11 +90,28 @@ def run():
 
     layouts = {}  # VS id -> (cb index, worldMatrix offset, worldEye offset or None) or None
     rows = []     # (event, pass key, VS id, matrix or None, eye or None, indices)
+    csv_rows = []
     for a in draws:
         ctl.SetFrameEvent(a.eventId, False)
         pipe = ctl.GetPipelineState()
         vs = int(pipe.GetShader(rd.ShaderStage.Vertex))
         key = (tuple(int(o) for o in a.outputs if int(o)), int(a.depthOut))
+        identity = {}
+        if CSV:
+            try:
+                vbs = pipe.GetVBuffers()
+                vb = vbs[0] if vbs else None
+                ib = pipe.GetIBuffer()
+                identity = {
+                    "ps": int(pipe.GetShader(rd.ShaderStage.Pixel)),
+                    "vb": int(vb.resourceId) if vb else 0, "vb_offset": int(vb.byteOffset) if vb else 0,
+                    "ib": int(ib.resourceId) if ib else 0, "ib_offset": int(ib.byteOffset) if ib else 0,
+                    "index_start": int(a.indexOffset), "indices": int(a.numIndices),
+                    "base_vertex": int(a.baseVertex), "vertex_start": int(a.vertexOffset),
+                    "instances": int(a.numInstances),
+                }
+            except Exception as e:  # an API difference: the row keeps what it has
+                identity = {"error": repr(e)}
         if vs not in layouts:
             found = None
             refl = pipe.GetShaderReflection(rd.ShaderStage.Vertex) if vs else None
@@ -100,8 +122,10 @@ def run():
             layouts[vs] = found
         lay = layouts[vs]
         m = eye = None
+        cb = (0, 0)
         if lay:
             rid, off, size = rid_of(pipe.GetConstantBlock(rd.ShaderStage.Vertex, lay[0], 0))
+            cb = (int(rid), off)
             if int(rid) and size:
                 data = ctl.GetBufferData(rid, off, min(size, 512))
                 if len(data) >= lay[1] + 64:
@@ -109,6 +133,32 @@ def run():
                 if lay[2] is not None and len(data) >= lay[2] + 12:
                     eye = struct.unpack_from("<3f", data, lay[2])
         rows.append((a.eventId, key, vs, m, eye, a.numIndices))
+        if CSV:
+            csv_rows.append((a.eventId, key, vs, identity, cb, m, eye))
+
+    if CSV:
+        import csv as csvmod
+        first_of_pass = {}
+        for r in rows:
+            first_of_pass.setdefault(r[1], r[0])
+        cols = ["event", "pass", "vs", "ps", "vb", "vb_offset", "ib", "ib_offset", "index_start", "indices",
+                "base_vertex", "vertex_start", "instances", "cb", "cb_offset", "kind", "distance"] + \
+               [f"m{i}" for i in range(16)] + ["eye_x", "eye_y", "eye_z", "error"]
+        with open(CSV, "w", newline="", encoding="utf-8") as f:
+            w = csvmod.writer(f)
+            w.writerow(cols)
+            for event, key, vs, ident, cb, m, eye in csv_rows:
+                d = ""
+                if m and eye:
+                    t = translation(m)
+                    d = f"{math.sqrt(sum((x - y) ** 2 for x, y in zip(t, eye))):.3f}"
+                w.writerow([event, first_of_pass[key], vs, ident.get("ps", ""), ident.get("vb", ""),
+                            ident.get("vb_offset", ""), ident.get("ib", ""), ident.get("ib_offset", ""),
+                            ident.get("index_start", ""), ident.get("indices", ""), ident.get("base_vertex", ""),
+                            ident.get("vertex_start", ""), ident.get("instances", ""), cb[0], cb[1],
+                            kind(m) if m else "", d] + (list(m) if m else [""] * 16) +
+                           (list(eye) if eye else ["", "", ""]) + [ident.get("error", "")])
+        p(f"- {len(csv_rows)} draws written to {CSV}\n")
 
     p(f"# World-matrix census: {os.path.basename(IN)}, events {FIRST}-{LAST}\n")
     with_m = [r for r in rows if r[3]]

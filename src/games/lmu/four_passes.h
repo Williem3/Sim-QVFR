@@ -79,6 +79,12 @@ struct FourPassesRun {
     // Texture sharpening ([dlss] texture_sharpening) on at launch: its pixel shader hook is installed (mvr_pass.h
     // mvr_mip_bias_hooks), and the probe makes the twins. Off at launch: neither, at no cost; turned on, the next launch.
     bool textureSharpening = false;
+    // Other cars' motion vectors, stage 2 ([experiment] lmu_car_track=1, log only): each car part's world matrix tracked
+    // frame to frame from the eye passes' draws (mvr_pass.h mvr_car_track); nothing drawn changes.
+    bool carTrack = false;
+    // Stage 3 ([experiment] lmu_car_vectors, with carTrack): 1 the parts' slots written beside the scene and a gate
+    // image; 2 DLSS's vectors take the parts' motion too (mvr_pass.h mvr_car_slots).
+    int carSlots = 0;
     // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
     // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.
     int fallbackAt = 0;

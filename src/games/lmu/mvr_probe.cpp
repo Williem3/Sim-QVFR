@@ -3,6 +3,8 @@
 
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d11shader.h>
+#include <d3dcompiler.h>
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -55,6 +57,8 @@ std::atomic<bool> supportLogged{false};
 bool dump = false;
 bool attach = false;  // lmu_mvr=1: each game shader gets its converted twin as private data (kMvrTwinGuid)
 bool makeBiasTwins = false;  // texture sharpening on at launch ([dlss] texture_sharpening): pixel shaders' mip bias twins
+bool markWorldMatrix = false;  // [experiment] lmu_car_track=1: each vertex shader's worldMatrix slot (kVsWorldMatrixGuid)
+bool makeSlotTwins = false;    // [experiment] lmu_car_vectors >= 1 (with lmu_car_track): pixel shaders' slot twins
 bool markChecksums = false;  // with the focus post: every shader's checksum as private data (the traces' names)
 bool underRenderDoc = false;
 bool forceInstanced = false;  // [experiment] multi_view_software=1: instancing even where NVIDIA's is there
@@ -74,7 +78,32 @@ thread_local bool inProbe = false;  // NVAPI's own shader creation must not be e
 std::mutex twinMutex;
 std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11VertexShader>> twins, instancedTwins;
 std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D11PixelShader>> biasTwins;  // the pixel shaders' (or null)
+// Their slot twins (lmu_car_vectors): of the game's shader, of its mip bias twin (either null).
+std::unordered_map<uint64_t, std::pair<Microsoft::WRL::ComPtr<ID3D11PixelShader>, Microsoft::WRL::ComPtr<ID3D11PixelShader>>>
+    slotTwins;
 std::atomic<uint64_t> pixelGeneration{0};
+// Where each distinct vertex shader reads its worldMatrix (slot, byte offset; slot ~0u: it reads none), by bytecode.
+std::unordered_map<uint64_t, std::pair<UINT, UINT>> worldSlots;
+
+// The constant buffer slot and byte offset of the shader's `worldMatrix` (its reflection: LMU's shaders keep their
+// names, GlobalCBFloats_Draw_0 at offset 0). False: it has none.
+bool world_matrix_slot(const void* code, size_t size, UINT& slot, UINT& offset) {
+    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> r;
+    if (FAILED(D3DReflect(code, size, IID_PPV_ARGS(&r))))
+        return false;
+    ID3D11ShaderReflectionVariable* v = r->GetVariableByName("worldMatrix");
+    D3D11_SHADER_VARIABLE_DESC vd{};
+    if (!v || FAILED(v->GetDesc(&vd)))
+        return false;
+    ID3D11ShaderReflectionConstantBuffer* cb = v->GetBuffer();
+    D3D11_SHADER_BUFFER_DESC bd{};
+    D3D11_SHADER_INPUT_BIND_DESC bind{};
+    if (!cb || FAILED(cb->GetDesc(&bd)) || FAILED(r->GetResourceBindingDescByName(bd.Name, &bind)))
+        return false;
+    slot = bind.BindPoint;
+    offset = vd.StartOffset;
+    return true;
+}
 
 uint64_t id_of(const uint8_t* code, size_t size) {
     uint64_t id = 0;
@@ -275,6 +304,30 @@ HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void*
         std::lock_guard guard(statsMutex);
         ++(role == VsRole::lensMask ? stats.lensMasks : stats.vruiPanels);
     }
+    // Other cars' motion vectors: where it reads its worldMatrix (once per distinct bytecode).
+    if (SUCCEEDED(hr) && markWorldMatrix && !inProbe && shader && *shader && code && size) {
+        const uint64_t id = id_of(static_cast<const uint8_t*>(code), size);
+        std::pair<UINT, UINT> at{~0u, 0};
+        bool seen = false;
+        {
+            std::lock_guard guard(twinMutex);
+            if (const auto it = worldSlots.find(id); it != worldSlots.end()) {
+                at = it->second;
+                seen = true;
+            }
+        }
+        if (!seen) {
+            UINT slot = 0, offset = 0;
+            if (world_matrix_slot(code, size, slot, offset))
+                at = {slot, offset};
+            std::lock_guard guard(twinMutex);
+            worldSlots[id] = at;
+        }
+        if (at.first != ~0u) {
+            const UINT value[2] = {at.first, at.second};
+            (*shader)->SetPrivateData(kVsWorldMatrixGuid, sizeof(value), value);
+        }
+    }
     if (SUCCEEDED(hr))  // after its twin is attached: a lookup that sees the new count sees the twin too
         shaderGeneration.fetch_add(1, std::memory_order_release);
     return hr;
@@ -369,6 +422,50 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         if (!refusedWhy.empty())
             ++stats.pixelRefused[refusedWhy];
     }
+    // Other cars' motion vectors (lmu_car_vectors): the slot twin, and the slot twin of the mip bias twin, one each per
+    // distinct bytecode, made when first seen.
+    if (attach && makeSlotTwins && !inProbe && role == YebisRole::none && code && size) {
+        const auto* bytes = static_cast<const uint8_t*>(code);
+        const uint64_t id = id_of(bytes, size);
+        std::pair<Microsoft::WRL::ComPtr<ID3D11PixelShader>, Microsoft::WRL::ComPtr<ID3D11PixelShader>> pair;
+        bool seen = false;
+        {
+            std::lock_guard guard(twinMutex);
+            if (const auto it = slotTwins.find(id); it != slotTwins.end()) {
+                pair = it->second;
+                seen = true;
+            }
+        }
+        std::string refusedWhy;
+        int failed = 0;
+        if (!seen) {
+            const dxbc::SlotOutput s = dxbc::add_slot_output(bytes, size);
+            if (s.bytecode.empty())
+                refusedWhy = s.error;
+            else if (FAILED(originalCreatePixelShader(device, s.bytecode.data(), s.bytecode.size(), nullptr, &pair.first)))
+                ++failed;
+            if (makeBiasTwins) {
+                const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(bytes, size);
+                const dxbc::SlotOutput sb = b.bytecode.empty() ? dxbc::SlotOutput{}
+                                                               : dxbc::add_slot_output(b.bytecode.data(), b.bytecode.size());
+                if (!sb.bytecode.empty() &&
+                    FAILED(originalCreatePixelShader(device, sb.bytecode.data(), sb.bytecode.size(), nullptr, &pair.second)))
+                    ++failed;
+            }
+            std::lock_guard guard(twinMutex);
+            slotTwins[id] = pair;
+        }
+        if (pair.first)
+            (*shader)->SetPrivateDataInterface(kMvrSlotTwinGuid, pair.first.Get());
+        if (pair.second)
+            (*shader)->SetPrivateDataInterface(kMvrSlotBiasTwinGuid, pair.second.Get());
+        std::lock_guard guard(statsMutex);
+        stats.slotTwinned += pair.first ? 1 : 0;
+        stats.slotBiasTwinned += pair.second ? 1 : 0;
+        stats.slotFailed += static_cast<uint64_t>(failed);
+        if (!refusedWhy.empty())
+            ++stats.slotRefused[refusedWhy];
+    }
     pixelGeneration.fetch_add(1, std::memory_order_release);  // after its twin is attached (as for vertex shaders)
     return hr;
 }
@@ -430,6 +527,8 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     attach = attachTwins;
     // Texture sharpening's twins only when it's on at launch (as its hook, four_passes.cpp install_mvr).
     makeBiasTwins = attach && ini && simqvfr::read_dlss_settings(ini).textureSharpening != 0;
+    markWorldMatrix = attach && ini && GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, ini) != 0;
+    makeSlotTwins = markWorldMatrix && GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, ini) >= 1;
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
     markChecksums =
         attach && (nameShaders || (ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0));
@@ -524,6 +623,16 @@ void mvr_probe_frame_end() {
                       pixelRefused.c_str(), pixelRefused.empty() ? "" : ")",
                       static_cast<unsigned long long>(stats.pixelFailed));
     }
+    if (makeSlotTwins) {
+        std::string slotWhy;
+        for (const auto& [why, count] : stats.slotRefused)
+            slotWhy += (slotWhy.empty() ? "" : ", ") + why + " x" + std::to_string(count);
+        simqvfr::logf("lmu mvr probe: car slots: %llu pixel shaders given a slot twin, %llu a slot twin of their mip bias "
+                      "twin%s%s%s, %llu not created",
+                      static_cast<unsigned long long>(stats.slotTwinned),
+                      static_cast<unsigned long long>(stats.slotBiasTwinned), slotWhy.empty() ? "" : " (refused: ",
+                      slotWhy.c_str(), slotWhy.empty() ? "" : ")", static_cast<unsigned long long>(stats.slotFailed));
+    }
 }
 
 bool mvr_probe_usable() { return attach && (nvapiUsable || instancedUsable); }
@@ -552,5 +661,14 @@ MvrProbeStats mvr_probe_stats() {
 
 uint64_t mvr_shader_generation() { return shaderGeneration.load(std::memory_order_acquire); }
 uint64_t mvr_pixel_shader_generation() { return pixelGeneration.load(std::memory_order_acquire); }
+
+bool mvr_world_matrix_place(const void* code, size_t size, unsigned& slot, unsigned& offset) {
+    UINT s = 0, o = 0;
+    if (!code || !size || !world_matrix_slot(code, size, s, o))
+        return false;
+    slot = s;
+    offset = o;
+    return true;
+}
 
 }  // namespace lmu

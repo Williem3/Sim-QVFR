@@ -19,12 +19,14 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <openxr/openxr.h>
 
 struct ID3D11DepthStencilView;
 struct ID3D11DeviceContext;
 struct ID3D11Resource;
+struct ID3D11ShaderResourceView;
 
 namespace simqvfr {
 
@@ -106,6 +108,13 @@ struct DlssPass {
     // What it was drawn at, from the same corner (dlss_focus_scale; 0: its size): upscaled to its size in place.
     unsigned focusRenderWidth = 0, focusRenderHeight = 0;
     float remap[4] = {1, 0, 1, 0};             // the focus view's clip remap as drawn (its jitter included)
+    // Moving objects (LMU's other cars, games/lmu/mvr_pass.h mvr_car_slots): a uint texture the scene target's size whose
+    // texel is an object's slot + 1 where that object is the surface (0: the world), and a structured buffer of float4x3,
+    // per slot the object's motion in world space (a point this frame times it: where it was the frame before; row
+    // vectors). Null: none (the world's reprojection alone).
+    ID3D11ShaderResourceView* objectSlots = nullptr;
+    ID3D11ShaderResourceView* objectMotion = nullptr;
+    unsigned objectCount = 0;
 };
 // Right after an eye pass's scene is complete in `resolved` (a resolve's target, or the scene's own single-sample
 // target), on the game's immediate context; `depth` the scene's depth target. The caller keeps its own hooks out of
@@ -114,6 +123,10 @@ struct DlssPass {
 void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, ID3D11DepthStencilView* depth,
                         const DlssPass& pass);
 void dlss_frame_end(unsigned long long frame);
+// Checks: view `index`'s motion vectors as its last evaluation got them (0-1 the eyes, 2-3 their focus views), x and y in
+// pixels per texel, row by row. False: none yet.
+bool dlss_vectors_for_checks(ID3D11DeviceContext* context, int index, std::vector<float>& xy, unsigned& width,
+                             unsigned& height);
 // The session's end (or a check's): every feature released, NGX shut down, nothing of the device held. A later pass
 // starts it again.
 void dlss_shutdown();

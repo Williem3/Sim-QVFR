@@ -39,12 +39,22 @@ cbuffer C : register(b0) {
     float4 head;             // the eye's position in the tracking space
     float4 boxMin;           // the car's box about it: x right, y up, z back
     float4 boxMax;
+    row_major float4x4 Inv;  // moving objects: this frame's clip (as rendered) -> the world
+    row_major float4x4 B;    // the world -> the frame before's clip (without its jitter)
+    float4 objects;          // x: how many object slots (0: none)
 };
 #ifdef MS
 Texture2DMS<float> depthIn : register(t0);
 #else
 Texture2D<float> depthIn : register(t0);
 #endif
+// Moving objects (DlssPass::objectSlots, objectMotion): the surface's object slot + 1 (0: the world), each object's
+// motion in the world (rows: a point [x y z 1] times it is where it was the frame before).
+Texture2D<uint> slotsIn : register(t1);
+struct Motion {
+    float3 r0, r1, r2, r3;
+};
+StructuredBuffer<Motion> motionIn : register(t2);
 float4 vs(uint id : SV_VertexID) : SV_Position {
     float2 uv = float2((id << 1) & 2, id & 2);
     return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
@@ -70,7 +80,20 @@ Out ps(float4 pos : SV_Position) {
     float d = depthIn.Load(int3(p, 0));
 #endif
     float2 ndc = float2(pos.x / js.z * 2 - 1, 1 - pos.y / js.w * 2);
-    float4 before = in_car(ndc, d) ? mul(float4(ndc, d, 1), R2) : mul(float4(ndc, d, 1), R);
+    bool car = in_car(ndc, d);
+    float4 before = car ? mul(float4(ndc, d, 1), R2) : mul(float4(ndc, d, 1), R);
+    if (!car && objects.x > 0) {  // a moving object's surface: its point moved back with it, then into the frame before
+        uint word = slotsIn.Load(int3(p, 0));
+        if (word > 0 && word <= (uint)objects.x) {
+            float4 w = mul(float4(ndc, d, 1), Inv);
+            if (abs(w.w) > 1e-20) {
+                float3 at = w.xyz / w.w;
+                Motion m = motionIn[word - 1];
+                float3 was = at.x * m.r0 + at.y * m.r1 + at.z * m.r2 + m.r3;
+                before = mul(float4(was, 1), B);
+            }
+        }
+    }
     Out o;
     o.depth = d;
     o.motion = before.w > 1e-6 ? (before.xy / before.w - (ndc - js.xy)) * float2(0.5 * js.z, -0.5 * js.w) : float2(0, 0);
@@ -218,6 +241,7 @@ float4 ps(float4 pos : SV_Position) : SV_Target { return src.SampleLevel(linearC
 
 struct Constants {
     float r[16], r2[16], js[4], origin[4], extra[4], t[16], head[4], boxMin[4], boxMax[4];
+    float inv[16], before[16], objects[4];  // moving objects (DlssPass::objectSlots)
 };
 
 // The car's box for a view this frame (dlss_math.h in_car_box): off without the eye's pose.
@@ -307,6 +331,7 @@ struct State {
     bool jitterHeld = false;   // in a stretch of frames with a view failing (logged at its start)
     unsigned long long failuresAtFrameEnd = 0;  // `failures` at the last frame end: a frame's own failures
     unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0, stretched = 0;
+    unsigned long long objectViews = 0;  // views whose vectors took moving objects' motion (DlssPass::objectSlots)
     unsigned long long evaluationsTotal = 0, stretchedTotal = 0;
     PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
     // The player's latest change (dlss_live; under the mutex), taken at the next frame end.
@@ -817,7 +842,8 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
 // place at ow x oh (DLAA: the same). False: not done (the view as it was drawn).
 bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
               unsigned w, unsigned h, unsigned ow, unsigned oh, const M4 rendered[2], const M4 unjittered[2],
-              const Jitter& jitter, double shiftX, double shiftY, bool inverted, const double depthTerms[2], CarTest car) {
+              const Jitter& jitter, double shiftX, double shiftY, bool inverted, const double depthTerms[2], CarTest car,
+              const DlssPass& pass) {
     Slot& s = d.slots[index];
     if (!ensure(context, s, index, w, h, ow, oh, format, inverted)) {
         ++d.failures;
@@ -858,18 +884,28 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     c.boxMax[1] = static_cast<float>(d.cfg.carBox[3]);
     c.boxMin[2] = static_cast<float>(-d.cfg.carBox[4]);
     c.boxMax[2] = static_cast<float>(d.cfg.carBox[5]);
+    // Moving objects: with the frame before's view, each object surface's point goes back with its object's motion.
+    M4 inv = dlss::identity();
+    const bool objects = ok && pass.objectSlots && pass.objectMotion && pass.objectCount && dlss::invert(rendered[use], inv);
+    to_floats(inv, c.inv);
+    to_floats(objects ? s.beforeUnjittered[use] : dlss::identity(), c.before);
+    c.objects[0] = objects ? static_cast<float>(pass.objectCount) : 0.0f;
+    if (objects)
+        ++d.objectViews;
     context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
     ID3D11RenderTargetView* rtvs[2] = {s.depthRtv.Get(), s.vectorsRtv.Get()};
     context->OMSetRenderTargets(2, rtvs, nullptr);
-    context->PSSetShaderResources(0, 1, d.depthSrv.GetAddressOf());
+    ID3D11ShaderResourceView* inputs[3] = {d.depthSrv.Get(), objects ? pass.objectSlots : nullptr,
+                                           objects ? pass.objectMotion : nullptr};
+    context->PSSetShaderResources(0, 3, inputs);
     draw_triangle(context, d.depthMs ? d.vectorsMs.Get() : d.vectorsSs.Get(), w, h);
     if (!ok || !d.cfg.vectors) {
         const float zero[4] = {};
         context->ClearRenderTargetView(s.vectorsRtv.Get(), zero);
     }
     context->OMSetRenderTargets(0, nullptr, nullptr);
-    ID3D11ShaderResourceView* none = nullptr;
-    context->PSSetShaderResources(0, 1, &none);
+    ID3D11ShaderResourceView* none[3] = {};
+    context->PSSetShaderResources(0, 3, none);
 
     if (d.cfg.gate) {  // the frame as the game made it, kept for the next frame's check
         s.colourAt = 1 - s.colourAt;
@@ -1224,7 +1260,8 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
         const M4 off = dlss::clip_shift(eyeJitter.on ? -eyeJitter.cx : 0, eyeJitter.on ? -eyeJitter.cy : 0);
         const M4 unjittered[2] = {dlss::mul(vp[0], off), dlss::mul(vp[1], off)};
         eyeDone = run_view(context, resolved, sd.Format, pass.eye, 0, 0, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth,
-                           pass.eyeHeight, vp, unjittered, eyeJitter, eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car);
+                           pass.eyeHeight, vp, unjittered, eyeJitter, eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car,
+                           pass);
     }
     if (focus && !d.off) {  // the focus view: the eye's clip through its remap (which carries its own jitter)
         const M4 remap = dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]);
@@ -1233,7 +1270,7 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
         const M4 rendered[2] = {dlss::mul(vp[0], remap), dlss::mul(vp[1], remap)};
         const M4 unjittered[2] = {dlss::mul(vp[0], plain), dlss::mul(vp[1], plain)};
         focusDone = run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered,
-                             unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car);
+                             unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car, pass);
         if (focusDone)
             focusLeft = false;
     }
@@ -1282,6 +1319,45 @@ void dlss_shutdown() {
 }
 
 void dlss_set_matrices(PassMatricesFn fn) { d.matrices = fn; }
+
+bool dlss_vectors_for_checks(ID3D11DeviceContext* context, int index, std::vector<float>& xy, unsigned& width,
+                             unsigned& height) {
+    if (!context || index < 0 || index >= static_cast<int>(std::size(d.slots)) || !d.slots[index].vectors)
+        return false;
+    ID3D11Texture2D* vectors = d.slots[index].vectors.Get();
+    D3D11_TEXTURE2D_DESC t;
+    vectors->GetDesc(&t);
+    t.Usage = D3D11_USAGE_STAGING;
+    t.BindFlags = 0;
+    t.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    t.MiscFlags = 0;
+    ComPtr<ID3D11Device> device;
+    context->GetDevice(&device);
+    ComPtr<ID3D11Texture2D> staging;
+    if (FAILED(device->CreateTexture2D(&t, nullptr, &staging)))
+        return false;
+    context->CopyResource(staging.Get(), vectors);
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m)))
+        return false;
+    const auto half = [](uint16_t v) {  // R16G16_FLOAT
+        const uint32_t sign = v >> 15, exponent = (v >> 10) & 0x1f, mantissa = v & 0x3ff;
+        const float f = exponent == 0    ? std::ldexp(static_cast<float>(mantissa), -24)
+                        : exponent == 31 ? 0.0f
+                                         : std::ldexp(static_cast<float>(mantissa | 0x400), static_cast<int>(exponent) - 25);
+        return sign ? -f : f;
+    };
+    width = t.Width;
+    height = t.Height;
+    xy.resize(static_cast<size_t>(width) * height * 2);
+    for (unsigned y = 0; y < height; ++y) {
+        const auto* row = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(m.pData) + y * m.RowPitch);
+        for (unsigned x = 0; x < width * 2; ++x)
+            xy[static_cast<size_t>(y) * width * 2 + x] = half(row[x]);
+    }
+    context->Unmap(staging.Get(), 0);
+    return true;
+}
 
 void dlss_live(const DlssLive& live) {
     std::lock_guard guard(d.mutex);
@@ -1388,13 +1464,15 @@ void dlss_frame_end(unsigned long long frame) {
                     std::snprintf(focusSizes[i], sizeof(focusSizes[i]), "%ux%u", s.width, s.height);
             }
             say("%llu evaluations, %llu failed, %llu features made again, %llu frames with jitter, %llu focus views "
-                "stretched since the last line; views %ux%u %ux%u, focus %s %s; jitter sign %s",
-                d.evaluations, d.failures, d.recreated, d.jitteredFrames, d.stretched, d.slots[0].width, d.slots[0].height,
+                "stretched, %llu views with moving objects' motion since the last line; views %ux%u %ux%u, focus %s %s; "
+                "jitter sign %s",
+                d.evaluations, d.failures, d.recreated, d.jitteredFrames, d.stretched, d.objectViews, d.slots[0].width,
+                d.slots[0].height,
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
                 : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
         }
-        d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = 0;
+        d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = d.objectViews = 0;
     }
     d.failuresAtFrameEnd = d.failures;
 }

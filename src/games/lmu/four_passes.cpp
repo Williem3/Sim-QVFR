@@ -912,6 +912,8 @@ bool install_mvr(ID3D11Device* device) {
     // tracker drives (DLSS's only way in).
     mvr_mip_bias_hooks(cfg.textureSharpening && simqvfr::ngx::built_in() && simqvfr::nvapi::two_views_gpu() != nullptr &&
                        cfg.trackerDrives);
+    mvr_car_track(cfg.carTrack);  // log only (stage 2): its hooks only when on
+    mvr_car_slots(cfg.carTrack ? cfg.carSlots : 0);  // stage 3 (after the tracking: it needs it)
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
         cfg.mvr = false;

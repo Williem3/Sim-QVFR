@@ -61,6 +61,7 @@ void md5_block(uint32_t (&s)[4], const uint8_t* block) {
 // ---- tokens ----
 
 enum : uint32_t {
+    kOpLd = 45, kOpDclResource = 88,
     kOpAnd = 1, kOpGe = 29, kOpLt = 49, kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMovc = 55, kOpMul = 56,
     kOpRet = 62, kOpRetc = 63, kOpSample = 69, kOpSampleC = 70, kOpSampleCLz = 71, kOpSampleL = 72, kOpSampleD = 73,
     kOpSampleB = 74, kOpUshr = 85, kOpDclConstantBuffer = 89, kOpDclIndexRange = 91, kOpDclInput = 95,
@@ -68,7 +69,8 @@ enum : uint32_t {
     kOpDclOutput = 101, kOpDclOutputSgv = 102, kOpDclOutputSiv = 103, kOpDclTemps = 104, kOpDclGlobalFlags = 106,
 };
 enum : uint32_t { kInterpolationLinearNoPerspective = 4 };
-enum : uint32_t { kTemp = 0, kInput = 1, kOutput = 2, kImm32 = 4, kImm64 = 5, kConstantBuffer = 8 };
+enum : uint32_t { kTemp = 0, kInput = 1, kOutput = 2, kImm32 = 4, kImm64 = 5, kResource = 7, kConstantBuffer = 8 };
+enum : uint32_t { kResourceDimensionBuffer = 1, kReturnTypeUint = 4, kNameTarget = 64 };
 // System value names (declarations' name tokens and the signatures' system values share them).
 enum : uint32_t { kNamePosition = 1, kNameRenderTargetArrayIndex = 4, kNameViewportArrayIndex = 5, kNameInstanceId = 8 };
 enum : uint32_t { kComponentUint32 = 1 };
@@ -980,6 +982,119 @@ FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMip
     program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
                          reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
     signature->data = write_signature(inputs);
+    r.bytecode = write_chunks(chunks);
+    return r;
+}
+
+SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options) {
+    SlotOutput r;
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks)) {
+        r.error = "not a DXBC container";
+        return r;
+    }
+    Chunk* program = nullptr;
+    Chunk* signature = nullptr;
+    for (Chunk& c : chunks) {
+        if (c.fourcc == fourcc("SHDR") || c.fourcc == fourcc("SHEX"))
+            program = &c;
+        else if (c.fourcc == fourcc("OSGN"))
+            signature = &c;
+    }
+    if (!program || !signature || program->data.size() < 8) {
+        r.error = !program ? "no SHDR/SHEX" : "no OSGN (OSG1/OSG5 not handled)";
+        return r;
+    }
+    std::vector<Element> outputs;
+    if (!read_signature(signature->data, outputs)) {
+        r.error = "unreadable output signature";
+        return r;
+    }
+    uint32_t targetName = kNameTarget;
+    for (const Element& el : outputs) {
+        if (el.reg == options.reg || (el.name == "SV_Target" && el.index == options.reg)) {
+            r.error = "the slot's render target is written already";
+            return r;
+        }
+        if (el.name == "SV_Target")
+            targetName = el.systemValue;  // as the compiler records it
+    }
+    const auto* tokens = reinterpret_cast<const uint32_t*>(program->data.data());
+    const uint32_t version = tokens[0], length = tokens[1];
+    if ((version >> 16) != 0) {
+        r.error = "not a pixel shader";
+        return r;
+    }
+    if (size_t{length} * 4 > program->data.size() || length < 2) {
+        r.error = "program length";
+        return r;
+    }
+    // Where the declarations go: the resource after the last resource-like declaration (or the global flags), the output
+    // after the last output declaration (or before the temps / the first instruction).
+    size_t globalFlagsEnd = 2, lastResourceDcl = 0, lastOutputDcl = 0, tempsAt = 0, firstInstruction = 0;
+    for (size_t i = 2; i < length;) {
+        const uint32_t n = length_of(tokens + i);
+        if (n == 0 || i + n > length) {
+            r.error = "instruction walk";
+            return r;
+        }
+        const uint32_t op = opcode_of(tokens[i]);
+        if (!firstInstruction && !is_declaration(op))
+            firstInstruction = i;
+        if (op == kOpDclGlobalFlags) {
+            globalFlagsEnd = i + n;
+        } else if (op == kOpDclResource || op == kOpDclConstantBuffer || op == 90 /* dcl_sampler */ ||
+                   (op >= 143 && op <= 162)) {  // D3D11's resource, UAV and structured declarations among these
+            if (op == kOpDclResource && n >= 3 && tokens[i + 2] == options.srvSlot) {
+                r.error = "the slot's resource is declared already";
+                return r;
+            }
+            lastResourceDcl = i + n;
+        } else if (op == kOpDclOutput || op == kOpDclOutputSgv || op == kOpDclOutputSiv) {
+            lastOutputDcl = i + n;
+        } else if (op == kOpDclTemps) {
+            tempsAt = i;
+        }
+        i += n;
+    }
+    if (!firstInstruction) {
+        r.error = "no instructions";
+        return r;
+    }
+    const std::vector<uint32_t> resourceDcl = {instruction(kOpDclResource, 4) | (kResourceDimensionBuffer << 11),
+                                               operand(0, 0, 0, kResource, 1), options.srvSlot,
+                                               kReturnTypeUint | (kReturnTypeUint << 4) | (kReturnTypeUint << 8) |
+                                                   (kReturnTypeUint << 12)};
+    const std::vector<uint32_t> outputDcl = {instruction(kOpDclOutput, 3), operand(2, 0, 0x1, kOutput, 1), options.reg};
+    // ld o<reg>.x, l(0, 0, 0, 0), t<srvSlot>.xxxx
+    const std::vector<uint32_t> load = {instruction(kOpLd, 10),
+                                        operand(2, 0, 0x1, kOutput, 1), options.reg,
+                                        operand(2, 0, 0, kImm32, 0), 0u, 0u, 0u, 0u,
+                                        operand(2, 1, swizzle(0, 0, 0, 0), kResource, 1), options.srvSlot};
+    const size_t resourceAt = lastResourceDcl ? lastResourceDcl : globalFlagsEnd;
+    const size_t outputAt = lastOutputDcl ? lastOutputDcl : tempsAt ? tempsAt : firstInstruction;
+    std::vector<uint32_t> out(tokens, tokens + 2);
+    for (size_t i = 2; i < length;) {
+        if (i == resourceAt)
+            out.insert(out.end(), resourceDcl.begin(), resourceDcl.end());
+        if (i == outputAt)
+            out.insert(out.end(), outputDcl.begin(), outputDcl.end());
+        if (i == firstInstruction)
+            out.insert(out.end(), load.begin(), load.end());
+        const uint32_t n = length_of(tokens + i);
+        out.insert(out.end(), tokens + i, tokens + i + n);
+        i += n;
+    }
+    out[1] = static_cast<uint32_t>(out.size());
+
+    size_t at = 0;  // by register (a depth output, register ~0, stays last)
+    while (at < outputs.size() && outputs[at].reg < options.reg)
+        ++at;
+    outputs.insert(outputs.begin() + static_cast<std::ptrdiff_t>(at),
+                   Element{"SV_Target", options.reg, targetName, kComponentUint32, options.reg, 0x1, 0xe});
+    program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
+                         reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
+    signature->data = write_signature(outputs);
     r.bytecode = write_chunks(chunks);
     return r;
 }

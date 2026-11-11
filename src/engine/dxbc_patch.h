@@ -110,4 +110,24 @@ struct FocusMipBias {
 
 FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMipBiasOptions& options = {});
 
+// add_slot_output is for other cars' motion vectors (docs/recon-lmu.md "stage 3"): a pixel shader that also writes, to
+// render target `reg` (SV_Target1 by default, a uint), the first element of a uint buffer at `srvSlot`: the draw's car
+// part slot, bound per draw by the caller (unbound: 0, none). Everything the shader wrote it still writes.
+//
+// How: dcl_resource_buffer (uint) t<srvSlot> and dcl_output o<reg>.x join the declarations, and before the first
+// instruction ld o<reg>.x, l(0, 0, 0, 0), t<srvSlot>.xxxx (an output written once and never again: SM4/5 keep it). The
+// output signature gains SV_Target<reg> (uint, x) after its last element. Refused when the shader already has that
+// output or declares that resource, or isn't a pixel shader.
+struct SlotOutputOptions {
+    uint32_t srvSlot = 127;
+    uint32_t reg = 1;
+};
+
+struct SlotOutput {
+    std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
+    std::string error;
+};
+
+SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options = {});
+
 }  // namespace simqvfr::dxbc

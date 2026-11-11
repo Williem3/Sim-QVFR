@@ -4,6 +4,7 @@
 //
 //   nvapi_stereo_check.exe [folder of .dxbc vertex shaders]
 //   nvapi_stereo_check.exe --timing      (only 4. below)
+//   nvapi_stereo_check.exe --car-timing  (only 9. below)
 //
 // 1. NVAPI's support flags on the default adapter.
 // 2. Every shader in the folder: its checksum, the conversion, the converted checksum, created by D3D11 and by NVAPI
@@ -520,6 +521,183 @@ void STDMETHODCALLTYPE counted_viewports(ID3D11DeviceContext* c, UINT n, const D
     realRSSetViewports(c, n, vps);
 }
 
+// 9. (--car-timing) What other cars' motion vectors would add per car draw (docs/recon-lmu.md "Other cars' motion
+//    vectors"): LMU rewrites one per-draw constant buffer (Map, discard) before each of its ~1,000 car draws per eye;
+//    each car part needs this frame's world matrix kept for the next (a GPU copy of that buffer into a history buffer,
+//    at the part's slot) and last frame's handed to its shaders (a shader resource view of its slot bound). Passes of
+//    1,000 draws, CPU thread cycles per pass and GPU time, without and with each, and the copies read back.
+void car_timing(ID3D11Device* device, ID3D11DeviceContext* context) {
+    constexpr int kDraws = 1000, kPasses = 200, kSlotBytes = 256;
+    const char* vsSource = "cbuffer D : register(b0) { float4x4 world; float4 pad[12]; };"
+                           "ByteAddressBuffer prevs : register(t12);"
+                           "float4 main(float4 p : POSITION) : SV_Position {"
+                           "  float4 q = asfloat(prevs.Load4(0)); return mul(p, world) + q * 1e-9; }";
+    const std::vector<uint8_t> vsCode = compile(vsSource, "vs_5_0"),
+                               psCode = compile("float4 main() : SV_Target { return 1; }", "ps_5_0");
+    const float points[3][4] = {{-1, -1, 0.5f, 1}, {-1, 3, 0.5f, 1}, {3, -1, 0.5f, 1}};
+    D3D11_BUFFER_DESC vbd = {sizeof(points), D3D11_USAGE_DEFAULT, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+    D3D11_BUFFER_DESC cbd = {kSlotBytes, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
+    D3D11_BUFFER_DESC hbd = {kSlotBytes * kDraws, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0,
+                             D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0};
+    D3D11_BUFFER_DESC sbd = {kSlotBytes * kDraws, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+    const D3D11_SUBRESOURCE_DATA vInit = {points, 0, 0};
+    const D3D11_INPUT_ELEMENT_DESC element = {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,
+                                              D3D11_INPUT_PER_VERTEX_DATA, 0};
+    D3D11_TEXTURE2D_DESC td = {512, 256, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                               D3D11_BIND_RENDER_TARGET, 0, 0};
+    ComPtr<ID3D11Buffer> vb, cb, history, staging;
+    ComPtr<ID3D11InputLayout> layout;
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11PixelShader> ps;
+    ComPtr<ID3D11Texture2D> target;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    ComPtr<ID3D11Query> done, disjoint, stamps[2];
+    std::vector<ComPtr<ID3D11ShaderResourceView>> slots(kDraws);
+    const D3D11_QUERY_DESC qd = {D3D11_QUERY_EVENT, 0}, dq = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0},
+                           tq = {D3D11_QUERY_TIMESTAMP, 0};
+    bool ok = !vsCode.empty() && !psCode.empty() && SUCCEEDED(device->CreateBuffer(&vbd, &vInit, &vb)) &&
+              SUCCEEDED(device->CreateBuffer(&cbd, nullptr, &cb)) && SUCCEEDED(device->CreateBuffer(&hbd, nullptr, &history)) &&
+              SUCCEEDED(device->CreateBuffer(&sbd, nullptr, &staging)) &&
+              SUCCEEDED(device->CreateInputLayout(&element, 1, vsCode.data(), vsCode.size(), &layout)) &&
+              SUCCEEDED(device->CreateVertexShader(vsCode.data(), vsCode.size(), nullptr, &vs)) &&
+              SUCCEEDED(device->CreatePixelShader(psCode.data(), psCode.size(), nullptr, &ps)) &&
+              SUCCEEDED(device->CreateTexture2D(&td, nullptr, &target)) &&
+              SUCCEEDED(device->CreateRenderTargetView(target.Get(), nullptr, &rtv)) &&
+              SUCCEEDED(device->CreateQuery(&qd, &done)) && SUCCEEDED(device->CreateQuery(&dq, &disjoint)) &&
+              SUCCEEDED(device->CreateQuery(&tq, &stamps[0])) && SUCCEEDED(device->CreateQuery(&tq, &stamps[1]));
+    for (int i = 0; ok && i < kDraws; ++i) {  // one raw view per slot (its window of the history)
+        D3D11_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format = DXGI_FORMAT_R32_TYPELESS;
+        sd.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+        sd.BufferEx.FirstElement = static_cast<UINT>(i * kSlotBytes / 4);
+        sd.BufferEx.NumElements = kSlotBytes / 4;
+        sd.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+        ok = SUCCEEDED(device->CreateShaderResourceView(history.Get(), &sd, &slots[i]));
+    }
+    if (!ok) {
+        check(false, "car timing: resources");
+        return;
+    }
+    const D3D11_VIEWPORT viewport = {0, 0, 512, 256, 0, 1};
+    const UINT stride = 16, offset = 0;
+    const auto wait = [&] {
+        context->End(done.Get());
+        context->Flush();
+        BOOL finished = FALSE;
+        while (context->GetData(done.Get(), &finished, sizeof(finished), 0) != S_OK || !finished)
+            Sleep(0);
+    };
+    struct Case {
+        const char* name;
+        bool copy, bind;
+        int cpu = 0;          // 1: the matrix read back from the mapped (write-combined) memory before Unmap;
+                              // 2: the game writes an ordinary memory copy, copied into the mapped memory at Unmap
+        bool upload = false;  // last frame's matrices uploaded once per pass (UpdateSubresource of the history)
+    };
+    const Case cases[] = {{"the game alone: Map/discard the per-draw buffer, draw", false, false},
+                          {"+ a copy of the buffer into the history, per draw", true, false},
+                          {"+ last frame's slot bound (a view per draw)", false, true},
+                          {"+ both (GPU copies)", true, true},
+                          {"CPU: the matrix read back from the mapped memory", false, false, 1},
+                          {"CPU: the game writes a copy, put into the mapped memory", false, false, 2},
+                          {"CPU read-back + slot bound + one upload per pass", false, true, 1, true},
+                          {"CPU copy + slot bound + one upload per pass", false, true, 2, true}};
+    std::vector<float> shadow(kSlotBytes / 4), cpuHistory(static_cast<size_t>(kDraws) * kSlotBytes / 4);
+    volatile float sink = 0;
+    const double rate = cycles_per_ms();
+    double base = 0, baseGpu = 0;
+    for (const Case& c : cases) {
+        wait();
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+        context->RSSetViewports(1, &viewport);
+        context->IASetInputLayout(layout.Get());
+        context->IASetVertexBuffers(0, 1, vb.GetAddressOf(), &stride, &offset);
+        context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context->VSSetShader(vs.Get(), nullptr, 0);
+        context->VSSetConstantBuffers(0, 1, cb.GetAddressOf());
+        context->VSSetShaderResources(12, 1, slots[0].GetAddressOf());
+        context->PSSetShader(ps.Get(), nullptr, 0);
+        ULONG64 total = 0;
+        double gpuMs = 0;
+        int gpuPasses = 0;
+        for (int pass = 0; pass < kPasses; ++pass) {
+            const bool timed = pass % 20 == 10;
+            if (timed) {
+                context->Begin(disjoint.Get());
+                context->End(stamps[0].Get());
+            }
+            ULONG64 c0 = 0, c1 = 0;
+            QueryThreadCycleTime(GetCurrentThread(), &c0);
+            if (c.upload)  // last frame's matrices, once per pass
+                context->UpdateSubresource(history.Get(), 0, nullptr, cpuHistory.data(), 0, 0);
+            for (int d = 0; d < kDraws; ++d) {
+                D3D11_MAPPED_SUBRESOURCE map;
+                if (SUCCEEDED(context->Map(cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map))) {
+                    // world = 0.01 x identity, the slot in its last row; written where the game would write it
+                    float* f = c.cpu == 2 ? shadow.data() : static_cast<float*>(map.pData);
+                    std::memset(f, 0, kSlotBytes);
+                    f[0] = f[5] = f[10] = 0.01f;
+                    f[15] = 1;
+                    f[12] = static_cast<float>(d);
+                    if (c.cpu == 1) {  // read back from write-combined memory
+                        const float* mapped = static_cast<const float*>(map.pData);
+                        std::memcpy(&cpuHistory[static_cast<size_t>(d) * kSlotBytes / 4], mapped, 64);
+                        sink = sink + cpuHistory[static_cast<size_t>(d) * kSlotBytes / 4 + 12];
+                    } else if (c.cpu == 2) {  // the copy into the mapped memory, the matrix kept from the copy
+                        std::memcpy(map.pData, shadow.data(), kSlotBytes);
+                        std::memcpy(&cpuHistory[static_cast<size_t>(d) * kSlotBytes / 4], shadow.data(), 64);
+                    }
+                    context->Unmap(cb.Get(), 0);
+                }
+                if (c.bind)
+                    context->VSSetShaderResources(12, 1, slots[d].GetAddressOf());
+                context->Draw(3, 0);
+                if (c.copy)
+                    context->CopySubresourceRegion(history.Get(), 0, static_cast<UINT>(d * kSlotBytes), 0, 0, cb.Get(), 0,
+                                                   nullptr);
+            }
+            QueryThreadCycleTime(GetCurrentThread(), &c1);
+            total += c1 - c0;
+            if (timed) {
+                context->End(stamps[1].Get());
+                context->End(disjoint.Get());
+                wait();
+                D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+                UINT64 t0 = 0, t1 = 0;
+                if (context->GetData(disjoint.Get(), &dj, sizeof(dj), 0) == S_OK && !dj.Disjoint &&
+                    context->GetData(stamps[0].Get(), &t0, sizeof(t0), 0) == S_OK &&
+                    context->GetData(stamps[1].Get(), &t1, sizeof(t1), 0) == S_OK) {
+                    gpuMs += static_cast<double>(t1 - t0) * 1000.0 / static_cast<double>(dj.Frequency);
+                    ++gpuPasses;
+                }
+            }
+            if (pass % 20 == 19)
+                wait();
+        }
+        const double cpu = static_cast<double>(total) / kPasses / rate;
+        const double gpu = gpuPasses ? gpuMs / gpuPasses : 0;
+        if (&c == &cases[0]) {
+            base = cpu;
+            baseGpu = gpu;
+        }
+        std::printf("     %-58s CPU %.3f ms per 1,000 draws (+%.3f), GPU %.3f ms (+%.3f)\n", c.name, cpu, cpu - base, gpu,
+                    gpu - baseGpu);
+    }
+    // The copies landed: each slot's matrix row holds its draw's number.
+    wait();
+    context->CopyResource(staging.Get(), history.Get());
+    D3D11_MAPPED_SUBRESOURCE map;
+    int right = 0;
+    if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map))) {
+        for (int d = 0; d < kDraws; ++d)
+            right += static_cast<const float*>(map.pData)[d * kSlotBytes / 4 + 12] == static_cast<float>(d) ? 1 : 0;
+        context->Unmap(staging.Get(), 0);
+    }
+    char what[160];
+    std::snprintf(what, sizeof(what), "car timing: every draw's buffer copied into its slot (%d of %d right)", right, kDraws);
+    check(right == kDraws, what);
+}
+
 // 8. The focus mip bias (dxbc::add_focus_mip_bias) under the layer's two views: one quad through a converted
 //    second-view shader into a 256x128 target, view 0 in the left 128x128 viewport, view 1 (the half-size remap) in
 //    the right; a converted pixel shader samples a 512x512 texture whose mip k is red 40 k + 20, point-filtered. View 0
@@ -676,6 +854,11 @@ int main(int argc, char** argv) {
         return 1;
     if (argc > 1 && std::strcmp(argv[1], "--timing") == 0) {
         timing(device.Get(), context.Get());
+        std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+        return failures ? 1 : 0;
+    }
+    if (argc > 1 && std::strcmp(argv[1], "--car-timing") == 0) {
+        car_timing(device.Get(), context.Get());
         std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
         return failures ? 1 : 0;
     }

@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "car_motion.h"
 #include "focus_math.h"
 
 struct ID3D11Device;
@@ -57,6 +58,9 @@ struct MvrPassView {
 // A hook on one function an entry held misses the calls through the others, so the hooks are on every function each
 // entry is seen holding (mvr_pass.cpp). nvapi_stereo_check lists what d3d11 rewrites.
 namespace context_slot {
+inline constexpr unsigned kVSSetConstantBuffers = 7, kMap = 14, kUnmap = 15, kIASetVertexBuffers = 18,
+                          kIASetIndexBuffer = 19;
+inline constexpr unsigned kOMSetBlendState = 35, kOMSetDepthStencilState = 36;  // car slots (mvr_car_slots)
 inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
                           kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
                           kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kDrawAuto = 38,
@@ -65,14 +69,17 @@ inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12
                           kDSSetShader = 64;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
 // DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
-// PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks).
+// PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks); VSSetConstantBuffers, Map, Unmap and the input
+// assembler's buffers only with car tracking (mvr_car_track); the blend and depth-stencil states only with car slots.
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
                                        kDSSetShader,       kDrawIndexed,        kDraw,
                                        kDrawIndexedInstanced, kDrawInstanced, kCopySubresourceRegion,
                                        kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
-                                       kPSSetShader};
+                                       kPSSetShader,       kVSSetConstantBuffers, kMap, kUnmap,
+                                       kIASetVertexBuffers, kIASetIndexBuffer, kOMSetBlendState,
+                                       kOMSetDepthStencilState};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -139,6 +146,25 @@ void mvr_ui_mips(bool on);
 void mvr_mip_bias_hooks(bool on);
 // Those hooks are installed (texture sharpening was on at launch and its buffer could be made).
 bool mvr_mip_bias_ready();
+// Other cars' motion vectors, stage 2 ([experiment] lmu_car_track=1, log only; car_motion.h): before the install. In the
+// eye passes, each draw whose vertex shader reads a worldMatrix (mvr_probe.h kVsWorldMatrixGuid) has its matrix read as
+// the game writes the per-draw buffer (Map, Unmap) and its key from the input assembler's buffers, and car_motion keeps
+// it per car part. The log counts them (parts, matched to the frame before) and the hooks' CPU (lmu_mvr_timing=1).
+void mvr_car_track(bool on);
+// Car tracking's counts so far (car_motion.h).
+CarMotionStats mvr_car_stats();
+// Other cars' motion vectors, stage 3 ([experiment] lmu_car_vectors, with car tracking): before the install. In the eye
+// passes the scene's binds get a slot target at render target 1 (R16_UINT, the scene target's size, cleared over the
+// pass's views at its start), the game's pixel shaders their slot twins (mvr_probe.h kMvrSlotTwinGuid), each car part's
+// draw with a frame before its slot (+1; 0 none) at t127, and the blend states twins that write target 1 unblended where
+// the depth state writes depth (transparents leave it). Before DLSS reads the pass: each part's motion, inverse(this
+// frame's world) x the frame before's, uploaded; DlssPass carries both. Level 1: the slots and a gate image (logs\car-
+// slots-*.png), DLSS as before; 2: DLSS's vectors take the parts' motion.
+void mvr_car_slots(int level);
+// Tests: the scene's target as the tracker would learn it (MSAA off; null forgets it), and the slot target (null
+// before its first bind).
+void mvr_test_scene_target(ID3D11Resource* scene);
+ID3D11Texture2D* mvr_car_slot_texture();
 // Eye `eye`'s focus image from the focus post (RGBA16F, as the eye's composite) and the composites into it so far
 // (null, 0: none yet).
 ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites);
@@ -193,6 +219,14 @@ struct MvrPassStats {
     // was wanted, and the twin lookups (and those not cached).
     uint64_t biasPasses = 0, psTwinBinds = 0, psNoTwin = 0, psLookups = 0, psLookupMisses = 0;
     uint64_t biasCbLost = 0;  // checks that found the bias buffer unbound by the game while a twin was in use (rebound)
+    // Car tracking: matrices read at the per-draw buffer's Unmap; the per-draw buffer learned (again); scene draws
+    // with a worldMatrix before any matrix was read; and those whose shader reads it at another offset (left out);
+    // tracked draws from a dynamic vertex buffer (the game's ring: keyed without their base vertex and offset).
+    uint64_t carMatrixReads = 0, carBufferLearned = 0, carNoMatrix = 0, carOtherOffset = 0, carDynamicVb = 0;
+    // Car slots: passes with the slot target bound, its binds, slot views bound, slot twin binds, binds of shaders
+    // without one while it was bound, blend twins made, motion uploads and the slots in them, gate images saved.
+    uint64_t slotPasses = 0, slotBinds = 0, slotViews = 0, slotTwinBinds = 0, slotNoTwin = 0, blendTwins = 0;
+    uint64_t motionUploads = 0, motionSlots = 0, slotImages = 0;
 };
 MvrPassStats mvr_pass_stats();
 // Single-pass stereo was refused at a draw and instancing couldn't take over (off for the session since): no focus

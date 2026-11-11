@@ -17,11 +17,13 @@
 // Last, the focus views in DLSS performance mode (drawn at 50% each way, upscaled by DLSS into their region): the
 // upscaled view must sit where a full-size render of it without jitter has the world (no shift, no scale), the gate must
 // fit at the render size, and a frame in which DLSS gives up must still fill the region (the render stretched).
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -497,9 +499,37 @@ int wmain(int argc, wchar_t** argv) {
     // size refused (the eyes left as drawn: no jitter on them, the focus views still processed, DLSS not given up).
     unsigned long long refusedAt[2] = {};
     bool refusedJitterEarly = false, refusedJitterLate = true, refusedFovMovedLate = true;
-    for (int part = 0; part < 8; ++part) {
+    // Moving objects (DlssPass::objectSlots, LMU's other cars), parts 8-10, all without jitter (so one frame of them is
+    // the same frame in each; the gate computes its own vectors, so these are read back as DLSS gets them): 8 the plain
+    // scene, 9 every pixel object 1 with the identity for its motion (its vectors must be the world's: the branch's
+    // matrices in the right order and layout), 10 the same object moved 1 m up and 3 m along the road (its vectors must
+    // differ by about what that move projects to).
+    ComPtr<ID3D11ShaderResourceView> objectSlots, objectMotion[2];
+    std::vector<float> objectVectors[3];
+    unsigned objectVectorsW[3] = {}, objectVectorsH[3] = {};
+    {
+        std::vector<uint16_t> ones(static_cast<size_t>(W) * H, 1);
+        D3D11_TEXTURE2D_DESC od{};
+        od.Width = W, od.Height = H, od.MipLevels = od.ArraySize = 1, od.SampleDesc.Count = 1;
+        od.Format = DXGI_FORMAT_R16_UINT, od.Usage = D3D11_USAGE_IMMUTABLE, od.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        const D3D11_SUBRESOURCE_DATA oi = {ones.data(), W * 2, 0};
+        ComPtr<ID3D11Texture2D> slots;
+        if (SUCCEEDED(device->CreateTexture2D(&od, &oi, &slots)))
+            device->CreateShaderResourceView(slots.Get(), nullptr, &objectSlots);
+        for (int k = 0; k < 2; ++k) {
+            const float motion[12] = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, k ? 1.0f : 0.0f, k ? 3.0f : 0.0f};
+            const D3D11_BUFFER_DESC mb = {sizeof(motion), D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0,
+                                          D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, sizeof(motion)};
+            const D3D11_SUBRESOURCE_DATA mi = {motion, 0, 0};
+            ComPtr<ID3D11Buffer> buffer;
+            if (SUCCEEDED(device->CreateBuffer(&mb, &mi, &buffer)))
+                device->CreateShaderResourceView(buffer.Get(), nullptr, &objectMotion[k]);
+        }
+        check(objectSlots && objectMotion[0] && objectMotion[1], "the moving objects' slot texture and motions are made");
+    }
+    for (int part = 0; part < 11; ++part) {
         const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5, liveTest = part == 6,
-                   refusals = part == 7;
+                   refusals = part == 7, objectsPart = part >= 8, objects = part >= 9;
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
         simqvfr::DlssRun moving = run;
@@ -510,6 +540,7 @@ int wmain(int argc, wchar_t** argv) {
             moving.carBox[i] = box[i];
         moving.viewInverse = control;
         moving.focusScale = sr ? 50 : 100;
+        moving.jitter = moving.jitter && !objectsPart;  // the object parts: the same frames in each
         simqvfr::ngx::refuse_for_tests(refusals ? sceneEyeW : 0, 6);
         simqvfr::dlss_start(moving);
         // The super resolution part drives as the others (its gate at the 60th and 300th frames), then stands still for
@@ -591,6 +622,11 @@ int wmain(int argc, wchar_t** argv) {
                 pass.focus = true;
                 pass.focusWidth = focusW, pass.focusHeight = focusH;
                 pass.focusRenderWidth = rw, pass.focusRenderHeight = rh;
+                if (objects) {
+                    pass.objectSlots = objectSlots.Get();
+                    pass.objectMotion = objectMotion[part == 10 ? 1 : 0].Get();
+                    pass.objectCount = 1;
+                }
                 // As the game's remap is made (from the eye's projection as rendered to the focus view's): the eye's jitter
                 // (its NDC shift, the projection's third row) taken back out, so the focus view carries only its own.
                 const float shiftX = projection[8] - plain[8], shiftY = projection[9] - plain[9];
@@ -644,6 +680,9 @@ int wmain(int argc, wchar_t** argv) {
                     }
                 }
                 simqvfr::dlss_after_resolve(context.Get(), resolved.Get(), partDsv, pass);
+                if (objectsPart && eye == 0 && f == 200)  // the eye's vectors as DLSS got them
+                    simqvfr::dlss_vectors_for_checks(context.Get(), 0, objectVectors[part - 8], objectVectorsW[part - 8],
+                                                     objectVectorsH[part - 8]);
                 if ((referenceFrame || giveUpFrame) && eye == 0 && referenceRtv && accumulate) {
                     // The focus view without jitter at its size: the eye's clip unjittered through the remap without
                     // the focus view's jitter (as the remap was made before it was added), antialiased.
@@ -739,9 +778,10 @@ int wmain(int argc, wchar_t** argv) {
         }
         return v;
     };
-    size_t starts[10] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos, std::string::npos,
-                         std::string::npos, std::string::npos, std::string::npos, std::string::npos, std::string::npos};
-    for (int i = 1; i < 9 && starts[i - 1] != std::string::npos; ++i)
+    size_t starts[13];
+    std::fill(std::begin(starts), std::end(starts), std::string::npos);
+    starts[0] = all.find("lmu dlss: DLAA on");
+    for (int i = 1; i < 12 && starts[i - 1] != std::string::npos; ++i)
         starts[i] = all.find("lmu dlss: DLAA on", starts[i - 1] + 1);
     const auto part_verdicts = [&](int i) {
         return starts[i] == std::string::npos ? Verdicts{} : verdicts(starts[i], starts[i + 1]);
@@ -772,6 +812,37 @@ int wmain(int argc, wchar_t** argv) {
               single.depthNot == 0 &&
               single.nearColourFit == single.lines,
           "MSAA off: the depth read from a single-sample target, the vectors fit as with MSAA");
+    // Moving objects (parts 8-10): the eye's vectors at frame 200, the plain scene against every pixel an object.
+    const std::string objectsPart = starts[10] == std::string::npos ? "" : all.substr(starts[10]);
+    const auto mean_difference = [&](int a, int b) {
+        if (objectVectors[a].empty() || objectVectors[a].size() != objectVectors[b].size())
+            return -1.0;
+        double sum = 0;
+        for (size_t i = 0; i + 1 < objectVectors[a].size(); i += 2)
+            sum += std::hypot(objectVectors[a][i] - objectVectors[b][i], objectVectors[a][i + 1] - objectVectors[b][i + 1]);
+        return sum / (objectVectors[a].size() / 2);
+    };
+    double plainLength = 0;
+    for (size_t i = 0; i + 1 < objectVectors[0].size(); i += 2)
+        plainLength += std::hypot(objectVectors[0][i], objectVectors[0][i + 1]);
+    plainLength /= objectVectors[0].empty() ? 1 : objectVectors[0].size() / 2;
+    const double stillDiff = mean_difference(1, 0), movedDiff = mean_difference(2, 0);
+    std::printf("     moving objects, the eye's %ux%u vectors at frame 200: the plain scene's %.2f px long on average; every "
+                "pixel an object with no motion of its own differs from them by %.4f px, moved 1 m up and 3 m on by %.2f px\n",
+                objectVectorsW[0], objectVectorsH[0], plainLength, stillDiff, movedDiff);
+    check(stillDiff >= 0 && stillDiff < 0.02 && plainLength > 1,
+          "moving objects with no motion of their own: the vectors are the world's (to a fiftieth of a pixel)");
+    check(movedDiff > 2, "moving objects given a motion: the vectors take it");
+    unsigned long long objectViews = 0;  // summed over the parts' log lines ("N views with moving objects' motion")
+    for (size_t k = objectsPart.find(" views with moving objects' motion"); k != std::string::npos;
+         k = objectsPart.find(" views with moving objects' motion", k + 1)) {
+        size_t b = k;
+        while (b > 0 && objectsPart[b - 1] >= '0' && objectsPart[b - 1] <= '9')
+            --b;
+        objectViews += b < k ? std::stoull(objectsPart.substr(b, k - b)) : 0;
+    }
+    std::printf("     %llu views took the moving objects' motion\n", objectViews);
+    check(objectViews > 0, "moving objects: the views counted as taking their motion");
 
     // The focus views in DLSS performance mode.
     const std::string srPart = starts[6] == std::string::npos ? "" : all.substr(starts[6], starts[7] - starts[6]);
