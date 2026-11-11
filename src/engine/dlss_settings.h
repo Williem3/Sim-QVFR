@@ -19,7 +19,7 @@ namespace simqvfr {
 
 struct DlssSettings {
     bool on = false;       // on: DLSS on the eyes and the focus views (live)
-    std::wstring folder;   // folder: where nvngx_dlss.dll is (empty: beside the game's exe; next launch)
+    std::wstring folder;   // folder: another nvngx_dlss.dll's (empty: the one Sim-QVFR includes; next launch)
     int focusScale = 100;  // focus_scale: the focus views' mode, percent of their size each way (kDlssFocusModes; live)
     int focusPreset = 0;   // focus_preset: their NGX preset, 0 NGX's default for the mode (kDlssFocusPresets; live)
     int eyePreset = 11;    // eye_preset: the eyes' (the periphery's) NGX preset, K or F (kDlssEyePresets; live)

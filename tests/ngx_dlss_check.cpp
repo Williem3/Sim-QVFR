@@ -315,7 +315,7 @@ int wmain(int argc, wchar_t** argv) {
     const wchar_t* paths[] = {argv[1]};
     NVSDK_NGX_FeatureCommonInfo info{};
     info.PathListInfo.Path = paths, info.PathListInfo.Length = 1;
-    if (std::getenv("NGX_LOG")) {
+    if (GetEnvironmentVariableW(L"NGX_LOG", nullptr, 0) > 0) {  // set at all (getenv warns, and a package build stops at a warning)
         info.LoggingInfo.LoggingCallback = ngx_log;
         info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_VERBOSE;
     }
@@ -374,6 +374,19 @@ int wmain(int argc, wchar_t** argv) {
             const double q77 = time_pair(params, quality, 0, 1499, 1204, 1947, 1563, frames);
             std::printf("     focus pair at 77%% in the quality mode, default preset: GPU %.2f ms per frame\n", q77);
             check(q77 > 0, "77% in the quality mode: every evaluation succeeded");
+        }
+        // Which preset numbers NGX refuses for a DLAA feature (a DLL that drops a preset refuses it; the SDK marks E and
+        // F deprecated): a probe, printed, for the module's fallback to NGX's default.
+        {
+            std::printf("     DLAA presets refused by this DLL:");
+            for (int preset : {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 31, 255}) {
+                View probe{1038, 834, 1038, 834};
+                if (create(probe, params, NVSDK_NGX_PerfQuality_Value_DLAA, preset, false))
+                    NVSDK_NGX_D3D11_ReleaseFeature(probe.handle);
+                else
+                    std::printf(" %d", preset);
+            }
+            std::printf("\n");
         }
 
         // Per pair and preset at LMU run 14's sizes (eyes 1038x834, focus views 1947x1563 drawn at 50%): what each

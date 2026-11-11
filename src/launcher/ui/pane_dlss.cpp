@@ -50,21 +50,30 @@ float own_dlss_pane(float x, float y, float w, bool draw) {
                   : why;
     use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
     use.full = [useDesc, available, on = d.on](const Rect& r) { checkbox(kDlssOn, r, on, L"Use DLSS", useDesc, !available); };
-    const std::wstring dll = dlss_dll_path(d.folder, launcher_game_exe());
+    // The DLL: the one Sim-QVFR includes (NVIDIA's, beside the layer), or another the player chose (Use included goes back).
+    const std::wstring dll = dlss_dll_path(d.folder, layer_folder());
     const std::wstring version = file_version(dll);
     const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES;
+    const bool chosen = !d.folder.empty();
+    const std::wstring named = version.empty() ? std::wstring(L"Found") : L"Version " + version;
     Row file;
     file.label = L"nvngx_dlss.dll";
-    if (found)
-        file.desc = (version.empty() ? std::wstring(L"Found") : L"Version " + version) + L", in " +
-                    (d.folder.empty() ? game_name() + L"’s folder" : d.folder) + L".";
+    if (!chosen)
+        file.desc = found ? named + L", included with Sim-QVFR. Choose another (a newer one from a game, say) to use it "
+                                    L"instead."
+                          : std::wstring(L"Missing from Sim-QVFR’s folder: install Sim-QVFR again, or choose one from a "
+                                         L"game (DLSS 310 or newer).");
     else
-        file.desc = std::wstring(L"Not found ") +
-                    (d.folder.empty() ? L"next to " + game_name() + L"’s exe" : L"in " + d.folder) +
-                    L": choose the one in another game’s folder. Sim-QVFR doesn’t include it.";
-    file.controlW = button_width(L"Choose…");
+        file.desc = found ? named + L", in " + d.folder + L", your choice."
+                          : L"Not found in " + d.folder + L": DLSS takes the one Sim-QVFR includes instead.";
+    const float chooseW = button_width(L"Choose…"), includedW = chosen ? button_width(L"Use included") : 0.0f;
+    file.controlW = chosen ? includedW + t::kSpace3 + chooseW : chooseW;
     file.controlH = t::kControlHeight;
-    file.control = [](const Rect& r) { button(kDlssFolder, r, L"Choose…", false); };
+    file.control = [chosen, chooseW, includedW](const Rect& r) {
+        if (chosen)
+            button(kDlssIncluded, {r.x, r.y, includedW, r.h}, L"Use included", false);
+        button(kDlssFolder, {r.right() - chooseW, r.y, chooseW, r.h}, L"Choose…", false);
+    };
     h += section(x, y, w, L"DLSS", {use, file},
                  L"On and off apply while the game runs; another nvngx_dlss.dll at the next launch. Needs an NVIDIA RTX "
                  L"graphics card, Quad View Foveated Rendering and multi-view rendering.",

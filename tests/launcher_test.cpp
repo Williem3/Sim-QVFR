@@ -1955,6 +1955,63 @@ int main() {
             d.dlssVersion = L"2.2.15.0";
             d.cheekyLoad = false;
             check(!find(preflight_checks(d), "dlss_version"), "preflight: without Foveated DLSS the DLSS version doesn't matter");
+
+            // Sim-QVFR's own DLSS (LMU): multi-view rendering, then its nvngx_dlss.dll (the included one or the player's)
+            // and its version.
+            simqvfr::games::set_launcher_game(lmu::kGame);
+            PreflightInput o = in;
+            o.ownDlss = true;
+            o.ownDlssMultiView = true;
+            o.ownDlssIncluded = true;
+            o.ownDlssFound = true;
+            o.ownDlssPath = L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll";
+            o.ownDlssVersion = L"310.9.1.0";
+            std::vector<Check> ownChecks = preflight_checks(o);
+            const Check* ready = find(ownChecks, "own_dlss");
+            check(ready && ready->tone == CheckTone::Ok && ready->title.find(L"310.9.1.0") != std::wstring::npos &&
+                      ready->detail.find(L"Sim-QVFR includes") != std::wstring::npos,
+                  "preflight: the included DLSS 310 DLL is ready, its version named");
+            o.ownDlssFound = false;
+            o.ownDlssVersion.clear();
+            ownChecks = preflight_checks(o);
+            const Check* gone = find(ownChecks, "own_dlss");
+            check(gone && gone->tone == CheckTone::Warn && gone->fix == CheckFix::OpenDlss &&
+                      gone->detail.find(L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll") != std::wstring::npos &&
+                      gone->detail.find(L"Install Sim-QVFR again") != std::wstring::npos &&
+                      gone->detail.find(L"without DLSS") != std::wstring::npos,
+                  "preflight: the included DLL missing warns where it looked, to install again, and that DLSS won't run");
+            o.ownDlssIncluded = false;
+            o.ownDlssFound = true;
+            o.ownDlssPath = L"K:\\ACE\\nvngx_dlss.dll";
+            o.ownDlssVersion = L"310.9.16.0";
+            ownChecks = preflight_checks(o);
+            const Check* yours = find(ownChecks, "own_dlss");
+            check(yours && yours->tone == CheckTone::Ok && yours->detail.find(L"Your nvngx_dlss.dll") != std::wstring::npos,
+                  "preflight: a DLL the player chose is ready, named as theirs");
+            o.ownDlssVersion = L"2.5.1.0";
+            ownChecks = preflight_checks(o);
+            const Check* older = find(ownChecks, "own_dlss");
+            check(older && older->tone == CheckTone::Warn && older->fix == CheckFix::OpenDlss && !older->confirm,
+                  "preflight: an older DLSS warns and opens the DLSS pane, without stopping the launch");
+            o.ownDlssFound = false;
+            o.ownDlssVersion.clear();
+            ownChecks = preflight_checks(o);
+            const Check* missing = find(ownChecks, "own_dlss");
+            check(missing && missing->tone == CheckTone::Warn && missing->fix == CheckFix::OpenDlss &&
+                      missing->detail.find(L"K:\\ACE\\nvngx_dlss.dll") != std::wstring::npos &&
+                      missing->detail.find(L"Sim-QVFR includes instead") != std::wstring::npos,
+                  "preflight: a chosen nvngx_dlss.dll gone warns where it looked, and that the included one is taken");
+            check(dlss_dll_path(L"", L"C:\\Sim-QVFR\\layer") == L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll" &&
+                      dlss_dll_path(L"K:\\ACE", L"C:\\Sim-QVFR\\layer") == L"K:\\ACE\\nvngx_dlss.dll" &&
+                      dlss_dll_path(L"", L"").empty(),
+                  "dlss_dll_path: the chosen folder's, else the included one beside the layer");
+            o.ownDlssMultiView = false;
+            ownChecks = preflight_checks(o);
+            const Check* noMulti = find(ownChecks, "own_dlss");
+            check(noMulti && noMulti->title.find(L"multi-view") != std::wstring::npos,
+                  "preflight: DLSS on without multi-view rendering says it needs it");
+            o.ownDlss = false;
+            check(!find(preflight_checks(o), "own_dlss"), "preflight: Sim-QVFR's DLSS off: no check");
             simqvfr::games::set_launcher_game(ace::kGame);
             check(version_major(L"310.9.1.0") == 310 && version_major(L"2.2.15.0") == 2 && version_major(L"") == -1 &&
                       version_major(L"x1") == -1,

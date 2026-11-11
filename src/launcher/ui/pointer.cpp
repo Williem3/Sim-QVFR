@@ -2,6 +2,7 @@
 // and runtime pickers.
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <string>
 #include <utility>
 #include <vector>
@@ -262,25 +263,36 @@ void choose_cheeky_runtime() {
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
-// Sim-QVFR's own DLSS: the nvngx_dlss.dll to use (another game's: Sim-QVFR doesn't include it); its folder is saved as
-// [dlss] folder (every game's), read by the game at its next launch.
+// Sim-QVFR's own DLSS: another nvngx_dlss.dll than the one Sim-QVFR includes (a newer one from a game); its folder is
+// saved as [dlss] folder (every game's), read by the game at its next launch. Choosing the included one saves none.
 void choose_dlss_dll() {
     wchar_t path[MAX_PATH] = {};
-    const std::wstring current = dlss_dll_path(app.s.dlss.folder, launcher_game_exe());
+    const std::wstring current = dlss_dll_path(app.s.dlss.folder, layer_folder());
     wcsncpy_s(path, current.c_str(), _TRUNCATE);
     OPENFILENAMEW ofn{sizeof(ofn)};
     ofn.hwndOwner = app.hwnd;
     ofn.lpstrFilter = L"NVIDIA DLSS (nvngx_dlss.dll)\0nvngx_dlss.dll\0";
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrTitle = L"Choose NVIDIA’s nvngx_dlss.dll (from another game’s folder)";
+    ofn.lpstrTitle = L"Choose NVIDIA’s nvngx_dlss.dll (DLSS 310 or newer)";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn)) {
         std::wstring folder = path;
         const size_t slash = folder.find_last_of(L"\\/");
-        app.s.dlss.folder = slash == std::wstring::npos ? L"" : folder.substr(0, slash);
+        folder = slash == std::wstring::npos ? L"" : folder.substr(0, slash);
+        std::error_code ec;
+        if (!folder.empty() && std::filesystem::equivalent(folder, layer_folder(), ec))
+            folder.clear();
+        app.s.dlss.folder = folder;
         changed();
     }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// Use included: back to the nvngx_dlss.dll Sim-QVFR includes.
+void use_included_dlss() {
+    app.s.dlss.folder.clear();
+    changed();
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 

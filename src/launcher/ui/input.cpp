@@ -172,6 +172,7 @@ void activate(Ctl id, int option) {
         }
         return;
     case kDlssFolder: choose_dlss_dll(); return;
+    case kDlssIncluded: use_included_dlss(); return;
     case kFgOn:
         if (game_has(&games::GameFeatures::frameGeneration)) {  // greyed out for a game without it
             app.s.cheeky.fg = !app.s.cheeky.fg;
@@ -288,6 +289,7 @@ bool push_button(Ctl id) {
     switch (id) {
     case kCheekyRuntime:
     case kDlssFolder:
+    case kDlssIncluded:
     case kUpdateNow:
     case kUpdateDownload:
     case kUpdateInstall:

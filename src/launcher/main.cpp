@@ -704,6 +704,17 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
         }
     }
     in.cheekyFg = dlss && cheeky.fg && games::launcher_game().features.frameGeneration;
+    // Sim-QVFR's own DLSS: on for a QVFR launch of a game with it; its DLL where the layer will look.
+    const simqvfr::DlssSettings own = simqvfr::read_dlss_settings(ini.c_str());
+    in.ownDlss = games::launcher_game().features.sideLoadedDlss && own.on && in.mode == LaunchMode::Qvfr;
+    if (in.ownDlss) {
+        in.ownDlssMultiView = GetPrivateProfileIntW(L"experiment", L"multi_view", 1, ini.c_str()) != 0;
+        in.ownDlssIncluded = own.folder.empty();
+        in.ownDlssPath = dlss_dll_path(own.folder, layer_folder());
+        in.ownDlssFound = !in.ownDlssPath.empty() && GetFileAttributesW(in.ownDlssPath.c_str()) != INVALID_FILE_ATTRIBUTES;
+        if (in.ownDlssFound)
+            in.ownDlssVersion = file_version(in.ownDlssPath);
+    }
     in.cheekyRuntimeFound = GetFileAttributesW(cheeky_runtime_path(ini, layer_folder()).c_str()) != INVALID_FILE_ATTRIBUTES;
     in.cheekyLayer = cheeky_layer_state();
     in.layers = launcher_layer_plan();

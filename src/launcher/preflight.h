@@ -68,6 +68,11 @@ struct PreflightInput {
     EyeTracker eyeTracker = EyeTracker::Unknown;
     OpenComposite openComposite = OpenComposite::Unknown;  // only for a game that needs it
     std::wstring dlssPath, dlssVersion;  // the game's nvngx_dlss.dll and its file version ("2.2.15.0"); empty: unknown
+    // Sim-QVFR's own DLSS ([dlss] on, a game with GameFeatures::sideLoadedDlss, QVFR): whether multi-view rendering,
+    // which it needs, is on, and its nvngx_dlss.dll (dlss_dll_path): the one Sim-QVFR includes (ownDlssIncluded) or the
+    // one the player chose; found, its version.
+    bool ownDlss = false, ownDlssMultiView = true, ownDlssIncluded = true, ownDlssFound = false;
+    std::wstring ownDlssPath, ownDlssVersion;
     bool elevated = false;  // the launcher runs as administrator (above medium integrity): the game would too
     bool elevatedRegistration = true;  // then the launch's layers are registered in HKLM for it (explicit_layers.h)
     std::wstring parent;    // the program that started the launcher ("explorer.exe"); empty: unknown

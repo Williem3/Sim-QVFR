@@ -272,6 +272,7 @@ struct State {
     Slot slots[4];
     int createFailures = 0;
     bool firstLogged = false;
+    bool dllNamed = false;  // the nvngx_dlss.dll NGX loaded has been logged
     // Super resolution on the focus views (DlssRun::focusScale): off for the session once NGX refuses a feature for it.
     bool focusSrOff = false;
     unsigned phases = dlss::kJitterPhases;  // the jitter sequence's length (longer for a smaller render)
@@ -300,6 +301,11 @@ struct State {
     int sign[2] = {1, 1};
     // This frame, and since the last log line.
     bool evaluated[2] = {};
+    // Each eye's focus view processed this frame, and in the frame before (its jitter may go on).
+    bool focusEvaluated[2] = {}, focusOk[2] = {};
+    int jitterHeldLogged = 0;  // "no jitter until it is processed" lines so far (a few)
+    bool jitterHeld = false;   // in a stretch of frames with a view failing (logged at its start)
+    unsigned long long failuresAtFrameEnd = 0;  // `failures` at the last frame end: a frame's own failures
     unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0, stretched = 0;
     unsigned long long evaluationsTotal = 0, stretchedTotal = 0;
     PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
@@ -394,9 +400,11 @@ bool initialize(ID3D11DeviceContext* context) {
     if (d.cfg.views >= 2)
         std::snprintf(focusMode, sizeof(focusMode), " and the focus views (%s, %d%%)", dlss::focus_mode_name(d.cfg.focusScale),
                       d.cfg.focusScale);
-    say("NGX started on the game's device (nvngx_dlss.dll from %ls); views: the eyes%s; jitter %s (%u phases); "
+    const std::wstring lookedIn =
+        d.cfg.dllFolder.empty() ? std::wstring(L"Sim-QVFR's folder") : d.cfg.dllFolder + L", then Sim-QVFR's folder";
+    say("NGX started on the game's device (nvngx_dlss.dll looked for in %ls); views: the eyes%s; jitter %s (%u phases); "
                   "presets: the eyes %s, the focus views %s",
-                  d.cfg.dllFolder.empty() ? L"the game's folder" : d.cfg.dllFolder.c_str(), focusMode,
+                  lookedIn.c_str(), focusMode,
                   d.cfg.jitter ? "on" : "off", d.phases,
                   dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
     d.ready = true;
@@ -496,6 +504,18 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
     unsigned result = 0;
     if (ok)
         s.feature = ngx::create(context, w, h, ow, oh, inverted, preset, result);
+    int made = preset;  // the preset the feature was made with
+    if (!s.feature && ok && preset != 0) {  // a DLL without that preset: NGX's default for the mode instead
+        unsigned again = 0;
+        s.feature = ngx::create(context, w, h, ow, oh, inverted, 0, again);
+        if (s.feature) {
+            say("view %d: NGX refused preset %s (NGX 0x%08x): made with its default for the mode instead", index,
+                dlss::preset_name(preset), result);
+            made = 0;
+        } else {
+            result = again;
+        }
+    }
     if (!s.feature) {
         s.refused = true;
         say("view %d's feature at %ux%u%s (preset %s, format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
@@ -514,11 +534,16 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
     // Preset F" or "... using title default Preset K".
     if (upscale)
         say("view %d's DLSS feature made at %ux%u up to %ux%u (%s, preset %s, format %d, depth %s)", index, w, h, ow, oh,
-            dlss::focus_mode_name(d.cfg.focusScale), dlss::preset_name(preset), static_cast<int>(format),
+            dlss::focus_mode_name(d.cfg.focusScale), dlss::preset_name(made), static_cast<int>(format),
             inverted ? "inverted" : "0 near");
     else
-        say("view %d's DLAA feature made at %ux%u (preset %s, format %d, depth %s)", index, w, h, dlss::preset_name(preset),
+        say("view %d's DLAA feature made at %ux%u (preset %s, format %d, depth %s)", index, w, h, dlss::preset_name(made),
             static_cast<int>(format), inverted ? "inverted" : "0 near");
+    if (!d.dllNamed) {  // which one NGX took: the player's, Sim-QVFR's own, or one beside the game's exe
+        d.dllNamed = true;
+        const std::wstring dll = ngx::loaded_dll();
+        say("nvngx_dlss.dll in use: %ls", dll.empty() ? L"(none loaded in this process)" : dll.c_str());
+    }
     return true;
 }
 
@@ -1041,7 +1066,8 @@ void dlss_focus_jitter(int eye, unsigned focusWidth, unsigned focusHeight, float
         return;
     std::lock_guard guard(d.mutex);
     d.focus[eye].on = false;
-    if (!dlss_wanted() || d.cfg.views < 2 || !d.cfg.jitter || d.jitterDead || !d.lastFrameOk || !focusWidth || !focusHeight)
+    if (!dlss_wanted() || d.cfg.views < 2 || !d.cfg.jitter || d.jitterDead || !d.lastFrameOk || !d.focusOk[eye] ||
+        !focusWidth || !focusHeight)
         return;
     Jitter j;
     j.on = true;
@@ -1077,6 +1103,14 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     const OnExit stretchLeft{[&] {
         if (focusLeft)
             stretch_focus(context, resolved, pass.eyeWidth, rw, rh, fw, fh);
+    }};
+    // Whether DLSS processed the eye and its focus view this frame, noted on every way out: the next frame's jitter
+    // goes only to views it processed (dlss_frame_end), so a view left as drawn (its feature refused, an evaluation
+    // failed) never shows the jitter as a shake.
+    bool eyeDone = false, focusDone = false;
+    const OnExit noteDone{[&] {
+        d.evaluated[pass.eye] = eyeDone;
+        d.focusEvaluated[pass.eye] = focusDone;
     }};
     if (!dlss_wanted())
         return;
@@ -1176,8 +1210,8 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     {  // the eye: rendered with its jitter; without it the clip shift is taken off
         const M4 off = dlss::clip_shift(eyeJitter.on ? -eyeJitter.cx : 0, eyeJitter.on ? -eyeJitter.cy : 0);
         const M4 unjittered[2] = {dlss::mul(vp[0], off), dlss::mul(vp[1], off)};
-        run_view(context, resolved, sd.Format, pass.eye, 0, 0, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth,
-                 pass.eyeHeight, vp, unjittered, eyeJitter, eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car);
+        eyeDone = run_view(context, resolved, sd.Format, pass.eye, 0, 0, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth,
+                           pass.eyeHeight, vp, unjittered, eyeJitter, eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car);
     }
     if (focus && !d.off) {  // the focus view: the eye's clip through its remap (which carries its own jitter)
         const M4 remap = dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]);
@@ -1185,12 +1219,11 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
                                                  pass.remap[2], pass.remap[3] - (focusJitter.on ? focusJitter.cy : 0));
         const M4 rendered[2] = {dlss::mul(vp[0], remap), dlss::mul(vp[1], remap)};
         const M4 unjittered[2] = {dlss::mul(vp[0], plain), dlss::mul(vp[1], plain)};
-        if (run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered, unjittered,
-                     focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car))
+        focusDone = run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered,
+                             unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car);
+        if (focusDone)
             focusLeft = false;
     }
-
-    d.evaluated[pass.eye] = true;
     d.jitteredFrames += eyeJitter.on && pass.eye == 0 ? 1 : 0;
 }
 
@@ -1228,6 +1261,7 @@ void dlss_shutdown() {
     {
         std::lock_guard guard(d.mutex);
         d.lastFrameOk = false;
+        d.focusOk[0] = d.focusOk[1] = false;
         d.eye[0] = d.eye[1] = d.focus[0] = d.focus[1] = Jitter{};
     }
     d.firstLogged = false;
@@ -1271,9 +1305,10 @@ void apply_live(const DlssLive& l) {
         d.focusSrOff = false;  // a new mode is tried afresh
         if (!views) {
             d.lastFrameOk = false;
+            d.focusOk[0] = d.focusOk[1] = false;
             d.eye[0] = d.eye[1] = d.focus[0] = d.focus[1] = Jitter{};
         }
-        d.evaluated[0] = d.evaluated[1] = false;
+        d.evaluated[0] = d.evaluated[1] = d.focusEvaluated[0] = d.focusEvaluated[1] = false;
     }
     d.createFailures = 0;
     if (!views)
@@ -1303,9 +1338,22 @@ void dlss_frame_end(unsigned long long frame) {
     if (!d.cfg.views)
         return;
     {
+        // Jitter next frame only where DLSS processed the view this frame: the eyes (one FOV shift for both) if it
+        // processed both, each focus view if it processed that one.
         std::lock_guard guard(d.mutex);
         d.lastFrameOk = d.evaluated[0] && d.evaluated[1] && !d.off;
-        d.evaluated[0] = d.evaluated[1] = false;
+        for (int e = 0; e < 2; ++e)
+            d.focusOk[e] = d.focusEvaluated[e] && !d.off;
+        // Logged once a stretch of frames in which a view was tried and failed (not a frame without passes: menus,
+        // loading), a few stretches a session.
+        const bool failedNow = d.failures != d.failuresAtFrameEnd;
+        if (failedNow && !d.jitterHeld && d.cfg.jitter && !d.off && d.jitterHeldLogged < 3) {
+            ++d.jitterHeldLogged;
+            say("frame %llu: a view wasn't processed (eyes %d %d, focus views %d %d): no jitter on it until it is", d.frame,
+                d.evaluated[0] ? 1 : 0, d.evaluated[1] ? 1 : 0, d.focusEvaluated[0] ? 1 : 0, d.focusEvaluated[1] ? 1 : 0);
+        }
+        d.jitterHeld = failedNow || (d.jitterHeld && !(d.lastFrameOk && d.focusOk[0] && d.focusOk[1]));
+        d.evaluated[0] = d.evaluated[1] = d.focusEvaluated[0] = d.focusEvaluated[1] = false;
     }
     ++d.frame;
     if (frame - d.statsFrame >= 900) {
@@ -1329,6 +1377,7 @@ void dlss_frame_end(unsigned long long frame) {
         }
         d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = 0;
     }
+    d.failuresAtFrameEnd = d.failures;
 }
 
 }  // namespace simqvfr

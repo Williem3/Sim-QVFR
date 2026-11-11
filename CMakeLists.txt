@@ -64,10 +64,22 @@ target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 
 # NVIDIA's NGX SDK (its include folder and nvsdk_ngx_s.lib), for DLSS called by us (src/engine/ngx_dlss.h): not in this
 # repository. Unset: the code builds without it and answers that DLSS is unavailable.
-set(NGX_SDK_DIR "" CACHE PATH "A local NVIDIA NGX SDK (include + nvsdk_ngx_s.lib)")
+# Its place inside a checkout, gitignored (never committed or published): third_party/nvidia-dlss-sdk, taken when
+# NGX_SDK_DIR isn't given.
+set(SIM_QVFR_NGX_DEFAULT "")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvidia-dlss-sdk/include/nvsdk_ngx.h")
+  set(SIM_QVFR_NGX_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvidia-dlss-sdk")
+endif()
+set(NGX_SDK_DIR "${SIM_QVFR_NGX_DEFAULT}" CACHE PATH "A local NVIDIA NGX SDK (include + nvsdk_ngx_s.lib)")
 set(SIM_QVFR_NGX OFF)
 if(NGX_SDK_DIR AND EXISTS "${NGX_SDK_DIR}/include/nvsdk_ngx.h")
   set(SIM_QVFR_NGX ON)
+endif()
+# NVIDIA's nvngx_dlss.dll, when the SDK folder has it (package.ps1's -NgxSdk layout): copied beside the layer, where the
+# layer looks for the DLL it includes (ngx_dlss.h), as a release has it.
+set(SIM_QVFR_NGX_DLL "")
+if(SIM_QVFR_NGX AND EXISTS "${NGX_SDK_DIR}/nvngx_dlss.dll")
+  set(SIM_QVFR_NGX_DLL "${NGX_SDK_DIR}/nvngx_dlss.dll")
 endif()
 
 # Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
@@ -117,6 +129,10 @@ set_target_properties(sim_qvfr PROPERTIES OUTPUT_NAME sim-qvfr)
 sim_qvfr_version_info(sim_qvfr sim-qvfr.dll VFT_DLL "Sim-QVFR OpenXR layer")
 # A linker map next to the DLL, to name the layer's frames in a game's crash call stack (no effect on the code).
 target_link_options(sim_qvfr PRIVATE /MAP)
+if(SIM_QVFR_NGX_DLL)
+  add_custom_command(TARGET sim_qvfr POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SIM_QVFR_NGX_DLL}" $<TARGET_FILE_DIR:sim_qvfr>/nvngx_dlss.dll)
+endif()
 
 add_custom_command(TARGET sim_qvfr POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -422,6 +438,9 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input
   src/launcher/ui/chrome.cpp src/launcher/ui/pointer.cpp src/launcher/ui/input.cpp)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+if(SIM_QVFR_NGX)  # the layer has NGX in it: the About pane credits NVIDIA DLSS (the RTX SDKs licence's attribution)
+  target_compile_definitions(sim_qvfr_launcher PRIVATE SIM_QVFR_NGX)
+endif()
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32)
 target_precompile_headers(sim_qvfr_launcher PRIVATE ${SIM_QVFR_PCH})

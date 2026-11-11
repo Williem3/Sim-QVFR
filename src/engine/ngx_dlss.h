@@ -15,8 +15,9 @@ namespace simqvfr::ngx {
 
 // This build has the NGX SDK linked in.
 bool built_in();
-// NGX started on `device` with a project id of ours, nvngx_dlss.dll looked for in `dllFolder` (and beside the game's
-// exe), NGX's own files in `dataFolder`. False with the reason in `why` (not built in, no RTX GPU, no DLL, an old
+// NGX started on `device` with a project id of ours, nvngx_dlss.dll looked for in `dllFolder` (the player's choice,
+// may be empty), then in Sim-QVFR's own folder (beside the layer: the one its releases include), then beside the game's
+// exe; NGX's own files in `dataFolder`. False with the reason in `why` (not built in, no RTX GPU, no DLL, an old
 // driver). Once per device; a second call answers as the first did.
 bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFolder, std::string& why);
 
@@ -30,6 +31,8 @@ struct Feature;
 Feature* create(ID3D11DeviceContext* context, unsigned renderWidth, unsigned renderHeight, unsigned outputWidth,
                 unsigned outputHeight, bool depthInverted, int preset, unsigned& result);
 void release(Feature* feature);
+// The nvngx_dlss.dll NGX loaded into this process (its full path), empty while none is.
+std::wstring loaded_dll();
 
 struct Evaluation {
     ID3D11Resource* colour = nullptr;   // the view at (colourX, colourY) of this texture, width x height
@@ -44,5 +47,9 @@ struct Evaluation {
 bool evaluate(ID3D11DeviceContext* context, Feature* feature, const Evaluation& e, unsigned& result);
 // Every feature must be released first.
 void shutdown(ID3D11Device* device);
+
+// Tests: create() refuses a feature rendered `renderWidth` wide, with `preset` (-1: any), as a DLL without that preset
+// or NGX out of memory would (NGX itself refuses no preset number: it falls back to its default). 0 wide: none refused.
+void refuse_for_tests(unsigned renderWidth, int preset);
 
 }  // namespace simqvfr::ngx

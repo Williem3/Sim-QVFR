@@ -140,8 +140,9 @@ constexpr Help kHelp[] = {
     {L"Placement", L"The settings menu stays 0.8 m in front of your head, wherever you look."},
     {L"Use DLSS",
      L"Sim-QVFR evaluates NVIDIA’s DLSS on each view, with depth and motion it works out from the game’s own frames, "
-     L"before the game’s post-processing. The game’s code isn’t changed or called. Needs an NVIDIA RTX graphics card and "
-     L"an nvngx_dlss.dll, which you choose: Sim-QVFR doesn’t include one."},
+     L"before the game’s post-processing. The game’s code isn’t changed or called. Needs an NVIDIA RTX graphics card. "
+     L"Sim-QVFR includes NVIDIA’s nvngx_dlss.dll; Choose… takes another (a newer one from a game), Use included goes "
+     L"back."},
     {L"Periphery preset",
      L"The DLSS model for the outer views. K is steadier at a higher cost; F, the older model, costs about half as much and "
      L"aliases more. With eye tracking you rarely look there, so F’s savings come cheap; with a fixed focus, K."},

@@ -33,6 +33,7 @@
 
 #include "engine/dlss_math.h"
 #include "engine/dlss_views.h"
+#include "engine/ngx_dlss.h"
 #include "log.h"
 
 using Microsoft::WRL::ComPtr;
@@ -491,22 +492,29 @@ int wmain(int argc, wchar_t** argv) {
     unsigned long long liveAt[4] = {};
     double liveScaleOff = -1, liveScaleOn = -1;
     bool liveWantedOff = true;
-    for (int part = 0; part < 7; ++part) {
-        const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5, liveTest = part == 6;
+    // The refusals part (a DLL without a preset, NGX refusing a feature; ngx::refuse_for_tests stands in): the eyes on
+    // F with F refused (made with NGX's default instead, the jitter on), then from frame 30 every feature at the eyes'
+    // size refused (the eyes left as drawn: no jitter on them, the focus views still processed, DLSS not given up).
+    unsigned long long refusedAt[2] = {};
+    bool refusedJitterEarly = false, refusedJitterLate = true, refusedFovMovedLate = true;
+    for (int part = 0; part < 8; ++part) {
+        const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5, liveTest = part == 6,
+                   refusals = part == 7;
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
         simqvfr::DlssRun moving = run;
-        moving.eyePreset = -1;                // as the focus views' (NGX's default)
+        moving.eyePreset = refusals ? 6 : -1;  // as the focus views' (NGX's default), F in the refusals part
         moving.car = part == 2 || part == 3;  // part 2: the box alone (nothing in it), part 3: with the frame in it
         const double box[6] = {0.8, 0.8, 0.6, 0.6, 1.0, 1.0};  // the frame inside, the floor and the posts outside
         for (int i = 0; i < 6; ++i)
             moving.carBox[i] = box[i];
         moving.viewInverse = control;
         moving.focusScale = sr ? 50 : 100;
+        simqvfr::ngx::refuse_for_tests(refusals ? sceneEyeW : 0, 6);
         simqvfr::dlss_start(moving);
         // The super resolution part drives as the others (its gate at the 60th and 300th frames), then stands still for
         // 90 frames (its history converges over the 32 jitter phases) before the reference frame and the give-up frame.
-        const unsigned partFrames = sr ? 400 : liveTest ? 120 : sceneFrames, stopAt = 310;
+        const unsigned partFrames = sr ? 400 : liveTest ? 120 : refusals ? 60 : sceneFrames, stopAt = 310;
         for (unsigned f = 0; f < partFrames && scene.ps && resolvedRtv; ++f) {
             if (liveTest) {
                 simqvfr::DlssLive change;
@@ -532,6 +540,14 @@ int wmain(int argc, wchar_t** argv) {
                 if (f == 75)
                     liveScaleOn = simqvfr::dlss_focus_scale();
             }
+            if (refusals && f == 30) {  // everything at the eyes' size refused; the eyes' preset changed, so they are made again
+                simqvfr::ngx::refuse_for_tests(sceneEyeW, -1);
+                simqvfr::DlssLive change;
+                change.on = true, change.focusScale = 100, change.preset = 0, change.eyePreset = 11;
+                simqvfr::dlss_live(change);
+            }
+            if (refusals && (f == 35 || f == 55))
+                refusedAt[f == 35 ? 0 : 1] = simqvfr::dlss_evaluations_total();
             const bool referenceFrame = sr && f == partFrames - 2, giveUpFrame = sr && f == partFrames - 1;
             matricesFail = giveUpFrame;
             if (giveUpFrame)
@@ -548,6 +564,15 @@ int wmain(int argc, wchar_t** argv) {
                 v.pose.position = {0.03f, 1.2f, 0.0f};
             }
             simqvfr::dlss_jitter_views(views, 2);
+            if (refusals && (f == 25 || f == 50)) {  // the eyes' jitter: in the clip shift and the FOV handed on
+                double jx, jy;
+                const bool jitter = simqvfr::dlss_eye_clip_shift(0, jx, jy);
+                const bool moved = views[0].fov.angleLeft != -0.9512f || views[0].fov.angleUp != 0.8290f;
+                if (f == 25)
+                    refusedJitterEarly = jitter && moved;
+                else
+                    refusedJitterLate = jitter, refusedFovMovedLate = moved;
+            }
             // 0.5 m a frame (45 m/s at 90 fps) along z, turning a little, 1.2 m above the floor.
             const double travel = sr && f > stopAt ? stopAt : static_cast<double>(f);
             const double yaw = 0.002 * travel, c = std::cos(yaw), s = std::sin(yaw);
@@ -714,9 +739,9 @@ int wmain(int argc, wchar_t** argv) {
         }
         return v;
     };
-    size_t starts[9] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos,
-                        std::string::npos, std::string::npos, std::string::npos, std::string::npos, std::string::npos};
-    for (int i = 1; i < 8 && starts[i - 1] != std::string::npos; ++i)
+    size_t starts[10] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos, std::string::npos,
+                         std::string::npos, std::string::npos, std::string::npos, std::string::npos, std::string::npos};
+    for (int i = 1; i < 9 && starts[i - 1] != std::string::npos; ++i)
         starts[i] = all.find("lmu dlss: DLAA on", starts[i - 1] + 1);
     const auto part_verdicts = [&](int i) {
         return starts[i] == std::string::npos ? Verdicts{} : verdicts(starts[i], starts[i + 1]);
@@ -811,7 +836,7 @@ int wmain(int argc, wchar_t** argv) {
           "super resolution: when DLSS gives up, both focus views are stretched over their region; then their size again");
 
     // The live part.
-    const std::string livePart = starts[7] == std::string::npos ? "" : all.substr(starts[7]);
+    const std::string livePart = starts[7] == std::string::npos ? "" : all.substr(starts[7], starts[8] - starts[7]);
     char liveFocus[96];
     std::snprintf(liveFocus, sizeof(liveFocus), "view 2's DLSS feature made at %ux%u up to %ux%u (quality, preset default",
                   simqvfr::dlss::render_size(focusW, 0.67), simqvfr::dlss::render_size(focusH, 0.67), focusW, focusH);
@@ -838,6 +863,22 @@ int wmain(int argc, wchar_t** argv) {
     check(livePart.find(liveFocus77) != std::string::npos && livePart.find("couldn't be made") == std::string::npos &&
               livePart.find("ngx: (Quality) App hint Preset Unspecified or Overridden, using title default Preset K") != std::string::npos,
           "live: 77% (\"ultra quality\") made in NGX's quality mode, nothing refused");
+
+    // The refusals part.
+    const std::string refusedPart = starts[8] == std::string::npos ? "" : all.substr(starts[8]);
+    std::printf("     refusals: evaluations %llu at frame 35, %llu at frame 55; the eyes' jitter %s before, %s after (their "
+                "FOV %s)\n",
+                refusedAt[0], refusedAt[1], refusedJitterEarly ? "on" : "OFF", refusedJitterLate ? "ON" : "off",
+                refusedFovMovedLate ? "MOVED" : "as located");
+    check(refusedPart.find("view 0: NGX refused preset F") != std::string::npos &&
+              refusedPart.find("made with its default for the mode instead") != std::string::npos && refusedJitterEarly,
+          "refusals: a refused preset made with NGX's default instead, the eyes jittered and processed");
+    check(!refusedJitterLate && !refusedFovMovedLate && refusedAt[1] - refusedAt[0] == 2 * 20 &&
+              refusedPart.find("no jitter on it until it is") != std::string::npos &&
+              refusedPart.find("off for this session") == std::string::npos,
+          "refusals: eyes that can't be made get no jitter (their FOV as located), the focus views still processed, DLSS "
+          "not given up");
+    simqvfr::ngx::refuse_for_tests(0, 0);
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

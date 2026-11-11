@@ -220,9 +220,10 @@ bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime);
 // Cheeky's OpenXR layer (CheekyOpenXRSetup.exe): registered as an implicit layer, and enabled.
 enum class CheekyLayer { Missing, Disabled, Enabled };
 CheekyLayer cheeky_layer_state();
-// Sim-QVFR's own DLSS: the nvngx_dlss.dll the game will load, [dlss] folder's, or beside the game's exe without one
-// (empty: neither known). Whether it's there is the caller's to check.
-std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& gameExe);
+// Sim-QVFR's own DLSS: the nvngx_dlss.dll the layer gives NGX first: [dlss] folder's (the player's choice), or without
+// one the DLL Sim-QVFR includes beside its layer (in `layerFolder`). NGX takes the included one when the chosen one isn't
+// there (ngx_dlss.h). Empty if neither folder is known; whether the file is there is the caller's to check.
+std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& layerFolder);
 RuntimeInfo load_runtime_info(const std::wstring& path);
 
 // The kit's readouts for a recommended per-eye size: view sizes in px, ACE's double-wide target and

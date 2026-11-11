@@ -138,8 +138,7 @@ Settings restored_defaults(const Settings& current) {
     s.hiddenGames = current.hiddenGames;
     s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
-    s.dlss.folder = current.dlss.folder;  // where nvngx_dlss.dll is: the user's install, not a setting
-    return s;
+    return s;  // [dlss] folder too: back to the nvngx_dlss.dll Sim-QVFR includes
 }
 
 bool save_settings(const std::wstring& ini, const Settings& in) {
@@ -438,12 +437,9 @@ bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime) {
     return write(ini, L"cheeky", L"runtime", runtime);
 }
 
-std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& gameExe) {
-    if (!folder.empty())
-        return (std::filesystem::path(folder) / L"nvngx_dlss.dll").wstring();
-    if (gameExe.empty())
-        return L"";
-    return (std::filesystem::path(gameExe).parent_path() / L"nvngx_dlss.dll").wstring();
+std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& layerFolder) {
+    const std::wstring& in = folder.empty() ? layerFolder : folder;
+    return in.empty() ? std::wstring() : (std::filesystem::path(in) / L"nvngx_dlss.dll").wstring();
 }
 
 CheekyLayer cheeky_layer_state() {

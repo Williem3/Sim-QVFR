@@ -83,6 +83,21 @@ matches the images' opening.
 Nothing else: MinHook and the OpenXR headers are vendored in `third_party/` (see `third_party/README.md`).
 A separately installed CMake (3.24 or newer) works too.
 
+**DLSS in LMU (optional): NVIDIA's DLSS SDK, local only.** DLSS in LMU builds only with NVIDIA's DLSS
+SDK ([github.com/NVIDIA/DLSS](https://github.com/NVIDIA/DLSS)), which is **never committed or published**: its
+licence allows it only in object code inside an application, so its headers, libraries and DLLs stay on your
+machine. `.gitignore` ignores its folder and its files (`nvsdk_ngx*.h`, `nvsdk_ngx*.lib`, `nvngx_*.dll`) anywhere in
+the tree, and `package.ps1` refuses a commit holding any of them. Put these files side by side in one folder, of the
+same SDK release:
+- `include\*.h` (the SDK's `include` folder),
+- `nvsdk_ngx_s.lib` and `nvsdk_ngx_s_dbg.lib` (from `lib\Windows_x86_64\x64`),
+- `nvngx_dlss.dll` (from `lib\Windows_x86_64\rel`: the release DLL, not `dev`),
+- `LICENSE.txt`.
+
+That folder is either `third_party\nvidia-dlss-sdk\` in your checkout (gitignored; CMake finds it there) or anywhere
+outside it, given to CMake as `-DNGX_SDK_DIR=<folder>`. Without it everything builds and DLSS answers that it isn't
+available. With it, the build copies `nvngx_dlss.dll` beside `sim-qvfr.dll`, as a release has it.
+
 ### Building
 
 From any PowerShell:
@@ -152,6 +167,18 @@ after running every test. It needs the same Visual Studio setup and loads its en
 `packaging/README.txt` is the user guide that ships in the zip. Without
 `-Version` it packages the release planned in `CMakeLists.txt` (`SIM_QVFR_RELEASE`), the one the
 launcher's About pane names in a development build. Update that line when the next release is planned.
+
+Every package says whether it has DLSS: `-NgxSdk <folder>` (the SDK folder above) builds with it and ships
+`nvngx_dlss.dll` beside the layer, with NVIDIA's licence in `licenses\`; `-NoDlss` builds without it. The package
+never carries the SDK's headers or libraries (`package.ps1` checks the zip), only its library compiled into
+`sim-qvfr.dll`, the DLL and the licence. The DLL must be one of the SDK's release DLLs that `package.ps1` lists
+(`$dlssReleases`, by git blob hash in github.com/NVIDIA/DLSS): never the development one (`dev`), which has the same
+signature and version. For a newer SDK, add its `rel` DLL's blob hash there.
+
+A release with DLSS goes out only after NVIDIA has been notified (developer.nvidia.com/sw-notification) and has
+approved in writing how the About page, the README and the release notes name NVIDIA and DLSS. Its RTX SDKs licence
+asks for both (its supplement, sections 4 and 7). NVIDIA's names stand on their own: "Sim-QVFR uses NVIDIA DLSS",
+never "Sim-QVFR's DLSS". Until then, release with `-NoDlss`.
 
 ## The launcher
 
@@ -234,5 +261,7 @@ header and icon.
 ## Licence
 
 Contributions are under the project's [PolyForm Noncommercial License 1.0.0](LICENSE.md). MinHook and
-the OpenXR headers keep their own licences ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). Cheeky
+the OpenXR headers keep their own licences ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). NVIDIA's DLSS SDK
+parts in releases are under NVIDIA's terms (the same file), and its licence forbids reverse engineering them: debug
+DLSS through its API and NGX's log, never by disassembling `nvngx_dlss.dll` or the NGX library. Cheeky
 Foveated DLSS is GPL v3 and is never bundled: the layer loads it at runtime from the user's own download.

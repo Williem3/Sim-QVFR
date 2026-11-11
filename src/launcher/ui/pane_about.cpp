@@ -112,6 +112,23 @@ float about_pane(float x, float y, float w, bool draw) {
                         col(app.c->label_secondary), Align::Leading, false, true);
     }
     h += t::kSpace6 + 16 + t::kSpace2 + nh;
+#ifdef SIM_QVFR_NGX
+    // NVIDIA's RTX SDKs licence: an application with the NGX SDK credits it in its about box (text only: NVIDIA's
+    // marks themselves need NVIDIA's approval first). NVIDIA's names stand on their own, never joined to ours (its
+    // supplement, 7.3b): "Sim-QVFR uses NVIDIA DLSS", not "Sim-QVFR's DLSS".
+    const std::wstring nvidia =
+        L"In Le Mans Ultimate, Sim-QVFR uses NVIDIA DLSS through the NVIDIA DLSS SDK and includes NVIDIA’s "
+        L"nvngx_dlss.dll, under NVIDIA’s RTX SDKs licence (licenses\\NVIDIA-RTX-SDKs-LICENSE.txt; your terms for "
+        L"NVIDIA’s parts: THIRD_PARTY_NOTICES.md). NVIDIA, RTX and DLSS are trademarks and/or registered trademarks of "
+        L"NVIDIA Corporation in the U.S. and other countries. Sim-QVFR is not sponsored or endorsed by NVIDIA.";
+    const float vh = app.canvas.measure_height(nvidia, t::kCallout, w);
+    if (draw) {
+        app.canvas.text(L"NVIDIA DLSS", t::kHeadline, {x, y + h + t::kSpace6, w, 16}, col(app.c->label));
+        app.canvas.text(nvidia, t::kCallout, {x, y + h + t::kSpace6 + 16 + t::kSpace2, w, vh + 2},
+                        col(app.c->label_secondary), Align::Leading, false, true);
+    }
+    h += t::kSpace6 + 16 + t::kSpace2 + vh;
+#endif
     return h;
 }
 

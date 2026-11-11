@@ -31,7 +31,7 @@ namespace simqvfr {
 struct DlssRun {
     const char* tag = "dlss";  // the log lines' prefix (LMU: "lmu dlss")
     int views = 0;             // 0 off, 1 the eyes, 2 the eyes and the focus views
-    std::wstring dllFolder;    // where nvngx_dlss.dll is (empty: beside the game's exe)
+    std::wstring dllFolder;    // the player's nvngx_dlss.dll folder, looked in first (empty: Sim-QVFR's own DLL)
     // NGX's render presets (dlss_math.h preset_name: 0 NGX's default for the mode, 6 F, 11 K, 13 M): the focus views',
     // and the eyes' (the periphery's) unless eyePreset is set (>= 0). NGX's default is K for DLAA, quality and
     // balanced, M for performance; F (an older, cheaper model) costs the eyes about half of K.

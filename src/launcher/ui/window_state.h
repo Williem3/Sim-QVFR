@@ -44,9 +44,9 @@ enum Ctl {
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
-    // Sim-QVFR's own DLSS ([dlss], DLSS pane; a game with GameFeatures::sideLoadedDlss): on, nvngx_dlss.dll's folder, the
-    // focus views' mode and preset, the eyes' preset.
-    kDlssOn, kDlssFolder, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset,
+    // Sim-QVFR's own DLSS ([dlss], DLSS pane; a game with GameFeatures::sideLoadedDlss): on, another nvngx_dlss.dll's
+    // folder (Choose…, Use included), the focus views' mode and preset, the eyes' preset.
+    kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // Multi-view rendering ([experiment] multi_view, Resolution pane): NVIDIA's or Sim-QVFR's own.
@@ -464,6 +464,7 @@ void close_popup(bool accept);
 int popup_item_at(float x, float y);
 void choose_cheeky_runtime();
 void choose_dlss_dll();
+void use_included_dlss();
 void choose_game_folder();
 void undo_restore();
 

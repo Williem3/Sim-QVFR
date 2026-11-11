@@ -29,6 +29,9 @@ NVSDK_NGX_Parameter* params = nullptr;
 // While a feature is made: the tag NGX's lines give its mode ("(DLAA)", "(Perf)"), so its line on the preset it took
 // for that mode is logged (it writes one for every mode).
 const char* creatingMode = nullptr;
+// refuse_for_tests.
+unsigned testRefuseWidth = 0;
+int testRefusePreset = -1;
 
 // NGX's own lines into our log: its errors and warnings, and the preset it took for a feature being made (it writes
 // hundreds of lines a feature otherwise).
@@ -56,6 +59,21 @@ void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_
     simqvfr::logf("ngx: %s", line.c_str());
 }
 
+// The folder of the module this code is in: the layer's DLL (a check's exe).
+std::wstring own_folder() {
+    HMODULE self = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&own_folder), &self))
+        return {};
+    wchar_t path[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
+    if (n == 0 || n == MAX_PATH)
+        return {};
+    const std::wstring full(path, n);
+    const size_t slash = full.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? std::wstring() : full.substr(0, slash);
+}
+
 }  // namespace
 
 bool built_in() { return true; }
@@ -67,11 +85,18 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     }
     tried = true;
     CreateDirectoryW(dataFolder, nullptr);
-    const wchar_t* paths[] = {dllFolder};
+    // NGX looks in these folders in order, then beside the game's exe: the player's choice, then Sim-QVFR's own.
+    const std::wstring own = own_folder();
+    const wchar_t* paths[2] = {};
+    unsigned count = 0;
+    if (dllFolder && *dllFolder)
+        paths[count++] = dllFolder;
+    if (!own.empty())
+        paths[count++] = own.c_str();
     NVSDK_NGX_FeatureCommonInfo info{};
-    if (dllFolder && *dllFolder) {
+    if (count) {
         info.PathListInfo.Path = paths;
-        info.PathListInfo.Length = 1;
+        info.PathListInfo.Length = count;
     }
     info.LoggingInfo.LoggingCallback = ngx_log;
     info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_ON;
@@ -108,6 +133,10 @@ Feature* create(ID3D11DeviceContext* context, unsigned renderWidth, unsigned ren
     result = static_cast<unsigned>(NVSDK_NGX_Result_Fail);
     if (!started || !params || !renderWidth || !renderHeight || renderWidth > outputWidth || renderHeight > outputHeight)
         return nullptr;
+    if (testRefuseWidth && renderWidth == testRefuseWidth && (testRefusePreset < 0 || testRefusePreset == preset)) {
+        result = static_cast<unsigned>(NVSDK_NGX_Result_FAIL_FeatureNotSupported);
+        return nullptr;
+    }
     NVSDK_NGX_DLSS_Create_Params c{};
     c.Feature.InWidth = renderWidth;
     c.Feature.InHeight = renderHeight;
@@ -186,6 +215,11 @@ void shutdown(ID3D11Device* device) {
     params = nullptr;
 }
 
+void refuse_for_tests(unsigned renderWidth, int preset) {
+    testRefuseWidth = renderWidth;
+    testRefusePreset = preset;
+}
+
 }  // namespace simqvfr::ngx
 
 #else  // no NGX SDK in this build
@@ -209,7 +243,21 @@ bool evaluate(ID3D11DeviceContext*, Feature*, const Evaluation&, unsigned& resul
     return false;
 }
 void shutdown(ID3D11Device*) {}
+void refuse_for_tests(unsigned, int) {}
 
 }  // namespace simqvfr::ngx
 
 #endif
+
+namespace simqvfr::ngx {
+
+std::wstring loaded_dll() {
+    const HMODULE dll = GetModuleHandleW(L"nvngx_dlss.dll");
+    if (!dll)
+        return {};
+    wchar_t path[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(dll, path, MAX_PATH);
+    return n == 0 || n == MAX_PATH ? std::wstring() : std::wstring(path, n);
+}
+
+}  // namespace simqvfr::ngx

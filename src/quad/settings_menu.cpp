@@ -274,7 +274,7 @@ std::wstring menu_subtitle(const SettingsMenu& menu) {
     if (page == MenuPage::Settings)
         return menu.optimizeDetail;
     if (page == MenuPage::OwnDlss)
-        return L"Sim-QVFR's DLSS through NVIDIA's NGX: changes apply at once";
+        return L"NVIDIA DLSS, run by Sim-QVFR through NVIDIA's NGX: changes apply at once";
     return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";
 }
 

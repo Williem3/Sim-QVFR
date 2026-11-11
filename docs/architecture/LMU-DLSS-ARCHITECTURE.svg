@@ -151,7 +151,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="s" x="440" y="694">DLAA, or super resolution</text>
 <circle cx="424" cy="712" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="716" text-anchor="middle" fill="var(--group-bg)">4</text>
 <text class="s" x="440" y="716">Result back into the HDR scene</text>
-<text class="ms" x="416" y="736">Not upscaled this frame: stretched in place</text>
+<text class="ms" x="416" y="736">Unprocessed: stretched if small, no jitter</text>
 <text class="ms" x="416" y="752">lmu_dlss_gate=1: vectors checked, logged</text>
 
 <!-- Runtime -->
@@ -170,9 +170,9 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <rect x="780" y="250" width="300" height="510" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
 <text class="t" x="796" y="276">Graphics card</text>
 <text class="m" x="796" y="296">NVIDIA RTX, through NGX</text>
-<text class="s" x="796" y="320">nvngx_dlss.dll chosen in the launcher, or</text>
-<text class="s" x="796" y="336">beside LMU.exe: not shipped with Sim-QVFR.</text>
-<text class="s" x="796" y="352">Only in builds with the NGX SDK linked.</text>
+<text class="s" x="796" y="320">NVIDIA’s nvngx_dlss.dll 310.9.1, shipped</text>
+<text class="s" x="796" y="336">beside the layer; or a newer one chosen</text>
+<text class="s" x="796" y="352">in the launcher (DLSS 310 or newer).</text>
 <text class="s" x="796" y="378">A feature per view, each with its own</text>
 <text class="s" x="796" y="394">mode, size and preset (the table below).</text>
 <text class="sd" x="796" y="410">The log names the preset NGX took for each.</text>
@@ -266,7 +266,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="hdr" x="16" y="956">View</text>
 <text class="hdr" x="176" y="956">DLSS</text>
 <text class="hdr" x="396" y="956">Drawn at, each way</text>
-<text class="hdr" x="636" y="956">NGX preset (the log names the one NGX took)</text>
+<text class="hdr" x="636" y="956">NGX preset (logged as NGX took it; refused: its default)</text>
 <line x1="16" y1="966" x2="1064" y2="966" stroke="var(--separator)"/>
 <text class="t" x="16" y="988">Eyes</text>
 <text class="ms" x="16" y="1004">the periphery</text>
