@@ -573,16 +573,23 @@ void gpu_collect() {
 unsigned final_eye_w(const MvrPassView& view) { return view.finalEyeW ? view.finalEyeW : view.eyeW; }
 unsigned final_eye_h(const MvrPassView& view) { return view.finalEyeH ? view.finalEyeH : view.eyeH; }
 
-// The focus view's viewport beside the eye's `v`: in the scene the eye's rendered size scaled to the focus view's; for an
-// overlay into the eye's final (`overlay`), the eye's corner of the final to the focus final's (the focus size, 1:1).
-D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v, bool overlay = false) {
+// The focus view's viewport beside the eye's `v`: in the scene the eye's rendered size scaled to the focus view's (to
+// what it's drawn at before the post, `scene`: smaller under DLSS super resolution); for an overlay into the eye's final
+// (`overlay`), the eye's corner of the final to the focus final's (the focus size, 1:1).
+D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v, bool overlay = false, bool scene = false) {
     const unsigned ew = overlay ? final_eye_w(view) : view.eyeW, eh = overlay ? final_eye_h(view) : view.eyeH;
-    const float sx = ew ? static_cast<float>(view.focusW) / static_cast<float>(ew) : 1.0f;
-    const float sy = eh ? static_cast<float>(view.focusH) / static_cast<float>(eh) : 1.0f;
+    const unsigned fw = !overlay && scene && view.focusRenderW ? view.focusRenderW : view.focusW;
+    const unsigned fh = !overlay && scene && view.focusRenderH ? view.focusRenderH : view.focusH;
+    const float sx = ew ? static_cast<float>(fw) / static_cast<float>(ew) : 1.0f;
+    const float sy = eh ? static_cast<float>(fh) / static_cast<float>(eh) : 1.0f;
     return {v.TopLeftX + v.Width, v.TopLeftY, v.Width * sx, v.Height * sy, v.MinDepth, v.MaxDepth};
 }
 
-D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) { return focus_viewport_of(g.view, v, g.overlayTarget); }
+// The pass's focus viewport now: the scene's draws until its post begins (the resolve, or YEBIS's copy with MSAA off),
+// the post's region after it.
+D3D11_VIEWPORT focus_viewport(const D3D11_VIEWPORT& v) {
+    return focus_viewport_of(g.view, v, g.overlayTarget, !g.afterResolve);
+}
 
 // An overlay's viewport into eye `eye`'s final: the whole target cut to the eye's corner of it (as the driver tags'
 // under live resolution: tag_viewport.h), so its second viewport lands on the focus view beside it.
@@ -986,7 +993,11 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
     ID3D11Resource* const dst = scene;
     const int eye = g.pass & 1;
     g.resolved[g.pass] = dst;
-    if (g.pass < 2 && simqvfr::dlss_wanted() && g.view.eyeW && g.view.eyeH) {
+    // A focus view drawn smaller (DLSS super resolution) goes through the module even if DLSS went off since the pass
+    // was set up: it stretches what DLSS can't upscale.
+    const bool smaller = (g.view.focusRenderW && g.view.focusRenderW < g.view.focusW) ||
+                         (g.view.focusRenderH && g.view.focusRenderH < g.view.focusH);
+    if (g.pass < 2 && (simqvfr::dlss_wanted() || smaller) && g.view.eyeW && g.view.eyeH) {
         // DLAA on the eye (and its focus view beside it) before anything reads the resolved scene. Its draws and copies
         // pass these hooks untouched; single-pass stereo is off meanwhile (the scene's last shader may have left it on).
         simqvfr::DlssPass dp;
@@ -996,6 +1007,8 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
         dp.focus = g.drawFocus && g.passTwinBinds > 0;
         dp.focusWidth = g.view.focusW;
         dp.focusHeight = g.view.focusH;
+        dp.focusRenderWidth = g.view.focusRenderW;
+        dp.focusRenderHeight = g.view.focusRenderH;
         std::memcpy(dp.remap, g.view.remap, sizeof(dp.remap));
         const bool stereo = g.stereo && !g.instanced;
         if (stereo)

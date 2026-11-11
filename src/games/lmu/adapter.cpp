@@ -154,6 +154,9 @@ public:
             dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
             dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
             dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
+            // lmu_dlss_focus_scale: the focus views' DLSS mode with lmu_dlss=2, the percent of their size each way they
+            // are drawn at and upscaled from (100 DLAA, 77 ultra quality, 67 quality, 58 balanced, 50 performance).
+            dlss.focusScale = std::clamp(key(L"lmu_dlss_focus_scale", 100), 33, 100);
             if (dlss.views && !run.trackerDrives) {
                 simqvfr::log_line("lmu dlss: asked for, but it needs the multi-view path (multi_view=1): off");
                 dlss.views = 0;

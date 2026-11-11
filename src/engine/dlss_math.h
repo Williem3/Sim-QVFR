@@ -99,12 +99,40 @@ inline double halton(unsigned index, unsigned base) {
     return r;
 }
 
-// Frame n's jitter: how far the image moves, in pixels (x right, y down), each in [-0.5, 0.5). 16 phases.
+// Frame n's jitter: how far the image moves, in pixels (x right, y down), each in [-0.5, 0.5). 16 phases unless told.
 inline constexpr unsigned kJitterPhases = 16;
-inline void jitter_pixels(unsigned n, double& x, double& y) {
-    const unsigned i = n % kJitterPhases + 1;
+inline void jitter_pixels(unsigned n, double& x, double& y, unsigned phases = kJitterPhases) {
+    const unsigned i = n % (phases ? phases : kJitterPhases) + 1;
     x = halton(i, 2) - 0.5;
     y = halton(i, 3) - 0.5;
+}
+
+// The phases for an image upscaled from `scale` of its size each way: NVIDIA's 8 x (output / render)^2, never fewer
+// than DLAA's 16 (50%: 32).
+inline unsigned jitter_phases(double scale) {
+    if (!(scale > 0) || scale >= 1)
+        return kJitterPhases;
+    const double n = std::ceil(8.0 / (scale * scale) - 1e-9);
+    return n > kJitterPhases ? static_cast<unsigned>(n) : kJitterPhases;
+}
+
+// The DLSS mode a render scale (percent of the output each way) is nearest: NVIDIA's ultra quality 77%, quality 67%,
+// balanced 58%, performance 50%, ultra performance 33%; 100: DLAA (ngx_dlss.cpp picks NGX's mode the same way).
+inline const char* focus_mode_name(int percent) {
+    return percent >= 100 ? "DLAA"
+           : percent >= 72 ? "ultra quality"
+           : percent >= 62 ? "quality"
+           : percent >= 54 ? "balanced"
+           : percent >= 42 ? "performance"
+                           : "ultra performance";
+}
+
+// A side `output` pixels long rendered at `scale` of it for an upscale: rounded, at least 1, at most `output`.
+inline unsigned render_size(unsigned output, double scale) {
+    if (!(scale > 0) || scale >= 1)
+        return output;
+    const double r = std::floor(output * scale + 0.5);
+    return r < 1 ? 1u : static_cast<unsigned>(r);
 }
 
 struct Tangents {

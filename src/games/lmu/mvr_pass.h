@@ -33,7 +33,10 @@ struct MvrPassView {
     int eye = 0;
     float remap[4] = {1, 0, 1, 0};    // a, b, c, d: the focus view's clip x = a x + b w, y = c y + d w (focus_math.h)
     unsigned eyeW = 0, eyeH = 0;      // the size the eye renders at (its corner of the targets)
-    unsigned focusW = 0, focusH = 0;  // the focus view's
+    unsigned focusW = 0, focusH = 0;  // the focus view's (its region in the targets, what the post reads)
+    // What the scene's draws draw it at from the same corner (engine/dlss_views.h dlss_focus_scale: smaller for DLSS
+    // super resolution, which upscales it into the region before the post); 0: focusW x focusH.
+    unsigned focusRenderW = 0, focusRenderH = 0;
     // The eye's corner of its final (the eye target): eyeW x eyeH stretched by the game's final blit when its render
     // scale isn't 1 (focus_math.h final_extent); 0: as eyeW x eyeH. The focus final goes beside it, at the focus size.
     unsigned finalEyeW = 0, finalEyeH = 0;

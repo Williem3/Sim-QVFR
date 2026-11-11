@@ -12,6 +12,8 @@
 //   - evaluation: the caller's, right after an eye pass's scene is complete and before its post-processing reads it
 //     (a multisample resolve, or the first read of the scene's own target), each view's part of the HDR scene through
 //     NGX (ngx_dlss.h) and back into place.
+//   - the focus views' mode (DlssRun::focusScale): DLAA, or drawn smaller by the game's pass (the caller sizes them by
+//     dlss_focus_scale) and upscaled into their full region by DLSS super resolution before the post reads it.
 // Needs a build with the NGX SDK (CMake: NGX_SDK_DIR).
 #pragma once
 
@@ -44,6 +46,9 @@ struct DlssRun {
     double carBox[6] = {1.5, 1.5, 1.5, 0.6, 3.0, 3.0};
     bool gate = false;         // every 300 frames: the vectors checked against the frames themselves, logged
     bool vectors = true;       // off: zero vectors (a comparison)
+    // The focus views' DLSS mode: drawn at this percent of their size each way and upscaled to it by DLSS super resolution
+    // (77 ultra quality, 67 quality, 58 balanced, 50 performance; 33..100), 100 DLAA. The eyes stay DLAA.
+    int focusScale = 100;
 };
 
 // The game's side: eye `eye`'s pass's view matrix (world -> view, row vectors) and projection as rendered (jitter
@@ -55,7 +60,13 @@ void dlss_start(const DlssRun& run);
 bool dlss_wanted();
 // The end of xrLocateViews for the game's stereo views: this frame's jitter put into their FOV.
 void dlss_jitter_views(XrView* views, uint32_t count);
-// Eye `eye`'s focus view's remap for this frame (x' = a x + b w, y' = c y + d w): its jitter added to b and d.
+// The focus views' render scale for the frame being set up: a focus view w x h is drawn at dlss::render_size(w, s) x
+// dlss::render_size(h, s) and DLSS upscales it to w x h before anything reads it (DlssPass::focusRenderWidth). 1 unless
+// DlssRun::focusScale asks for less and DLSS works (NGX started, no focus feature refused at its sizes): until then,
+// and after it gives up, the focus views are drawn at their size.
+double dlss_focus_scale();
+// Eye `eye`'s focus view's remap for this frame (x' = a x + b w, y' = c y + d w): its jitter added to b and d. The
+// size is what the focus view is drawn at (its render size under super resolution).
 void dlss_focus_jitter(int eye, unsigned focusWidth, unsigned focusHeight, float& b, float& d);
 // The clip shift (x += cx w, y += cy w) this frame's jitter put into eye `eye`'s projection, as the projection carries
 // it (the log's sign check): what the eye's image no longer has once DLAA is through it. What is measured on the
@@ -67,12 +78,15 @@ struct DlssPass {
     int eye = 0;
     unsigned eyeWidth = 0, eyeHeight = 0;      // the eye's part of the scene, from its top-left
     bool focus = false;                        // its focus view is right of it
-    unsigned focusWidth = 0, focusHeight = 0;
+    unsigned focusWidth = 0, focusHeight = 0;  // its size (what the post reads, from the eye's top-right)
+    // What it was drawn at, from the same corner (dlss_focus_scale; 0: its size): upscaled to its size in place.
+    unsigned focusRenderWidth = 0, focusRenderHeight = 0;
     float remap[4] = {1, 0, 1, 0};             // the focus view's clip remap as drawn (its jitter included)
 };
 // Right after an eye pass's scene is complete in `resolved` (a resolve's target, or the scene's own single-sample
 // target), on the game's immediate context; `depth` the scene's depth target. The caller keeps its own hooks out of
 // the way (the work draws and copies on `context`); the context's state is put back call by call before it returns.
+// A focus view drawn smaller that DLSS couldn't upscale this frame is stretched to its size (soft, but in place).
 void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, ID3D11DepthStencilView* depth,
                         const DlssPass& pass);
 void dlss_frame_end(unsigned long long frame);
@@ -80,7 +94,8 @@ void dlss_frame_end(unsigned long long frame);
 // starts it again.
 void dlss_shutdown();
 
-// The evaluations that succeeded since the start (checks outside the game).
+// The evaluations that succeeded since the start, and the focus views stretched instead (checks outside the game).
 unsigned long long dlss_evaluations_total();
+unsigned long long dlss_stretched_total();
 
 }  // namespace simqvfr

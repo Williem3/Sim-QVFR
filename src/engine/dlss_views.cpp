@@ -204,6 +204,18 @@ Out ps(float4 pos : SV_Position) {
 }
 )";
 
+// A focus view drawn smaller that DLSS didn't upscale this frame: its render stretched over its region (bilinear).
+constexpr char kStretchShader[] = R"(
+cbuffer C : register(b0) {
+    row_major float4x4 R;
+    row_major float4x4 R2;
+    float4 js;               // z, w: the region's width, height
+};
+Texture2D<float4> src : register(t0);
+SamplerState linearClamp : register(s0);
+float4 ps(float4 pos : SV_Position) : SV_Target { return src.SampleLevel(linearClamp, pos.xy / js.zw, 0); }
+)";
+
 struct Constants {
     float r[16], r2[16], js[4], origin[4], extra[4], t[16], head[4], boxMin[4], boxMax[4];
 };
@@ -222,7 +234,8 @@ struct Jitter {
 };
 
 struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
-    unsigned width = 0, height = 0;
+    unsigned width = 0, height = 0;        // what it's drawn at (its inputs)
+    unsigned outWidth = 0, outHeight = 0;  // what DLSS makes of it (the same: DLAA)
     bool inverted = false;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     ngx::Feature* feature = nullptr;
@@ -246,7 +259,7 @@ struct State {
     unsigned long long frame = 1;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check;
+    ComPtr<ID3D11PixelShader> vectorsMs, vectorsSs, check, stretch;
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11SamplerState> linearClamp;
     ComPtr<ID3D11Texture2D> checkTarget[4], checkRead[4];
@@ -258,6 +271,16 @@ struct State {
     Slot slots[4];
     int createFailures = 0;
     bool firstLogged = false;
+    // Super resolution on the focus views (DlssRun::focusScale): off for the session once NGX refuses a feature for it.
+    bool focusSrOff = false;
+    unsigned phases = dlss::kJitterPhases;  // the jitter sequence's length (longer for a smaller render)
+    // The stretch for a focus view DLSS didn't upscale (stretch_focus): its render and its region, at these sizes.
+    ComPtr<ID3D11Texture2D> stretchIn, stretchOut;
+    ComPtr<ID3D11ShaderResourceView> stretchSrv;
+    ComPtr<ID3D11RenderTargetView> stretchRtv;
+    unsigned stretchSize[4] = {};
+    DXGI_FORMAT stretchFormat = DXGI_FORMAT_UNKNOWN;
+    bool stretchRefusedLogged = false;
     // Jitter (the mutex: xrLocateViews may run on another thread than the passes).
     std::mutex mutex;
     unsigned phase = 0;
@@ -276,8 +299,8 @@ struct State {
     int sign[2] = {1, 1};
     // This frame, and since the last log line.
     bool evaluated[2] = {};
-    unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0;
-    unsigned long long evaluationsTotal = 0;
+    unsigned long long evaluations = 0, failures = 0, recreated = 0, jitteredFrames = 0, statsFrame = 0, stretched = 0;
+    unsigned long long evaluationsTotal = 0, stretchedTotal = 0;
     PassMatricesFn matrices = nullptr;  // the game's (dlss_set_matrices)
 } d;
 
@@ -317,11 +340,13 @@ bool initialize(ID3D11DeviceContext* context) {
     const auto psMs = compile(kVectorsShader, "ps", "ps_5_0", ms);
     const auto psSs = compile(kVectorsShader, "ps", "ps_5_0", nullptr);
     const auto check = compile(kCheckShader, "ps", "ps_5_0", nullptr);
-    if (!vs || !psMs || !psSs || !check ||
+    const auto stretch = compile(kStretchShader, "ps", "ps_5_0", nullptr);
+    if (!vs || !psMs || !psSs || !check || !stretch ||
         FAILED(d.device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &d.vs)) ||
         FAILED(d.device->CreatePixelShader(psMs->GetBufferPointer(), psMs->GetBufferSize(), nullptr, &d.vectorsMs)) ||
         FAILED(d.device->CreatePixelShader(psSs->GetBufferPointer(), psSs->GetBufferSize(), nullptr, &d.vectorsSs)) ||
-        FAILED(d.device->CreatePixelShader(check->GetBufferPointer(), check->GetBufferSize(), nullptr, &d.check))) {
+        FAILED(d.device->CreatePixelShader(check->GetBufferPointer(), check->GetBufferSize(), nullptr, &d.check)) ||
+        FAILED(d.device->CreatePixelShader(stretch->GetBufferPointer(), stretch->GetBufferSize(), nullptr, &d.stretch))) {
         give_up("its shaders couldn't be made");
         return false;
     }
@@ -361,10 +386,14 @@ bool initialize(ID3D11DeviceContext* context) {
         give_up(why.c_str());
         return false;
     }
-    say("NGX started on the game's device (nvngx_dlss.dll from %ls); views: the eyes%s; jitter %s; "
+    char focusMode[96] = "";
+    if (d.cfg.views >= 2)
+        std::snprintf(focusMode, sizeof(focusMode), " and the focus views (%s, %d%%)", dlss::focus_mode_name(d.cfg.focusScale),
+                      d.cfg.focusScale);
+    say("NGX started on the game's device (nvngx_dlss.dll from %ls); views: the eyes%s; jitter %s (%u phases); "
                   "preset %d",
-                  d.cfg.dllFolder.empty() ? L"the game's folder" : d.cfg.dllFolder.c_str(),
-                  d.cfg.views >= 2 ? " and the focus views" : "", d.cfg.jitter ? "on" : "off", d.cfg.preset);
+                  d.cfg.dllFolder.empty() ? L"the game's folder" : d.cfg.dllFolder.c_str(), focusMode,
+                  d.cfg.jitter ? "on" : "off", d.phases, d.cfg.preset);
     d.ready = true;
     return true;
 }
@@ -426,9 +455,11 @@ bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT 
     return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
 }
 
-// The view's feature and textures at this size (made again when it changes: a live resolution change).
-bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsigned h, DXGI_FORMAT format, bool inverted) {
-    if (s.width == w && s.height == h && s.format == format && s.inverted == inverted)
+// The view's feature and textures at these sizes, drawn at w x h and made into ow x oh (made again when they change: a
+// live resolution change, super resolution starting or stopping).
+bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsigned h, unsigned ow, unsigned oh,
+            DXGI_FORMAT format, bool inverted) {
+    if (s.width == w && s.height == h && s.outWidth == ow && s.outHeight == oh && s.format == format && s.inverted == inverted)
         return s.feature != nullptr;
     if (s.feature) {
         ngx::release(s.feature);
@@ -437,11 +468,14 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
     s = Slot{};
     s.width = w;
     s.height = h;
+    s.outWidth = ow;
+    s.outHeight = oh;
     s.format = format;
     s.inverted = inverted;
+    const bool upscale = ow != w || oh != h;
     const UINT targets = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
     bool ok = make(s.depth, w, h, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) &&
-              make(s.vectors, w, h, DXGI_FORMAT_R16G16_FLOAT, targets) && make(s.output, w, h, format, targets) &&
+              make(s.vectors, w, h, DXGI_FORMAT_R16G16_FLOAT, targets) && make(s.output, ow, oh, format, targets) &&
               SUCCEEDED(d.device->CreateRenderTargetView(s.depth.Get(), nullptr, &s.depthRtv)) &&
               SUCCEEDED(d.device->CreateRenderTargetView(s.vectors.Get(), nullptr, &s.vectorsRtv)) &&
               SUCCEEDED(d.device->CreateShaderResourceView(s.depth.Get(), nullptr, &s.depthSrv));
@@ -453,17 +487,26 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
              SUCCEEDED(d.device->CreateShaderResourceView(s.depthBefore.Get(), nullptr, &s.depthBeforeSrv));
     unsigned result = 0;
     if (ok)
-        s.feature = ngx::create(context, w, h, inverted, d.cfg.preset, result);
+        s.feature = ngx::create(context, w, h, ow, oh, inverted, d.cfg.preset, result);
     if (!s.feature) {
         s.refused = true;
-        say("view %d's feature at %ux%u (format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
-                      static_cast<int>(format), ok ? "NGX refused" : "its textures", result);
-        if (++d.createFailures >= 4)
+        say("view %d's feature at %ux%u%s (format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
+            upscale ? " for an upscale" : "", static_cast<int>(format), ok ? "NGX refused" : "its textures", result);
+        if (upscale) {  // the focus views go back to their size and DLAA (from the next frame: dlss_focus_scale)
+            if (!d.focusSrOff)
+                say("super resolution on the focus views off for this session: they're drawn at their size with DLAA");
+            d.focusSrOff = true;
+        } else if (++d.createFailures >= 4) {
             give_up("the features can't be made");
+        }
         return false;
     }
-    say("view %d's DLAA feature made at %ux%u (format %d, depth %s)", index, w, h,
-                  static_cast<int>(format), inverted ? "inverted" : "0 near");
+    if (upscale)
+        say("view %d's DLSS feature made at %ux%u up to %ux%u (%s, format %d, depth %s)", index, w, h, ow, oh,
+            dlss::focus_mode_name(d.cfg.focusScale), static_cast<int>(format), inverted ? "inverted" : "0 near");
+    else
+        say("view %d's DLAA feature made at %ux%u (format %d, depth %s)", index, w, h, static_cast<int>(format),
+            inverted ? "inverted" : "0 near");
     return true;
 }
 
@@ -733,14 +776,15 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
                       d.frame, index, s.width, s.height, text[0], text[1]);
 }
 
-// One view: its depth and vectors drawn, its part of the resolved scene through DLAA and back.
-void run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
-              unsigned w, unsigned h, const M4 rendered[2], const M4 unjittered[2], const Jitter& jitter, double shiftX,
-              double shiftY, bool inverted, const double depthTerms[2], CarTest car) {
+// One view: its depth and vectors drawn, its part of the resolved scene (w x h at (x, y)) through DLSS and back into
+// place at ow x oh (DLAA: the same). False: not done (the view as it was drawn).
+bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
+              unsigned w, unsigned h, unsigned ow, unsigned oh, const M4 rendered[2], const M4 unjittered[2],
+              const Jitter& jitter, double shiftX, double shiftY, bool inverted, const double depthTerms[2], CarTest car) {
     Slot& s = d.slots[index];
-    if (!ensure(context, s, index, w, h, format, inverted)) {
+    if (!ensure(context, s, index, w, h, ow, oh, format, inverted)) {
         ++d.failures;
-        return;
+        return false;
     }
     const bool history = s.haveBefore && s.beforeFrame + 1 == d.frame;
     const int use = 0;  // [0] through the world's view, [1] through the head's (the car)
@@ -818,8 +862,9 @@ void run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     e.jitterY = jitter.on ? static_cast<float>(d.cfg.flipY ? -jitter.sy : jitter.sy) : 0;
     e.reset = !history;
     unsigned result = 0;
-    if (ngx::evaluate(context, s.feature, e, result)) {
-        context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);
+    const bool done = ngx::evaluate(context, s.feature, e, result);
+    if (done) {
+        context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
         ++d.evaluations;
         ++d.evaluationsTotal;
     } else {
@@ -833,22 +878,99 @@ void run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     s.beforeShift[1] = jitter.on ? shiftY : 0;
     s.beforeFrame = d.frame;
     s.haveBefore = true;
+    return done;
 }
+
+// A focus view drawn smaller (w x h at (x, 0)) that DLSS didn't upscale this frame: stretched over its region (ow x oh
+// from there), so the post and the headset get it in place, soft, not a small image in the region's corner with the
+// last frame's around it. Under its own state guard (the game's state back after it).
+void stretch_focus(ID3D11DeviceContext* context, ID3D11Resource* resolved, unsigned x, unsigned w, unsigned h, unsigned ow,
+                   unsigned oh) {
+    if (!d.device || !d.vs || !d.stretch || !d.constants || !d.linearClamp || !resolved || !w || !h)
+        return;
+    ComPtr<ID3D11Texture2D> scene;
+    if (FAILED(resolved->QueryInterface(IID_PPV_ARGS(&scene))))
+        return;
+    D3D11_TEXTURE2D_DESC sd;
+    scene->GetDesc(&sd);
+    if (sd.SampleDesc.Count != 1 || x + ow > sd.Width || oh > sd.Height || w > ow || h > oh)
+        return;
+    const unsigned size[4] = {w, h, ow, oh};
+    if (std::memcmp(size, d.stretchSize, sizeof(size)) != 0 || d.stretchFormat != sd.Format) {
+        std::memcpy(d.stretchSize, size, sizeof(size));
+        d.stretchFormat = sd.Format;
+        d.stretchSrv.Reset();
+        d.stretchRtv.Reset();
+        if (!make(d.stretchIn, w, h, sd.Format, D3D11_BIND_SHADER_RESOURCE) ||
+            !make(d.stretchOut, ow, oh, sd.Format, D3D11_BIND_RENDER_TARGET) ||
+            FAILED(d.device->CreateShaderResourceView(d.stretchIn.Get(), nullptr, &d.stretchSrv)) ||
+            FAILED(d.device->CreateRenderTargetView(d.stretchOut.Get(), nullptr, &d.stretchRtv))) {
+            d.stretchSrv.Reset();
+            d.stretchRtv.Reset();
+            if (!d.stretchRefusedLogged)
+                say("a focus view's stretch (%ux%u to %ux%u, format %d) couldn't be made", w, h, ow, oh,
+                    static_cast<int>(sd.Format));
+            d.stretchRefusedLogged = true;
+        }
+    }
+    if (!d.stretchSrv || !d.stretchRtv)
+        return;
+    StateGuard guard(context);
+    context->GSSetShader(nullptr, nullptr, 0);
+    context->HSSetShader(nullptr, nullptr, 0);
+    context->DSSetShader(nullptr, nullptr, 0);
+    context->RSSetState(nullptr);
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context->OMSetDepthStencilState(nullptr, 0);
+    const D3D11_BOX box{x, 0, 0, x + w, h, 1};
+    context->CopySubresourceRegion(d.stretchIn.Get(), 0, 0, 0, 0, resolved, 0, &box);
+    Constants c{};
+    c.js[2] = static_cast<float>(ow);
+    c.js[3] = static_cast<float>(oh);
+    context->UpdateSubresource(d.constants.Get(), 0, nullptr, &c, 0, 0);
+    context->OMSetRenderTargets(1, d.stretchRtv.GetAddressOf(), nullptr);
+    context->PSSetShaderResources(0, 1, d.stretchSrv.GetAddressOf());
+    context->PSSetSamplers(0, 1, d.linearClamp.GetAddressOf());
+    draw_triangle(context, d.stretch.Get(), ow, oh);
+    context->OMSetRenderTargets(0, nullptr, nullptr);
+    ID3D11ShaderResourceView* none = nullptr;
+    context->PSSetShaderResources(0, 1, &none);
+    context->CopySubresourceRegion(resolved, 0, x, 0, 0, d.stretchOut.Get(), 0, nullptr);
+    ++d.stretched;
+    ++d.stretchedTotal;
+}
+
+// Runs `f` on the way out of a scope.
+template <class F> struct OnExit {
+    F f;
+    ~OnExit() { f(); }
+};
+template <class F> OnExit(F) -> OnExit<F>;
 
 }  // namespace
 
 void dlss_start(const DlssRun& run) {
     d.cfg = run;
+    d.off = d.focusSrOff = false;
+    d.cfg.focusScale = (std::max)(33, (std::min)(100, run.focusScale));
+    // The jitter's sequence: as long as the smallest render asks (the eyes and the focus views share its phase).
+    d.phases = d.cfg.views >= 2 ? dlss::jitter_phases(d.cfg.focusScale / 100.0) : dlss::kJitterPhases;
     if (run.views && !ngx::built_in()) {
         say("asked for, but this build has no NGX SDK (CMake: NGX_SDK_DIR): off");
         d.cfg.views = 0;
     }
+    char focusMode[160] = "";
+    if (d.cfg.views >= 2 && d.cfg.focusScale < 100)
+        std::snprintf(focusMode, sizeof(focusMode), ", DLSS %s on the focus views (drawn at %d%% of their size each way, "
+                      "upscaled)", dlss::focus_mode_name(d.cfg.focusScale), d.cfg.focusScale);
+    else if (d.cfg.views >= 2)
+        std::snprintf(focusMode, sizeof(focusMode), " and the focus views");
     if (d.cfg.views)
         say("DLAA on the eyes%s after each eye pass's scene (its multisample resolve, or with MSAA off "
                       "before the post-processing reads it) (jitter %s, vectors %s, depth "
                       "%s, the car %s: a box %.2f m left, %.2f right, %.2f down, %.2f up, %.2f front, %.2f back of the "
                       "head%s%s)",
-                      d.cfg.views >= 2 ? " and the focus views" : "", d.cfg.jitter ? "on" : "off",
+                      focusMode, d.cfg.jitter ? "on" : "off",
                       d.cfg.vectors ? "from depth" : "zero", d.cfg.depthReversed ? "reversed" : "0 near",
                       d.cfg.car ? "on" : "off", d.cfg.carBox[0], d.cfg.carBox[1], d.cfg.carBox[2], d.cfg.carBox[3],
                       d.cfg.carBox[4], d.cfg.carBox[5], d.cfg.viewInverse ? ", view matrix inverted" : "",
@@ -871,7 +993,7 @@ void dlss_jitter_views(XrView* views, uint32_t count) {
         return;
     ++d.phase;
     double sx, sy;
-    dlss::jitter_pixels(d.phase, sx, sy);
+    dlss::jitter_pixels(d.phase, sx, sy, d.phases);
     for (int e = 0; e < 2; ++e) {
         if (!d.eyeW[e] || !d.eyeH[e])
             continue;
@@ -891,6 +1013,12 @@ void dlss_jitter_views(XrView* views, uint32_t count) {
     }
 }
 
+double dlss_focus_scale() {
+    if (!dlss_wanted() || !d.ready || d.cfg.views < 2 || d.cfg.focusScale >= 100 || d.focusSrOff)
+        return 1.0;
+    return d.cfg.focusScale / 100.0;
+}
+
 void dlss_focus_jitter(int eye, unsigned focusWidth, unsigned focusHeight, float& b, float& dd) {
     if (eye < 0 || eye > 1)
         return;
@@ -900,7 +1028,7 @@ void dlss_focus_jitter(int eye, unsigned focusWidth, unsigned focusHeight, float
         return;
     Jitter j;
     j.on = true;
-    dlss::jitter_pixels(d.phase, j.sx, j.sy);
+    dlss::jitter_pixels(d.phase, j.sx, j.sy, d.phases);
     dlss::clip_shift_for(j.sx, j.sy, focusWidth, focusHeight, j.cx, j.cy);
     b += static_cast<float>(j.cx);
     dd += static_cast<float>(j.cy);
@@ -921,7 +1049,19 @@ bool dlss_eye_clip_shift(int eye, double& cx, double& cy) {
 
 void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, ID3D11DepthStencilView* depth,
                         const DlssPass& pass) {
-    if (!dlss_wanted() || !context || !resolved || pass.eye < 0 || pass.eye > 1 || !pass.eyeWidth || !pass.eyeHeight)
+    if (!context || !resolved || pass.eye < 0 || pass.eye > 1 || !pass.eyeWidth || !pass.eyeHeight)
+        return;
+    // The focus view's size, and what it was drawn at (smaller: super resolution). Drawn smaller, it is upscaled here or,
+    // on any way out without that, stretched (the region would otherwise hold a small image in its corner).
+    const unsigned fw = pass.focusWidth, fh = pass.focusHeight;
+    const unsigned rw = pass.focusRenderWidth ? (std::min)(pass.focusRenderWidth, fw) : fw;
+    const unsigned rh = pass.focusRenderHeight ? (std::min)(pass.focusRenderHeight, fh) : fh;
+    bool focusLeft = pass.focus && fw && fh && (rw < fw || rh < fh);
+    const OnExit stretchLeft{[&] {
+        if (focusLeft)
+            stretch_focus(context, resolved, pass.eyeWidth, rw, rh, fw, fh);
+    }};
+    if (!dlss_wanted())
         return;
     if (!d.ready && !initialize(context))
         return;
@@ -990,17 +1130,20 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     const M4 vp[2] = {dlss::mul(view, used), dlss::mul(head, used)};
     const bool room = pass.eyeWidth <= sd.Width && pass.eyeHeight <= sd.Height && pass.eyeWidth <= depthW &&
                       pass.eyeHeight <= depthH;
-    const bool focus = d.cfg.views >= 2 && pass.focus && pass.focusWidth && pass.focusHeight &&
-                       pass.eyeWidth + pass.focusWidth <= (std::min)(sd.Width, depthW) &&
-                       pass.focusHeight <= (std::min)(sd.Height, depthH);
+    // The focus view: its region in the scene (DLSS's output), what it was drawn at in the depth.
+    const bool focus = d.cfg.views >= 2 && pass.focus && fw && fh && pass.eyeWidth + fw <= sd.Width && fh <= sd.Height &&
+                       pass.eyeWidth + rw <= depthW && rh <= depthH;
     if (!room) {
         ++d.failures;
         return;
     }
     if (!d.firstLogged) {
         d.firstLogged = true;
-        say("first pass: eye %d %ux%u%s in a %ux%u scene (format %d), depth %ux%u x%s", pass.eye,
-                      pass.eyeWidth, pass.eyeHeight, focus ? " with its focus view beside" : "", sd.Width, sd.Height,
+        char drawn[64] = "";
+        if (focus && (rw < fw || rh < fh))
+            std::snprintf(drawn, sizeof(drawn), " (drawn at %ux%u of its %ux%u)", rw, rh, fw, fh);
+        say("first pass: eye %d %ux%u%s%s in a %ux%u scene (format %d), depth %ux%u x%s", pass.eye,
+                      pass.eyeWidth, pass.eyeHeight, focus ? " with its focus view beside" : "", drawn, sd.Width, sd.Height,
                       static_cast<int>(sd.Format), depthW, depthH, d.depthMs ? "multisample" : "1");
     }
 
@@ -1016,8 +1159,8 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     {  // the eye: rendered with its jitter; without it the clip shift is taken off
         const M4 off = dlss::clip_shift(eyeJitter.on ? -eyeJitter.cx : 0, eyeJitter.on ? -eyeJitter.cy : 0);
         const M4 unjittered[2] = {dlss::mul(vp[0], off), dlss::mul(vp[1], off)};
-        run_view(context, resolved, sd.Format, pass.eye, 0, 0, pass.eyeWidth, pass.eyeHeight, vp, unjittered, eyeJitter,
-                 eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car);
+        run_view(context, resolved, sd.Format, pass.eye, 0, 0, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth,
+                 pass.eyeHeight, vp, unjittered, eyeJitter, eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car);
     }
     if (focus && !d.off) {  // the focus view: the eye's clip through its remap (which carries its own jitter)
         const M4 remap = dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]);
@@ -1025,8 +1168,9 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
                                                  pass.remap[2], pass.remap[3] - (focusJitter.on ? focusJitter.cy : 0));
         const M4 rendered[2] = {dlss::mul(vp[0], remap), dlss::mul(vp[1], remap)};
         const M4 unjittered[2] = {dlss::mul(vp[0], plain), dlss::mul(vp[1], plain)};
-        run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, pass.focusWidth, pass.focusHeight, rendered,
-                 unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car);
+        if (run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered, unjittered,
+                     focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car))
+            focusLeft = false;
     }
 
     d.evaluated[pass.eye] = true;
@@ -1050,6 +1194,12 @@ void dlss_shutdown() {
     d.vectorsMs.Reset();
     d.vectorsSs.Reset();
     d.check.Reset();
+    d.stretch.Reset();
+    d.stretchIn.Reset();
+    d.stretchOut.Reset();
+    d.stretchSrv.Reset();
+    d.stretchRtv.Reset();
+    std::memset(d.stretchSize, 0, sizeof(d.stretchSize));
     d.constants.Reset();
     d.linearClamp.Reset();
     for (int i = 0; i < 4; ++i) {
@@ -1070,6 +1220,7 @@ void dlss_shutdown() {
 void dlss_set_matrices(PassMatricesFn fn) { d.matrices = fn; }
 
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
+unsigned long long dlss_stretched_total() { return d.stretchedTotal; }
 
 void dlss_frame_end(unsigned long long frame) {
     if (!d.cfg.views)
@@ -1082,15 +1233,24 @@ void dlss_frame_end(unsigned long long frame) {
     ++d.frame;
     if (frame - d.statsFrame >= 900) {
         d.statsFrame = frame;
-        if (d.evaluations || d.failures)
-            say("%llu evaluations, %llu failed, %llu features made again, %llu frames with jitter since the "
-                          "last line; views %ux%u %ux%u, focus %ux%u %ux%u; jitter sign %s",
-                          d.evaluations, d.failures, d.recreated, d.jitteredFrames, d.slots[0].width, d.slots[0].height,
-                          d.slots[1].width, d.slots[1].height, d.slots[2].width, d.slots[2].height, d.slots[3].width,
-                          d.slots[3].height,
-                          d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
-                          : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
-        d.evaluations = d.failures = d.recreated = d.jitteredFrames = 0;
+        if (d.evaluations || d.failures || d.stretched) {
+            char focusSizes[2][48];
+            for (int i = 0; i < 2; ++i) {
+                const Slot& s = d.slots[2 + i];
+                if (s.outWidth != s.width || s.outHeight != s.height)
+                    std::snprintf(focusSizes[i], sizeof(focusSizes[i]), "%ux%u up to %ux%u", s.width, s.height, s.outWidth,
+                                  s.outHeight);
+                else
+                    std::snprintf(focusSizes[i], sizeof(focusSizes[i]), "%ux%u", s.width, s.height);
+            }
+            say("%llu evaluations, %llu failed, %llu features made again, %llu frames with jitter, %llu focus views "
+                "stretched since the last line; views %ux%u %ux%u, focus %s %s; jitter sign %s",
+                d.evaluations, d.failures, d.recreated, d.jitteredFrames, d.stretched, d.slots[0].width, d.slots[0].height,
+                d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
+                d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
+                : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
+        }
+        d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = 0;
     }
 }
 

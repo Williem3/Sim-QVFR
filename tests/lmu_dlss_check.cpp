@@ -13,6 +13,10 @@
 // Then a second part with a scene that moves with the camera (a textured floor and ceiling drawn through each view's
 // projection as rendered, the camera driving at racing speed): every point stands still in the world, so the vectors
 // must explain the frame's change and the gate must say so, at a small eye size (fine detail per pixel) too.
+//
+// Last, the focus views in DLSS performance mode (drawn at 50% each way, upscaled by DLSS into their region): the
+// upscaled view must sit where a full-size render of it without jitter has the world (no shift, no scale), the gate must
+// fit at the render size, and a frame in which DLSS gives up must still fill the region (the render stretched).
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -197,10 +201,11 @@ bool make_scene(Scene& s) {
 
 // One view of the scene through `rendered` (the world -> its clip as rendered; `view` the camera's view matrix, for
 // the window frame with `frame`): its colour into `colour`, its depth into the multisample depth target (with the
-// multisample colour target, which takes the colour too and is not read).
+// multisample colour target, which takes the colour too and is not read). No `msColour`: the colour alone, with `blend`
+// (and its factor) if given.
 bool draw_scene_view(const Scene& s, const simqvfr::dlss::M4& rendered, const float (&view)[16], bool frame, float x, float y,
                      float w, float h, ID3D11RenderTargetView* colour, ID3D11RenderTargetView* msColour,
-                     ID3D11DepthStencilView* dsv) {
+                     ID3D11DepthStencilView* dsv, ID3D11BlendState* blend = nullptr, const float* blendFactor = nullptr) {
     simqvfr::dlss::M4 inverse;
     if (!simqvfr::dlss::invert(rendered, inverse))
         return false;
@@ -225,10 +230,15 @@ bool draw_scene_view(const Scene& s, const simqvfr::dlss::M4& rendered, const fl
     context->PSSetShader(s.ps.Get(), nullptr, 0);
     context->PSSetConstantBuffers(0, 1, s.constants.GetAddressOf());
     context->OMSetDepthStencilState(s.always.Get(), 0);
+    if (blend)
+        context->OMSetBlendState(blend, blendFactor, 0xffffffff);
     context->OMSetRenderTargets(1, &colour, nullptr);
     context->Draw(3, 0);
-    context->OMSetRenderTargets(1, &msColour, dsv);
-    context->Draw(3, 0);
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    if (msColour) {
+        context->OMSetRenderTargets(1, &msColour, dsv);
+        context->Draw(3, 0);
+    }
     context->OMSetDepthStencilState(nullptr, 0);
     return true;
 }
@@ -252,10 +262,22 @@ void eye_projection(const XrFovf& fov, float (&projection)[16]) {
 // The game's side's view and projection for the pass about to be called (each frame below sets them), handed to the
 // module as a game's matrices callback would (simqvfr::dlss_set_matrices).
 float view[16], projection[16];
+bool matricesFail = false;  // the game's side has none (the module then gives up: the stretch's check)
 bool check_matrices(int, float (&v)[16], float (&p)[16]) {
     std::memcpy(v, view, sizeof(v));
     std::memcpy(p, projection, sizeof(p));
-    return true;
+    return !matricesFail;
+}
+
+// Mean |a[x] - b[x + dx]| over the row, a few pixels in from its ends.
+double shifted_difference(const std::vector<float>& a, const std::vector<float>& b, int dx) {
+    double s = 0;
+    int n = 0;
+    for (int x = 4; x + 4 < static_cast<int>(a.size()) && x + 4 < static_cast<int>(b.size()); ++x) {
+        s += std::fabs(a[x] - b[x + dx]);
+        ++n;
+    }
+    return n ? s / n : 0;
 }
 
 }  // namespace
@@ -417,13 +439,40 @@ int wmain(int argc, wchar_t** argv) {
     // (lmu_dlss_view_inverse): the control, whose vectors the gate must find wrong. Then a car's window frame fixed to
     // the camera, with the car's box about the head (the head still in the tracking space: the frame stands still on
     // screen): the world comes out from behind its edges every frame, as the game's periphery sees it.
-    // Last, the plain scene again with MSAA off: a single-sample depth target (as LMU makes it then: R32 typeless with a
+    // Then the plain scene again with MSAA off: a single-sample depth target (as LMU makes it then: R32 typeless with a
     // D32 view) and the scene's own colour target, the module called at YEBIS's copy instead of a resolve.
+    // Last, the plain scene with the focus views in DLSS performance mode (lmu_dlss_focus_scale=50): drawn at their
+    // render size (dlss_focus_scale, asked each frame as the game's side does) in their region's corner.
     const unsigned sceneEyeW = 520, sceneEyeH = 420, sceneFrames = 330;
     Scene scene;
     check(make_scene(scene), "the moving scene's shaders are made");
     ComPtr<ID3D11RenderTargetView> resolvedRtv;
     device->CreateRenderTargetView(resolved.Get(), nullptr, &resolvedRtv);
+    // The super resolution part's reference: the focus view drawn at its size without jitter.
+    D3D11_TEXTURE2D_DESC rd{};
+    rd.Width = focusW, rd.Height = focusH, rd.MipLevels = rd.ArraySize = 1, rd.SampleDesc.Count = 1;
+    rd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT, rd.Usage = D3D11_USAGE_DEFAULT, rd.BindFlags = D3D11_BIND_RENDER_TARGET;
+    ComPtr<ID3D11Texture2D> reference;
+    ComPtr<ID3D11RenderTargetView> referenceRtv;
+    device->CreateTexture2D(&rd, nullptr, &reference);
+    if (reference)
+        device->CreateRenderTargetView(reference.Get(), nullptr, &referenceRtv);
+    // It is antialiased (16 renders a pixel apart in sub-pixel steps, averaged): what a converged history tends to,
+    // where one render's own aliasing would hide how near DLSS gets.
+    D3D11_BLEND_DESC bd{};
+    bd.RenderTarget[0].BlendEnable = TRUE;
+    bd.RenderTarget[0].SrcBlend = bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_BLEND_FACTOR;
+    bd.RenderTarget[0].DestBlend = bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+    bd.RenderTarget[0].BlendOp = bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    ComPtr<ID3D11BlendState> accumulate;
+    device->CreateBlendState(&bd, &accumulate);
+    // The upscaled focus view against the reference, shifted by dx, dy pixels (summed over rows across it), and what the
+    // stretch left (a frame in which DLSS gave up).
+    double placement[5][5] = {}, bilinearDiff = 0;
+    bool placed = false, srScaled = true, stretchFilled = false, stretchOff = false;
+    unsigned long long stretchedBefore = 0, stretchedAfter = 0;
+    double stretchDiff = -1;
     D3D11_TEXTURE2D_DESC sd1{};
     sd1.Width = W, sd1.Height = H, sd1.MipLevels = sd1.ArraySize = 1, sd1.SampleDesc.Count = 1;
     sd1.Format = DXGI_FORMAT_R32_TYPELESS, sd1.Usage = D3D11_USAGE_DEFAULT;
@@ -435,8 +484,8 @@ int wmain(int argc, wchar_t** argv) {
     check(SUCCEEDED(device->CreateTexture2D(&sd1, nullptr, &depth1)) &&
               SUCCEEDED(device->CreateDepthStencilView(depth1.Get(), &dd1, &dsv1)),
           "the single-sample depth target (MSAA off) is made");
-    for (int part = 0; part < 5; ++part) {
-        const bool control = part == 1, frame = part == 3, single = part == 4;
+    for (int part = 0; part < 6; ++part) {
+        const bool control = part == 1, frame = part == 3, single = part == 4, sr = part == 5;
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
         simqvfr::DlssRun moving = run;
@@ -445,8 +494,21 @@ int wmain(int argc, wchar_t** argv) {
         for (int i = 0; i < 6; ++i)
             moving.carBox[i] = box[i];
         moving.viewInverse = control;
+        moving.focusScale = sr ? 50 : 100;
         simqvfr::dlss_start(moving);
-        for (unsigned f = 0; f < sceneFrames && scene.ps && resolvedRtv; ++f) {
+        // The super resolution part drives as the others (its gate at the 60th and 300th frames), then stands still for
+        // 90 frames (its history converges over the 32 jitter phases) before the reference frame and the give-up frame.
+        const unsigned partFrames = sr ? 400 : sceneFrames, stopAt = 310;
+        for (unsigned f = 0; f < partFrames && scene.ps && resolvedRtv; ++f) {
+            const bool referenceFrame = sr && f == partFrames - 2, giveUpFrame = sr && f == partFrames - 1;
+            matricesFail = giveUpFrame;
+            if (giveUpFrame)
+                stretchedBefore = simqvfr::dlss_stretched_total();
+            // The focus view's render size this frame, as the game's side sizes it (its size until NGX has started).
+            const double scale = simqvfr::dlss_focus_scale();
+            const unsigned rw = simqvfr::dlss::render_size(focusW, scale), rh = simqvfr::dlss::render_size(focusH, scale);
+            if (sr && f >= 1 && (rw != focusW / 2 || rh != focusH / 2) && !giveUpFrame)
+                srScaled = false;
             XrView views[2]{};
             for (XrView& v : views) {
                 v.fov = {-0.9512f, 0.8814f, 0.8290f, -0.8290f};
@@ -455,8 +517,9 @@ int wmain(int argc, wchar_t** argv) {
             }
             simqvfr::dlss_jitter_views(views, 2);
             // 0.5 m a frame (45 m/s at 90 fps) along z, turning a little, 1.2 m above the floor.
-            const double yaw = 0.002 * f, c = std::cos(yaw), s = std::sin(yaw);
-            const simqvfr::dlss::M4 world = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 100.0, 1.2, 0.5 * f, 1};
+            const double travel = sr && f > stopAt ? stopAt : static_cast<double>(f);
+            const double yaw = 0.002 * travel, c = std::cos(yaw), s = std::sin(yaw);
+            const simqvfr::dlss::M4 world = {c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 100.0, 1.2, 0.5 * travel, 1};
             simqvfr::dlss::M4 v;
             simqvfr::dlss::invert(world, v);
             for (int i = 0; i < 16; ++i)
@@ -470,21 +533,27 @@ int wmain(int argc, wchar_t** argv) {
                 pass.eyeWidth = sceneEyeW, pass.eyeHeight = sceneEyeH;
                 pass.focus = true;
                 pass.focusWidth = focusW, pass.focusHeight = focusH;
+                pass.focusRenderWidth = rw, pass.focusRenderHeight = rh;
                 // As the game's remap is made (from the eye's projection as rendered to the focus view's): the eye's jitter
                 // (its NDC shift, the projection's third row) taken back out, so the focus view carries only its own.
                 const float shiftX = projection[8] - plain[8], shiftY = projection[9] - plain[9];
                 pass.remap[0] = 4, pass.remap[1] = -0.3f - 4 * shiftX, pass.remap[2] = 1.6f, pass.remap[3] = -0.08f - 1.6f * shiftY;
-                simqvfr::dlss_focus_jitter(eye, focusW, focusH, pass.remap[1], pass.remap[3]);
+                simqvfr::dlss_focus_jitter(eye, rw, rh, pass.remap[1], pass.remap[3]);
                 // The scene as the game draws it: the eye through its projection as rendered, the focus view through the
-                // eye's clip remapped (its jitter included), each into its corner of the targets.
+                // eye's clip remapped (its jitter included), each into its corner of the targets (the focus view at its
+                // render size).
                 const simqvfr::dlss::M4 eyeClip =
                     simqvfr::dlss::mul(simqvfr::dlss::from_floats(view), simqvfr::dlss::reversed_depth(simqvfr::dlss::from_floats(projection)));
                 const simqvfr::dlss::M4 focusClip = simqvfr::dlss::mul(
                     eyeClip, simqvfr::dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]));
+                if (giveUpFrame) {  // a marker the stretch must cover where the focus view's region lies beyond its render
+                    const float marker[4] = {7, 7, 7, 1};
+                    context->ClearRenderTargetView(resolvedRtv.Get(), marker);
+                }
                 draw_scene_view(scene, eyeClip, view, frame, 0, 0, static_cast<float>(sceneEyeW),
                                 static_cast<float>(sceneEyeH), resolvedRtv.Get(), partColour, partDsv);
-                draw_scene_view(scene, focusClip, view, frame, static_cast<float>(sceneEyeW), 0, static_cast<float>(focusW),
-                                static_cast<float>(focusH), resolvedRtv.Get(), partColour, partDsv);
+                draw_scene_view(scene, focusClip, view, frame, static_cast<float>(sceneEyeW), 0, static_cast<float>(rw),
+                                static_cast<float>(rh), resolvedRtv.Get(), partColour, partDsv);
                 // The game's state at its resolve (MSAA off: at YEBIS's copy, the scene an input of it), then the module.
                 if (single) {
                     ID3D11RenderTargetView* const copyTarget = otherRtv.Get();  // some other target bound, as the copy's
@@ -493,10 +562,81 @@ int wmain(int argc, wchar_t** argv) {
                     context->OMSetRenderTargets(1, otherRtv.GetAddressOf(), dsv.Get());
                 }
                 context->PSSetShaderResources(0, 1, resolvedSrv.GetAddressOf());
+                // The baseline: the render upscaled bilinearly (as the stretch does), on the rows compared below.
+                std::vector<float> bilinear[7];
+                if (referenceFrame && eye == 0) {
+                    const auto axis = [](unsigned at, unsigned from, unsigned to, unsigned& i0, unsigned& i1, double& t) {
+                        const double p = (std::max)(0.0, (at + 0.5) * from / to - 0.5);
+                        i0 = (std::min)(static_cast<unsigned>(p), from - 1);
+                        i1 = (std::min)(i0 + 1, from - 1);
+                        t = p - std::floor(p);
+                    };
+                    for (unsigned k = 1; k < 8; ++k) {
+                        unsigned y0, y1;
+                        double ty;
+                        axis(focusH * k / 8, rh, focusH, y0, y1, ty);
+                        const std::vector<float> r0 = row_of(resolved.Get(), sceneEyeW, y0, rw),
+                                                 r1 = row_of(resolved.Get(), sceneEyeW, y1, rw);
+                        for (unsigned x = 0; x < focusW && r0.size() == rw && r1.size() == rw; ++x) {
+                            unsigned x0, x1;
+                            double tx;
+                            axis(x, rw, focusW, x0, x1, tx);
+                            const double top = r0[x0] + (r0[x1] - r0[x0]) * tx, bottom = r1[x0] + (r1[x1] - r1[x0]) * tx;
+                            bilinear[k - 1].push_back(static_cast<float>(top + (bottom - top) * ty));
+                        }
+                    }
+                }
                 simqvfr::dlss_after_resolve(context.Get(), resolved.Get(), partDsv, pass);
+                if ((referenceFrame || giveUpFrame) && eye == 0 && referenceRtv && accumulate) {
+                    // The focus view without jitter at its size: the eye's clip unjittered through the remap without
+                    // the focus view's jitter (as the remap was made before it was added), antialiased.
+                    const simqvfr::dlss::M4 plainClip = simqvfr::dlss::mul(
+                        simqvfr::dlss::mul(simqvfr::dlss::from_floats(view), simqvfr::dlss::reversed_depth(simqvfr::dlss::from_floats(plain))),
+                        simqvfr::dlss::clip_remap_matrix(4, -0.3f, 1.6f, -0.08f));
+                    const float zero[4] = {}, sixteenth[4] = {1 / 16.0f, 1 / 16.0f, 1 / 16.0f, 1 / 16.0f};
+                    context->ClearRenderTargetView(referenceRtv.Get(), zero);
+                    for (unsigned i = 0; i < 16; ++i) {
+                        double sx, sy, cx, cy;
+                        simqvfr::dlss::jitter_pixels(i, sx, sy, 16);
+                        simqvfr::dlss::clip_shift_for(sx, sy, focusW, focusH, cx, cy);
+                        draw_scene_view(scene, simqvfr::dlss::mul(plainClip, simqvfr::dlss::clip_shift(cx, cy)), view, false, 0, 0,
+                                        static_cast<float>(focusW), static_cast<float>(focusH), referenceRtv.Get(), nullptr,
+                                        nullptr, accumulate.Get(), sixteenth);
+                    }
+                }
+                if (referenceFrame && eye == 0 && reference) {
+                    // Rows across the upscaled region against the reference's, shifted -2..2 each way.
+                    for (unsigned k = 1; k < 8; ++k) {
+                        const unsigned y = focusH * k / 8;
+                        const std::vector<float> out = row_of(resolved.Get(), sceneEyeW, y, focusW);
+                        for (int dy = -2; dy <= 2; ++dy) {
+                            const std::vector<float> ref = row_of(reference.Get(), 0, y + dy, focusW);
+                            for (int dx = -2; dx <= 2; ++dx)
+                                placement[dy + 2][dx + 2] += shifted_difference(out, ref, dx) / 7;
+                            if (dy == 0)
+                                bilinearDiff += shifted_difference(bilinear[k - 1], ref, 0) / 7;
+                        }
+                    }
+                    placed = true;
+                }
+                if (giveUpFrame && eye == 0 && reference) {
+                    // DLSS gave up in this call (no matrices): the region beyond the render must hold the render
+                    // stretched, not the marker, and look like the reference there.
+                    const unsigned y = focusH * 7 / 8;
+                    const std::vector<float> out = row_of(resolved.Get(), sceneEyeW, y, focusW);
+                    stretchFilled = !out.empty();
+                    for (float value : out)
+                        stretchFilled = stretchFilled && std::fabs(value - 7.0f) > 0.5f;
+                    stretchDiff = shifted_difference(out, row_of(reference.Get(), 0, y, focusW), 0);
+                }
+            }
+            if (giveUpFrame) {
+                stretchedAfter = simqvfr::dlss_stretched_total();
+                stretchOff = !simqvfr::dlss_wanted() && simqvfr::dlss_focus_scale() == 1.0;
             }
             simqvfr::dlss_frame_end(static_cast<unsigned long long>(frames) + part * sceneFrames + f + 1);
         }
+        matricesFail = false;
         simqvfr::dlss_shutdown();
     }
 
@@ -542,15 +682,15 @@ int wmain(int argc, wchar_t** argv) {
         }
         return v;
     };
-    size_t starts[7] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos,
-                        std::string::npos, std::string::npos, std::string::npos};
-    for (int i = 1; i < 6 && starts[i - 1] != std::string::npos; ++i)
+    size_t starts[8] = {all.find("lmu dlss: DLAA on"), std::string::npos, std::string::npos, std::string::npos,
+                        std::string::npos, std::string::npos, std::string::npos, std::string::npos};
+    for (int i = 1; i < 7 && starts[i - 1] != std::string::npos; ++i)
         starts[i] = all.find("lmu dlss: DLAA on", starts[i - 1] + 1);
     const auto part_verdicts = [&](int i) {
         return starts[i] == std::string::npos ? Verdicts{} : verdicts(starts[i], starts[i + 1]);
     };
     const Verdicts right = part_verdicts(1), wrong = part_verdicts(2), boxed = part_verdicts(3), framed = part_verdicts(4),
-                   single = part_verdicts(5);
+                   single = part_verdicts(5), upscaled = part_verdicts(6);
     std::printf("     the moving scene: %d gate lines, depth fit in %d classes, not in %d, the nearer class's colour fit in %d\n",
                 right.lines, right.depthFit, right.depthNot, right.nearColourFit);
     std::printf("     its control (the view matrix inverted): %d gate lines, depth fit in %d classes, not in %d\n", wrong.lines,
@@ -575,6 +715,48 @@ int wmain(int argc, wchar_t** argv) {
               single.depthNot == 0 &&
               single.nearColourFit == single.lines,
           "MSAA off: the depth read from a single-sample target, the vectors fit as with MSAA");
+
+    // The focus views in DLSS performance mode.
+    const std::string srPart = starts[6] == std::string::npos ? "" : all.substr(starts[6]);
+    char made[96];
+    std::snprintf(made, sizeof(made), "view 2's DLSS feature made at %ux%u up to %ux%u (performance", focusW / 2, focusH / 2,
+                  focusW, focusH);
+    char gateView[48];
+    std::snprintf(gateView, sizeof(gateView), "view 2 (%ux%u)", focusW / 2, focusH / 2);
+    std::printf("     super resolution: %d gate lines, depth fit in %d classes, not in %d\n", upscaled.lines, upscaled.depthFit,
+                upscaled.depthNot);
+    check(srPart.find("DLSS performance on the focus views") != std::string::npos && srPart.find(made) != std::string::npos &&
+              srPart.find("(32 phases)") != std::string::npos,
+          "super resolution: the focus views' features made at half size up to their size, 32 jitter phases");
+    check(srScaled, "super resolution: the focus views asked to be drawn at half size from the frame after NGX started");
+    check(upscaled.lines >= 4 && upscaled.depthFit == 2 * upscaled.lines && upscaled.depthNot == 0 &&
+              srPart.find(gateView) != std::string::npos,
+          "super resolution: the vectors fit by their depth, the focus view's at its render size");
+    int bestX = 0, bestY = 0;
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx)
+            if (placement[dy + 2][dx + 2] < placement[bestY + 2][bestX + 2])
+                bestX = dx, bestY = dy;
+    std::printf("     the upscaled focus view against its reference (mean difference per texel, rows across it), shifted:\n");
+    for (int dy = -2; dy <= 2; ++dy)
+        std::printf("       dy %+d: %.4f %.4f %.4f %.4f %.4f\n", dy, placement[dy + 2][0], placement[dy + 2][1],
+                    placement[dy + 2][2], placement[dy + 2][3], placement[dy + 2][4]);
+    check(placed && bestX == 0 && bestY == 0 && placement[2][2] < 0.8 * placement[2][4],
+          "super resolution: the upscaled focus view sits where the full-size render has the world (no shift, no scale)");
+    std::printf("     after 90 frames standing still: DLSS's upscale differs from the full-size render by %.4f (%.0f%% of "
+                "the render upscaled bilinearly, %.4f)\n",
+                placement[2][2], bilinearDiff > 0 ? 100 * placement[2][2] / bilinearDiff : 0.0, bilinearDiff);
+    // Measured 2026-11-10 (RTX 5070 Ti, nvngx_dlss.dll 310.9.1 from ACE): 32% with the inputs right; 54% with the focus view's
+    // jitter computed for its full size instead of its render size (a control, the inputs' likeliest mistake).
+    check(placed && bilinearDiff > 0 && placement[2][2] < 0.45 * bilinearDiff,
+          "super resolution: converged, DLSS's upscale is far nearer the full-size render than a bilinear upscale (jitter "
+          "and vectors in render pixels)");
+    std::printf("     DLSS given up in a frame: %llu focus views stretched, the row beyond the render %s, differing from the "
+                "reference by %.4f\n",
+                stretchedAfter - stretchedBefore, stretchFilled ? "filled" : "NOT FILLED", stretchDiff);
+    check(stretchedAfter - stretchedBefore == 2 && stretchFilled && stretchDiff >= 0 && stretchDiff < placement[2][4] &&
+              stretchOff,
+          "super resolution: when DLSS gives up, both focus views are stretched over their region; then their size again");
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

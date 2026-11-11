@@ -1038,10 +1038,16 @@ void mvr_before_pass(int p) {
         real_recommended(recommended);
         v.focusW = scaled_size(recommended[0], gameScale * shareW);
         v.focusH = scaled_size(recommended[1], gameScale * shareH);
-        // DLAA (engine/dlss_views.h): the focus view's own jitter, through its remap; the eye's is in its projection. Both are
-        // what the overlays after the post are drawn moved back by (MvrPassView::overlayShift).
+        // DLSS super resolution on the focus view (engine/dlss_views.h dlss_focus_scale): the scene draws it smaller in
+        // the same corner, DLSS upscales it into its region before the post; 1 (its size) unless that's on and working.
+        const double srScale = simqvfr::dlss_focus_scale();
+        v.focusRenderW = simqvfr::dlss::render_size(v.focusW, srScale);
+        v.focusRenderH = simqvfr::dlss::render_size(v.focusH, srScale);
+        // DLAA (engine/dlss_views.h): the focus view's own jitter, through its remap (in the pixels it's drawn at); the
+        // eye's is in its projection. Both are what the overlays after the post are drawn moved back by
+        // (MvrPassView::overlayShift).
         const float remapB = v.remap[1], remapD = v.remap[3];
-        simqvfr::dlss_focus_jitter(p, v.focusW, v.focusH, v.remap[1], v.remap[3]);
+        simqvfr::dlss_focus_jitter(p, v.focusRenderW, v.focusRenderH, v.remap[1], v.remap[3]);
         v.overlayShift[1][0] = v.remap[1] - remapB;
         v.overlayShift[1][1] = v.remap[3] - remapD;
         simqvfr::dlss_eye_clip_shift(p, v.overlayShift[0][0], v.overlayShift[0][1]);

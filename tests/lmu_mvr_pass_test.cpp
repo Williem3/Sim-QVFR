@@ -224,6 +224,39 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
+    {  // DLSS super resolution on the focus view (MvrPassView::focusRenderW): the scene draws it at its render size in its
+       // corner; once the pass's post begins (its resolve) the focus viewport is its region again, as the post reads it.
+        lmu::MvrPassView reduced = view;
+        reduced.focusRenderW = 30;
+        reduced.focusRenderH = 25;
+        context->VSSetShader(a.Get(), nullptr, 0);
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+        context->RSSetViewports(1, &eye);
+        lmu::mvr_pass_begin(0, &reduced, false);
+        n = viewports(context.Get(), vps);
+        check(bound_vs(context.Get()) == twin.Get() && n == 2 && same(vps[0], 0, 0, 100, 80) && same(vps[1], 100, 0, 30, 25),
+              "super resolution: the scene's focus viewport at the render size (100,0 30x25)");
+        const D3D11_RECT whole = {0, 0, 100, 80};
+        context->RSSetScissorRects(1, &whole);
+        rn = 16;
+        context->RSGetScissorRects(&rn, rects);
+        check(rn == 2 && rects[1].left == 100 && rects[1].top == 0 && rects[1].right == 130 && rects[1].bottom == 25,
+              "super resolution: the scissor mapped onto it (100,0 - 130,25)");
+        D3D11_TEXTURE2D_DESC md = {64, 64, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {4, 0}, D3D11_USAGE_DEFAULT,
+                                   D3D11_BIND_RENDER_TARGET, 0, 0};
+        ComPtr<ID3D11Texture2D> ms, single;
+        device->CreateTexture2D(&md, nullptr, &ms);
+        md.SampleDesc.Count = 1;
+        device->CreateTexture2D(&md, nullptr, &single);
+        context->ResolveSubresource(single.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        context->RSSetViewports(1, &eye);
+        n = viewports(context.Get(), vps);
+        check(ms && single && n == 2 && same(vps[1], 100, 0, 60, 50),
+              "super resolution: after the resolve (the post) the focus viewport at its size (100,0 60x50)");
+        lmu::mvr_pass_end(0);
+        context->RSSetScissorRects(0, nullptr);
+    }
+
     {  // Multithread protection on: d3d11 puts other functions in the context's entries; the hooks are on those too.
         ComPtr<ID3D11Multithread> mt;
         check(SUCCEEDED(context.As(&mt)), "the context's multithread protection");

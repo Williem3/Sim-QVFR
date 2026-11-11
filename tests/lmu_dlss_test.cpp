@@ -84,6 +84,24 @@ int main() {
     check(inside, "every jitter phase is within half a pixel");
     check(std::fabs(sumX / kJitterPhases) < 0.05 && std::fabs(sumY / kJitterPhases) < 0.05, "the phases average to the centre");
 
+    // Super resolution: more phases the smaller the render, NVIDIA's 8 x ratio^2; the render sizes rounded.
+    check(jitter_phases(1.0) == 16 && jitter_phases(0.77) == 16 && jitter_phases(0.67) == 18 &&
+              jitter_phases(0.58) == 24 && jitter_phases(0.5) == 32 && jitter_phases(0.0) == 16,
+          "the jitter phases follow the render scale (16 at DLAA and ultra quality, 32 at performance)");
+    double sx32 = 0, sy32 = 0;
+    bool inside32 = true;
+    for (unsigned n = 0; n < 32; ++n) {
+        double x, y;
+        jitter_pixels(n, x, y, 32);
+        inside32 = inside32 && x >= -0.5 && x < 0.5 && y >= -0.5 && y < 0.5;
+        sx32 += x;
+        sy32 += y;
+    }
+    check(inside32 && std::fabs(sx32 / 32) < 0.03 && std::fabs(sy32 / 32) < 0.03, "32 phases stay inside and average out");
+    check(render_size(1000, 1.0) == 1000 && render_size(1000, 0.5) == 500 && render_size(1001, 0.5) == 501 &&
+              render_size(1517, 0.67) == 1016 && render_size(1, 0.33) == 1 && render_size(800, 1.2) == 800,
+          "the render size is the output's times the scale, rounded, within 1..output");
+
     // The located FOV moved by the jitter: LMU's projection of it shows the image moved by exactly those pixels.
     const double sx = 0.3, sy = -0.2;
     double cx, cy;

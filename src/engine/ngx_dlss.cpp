@@ -90,19 +90,32 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     return true;
 }
 
-Feature* create(ID3D11DeviceContext* context, unsigned width, unsigned height, bool depthInverted, int preset,
-                unsigned& result) {
+Feature* create(ID3D11DeviceContext* context, unsigned renderWidth, unsigned renderHeight, unsigned outputWidth,
+                unsigned outputHeight, bool depthInverted, int preset, unsigned& result) {
     result = static_cast<unsigned>(NVSDK_NGX_Result_Fail);
-    if (!started || !params)
+    if (!started || !params || !renderWidth || !renderHeight || renderWidth > outputWidth || renderHeight > outputHeight)
         return nullptr;
     NVSDK_NGX_DLSS_Create_Params c{};
-    c.Feature.InWidth = c.Feature.InTargetWidth = width;
-    c.Feature.InHeight = c.Feature.InTargetHeight = height;
-    c.Feature.InPerfQualityValue = NVSDK_NGX_PerfQuality_Value_DLAA;
+    c.Feature.InWidth = renderWidth;
+    c.Feature.InHeight = renderHeight;
+    c.Feature.InTargetWidth = outputWidth;
+    c.Feature.InTargetHeight = outputHeight;
+    // The mode nearest the ratio (it names the preset NGX picks; the sizes are what it works at).
+    const double ratio = static_cast<double>(renderWidth) / outputWidth;
+    c.Feature.InPerfQualityValue = renderWidth == outputWidth && renderHeight == outputHeight ? NVSDK_NGX_PerfQuality_Value_DLAA
+                                   : ratio >= 0.72 ? NVSDK_NGX_PerfQuality_Value_UltraQuality
+                                   : ratio >= 0.62 ? NVSDK_NGX_PerfQuality_Value_MaxQuality
+                                   : ratio >= 0.54 ? NVSDK_NGX_PerfQuality_Value_Balanced
+                                   : ratio >= 0.42 ? NVSDK_NGX_PerfQuality_Value_MaxPerf
+                                                   : NVSDK_NGX_PerfQuality_Value_UltraPerformance;
     c.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes |
                              NVSDK_NGX_DLSS_Feature_Flags_AutoExposure |
                              (depthInverted ? NVSDK_NGX_DLSS_Feature_Flags_DepthInverted : 0);
-    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, static_cast<unsigned>(preset));
+    for (const char* hint : {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality,
+                             NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
+                             NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
+                             NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance})
+        NVSDK_NGX_Parameter_SetUI(params, hint, static_cast<unsigned>(preset));
     NVSDK_NGX_Handle* handle = nullptr;
     const NVSDK_NGX_Result r = NGX_D3D11_CREATE_DLSS_EXT(context, &handle, params, &c);
     result = static_cast<unsigned>(r);
@@ -163,7 +176,7 @@ bool start(ID3D11Device*, const wchar_t*, const wchar_t*, std::string& why) {
     why = "this build has no NGX SDK (CMake: NGX_SDK_DIR)";
     return false;
 }
-Feature* create(ID3D11DeviceContext*, unsigned, unsigned, bool, int, unsigned& result) {
+Feature* create(ID3D11DeviceContext*, unsigned, unsigned, unsigned, unsigned, bool, int, unsigned& result) {
     result = 0;
     return nullptr;
 }
