@@ -148,6 +148,16 @@ int main() {
         check(fg && fg->pill && fg->value == L"Waiting for guides" && fg->tone == OsdTone::Warn,
               "frame generation not yet generating shows Cheeky's state");
         check(gaze && gaze->pill && gaze->value == L"Tracking" && gaze->tone == OsdTone::Good, "eye tracking badge");
+        in.gaze = OsdGaze::Runtime;
+        const std::vector<OsdRow> runtime = osd_rows(in, osd_summary(in));
+        const OsdRow* rg = row(runtime, L"Eye tracking");
+        check(rg && rg->value == L"Tracking · runtime" && rg->tone == OsdTone::Good,
+              "the runtime's eye tracking (quad views it composes): tracking, not off");
+        in.gaze = OsdGaze::RuntimeStill;
+        const std::vector<OsdRow> still = osd_rows(in, osd_summary(in));
+        const OsdRow* sg = row(still, L"Eye tracking");
+        check(sg && sg->value == L"Runtime · still" && sg->tone == OsdTone::Warn,
+              "the runtime's focus views held still: a warning");
         check(gpuParts && gpuParts->value == L"7.0 / — / 0.4 / —", "without the whole GPU's load: ACE's queue and the layer");
         in.fg = OsdFg::On;
         in.fgMultiplier = 2;

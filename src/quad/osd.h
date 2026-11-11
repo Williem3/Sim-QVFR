@@ -37,7 +37,9 @@ struct OsdFrame {
 // Frame generation as Cheeky reports it (its snapshot's "fg").
 enum class OsdFg { Off, Starting, On };
 // Eye tracking: off in the settings, not offered by the runtime, delivering samples or not.
-enum class OsdGaze { Off, Unavailable, Tracking, Partial, Lost };
+// Runtime / RuntimeStill: the runtime composes quad views and its own foveated rendering puts the focus views where the
+// eyes look (Pimax's, Varjo's): it moved them in the last few seconds, or it has held them still that long.
+enum class OsdGaze { Off, Unavailable, Tracking, Partial, Lost, Runtime, RuntimeStill };
 
 // Everything one card shows, gathered over the last window (about half a second).
 struct OsdInput {
