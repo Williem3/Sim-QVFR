@@ -123,8 +123,12 @@ bool create(View& v, NVSDK_NGX_Parameter* params, NVSDK_NGX_PerfQuality_Value qu
     c.Feature.InPerfQualityValue = quality;
     c.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_MVLowRes;
     c.InEnableOutputSubrects = outSubrects;
-    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, preset);
-    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, preset);
+    // Every mode's hint, as the module sets them (engine/ngx_dlss.cpp): the one for this feature's mode is the one used.
+    for (const char* hint : {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality,
+                             NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
+                             NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
+                             NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance})
+        NVSDK_NGX_Parameter_SetUI(params, hint, static_cast<unsigned>(preset));
     NVSDK_NGX_Result r = NGX_D3D11_CREATE_DLSS_EXT(context.Get(), &v.handle, params, &c);
     if (NVSDK_NGX_FAILED(r)) {
         std::printf("  create %ux%u -> %ux%u: 0x%08x\n", v.rw, v.rh, v.ow, v.oh, unsigned(r));
@@ -196,6 +200,60 @@ void run_case(Case& k, NVSDK_NGX_Parameter* params, int frames) {
         if (v.handle) NVSDK_NGX_D3D11_ReleaseFeature(v.handle);
         v = View{v.rw, v.rh, v.ow, v.oh};
     }
+}
+
+// Two features of one kind (a pair of views: the eyes, or the focus views) timed alone: GPU ms per frame for the pair,
+// median after a warm-up. -1: not made (NGX refused the preset or the size).
+double time_pair(NVSDK_NGX_Parameter* params, NVSDK_NGX_PerfQuality_Value quality, int preset, UINT rw, UINT rh, UINT ow,
+                 UINT oh, int frames) {
+    View views[2] = {{rw, rh, ow, oh}, {rw, rh, ow, oh}};
+    bool made = true;
+    for (View& v : views) {
+        made = made && create(v, params, quality, preset, false);
+        v.colour = texture(v.rw, v.rh, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE, true);
+        v.depth = texture(v.rw, v.rh, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE, true);
+        v.vectors = texture(v.rw, v.rh, DXGI_FORMAT_R16G16_FLOAT, kTargets, false);
+        v.output = texture(v.ow, v.oh, DXGI_FORMAT_R16G16B16A16_FLOAT, kTargets, false);
+        const float zero[4]{};
+        ComPtr<ID3D11RenderTargetView> rtv;
+        device->CreateRenderTargetView(v.vectors.Get(), nullptr, &rtv);
+        context->ClearRenderTargetView(rtv.Get(), zero);
+    }
+    double result = -1;
+    if (made) {
+        D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0}, qt{D3D11_QUERY_TIMESTAMP, 0};
+        ComPtr<ID3D11Query> disjoint, t0, t1;
+        device->CreateQuery(&qd, &disjoint), device->CreateQuery(&qt, &t0), device->CreateQuery(&qt, &t1);
+        std::vector<double> gpu;
+        bool ok = true;
+        for (int f = 0; f < frames; ++f) {
+            context->Begin(disjoint.Get());
+            context->End(t0.Get());
+            for (View& v : views) {
+                NVSDK_NGX_D3D11_DLSS_Eval_Params e{};
+                e.Feature.pInColor = v.colour.Get(), e.Feature.pInOutput = v.output.Get();
+                e.pInDepth = v.depth.Get(), e.pInMotionVectors = v.vectors.Get();
+                e.InJitterOffsetX = (f % 8) / 8.0f - 0.5f, e.InJitterOffsetY = (f % 3) / 3.0f - 0.5f;
+                e.InRenderSubrectDimensions = {v.rw, v.rh};
+                e.InReset = f == 0, e.InMVScaleX = 1, e.InMVScaleY = 1, e.InPreExposure = 1, e.InExposureScale = 1;
+                ok = ok && NVSDK_NGX_SUCCEED(NGX_D3D11_EVALUATE_DLSS_EXT(context.Get(), v.handle, params, &e));
+            }
+            context->End(t1.Get());
+            context->End(disjoint.Get());
+            context->Flush();
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+            UINT64 s0 = 0, s1 = 0;
+            while (context->GetData(disjoint.Get(), &dj, sizeof dj, 0) == S_FALSE) Sleep(0);
+            while (context->GetData(t0.Get(), &s0, sizeof s0, 0) == S_FALSE) Sleep(0);
+            while (context->GetData(t1.Get(), &s1, sizeof s1, 0) == S_FALSE) Sleep(0);
+            if (f >= frames / 5 && !dj.Disjoint)
+                gpu.push_back(double(s1 - s0) * 1000.0 / double(dj.Frequency));
+        }
+        result = ok ? median(gpu) : -1;
+    }
+    for (View& v : views)
+        if (v.handle) NVSDK_NGX_D3D11_ReleaseFeature(v.handle);
+    return result;
 }
 
 // An eye (ew x eh) with its focus view (fw x fh) to its right in one set of textures: the focus view evaluated from
@@ -299,6 +357,28 @@ int wmain(int argc, wchar_t** argv) {
         };
         for (Case& k : cases) run_case(k, params, frames);
         run_subrects(params, 1600, 1280, 1280, 1300);
+
+        // Per pair and preset at LMU run 14's sizes (eyes 1038x834, focus views 1947x1563 drawn at 50%): what each
+        // preset costs the eyes (the periphery) and the focus views apart. Hinted for every mode at once, as the
+        // module does; 0 is NGX's default for the mode (K for DLAA, quality and balanced; M for performance).
+        struct Preset {
+            const char* name;
+            int value;
+        };
+        const Preset presets[] = {{"default", NVSDK_NGX_DLSS_Hint_Render_Preset_Default}, {"E", NVSDK_NGX_DLSS_Hint_Render_Preset_E},
+                                  {"F", NVSDK_NGX_DLSS_Hint_Render_Preset_F}, {"J", NVSDK_NGX_DLSS_Hint_Render_Preset_J},
+                                  {"K", NVSDK_NGX_DLSS_Hint_Render_Preset_K}, {"L", NVSDK_NGX_DLSS_Hint_Render_Preset_L},
+                                  {"M", NVSDK_NGX_DLSS_Hint_Render_Preset_M}};
+        const NVSDK_NGX_PerfQuality_Value perf = NVSDK_NGX_PerfQuality_Value_MaxPerf;
+        std::printf("\nper pair, GPU ms per frame for two views (run 14's sizes; -1: not made):\n");
+        std::printf("     %-8s %12s %14s %14s %14s\n", "preset", "eyes DLAA", "focus DLAA", "focus 67%", "focus 50%");
+        for (const Preset& p : presets) {
+            const double eyes = time_pair(params, dlaa, p.value, 1038, 834, 1038, 834, frames);
+            const double focusDlaa = time_pair(params, dlaa, p.value, 1947, 1563, 1947, 1563, frames);
+            const double focusQuality = time_pair(params, quality, p.value, 1304, 1047, 1947, 1563, frames);
+            const double focusPerf = time_pair(params, perf, p.value, 974, 782, 1947, 1563, frames);
+            std::printf("     %-8s %12.2f %14.2f %14.2f %14.2f\n", p.name, eyes, focusDlaa, focusQuality, focusPerf);
+        }
     }
     context->ClearState();
     context->Flush();

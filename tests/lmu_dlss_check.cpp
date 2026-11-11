@@ -346,6 +346,7 @@ int wmain(int argc, wchar_t** argv) {
     run.views = 2;
     run.dllFolder = argv[1];
     run.gate = true;
+    run.eyePreset = 6;  // the first part: the eyes on preset F (lmu_dlss_eye_preset=F), the focus views on NGX's default
     simqvfr::dlss_start(run);
     check(simqvfr::dlss_wanted(), "the module takes the run (a build with the NGX SDK)");
 
@@ -489,6 +490,7 @@ int wmain(int argc, wchar_t** argv) {
         ID3D11DepthStencilView* const partDsv = single ? dsv1.Get() : dsv.Get();
         ID3D11RenderTargetView* const partColour = single ? resolvedRtv.Get() : otherRtv.Get();
         simqvfr::DlssRun moving = run;
+        moving.eyePreset = -1;                // as the focus views' (NGX's default)
         moving.car = part == 2 || part == 3;  // part 2: the box alone (nothing in it), part 3: with the frame in it
         const double box[6] = {0.8, 0.8, 0.6, 0.6, 1.0, 1.0};  // the frame inside, the floor and the posts outside
         for (int i = 0; i < 6; ++i)
@@ -728,6 +730,26 @@ int wmain(int argc, wchar_t** argv) {
     check(srPart.find("DLSS performance on the focus views") != std::string::npos && srPart.find(made) != std::string::npos &&
               srPart.find("(32 phases)") != std::string::npos,
           "super resolution: the focus views' features made at half size up to their size, 32 jitter phases");
+    check(srPart.find("ngx: (Perf) App hint Preset Unspecified or Overridden, using title default Preset M") != std::string::npos,
+          "super resolution: NGX's line says it took preset M, its default for performance");
+
+    // The presets per view (the first part: the eyes on F, the focus views on NGX's default), as made and as NGX took them.
+    const std::string firstPart = starts[0] == std::string::npos ? "" : all.substr(starts[0], starts[1] - starts[0]);
+    char eyeMade[96], focusMade[96];
+    std::snprintf(eyeMade, sizeof(eyeMade), "view 0's DLAA feature made at 1600x1280 (preset F");
+    std::snprintf(focusMade, sizeof(focusMade), "view 2's DLAA feature made at %ux%u (preset default", focusW, focusH);
+    const size_t eyeAt = firstPart.find(eyeMade), focusAt = firstPart.find(focusMade);
+    const auto ngx_line_before = [&](size_t at, const char* what) {  // NGX's preset line comes right before ours
+        const size_t found = at == std::string::npos ? at : firstPart.rfind("ngx: (DLAA)", at);
+        return found != std::string::npos && firstPart.find(what, found) != std::string::npos &&
+               firstPart.find(what, found) < at;
+    };
+    check(firstPart.find("presets: the eyes F, the focus views default") != std::string::npos && eyeAt != std::string::npos &&
+              focusAt != std::string::npos,
+          "presets: the eyes' features made with F, the focus views' with NGX's default");
+    check(ngx_line_before(eyeAt, "Using App hint Preset F") &&
+              ngx_line_before(focusAt, "using title default Preset K"),
+          "presets: NGX's lines say it took F for the eyes and K (its DLAA default) for the focus views");
     check(srScaled, "super resolution: the focus views asked to be drawn at half size from the frame after NGX started");
     check(upscaled.lines >= 4 && upscaled.depthFit == 2 * upscaled.lines && upscaled.depthNot == 0 &&
               srPart.find(gateView) != std::string::npos,

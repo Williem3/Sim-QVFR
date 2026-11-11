@@ -236,6 +236,7 @@ struct Jitter {
 struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
     unsigned width = 0, height = 0;        // what it's drawn at (its inputs)
     unsigned outWidth = 0, outHeight = 0;  // what DLSS makes of it (the same: DLAA)
+    int preset = 0;                        // NGX's render preset it was made with (DlssRun::preset, eyePreset)
     bool inverted = false;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     ngx::Feature* feature = nullptr;
@@ -391,9 +392,10 @@ bool initialize(ID3D11DeviceContext* context) {
         std::snprintf(focusMode, sizeof(focusMode), " and the focus views (%s, %d%%)", dlss::focus_mode_name(d.cfg.focusScale),
                       d.cfg.focusScale);
     say("NGX started on the game's device (nvngx_dlss.dll from %ls); views: the eyes%s; jitter %s (%u phases); "
-                  "preset %d",
+                  "presets: the eyes %s, the focus views %s",
                   d.cfg.dllFolder.empty() ? L"the game's folder" : d.cfg.dllFolder.c_str(), focusMode,
-                  d.cfg.jitter ? "on" : "off", d.phases, d.cfg.preset);
+                  d.cfg.jitter ? "on" : "off", d.phases,
+                  dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
     d.ready = true;
     return true;
 }
@@ -459,7 +461,9 @@ bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT 
 // live resolution change, super resolution starting or stopping).
 bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsigned h, unsigned ow, unsigned oh,
             DXGI_FORMAT format, bool inverted) {
-    if (s.width == w && s.height == h && s.outWidth == ow && s.outHeight == oh && s.format == format && s.inverted == inverted)
+    const int preset = index < 2 && d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset;  // the eyes are views 0-1
+    if (s.width == w && s.height == h && s.outWidth == ow && s.outHeight == oh && s.format == format &&
+        s.inverted == inverted && s.preset == preset)
         return s.feature != nullptr;
     if (s.feature) {
         ngx::release(s.feature);
@@ -470,6 +474,7 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
     s.height = h;
     s.outWidth = ow;
     s.outHeight = oh;
+    s.preset = preset;
     s.format = format;
     s.inverted = inverted;
     const bool upscale = ow != w || oh != h;
@@ -487,11 +492,12 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
              SUCCEEDED(d.device->CreateShaderResourceView(s.depthBefore.Get(), nullptr, &s.depthBeforeSrv));
     unsigned result = 0;
     if (ok)
-        s.feature = ngx::create(context, w, h, ow, oh, inverted, d.cfg.preset, result);
+        s.feature = ngx::create(context, w, h, ow, oh, inverted, preset, result);
     if (!s.feature) {
         s.refused = true;
-        say("view %d's feature at %ux%u%s (format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
-            upscale ? " for an upscale" : "", static_cast<int>(format), ok ? "NGX refused" : "its textures", result);
+        say("view %d's feature at %ux%u%s (preset %s, format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
+            upscale ? " for an upscale" : "", dlss::preset_name(preset), static_cast<int>(format),
+            ok ? "NGX refused" : "its textures", result);
         if (upscale) {  // the focus views go back to their size and DLAA (from the next frame: dlss_focus_scale)
             if (!d.focusSrOff)
                 say("super resolution on the focus views off for this session: they're drawn at their size with DLAA");
@@ -501,12 +507,15 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
         }
         return false;
     }
+    // NGX's own line on the preset it took for the feature's mode follows (ngx_dlss.cpp), "ngx: (DLAA) Using App hint
+    // Preset F" or "... using title default Preset K".
     if (upscale)
-        say("view %d's DLSS feature made at %ux%u up to %ux%u (%s, format %d, depth %s)", index, w, h, ow, oh,
-            dlss::focus_mode_name(d.cfg.focusScale), static_cast<int>(format), inverted ? "inverted" : "0 near");
-    else
-        say("view %d's DLAA feature made at %ux%u (format %d, depth %s)", index, w, h, static_cast<int>(format),
+        say("view %d's DLSS feature made at %ux%u up to %ux%u (%s, preset %s, format %d, depth %s)", index, w, h, ow, oh,
+            dlss::focus_mode_name(d.cfg.focusScale), dlss::preset_name(preset), static_cast<int>(format),
             inverted ? "inverted" : "0 near");
+    else
+        say("view %d's DLAA feature made at %ux%u (preset %s, format %d, depth %s)", index, w, h, dlss::preset_name(preset),
+            static_cast<int>(format), inverted ? "inverted" : "0 near");
     return true;
 }
 
@@ -969,12 +978,13 @@ void dlss_start(const DlssRun& run) {
         say("DLAA on the eyes%s after each eye pass's scene (its multisample resolve, or with MSAA off "
                       "before the post-processing reads it) (jitter %s, vectors %s, depth "
                       "%s, the car %s: a box %.2f m left, %.2f right, %.2f down, %.2f up, %.2f front, %.2f back of the "
-                      "head%s%s)",
+                      "head%s%s; presets: the eyes %s, the focus views %s)",
                       focusMode, d.cfg.jitter ? "on" : "off",
                       d.cfg.vectors ? "from depth" : "zero", d.cfg.depthReversed ? "reversed" : "0 near",
                       d.cfg.car ? "on" : "off", d.cfg.carBox[0], d.cfg.carBox[1], d.cfg.carBox[2], d.cfg.carBox[3],
                       d.cfg.carBox[4], d.cfg.carBox[5], d.cfg.viewInverse ? ", view matrix inverted" : "",
-                      d.cfg.gate ? ", gate on" : "");
+                      d.cfg.gate ? ", gate on" : "",
+                      dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
 }
 
 bool dlss_wanted() { return d.cfg.views > 0 && !d.off; }

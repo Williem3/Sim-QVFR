@@ -8,6 +8,7 @@
 #include "../diag_switches.h"
 #include "../identity_adapter.h"
 #include "../multi_view.h"
+#include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
 #include "dlss_inputs.h"
 #include "four_passes.h"
@@ -124,9 +125,10 @@ public:
         glareAtLaunch_ = run.glareShare;
         // DLAA through NGX on the views ([experiment] lmu_dlss=1 the eyes, 2 the eyes and the focus views; engine/dlss_views.h):
         // with the multi-view path only (its eye passes found at the d3d11 level). lmu_dlss_folder: where nvngx_dlss.dll
-        // is; lmu_dlss_preset: NGX's preset number; lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a
-        // comparison); lmu_dlss_view_inverse, lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's
-        // gate (lmu_dlss_gate=1) or the picture say they are the other way round.
+        // is; lmu_dlss_preset: NGX's preset (a letter or its number; empty or 0: NGX's default for the mode) for the
+        // focus views, and the eyes unless lmu_dlss_eye_preset gives theirs; lmu_dlss_jitter=0, lmu_dlss_vectors=0:
+        // without that input (a comparison); lmu_dlss_view_inverse, lmu_dlss_jitter_flip_x/_y: the inputs'
+        // conventions, should the log's gate (lmu_dlss_gate=1) or the picture say they are the other way round.
         simqvfr::DlssRun dlss;
         dlss.tag = "lmu dlss";
         if (s.ini) {
@@ -137,7 +139,11 @@ public:
             wchar_t folder[MAX_PATH] = {};
             GetPrivateProfileStringW(L"experiment", L"lmu_dlss_folder", L"", folder, MAX_PATH, s.ini);
             dlss.dllFolder = folder;
-            dlss.preset = (std::max)(0, key(L"lmu_dlss_preset", 0));
+            wchar_t preset[16] = {};
+            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_preset", L"", preset, 16, s.ini);
+            dlss.preset = simqvfr::dlss::preset_from_text(preset, 0);
+            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_eye_preset", L"", preset, 16, s.ini);
+            dlss.eyePreset = simqvfr::dlss::preset_from_text(preset, -1);
             dlss.jitter = key(L"lmu_dlss_jitter", 1) != 0;
             dlss.vectors = key(L"lmu_dlss_vectors", 1) != 0;
             dlss.viewInverse = key(L"lmu_dlss_view_inverse", 0) != 0;

@@ -98,6 +98,15 @@ int main() {
         sy32 += y;
     }
     check(inside32 && std::fabs(sx32 / 32) < 0.03 && std::fabs(sy32 / 32) < 0.03, "32 phases stay inside and average out");
+    // Presets from the ini: a letter (either case) or NGX's number; empty, junk or out of range: the fallback.
+    check(preset_from_text(L"F", -1) == 6 && preset_from_text(L" k", -1) == 11 && preset_from_text(L"M", -1) == 13 &&
+              preset_from_text(L"11", -1) == 11 && preset_from_text(L"0", -1) == 0 && preset_from_text(L"", -1) == -1 &&
+              preset_from_text(nullptr, 0) == 0 && preset_from_text(L"FK", -1) == -1 && preset_from_text(L"16", -1) == -1 &&
+              preset_from_text(L"Z", 0) == 0,
+          "presets read as a letter or a number, anything else as the fallback");
+    check(std::strcmp(preset_name(0), "default") == 0 && std::strcmp(preset_name(6), "F") == 0 &&
+              std::strcmp(preset_name(13), "M") == 0 && std::strcmp(preset_name(-1), "?") == 0,
+          "presets named by their letter, 0 as NGX's default");
     check(render_size(1000, 1.0) == 1000 && render_size(1000, 0.5) == 500 && render_size(1001, 0.5) == 501 &&
               render_size(1517, 0.67) == 1016 && render_size(1, 0.33) == 1 && render_size(800, 1.2) == 800,
           "the render size is the output's times the scale, rounded, within 1..output");

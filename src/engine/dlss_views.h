@@ -32,7 +32,11 @@ struct DlssRun {
     const char* tag = "dlss";  // the log lines' prefix (LMU: "lmu dlss")
     int views = 0;             // 0 off, 1 the eyes, 2 the eyes and the focus views
     std::wstring dllFolder;    // where nvngx_dlss.dll is (empty: beside the game's exe)
-    int preset = 0;            // NGX's render preset number (0: its default)
+    // NGX's render presets (dlss_math.h preset_name: 0 NGX's default for the mode, 6 F, 11 K, 13 M): the focus views',
+    // and the eyes' (the periphery's) unless eyePreset is set (>= 0). NGX's default is K for DLAA, quality and
+    // balanced, M for performance; F (an older, cheaper model) costs the eyes about half of K.
+    int preset = 0;
+    int eyePreset = -1;
     bool jitter = true;        // off: no jitter (the inputs' plumbing alone; DLAA then only smooths over time)
     bool viewInverse = false;  // the matrix the game gives is the camera's world matrix, not the view matrix
     // The scene's depth is 1 at the near plane and 0 far away while the projection the game gives is the ordinary one

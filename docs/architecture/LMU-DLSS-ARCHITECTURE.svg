@@ -1,0 +1,292 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1330" width="1120" height="1330" role="img" aria-labelledby="title">
+<title id="title">LMU with DLSS through NVIDIA’s NGX</title>
+<style>
+:root { --window-bg:#f2f2f5; --group-bg:#ffffff; --control-bg:#e9e9ee; --control-border:#c2c2c9; --separator:#dcdce2;
+ --label:#1d1d1f; --label-secondary:#55555c; --label-muted:#6e6e75; --success:#1f7a34; --success-bg:#e3f4e7;
+ --warning:#8f5500; --overlay-teal:#0e8a9e; --overlay-magenta:#c026b8; --dlss:#6a4fd6; --dlss-bg:#efebfc;
+ --preview-canvas:#1c1c1e; --preview-periphery:#2c2c30; --preview-focus:#5a5a62; --preview-label:#f5f5f7; --preview-dlss:#b9a8ff; }
+@media (prefers-color-scheme: dark) { :root { --window-bg:#1c1c1e; --group-bg:#232326; --control-bg:#333338;
+ --control-border:#4a4a50; --separator:#2e2e31; --label:#f2f2f4; --label-secondary:#a1a1aa; --label-muted:#8e8e93;
+ --success:#4cd964; --success-bg:#1b3522; --warning:#ffcc66; --overlay-teal:#40c8e0; --overlay-magenta:#f272e6;
+ --dlss:#a995ff; --dlss-bg:#2a2440; --preview-canvas:#111113; --preview-periphery:#1d1d21; --preview-focus:#3c4a5c;
+ --preview-label:#f5f5f7; --preview-dlss:#b9a8ff; } }
+text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+.h1 { fill:var(--label); font-size:22px; font-weight:700; }
+.sub { fill:var(--label-secondary); font-size:13px; }
+.t { fill:var(--label); font-size:13px; font-weight:600; }
+.s { fill:var(--label-secondary); font-size:12px; }
+.sd { fill:var(--dlss); font-size:12px; }
+.m, .ms, .md { font-family:"SF Mono","Cascadia Mono",ui-monospace,Consolas,monospace; }
+.m { fill:var(--label); font-size:11.5px; }
+.md { fill:var(--dlss); font-size:11.5px; }
+.ms { fill:var(--label-secondary); font-size:11px; }
+.hdr { fill:var(--label-secondary); font-size:11px; font-weight:600; }
+.lab { font-size:11px; font-weight:500; paint-order:stroke; stroke:var(--window-bg); stroke-width:5px; stroke-linejoin:round; }
+.bt { font-size:10.5px; font-weight:600; }
+.pv { fill:var(--preview-label); font-size:12px; font-weight:600; }
+.pvs { fill:var(--preview-label); font-size:11px; opacity:.75; font-family:"SF Mono","Cascadia Mono",ui-monospace,Consolas,monospace; }
+.pvd { fill:var(--preview-dlss); font-size:11px; font-family:"SF Mono","Cascadia Mono",ui-monospace,Consolas,monospace; }
+.foot { fill:var(--label-secondary); font-size:11.5px; }
+</style>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="context-stroke"/></marker></defs>
+<rect width="1120" height="1330" fill="var(--window-bg)"/>
+<text class="h1" x="20" y="40">LMU with DLSS through NVIDIA’s NGX</text>
+<text class="sub" x="20" y="66">Experimental (lmu_dlss). LMU ships no DLSS; Sim-QVFR calls NGX on LMU’s own device, on top of the multi-view path. Every input</text>
+<text class="sub" x="20" y="84">comes from the OpenXR and D3D11 calls LMU makes anyway and two more matrix reads. LMU’s code isn’t changed, hooked or called.</text>
+<circle cx="25" cy="112" r="5" fill="var(--label-muted)"/>
+<text class="s" x="36" y="116">LMU, unchanged</text>
+<circle cx="155" cy="112" r="5" fill="var(--overlay-teal)"/>
+<text class="s" x="166" y="116">Sim-QVFR</text>
+<circle cx="246" cy="112" r="5" fill="var(--overlay-magenta)"/>
+<text class="s" x="257" y="116">Detours in Microsoft’s d3d11.dll</text>
+<circle cx="480" cy="112" r="5" fill="var(--dlss)"/>
+<text class="s" x="491" y="116">Added for DLSS</text>
+<circle cx="600" cy="112" r="5" fill="var(--label-secondary)"/>
+<text class="s" x="611" y="116">Read</text>
+<circle cx="664" cy="112" r="5" fill="var(--warning)"/>
+<text class="s" x="675" y="116">Written</text>
+<g transform="translate(20,160)">
+<text class="hdr" x="0" y="-14">LMU.exe</text>
+<text class="hdr" x="400" y="-14">Sim-QVFR, loaded as an OpenXR API layer</text>
+<text class="hdr" x="780" y="-14">Runtime and graphics card</text>
+
+<!-- LMU.exe -->
+<rect x="0" y="0" width="320" height="760" rx="12" fill="var(--window-bg)" stroke="var(--separator)"/>
+<rect x="16" y="18" width="288" height="232" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="32" y="44">Game code</text>
+<rect x="216" y="30" width="74" height="20" rx="10" fill="var(--success-bg)"/>
+<text class="bt" x="253" y="44" text-anchor="middle" fill="var(--success)">Unchanged</text>
+<text class="s" x="32" y="66">No bytes changed, nothing hooked,</text>
+<text class="s" x="32" y="82">no function called. No DLSS of its own.</text>
+<text class="m" x="32" y="110">VR eye loop: its own two passes</text>
+<text class="m" x="32" y="128">Scene, MSAA on or off</text>
+<text class="m" x="32" y="146">Resolve, YEBIS copy and post</text>
+<text class="m" x="32" y="164">Final blit, driver tags, VR UI</text>
+<text class="m" x="32" y="182">Submit: CopySubresourceRegion</text>
+<line x1="32" y1="200" x2="288" y2="200" stroke="var(--separator)"/>
+<circle cx="42" cy="224" r="5" fill="var(--dlss)"/>
+<text class="sd" x="56" y="220">Builds each eye’s projection from the</text>
+<text class="sd" x="56" y="236">FOV it locates: the jitter rides in there.</text>
+
+<rect x="16" y="270" width="288" height="474" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="32" y="296">Game data</text>
+<text class="s" x="32" y="314">Plain reads and writes of values</text>
+<rect x="28" y="328" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
+<circle cx="48" cy="353" r="9" fill="var(--warning)"/>
+<text class="bt" x="48" y="357" text-anchor="middle" fill="var(--group-bg)">W</text>
+<text class="t" x="66" y="348">Render scale</text>
+<text class="ms" x="66" y="366">0x199cc18 · float</text>
+<rect x="28" y="386" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
+<circle cx="48" cy="411" r="9" fill="var(--warning)"/>
+<text class="bt" x="48" y="415" text-anchor="middle" fill="var(--group-bg)">W</text>
+<text class="t" x="66" y="406">Eye render size</text>
+<text class="ms" x="66" y="424">0x1b1c240 · width, height</text>
+<rect x="28" y="444" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="469" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="473" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="464">Recommended size</text>
+<text class="ms" x="66" y="482">0x1b1c654 · width, height</text>
+<rect x="28" y="502" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="527" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="531" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="522">Eye projections</text>
+<text class="ms" x="66" y="540">0x1b1bf74, 0x1b1c04c</text>
+<rect x="28" y="560" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="585" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="589" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="580">Eye being drawn</text>
+<text class="ms" x="66" y="598">Renderer +0x77388 · int</text>
+<rect x="28" y="618" width="264" height="50" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<circle cx="48" cy="643" r="9" fill="var(--dlss)"/>
+<text class="bt" x="48" y="647" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="638">Pass view matrix</text>
+<text class="ms" x="66" y="656">Renderer +0x77388 +0x2c · 4×4</text>
+<rect x="28" y="676" width="264" height="50" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<circle cx="48" cy="701" r="9" fill="var(--dlss)"/>
+<text class="bt" x="48" y="705" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="696">Pass projection</text>
+<text class="ms" x="66" y="714">+0x94 · else the eye’s slot above</text>
+
+<!-- Sim-QVFR: OpenXR layer -->
+<rect x="400" y="0" width="320" height="230" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
+<text class="t" x="416" y="26">OpenXR layer</text>
+<text class="m" x="416" y="54">xrLocateViews</text>
+<text class="sd" x="416" y="71">Last, after the layer has read the FOV:</text>
+<text class="sd" x="416" y="87">moves it by this frame’s sub-pixel jitter</text>
+<text class="sd" x="416" y="103">(Halton 2, 3; 16 phases, 32 at 50 %).</text>
+<text class="sd" x="416" y="119">Eye poses kept for the car’s vectors.</text>
+<text class="m" x="416" y="143">xrEndFrame</text>
+<text class="s" x="416" y="160">Submits with the FOV as the runtime</text>
+<text class="sd" x="416" y="176">located it, the focus box moved back by</text>
+<text class="sd" x="416" y="192">the jitter. The headset sees none of it.</text>
+<text class="ms" x="416" y="210">Session end: features freed, NGX shut down</text>
+
+<!-- Sim-QVFR: Direct3D 11 -->
+<rect x="400" y="250" width="320" height="262" rx="12" fill="var(--group-bg)" stroke="var(--overlay-magenta)" stroke-width="1.5"/>
+<text class="t" x="416" y="276">Direct3D 11: the multi-view detours</text>
+<text class="s" x="416" y="294">The same entries as with MVR, none new</text>
+<text class="m" x="416" y="320">OMSetRenderTargets → <tspan fill="var(--dlss)">+ scene depth</tspan></text>
+<text class="m" x="416" y="339">RSSetViewports → <tspan fill="var(--dlss)">focus at render size,</tspan></text>
+<text class="md" x="533" y="356">overlays moved back</text>
+<text class="m" x="416" y="380">ResolveSubresource → <tspan fill="var(--dlss)">DLSS (MSAA on)</tspan></text>
+<text class="m" x="416" y="399">Draw* YEBIS copy → <tspan fill="var(--dlss)">DLSS (MSAA off)</tspan></text>
+<text class="m" x="416" y="418">Draw* VR UI → canvas with mips</text>
+<text class="s" x="416" y="446">The module’s own draws and copies pass</text>
+<text class="s" x="416" y="462">through these detours untouched; NVIDIA’s</text>
+<text class="s" x="416" y="478">multi-view is off while it runs, and the</text>
+<text class="s" x="416" y="494">context’s state is put back call by call.</text>
+
+<!-- Sim-QVFR: engine DLSS module -->
+<rect x="400" y="532" width="320" height="228" rx="12" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<text class="t" x="416" y="558">Engine DLSS module</text>
+<text class="ms" x="416" y="576">src/engine/dlss_views.cpp · any game</text>
+<circle cx="424" cy="598" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="602" text-anchor="middle" fill="var(--group-bg)">1</text>
+<text class="s" x="440" y="602">Depth: sample 0 → R32F, per view</text>
+<circle cx="424" cy="620" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="624" text-anchor="middle" fill="var(--group-bg)">2</text>
+<text class="s" x="440" y="624">Vectors: depth reprojected through last</text>
+<text class="s" x="440" y="640">frame’s view × projection; in the car’s</text>
+<text class="s" x="440" y="656">box about the head, the head’s motion</text>
+<circle cx="424" cy="674" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="678" text-anchor="middle" fill="var(--group-bg)">3</text>
+<text class="s" x="440" y="678">NGX evaluate, each view with its preset:</text>
+<text class="s" x="440" y="694">DLAA, or super resolution</text>
+<circle cx="424" cy="712" r="7" fill="var(--dlss)"/><text class="bt" x="424" y="716" text-anchor="middle" fill="var(--group-bg)">4</text>
+<text class="s" x="440" y="716">Result back into the HDR scene</text>
+<text class="ms" x="416" y="736">Not upscaled this frame: stretched in place</text>
+<text class="ms" x="416" y="752">lmu_dlss_gate=1: vectors checked, logged</text>
+
+<!-- Runtime -->
+<rect x="780" y="0" width="300" height="230" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="796" y="26">OpenXR runtime and headset</text>
+<text class="s" x="796" y="50">SteamVR, Pimax, Varjo, Virtual Desktop</text>
+<text class="s" x="796" y="78">Gets an ordinary stereo frame with the</text>
+<text class="s" x="796" y="94">FOV it located: no jitter reaches it.</text>
+<text class="s" x="796" y="122">With runtime composition on Pimax and</text>
+<text class="s" x="796" y="138">Varjo, it gets the four views as quad views.</text>
+<text class="s" x="796" y="166">No other OpenXR parts to install.</text>
+<text class="sd" x="796" y="194">DLSS tried on SteamVR and on Pimax’s</text>
+<text class="sd" x="796" y="210">runtime; not yet on Varjo or VD.</text>
+
+<!-- Graphics card -->
+<rect x="780" y="250" width="300" height="510" rx="12" fill="var(--group-bg)" stroke="var(--separator)" stroke-width="1.5"/>
+<text class="t" x="796" y="276">Graphics card</text>
+<text class="m" x="796" y="296">NVIDIA RTX, through NGX</text>
+<text class="s" x="796" y="320">nvngx_dlss.dll from lmu_dlss_folder or</text>
+<text class="s" x="796" y="336">beside LMU.exe: not shipped with Sim-QVFR.</text>
+<text class="s" x="796" y="352">Only in builds with the NGX SDK linked.</text>
+<text class="s" x="796" y="378">A feature per view, each with its own</text>
+<text class="s" x="796" y="394">mode, size and preset (the table below).</text>
+<text class="sd" x="796" y="410">The log names the preset NGX took for each.</text>
+<rect x="796" y="428" width="268" height="180" rx="8" fill="var(--preview-canvas)"/>
+<rect x="806" y="438" width="128" height="104" rx="3" fill="var(--preview-periphery)"/>
+<text class="pv" x="870" y="484" text-anchor="middle">Eye</text>
+<text class="pvd" x="870" y="501" text-anchor="middle">DLAA</text>
+<rect x="940" y="438" width="114" height="132" rx="3" fill="var(--preview-focus)"/>
+<rect x="940" y="438" width="76" height="88" rx="2" fill="none" stroke="var(--preview-dlss)" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text class="pvd" x="978" y="480" text-anchor="middle">drawn</text>
+<text class="pvd" x="978" y="494" text-anchor="middle">at 67%</text>
+<path d="M1018,528 L1046,560" stroke="var(--preview-dlss)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+<text class="pv" x="990" y="548" text-anchor="middle">Focus</text>
+<text class="pvs" x="990" y="563" text-anchor="middle">view</text>
+<text class="pvs" x="930" y="594" text-anchor="middle">LMU’s eye target, one pass</text>
+<text class="s" x="796" y="632">Eye and focus view drawn in one pass by</text>
+<text class="s" x="796" y="648">NVIDIA’s multi-view rendering, as before.</text>
+<text class="sd" x="796" y="664">DLSS runs on each view’s part of the HDR</text>
+<text class="sd" x="796" y="680">scene before YEBIS’s post reads it; a</text>
+<text class="sd" x="796" y="696">focus view drawn smaller is upscaled into</text>
+<text class="sd" x="796" y="712">its whole region.</text>
+<text class="ms" x="796" y="740">lmu_dlss=1 eyes, 2 focus views too</text>
+
+<!-- Arrows -->
+<path d="M304,110 L398,110" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="352" y="102" text-anchor="middle" fill="var(--label-secondary)">OpenXR</text>
+<path d="M304,174 C354,174 352,380 398,380" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="352" y="282" text-anchor="middle" fill="var(--label-secondary)">D3D11</text>
+<text class="lab" x="352" y="298" text-anchor="middle" fill="var(--label-secondary)">calls</text>
+<path d="M400,150 C350,150 352,462 306,469" stroke="var(--label-secondary)" stroke-width="1.4" fill="none" stroke-dasharray="2 4" marker-end="url(#ah)"/>
+<path d="M400,440 C356,440 350,392 306,392" stroke="var(--warning)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="424" text-anchor="middle" fill="var(--warning)">Writes 2</text>
+<path d="M400,492 C356,492 350,540 306,540" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="510" text-anchor="middle" fill="var(--label-secondary)">Reads 3</text>
+<path d="M400,650 C356,650 350,672 306,672" stroke="var(--dlss)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="656" text-anchor="middle" fill="var(--dlss)">Reads 2</text>
+<path d="M560,512 L560,530" stroke="var(--dlss)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<path d="M720,140 L778,140" stroke="var(--overlay-teal)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="749" y="132" text-anchor="middle" fill="var(--overlay-teal)">Frame</text>
+<path d="M720,380 L778,380" stroke="var(--overlay-magenta)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="749" y="372" text-anchor="middle" fill="var(--overlay-magenta)">NVAPI</text>
+<path d="M720,660 L778,660" stroke="var(--dlss)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+<text class="lab" x="749" y="652" text-anchor="middle" fill="var(--dlss)">NGX</text>
+
+<!-- One eye pass, in order -->
+<text class="hdr" x="0" y="790">One eye pass with lmu_dlss on, in order</text>
+<rect x="0" y="800" width="142" height="92" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<text class="t" x="12" y="824">1 xrLocateViews</text>
+<text class="s" x="12" y="844">FOV moved by the</text>
+<text class="s" x="12" y="860">sub-pixel jitter</text>
+<rect x="156" y="800" width="142" height="92" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="168" y="824">2 Scene draws</text>
+<text class="s" x="168" y="844">eye and focus view</text>
+<text class="s" x="168" y="860">in one pass, focus</text>
+<text class="s" x="168" y="876">at its render size</text>
+<rect x="312" y="800" width="142" height="92" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="324" y="824">3 Scene complete</text>
+<text class="s" x="324" y="844">its MSAA resolve or,</text>
+<text class="s" x="324" y="860">MSAA off, YEBIS’s</text>
+<text class="s" x="324" y="876">copy about to read it</text>
+<rect x="468" y="800" width="142" height="92" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<text class="t" x="480" y="824">4 DLSS per view</text>
+<text class="s" x="480" y="844">depth, vectors, NGX;</text>
+<text class="s" x="480" y="860">result back into</text>
+<text class="s" x="480" y="876">the HDR scene</text>
+<rect x="624" y="800" width="142" height="92" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<text class="t" x="636" y="824">5 YEBIS post</text>
+<text class="s" x="636" y="844">glare and exposure</text>
+<text class="s" x="636" y="860">on the anti-aliased</text>
+<text class="s" x="636" y="876">scene, as shipped</text>
+<rect x="780" y="800" width="142" height="92" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<text class="t" x="792" y="824">6 Overlays</text>
+<text class="s" x="792" y="844">driver tags, VR UI</text>
+<text class="s" x="792" y="860">drawn moved back</text>
+<text class="s" x="792" y="876">by the jitter</text>
+<rect x="936" y="800" width="142" height="92" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<text class="t" x="948" y="824">7 xrEndFrame</text>
+<text class="s" x="948" y="844">composed with the</text>
+<text class="s" x="948" y="860">unjittered FOV and</text>
+<text class="s" x="948" y="876">focus box</text>
+<path d="M143,846 L154,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+<path d="M299,846 L310,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+<path d="M455,846 L466,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+<path d="M611,846 L622,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+<path d="M767,846 L778,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+<path d="M923,846 L934,846" stroke="var(--label-muted)" stroke-width="1.5" fill="none" marker-end="url(#ah)"/>
+
+<!-- Per view -->
+<text class="hdr" x="0" y="924">Per view, with lmu_dlss=2</text>
+<rect x="0" y="934" width="1080" height="128" rx="8" fill="var(--group-bg)" stroke="var(--separator)"/>
+<text class="hdr" x="16" y="956">View</text>
+<text class="hdr" x="176" y="956">DLSS</text>
+<text class="hdr" x="396" y="956">Drawn at, each way</text>
+<text class="hdr" x="636" y="956">NGX preset (the log names the one NGX took)</text>
+<line x1="16" y1="966" x2="1064" y2="966" stroke="var(--separator)"/>
+<text class="t" x="16" y="988">Eyes</text>
+<text class="ms" x="16" y="1004">the periphery</text>
+<text class="s" x="176" y="988">DLAA</text>
+<text class="ms" x="176" y="1004">lmu_dlss=1 or 2</text>
+<text class="s" x="396" y="988">their own size</text>
+<text class="s" x="636" y="988">K (NGX’s DLAA default), the steadier; or F, about half the cost</text>
+<text class="ms" x="636" y="1004">lmu_dlss_eye_preset=F: more aliasing, suits eye tracking</text>
+<line x1="16" y1="1014" x2="1064" y2="1014" stroke="var(--separator)"/>
+<text class="t" x="16" y="1036">Focus views</text>
+<text class="ms" x="16" y="1052">the inner region</text>
+<text class="s" x="176" y="1036">DLAA, or super resolution</text>
+<text class="ms" x="176" y="1052">lmu_dlss=2</text>
+<text class="s" x="396" y="1036">100, 77, 67, 58 or 50 %</text>
+<text class="ms" x="396" y="1052">lmu_dlss_focus_scale (100: DLAA)</text>
+<text class="s" x="636" y="1036">NGX’s default for the mode: K; M in performance</text>
+<text class="ms" x="636" y="1052">lmu_dlss_preset: a letter (F, J, K, L, M) instead</text>
+</g>
+<text class="foot" x="20" y="1252">Violet marks what DLSS adds to the multi-view path (LMU-MVR-ARCHITECTURE.svg); the rest is as there. Still no arrow points into LMU’s code:</text>
+<text class="foot" x="20" y="1269">the jitter reaches LMU through the FOV it asks for, and DLSS runs between LMU’s own D3D11 calls. Needs multi_view=1; lmu_dlss=0 by default.</text>
+<text class="foot" x="20" y="1286">Known limits: the motion vectors come from depth, so other cars smear; a focus view drawn smaller picks its texture mips for that size (no per-view</text>
+<text class="foot" x="20" y="1303">mip bias at the API level). The VR UI’s canvas with mips (lmu_ui_mips) is on with or without DLSS. Design as of 2026-11-10, branch lmu-dlss.</text>
+</svg>

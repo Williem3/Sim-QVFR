@@ -127,6 +127,33 @@ inline const char* focus_mode_name(int percent) {
                            : "ultra performance";
 }
 
+// NGX's render presets by letter: A is 1 ... O is 15 (nvsdk_ngx_defs.h NVSDK_NGX_DLSS_Hint_Render_Preset); 0 is NGX's
+// default for the feature's mode. A setting's text: a letter, or the number; anything else, empty or out of range:
+// `fallback`.
+inline int preset_from_text(const wchar_t* text, int fallback) {
+    if (!text)
+        return fallback;
+    while (*text == L' ' || *text == L'\t')
+        ++text;
+    if (!*text)
+        return fallback;
+    const wchar_t c = *text >= L'a' && *text <= L'z' ? static_cast<wchar_t>(*text - L'a' + L'A') : *text;
+    if (c >= L'A' && c <= L'O' && (text[1] == 0 || text[1] == L' ' || text[1] == L'\t'))
+        return c - L'A' + 1;
+    int n = 0;
+    for (; *text >= L'0' && *text <= L'9'; ++text)
+        n = n * 10 + (*text - L'0');
+    while (*text == L' ' || *text == L'\t')
+        ++text;
+    return *text || n > 15 ? fallback : n;
+}
+
+// "default" for 0, else the preset's letter ("F", "K").
+inline const char* preset_name(int preset) {
+    static const char* const names[] = {"default", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"};
+    return preset >= 0 && preset <= 15 ? names[preset] : "?";
+}
+
 // A side `output` pixels long rendered at `scale` of it for an upscale: rounded, at least 1, at most `output`.
 inline unsigned render_size(unsigned output, double scale) {
     if (!(scale > 0) || scale >= 1)

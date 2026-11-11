@@ -26,13 +26,26 @@ constexpr const char* kProjectId = "5b1c0f1e-6a57-4c1b-9d0e-51a0c7f3d2a4";
 bool started = false, tried = false;
 std::string failure;
 NVSDK_NGX_Parameter* params = nullptr;
+// While a feature is made: the tag NGX's lines give its mode ("(DLAA)", "(Perf)"), so its line on the preset it took
+// for that mode is logged (it writes one for every mode).
+const char* creatingMode = nullptr;
 
-// NGX's own lines into our log: its errors and warnings only (it writes hundreds of lines a feature otherwise).
+// NGX's own lines into our log: its errors and warnings, and the preset it took for a feature being made (it writes
+// hundreds of lines a feature otherwise).
 void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
     std::string line = message ? message : "";
     std::string lower = line;
     for (char& c : lower)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (const size_t at = creatingMode ? line.find(creatingMode) : std::string::npos;
+        at != std::string::npos &&
+        (lower.find("using app hint preset") != std::string::npos || lower.find("using title default preset") != std::string::npos)) {
+        std::string preset = line.substr(at);
+        while (!preset.empty() && (preset.back() == '\n' || preset.back() == '\r' || preset.back() == ' '))
+            preset.pop_back();
+        simqvfr::logf("ngx: %s", preset.c_str());
+        return;
+    }
     if (lower.find("error") == std::string::npos && lower.find("warn") == std::string::npos && lower.find("fail") == std::string::npos)
         return;
     // Not failures: its first two guesses for its core before the driver's own, and model downloads it has no copy of.
@@ -116,8 +129,17 @@ Feature* create(ID3D11DeviceContext* context, unsigned renderWidth, unsigned ren
                              NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
                              NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance})
         NVSDK_NGX_Parameter_SetUI(params, hint, static_cast<unsigned>(preset));
+    switch (c.Feature.InPerfQualityValue) {
+    case NVSDK_NGX_PerfQuality_Value_DLAA: creatingMode = "(DLAA)"; break;
+    case NVSDK_NGX_PerfQuality_Value_UltraQuality: creatingMode = "(UltraQuality)"; break;
+    case NVSDK_NGX_PerfQuality_Value_MaxQuality: creatingMode = "(Quality)"; break;
+    case NVSDK_NGX_PerfQuality_Value_Balanced: creatingMode = "(Balanced)"; break;
+    case NVSDK_NGX_PerfQuality_Value_MaxPerf: creatingMode = "(Perf)"; break;
+    default: creatingMode = "(UltraPerf)"; break;
+    }
     NVSDK_NGX_Handle* handle = nullptr;
     const NVSDK_NGX_Result r = NGX_D3D11_CREATE_DLSS_EXT(context, &handle, params, &c);
+    creatingMode = nullptr;
     result = static_cast<unsigned>(r);
     if (NVSDK_NGX_FAILED(r) || !handle)
         return nullptr;
