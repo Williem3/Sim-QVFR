@@ -265,7 +265,7 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   LMU renders the four views on their own; the log says so.
 - **Turn off MFAA in the NVIDIA Control Panel** (Manage 3D settings, Multi-Frame Sampled AA, globally or for
   LMU). With it on, shadows flicker in and out and show hard edges while you drive with multi-view rendering.
-  Turning it off fixed that for players who reported it.
+  Turning it off fixed that for the player who reported it.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).
