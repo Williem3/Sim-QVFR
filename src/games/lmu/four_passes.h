@@ -57,6 +57,9 @@ struct FourPassesRun {
     // YEBIS's copy and composite once more, with the eye's glare and exposure), its final blit beside the eye and the
     // overlays doubled into it (R3).
     bool focusReplay = false;
+    // [experiment] lmu_ui_mips (default 1): the VR UI panel's doubled draws sample a copy of its canvas with mips
+    // (mvr_pass.h mvr_ui_mips); 0: the game's canvas (one mip) as it is.
+    bool uiMips = true;
     // R4a ([experiment] lmu_focus_final, with focusReplay): the game's two eye passes only; the focus views are those
     // focus finals beside the eyes. lmu_focus_final_ab=N: N frames like that, then N with the four passes (gate D), in
     // turn, each side's CPU and GPU per pass logged apart.

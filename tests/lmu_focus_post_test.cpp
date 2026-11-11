@@ -451,20 +451,27 @@ int main(int argc, char** argv) {
     const Kit standIn = {copyPs.Get(),    compositePs.Get(),      copyCb.Get(),         compositeCb.Get(),
                          copyConstants,   sizeof(copyConstants),  downConstants,        sizeof(downConstants),
                          compositeConstants, sizeof(compositeConstants), blitVs.Get(), blitPs.Get()};
+    // MSAA off (`single`): the scene drawn into its single-sample target with a single-sample depth target, no resolve;
+    // the post-processing reads that target directly (docs/recon-lmu.md "MSAA off").
+    ComPtr<ID3D11Texture2D> depth1 = texture(device.Get(), W, H, DXGI_FORMAT_D24_UNORM_S8_UINT, 1, D3D11_BIND_DEPTH_STENCIL);
+    ComPtr<ID3D11DepthStencilView> dsv1;
+    device->CreateDepthStencilView(depth1.Get(), nullptr, &dsv1);
     const auto eye_pass = [&](int pass, const lmu::MvrPassView* v, bool checkState, const Kit& k,
-                              bool overlayCheck = false, bool driven = false) {
+                              bool overlayCheck = false, bool driven = false, bool single = false) {
         if (!driven)  // driven: the tracker begins it at the scene's bind below
             lmu::mvr_pass_begin(pass, v, false);  // as the game's scene render: the pass begins, then its scene's bind
-        context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), dsv.Get());
+        ID3D11RenderTargetView* const sceneTarget = single ? sceneRtv.Get() : msaaRtv.Get();
+        context->OMSetRenderTargets(1, &sceneTarget, single ? dsv1.Get() : dsv.Get());
         context->VSSetShader(twinned.Get(), nullptr, 0);
         const D3D11_VIEWPORT whole = {0, 0, static_cast<float>(W), static_cast<float>(H), 0, 1};
         context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), nullptr);
+        context->OMSetRenderTargets(1, &sceneTarget, nullptr);
         context->VSSetShader(plainVs.Get(), nullptr, 0);
         context->PSSetShader(scenePs.Get(), nullptr, 0);
         context->RSSetViewports(1, &whole);
         context->Draw(3, 0);
-        context->ResolveSubresource(scene.Get(), 0, msaa.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        if (!single)
+            context->ResolveSubresource(scene.Get(), 0, msaa.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
 
         context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
         context->IASetInputLayout(nullptr);
@@ -893,6 +900,115 @@ int main(int argc, char** argv) {
         lmu::mvr_track_passes(false);
     }
 
+    {  // MSAA off: no multisample target, no resolve; YEBIS's copy reads the scene's own target. A frame of it without
+       // passes teaches the tracker that target (what the copy reads, drawn with depth); from the next frame it drives
+       // the passes from its binds with depth, and their post-processing begins at the copy: the focus post and finals
+       // as with MSAA. A multisample frame after it: the passes from the multisample binds again.
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100020);
+        driveLog.clear();
+        // The frame it learns in: both eyes, no pass begun (eye 1's scene bind comes after the learning, mid-frame).
+        eye_pass(0, nullptr, false, standIn, false, true, true);
+        eye_pass(1, nullptr, false, standIn, false, true, true);
+        lmu::mvr_frame_end(100021);
+        const bool learnedWithoutPasses = driveLog.empty();
+        // A frame whose focus views don't fit (the first after loading, at the game's own size: no view handed over):
+        // no focus post, yet both passes found, pass 0 ending after its own final blit (after which pass 1's end
+        // applies the live resolution).
+        driveLog.clear();
+        driveViews[0] = driveViews[1] = nullptr;
+        const lmu::MvrTrackStats unfitBefore = lmu::mvr_track_stats();
+        const lmu::MvrPassStats unfitPost = lmu::mvr_pass_stats();
+        eye_pass(0, nullptr, false, standIn, false, true, true);
+        eye_pass(1, nullptr, false, standIn, false, true, true);
+        lmu::mvr_frame_end(100024);
+        const lmu::MvrTrackStats unfit = lmu::mvr_track_stats();
+        std::snprintf(what, sizeof(what),
+                      "MSAA off, the focus views not fitting: passes%s, %llu final blits seen, %llu composites, the "
+                      "fallback refused (single-sample: %s)",
+                      driveLog.c_str(), static_cast<unsigned long long>(unfit.singleSampleBlits - unfitBefore.singleSampleBlits),
+                      static_cast<unsigned long long>(lmu::mvr_pass_stats().focusComposites - unfitPost.focusComposites),
+                      lmu::mvr_single_sample_passes() ? "yes" : "NO");
+        check(driveLog == " b0 e0 b1 e1" && unfit.singleSampleBlits == unfitBefore.singleSampleBlits + 2 &&
+                  lmu::mvr_pass_stats().focusComposites == unfitPost.focusComposites && lmu::mvr_single_sample_passes(),
+              what);
+        // A blit reading the scene's target before the pass's post-processing began (a draw like the final blit
+        // mid-pass): not the pass's end, so the eye's pass stays one and the other eye is still found.
+        driveLog.clear();
+        const lmu::MvrTrackStats strayBefore = lmu::mvr_track_stats();
+        const uint64_t postsBefore = lmu::mvr_pass_stats().singleSamplePosts;
+        {
+            ID3D11RenderTargetView* const sceneTarget = sceneRtv.Get();
+            context->OMSetRenderTargets(1, &sceneTarget, dsv1.Get());  // eye 0's scene: its pass begins
+            context->OMSetRenderTargets(1, eyeFinalRtv.GetAddressOf(), nullptr);
+            context->IASetInputLayout(blitLayout.Get());
+            const UINT stride = sizeof(BlitVertex), offset = 0;
+            context->IASetVertexBuffers(0, 1, blitVb.GetAddressOf(), &stride, &offset);
+            context->VSSetShader(blitVs.Get(), nullptr, 0);
+            context->PSSetShader(blitPs.Get(), nullptr, 0);
+            context->PSSetShaderResources(0, 1, sceneSrv.GetAddressOf());
+            const D3D11_VIEWPORT whole = {0, 0, static_cast<float>(W), static_cast<float>(H), 0, 1};
+            context->RSSetViewports(1, &whole);
+            context->Draw(6, 6);  // the stray blit, before any copy
+            context->OMSetRenderTargets(1, copyRtv.GetAddressOf(), nullptr);  // another target after it
+        }
+        eye_pass(0, nullptr, false, standIn, false, true, true);  // the rest of eye 0 (its scene bind again, its post)
+        eye_pass(1, nullptr, false, standIn, false, true, true);
+        lmu::mvr_frame_end(100025);
+        const lmu::MvrTrackStats stray = lmu::mvr_track_stats();
+        const uint64_t posts = lmu::mvr_pass_stats().singleSamplePosts - postsBefore;
+        std::snprintf(what, sizeof(what),
+                      "MSAA off, a blit reading the scene before the copy: passes%s, both eyes' post-processing begun (%llu), "
+                      "%llu blits before a post not taken, %llu passes ended before their post",
+                      driveLog.c_str(), static_cast<unsigned long long>(posts),
+                      static_cast<unsigned long long>(stray.blitsBeforePost - strayBefore.blitsBeforePost),
+                      static_cast<unsigned long long>(stray.passesWithoutPost - strayBefore.passesWithoutPost));
+        check(driveLog == " b0 e0 b1 e1" && posts == 2 && stray.blitsBeforePost == strayBefore.blitsBeforePost + 1 &&
+                  stray.passesWithoutPost == strayBefore.passesWithoutPost,
+              what);
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        const lmu::MvrTrackStats trackBefore = lmu::mvr_track_stats();
+        driveLog.clear();
+        eye_pass(0, nullptr, false, standIn, false, true, true);
+        eye_pass(1, nullptr, false, standIn, false, true, true);
+        driveFinals = false;
+        lmu::mvr_frame_end(100022);
+        const lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        const lmu::MvrTrackStats trackAfter = lmu::mvr_track_stats();
+        const bool finals = driveFinals, single = lmu::mvr_single_sample_passes();
+        std::snprintf(what, sizeof(what),
+                      "MSAA off: the scene's target learned in a frame without passes (%s), then the tracker drives the "
+                      "passes:%s; post-processings begun at the copy %llu, resolves %llu; %llu composites and %llu final "
+                      "blits, both eyes' focus finals made; the passes said single-sample",
+                      learnedWithoutPasses ? "none driven" : "SOME DRIVEN", driveLog.c_str(),
+                      static_cast<unsigned long long>(after.singleSamplePosts - before.singleSamplePosts),
+                      static_cast<unsigned long long>(after.resolves - before.resolves),
+                      static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusBlits - before.focusBlits));
+        check(learnedWithoutPasses && driveLog == " b0 e0 b1 e1" && after.singleSamplePosts == before.singleSamplePosts + 2 &&
+                  after.resolves == before.resolves && after.focusComposites == before.focusComposites + 2 &&
+                  after.focusBlits == before.focusBlits + 2 && finals && single &&
+                  trackAfter.singleSamplePasses == trackBefore.singleSamplePasses + 2,
+              what);
+        driveLog.clear();
+        eye_pass(0, nullptr, false, standIn, false, true);
+        eye_pass(1, nullptr, false, standIn, false, true);
+        lmu::mvr_frame_end(100023);
+        const lmu::MvrPassStats msaaAgain = lmu::mvr_pass_stats();
+        check(driveLog == " b0 e0 b1 e1" && msaaAgain.resolves == after.resolves + 2 &&
+                  msaaAgain.singleSamplePosts == after.singleSamplePosts && !lmu::mvr_single_sample_passes(),
+              "MSAA on again: the passes from the multisample binds, their post-processing at the resolve");
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+
     const auto marked = [&](lmu::VsRole role) {  // a vertex shader with a role, as the probe marks the game's
         ComPtr<ID3D11VertexShader> s = vs(device.Get(), kPlainVs);
         const UINT r = static_cast<UINT>(role);
@@ -1103,6 +1219,79 @@ int main(int argc, char** argv) {
                 check(errors == 0, what);
             }
         }
+    }
+
+    {  // The desktop mirror as LMU's: its swapchain's back buffer bound with a depth target outside the passes, the
+       // tracker on (it notes what is drawn with depth there, for MSAA off). Nothing of it may be held: ResizeBuffers
+       // fails while any reference to a back buffer is (it did, "Resize swap chain failed" at the session's start,
+       // 2026-11-10 19:13). The control: a view of ours kept alive makes it fail, so the check can see a reference.
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"lmu_focus_post_test";
+        RegisterClassW(&wc);
+        HWND hwnd = CreateWindowW(wc.lpszClassName, L"", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, nullptr, nullptr, wc.hInstance,
+                                  nullptr);
+        ComPtr<IDXGIDevice> dxgiDevice;
+        ComPtr<IDXGIAdapter> adapter;
+        ComPtr<IDXGIFactory> factory;
+        ComPtr<IDXGISwapChain> chain;
+        DXGI_SWAP_CHAIN_DESC scd{};
+        scd.BufferDesc.Width = scd.BufferDesc.Height = 64;
+        scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        scd.SampleDesc.Count = 1;
+        scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        scd.BufferCount = 2;
+        scd.OutputWindow = hwnd;
+        scd.Windowed = TRUE;
+        scd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        const bool made = hwnd && SUCCEEDED(device.As(&dxgiDevice)) && SUCCEEDED(dxgiDevice->GetAdapter(&adapter)) &&
+                          SUCCEEDED(adapter->GetParent(IID_PPV_ARGS(&factory))) &&
+                          SUCCEEDED(factory->CreateSwapChain(device.Get(), &scd, &chain));
+        lmu::mvr_track_passes(true);
+        lmu::mvr_frame_end(100030);
+        ComPtr<ID3D11Texture2D> mirrorDepth =
+            texture(device.Get(), 64, 64, DXGI_FORMAT_D24_UNORM_S8_UINT, 1, D3D11_BIND_DEPTH_STENCIL);
+        ComPtr<ID3D11DepthStencilView> mirrorDsv;
+        device->CreateDepthStencilView(mirrorDepth.Get(), nullptr, &mirrorDsv);
+        const auto mirror_frame = [&](ComPtr<ID3D11RenderTargetView>* keep) {
+            ComPtr<ID3D11Texture2D> back;
+            ComPtr<ID3D11RenderTargetView> backRtv;
+            if (!chain || FAILED(chain->GetBuffer(0, IID_PPV_ARGS(&back))) ||
+                FAILED(device->CreateRenderTargetView(back.Get(), nullptr, &backRtv)))
+                return false;
+            context->OMSetRenderTargets(1, backRtv.GetAddressOf(), mirrorDsv.Get());
+            context->VSSetShader(plainVs.Get(), nullptr, 0);
+            context->PSSetShader(scenePs.Get(), nullptr, 0);
+            const D3D11_VIEWPORT vp = {0, 0, 64, 64, 0, 1};
+            context->RSSetViewports(1, &vp);
+            context->Draw(3, 0);
+            context->OMSetRenderTargets(0, nullptr, nullptr);
+            if (keep)
+                *keep = backRtv;
+            return true;
+        };
+        const bool drawn = mirror_frame(nullptr);
+        context->Flush();
+        const HRESULT resized = chain ? chain->ResizeBuffers(0, 96, 96, DXGI_FORMAT_UNKNOWN, 0) : E_FAIL;
+        ComPtr<ID3D11RenderTargetView> kept;
+        mirror_frame(&kept);
+        context->Flush();
+        const HRESULT held = chain ? chain->ResizeBuffers(0, 128, 128, DXGI_FORMAT_UNKNOWN, 0) : S_OK;
+        kept.Reset();
+        context->Flush();
+        const HRESULT released = chain ? chain->ResizeBuffers(0, 128, 128, DXGI_FORMAT_UNKNOWN, 0) : E_FAIL;
+        lmu::mvr_frame_end(100031);
+        lmu::mvr_track_passes(false);
+        std::snprintf(what, sizeof(what),
+                      "the mirror's back buffer bound with depth outside the passes, the tracker on: ResizeBuffers 0x%08lx "
+                      "(the control, a view kept: 0x%08lx; let go: 0x%08lx)",
+                      static_cast<unsigned long>(resized), static_cast<unsigned long>(held),
+                      static_cast<unsigned long>(released));
+        check(made && drawn && SUCCEEDED(resized) && FAILED(held) && SUCCEEDED(released), what);
+        chain.Reset();
+        if (hwnd)
+            DestroyWindow(hwnd);
     }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

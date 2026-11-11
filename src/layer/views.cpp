@@ -184,6 +184,8 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                  static_cast<long long>(info->displayTime), i, views[i].fov.angleLeft, views[i].fov.angleRight,
                  views[i].fov.angleUp, views[i].fov.angleDown, views[i].pose.position.x, views[i].pose.position.y,
                  views[i].pose.position.z);
+    if (stereo && experiment.views4)  // last: the layer has read what it needs from the FOV (adapter.h)
+        game->qvfr_jitter_views(views, std::min(*countOutput, capacity));
     return r;
 }
 

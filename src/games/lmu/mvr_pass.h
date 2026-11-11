@@ -38,6 +38,10 @@ struct MvrPassView {
     // scale isn't 1 (focus_math.h final_extent); 0: as eyeW x eyeH. The focus final goes beside it, at the focus size.
     unsigned finalEyeW = 0, finalEyeH = 0;
     FocusBox box{};                 // its tangents and the eye's (the focus post's glare mapping; valid: known)
+    // DLAA (dlss_views.h): the clip shift (x += s[0] w, y += s[1] w) the eye's [0] and the focus view's [1] draws carry
+    // this frame, which their images lose in DLAA. The overlays drawn after the post (the driver tags, the VR UI) are
+    // drawn with their viewports moved back by it, so they land where the world is in the image. Zero: no jitter.
+    double overlayShift[2][2] = {};
 };
 
 // The immediate context's vtable entries the hooks use (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
@@ -114,6 +118,11 @@ void mvr_time_hooks(bool on);
 // mvr_pass_install: DrawIndexed is hooked only with it on (turned on later, its functions are hooked as pass starts see
 // them).
 void mvr_focus_replay(bool on);
+// The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
+// about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
+// MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips
+// (copied and its mips made once a frame, bound for those draws only).
+void mvr_ui_mips(bool on);
 // Eye `eye`'s focus image from the focus post (RGBA16F, as the eye's composite) and the composites into it so far
 // (null, 0: none yet).
 ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites);
@@ -143,6 +152,7 @@ MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector
 struct MvrPassStats {
     uint64_t twinBinds = 0, plainBinds = 0, toggles = 0, viewportRewrites = 0, scissorRewrites = 0, stereoErrors = 0;
     uint64_t passesWithFocus = 0, samples = 0, resolves = 0, keptRegions = 0, replacedResolves = 0;
+    uint64_t singleSamplePosts = 0;          // MSAA off: passes whose post-processing began at YEBIS's copy
     uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
     uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
@@ -155,6 +165,7 @@ struct MvrPassStats {
     // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
     // and after them (the VR UI).
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
+    uint64_t uiMipFrames = 0;  // frames whose VR UI canvas was copied with mips for the panel (mvr_ui_mips)
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
     // draws replayed for the menus (mvr_redraw_panel).
     uint64_t maskDraws = 0, maskDrawsTwo = 0, maskDropped = 0, panelReplays = 0;
@@ -184,7 +195,16 @@ struct MvrTrackStats {
     uint64_t frames = 0, matched = 0, countDiffers = 0, beganBefore = 0, endedAfter = 0, passesCompared = 0;
     uint64_t startGapSum = 0, startGapMax = 0, endGapSum = 0, endGapMax = 0;  // draws of the game's pass left out
     uint64_t framesWithoutGame = 0, passesWithoutGame = 0;                    // false finds (menus)
+    uint64_t singleSamplePasses = 0;  // passes begun on the learned single-sample scene target (MSAA off)
+    uint64_t sceneRelearned = 0;      // that target learned again (the game made its targets anew)
+    uint64_t singleSampleBlits = 0;   // those passes' final blits seen (their end), with the focus post or without
+    uint64_t blitsBeforePost = 0;     // blits reading the scene's target before a pass's post began (not taken)
+    uint64_t passesWithoutPost = 0;   // single-sample passes that ended before reaching YEBIS's copy
 };
 MvrTrackStats mvr_track_stats();
+// MSAA off: the tracker has learned the scene's single-sample target (from YEBIS's copy) and seen no multisample scene
+// since. Then the post-processing begins at YEBIS's copy (no resolve), and the four passes aren't fallen back to (they
+// would hook the game's code), whatever happens to the passes.
+bool mvr_single_sample_passes();
 
 }  // namespace lmu

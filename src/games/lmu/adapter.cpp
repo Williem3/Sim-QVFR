@@ -8,6 +8,7 @@
 #include "../diag_switches.h"
 #include "../identity_adapter.h"
 #include "../multi_view.h"
+#include "dlss_views.h"
 #include "four_passes.h"
 #include "game.h"
 #include "glare_share.h"
@@ -79,6 +80,8 @@ public:
             const bool player = gate == 0 && !legacy;  // multi_view=1: the two-pass path
             // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
             run.focusReplay = player || (s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0);
+            // lmu_ui_mips=0: the VR UI panel samples the game's canvas (one mip) in the small periphery too.
+            run.uiMips = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_ui_mips", 1, s.ini) != 0;
             // lmu_focus_final=1 (with it): two eye passes, the focus views from beside the eyes (four_passes.h).
             run.focusFinal = run.focusReplay && run.mvrSkip &&
                              (player || GetPrivateProfileIntW(L"experiment", L"lmu_focus_final", 0, s.ini) != 0);
@@ -118,6 +121,43 @@ public:
                           "turns it off)",
                           diag_.ini().c_str());
         glareAtLaunch_ = run.glareShare;
+        // DLAA through NGX on the views ([experiment] lmu_dlss=1 the eyes, 2 the eyes and the focus views; dlss_views.h):
+        // with the multi-view path only (its eye passes found at the d3d11 level). lmu_dlss_folder: where nvngx_dlss.dll
+        // is; lmu_dlss_preset: NGX's preset number; lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a
+        // comparison); lmu_dlss_view_inverse, lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's
+        // gate (lmu_dlss_gate=1) or the picture say they are the other way round.
+        DlssRun dlss;
+        if (s.ini) {
+            const auto key = [&](const wchar_t* name, int fallback) {
+                return static_cast<int>(GetPrivateProfileIntW(L"experiment", name, fallback, s.ini));
+            };
+            dlss.views = std::clamp(key(L"lmu_dlss", 0), 0, 2);
+            wchar_t folder[MAX_PATH] = {};
+            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_folder", L"", folder, MAX_PATH, s.ini);
+            dlss.dllFolder = folder;
+            dlss.preset = (std::max)(0, key(L"lmu_dlss_preset", 0));
+            dlss.jitter = key(L"lmu_dlss_jitter", 1) != 0;
+            dlss.vectors = key(L"lmu_dlss_vectors", 1) != 0;
+            dlss.viewInverse = key(L"lmu_dlss_view_inverse", 0) != 0;
+            dlss.depthReversed = key(L"lmu_dlss_depth_reversed", 1) != 0;
+            // lmu_dlss_car=0: the cockpit treated as the world. lmu_dlss_car_box_cm: the car's box about the head, in
+            // centimetres to the left, right, down, up, front and back (dlss_views.h).
+            dlss.car = key(L"lmu_dlss_car", 1) != 0;
+            wchar_t box[96] = {};
+            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_car_box_cm", L"", box, 96, s.ini);
+            int cm[6];
+            if (swscanf_s(box, L"%d,%d,%d,%d,%d,%d", &cm[0], &cm[1], &cm[2], &cm[3], &cm[4], &cm[5]) == 6)
+                for (int i = 0; i < 6; ++i)
+                    dlss.carBox[i] = std::clamp(cm[i], 0, 2000) / 100.0;
+            dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
+            dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
+            dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
+            if (dlss.views && !run.trackerDrives) {
+                simqvfr::log_line("lmu dlss: asked for, but it needs the multi-view path (multi_view=1): off");
+                dlss.views = 0;
+            }
+        }
+        dlss_start(dlss);
         qvfr_ = four_passes_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
@@ -152,6 +192,15 @@ public:
     void qvfr_note_views(const XrView* views, uint32_t count) override {
         if (qvfr_)
             four_passes_note_views(views, count);
+    }
+    void session_destroyed() override {
+        IdentityAdapter::session_destroyed();
+        dlss_shutdown();  // its features and NGX belong to the session's device
+    }
+    // DLAA's jitter (dlss_views.h): the last thing done to the FOV the game locates.
+    void qvfr_jitter_views(XrView* views, uint32_t count) override {
+        if (qvfr_)
+            dlss_jitter_views(views, count);
     }
     void visibility_mask_taken(uint32_t viewIndex) override {
         if (qvfr_)
