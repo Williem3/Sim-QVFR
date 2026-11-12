@@ -1,6 +1,7 @@
 // Panels: a modal card over the dimmed window, with its title and a close button, for what doesn't fit a card: Report an
-// issue (the Get help card opens it) and a game's own colour (Custom… on the Games card). Escape or the close button
-// closes it; its content scrolls when it is taller than the window.
+// issue (the Get help card opens it), a game's own colour (Custom… on the Games card), Manage profiles (the profile
+// menu) and About (the version in the rail). Escape or the close button closes it; its content scrolls when it is
+// taller than the window.
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -13,21 +14,34 @@
 
 namespace simqvfr::launcher::ui::win {
 
-namespace {
-
-std::wstring panel_title() {
-    switch (app.panel) {
+std::wstring panel_title(PanelKind kind) {
+    switch (kind) {
     case PanelKind::Report: return L"Report an issue";
     case PanelKind::Color: return L"Colour for " + std::wstring(color_game().name);
+    case PanelKind::Profiles: return L"Manage profiles";
+    case PanelKind::About: return L"About";
     default: return L"";
     }
 }
 
-float panel_content(float x, float y, float w, bool draw) {
-    switch (app.panel) {
+float panel_content(PanelKind kind, float x, float y, float w, bool draw) {
+    switch (kind) {
     case PanelKind::Report: return report_pane(x, y, w, draw);
     case PanelKind::Color: return color_panel(x, y, w, draw);
+    case PanelKind::Profiles: return profiles_pane(x, y, w, draw);
+    case PanelKind::About: return about_pane(x, y, w, draw);
     default: return 0;
+    }
+}
+
+namespace {
+
+// A panel's width: the forms' (Report, Manage profiles), About's text, the colour wheel's.
+float panel_width(PanelKind kind) {
+    switch (kind) {
+    case PanelKind::Color: return 440;
+    case PanelKind::About: return 560;
+    default: return 620;
     }
 }
 
@@ -42,6 +56,10 @@ void open_panel(PanelKind kind) {
         reload_runtime();  // the causes and the report from the latest session
     if (kind == PanelKind::Color)
         load_color_edit();
+    if (kind == PanelKind::Profiles) {
+        app.profileMessage.clear();
+        refresh_profiles();
+    }
     app.focus = kPanelClose;
     app.focusOption = -1;
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -69,14 +87,14 @@ void panel_overlay() {
     cv.fill({0, 0, W, H}, {0, app.dark ? 0.55f : 0.32f});
     app.hits.clear();
     app.drawnLabels.clear();
-    const float w = std::min(app.panel == PanelKind::Report ? 620.0f : 440.0f, W - 32), pad = t::kSpace6, headerH = 60;
+    const float w = std::min(panel_width(app.panel), W - 32), pad = t::kSpace6, headerH = 60;
     const float inner = w - 2 * pad;
-    const float contentH = panel_content(0, 0, inner, false);
+    const float contentH = panel_content(app.panel, 0, 0, inner, false);
     const float h = std::min(headerH + contentH + pad, H - 48);
     const Rect card{std::round((W - w) / 2), std::round(std::max(24.0f, (H - h) / 2)), w, h};
-    cv.fill(card, col(app.panel == PanelKind::Report ? app.c->bg : app.c->surface), t::kRadiusGroup);
+    cv.fill(card, col(app.panel == PanelKind::Color ? app.c->surface : app.c->bg), t::kRadiusGroup);  // forms: their sections on it
     cv.stroke(card, col(app.c->field_border), 1, t::kRadiusGroup);
-    cv.text(panel_title(), t::kTitle3, {card.x + pad, card.y + 20, inner - 40, t::kTitle3.lineHeight}, col(app.c->label));
+    cv.text(panel_title(app.panel), t::kTitle3, {card.x + pad, card.y + 20, inner - 40, t::kTitle3.lineHeight}, col(app.c->label));
     // Its close button: an ✕.
     const Rect close{card.right() - pad - 28, card.y + 16, 28, 28};
     if (pointer_in(close))
@@ -91,7 +109,7 @@ void panel_overlay() {
     app.panelScrollMax = std::max(0.0f, contentH - body.h);
     app.panelScroll = std::clamp(app.panelScroll, 0.0f, app.panelScrollMax);
     cv.push_clip(body);
-    panel_content(body.x, body.y - app.panelScroll, body.w, true);
+    panel_content(app.panel, body.x, body.y - app.panelScroll, body.w, true);
     cv.pop_clip();
 }
 

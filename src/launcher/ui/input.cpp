@@ -29,16 +29,17 @@ void activate(Ctl id, int option) {
         }
         if (app.pane == Pane::Headset)
             open_pads();
-        if (app.pane == Pane::Profiles) {
-            app.profileMessage.clear();
+        if (app.pane == Pane::Overview) {  // the profile in use, the last session, the layers below
             refresh_profiles();
+            reload_runtime();
+            refresh_layers();
         }
         app.tabPage[static_cast<int>(tab_of(app.pane))] = app.pane;  // the tab comes back to it
         break;
     case kTopTab: show_tab(static_cast<Tab>(std::clamp(option, 0, kTabs - 1))); return;
     case kSearch: open_search(); return;
     case kProfileMenu: open_profile_menu(); return;
-    case kVersion: show_page(Pane::About); return;
+    case kVersion: open_panel(PanelKind::About); return;
     case kSearchResult:
         if (option >= 0 && option < static_cast<int>(app.searchResults.size()))
             jump_to(app.searchIndex[static_cast<size_t>(app.searchResults[static_cast<size_t>(option)])]);
@@ -144,6 +145,11 @@ void activate(Ctl id, int option) {
         SetFocus(app.reportEdit);
         return;
     case kReportOpen: open_panel(PanelKind::Report); return;
+    case kOverviewCard:
+        if (option >= 0 && option < static_cast<int>(app.overviewTargets.size()))
+            jump_to(app.overviewTargets[static_cast<size_t>(option)]);
+        return;
+    case kKofiTile: ShellExecuteW(app.hwnd, L"open", kSupportUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     case kPanelClose: close_panel(); return;
     case kColorPreset: use_color_preset(option); return;
     case kColorCustom: open_panel(PanelKind::Color); return;
@@ -177,7 +183,8 @@ void activate(Ctl id, int option) {
     case kFgMultiplier:
     case kFgScale:
     case kFgPeriphery:
-    case kLayerProfile: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
+    case kLayerProfile:
+    case kOverviewProfile: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
         std::vector<std::wstring> items;
         const int selected = choice_items(id, items);
         if (!items.empty())
@@ -258,7 +265,7 @@ void activate(Ctl id, int option) {
         if (!app.release.url.empty() && app.release.url.rfind(L"https://github.com/", 0) == 0)
             ShellExecuteW(app.hwnd, L"open", app.release.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return;
-    case kUpdateBadge: show_page(Pane::About); return;
+    case kUpdateBadge: open_panel(PanelKind::About); return;
     case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kGameShown: {
         std::size_t count = 0;
@@ -393,6 +400,8 @@ bool push_button(Ctl id) {
     case kPanelClose:
     case kColorPreset:
     case kColorCustom:
+    case kOverviewCard:
+    case kKofiTile:
     case kColorReset: return true;
     default: return false;
     }
@@ -441,6 +450,7 @@ bool space_control(Ctl id) {
     case kShape:
     case kHelmetDetail:
     case kLayerProfile:
+    case kOverviewProfile:
     case kLayerOn:
     case kDiagCapture:
     case kDiagFrameCapture:

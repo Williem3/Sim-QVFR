@@ -67,7 +67,9 @@ void match() {
 // Where a result is: "Picture › Resolution · Field of view crop".
 std::wstring where(const SearchEntry& e) {
     std::wstring s = std::wstring(tab_label(tab_of(e.pane)));
-    if (tab_pages(tab_of(e.pane)).size() > 1)
+    if (e.panel != PanelKind::None)
+        s += L" › " + panel_title(e.panel);
+    else if (tab_pages(tab_of(e.pane)).size() > 1)
         s += std::wstring(L" › ") + pane_label(static_cast<int>(e.pane));
     if (!e.section.empty() && e.section != e.label)
         s += L" › " + e.section;
@@ -130,6 +132,17 @@ void search_index_pages(float x, float w) {
                     app.searchIndex.push_back({d.label, d.section, p, d.hiddenBy, d.more});
             }
         }
+    // Manage profiles and About: their labels open them (Overview's panels).
+    for (const PanelKind kind : {PanelKind::Profiles, PanelKind::About}) {
+        app.drawnLabels.clear();
+        app.drawingSection = panel_title(kind);
+        app.searchIndex.push_back({panel_title(kind), L"", Pane::Overview, L"", L"", kind});
+        panel_content(kind, x, -100000, std::min(w, 560.0f), true);
+        for (const DrawnLabel& d : app.drawnLabels)
+            if (!d.label.empty())
+                app.searchIndex.push_back({d.label, d.section, Pane::Overview, d.hiddenBy, d.more, kind});
+    }
+    app.drawingSection.clear();
     app.canvas.pop_clip();
     app.pane = shown;
     app.scroll = scroll;
@@ -187,6 +200,10 @@ void search_card() {
 void jump_to(const SearchEntry& entry) {
     close_search();
     show_page(entry.pane);
+    if (entry.panel != PanelKind::None) {  // in a panel: it opens
+        open_panel(entry.panel);
+        return;
+    }
     if (!entry.more.empty())  // inside a closed More: opened
         app.moreOpen.insert(entry.more);
     app.highlight = {entry.label, entry.section, {}};

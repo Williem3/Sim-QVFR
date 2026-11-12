@@ -30,11 +30,11 @@ namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
 
-// The pages. Picture, Headset and Game are their tabs' cards (picture.cpp, headset.cpp, pane_games.cpp game_page); Profiles
-// and About are the old panes, Overview's pages until it has its hub (docs/ui/OVERHAUL_PLAN.md §7).
-enum class Pane { Profiles, Picture, Headset, Game, About };
+// The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
+// headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).
+enum class Pane { Overview, Picture, Headset, Game };
 
-inline constexpr int kPanes = 5;
+inline constexpr int kPanes = 4;
 
 // The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
 // strip under the top bar (shell.cpp kTabPages).
@@ -113,11 +113,14 @@ enum Ctl {
     kCardMenu, kMore, kHelmetFolder,
     // Get help's Report an issue… (its panel), an open panel's close button, a colour preset on the Games card (option:
     // its index in kColorPresets) and Custom… (the colour panel).
-    kReportOpen, kPanelClose, kColorPreset, kColorCustom
+    kReportOpen, kPanelClose, kColorPreset, kColorCustom,
+    // The Overview: the profile's segments (option: a preset's index, or Custom), a summary card (option: its index in
+    // app.overviewTargets) and the Ko-fi tile.
+    kOverviewProfile, kOverviewCard, kKofiTile
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
-enum class PanelKind { None, Report, Color };
+enum class PanelKind { None, Report, Color, Profiles, About };
 
 // A stop in the keyboard's Tab order: a control, and which one of several (a card's menu), or -1.
 struct FocusStop {
@@ -182,11 +185,13 @@ struct DrawnLabel {
     std::wstring more;      // hidden in this More while it is closed (app.moreOpen's key)
 };
 
-// A setting Find a setting can jump to: its label, its section's title, its page, and what hides it.
+// A setting Find a setting can jump to: its label, its section's title, its page, what hides it, and the panel it is in
+// (Manage profiles, About), if any.
 struct SearchEntry {
     std::wstring label, section;
     Pane pane;
     std::wstring hiddenBy, more;
+    PanelKind panel = PanelKind::None;
 };
 
 // app.tip for a hit's own tip text (Hit::tip) rather than an entry of kHelp.
@@ -280,8 +285,8 @@ struct App {
     std::wstring ini;
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Game;
-    Pane tabPage[kTabs] = {Pane::Profiles, Pane::Picture, Pane::Headset, Pane::Game};  // each tab's page, as last shown
+    Pane pane = Pane::Overview;
+    Pane tabPage[kTabs] = {Pane::Overview, Pane::Picture, Pane::Headset, Pane::Game};  // each tab's page
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -402,6 +407,8 @@ struct App {
     PanelKind panel = PanelKind::None;
     float panelScroll = 0, panelScrollMax = 0;
     Rect panelBody;
+    // The Overview's summary cards as last drawn: the card each one opens (kOverviewCard's options).
+    std::vector<SearchEntry> overviewTargets;
 };
 
 // The window (window_state.cpp).
@@ -499,7 +506,7 @@ float report_pane(float x, float y, float w, bool draw);
 void place_report_edit();
 void create_report_edit();
 
-// pane_profiles.cpp
+// pane_profiles.cpp: Manage profiles (a panel), and using, saving and pasting profiles.
 float profiles_pane(float x, float y, float w, bool draw);
 void use_profile(const std::wstring& name);
 void save_current_profile();
@@ -531,10 +538,18 @@ void use_color_preset(int preset);
 float color_panel(float x, float y, float w, bool draw);
 float game_page(float x, float y, float w, bool draw);
 
-// panels.cpp: a panel over the window (Report an issue, a game's colour); Escape or its ✕ closes it.
+// panels.cpp: a panel over the window (Report an issue, a game's colour, Manage profiles, About); Escape or its ✕ closes
+// it. Its title and content are Find a setting's too.
+std::wstring panel_title(PanelKind kind);
+float panel_content(PanelKind kind, float x, float y, float w, bool draw);
 void open_panel(PanelKind kind);
 void close_panel();
 void panel_overlay();
+
+// overview.cpp: the Overview tab, and its profile segments (the presets, then Custom) and the one chosen.
+float overview_page(float x, float y, float w, bool draw);
+int overview_profile(std::vector<std::wstring>& items);
+void choose_overview_profile(int option);
 
 // picture.cpp: the Picture tab's cards.
 float picture_page(float x, float y, float w, bool draw);
@@ -552,12 +567,11 @@ float readouts_card(float x, float y, float w, bool draw);
 float placement_preview(float x, float y, float w, bool draw);
 float placement_caption(float x, float y, float w, bool draw);
 float placement_readouts(float x, float y, float w, bool draw);
-float side_preview(float x, float y, float w, bool draw);
 
 // headset.cpp: the Headset tab's cards.
 float headset_page(float x, float y, float w, bool draw);
 
-// pane_about.cpp
+// pane_about.cpp: the About panel's content.
 float about_pane(float x, float y, float w, bool draw);
 
 // chrome.cpp

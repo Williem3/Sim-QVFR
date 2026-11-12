@@ -365,18 +365,20 @@ namespace {
 
 // The controls of a page of cards in the order they were drawn (card by card, top to bottom), from the last frame's
 // hits: each once, a card's menu once per card. What a disclosure hides was not drawn, so it isn't in the order.
-std::vector<FocusStop> drawn_order() {
+// In a panel only its own hits were drawn, and its Ko-fi button (About) is one of them.
+std::vector<FocusStop> drawn_order(bool panel = false) {
     static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kThemeToggle,
                                     kLaunch, kSupport, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
                                     kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kDiagZip};
     std::vector<FocusStop> out;
     for (const Hit& h : app.hits) {
-        if (std::find(std::begin(kNotStops), std::end(kNotStops), h.id) != std::end(kNotStops))
+        if (std::find(std::begin(kNotStops), std::end(kNotStops), h.id) != std::end(kNotStops) && !(panel && h.id == kSupport))
             continue;
         if (h.r.bottom() < app.scrollArea.y - 2000 || h.r.y > app.scrollArea.bottom() + 2000)
             continue;  // not this page's (an index pass draws far away)
         const bool several = h.id == kCardMenu || h.id == kMore || h.id == kHotkeyKey || h.id == kHotkeyPad ||
-                             h.id == kCheckFix || h.id == kGameShown || h.id == kColorGame || h.id == kColorPreset;
+                             h.id == kCheckFix || h.id == kGameShown || h.id == kColorGame || h.id == kColorPreset ||
+                             h.id == kOverviewCard || (h.id >= kProfileUse && h.id <= kProfileRevert);
         // A layer's switch and moves: one stop, the list (the arrows pick a row, Space and Ctrl+arrows act on it).
         const bool layer = h.id == kLayerOn || h.id == kLayerUp || h.id == kLayerDown;
         const FocusStop stop{layer ? kLayerList : h.id, several ? h.option : -1};
@@ -390,7 +392,7 @@ std::vector<FocusStop> drawn_order() {
 
 std::vector<FocusStop> focus_order() {
     if (app.panel != PanelKind::None) {  // a panel: only its own controls (its ✕ first, as drawn)
-        std::vector<FocusStop> order = drawn_order();
+        std::vector<FocusStop> order = drawn_order(true);
         if (app.panel == PanelKind::Report && !app.reportZip.empty())
             order.push_back({kDiagZip});  // Return shows it in Explorer
         return order;
@@ -399,7 +401,7 @@ std::vector<FocusStop> focus_order() {
     if (tab_pages(tab_of(app.pane)).size() < 2)
         order.pop_back();  // no page strip
     switch (app.pane) {
-    case Pane::Profiles: order.insert(order.end(), {{kProfileSave}, {kProfilePaste}}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
+    case Pane::Overview:
     case Pane::Picture:
     case Pane::Headset:
     case Pane::Game: {
@@ -407,7 +409,6 @@ std::vector<FocusStop> focus_order() {
         order.insert(order.end(), drawn.begin(), drawn.end());
         break;
     }
-    case Pane::About: order.insert(order.end(), {{kSupport}, {kUpdateCheck}, {kUpdateNow}}); break;
     }
     order.insert(order.end(), {{kThemeToggle}, {kSearch}, {kProfileMenu}, {kLaunch}, {kVersion}});  // the top bar, the rail's foot
     return order;

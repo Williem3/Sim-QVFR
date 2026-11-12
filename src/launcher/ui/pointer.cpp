@@ -76,6 +76,8 @@ void set_panel_from(float x, float y) {
 int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     int selected = 0;
     items.clear();
+    if (owner == kOverviewProfile)
+        return overview_profile(items);
     if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
         const bool focus = owner == kCheekyFocusPreset;
         const int value = focus ? app.s.cheeky.focusPreset : app.s.cheeky.outerPreset;
@@ -167,7 +169,8 @@ bool segmented_ctl(Ctl id) {
     case kFgMultiplier:
     case kFgScale:
     case kFgPeriphery:
-    case kLayerProfile: return true;
+    case kLayerProfile:
+    case kOverviewProfile: return true;
     default: return false;
     }
 }
@@ -282,7 +285,7 @@ void profile_menu_action(int option) {
     case kActRevert: activate(kProfileRevert, current); break;
     case kActSave: activate(kProfileSave, -1); break;
     case kActPaste: activate(kProfilePaste, -1); break;
-    case kActManage: show_page(Pane::Profiles); break;
+    case kActManage: open_panel(PanelKind::Profiles); break;
     case kActRestore: activate(kRestore, -1); break;
     default: activate(kProfileUse, action); break;
     }
@@ -300,6 +303,10 @@ void choose(Ctl owner, int option) {
     }
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
+        return;
+    }
+    if (owner == kOverviewProfile) {  // a preset used, or the profile menu
+        choose_overview_profile(option);
         return;
     }
     if (owner == kMethod)
