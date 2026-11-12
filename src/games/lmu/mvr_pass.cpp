@@ -13,12 +13,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
@@ -438,6 +440,115 @@ struct Tracker {
     bool menuLogged = false;
 } tr;
 
+// The pass trace (log only): while the tracker drives the passes, three frames' render target binds with depth or a
+// multisample target, resolves, CopySubresourceRegions, YEBIS's draws, the focus post's window and the tracked passes'
+// bounds, in order, to see what the tracker takes for a pass's begin and end. The frames with tracked passes numbered
+// kPassTraceAt (the first renders at the game's own size); a frame without passes is dropped.
+struct PassTrace {
+    bool recording = false;
+    int framesWithPasses = 0, logged = 0, dropped = 0;
+    std::vector<std::string> events;
+    std::vector<const void*> ids;  // the textures mentioned this frame (raw: compared only)
+} pt;
+constexpr int kPassTraceAt[] = {2, 3, 45};
+constexpr std::size_t kPassTraceEvents = 400;
+
+void pt_event(const char* format, ...) {
+    if (pt.events.size() >= kPassTraceEvents) {
+        ++pt.dropped;
+        return;
+    }
+    char head[32];
+    std::snprintf(head, sizeof(head), "@%llu ", static_cast<unsigned long long>(tr.draws));
+    char body[320];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(body, sizeof(body), format, args);
+    va_end(args);
+    pt.events.push_back(std::string(head) + body);
+}
+
+// A texture as "#n", with its size, format and sample count at its first mention this frame; "-" for none.
+std::string pt_tex(ID3D11Resource* resource) {
+    if (!resource)
+        return "-";
+    for (std::size_t i = 0; i < pt.ids.size(); ++i)
+        if (pt.ids[i] == resource)
+            return "#" + std::to_string(i);
+    pt.ids.push_back(resource);
+    std::string s = "#" + std::to_string(pt.ids.size() - 1);
+    ComPtr<ID3D11Texture2D> t;
+    if (SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&t)))) {
+        D3D11_TEXTURE2D_DESC d;
+        t->GetDesc(&d);
+        char desc[64];
+        std::snprintf(desc, sizeof(desc), "(%ux%u f%d x%u%s)", d.Width, d.Height, static_cast<int>(d.Format),
+                      d.SampleDesc.Count, d.ArraySize > 1 ? " array" : "");
+        s += desc;
+    } else {
+        s += "(not 2D)";
+    }
+    return s;
+}
+
+std::string pt_view(ID3D11View* view) {
+    if (!view)
+        return "-";
+    ComPtr<ID3D11Resource> r;
+    view->GetResource(&r);
+    return pt_tex(r.Get());
+}
+
+// A draw on the game's context with one of YEBIS's pixel shaders (copy, composite, final blit): its input and target.
+void pt_draw(ID3D11DeviceContext* context, const char* call) {
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || !role)
+        return;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    context->PSGetShaderResources(0, 1, &srv);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    const char* name = role == static_cast<UINT>(YebisRole::copy)        ? "copy"
+                       : role == static_cast<UINT>(YebisRole::composite) ? "composite"
+                       : role == static_cast<UINT>(YebisRole::blit)      ? "final blit"
+                                                                         : "?";
+    const std::string in = pt_view(srv.Get()), out = pt_view(rtv.Get());
+    pt_event("YEBIS %s (%s) t0 %s > %s, %s", name, call, in.c_str(), out.c_str(),
+             tr.open ? ("in tracked pass " + std::to_string(tr.pass)).c_str() : "outside the tracked passes");
+}
+
+// The frame end (after the tracker's): the trace logged if this frame is one of kPassTraceAt; the next frame's decided.
+void pt_frame_end(unsigned long long frame, int passes) {
+    if (passes > 0)
+        ++pt.framesWithPasses;
+    if (pt.recording && passes > 0 && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+        pt.framesWithPasses == kPassTraceAt[pt.logged]) {
+        ++pt.logged;
+        simqvfr::logf("lmu mvr: pass trace: frame %llu (number %d with tracked passes, %d of them): %zu events, %d not "
+                      "logged (over %zu); @N = the game's draws this frame so far, #n = a texture (size, format, samples "
+                      "at its first mention); B = a render target bind (target 0, depth), R = a resolve, C = a "
+                      "CopySubresourceRegion, P+/P- = a tracked pass's begin/end, W = the focus post's window opened",
+                      frame, pt.framesWithPasses, passes, pt.events.size(), pt.dropped, kPassTraceEvents);
+        std::string line;
+        for (const std::string& e : pt.events) {
+            if (!line.empty() && line.size() + e.size() > 1300) {
+                simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+                line.clear();
+            }
+            line += line.empty() ? e : "; " + e;
+        }
+        if (!line.empty())
+            simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+    }
+    pt.events.clear();
+    pt.ids.clear();
+    pt.dropped = 0;
+    pt.recording = tr.on && tr.driveBegin && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+                   pt.framesWithPasses + 1 == kPassTraceAt[pt.logged];
+}
+
 void track_begin(const char* what) {
     tr.open = true;
     tr.pass = tr.passes++;
@@ -448,6 +559,9 @@ void track_begin(const char* what) {
         tr.firstBind = what;
     if (tr.driveBegin)
         tr.driveBegin(tr.pass);  // R4b: the pass's work (mvr_pass_begin among it) now, before its draws
+    if (pt.recording)
+        pt_event("P+%d on %s; its focus view %s (eye %ux%u, focus %ux%u)", tr.pass, what,
+                 g.drawFocus ? "drawn" : "not drawn", g.view.eyeW, g.view.eyeH, g.view.focusW, g.view.focusH);
 }
 
 void track_end(const char* why) {
@@ -463,6 +577,8 @@ void track_end(const char* why) {
                           static_cast<unsigned long long>(tr.draws - tr.begin[tr.pass]));
         }
     }
+    if (pt.recording)
+        pt_event("P-%d at %s", tr.pass, why);
     tr.open = false;
     tr.end[tr.pass] = tr.draws;
     tr.endWhy[tr.pass] = why;
@@ -493,6 +609,22 @@ void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilV
     const bool learned = !msaa && !tr.msaaFrame && !tr.learnedThisFrame && dsv && r0 && tr.scene && r0.Get() == tr.scene &&
                          d.Width == tr.sceneDesc.Width && d.Height == tr.sceneDesc.Height &&
                          d.Format == tr.sceneDesc.Format && d.SampleDesc.Count == tr.sceneDesc.SampleDesc.Count;
+    bool multisampleTarget = msaa;  // also without depth (the tracker's own test needs both)
+    if (pt.recording && r0 && !dsv) {
+        ComPtr<ID3D11Texture2D> texture;
+        D3D11_TEXTURE2D_DESC td{};
+        if (SUCCEEDED(r0.As(&texture))) {
+            texture->GetDesc(&td);
+            multisampleTarget = td.SampleDesc.Count > 1;
+        }
+    }
+    if (pt.recording && (dsv || multisampleTarget)) {
+        ComPtr<ID3D11Resource> depth;
+        if (dsv)
+            dsv->GetResource(&depth);
+        const std::string rt = pt_tex(r0.Get()), ds = pt_tex(depth.Get());
+        pt_event("B %s depth %s%s", rt.c_str(), ds.c_str(), tr.open && tr.resolved ? " (after a resolve in the pass)" : "");
+    }
     if (tr.open) {
         const ID3D11Resource* finalOf = tr.singleSample && tr.finalTarget ? tr.finalTarget : g.eyeFinal[tr.pass].Get();
         if (tr.blitSeen && r0 && r0.Get() != finalOf)
@@ -1605,6 +1737,11 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
 
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
+    if (pt.recording && context == g.context && !g.replaying) {
+        const std::string from = pt_tex(src), to = pt_tex(dst);
+        pt_event("R %s > %s, %s", from.c_str(), to.c_str(),
+                 tr.open ? ("in tracked pass " + std::to_string(tr.pass)).c_str() : "outside the tracked passes");
+    }
     if (tr.on && tr.open && context == g.context && !g.replaying && src) {
         ComPtr<ID3D11Texture2D> source;
         D3D11_TEXTURE2D_DESC sd{};
@@ -1733,6 +1870,10 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
         }
         g.postWindow = g.focusPost.ready();
     }
+    if (pt.recording)
+        pt_event("W pass %d: the focus post's window %s (focus view drawn %d, twin binds %llu, box %d)", g.pass,
+                 g.postWindow ? "open" : "not opened", g.drawFocus ? 1 : 0,
+                 static_cast<unsigned long long>(g.passTwinBinds), g.view.box.valid ? 1 : 0);
 }
 
 // The focus post at one of the pass's post-processing draws (the post window open): after YEBIS's copy of the resolved
@@ -2288,6 +2429,10 @@ void STDMETHODCALLTYPE copy_subresource_region(ID3D11DeviceContext* context, ID3
     call_real<kHookCopy>(context, dst, dstSub, x, y, z, src, srcSub, box);
     if (context != g.context || g.replaying)
         return;
+    if (pt.recording) {
+        const std::string from = pt_tex(src), to = pt_tex(dst);
+        pt_event("C %s > %s at %u,%u%s", from.c_str(), to.c_str(), x, y, box ? "" : " (whole)");
+    }
     State::CopySeen& c = g.copies[g.copyNext++ % State::kCopiesKept];
     c.dst = dst;
     c.src = src;
@@ -2398,6 +2543,8 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         game_draw<kHookDrawIndexed>(context, count, start, base);
     if (g.tracing && context == g.context && !g.replaying)
         trace_draw(context, "DrawIndexed", count, start);
+    if (pt.recording && context == g.context && !g.replaying)
+        pt_draw(context, "DrawIndexed");
     if (ours(context) && g.overlayTarget && g.on)
         ++g.stats.overlayDraws;
     if (!g.postWindow || !ours(context))
@@ -2439,6 +2586,8 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         const long long args[] = {static_cast<long long>(a)...};
         trace_draw(context, kHookName[H], args[0], args[1]);
     }
+    if (pt.recording && context == g.context && !g.replaying)
+        pt_draw(context, kHookName[H]);
     if (ours(context) && g.overlayTarget && g.on)
         ++g.stats.overlayDraws;
     if constexpr (H == kHookDraw) {
@@ -3378,7 +3527,9 @@ void mvr_frame_end(unsigned long long frame) {
         g.gpuSlot = -1;
     }
     if (tr.on) {
+        const int passes = tr.passes;
         track_frame_end(frame);  // a pass the tracker ends here reads its focus final (mvr_focus_final) first
+        pt_frame_end(frame, passes);
     } else {  // the counts start afresh each frame either way
         tr.passes = tr.actual = 0;
         tr.draws = 0;
