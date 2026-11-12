@@ -30,6 +30,7 @@ struct CpuLoad {
     double renderPercent = -1;  // the render thread (cpu_load_render_thread), -1: not seen
     double processPercent = 0;  // every thread together, in cores x 100
     int threads = 0;
+    uint64_t fromTsc = 0, toTsc = 0;  // the sample's span on the time-stamp counter (0 from cpu_load_from)
 };
 // From two snapshots of thread id -> cycles and the time-stamp counter's cycles between them; the threads in
 // `spinning` count in the process's total but are never the busiest.

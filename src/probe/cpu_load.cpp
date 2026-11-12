@@ -174,6 +174,8 @@ void run() {
             spinning.insert(id);
         }
         CpuLoad load = cpu_load_from(before, after, now - tsc, worker.render.load(), spinning);
+        load.fromTsc = tsc;
+        load.toTsc = now;
         if (load.busiestThread)
             load.busiestName = describe(load.busiestThread);
         before = after;

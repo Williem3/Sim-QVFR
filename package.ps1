@@ -17,7 +17,9 @@ param([string]$Version = '',
       [string]$OutputDirectory = '',
       [string]$NgxSdk = '',
       [switch]$NoDlss,
+      [string[]]$SkipTest = @(),  # test builds only: ctest names left out of the run (VERSION.txt says so)
       [switch]$Sign,
+      [switch]$NoScan,  # local builds only: skips the Windows Defender scan before zipping
       [string]$CertificateThumbprint = '4683DA63C881A76D5A1E803751B481F621ADF9C1',  # Certum, until 2027-11-04
       [string]$TimestampUrl = 'http://time.certum.pl')
 $ErrorActionPreference = 'Stop'
@@ -118,8 +120,9 @@ $stage = Join-Path $OutputDirectory $name
 $archive = "$stage.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $archive)) { throw "$stage(.zip) already exists" }
 
-# Outside the repo's folder tree, so a sibling folder cannot stand in for a missing file.
-$work = Join-Path (Join-Path $env:LOCALAPPDATA 'sim-qvfr-package') ([Guid]::NewGuid().ToString('N').Substring(0, 8))
+# Outside the repo's folder tree, so a sibling folder cannot stand in for a missing file. Under %TEMP%, not
+# %LOCALAPPDATA%: Defender's MpCmdRun can't scan folders directly under %LOCALAPPDATA% (fails with 0x80508023).
+$work = Join-Path (Join-Path $env:TEMP 'sim-qvfr-package') ([Guid]::NewGuid().ToString('N').Substring(0, 8))
 Invoke-Native 'git worktree add' { git -C $repo worktree add --detach $work $hash } | Out-Null
 try {
     Write-Host "Building $short in $work"
@@ -137,8 +140,17 @@ try {
         if ($warnings) { $warnings | ForEach-Object { Write-Host $_ }; throw 'The build has warnings' }
 
         # Every offline test, side by side, each with its own TEMP folder and log (the ctest suite in CMakeLists.txt).
+        # -SkipTest: ctest leaves those tests out.
+        $ctestSkip = @()
+        if ($SkipTest) {
+            foreach ($t in $SkipTest) {
+                if ($t -notmatch '^[a-z0-9_]+_test$') { throw "-SkipTest takes test names (name_test), not '$t'" }
+                Write-Warning "Test $t is SKIPPED in this package"
+            }
+            $ctestSkip = @('-E', ('^(' + ($SkipTest -join '|') + ')$'))
+        }
         $tests = Invoke-Native 'ctest' {
-            ctest --test-dir (Join-Path $work 'build') -C Release -j $env:NUMBER_OF_PROCESSORS --output-on-failure --no-tests=error
+            ctest --test-dir (Join-Path $work 'build') -C Release -j $env:NUMBER_OF_PROCESSORS --output-on-failure --no-tests=error @ctestSkip
         }
         $tests | Where-Object { $_ -match 'Test +#|tests passed' } | ForEach-Object { Write-Host "  $($_.ToString().Trim())" }
     } finally {
@@ -201,7 +213,9 @@ try {
         }
     }
     $dlssLine = if ($NgxSdk) { "DLSS: built with NVIDIA's DLSS SDK $dlssSdk, its nvngx_dlss.dll $dlssVersion included" } else { 'DLSS: not built in' }
-    Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Value "Sim-QVFR $Version`r`ncommit $hash`r`n$dlssLine" -Encoding ASCII
+    $versionText = "Sim-QVFR $Version`r`ncommit $hash`r`n$dlssLine"
+    if ($SkipTest) { $versionText += "`r`ntests skipped: $($SkipTest -join ', ')" }
+    Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Value $versionText -Encoding ASCII
     Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
         $relative = $_.FullName.Substring($stage.Length).TrimStart('\', '/').Replace('\', '/')
         '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $relative
@@ -209,7 +223,7 @@ try {
     # Windows Defender's verdict on what ships and on the build the suite ran (this repository's
     # tools\defender_scan.ps1, whichever commit is packaged): a flagged file stops the package, false positive or not.
     $scanner = Join-Path $PSScriptRoot 'tools\defender_scan.ps1'
-    foreach ($scanned in @($stage, (Join-Path $work 'build\Release'))) {
+    foreach ($scanned in $(if ($NoScan) { @() } else { @($stage, (Join-Path $work 'build\Release')) })) {
         & $scanner -Folder $scanned
         if ($LASTEXITCODE -ne 0) { throw "Windows Defender flagged a file under $scanned (defender_scan above)" }
     }

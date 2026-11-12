@@ -8,6 +8,8 @@
 #include "../src/games/ace/game.h"
 #include "../src/games/ace/views4.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -306,7 +308,13 @@ XrResult XRAPI_CALL fakeCreateActionSpace(XrSession, const XrActionSpaceCreateIn
     *space = reinterpret_cast<XrSpace>(0x300);
     return XR_SUCCESS;
 }
+// xrLocateSpace calls, the test's own thread's apart: the gaze thread looks up on its own thread.
+DWORD testThread = 0;
+std::atomic<uint64_t> spaceLocates{0}, ownSpaceLocates{0};
 XrResult XRAPI_CALL fakeLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* location) {
+    ++spaceLocates;
+    if (GetCurrentThreadId() == testThread)
+        ++ownSpaceLocates;
     // Rotation taking a = (0,0,-1) to the gaze direction b: q = normalize(1 + a.b, a x b), where
     // a.b = -bz and a x b = (by, -bx, 0).
     const double len = std::sqrt(kGazeX * kGazeX + kGazeY * kGazeY + 1);
@@ -531,6 +539,7 @@ int SIM_QVFR_TEST_MAIN() {
     using namespace simqvfr;
     using namespace simqvfr::layer;
     game = &games::adapter_for(&ace::kGame);  // views4 below is ACE's
+    testThread = GetCurrentThreadId();
     // The log goes to a file of the test's own (opened at its first line); the pacing check reads it back.
     wchar_t logDir[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, logDir);
@@ -1069,34 +1078,60 @@ int SIM_QVFR_TEST_MAIN() {
         XrVector3f d{};
         gaze_now(nullptr, base, 1000, d);  // starts the thread
         Sleep(100);
+        // The counts are read around the calls; the thread looks up meanwhile at its own rate, however long the
+        // calls take (the test's thread may lose its core to others under the full suite), a lookup in flight at
+        // either end aside. The calls' own lookups are told apart by the thread they are made on.
+        const auto t0 = std::chrono::steady_clock::now();
         uint64_t before;
         {
             std::lock_guard guard(gaze.mutex);
             before = gaze.queries;
         }
+        const uint64_t ownBefore = ownSpaceLocates;
         bool got = true;
         for (int i = 0; i < 100; ++i)
             got &= gaze_now(nullptr, base, 1000 + i, d);
+        const uint64_t own = ownSpaceLocates - ownBefore;
         uint64_t after;
         {
             std::lock_guard guard(gaze.mutex);
             after = gaze.queries;
         }
+        const double callsMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         const double len = std::sqrt(kGazeX * kGazeX + kGazeY * kGazeY + 1);
-        std::printf("     gaze thread: %llu lookups during 100 calls, direction %.3f,%.3f,%.3f\n",
-                    static_cast<unsigned long long>(after - before), d.x, d.y, d.z);
+        std::printf("     gaze thread: %llu lookups during 100 calls (%.2f ms), %llu of them on the calls' thread, direction "
+                    "%.3f,%.3f,%.3f\n",
+                    static_cast<unsigned long long>(after - before), callsMs, static_cast<unsigned long long>(own), d.x,
+                    d.y, d.z);
         check(got && std::abs(d.x - kGazeX / len) < 1e-3 && std::abs(d.y - kGazeY / len) < 1e-3,
               "gaze thread: xrLocateViews gets the tracked gaze the thread looked up");
-        check(after - before <= 3, "gaze thread: 100 xrLocateViews calls look nothing up themselves");
+        check(own == 0, "gaze thread: 100 xrLocateViews calls look nothing up themselves");
+        check(after - before <= callsMs * experiment.gazePollHz / 1000 + 2,
+              "gaze thread: the thread looks up at its own rate meanwhile, not the calls'");
+        gaze_thread_stop();
+        check(!gazeThread.thread.joinable(), "gaze thread: stops with the session");
+        // ACE syncing no actions: no gaze thread (none runs then), gaze_now looks up inline. Checked with the thread
+        // stopped: while it ran, its own lookups at 40 Hz fell inside this call's window (a fifth to a whole ms, the
+        // runtime-info ini read) and counted as the call's, 3-7 in 300 calls under the full suite (2026-11-11).
         {
             std::lock_guard guard(gaze.mutex);
             gaze.appSyncs = 0;
+            before = gaze.queries;
         }
-        const uint64_t inlineBefore = gaze.queries;
+        const uint64_t ownInline = ownSpaceLocates, allInline = spaceLocates;
         gaze_now(nullptr, base, 2000, d);
-        check(gaze.queries == inlineBefore + 1, "gaze thread: without ACE syncing actions, looked up inline as before");
-        gaze_thread_stop();
-        check(!gazeThread.thread.joinable(), "gaze thread: stops with the session");
+        {
+            std::lock_guard guard(gaze.mutex);
+            after = gaze.queries;
+        }
+        std::printf("     gaze thread: without ACE syncing, %llu lookup counted, %llu xrLocateSpace (%llu on the calling "
+                    "thread)\n",
+                    static_cast<unsigned long long>(after - before),
+                    static_cast<unsigned long long>(spaceLocates - allInline),
+                    static_cast<unsigned long long>(ownSpaceLocates - ownInline));
+        check(after - before == 1 && spaceLocates - allInline == 1 && ownSpaceLocates - ownInline == 1 &&
+                  !gazeThread.thread.joinable(),
+              "gaze thread: without ACE syncing actions, looked up inline as before (no thread started)");
     }
     DeleteFileW(logPath.c_str());
     std::printf("RESULT: %s\n", ok ? "pass" : "FAIL");

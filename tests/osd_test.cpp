@@ -148,16 +148,33 @@ int SIM_QVFR_TEST_MAIN() {
         check(fg && fg->pill && fg->value == L"Waiting for guides" && fg->tone == OsdTone::Warn,
               "frame generation not yet generating shows Cheeky's state");
         check(gaze && gaze->pill && gaze->value == L"Tracking" && gaze->tone == OsdTone::Good, "eye tracking badge");
-        in.gaze = OsdGaze::Runtime;
-        const std::vector<OsdRow> runtime = osd_rows(in, osd_summary(in));
-        const OsdRow* rg = row(runtime, L"Eye tracking");
-        check(rg && rg->value == L"Tracking · runtime" && rg->tone == OsdTone::Good,
-              "the runtime's eye tracking (quad views it composes): tracking, not off");
-        in.gaze = OsdGaze::RuntimeStill;
-        const std::vector<OsdRow> still = osd_rows(in, osd_summary(in));
-        const OsdRow* sg = row(still, L"Eye tracking");
-        check(sg && sg->value == L"Runtime · still" && sg->tone == OsdTone::Warn,
-              "the runtime's focus views held still: a warning");
+        // Every eye tracking state: its badge text and colour. Runtime / RuntimeStill: the runtime composes the quad
+        // views and its own foveated rendering moves the focus views (it tracks, not off), or has held them still.
+        struct GazeBadge {
+            OsdGaze gaze;
+            const wchar_t* value;
+            OsdTone tone;
+        };
+        const GazeBadge badges[] = {{OsdGaze::Off, L"Off", OsdTone::Neutral},
+                                    {OsdGaze::Unavailable, L"Not available", OsdTone::Bad},
+                                    {OsdGaze::Tracking, L"Tracking", OsdTone::Good},
+                                    {OsdGaze::Partial, L"Partial", OsdTone::Warn},
+                                    {OsdGaze::Lost, L"Lost", OsdTone::Bad},
+                                    {OsdGaze::Runtime, L"Tracking · runtime", OsdTone::Good},
+                                    {OsdGaze::RuntimeStill, L"Runtime · still", OsdTone::Warn}};
+        bool badgesRight = true;
+        for (const GazeBadge& b : badges) {
+            OsdInput state = in;
+            state.gaze = b.gaze;
+            const std::vector<OsdRow> stateRows = osd_rows(state, osd_summary(state));
+            const OsdRow* r = row(stateRows, L"Eye tracking");
+            const bool right = r && r->pill && r->value == b.value && r->tone == b.tone;
+            if (!right)
+                std::printf("     eye tracking state %d: \"%ls\", tone %d\n", static_cast<int>(b.gaze), r ? r->value.c_str() : L"(no row)",
+                            r ? static_cast<int>(r->tone) : -1);
+            badgesRight &= right;
+        }
+        check(badgesRight, "each eye tracking state's badge, the runtime's tracking (quad views it composes) included");
         check(gpuParts && gpuParts->value == L"7.0 / — / 0.4 / —", "without the whole GPU's load: ACE's queue and the layer");
         in.fg = OsdFg::On;
         in.fgMultiplier = 2;

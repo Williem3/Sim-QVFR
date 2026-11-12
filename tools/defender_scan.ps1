@@ -26,8 +26,25 @@ $flagged = @()
 # 1. The scan (exit code 2 when it found something).
 $scan = & $mpcmd -Scan -ScanType 3 -File $Folder -DisableRemediation 2>&1
 $scanCode = $LASTEXITCODE
+# MpCmdRun also exits 2 when the scan itself fails ("Failed with hr = 0x...", e.g. 0x80508023 for folders directly under
+# %LOCALAPPDATA%): that is no verdict, so say so instead of reporting a detection.
+$scanFailed = $scan | Select-String -Pattern 'Failed with hr' -SimpleMatch
+if ($scanFailed) {
+    Write-Host "defender_scan: the scan of $Folder FAILED, no verdict: $($scanFailed[0].Line.Trim())"
+    exit 3
+}
 if ($scanCode -eq 2 -or ($scan | Select-String -SimpleMatch 'found' | Select-String -NotMatch 'found no threats')) {
-    $flagged += ($scan | Where-Object { $_ -match 'Threat|file:|found' } | ForEach-Object { "scan: $_" })
+    # The folder scan names the threat but not the file: scan each binary alone to name it.
+    $named = @()
+    foreach ($binary in Get-ChildItem -LiteralPath $Folder -Recurse -File -Include *.exe, *.dll) {
+        $one = & $mpcmd -Scan -ScanType 3 -File $binary.FullName -DisableRemediation 2>&1
+        if ($LASTEXITCODE -eq 2 -and -not ($one | Select-String -Pattern 'Failed with hr' -SimpleMatch)) {
+            $threat = ($one | Select-String -Pattern '^\s*Threat\s*:' | Select-Object -First 1).Line -replace '^\s*Threat\s*:\s*', ''
+            $named += "scan: $threat`: $($binary.FullName)"
+        }
+    }
+    if ($named) { $flagged += $named }
+    else { $flagged += ($scan | Where-Object { $_ -match 'found' } | ForEach-Object { "scan: $_ (no single file flagged alone)" }) }
     if (-not $flagged) { $flagged += "scan: MpCmdRun exit $scanCode" }
 }
 
