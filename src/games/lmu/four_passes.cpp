@@ -708,19 +708,8 @@ bool install_mvr(ID3D11Device* device) {
 }
 
 void mvr_before_pass(int p) {
-    if (!mvrInstalled) {
-        ID3D11Texture2D* t = eye_texture(0);
-        if (!t)
-            return;
-        ID3D11Device* device = nullptr;
-        t->GetDevice(&device);
-        t->Release();
-        const bool ok = install_mvr(device);
-        if (device)
-            device->Release();
-        if (!ok)
-            return;
-    }
+    if (!mvrInstalled)  // (the tracker's passes come only once its hooks are in: four_passes_frame_end)
+        return;
     bool sample = false;
     if (p == 0) {
         mvr_frame_mode(0);
