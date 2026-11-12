@@ -277,6 +277,9 @@ struct Kit {
     size_t compositeBytes = 0;
     ID3D11VertexShader* blitVs = nullptr;  // the final blit's
     ID3D11PixelShader* blitPs = nullptr;
+    // A stage between the resolve and YEBIS (reflections high, 2026-11-11): 0 none; 1 its image over the whole target;
+    // 2 over the eye only. YEBIS's chain then starts from its image (no copy of the resolve).
+    int stage = 0;
 };
 
 std::vector<uint8_t> file_bytes(const std::string& path) {
@@ -456,6 +459,14 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     ComPtr<ID3D11Texture2D> depth1 = texture(device.Get(), W, H, DXGI_FORMAT_D24_UNORM_S8_UINT, 1, D3D11_BIND_DEPTH_STENCIL);
     ComPtr<ID3D11DepthStencilView> dsv1;
     device->CreateDepthStencilView(depth1.Get(), nullptr, &dsv1);
+    // The stage's single-sample depth for YEBIS (as LMU's `$Z Buffer Single Sample`, R32) and its pixel shader: the copy's
+    // code, not marked (not YEBIS's), its gain in constants of its own.
+    ComPtr<ID3D11Texture2D> zSingle = texture(device.Get(), W, H, DXGI_FORMAT_R32_FLOAT);
+    ComPtr<ID3D11RenderTargetView> zSingleRtv;
+    device->CreateRenderTargetView(zSingle.Get(), nullptr, &zSingleRtv);
+    ComPtr<ID3D11PixelShader> stagePs = ps(device.Get(), kCopyPs);
+    ComPtr<ID3D11Buffer> stageCb = constants(device.Get(), 15 * 16);
+    const float wholeRect[4] = {0, 0, 1, 1};
     const auto eye_pass = [&](int pass, const lmu::MvrPassView* v, bool checkState, const Kit& k,
                               bool overlayCheck = false, bool driven = false, bool single = false) {
         if (!driven)  // driven: the tracker begins it at the scene's bind below
@@ -478,7 +489,33 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         write(context.Get(), rectCb.Get(), eyeRect, sizeof(eyeRect));
         context->VSSetShader(yebisVs.Get(), nullptr, 0);
         context->VSSetConstantBuffers(1, 1, rectCb.GetAddressOf());
-        // The copy of the resolved scene.
+        if (k.stage && !single) {
+            // A stage between the resolve and YEBIS, as the pass trace showed it: the single-sample depth drawn, the
+            // scene's target bound again with its depth, then the stage's image of the resolved scene (x1.5) into the
+            // scene copy, which YEBIS's chain starts from.
+            context->VSSetShader(plainVs.Get(), nullptr, 0);
+            context->PSSetShader(scenePs.Get(), nullptr, 0);
+            context->OMSetRenderTargets(1, zSingleRtv.GetAddressOf(), dsv1.Get());
+            context->RSSetViewports(1, &whole);
+            context->Draw(3, 0);
+            context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), dsv.Get());
+            context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), nullptr);
+            write(context.Get(), rectCb.Get(), k.stage == 1 ? wholeRect : eyeRect, sizeof(eyeRect));
+            write(context.Get(), stageCb.Get(), copyConstants, sizeof(copyConstants));
+            context->VSSetShader(yebisVs.Get(), nullptr, 0);
+            context->PSSetShader(stagePs.Get(), nullptr, 0);
+            context->PSSetConstantBuffers(0, 1, stageCb.GetAddressOf());
+            context->PSSetSamplers(0, 1, point.GetAddressOf());
+            context->OMSetRenderTargets(1, copyRtv.GetAddressOf(), nullptr);
+            context->PSSetShaderResources(0, 1, sceneSrv.GetAddressOf());
+            context->RSSetViewports(1, k.stage == 1 ? &whole : &eyeVp);
+            context->DrawIndexed(3, 0, 0);
+            write(context.Get(), rectCb.Get(), eyeRect, sizeof(eyeRect));
+            context->PSSetShader(k.copy, nullptr, 0);  // YEBIS's chain from here: its downsample first
+            context->PSSetConstantBuffers(0, 1, &k.copyCb);
+        }
+        // The copy of the resolved scene (none past a stage: its image is the scene copy).
+        if (!k.stage || single) {
         write(context.Get(), k.copyCb, k.copyData, k.copyBytes);
         context->PSSetShader(k.copy, nullptr, 0);
         context->PSSetConstantBuffers(0, 1, &k.copyCb);
@@ -507,6 +544,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                       bound(t) == sceneSrv.Get() && bound(b) == k.copyCb && !bound(b12) && n == 1 &&
                       vp[0].Width == eyeW && vp[0].Height == eyeH,
                   "after the copy: the game's shaders, target, texture, constants and viewport as it set them");
+        }
         }
         // A downsample (the copy's shader on another texture; the game's constants rewritten): not the scene's copy.
         write(context.Get(), k.copyCb, k.downData, k.downBytes);
@@ -896,6 +934,60 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         context->Draw(3, 0);
         lmu::mvr_frame_end(100012);
         check(driveLog.empty(), "the tracker drives no pass in a frame without a multisample scene bind (a menu)");
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+
+    {  // A stage between the resolve and YEBIS (reflections high, the 2026-11-11 pass trace): a single-sample depth
+       // drawn, the scene's target bound again, YEBIS's chain from the stage's image. Its image over the focus view:
+       // the focus view's scene from it (the eye's picture by construction); over the eye only: from the resolve.
+        Kit staged = standIn;
+        staged.stage = 1;
+        lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        eye_pass(0, &view, false, staged);
+        lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        check(after.focusCopies == before.focusCopies + 1 && after.focusStageCopies == before.focusStageCopies + 1 &&
+                  after.focusComposites == before.focusComposites + 1 && after.focusFailures == before.focusFailures,
+              "past a stage over the whole target: the focus view's scene from its image, then the composite");
+        same_as_eye("past a stage over the whole target", 100, true);
+        final_as_eye("past a stage over the whole target", 100);
+        staged.stage = 2;
+        before = lmu::mvr_pass_stats();
+        eye_pass(0, &view, false, staged);
+        after = lmu::mvr_pass_stats();
+        check(after.focusCopies == before.focusCopies + 1 && after.focusStageResolves == before.focusStageResolves + 1 &&
+                  after.focusComposites == before.focusComposites + 1 && after.focusFailures == before.focusFailures,
+              "past a stage over the eye only: the focus view's scene from the resolve, then the composite");
+
+        // The tracker driving: the rebind of the pass's own scene before YEBIS keeps the pass open (before, it ended
+        // there at "the next pass's scene" and YEBIS ran outside it: no focus finals, the fallback after 90 frames).
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100015);
+        driveLog.clear();
+        staged.stage = 1;
+        before = lmu::mvr_pass_stats();
+        const lmu::MvrTrackStats trackBefore = lmu::mvr_track_stats();
+        eye_pass(0, nullptr, false, staged, false, true);
+        eye_pass(1, nullptr, false, staged, false, true);
+        driveFinals = false;
+        lmu::mvr_frame_end(100016);
+        after = lmu::mvr_pass_stats();
+        const lmu::MvrTrackStats trackAfter = lmu::mvr_track_stats();
+        std::snprintf(what, sizeof(what),
+                      "past a stage, the tracker driving:%s; scene rebinds kept %llu; %llu composites, %llu final blits, "
+                      "both eyes' focus finals made",
+                      driveLog.c_str(), static_cast<unsigned long long>(trackAfter.sceneRebinds - trackBefore.sceneRebinds),
+                      static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusBlits - before.focusBlits));
+        check(driveLog == " b0 e0 b1 e1" && trackAfter.sceneRebinds == trackBefore.sceneRebinds + 2 &&
+                  after.focusComposites == before.focusComposites + 2 && after.focusBlits == before.focusBlits + 2 &&
+                  driveFinals,
+              what);
         lmu::mvr_track_drive(nullptr, nullptr);
         lmu::mvr_track_passes(false);
     }

@@ -210,6 +210,10 @@ struct MvrPassStats {
     // another pixel shader (the log names them).
     uint64_t focusNoComposite = 0, focusUnknownComposites = 0;
     uint64_t focusCompositesByBindings = 0;  // of the composites, those not of a known checksum (another variant)
+    // A stage between the resolve and YEBIS (a draw making a resolve-sized image YEBIS's copy then starts from, seen with
+    // reflections high, 2026-11-11): focus copies from that image (its draw covered the focus view), and from the
+    // resolve instead (it didn't, or its draw wasn't seen).
+    uint64_t focusStageCopies = 0, focusStageResolves = 0;
     // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
     // and after them (the VR UI).
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
@@ -267,6 +271,7 @@ struct MvrTrackStats {
     uint64_t singleSampleBlits = 0;   // those passes' final blits seen (their end), with the focus post or without
     uint64_t blitsBeforePost = 0;     // blits reading the scene's target before a pass's post began (not taken)
     uint64_t passesWithoutPost = 0;   // single-sample passes that ended before reaching YEBIS's copy
+    uint64_t sceneRebinds = 0;  // a pass's own multisample scene bound again after its resolve, before YEBIS: kept in it
 };
 MvrTrackStats mvr_track_stats();
 // MSAA off: the tracker has learned the scene's single-sample target (from YEBIS's copy) and seen no multisample scene
