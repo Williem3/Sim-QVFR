@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include "../../log.h"
-#include "../diag_switches.h"
 #include "../identity_adapter.h"
 #include "../multi_view.h"
 #include "../../engine/dlss_math.h"
@@ -14,7 +13,6 @@
 #include "dlss_inputs.h"
 #include "four_passes.h"
 #include "game.h"
-#include "glare_share.h"
 #include "mvr_probe.h"
 #include "view_probe.h"
 
@@ -54,7 +52,6 @@ public:
         run.qvfr = true;
         run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
         run.fractionY = s.focusFractionY;
-        run.holdExposure = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, s.ini) != 0;
         // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (four_passes.h).
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
@@ -107,17 +104,9 @@ public:
                                                                                   s.ini)));
             }
         }
-        // The focus views take their eye's glare (glare_share.h), so a light's halo doesn't stop at the box edge.
-        run.glareShare = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_glare_share", 1, s.ini) != 0;
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
             run.renderScaleProbe =
                 std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);
-        // Diagnostics (lmu_diag=1; games/diag_switches.h): Ctrl+Alt+1 the glare share (an A/B in one run).
-        if (diag_.start(s.ini, L"lmu", {L"glare_share"}))
-            simqvfr::logf("lmu: diagnostics on: Ctrl+Alt+1 switches the glare share (lmu_diag_glare_share_off=1 in %ls "
-                          "turns it off)",
-                          diag_.ini().c_str());
-        glareAtLaunch_ = run.glareShare;
         // Sim-QVFR's own DLSS on the views (engine/dlss_views.h): the player's [dlss] (engine/dlss_settings.h: on, the
         // nvngx_dlss.dll folder, the focus views' mode and preset, the eyes' preset), live through qvfr_set_dlss; with
         // the multi-view path only (its eye passes found at the d3d11 level). The inputs' diagnostics are [experiment]
@@ -267,8 +256,6 @@ public:
     void qvfr_frame_end() override {
         if (!qvfr_)
             return;
-        if (diag_.poll())  // a switch off = the launch setting flipped
-            glare_share_set(diag_.off(0) ? !glareAtLaunch_ : glareAtLaunch_);
         four_passes_frame_end();
     }
 
@@ -306,8 +293,6 @@ private:
     bool viewProbe_ = false;
     bool mvrProbe_ = false;
     bool qvfr_ = false;
-    simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
-    bool glareAtLaunch_ = true;
     // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
     simqvfr::DlssSettings dlssSettings_;
     simqvfr::NrSettings nrSettings_;
