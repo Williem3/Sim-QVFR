@@ -30,6 +30,8 @@ struct Row {
 };
 
 // form.cpp
+// When a card's or a row's settings apply, as a tag at (x, y), 18 high (its ⓘ text under the pointer). Returns its width.
+float applies_tag(float x, float y, Applies applies);
 float section(float x, float y, float w, const std::wstring& title, const std::vector<Row>& rows, const std::wstring& footer,
               bool draw, Applies applies = Applies::None);
 std::wstring px(Size s);

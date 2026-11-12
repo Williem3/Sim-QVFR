@@ -3,6 +3,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "../settings.h"
 #include "window_state.h"
@@ -49,6 +50,9 @@ float popup_width(const std::wstring* items, int count, float minWidth);
 void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disabled);
 void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
             const wchar_t* unit = L"%", bool tenths = false);
+void slider_track(Ctl id, const Rect& track, int value, Range range, bool disabled);
+float segmented_choice_width(const std::vector<std::wstring>& items);
+void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& items, int selected, bool disabled);
 float checkbox_height(const std::wstring& desc, float width);
 void switch_track(const Rect& s, bool on, bool disabled);
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,

@@ -7,6 +7,7 @@
 #include <windowsx.h>
 
 #include "../launch_plan.h"
+#include "../launcher.h"
 #include "../game_tabs.h"
 #include "../settings.h"
 #include "../../engine/nvapi_gpus.h"
@@ -159,26 +160,47 @@ void activate(Ctl id, int option) {
         app.layerMessage.clear();
         break;
     case kGameTab: select_game(option); return;
-    case kMethod:
     case kMode:
+    case kShape:
+    case kVisor:
+    case kHelmetDetail:
+    case kDlssFocusPreset:
+    case kDlssEyePreset:
+    case kNrOrder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
+        std::vector<std::wstring> items;
+        const int selected = choice_items(id, items);
+        if (!items.empty())
+            choose_option(id, option >= 0 ? option : (selected + 1) % static_cast<int>(items.size()));
+        return;
+    }
+    case kCardMenu: open_card_menu(option); return;
+    case kMore: {
+        if (option < 0 || option >= static_cast<int>(app.moreKeys.size()))
+            return;
+        const std::wstring& key = app.moreKeys[static_cast<size_t>(option)];
+        if (!app.moreOpen.erase(key))
+            app.moreOpen.insert(key);
+        break;
+    }
+    case kHelmetFolder: {
+        const std::wstring folder = layer_folder() + L"\\helmet";
+        CreateDirectoryW(folder.c_str(), nullptr);
+        ShellExecuteW(app.hwnd, L"explore", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return;
+    }
+    case kMethod:
     case kCheekyOuterPreset:
     case kCheekyFocusPreset:
     case kCheekyNrPreset:
     case kCheekyNrPasses:
-    case kFgMultiplier:
-    case kFgScale:
-    case kFgPeriphery:
     case kFgRelease:
-    case kVisor:
-    case kShape:
     case kDlssFocusMode:
-    case kDlssFocusPreset:
-    case kDlssEyePreset:
     case kDlssSharpening:
     case kNrStyle:
-    case kNrPreset:
-    case kNrOrder:
-    case kHelmetDetail: open_popup(id); return;
+    case kNrPreset: open_popup(id); return;
     case kNrOn:
         if (own_nr_available()) {  // greyed out without DLSS on or the player's nvngx_dlssnr.dll
             app.s.nr.on = !app.s.nr.on;
@@ -332,6 +354,9 @@ bool push_button(Ctl id) {
     case kLayerDown:
     case kSupport:
     case kRestore:
+    case kCardMenu:
+    case kMore:
+    case kHelmetFolder:
     case kThemeToggle:
     case kSearch:
     case kProfileMenu:
@@ -472,11 +497,13 @@ void on_key(WPARAM key) {
     }
     if (key == VK_TAB) {
         const auto order = focus_order();
-        auto it = std::find(order.begin(), order.end(), app.focus);
+        const auto it = std::find_if(order.begin(), order.end(), [](const FocusStop& s) {
+            return s.id == app.focus && (s.option < 0 || s.option == app.focusOption);
+        });
         int i = it == order.end() ? (shift ? 0 : -1) : static_cast<int>(it - order.begin());
         i = (i + (shift ? static_cast<int>(order.size()) - 1 : 1)) % static_cast<int>(order.size());
-        app.focus = order[i];
-        app.focusOption = -1;
+        app.focus = order[static_cast<size_t>(i)].id;
+        app.focusOption = order[static_cast<size_t>(i)].option;
         app.keyboard = true;
         if (app.focus == kDiagDescription)  // typing goes to the description box
             activate(kDiagDescription, -1);
@@ -510,6 +537,13 @@ void on_key(WPARAM key) {
             return;
         *v = std::clamp(nv, r.min, r.max);
         changed();
+        return;
+    }
+    if (segmented_ctl(app.focus) && (key == VK_LEFT || key == VK_RIGHT)) {  // a segmented choice: the arrows step it
+        std::vector<std::wstring> items;
+        const int selected = choice_items(app.focus, items), n = static_cast<int>(items.size());
+        if (n > 0)
+            choose_option(app.focus, std::clamp(selected + (key == VK_RIGHT ? 1 : -1), 0, n - 1));
         return;
     }
     switch (app.focus) {

@@ -66,9 +66,13 @@ void match() {
 
 // Where a result is: "Picture › Resolution · Field of view crop".
 std::wstring where(const SearchEntry& e) {
-    std::wstring s = std::wstring(tab_label(tab_of(e.pane))) + L" › " + pane_label(static_cast<int>(e.pane));
+    std::wstring s = std::wstring(tab_label(tab_of(e.pane)));
+    if (tab_pages(tab_of(e.pane)).size() > 1)
+        s += std::wstring(L" › ") + pane_label(static_cast<int>(e.pane));
     if (!e.section.empty() && e.section != e.label)
-        s += L" · " + e.section;
+        s += L" › " + e.section;
+    if (!e.hiddenBy.empty())
+        s += L"  ·  shows with " + e.hiddenBy;
     return s;
 }
 
@@ -123,7 +127,7 @@ void search_index_pages(float x, float w) {
                     return e.pane == p && e.label == d.label && e.section == d.section;
                 });
                 if (!d.label.empty() && !known)
-                    app.searchIndex.push_back({d.label, d.section, p});
+                    app.searchIndex.push_back({d.label, d.section, p, d.hiddenBy, d.more});
             }
         }
     app.canvas.pop_clip();
@@ -183,6 +187,8 @@ void search_card() {
 void jump_to(const SearchEntry& entry) {
     close_search();
     show_page(entry.pane);
+    if (!entry.more.empty())  // inside a closed More: opened
+        app.moreOpen.insert(entry.more);
     app.highlight = {entry.label, entry.section, {}};
     app.highlightUntil = GetTickCount64() + kHighlightMs;
     app.highlightScroll = true;

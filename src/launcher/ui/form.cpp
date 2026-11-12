@@ -36,7 +36,9 @@ float row_height(const Row& row, float w) {
 
 // The tag after a section's title: "Live" or "Live when lowered" (green), or "Next launch" (grey), 18 high; under the
 // pointer, what it means (its help, as an ⓘ's).
-void applies_tag(float x, float y, Applies applies) {
+}  // namespace
+
+float applies_tag(float x, float y, Applies applies) {
     const bool live = applies != Applies::NextLaunch;
     const std::wstring text = applies == Applies::Live ? L"Live" : applies == Applies::LiveLowered ? L"Live when lowered" : L"Next launch";
     const Rect r{x, y, std::ceil(app.canvas.measure(text, kBadgeStyle)) + 16, 18};
@@ -48,9 +50,8 @@ void applies_tag(float x, float y, Applies applies) {
     app.hits.push_back({kHelpIcon, r, index});
     if (app.tip == index)
         app.tipAnchor = r;
+    return r.w;
 }
-
-}  // namespace
 
 // FormSection at (x, y), width w: its heading (and when its settings apply), a card of rows, a footer under it.
 // Returns its height.

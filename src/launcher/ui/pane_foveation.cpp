@@ -1,4 +1,4 @@
-// The Foveation and Focus overlay panes, and the side panel's foveation preview, legend and readouts.
+// The foveation preview (the Picture tab's Preview card, and the old pages' preview column), its legend and readouts.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -15,96 +15,6 @@
 #include "form.h"
 
 namespace simqvfr::launcher::ui::win {
-
-float foveation_pane(float x, float y, float w, bool draw) {
-    const bool qvfr = app.s.mode == RenderMode::Qvfr;
-    float h = 0;
-    if (eye_warning()) {
-        if (draw)
-            badge(x, y, 1, L"Eye tracker not detected. The focus region stays centered until one connects.", w);
-        h += 20 + t::kSpace6;
-    }
-    Row method, mode;
-    method.label = L"Rendering method";
-    {
-        const std::wstring names[2] = {kMethodNames[0], kMethodNames[1]};
-        method.controlW = popup_width(names, 2, 180);
-    }
-    method.controlH = t::kControlHeight;
-    method.control = [](const Rect& r) { popup_button(kMethod, r, kMethodNames[app.s.mode == RenderMode::Qvfr ? 0 : 1], false); };
-    mode.label = L"Foveated mode";
-    mode.desc = app.s.eyeTracking ? L"The focus region follows your gaze." : L"The focus region stays at the center of each lens.";
-    {
-        const std::wstring names[2] = {kModeNames[0], kModeNames[1]};
-        mode.controlW = popup_width(names, 2, 140);
-    }
-    mode.controlH = t::kControlHeight;
-    mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
-    h += section(x, y + h, w, L"Mode", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
-                 qvfr ? L"Eye tracked or fixed: whether the sharp focus region follows your eyes."
-                      : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
-                        L"Foveated Rendering; Two-loop won't be offered again.",
-                 draw, method_shown() ? Applies::NextLaunch : Applies::Live);
-    h += t::kSpace6;
-    h += section(x, y + h, w, L"Focus region",
-                 {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
-                  slider_row(kHeight, L"Foveated height", L"", app.s.height, L""),
-                  slider_row(kCorner, L"Corner radius",
-                             app.s.shape.corners ? L"Box shape only." : L"Rounds the corners of the focus region.",
-                             app.s.corner, L"", app.s.shape.corners),
-                  slider_row(kFeather, L"Feather", L"Softens the edge of the focus region.", app.s.feather, L""),
-                  app.s.eyeTracking
-                      ? slider_row(kFocusOffset, L"Gaze offset",
-                                   L"Moves the focus region above (+) or below (−) where you look, if it sits off.",
-                                   app.s.offset.gaze, L"", false, L"°")
-                      : slider_row(kFocusOffset, L"Vertical position",
-                                   L"Raises (+) or lowers (−) the fixed focus region, e.g. toward the road or the dash.",
-                                   app.s.offset.fixed, L"", false, L"°"),
-                  slider_row(kGazeDeadzone, L"Gaze dead-zone",
-                             L"How far your gaze moves before the focus region follows. Higher holds it steadier "
-                             L"against eye-tracker jitter (shimmer with MSAA); 0 follows every sample.",
-                             app.s.gazeDeadzone, L"", !app.s.eyeTracking, L"°", true)},
-                 L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
-                 L"vertical offset.",
-                 draw, Applies::Live);
-    h += t::kSpace6;
-    {
-        const std::wstring names[2] = {kShapeNames[0], kShapeNames[1]};
-        Row shape = choice_row(kShape, L"Shape", names, 2, app.s.shape.corners ? 1 : 0, false);
-        shape.desc = L"Box: a rectangle, with the corner radius above. Corners: move each corner in on its own.";
-        const bool off = !app.s.shape.corners;
-        const auto corner = [&](Ctl id, const wchar_t* label) {
-            return slider_row(id, label, L"", *slider_value(id), L"", off);
-        };
-        h += section(x, y + h, w, L"Focus shape",
-                     {shape, corner(kShapeTopLeftIn, L"Top left in"), corner(kShapeTopLeftDown, L"Top left down"),
-                      corner(kShapeTopRightIn, L"Top right in"), corner(kShapeTopRightDown, L"Top right down"),
-                      corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"),
-                      corner(kShapeBottomRightIn, L"Bottom right in"),
-                      corner(kShapeBottomRightUp, L"Bottom right up")},
-                     L"Pull the top corners in for a trapezoid: more of the dash sharp, at the same cost.",
-                     draw, Applies::Live);
-    }
-    return h;
-}
-
-float overlay_pane(float x, float y, float w, bool draw) {
-    float h = 0;
-    Row show;
-    const std::wstring desc = L"Draws a colored border around the focus region.";
-    show.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
-    show.full = [desc](const Rect& r) { checkbox(kOutline, r, app.s.outline, L"Show focus outline", desc); };
-    Row color;
-    color.label = L"Outline color";
-    color.disabled = !app.s.outline;
-    color.controlW = segmented_width();
-    color.controlH = t::kControlHeight;
-    color.control = [](const Rect& r) { segmented(kColor, r, static_cast<int>(app.s.color), !app.s.outline); };
-    h += section(x, y, w, L"Focus overlay",
-                 {show, color},
-                 L"The outline is drawn into the headset image, to show where the focus region is.", draw, Applies::Live);
-    return h;
-}
 
 // FoveationPreview (one eye, a schematic) at (x, y), width w. Returns its height.
 float preview(float x, float y, float w, bool draw) {

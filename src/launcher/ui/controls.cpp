@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 
@@ -131,11 +132,10 @@ constexpr float kSliderValueW = 112;
 
 // The kit's PercentSlider: track, value readout (in `unit`) and an optional detail line under the value. Height 20
 // (36 with detail). `tenths`: the value is in tenths, shown with one decimal ("1.5°").
-void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
-            const wchar_t* unit, bool tenths) {
-    const float trackW = r.w - kSliderValueW - t::kSpace5;
-    const float cy = r.y + (detail.empty() ? 10.0f : 18.0f);
-    const Rect track{r.x, cy - 10, trackW, 20};
+// A slider's track and thumb in `track` (20 high), its hit there when enabled. The cards draw the label and value
+// themselves (card.cpp); slider() adds the value column.
+void slider_track(Ctl id, const Rect& track, int value, Range range, bool disabled) {
+    const float cy = track.y + track.h / 2;
     const float knob = t::kThumb, travel = track.w - knob;
     const float f = range.max > range.min ? static_cast<float>(value - range.min) / (range.max - range.min) : 0;
     const float kx = track.x + travel * f;
@@ -151,6 +151,16 @@ void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& d
     app.canvas.fill({k.x + knob / 2 - 1, k.y + 5, 2, knob - 10}, col(app.c->knob, disabled ? 0.6f : 1));
     if (focused(id))
         focus_ring(k, t::kRadiusThumb);
+    if (!disabled)
+        app.hits.push_back({id, track});
+}
+
+void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
+            const wchar_t* unit, bool tenths) {
+    const float trackW = r.w - kSliderValueW - t::kSpace5;
+    const float cy = r.y + (detail.empty() ? 10.0f : 18.0f);
+    const Rect track{r.x, cy - 10, trackW, 20};
+    slider_track(id, track, value, range, disabled);
     const float vx = track.right() + t::kSpace5;
     const std::wstring text = (tenths ? gaze_deadzone_text(value) : std::to_wstring(value)) + unit;
     if (detail.empty()) {
@@ -162,8 +172,6 @@ void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& d
         app.canvas.text(detail, t::kSubheadline, {vx - 40, r.y + 19, kSliderValueW + 40, 16},
                         col(disabled ? app.c->label_tertiary : app.c->label_muted), Align::Trailing);
     }
-    if (!disabled)
-        app.hits.push_back({id, track});
 }
 
 float checkbox_height(const std::wstring& desc, float width) {
@@ -202,6 +210,46 @@ void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, co
     app.hits.push_back({id, r});
     help_icon(label, r.x + std::min(tw - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), ty);
     app.drawnLabels.push_back({label, app.drawingSection, r});
+}
+
+// A segmented choice's natural width: each item's text and its padding.
+float segmented_choice_width(const std::vector<std::wstring>& items) {
+    float w = 4;
+    for (const auto& item : items)
+        w += std::ceil(app.canvas.measure(item, t::kBodyMedium)) + 2 * t::kSpace3 + 2;
+    return w;
+}
+
+// A choice of a few short items as one control: the track, the chosen segment in ink (its text inverted), a hit per
+// segment (option: its index), the focus ring on the chosen one.
+void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& items, int selected, bool disabled) {
+    app.canvas.fill(r, col(app.c->segment_track), t::kRadiusControl);
+    if (items.empty())
+        return;
+    // Each item its natural width, the rest shared out evenly.
+    std::vector<float> widths;
+    float natural = 0;
+    for (const auto& item : items) {
+        widths.push_back(std::ceil(app.canvas.measure(item, t::kBodyMedium)) + 2 * t::kSpace3);
+        natural += widths.back();
+    }
+    const float extra = std::max(0.0f, (r.w - 4 - 2 * (items.size() - 1) - natural) / items.size());
+    float x = r.x + 2;
+    for (size_t i = 0; i < items.size(); ++i) {
+        const Rect item{x, r.y + 2, widths[i] + extra, r.h - 4};
+        const bool on = static_cast<int>(i) == selected;
+        if (on)
+            app.canvas.fill(item, col(app.c->segment_selected, disabled ? 0.35f : 1), t::kRadiusControl - 2);
+        else if (!disabled && pointer_in(item))
+            app.canvas.fill(item, col(app.c->control_hover), t::kRadiusControl - 2);
+        app.canvas.text(items[i], on ? t::kBodyStrong : t::kBodyMedium, item,
+                        col(on ? app.c->on_segment : disabled ? app.c->label_tertiary : app.c->label), Align::Center);
+        if (on && focused(id))
+            focus_ring(item, t::kRadiusControl - 2);
+        if (!disabled)
+            app.hits.push_back({id, item, static_cast<int>(i)});
+        x = item.right() + 2;
+    }
 }
 
 float segmented_width() {

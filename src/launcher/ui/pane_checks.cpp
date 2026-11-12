@@ -7,6 +7,7 @@
 
 #include "../launcher.h"
 #include "../preflight.h"
+#include "../../games/game.h"
 #include "window_state.h"
 #include "controls.h"
 #include "form.h"
@@ -66,11 +67,11 @@ void fix_check(const Check& c) {
         return;
     }
     case CheckFix::OpenLayers: activate(kPage, static_cast<int>(Pane::Layers)); return;
-    case CheckFix::OpenDlss:
-        if (pane_shown(static_cast<int>(Pane::Dlss)))
-            activate(kPage, static_cast<int>(Pane::Dlss));
+    case CheckFix::OpenDlss:  // the card with DLSS's switch (Rendering), highlighted
+        jump_to({game_has(&games::GameFeatures::sideLoadedDlss) ? L"Use DLSS" : L"Use Cheeky Foveated DLSS", L"Rendering",
+                 Pane::Picture});
         return;
-    case CheckFix::OpenFoveation: activate(kPage, static_cast<int>(Pane::Foveation)); return;
+    case CheckFix::OpenFoveation: jump_to({L"Foveation", L"Foveation", Pane::Picture}); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
             notify(L"Turbo mode is still on", L"OpenXR Toolkit’s settings for " + short_name() +

@@ -20,6 +20,7 @@
 #include "../install.h"
 #include "../../games/game.h"
 #include "window_state.h"
+#include "card.h"
 
 namespace simqvfr::launcher::ui::win {
 
@@ -104,6 +105,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_TIMER:
         if (wParam == kCaptureTimer)
             capture_poll();
+        if (wParam == kRevealTimer) {  // a disclosure sliding open
+            if (!revealing())
+                KillTimer(hwnd, kRevealTimer);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         if (wParam == kHighlightTimer) {  // Find a setting's highlight ends
             KillTimer(hwnd, kHighlightTimer);
             InvalidateRect(hwnd, nullptr, FALSE);

@@ -170,6 +170,81 @@ constexpr Help kHelp[] = {
     {L"Show the overlay",
      L"The performance overlay in the headset: frame rate, CPU and GPU time and what limits the frame. A little CPU time while "
      L"it shows."},
+    // The Picture tab's cards (picture.cpp): what their rows' one line of help leaves out.
+    {L"Shape",
+     L"Box: a rectangle, rounded by Corner radius. Corners: each corner moved in on its own. Pull the top corners in for a "
+     L"trapezoid: more of the dash sharp, at the same cost."},
+    {L"Outline color", L"The outline’s colour in the headset. It shows while Show focus outline is on."},
+    {L"Let the runtime compose",
+     L"On a Pimax or Varjo runtime, the runtime puts the focus region on the display at its full resolution: sharper than "
+     L"Sim-QVFR can compose it. On other runtimes (SteamVR) nothing changes. With the runtime composing, the resolution set "
+     L"here applies and changes while you drive. The focus area shows inside the runtime’s own focus region (Pimax Play’s or "
+     L"Varjo Base’s focus area), centred where the runtime puts it: keep that at least as large as the focus area here. Off "
+     L"with frame generation (Cheeky’s or VectorXR’s), which needs one composed image."},
+    {L"nvngx_dlss.dll",
+     L"The DLSS Sim-QVFR uses: the one it includes (NVIDIA’s), or another you choose, a newer one from a game, say (DLSS 310 "
+     L"or newer). Use included goes back. Applies at the next launch."},
+    {L"Focus views",
+     L"DLAA draws them at their size. Ultra quality, Quality, Balanced and Performance draw them at 77, 67, 58 or 50% each "
+     L"way and upscale them: less GPU time, softer distant textures. DLSS has no ultra quality model of its own: 77% runs its "
+     L"quality one."},
+    {L"Focus preset",
+     L"The DLSS preset for the sharp focus views. With Sim-QVFR’s DLSS, Default is NVIDIA’s choice for the mode: K, and M at "
+     L"Performance, which costs more. With Cheeky, Game default keeps the game’s."},
+    {L"Other cars’ motion",
+     L"Gives DLSS each other car’s own motion, so cars passing, alongside or ahead stay clean instead of smearing. Turn it off "
+     L"for more headroom: in a field of cars it costs about 0.5 ms of CPU and 0.2 to 0.5 ms of GPU a frame. Applies at the "
+     L"next launch, with DLSS on at launch; with DLSS off it costs nothing."},
+    {L"nvngx_dlssnr.dll",
+     L"NVIDIA’s DLSS neural rendering runtime. Sim-QVFR includes none: it is NVIDIA’s, and comes only with games that ship "
+     L"DLSS-NR. Choose the one in such a game’s folder. Applies at the next launch."},
+    {L"Use DLSS-NR",
+     L"NVIDIA’s DLSS neural rendering on the views: its model reworks lighting and materials from the picture, its depth and "
+     L"its motion. Experimental, and heavy: about 2 ms of GPU time and 130 MB of video memory for every million pixels it "
+     L"works on, per view (RTX 5070 Ti). It turns itself off if frames fall under 10 a second with it on."},
+    {L"Intensity", L"How much of the model’s change you get: 0% is the picture as it came."},
+    {L"Style", L"The look the model aims for."},
+    {L"Preset",
+     L"The model: A is the original, B a faster one in newer DLLs (310.9.16 on). Default is the DLL’s own choice. A change "
+     L"rebuilds DLSS-NR: a short stutter."},
+    {L"Local tone", L"The strength of the model’s local contrast and lighting changes."},
+    {L"Local structure", L"The strength of the model’s changes to fine structure."},
+    {L"Auto mask", L"Lets the model find what it treats differently (skin) by itself."},
+    {L"Runs",
+     L"After DLSS works on the finished, anti-aliased views. Before DLSS works on the views as drawn, before anti-aliasing "
+     L"and upscaling: fewer pixels when the focus views are upscaled, and DLSS then smooths its result."},
+    {L"Focus working size",
+     L"What the model works at, a share of the focus view. Lower costs less; the picture keeps its own detail."},
+    {L"Working size limit",
+     L"The most one view’s model works on, in megapixels, whatever the sizes. Each megapixel costs about 2 ms of GPU time and "
+     L"130 MB of video memory, per view."},
+    {L"Edge blend", L"The band over which the processed area fades into what isn’t processed around it."},
+    {L"Periphery too",
+     L"Off, only the focus views are processed: where you look. On, the periphery too, at its own working size and coverage. "
+     L"It adds about 2 ms of GPU time per eye at least, however small you make it."},
+    {L"Periphery working size", L"As the focus working size, for the periphery."},
+    {L"Periphery covered", L"How much of each eye’s view the model covers, around the focus area."},
+    {L"Foveated DLSS", L"Off leaves the game’s own DLSS on every view."},
+    {L"Outer preset", L"The DLSS preset of the outer views’ own pass (Cheaper outer views)."},
+    {L"Fix motion-vector blur", L"Cheeky’s workaround for smearing with some presets. Adds GPU work."},
+    {L"DLSS-NR", L"NVIDIA’s DLSS-NR (DLSS 5) on the focus views. Needs nvngx_dlssnr.dll next to the game."},
+    {L"DLSS-NR passes", L"Each extra DLSS-NR pass costs about one more NR evaluation."},
+    {L"Multiplier", L"Frames shown per frame the game renders: 2x adds one generated frame between each two of the game’s."},
+    {L"Center FG scale", L"Frame generation’s resolution in the center region. Lower uses less GPU time and memory."},
+    {L"Periphery FG scale", L"Frame generation’s resolution around the center region. Lower uses less GPU time and memory."},
+    {L"Release game",
+     L"When the game starts its next frame. Never: CPU and GPU overlap (most frames). Capture: after the GPU finishes. "
+     L"Generated: after the generated frame."},
+    {L"Show the center region", L"Outlines the region in the headset, to check that it follows your eyes."},
+    {L"Rim", L"How far the helmet’s padding reaches into the view."},
+    {L"Corners", L"Rounds the helmet’s visor opening."},
+    {L"Lighting", L"How much the scene lights the helmet."},
+    {L"Visor", L"Your own images only: closed, half or open. Ctrl+Alt+V in the game steps it."},
+    {L"Depth", L"Your own images only: how far in front of your eyes, in cm. 0 is far away, with no depth."},
+    {L"Detail", L"Your own images only: Detail (4096) is sharper, Performance (2048) costs less GPU time and memory."},
+    {L"Helmet images",
+     L"Your own helmet: top.png, bottom.png and visor.png in the helmet folder next to the layer. Size and Height place them "
+     L"(degrees of view, and above straight ahead)."},
 };
 
 const wchar_t* help_for(const std::wstring& label) {

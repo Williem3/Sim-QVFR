@@ -255,3 +255,10 @@ The user answered "use your defaults" to the twelve open questions:
   - Find a setting (Ctrl+K): its index is what every page draws, so it can't drift from the pages; Return shows the page, scrolls to the row and highlights it.
   - Narrow windows drop "Profile:", then tighten the tabs, then shorten the status, then Launch's padding: all four tabs fit at the 880 px minimum.
   - The window opens on Overview. Until the tabs have their cards, the old panes are each tab's pages (a strip under the top bar): Overview: Profiles, About; Picture: Resolution, Foveation, Focus overlay, DLSS; Headset: Headset menu, Hotkeys; Game: Launch checks, Diagnostics, Report an issue, Games, OpenXR layers.
+- **Phase 4** (the Picture tab):
+  - One page of cards (`picture.cpp`) replaces Resolution, Foveation, Focus overlay and DLSS: Resolution, Foveation, Preview, View & helmet, Rendering, then DLSS and DLSS-NR (LMU) or Foveated DLSS and Frame generation (ACE, ACC), each only where the game has it, and the DLSS cards only once their switch is on.
+  - `card.cpp`: the card (section shape and colour, title, Live / Next launch tag, ⋯ menu with Reset this card…, the 2 px rule) and its compact rows (two-line sliders, pairs side by side, switches, segmented choices, pop-ups, a More), in 3, 2 or 1 columns by window width, each card in the shortest column.
+  - Disclosure (§3): what a switch or choice hides isn't drawn and keeps its value. The switch says what it hides ("Off · rim, corners and lighting hidden"), and its rows slide open for 160 ms when it turns on (not with Windows' animations off). Find a setting still lists hidden settings ("shows with Show a helmet") and highlights what shows them, or opens the More they are in.
+  - The rows' longer explanations (costs, cautions) moved into their ⓘ, so nothing was dropped.
+  - Checked: 1440 × 900 shows the default Picture tab without scrolling; the crop hides and shows with its values kept; a segmented choice saves; Reset this card asks, then resets only its own settings.
+  - The Rendering card has no multi-view line: runtime.ini's session mode says only QVFR, Two-loop or Off.

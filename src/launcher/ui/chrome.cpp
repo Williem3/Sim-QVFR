@@ -21,10 +21,7 @@ float pane_content(float x, float y, float w, bool draw) {
     case Pane::Checks: return checks_pane(x, y, w, draw);
     case Pane::Hotkeys: return hotkeys_pane(x, y, w, draw);
     case Pane::Profiles: return profiles_pane(x, y, w, draw);
-    case Pane::Resolution: return resolution_pane(x, y, w, draw);
-    case Pane::Foveation: return foveation_pane(x, y, w, draw);
-    case Pane::Overlay: return overlay_pane(x, y, w, draw);
-    case Pane::Dlss: return dlss_pane(x, y, w, draw);
+    case Pane::Picture: return picture_page(x, y, w, draw);
     case Pane::Menu: return menu_pane(x, y, w, draw);
     case Pane::Games: return games_pane(x, y, w, draw);
     case Pane::Layers: return layers_pane(x, y, w, draw);
@@ -37,27 +34,18 @@ float pane_content(float x, float y, float w, bool draw) {
 
 namespace {
 
-constexpr const wchar_t* kPaneLabels[] = {L"Launch checks", L"Profiles",      L"Resolution",    L"Foveation",
-                                          L"Focus overlay", L"Foveated DLSS", L"Headset menu",  L"Hotkeys",
-                                          L"Games",         L"OpenXR layers", L"Diagnostics",   L"Report an issue",
-                                          L"About"};
+constexpr const wchar_t* kPaneLabels[] = {L"Launch checks", L"Profiles",      L"Picture",     L"Headset menu", L"Hotkeys",
+                                          L"Games",         L"OpenXR layers", L"Diagnostics", L"Report an issue", L"About"};
 
 static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 
 }  // namespace
 
-// A page this game has: the DLSS page only where the game has Cheeky's or Sim-QVFR's own.
-bool pane_shown(int pane) {
-    return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss) ||
-           game_has(&games::GameFeatures::sideLoadedDlss);
-}
+// A page this game has: every one (a game's own features are cards and rows the Picture tab leaves out).
+bool pane_shown(int) { return true; }
 
-// A page's name in the page strip and as its title: the DLSS page is "DLSS" for a game with Sim-QVFR's own.
-const wchar_t* pane_label(int pane) {
-    if (pane == static_cast<int>(Pane::Dlss) && game_has(&games::GameFeatures::sideLoadedDlss))
-        return L"DLSS";
-    return kPaneLabels[std::clamp(pane, 0, kPanes - 1)];
-}
+// A page's name in the page strip and as its title.
+const wchar_t* pane_label(int pane) { return kPaneLabels[std::clamp(pane, 0, kPanes - 1)]; }
 
 // The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
 int shown_pane(int pane, int step, int from) {
@@ -74,27 +62,7 @@ std::wstring pane_description(Pane pane) {
     switch (pane) {
     case Pane::Checks: return L"What would stop Sim-QVFR at the next launch, each with its fix.";
     case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
-    case Pane::Resolution: {
-        // The game's own parts of the pane, joined as "a, b and c".
-        const wchar_t* parts[3];
-        int n = 0;
-        if (game_has(&games::GameFeatures::sharpening))
-            parts[n++] = L"how sharp it looks";
-        if (game_has(&games::GameFeatures::fovCrop))
-            parts[n++] = L"the edges it skips";
-        if (game_has(&games::GameFeatures::helmet))
-            parts[n++] = L"the helmet around it";
-        std::wstring text = L"How many pixels each view draws";
-        for (int i = 0; i < n; ++i)
-            text += std::wstring(i == n - 1 ? L" and " : L", ") + parts[i];
-        return text + L".";
-    }
-    case Pane::Foveation: return L"The size, shape and movement of the sharp focus region.";
-    case Pane::Overlay: return L"An outline in the headset that shows where the focus region is.";
-    case Pane::Dlss:
-        return game_has(&games::GameFeatures::sideLoadedDlss)
-                   ? L"NVIDIA’s DLSS on the views, run by Sim-QVFR: smooth edges everywhere, a cheaper focus region."
-                   : L"Cheaper outer views, a sharper centre and frame generation, with Cheeky Foveated DLSS.";
+    case Pane::Picture: return L"";
     case Pane::Menu: return L"Where the settings menu and the performance overlay float in your view.";
     case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
     case Pane::Games: return L"Which games have a tab, and each game’s colour.";
@@ -212,26 +180,35 @@ void paint() {
 
     // Main and preview columns, right of the rail and under the top bar and the page strip; narrow, the preview drops
     // under the page.
+    // A page of cards (Picture) takes the whole width, with no header and no preview column (its Preview is a card).
     const float pad = t::kSpace7;
-    const float mainX = railW, stripH = 44, bodyTop = t::kTopbarHeight + stripH, bodyH = Hh - bodyTop;
-    const bool narrow = W - railW < 780;
+    const bool cards = app.pane == Pane::Picture;
+    const float stripH = tab_pages(tab_of(app.pane)).size() > 1 ? 44.0f : 0.0f;
+    const float mainX = railW, bodyTop = t::kTopbarHeight + stripH, bodyH = Hh - bodyTop;
+    const bool narrow = cards || W - railW < 780;
     const float mainW = narrow ? W - mainX : W - mainX - t::kPreviewWidth;
-    const float contentX = mainX + pad, contentW = std::min(mainW - 2 * pad, 760.0f);
+    const float contentX = mainX + pad, contentW = cards ? mainW - 2 * pad : std::min(mainW - 2 * pad, 760.0f);
     // Find a setting indexes every page's labels once per opening, drawn where nothing shows (search.cpp).
+    app.cardTitles.clear();
+    app.cardResets.clear();
+    app.moreKeys.clear();
     if (app.searchOpen && !app.searchIndexed) {
         search_index_pages(contentX, contentW);
         app.hits.clear();
         app.drawnLabels.clear();
         app.reportEditRect = {};
+        app.cardTitles.clear();
+        app.cardResets.clear();
+        app.moreKeys.clear();
     }
     app.scrollArea = {mainX, bodyTop, W - mainX, bodyH};
     cv.push_clip(app.scrollArea);
     const float y0 = bodyTop + pad - app.scroll;
-    // About has no header: its own title, the app's name, says what the page is.
-    float contentH = app.pane == Pane::About ? 0 : pane_header(contentX, y0, contentW, true) + t::kSpace7;
+    // About has no header: its own title, the app's name, says what the page is. Cards have none either.
+    float contentH = app.pane == Pane::About || cards ? 0 : pane_header(contentX, y0, contentW, true) + t::kSpace7;
     contentH += pane_content(contentX, y0 + contentH, contentW, true);
     float total = contentH + pad;
-    if (narrow) {
+    if (narrow && !cards) {
         const float pw = std::min(contentW, 460.0f);
         total += side_preview(contentX, y0 + total, pw, true) + pad;
     }
@@ -246,7 +223,7 @@ void paint() {
     draw_highlight();  // the row Find a setting jumped to
     cv.pop_clip();
 
-    page_strip(contentX - 12, W);
+    page_strip(mainX + pad - 12, W);
     topbar(W);
     rail(Hh);  // last: its notch reaches over the page
 

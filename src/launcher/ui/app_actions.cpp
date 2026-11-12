@@ -358,121 +358,72 @@ Range slider_range(Ctl id) {
     }
 }
 
-namespace {
-
-bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
-
-}  // namespace
-
 // Two-loop is legacy (ini mode=quad still runs it): the method picker shows only while it is chosen, to leave it.
 bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
-std::vector<Ctl> focus_order() {
-    std::vector<Ctl> order = {kGameTab, kTopTab, kPage};
+namespace {
+
+// The controls of a page of cards in the order they were drawn (card by card, top to bottom), from the last frame's
+// hits: each once, a card's menu once per card. What a disclosure hides was not drawn, so it isn't in the order.
+std::vector<FocusStop> drawn_order() {
+    static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kThemeToggle,
+                                    kLaunch, kSupport, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
+                                    kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kMenuPanel, kOsdPanel};
+    std::vector<FocusStop> out;
+    for (const Hit& h : app.hits) {
+        if (std::find(std::begin(kNotStops), std::end(kNotStops), h.id) != std::end(kNotStops))
+            continue;
+        if (h.r.bottom() < app.scrollArea.y - 2000 || h.r.y > app.scrollArea.bottom() + 2000)
+            continue;  // not this page's (an index pass draws far away)
+        const FocusStop stop{h.id, h.id == kCardMenu || h.id == kMore ? h.option : -1};
+        if (std::find(out.begin(), out.end(), stop) == out.end())
+            out.push_back(stop);
+    }
+    return out;
+}
+
+}  // namespace
+
+std::vector<FocusStop> focus_order() {
+    std::vector<FocusStop> order = {{kGameTab}, {kTopTab}, {kPage}};
+    if (tab_pages(tab_of(app.pane)).size() < 2)
+        order.pop_back();  // no page strip
     switch (app.pane) {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
-    case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
-    case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
-    case Pane::Resolution:
-        order.push_back(kOuter);
-        if (!inner_disabled()) {
-            order.push_back(kInner);
-            if (game_has(&games::GameFeatures::objectDetail))
-                order.push_back(kObjectDetail);
-            if (game_has(&games::GameFeatures::sharpening))
-                order.push_back(kSharpen);
-            if (game_has(&games::GameFeatures::nativeQuadViews))
-                order.push_back(kNativeQuad);
-            if (game_has(&games::GameFeatures::fovCrop))
-                order.push_back(kCropOn);
-            if (app.s.crop && game_has(&games::GameFeatures::fovCrop))
-                order.insert(order.end(), {kCropTop, kCropBottom, kCropOuter, kCropInner});
-            if (game_has(&games::GameFeatures::helmet))
-                order.push_back(kHelmetOn);
-            if (app.s.helmet.on && game_has(&games::GameFeatures::helmet))
-                order.insert(order.end(), {kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight,
-                                           kHelmetDepth, kHelmetDetail});
-        }
+    case Pane::Hotkeys: order.push_back({kHotkeysReset}); break;
+    case Pane::Profiles: order.insert(order.end(), {{kProfileSave}, {kProfilePaste}}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
+    case Pane::Picture: {
+        const std::vector<FocusStop> drawn = drawn_order();
+        order.insert(order.end(), drawn.begin(), drawn.end());
         break;
-    case Pane::Foveation:
-        if (method_shown())
-            order.push_back(kMethod);
-        order.insert(order.end(), {kMode, kWidth, kHeight});
-        if (!app.s.shape.corners)
-            order.push_back(kCorner);
-        order.insert(order.end(), {kFeather, kFocusOffset});
-        if (app.s.eyeTracking)
-            order.push_back(kGazeDeadzone);
-        order.push_back(kShape);
-        if (app.s.shape.corners)  // in reading order, as the pane lists them
-            order.insert(order.end(), {kShapeTopLeftIn, kShapeTopLeftDown, kShapeTopRightIn, kShapeTopRightDown,
-                                       kShapeBottomLeftIn, kShapeBottomLeftUp, kShapeBottomRightIn, kShapeBottomRightUp});
-        break;
-    case Pane::Overlay:
-        order.push_back(kOutline);
-        if (app.s.outline)
-            order.push_back(kColor);
-        break;
-    case Pane::Dlss:
-        if (game_has(&games::GameFeatures::sideLoadedDlss)) {  // Sim-QVFR's own (pane_dlss.cpp)
-            if (own_dlss_available())
-                order.push_back(kDlssOn);
-            if (!app.s.dlss.folder.empty())  // another nvngx_dlss.dll chosen: Use included, left of Choose…
-                order.push_back(kDlssIncluded);
-            order.push_back(kDlssFolder);
-            if (own_dlss_available() && app.s.dlss.on)
-                order.insert(order.end(), {kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
-                                           kDlssCarVectors});
-            if (own_nr_available())
-                order.push_back(kNrOn);
-            order.push_back(kNrFolder);
-            if (own_nr_available() && app.s.nr.on) {
-                order.insert(order.end(), {kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask,
-                                           kNrOrder, kNrFocusScale, kNrLimit, kNrEdgeBlend, kNrPeriphery});
-                if (app.s.nr.periphery)
-                    order.insert(order.end(), {kNrPeripheryScale, kNrPeripheryCoverage});
-            }
-            break;
-        }
-        if (!game_has(&games::GameFeatures::foveatedDlss))
-            break;
-        order.insert(order.end(), {kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset,
-                                   kCheekyFocusPreset, kCheekySupersampling, kCheekyMotionFix, kCheekyNr});
-        if (app.s.cheeky.nr)
-            order.insert(order.end(), {kCheekyNrPreset, kCheekyNrPasses});
-        if (!game_has(&games::GameFeatures::frameGeneration))
-            break;
-        order.push_back(kFgOn);
-        if (app.s.cheeky.fg)
-            order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder});
-        break;
+    }
     case Pane::Menu:
-        order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kHotkeyFooter, kOsdOn});
+        order.insert(order.end(), {{kMenuYaw}, {kMenuPitch}, {kMenuWidth}, {kMenuPanel}, {kHotkeyFooter}, {kOsdOn}});
         if (app.s.osd.enabled)
-            order.insert(order.end(), {kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel});
+            order.insert(order.end(), {{kOsdYaw}, {kOsdPitch}, {kOsdSize}, {kOsdPanel}});
         break;
     case Pane::Layers:
-        order.insert(order.end(), {kLayerProfile, kLayerList});
+        order.insert(order.end(), {{kLayerProfile}, {kLayerList}});
         if (app.layerProfile == 0)
-            order.push_back(kLayerReset);
+            order.push_back({kLayerReset});
         else if (layers_dirty())
-            order.insert(order.end(), {kLayerRevert, kLayerApply});
+            order.insert(order.end(), {{kLayerRevert}, {kLayerApply}});
         break;
     case Pane::Games:
-        order.insert(order.end(), {kColorValue, kColorReset});
+        order.insert(order.end(), {{kColorValue}, {kColorReset}});
         if (games::launcher_game().antiCheatStart)
-            order.push_back(kAntiCheat);
+            order.push_back({kAntiCheat});
         break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
+    case Pane::Diagnostics: order.insert(order.end(), {{kDiagCapture}, {kDiagFrameCapture}, {kDiagBaseline}, {kDiagCopy}, {kDiagLogs}}); break;
     case Pane::Report:
-        order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});
+        order.insert(order.end(), {{kDiagKind}, {kDiagDescription}, {kDiagReport}});
         if (!app.reportZip.empty())
-            order.push_back(kDiagZip);
-        order.push_back(kDiagExport);
+            order.push_back({kDiagZip});
+        order.push_back({kDiagExport});
         break;
-    case Pane::About: order.insert(order.end(), {kSupport, kUpdateCheck, kUpdateNow}); break;
+    case Pane::About: order.insert(order.end(), {{kSupport}, {kUpdateCheck}, {kUpdateNow}}); break;
     }
-    order.insert(order.end(), {kThemeToggle, kSearch, kProfileMenu, kLaunch, kVersion});  // the top bar, then the rail's foot
+    order.insert(order.end(), {{kThemeToggle}, {kSearch}, {kProfileMenu}, {kLaunch}, {kVersion}});  // the top bar, the rail's foot
     return order;
 }
 

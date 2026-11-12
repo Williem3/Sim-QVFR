@@ -24,7 +24,7 @@ namespace {
 // Each tab's pages, in order (the old panes, until the tab has its cards).
 const std::vector<Pane> kTabPages[kTabs] = {
     {Pane::Profiles, Pane::About},
-    {Pane::Resolution, Pane::Foveation, Pane::Overlay, Pane::Dlss},
+    {Pane::Picture},
     {Pane::Menu, Pane::Hotkeys},
     {Pane::Checks, Pane::Diagnostics, Pane::Report, Pane::Games, Pane::Layers},
 };
@@ -195,6 +195,10 @@ std::wstring fit(const std::wstring& text, const t::TypeStyle& style, float w) {
 }
 
 }  // namespace
+
+uint32_t section_color(Tab tab) { return tab_color(tab); }
+
+void section_shape(Tab tab, float cx, float cy, float size) { tab_shape(tab, cx, cy, size); }
 
 // ---- Tabs and pages ----------------------------------------------------------------------------
 
@@ -453,6 +457,8 @@ float page_strip(float x, float W) {
     Canvas& cv = app.canvas;
     const float y = t::kTopbarHeight, H = 44;
     const Tab tab = tab_of(app.pane);
+    if (tab_pages(tab).size() < 2)
+        return 0;  // a tab of one page (its cards): no strip
     cv.fill({rail_width(), y, W - rail_width(), H}, col(app.c->bg));
     cv.line(rail_width(), y + H - 0.5f, W, y + H - 0.5f, col(app.c->line), 1);
     float px = x;

@@ -18,6 +18,7 @@
 #include "../settings.h"
 #include "../../games/game.h"
 #include "window_state.h"
+#include "card.h"
 
 #pragma comment(lib, "comdlg32.lib")
 
@@ -71,6 +72,105 @@ void set_panel_from(float x, float y) {
         push_live();  // the running game moves it as it is dragged; the settings save once it is let go
 }
 
+// A choice's items and the one chosen now: a pop-up's, or a segmented control's (they share them).
+int choice_items(Ctl owner, std::vector<std::wstring>& items) {
+    int selected = 0;
+    items.clear();
+    if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
+        const bool focus = owner == kCheekyFocusPreset;
+        const int value = focus ? app.s.cheeky.focusPreset : app.s.cheeky.outerPreset;
+        items.clear();
+        selected = 0;
+        for (const CheekyPreset& p : kCheekyPresets)
+            if (focus || p.value != 0) {
+                if (p.value == value)
+                    selected = static_cast<int>(items.size());
+                items.push_back(p.name);
+            }
+    } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
+               owner == kDlssSharpening) {  // DLSS in LMU
+        const auto fill = [&items, &selected](const auto& list, int value) {
+            items.clear();
+            for (const DlssChoice& c : list)
+                items.push_back(c.name);
+            selected = dlss_choice_index(list, value, true);
+        };
+        if (owner == kDlssFocusMode)
+            fill(kDlssFocusModes, app.s.dlss.focusScale);
+        else if (owner == kDlssFocusPreset)
+            fill(kDlssFocusPresets, app.s.dlss.focusPreset);
+        else if (owner == kDlssEyePreset)
+            fill(kDlssEyePresets, app.s.dlss.eyePreset);
+        else
+            fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
+    } else if (owner == kNrStyle || owner == kNrPreset) {  // DLSS-NR in LMU
+        const bool style = owner == kNrStyle;
+        items.clear();
+        if (style)
+            for (const DlssChoice& c : kNrStyles)
+                items.push_back(c.name);
+        else
+            for (const DlssChoice& c : kNrPresets)
+                items.push_back(c.name);
+        selected = style ? dlss_choice_index(kNrStyles, app.s.nr.style) : dlss_choice_index(kNrPresets, app.s.nr.preset);
+    } else if (owner == kNrOrder) {
+        items = {L"After DLSS", L"Before DLSS"};
+        selected = app.s.nr.beforeDlss ? 1 : 0;
+    } else if (owner == kCheekyNrPreset) {
+        items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
+        selected = app.s.cheeky.nrPreset;
+    } else if (owner == kFgMultiplier) {
+        items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
+        selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
+    } else if (owner == kFgRelease) {
+        items.assign(std::begin(kCheekyFgReleaseNames), std::end(kCheekyFgReleaseNames));
+        selected = cheeky_fg_release_index(app.s.cheeky.fgRelease);
+    } else if (owner == kFgScale || owner == kFgPeriphery) {
+        items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
+        selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
+    } else if (owner == kVisor) {
+        items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
+        selected = static_cast<int>(app.s.helmet.visor);
+    } else if (owner == kShape) {
+        items.assign(std::begin(kShapeNames), std::end(kShapeNames));
+        selected = app.s.shape.corners ? 1 : 0;
+    } else if (owner == kDiagKind) {
+        items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
+        selected = app.reportKind;
+    } else if (owner == kHelmetDetail) {
+        items = {L"Performance", L"Detail"};  // 2048 or 4096 a side: the help says so
+        selected = app.s.helmet.detail ? 1 : 0;
+    } else if (owner == kLayerProfile) {
+        items = {kLayerProfileNames[0], kLayerProfileNames[1]};
+        selected = app.layerProfile;
+    } else if (owner == kCheekyNrPasses) {
+        items = {L"1 pass", L"2 passes", L"3 passes"};
+        selected = app.s.cheeky.nrPasses - 1;
+    } else {
+        items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
+                                           : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
+        selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
+    }
+    return selected;
+}
+
+// The choices shown as segmented controls (card.cpp); the others open a pop-up menu.
+bool segmented_ctl(Ctl id) {
+    switch (id) {
+    case kMode:
+    case kShape:
+    case kVisor:
+    case kHelmetDetail:
+    case kDlssFocusPreset:
+    case kDlssEyePreset:
+    case kNrOrder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery: return true;
+    default: return false;
+    }
+}
+
 void open_popup(Ctl owner) {
     if (owner == kProfileMenu) {
         open_profile_menu();
@@ -84,83 +184,27 @@ void open_popup(Ctl owner) {
             break;
         }
     app.popup.owner = owner;
-    if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
-        const bool focus = owner == kCheekyFocusPreset;
-        const int value = focus ? app.s.cheeky.focusPreset : app.s.cheeky.outerPreset;
-        app.popup.items.clear();
-        app.popup.selected = 0;
-        for (const CheekyPreset& p : kCheekyPresets)
-            if (focus || p.value != 0) {
-                if (p.value == value)
-                    app.popup.selected = static_cast<int>(app.popup.items.size());
-                app.popup.items.push_back(p.name);
-            }
-    } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
-               owner == kDlssSharpening) {  // DLSS in LMU
-        const auto fill = [](const auto& list, int value) {
-            app.popup.items.clear();
-            for (const DlssChoice& c : list)
-                app.popup.items.push_back(c.name);
-            app.popup.selected = dlss_choice_index(list, value, true);
-        };
-        if (owner == kDlssFocusMode)
-            fill(kDlssFocusModes, app.s.dlss.focusScale);
-        else if (owner == kDlssFocusPreset)
-            fill(kDlssFocusPresets, app.s.dlss.focusPreset);
-        else if (owner == kDlssEyePreset)
-            fill(kDlssEyePresets, app.s.dlss.eyePreset);
-        else
-            fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
-    } else if (owner == kNrStyle || owner == kNrPreset) {  // DLSS-NR in LMU
-        const bool style = owner == kNrStyle;
-        app.popup.items.clear();
-        if (style)
-            for (const DlssChoice& c : kNrStyles)
-                app.popup.items.push_back(c.name);
-        else
-            for (const DlssChoice& c : kNrPresets)
-                app.popup.items.push_back(c.name);
-        app.popup.selected = style ? dlss_choice_index(kNrStyles, app.s.nr.style) : dlss_choice_index(kNrPresets, app.s.nr.preset);
-    } else if (owner == kNrOrder) {
-        app.popup.items = {L"After DLSS", L"Before DLSS"};
-        app.popup.selected = app.s.nr.beforeDlss ? 1 : 0;
-    } else if (owner == kCheekyNrPreset) {
-        app.popup.items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
-        app.popup.selected = app.s.cheeky.nrPreset;
-    } else if (owner == kFgMultiplier) {
-        app.popup.items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
-        app.popup.selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
-    } else if (owner == kFgRelease) {
-        app.popup.items.assign(std::begin(kCheekyFgReleaseNames), std::end(kCheekyFgReleaseNames));
-        app.popup.selected = cheeky_fg_release_index(app.s.cheeky.fgRelease);
-    } else if (owner == kFgScale || owner == kFgPeriphery) {
-        app.popup.items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
-        app.popup.selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
-    } else if (owner == kVisor) {
-        app.popup.items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
-        app.popup.selected = static_cast<int>(app.s.helmet.visor);
-    } else if (owner == kShape) {
-        app.popup.items.assign(std::begin(kShapeNames), std::end(kShapeNames));
-        app.popup.selected = app.s.shape.corners ? 1 : 0;
-    } else if (owner == kDiagKind) {
-        app.popup.items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
-        app.popup.selected = app.reportKind;
-    } else if (owner == kHelmetDetail) {
-        app.popup.items = {L"Performance (2048)", L"Detail (4096)"};
-        app.popup.selected = app.s.helmet.detail ? 1 : 0;
-    } else if (owner == kLayerProfile) {
-        app.popup.items = {kLayerProfileNames[0], kLayerProfileNames[1]};
-        app.popup.selected = app.layerProfile;
-    } else if (owner == kCheekyNrPasses) {
-        app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
-        app.popup.selected = app.s.cheeky.nrPasses - 1;
-    } else {
-        app.popup.items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
-                                           : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
-        app.popup.selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
-    }
+    app.popup.selected = choice_items(owner, app.popup.items);
     app.popup.hover = app.popup.selected;
     app.popup.open = true;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// A card's ⋯ menu (option: the card's index this frame): Reset this card.
+void open_card_menu(int card) {
+    if (card < 0 || card >= static_cast<int>(app.cardResets.size()))
+        return;
+    Popup& p = app.popup;
+    p = {};
+    p.owner = kCardMenu;
+    for (const Hit& h : app.hits)
+        if (h.id == kCardMenu && h.option == card)
+            p.anchor = h.r;
+    p.items = {L"Reset this card…"};
+    p.actions = {card};
+    p.selected = -1;
+    p.hover = 0;
+    p.open = true;
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -248,6 +292,11 @@ void choose(Ctl owner, int option) {
         profile_menu_action(option);
         return;
     }
+    if (owner == kCardMenu) {
+        if (option >= 0 && option < static_cast<int>(app.popup.actions.size()))
+            reset_card(app.popup.actions[static_cast<size_t>(option)]);
+        return;
+    }
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
         return;
@@ -304,6 +353,8 @@ void choose(Ctl owner, int option) {
 }
 
 }  // namespace
+
+void choose_option(Ctl owner, int option) { choose(owner, option); }
 
 // A game tab: [launcher] game, then everything that follows the game (its checks, its features, its palette).
 void select_game(int option) {

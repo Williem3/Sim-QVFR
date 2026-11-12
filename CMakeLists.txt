@@ -499,8 +499,8 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input
   src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc
   src/launcher/ui/window_state.cpp src/launcher/ui/app_actions.cpp src/launcher/ui/update_install.cpp
   src/launcher/ui/controls.cpp src/launcher/ui/help.cpp src/launcher/ui/sheet.cpp src/launcher/ui/form.cpp
-  src/launcher/ui/pane_checks.cpp src/launcher/ui/pane_profiles.cpp src/launcher/ui/pane_resolution.cpp
-  src/launcher/ui/pane_foveation.cpp src/launcher/ui/pane_dlss.cpp src/launcher/ui/pane_menu.cpp
+  src/launcher/ui/pane_checks.cpp src/launcher/ui/pane_profiles.cpp src/launcher/ui/picture.cpp src/launcher/ui/card.cpp
+  src/launcher/ui/pane_foveation.cpp src/launcher/ui/pane_menu.cpp
   src/launcher/ui/pane_hotkeys.cpp src/launcher/ui/pane_games.cpp src/launcher/ui/pane_layers.cpp
   src/launcher/ui/pane_diagnostics.cpp src/launcher/ui/pane_report.cpp src/launcher/ui/pane_about.cpp
   src/launcher/ui/chrome.cpp src/launcher/ui/shell.cpp src/launcher/ui/search.cpp src/launcher/ui/pointer.cpp
