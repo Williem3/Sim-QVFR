@@ -1009,12 +1009,12 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         const bool installed = lmu::mvr_pass_install(device.Get());
         const uint64_t hookedNow = lmu::mvr_pass_stats().contextFunctions;
         std::snprintf(what, sizeof(what),
-                      "the layer's install: %llu functions hooked for %llu entries (fifteen with the focus post; two each "
+                      "the layer's install: %llu functions hooked for %llu entries (sixteen with the focus post; two each "
                       "at least), %llu of them ResolveSubresource's",
                       static_cast<unsigned long long>(hookedNow),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().contextEntries),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
-        check(installed && lmu::mvr_pass_stats().contextEntries == 15 && hookedNow >= 30, what);
+        check(installed && lmu::mvr_pass_stats().contextEntries == 16 && hookedNow >= 32, what);
         ComPtr<ID3D11Multithread> mt;
         if (SUCCEEDED(context.As(&mt))) {
             const BOOL was = mt->SetMultithreadProtected(TRUE);
