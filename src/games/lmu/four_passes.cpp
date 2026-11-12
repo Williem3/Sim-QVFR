@@ -2630,6 +2630,7 @@ void install_four_pass_extras() {
 // frames) when MVR fails while running. Logged once with `why`.
 bool fellBack = false;
 int badgeLogged = 0;
+bool losingForTest = false;  // lmu_mvr_lose_at's window is open
 std::atomic<int> multiViewNow{0};  // four_passes_multi_view's (a QvfrMultiView), as of the last frame end
 
 // What the multi-view path did before it stopped, step by step, so a log shows which one the focus views didn't get past:
@@ -2867,6 +2868,16 @@ void four_passes_frame_end() {
                           : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
                               ? "forced by lmu_mvr_fallback_at"
                               : nullptr;
+        if (cfg.loseAt > 0 && cfg.focusReplay && !why) {  // the recovery's test: the focus post off for a while
+            const unsigned long long from = static_cast<unsigned long long>(cfg.loseAt);
+            const bool lose = sceneFrames >= from && sceneFrames < from + 1800;
+            if (lose != losingForTest) {
+                losingForTest = lose;
+                mvr_focus_replay(!lose);
+                simqvfr::logf("lmu mvr: frame %llu (scene frame %llu): lmu_mvr_lose_at: the focus post %s", frames, sceneFrames,
+                              lose ? "off for 1800 scene frames (no focus views: the recovery's test)" : "on again");
+            }
+        }
         if (why) {
             fallback_to_four_passes(why);
         } else {

@@ -134,6 +134,9 @@ public:
                 // lmu_mvr_fallback_at=N: the fallback to the four passes forced at scene frame N (its test).
                 run.fallbackAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_fallback_at", 0,
                                                                                       s.ini)));
+                // lmu_mvr_lose_at=N: the focus views lost from scene frame N for 1800 scene frames (the recovery's test).
+                run.loseAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_at", 0,
+                                                                                  s.ini)));
             }
         }
         // The focus views take their eye's glare (glare_share.h), so a light's halo doesn't stop at the box edge.
