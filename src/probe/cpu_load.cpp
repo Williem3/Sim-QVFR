@@ -227,7 +227,12 @@ CpuLoad cpu_load_from(const std::map<uint32_t, uint64_t>& before, const std::map
 }
 
 bool cpu_load_spins(const std::wstring& name) {
-    return name == L"Physics" || name.find(L"aSeeVRClient") != std::wstring::npos ||
+    // ACE's "Physics"; LMU's (gMotor) "Le Mans Ultimate Physics Thread": a whole core at every sample of a 2026-11-12
+    // run while the render thread ran 6% and the GPU 18%, frames on time.
+    constexpr std::wstring_view kPhysicsThread = L" Physics Thread";
+    const bool physics = name == L"Physics" ||
+                         (name.size() > kPhysicsThread.size() && name.ends_with(kPhysicsThread));
+    return physics || name.find(L"aSeeVRClient") != std::wstring::npos ||
            name.find(L"virtualdesktop-openxr") != std::wstring::npos;
 }
 
@@ -252,7 +257,7 @@ bool cpu_load_start() {
     worker.latest = CpuLoad{};
     worker.running = true;
     worker.thread = std::thread(run);
-    logf("cpu load: sampling the game's threads every %d ms (the busiest leaves out Physics, the eye tracker's client and Virtual Desktop's pacing: they spin)",
+    logf("cpu load: sampling the game's threads every %d ms (the busiest leaves out the physics thread (ACE's, LMU's), the eye tracker's client and Virtual Desktop's pacing: they spin)",
          kCpuLoadMs);
     return true;
 }

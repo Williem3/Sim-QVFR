@@ -167,6 +167,11 @@ OsdSummary osd_summary(const OsdInput& in) {
     if (in.gpuBusyPercent >= 0 && s.frameMs > 0) {
         s.gpuWhole = true;
         s.gpuMs = in.gpuBusyPercent / 100 * s.frameMs;
+        // No queue timestamps (a D3D11 game): the game's part from its process's share of the GPU, which also holds
+        // the layer's composition (it runs in the game's process), taken out when timed.
+        if (s.gpuGameMs < 0 && in.gpuGamePercent >= 0)
+            s.gpuGameMs = std::max(0.0, std::min(in.gpuGamePercent, in.gpuBusyPercent) / 100 * s.frameMs -
+                                            std::max(0.0, s.gpuLayerMs));
         s.gpuRestMs = std::max(0.0, s.gpuMs - std::max(0.0, s.gpuGameMs) - std::max(0.0, s.gpuFgMs) -
                                         std::max(0.0, s.gpuLayerMs));
     } else {
@@ -340,6 +345,14 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         rows.push_back(r);
     }
     return rows;
+}
+
+std::wstring osd_clock(int hour, int minute) {
+    hour = ((hour % 24) + 24) % 24;
+    const int twelve = hour % 12 == 0 ? 12 : hour % 12;
+    wchar_t s[16];
+    swprintf_s(s, L"%d:%02d %s", twelve, ((minute % 60) + 60) % 60, hour < 12 ? L"AM" : L"PM");
+    return s;
 }
 
 OsdRow osd_badge(const OsdInput& in) {

@@ -217,6 +217,31 @@ int SIM_QVFR_TEST_MAIN() {
               "CPU headroom from the busier of the render thread's work and the busiest thread");
     }
     {
+        // A D3D11 game (LMU): no queue timestamps, so the game's part is its process's share of the GPU, the layer's
+        // composition (timed by queries, and inside that share) taken out of it.
+        OsdInput in = measured(22.222, 9, 12.5, 9.7, 90, 60);
+        in.gpuMs = -1;
+        in.gpuGamePercent = 80;
+        const OsdSummary s = osd_summary(in);
+        const double frame = 22.222;
+        check(s.gpuWhole && close_to(s.gpuGameMs, 0.8 * frame - 0.4, 0.01) && close_to(s.gpuLayerMs, 0.4) &&
+                  close_to(s.gpuRestMs, 0.9 * frame - (0.8 * frame - 0.4) - 1.1 - 0.4, 0.01),
+              "D3D11: game = its GPU share less the layer's composition; rest = whole less game, FG and layer");
+        const std::wstring parts = row(osd_rows(in, s), L"GPU ms: game/FG/layer/rest")->value;
+        check(parts.find(L"—") == std::wstring::npos, "D3D11: every GPU part filled in");
+        in.composeMs = -1;
+        in.fg = OsdFg::Off;
+        const OsdSummary bare = osd_summary(in);
+        check(close_to(bare.gpuGameMs, 0.8 * frame, 0.01) && close_to(bare.gpuRestMs, 0.1 * frame, 0.01),
+              "D3D11 without the layer's time: the game's whole share, the rest the remainder");
+        in.gpuGamePercent = 95;  // the share sampled a little above the busiest engine's total: capped at it
+        check(close_to(osd_summary(in).gpuGameMs, 0.9 * frame, 0.01) && osd_summary(in).gpuRestMs >= 0,
+              "D3D11: the game's share never exceeds the whole GPU");
+    }
+    check(osd_clock(0, 5) == L"12:05 AM" && osd_clock(9, 41) == L"9:41 AM" && osd_clock(12, 0) == L"12:00 PM" &&
+              osd_clock(23, 59) == L"11:59 PM" && osd_clock(13, 7) == L"1:07 PM",
+          "the clock: 12-hour, minutes padded, midnight and noon as 12");
+    {
         // Cheeky's layer gives ACE the doubled period (22.2 ms): with the headset's refresh known, the budget is
         // that refresh times the multiplier, not doubled again (the 44.4 ms that showed false headroom).
         OsdInput doubled = measured(22.4, 9, 12.6, 9.7, 71, 60);
@@ -280,7 +305,7 @@ int SIM_QVFR_TEST_MAIN() {
         const OsdSummary s = osd_summary(full);
         std::vector<double> history(150, 24.6);
         const std::vector<uint32_t> pixels =
-            draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s), osd_badge(full));
+            draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s), osd_badge(full), osd_clock(21, 47));
         save_card(path, pixels);
     }
     {
@@ -336,6 +361,23 @@ int SIM_QVFR_TEST_MAIN() {
         std::snprintf(what, sizeof(what), "the badge drawn in the CPU tile's label row (%d pixels), nothing else changed (%d)",
                       inside, outside);
         check(inside > 300 && outside == 0, what);
+        // The clock: only the graph row changes (the clock at its right end, the graph shorter), nothing above or below.
+        const std::vector<uint32_t> clocked =
+            draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), none, osd_clock(21, 47));
+        int clockText = 0, elsewhere = 0;
+        for (int y = 0; y < kOsdHeight; ++y)
+            for (int x = 0; x < kOsdWidth; ++x) {
+                const size_t i = static_cast<size_t>(y) * kOsdWidth + x;
+                if (plain[i] == clocked[i])
+                    continue;
+                if (y >= 166 && y < 226)  // the graph's row
+                    clockText += x >= kOsdWidth - 36 - 110;
+                else
+                    ++elsewhere;
+            }
+        std::snprintf(what, sizeof(what), "the clock drawn at the graph's right end (%d pixels), nothing outside its row (%d)",
+                      clockText, elsewhere);
+        check(clockText > 200 && elsewhere == 0, what);
     }
     {
         const std::vector<uint32_t> pixels =
