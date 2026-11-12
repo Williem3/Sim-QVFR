@@ -342,4 +342,16 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     return rows;
 }
 
+OsdRow osd_badge(const OsdInput& in) {
+    OsdRow r{L"Multi-view"};
+    r.pill = true;
+    switch (in.multiView) {
+    case OsdMultiView::None: break;
+    case OsdMultiView::Mvr: r.value = L"MVR"; r.tone = OsdTone::Good; break;
+    case OsdMultiView::Smvr: r.value = L"SMVR"; r.tone = OsdTone::Good; break;
+    case OsdMultiView::Fallback: r.value = L"Fallback"; r.tone = OsdTone::Warn; break;
+    }
+    return r;
+}
+
 }  // namespace simqvfr

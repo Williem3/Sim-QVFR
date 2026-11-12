@@ -233,6 +233,9 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
     own during a session, Sim-QVFR's takes over. Sim-QVFR's own draws each vertex twice, so it costs a little more
     GPU time: on the RTX 5070 Ti above it saved the same CPU time and about 0.65 ms of GPU time per frame. It has
     been tested on that card only so far; reports from AMD and Intel cards are welcome.
+  - **Which one is running:** the performance overlay (Ctrl+Alt+P) shows it beside its CPU heading:
+    **MVR** for NVIDIA's multi-view rendering, **SMVR** for Sim-QVFR's own, or a yellow **Fallback** when
+    multi-view rendering stopped and the four views are rendered on their own, as before (the log says why).
   - **It doesn't patch LMU's code.** With multi-view rendering, Sim-QVFR works through OpenXR and Direct3D 11
     only: it doesn't change, hook or call any of LMU's own code. In LMU's memory it reads a few values (the
     cameras, the eye being drawn, the render size) and writes just two, the render scale and the eye render size, which set each

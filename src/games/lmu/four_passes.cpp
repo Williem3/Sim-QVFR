@@ -2536,6 +2536,7 @@ void install_four_pass_extras() {
 // the rest of the session: at xrCreateSession when the device can't do it, or at a frame end (render thread, between
 // frames) when MVR fails while running. Logged once with `why`.
 bool fellBack = false;
+std::atomic<int> multiViewNow{0};  // four_passes_multi_view's (a QvfrMultiView), as of the last frame end
 
 // What the multi-view path did before it stopped, step by step, so a log shows which one the focus views didn't get past:
 // the eye passes' room check and focus box (mvr_before_pass), drawing the focus view, the focus post's copy, composite
@@ -2777,6 +2778,15 @@ void four_passes_frame_end() {
         if (why)
             fallback_to_four_passes(why);
     }
+    // The overlay's badge: the way this frame's focus views were drawn (the backend as it stands: NVIDIA's until
+    // instancing takes over).
+    using simqvfr::games::QvfrMultiView;
+    QvfrMultiView way = QvfrMultiView::none;
+    if (fellBack)
+        way = QvfrMultiView::fallback;
+    else if (cfg.trackerDrives && cfg.mvr && mvr_probe_backend() != MvrBackend::none)
+        way = mvr_probe_backend() == MvrBackend::nvapi && !mvr_instanced() ? QvfrMultiView::nvidia : QvfrMultiView::software;
+    multiViewNow.store(static_cast<int>(way), std::memory_order_relaxed);
     if (fourPassFrames == 1 && passes >= 4)
         simqvfr::logf("%s: frame %llu: first four-pass frame, eyes rendered %d %d %d %d; post-effect frame time "
                       "held in passes 2-3: %s (%d calls this frame, the game's %.5f s -> %.5f s); hidden-area mask "
@@ -2987,6 +2997,10 @@ void four_passes_set_box(double fractionX, double fractionY) {
     std::lock_guard guard(liveMutex);
     focusFraction = std::clamp(fractionX, 0.05, 1.0);
     focusFractionY = fractionY > 0 ? std::clamp(fractionY, 0.05, 1.0) : 0.0;
+}
+
+simqvfr::games::QvfrMultiView four_passes_multi_view() {
+    return static_cast<simqvfr::games::QvfrMultiView>(multiViewNow.load(std::memory_order_relaxed));
 }
 
 bool four_passes_record(simqvfr::Views4Frame& frame) {

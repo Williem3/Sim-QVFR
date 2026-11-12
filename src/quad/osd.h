@@ -41,6 +41,10 @@ enum class OsdFg { Off, Starting, On };
 // eyes look (Pimax's, Varjo's): it moved them in the last few seconds, or it has held them still that long.
 enum class OsdGaze { Off, Unavailable, Tracking, Partial, Lost, Runtime, RuntimeStill };
 
+// How the game's focus views are drawn (games/adapter.h QvfrMultiView): the card's badge, by the CPU tile's label.
+// None: no badge.
+enum class OsdMultiView { None, Mvr, Smvr, Fallback };
+
 // Everything one card shows, gathered over the last window (about half a second).
 struct OsdInput {
     std::vector<OsdFrame> frames;  // this window's frames, oldest first
@@ -61,6 +65,7 @@ struct OsdInput {
     std::wstring fgState;          // Cheeky's own words while not generating ("Waiting for guides")
     OsdGaze gaze = OsdGaze::Off;
     uint64_t vramUsed = 0, vramBudget = 0;  // bytes, 0: unknown
+    OsdMultiView multiView = OsdMultiView::None;
 };
 
 // What the card takes from Cheeky's runtime snapshot (CheekyRuntime_Snapshot's JSON): whether frame
@@ -124,12 +129,17 @@ struct OsdRow {
 // frame generation, eye tracking: three rows of three.
 std::vector<OsdRow> osd_rows(const OsdInput& input, const OsdSummary& summary);
 
+// The badge beside the CPU tile's label, a pill (an empty value: none): MVR (NVIDIA's multi-view rendering) and
+// SMVR (Sim-QVFR's software multi-view) green, Fallback (the focus views in passes of their own again) yellow.
+OsdRow osd_badge(const OsdInput& input);
+
 // RGBA8 pixels (sRGB, straight alpha), kOsdWidth x kOsdHeight: a rounded translucent card with the
 // `tiles` across the top, a strip graph of the recent frame times (`history`, ms, oldest first)
-// against the budget, then `rows` as a grid of three columns.
+// against the budget, then `rows` as a grid of three columns; `badge` (osd_badge) at the right of the CPU tile's label.
 inline constexpr int kOsdWidth = 1024, kOsdHeight = 496;
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
-                                     const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows);
+                                     const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
+                                     const OsdRow& badge = {});
 
 // The same card with a notice instead of the numbers: `title` in yellow, then `lines`, each a paragraph
 // (wrapped; the first in white, the rest grey). The layer shows it for a while at the session's start when

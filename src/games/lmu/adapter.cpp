@@ -158,6 +158,9 @@ public:
             four_passes_mask_taken(viewIndex);
     }
     bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
+    simqvfr::games::QvfrMultiView qvfr_multi_view() const override {
+        return qvfr_ ? four_passes_multi_view() : simqvfr::games::QvfrMultiView::none;
+    }
     bool qvfr_latest_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
     ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) override {
         return qvfr_ ? four_passes_atlas(eyes, uv) : nullptr;
