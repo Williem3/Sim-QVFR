@@ -2802,6 +2802,7 @@ bool four_passes_start(const FourPassesRun& run) {
 
 void four_passes_device(ID3D11Device* device) {
     sessionDevice = device;
+    recovery.new_session();  // a graphics setting may have changed: no waiting for the next try
     // R5: the device decides; the game is still in its menus, the eye loop not yet run.
     if (installed && cfg.trackerDrives && !mvr_probe_usable())
         fallback_to_four_passes("the game's device can't draw two views a pass (no NVIDIA multi-view rendering, and no "

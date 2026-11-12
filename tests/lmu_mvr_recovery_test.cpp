@@ -74,7 +74,19 @@ int SIM_QVFR_TEST_MAIN() {
             for (int f = 0; f < 6; ++f)
                 r.frame(2, false, t += frameMs);
         }
-        check(r.plain() && r.waitMs == MvrRecovery::kMaxWaitMs, "the wait doubles up to a minute");
+        check(r.plain() && r.waitMs == MvrRecovery::kMaxWaitMs && MvrRecovery::kMaxWaitMs == 20000,
+              "the wait doubles up to 20 s");
+        {  // a new session (LMU's on a graphics setting change): the next scene frame tries, whatever the wait was
+            MvrRecovery s = r;
+            const double now = s.retryAtMs - 15000;
+            const bool waiting = s.frame(2, false, now) == Event::none && s.plain();
+            s.new_session();
+            const bool tries = s.frame(2, false, now + frameMs) == Event::tryingAgain;
+            const bool back = s.frame(2, false, now + 2 * frameMs) == Event::none &&
+                              s.frame(2, true, now + 3 * frameMs) == Event::recovered;
+            check(waiting && tries && back && s.waitMs == 0,
+                  "a new session while plain: the next scene frame is a try, and the waits start afresh");
+        }
         // The player changes the setting back: the next try gets its focus views and stays.
         t = r.retryAtMs + 1;
         r.frame(2, false, t);

@@ -7,7 +7,8 @@
 //             Slower, but a right and sharp picture, where the eyes alone at the periphery's size are a blur.
 //   trying    from plain once its wait is over: foveated again for a few frames. Focus views within kTryFrames: back
 //             to foveated. None: plain again, the wait doubled (kFirstWaitMs up to kMaxWaitMs), so a setting it can't
-//             handle costs a short soft blink at most once a minute, and a setting changed back is picked up by itself.
+//             handle costs a short soft blink at most every 20 s. A setting changed back is picked up at once: LMU
+//             makes its session anew on every graphics change (new_session: the next scene frame is a try).
 #pragma once
 
 #include <algorithm>
@@ -21,7 +22,7 @@ struct MvrRecovery {
     static constexpr unsigned long long kNoFinalsFrames = 45;  // half a second at 90 Hz
     static constexpr unsigned long long kTryFrames = 6;        // the first renders at the full size still, by design
     static constexpr unsigned long long kSettledFrames = 600;  // focus views this long: the wait starts afresh
-    static constexpr double kFirstWaitMs = 3000, kMaxWaitMs = 60000;
+    static constexpr double kFirstWaitMs = 3000, kMaxWaitMs = 20000;
 
     State state = State::foveated;
     unsigned long long noFinals = 0;  // frames in a row with a pass but without both focus views
@@ -30,6 +31,13 @@ struct MvrRecovery {
     double retryAtMs = 0, waitMs = 0;
 
     bool plain() const { return state == State::plain; }
+
+    // The game made its session anew (LMU does on every graphics setting change): what stopped the focus views may
+    // be gone, so the next scene frame tries, and the waits start afresh.
+    void new_session() {
+        retryAtMs = 0;
+        waitMs = 0;
+    }
 
     // One frame: `passes` eye passes found, `finals` both focus views made, at `nowMs`.
     Event frame(int passes, bool finals, double nowMs) {
