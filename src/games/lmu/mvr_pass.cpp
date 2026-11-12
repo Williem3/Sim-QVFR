@@ -618,32 +618,69 @@ void pt_log_events() {
         simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
 }
 
-// The frame's shape (PassTrace): what orders the passes and their post-processing, without the textures' numbers, the
-// draw counts and the sizes. `yebis`: a draw with one of YEBIS's shaders is in it.
+// The frame's shape (PassTrace): per tracked pass, what it began on, what is bound between its resolve and YEBIS's first
+// draw (a stage there is what the first shape rule missed: it took YEBIS's metering copies, which come and go, and every
+// bind after the resolve, for shape), whether YEBIS's first copy reads the resolve, whether the composite and the final
+// blit were seen, and why it ended. A frame without tracked passes: whether YEBIS drew at all. `yebis`: it did.
 std::string pt_shape(bool& yebis) {
-    std::string shape;
+    const auto id_after = [](const std::string& k, const char* mark) -> std::string {
+        const std::size_t at = k.find(mark);
+        if (at == std::string::npos)
+            return {};
+        std::size_t i = at + std::strlen(mark), j = i;
+        while (j < k.size() && k[j] >= '0' && k[j] <= '9')
+            ++j;
+        return k.substr(i, j - i);
+    };
+    const auto size_of = [](const std::string& k, std::size_t from) -> std::string {  // "(WxH fN xS)" right after an id
+        const std::size_t open = k.find('(', from), close = open == std::string::npos ? open : k.find(')', open);
+        return close == std::string::npos ? std::string() : k.substr(open, close - open + 1);
+    };
+    std::string shape, resolveTo;
+    bool inPass = false, resolved = false, copySeen = false, composite = false, blit = false;
     yebis = false;
+    int passes = 0;
     for (const std::string& e : pt.events) {
         const std::size_t space = e.find(' ');
-        std::string k = space == std::string::npos ? e : e.substr(space + 1);
+        const std::string k = space == std::string::npos ? e : e.substr(space + 1);
         const auto starts = [&k](const char* with) { return k.rfind(with, 0) == 0; };
-        yebis = yebis || starts("YEBIS");
-        if (!(starts("P+") || starts("P-") || starts("YEBIS") || starts("R ") || starts("W ") ||
-              k.find("(after a resolve in the pass)") != std::string::npos))
+        if (starts("YEBIS"))
+            yebis = true;
+        if (starts("P+")) {
+            inPass = true;
+            resolved = copySeen = composite = blit = false;
+            resolveTo.clear();
+            ++passes;
+            shape += k.substr(0, k.find(';')) + " [";
+        } else if (starts("P-") && inPass) {
+            shape += std::string(copySeen ? "" : " NO-COPY") + (composite ? " composite" : " NO-COMPOSITE") +
+                     (blit ? " blit" : " NO-BLIT") + "] " + k.substr(3) + " | ";
+            inPass = false;
+        } else if (!inPass) {
             continue;
-        if (starts("P+"))
-            k = k.substr(0, k.find(';'));
-        if (starts("W "))
-            k = k.substr(0, k.find(':'));
-        std::string plain;
-        for (std::size_t i = 0; i < k.size(); ++i) {
-            plain += k[i];
-            if (k[i] == '#')
-                while (i + 1 < k.size() && k[i + 1] >= '0' && k[i + 1] <= '9')
-                    ++i;
+        } else if (starts("R ")) {
+            resolved = true;
+            resolveTo = id_after(k, "> #");
+            shape += " R";
+        } else if (starts("B ") && resolved && !copySeen) {  // between the resolve and YEBIS: a stage
+            const std::string target = id_after(k, "B #");
+            const std::size_t depthAt = k.find(" depth ");
+            shape += " B(" + (target.empty() ? std::string("-") : target == resolveTo ? std::string("the resolve") : "t" + size_of(k, 2)) +
+                     (depthAt != std::string::npos && k.compare(depthAt + 7, 1, "-") != 0 ? " +depth)" : ")");
+        } else if (starts("YEBIS copy") && resolved && !copySeen) {
+            copySeen = true;
+            const std::string from = id_after(k, "t0 #");
+            shape += from == resolveTo ? " copy<-resolve" : " copy<-OTHER" + size_of(k, k.find("t0 #"));
+        } else if (starts("YEBIS composite") && resolved) {
+            composite = true;
+        } else if (starts("YEBIS final blit") && resolved && copySeen) {
+            blit = true;
         }
-        shape += plain + "|";
     }
+    if (inPass)
+        shape += " (open at the frame's end)";
+    if (!passes)
+        shape = yebis ? "no tracked pass, YEBIS drew" : "no tracked pass";
     return shape;
 }
 
