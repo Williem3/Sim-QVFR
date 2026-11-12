@@ -619,10 +619,10 @@ void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilV
         }
     }
     if (pt.recording && (dsv || multisampleTarget)) {
-        ComPtr<ID3D11Resource> depth;
+        ComPtr<ID3D11Resource> depthTarget;
         if (dsv)
-            dsv->GetResource(&depth);
-        const std::string rt = pt_tex(r0.Get()), ds = pt_tex(depth.Get());
+            dsv->GetResource(&depthTarget);
+        const std::string rt = pt_tex(r0.Get()), ds = pt_tex(depthTarget.Get());
         pt_event("B %s depth %s%s", rt.c_str(), ds.c_str(), tr.open && tr.resolved ? " (after a resolve in the pass)" : "");
     }
     if (tr.open) {
