@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "../../engine/code_patch.h"
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
@@ -31,6 +32,7 @@
 #include "glare_math.h"
 #include "mvr_probe.h"
 #include "tag_viewport.h"
+#include "abi.h"
 #include "yebis_shaders.h"
 
 namespace lmu {
@@ -444,14 +446,84 @@ struct Tracker {
 // multisample target, resolves, CopySubresourceRegions, YEBIS's draws, the focus post's window and the tracked passes'
 // bounds, in order, to see what the tracker takes for a pass's begin and end. The frames with tracked passes numbered
 // kPassTraceAt (the first renders at the game's own size); a frame without passes is dropped.
+// With [experiment] lmu_pass_trace=1 (mvr_pass_trace) every frame is recorded instead, and a frame is logged whenever
+// its shape is one not seen before this launch: the order of its passes' bounds, resolves, what is bound after a
+// resolve, YEBIS's draws and the focus post's window, with the textures' numbers left out. With it the game's graphics
+// settings as its own files hold them (UserData\Config_DX11_VR.ini, UserData\player\Settings.JSON) and the renderer's
+// post-processing bits, so a run that steps through the game's settings shows which one changes the stream.
 struct PassTrace {
     bool recording = false;
     int framesWithPasses = 0, logged = 0, dropped = 0;
     std::vector<std::string> events;
     std::vector<const void*> ids;  // the textures mentioned this frame (raw: compared only)
+    int level = 0;                 // mvr_pass_trace
+    std::vector<uint64_t> shapes;  // the shapes logged so far (their hashes)
+    int lastShape = -1;
+    unsigned long long lastSwitchFrame = 0, settingsCheckedFrame = 0;
+    std::string settings;          // the game's settings as last logged
 } pt;
 constexpr int kPassTraceAt[] = {2, 3, 45};
 constexpr std::size_t kPassTraceEvents = 400;
+constexpr std::size_t kPassTraceShapes = 40;
+
+// The game's graphics settings, read from its own files (not its memory): one line.
+std::string pt_game_settings() {
+    wchar_t exe[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (!n || n == MAX_PATH)
+        return "?";
+    const std::filesystem::path user = std::filesystem::path(exe).parent_path() / L"UserData";
+    std::string line;
+    const std::wstring config = (user / L"Config_DX11_VR.ini").wstring();
+    for (const wchar_t* key : {L"EPostProcessingSettings", L"MSAA", L"UseFXAA", L"UpscaleMethod", L"RenderScale", L"ShaderLevel"}) {
+        wchar_t value[64] = {};
+        GetPrivateProfileStringW(L"COMPONENTS", key, L"?", value, 64, config.c_str());
+        char text[160];
+        std::snprintf(text, sizeof(text), "%s%ls=%ls", line.empty() ? "" : " ", key, value);
+        line += text;
+    }
+    std::string json;
+    if (HANDLE f = CreateFileW((user / L"player" / L"Settings.JSON").wstring().c_str(), GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+        f != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1 << 22)) {
+            json.resize(static_cast<std::size_t>(size.QuadPart));
+            DWORD got = 0;
+            if (!ReadFile(f, json.data(), static_cast<DWORD>(json.size()), &got, nullptr))
+                got = 0;
+            json.resize(got);
+        }
+        CloseHandle(f);
+    }
+    line += ";";
+    for (const char* key : {"Environment Reflections", "Road Reflections", "Shadows", "Shadow Blur", "Soft Particles", "Motion blur",
+                            "Rain FX Quality", "Raindrop Flow", "Rainspray Flow", "Opponent Detail", "Player Detail", "Texture Detail",
+                            "Special FX", "Circuit Detail", "Sun Occlusion", "Rearview Driving", "Max Visible Vehicles",
+                            "Heat FX Fade Speed", "Live TV Displays"}) {
+        const std::string quoted = std::string("\"") + key + "\":";
+        const std::size_t at = json.find(quoted);
+        if (at == std::string::npos)
+            continue;
+        std::size_t from = at + quoted.size(), to = json.find_first_of(",\r\n}", from);
+        while (from < json.size() && json[from] == ' ')
+            ++from;
+        line += " " + std::string(key) + " " + json.substr(from, to == std::string::npos ? 8 : to - from) + ",";
+    }
+    // The renderer's own state (a read of the game's memory, this diagnostic's alone): the post-processing bits and the
+    // flags a static reading of its post-processing function names. Their offsets are from that reading, not verified.
+    const std::uintptr_t base = simqvfr::module_base();
+    if (const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer)) {
+        std::uint32_t post = 0, msaa = 0;
+        std::memcpy(&post, renderer + 0x7770c, sizeof(post));
+        std::memcpy(&msaa, renderer + 0x1a1c, sizeof(msaa));
+        char text[160];
+        std::snprintf(text, sizeof(text), " renderer: post bits 0x%08x (bits 24-26: %u%u%u), +0x770fa %u, +0x1a1c %u", post,
+                      (post >> 24) & 1, (post >> 25) & 1, (post >> 26) & 1, static_cast<unsigned>(renderer[0x770fa]), msaa);
+        line += text;
+    }
+    return line;
+}
 
 void pt_event(const char* format, ...) {
     if (pt.events.size() >= kPassTraceEvents) {
@@ -519,34 +591,111 @@ void pt_draw(ID3D11DeviceContext* context, const char* call) {
              tr.open ? ("in tracked pass " + std::to_string(tr.pass)).c_str() : "outside the tracked passes");
 }
 
-// The frame end (after the tracker's): the trace logged if this frame is one of kPassTraceAt; the next frame's decided.
+// A frame's events written out, a few to a line.
+void pt_log_events() {
+    std::string line;
+    for (const std::string& e : pt.events) {
+        if (!line.empty() && line.size() + e.size() > 1300) {
+            simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+            line.clear();
+        }
+        line += line.empty() ? e : "; " + e;
+    }
+    if (!line.empty())
+        simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+}
+
+// The frame's shape (PassTrace): what orders the passes and their post-processing, without the textures' numbers, the
+// draw counts and the sizes. `yebis`: a draw with one of YEBIS's shaders is in it.
+std::string pt_shape(bool& yebis) {
+    std::string shape;
+    yebis = false;
+    for (const std::string& e : pt.events) {
+        const std::size_t space = e.find(' ');
+        std::string k = space == std::string::npos ? e : e.substr(space + 1);
+        const auto starts = [&k](const char* with) { return k.rfind(with, 0) == 0; };
+        yebis = yebis || starts("YEBIS");
+        if (!(starts("P+") || starts("P-") || starts("YEBIS") || starts("R ") || starts("W ") ||
+              k.find("(after a resolve in the pass)") != std::string::npos))
+            continue;
+        if (starts("P+"))
+            k = k.substr(0, k.find(';'));
+        if (starts("W "))
+            k = k.substr(0, k.find(':'));
+        std::string plain;
+        for (std::size_t i = 0; i < k.size(); ++i) {
+            plain += k[i];
+            if (k[i] == '#')
+                while (i + 1 < k.size() && k[i + 1] >= '0' && k[i + 1] <= '9')
+                    ++i;
+        }
+        shape += plain + "|";
+    }
+    return shape;
+}
+
+// The frame end (after the tracker's): the trace logged if this frame is one of kPassTraceAt, or with lmu_pass_trace
+// if its shape is new; the next frame's decided.
 void pt_frame_end(unsigned long long frame, int passes) {
     if (passes > 0)
         ++pt.framesWithPasses;
-    if (pt.recording && passes > 0 && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
-        pt.framesWithPasses == kPassTraceAt[pt.logged]) {
+    const char* const key = "@N = the game's draws this frame so far, #n = a texture (size, format, samples at its first "
+                            "mention); B = a render target bind (target 0, depth), R = a resolve, C = a "
+                            "CopySubresourceRegion, P+/P- = a tracked pass's begin/end, W = the focus post's window opened";
+    if (pt.level && pt.recording) {
+        // The game's settings, when its files change (looked at every two seconds or so).
+        if (frame - pt.settingsCheckedFrame >= 180 || pt.settings.empty()) {
+            pt.settingsCheckedFrame = frame;
+            std::string now = pt_game_settings();
+            if (now != pt.settings) {
+                simqvfr::logf("lmu mvr: pass trace: frame %llu: the game's settings%s: %s", frame, pt.settings.empty() ? "" : " CHANGED",
+                              now.c_str());
+                pt.settings = std::move(now);
+            }
+        }
+        bool yebis = false;
+        const std::string shape = pt_shape(yebis);
+        if (passes > 0 || yebis) {
+            uint64_t hash = 1469598103934665603ull;
+            for (const char c : shape)
+                hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+            int index = -1;
+            for (std::size_t i = 0; i < pt.shapes.size(); ++i)
+                if (pt.shapes[i] == hash)
+                    index = static_cast<int>(i);
+            if (index < 0 && pt.shapes.size() < kPassTraceShapes) {
+                pt.shapes.push_back(hash);
+                index = static_cast<int>(pt.shapes.size()) - 1;
+                simqvfr::logf("lmu mvr: pass trace: frame %llu: SHAPE %d, new (%d tracked passes): %zu events, %d not logged (over "
+                              "%zu); %s",
+                              frame, index, passes, pt.events.size(), pt.dropped, kPassTraceEvents, key);
+                simqvfr::logf("lmu mvr: pass trace: shape %d with the game's settings: %s", index, pt_game_settings().c_str());
+                pt_log_events();
+                simqvfr::logf("lmu mvr: pass trace: shape %d is: %s", index, shape.c_str());
+                pt.lastShape = index;
+                pt.lastSwitchFrame = frame;
+            } else if (index >= 0 && index != pt.lastShape && frame - pt.lastSwitchFrame >= 45) {
+                simqvfr::logf("lmu mvr: pass trace: frame %llu: shape %d again (was %d; %d tracked passes)", frame, index, pt.lastShape,
+                              passes);
+                pt.lastShape = index;
+                pt.lastSwitchFrame = frame;
+            }
+        }
+    } else if (pt.recording && passes > 0 && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+               pt.framesWithPasses == kPassTraceAt[pt.logged]) {
         ++pt.logged;
         simqvfr::logf("lmu mvr: pass trace: frame %llu (number %d with tracked passes, %d of them): %zu events, %d not "
-                      "logged (over %zu); @N = the game's draws this frame so far, #n = a texture (size, format, samples "
-                      "at its first mention); B = a render target bind (target 0, depth), R = a resolve, C = a "
-                      "CopySubresourceRegion, P+/P- = a tracked pass's begin/end, W = the focus post's window opened",
-                      frame, pt.framesWithPasses, passes, pt.events.size(), pt.dropped, kPassTraceEvents);
-        std::string line;
-        for (const std::string& e : pt.events) {
-            if (!line.empty() && line.size() + e.size() > 1300) {
-                simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
-                line.clear();
-            }
-            line += line.empty() ? e : "; " + e;
-        }
-        if (!line.empty())
-            simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+                      "logged (over %zu); %s",
+                      frame, pt.framesWithPasses, passes, pt.events.size(), pt.dropped, kPassTraceEvents, key);
+        pt_log_events();
     }
     pt.events.clear();
     pt.ids.clear();
     pt.dropped = 0;
-    pt.recording = tr.on && tr.driveBegin && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
-                   pt.framesWithPasses + 1 == kPassTraceAt[pt.logged];
+    pt.recording = tr.on && tr.driveBegin &&
+                   (pt.level ? true
+                             : pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+                                   pt.framesWithPasses + 1 == kPassTraceAt[pt.logged]);
 }
 
 void track_begin(const char* what) {
@@ -3879,6 +4028,16 @@ bool mvr_broken() { return g.context && g.broken; }
 void mvr_track_drive(TrackFn begin, TrackFn end) {
     tr.driveBegin = begin;
     tr.driveEnd = end;
+}
+
+void mvr_pass_trace(int level) {
+    pt.level = level;
+    pt.shapes.clear();
+    pt.lastShape = -1;
+    pt.settings.clear();
+    if (level)
+        simqvfr::log_line("lmu mvr: pass trace on (lmu_pass_trace): every frame recorded, a frame logged when its shape is new, "
+                          "with the game's settings as its files hold them");
 }
 
 void mvr_track_passes(bool on) {

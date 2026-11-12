@@ -936,6 +936,7 @@ bool install_mvr(ID3D11Device* device) {
     }
     if (cfg.passTracker) {
         mvr_track_passes(true);
+        mvr_pass_trace(cfg.passTrace);
         if (cfg.trackerDrives) {
             mvr_track_drive(&pass_begin, &pass_end);
             mvr_mask_stale(&maskStale);  // R6c: the lens mask's draw dropped while stale

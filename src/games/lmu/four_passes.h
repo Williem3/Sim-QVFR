@@ -51,6 +51,7 @@ struct FourPassesRun {
     bool mvrCompare = false;
     // The CPU in the context hooks timed and logged (lmu_mvr_timing, any A/B run).
     bool mvrTiming = false;
+    int passTrace = 0;  // [experiment] lmu_pass_trace (mvr_pass.h mvr_pass_trace)
     // QVFR: the focus views take their eye's glare (glare_share.h; [experiment] lmu_glare_share, default on).
     bool glareShare = true;
     // MVR ([experiment] lmu_focus_replay, default off): each eye pass also post-processes its focus view (focus_post.h:

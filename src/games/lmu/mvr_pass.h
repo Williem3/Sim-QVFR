@@ -247,6 +247,10 @@ bool mvr_broken();
 // with the game's (mvr_pass_begin / mvr_pass_end), by the draws between their bounds; passes found in frames without the
 // game's (menus) counted. Needs the focus post (the draws hooked).
 void mvr_track_passes(bool on);
+// Diagnostics, [experiment] lmu_pass_trace=1 (log only): with the tracker driving the passes, every frame's render
+// target binds, resolves and YEBIS draws are recorded and a frame is logged whenever its shape is new this launch, with
+// the game's graphics settings as its own files hold them. 0: off.
+void mvr_pass_trace(int level);
 // R4b-2: the tracker drives the passes: `begin(p)` at a tracked pass's begin (before its draws), `end(p)` at its end, on
 // the render thread inside the context's hooks; their work calls mvr_pass_begin / mvr_pass_end as the game's scene
 // render hook did. Null: observe only.
