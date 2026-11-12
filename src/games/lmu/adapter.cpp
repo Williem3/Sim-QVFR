@@ -6,6 +6,7 @@
 
 #include "../../log.h"
 #include "../identity_adapter.h"
+#include "../diag_switches.h"
 #include "../multi_view.h"
 #include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
@@ -13,6 +14,7 @@
 #include "dlss_inputs.h"
 #include "four_passes.h"
 #include "game.h"
+#include "mvr_pass.h"
 #include "mvr_probe.h"
 #include "view_probe.h"
 
@@ -161,6 +163,12 @@ public:
         simqvfr::NrSettings nr = nrSettings_;
         nr.on = nr.on && dlssPossible_;
         simqvfr::nr_start("lmu dlss-nr", nr);
+        // Diagnostics (lmu_diag=1; games/diag_switches.h), an A/B in one run: Ctrl+Alt+1 executes the game's command
+        // lists (its sun shadows) as before their fix (mvr_pass.h mvr_replay_lists_plain).
+        if (diag_.start(s.ini, L"lmu", {L"list_fix"}))
+            simqvfr::logf("lmu: diagnostics on: Ctrl+Alt+1 switches the multi-view shadow fix (lmu_diag_list_fix_off=1 in "
+                          "%ls turns it off)",
+                          diag_.ini().c_str());
         qvfr_ = four_passes_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
@@ -256,6 +264,8 @@ public:
     void qvfr_frame_end() override {
         if (!qvfr_)
             return;
+        if (diag_.poll())  // the switch off: the lists executed as before the fix
+            mvr_replay_lists_plain(!diag_.off(0));
         four_passes_frame_end();
     }
 
@@ -296,6 +306,7 @@ private:
     // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
     simqvfr::DlssSettings dlssSettings_;
     simqvfr::NrSettings nrSettings_;
+    simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
     bool dlssPossible_ = false, dlssRefusedLogged_ = false;
 };
 

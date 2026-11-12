@@ -99,10 +99,10 @@ int SIM_QVFR_TEST_MAIN() {
         return 1;
     }
     lmu::mvr_set_two_views(&fake_two_views);
-    // The hooks are on every function the context's eleven entries hold (with multithread protection off and on, idle
-    // and busy), in d3d11's code: ten, and PSSetShader's with texture sharpening possible (mvr_mip_bias_hooks, before the
-    // install); DrawIndexed's only with the focus post (lmu_focus_post_test). The context's vtable pointer as it was (its
-    // entries are d3d11's to rewrite).
+    // The hooks are on every function the context's twelve entries hold (with multithread protection off and on, idle
+    // and busy), in d3d11's code: ten, PSSetShader's with texture sharpening possible (mvr_mip_bias_hooks, before the
+    // install) and ExecuteCommandList's (the game's command lists); DrawIndexed's only with the focus post
+    // (lmu_focus_post_test). The context's vtable pointer as it was (its entries are d3d11's to rewrite).
     lmu::mvr_mip_bias_hooks(true);
     void** const ownVtable = *reinterpret_cast<void***>(context.Get());
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
@@ -110,12 +110,12 @@ int SIM_QVFR_TEST_MAIN() {
     char what[200];
     const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
     std::snprintf(what, sizeof(what),
-                  "%llu functions hooked for %llu entries (eleven with PSSetShader: no DrawIndexed without the focus post; "
-                  "two each at least: protection off and on), %llu of them ResolveSubresource's",
+                  "%llu functions hooked for %llu entries (twelve with PSSetShader and ExecuteCommandList: no DrawIndexed "
+                  "without the focus post; two each at least: protection off and on), %llu of them ResolveSubresource's",
                   static_cast<unsigned long long>(installed.contextFunctions),
                   static_cast<unsigned long long>(installed.contextEntries),
                   static_cast<unsigned long long>(installed.resolveFunctions));
-    check(installed.contextEntries == 11 && installed.contextFunctions >= 22 && installed.resolveFunctions >= 2, what);
+    check(installed.contextEntries == 12 && installed.contextFunctions >= 24 && installed.resolveFunctions >= 2, what);
     ComPtr<ID3D11DeviceContext4> context4;
     check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
           "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");
@@ -212,12 +212,76 @@ int SIM_QVFR_TEST_MAIN() {
         context->ResolveSubresource(single.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
         check(ms && single && lmu::mvr_pass_stats().resolves == before + 1, "a multisample resolve in the pass is seen");
     }
+    {  // The game's command list (LMU's sun shadow casters: a deferred context's, its own shader, depth target, viewport)
+       // executed in the pass with the two views on: executed with them off, its calls (WARP replays a list through the
+       // immediate context's own functions) not taken for the game's, the state read again after it.
+        ComPtr<ID3D11DeviceContext> deferred;
+        check(SUCCEEDED(device->CreateDeferredContext(0, &deferred)), "a deferred context");
+        const D3D11_VIEWPORT tile = {0, 0, 64, 64, 0, 1};
+        auto record = [&] {
+            ComPtr<ID3D11CommandList> list;
+            deferred->OMSetRenderTargets(0, nullptr, dsv.Get());
+            deferred->RSSetViewports(1, &tile);
+            deferred->VSSetShader(a.Get(), nullptr, 0);
+            deferred->FinishCommandList(FALSE, &list);
+            return list;
+        };
+        context->RSSetViewports(1, &eye);
+        check(bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && viewports(context.Get(), vps) == 2,
+              "before the list: the twin, two views");
+        const lmu::MvrPassStats s0 = lmu::mvr_pass_stats();
+        int calls = twoViewsCalls;
+        ComPtr<ID3D11CommandList> list = record();
+        context->ExecuteCommandList(list.Get(), FALSE);
+        const lmu::MvrPassStats s1 = lmu::mvr_pass_stats();
+        std::snprintf(what, sizeof(what),
+                      "a list executed (state not kept): the two views switched off once (%d calls) and left off, the "
+                      "context cleared (no shader, %u viewports); counted in the pass with the views on (%llu hooked calls "
+                      "while it executed)",
+                      twoViewsCalls - calls, viewports(context.Get(), vps),
+                      static_cast<unsigned long long>(s1.callsInLists - s0.callsInLists));
+        check(twoViewsCalls == calls + 1 && twoViewsOn == 0 && bound_vs(context.Get()) == nullptr &&
+                  viewports(context.Get(), vps) == 0 && s1.listsInPass == s0.listsInPass + 1 &&
+                  s1.listsTwoViews == s0.listsTwoViews + 1,
+              what);
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+        context->RSSetViewports(1, &eye);
+        context->VSSetShader(a.Get(), nullptr, 0);
+        n = viewports(context.Get(), vps);
+        ID3D11Buffer* remap = nullptr;
+        context->VSGetConstantBuffers(13, 1, &remap);
+        check(bound_vs(context.Get()) == twin.Get() && twoViewsOn == 1 && n == 2 && same(vps[1], 100, 0, 60, 50) &&
+                  remap != nullptr,
+              "the game's state set again after it: the twin, two views, the focus viewport and the remap at cb13");
+        if (remap)
+            remap->Release();
+        calls = twoViewsCalls;
+        list = record();
+        context->ExecuteCommandList(list.Get(), TRUE);
+        check(twoViewsCalls == calls + 2 && twoViewsOn == 1 && bound_vs(context.Get()) == twin.Get() &&
+                  viewports(context.Get(), vps) == 2,
+              "a list executed keeping the state: the two views off around it, the twin and both viewports after it");
+        lmu::mvr_replay_lists_plain(false);  // the A/B's other side: as before the fix
+        list = record();
+        context->ExecuteCommandList(list.Get(), TRUE);
+        check(lmu::mvr_pass_stats().listsInPass == s1.listsInPass + 2,
+              "the fix switched off (lmu_diag switch 2): the list still executed and counted");
+        lmu::mvr_replay_lists_plain(true);
+        // As before the fix the list's calls went to the hooks as the game's: their copy of the state is stale. The
+        // game's state set again, as the checks below expect it.
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+        context->VSSetShader(a.Get(), nullptr, 0);
+        context->RSSetViewports(1, &quarter);
+        context->RSSetScissorRects(1, &scissor);
+    }
     lmu::mvr_pass_end(0);
     n = viewports(context.Get(), vps);
     rn = 16;
     context->RSGetScissorRects(&rn, rects);
-    check(bound_vs(context.Get()) == a.Get() && twoViewsOn == 0 && n == 1 && same(vps[0], 0, 0, 25, 20) && rn == 1,
-          "pass end: the game's shader, one view, its viewport and scissor");
+    std::snprintf(what, sizeof(what), "pass end: the game's shader (%s), one view (%d), its viewport (%u: %.0f,%.0f %.0fx%.0f) and "
+                  "scissor (%u)", bound_vs(context.Get()) == a.Get() ? "yes" : "no", twoViewsOn, n, vps[0].TopLeftX,
+                  vps[0].TopLeftY, vps[0].Width, vps[0].Height, rn);
+    check(bound_vs(context.Get()) == a.Get() && twoViewsOn == 0 && n == 1 && same(vps[0], 0, 0, 25, 20) && rn == 1, what);
 
     lmu::mvr_pass_begin(2, nullptr, false);
     context->VSSetShader(a.Get(), nullptr, 0);

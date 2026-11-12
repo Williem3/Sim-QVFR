@@ -68,8 +68,8 @@ inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12
                           kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
                           kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kDrawAuto = 38,
                           kDrawIndexedInstancedIndirect = 39, kDrawInstancedIndirect = 40, kRSSetViewports = 44,
-                          kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57, kHSSetShader = 60,
-                          kDSSetShader = 64;
+                          kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57,
+                          kExecuteCommandList = 58, kHSSetShader = 60, kDSSetShader = 64;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
 // DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
 // PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks); VSSetConstantBuffers, Map, Unmap and the input
@@ -82,7 +82,7 @@ inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        
                                        kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
                                        kPSSetShader,       kVSSetConstantBuffers, kMap, kUnmap,
                                        kIASetVertexBuffers, kIASetIndexBuffer, kOMSetBlendState,
-                                       kOMSetDepthStencilState};
+                                       kOMSetDepthStencilState, kExecuteCommandList};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -91,6 +91,11 @@ bool mvr_pass_install(ID3D11Device* device);
 // focus views are compared (the regions copied at each pass's end).
 void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replaceResolve = false);
 void mvr_pass_end(int pass);
+// A command list the game executes inside a pass (LMU's sun shadow casters, recorded on its worker threads) runs as the
+// game recorded it: the two views off around it, the hooks passing on whatever d3d11 replays through the context's own
+// functions, their copy of the state read again after it. False (lmu_diag switch 2, a live A/B): as before this fix,
+// the list executed with the two views as they were and its replayed calls handled like the game's.
+void mvr_replay_lists_plain(bool on);
 // R6c: the lens mask's draws (its vertex shader's role, yebis_shaders.h VsRole) are drawn like the scene's, or dropped
 // while `*stale` (a live FOV crop change since the game built the mask: four_passes.cpp maskStale). Null: never dropped.
 void mvr_mask_stale(const std::atomic<bool>* stale);
@@ -249,6 +254,10 @@ struct MvrPassStats {
     // without one while it was bound, blend twins made, motion uploads and the slots in them, gate images saved.
     uint64_t slotPasses = 0, slotBinds = 0, slotViews = 0, slotTwinBinds = 0, slotNoTwin = 0, blendTwins = 0;
     uint64_t motionUploads = 0, motionSlots = 0, slotImages = 0;
+    // The game's command lists executed on the immediate context (LMU's sun shadows: worker-recorded, replayed in pass
+    // 0's Pre Render): inside a pass, with the two views on as they began, outside the passes; the hooked calls d3d11
+    // made while executing them (a runtime that replays a list through the context's own functions).
+    uint64_t listsInPass = 0, listsTwoViews = 0, listsOutside = 0, callsInLists = 0;
 };
 MvrPassStats mvr_pass_stats();
 // Single-pass stereo was refused at a draw and instancing couldn't take over (off for the session since): no focus
