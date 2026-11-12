@@ -69,6 +69,9 @@ struct FourPassesRun {
     // The recovery's test ([experiment] lmu_mvr_lose_at=N): from scene frame N the focus post is off for 1800 scene
     // frames (no focus finals, as with a pipeline it doesn't handle), then on again. 0: never.
     int loseAt = 0;
+    // With loseAt ([experiment] lmu_mvr_lose_shape=1): the frame's shape reported not ready through that window, as
+    // with a pipeline that lacks a step: no try, so no blink, until the window ends.
+    bool loseShape = false;
     // The two ways to draw the focus views, compared in one run ([experiment] lmu_mvr_backend_ab=N, with trackerDrives on
     // an NVIDIA RTX 20+ card, where both twins are attached): N frames with NVIDIA's single-pass stereo, then N with
     // instancing, in turn; each side's CPU per pass logged apart, its GPU per pass by mvr_pass's per-mode lines.

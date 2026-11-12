@@ -107,6 +107,39 @@ int SIM_QVFR_TEST_MAIN() {
         t = r.retryAtMs + 1;
         check(r.frame(1, false, t) == Event::none && r.plain(), "and a one-pass frame doesn't start a try");
     }
+    {  // a pipeline that lacks a step (not ready): no tries, so no blinks, however long; back the frame it is ready
+        MvrRecovery r;
+        double t = 0;
+        for (int f = 0; f < 100; ++f, t += frameMs)
+            r.frame(2, true, t, true);
+        bool went = false;
+        for (int f = 0; f < 60; ++f, t += frameMs)
+            went = went || r.frame(2, false, t, false) == Event::wentPlain;
+        bool quiet = went && r.plain();
+        for (int f = 0; f < 5000; ++f, t += frameMs)  // 55 s
+            quiet = quiet && r.frame(2, false, t, false) == Event::none && r.plain();
+        check(quiet && r.timesPlain == 1, "plain while the frame lacks a step: no try for most of a minute (no blink)");
+        {  // a minute of it: one try all the same (the steps may be there and not seen), then a minute more
+            MvrRecovery u = r;
+            double tu = t;
+            int tries = 0;
+            for (int f = 0; f < 10000; ++f, tu += frameMs)  // 111 s more
+                tries += u.frame(2, false, tu, false) == Event::tryingAgain ? 1 : 0;
+            check(tries == 2, "not ready for a minute: one try a minute all the same");
+        }
+        const bool tries = r.frame(2, false, t += frameMs, true) == Event::tryingAgain;
+        r.frame(2, false, t += frameMs, true);  // the try's first frame still renders at the full size
+        check(tries && r.frame(2, true, t += frameMs, true) == Event::recovered,
+              "the frame it has every step again: a try at once, and the focus views are back");
+    }
+    {  // ready, yet the focus views stop (a step of ours fails): the timed tries, not one a frame
+        MvrRecovery r;
+        double t = 0;
+        int tries = 0;
+        for (int f = 0; f < 2700; ++f, t += frameMs)  // 30 s
+            tries += r.frame(2, false, t, true) == Event::tryingAgain ? 1 : 0;
+        check(tries >= 2 && tries <= 4, "ready but no focus views: tries on the timer (3 s, 6 s, 12 s), not every frame");
+    }
     {  // stopped (multi-view can't run at all): plain for good, a new session doesn't revive it
         MvrRecovery r;
         r.stop();
