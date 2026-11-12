@@ -52,6 +52,16 @@ int SIM_QVFR_TEST_MAIN() {
           "working: the percent of the region each way");
     check(nr::working(200, 25) == nr::kMinWorking && nr::working(40, 50) == 40 && nr::working(1600, 400) == 1600,
           "working: no smaller than the runtime's least, no larger than the region");
+    // The limit on what a view's model works on.
+    {
+        unsigned w = 2595, h = 2084;
+        check(nr::limit_working(w, h, 1.0) && w * h <= 1000000 && w * h > 990000 && std::fabs(w / double(h) - 2595.0 / 2084) < 0.01,
+              "limit: a 5.4 megapixel view comes under 1.0, its shape kept");
+        w = 900, h = 900;
+        check(!nr::limit_working(w, h, 1.0) && w == 900 && h == 900, "limit: a view under it is left alone");
+        w = 4000, h = 100;
+        check(nr::limit_working(w, h, 0.3) && h >= nr::kMinWorking, "limit: no side under the runtime's least");
+    }
     // The focus view's place from its remap (x' = a x + b w): the eye's clip (-b/a, -d/c) is its centre.
     {
         const float centred[4] = {4, 0, 3, 0};
@@ -100,6 +110,12 @@ int SIM_QVFR_TEST_MAIN() {
         nr::decode(white, 1, false, out);
         check(std::isfinite(out[0]) && out[0] > 1000, "curve: the model's 1.0 comes back very bright, not endless");
     }
+    // The model's change as a gain on the scene.
+    check(nr::gain(0.4, 0.4, 3) == 1 && nr::gain(0, 0, 3) == 1, "gain: what the model gave back unchanged leaves the scene as it came");
+    check(std::fabs(nr::gain(0.9, 0.95, 3) - 0.96 / 0.91) < 1e-12 && nr::gain(0.9, 0.95, 3) < 1.06,
+          "gain: a small change near white stays a small change (the curve's inverse made it 2x)");
+    check(nr::gain(0.01, 0.9, 3) == 3 && nr::gain(0.9, 0.0, 3) == 1.0 / 3, "gain: held to the most either way");
+    check(nr::gain(0.002, 0.001, 3) > 0.9, "gain: the darkest values barely swing it (no crushed blacks from their noise)");
     // [dlss_nr].
     {
         wchar_t temp[MAX_PATH];
@@ -110,7 +126,8 @@ int SIM_QVFR_TEST_MAIN() {
         check(!fresh.on && fresh.folder.empty() && !fresh.periphery && !fresh.beforeDlss && fresh.intensity == 100 && fresh.style == 0 &&
                   fresh.preset == 0 && fresh.localTone == 100 && fresh.localStructure == 100 && !fresh.autoMask &&
                   fresh.focusScale == 100 && fresh.peripheryScale == 50 && fresh.peripheryCoverage == 100 && fresh.edgeBlend == 10 &&
-                  fresh.exposure == 100 && fresh.inputGamma,
+                  fresh.workingLimit == 10 &&
+                  fresh.exposure == 100 && fresh.inputGamma && fresh.autoExposure && fresh.maxGain == 300 && fresh.saveFrames == 0,
               "[dlss_nr]: an empty file reads off, the focus views only, after DLSS, the model's own strengths");
         NrSettings s;
         s.on = true;
@@ -118,7 +135,9 @@ int SIM_QVFR_TEST_MAIN() {
         s.preset = 2, s.style = 1, s.intensity = 65, s.localTone = 140, s.localStructure = 30;
         s.autoMask = true, s.periphery = true;
         s.focusScale = 75, s.peripheryScale = 40, s.peripheryCoverage = 60, s.edgeBlend = 14;
+        s.workingLimit = 25;
         s.beforeDlss = true, s.exposure = 150, s.inputGamma = false;
+        s.autoExposure = false, s.maxGain = 450;
         check(write_nr_settings(ini.c_str(), s) && read_nr_settings(ini.c_str()) == s, "[dlss_nr]: every setting written reads back");
         WritePrivateProfileStringW(L"dlss_nr", L"intensity", L"250", ini.c_str());
         WritePrivateProfileStringW(L"dlss_nr", L"local_tone", L"-5", ini.c_str());

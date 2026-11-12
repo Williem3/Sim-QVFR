@@ -52,7 +52,7 @@ enum Ctl {
     // DLSS-NR on those views ([dlss_nr], DLSS pane): on, the player's nvngx_dlssnr.dll (Choose…), the model's settings,
     // where it runs relative to DLSS, the working sizes, the edge blend, the periphery and how much of it.
     kNrOn, kNrFolder, kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask, kNrOrder,
-    kNrFocusScale, kNrEdgeBlend, kNrPeriphery, kNrPeripheryScale, kNrPeripheryCoverage,
+    kNrFocusScale, kNrEdgeBlend, kNrPeriphery, kNrPeripheryScale, kNrPeripheryCoverage, kNrLimit,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // Multi-view rendering ([experiment] multi_view, Resolution pane): NVIDIA's or Sim-QVFR's own.

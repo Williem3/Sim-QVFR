@@ -55,7 +55,8 @@ enum class MenuItem {
     // model's settings, where it runs relative to DLSS, the focus views' working size, the edge blend, the periphery
     // and how much of it at what working size.
     NrOn, NrIntensity, NrStyle, NrPreset, NrLocalTone, NrLocalStructure, NrAutoMask, NrOrder, NrFocusScale, NrEdgeBlend,
-    NrPeriphery, NrPeripheryScale, NrPeripheryCoverage
+    NrPeriphery, NrPeripheryScale, NrPeripheryCoverage,
+    NrLimit  // the most a view's model works on (NrSettings::workingLimit), after the focus working size
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,

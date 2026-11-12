@@ -15,6 +15,7 @@
 //    DLSS and DLSS-NR evaluation succeeds, after DLSS and before it, the caller's state kept.
 // The modules' log lines are printed at the end.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -50,6 +51,19 @@ void check(bool ok, const char* what) {
 
 ComPtr<ID3D11Device> device;
 ComPtr<ID3D11DeviceContext> context;
+
+// The GPU through everything queued, as a game's frame pacing keeps it from running ahead (an event query waited for).
+void finish() {
+    D3D11_QUERY_DESC qd{D3D11_QUERY_EVENT, 0};
+    ComPtr<ID3D11Query> query;
+    if (FAILED(device->CreateQuery(&qd, &query)))
+        return;
+    context->End(query.Get());
+    BOOL done = FALSE;
+    const auto t0 = std::chrono::steady_clock::now();
+    while (context->GetData(query.Get(), &done, sizeof(done), 0) != S_OK && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(5))
+        Sleep(0);
+}
 
 // A picture of sorts, linear HDR: sky, a ground with a fine checker, a disc of 6.0, 5.5, 4.5.
 void picture(unsigned w, unsigned h, std::vector<uint16_t>& half) {
@@ -189,6 +203,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     base.on = true;
     base.folder = argv[2];
     base.edgeBlend = 0;
+    base.workingLimit = simqvfr::kNrLimitMax;  // these parts' views are small; the limit has its own part below
     unsigned long long frame = 0;
     // `frames` frames of view `index` through the module with `settings`; the scene read back after the last.
     const auto run = [&](const simqvfr::NrSettings& settings, int index, int frames, std::vector<float>& out, bool start = true) {
@@ -209,6 +224,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
             v.focusKnown = true, v.focusU = 0.7, v.focusV = 0.4;
             ok = simqvfr::nr_run_view(context.Get(), v) && ok;
             simqvfr::nr_frame_end(++frame);
+            finish();
         }
         return read(scene.Get(), out) && ok;
     };
@@ -253,6 +269,23 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                     edge.max, sideEdge.max, middle.mean);
         check(middle.mean > 0.002, "the model changes the middle of the view");
         check(edge.max < 0.01 && sideEdge.max < 0.01, "the view's edge stays as it came (the edge blend)");
+    }
+    {  // the diagnostic pictures, and the scene taken far brighter than a display's range: the model's change must not
+       // grow with it (the first headset runs' blown highlights)
+        simqvfr::NrSettings s = base;
+        s.saveFrames = 1;
+        run(s, 2, 40, out);
+        const std::wstring folder = simqvfr::log_directory();
+        const bool saved = GetFileAttributesW((folder + L"/dlss-nr-01-model-got.png").c_str()) != INVALID_FILE_ATTRIBUTES &&
+                           GetFileAttributesW((folder + L"/dlss-nr-01-model-gave.png").c_str()) != INVALID_FILE_ATTRIBUTES &&
+                           GetFileAttributesW((folder + L"/dlss-nr-01-result.png").c_str()) != INVALID_FILE_ATTRIBUTES;
+        std::printf("     pictures in %ls\n", folder.c_str());
+        check(saved, "the diagnostic pictures are saved (what the model got, what it gave back, the result)");
+        // The disc of 6.0, 5.5, 4.5 (inside the view): within the gain's bound of its own value.
+        const size_t at = (size_t(unsigned(H * 0.3f)) * W + unsigned(W * 0.6f)) * 3;
+        std::printf("     the 6.0 5.5 4.5 disc comes back %.2f %.2f %.2f\n", out[at], out[at + 1], out[at + 2]);
+        check(out[at] > 6.0f / 3.01f && out[at] < 6.0f * 3.01f && out[at] > 3.0f && out[at] < 12.0f,
+              "a highlight far above 1 stays a highlight of its own order (no blow-out through the curve)");
     }
     {  // an eye's view, half covered about a focus view at (0.7, 0.4)
         simqvfr::NrSettings s = base;
@@ -402,6 +435,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                     stateKept = stateKept && rtvNow.Get() == otherRtv.Get() && dsvNow.Get() == dsv.Get() && count == 1 && vpNow.Width == 123;
                 }
                 simqvfr::dlss_frame_end(static_cast<unsigned long long>(order * 1000 + f + 1));
+                finish();
             }
             const unsigned long long nr = simqvfr::nr_evaluations_total() - nrBefore, ds = simqvfr::dlss_evaluations_total() - dlssBefore;
             std::printf("     %s DLSS%s: %llu DLSS evaluations, %llu DLSS-NR evaluations in %d frames\n", order ? "before" : "after",
@@ -419,6 +453,101 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                 check(region[2] == simqvfr::dlss::render_size(focusW, 0.67), "before DLSS the focus view is processed at its render size");
             simqvfr::dlss_shutdown();  // DLSS-NR's with it
         }
+    }
+
+    // ---- 3. The first headset run's case: two focus views of 2595x2084 at 100%, switched on and off while the GPU still
+    // has their work queued (no waiting between frames here either). With the limit: worked at 1.0 megapixel. Released
+    // views are destroyed only once the GPU is through them, a few frames later; nothing blocks.
+    {
+        const unsigned bw = 2595, bh = 2084;
+        td = {};
+        td.Width = bw, td.Height = bh, td.MipLevels = td.ArraySize = 1, td.SampleDesc.Count = 1;
+        td.Format = DXGI_FORMAT_R16G16B16A16_FLOAT, td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        ComPtr<ID3D11Texture2D> big, bigDepth, bigVectors;
+        device->CreateTexture2D(&td, nullptr, &big);
+        td.Format = DXGI_FORMAT_R32_FLOAT;
+        device->CreateTexture2D(&td, nullptr, &bigDepth);
+        td.Format = DXGI_FORMAT_R16G16_FLOAT;
+        device->CreateTexture2D(&td, nullptr, &bigVectors);
+        ComPtr<ID3D11ShaderResourceView> bigDepthSrv, bigVectorsSrv;
+        ComPtr<ID3D11RenderTargetView> bigRtv, clearDepth, clearVectors;
+        check(big && bigDepth && bigVectors && SUCCEEDED(device->CreateShaderResourceView(bigDepth.Get(), nullptr, &bigDepthSrv)) &&
+                  SUCCEEDED(device->CreateShaderResourceView(bigVectors.Get(), nullptr, &bigVectorsSrv)) &&
+                  SUCCEEDED(device->CreateRenderTargetView(big.Get(), nullptr, &bigRtv)) &&
+                  SUCCEEDED(device->CreateRenderTargetView(bigDepth.Get(), nullptr, &clearDepth)) &&
+                  SUCCEEDED(device->CreateRenderTargetView(bigVectors.Get(), nullptr, &clearVectors)),
+              "the first headset run's views are made (2595x2084)");
+        const float grey[4] = {0.3f, 0.35f, 0.4f, 1}, half4[4] = {0.0625f, 0, 0, 0}, none4[4] = {};
+        context->ClearRenderTargetView(clearDepth.Get(), half4);
+        context->ClearRenderTargetView(clearVectors.Get(), none4);
+        const auto frames_of = [&](int count, unsigned long long& evaluated, double& worstMs) {
+            const unsigned long long before = simqvfr::nr_evaluations_total();
+            worstMs = 0;
+            for (int f = 0; f < count; ++f) {
+                const auto t0 = std::chrono::steady_clock::now();
+                for (int index = 2; index < 4; ++index) {
+                    context->ClearRenderTargetView(bigRtv.Get(), grey);
+                    simqvfr::NrView v;
+                    v.index = index;
+                    v.scene = big.Get();
+                    v.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                    v.width = bw, v.height = bh;
+                    v.depth = bigDepthSrv.Get(), v.vectors = bigVectorsSrv.Get();
+                    v.guideWidth = bw, v.guideHeight = bh;
+                    v.depthInverted = true;
+                    simqvfr::nr_run_view(context.Get(), v);
+                }
+                simqvfr::nr_frame_end(++frame);
+                context->Flush();  // as a frame's present does
+                worstMs = (std::max)(worstMs, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+            evaluated = simqvfr::nr_evaluations_total() - before;
+        };
+        simqvfr::NrSettings s = base;
+        s.edgeBlend = 10;
+        s.workingLimit = 10;
+        simqvfr::nr_start("lmu dlss-nr", s);
+        unsigned long long evaluated = 0;
+        double worst = 0;
+        frames_of(30, evaluated, worst);
+        unsigned region[4] = {}, working[2] = {};
+        simqvfr::nr_view_for_checks(2, region, working);
+        std::printf("     2595x2084 at 100%% with the 1.0 megapixel limit: worked at %ux%u; %llu evaluations in 30 frames\n", working[0],
+                    working[1], evaluated);
+        check(working[0] * working[1] <= 1000000 && working[0] * working[1] > 950000, "the limit holds a 5.4 megapixel view to 1.0");
+        check(evaluated > 0, "the limited views are evaluated");
+        // On and off ten times with the work still queued: the CPU side of a frame must stay short (nothing waits for
+        // the GPU), and every released view must be destroyed in the end.
+        double worstSwitch = 0;
+        for (int cycle = 0; cycle < 10; ++cycle) {
+            simqvfr::NrSettings off = s;
+            off.on = false;
+            simqvfr::nr_live(off);
+            std::this_thread::sleep_for(std::chrono::milliseconds(520));  // the settle
+            frames_of(3, evaluated, worst);
+            worstSwitch = (std::max)(worstSwitch, worst);
+            simqvfr::nr_live(s);
+            std::this_thread::sleep_for(std::chrono::milliseconds(520));
+            frames_of(1, evaluated, worst);  // the frame the features are made in: not the measure
+            frames_of(6, evaluated, worst);
+        }
+        std::printf("     ten times off and on: the longest frame's CPU side at a switch off %.1f ms; %u released views still to "
+                    "destroy\n",
+                    worstSwitch, simqvfr::nr_pending_releases());
+        check(worstSwitch < 250, "switching off waits for nothing (the first build waited up to 5 s a view, then destroyed regardless)");
+        simqvfr::NrSettings off = s;
+        off.on = false;
+        simqvfr::nr_live(off);
+        std::this_thread::sleep_for(std::chrono::milliseconds(520));
+        for (int f = 0; f < 100 && (f < 12 || simqvfr::nr_pending_releases()); ++f) {
+            simqvfr::nr_frame_end(++frame);
+            context->Flush();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        std::printf("     after it: %u released views still to destroy\n", simqvfr::nr_pending_releases());
+        check(simqvfr::nr_pending_releases() == 0, "every released view is destroyed once the GPU is through it");
+        simqvfr::nr_shutdown();
     }
 
     std::ifstream in(log);

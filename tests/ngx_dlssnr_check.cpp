@@ -74,6 +74,15 @@ NVSDK_NGX_Result NVSDK_CONV sdk_evaluate(ID3D12GraphicsCommandList* list, const 
 }
 
 ComPtr<ID3D12Device> device;
+ComPtr<IDXGIAdapter3> adapter3;
+// This process's video memory in use on the GPU, MB; what the last run() took at its most (its textures and feature).
+double vram_mb() {
+    DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+    if (!adapter3 || FAILED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+        return 0;
+    return static_cast<double>(info.CurrentUsage) / (1024.0 * 1024.0);
+}
+double lastVramMb = 0;
 ComPtr<ID3D12CommandQueue> queue;
 ComPtr<ID3D12CommandAllocator> allocator;
 ComPtr<ID3D12GraphicsCommandList> list;
@@ -257,6 +266,7 @@ Diff diff(const std::vector<float>& a, const std::vector<float>& b, UINT stride,
 // evaluations; `ms`: the median wall time of an evaluation, submitted and waited for (an idle GPU: a floor).
 bool run(const Runtime& rt, const Tuning& t, UINT w, UINT h, UINT tw, UINT th, UINT x0, UINT y0, int frames, std::vector<float>* in,
          std::vector<float>* out, double* ms, double* createMs) {
+    const double vramBefore = vram_mb();
     ComPtr<ID3D12Resource> colour = texture(tw, th, DXGI_FORMAT_R16G16B16A16_FLOAT, false);
     ComPtr<ID3D12Resource> output = texture(tw, th, DXGI_FORMAT_R16G16B16A16_FLOAT, true);
     ComPtr<ID3D12Resource> vectors = texture(tw, th, DXGI_FORMAT_R16G16_FLOAT, false);
@@ -331,6 +341,7 @@ bool run(const Runtime& rt, const Tuning& t, UINT w, UINT h, UINT tw, UINT th, U
         if (frame >= 2)
             times.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
+    lastVramMb = vram_mb() - vramBefore;
     if (ok && ms && !times.empty()) {
         std::sort(times.begin(), times.end());
         *ms = times[times.size() / 2];
@@ -352,6 +363,7 @@ bool nvidia_device() {
         adapter->GetDesc1(&d);
         if (d.VendorId == 0x10de && SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device)))) {
             std::printf("GPU: %ls\n", d.Description);
+            adapter.As(&adapter3);
             return true;
         }
     }
@@ -505,12 +517,24 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     }
 
     // 3. Cost by size (square views; an idle GPU, submit and wait included).
-    for (const UINT s : {768u, 1024u, 1536u, 2048u, 2560u}) {
+    // Video memory: what a view takes (its four textures and its feature), by this process's usage before and after.
+    {
+        DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+        if (adapter3 && SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+            std::printf("  video memory: this process uses %.0f MB of a %.0f MB budget before the sizes below\n",
+                        info.CurrentUsage / 1048576.0, info.Budget / 1048576.0);
+    }
+    struct Size {
+        UINT w, h;
+    };
+    for (const Size s : {Size{768, 768}, Size{1024, 1024}, Size{1536, 1536}, Size{2048, 2048}, Size{2560, 2560}, Size{2595, 2084}}) {
         double tms = 0, cms = 0;
-        if (run(rt, Tuning{"size"}, s, s, s, s, 0, 0, 12, nullptr, nullptr, &tms, &cms))
-            std::printf("  %ux%u: %.2f ms an evaluation (%.2f ms a megapixel), feature made in %.0f ms\n", s, s, tms, tms / (s * s / 1e6), cms);
+        if (run(rt, Tuning{"size"}, s.w, s.h, s.w, s.h, 0, 0, 12, nullptr, nullptr, &tms, &cms))
+            std::printf("  %ux%u: %.2f ms an evaluation (%.2f ms a megapixel), feature made in %.0f ms, %.0f MB of video memory "
+                        "(%.0f MB a megapixel)\n",
+                        s.w, s.h, tms, tms / (s.w * s.h / 1e6), cms, lastVramMb, lastVramMb / (s.w * s.h / 1e6));
         else
-            std::printf("  %ux%u: did not run\n", s, s);
+            std::printf("  %ux%u: did not run\n", s.w, s.h);
         std::fflush(stdout);
     }
 

@@ -64,5 +64,7 @@ void nr_shutdown();
 // Checks: evaluations that succeeded since the start; view `index`'s working size and region as last run.
 unsigned long long nr_evaluations_total();
 bool nr_view_for_checks(int index, unsigned region[4], unsigned working[2]);
+// Released features not destroyed yet (engine/ngx_nr.h: destroyed once the GPU is through their work).
+unsigned nr_pending_releases();
 
 }  // namespace simqvfr

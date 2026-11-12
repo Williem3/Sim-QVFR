@@ -43,6 +43,21 @@ inline unsigned working(unsigned size, int percent) {
     return (std::min)(size, (std::max)(want, (std::min)(size, kMinWorking)));
 }
 
+// A working size w x h brought under `megapixels` (its shape kept, no side under kMinWorking unless it already was):
+// the limit on what one view's model works on, whatever the view's size and the percent asked. True: it was lowered.
+inline bool limit_working(unsigned& w, unsigned& h, double megapixels) {
+    const double pixels = static_cast<double>(w) * h, limit = megapixels * 1e6;
+    if (!(limit > 0) || pixels <= limit)
+        return false;
+    const double f = std::sqrt(limit / pixels);
+    const unsigned nw = (std::max)(static_cast<unsigned>(w * f), (std::min)(w, kMinWorking));
+    const unsigned nh = (std::max)(static_cast<unsigned>(h * f), (std::min)(h, kMinWorking));
+    const bool lowered = nw < w || nh < h;
+    w = nw;
+    h = nh;
+    return lowered;
+}
+
 // Where the focus view sits in its eye's view, from the clip remap the eye's pass draws it with (x' = a x + b w,
 // y' = c y + d w; engine/dlss_views.h DlssPass::remap): its centre as fractions of the eye's view, v down. False: no
 // usable remap (the centre then is the view's).
@@ -77,9 +92,17 @@ inline double edge_weight(double t, double band, bool low, bool high) {
     return w;
 }
 
-// The curve the scene goes to the model through and back (nr_views.cpp's shaders, in C++ for the checks): scene-linear
-// HDR times `exposure`, the largest channel brought under 1 with the others in proportion (the hue kept), then sRGB's
-// curve if `gamma`.
+// The model's change of a pixel as the scene takes it (nr_views.cpp's compose, in C++ for the checks): the ratio of
+// what it gave back to what it got, both as a display would show them (linear, 0..1), a little lifted so the darkest
+// values don't swing it, and held to `maxGain` either way. The scene's value is multiplied by it.
+inline double gain(double got, double gave, double maxGain) {
+    const double lift = 0.01;
+    return std::clamp((std::clamp(gave, 0.0, 1.0) + lift) / (std::clamp(got, 0.0, 1.0) + lift), 1.0 / maxGain, maxGain);
+}
+
+// The curve the scene goes to the model through (nr_views.cpp's shaders, in C++ for the checks): scene-linear HDR
+// times `exposure`, the largest channel brought under 1 with the others in proportion (the hue kept), then sRGB's
+// curve if `gamma`. decode is its inverse (the first builds' way back, kept for the checks of the curve itself).
 inline double srgb_encode(double c) { return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055; }
 inline double srgb_decode(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); }
 inline void encode(const double in[3], double exposure, bool gamma, double out[3]) {

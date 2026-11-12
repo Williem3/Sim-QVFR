@@ -108,6 +108,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::NrPeriphery, L"Periphery too", 0, 1, 1},
     {MenuItem::NrPeripheryScale, L"Periphery working size", kNrScaleMin, 100, 5},
     {MenuItem::NrPeripheryCoverage, L"Periphery covered", kNrCoverageMin, 100, 10},
+    {MenuItem::NrLimit, L"Working size limit", kNrLimitMin, kNrLimitMax, 1},  // tenths of a megapixel a view
 };
 
 const Spec& spec(MenuItem item) {
@@ -129,6 +130,7 @@ int* nr_number(NrSettings& n, MenuItem item) {
     case MenuItem::NrEdgeBlend: return &n.edgeBlend;
     case MenuItem::NrPeripheryScale: return &n.peripheryScale;
     case MenuItem::NrPeripheryCoverage: return &n.peripheryCoverage;
+    case MenuItem::NrLimit: return &n.workingLimit;
     default: return nullptr;
     }
 }
@@ -262,7 +264,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (menu.values.nr.on) {
             items.insert(items.end(), {MenuItem::NrIntensity, MenuItem::NrStyle, MenuItem::NrPreset, MenuItem::NrLocalTone,
                                        MenuItem::NrLocalStructure, MenuItem::NrAutoMask, MenuItem::NrOrder, MenuItem::NrFocusScale,
-                                       MenuItem::NrEdgeBlend, MenuItem::NrPeriphery});
+                                       MenuItem::NrLimit, MenuItem::NrEdgeBlend, MenuItem::NrPeriphery});
             if (menu.values.nr.periphery)
                 items.insert(items.end(), {MenuItem::NrPeripheryScale, MenuItem::NrPeripheryCoverage});
         }
@@ -686,8 +688,7 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         if (n.on && !menu.values.dlss.on)
             notes.push_back(L"Runs with DLSS on (the DLSS page): it takes DLSS's depth and motion");
         if (n.on)
-            notes.push_back(n.periphery ? L"Its cost grows with the pixels worked on: lower the working sizes first"
-                                        : L"On the focus views; its cost grows with the pixels worked on");
+            notes.push_back(L"About 2 ms of GPU and 130 MB of video memory a megapixel worked on, each view");
         if (n.on)
             notes.push_back(L"Preset, working sizes, coverage and order rebuild it: a short stutter");
         return notes;
@@ -757,6 +758,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = dlss_choice_name(kNrPresets, v.nr.preset);
         else if (items[i] == MenuItem::NrOrder)
             line.value = v.nr.beforeDlss ? L"Before DLSS" : L"After DLSS";
+        else if (items[i] == MenuItem::NrLimit)
+            line.value = std::to_wstring(v.nr.workingLimit / 10) + L"." + std::to_wstring(v.nr.workingLimit % 10) + L" MP a view";
         else if (const bool* flag = nr_flag(v.nr, items[i]))
             line.value = *flag ? L"On" : L"Off";
         else if (const int* number = nr_number(v.nr, items[i]))

@@ -1085,7 +1085,7 @@ int SIM_QVFR_TEST_MAIN() {
         check(menu_title(nm) == L"DLSS-NR" && menu_page_items(nm).size() == 2 && menu_page_items(nm)[1] == MenuItem::NrOn,
               "DLSS-NR page: off, only its switch");
         nm.selected = 1;
-        check(menu_key(nm, MenuKey::Right) && nm.values.nr.on && menu_page_items(nm).size() == 12 && menu_lines(nm)[1].value == L"On",
+        check(menu_key(nm, MenuKey::Right) && nm.values.nr.on && menu_page_items(nm).size() == 13 && menu_lines(nm)[1].value == L"On",
               "DLSS-NR page: on, then the model's settings, the order, the focus working size, the edge blend, the periphery");
         const auto at = [&](MenuItem item) {
             const std::vector<MenuItem> items = menu_page_items(nm);
@@ -1115,8 +1115,12 @@ int SIM_QVFR_TEST_MAIN() {
         for (int i = 0; i < 20; ++i)
             menu_key(nm, MenuKey::Left);
         check(nm.values.nr.focusScale == kNrScaleMin, "DLSS-NR page: the focus working size stops at its minimum");
+        nm.selected = at(MenuItem::NrLimit);
+        check(menu_lines(nm)[nm.selected].value == L"1.0 MP a view" && menu_key(nm, MenuKey::Right) && nm.values.nr.workingLimit == 11 &&
+                  menu_lines(nm)[nm.selected].value == L"1.1 MP a view",
+              "DLSS-NR page: the working size limit is 1.0 megapixel a view by default, a tenth a step");
         nm.selected = at(MenuItem::NrPeriphery);
-        check(!nm.values.nr.periphery && menu_key(nm, MenuKey::Right) && nm.values.nr.periphery && menu_page_items(nm).size() == 14 &&
+        check(!nm.values.nr.periphery && menu_key(nm, MenuKey::Right) && nm.values.nr.periphery && menu_page_items(nm).size() == 15 &&
                   menu_page_items(nm).back() == MenuItem::NrPeripheryCoverage,
               "DLSS-NR page: the periphery off by default; on, its working size and coverage follow");
         nm.selected = at(MenuItem::NrPeripheryCoverage);

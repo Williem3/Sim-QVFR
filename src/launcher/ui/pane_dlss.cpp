@@ -61,7 +61,8 @@ float own_nr_pane(float x, float y, float w, bool draw) {
     const std::wstring useDesc =
         available ? L"NVIDIA’s DLSS neural rendering (DLSS-NR) on " + game_name() + L"’s views: its model reworks lighting and "
                     L"materials from the picture, its depth and its motion. Experimental, and heavy: about 2 ms of GPU time "
-                    L"for every million pixels it works on (RTX 5070 Ti)."
+                    L"and 130 MB of video memory for every million pixels it works on, per view (RTX 5070 Ti). It turns "
+                    L"itself off if frames fall under 10 a second with it on."
                   : why;
     use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
     use.full = [useDesc, available, on = n.on](const Rect& r) { checkbox(kNrOn, r, on, L"Use DLSS-NR", useDesc, !available); };
@@ -126,6 +127,10 @@ float own_nr_pane(float x, float y, float w, bool draw) {
                              L"What the model works at, a share of the focus view. Lower costs less; the picture "
                              L"keeps its own detail.",
                              n.focusScale, L"", off),
+                  slider_row(kNrLimit, L"Working size limit",
+                             L"The most one view’s model works on, in megapixels, whatever the sizes above. Each megapixel "
+                             L"costs about 2 ms of GPU time and 130 MB of video memory, per view.",
+                             n.workingLimit, L"", off, L" MP", true),
                   slider_row(kNrEdgeBlend, L"Edge blend",
                              L"The band over which the processed area fades into what isn’t processed around it.", n.edgeBlend,
                              L"", off),

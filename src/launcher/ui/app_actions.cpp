@@ -262,6 +262,7 @@ int* slider_value(Ctl id) {
     case kNrEdgeBlend: return &app.s.nr.edgeBlend;
     case kNrPeripheryScale: return &app.s.nr.peripheryScale;
     case kNrPeripheryCoverage: return &app.s.nr.peripheryCoverage;
+    case kNrLimit: return &app.s.nr.workingLimit;
     case kCheekySupersampling: return &app.s.cheeky.supersampling;
     case kFgSize: return &app.s.cheeky.fgSize;
     case kOsdYaw: return &app.s.osd.yaw;
@@ -311,6 +312,7 @@ Range slider_range(Ctl id) {
     case kNrPeripheryScale: return {kNrScaleMin, 100};
     case kNrEdgeBlend: return {0, kNrEdgeMax};
     case kNrPeripheryCoverage: return {kNrCoverageMin, 100};
+    case kNrLimit: return {kNrLimitMin, kNrLimitMax};
     case kCheekySupersampling: return {kCheekySupersamplingMin, kCheekySupersamplingMax};
     case kFgSize: return {kCheekyFgSizeMin, kCheekyFgSizeMax};
     case kOsdYaw: return {-kOsdYawMax, kOsdYawMax};
@@ -402,7 +404,7 @@ std::vector<Ctl> focus_order() {
             order.push_back(kNrFolder);
             if (own_nr_available() && app.s.nr.on) {
                 order.insert(order.end(), {kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask,
-                                           kNrOrder, kNrFocusScale, kNrEdgeBlend, kNrPeriphery});
+                                           kNrOrder, kNrFocusScale, kNrLimit, kNrEdgeBlend, kNrPeriphery});
                 if (app.s.nr.periphery)
                     order.insert(order.end(), {kNrPeripheryScale, kNrPeripheryCoverage});
             }

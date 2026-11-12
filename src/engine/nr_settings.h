@@ -33,6 +33,12 @@ struct NrSettings {
     // not the picture's (live, new features).
     int focusScale = 100;
     int peripheryScale = 50;
+    // working_limit: the most one view's model works on, in tenths of a megapixel (kNrLimitMin..kNrLimitMax), whatever
+    // the view's size and the percents above: a working size over it is lowered to it. The model takes about 2 ms of
+    // GPU time and 130 MB of video memory a megapixel, plus 300 MB a view (RTX 5070 Ti, runtime 310.8). The first
+    // headset run had none of this: two 5.4-megapixel focus views, 2 GB and 21 ms a frame on a full card (live, new
+    // features).
+    int workingLimit = 10;
     // periphery_coverage: how much of each eye's view the model covers, percent of its size each way, about the focus
     // view (kNrCoverageMin..100: all of it) (live, new features).
     int peripheryCoverage = 100;
@@ -49,12 +55,28 @@ struct NrSettings {
     int exposure = 100;
     // input_gamma: the model gets the scene display-encoded (sRGB's curve), as a finished frame is; off: linear (live).
     bool inputGamma = true;
+    // auto_exposure: the scene is brought to a photograph's exposure before the model gets it (its mean brightness to
+    // middle grey, smoothed over frames, one value for every view), whatever the game's own scale; `exposure` then
+    // multiplies that. Off: `exposure` alone (live).
+    bool autoExposure = true;
+    // max_gain: the most the model may brighten or darken a pixel, percent (kNrGainMin..kNrGainMax; 300: three times
+    // either way). Its change is taken as a ratio of its output to its input, as the display would show them, and
+    // the scene is multiplied by it: a ratio near white stays a ratio (the first two headset runs put its output back
+    // through the curve's inverse, which made every small change near white many times larger: blown highlights, and
+    // its frame-to-frame variation a flicker) (live).
+    int maxGain = 300;
+    // Diagnostics, [experiment] dlss_nr_save=N (not written back): N sets of pictures into the log folder, the first
+    // half a second after it starts and then every ten: what the model got, what it gave back and the composed result,
+    // as PNG (each read back from the GPU: a hitch a set).
+    int saveFrames = 0;
     bool operator==(const NrSettings&) const = default;
 };
 
 inline constexpr DlssChoice kNrPresets[] = {{0, L"Default"}, {1, L"A (original)"}, {2, L"B (faster)"}};
 inline constexpr DlssChoice kNrStyles[] = {{0, L"Standard"}, {1, L"Natural"}, {2, L"Cinematic"}};
 inline constexpr int kNrScaleMin = 25, kNrCoverageMin = 20, kNrEdgeMax = 30, kNrExposureMin = 25, kNrExposureMax = 400;
+inline constexpr int kNrLimitMin = 3, kNrLimitMax = 40;  // tenths of a megapixel a view
+inline constexpr int kNrGainMin = 110, kNrGainMax = 1000;
 
 // The settings held to their ranges (an ini edited by hand).
 inline NrSettings nr_clamped(NrSettings s) {
@@ -65,9 +87,12 @@ inline NrSettings nr_clamped(NrSettings s) {
     s.localStructure = std::clamp(s.localStructure, 0, 200);
     s.focusScale = std::clamp(s.focusScale, kNrScaleMin, 100);
     s.peripheryScale = std::clamp(s.peripheryScale, kNrScaleMin, 100);
+    s.workingLimit = std::clamp(s.workingLimit, kNrLimitMin, kNrLimitMax);
     s.peripheryCoverage = std::clamp(s.peripheryCoverage, kNrCoverageMin, 100);
     s.edgeBlend = std::clamp(s.edgeBlend, 0, kNrEdgeMax);
     s.exposure = std::clamp(s.exposure, kNrExposureMin, kNrExposureMax);
+    s.maxGain = std::clamp(s.maxGain, kNrGainMin, kNrGainMax);
+    s.saveFrames = std::clamp(s.saveFrames, 0, 50);
     return s;
 }
 
@@ -91,11 +116,15 @@ inline NrSettings read_nr_settings(const wchar_t* ini) {
     s.periphery = number(L"periphery", 0) != 0;
     s.focusScale = number(L"focus_working", s.focusScale);
     s.peripheryScale = number(L"periphery_working", s.peripheryScale);
+    s.workingLimit = number(L"working_limit", s.workingLimit);
     s.peripheryCoverage = number(L"periphery_coverage", s.peripheryCoverage);
     s.edgeBlend = number(L"edge_blend", s.edgeBlend);
     s.beforeDlss = number(L"before_dlss", 0) != 0;
     s.exposure = number(L"exposure", s.exposure);
     s.inputGamma = number(L"input_gamma", 1) != 0;
+    s.autoExposure = number(L"auto_exposure", 1) != 0;
+    s.maxGain = number(L"max_gain", s.maxGain);
+    s.saveFrames = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"dlss_nr_save", 0, ini));
     return nr_clamped(s);
 }
 
@@ -112,11 +141,14 @@ inline bool write_nr_settings(const wchar_t* ini, const NrSettings& given) {
     ok &= ini_put(ini, L"dlss_nr", L"periphery", s.periphery ? 1 : 0);
     ok &= ini_put(ini, L"dlss_nr", L"focus_working", s.focusScale);
     ok &= ini_put(ini, L"dlss_nr", L"periphery_working", s.peripheryScale);
+    ok &= ini_put(ini, L"dlss_nr", L"working_limit", s.workingLimit);
     ok &= ini_put(ini, L"dlss_nr", L"periphery_coverage", s.peripheryCoverage);
     ok &= ini_put(ini, L"dlss_nr", L"edge_blend", s.edgeBlend);
     ok &= ini_put(ini, L"dlss_nr", L"before_dlss", s.beforeDlss ? 1 : 0);
     ok &= ini_put(ini, L"dlss_nr", L"exposure", s.exposure);
     ok &= ini_put(ini, L"dlss_nr", L"input_gamma", s.inputGamma ? 1 : 0);
+    ok &= ini_put(ini, L"dlss_nr", L"auto_exposure", s.autoExposure ? 1 : 0);
+    ok &= ini_put(ini, L"dlss_nr", L"max_gain", s.maxGain);
     return ok;
 }
 

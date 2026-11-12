@@ -6,6 +6,7 @@
 #ifdef SIM_QVFR_NGX
 #include <cctype>
 #include <cstdio>
+#include <deque>
 #include <vector>
 
 #include <d3d12.h>
@@ -30,6 +31,10 @@ struct View {
     ComPtr<ID3D12QueryHeap> queries;
     ComPtr<ID3D12Resource> times;
     UINT64 timedAt = 0;  // the fence value of the submission whose timestamps `times` holds (0: none)
+    UINT64 lastSubmit = 0;             // the fence value its last submission is through at
+    unsigned long long releasedAt = 0; // collect()'s count when it was released
+    UINT64 releaseValue = 0;           // the release fence's value the game's device signals once it is through with it
+    std::vector<ComPtr<IUnknown>> keep;  // the caller's Direct3D 11 objects on its textures, let go of with it
     double msSum = 0;
     unsigned msCount = 0;
 };
@@ -57,9 +62,40 @@ struct State {
     ComPtr<ID3D12Fence> fence;
     ComPtr<ID3D11Fence> fence11;
     UINT64 value = 0;
+    // Releases: signalled by the game's device alone, after all it has queued (release()).
+    ComPtr<ID3D12Fence> releaseFence;
+    ComPtr<ID3D11Fence> releaseFence11;
+    UINT64 releaseValue = 0;
     HANDLE event = nullptr;
     UINT64 timestampFrequency = 0;
+    ComPtr<IDXGIAdapter3> adapter;
+    std::vector<View*> released;          // given up, not destroyed yet (collect)
+    unsigned long long collects = 0;
+    std::deque<UINT64> outstanding;       // the evaluations' fence values the GPU hasn't reached yet
 } s;
+
+// A released view is destroyed no sooner than this many collect() calls (frames) after its release, and only with the
+// GPU through its last submission.
+constexpr unsigned long long kReleaseFrames = 8;
+
+void destroy(View* v);
+bool wait_for(UINT64 value, DWORD ms);
+// A view that never came into use (create() failed part-way): destroyed once our queue is through its one list.
+void discard(View* v) {
+    if (s.queue && s.fence && v->lastSubmit && !wait_for(v->lastSubmit, 30000)) {
+        s.released.push_back(v);  // not through: kept (collect, shutdown)
+        return;
+    }
+    destroy(v);
+}
+
+void destroy(View* v) {
+    if (v->handle)
+        NVSDK_NGX_D3D12_ReleaseFeature(v->handle);
+    if (v->params)
+        NVSDK_NGX_D3D12_DestroyParameters(v->params);
+    delete v;
+}
 
 void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
     std::string line = message ? message : "";
@@ -213,20 +249,27 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
         return fail(why, "the game's graphics adapter couldn't be found", hr);
     if (FAILED(hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&s.device))))
         return fail(why, "no Direct3D 12 device on the game's graphics card", hr);
+    adapter.As(&s.adapter);
     D3D12_COMMAND_QUEUE_DESC q{};
     q.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     HANDLE fenceHandle = nullptr;
     if (FAILED(hr = s.device->CreateCommandQueue(&q, IID_PPV_ARGS(&s.queue))) ||
         FAILED(hr = s.device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&s.fence))) ||
         FAILED(hr = s.device->CreateSharedHandle(s.fence.Get(), nullptr, GENERIC_ALL, nullptr, &fenceHandle))) {
-        shutdown();
+        shutdown(nullptr);
         s.tried = true;
         return fail(why, "the Direct3D 12 queue and its fence couldn't be made", hr);
     }
     hr = s.device11->OpenSharedFence(fenceHandle, IID_PPV_ARGS(&s.fence11));
     CloseHandle(fenceHandle);
+    fenceHandle = nullptr;
+    if (SUCCEEDED(hr) && SUCCEEDED(hr = s.device->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&s.releaseFence))) &&
+        SUCCEEDED(hr = s.device->CreateSharedHandle(s.releaseFence.Get(), nullptr, GENERIC_ALL, nullptr, &fenceHandle))) {
+        hr = s.device11->OpenSharedFence(fenceHandle, IID_PPV_ARGS(&s.releaseFence11));
+        CloseHandle(fenceHandle);
+    }
     if (FAILED(hr)) {
-        shutdown();
+        shutdown(nullptr);
         s.tried = true;
         return fail(why, "the game's device couldn't open the shared fence", hr);
     }
@@ -245,7 +288,7 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     if (NVSDK_NGX_FAILED(r)) {
         ComPtr<ID3D12Device> keep = s.device;  // not NGX's to shut down: it never started
         s.device.Reset();
-        shutdown();
+        shutdown(nullptr);
         s.tried = true;
         return fail(why, "NGX didn't start on Direct3D 12", static_cast<HRESULT>(r));
     }
@@ -279,7 +322,7 @@ View* create(unsigned width, unsigned height, int preset, unsigned& result) {
                                                                nullptr, IID_PPV_ARGS(&v->times)));
     if (!ok) {
         result = static_cast<unsigned>(hr);
-        release(v);
+        discard(v);
         return nullptr;
     }
     NVSDK_NGX_Result r = NVSDK_NGX_D3D12_AllocateParameters(&v->params);
@@ -303,13 +346,14 @@ View* create(unsigned width, unsigned height, int preset, unsigned& result) {
         if (begin_list()) {
             r = NVSDK_NGX_D3D12_CreateFeature(s.list.Get(), kNeuralRendering, p, &v->handle);
             const UINT64 at = end_list();
+            v->lastSubmit = at ? at : s.value;
             if (NVSDK_NGX_SUCCEED(r) && (!at || !wait_for(at, 30000)))
                 r = NVSDK_NGX_Result_Fail;
         }
     }
     result = static_cast<unsigned>(r);
     if (NVSDK_NGX_FAILED(r) || !v->handle) {
-        release(v);
+        discard(v);
         return nullptr;
     }
     NVSDK_NGX_Parameter* p = v->params;
@@ -331,16 +375,52 @@ View* create(unsigned width, unsigned height, int preset, unsigned& result) {
     return v;
 }
 
-void release(View* v) {
+void release(ID3D11DeviceContext* context, View* v, IUnknown* const* keep, unsigned count) {
     if (!v)
         return;
-    if (s.queue && s.fence && s.value)  // nothing of it still in flight
-        wait_for(s.value, 5000);
-    if (v->handle)
-        NVSDK_NGX_D3D12_ReleaseFeature(v->handle);
-    if (v->params)
-        NVSDK_NGX_D3D12_DestroyParameters(v->params);
-    delete v;
+    for (unsigned i = 0; keep && i < count; ++i)
+        if (keep[i])
+            v->keep.emplace_back(keep[i]);
+    // The game's device signals once it has run everything queued so far: every draw into the view's inputs, every
+    // read of its output.
+    ComPtr<ID3D11DeviceContext4> context4;
+    if (context && s.releaseFence11 && SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&context4)))) {
+        v->releaseValue = ++s.releaseValue;
+        context4->Signal(s.releaseFence11.Get(), v->releaseValue);
+    } else {
+        v->releaseValue = UINT64_MAX;  // never known to be through: left to shutdown()
+    }
+    v->releasedAt = s.collects;
+    s.released.push_back(v);
+}
+
+void collect() {
+    ++s.collects;
+    if (s.released.empty() || !s.fence || !s.releaseFence)
+        return;
+    const UINT64 done = s.fence->GetCompletedValue(), let = s.releaseFence->GetCompletedValue();
+    if (done == UINT64_MAX || let == UINT64_MAX)  // a lost device: nothing is known to be through
+        return;
+    for (auto it = s.released.begin(); it != s.released.end();) {
+        View* v = *it;
+        if (done >= v->lastSubmit && let >= v->releaseValue && s.collects >= v->releasedAt + kReleaseFrames) {
+            destroy(v);
+            it = s.released.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+unsigned pending_releases() { return static_cast<unsigned>(s.released.size()); }
+
+bool video_memory(double& usedMb, double& budgetMb) {
+    DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+    if (!s.adapter || FAILED(s.adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
+        return false;
+    usedMb = static_cast<double>(info.CurrentUsage) / 1048576.0;
+    budgetMb = static_cast<double>(info.Budget) / 1048576.0;
+    return true;
 }
 
 Textures textures(View* v) {
@@ -365,6 +445,14 @@ bool evaluate(ID3D11DeviceContext* context, View* v, const Evaluation& e, unsign
         return false;
     }
     collect_time(v);
+    // The GPU's backlog of our evaluations: with kBacklog of them still to do, this one isn't added to the pile.
+    const UINT64 reached = s.fence->GetCompletedValue();
+    while (!s.outstanding.empty() && s.outstanding.front() <= reached)
+        s.outstanding.pop_front();
+    if (s.outstanding.size() >= kBacklog) {
+        result = kBehind;
+        return false;
+    }
     if (!begin_list())
         return false;
     // D3D11's draws into the inputs first: the queue waits for this value before the list below runs.
@@ -402,6 +490,8 @@ bool evaluate(ID3D11DeviceContext* context, View* v, const Evaluation& e, unsign
         return false;
     if (timed)
         v->timedAt = done;
+    v->lastSubmit = done;
+    s.outstanding.push_back(done);
     context4->Wait(s.fence11.Get(), done);
     result = static_cast<unsigned>(r);
     return NVSDK_NGX_SUCCEED(r);
@@ -417,12 +507,53 @@ double take_gpu_ms(View* v) {
     return ms;
 }
 
-void shutdown() {
+void shutdown(ID3D11DeviceContext* context) {
+    // Both devices through all that is queued: the game's (flushed here; its signal on the release fence comes after
+    // everything before it) and ours.
+    bool idle = true;
     if (s.queue && s.fence && s.event) {
+        ComPtr<ID3D11DeviceContext4> context4;
+        UINT64 let = 0;
+        if (context && s.releaseFence11 && SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&context4)))) {
+            let = ++s.releaseValue;
+            context4->Signal(s.releaseFence11.Get(), let);
+            context->Flush();
+        } else if (!s.released.empty()) {
+            idle = false;
+        }
         const UINT64 at = ++s.value;
-        if (SUCCEEDED(s.queue->Signal(s.fence.Get(), at)))
-            wait_for(at, 5000);
+        idle = idle && SUCCEEDED(s.queue->Signal(s.fence.Get(), at)) && wait_for(at, 3000);
+        if (idle && let) {
+            idle = SUCCEEDED(s.releaseFence->SetEventOnCompletion(let, s.event)) && WaitForSingleObject(s.event, 3000) == WAIT_OBJECT_0;
+            idle = idle && s.releaseFence->GetCompletedValue() != UINT64_MAX;
+        }
+        idle = idle && s.fence->GetCompletedValue() != UINT64_MAX;
     }
+    if (!idle) {
+        // Work of ours still queued on a device, or a device lost: nothing is destroyed. Left to the process's end.
+        simqvfr::logf("ngx nr: the GPU didn't finish DLSS-NR's work within 3 s of the session's end (or its device is lost): its "
+                      "Direct3D 12 objects (%u released views among them) are left as they are, not destroyed",
+                      static_cast<unsigned>(s.released.size()));
+        (void)s.device.Detach();
+        (void)s.device11.Detach();
+        (void)s.queue.Detach();
+        (void)s.list.Detach();
+        (void)s.fence.Detach();
+        (void)s.fence11.Detach();
+        (void)s.releaseFence.Detach();
+        (void)s.releaseFence11.Detach();
+        (void)s.adapter.Detach();
+        for (Allocator& a : s.allocators)
+            (void)a.allocator.Detach();
+        for (View* v : s.released)
+            for (ComPtr<IUnknown>& k : v->keep)
+                (void)k.Detach();
+        s = State{};
+        return;
+    }
+    for (View* v : s.released)
+        destroy(v);
+    s.released.clear();
     if (s.started && s.device)
         NVSDK_NGX_D3D12_Shutdown1(s.device.Get());
     if (s.event)
@@ -447,14 +578,17 @@ View* create(unsigned, unsigned, int, unsigned& result) {
     result = 0;
     return nullptr;
 }
-void release(View*) {}
+void release(ID3D11DeviceContext*, View*, IUnknown* const*, unsigned) {}
+void collect() {}
+unsigned pending_releases() { return 0; }
+bool video_memory(double&, double&) { return false; }
 Textures textures(View*) { return {}; }
 bool evaluate(ID3D11DeviceContext*, View*, const Evaluation&, unsigned& result) {
     result = 0;
     return false;
 }
 double take_gpu_ms(View*) { return 0; }
-void shutdown() {}
+void shutdown(ID3D11DeviceContext*) {}
 
 }  // namespace simqvfr::ngxnr
 

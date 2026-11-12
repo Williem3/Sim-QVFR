@@ -15,6 +15,7 @@
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 struct ID3D11Texture2D;
+struct IUnknown;
 
 namespace simqvfr::ngxnr {
 
@@ -28,7 +29,18 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
 struct View;
 // `preset`: the runtime's model (0 its default, 1 A, 2 B). Null with NGX's or Direct3D's result in `result`.
 View* create(unsigned width, unsigned height, int preset, unsigned& result);
-void release(View* view);
+// The view is given up: nothing waits, and nothing of it is let go of yet on either device. Its feature and textures,
+// and `keep` (the caller's own Direct3D 11 objects made on those textures: views, the textures they draw from), are
+// destroyed by a later collect(), once both devices are through everything queued that touches them: the D3D12 queue
+// by the evaluations' fence, the game's device by a second fence it signals on `context` here, after all it has queued.
+// Letting go of either side under queued work is what must never happen: NVIDIA's driver answers with an error and a
+// hung device (event 153, tests/nr_views_check.cpp part 3), and the first headset run ended in a Windows bugcheck right
+// after a release that waited 5 s and then destroyed regardless.
+void release(ID3D11DeviceContext* context, View* view, IUnknown* const* keep = nullptr, unsigned count = 0);
+// Once a frame, between frames: destroys the released views whose work the GPU has finished.
+void collect();
+// Released views not destroyed yet (checks).
+unsigned pending_releases();
 
 // The view's textures on the game's device. D3D11 draws the three inputs and reads the output.
 struct Textures {
@@ -52,12 +64,26 @@ struct Evaluation {
 // The inputs as D3D11 has drawn them on `context` up to this call go through the model; what `context` does after this
 // call sees the output. Nothing waits on the CPU. False with the result in `result` (the output then is not to be used).
 bool evaluate(ID3D11DeviceContext* context, View* view, const Evaluation& e, unsigned& result);
+// evaluate()'s `result` when nothing was submitted because the GPU has kBacklog evaluations of ours still to do: the
+// view stays as it came this frame.
+inline constexpr unsigned kBehind = 0x4e520001;
+inline constexpr unsigned kBacklog = 24;  // six frames of four views
+
+// This process's video memory on the game's graphics card, in MB: in use, and what Windows lets it use before it
+// starts moving memory off the card. False: not known.
+bool video_memory(double& usedMb, double& budgetMb);
+// What a view worked at width x height takes, MB: its feature and four textures (measured with runtime 310.8.0.0,
+// tests/ngx_dlssnr_check.cpp: 360 MB at 0.6 megapixels, 574 at 2.4, 979 at 5.4).
+inline double view_memory_mb(unsigned width, unsigned height) { return 300.0 + 130.0 * (width * static_cast<double>(height) / 1e6); }
 
 // The GPU time of `view`'s evaluations since the last call, in ms each on average (0: none measured yet).
 double take_gpu_ms(View* view);
 
-// Every view must be released first. NGX on D3D12 shut down, the D3D12 device released.
-void shutdown();
+// The session's end, on the thread of the game's immediate `context`. Flushes it and waits a bounded time for both
+// devices to finish what was queued, destroys the released views, shuts NGX on D3D12 down and releases the D3D12
+// device. If they don't finish in that time, nothing is destroyed: the objects are left to the process's end (a leak,
+// logged) rather than destroyed under work still queued.
+void shutdown(ID3D11DeviceContext* context);
 
 // The nvngx_dlssnr.dll NGX loaded into this process (its full path), empty while none is.
 std::wstring loaded_dll();
