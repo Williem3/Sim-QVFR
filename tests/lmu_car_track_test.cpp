@@ -219,9 +219,9 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
     char what[240];
     const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
-    std::snprintf(what, sizeof(what), "%llu entries hooked (sixteen with car tracking)",
+    std::snprintf(what, sizeof(what), "%llu entries hooked (seventeen with car tracking, ExecuteCommandList among them)",
                   static_cast<unsigned long long>(installed.contextEntries));
-    check(installed.contextEntries == 16, what);
+    check(installed.contextEntries == 17, what);
 
     int mapsOk = 0, maps = 0;
     // A draw as LMU makes it: the per-draw buffer written (Map discard, Unmap), the mesh's buffers bound, DrawIndexed.

@@ -53,7 +53,7 @@ enum Hook : int {
     kHookVS, kHookGS, kHookOM, kHookOMUav, kHookSO, kHookVP, kHookSC, kHookResolve, kHookHS, kHookDS, kHookDrawIndexed,
     kHookDraw, kHookDrawIndexedInstanced, kHookDrawInstanced, kHookCopy, kHookDrawAuto, kHookDrawIndexedIndirect,
     kHookDrawInstancedIndirect, kHookPS, kHookVSCB, kHookMap, kHookUnmap, kHookIAVB, kHookIAIB, kHookBlend, kHookDepth,
-    kHooks
+    kHookExecute, kHooks
 };
 constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRenderTargets, kOMSetRenderTargetsAndUavs,
                                       kSOSetTargets,  kRSSetViewports, kRSSetScissorRects,  kResolveSubresource,
@@ -61,7 +61,7 @@ constexpr unsigned kSlotOf[kHooks] = {kVSSetShader,   kGSSetShader,    kOMSetRen
                                       kDrawIndexedInstanced,           kDrawInstanced,      kCopySubresourceRegion,
                                       kDrawAuto,      kDrawIndexedInstancedIndirect,        kDrawInstancedIndirect,
                                       kPSSetShader,   kVSSetConstantBuffers, kMap, kUnmap,  kIASetVertexBuffers,
-                                      kIASetIndexBuffer, kOMSetBlendState, kOMSetDepthStencilState};
+                                      kIASetIndexBuffer, kOMSetBlendState, kOMSetDepthStencilState, kExecuteCommandList};
 constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",       "OMSetRenderTargets",
                                            "OMSetRenderTargetsAndUnorderedAccessViews", "SOSetTargets",
                                            "RSSetViewports", "RSSetScissorRects", "ResolveSubresource",
@@ -70,7 +70,7 @@ constexpr const char* kHookName[kHooks] = {"VSSetShader",    "GSSetShader",     
                                            "CopySubresourceRegion", "DrawAuto", "DrawIndexedInstancedIndirect",
                                            "DrawInstancedIndirect", "PSSetShader", "VSSetConstantBuffers", "Map",
                                            "Unmap", "IASetVertexBuffers", "IASetIndexBuffer", "OMSetBlendState",
-                                           "OMSetDepthStencilState"};
+                                           "OMSetDepthStencilState", "ExecuteCommandList"};
 // Car tracking's hooks (mvr_car_track).
 constexpr bool is_car_hook(int h) {
     return h == kHookVSCB || h == kHookMap || h == kHookUnmap || h == kHookIAVB || h == kHookIAIB;
@@ -400,6 +400,8 @@ struct State {
     // The focus post executing its command list: d3d11 may replay it through the immediate context's own functions
     // (WARP does), so its state and draws reach these hooks as if they were the game's; ignored meanwhile.
     bool replaying = false;
+    bool inList = false;  // the game's command list executing (its replayed calls counted)
+    std::atomic<bool> listsAsBefore{false};  // mvr_replay_lists_plain(false): the lists executed as before the fix
     int framesTraced = 0, traceDraws = 0, traceDropped = 0;
     unsigned long long framesSinceInstall = 0;
     bool have[4] = {};
@@ -407,7 +409,11 @@ struct State {
     MvrPassStats stats;
 } g;
 
-bool ours(ID3D11DeviceContext* context) { return context == g.context && g.pass >= 0 && !g.replaying; }
+bool ours(ID3D11DeviceContext* context) {
+    if (g.inList && context == g.context)
+        ++g.stats.callsInLists;
+    return context == g.context && g.pass >= 0 && !g.replaying;
+}
 
 // R4b's pass tracker (mvr_track_passes): the eye passes as the d3d11 calls show them, compared with the game's bounds.
 struct Tracker {
@@ -3127,6 +3133,45 @@ void STDMETHODCALLTYPE undoubled_draw(ID3D11DeviceContext* context, A... a) {
     realVSSetShader(context, g.boundVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
 }
 
+void read_bindings();
+
+// A command list of the game's (its sun shadow casters, docs/recon-lmu.md "MVR shadow complaint"): executed as recorded.
+// Inside a pass the two views may be on (pass 0 begins before its Pre Render with the loop's passes) and d3d11 may replay
+// the list through the context's own functions, which would make its casters' binds look like the scene's to the hooks
+// (the twin, a second viewport beside the atlas tile). So: the two views off, the replay passed on untouched, and the
+// state read again after it (RestoreContextState FALSE leaves the context cleared, TRUE as it was: the views back on).
+void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore) {
+    if (context != g.context || g.replaying) {  // ours (the focus post's) or another context's
+        call_real<kHookExecute>(context, list, restore);
+        return;
+    }
+    Timed timed(g.time.hooks);
+    ++g.time.calls;
+    const bool inPass = g.pass >= 0;
+    ++(inPass ? g.stats.listsInPass : g.stats.listsOutside);
+    g.stats.listsTwoViews += g.stereo ? 1 : 0;
+    const bool plain = inPass && !g.listsAsBefore.load(std::memory_order_relaxed);
+    if (plain && g.stereo && !g.instanced) {
+        Timed switching(g.time.switches);
+        if (g.twoViews(g.context, false) == 0) {
+            g.stereo = false;
+            ++g.stats.toggles;
+        }
+    }
+    g.inList = true;
+    g.replaying = plain;
+    call_real<kHookExecute>(context, list, restore);
+    g.replaying = false;
+    g.inList = false;
+    if (!plain)
+        return;
+    if (!restore) {  // the context's state cleared to its defaults: nothing of ours (twin, cb13, two viewports) bound
+        read_bindings();
+        g.on = false;
+    }
+    update();
+}
+
 // The detours of hook H's functions, one per function (N): straight through inside the handling of one (depth), else
 // the handler, which passes the call on through call_real.
 template <int H, auto Handler, typename... A>
@@ -3228,6 +3273,7 @@ void* detour_for(int h, int n) {
             return LeanDetours<kHookBlend, &om_set_blend_state, void, ID3D11BlendState*, const FLOAT*, UINT>::get(n);
         case kHookDepth:
             return LeanDetours<kHookDepth, &om_set_depth_stencil_state, void, ID3D11DepthStencilState*, UINT>::get(n);
+        case kHookExecute: return Detours<kHookExecute, &execute_command_list, ID3D11CommandList*, BOOL>::get(n);
         default: return nullptr;
     }
 }
@@ -3834,6 +3880,13 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     update();
 }
 
+void mvr_replay_lists_plain(bool on) {
+    if (g.listsAsBefore.exchange(!on) != !on)
+        simqvfr::logf("lmu mvr: the game's command lists from now on executed %s",
+                      on ? "plain (the two views off, their calls passed on: the fix)"
+                         : "AS BEFORE THE FIX (the two views as they were, their calls handled as the game's)");
+}
+
 void mvr_pass_end(int pass) {
     if (!g.context || g.pass < 0)
         return;
@@ -4186,6 +4239,14 @@ void mvr_frame_end(unsigned long long frame) {
                               static_cast<unsigned long long>(ts.passesWithoutPost),
                               static_cast<unsigned long long>(ts.sceneRelearned));
         }
+        if (s.listsInPass || s.listsOutside)
+            simqvfr::logf("lmu mvr: the game's command lists: %llu executed in a pass (%llu with the two views on as they "
+                          "began), %llu outside; %llu hooked calls made while they executed; executed %s",
+                          static_cast<unsigned long long>(s.listsInPass), static_cast<unsigned long long>(s.listsTwoViews),
+                          static_cast<unsigned long long>(s.listsOutside), static_cast<unsigned long long>(s.callsInLists),
+                          g.listsAsBefore.load(std::memory_order_relaxed)
+                              ? "AS BEFORE THE FIX (the two views as they were, their calls handled as the game's)"
+                              : "plain (the two views off, their calls passed on)");
         if (g.instanced)
             simqvfr::logf("lmu mvr: instancing: %llu draws made with twice their instances (%llu with a per-instance "
                           "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect)%s",
