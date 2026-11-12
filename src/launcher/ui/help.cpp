@@ -1,5 +1,6 @@
 // Each setting's help: the kHelp table, the ⓘ next to a label and the tip it shows under the pointer.
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include <windows.h>
@@ -197,10 +198,12 @@ void help_icon(const std::wstring& label, float x, float y) {
 
 // The help under the pointer: a card under its ⓘ, kept inside the window, over everything but a pop-up menu.
 void help_tip() {
-    if (app.tip < 0 || app.tip >= static_cast<int>(std::size(kHelp)) || app.tipAnchor.w <= 0)
+    const bool own = app.tip == kTipText;  // a hit's own tip (Hit::tip): the top bar's, the rail's
+    if ((!own && (app.tip < 0 || app.tip >= static_cast<int>(std::size(kHelp)))) || app.tipAnchor.w <= 0)
         return;
-    const float w = 320, pad = t::kSpace4;
-    const std::wstring text = kHelp[app.tip].text;
+    const float pad = t::kSpace4;
+    const std::wstring text = own ? app.tipText : kHelp[app.tip].text;
+    const float w = own ? std::min(320.0f, std::ceil(app.canvas.measure(text, t::kCallout)) + 2 * pad + 2) : 320.0f;
     const float th = app.canvas.measure_height(text, t::kCallout, w - 2 * pad);
     Rect card{app.tipAnchor.x - 12, app.tipAnchor.bottom() + 8, w, th + 2 * pad};
     card.x = std::clamp(card.x, 8.0f, app.canvas.width() - w - 8);

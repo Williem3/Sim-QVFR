@@ -19,7 +19,7 @@ namespace simqvfr::launcher::ui::win {
 void activate(Ctl id, int option) {
     end_capture();  // any click ends catching a hotkey (one on a hotkey's button starts again)
     switch (id) {
-    case kSidebar:
+    case kPage:
         app.pane = static_cast<Pane>(option);
         app.scroll = 0;
         if (app.pane == Pane::Layers)
@@ -32,18 +32,28 @@ void activate(Ctl id, int option) {
         }
         if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
             reload_runtime();
+        app.tabPage[static_cast<int>(tab_of(app.pane))] = app.pane;  // the tab comes back to it
         break;
+    case kTopTab: show_tab(static_cast<Tab>(std::clamp(option, 0, kTabs - 1))); return;
+    case kSearch: open_search(); return;
+    case kProfileMenu: open_profile_menu(); return;
+    case kVersion: show_page(Pane::About); return;
+    case kSearchResult:
+        if (option >= 0 && option < static_cast<int>(app.searchResults.size()))
+            jump_to(app.searchIndex[static_cast<size_t>(app.searchResults[static_cast<size_t>(option)])]);
+        return;
+    case kSearchField: SetFocus(app.searchEdit); return;
     case kSheetButton: close_sheet(option); return;
-    case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
+    case kChecksBadge: activate(kPage, static_cast<int>(Pane::Checks)); return;
     case kUndoBadge: undo_restore(); return;
     case kLaunchBadge: {
         const LaunchOutcome o = app.watch.outcome();
         if (o.link == LaunchLink::Diagnostics) {
-            activate(kSidebar, static_cast<int>(Pane::Diagnostics));
+            activate(kPage, static_cast<int>(Pane::Diagnostics));
         } else if (o.link == LaunchLink::Report) {
             if (o.state == LaunchState::Crashed)
                 app.reportKind = 1;  // kIssueKinds: Crash or freeze
-            activate(kSidebar, static_cast<int>(Pane::Report));
+            activate(kPage, static_cast<int>(Pane::Report));
             if (o.finished())
                 app.watch.stop();  // seen: Report an issue has its logs
         }
@@ -218,7 +228,7 @@ void activate(Ctl id, int option) {
         if (!app.release.url.empty() && app.release.url.rfind(L"https://github.com/", 0) == 0)
             ShellExecuteW(app.hwnd, L"open", app.release.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return;
-    case kUpdateBadge: activate(kSidebar, static_cast<int>(Pane::About)); return;
+    case kUpdateBadge: show_page(Pane::About); return;
     case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kGameShown: {
         std::size_t count = 0;
@@ -323,6 +333,9 @@ bool push_button(Ctl id) {
     case kSupport:
     case kRestore:
     case kThemeToggle:
+    case kSearch:
+    case kProfileMenu:
+    case kVersion:
     case kLaunch:
     case kHotkeysReset:
     case kHotkeyKey:
@@ -413,13 +426,31 @@ void on_key(WPARAM key) {
     const bool shift = GetKeyState(VK_SHIFT) < 0;
     if (app.popup.open) {
         const int n = static_cast<int>(app.popup.items.size());
-        if (key == VK_UP || key == VK_DOWN)
-            app.popup.hover = (app.popup.hover + (key == VK_DOWN ? 1 : n - 1)) % n;
+        const auto item = [](int i) {
+            return app.popup.kinds.empty() || app.popup.kinds[static_cast<size_t>(i)] == PopupRow::Item;
+        };
+        if ((key == VK_UP || key == VK_DOWN) && n > 0) {  // the next item that is one (not a separator or a note)
+            int h = app.popup.hover < 0 ? (key == VK_DOWN ? n - 1 : 0) : app.popup.hover;
+            for (int step = 0; step < n; ++step) {
+                h = (h + (key == VK_DOWN ? 1 : n - 1)) % n;
+                if (item(h))
+                    break;
+            }
+            app.popup.hover = h;
+        }
         else if (key == VK_RETURN || key == VK_SPACE)
             close_popup(true);
         else if (key == VK_ESCAPE)
             close_popup(false);
         InvalidateRect(app.hwnd, nullptr, FALSE);
+        return;
+    }
+    if (key == 'K' && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+K: Find a setting
+        open_search();
+        return;
+    }
+    if (key == VK_ESCAPE && app.searchOpen) {
+        close_search();
         return;
     }
     if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && app.undoRestore) {  // Ctrl+Z: Restore Defaults' Undo
@@ -507,20 +538,37 @@ void on_key(WPARAM key) {
             return -1;
         };
         int to = -1;
-        if (key == VK_LEFT || key == VK_RIGHT)
-            to = next_shown(game_index() + (key == VK_RIGHT ? 1 : -1), key == VK_RIGHT ? 1 : -1);
+        const bool next = key == VK_RIGHT || key == VK_DOWN;  // the rail is a column; Left and Right still work
+        if (key == VK_LEFT || key == VK_RIGHT || key == VK_UP || key == VK_DOWN)
+            to = next_shown(game_index() + (next ? 1 : -1), next ? 1 : -1);
         else if (key == VK_HOME || key == VK_END)
             to = key == VK_HOME ? next_shown(0, 1) : next_shown(static_cast<int>(count) - 1, -1);
         if (to >= 0)
             select_game(to);
         break;
     }
-    case kSidebar:
-        if (key == VK_UP || key == VK_DOWN) {
-            const int step = key == VK_DOWN ? 1 : -1, here = static_cast<int>(app.pane);
-            activate(kSidebar, shown_pane(std::clamp(here + step, 0, kPanes - 1), step, here));
-        }
+    case kPage: {  // the strip of the tab's pages: Left and Right (Up and Down too) the previous or next page
+        const std::vector<Pane> pages = tab_pages(tab_of(app.pane));
+        const auto at = std::find(pages.begin(), pages.end(), app.pane);
+        if (at == pages.end() || pages.empty())
+            break;
+        const int i = static_cast<int>(at - pages.begin()), n = static_cast<int>(pages.size());
+        if (key == VK_LEFT || key == VK_UP)
+            show_page(pages[static_cast<size_t>((i + n - 1) % n)]);
+        else if (key == VK_RIGHT || key == VK_DOWN)
+            show_page(pages[static_cast<size_t>((i + 1) % n)]);
+        else if (key == VK_HOME || key == VK_END)
+            show_page(key == VK_HOME ? pages.front() : pages.back());
         break;
+    }
+    case kTopTab: {  // the tabs: Left and Right, Home and End
+        const int i = static_cast<int>(tab_of(app.pane));
+        if (key == VK_LEFT || key == VK_RIGHT)
+            show_tab(static_cast<Tab>((i + (key == VK_RIGHT ? 1 : kTabs - 1)) % kTabs));
+        else if (key == VK_HOME || key == VK_END)
+            show_tab(key == VK_HOME ? Tab::Overview : Tab::Game);
+        break;
+    }
     case kMenuPanel:
     case kOsdPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
         const int step = key == VK_PRIOR || key == VK_NEXT ? 10 : 1;

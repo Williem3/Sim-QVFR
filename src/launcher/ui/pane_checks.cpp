@@ -65,12 +65,12 @@ void fix_check(const Check& c) {
         ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
         return;
     }
-    case CheckFix::OpenLayers: activate(kSidebar, static_cast<int>(Pane::Layers)); return;
+    case CheckFix::OpenLayers: activate(kPage, static_cast<int>(Pane::Layers)); return;
     case CheckFix::OpenDlss:
         if (pane_shown(static_cast<int>(Pane::Dlss)))
-            activate(kSidebar, static_cast<int>(Pane::Dlss));
+            activate(kPage, static_cast<int>(Pane::Dlss));
         return;
-    case CheckFix::OpenFoveation: activate(kSidebar, static_cast<int>(Pane::Foveation)); return;
+    case CheckFix::OpenFoveation: activate(kPage, static_cast<int>(Pane::Foveation)); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))
             notify(L"Turbo mode is still on", L"OpenXR Toolkit’s settings for " + short_name() +

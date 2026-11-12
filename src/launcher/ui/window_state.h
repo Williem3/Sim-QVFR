@@ -33,8 +33,16 @@ enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, 
 
 inline constexpr int kPanes = 13;
 
+// The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
+// strip under the top bar (shell.cpp kTabPages).
+enum class Tab { Overview, Picture, Headset, Game };
+
+inline constexpr int kTabs = 4;
+
 enum Ctl {
-    kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
+    // kPage: a page (option: its Pane) in the strip under the top bar; kGameTab: a game on the rail (option: its index in
+    // games::all_games).
+    kNone, kPage, kGameTab, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
     // (FocusCorner's order, across then up or down).
@@ -92,7 +100,11 @@ enum Ctl {
     // An open sheet (open_sheet): its buttons (option: the button's index) and its name field.
     kSheetButton, kSheetField,
     // The theme button: following Windows, light or dark ([launcher] ui_theme).
-    kThemeToggle
+    kThemeToggle,
+    // The top bar: a tab (option: its Tab), Find a setting, the profile menu; the rail's version (it opens About).
+    kTopTab, kSearch, kProfileMenu, kVersion,
+    // Find a setting's results (option: the result's index) and its field.
+    kSearchResult, kSearchField
 };
 
 // The theme the window uses: Windows' app theme, or one chosen with the theme button ([launcher] ui_theme).
@@ -138,8 +150,25 @@ inline constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {L"Open or close
 struct Hit {
     Ctl id;
     Rect r;
-    int option = -1;  // sidebar row, segment, popup item
+    int option = -1;  // a page, a segment, a popup item
+    std::wstring tip;  // shown under it while the pointer is over it (help_tip), if any
 };
+
+// A label as last drawn (form.cpp section, controls.cpp checkbox): its text, its section's title and its row. Find a
+// setting indexes them and highlights the one it jumps to.
+struct DrawnLabel {
+    std::wstring label, section;
+    Rect r;
+};
+
+// A setting Find a setting can jump to: its label, its section's title, its page.
+struct SearchEntry {
+    std::wstring label, section;
+    Pane pane;
+};
+
+// app.tip for a hit's own tip text (Hit::tip) rather than an entry of kHelp.
+inline constexpr int kTipText = 100000;
 
 enum class Status { Idle, Starting, Error };
 
@@ -147,11 +176,16 @@ enum class Status { Idle, Starting, Error };
 // or method differ from what it runs with (NextLaunch).
 enum class Live { Off, Applied, NextLaunch };
 
+// A popup row's kind: an item to choose, a separator line, or a note (text that isn't a choice).
+enum class PopupRow : uint8_t { Item, Separator, Note };
+
 struct Popup {
     bool open = false;
     Ctl owner = kNone;
     Rect anchor;
     std::vector<std::wstring> items;
+    std::vector<PopupRow> kinds;  // per item; empty: all are items
+    std::vector<int> actions;     // per item, what it does (the profile menu's: pointer.cpp profile_menu_action)
     int selected = 0, hover = -1;
 };
 
@@ -183,7 +217,12 @@ inline constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
 
 inline constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
 
-inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1160, kDefaultHeight = 740;
+inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1280, kDefaultHeight = 838;  // a 1280 x 800 page
+
+// Find a setting's highlight on the row it jumped to, and the timer that clears it.
+inline constexpr UINT_PTR kHighlightTimer = 3;
+
+inline constexpr UINT kHighlightMs = 1600;
 
 inline constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes its title bar; ours is native
 
@@ -215,6 +254,7 @@ struct App {
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
     Pane pane = Pane::Checks;
+    Pane tabPage[kTabs] = {Pane::Profiles, Pane::Resolution, Pane::Menu, Pane::Checks};  // each tab's page, as last shown
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -305,6 +345,23 @@ struct App {
     Rect sheetEditRect;
     bool sheetFocusField = false;
     bool drawingSheet = false;  // paint is drawing the sheet: its controls show hover
+    // The labels drawn this frame (Find a setting), and the section being drawn (form.cpp).
+    std::vector<DrawnLabel> drawnLabels;
+    std::wstring drawingSection;
+    // Find a setting (search.cpp): open, its field (a native edit over the canvas), the pages' labels as last indexed,
+    // the matches for the field's text and the one Return picks.
+    bool searchOpen = false, searchIndexed = false, searchFocusField = false;
+    HWND searchEdit = nullptr;
+    Rect searchEditRect, searchAnchor;
+    std::vector<SearchEntry> searchIndex;
+    std::vector<int> searchResults;
+    int searchSelected = 0;
+    // The row it jumped to: highlighted until highlightUntil (GetTickCount64), scrolled into view once.
+    DrawnLabel highlight;
+    unsigned long long highlightUntil = 0;
+    bool highlightScroll = false;
+    // A hit's own tip (Hit::tip) under the pointer: its text (app.tip is then kTipText).
+    std::wstring tipText;
 };
 
 // The window (window_state.cpp).
@@ -460,9 +517,35 @@ float about_pane(float x, float y, float w, bool draw);
 // chrome.cpp
 bool pane_shown(int pane);
 int shown_pane(int pane, int step, int from);
+const wchar_t* pane_label(int pane);
+float pane_content(float x, float y, float w, bool draw);
 Rect popup_menu_rect();
+float popup_row_height(size_t i);
 void edit_font();
 void paint();
+
+// shell.cpp: the tabs and their pages, the rail, the top bar and the page strip.
+Tab tab_of(Pane pane);
+const wchar_t* tab_label(Tab tab);
+std::vector<Pane> tab_pages(Tab tab);
+void show_tab(Tab tab);
+void show_page(Pane pane);
+float rail_width();
+std::wstring rail_abbreviation(const games::GameInfo& game);
+void rail(float H);
+void topbar(float W);
+float page_strip(float x, float W);
+
+// search.cpp: Find a setting.
+void open_search();
+void close_search();
+void search_changed();
+void search_card();
+void search_index_pages(float x, float w);
+void place_search_edit();
+void create_search_edit();
+void jump_to(const SearchEntry& entry);
+void draw_highlight();
 
 // pointer.cpp
 const Hit* hit_at(float x, float y);
@@ -470,6 +553,7 @@ void set_slider_from_x(float x);
 std::pair<int*, int*> placement_of(Ctl id);
 void set_panel_from(float x, float y);
 void open_popup(Ctl owner);
+void open_profile_menu();
 void select_game(int option);
 int game_index();
 void close_popup(bool accept);

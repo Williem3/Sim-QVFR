@@ -60,6 +60,7 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
     if (!title.empty()) {
         if (draw) {
             app.canvas.text(title, t::kHeadline, {x + 2, y, w - 2, t::kHeadline.lineHeight}, col(app.c->heading));
+            app.drawnLabels.push_back({title, title, {x, y, w, t::kHeadline.lineHeight}});
             // Then its ⓘ (the section's reference text, kHelp by its title) and when its settings apply.
             float tx = x + 2 + std::ceil(app.canvas.measure(title, t::kHeadline)) + 6;
             if (help_for(title)) {
@@ -77,10 +78,13 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
     const Rect box{x, y + h, w, boxH};
     if (draw) {
         app.canvas.fill(box, col(app.c->group_bg), t::kRadiusGroup);  // flat: no edge, no shadow
+        app.drawingSection = title;  // the switches' labels (checkbox) record it too
         float ry = box.y;
         for (size_t i = 0; i < rows.size(); ++i) {
             const Row& row = rows[i];
             const float rh = row_height(row, w);
+            if (!row.label.empty())
+                app.drawnLabels.push_back({row.label, title, {box.x, ry, w, rh}});
             if (i > 0)
                 app.canvas.line(box.x + kRowPadX, ry, box.right() - 1, ry, col(app.c->separator), 1);
             const Rect inner{box.x + kRowPadX, ry + kRowPadY, w - 2 * kRowPadX, rh - 2 * kRowPadY};
@@ -110,6 +114,7 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
             ry += rh;
         }
     }
+    app.drawingSection.clear();
     h += boxH;
     if (!footer.empty()) {
         const float fw = w - 4, fh = app.canvas.measure_height(footer, t::kSubheadline, fw);

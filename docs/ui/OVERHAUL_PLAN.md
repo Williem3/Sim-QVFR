@@ -243,3 +243,15 @@ The user answered "use your defaults" to the twelve open questions:
 10. **Screen readers:** the UI Automation provider is built in Phase 8.
 11. **Pixels saved** in Last session uses that session's own settings.
 12. **LMU resolution badge** keeps today's tag.
+
+## 7. Progress
+
+- **Phase 1** (2dd8ac4): this plan and the inventory.
+- **Phase 2** (e4ae4a2): tokens, Jost and Inter, the restyled controls, the theme button (`[launcher] ui_theme`), the round-trip test.
+- **Phase 3** (the shell):
+  - The rail: the games from `games::all_games()`, the selected one yellow with its notch, each game's colour as a 4 px marker, Ko-fi and the version (it opens About; a dot when an update is out). Under 1024 px it shows abbreviations only.
+  - The top bar: the tabs with their shapes, the theme button, Find a setting, the profile menu, the status (a dot and a few words, the whole sentence as its tip, clicked where the action bar's badge went), and Launch.
+  - The profile menu: the summary line, the presets and saved profiles, Update and Revert when the one in use has changed, Save, Paste, Manage profiles…, and Restore defaults for <game> (its Undo stays in the status and on Ctrl+Z).
+  - Find a setting (Ctrl+K): its index is what every page draws, so it can't drift from the pages; Return shows the page, scrolls to the row and highlights it.
+  - Narrow windows drop "Profile:", then tighten the tabs, then shorten the status, then Launch's padding: all four tabs fit at the 880 px minimum.
+  - The window opens on Overview. Until the tabs have their cards, the old panes are each tab's pages (a strip under the top bar): Overview: Profiles, About; Picture: Resolution, Foveation, Focus overlay, DLSS; Headset: Headset menu, Hotkeys; Game: Launch checks, Diagnostics, Report an issue, Games, OpenXR layers.

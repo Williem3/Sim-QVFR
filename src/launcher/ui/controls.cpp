@@ -193,12 +193,15 @@ void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, co
                         col(disabled ? app.c->label_tertiary : app.c->label_secondary), Align::Leading, false, true);
     const Rect s{r.right() - kSwitchW, r.y + (r.h - kSwitchH) / 2, kSwitchW, kSwitchH};
     switch_track(s, checked, disabled);
-    if (disabled)
+    if (disabled) {
+        app.drawnLabels.push_back({label, app.drawingSection, r});
         return;  // no hit: it does nothing
+    }
     if (focused(id))
         focus_ring(s, t::kRadiusSwitch);
     app.hits.push_back({id, r});
     help_icon(label, r.x + std::min(tw - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), ty);
+    app.drawnLabels.push_back({label, app.drawingSection, r});
 }
 
 float segmented_width() {

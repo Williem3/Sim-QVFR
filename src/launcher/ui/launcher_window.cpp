@@ -36,6 +36,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         SetTimer(hwnd, kFollowTimer, 500, nullptr);
         create_report_edit();
         create_sheet_edit();
+        create_search_edit();
         refresh_installed();
         if (!game_shown(games::launcher_game())) {  // e.g. ACE, the first default, where only another game is installed
             std::size_t count = 0;
@@ -49,9 +50,9 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         refresh_checks();
         if (app.iniFound)
             refresh_profiles();
-        // The window opens on Launch checks: what the game, Steam and the layers look like now (often a new day: a game
-        // update, Steam closed). The launcher stays open while the game runs, so a tuning session keeps its pane.
-        activate(kSidebar, static_cast<int>(Pane::Checks));
+        // The window opens on Overview (docs/ui/OVERHAUL_PLAN.md §6.4); the top bar's status names what the launch checks
+        // found (often a new day: a game update, Steam closed) and opens them. A tuning session keeps its page.
+        show_tab(Tab::Overview);
         if (app.s.updateCheck)
             start_update_check();
         else if (app.iniFound && !app.s.updateAsked)
@@ -79,8 +80,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
+    case WM_COMMAND:  // Find a setting's field changed: its matches follow
+        if (reinterpret_cast<HWND>(lParam) == app.searchEdit && app.searchEdit && HIWORD(wParam) == EN_CHANGE) {
+            search_changed();
+            return 0;
+        }
+        break;
     case WM_CTLCOLOREDIT:  // the description box in the theme's field colours
-        if (reinterpret_cast<HWND>(lParam) == app.reportEdit || reinterpret_cast<HWND>(lParam) == app.sheetEdit) {
+        if (reinterpret_cast<HWND>(lParam) == app.reportEdit || reinterpret_cast<HWND>(lParam) == app.sheetEdit ||
+            reinterpret_cast<HWND>(lParam) == app.searchEdit) {
             if (!app.reportBrush || app.reportBrushRgb != app.c->field_bg) {
                 if (app.reportBrush)
                     DeleteObject(app.reportBrush);
@@ -96,6 +104,10 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
     case WM_TIMER:
         if (wParam == kCaptureTimer)
             capture_poll();
+        if (wParam == kHighlightTimer) {  // Find a setting's highlight ends
+            KillTimer(hwnd, kHighlightTimer);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         if (wParam == kFollowTimer) {
             follow_ini();
             if (app.watch.poll()) {  // the launched game's status changed: the checks follow it (running, starting)
@@ -174,6 +186,13 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             return 0;
         }
         const Hit* h = hit_at(x, y);
+        if (app.searchOpen && !app.sheet.open) {  // a result, the field, or anywhere else: closed
+            if (h && (h->id == kSearchResult || h->id == kSearchField))
+                activate(h->id, h->option);
+            else
+                close_search();
+            return 0;
+        }
         if (app.sheet.open) {  // only its buttons (pressed until the button is let go) and its field
             if (h && h->id == kSheetButton) {
                 app.pressed = kSheetButton;
@@ -184,7 +203,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             }
             return 0;
         }
-        if (!h)
+        if (!h || h->id == kNone)  // nothing there, or something with a tip only
             return 0;
         app.focus = h->id;  // as Windows does: Return now presses it, if it's a button
         app.focusOption = h->option;
@@ -237,10 +256,15 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
             }
         } else {
             const Hit* h = hit_at(x, y);
-            const int tip = h && h->id == kHelpIcon ? h->option : -1;
+            const int tip = !h ? -1 : h->id == kHelpIcon ? h->option : !h->tip.empty() ? kTipText : -1;
             const Ctl hover = h ? h->id : kNone;
             const int hoverOption = h ? h->option : -1;
-            if (tip != app.tip || hover != app.hover || hoverOption != app.hoverOption) {  // hover states follow
+            const bool newText = tip == kTipText && h->tip != app.tipText;
+            if (tip == kTipText) {  // a hit's own tip: its text, under it
+                app.tipText = h->tip;
+                app.tipAnchor = h->r;
+            }
+            if (tip != app.tip || newText || hover != app.hover || hoverOption != app.hoverOption) {  // hover states follow
                 app.tip = tip;
                 app.hover = hover;
                 app.hoverOption = hoverOption;

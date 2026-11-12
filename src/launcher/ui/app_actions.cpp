@@ -368,7 +368,7 @@ bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
 bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
 std::vector<Ctl> focus_order() {
-    std::vector<Ctl> order = {kGameTab, kThemeToggle, kSidebar};
+    std::vector<Ctl> order = {kGameTab, kTopTab, kPage};
     switch (app.pane) {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
     case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
@@ -472,7 +472,7 @@ std::vector<Ctl> focus_order() {
         break;
     case Pane::About: order.insert(order.end(), {kSupport, kUpdateCheck, kUpdateNow}); break;
     }
-    order.insert(order.end(), {kRestore, kLaunch});
+    order.insert(order.end(), {kThemeToggle, kSearch, kProfileMenu, kLaunch, kVersion});  // the top bar, then the rail's foot
     return order;
 }
 

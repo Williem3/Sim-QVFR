@@ -72,6 +72,12 @@ void set_panel_from(float x, float y) {
 }
 
 void open_popup(Ctl owner) {
+    if (owner == kProfileMenu) {
+        open_profile_menu();
+        return;
+    }
+    app.popup.kinds.clear();
+    app.popup.actions.clear();
     for (const Hit& h : app.hits)
         if (h.id == owner) {
             app.popup.anchor = h.r;
@@ -160,7 +166,88 @@ void open_popup(Ctl owner) {
 
 namespace {
 
+// The profile menu's actions besides a profile (its index in app.profileNames, 0 and up).
+enum ProfileAction { kActUpdate = -1, kActRevert = -2, kActSave = -3, kActPaste = -4, kActManage = -5, kActRestore = -6 };
+
+int profile_index(const std::wstring& name) {
+    for (size_t i = 0; i < app.profileNames.size(); ++i)
+        if (_wcsicmp(app.profileNames[i].c_str(), name.c_str()) == 0)
+            return static_cast<int>(i);
+    return -1;
+}
+
+}  // namespace
+
+// The top bar's profile menu: what the settings are now, the presets and saved profiles (the one in use checked), the
+// one in use's Update and Revert once the settings differ from it, saving and pasting, the Profiles page, and Restore
+// Defaults (its Undo stays in the status and Ctrl+Z).
+void open_profile_menu() {
+    Popup& p = app.popup;
+    p = {};
+    p.owner = kProfileMenu;
+    for (const Hit& h : app.hits)
+        if (h.id == kProfileMenu)
+            p.anchor = h.r;
+    const auto add = [&p](PopupRow kind, const std::wstring& text, int action) {
+        p.items.push_back(text);
+        p.kinds.push_back(kind);
+        p.actions.push_back(action);
+    };
+    const Readouts ro = readouts(app.s, app.runtime);
+    add(PopupRow::Note,
+        std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L"  ·  Outer " + std::to_wstring(app.s.outer) + L"%  ·  Focus " +
+            std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%",
+        0);
+    add(PopupRow::Separator, L"", 0);
+    const int current = profile_index(app.profileCurrent);
+    const size_t presets = builtin_profiles(app.s.eyeTracking).size();
+    p.selected = -1;
+    for (size_t i = 0; i < app.profileNames.size(); ++i) {
+        if (i == presets && presets > 0)
+            add(PopupRow::Separator, L"", 0);
+        const bool inUse = static_cast<int>(i) == current;
+        if (inUse)
+            p.selected = static_cast<int>(p.items.size());
+        add(PopupRow::Item, app.profileNames[i] + (inUse && !app.profileMatches ? L"  ·  changed since" : L""), static_cast<int>(i));
+    }
+    add(PopupRow::Separator, L"", 0);
+    if (current >= 0 && !app.profileMatches) {
+        if (static_cast<size_t>(current) >= presets)
+            add(PopupRow::Item, L"Update " + app.profileCurrent + L" with these settings", kActUpdate);
+        add(PopupRow::Item, L"Revert to " + app.profileCurrent, kActRevert);
+    }
+    add(PopupRow::Item, L"Save current settings…", kActSave);
+    add(PopupRow::Item, L"Paste a shared profile", kActPaste);
+    add(PopupRow::Item, L"Manage profiles…", kActManage);
+    add(PopupRow::Separator, L"", 0);
+    add(PopupRow::Item, L"Restore defaults for " + short_name(), kActRestore);
+    p.hover = p.selected;
+    p.open = true;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+namespace {
+
+void profile_menu_action(int option) {
+    if (option < 0 || option >= static_cast<int>(app.popup.actions.size()))
+        return;
+    const int action = app.popup.actions[static_cast<size_t>(option)], current = profile_index(app.profileCurrent);
+    switch (action) {
+    case kActUpdate: activate(kProfileUpdate, current); break;
+    case kActRevert: activate(kProfileRevert, current); break;
+    case kActSave: activate(kProfileSave, -1); break;
+    case kActPaste: activate(kProfilePaste, -1); break;
+    case kActManage: show_page(Pane::Profiles); break;
+    case kActRestore: activate(kRestore, -1); break;
+    default: activate(kProfileUse, action); break;
+    }
+}
+
 void choose(Ctl owner, int option) {
+    if (owner == kProfileMenu) {  // actions, not settings: each saves as it would from its own button
+        profile_menu_action(option);
+        return;
+    }
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
         return;
@@ -236,8 +323,8 @@ void select_game(int option) {
     } else {
         games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
     }
-    if (!pane_shown(static_cast<int>(app.pane)))
-        app.pane = static_cast<Pane>(shown_pane(static_cast<int>(app.pane), -1, 0));
+    if (!pane_shown(static_cast<int>(app.pane)))  // a page this game hasn't (DLSS): its tab's first
+        show_tab(tab_of(app.pane));
     apply_theme();
     refresh_checks();
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -253,19 +340,24 @@ int game_index() {
 }
 
 void close_popup(bool accept) {
-    if (accept && app.popup.hover >= 0)
-        choose(app.popup.owner, app.popup.hover);
+    const Popup p = app.popup;  // choose may open a sheet, or another menu
     app.popup.open = false;
+    if (accept && p.hover >= 0 && (p.kinds.empty() || p.kinds[static_cast<size_t>(p.hover)] == PopupRow::Item))
+        choose(p.owner, p.hover);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+// The item at (x, y); -1 for none, a separator or a note.
 int popup_item_at(float x, float y) {
     const Popup& p = app.popup;
-    const float itemH = kMenuItemH;
     const Rect menu = popup_menu_rect();
-    for (size_t i = 0; i < p.items.size(); ++i)
-        if (Rect{menu.x + 6, menu.y + 6 + itemH * i, menu.w - 12, itemH}.contains(x, y))
-            return static_cast<int>(i);
+    float top = menu.y + 6;
+    for (size_t i = 0; i < p.items.size(); ++i) {
+        const float h = popup_row_height(i);
+        if (Rect{menu.x + 6, top, menu.w - 12, h}.contains(x, y))
+            return p.kinds.empty() || p.kinds[i] == PopupRow::Item ? static_cast<int>(i) : -1;
+        top += h;
+    }
     return -1;
 }
 
