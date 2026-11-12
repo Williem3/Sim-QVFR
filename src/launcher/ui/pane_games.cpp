@@ -1,6 +1,8 @@
-// The Games pane: which games get a tab, and each game's colour (the colour wheel).
+// The Games card (which games are in the rail, each one's colour), the colour panel, the game's own options, and the
+// Game tab's page of cards.
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -10,6 +12,7 @@
 #include "../game_tabs.h"
 #include "../../games/game.h"
 #include "window_state.h"
+#include "card.h"
 #include "controls.h"
 #include "form.h"
 
@@ -46,9 +49,7 @@ int shown_game_count() {
     return shown;
 }
 
-namespace {
-
-// The game whose colour the wheel edits: the one picked by its swatch, else the selected game.
+// The game whose colour the colour row and panel edit: the one picked by its swatch, else the selected game.
 int color_game_index() {
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
@@ -59,8 +60,6 @@ int color_game_index() {
             return static_cast<int>(i);
     return 0;
 }
-
-}  // namespace
 
 const games::GameInfo& color_game() {
     std::size_t count = 0;
@@ -137,103 +136,177 @@ void color_wheel(const Rect& r) {
 
 }  // namespace
 
-float games_pane(float x, float y, float w, bool draw) {
-    std::size_t count = 0;
-    const games::GameInfo* const* all = games::all_games(count);
+// A game's colour among the presets (the Games card's swatches; Custom… for any other): apart from the games' own colours
+// (theme_tokens.h kGamePalettes) and the sections' blue, red and yellow, so a game given one stands out.
+const uint32_t kColorPresets[] = {0x7a3db8, 0xc0267a, 0x4d7c0f, 0x8b5e34, 0x0e7490, 0x4b5563};
+static_assert(std::size(kColorPresets) == 6, "six presets");
+
+// A preset chosen on the Games card: the edited game's colour, at once.
+void use_color_preset(int preset) {
+    if (preset < 0 || preset >= static_cast<int>(std::size(kColorPresets)))
+        return;
+    app.s.gameColors[game_id(color_game())] = kColorPresets[preset];
+    app.colorLoaded = -2;
     load_color_edit();
-    const int editing = color_game_index();
-    const bool onlyOne = shown_game_count() <= 1;
-    std::vector<Row> rows;
-    for (std::size_t i = 0; i < count; ++i) {
-        const games::GameInfo* game = all[i];
-        const bool shown = game_shown(*game), locked = shown && onlyOne;  // the last tab stays
-        const bool found = installed(*game);
-        const std::wstring desc = locked  ? L"The last tab: show another game to hide this one."
-                                  : !found ? shown ? L"Has a tab: choose its folder in Launch checks."
-                                                   : L"Steam doesn’t list it. Turn it on if it’s installed elsewhere."
-                                  : shown  ? L"Has a tab at the top of the window."
-                                           : L"No tab. Its settings are kept for when you show it again.";
-        Row row;
-        row.fullHeight = [desc](float width) { return checkbox_height(desc, width - 36); };
-        row.full = [=](const Rect& r) {
-            const t::Accent a = game_accent(*game);
-            const Rect swatch{r.x, r.y + (r.h - 22) / 2, 22, 22};
-            app.canvas.circle(swatch.x + 11, swatch.y + 11, 9, col(a.accent_fill), true);
-            if (static_cast<int>(i) == editing)  // the game the wheel below edits
-                app.canvas.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
-            if (focused(kColorGame) && app.hoverOption == static_cast<int>(i))
-                focus_ring(swatch, 11);
-            app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i)});
-            const Rect rest{r.x + 36, r.y, r.w - 36, r.h};
-            const float tw = rest.w - kSwitchW - t::kSpace5;
-            const float descH = app.canvas.measure_height(desc, t::kCallout, tw);
-            const float ty = rest.y + (rest.h - t::kBody.lineHeight - 2 - descH) / 2;
-            app.canvas.text(game->name, t::kBody, {rest.x, ty, tw, t::kBody.lineHeight}, col(app.c->label));
-            if (!found) {  // tagged: Steam doesn't have it
-                const float nx = rest.x + std::ceil(app.canvas.measure(game->name, t::kBody)) + t::kSpace2;
-                badge(nx, ty, 3, L"Not found", std::max(0.0f, rest.x + tw - nx));
-            }
-            app.canvas.text(desc, t::kCallout, {rest.x, ty + t::kBody.lineHeight + 2, tw, descH + 2}, col(app.c->label_secondary),
-                            Align::Leading, false, true);
-            switch_track({rest.right() - kSwitchW, rest.y + (rest.h - kSwitchH) / 2, kSwitchW, kSwitchH}, shown, locked);
-            if (!locked)
-                app.hits.push_back({kGameShown, rest, static_cast<int>(i)});
-        };
-        rows.push_back(row);
+    apply_theme();  // the selected game's accent may be the one changed
+    changed();
+}
+
+namespace {
+
+// A game's note on the Games card: why its switch is locked, that Steam didn't find it, or that it's hidden.
+std::wstring game_note(const games::GameInfo& game) {
+    const bool shown = game_shown(game), locked = shown && shown_game_count() <= 1, found = installed(game);
+    return locked  ? L"The last game in the rail: show another to hide it."
+           : !found ? shown ? L"Not found by Steam: choose its folder in Launch checks."
+                            : L"Not found by Steam. Turn it on if it’s installed elsewhere."
+           : shown  ? L""
+                    : L"Hidden. Its settings are kept for when you show it again.";
+}
+
+constexpr float kGameTextX = 36;
+
+// A game's row's height in a card `w` wide: its name, and its note under it.
+float game_row_height(size_t i, float w) {
+    std::size_t count = 0;
+    const std::wstring desc = game_note(*games::all_games(count)[i]);
+    const float tw = w - kGameTextX - kSwitchW - t::kSpace4;
+    return std::max(28.0f, t::kBody.lineHeight + (desc.empty() ? 0 : 2 + app.canvas.measure_height(desc, t::kCallout, tw)));
+}
+
+// A game's row on the Games card: its colour (click: its colour below), its name and where it stands, its switch.
+void game_row(const Rect& r, size_t i) {
+    std::size_t count = 0;
+    const games::GameInfo* game = games::all_games(count)[i];
+    const bool shown = game_shown(*game), locked = shown && shown_game_count() <= 1, found = installed(*game);
+    const std::wstring desc = game_note(*game);
+    Canvas& cv = app.canvas;
+    const t::Accent a = game_accent(*game);
+    const Rect swatch{r.x, r.y + (r.h - 22) / 2, 22, 22};
+    cv.circle(swatch.x + 11, swatch.y + 11, 9, col(a.accent_fill), true);
+    if (static_cast<int>(i) == color_game_index())  // the game the colour row edits
+        cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
+    if (focused(kColorGame) && app.focusOption == static_cast<int>(i))
+        focus_ring(swatch, 11);
+    app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i), L"Change " + std::wstring(game->shortName) + L"’s colour"});
+    const float tx = r.x + kGameTextX, tw = r.w - kGameTextX - kSwitchW - t::kSpace4;
+    const float dh = desc.empty() ? 0 : cv.measure_height(desc, t::kCallout, tw);
+    const float ty = r.y + (r.h - t::kBody.lineHeight - (dh > 0 ? 2 + dh : 0)) / 2;
+    cv.text(game->name, t::kBody, {tx, ty, tw, t::kBody.lineHeight}, col(app.c->label));
+    if (!found) {
+        const float nx = tx + std::ceil(cv.measure(game->name, t::kBody)) + t::kSpace2;
+        badge(nx, ty, 3, L"Not found", std::max(0.0f, tx + tw - nx));
     }
-    float h = section(x, y, w, L"Game tabs", rows,
-                      L"Installed games get a tab; turn one off to hide it. Click a colour dot to change it below.", draw);
-    h += t::kSpace6;
+    if (dh > 0)
+        cv.text(desc, t::kCallout, {tx, ty + t::kBody.lineHeight + 2, tw, dh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+    const Rect sw{r.right() - kSwitchW, r.y + (r.h - kSwitchH) / 2, kSwitchW, kSwitchH};
+    switch_track(sw, shown, locked);
+    if (!locked) {
+        if (focused(kGameShown) && app.focusOption == static_cast<int>(i))
+            focus_ring(sw, t::kRadiusSwitch);
+        app.hits.push_back({kGameShown, {tx, r.y, r.right() - tx, r.h}, static_cast<int>(i)});
+    }
+    app.drawnLabels.push_back({game->name, app.drawingSection, r});
+}
+
+// The colour row: the edited game's own colour (Default), the presets, Custom… (the panel with the wheel).
+void color_row(const Rect& r) {
+    Canvas& cv = app.canvas;
     const games::GameInfo& game = color_game();
-    const bool custom = app.s.gameColors.count(game_id(game)) > 0;
-    Row wheel;
-    wheel.fullHeight = [](float) { return 184.0f; };
-    wheel.full = [&game](const Rect& r) {
-        color_wheel({r.x, r.y, r.h, r.h});
-        // What it looks like: the game's marker on its tab, chosen (yellow) and not.
-        const t::Accent a = game_accent(game);
-        const float px = r.x + r.h + t::kSpace6, pw = std::min(260.0f, r.right() - px);
-        if (pw < 120)
-            return;
-        const auto tab = [&](float ty, bool chosen) {
-            const Rect tr{px, ty, pw, 34};
-            app.canvas.fill(tr, col(chosen ? app.c->yellow : app.c->control_bg), t::kRadiusControl);
-            app.canvas.fill({tr.x + 14, tr.y + tr.h / 2 - 4, 8, 8}, col(a.accent_fill));
-            if (chosen)
-                app.canvas.stroke({tr.x + 13.5f, tr.y + tr.h / 2 - 4.5f, 9, 9}, col(app.c->ink, 0.6f), 1);
-            app.canvas.text(game.name, t::kBodyMedium, {tr.x + 30, tr.y, tr.w - 34, tr.h}, col(chosen ? app.c->ink : app.c->label));
-            return tr;
-        };
-        const Rect chosen = tab(r.y + 40, true);
-        tab(chosen.bottom() + 12, false);
-        app.canvas.text(L"Preview", t::kSubheadline, {px, r.y + 14, pw, 18}, col(app.c->label_secondary));
+    const auto custom = app.s.gameColors.find(game_id(game));
+    const bool hasCustom = custom != app.s.gameColors.end();
+    const std::wstring label = L"Colour for " + std::wstring(game.shortName);
+    cv.text(label, t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));
+    app.drawnLabels.push_back({L"Colour", app.drawingSection, r});
+    float x = r.x;
+    const float y = r.y + 28, d = 26;
+    const auto swatch = [&](Ctl id, int option, uint32_t rgb, bool chosen, const std::wstring& tip) {
+        const Rect s{x, y, d, d};
+        cv.circle(s.x + d / 2, s.y + d / 2, d / 2 - 2, col(rgb), true);
+        if (chosen)
+            cv.circle(s.x + d / 2, s.y + d / 2, d / 2 + 1, col(app.c->label), false, 2);
+        if (focused(id) && (option < 0 || app.focusOption == option))
+            focus_ring(s, d / 2);
+        app.hits.push_back({id, s.inset(-2, -2), option, tip});
+        x += d + 10;
     };
-    Row reset;
-    reset.label = L"Built-in colour";
-    reset.desc = custom ? L"Go back to " + std::wstring(game.shortName) + L"’s own colour." : L"In use.";
-    reset.controlW = button_width(L"Use default");
-    reset.controlH = t::kControlHeight;
-    if (custom)
-        reset.control = [](const Rect& r) { button(kColorReset, r, L"Use default", Btn::Secondary); };
-    h += section(x, y + h, w, L"Colour for " + std::wstring(game.name),
-                 {wheel, slider_row(kColorValue, L"Brightness", L"", app.colorValue, L""), reset},
-                 L"Drag in the wheel to pick a colour; it applies at once.", draw);
-    // Running with the game's anti-cheat (LMU's Easy Anti-Cheat): the user's choice and risk (games/game.h antiCheatStart).
-    const games::GameInfo& launching = games::launcher_game();
-    if (launching.antiCheatStart) {
-        h += t::kSpace6;
-        const std::wstring desc =
-            L"Starts " + std::wstring(launching.shortName) +
-            L" through its anti-cheat, as Steam does, with Sim-QVFR running. Sim-QVFR works inside the game "
-            L"(without multi-view rendering it also changes the game’s code), and the anti-cheat may kick you or ban "
-            L"your account for it. Off starts the game without the anti-cheat (offline only).";
-        Row on;
-        on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
-        on.full = [desc](const Rect& r) { checkbox(kAntiCheat, r, app.s.antiCheat, L"Run with anti-cheat", desc, false); };
-        h += section(x, y + h, w, L"Anti-cheat for " + std::wstring(launching.name), {on},
-                     L"At your own risk.", draw, Applies::NextLaunch);
-    }
-    return h;
+    swatch(kColorReset, -1, builtin_accent(game).accent_fill, !hasCustom, std::wstring(game.shortName) + L"’s own colour");
+    for (int p = 0; p < static_cast<int>(std::size(kColorPresets)); ++p)
+        swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p], L"");
+    const bool other = hasCustom && std::find(std::begin(kColorPresets), std::end(kColorPresets), custom->second) == std::end(kColorPresets);
+    const float bw = button_width(L"Custom…");
+    if (other)  // a colour of its own: shown before Custom…
+        swatch(kColorCustom, -1, custom->second, true, L"Its own colour");
+    button(kColorCustom, {std::min(x, r.right() - bw), y - 4, bw, t::kControlHeight}, L"Custom…", Btn::Secondary);
+}
+
+}  // namespace
+
+// The Games card: which games are in the rail, and each one's colour (its marker on the rail).
+Card games_card() {
+    Card c{Tab::Game, L"Games in the rail"};
+    c.body = [](Body& b) {
+        std::size_t count = 0;
+        games::all_games(count);
+        load_color_edit();
+        for (size_t i = 0; i < count; ++i)
+            b.custom(game_row_height(i, b.width()), [i](const Rect& r) { game_row(r, i); });
+        b.divider();
+        b.custom(28 + 26, color_row);
+        b.note(L"A game’s colour marks it on the rail. Installed games are in the rail unless you hide them.");
+    };
+    return c;
+}
+
+// The game's own options (a game with an anti-cheat bootstrapper: LMU): running with its anti-cheat, at the user's risk.
+Card options_card() {
+    const games::GameInfo& game = games::launcher_game();
+    Card c{Tab::Game, std::wstring(game.shortName) + L" options", Applies::NextLaunch};
+    c.body = [](Body& b) {
+        const games::GameInfo& g = games::launcher_game();
+        const bool on = app.s.antiCheat;
+        b.toggle(kAntiCheat, L"Run with anti-cheat", on,
+                 on ? L"Starts " + std::wstring(g.shortName) + L" through its anti-cheat, as Steam does, with Sim-QVFR running."
+                    : L"Off · starts without its anti-cheat (offline sessions only)");
+        if (on) {  // the risk, only while it's on
+            b.chip(1, L"At your own risk");
+            b.note(L"Sim-QVFR works inside the game (without multi-view rendering it also changes the game’s code), and the "
+                   L"anti-cheat may kick you or ban your account for it.");
+        }
+    };
+    c.reset = [](Settings& s) { s.antiCheat = Settings{}.antiCheat; };
+    return c;
+}
+
+// The colour panel (Custom…): the wheel and its brightness, how the game looks with it on the rail, its own colour back.
+float color_panel(float x, float y, float w, bool draw) {
+    Body b(x, y, w, draw);
+    b.custom(184, [](const Rect& r) {
+        color_wheel({r.x, r.y, r.h, r.h});
+        const games::GameInfo& game = color_game();
+        const t::Accent a = game_accent(game);
+        const float px = r.x + r.h + t::kSpace6, pw = std::min(200.0f, r.right() - px);
+        if (pw < 100)
+            return;
+        app.canvas.text(L"On the rail", t::kSubheadline, {px, r.y + 20, pw, 18}, col(app.c->label_secondary));
+        const Rect block{px, r.y + 44, pw, 64};
+        app.canvas.fill(block, col(app.c->rail));
+        app.canvas.fill({block.x, block.y, 4, block.h}, col(a.accent_fill));
+        app.canvas.text(rail_abbreviation(game), t::kRailAbbrev, {block.x + 16, block.y + 10, pw - 20, 24}, col(app.c->rail_text));
+        app.canvas.text(game.name, t::kRailName, {block.x + 16, block.y + 36, pw - 20, 16}, col(app.c->rail_text_muted));
+    });
+    b.slider({kColorValue, L"Brightness", app.colorValue});
+    b.actions({{kColorReset, L"Use its own colour"}, {kPanelClose, L"Done", Btn::Primary}});
+    return b.height();
+}
+
+// The Game tab's cards, in order: what's needed before and after a launch first, then the layers, then the games and
+// the game's own options.
+float game_page(float x, float y, float w, bool draw) {
+    std::vector<Card> cards = {checks_card(), diagnostics_card(), help_card(), layers_card(), games_card()};
+    if (games::launcher_game().antiCheatStart)
+        cards.push_back(options_card());
+    return card_grid(cards, x, y, w, draw);
 }
 
 }  // namespace simqvfr::launcher::ui::win

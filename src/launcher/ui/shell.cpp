@@ -21,12 +21,12 @@ namespace simqvfr::launcher::ui::win {
 
 namespace {
 
-// Each tab's pages, in order (the old panes, until the tab has its cards).
+// Each tab's pages, in order (Overview's are the old panes until it has its hub).
 const std::vector<Pane> kTabPages[kTabs] = {
     {Pane::Profiles, Pane::About},
     {Pane::Picture},
     {Pane::Headset},
-    {Pane::Checks, Pane::Diagnostics, Pane::Report, Pane::Games, Pane::Layers},
+    {Pane::Game},
 };
 
 constexpr const wchar_t* kTabLabels[kTabs] = {L"Overview", L"Picture", L"Headset", L"Game"};

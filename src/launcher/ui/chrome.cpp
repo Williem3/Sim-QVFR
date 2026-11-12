@@ -18,14 +18,10 @@ namespace simqvfr::launcher::ui::win {
 // The current page's content at (x, y), width w. Returns its height.
 float pane_content(float x, float y, float w, bool draw) {
     switch (app.pane) {
-    case Pane::Checks: return checks_pane(x, y, w, draw);
     case Pane::Profiles: return profiles_pane(x, y, w, draw);
     case Pane::Picture: return picture_page(x, y, w, draw);
     case Pane::Headset: return headset_page(x, y, w, draw);
-    case Pane::Games: return games_pane(x, y, w, draw);
-    case Pane::Layers: return layers_pane(x, y, w, draw);
-    case Pane::Diagnostics: return diagnostics_pane(x, y, w, draw);
-    case Pane::Report: return report_pane(x, y, w, draw);
+    case Pane::Game: return game_page(x, y, w, draw);
     case Pane::About: return about_pane(x, y, w, draw);
     }
     return 0;
@@ -33,8 +29,7 @@ float pane_content(float x, float y, float w, bool draw) {
 
 namespace {
 
-constexpr const wchar_t* kPaneLabels[] = {L"Launch checks", L"Profiles",    L"Picture",         L"Headset", L"Games",
-                                          L"OpenXR layers", L"Diagnostics", L"Report an issue", L"About"};
+constexpr const wchar_t* kPaneLabels[] = {L"Profiles", L"Picture", L"Headset", L"Game", L"About"};
 
 static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 
@@ -59,14 +54,10 @@ namespace {
 // What a pane is for, under its title.
 std::wstring pane_description(Pane pane) {
     switch (pane) {
-    case Pane::Checks: return L"What would stop Sim-QVFR at the next launch, each with its fix.";
     case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
-    case Pane::Picture: return L"";
-    case Pane::Headset: return L"";
-    case Pane::Games: return L"Which games have a tab, and each game’s colour.";
-    case Pane::Layers: return L"The OpenXR layers " + game_name() + L" loads, and their order.";
-    case Pane::Diagnostics: return L"The last session’s numbers against the ones before it, and what to share when you ask for help.";
-    case Pane::Report: return L"Zips the logs and opens a GitHub issue with the details filled in.";
+    case Pane::Picture:
+    case Pane::Headset:
+    case Pane::Game: return L"";
     case Pane::About: return L"The version, updates and support.";
     }
     return L"";
@@ -178,9 +169,10 @@ void paint() {
 
     // Main and preview columns, right of the rail and under the top bar and the page strip; narrow, the preview drops
     // under the page.
-    // A page of cards (Picture, Headset) takes the whole width, with no header and no preview column (its Preview is a card).
+    // A page of cards (Picture, Headset, Game) takes the whole width, with no header and no preview column (its Preview is
+    // a card).
     const float pad = t::kSpace7;
-    const bool cards = app.pane == Pane::Picture || app.pane == Pane::Headset;
+    const bool cards = app.pane == Pane::Picture || app.pane == Pane::Headset || app.pane == Pane::Game;
     const float stripH = tab_pages(tab_of(app.pane)).size() > 1 ? 44.0f : 0.0f;
     const float mainX = railW, bodyTop = t::kTopbarHeight + stripH, bodyH = Hh - bodyTop;
     const bool narrow = cards || W - railW < 780;
@@ -227,6 +219,7 @@ void paint() {
 
     if (app.searchOpen)
         search_card();
+    panel_overlay();  // over the page; only it answers while open
     if (app.sheet.open)
         sheet_card();  // over everything: nothing under it answers
     else

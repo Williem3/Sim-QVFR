@@ -1,4 +1,4 @@
-// The Launch checks pane (preflight.h) and each check's fix.
+// The Launch checks card (preflight.h) and each check's fix.
 #include <string>
 #include <vector>
 
@@ -9,48 +9,52 @@
 #include "../preflight.h"
 #include "../../games/game.h"
 #include "window_state.h"
+#include "card.h"
 #include "controls.h"
 #include "form.h"
 
 namespace simqvfr::launcher::ui::win {
 
-// Launch checks (preflight.h): what needs attention first, each with its fix, then what is ready.
-float checks_pane(float x, float y, float w, bool draw) {
-    static const wchar_t* const kToneText[] = {L"OK", L"Check", L"Problem", L"Checking"};  // CheckTone's order
-    // Each row: its fix's button, else a badge with its state (the section says which need attention).
-    const auto check_row = [](size_t i) {
-        const Check& c = app.checks[i];
-        Row row;
-        row.label = c.title;
-        row.desc = c.detail;
-        if (!c.fixLabel.empty()) {
-            row.controlW = button_width(c.fixLabel);
-            row.controlH = t::kControlHeight;
-            row.control = [i](const Rect& r) {
-                button(kCheckFix, r, app.checks[i].fixLabel, false);
-                app.hits.back().option = static_cast<int>(i);
-            };
-        } else {
-            const int tone = static_cast<int>(c.tone);  // the badge's tones are CheckTone's
-            const std::wstring text = kToneText[tone];
-            row.controlW = badge_width(text);
-            row.controlH = 20;
-            row.control = [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); };
+// Launch checks (preflight.h) as a card: the verdict first, then what needs attention, each with its fix, then what is
+// ready behind a More.
+Card checks_card() {
+    Card c{Tab::Game, L"Launch checks"};
+    c.body = [](Body& b) {
+        static const wchar_t* const kToneText[] = {L"OK", L"Check", L"Problem", L"Checking"};  // CheckTone's order
+        size_t bad = 0, warn = 0;
+        std::vector<size_t> attention, ready;
+        for (size_t i = 0; i < app.checks.size(); ++i) {
+            const CheckTone tone = app.checks[i].tone;
+            bad += tone == CheckTone::Bad ? 1 : 0;
+            warn += tone == CheckTone::Warn ? 1 : 0;
+            (tone == CheckTone::Bad || tone == CheckTone::Warn ? attention : ready).push_back(i);
         }
-        return row;
+        if (bad > 0)
+            b.chip(2, std::to_wstring(bad) + (bad == 1 ? L" problem" : L" problems") + L": Launch asks before starting");
+        else if (warn > 0)
+            b.chip(1, std::to_wstring(warn) + L" to check");
+        else
+            b.chip(0, L"Ready to launch");
+        const auto check_row = [](Body& r, size_t i) {
+            const Check& k = app.checks[i];
+            if (!k.fixLabel.empty())
+                r.action(k.title, k.detail, kCheckFix, k.fixLabel, static_cast<int>(i));
+            else
+                r.status(k.title, k.detail, static_cast<int>(k.tone), kToneText[static_cast<int>(k.tone)]);
+        };
+        for (size_t i : attention)
+            check_row(b, i);
+        std::vector<std::wstring> labels;
+        for (size_t i : ready)
+            labels.push_back(app.checks[i].title);
+        if (!ready.empty())
+            b.more(std::to_wstring(ready.size()) + (attention.empty() ? L" checks, all ready" : L" ready"), labels,
+                   [ready, check_row](Body& m) {
+                       for (size_t i : ready)
+                           check_row(m, i);
+                   });
     };
-    std::vector<Row> attention, ready;
-    for (size_t i = 0; i < app.checks.size(); ++i)
-        (app.checks[i].tone == CheckTone::Bad || app.checks[i].tone == CheckTone::Warn ? attention : ready).push_back(check_row(i));
-    float h = 0;
-    if (!attention.empty())
-        h += section(x, y + h, w, L"Needs attention", attention,
-                     L"Launch asks before starting the game while a problem would crash it or leave Sim-QVFR off.", draw) +
-             t::kSpace6;
-    if (!ready.empty())
-        h += section(x, y + h, w, attention.empty() ? L"Ready to launch" : L"Ready", ready,
-                     attention.empty() ? L"Nothing found that would stop Sim-QVFR at the next launch." : L"", draw);
-    return h;
+    return c;
 }
 
 // A launch check's button (preflight.h's CheckFix).
@@ -66,7 +70,7 @@ void fix_check(const Check& c) {
         ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
         return;
     }
-    case CheckFix::OpenLayers: activate(kPage, static_cast<int>(Pane::Layers)); return;
+    case CheckFix::OpenLayers: jump_to({L"OpenXR layers", L"OpenXR layers", Pane::Game}); return;
     case CheckFix::OpenDlss:  // the card with DLSS's switch (Rendering), highlighted
         jump_to({game_has(&games::GameFeatures::sideLoadedDlss) ? L"Use DLSS" : L"Use Cheeky Foveated DLSS", L"Rendering",
                  Pane::Picture});

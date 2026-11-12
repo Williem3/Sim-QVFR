@@ -175,7 +175,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         if (LOWORD(wParam) != WA_INACTIVE) {  // a session may have reported the headset meanwhile
             reload_runtime();
             refresh_installed();  // a game installed or removed meanwhile
-            if (app.pane == Pane::Layers)  // a layer may have been installed or switched meanwhile
+            if (app.pane == Pane::Game)  // a layer may have been installed or switched meanwhile
                 refresh_layers();
             refresh_checks();
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -235,7 +235,7 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         } else if (h->id == kDiagZip) {
             drag_report_zip(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         } else if (h->id == kRestore || h->id == kLaunch || h->id == kSupport || h->id == kLayerApply ||
-                   h->id == kLayerRevert || h->id == kLayerReset) {
+                   h->id == kLayerRevert || h->id == kLayerReset || h->id == kReportOpen || h->id == kColorCustom) {
             app.pressed = h->id;
             SetCapture(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -318,6 +318,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         if (app.sheet.open)
             return 0;
         app.tip = -1;  // its ⓘ moves away
+        if (app.panel != PanelKind::None) {  // an open panel's content scrolls, not the page under it
+            if (app.panelScrollMax > 0) {
+                app.panelScroll = std::clamp(app.panelScroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f,
+                                             app.panelScrollMax);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
         if (app.scrollMax > 0) {
             app.scroll = std::clamp(app.scroll - GET_WHEEL_DELTA_WPARAM(wParam) / 120.0f * 40, 0.0f, app.scrollMax);
             InvalidateRect(hwnd, nullptr, FALSE);

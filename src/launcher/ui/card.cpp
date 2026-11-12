@@ -204,6 +204,83 @@ void Body::info(const std::wstring& label, const std::wstring& value) {
     h_ += kLineH;
 }
 
+// A row with its label and a line under it leading, and something `tw` x `th` trailing (painted at its rect).
+void Body::trailing(const std::wstring& label, const std::wstring& desc, float tw, float th,
+                    const std::function<void(const Rect&)>& paint) {
+    gap();
+    const float textW = std::max(60.0f, w_ - tw - 12);
+    const float dh = desc.empty() ? 0 : app.canvas.measure_height(desc, t::kCallout, textW);
+    const float h = std::max(kLineH + (dh > 0 ? 2 + dh : 0), th), y = y_ + h_;
+    if (draw_) {
+        app.canvas.text(label, t::kBody, {x_, y, textW, kLineH}, col(app.c->label));
+        help_icon(label, x_ + std::min(textW - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), y);
+        if (dh > 0)
+            app.canvas.text(desc, t::kCallout, {x_, y + kLineH + 2, textW, dh + 2}, col(app.c->label_secondary), Align::Leading,
+                            false, true);
+        paint({x_ + w_ - tw, y + (std::min(h, std::max(th, kLineH)) - th) / 2, tw, th});
+        record(label, {x_, y, w_, h});
+    }
+    h_ += h;
+}
+
+void Body::row(const std::wstring& label, const std::wstring& desc, const std::wstring& value) {
+    const float vw = value.empty() ? 0 : std::ceil(app.canvas.measure(value, t::kValue)) + 2;
+    if (vw > w_ * 0.45f) {  // a long value (a comparison): on its own line under the label, the line under it after
+        gap();
+        const float y = y_ + h_;
+        const float vh = app.canvas.measure_height(value, t::kValue, w_);
+        const float dh = desc.empty() ? 0 : app.canvas.measure_height(desc, t::kCallout, w_);
+        const float h = kLineH + 2 + vh + (dh > 0 ? 2 + dh : 0);
+        if (draw_) {
+            app.canvas.text(label, t::kBody, {x_, y, w_, kLineH}, col(app.c->label));
+            help_icon(label, x_ + std::ceil(app.canvas.measure(label, t::kBody)) + 6, y);
+            app.canvas.text(value, t::kValue, {x_, y + kLineH + 2, w_, vh + 2}, col(app.c->label), Align::Leading, false, true);
+            if (dh > 0)
+                app.canvas.text(desc, t::kCallout, {x_, y + kLineH + 4 + vh, w_, dh + 2}, col(app.c->label_secondary),
+                                Align::Leading, false, true);
+            record(label, {x_, y, w_, h});
+        }
+        h_ += h;
+        return;
+    }
+    trailing(label, desc, vw, kLineH, [value](const Rect& r) {
+        if (!value.empty())
+            app.canvas.text(value, t::kValue, r, col(app.c->label), Align::Trailing);
+    });
+}
+
+void Body::status(const std::wstring& label, const std::wstring& desc, int tone, const std::wstring& text) {
+    trailing(label, desc, badge_width(text), 20, [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); });
+}
+
+void Body::action(const std::wstring& label, const std::wstring& desc, Ctl id, const std::wstring& button, int option,
+                  Btn style) {
+    trailing(label, desc, button_width(button), t::kControlHeight, [=](const Rect& r) {
+        ::simqvfr::launcher::ui::win::button(id, r, button, style, nullptr, option);
+    });
+}
+
+void Body::actions(const std::vector<ButtonSpec>& list) {
+    gap();
+    float x = 0, y = 0;
+    std::vector<Rect> rects;
+    for (const ButtonSpec& b : list) {
+        const float bw = button_width(b.label) + (b.icon ? 24.0f : 0.0f);
+        if (x > 0 && x + bw > w_) {
+            x = 0;
+            y += t::kControlHeight + t::kSpace2;
+        }
+        rects.push_back({x_ + x, y_ + h_ + y, bw, t::kControlHeight});
+        x += bw + t::kSpace2;
+    }
+    if (draw_)
+        for (size_t i = 0; i < list.size(); ++i) {
+            button(list[i].id, rects[i], list[i].label, list[i].style, list[i].icon);
+            record(list[i].label, rects[i]);  // Find a setting finds a button (Report an issue…)
+        }
+    h_ += y + t::kControlHeight;
+}
+
 void Body::note(const std::wstring& text) {
     gap();
     const float th = app.canvas.measure_height(text, t::kCallout, w_);

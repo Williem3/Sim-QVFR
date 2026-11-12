@@ -192,11 +192,8 @@ Content in_well(Content frame, Content after = nullptr) {
 
 }  // namespace
 
-// The old pages' preview column: the load order on OpenXR layers, the foveation preview elsewhere; each a card, with a
-// second card of numbers under the preview.
+// The old pages' preview column: the foveation preview, a card, with a second card of numbers under it.
 float side_preview(float x, float y, float w, bool draw) {
-    if (app.pane == Pane::Layers)
-        return preview_card(x, y, w, L"Load order", game_name() + L" to headset", layers_preview, draw);
     float h = 0;
     h += preview_card(x, y, w, L"Preview", L"Left eye", in_well(preview, preview_legend), draw);
     h += t::kSpace4;

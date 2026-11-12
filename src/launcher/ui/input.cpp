@@ -23,16 +23,16 @@ void activate(Ctl id, int option) {
     case kPage:
         app.pane = static_cast<Pane>(option);
         app.scroll = 0;
-        if (app.pane == Pane::Layers)
+        if (app.pane == Pane::Game) {  // a layer may have changed, a session may have ended
             refresh_layers();
+            reload_runtime();
+        }
         if (app.pane == Pane::Headset)
             open_pads();
         if (app.pane == Pane::Profiles) {
             app.profileMessage.clear();
             refresh_profiles();
         }
-        if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
-            reload_runtime();
         app.tabPage[static_cast<int>(tab_of(app.pane))] = app.pane;  // the tab comes back to it
         break;
     case kTopTab: show_tab(static_cast<Tab>(std::clamp(option, 0, kTabs - 1))); return;
@@ -45,16 +45,17 @@ void activate(Ctl id, int option) {
         return;
     case kSearchField: SetFocus(app.searchEdit); return;
     case kSheetButton: close_sheet(option); return;
-    case kChecksBadge: activate(kPage, static_cast<int>(Pane::Checks)); return;
+    case kChecksBadge: jump_to({L"Launch checks", L"Launch checks", Pane::Game}); return;
     case kUndoBadge: undo_restore(); return;
     case kLaunchBadge: {
         const LaunchOutcome o = app.watch.outcome();
         if (o.link == LaunchLink::Diagnostics) {
-            activate(kPage, static_cast<int>(Pane::Diagnostics));
+            jump_to({L"Diagnostics", L"Diagnostics", Pane::Game});
         } else if (o.link == LaunchLink::Report) {
             if (o.state == LaunchState::Crashed)
                 app.reportKind = 1;  // kIssueKinds: Crash or freeze
-            activate(kPage, static_cast<int>(Pane::Report));
+            show_page(Pane::Game);
+            open_panel(PanelKind::Report);
             if (o.finished())
                 app.watch.stop();  // seen: Report an issue has its logs
         }
@@ -131,20 +132,26 @@ void activate(Ctl id, int option) {
         return;
     case kDiagKind: open_popup(id); return;
     case kDiagDescription:
-        if (!report_edit_fits()) {  // scroll the field into view first: the edit shows only then
+        if (app.panel != PanelKind::Report)
+            return;
+        if (!report_edit_fits()) {  // scroll the field into view in the panel first: the edit shows only then
             const Rect& r = app.reportEditRect;
-            const float by = r.bottom() > app.scrollArea.bottom() ? r.bottom() + 5 - app.scrollArea.bottom() : r.y - 5 - app.scrollArea.y;
-            app.scroll = std::clamp(app.scroll + by + (by > 0 ? t::kSpace4 : -t::kSpace4), 0.0f, app.scrollMax);
+            const Rect& body = app.panelBody;
+            const float by = r.bottom() > body.bottom() ? r.bottom() + 5 - body.bottom() : r.y - 5 - body.y;
+            app.panelScroll = std::clamp(app.panelScroll + by + (by > 0 ? t::kSpace4 : -t::kSpace4), 0.0f, app.panelScrollMax);
             RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
         }
         SetFocus(app.reportEdit);
         return;
+    case kReportOpen: open_panel(PanelKind::Report); return;
+    case kPanelClose: close_panel(); return;
+    case kColorPreset: use_color_preset(option); return;
+    case kColorCustom: open_panel(PanelKind::Color); return;
     case kDiagReport: report_issue(); return;
     case kDiagExport: export_logs(); return;
     case kDiagZip: show_report_zip(); return;  // the keyboard's; the mouse drags it (drag_report_zip)
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
-    case kLayerProfile: open_popup(id); return;
     case kLayerOn: app.layerRow = option; toggle_layer(option); break;
     case kLayerUp: move_layer(option, -1); break;
     case kLayerDown: move_layer(option, 1); break;
@@ -169,7 +176,8 @@ void activate(Ctl id, int option) {
     case kNrOrder:
     case kFgMultiplier:
     case kFgScale:
-    case kFgPeriphery: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
+    case kFgPeriphery:
+    case kLayerProfile: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
         std::vector<std::wstring> items;
         const int selected = choice_items(id, items);
         if (!items.empty())
@@ -381,6 +389,10 @@ bool push_button(Ctl id) {
     case kDiagExport:
     case kDiagCopy:
     case kDiagLogs:
+    case kReportOpen:
+    case kPanelClose:
+    case kColorPreset:
+    case kColorCustom:
     case kColorReset: return true;
     default: return false;
     }
@@ -476,6 +488,10 @@ void on_key(WPARAM key) {
     }
     if (key == VK_ESCAPE && app.searchOpen) {
         close_search();
+        return;
+    }
+    if (key == VK_ESCAPE && app.panel != PanelKind::None) {
+        close_panel();
         return;
     }
     if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && app.undoRestore) {  // Ctrl+Z: Restore Defaults' Undo

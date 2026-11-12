@@ -166,7 +166,8 @@ bool segmented_ctl(Ctl id) {
     case kNrOrder:
     case kFgMultiplier:
     case kFgScale:
-    case kFgPeriphery: return true;
+    case kFgPeriphery:
+    case kLayerProfile: return true;
     default: return false;
     }
 }

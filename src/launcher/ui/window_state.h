@@ -30,11 +30,11 @@ namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
 
-// The pages. Picture and Headset are their tabs' cards (picture.cpp, headset.cpp); the others are the old panes, each a page of its tab
-// until the tab has its cards (docs/ui/OVERHAUL_PLAN.md §7).
-enum class Pane { Checks, Profiles, Picture, Headset, Games, Layers, Diagnostics, Report, About };
+// The pages. Picture, Headset and Game are their tabs' cards (picture.cpp, headset.cpp, pane_games.cpp game_page); Profiles
+// and About are the old panes, Overview's pages until it has its hub (docs/ui/OVERHAUL_PLAN.md §7).
+enum class Pane { Profiles, Picture, Headset, Game, About };
 
-inline constexpr int kPanes = 9;
+inline constexpr int kPanes = 5;
 
 // The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
 // strip under the top bar (shell.cpp kTabPages).
@@ -110,8 +110,14 @@ enum Ctl {
     kSearchResult, kSearchField,
     // A card's ⋯ menu (option: the card's index this frame), a card's More (option: its index in app.moreKeys), and the
     // helmet's images folder.
-    kCardMenu, kMore, kHelmetFolder
+    kCardMenu, kMore, kHelmetFolder,
+    // Get help's Report an issue… (its panel), an open panel's close button, a colour preset on the Games card (option:
+    // its index in kColorPresets) and Custom… (the colour panel).
+    kReportOpen, kPanelClose, kColorPreset, kColorCustom
 };
+
+// A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
+enum class PanelKind { None, Report, Color };
 
 // A stop in the keyboard's Tab order: a control, and which one of several (a card's menu), or -1.
 struct FocusStop {
@@ -123,7 +129,7 @@ struct FocusStop {
 // The theme the window uses: Windows' app theme, or one chosen with the theme button ([launcher] ui_theme).
 enum class ThemeChoice { System, Light, Dark };
 
-inline constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
+inline constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Windows’ list"};
 
 inline constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 
@@ -274,8 +280,8 @@ struct App {
     std::wstring ini;
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Checks;
-    Pane tabPage[kTabs] = {Pane::Profiles, Pane::Picture, Pane::Headset, Pane::Checks};  // each tab's page, as last shown
+    Pane pane = Pane::Game;
+    Pane tabPage[kTabs] = {Pane::Profiles, Pane::Picture, Pane::Headset, Pane::Game};  // each tab's page, as last shown
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -392,6 +398,10 @@ struct App {
     // Disclosures: when each parent (by Ctl) turned on, while its rows slide open, and its state as last drawn.
     std::map<int, unsigned long long> revealStart;
     std::map<int, bool> revealLast;
+    // The open panel (panels.cpp), its content's scroll and the content's rect as last drawn.
+    PanelKind panel = PanelKind::None;
+    float panelScroll = 0, panelScrollMax = 0;
+    Rect panelBody;
 };
 
 // The window (window_state.cpp).
@@ -472,8 +482,6 @@ void edit_launcher_layers(const std::function<void(LauncherLayers&)>& change);
 void toggle_layer(int i);
 void move_layer(int i, int step);
 void apply_layers();
-float layers_pane(float x, float y, float w, bool draw);
-float layers_preview(float x, float y, float w, bool draw);
 
 // pane_diagnostics.cpp
 std::wstring logs_folder();
@@ -481,7 +489,6 @@ bool copy_text(const std::wstring& text);
 void copy_summary();
 std::wstring clipboard_text();
 bool report_edit_fits();
-float diagnostics_pane(float x, float y, float w, bool draw);
 
 // pane_report.cpp
 void export_logs();
@@ -507,7 +514,6 @@ bool capture_key(WPARAM vk);
 void capture_poll();
 
 // pane_checks.cpp
-float checks_pane(float x, float y, float w, bool draw);
 void fix_check(const Check& c);
 
 // pane_games.cpp
@@ -519,7 +525,16 @@ const games::GameInfo& color_game();
 void load_color_edit();
 void apply_color_edit();
 void set_color_from(float x, float y);
-float games_pane(float x, float y, float w, bool draw);
+int color_game_index();
+void use_color_preset(int preset);
+// The colour panel's content (Custom… on the Games card), and the Game tab's cards.
+float color_panel(float x, float y, float w, bool draw);
+float game_page(float x, float y, float w, bool draw);
+
+// panels.cpp: a panel over the window (Report an issue, a game's colour); Escape or its ✕ closes it.
+void open_panel(PanelKind kind);
+void close_panel();
+void panel_overlay();
 
 // picture.cpp: the Picture tab's cards.
 float picture_page(float x, float y, float w, bool draw);

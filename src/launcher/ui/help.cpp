@@ -92,9 +92,27 @@ constexpr Help kHelp[] = {
     {L"Busiest threads",
      L"Each thread is a share of ONE core. A thread near 100% can hold the frame rate back even when Windows shows the whole "
      L"CPU at 15%; a thread that spins by design looks busy whatever limits it."},
-    {L"Capture and share",
-     L"To report a problem, use Report an issue in the sidebar: it zips these logs and fills in the issue. Elsewhere, send a "
-     L"screenshot of this page (or paste the summary) and the session’s log, with the latest cpu-profile file if you made one."},
+    {L"Frame rate",
+     L"The last session’s average against the headset’s refresh rate, the frame rate it asks for. Below it, the runtime "
+     L"fills the gaps (motion smoothing or reprojection), which shows as wobble on moving edges."},
+    {L"Slow frames",
+     L"The 90th percentile frame time: one frame in ten took at least this long. Above the frame’s budget (1000 ms divided "
+     L"by the refresh rate) those frames miss the headset’s refresh, and the stutter you feel comes from them, not from the "
+     L"average."},
+    {L"Limited by",
+     L"What held the frame back most of the time: the game’s render thread on the CPU, the GPU, or nothing (the headset’s "
+     L"refresh). Lowering resolution helps only when the GPU limits it."},
+    {L"Previous session",
+     L"The session before the last one for this game, and the settings changed in between, so you can see what a change "
+     L"did. Compare runs on the same track and car for a fair difference."},
+    {L"Run with anti-cheat",
+     L"Starts the game through its anti-cheat (Easy Anti-Cheat), as Steam does, with Sim-QVFR running. Sim-QVFR works inside "
+     L"the game (without multi-view rendering it also changes the game’s code), and the anti-cheat may kick you or ban your "
+     L"account for it: at your own risk. Off starts the game without its anti-cheat, for offline sessions only."},
+    {L"Profile",
+     L"With the launcher: the layers a launch from here loads, below Sim-QVFR, in an order of its own; Windows’ list stays as "
+     L"it is. Windows’ list: what every other app loads (and the game started from Steam), saved in the registry when you "
+     L"apply, with a backup in the logs folder first."},
     {L"CPU capture",
      L"At the next launch, the CPU capture hotkey (Ctrl+Alt+C) while driving records for 20 s where the game’s busiest "
      L"threads spend their time, into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; "

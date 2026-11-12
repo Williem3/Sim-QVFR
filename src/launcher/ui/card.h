@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "controls.h"
 #include "form.h"
 #include "window_state.h"
 
@@ -47,6 +48,19 @@ public:
                  Applies applies = Applies::None);
     // A label and a value, the value trailing.
     void info(const std::wstring& label, const std::wstring& value);
+    // A label, a line under it (wrapped) and, trailing, a value (tabular), a status badge or a button.
+    void row(const std::wstring& label, const std::wstring& desc, const std::wstring& value);
+    void status(const std::wstring& label, const std::wstring& desc, int tone, const std::wstring& text);
+    void action(const std::wstring& label, const std::wstring& desc, Ctl id, const std::wstring& button, int option = -1,
+                Btn style = Btn::Secondary);
+    // Buttons in a row, wrapping onto the next line when they don't fit.
+    struct ButtonSpec {
+        Ctl id;
+        std::wstring label;
+        Btn style = Btn::Secondary;
+        const char* icon = nullptr;
+    };
+    void actions(const std::vector<ButtonSpec>& list);
     // Muted text, wrapped (a note, why something isn't available).
     void note(const std::wstring& text);
     // A status chip (badge's tones).
@@ -67,6 +81,11 @@ public:
     // Rows most people never change, behind "More: <label>" (open or closed, remembered per card); closed, their labels
     // are recorded for Find a setting, which opens it.
     void more(const std::wstring& label, const std::vector<std::wstring>& hiddenLabels, const std::function<void(Body&)>& rows);
+
+    // A label and a line under it leading, and anything `tw` x `th` trailing, painted at its rect (a layer's switch and
+    // moves).
+    void trailing(const std::wstring& label, const std::wstring& desc, float tw, float th,
+                  const std::function<void(const Rect&)>& paint);
 
 private:
     void gap();
@@ -92,6 +111,15 @@ struct Card {
 // The cards in columns (3 at 1400 px and wider, 2 from 1024, 1 below), each in the shortest column, in order, from
 // (x, y) across `w`. Returns the height of the tallest column.
 float card_grid(const std::vector<Card>& cards, float x, float y, float w, bool draw);
+
+// The cards each Game tab's part makes (pane_checks.cpp, pane_diagnostics.cpp, pane_report.cpp, pane_games.cpp,
+// pane_layers.cpp).
+Card checks_card();
+Card diagnostics_card();
+Card help_card();
+Card games_card();
+Card options_card();  // the game's own options (LMU's anti-cheat); only for a game with them
+Card layers_card();
 
 // The card menu's Reset this card: asks first, then the card's settings go back to their defaults (a change like any
 // other: saved and sent to a running game).

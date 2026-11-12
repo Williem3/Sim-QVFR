@@ -503,7 +503,7 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input
   src/launcher/ui/pane_foveation.cpp src/launcher/ui/pane_menu.cpp
   src/launcher/ui/pane_hotkeys.cpp src/launcher/ui/pane_games.cpp src/launcher/ui/pane_layers.cpp
   src/launcher/ui/pane_diagnostics.cpp src/launcher/ui/pane_report.cpp src/launcher/ui/pane_about.cpp
-  src/launcher/ui/chrome.cpp src/launcher/ui/shell.cpp src/launcher/ui/search.cpp src/launcher/ui/pointer.cpp
+  src/launcher/ui/panels.cpp src/launcher/ui/chrome.cpp src/launcher/ui/shell.cpp src/launcher/ui/search.cpp src/launcher/ui/pointer.cpp
   src/launcher/ui/input.cpp)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
