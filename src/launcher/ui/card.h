@@ -84,8 +84,9 @@ public:
 
     // A label and a line under it leading, and anything `tw` x `th` trailing, painted at its rect (a layer's switch and
     // moves).
+    // `spoken`: what a screen reader reads for the row (empty: the label and its line, when it has one).
     void trailing(const std::wstring& label, const std::wstring& desc, float tw, float th,
-                  const std::function<void(const Rect&)>& paint);
+                  const std::function<void(const Rect&)>& paint, const std::wstring& spoken = {});
 
 private:
     void gap();
@@ -108,8 +109,8 @@ struct Card {
     int chipTone = 1;
 };
 
-// The cards in columns (3 at 1400 px and wider, 2 from 1024, 1 below), each in the shortest column, in order, from
-// (x, y) across `w`. Returns the height of the tallest column.
+// The cards in columns (as many of at least 360 px as fit in `w`, up to four), each in the shortest column, in order,
+// from (x, y) across `w`. Returns the height of the tallest column.
 float card_grid(const std::vector<Card>& cards, float x, float y, float w, bool draw);
 
 // The cards each Game tab's part makes (pane_checks.cpp, pane_diagnostics.cpp, pane_report.cpp, pane_games.cpp,

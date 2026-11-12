@@ -344,6 +344,19 @@ void activate(Ctl id, int option) {
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+// A slider set from the keyboard or a screen reader: within its range, saved and sent as any change (the colour
+// panel's brightness recolours the game, as dragging it does).
+void set_slider(Ctl id, int value) {
+    int* v = slider_value(id);
+    if (!v)
+        return;
+    const Range r = slider_range(id);
+    *v = std::clamp(value, r.min, r.max);
+    if (id == kColorValue)
+        apply_color_edit();
+    changed();
+}
+
 float dip(LPARAM lp, bool y) {
     return (y ? GET_Y_LPARAM(lp) : GET_X_LPARAM(lp)) / app.canvas.dpi_scale();
 }
@@ -544,7 +557,7 @@ void on_key(WPARAM key) {
         return;
     }
     app.keyboard = true;
-    if (int* v = slider_value(app.focus)) {
+    if (const int* v = slider_value(app.focus)) {
         const Range r = slider_range(app.focus);
         int nv = *v;
         if (key == VK_LEFT || key == VK_DOWN)
@@ -561,8 +574,7 @@ void on_key(WPARAM key) {
             nv = r.max;
         else
             return;
-        *v = std::clamp(nv, r.min, r.max);
-        changed();
+        set_slider(app.focus, nv);
         return;
     }
     if (segmented_ctl(app.focus) && (key == VK_LEFT || key == VK_RIGHT)) {  // a segmented choice: the arrows step it

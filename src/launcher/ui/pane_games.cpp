@@ -139,6 +139,7 @@ void color_wheel(const Rect& r) {
 // A game's colour among the presets (the Games card's swatches; Custom… for any other): apart from the games' own colours
 // (theme_tokens.h kGamePalettes) and the sections' blue, red and yellow, so a game given one stands out.
 const uint32_t kColorPresets[] = {0x7a3db8, 0xc0267a, 0x4d7c0f, 0x8b5e34, 0x0e7490, 0x4b5563};
+const wchar_t* const kColorPresetNames[] = {L"Purple", L"Magenta", L"Olive", L"Brown", L"Teal blue", L"Slate"};
 static_assert(std::size(kColorPresets) == 6, "six presets");
 
 // A preset chosen on the Games card: the edited game's colour, at once.
@@ -188,7 +189,8 @@ void game_row(const Rect& r, size_t i) {
         cv.circle(swatch.x + 11, swatch.y + 11, 11.5f, col(app.c->label), false, 1.5f);
     if (focused(kColorGame) && app.focusOption == static_cast<int>(i))
         focus_ring(swatch, 11);
-    app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i), L"Change " + std::wstring(game->shortName) + L"’s colour"});
+    app.hits.push_back({kColorGame, swatch.inset(-4, -4), static_cast<int>(i), L"Change " + std::wstring(game->shortName) + L"’s colour",
+                        L"Change its colour"});
     const float tx = r.x + kGameTextX, tw = r.w - kGameTextX - kSwitchW - t::kSpace4;
     const float dh = desc.empty() ? 0 : cv.measure_height(desc, t::kCallout, tw);
     const float ty = r.y + (r.h - t::kBody.lineHeight - (dh > 0 ? 2 + dh : 0)) / 2;
@@ -204,7 +206,7 @@ void game_row(const Rect& r, size_t i) {
     if (!locked) {
         if (focused(kGameShown) && app.focusOption == static_cast<int>(i))
             focus_ring(sw, t::kRadiusSwitch);
-        app.hits.push_back({kGameShown, {tx, r.y, r.right() - tx, r.h}, static_cast<int>(i)});
+        app.hits.push_back({kGameShown, {tx, r.y, r.right() - tx, r.h}, static_cast<int>(i), L"", L"In the rail", shown ? 1 : 0});
     }
     app.drawnLabels.push_back({game->name, app.drawingSection, r});
 }
@@ -227,12 +229,12 @@ void color_row(const Rect& r) {
             cv.circle(s.x + d / 2, s.y + d / 2, d / 2 + 1, col(app.c->label), false, 2);
         if (focused(id) && (option < 0 || app.focusOption == option))
             focus_ring(s, d / 2);
-        app.hits.push_back({id, s.inset(-2, -2), option, tip});
+        app.hits.push_back({id, s.inset(-2, -2), option, tip, tip, chosen ? 1 : 0});
         x += d + 10;
     };
     swatch(kColorReset, -1, builtin_accent(game).accent_fill, !hasCustom, std::wstring(game.shortName) + L"’s own colour");
     for (int p = 0; p < static_cast<int>(std::size(kColorPresets)); ++p)
-        swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p], L"");
+        swatch(kColorPreset, p, kColorPresets[p], hasCustom && custom->second == kColorPresets[p], kColorPresetNames[p]);
     const bool other = hasCustom && std::find(std::begin(kColorPresets), std::end(kColorPresets), custom->second) == std::end(kColorPresets);
     const float bw = button_width(L"Custom…");
     if (other)  // a colour of its own: shown before Custom…

@@ -98,10 +98,10 @@ void apply_layers() {
 
 namespace {
 
-void mini_check(int option, const Rect& box, bool on, bool disabled) {
+void mini_check(int option, const Rect& box, bool on, bool disabled, const std::wstring& name, const std::wstring& tip) {
     switch_track(box, on, disabled);
     if (!disabled)
-        app.hits.push_back({kLayerOn, {box.x - 4, box.y - 4, box.w + 8, box.h + 8}, option});
+        app.hits.push_back({kLayerOn, {box.x - 4, box.y - 4, box.w + 8, box.h + 8}, option, tip, name, on ? 1 : 0});
 }
 
 void arrow_button(Ctl id, int option, const Rect& r, bool disabled) {
@@ -110,14 +110,15 @@ void arrow_button(Ctl id, int option, const Rect& r, bool disabled) {
     app.canvas.path(id == kLayerUp ? "M3 7.5L6 4.5l3 3" : "M3 4.5L6 7.5l3-3", {r.x + (r.w - 12) / 2, r.y + (r.h - 12) / 2, 12, 12},
                     12, col(disabled ? app.c->label_tertiary : app.c->label), 1.5f);
     if (!disabled)
-        app.hits.push_back({id, r, option});
+        app.hits.push_back({id, r, option, L"", id == kLayerUp ? L"Move up" : L"Move down"});  // the row says which layer
 }
 
 constexpr float kLayerControlsW = 40 + 14 + 32 + 4 + 32;
 
 // One movable layer's switch (disabled when locked) and its moves, at r (kLayerControlsW x 32).
-void layer_controls(const Rect& r, int index, bool on, bool switchLocked, bool canUp, bool canDown) {
-    mini_check(index, {r.x, r.y + 5, 40, 22}, on, switchLocked);
+void layer_controls(const Rect& r, const std::wstring& name, int index, bool on, bool switchLocked, bool canUp, bool canDown,
+                    const std::wstring& tip = {}) {
+    mini_check(index, {r.x, r.y + 5, 40, 22}, on, switchLocked, name, tip);
     arrow_button(kLayerUp, index, {r.x + 54, r.y, 32, 32}, !canUp);
     arrow_button(kLayerDown, index, {r.x + 90, r.y, 32, 32}, !canDown);
     if (focused(kLayerList) && app.layerRow == index)
@@ -166,8 +167,9 @@ Card layers_card() {
                 const PlannedLayer& l = app.layerPlan.layers[i];
                 const std::wstring desc = !l.lock.empty() ? widen(l.lock) : l.systemOn ? L"" : L"Off in Windows";
                 const bool on = l.on, locked = !l.lock.empty();
-                b.trailing(friendly_layer(l.name), desc, kLayerControlsW, 32,
-                           [=](const Rect& r) { layer_controls(r, i, on, locked, i > 0, i + 1 < n); });
+                const std::wstring name = friendly_layer(l.name);
+                b.trailing(name, desc, kLayerControlsW, 32,
+                           [=](const Rect& r) { layer_controls(r, name, i, on, locked, i > 0, i + 1 < n); });
             }
         } else {
             const int n = static_cast<int>(app.layersDraft.size());
@@ -178,7 +180,7 @@ Card layers_card() {
                     if (l.machine != machine)
                         continue;
                     if (!any) {
-                        b.group(machine ? L"All users (HKLM)" : L"This user (HKCU)");
+                        b.group(machine ? L"All users" : L"This user");
                         b.note(machine ? L"Changing these needs administrator rights: Windows asks once when you apply."
                                        : L"Windows loads these after the machine-wide ones.");
                     }
@@ -186,11 +188,14 @@ Card layers_card() {
                     const bool up = i > 0 && app.layersDraft[i - 1].machine == machine && app.layersDraft[i - 1].lock.empty() &&
                                     l.lock.empty();
                     const bool down = i + 1 < n && app.layersDraft[i + 1].machine == machine && l.lock.empty();
-                    std::wstring desc = l.lock.empty() ? std::wstring() : widen(l.lock) + L" · ";
-                    desc += l.name.empty() ? L"Unreadable manifest: " + l.manifest : l.manifest;
+                    // Its manifest's path is its switch's tip, not its line (no developer paths in the text).
+                    std::wstring desc = l.lock.empty() ? std::wstring() : widen(l.lock);
+                    if (l.name.empty())
+                        desc += (desc.empty() ? L"" : L" · ") + std::wstring(L"Its manifest can’t be read");
                     const bool on = l.on;
-                    b.trailing(friendly_layer(l.name, l.manifest), desc, kLayerControlsW, 32,
-                               [=](const Rect& r) { layer_controls(r, i, on, false, up, down); });
+                    const std::wstring name = friendly_layer(l.name, l.manifest), manifest = l.manifest;
+                    b.trailing(name, desc, kLayerControlsW, 32,
+                               [=](const Rect& r) { layer_controls(r, name, i, on, false, up, down, manifest); });
                 }
             }
             if (app.layersDraft.empty())

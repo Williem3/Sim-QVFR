@@ -40,6 +40,8 @@ inline constexpr float kSwitchW = t::kSwitchWidth, kSwitchH = t::kSwitchHeight;
 
 // controls.cpp
 void focus_ring(const Rect& r, float radius);
+// Text a screen reader reads where it is drawn (accessibility.cpp), in drawn order; `heading` 1-3 for a title.
+void reader_text(const Rect& r, const std::wstring& text, int heading = -1);
 bool focused(Ctl id);
 bool pointer_in(const Rect& r);
 float badge_width(const std::wstring& text);

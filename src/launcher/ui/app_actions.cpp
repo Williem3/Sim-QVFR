@@ -369,7 +369,7 @@ namespace {
 std::vector<FocusStop> drawn_order(bool panel = false) {
     static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kThemeToggle,
                                     kLaunch, kSupport, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
-                                    kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kDiagZip};
+                                    kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kDiagZip, kText};
     std::vector<FocusStop> out;
     for (const Hit& h : app.hits) {
         if (std::find(std::begin(kNotStops), std::end(kNotStops), h.id) != std::end(kNotStops) && !(panel && h.id == kSupport))

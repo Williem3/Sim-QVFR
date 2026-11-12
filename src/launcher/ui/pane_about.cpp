@@ -26,14 +26,19 @@ float about_pane(float x, float y, float w, bool draw) {
                                          : widen(SIM_QVFR_RELEASE) + L" · development build";
         app.canvas.text(L"Version " + version, t::kBody, {x, y + t::kTitle1.lineHeight + 8 + lh + 4, w, lh},
                         col(app.c->label_secondary));
+        reader_text({x, y, w, t::kTitle1.lineHeight}, L"Sim-QVFR Launcher", 2);
+        reader_text({x, y + t::kTitle1.lineHeight + 8, w, 2 * lh + 4},
+                    L"Starts " + game_name() + L" with foveated rendering enabled. Version " + version + L".");
     }
     h += t::kTitle1.lineHeight + 8 + lh + 4 + lh;
     // Support, before Updates so a short window still shows it: a line and a button that opens the Ko-fi page.
     const std::wstring support = L"If Sim-QVFR improves your races, you can support its development on Ko-fi.";
     const float sh = app.canvas.measure_height(support, t::kCallout, w);
-    if (draw)
+    if (draw) {
+        reader_text({x, y + h + t::kSpace6, w, sh}, support);
         app.canvas.text(support, t::kCallout, {x, y + h + t::kSpace6, w, sh + 2}, col(app.c->label_secondary),
                         Align::Leading, false, true);
+    }
     h += t::kSpace6 + sh + t::kSpace2;
     const float bw = button_width(L"Support on Ko-fi") + 24;
     if (draw)
@@ -108,6 +113,7 @@ float about_pane(float x, float y, float w, bool draw) {
     if (draw) {
         app.canvas.text(L"Experimental and unofficial. Use at your own risk.", t::kHeadline,
                         {x, y + h + t::kSpace6, w, 16}, col(app.c->label));
+        reader_text({x, y + h + t::kSpace6, w, 16 + t::kSpace2 + nh}, L"Experimental and unofficial. Use at your own risk. " + notice);
         app.canvas.text(notice, t::kCallout, {x, y + h + t::kSpace6 + 16 + t::kSpace2, w, nh + 2},
                         col(app.c->label_secondary), Align::Leading, false, true);
     }
@@ -124,6 +130,7 @@ float about_pane(float x, float y, float w, bool draw) {
     const float vh = app.canvas.measure_height(nvidia, t::kCallout, w);
     if (draw) {
         app.canvas.text(L"NVIDIA DLSS", t::kHeadline, {x, y + h + t::kSpace6, w, 16}, col(app.c->label));
+        reader_text({x, y + h + t::kSpace6, w, 16 + t::kSpace2 + vh}, L"NVIDIA DLSS. " + nvidia);
         app.canvas.text(nvidia, t::kCallout, {x, y + h + t::kSpace6 + 16 + t::kSpace2, w, vh + 2},
                         col(app.c->label_secondary), Align::Leading, false, true);
     }

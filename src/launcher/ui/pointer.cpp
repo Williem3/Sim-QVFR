@@ -28,7 +28,7 @@ namespace simqvfr::launcher::ui::win {
 
 const Hit* hit_at(float x, float y) {
     for (auto it = app.hits.rbegin(); it != app.hits.rend(); ++it)
-        if (it->r.contains(x, y))
+        if (it->id != kText && it->r.contains(x, y))
             return &*it;
     return nullptr;
 }

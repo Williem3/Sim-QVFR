@@ -42,6 +42,11 @@ uint32_t mix(uint32_t a, uint32_t b, float f) {
 
 }  // namespace
 
+void reader_text(const Rect& r, const std::wstring& text, int heading) {
+    if (!text.empty())
+        app.hits.push_back({kText, r, -1, L"", text, heading});
+}
+
 float badge_width(const std::wstring& text) { return 7 + 12 + 5 + std::ceil(app.canvas.measure(text, kBadgeStyle)) + 10; }
 
 float button_width(const std::wstring& label, const t::TypeStyle& style) {
@@ -93,7 +98,7 @@ void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const c
     }
     if (focused(id) && (option < 0 || app.focusOption == option))
         focus_ring(r, radius);
-    app.hits.push_back({id, r, option});
+    app.hits.push_back({id, r, option, L"", label});
 }
 
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {
@@ -207,7 +212,7 @@ void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, co
     }
     if (focused(id))
         focus_ring(s, t::kRadiusSwitch);
-    app.hits.push_back({id, r});
+    app.hits.push_back({id, r, -1, L"", label, checked ? 1 : 0, desc});
     help_icon(label, r.x + std::min(tw - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), ty);
     app.drawnLabels.push_back({label, app.drawingSection, r});
 }
@@ -247,7 +252,7 @@ void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& it
         if (on && focused(id))
             focus_ring(item, t::kRadiusControl - 2);
         if (!disabled)
-            app.hits.push_back({id, item, static_cast<int>(i)});
+            app.hits.push_back({id, item, static_cast<int>(i), L"", items[i], on ? 1 : 0});
         x = item.right() + 2;
     }
 }
@@ -281,7 +286,7 @@ void segmented(Ctl id, const Rect& r, int selected, bool disabled) {
         if (on && focused(id))
             focus_ring(item, t::kRadiusControl - 2);
         if (!disabled)
-            app.hits.push_back({id, item, i});
+            app.hits.push_back({id, item, i, L"", kColorNames[i], on ? 1 : 0});
         x += w + 2;
     }
 }

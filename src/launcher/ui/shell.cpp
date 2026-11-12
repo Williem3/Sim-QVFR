@@ -289,7 +289,7 @@ void rail(float H) {
             cv.path("M0 0L8 8L0 16Z", {W, y + blockH / 2 - 8, 16, 16}, 16, col(app.c->yellow), 0, true);  // 8 x 16
         if (selected && focused(kGameTab))
             cv.stroke(block.inset(3, 3), col(app.c->ink), 2, t::kRadiusControl);
-        app.hits.push_back({kGameTab, block, i, compact ? std::wstring(game.name) : std::wstring()});
+        app.hits.push_back({kGameTab, block, i, compact ? std::wstring(game.name) : std::wstring(), game.name, selected ? 1 : 0});
         y += blockH;
     }
     // Support on Ko-fi: a red circle with a heart.
@@ -323,7 +323,7 @@ void rail(float H) {
         cv.circle(cx + std::min(W / 2 - 6, cv.measure(version, t::kRailName) / 2 + 6), by + versionH / 2, 3, col(app.c->yellow), true);
     if (focused(kVersion))
         cv.stroke(vr.inset(6, -2), col(app.c->rail_text), 2, t::kRadiusControl);
-    app.hits.push_back({kVersion, vr, -1,
+    app.hits.push_back({kVersion, vr.inset(0, -4), -1,  // 24 high: the smallest target (WCAG 2.5.8)
                         app.update == Update::Available ? L"Sim-QVFR " + app.release.tag + L" is available: About and updates"
                                                         : L"About Sim-QVFR and updates"});
 }
@@ -392,7 +392,7 @@ void topbar(float W) {
         const std::wstring word = fit(status.word, t::kBodyMedium, statusW - 14);
         if (!word.empty())
             cv.text(word, t::kBodyMedium, {x + 14, sr.y, statusW - 14 + 2, sr.h}, c);
-        app.hits.push_back({status.link, sr, -1, status.text != status.word ? status.text : std::wstring()});
+        app.hits.push_back({status.link, sr, -1, status.text != status.word ? status.text : std::wstring(), status.text});
     }
     // The profile menu: the profile in use (Custom when the settings differ from every profile), a chevron.
     const float profileW = 12 + (withPrefix ? prefixW : 0) + nameW + chevronW + 4;
@@ -444,7 +444,7 @@ void topbar(float W) {
             cv.fill({r.x + tabPad - 4, H - 3, r.w - 2 * tabPad + 8, 3}, col(tab_color(tab)));
         if (selected && focused(kTopTab))
             focus_ring(r.inset(4, 12), t::kRadiusControl);
-        app.hits.push_back({kTopTab, r, i});
+        app.hits.push_back({kTopTab, r, i, L"", kTabLabels[i], selected ? 1 : 0});
         tx = r.right();
     }
 }

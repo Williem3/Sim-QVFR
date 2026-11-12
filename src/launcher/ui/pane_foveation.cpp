@@ -163,6 +163,7 @@ float preview_legend(float x, float y, float w, bool draw) {
 float readout(float x, float y, float w, const std::wstring& name, const std::wstring& value, bool draw,
               const std::wstring& of) {
     if (draw) {
+        reader_text({x, y, w, 20}, name + L": " + value + (of.empty() ? L"" : L" " + of));
         app.canvas.text(name, t::kBody, {x, y, w / 2, 20}, col(app.c->label_secondary));
         const float ow = of.empty() ? 0 : std::ceil(app.canvas.measure(of, t::kBody)) + 2;
         app.canvas.text(value, t::kBody, {x + w / 2, y, w / 2 - ow - (of.empty() ? 0 : 4), 20}, col(app.c->label), Align::Trailing);

@@ -119,10 +119,10 @@ constexpr Help kHelp[] = {
      L"the game may stutter slightly while it records."},
     {L"Frame capture",
      L"Saves the game’s own image and the composed output, as PNG files in the captures folder inside the logs folder. Each "
-     L"press saves one more frame, to compare the views where something looks wrong. For games composed by the D3D11 "
-     L"compositor (X-Plane 12, Assetto Corsa Competizione, Le Mans Ultimate)."},
+     L"press saves one more frame, to compare the views where something looks wrong. In X-Plane 12, Assetto Corsa "
+     L"Competizione and Le Mans Ultimate."},
     {L"Next launch without QVFR",
-     L"Starts the game once with its own two views and QVFR off, still measuring, so this page can compare the same race with "
+     L"Starts the game once with its own two views and QVFR off, still measuring, so Diagnostics can compare the same race with "
      L"and without QVFR. It turns itself off after that launch; the next one has QVFR again. The performance overlay works "
      L"in it, the settings menu does not."},
     {L"Presets for eye tracked foveation",
@@ -155,7 +155,7 @@ constexpr Help kHelp[] = {
      L"No Cheeky loader goes in the game folder: Sim-QVFR loads Cheeky’s runtime into the game itself."},
     {L"Frame generation (experimental)",
      L"Outside the center region frames are warped with the game’s motion. Lower scales use less GPU time and memory. With "
-     L"an eye-tracked focus (Foveation pane) the region follows your eyes too, through Cheeky’s OpenXR layer."},
+     L"an eye-tracked focus (the Foveation card) the region follows your eyes too, through Cheeky’s OpenXR layer."},
     {L"Placement", L"The settings menu stays 0.8 m in front of your head, wherever you look."},
     {L"Use DLSS",
      L"Sim-QVFR evaluates NVIDIA’s DLSS on each view, with depth and motion it works out from the game’s own frames, "

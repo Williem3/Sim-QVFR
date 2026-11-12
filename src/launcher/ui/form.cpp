@@ -62,6 +62,7 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
         if (draw) {
             app.canvas.text(title, t::kHeadline, {x + 2, y, w - 2, t::kHeadline.lineHeight}, col(app.c->heading));
             app.drawnLabels.push_back({title, title, {x, y, w, t::kHeadline.lineHeight}});
+            reader_text({x, y, w, t::kHeadline.lineHeight}, title, 3);
             // Then its ⓘ (the section's reference text, kHelp by its title) and when its settings apply.
             float tx = x + 2 + std::ceil(app.canvas.measure(title, t::kHeadline)) + 6;
             if (help_for(title)) {
@@ -86,6 +87,8 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
             const float rh = row_height(row, w);
             if (!row.label.empty())
                 app.drawnLabels.push_back({row.label, title, {box.x, ry, w, rh}});
+            if (!row.full && (!row.desc.empty() || !row.control))  // its text (a control is named by the label)
+                reader_text({box.x, ry, w, rh}, row.label + (row.desc.empty() ? L"" : (row.label.empty() ? L"" : L". ") + row.desc));
             if (i > 0)
                 app.canvas.line(box.x + kRowPadX, ry, box.right() - 1, ry, col(app.c->separator), 1);
             const Rect inner{box.x + kRowPadX, ry + kRowPadY, w - 2 * kRowPadX, rh - 2 * kRowPadY};
@@ -119,9 +122,11 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
     h += boxH;
     if (!footer.empty()) {
         const float fw = w - 4, fh = app.canvas.measure_height(footer, t::kSubheadline, fw);
-        if (draw)
+        if (draw) {
+            reader_text({x, y + h + t::kSpace2, w, fh}, footer);
             app.canvas.text(footer, t::kSubheadline, {x + 2, y + h + t::kSpace2, fw, fh + 2}, col(app.c->label_muted),
                             Align::Leading, false, true);
+        }
         h += t::kSpace2 + fh;
     }
     return h;

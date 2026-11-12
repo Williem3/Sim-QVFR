@@ -195,6 +195,8 @@ void Body::buttons(const std::wstring& label, const std::wstring& text, const st
 void Body::info(const std::wstring& label, const std::wstring& value) {
     gap();
     const float y = y_ + h_;
+    if (draw_)
+        reader_text({x_, y_ + h_, w_, kLineH}, label + L": " + value);
     if (draw_) {
         const float vw = std::ceil(app.canvas.measure(value, t::kValue)) + 2;
         app.canvas.text(label, t::kBody, {x_, y, w_ - vw - 8, kLineH}, col(app.c->label_secondary));
@@ -206,12 +208,14 @@ void Body::info(const std::wstring& label, const std::wstring& value) {
 
 // A row with its label and a line under it leading, and something `tw` x `th` trailing (painted at its rect).
 void Body::trailing(const std::wstring& label, const std::wstring& desc, float tw, float th,
-                    const std::function<void(const Rect&)>& paint) {
+                    const std::function<void(const Rect&)>& paint, const std::wstring& spoken) {
     gap();
     const float textW = std::max(60.0f, w_ - tw - 12);
     const float dh = desc.empty() ? 0 : app.canvas.measure_height(desc, t::kCallout, textW);
     const float h = std::max(kLineH + (dh > 0 ? 2 + dh : 0), th), y = y_ + h_;
     if (draw_) {
+        // Read before its control: what the row says (its value), or its line under the label.
+        reader_text({x_, y, w_, h}, !spoken.empty() ? spoken : desc.empty() ? L"" : label + L". " + desc);
         app.canvas.text(label, t::kBody, {x_, y, textW, kLineH}, col(app.c->label));
         help_icon(label, x_ + std::min(textW - 14, std::ceil(app.canvas.measure(label, t::kBody)) + 6), y);
         if (dh > 0)
@@ -232,6 +236,7 @@ void Body::row(const std::wstring& label, const std::wstring& desc, const std::w
         const float dh = desc.empty() ? 0 : app.canvas.measure_height(desc, t::kCallout, w_);
         const float h = kLineH + 2 + vh + (dh > 0 ? 2 + dh : 0);
         if (draw_) {
+            reader_text({x_, y, w_, h}, label + L": " + value + (desc.empty() ? L"" : L". " + desc));
             app.canvas.text(label, t::kBody, {x_, y, w_, kLineH}, col(app.c->label));
             help_icon(label, x_ + std::ceil(app.canvas.measure(label, t::kBody)) + 6, y);
             app.canvas.text(value, t::kValue, {x_, y + kLineH + 2, w_, vh + 2}, col(app.c->label), Align::Leading, false, true);
@@ -243,14 +248,19 @@ void Body::row(const std::wstring& label, const std::wstring& desc, const std::w
         h_ += h;
         return;
     }
-    trailing(label, desc, vw, kLineH, [value](const Rect& r) {
-        if (!value.empty())
-            app.canvas.text(value, t::kValue, r, col(app.c->label), Align::Trailing);
-    });
+    trailing(
+        label, desc, vw, kLineH,
+        [value](const Rect& r) {
+            if (!value.empty())
+                app.canvas.text(value, t::kValue, r, col(app.c->label), Align::Trailing);
+        },
+        label + (value.empty() ? L"" : L": " + value) + (desc.empty() ? L"" : L". " + desc));
 }
 
 void Body::status(const std::wstring& label, const std::wstring& desc, int tone, const std::wstring& text) {
-    trailing(label, desc, badge_width(text), 20, [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); });
+    trailing(
+        label, desc, badge_width(text), 20, [tone, text](const Rect& r) { badge(r.x, r.y, tone, text); },
+        label + L": " + text + (desc.empty() ? L"" : L". " + desc));
 }
 
 void Body::action(const std::wstring& label, const std::wstring& desc, Ctl id, const std::wstring& button, int option,
@@ -284,22 +294,28 @@ void Body::actions(const std::vector<ButtonSpec>& list) {
 void Body::note(const std::wstring& text) {
     gap();
     const float th = app.canvas.measure_height(text, t::kCallout, w_);
-    if (draw_)
+    if (draw_) {
+        reader_text({x_, y_ + h_, w_, th}, text);
         app.canvas.text(text, t::kCallout, {x_, y_ + h_, w_, th + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+    }
     h_ += th;
 }
 
 void Body::chip(int tone, const std::wstring& text) {
     gap();
-    if (draw_)
+    if (draw_) {
+        reader_text({x_, y_ + h_, w_, 22}, text);
         badge(x_, y_ + h_ + 1, tone, text, w_);
+    }
     h_ += 22;
 }
 
 void Body::group(const std::wstring& text) {
     gap();
-    if (draw_)
+    if (draw_) {
+        reader_text({x_, y_ + h_, w_, t::kFootnote.lineHeight}, text, 3);
         app.canvas.text(text, t::kFootnote, {x_, y_ + h_, w_, t::kFootnote.lineHeight}, col(app.c->label_muted));
+    }
     h_ += t::kFootnote.lineHeight;
 }
 
@@ -386,7 +402,7 @@ void Body::more(const std::wstring& label, const std::vector<std::wstring>& hidd
                         col(app.c->accent), 1.5f);
         if (focused(kMore) && app.focusOption == index)
             focus_ring(r, t::kRadiusControl);
-        app.hits.push_back({kMore, r, index});
+        app.hits.push_back({kMore, r, index, L"", text, open ? 1 : 0});
         if (!open)
             for (const std::wstring& l : hiddenLabels)
                 app.drawnLabels.push_back({l, app.drawingSection, {x_, y, w_, h}, L"", key});
@@ -414,6 +430,15 @@ void draw_card(const Card& card, const Rect& r, int index) {
     Canvas& cv = app.canvas;
     cv.fill(r, col(app.c->surface), t::kRadiusGroup);
     const float hy = r.y + 14;
+    {  // read as a heading: its title, its chip, when it applies
+        std::wstring spoken = card.title;
+        if (!card.chip.empty())
+            spoken += L", " + card.chip;
+        if (card.applies != Applies::None)
+            spoken += card.applies == Applies::Live ? L", live" : card.applies == Applies::LiveLowered ? L", live when lowered"
+                                                                                                      : L", next launch";
+        reader_text({r.x, r.y, r.w, kHeaderH}, spoken, 2);
+    }
     section_shape(card.section, r.x + kPad + 5, hy + 11, 10);
     float right = r.right() - kPad;
     if (card.reset) {  // the ⋯ menu
@@ -453,9 +478,11 @@ void draw_card(const Card& card, const Rect& r, int index) {
 }  // namespace
 
 float card_grid(const std::vector<Card>& cards, float x, float y, float w, bool draw) {
-    const float W = app.canvas.width();
-    const int cols = W >= 1400 ? 3 : W >= 1024 ? 2 : 1;
-    const float gap = 16, cw = std::floor((w - gap * (cols - 1)) / cols);
+    // As many columns of at least kCardMinW as fit, up to four: 3 at 1440 px, 2 at 1024 to 1280, 4 at 1920.
+    constexpr float kCardMinW = 360;
+    const float gap = 16;
+    const int cols = std::clamp(static_cast<int>((w + gap) / (kCardMinW + gap)), 1, 4);
+    const float cw = std::floor((w - gap * (cols - 1)) / cols);
     std::vector<float> colY(static_cast<size_t>(cols), 0.0f);
     for (const Card& card : cards) {
         const size_t c = static_cast<size_t>(std::min_element(colY.begin(), colY.end()) - colY.begin());

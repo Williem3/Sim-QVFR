@@ -116,7 +116,9 @@ enum Ctl {
     kReportOpen, kPanelClose, kColorPreset, kColorCustom,
     // The Overview: the profile's segments (option: a preset's index, or Custom), a summary card (option: its index in
     // app.overviewTargets) and the Ko-fi tile.
-    kOverviewProfile, kOverviewCard, kKofiTile
+    kOverviewProfile, kOverviewCard, kKofiTile,
+    // Text a screen reader reads (reader_text): never a click target or a Tab stop.
+    kText
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -146,6 +148,13 @@ inline constexpr UINT kHashedMessage = WM_APP + 1;
 // The update check, done on a worker: its message carries a new UpdateResult.
 inline constexpr UINT kUpdateMessage = WM_APP + 2;
 
+// A screen reader's action, posted to the window (accessibility.cpp): a control pressed (wParam its Ctl, lParam its
+// option), as a click would; a slider set (wParam its Ctl, lParam the value), as the arrow keys would.
+inline constexpr UINT kAccessActivateMessage = WM_APP + 5, kAccessValueMessage = WM_APP + 6;
+
+// A screen reader chose an item of the open pop-up menu (wParam its index).
+inline constexpr UINT kAccessMenuMessage = WM_APP + 7;
+
 // Dev: a development build (no version to compare): the newest release is shown, not offered as an update.
 enum class Update { Off, Checking, UpToDate, Available, Dev, Failed };
 
@@ -174,6 +183,11 @@ struct Hit {
     Rect r;
     int option = -1;  // a page, a segment, a popup item
     std::wstring tip;  // shown under it while the pointer is over it (help_tip), if any
+    // For screen readers (accessibility.cpp): its own name (a button's label, a segment's item; empty: the row's label),
+    // and its state as drawn (a switch: 0 off, 1 on; a segment, tab or game: 1 the chosen one; -1 none).
+    std::wstring name;
+    int state = -1;  // kText: its heading level (1-3), -1 none
+    std::wstring desc;  // a switch's line under its label
 };
 
 // A label as last drawn (form.cpp section, controls.cpp checkbox): its text, its section's title and its row. Find a
@@ -546,6 +560,12 @@ void open_panel(PanelKind kind);
 void close_panel();
 void panel_overlay();
 
+// accessibility.cpp: UI Automation (screen readers): the window's provider (WM_GETOBJECT), the focus and state events
+// after each paint, and letting go of it when the window closes.
+bool accessibility_object(HWND hwnd, WPARAM wParam, LPARAM lParam, LRESULT& result);  // false: not UIA's request
+void accessibility_after_paint();
+void accessibility_close();
+
 // overview.cpp: the Overview tab, and its profile segments (the presets, then Custom) and the one chosen.
 float overview_page(float x, float y, float w, bool draw);
 int overview_profile(std::vector<std::wstring>& items);
@@ -638,6 +658,7 @@ void undo_restore();
 
 // input.cpp
 void activate(Ctl id, int option);
+void set_slider(Ctl id, int value);
 float dip(LPARAM lp, bool y);
 void on_key(WPARAM key);
 

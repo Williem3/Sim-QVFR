@@ -99,7 +99,7 @@ void profile_segments(const Rect& r) {
         if (on && focused(kOverviewProfile))
             focus_ring(item, t::kRadiusControl - 2);
         app.hits.push_back({kOverviewProfile, item, static_cast<int>(i),
-                            i + 1 == items.size() ? L"Saved profiles and more: the profile menu" : L""});
+                            i + 1 == items.size() ? L"Saved profiles and more: the profile menu" : L"", L"Profile: " + items[i], on ? 1 : 0});
         x = item.right() + 2;
     }
 }
@@ -146,7 +146,7 @@ void session_chart(const Rect& r, const std::vector<const SessionRecord*>& sessi
             cv.line(r.x + dx, ty, r.x + std::min(r.w, dx + 6), ty, col(app.c->red), 2);
     }
     cv.fill({r.x, base, r.w, 2}, col(app.c->label));
-    app.hits.push_back({kNone, r, -1, tip});
+    app.hits.push_back({kNone, r, -1, tip, tip});
 }
 
 // The panel: the yellow header with the game's name, the profile and the summary, then the last session (its numbers
@@ -173,6 +173,7 @@ float game_panel(float x, float y, float w, bool draw) {
         cv.path("M0 10L5 0.5L10 10Z", {x + kPad, y + kPad + 2, 10, 10}, 10, col(app.c->ink), 0, true);
         cv.text(L"Selected game", t::kFootnote, {x + kPad + 16, y + kPad, inner - 16, 14}, col(app.c->ink));
         cv.text(name, kGameTitle, {x + kPad, y + kPad + 22, inner, nameH + 2}, col(app.c->ink), Align::Leading, false, true);
+        reader_text(head, L"Selected game: " + name, 1);
     }
     float by = y + headH + kPad;
     // The profile and what the picture is.
@@ -184,13 +185,17 @@ float game_panel(float x, float y, float w, bool draw) {
     by += 34 + 10;
     const std::wstring summary = picture_summary(), saved = saved_profile_line();
     const float sh = cv.measure_height(summary, t::kCallout, inner);
-    if (draw)
+    if (draw) {
+        reader_text({x + kPad, by, inner, sh}, summary);
         cv.text(summary, t::kCallout, {x + kPad, by, inner, sh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+    }
     by += sh;
     if (!saved.empty()) {
         const float ph = cv.measure_height(saved, t::kCallout, inner);
-        if (draw)
+        if (draw) {
+            reader_text({x + kPad, by + 2, inner, ph}, saved);
             cv.text(saved, t::kCallout, {x + kPad, by + 2, inner, ph + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+        }
         by += 2 + ph;
     }
     by += 16;
@@ -201,6 +206,7 @@ float game_panel(float x, float y, float w, bool draw) {
     const std::vector<const SessionRecord*> sessions = game_sessions();
     if (draw) {
         cv.text(L"Last session", t::kFootnote, {x + kPad, by + 2, inner, 14}, col(app.c->label));
+        reader_text({x + kPad, by, inner, 18}, sessions.empty() ? L"Last session" : L"Last session, " + short_time(sessions.front()->time), 3);
         if (!sessions.empty())
             cv.text(short_time(sessions.front()->time), t::kCallout, {x + kPad, by, inner, 18}, col(app.c->label_secondary),
                     Align::Trailing);
@@ -209,8 +215,10 @@ float game_panel(float x, float y, float w, bool draw) {
     if (sessions.empty()) {
         const std::wstring empty = L"No sessions yet. Launch " + game_name() + L" from here and this fills in while you drive.";
         const float eh = cv.measure_height(empty, t::kCallout, inner);
-        if (draw)
+        if (draw) {
+            reader_text({x + kPad, by, inner, eh}, empty);
             cv.text(empty, t::kCallout, {x + kPad, by, inner, eh + 2}, col(app.c->label_secondary), Align::Leading, false, true);
+        }
         by += eh;
     } else {
         const SessionRecord& last = *sessions.front();
@@ -231,6 +239,11 @@ float game_panel(float x, float y, float w, bool draw) {
         float labelH = 0;
         for (const Figure& f : figures)
             labelH = std::max(labelH, cv.measure_height(f.label, t::kCallout, colW - 6));
+        if (draw) {
+            reader_text({x + kPad, by, inner, t::kBigNumber.lineHeight + 2 + labelH},
+                        figures[0].value + L" " + figures[0].label + L"; " + figures[1].value + L" " + figures[1].label + L"; " +
+                            figures[2].value + L" " + figures[2].label);
+        }
         if (draw)
             for (int i = 0; i < 3; ++i) {
                 const float fx = x + kPad + i * colW;
@@ -428,7 +441,12 @@ void draw_tile(const Tile& tile, const Rect& r) {
         badge(r.x + kTilePad, y + 8 + 1, tile.tone, tile.chip, inner);
     if (focused(kOverviewCard) && app.focusOption == index)
         focus_ring(r, t::kRadiusGroup);
-    app.hits.push_back({kOverviewCard, r, index});
+    // Read as a whole: its title, its lines and its chip.
+    std::wstring spoken = tile.title;
+    for (const std::wstring* part : {&tile.line1, &tile.line2, &tile.chip})
+        if (!part->empty())
+            spoken += L". " + *part;
+    app.hits.push_back({kOverviewCard, r, index, L"", spoken});
 }
 
 // The Ko-fi tile: dark and quiet, among the Game cards.
@@ -441,7 +459,7 @@ void kofi_tile(const Rect& r) {
     if (pointer_in(r))
         cv.stroke(r.inset(0.5f, 0.5f), col(app.c->rail_text_muted), 1, t::kRadiusGroup);
     const float inner = r.w - 2 * kTilePad;
-    const std::wstring line = L"Made by one sim racer, in spare time.";
+    const std::wstring line = L"Made by one sim racer, in spare time.";  // its hit's name says what it does
     const float lh = cv.measure_height(line, t::kCallout, inner - 20);
     cv.text(line, t::kCallout, {r.x + kTilePad, r.y + kTilePad, inner - 20, lh + 2}, col(app.c->rail_text), Align::Leading, false,
             true);
@@ -450,12 +468,13 @@ void kofi_tile(const Rect& r) {
     cv.text(L"Support on Ko-fi", t::kTabLabel, {r.x + kTilePad + 22, by, inner - 22, 18}, col(app.c->rail_text));
     if (focused(kKofiTile))
         focus_ring(r, t::kRadiusGroup);
-    app.hits.push_back({kKofiTile, r, -1, L"Support Sim-QVFR on Ko-fi (opens ko-fi.com)"});
+    app.hits.push_back({kKofiTile, r, -1, L"Support Sim-QVFR on Ko-fi (opens ko-fi.com)", L"Support Sim-QVFR on Ko-fi"});
 }
 
 // A group's header: its section's shape, its name in capitals and a rule in its colour to the right edge.
 float group_header(Tab tab, float x, float y, float w, bool draw) {
     if (draw) {
+        reader_text({x, y, w, 22}, tab_label(tab), 2);
         section_shape(tab, x + 6, y + 11, 12);
         const std::wstring label = tab_label(tab);
         const float lw = std::ceil(app.canvas.measure(label, t::kTabLabel));

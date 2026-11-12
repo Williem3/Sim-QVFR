@@ -346,7 +346,28 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         break;
     case WM_GETDLGCODE:
         return DLGC_WANTALLKEYS;
+    case WM_GETOBJECT: {  // a screen reader asks for the window's elements
+        LRESULT result = 0;
+        if (accessibility_object(hwnd, wParam, lParam, result))
+            return result;
+        break;
+    }
+    case kAccessActivateMessage:  // a screen reader pressed, toggled or chose a control
+        activate(static_cast<Ctl>(wParam), static_cast<int>(lParam));
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    case kAccessValueMessage:  // a screen reader set a slider
+        set_slider(static_cast<Ctl>(wParam), static_cast<int>(lParam));
+        return 0;
+    case kAccessMenuMessage:  // a screen reader chose an item of the open pop-up menu
+        if (app.popup.open && static_cast<size_t>(wParam) < app.popup.items.size()) {
+            app.popup.hover = static_cast<int>(wParam);
+            close_popup(true);
+        }
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
     case WM_DESTROY:
+        accessibility_close();
         PostQuitMessage(0);
         return 0;
     }

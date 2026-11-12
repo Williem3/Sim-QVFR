@@ -181,6 +181,7 @@ void paint() {
     place_report_edit();
     place_sheet_edit();
     place_search_edit();
+    accessibility_after_paint();  // a screen reader hears the focus move and the focused control change
 }
 
 }  // namespace simqvfr::launcher::ui::win
