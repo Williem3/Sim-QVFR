@@ -12,8 +12,11 @@ struct Region {
     bool operator==(const Region&) const = default;
 };
 
-// The model works on no less than this each way (the runtime's features start there).
-inline constexpr unsigned kMinWorking = 64;
+// The model works on no less than this each way. Runtime 310.8.0.0 hangs the GPU at its first evaluation of a 64x64
+// feature (tests/ngx_dlssnr_check.cpp "small": 78x64 and 64x96 run, 64x64 loses the device; the third headset run met
+// it with the periphery covered 20%), so the least is well above that. Nothing is saved under it either: an evaluation
+// costs about 2 ms whatever its size below a third of a megapixel.
+inline constexpr unsigned kMinWorking = 128;
 
 // `percent` of a view width x height each way, centred on (u, v) (fractions of the view, v down) and moved to stay
 // inside it; whole pixels, even sizes. 100 or more: the whole view. A view smaller than kMinWorking each way: itself.

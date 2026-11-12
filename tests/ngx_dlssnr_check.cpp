@@ -444,6 +444,27 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
             return 1;
     }
 
+    // "small" as the third argument: only the smallest sizes, largest first, each said before it runs (one that hangs the
+    // GPU is then the last line). The third headset run's device hung when a view came to be worked at 64x64.
+    if (argc > 3 && std::wcscmp(argv[3], L"small") == 0) {
+        struct Size {
+            UINT w, h;
+        };
+        for (const Size s : {Size{260, 209}, Size{182, 146}, Size{130, 104}, Size{128, 128}, Size{96, 96}, Size{78, 64}, Size{64, 96},
+                             Size{64, 64}}) {
+            std::printf("  %ux%u ...", s.w, s.h);
+            std::fflush(stdout);
+            double tms = 0, cms = 0;
+            const bool ran = run(rt, Tuning{"small"}, s.w, s.h, s.w, s.h, 0, 0, 12, nullptr, nullptr, &tms, &cms);
+            std::printf(" %s: %.2f ms an evaluation, feature made in %.0f ms, device 0x%08x\n", ran ? "ran" : "DID NOT RUN", tms, cms,
+                        unsigned(device->GetDeviceRemovedReason()));
+            std::fflush(stdout);
+            if (!ran)
+                break;
+        }
+        return 0;
+    }
+
     // 1. Does it run, and does it change the picture?
     constexpr UINT size = 512;
     std::vector<float> original, baseline;

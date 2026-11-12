@@ -39,8 +39,9 @@ int SIM_QVFR_TEST_MAIN() {
         const nr::Region odd = nr::covered(1999, 1801, 0.5, 0.5, 33);
         check(odd.width % 2 == 0 && odd.height % 2 == 0 && odd.x + odd.width <= 1999 && odd.y + odd.height <= 1801,
               "covered: even sizes, inside the view");
-        const nr::Region tiny = nr::covered(200, 100, 0.5, 0.5, 20);
+        const nr::Region tiny = nr::covered(400, 300, 0.5, 0.5, 20);
         check(tiny.width == nr::kMinWorking && tiny.height == nr::kMinWorking, "covered: never under the smallest working size");
+        check(nr::kMinWorking >= 128, "the smallest working size is clear of the 64x64 that hangs the runtime");
         const nr::Region nan = nr::covered(2000, 1800, std::nan(""), 0.5, 50);
         check(nan.x == 500, "covered: a centre that is no number is the view's centre");
         // A gaze that moves a pixel moves the part a pixel: its size is steady (one feature, its history kept).
@@ -50,7 +51,7 @@ int SIM_QVFR_TEST_MAIN() {
     // The working size.
     check(nr::working(1600, 100) == 1600 && nr::working(1600, 50) == 800 && nr::working(1600, 25) == 400,
           "working: the percent of the region each way");
-    check(nr::working(200, 25) == nr::kMinWorking && nr::working(40, 50) == 40 && nr::working(1600, 400) == 1600,
+    check(nr::working(400, 25) == nr::kMinWorking && nr::working(40, 50) == 40 && nr::working(1600, 400) == 1600,
           "working: no smaller than the runtime's least, no larger than the region");
     // The limit on what a view's model works on.
     {
@@ -60,7 +61,7 @@ int SIM_QVFR_TEST_MAIN() {
         w = 900, h = 900;
         check(!nr::limit_working(w, h, 1.0) && w == 900 && h == 900, "limit: a view under it is left alone");
         w = 4000, h = 100;
-        check(nr::limit_working(w, h, 0.3) && h >= nr::kMinWorking, "limit: no side under the runtime's least");
+        check(nr::limit_working(w, h, 0.3) && h == 100, "limit: a side already under the least is left, not shrunk");
     }
     // The focus view's place from its remap (x' = a x + b w): the eye's clip (-b/a, -d/c) is its centre.
     {

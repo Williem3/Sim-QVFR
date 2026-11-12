@@ -688,7 +688,7 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         if (n.on && !menu.values.dlss.on)
             notes.push_back(L"Runs with DLSS on (the DLSS page): it takes DLSS's depth and motion");
         if (n.on)
-            notes.push_back(L"About 2 ms of GPU and 130 MB of video memory a megapixel worked on, each view");
+            notes.push_back(L"Each view: 2 ms of GPU at least, about 2 ms and 130 MB a megapixel worked on");
         if (n.on)
             notes.push_back(L"Preset, working sizes, coverage and order rebuild it: a short stutter");
         return notes;

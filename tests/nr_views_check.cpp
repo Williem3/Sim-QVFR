@@ -31,6 +31,7 @@
 
 #include "engine/dlss_math.h"
 #include "engine/dlss_views.h"
+#include "engine/ngx_nr.h"
 #include "engine/nr_math.h"
 #include "engine/nr_views.h"
 #include "log.h"
@@ -317,6 +318,29 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         const Diff edge = diff(out, came, W, vx + vw / 4, vy, vw / 2, 2);
         std::printf("     a focus view with the periphery on: its top rows vs as they came: mean %.5f\n", edge.mean);
         check(edge.mean > 0.0005, "with the periphery processed the focus view's edge doesn't fade");
+    }
+    {  // the third headset run: the periphery covered 20% of a small eye's view came to 64x64, which hangs the runtime.
+       // Now no working size is under 128 a side; and a lost device (made here) is started again from.
+        simqvfr::NrSettings s = base;
+        s.periphery = true;
+        s.peripheryScale = 25;
+        s.peripheryCoverage = 20;
+        run(s, 0, 6, out);
+        unsigned region[4] = {}, working[2] = {};
+        const bool have = simqvfr::nr_view_for_checks(0, region, working);
+        std::printf("     an eye's view of %ux%u covered 20%% at 25%%: region %ux%u worked at %ux%u\n", vw, vh, region[2], region[3], working[0],
+                    working[1]);
+        check(have && working[0] >= simqvfr::nr::kMinWorking && working[1] >= simqvfr::nr::kMinWorking,
+              "the smallest settings still work at 128 a side or more");
+        const unsigned long long before = simqvfr::nr_evaluations_total();
+        simqvfr::ngxnr::lose_device_for_tests();
+        std::vector<float> lost;
+        run(s, 0, 12, lost, false);  // fails, is noticed at a frame's end, starts again
+        const unsigned long long during = simqvfr::nr_evaluations_total() - before;
+        const bool again = run(s, 0, 6, lost, false);
+        std::printf("     after our device was lost: %llu evaluations in the 12 frames around it, then %s\n", during,
+                    again ? "every frame evaluated" : "NOT every frame");
+        check(simqvfr::nr_wanted() && again, "a lost Direct3D 12 device is started again from, without a new launch");
     }
     {  // live changes
         simqvfr::NrSettings s = base;

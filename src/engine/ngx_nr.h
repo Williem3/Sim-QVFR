@@ -69,6 +69,11 @@ bool evaluate(ID3D11DeviceContext* context, View* view, const Evaluation& e, uns
 inline constexpr unsigned kBehind = 0x4e520001;
 inline constexpr unsigned kBacklog = 24;  // six frames of four views
 
+// Our Direct3D 12 device is lost (hung or removed): no evaluation will succeed until shutdown() and a new start().
+bool device_lost();
+// Tests: our device removed, as a hang leaves it.
+void lose_device_for_tests();
+
 // This process's video memory on the game's graphics card, in MB: in use, and what Windows lets it use before it
 // starts moving memory off the card. False: not known.
 bool video_memory(double& usedMb, double& budgetMb);

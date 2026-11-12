@@ -384,7 +384,7 @@ void release(ID3D11DeviceContext* context, View* v, IUnknown* const* keep, unsig
     // The game's device signals once it has run everything queued so far: every draw into the view's inputs, every
     // read of its output.
     ComPtr<ID3D11DeviceContext4> context4;
-    if (context && s.releaseFence11 && SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&context4)))) {
+    if (context && s.releaseFence11 && !device_lost() && SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&context4)))) {
         v->releaseValue = ++s.releaseValue;
         context4->Signal(s.releaseFence11.Get(), v->releaseValue);
     } else {
@@ -413,6 +413,14 @@ void collect() {
 }
 
 unsigned pending_releases() { return static_cast<unsigned>(s.released.size()); }
+
+bool device_lost() { return s.device && FAILED(s.device->GetDeviceRemovedReason()); }
+
+void lose_device_for_tests() {
+    ComPtr<ID3D12Device5> device5;
+    if (s.device && SUCCEEDED(s.device.As(&device5)))
+        device5->RemoveDevice();
+}
 
 bool video_memory(double& usedMb, double& budgetMb) {
     DXGI_QUERY_VIDEO_MEMORY_INFO info{};
@@ -510,8 +518,12 @@ double take_gpu_ms(View* v) {
 void shutdown(ID3D11DeviceContext* context) {
     // Both devices through all that is queued: the game's (flushed here; its signal on the release fence comes after
     // everything before it) and ours.
+    // A lost device has nothing queued that could still run: everything of it is released in full (a Direct3D 12
+    // device is one object a process and adapter while anything holds it, so one reference left would hand the lost
+    // device back to the next start()).
+    const bool lost = device_lost();
     bool idle = true;
-    if (s.queue && s.fence && s.event) {
+    if (!lost && s.queue && s.fence && s.event) {
         ComPtr<ID3D11DeviceContext4> context4;
         UINT64 let = 0;
         if (context && s.releaseFence11 && SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&context4)))) {
@@ -529,10 +541,13 @@ void shutdown(ID3D11DeviceContext* context) {
         }
         idle = idle && s.fence->GetCompletedValue() != UINT64_MAX;
     }
+    if (lost)
+        simqvfr::logf("ngx nr: its Direct3D 12 device is lost: everything of it released (%u released views among it)",
+                      static_cast<unsigned>(s.released.size()));
     if (!idle) {
-        // Work of ours still queued on a device, or a device lost: nothing is destroyed. Left to the process's end.
-        simqvfr::logf("ngx nr: the GPU didn't finish DLSS-NR's work within 3 s of the session's end (or its device is lost): its "
-                      "Direct3D 12 objects (%u released views among them) are left as they are, not destroyed",
+        // Work of ours still queued on a live device: nothing is destroyed. Left to the process's end.
+        simqvfr::logf("ngx nr: the GPU didn't finish DLSS-NR's work within 3 s: its Direct3D 12 objects (%u released views among "
+                      "them) are left as they are, not destroyed",
                       static_cast<unsigned>(s.released.size()));
         (void)s.device.Detach();
         (void)s.device11.Detach();
@@ -582,6 +597,8 @@ void release(ID3D11DeviceContext*, View*, IUnknown* const*, unsigned) {}
 void collect() {}
 unsigned pending_releases() { return 0; }
 bool video_memory(double&, double&) { return false; }
+bool device_lost() { return false; }
+void lose_device_for_tests() {}
 Textures textures(View*) { return {}; }
 bool evaluate(ID3D11DeviceContext*, View*, const Evaluation&, unsigned& result) {
     result = 0;

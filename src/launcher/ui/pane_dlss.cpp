@@ -115,7 +115,8 @@ float own_nr_pane(float x, float y, float w, bool draw) {
                  L"result.";
     Row periphery;
     const std::wstring peripheryDesc = L"Off, only the focus views are processed: where you look. On, the periphery too, at "
-                                       L"its own working size and coverage below.";
+                                       L"its own working size and coverage below. It adds about 2 ms of GPU time per eye at "
+                                       L"least, however small you make it.";
     periphery.fullHeight = [peripheryDesc](float width) { return checkbox_height(peripheryDesc, width); };
     periphery.full = [peripheryDesc, off, on = n.periphery](const Rect& r) {
         checkbox(kNrPeriphery, r, on, L"Periphery too", peripheryDesc, off);

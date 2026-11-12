@@ -176,7 +176,9 @@ struct State {
     bool haveLastFrameEnd = false, ranThisFrame = false, madeThisFrame = false;
     int slowFrames = 0;
     unsigned long long behind = 0;  // evaluations left out since the last line: the GPU had a backlog of ours
-    bool limitLogged[4] = {}, memoryLogged = false;
+    unsigned limitLogged[4][2] = {};  // the limited working size last said for the view
+    bool memoryLogged = false, smallLogged[4] = {};
+    int restarts = 0;  // times our device was lost and DLSS-NR started again this session
     unsigned long long evaluations = 0, failures = 0, remade = 0, statsFrame = 0, evaluationsTotal = 0;
     bool firstLogged[4] = {};
     std::mutex mutex;
@@ -523,12 +525,19 @@ bool nr_run_view(ID3D11DeviceContext* context, const NrView& v) {
     const int scale = eye ? d.cfg.peripheryScale : d.cfg.focusScale;
     unsigned ww = nr::working(region.width, scale), wh = nr::working(region.height, scale);
     const unsigned askedW = ww, askedH = wh;
-    if (nr::limit_working(ww, wh, d.cfg.workingLimit / 10.0) && !d.limitLogged[v.index]) {
-        d.limitLogged[v.index] = true;
+    if (nr::limit_working(ww, wh, d.cfg.workingLimit / 10.0) && (d.limitLogged[v.index][0] != ww || d.limitLogged[v.index][1] != wh)) {
+        d.limitLogged[v.index][0] = ww, d.limitLogged[v.index][1] = wh;
         say("view %d: %d%% of its %ux%u region would be %ux%u (%.2f megapixels): worked at %ux%u, the limit of %.1f megapixels a "
             "view (working_limit)",
             v.index, scale, region.width, region.height, askedW, askedH, askedW * static_cast<double>(askedH) / 1e6, ww, wh,
             d.cfg.workingLimit / 10.0);
+    }
+    if (ww < nr::kMinWorking || wh < nr::kMinWorking) {  // a view smaller than the model can work at: left as it came
+        if (!d.smallLogged[v.index])
+            say("view %d: its %ux%u region is under the %ux%u the model needs: not processed", v.index, region.width, region.height,
+                nr::kMinWorking, nr::kMinWorking);
+        d.smallLogged[v.index] = true;
+        return false;
     }
     Slot& s = d.slots[v.index];
     if (s.refused && s.region.width == region.width && s.region.height == region.height && s.workingW == ww && s.workingH == wh &&
@@ -671,6 +680,22 @@ void nr_frame_end(unsigned long long frame) {
             if (s.view)
                 release_slot(s);
     }
+    // Our Direct3D 12 device lost (a hang): everything of it is dropped, and DLSS-NR starts again on a new device, twice
+    // a session at most (a third loss leaves it off until it is switched off and on).
+    if (d.ready && ngxnr::device_lost()) {
+        for (Slot& s : d.slots)
+            release_slot(s);
+        ComPtr<ID3D11DeviceContext> context;
+        if (d.device)
+            d.device->GetImmediateContext(&context);
+        ngxnr::shutdown(context.Get());
+        d.ready = false;
+        d.createFailures = d.failuresInARow = d.slowFrames = 0;
+        const bool again = d.restarts < 2;
+        ++d.restarts;
+        say("its Direct3D 12 device was lost: %s", again ? "starting again on a new one" : "off until it is switched off and on again");
+        d.off = !again;
+    }
     NrSettings live;
     bool take = false;
     {
@@ -707,9 +732,9 @@ void nr_frame_end(unsigned long long frame) {
                 d.off = false;  // on again: a session's earlier refusal is tried once more
                 d.createFailures = d.failuresInARow = d.slowFrames = 0;
             }
-            if (remakes) {  // new sizes: said again, and a refusal for memory tried again
-                std::memset(d.limitLogged, 0, sizeof(d.limitLogged));
+            if (remakes) {  // new sizes: a refusal for memory tried again
                 d.memoryLogged = false;
+                std::memset(d.smallLogged, 0, sizeof(d.smallLogged));
                 for (Slot& s : d.slots)
                     if (s.refused)
                         s = Slot{};  // no view in it
@@ -794,6 +819,8 @@ void nr_shutdown() {
     d.device.Reset();
     std::memset(d.firstLogged, 0, sizeof(d.firstLogged));
     std::memset(d.limitLogged, 0, sizeof(d.limitLogged));
+    std::memset(d.smallLogged, 0, sizeof(d.smallLogged));
+    d.restarts = 0;
     d.memoryLogged = d.haveLastFrameEnd = false;
     d.slowFrames = 0;
     if (had)
