@@ -25,7 +25,7 @@ namespace {
 const std::vector<Pane> kTabPages[kTabs] = {
     {Pane::Profiles, Pane::About},
     {Pane::Picture},
-    {Pane::Menu, Pane::Hotkeys},
+    {Pane::Headset},
     {Pane::Checks, Pane::Diagnostics, Pane::Report, Pane::Games, Pane::Layers},
 };
 

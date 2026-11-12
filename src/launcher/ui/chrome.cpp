@@ -19,10 +19,9 @@ namespace simqvfr::launcher::ui::win {
 float pane_content(float x, float y, float w, bool draw) {
     switch (app.pane) {
     case Pane::Checks: return checks_pane(x, y, w, draw);
-    case Pane::Hotkeys: return hotkeys_pane(x, y, w, draw);
     case Pane::Profiles: return profiles_pane(x, y, w, draw);
     case Pane::Picture: return picture_page(x, y, w, draw);
-    case Pane::Menu: return menu_pane(x, y, w, draw);
+    case Pane::Headset: return headset_page(x, y, w, draw);
     case Pane::Games: return games_pane(x, y, w, draw);
     case Pane::Layers: return layers_pane(x, y, w, draw);
     case Pane::Diagnostics: return diagnostics_pane(x, y, w, draw);
@@ -34,8 +33,8 @@ float pane_content(float x, float y, float w, bool draw) {
 
 namespace {
 
-constexpr const wchar_t* kPaneLabels[] = {L"Launch checks", L"Profiles",      L"Picture",     L"Headset menu", L"Hotkeys",
-                                          L"Games",         L"OpenXR layers", L"Diagnostics", L"Report an issue", L"About"};
+constexpr const wchar_t* kPaneLabels[] = {L"Launch checks", L"Profiles",    L"Picture",         L"Headset", L"Games",
+                                          L"OpenXR layers", L"Diagnostics", L"Report an issue", L"About"};
 
 static_assert(std::size(kPaneLabels) == kPanes, "a name for every pane");
 
@@ -63,8 +62,7 @@ std::wstring pane_description(Pane pane) {
     case Pane::Checks: return L"What would stop Sim-QVFR at the next launch, each with its fix.";
     case Pane::Profiles: return L"A profile saves the whole picture: resolution, foveation, crop, overlay and DLSS.";
     case Pane::Picture: return L"";
-    case Pane::Menu: return L"Where the settings menu and the performance overlay float in your view.";
-    case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
+    case Pane::Headset: return L"";
     case Pane::Games: return L"Which games have a tab, and each game’s colour.";
     case Pane::Layers: return L"The OpenXR layers " + game_name() + L" loads, and their order.";
     case Pane::Diagnostics: return L"The last session’s numbers against the ones before it, and what to share when you ask for help.";
@@ -180,9 +178,9 @@ void paint() {
 
     // Main and preview columns, right of the rail and under the top bar and the page strip; narrow, the preview drops
     // under the page.
-    // A page of cards (Picture) takes the whole width, with no header and no preview column (its Preview is a card).
+    // A page of cards (Picture, Headset) takes the whole width, with no header and no preview column (its Preview is a card).
     const float pad = t::kSpace7;
-    const bool cards = app.pane == Pane::Picture;
+    const bool cards = app.pane == Pane::Picture || app.pane == Pane::Headset;
     const float stripH = tab_pages(tab_of(app.pane)).size() > 1 ? 44.0f : 0.0f;
     const float mainX = railW, bodyTop = t::kTopbarHeight + stripH, bodyH = Hh - bodyTop;
     const bool narrow = cards || W - railW < 780;

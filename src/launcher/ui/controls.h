@@ -44,7 +44,9 @@ bool focused(Ctl id);
 bool pointer_in(const Rect& r);
 float badge_width(const std::wstring& text);
 float button_width(const std::wstring& label, const t::TypeStyle& style = kButtonLabel);
-void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr);
+// `option`: which of several buttons with one id this is (a hotkey's); its hit carries it, and its focus ring shows
+// only when it is the focused one.
+void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr, int option = -1);
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary);
 float popup_width(const std::wstring* items, int count, float minWidth);
 void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disabled);

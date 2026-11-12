@@ -49,7 +49,7 @@ float button_width(const std::wstring& label, const t::TypeStyle& style) {
 }
 
 // A button; `icon`: a 16-box stroke path drawn before the label.
-void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon) {
+void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon, int option) {
     const bool down = app.pressed == id && r.contains(app.mouseX, app.mouseY), over = pointer_in(r);
     const float radius = t::kRadiusControl;
     Color bg{0, 0}, fg = col(app.c->label);
@@ -91,9 +91,9 @@ void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const c
     } else {
         app.canvas.text(label, textStyle, r, fg, Align::Center);
     }
-    if (focused(id))
+    if (focused(id) && (option < 0 || app.focusOption == option))
         focus_ring(r, radius);
-    app.hits.push_back({id, r});
+    app.hits.push_back({id, r, option});
 }
 
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary) {

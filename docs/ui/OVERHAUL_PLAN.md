@@ -262,3 +262,8 @@ The user answered "use your defaults" to the twelve open questions:
   - The rows' longer explanations (costs, cautions) moved into their ⓘ, so nothing was dropped.
   - Checked: 1440 × 900 shows the default Picture tab without scrolling; the crop hides and shows with its values kept; a segmented choice saves; Reset this card asks, then resets only its own settings.
   - The Rendering card has no multi-view line: runtime.ini's session mode says only QVFR, Two-loop or Off.
+- **Phase 5** (the Headset tab):
+  - One page of cards (`headset.cpp`) replaces Headset menu and Hotkeys: Settings menu (place and size, the hotkeys under it), Performance overlay (its place and size hidden while it is off), Placement (the drag preview and its readouts) and Hotkeys.
+  - Hotkeys is a table: action, keyboard, wheel; a clash shows a warning mark on both actions with what clashes in its tip; the wheels found are its note. Its card menu's reset replaces Reset hotkeys (the Ctrl+Alt keys, no wheel buttons).
+  - Each hotkey button is its own Tab stop (buttons take an option: only the focused one shows the ring), and the placement panels are in the Tab order again (arrows move them).
+  - Checked: 1440 × 900 shows the Headset tab without scrolling; a key caught and saved; the card's reset; the overlay's place kept while it is off; the menu dragged in Placement; Tab to a hotkey and Return to catch.

@@ -30,11 +30,11 @@ namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
 
-// The pages. Picture is the Picture tab's cards (picture.cpp); the others are the old panes, each a page of its tab
+// The pages. Picture and Headset are their tabs' cards (picture.cpp, headset.cpp); the others are the old panes, each a page of its tab
 // until the tab has its cards (docs/ui/OVERHAUL_PLAN.md §7).
-enum class Pane { Checks, Profiles, Picture, Menu, Hotkeys, Games, Layers, Diagnostics, Report, About };
+enum class Pane { Checks, Profiles, Picture, Headset, Games, Layers, Diagnostics, Report, About };
 
-inline constexpr int kPanes = 10;
+inline constexpr int kPanes = 9;
 
 // The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
 // strip under the top bar (shell.cpp kTabPages).
@@ -275,7 +275,7 @@ struct App {
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
     Pane pane = Pane::Checks;
-    Pane tabPage[kTabs] = {Pane::Profiles, Pane::Picture, Pane::Menu, Pane::Checks};  // each tab's page, as last shown
+    Pane tabPage[kTabs] = {Pane::Profiles, Pane::Picture, Pane::Headset, Pane::Checks};  // each tab's page, as last shown
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -500,7 +500,7 @@ void paste_profile();
 
 // pane_hotkeys.cpp
 void open_pads();
-float hotkeys_pane(float x, float y, float w, bool draw);
+std::wstring pads_found();
 void end_capture();
 void start_capture(int action, bool pad);
 bool capture_key(WPARAM vk);
@@ -534,8 +534,13 @@ float readouts_card(float x, float y, float w, bool draw);
 
 
 // pane_menu.cpp
-float menu_pane(float x, float y, float w, bool draw);
+float placement_preview(float x, float y, float w, bool draw);
+float placement_caption(float x, float y, float w, bool draw);
+float placement_readouts(float x, float y, float w, bool draw);
 float side_preview(float x, float y, float w, bool draw);
+
+// headset.cpp: the Headset tab's cards.
+float headset_page(float x, float y, float w, bool draw);
 
 // pane_about.cpp
 float about_pane(float x, float y, float w, bool draw);

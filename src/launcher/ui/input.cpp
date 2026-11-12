@@ -25,7 +25,7 @@ void activate(Ctl id, int option) {
         app.scroll = 0;
         if (app.pane == Pane::Layers)
             refresh_layers();
-        if (app.pane == Pane::Hotkeys)
+        if (app.pane == Pane::Headset)
             open_pads();
         if (app.pane == Pane::Profiles) {
             app.profileMessage.clear();

@@ -1,5 +1,5 @@
-// The Headset menu pane: the in-headset settings menu and the performance overlay, and the side panel's
-// placement preview to drag them around (with its caption and readouts).
+// The placement preview (the Headset tab's Placement card: the settings menu and the overlay, dragged where they
+// float, with its caption and readouts), and the old pages' preview column.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -14,57 +14,6 @@
 #include "form.h"
 
 namespace simqvfr::launcher::ui::win {
-
-float menu_pane(float x, float y, float w, bool draw) {
-    float h = 0;
-    h += section(x, y, w, L"Placement",
-                 {slider_row(kMenuYaw, L"Horizontal", L"Degrees right of straight ahead. Negative is left.", app.s.menuYaw,
-                             L"", false, L"°"),
-                  slider_row(kMenuPitch, L"Vertical", L"Degrees above eye level. Negative is below.", app.s.menuPitch, L"",
-                             false, L"°"),
-                  slider_row(kMenuWidth, L"Size", L"Width of the panel, in degrees of your view.", app.s.menuWidth, L"",
-                             false, L"°")},
-                 L"Drag it in the preview, or move it from the menu itself in the headset.",
-                 draw, Applies::Live);
-    const std::wstring open = L"Ctrl+Alt+arrows while the game has focus (or the keys and wheel buttons set in the Hotkeys "
-                              L"pane), or click the left controller stick. The right stick selects and changes values; "
-                              L"the menu hides after a few seconds.";
-    const float oh = app.canvas.measure_height(open, t::kCallout, w - 2 * t::kSpace3);
-    if (draw) {
-        app.canvas.text(L"Opening the menu", t::kHeadline, {x + t::kSpace3, y + h + t::kSpace6, w - t::kSpace3, 16},
-                        col(app.c->label));
-        app.canvas.text(open, t::kCallout, {x + t::kSpace3, y + h + t::kSpace6 + 16 + 6, w - 2 * t::kSpace3, oh + 2},
-                        col(app.c->label_secondary), Align::Leading, false, true);
-    }
-    h += t::kSpace6 + 16 + 6 + oh;
-    h += t::kSpace6;
-    Row footer;
-    const std::wstring footerDesc = L"A line under the menu with the in-game hotkeys (overlay, visor, CPU capture) and their "
-                                    L"wheel buttons, as set in the Hotkeys pane. Also on the menu’s Overlay and menu page.";
-    footer.fullHeight = [footerDesc](float width) { return checkbox_height(footerDesc, width); };
-    footer.full = [footerDesc](const Rect& r) {
-        checkbox(kHotkeyFooter, r, app.s.hotkeyFooter, L"Show the hotkeys under the menu", footerDesc);
-    };
-    h += section(x, y + h, w, L"", {footer}, L"", draw) + t::kSpace6;
-    Row osdOn;
-    const std::wstring osdDesc = L"Frame rate and pacing, CPU and GPU time with their headroom and which one limits the "
-                                 L"frame, VRAM, frame generation and eye tracking, floating in your view.";
-    osdOn.fullHeight = [osdDesc](float width) { return checkbox_height(osdDesc, width); };
-    osdOn.full = [osdDesc](const Rect& r) { checkbox(kOsdOn, r, app.s.osd.enabled, L"Show the overlay", osdDesc); };
-    const bool osdOff = !app.s.osd.enabled;
-    h += section(x, y + h, w, L"Performance overlay",
-                 {osdOn,
-                  slider_row(kOsdYaw, L"Horizontal", L"Degrees right of straight ahead. Negative is left.", app.s.osd.yaw,
-                             L"", osdOff, L"°"),
-                  slider_row(kOsdPitch, L"Vertical", L"Degrees above eye level. Negative is below.", app.s.osd.pitch, L"",
-                             osdOff, L"°"),
-                  slider_row(kOsdSize, L"Size", L"Width of the overlay, in degrees of your view.", app.s.osd.width, L"",
-                             osdOff, L"°")},
-                 L"Drag it in the preview, or move it from the headset menu’s Overlay and menu page. Ctrl+Alt+P "
-                 L"while the game has focus turns it on and off.",
-                 draw, Applies::Live);
-    return h;
-}
 
 namespace {
 
@@ -81,6 +30,8 @@ float osd_height_deg(int widthDeg) { return panel_height_deg(widthDeg, static_ca
 std::wstring degrees(int v, const wchar_t* plus, const wchar_t* minus) {
     return v == 0 ? L"0°" : std::to_wstring(std::abs(v)) + L"° " + (v > 0 ? plus : minus);
 }
+
+}  // namespace
 
 // The settings menu's place (Headset menu pane) at (x, y), width w: a kRefFovX x kRefFovY view in
 // degrees with the panel, drawn in its own colours, where it floats. Returns its height.
@@ -198,6 +149,8 @@ float placement_readouts(float x, float y, float w, bool draw) {
     return h;
 }
 
+namespace {
+
 using Content = std::function<float(float, float, float, bool)>;
 
 // A card in the preview column: a title (and a pill at its end) over `content`. Returns its height.
@@ -239,17 +192,12 @@ Content in_well(Content frame, Content after = nullptr) {
 
 }  // namespace
 
-// The preview column: the placement preview on the Headset menu pane, the load order on OpenXR layers, the foveation
-// preview elsewhere; each a card, with a second card of numbers under the previews.
+// The old pages' preview column: the load order on OpenXR layers, the foveation preview elsewhere; each a card, with a
+// second card of numbers under the preview.
 float side_preview(float x, float y, float w, bool draw) {
     if (app.pane == Pane::Layers)
         return preview_card(x, y, w, L"Load order", game_name() + L" to headset", layers_preview, draw);
     float h = 0;
-    if (app.pane == Pane::Menu) {
-        h += preview_card(x, y, w, L"Placement", L"100° × 80° view", in_well(placement_preview, placement_caption), draw);
-        h += t::kSpace4;
-        return h + preview_card(x, y + h, w, L"", L"", placement_readouts, draw);
-    }
     h += preview_card(x, y, w, L"Preview", L"Left eye", in_well(preview, preview_legend), draw);
     h += t::kSpace4;
     return h + preview_card(x, y + h, w, L"", L"", readouts_card, draw);
