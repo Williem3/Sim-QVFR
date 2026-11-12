@@ -29,7 +29,7 @@ bool close_to(double a, double b, double tolerance = 1e-6) { return a > b - tole
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     {
         const GpuEngineName n = parse_gpu_engine_name(L"pid_1234_luid_0x00000000_0x0000D1B6_phys_0_eng_3_engtype_3D");
         check(n.valid && n.pid == 1234 && n.luidHigh == 0 && n.luidLow == 0xD1B6 && n.engine == 3 && n.type == L"3D",

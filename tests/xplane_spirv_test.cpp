@@ -40,7 +40,7 @@ std::vector<std::uint32_t> module(bool secondLoad) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     std::vector<std::uint32_t> w = module(false);
     std::string why;
     const bool edited = xplane::spirv_add_to_input(w, "v_eye", 2, &why);

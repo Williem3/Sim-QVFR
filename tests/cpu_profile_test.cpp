@@ -74,18 +74,20 @@ __declspec(noinline) void frame_loop() {
     std::printf("     (%llu)\n", static_cast<unsigned long long>(x & 1));
 }
 
-// How the report names a function (at its start, `address`) without symbols: module+offset.
+// How the report names a function (`address`: its first instruction) without symbols: module+offset of the start
+// the profiler gives it. For busy_leaf (no stack use, so no unwind entry) that is its own start only while no other
+// such function sits right before it, which other tests' code can (every test is linked into one program).
 std::string start_offset(void* address) {
     char text[64];
     std::snprintf(text, sizeof(text), "+0x%llx",
-                  static_cast<unsigned long long>(reinterpret_cast<uint64_t>(address) -
+                  static_cast<unsigned long long>(cpu_profile_function_start(reinterpret_cast<uint64_t>(address)) -
                                                   reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr))));
     return text;
 }
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     DWORD id = 0;
     std::thread worker([&id] {
         id = GetCurrentThreadId();

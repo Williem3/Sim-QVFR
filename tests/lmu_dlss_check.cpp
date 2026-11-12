@@ -2,7 +2,7 @@
 // with a stand-in for the game's side. Not part of the test suite (no _test suffix): it needs an NVIDIA RTX GPU, a build
 // with the NGX SDK and a folder holding nvngx_dlss.dll.
 //
-//   lmu_dlss_check.exe <folder with nvngx_dlss.dll> [frames]
+//   sim_qvfr_tests lmu_dlss_check <folder with nvngx_dlss.dll> [frames]
 //
 // Each frame, as the game and the layer's hooks would: the stereo views located (their FOV jittered by the module), the
 // projection built from that FOV as LMU builds it, a camera that moves, an eye and its focus view side by side in a
@@ -285,7 +285,7 @@ double shifted_difference(const std::vector<float>& a, const std::vector<float>&
 
 }  // namespace
 
-int wmain(int argc, wchar_t** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     if (argc < 2) {
         std::printf("usage: lmu_dlss_check <folder with nvngx_dlss.dll> [frames]\n");
         return 2;

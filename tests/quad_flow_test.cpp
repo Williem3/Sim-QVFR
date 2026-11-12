@@ -527,7 +527,7 @@ std::vector<uint8_t> read_back(ID3D12Resource* image, UINT& pitch) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using namespace simqvfr;
     using namespace simqvfr::layer;
     game = &games::adapter_for(&ace::kGame);  // views4 below is ACE's

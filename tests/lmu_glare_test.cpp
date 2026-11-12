@@ -374,7 +374,7 @@ void read_checks(ID3D11Device* device) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     region_checks();
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;

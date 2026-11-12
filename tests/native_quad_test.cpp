@@ -174,7 +174,7 @@ XrCompositionLayerProjectionView eye_view(XrSwapchain chain) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     // quad_frame on its own: a stereo layer widened with copies, a four-view one kept, a quad passed through, a
     // three-view one left out.
     {

@@ -45,7 +45,7 @@ bool sphere_out(const FocusFrustum& f, float x, float y, float z, float r) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     // An unturned camera at the origin looking down -z, half-extents 0.5 x 0.25.
     const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     const FocusFrustum f = focus_frustum(identity, 0.5, 0.25);

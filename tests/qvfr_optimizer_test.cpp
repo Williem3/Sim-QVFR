@@ -39,7 +39,7 @@ int run(QvfrOptimizer& o, Sim& sim, int* applies = nullptr) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     const QvfrValues start{60, 120, 35, 35};
     const QvfrLimits limits;
     {

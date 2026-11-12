@@ -297,7 +297,7 @@ std::vector<uint8_t> file_bytes(const std::string& path) {
 // copy-ps-cb0.bin, composite-ps-cb0.bin, from a capture: tools/rdc/shader_bytes.py; the game's code, kept local). Then
 // the same pass runs with them, under the debug layer where it is installed (linkage between our vertex shaders and
 // theirs checked).
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     const std::string folder = argc > 1 ? argv[1] : "";
     char what[256];
     {  // The roles by checksum (the probe's marking at creation).

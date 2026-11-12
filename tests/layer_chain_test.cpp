@@ -52,7 +52,7 @@ XrResult XRAPI_CALL runtimeGipa(XrInstance, const char*, PFN_xrVoidFunction*) { 
 
 }  // namespace
 
-int main(int, char** argv) {
+int SIM_QVFR_TEST_MAIN(int, char** argv) {
     // The launcher's list, and what OpenComposite's loader made of it (its substr(start, end) bug).
     const std::string list = "XR_APILAYER_SIM_qvfr;XR_APILAYER_MBUCCHIA_quad_views_foveated;XR_APILAYER_MBUCCHIA_toolkit;"
                              "XR_APILAYER_VIRTUALDESKTOP_oculus_compatibility;XR_APILAYER_CHEEKY_foveated_dlss";

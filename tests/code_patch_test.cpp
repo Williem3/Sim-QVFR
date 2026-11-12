@@ -52,7 +52,7 @@ size_t emit(unsigned char* p, const unsigned char (&imul)[7]) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     unsigned char* page = alloc_near_module();
     if (!page) {
         std::puts("RESULT: FAIL (no memory near the module)");

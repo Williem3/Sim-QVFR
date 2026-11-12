@@ -110,7 +110,7 @@ int cas_reference(const std::vector<uint32_t>& v, int x, int y, int x0, int y0, 
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,

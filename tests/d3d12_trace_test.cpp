@@ -12,7 +12,7 @@
 
 using Microsoft::WRL::ComPtr;
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     // The log goes to a file of the test's own (opened at its first line), read back at the end.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);

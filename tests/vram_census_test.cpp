@@ -40,7 +40,7 @@ ComPtr<ID3D12Resource> texture(ID3D12Device* device, UINT64 width, UINT height, 
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     check(vram_follows(4837, 814, 4837, 814) && vram_follows(2419, 407, 4837, 814) && vram_follows(2418, 814, 4837, 814) &&
               vram_follows(605, 102, 4837, 814),
           "follows: the target, its halves (rounded either way) and an eighth, per axis");

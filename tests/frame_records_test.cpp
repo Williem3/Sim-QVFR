@@ -19,7 +19,7 @@ void check(bool ok, const char* what) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     {
         FrameRecords<int> r(0, 3);
         int v = -1;

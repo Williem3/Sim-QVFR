@@ -67,7 +67,7 @@ void expected(const ViewMapping& m, int i, int j, float& px, float& py) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     {
         const int rects[4][4] = {{0, 0, 1816, 1519}, {1816, 0, 1816, 1519}, {0, 1520, 1816, 1013}, {1816, 1520, 1816, 1013}};
         bool have[4] = {true, true, true, true};

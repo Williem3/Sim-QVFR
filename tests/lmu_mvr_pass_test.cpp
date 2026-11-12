@@ -90,7 +90,7 @@ std::vector<uint16_t> image(unsigned w, unsigned h, int shiftX, int shiftY, floa
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,

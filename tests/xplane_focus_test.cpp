@@ -27,7 +27,7 @@ double ndc(const double (&m)[16], bool cm, int row, double x, double y, double z
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     // The captured left eye, logical rows: (0.7648, 0, -0.0722, 0), (0, 0.9163, 0, 0), (0, 0, 0, 0.0081), (0, 0, -1, 0).
     const double rows[4][4] = {{0.7648, 0, -0.0722, 0}, {0, 0.9163, 0, 0}, {0, 0, 0, 0.0081}, {0, 0, -1, 0}};
     for (int layout = 0; layout < 2; ++layout) {

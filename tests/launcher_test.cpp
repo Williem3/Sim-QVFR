@@ -743,7 +743,7 @@ void explicit_layers_checks() {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
     folder = fs::path(temp) / L"simqvfr-launcher-test";

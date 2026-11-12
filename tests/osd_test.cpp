@@ -60,7 +60,7 @@ void save_card(const wchar_t* path, const std::vector<uint32_t>& pixels) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     {
         const OsdSummary s = osd_summary(steady(11.111, 5, 7));
         check(close_to(s.fps, 90, 0.1) && close_to(s.budgetMs, 11.111) && s.latePercent == 0 && close_to(s.jitterMs, 0),

@@ -49,7 +49,7 @@ bool read_back(simqvfr::D3D11DepthProbe& probe, ID3D11DeviceContext* ctx, float 
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
     if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,

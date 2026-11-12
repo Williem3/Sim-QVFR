@@ -193,7 +193,7 @@ int stall_holding_loader_lock(const std::filesystem::path& dir) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     wchar_t self[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, self, MAX_PATH);
     SetThreadDescription(GetCurrentThread(), L"stuck main thread");  // in every dump's thread names
@@ -250,7 +250,8 @@ int main(int argc, char** argv) {
            "frames stop mid-session: a dump, logged as mid-session");
     expect(count(text, "written (helper exit 0") == 1 && count(text, "written from outside the game") == 1,
            "the helper wrote it and logged it");
-    expect(text.find("hang_watch_test.exe") != std::string::npos && text.find("ntdll.dll") != std::string::npos,
+    expect(text.find(std::filesystem::path(self).filename().string()) != std::string::npos &&
+               text.find("ntdll.dll") != std::string::npos,
            "the helper logged the stuck process's modules");
 
     expect(dumps(folder(L"no-helper")) == 0 && dumps(folder(L"bad-helper")) == 0,

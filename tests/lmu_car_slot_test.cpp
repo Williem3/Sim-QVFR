@@ -151,7 +151,7 @@ uint32_t read_u32(Device& g, ID3D11Texture2D* tex, UINT x, UINT y) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     bool hardware = false;
     const char* scanFolder = nullptr;
     for (int i = 1; i < argc; ++i) {

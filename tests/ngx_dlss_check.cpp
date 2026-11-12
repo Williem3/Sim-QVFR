@@ -2,7 +2,7 @@
 // own create DLSS features and evaluate them, and what do four views a frame cost? Not part of the test suite (no
 // _test suffix): it needs an NVIDIA RTX GPU, the NGX SDK (CMake: NGX_SDK_DIR) and a folder holding nvngx_dlss.dll.
 //
-//   ngx_dlss_check.exe <folder with nvngx_dlss.dll> [frames]
+//   sim_qvfr_tests ngx_dlss_check <folder with nvngx_dlss.dll> [frames]
 //
 // 1. NGX starts with a project id (custom engine) and reports DLSS as available.
 // 2. Per case (render size -> output size, quality mode, preset): four features as QVFR would hold them (two periphery
@@ -295,7 +295,7 @@ void run_subrects(NVSDK_NGX_Parameter* params, UINT ew, UINT eh, UINT fw, UINT f
 
 }  // namespace
 
-int wmain(int argc, wchar_t** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     if (argc < 2) {
         std::printf("usage: ngx_dlss_check <folder with nvngx_dlss.dll> [frames]\n");
         return 2;

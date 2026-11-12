@@ -152,13 +152,22 @@ standard and Windows headers.
 
 ### Tests
 
-The offline tests are the `build/Release/*_test.exe` executables (hook stub, code patch, compositor,
-focus outline/cull/turn, launcher settings and plan, two-loop and quad flow, and others). Each one
-exits non-zero on failure. ctest runs them all side by side, in about 12 seconds.
+The offline tests (`tests/*_test.cpp`: hook stub, code patch, compositor, focus outline/cull/turn,
+launcher settings and plan, two-loop and quad flow, and others) are linked into one program,
+`build/Release/sim_qvfr_tests.exe`, which runs one by name: `sim_qvfr_tests osd_test`
+(`sim_qvfr_tests --list` names them all). Each test exits non-zero on failure. ctest runs them all side
+by side, each as its own process, in about 14 seconds. The hardware checks (`tests/*_check.cpp`) are in
+the same program and not in the suite: `sim_qvfr_tests nvapi_stereo_check --timing`.
 
-Each test gets its own TEMP folder and log, under `%TEMP%\sim-qvfr-tests\`. A test executable's first
-run after it changes takes about a second longer, because Windows Defender checks every new executable.
-The tests link deterministically, so only the ones a change reaches are new.
+A new test is a `tests/<name>_test.cpp` whose entry point is `int SIM_QVFR_TEST_MAIN()` (or with
+`int argc, char** argv`), added in `CMakeLists.txt` with `sim_qvfr_test(<name>_test tests/<name>_test.cpp)`.
+Keep its helpers in an anonymous namespace: every test shares the one program.
+
+Each test gets its own TEMP folder and log, under `%TEMP%\sim-qvfr-tests\`. The tests are one program
+and not one each because Windows Defender checks every new executable on its first start, one at a
+time: with an exe per test, the first suite after a build waited over a minute on those checks, and
+Defender's machine-learned verdicts kept flagging one or another small test exe. The program links
+deterministically, so a build that changes nothing it uses leaves it as it was.
 
 ### Packages
 
