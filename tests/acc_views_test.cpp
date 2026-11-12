@@ -20,7 +20,7 @@ void check(bool ok, const char* what) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using namespace acc;
     check(views_for(true) == 4 && views_for(false) == 1, "four views in stereo, one without");
     bool passes = pass_for_view(false, 0) == kPassFull;

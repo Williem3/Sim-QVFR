@@ -1,10 +1,10 @@
 // Offline check of the hang watch (probe/hang_watch.h) and its dump helper (probe/hang_dump.h: the launcher,
-// built next to this test, standing by from the first arm), each case in a child process (the watch fires once per process)
-// with a folder of its own, all at once: frames keep coming,
-// or the session ends, so no dump; frames stop mid-session, so the helper writes a dump; no helper, or one that
-// can't start, so no dump (never one from inside); frames stop while another thread holds the loader lock (X-Plane
-// loading a plugin, 2026-11-06), so a dump all the same, and log_modules doesn't wait for the lock; and in this
-// process, armed twice with no frame at all, one dump, the modules logged, and dbghelp never loaded here.
+// built next to this test, standing by from the first arm), each case in a child process (the watch fires once per
+// process) with a folder of its own, all at once, each lasting until its watch has answered (not a set time): frames
+// keep coming, or the session ends, so no dump; frames stop mid-session, so the helper writes a dump; no helper, or
+// one that can't start, so no dump (never one from inside); frames stop while another thread holds the loader lock
+// (X-Plane loading a plugin, 2026-11-06), so a dump all the same, and log_modules doesn't wait for the lock; and in
+// this process, armed twice with no frame at all, one dump, the modules logged, and dbghelp never loaded here.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -81,6 +81,48 @@ size_t count(const std::string& text, const char* what) {
     return n;
 }
 
+// The longest a case waits for the watch. Its loop starts only once the helper stands by, and starting the helper
+// took up to 4.6 s with the whole suite running: Windows Defender checks a freshly linked launcher on its first
+// start, every case's helper waiting on that one check (2026-11-11). A set time per case (3 s) failed there.
+constexpr DWORD kWaitMs = 20000;
+
+// Waits up to kWaitMs for `log` to have `what` (this process's own log: the watch writes it). True if it came.
+bool wait_logged(const std::filesystem::path& log, const char* what) {
+    const ULONGLONG start = GetTickCount64();
+    for (;;) {
+        if (read(log).find(what) != std::string::npos)
+            return true;
+        if (GetTickCount64() - start >= kWaitMs)
+            return false;
+        Sleep(20);
+    }
+}
+
+// When the first line with `what` was logged ("HH:MM:SS.mmm [tid] ..."), in seconds of the day; -1 if none.
+double logged_at(const std::string& text, const char* what) {
+    const size_t at = text.find(what);
+    if (at == std::string::npos)
+        return -1;
+    const size_t line = text.rfind('\n', at);
+    unsigned h = 0, m = 0, s = 0, ms = 0;
+    if (std::sscanf(text.c_str() + (line == std::string::npos ? 0 : line + 1), "%u:%u:%u.%u", &h, &m, &s, &ms) != 4)
+        return -1;
+    return h * 3600.0 + m * 60.0 + s + ms / 1000.0;
+}
+
+// A case's watch, step by step after its arm (-1: not logged): where the time goes on a busy machine.
+void print_timeline(const char* name, const std::string& text) {
+    const double arm = logged_at(text, "hang watch: 1 s;");
+    const auto after = [&](const char* what) {
+        const double at = logged_at(text, what);
+        return at < 0 || arm < 0 ? -1.0 : at - arm + (at < arm ? 86400 : 0);
+    };
+    std::printf("  (%s, after the arm: helper standing by %.2f s, watch fired %.2f s, dump written %.2f s, "
+                "its answer logged %.2f s)\n",
+                name, after("dump helper standing by"), after("the game looks stuck"),
+                after("written from outside the game"), after("hang watch: minidump"));
+}
+
 // A child case started in a folder of its own, for its log (SIM_QVFR_LOG, inherited) and any dump, so the cases
 // run side by side.
 HANDLE start_child(const wchar_t* self, const wchar_t* mode, const std::filesystem::path& dir) {
@@ -152,7 +194,7 @@ int stall_holding_loader_lock(const std::filesystem::path& dir) {
     // thread's CreateProcessW, the first in this process, loads sechost.dll under the loader lock (2026-11-06).
     // Frames keep coming meanwhile, so the watch fires only with the lock held.
     bool ready = false;
-    for (int i = 0; i < 1000 && !ready; ++i) {  // 10 s
+    for (DWORD i = 0; i < kWaitMs / 10 && !ready; ++i) {
         hang_watch_frame();
         ready = count(read(log), "dump helper standing by") > standing;
         if (!ready)
@@ -171,13 +213,10 @@ int stall_holding_loader_lock(const std::filesystem::path& dir) {
     hang_watch_frame();
     ULONG_PTR cookie = 0;
     lock(0, nullptr, &cookie);
-    bool dumped = false;
-    for (int i = 0; i < 100 && !dumped; ++i) {  // 10 s; the watch fires after 1
-        Sleep(100);
-        dumped = dumps(dir) > before;
-    }
-    if (dumped)
-        Sleep(500);  // the helper closes the file before it exits
+    // The lock held until the watch has the helper's answer (logged once the helper exits, its file closed): the
+    // watch fires after 1 s, and the dump took up to 0.6 s with the whole suite running (2026-11-11).
+    wait_logged(log, "hang watch: minidump");
+    const bool dumped = dumps(dir) > before;
     SetEvent(modules.go);
     SetEvent(name.go);
     const bool modulesFree = WaitForSingleObject(modules.done, 3000) == WAIT_OBJECT_0;
@@ -193,7 +232,7 @@ int stall_holding_loader_lock(const std::filesystem::path& dir) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     wchar_t self[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, self, MAX_PATH);
     SetThreadDescription(GetCurrentThread(), L"stuck main thread");  // in every dump's thread names
@@ -208,18 +247,32 @@ int main(int argc, char** argv) {
             log_line("hang watch test: this log as the helper");  // the case's own folder starts empty
             hang_watch_set_helper(log_file().c_str());
         }
+        const std::filesystem::path log(log_file());
         hang_watch_arm(1);
         hang_watch_frame();
+        // Each case lasts as long as the watch needs, not a set time: the watch counts only once its helper
+        // stands by (kWaitMs).
         if (std::strcmp(argv[1], "--framing") == 0) {  // frames keep coming until the process ends
-            for (int i = 0; i < 16; ++i) {
+            for (DWORD i = 0; i < kWaitMs / 100 && read(log).find("dump helper standing by") == std::string::npos;
+                 ++i) {
+                Sleep(100);
+                hang_watch_frame();
+            }
+            for (int i = 0; i < 16; ++i) {  // past the limit, the watch counting
                 Sleep(100);
                 hang_watch_frame();
             }
             return 0;
         }
-        if (std::strcmp(argv[1], "--ended") == 0)  // the session ends after its frame
+        if (std::strcmp(argv[1], "--ended") == 0) {  // the session ends after its frame
             hang_watch_disarm();
-        Sleep(3000);  // --stall, --no-helper, --bad-helper: no frame after the first (and the helper's answer)
+            wait_logged(log, "dump helper standing by");
+            Sleep(2000);  // twice the limit, the watch counting
+            return 0;
+        }
+        // --stall, --no-helper, --bad-helper: no frame after the first, until the watch has answered: the helper's
+        // exit, or the modules from here.
+        wait_logged(log, std::strcmp(argv[1], "--stall") == 0 ? "hang watch: minidump" : "modules from here");
         return 0;
     }
     const std::filesystem::path dir = std::filesystem::path(self).parent_path() / L"hang_watch_test";
@@ -236,21 +289,27 @@ int main(int argc, char** argv) {
     SetEnvironmentVariableW(L"SIM_QVFR_LOG", (own / L"test.log").c_str());  // before this process's first log line
     hang_watch_arm(1);
     hang_watch_arm(1);  // still one watch thread
-    Sleep(3000);
+    wait_logged(own / L"test.log", "hang watch: minidump");  // the watch's answer, the helper gone
     int exits[std::size(modes)] = {};
     for (size_t i = 0; i < std::size(modes); ++i)
         exits[i] = finish_child(children[i]);
     const auto folder = [&](const wchar_t* mode) { return dir / mode; };
     const auto log_of = [&](const wchar_t* mode) { return read(folder(mode) / L"test.log"); };
+    print_timeline("stall", log_of(L"stall"));
+    print_timeline("loader lock", log_of(L"loader-lock"));
+    print_timeline("no frame at all", read(own / L"test.log"));
 
-    expect(dumps(folder(L"framing")) == 0 && dumps(folder(L"ended")) == 0,
-           "frames keep coming, or the session ended: no dump");
+    expect(dumps(folder(L"framing")) == 0 && dumps(folder(L"ended")) == 0 &&
+               count(log_of(L"framing"), "dump helper standing by") == 1 &&
+               count(log_of(L"ended"), "dump helper standing by") == 1,
+           "frames keep coming, or the session ended, the watch counting: no dump");
     std::string text = log_of(L"stall");
     expect(dumps(folder(L"stall")) == 1 && text.find("mid-session") != std::string::npos,
            "frames stop mid-session: a dump, logged as mid-session");
     expect(count(text, "written (helper exit 0") == 1 && count(text, "written from outside the game") == 1,
            "the helper wrote it and logged it");
-    expect(text.find("hang_watch_test.exe") != std::string::npos && text.find("ntdll.dll") != std::string::npos,
+    expect(text.find(std::filesystem::path(self).filename().string()) != std::string::npos &&
+               text.find("ntdll.dll") != std::string::npos,
            "the helper logged the stuck process's modules");
 
     expect(dumps(folder(L"no-helper")) == 0 && dumps(folder(L"bad-helper")) == 0,

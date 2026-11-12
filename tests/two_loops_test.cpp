@@ -62,7 +62,7 @@ int run(int appFrames, bool frameGenerator) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     simqvfr::layer::game = &simqvfr::games::adapter_for(&ace::kGame);  // views4 below is ACE's
     const int errors = run(130, false);
     std::printf("ACE order: runtime waits=%d begins=%d ends=%d violations=%d endErrors=%d active=%d\n", rt.waits,

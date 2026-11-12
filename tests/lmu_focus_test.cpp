@@ -43,7 +43,7 @@ void project(const float (&m)[16], double tx, double ty, double& x, double& y) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     const double l = std::tan(-0.9512), r = std::tan(0.8814), u = std::tan(0.8290), d = std::tan(-0.8290);
     float eye[16];
     lmu_projection(l, r, d, u, 0.05, 20000, eye);

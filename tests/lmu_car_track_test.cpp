@@ -84,7 +84,7 @@ int scan(const char* folder) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     if (argc > 2 && std::strcmp(argv[1], "--scan") == 0)
         return scan(argv[2]);
     // --hardware: the GPU's own driver instead of WARP (d3d11 may take other paths for Map there). --timing: the hooks'

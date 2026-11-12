@@ -30,7 +30,7 @@ void check(bool ok, const char* what) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     SettingsMenu m;
     m.launch = {true, 50, 39, 39};
     check(menu_items(true).size() == 10 && menu_items(false).size() == 8 &&

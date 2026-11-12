@@ -79,7 +79,7 @@ struct FakeBag final : NgxParameter {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using namespace simqvfr;
 
     // The accessors reach the unsigned int overloads.

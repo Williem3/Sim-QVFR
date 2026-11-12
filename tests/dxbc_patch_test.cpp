@@ -4,7 +4,7 @@
 // instances, view 0 the original's SV_Position bit for bit in viewport 0, view 1 its remap in viewport 1, the game's own
 // instance kept; one rasterized pair on a debug device. The checksum is checked against the compiler's.
 //
-//   dxbc_patch_test.exe [folder of a game's VS_*.dxbc]   (also every shader there both ways; the game's code: local only)
+//   sim_qvfr_tests dxbc_patch_test [folder of a game's VS_*.dxbc]   (also every shader there both ways; the game's code: local only)
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -956,7 +956,7 @@ void real_pixel_shaders(Gpu& g, const char* folder) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--hardware") == 0) {  // this PC's GPU instead of WARP
         driverType = D3D_DRIVER_TYPE_HARDWARE;
         --argc;

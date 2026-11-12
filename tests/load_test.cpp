@@ -4,9 +4,12 @@
 // busy thread.
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <thread>
+#include <vector>
 
+#include <intrin.h>
 #include <windows.h>
 #include <dxgi.h>
 #include <wrl/client.h>
@@ -29,7 +32,7 @@ bool close_to(double a, double b, double tolerance = 1e-6) { return a > b - tole
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     {
         const GpuEngineName n = parse_gpu_engine_name(L"pid_1234_luid_0x00000000_0x0000D1B6_phys_0_eng_3_engtype_3D");
         check(n.valid && n.pid == 1234 && n.luidHigh == 0 && n.luidLow == 0xD1B6 && n.engine == 3 && n.type == L"3D",
@@ -81,23 +84,68 @@ int main() {
               "every thread's share of a core (the thread table); a new thread skipped");
     }
     {
-        // Live: a thread spinning flat out is the busiest, near a whole core.
+        // Live: a thread spinning flat out is the busiest, at the share of a core it ran. That is near a whole core
+        // only while the machine has one to spare: under the full suite (the machine 99-100% busy), this below-normal
+        // spinner ran 56-60% of one by its own count, and the sampler said so (2026-11-11). So it counts its own
+        // running on the time-stamp counter, the sampler's clock: a gap of more than kOffUs between two of its reads
+        // is time it was switched out. What it ran over the sample's span is what the sampler must report.
+        constexpr int kSlotShift = 20;  // 2^20 counts (about 0.3 ms) per slot
+        constexpr double kOffUs = 10;
+        LARGE_INTEGER qpcHz, q0, q1;
+        QueryPerformanceFrequency(&qpcHz);
+        QueryPerformanceCounter(&q0);
+        const uint64_t c0 = __rdtsc();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        QueryPerformanceCounter(&q1);
+        const uint64_t c1 = __rdtsc();
+        const double tscPerUs = static_cast<double>(c1 - c0) * static_cast<double>(qpcHz.QuadPart) /
+                                (static_cast<double>(q1.QuadPart - q0.QuadPart) * 1e6);
+        const uint64_t offCycles = static_cast<uint64_t>(kOffUs * tscPerUs);
+        std::vector<uint64_t> ran(size_t{1} << 16);  // counts it ran, per slot from `origin` (about 20 s of them)
+        const uint64_t origin = __rdtsc();
         std::atomic<bool> spin{true};
         std::atomic<DWORD> spinner{0};
         std::thread busy([&] {
             spinner = GetCurrentThreadId();
+            uint64_t last = __rdtsc();
             while (spin.load(std::memory_order_relaxed)) {
+                const uint64_t now = __rdtsc();
+                const uint64_t slot = (now - origin) >> kSlotShift;
+                if (now - last <= offCycles && slot < ran.size())
+                    ran[slot] += now - last;
+                last = now;
             }
         });
+        while (!spinner.load())  // spinning before the sampler's first snapshot: no start-up in its samples
+            std::this_thread::yield();
+        FILETIME idle0, kernel0, user0, idle1, kernel1, user1;
+        GetSystemTimes(&idle0, &kernel0, &user0);
         cpu_load_start();
         CpuLoad load;
-        for (int i = 0; i < 40 && !(load.valid && load.busiestThread == spinner.load()); ++i) {
+        int polls = 0;
+        for (; polls < 40 && !(load.valid && load.busiestThread == spinner.load()); ++polls) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             load = cpu_load_latest();
         }
         spin = false;
         busy.join();
+        GetSystemTimes(&idle1, &kernel1, &user1);
         cpu_load_stop();
+        // What the spinner ran over the sample's span, from the slots wholly inside it (less than a slot short at
+        // either end).
+        double ranPercent = -1;
+        if (load.fromTsc > origin && load.toTsc > load.fromTsc) {
+            const uint64_t first = ((load.fromTsc - origin) >> kSlotShift) + 1, end = (load.toTsc - origin) >> kSlotShift;
+            if (end > first && end <= ran.size()) {
+                uint64_t sum = 0;
+                for (uint64_t s = first; s < end; ++s)
+                    sum += ran[s];
+                ranPercent = 100.0 * static_cast<double>(sum) / static_cast<double>((end - first) << kSlotShift);
+            }
+        }
+        const auto ticks = [](const FILETIME& f) { return (static_cast<uint64_t>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+        const uint64_t all = ticks(kernel1) - ticks(kernel0) + ticks(user1) - ticks(user0);  // kernel time has idle in it
+        const double machineBusy = all ? 100.0 * static_cast<double>(all - (ticks(idle1) - ticks(idle0))) / all : -1;
         int overlaySamples = 0, logSamples = 0;
         const CpuLoad overlay = cpu_load_window(overlaySamples, 0);
         const CpuLoad logged = cpu_load_window(logSamples, 1);
@@ -105,10 +153,13 @@ int main() {
         cpu_load_window(again, 0);
         check(overlaySamples > 0 && overlaySamples == logSamples && overlay.valid && logged.valid && again == 0,
               "the overlay's and the log's windows each get every sample, and empty on their own");
-        std::printf("     live: busiest thread %u at %.0f%% of a core (the spinner is %u), %d threads\n", load.busiestThread,
-                    load.busiestPercent, static_cast<unsigned>(spinner.load()), load.threads);
-        check(load.valid && load.busiestThread == spinner.load() && load.busiestPercent > 60,
-              "live: the spinning thread is the busiest, most of a core");
+        std::printf("     live: busiest thread %u at %.1f%% of a core over a %.0f ms sample (poll %d); the spinner %u ran %.1f%% "
+                    "of it by its own count; %d threads; the machine %.0f%% busy\n",
+                    load.busiestThread, load.busiestPercent, static_cast<double>(load.toTsc - load.fromTsc) / tscPerUs / 1000,
+                    polls, static_cast<unsigned>(spinner.load()), ranPercent, load.threads, machineBusy);
+        check(load.valid && load.busiestThread == spinner.load(), "live: the spinning thread is the busiest");
+        check(ranPercent > 20 && std::abs(load.busiestPercent - ranPercent) < 5,
+              "live: at the share of a core it ran (its own count on the time-stamp counter, the sampler's clock)");
     }
     {
         // Live GPU counters: start and stop cleanly; on an adapter that matches nothing, no load.

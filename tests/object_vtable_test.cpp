@@ -48,7 +48,7 @@ void** vtable_of(const void* object) { return *static_cast<void** const*>(object
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     char what[200];
     std::snprintf(what, sizeof(what), "this SDK's newest interfaces: ID3D11Device5 %zu entries, ID3D11DeviceContext4 %zu",
                   simqvfr::kD3D11DeviceSlots, simqvfr::kD3D11ContextSlots);

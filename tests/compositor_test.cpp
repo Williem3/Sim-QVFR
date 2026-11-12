@@ -184,7 +184,7 @@ void expect(const Pixels& p, int eye, float u, float v, const char* name, uint8_
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     Gpu gpu;
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;

@@ -48,7 +48,7 @@ void view_matrix(const XrQuaternionf& q, const float (&position)[3], float (&v)[
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     const XrFovf fov{-0.9512f, 0.8814f, 0.8290f, -0.8290f};  // a Pimax-like left eye
     const double fraction = 0.35;
     // An eye looking somewhere arbitrary, away from the origin.

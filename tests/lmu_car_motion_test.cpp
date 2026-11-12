@@ -29,7 +29,7 @@ bool same(const float* a, const M& b) { return a && std::memcmp(a, b.m, sizeof(b
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using lmu::CarDrawKey;
     using lmu::CarMotion;
     int vbA = 0, vbB = 0, ib = 0;

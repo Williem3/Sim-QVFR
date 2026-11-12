@@ -23,7 +23,7 @@ LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     WNDCLASSW wc = {};
     wc.lpfnWndProc = proc;
     wc.hInstance = GetModuleHandleW(nullptr);

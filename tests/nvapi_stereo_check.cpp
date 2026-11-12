@@ -2,9 +2,9 @@
 // Not part of the test suite (no _test suffix): it needs an NVIDIA GPU, and its optional shader folder holds a game's
 // shaders (tools/rdc/view_census.py RDC_BYTECODE: keep it local).
 //
-//   nvapi_stereo_check.exe [folder of .dxbc vertex shaders]
-//   nvapi_stereo_check.exe --timing      (only 4. below)
-//   nvapi_stereo_check.exe --car-timing  (only 9. below)
+//   sim_qvfr_tests nvapi_stereo_check [folder of .dxbc vertex shaders]
+//   sim_qvfr_tests nvapi_stereo_check --timing      (only 4. below)
+//   sim_qvfr_tests nvapi_stereo_check --car-timing  (only 9. below)
 //
 // 1. NVAPI's support flags on the default adapter.
 // 2. Every shader in the folder: its checksum, the conversion, the converted checksum, created by D3D11 and by NVAPI
@@ -833,7 +833,7 @@ void focus_mip_bias(ID3D11Device* device, ID3D11DeviceContext* context) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;

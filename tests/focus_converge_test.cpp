@@ -20,7 +20,7 @@ XrQuaternionf yaw(double degrees) {  // about +y: positive turns -z (forward) to
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using namespace simqvfr;
     const XrVector3f eyes[2] = {{-0.032f, 0, 0}, {0.032f, 0, 0}};  // a 64 mm IPD
     const XrQuaternionf straight[2] = {{0, 0, 0, 1}, {0, 0, 0, 1}};

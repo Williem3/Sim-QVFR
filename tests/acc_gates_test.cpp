@@ -56,7 +56,7 @@ void render(Canvas& c, const acc::GateRect& eye, const acc::GateRect& focus, con
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using namespace acc;
     {
         // Copies: two views of the same scene.

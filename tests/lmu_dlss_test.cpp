@@ -56,7 +56,7 @@ Pixel pixel_of(const M4& vp, unsigned w, unsigned h, double wx, double wy, doubl
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     const unsigned W = 1600, H = 1280;
     const Tangents fov{std::tan(-0.9512), std::tan(0.8814), std::tan(-0.8290), std::tan(0.8290)};
     const M4 p = projection_of(fov, 0.05, 20000);

@@ -17,7 +17,7 @@ __declspec(noinline) double caller() { return victim(1, 2.5f, 3, 4.25, 5, 6.5f, 
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     using namespace simqvfr;
     if (MH_Initialize() != MH_OK)
         return 2;

@@ -22,7 +22,7 @@ void check(bool ok, const char* what) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     check(!make_panel_upload(SessionGraphics{}, 64, 8), "no device: no uploader");
 
     ComPtr<ID3D11Device> device;

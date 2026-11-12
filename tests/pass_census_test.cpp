@@ -27,7 +27,7 @@ ComPtr<ID3DBlob> compile(const char* source, const char* target) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     // The log goes to a file of the test's own (opened at its first line), read back at the end.
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
@@ -125,10 +125,10 @@ int main() {
     int watched = 0, watchedDispatches = 0;
     while (std::getline(log, line)) {
         if (line.find("pass census: watched eyes only pipeline draw viewport=64,0 64x64") != std::string::npos &&
-            line.find("stack: pass_census_test.exe+") != std::string::npos)
+            line.find("stack: sim_qvfr_tests.exe+") != std::string::npos)
             ++watched;
         if (line.find("pass census: watched test compute dispatch ") != std::string::npos &&
-            line.find("stack: pass_census_test.exe+") != std::string::npos)
+            line.find("stack: sim_qvfr_tests.exe+") != std::string::npos)
             ++watchedDispatches;
         if (line.find("pass census: cs") == std::string::npos && line.find("pass census: gfx") == std::string::npos)
             continue;

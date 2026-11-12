@@ -52,7 +52,7 @@ int real_runtime(const std::wstring& runtime, const std::filesystem::path& scrat
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     const std::filesystem::path scratch = exe_dir() / L"cheeky_host_test";
     std::error_code ec;
     std::filesystem::create_directories(scratch, ec);

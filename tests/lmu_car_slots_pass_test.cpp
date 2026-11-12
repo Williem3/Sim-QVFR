@@ -47,7 +47,7 @@ T* bound(T* p) {  // a Get* result as a raw pointer (its reference released: the
 
 }  // namespace
 
-int main(int argc, char** argv) {
+int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     const bool hardware = argc > 1 && std::strcmp(argv[1], "--hardware") == 0;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;

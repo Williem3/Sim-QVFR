@@ -1,0 +1,67 @@
+﻿// The one test program, sim_qvfr_tests.exe: every test and hardware check of tests/ (CMakeLists.txt, sim_qvfr_test),
+// run by name:
+//   sim_qvfr_tests <name> [the test's arguments]     sim_qvfr_tests --list
+// A test that starts this program again as its child passes only its own arguments: the child finds the test's name
+// in SIM_QVFR_TEST, set here. Generated from tests/tests_main.cpp.in.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include <windows.h>
+
+#include <shellapi.h>
+
+@SIM_QVFR_TEST_DECLARATIONS@
+namespace {
+
+struct Test {
+    const char* name;
+    int (*plain)();
+    int (*narrow)(int, char**);
+    int (*wide)(int, wchar_t**);
+};
+
+const Test tests[] = {
+@SIM_QVFR_TEST_ROWS@};
+
+const Test* find(const char* name) {
+    for (const Test& t : tests)
+        if (std::strcmp(t.name, name) == 0)
+            return &t;
+    return nullptr;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    // skip: how many arguments after the program's name are ours (the test's name), not the test's.
+    int skip = 1;
+    const Test* test = argc > 1 ? find(argv[1]) : nullptr;
+    if (!test) {
+        char name[128] = {};
+        if (GetEnvironmentVariableA("SIM_QVFR_TEST", name, sizeof(name)) > 0)
+            test = find(name);
+        skip = 0;
+    }
+    if (!test) {
+        const bool list = argc > 1 && std::strcmp(argv[1], "--list") == 0;
+        if (!list)
+            std::fprintf(stderr, "usage: sim_qvfr_tests <name> [the test's arguments], one of:\n");
+        for (const Test& t : tests)
+            std::fprintf(list ? stdout : stderr, list ? "%s\n" : "  %s\n", t.name);
+        return list ? 0 : 2;
+    }
+    SetEnvironmentVariableA("SIM_QVFR_TEST", test->name);
+    if (test->plain)
+        return test->plain();
+    if (test->narrow) {
+        argv[skip] = argv[0];  // the test's argv[0]: this program's path
+        return test->narrow(argc - skip, argv + skip);
+    }
+    int count = 0;
+    wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!wide || count <= skip)
+        return 2;
+    wide[skip] = wide[0];
+    return test->wide(count - skip, wide + skip);
+}

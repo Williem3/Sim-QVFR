@@ -39,4 +39,8 @@ void cpu_profile_wait();
 // The last finished report's path (empty before the first).
 std::wstring cpu_profile_last_report();
 
+// The start a report gives the function containing `address`: from its unwind entry, or for a function without
+// one (a leaf: no stack use) the first 16-byte boundary after the entry before it.
+uint64_t cpu_profile_function_start(uint64_t address);
+
 }  // namespace simqvfr

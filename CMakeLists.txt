@@ -53,6 +53,16 @@ function(sim_qvfr_version_info target file_name file_type description)
   set_property(TARGET ${target} PROPERTY SIM_QVFR_VERSION_INFO TRUE)
 endfunction()
 
+# A test or hardware check (tests/<name>.cpp): compiled as objects of the one test program, sim_qvfr_tests.exe (below),
+# which runs it as `sim_qvfr_tests <name> [arguments]`. One program and not one per test: Windows Defender checks every
+# new exe on its first start, one at a time (about 2 s each: the first suite after a build waited over a minute on
+# fifty of them), and its machine-learned verdicts kept flagging one or another small unsigned test exe.
+function(sim_qvfr_test name)
+  add_library(${name} OBJECT ${ARGN})
+  target_compile_definitions(${name} PRIVATE SIM_QVFR_TEST_MAIN=${name}_main)
+  set_property(GLOBAL APPEND PROPERTY SIM_QVFR_TESTS ${name})
+endfunction()
+
 # MinHook 1.3.4 and the OpenXR SDK headers, vendored (third_party/README.md).
 set(THIRD_PARTY ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 add_library(minhook STATIC
@@ -143,7 +153,7 @@ add_custom_command(TARGET sim_qvfr POST_BUILD
           $<TARGET_FILE_DIR:sim_qvfr>/vulkan/VkLayer_SIM_qvfr_early.json)
 
 # Offline check of the layer chain (tests/layer_chain_test.cpp): it negotiates the built sim-qvfr.dll.
-add_executable(layer_chain_test tests/layer_chain_test.cpp)
+sim_qvfr_test(layer_chain_test tests/layer_chain_test.cpp)
 target_include_directories(layer_chain_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(layer_chain_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(layer_chain_test PRIVATE /W4 /permissive- /utf-8)
@@ -151,37 +161,37 @@ target_link_libraries(layer_chain_test PRIVATE sim_qvfr_core)
 add_dependencies(layer_chain_test sim_qvfr)
 
 # Offline check of the hand-assembled probe stub (tests/stub_test.cpp).
-add_executable(stub_test tests/stub_test.cpp)
+sim_qvfr_test(stub_test tests/stub_test.cpp)
 target_include_directories(stub_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(stub_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(stub_test PRIVATE sim_qvfr_core)
 
 # Offline check of the D3D12 swapchain-write trace on a WARP device (tests/d3d12_trace_test.cpp).
-add_executable(d3d12_trace_test tests/d3d12_trace_test.cpp)
+sim_qvfr_test(d3d12_trace_test tests/d3d12_trace_test.cpp)
 target_include_directories(d3d12_trace_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(d3d12_trace_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(d3d12_trace_test PRIVATE sim_qvfr_core)
 
 # Offline check of the quad compositor on a WARP device (tests/compositor_test.cpp).
-add_executable(compositor_test tests/compositor_test.cpp)
+sim_qvfr_test(compositor_test tests/compositor_test.cpp)
 target_include_directories(compositor_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(compositor_test PRIVATE sim_qvfr_core)
 
 # Offline check of the SSR resample on a WARP device, and ACC's viewport matching (tests/view_resample_test.cpp).
-add_executable(view_resample_test tests/view_resample_test.cpp)
+sim_qvfr_test(view_resample_test tests/view_resample_test.cpp)
 target_include_directories(view_resample_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(view_resample_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(view_resample_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the depth probe on a WARP device (tests/depth_probe_test.cpp).
-add_executable(depth_probe_test tests/depth_probe_test.cpp)
+sim_qvfr_test(depth_probe_test tests/depth_probe_test.cpp)
 target_include_directories(depth_probe_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(depth_probe_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(depth_probe_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the second-view vertex shader edit on a WARP device (tests/dxbc_patch_test.cpp).
-add_executable(dxbc_patch_test tests/dxbc_patch_test.cpp)
+sim_qvfr_test(dxbc_patch_test tests/dxbc_patch_test.cpp)
 target_include_directories(dxbc_patch_test PRIVATE src)
 target_compile_definitions(dxbc_patch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(dxbc_patch_test PRIVATE /W4 /permissive- /utf-8)
@@ -189,7 +199,7 @@ target_link_libraries(dxbc_patch_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Hardware check of NVIDIA single-pass stereo with converted shaders (tests/nvapi_stereo_check.cpp): not in the suite
 # (no _test suffix; needs an NVIDIA GPU). Optional argument: a folder of a game's vertex shaders, kept local.
-add_executable(nvapi_stereo_check tests/nvapi_stereo_check.cpp)
+sim_qvfr_test(nvapi_stereo_check tests/nvapi_stereo_check.cpp)
 target_include_directories(nvapi_stereo_check PRIVATE src)
 target_compile_definitions(nvapi_stereo_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(nvapi_stereo_check PRIVATE /W4 /permissive- /utf-8)
@@ -197,7 +207,7 @@ target_link_libraries(nvapi_stereo_check PRIVATE sim_qvfr_core d3d11 d3dcompiler
 
 # Hardware check of LMU's DLAA module outside the game (tests/lmu_dlss_check.cpp): not in the suite, NGX SDK builds only.
 if(SIM_QVFR_NGX)
-  add_executable(lmu_dlss_check tests/lmu_dlss_check.cpp)
+  sim_qvfr_test(lmu_dlss_check tests/lmu_dlss_check.cpp)
   target_include_directories(lmu_dlss_check PRIVATE src ${THIRD_PARTY}/openxr/include)
   target_compile_definitions(lmu_dlss_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(lmu_dlss_check PRIVATE /W4 /permissive- /utf-8)
@@ -207,7 +217,7 @@ endif()
 # Hardware check of DLSS called by us through NGX on D3D11 (tests/ngx_dlss_check.cpp): not in the suite, and built only
 # with the NGX SDK (NGX_SDK_DIR above).
 if(SIM_QVFR_NGX)
-  add_executable(ngx_dlss_check tests/ngx_dlss_check.cpp)
+  sim_qvfr_test(ngx_dlss_check tests/ngx_dlss_check.cpp)
   target_include_directories(ngx_dlss_check PRIVATE "${NGX_SDK_DIR}/include")
   target_compile_definitions(ngx_dlss_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(ngx_dlss_check PRIVATE /W4 /permissive- /utf-8)
@@ -216,21 +226,21 @@ if(SIM_QVFR_NGX)
 endif()
 
 # Offline check of LMU's MVR probe on a WARP device (tests/lmu_mvr_probe_test.cpp).
-add_executable(lmu_mvr_probe_test tests/lmu_mvr_probe_test.cpp)
+sim_qvfr_test(lmu_mvr_probe_test tests/lmu_mvr_probe_test.cpp)
 target_include_directories(lmu_mvr_probe_test PRIVATE src)
 target_compile_definitions(lmu_mvr_probe_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_mvr_probe_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_mvr_probe_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of an object pointed at a vtable copy, on a WARP device (tests/object_vtable_test.cpp).
-add_executable(object_vtable_test tests/object_vtable_test.cpp)
+sim_qvfr_test(object_vtable_test tests/object_vtable_test.cpp)
 target_include_directories(object_vtable_test PRIVATE src)
 target_compile_definitions(object_vtable_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(object_vtable_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(object_vtable_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of LMU's multi-view rendering in the eye passes on a WARP device (tests/lmu_mvr_pass_test.cpp).
-add_executable(lmu_mvr_pass_test tests/lmu_mvr_pass_test.cpp)
+sim_qvfr_test(lmu_mvr_pass_test tests/lmu_mvr_pass_test.cpp)
 target_include_directories(lmu_mvr_pass_test PRIVATE src)
 target_compile_definitions(lmu_mvr_pass_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_mvr_pass_test PRIVATE /W4 /permissive- /utf-8)
@@ -238,150 +248,150 @@ target_link_libraries(lmu_mvr_pass_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of LMU MVR's focus post (YEBIS's copy and composite replayed for the focus view) on a WARP device
 # (tests/lmu_focus_post_test.cpp).
-add_executable(lmu_focus_post_test tests/lmu_focus_post_test.cpp)
+sim_qvfr_test(lmu_focus_post_test tests/lmu_focus_post_test.cpp)
 target_include_directories(lmu_focus_post_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(lmu_focus_post_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_focus_post_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_focus_post_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of the D3D11 compositor on a WARP device (tests/d3d11_compositor_test.cpp).
-add_executable(d3d11_compositor_test tests/d3d11_compositor_test.cpp)
+sim_qvfr_test(d3d11_compositor_test tests/d3d11_compositor_test.cpp)
 target_include_directories(d3d11_compositor_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(d3d11_compositor_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(d3d11_compositor_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the compositor's sharpening (CAS) on a WARP device (tests/cas_sharpen_test.cpp).
-add_executable(cas_sharpen_test tests/cas_sharpen_test.cpp)
+sim_qvfr_test(cas_sharpen_test tests/cas_sharpen_test.cpp)
 target_include_directories(cas_sharpen_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(cas_sharpen_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(cas_sharpen_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the panels' D3D11 upload on a WARP device (tests/panel_upload_test.cpp).
-add_executable(panel_upload_test tests/panel_upload_test.cpp)
+sim_qvfr_test(panel_upload_test tests/panel_upload_test.cpp)
 target_include_directories(panel_upload_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(panel_upload_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(panel_upload_test PRIVATE sim_qvfr_core d3d11)
 
 # Offline check of the frame records carried to the composition (tests/frame_records_test.cpp).
-add_executable(frame_records_test tests/frame_records_test.cpp)
+sim_qvfr_test(frame_records_test tests/frame_records_test.cpp)
 target_include_directories(frame_records_test PRIVATE src)
 target_compile_options(frame_records_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of the two_loops frame pairing against a fake runtime (tests/two_loops_test.cpp).
-add_executable(two_loops_test tests/two_loops_test.cpp)
+sim_qvfr_test(two_loops_test tests/two_loops_test.cpp)
 target_include_directories(two_loops_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(two_loops_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(two_loops_test PRIVATE sim_qvfr_layer)
 
 # Offline check of the quad pipeline's frame flow on a WARP device against a fake runtime (tests/quad_flow_test.cpp).
-add_executable(quad_flow_test tests/quad_flow_test.cpp)
+sim_qvfr_test(quad_flow_test tests/quad_flow_test.cpp)
 target_include_directories(quad_flow_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(quad_flow_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(quad_flow_test PRIVATE sim_qvfr_layer)
 
 # Offline check of native quad views (quad/native_quad.h, layer/native_quad.cpp) against a fake runtime offering
 # PRIMARY_QUAD_VARJO (tests/native_quad_test.cpp).
-add_executable(native_quad_test tests/native_quad_test.cpp)
+sim_qvfr_test(native_quad_test tests/native_quad_test.cpp)
 target_include_directories(native_quad_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(native_quad_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(native_quad_test PRIVATE sim_qvfr_layer)
 
 # The decrypted-image dump (probe/image_dump.h): this exe's own code from memory, relocations undone, equals its file.
-add_executable(image_dump_test tests/image_dump_test.cpp)
+sim_qvfr_test(image_dump_test tests/image_dump_test.cpp)
 target_include_directories(image_dump_test PRIVATE src)
 target_compile_definitions(image_dump_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(image_dump_test PRIVATE sim_qvfr_core)
 target_link_options(image_dump_test PRIVATE /IGNORE:4078)  # its pointer placed in .text on purpose
 
 # Gate runs that end themselves (probe/run_exit.h): WM_CLOSE to this process's visible top-level windows only.
-add_executable(run_exit_test tests/run_exit_test.cpp)
+sim_qvfr_test(run_exit_test tests/run_exit_test.cpp)
 target_include_directories(run_exit_test PRIVATE src)
 target_compile_definitions(run_exit_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(run_exit_test PRIVATE sim_qvfr_core)
 
 # LMU's focus projection (games/lmu/focus_math.h) against the projection the game builds.
-add_executable(lmu_focus_test tests/lmu_focus_test.cpp)
+sim_qvfr_test(lmu_focus_test tests/lmu_focus_test.cpp)
 target_include_directories(lmu_focus_test PRIVATE src)
 
 # LMU's car part tracking for other cars' motion vectors (games/lmu/car_motion.h): keys, slots, the frame before.
-add_executable(lmu_car_motion_test tests/lmu_car_motion_test.cpp)
+sim_qvfr_test(lmu_car_motion_test tests/lmu_car_motion_test.cpp)
 target_include_directories(lmu_car_motion_test PRIVATE src)
 target_link_libraries(lmu_car_motion_test PRIVATE sim_qvfr_core)
 
 # LMU's car tracking in the eye passes on a WARP device (games/lmu/mvr_pass.h mvr_car_track): reflection, hooks, counts.
-add_executable(lmu_car_track_test tests/lmu_car_track_test.cpp)
+sim_qvfr_test(lmu_car_track_test tests/lmu_car_track_test.cpp)
 target_include_directories(lmu_car_track_test PRIVATE src)
 target_compile_definitions(lmu_car_track_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_car_track_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_car_track_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # The car slot target and its pixel shader twin (other cars' motion vectors) on a WARP device (tests/lmu_car_slot_test.cpp).
-add_executable(lmu_car_slot_test tests/lmu_car_slot_test.cpp)
+sim_qvfr_test(lmu_car_slot_test tests/lmu_car_slot_test.cpp)
 target_include_directories(lmu_car_slot_test PRIVATE src)
 target_compile_definitions(lmu_car_slot_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_car_slot_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_car_slot_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # The car slots in the eye passes on a WARP device (tests/lmu_car_slots_pass_test.cpp): target, twins, blend states.
-add_executable(lmu_car_slots_pass_test tests/lmu_car_slots_pass_test.cpp)
+sim_qvfr_test(lmu_car_slots_pass_test tests/lmu_car_slots_pass_test.cpp)
 target_include_directories(lmu_car_slots_pass_test PRIVATE src)
 target_compile_definitions(lmu_car_slots_pass_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_car_slots_pass_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_car_slots_pass_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # The maths of the DLAA inputs (engine/dlss_math.h): the FOV jitter and the depth reprojection's vectors.
-add_executable(lmu_dlss_test tests/lmu_dlss_test.cpp)
+sim_qvfr_test(lmu_dlss_test tests/lmu_dlss_test.cpp)
 target_include_directories(lmu_dlss_test PRIVATE src)
 target_compile_options(lmu_dlss_test PRIVATE /W4 /permissive- /utf-8)
 
 # LMU's glare share (games/lmu/glare_math.h) on a WARP device: YEBIS's region, the eye's halo in the focus view at the
 # same angles, the pointer walk to the texture (tests/lmu_glare_test.cpp).
-add_executable(lmu_glare_test tests/lmu_glare_test.cpp)
+sim_qvfr_test(lmu_glare_test tests/lmu_glare_test.cpp)
 target_include_directories(lmu_glare_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(lmu_glare_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_glare_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_glare_test PRIVATE sim_qvfr_core d3d11)
 
 # ACE's DLSS output-extent fix (games/ace/ngx_extent.h) against a parameter bag laid out as NGX's.
-add_executable(ace_ngx_extent_test tests/ace_ngx_extent_test.cpp)
+sim_qvfr_test(ace_ngx_extent_test tests/ace_ngx_extent_test.cpp)
 target_include_directories(ace_ngx_extent_test PRIVATE src)
 
 # Offline check of the views4 index-folding trampolines (tests/code_patch_test.cpp).
-add_executable(code_patch_test tests/code_patch_test.cpp)
+sim_qvfr_test(code_patch_test tests/code_patch_test.cpp)
 target_include_directories(code_patch_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(code_patch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(code_patch_test PRIVATE sim_qvfr_core)
 
 # Offline check of the DRED device-removal report on WARP (tests/dred_test.cpp).
-add_executable(dred_test tests/dred_test.cpp)
+sim_qvfr_test(dred_test tests/dred_test.cpp)
 target_include_directories(dred_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(dred_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(dred_test PRIVATE sim_qvfr_core)
 
 # Offline check of the views4 focus outline on WARP (tests/focus_outline_test.cpp).
-add_executable(focus_outline_test tests/focus_outline_test.cpp)
+sim_qvfr_test(focus_outline_test tests/focus_outline_test.cpp)
 target_include_directories(focus_outline_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_outline_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(focus_outline_test PRIVATE sim_qvfr_core)
 
 # Offline check of the per-pipeline pass census on WARP (tests/pass_census_test.cpp).
-add_executable(pass_census_test tests/pass_census_test.cpp)
+sim_qvfr_test(pass_census_test tests/pass_census_test.cpp)
 target_include_directories(pass_census_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(pass_census_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(pass_census_test PRIVATE sim_qvfr_core)
 
 # Offline check of the gaze turn on ACE's row-vector view matrices (tests/focus_turn_test.cpp).
-add_executable(focus_turn_test tests/focus_turn_test.cpp)
+sim_qvfr_test(focus_turn_test tests/focus_turn_test.cpp)
 target_include_directories(focus_turn_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_turn_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 
 # Offline check of the converging focus boxes (tests/focus_converge_test.cpp).
-add_executable(focus_converge_test tests/focus_converge_test.cpp)
+sim_qvfr_test(focus_converge_test tests/focus_converge_test.cpp)
 target_include_directories(focus_converge_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_converge_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 
 # Offline check of the in-headset settings menu and its panel image (tests/settings_menu_test.cpp).
-add_executable(settings_menu_test tests/settings_menu_test.cpp)
+sim_qvfr_test(settings_menu_test tests/settings_menu_test.cpp)
 target_include_directories(settings_menu_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(settings_menu_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 # The documented ini, for timing a menu step on a file of its size (each ini write rewrites it).
@@ -390,29 +400,29 @@ target_compile_options(settings_menu_test PRIVATE /utf-8)
 target_link_libraries(settings_menu_test PRIVATE sim_qvfr_core)
 
 # Offline check of the performance overlay: its numbers, rows and card (tests/osd_test.cpp).
-add_executable(osd_test tests/osd_test.cpp)
+sim_qvfr_test(osd_test tests/osd_test.cpp)
 target_include_directories(osd_test PRIVATE src)
 target_compile_definitions(osd_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(osd_test PRIVATE /utf-8)
 target_link_libraries(osd_test PRIVATE sim_qvfr_core)
 
 # Offline check of the settings menu's QVFR optimizer against a simulated GPU (tests/qvfr_optimizer_test.cpp).
-add_executable(qvfr_optimizer_test tests/qvfr_optimizer_test.cpp)
+sim_qvfr_test(qvfr_optimizer_test tests/qvfr_optimizer_test.cpp)
 target_include_directories(qvfr_optimizer_test PRIVATE src)
 target_compile_definitions(qvfr_optimizer_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(qvfr_optimizer_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(qvfr_optimizer_test PRIVATE sim_qvfr_core)
 
 # Offline check of the focus-view cull planes and tests (tests/focus_cull_test.cpp).
-add_executable(focus_cull_test tests/focus_cull_test.cpp)
+sim_qvfr_test(focus_cull_test tests/focus_cull_test.cpp)
 target_include_directories(focus_cull_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_cull_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 
 # Offline check of the GPU frame timer on a WARP device (tests/gpu_frame_timer_test.cpp).
-add_executable(gpu_frame_timer_test tests/gpu_frame_timer_test.cpp)
+sim_qvfr_test(gpu_frame_timer_test tests/gpu_frame_timer_test.cpp)
 
 # Offline check of the GPU and CPU load samplers (tests/load_test.cpp).
-add_executable(load_test tests/load_test.cpp)
+sim_qvfr_test(load_test tests/load_test.cpp)
 target_include_directories(load_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(load_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(load_test PRIVATE sim_qvfr_core)
@@ -423,7 +433,7 @@ target_link_libraries(gpu_frame_timer_test PRIVATE sim_qvfr_core)
 # Offline check of the Cheeky runtime host against a fake runtime DLL (tests/cheeky_host_test.cpp); with
 # SIM_QVFR_CHEEKY_RUNTIME set to a real CheekyFoveatedDLSSRuntime.dll it also starts that one.
 add_library(cheeky_fake_runtime SHARED tests/cheeky_fake_runtime.cpp)
-add_executable(cheeky_host_test tests/cheeky_host_test.cpp)
+sim_qvfr_test(cheeky_host_test tests/cheeky_host_test.cpp)
 target_include_directories(cheeky_host_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(cheeky_host_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(cheeky_host_test PRIVATE /W4 /permissive- /utf-8)
@@ -432,7 +442,7 @@ add_dependencies(cheeky_host_test cheeky_fake_runtime)
 
 # Offline check of the hang watch's module log and its minidump, written by the launcher as the dump helper
 # (tests/hang_watch_test.cpp).
-add_executable(hang_watch_test tests/hang_watch_test.cpp)
+sim_qvfr_test(hang_watch_test tests/hang_watch_test.cpp)
 target_include_directories(hang_watch_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(hang_watch_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(hang_watch_test PRIVATE sim_qvfr_core)
@@ -489,7 +499,7 @@ foreach(piece top bottom visor)
 endforeach()
 
 # Offline check of the launcher's launch plan (tests/launcher_test.cpp).
-add_executable(launcher_test tests/launcher_test.cpp)
+sim_qvfr_test(launcher_test tests/launcher_test.cpp)
 target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(launcher_test PRIVATE /W4 /permissive- /utf-8)
@@ -497,41 +507,80 @@ target_link_libraries(launcher_test PRIVATE sim_qvfr_launcher_shared)
 
 # Offline check of the VRAM census on a WARP device: textures recorded, sorted and taken off when freed
 # (tests/vram_census_test.cpp).
-add_executable(vram_census_test tests/vram_census_test.cpp)
+sim_qvfr_test(vram_census_test tests/vram_census_test.cpp)
 target_include_directories(vram_census_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(vram_census_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(vram_census_test PRIVATE sim_qvfr_core)
 
 # Offline check of the CPU sampling profiler: a spinning thread's function on top (tests/cpu_profile_test.cpp).
-add_executable(cpu_profile_test tests/cpu_profile_test.cpp)
+sim_qvfr_test(cpu_profile_test tests/cpu_profile_test.cpp)
 target_include_directories(cpu_profile_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(cpu_profile_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(cpu_profile_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cpu_profile_test PRIVATE sim_qvfr_core)
 
 # Offline check of X-Plane's focus projections (tests/xplane_focus_test.cpp).
-add_executable(xplane_focus_test tests/xplane_focus_test.cpp src/games/xplane/focus_projection.cpp)
+sim_qvfr_test(xplane_focus_test tests/xplane_focus_test.cpp src/games/xplane/focus_projection.cpp)
 target_include_directories(xplane_focus_test PRIVATE src)
 target_compile_options(xplane_focus_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of the SPIR-V edit for X-Plane's final resolve shader (tests/xplane_spirv_test.cpp).
-add_executable(xplane_spirv_test tests/xplane_spirv_test.cpp src/games/xplane/spirv_patch.cpp)
+sim_qvfr_test(xplane_spirv_test tests/xplane_spirv_test.cpp src/games/xplane/spirv_patch.cpp)
 target_include_directories(xplane_spirv_test PRIVATE src)
 target_compile_definitions(xplane_spirv_test PRIVATE _CRT_SECURE_NO_WARNINGS)
 target_compile_options(xplane_spirv_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of ACC's four-view mapping onto UE 4.26's stereo passes (tests/acc_views_test.cpp).
-add_executable(acc_views_test tests/acc_views_test.cpp)
+sim_qvfr_test(acc_views_test tests/acc_views_test.cpp)
 target_include_directories(acc_views_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(acc_views_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(acc_views_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of ACC's gate comparisons (tests/acc_gates_test.cpp).
-add_executable(acc_gates_test tests/acc_gates_test.cpp)
+sim_qvfr_test(acc_gates_test tests/acc_gates_test.cpp)
 target_include_directories(acc_gates_test PRIVATE src)
 target_compile_options(acc_gates_test PRIVATE /W4 /permissive- /utf-8)
 
-# The tests, checks and test helpers: version info like the shipped binaries, and no manifest. Windows Defender
+# The one test program: every test and check above (sim_qvfr_test), run by name (tests/tests_main.cpp.in).
+get_property(_tests GLOBAL PROPERTY SIM_QVFR_TESTS)
+set(SIM_QVFR_TEST_DECLARATIONS "")
+set(SIM_QVFR_TEST_ROWS "")
+foreach(_test IN LISTS _tests)
+  get_target_property(_sources ${_test} SOURCES)
+  list(GET _sources 0 _source)
+  file(STRINGS ${_source} _entry REGEX "^int SIM_QVFR_TEST_MAIN\\(" LIMIT_COUNT 1)
+  if(_entry MATCHES "wchar_t")
+    string(APPEND SIM_QVFR_TEST_DECLARATIONS "int ${_test}_main(int, wchar_t**);\n")
+    string(APPEND SIM_QVFR_TEST_ROWS "    {\"${_test}\", nullptr, nullptr, ${_test}_main},\n")
+  elseif(_entry MATCHES "\\(\\)")
+    string(APPEND SIM_QVFR_TEST_DECLARATIONS "int ${_test}_main();\n")
+    string(APPEND SIM_QVFR_TEST_ROWS "    {\"${_test}\", ${_test}_main, nullptr, nullptr},\n")
+  elseif(_entry)
+    string(APPEND SIM_QVFR_TEST_DECLARATIONS "int ${_test}_main(int, char**);\n")
+    string(APPEND SIM_QVFR_TEST_ROWS "    {\"${_test}\", nullptr, ${_test}_main, nullptr},\n")
+  else()
+    message(FATAL_ERROR "${_source}: no `int SIM_QVFR_TEST_MAIN(` at the start of a line")
+  endif()
+endforeach()
+configure_file(tests/tests_main.cpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/tests_main.cpp @ONLY)
+# A build folder from before the one test program still holds an exe per test: removed, so that none is run by
+# mistake or keeps turning up in Windows Defender's scan of the folder.
+foreach(_test IN LISTS _tests)
+  foreach(_config Release Debug RelWithDebInfo MinSizeRel)
+    file(REMOVE ${CMAKE_CURRENT_BINARY_DIR}/${_config}/${_test}.exe ${CMAKE_CURRENT_BINARY_DIR}/${_config}/${_test}.pdb)
+  endforeach()
+endforeach()
+add_executable(sim_qvfr_tests ${CMAKE_CURRENT_BINARY_DIR}/generated/tests_main.cpp)
+target_compile_options(sim_qvfr_tests PRIVATE /W4 /permissive- /utf-8)
+# The layer and launcher objects by name: an object library reaches only the target that links it directly.
+target_link_libraries(sim_qvfr_tests PRIVATE ${_tests} sim_qvfr_layer sim_qvfr_launcher_shared shell32)
+# What the tests load or start from beside the program: the layer, the launcher (the dump helper), the fake runtime.
+add_dependencies(sim_qvfr_tests sim_qvfr sim_qvfr_launcher cheeky_fake_runtime)
+# A deterministic link (no time stamp in the exe): a build that changed nothing the tests use relinks to the same
+# bytes, which Windows Defender has already checked.
+target_link_options(sim_qvfr_tests PRIVATE /Brepro)
+
+# The test program and the test helper: version info like the shipped binaries, and no manifest. Windows Defender
 # quarantined small unsigned test exes (Program:Win32/Wacapew.A!ml, Trojan:Win32/Cloxer). Scans of variants of the
 # same exe: the linker's default manifest is what got them flagged (with or without version info); with no manifest
 # they are clean. Their manifest only asked to run as the invoker, which an x64 console exe does without one.
@@ -540,7 +589,7 @@ foreach(_target IN LISTS _targets)
   get_target_property(_type ${_target} TYPE)
   get_target_property(_has_version_info ${_target} SIM_QVFR_VERSION_INFO)
   if(NOT _has_version_info AND _type STREQUAL "EXECUTABLE")
-    sim_qvfr_version_info(${_target} ${_target}.exe VFT_APP "Sim-QVFR test (${_target})")
+    sim_qvfr_version_info(${_target} ${_target}.exe VFT_APP "Sim-QVFR tests")
     target_link_options(${_target} PRIVATE /MANIFEST:NO)
   elseif(NOT _has_version_info AND _type STREQUAL "SHARED_LIBRARY")
     sim_qvfr_version_info(${_target} ${_target}.dll VFT_DLL "Sim-QVFR test helper (${_target})")
@@ -548,7 +597,7 @@ foreach(_target IN LISTS _targets)
   endif()
 endforeach()
 
-# The offline suite for ctest: every *_test executable above, side by side
+# The offline suite for ctest: every *_test above, side by side
 # (`ctest --test-dir build -C Release -j 16 --output-on-failure`, `-R lmu` for some). Each test gets its own TEMP folder
 # and log, so tests that use the same file names never meet, in one run or in two worktrees' runs at once. The folders
 # are under the user's TEMP, not the build folder: some tests compare file times, which an exFAT drive keeps coarser.
@@ -558,17 +607,12 @@ string(SUBSTRING ${_build_hash} 0 8 _build_hash)
 file(TO_CMAKE_PATH "$ENV{TEMP}" _temp)
 set(_scratch_root ${_temp}/sim-qvfr-tests/${_build_hash})
 set(_scratch_folders)
-get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
-foreach(_target IN LISTS _targets)
-  get_target_property(_type ${_target} TYPE)
-  if(_target MATCHES "_test$" AND _type STREQUAL "EXECUTABLE")
-    # Deterministic links (no time stamp in the exe): a test the change didn't touch relinks to the same bytes, which
-    # Windows Defender has already checked, instead of a new exe it checks for about a second on its first run.
-    target_link_options(${_target} PRIVATE /Brepro)
-    file(TO_NATIVE_PATH ${_scratch_root}/${_target} _scratch)
+foreach(_test IN LISTS _tests)
+  if(_test MATCHES "_test$")
+    file(TO_NATIVE_PATH ${_scratch_root}/${_test} _scratch)
     list(APPEND _scratch_folders ${_scratch})
-    add_test(NAME ${_target} COMMAND ${_target})
-    set_tests_properties(${_target} PROPERTIES
+    add_test(NAME ${_test} COMMAND sim_qvfr_tests ${_test})
+    set_tests_properties(${_test} PROPERTIES
       ENVIRONMENT "TEMP=${_scratch};TMP=${_scratch};SIM_QVFR_LOG=${_scratch}\\test.log"
       FIXTURES_REQUIRED test_scratch
       TIMEOUT 120)

@@ -19,7 +19,7 @@ void release(T*& p) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     IDXGIFactory4* factory = nullptr;
     IDXGIAdapter* warp = nullptr;
     ID3D12Device* device = nullptr;

@@ -49,7 +49,7 @@ std::string outputs(int n) {
 
 }  // namespace
 
-int main() {
+int SIM_QVFR_TEST_MAIN() {
     // d3d11.dll's code before the probe: device creation (hooked until mvr_probe_device) and a device's shader creation
     // (never: an entry of a vtable copy the game's device points at).
     const auto* exportCode = reinterpret_cast<const uint8_t*>(GetProcAddress(GetModuleHandleW(L"d3d11.dll"), "D3D11CreateDevice"));

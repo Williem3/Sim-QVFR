@@ -667,6 +667,8 @@ void run(std::vector<Target> targets, int seconds, std::wstring path, double slo
 
 }  // namespace
 
+uint64_t cpu_profile_function_start(uint64_t address) { return function_start(address); }
+
 bool cpu_profile_start(const CpuProfileRequest& request) {
     std::lock_guard guard(state.mutex);
     if (state.running)
