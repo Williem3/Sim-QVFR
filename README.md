@@ -268,9 +268,9 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   little more than when Sim-QVFR composes the image.
 - **LMU's own render scale and FSR** (LMU's VR graphics settings) work with QVFR. They lower every view's
   resolution on top of Sim-QVFR's sliders, and FSR upscales each view as it does without Sim-QVFR.
-- **Turn off MFAA in the NVIDIA Control Panel** (Manage 3D settings, Multi-Frame Sampled AA, globally or for
-  LMU). With it on, shadows flicker in and out and show hard edges while you drive with multi-view rendering.
-  Turning it off fixed that for the player who reported it.
+- **MFAA works with multi-view rendering** (the NVIDIA Control Panel's Multi-Frame Sampled AA). Shadows no
+  longer jump, pop in and out or show hard edges with it on, and the same fix covers AMD graphics cards, which
+  showed this without MFAA. If you turned MFAA off for LMU, you can turn it back on.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
 - **DLSS** (experimental; NVIDIA RTX 20 series and newer; the launcher's **DLSS** page or the headset menu's):
