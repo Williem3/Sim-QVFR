@@ -1545,6 +1545,8 @@ void four_passes_frame_end() {
             if (lose != losingForTest) {
                 losingForTest = lose;
                 mvr_focus_replay(!lose);
+                if (cfg.loseShape)  // as a pipeline that lacks a step: no try is made meanwhile
+                    mvr_shape_force_bad(lose);
                 simqvfr::logf("lmu mvr: frame %llu (scene frame %llu): lmu_mvr_lose_at: the focus post %s", frames, sceneFrames,
                               lose ? "off for 1800 scene frames (no focus views: the recovery's test)" : "on again");
             }
@@ -1553,7 +1555,7 @@ void four_passes_frame_end() {
             stop_multi_view(why);
         } else {
             const double waited = recovery.waitMs;
-            switch (recovery.frame(passes, frameFinalsOk, now_ms())) {
+            switch (recovery.frame(passes, frameFinalsOk, now_ms(), mvr_shape_ready())) {
             case MvrRecovery::Event::wentPlain:
                 if (recovery.timesPlain == 1 && twoPassFrames)
                     log_multi_view_summary();  // what the focus views didn't get past, once

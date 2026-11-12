@@ -9,6 +9,10 @@
 //             to foveated. None: plain again, the wait doubled (kFirstWaitMs up to kMaxWaitMs), so a setting it can't
 //             handle costs a short soft blink at most every 20 s. A setting changed back is picked up at once: LMU
 //             makes its session anew on every graphics change (new_session: the next scene frame is a try).
+// `ready` (mvr_pass.h mvr_shape_ready): the frame's eye passes had every step the focus views are made at (the
+// post-processing's start, its copy, composite and final), seen while the eyes render alone too. Plain tries only
+// while ready, so a pipeline that lacks a step costs no blink at all, and is picked up the frame it has them again.
+// Ready and still no focus views (a step of ours failing): the timed tries above.
 #pragma once
 
 #include <algorithm>
@@ -30,6 +34,7 @@ struct MvrRecovery {
     unsigned long long timesPlain = 0;
     double retryAtMs = 0, waitMs = 0;
     bool stopped = false;  // stop(): plain for the rest of the session, no more tries
+    bool readyFailed = false;  // the focus views were lost, or a try failed, while the frame was ready: timed tries
 
     bool plain() const { return state == State::plain; }
 
@@ -45,15 +50,17 @@ struct MvrRecovery {
     void new_session() {
         retryAtMs = 0;
         waitMs = 0;
+        readyFailed = false;
     }
 
-    // One frame: `passes` eye passes found, `finals` both focus views made, at `nowMs`.
-    Event frame(int passes, bool finals, double nowMs) {
+    // One frame: `passes` eye passes found, `finals` both focus views made, at `nowMs`; `ready` as above.
+    Event frame(int passes, bool finals, double nowMs, bool ready = true) {
         if (stopped)
             return Event::none;
         if (state == State::plain) {
-            // Only from a frame that rendered both eyes: menus and loading screens don't use up a try.
-            if (passes >= 2 && nowMs >= retryAtMs) {
+            // Only from a frame that rendered both eyes: menus and loading screens don't use up a try. And only
+            // while the frame has every step: at once if nothing of ours failed with them there, else on the timer.
+            if (passes >= 2 && ready && (!readyFailed || nowMs >= retryAtMs)) {
                 state = State::trying;
                 noFinals = 0;
                 return Event::tryingAgain;
@@ -66,6 +73,7 @@ struct MvrRecovery {
             noFinals = 0;
             if (++good >= kSettledFrames)
                 waitMs = 0;
+            readyFailed = false;
             if (state == State::trying) {
                 state = State::foveated;
                 return Event::recovered;
@@ -75,6 +83,7 @@ struct MvrRecovery {
         good = 0;
         if (++noFinals < (state == State::trying ? kTryFrames : kNoFinalsFrames))
             return Event::none;
+        readyFailed = state == State::trying || ready;  // (a try is only ever made while ready)
         state = State::plain;
         noFinals = 0;
         ++timesPlain;

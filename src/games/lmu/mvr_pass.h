@@ -142,6 +142,15 @@ void mvr_time_hooks(bool on);
 // mvr_pass_install: DrawIndexed is hooked only with it on (turned on later, its functions are hooked as pass starts see
 // them).
 void mvr_focus_replay(bool on);
+// The last ended frame's two eye passes each had every step the focus views are made at: the post-processing's start,
+// the scene copy (or a stage's image), YEBIS's composite and the final blit (FSR: the eye's image bound), seen by
+// their bindings on the eye's own post-processing, whether or not focus views were drawn. False: a try to draw them
+// would fail (mvr_recovery.h). `mvr_shape_force_bad`: reported false whatever was seen (the recovery's test).
+bool mvr_shape_ready();
+// Tests: whether the probe knows a YEBIS copy and a final blit shader by checksum (1 yes, 0 no; -1: as the probe's
+// counts say, the default). Unknown: found by their bindings.
+void mvr_roles_known_for_tests(int copy, int blit);
+void mvr_shape_force_bad(bool bad);
 // LMU's FSR is on (each eye's post-processing ends in FSR's compute upscale of the whole scene target into the eye's
 // image, no final blit to draw the focus final with): the focus composite is put beside the eye in the scene's
 // target right after YEBIS's composite, so FSR's own upscale carries it beside the eye into the eye's image, where
@@ -232,6 +241,8 @@ struct MvrPassStats {
     // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
     // and after them (the VR UI).
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
+    uint64_t focusCopiesByBindings = 0, focusBlitsByBindings = 0;  // found without a checksum (a game update)
+    uint64_t shapeFrames = 0;  // frames whose two eye passes had every step (mvr_shape_ready)
     uint64_t fsrPlaced = 0, fsrFinals = 0;  // FSR: focus composites put beside the eye for its upscale; finals found
     uint64_t uiMipFrames = 0;  // frames whose VR UI canvas was copied with mips for the panel (mvr_ui_mips)
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
