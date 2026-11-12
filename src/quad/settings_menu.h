@@ -8,6 +8,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/dlss_settings.h"
+#include "../engine/nr_settings.h"
 #include "focus_offset.h"
 #include "focus_quad_distance.h"
 #include "focus_shape.h"
@@ -49,7 +50,13 @@ enum class MenuItem {
     Sharpening,
     // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
     // the focus views' mode and preset, the eyes' preset, texture sharpening.
-    DlssOn, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening
+    DlssOn, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening,
+    // The DLSS-NR page ([dlss_nr], engine/nr_settings.h), for a launch that can run it (MenuLaunch::ownNr): on, the
+    // model's settings, where it runs relative to DLSS, the focus views' working size, the edge blend, the periphery
+    // and how much of it at what working size.
+    NrOn, NrIntensity, NrStyle, NrPreset, NrLocalTone, NrLocalStructure, NrAutoMask, NrOrder, NrFocusScale, NrEdgeBlend,
+    NrPeriphery, NrPeripheryScale, NrPeripheryCoverage,
+    NrLimit  // the most a view's model works on (NrSettings::workingLimit), after the focus working size
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -87,6 +94,7 @@ struct MenuValues {
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     DlssSettings dlss;        // [dlss]: Sim-QVFR's own DLSS (a game with it: LMU; the DLSS page)
+    NrSettings nr;            // [dlss_nr]: DLSS-NR on those views (the DLSS-NR page)
     // The outer views' kept share of the eye (percent; 100 without a crop).
     double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }
     double crop_height() const { return crop ? 100.0 - cropTop - cropBottom : 100.0; }
@@ -120,6 +128,8 @@ struct MenuLaunch {
     // Sim-QVFR's own DLSS can run in this launch (GameFeatures::sideLoadedDlss, QVFR with the multi-view path, a build
     // with the NGX SDK): its DLSS page ([dlss]), live.
     bool ownDlss = false;
+    // DLSS-NR can run in this launch: ownDlss and the player's nvngx_dlssnr.dll in [dlss_nr] folder. Its page, live.
+    bool ownNr = false;
     // Texture sharpening was on at launch, so its hook and shader twins were made: its settings are live. Off at launch,
     // turning it on applies at the next launch (the page says so).
     bool sharpeningReady = false;
@@ -152,7 +162,7 @@ struct SettingsMenu {
 
 // The menu's pages: the method's settings, the focus area's shape, for QVFR the view crop and the helmet, with
 // Cheeky running Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
-enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, OwnDlss, Headset };
+enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, OwnDlss, OwnNr, Headset };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 

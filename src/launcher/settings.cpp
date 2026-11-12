@@ -67,7 +67,6 @@ Settings load_settings(const std::wstring& ini) {
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
     s.sharpen = clamp_to(read_int(ini, L"quad", L"sharpen_percent", s.sharpen), kSharpenRange);
-    s.multiView = read_int(ini, L"experiment", L"multi_view", 1) != 0;  // on by default (migrate_settings)
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
@@ -104,6 +103,7 @@ Settings load_settings(const std::wstring& ini) {
     s.hotkeyFooter = read_int(ini, L"menu", L"hotkey_footer", 1) != 0;
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.dlss = read_dlss_settings(ini.c_str());
+    s.nr = read_nr_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
     s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
     s.cropTop = clamp_to(read_int(ini, L"crop", L"top", 0), kCropRange);
@@ -138,6 +138,7 @@ Settings restored_defaults(const Settings& current) {
     s.hiddenGames = current.hiddenGames;
     s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
+    s.nr.folder = current.nr.folder;  // where the player's nvngx_dlssnr.dll is: not a setting to lose (Sim-QVFR has none)
     return s;  // [dlss] folder too: back to the nvngx_dlss.dll Sim-QVFR includes
 }
 
@@ -162,7 +163,6 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
-    ok &= write(ini, L"experiment", L"multi_view", s.multiView ? L"1" : L"0");  // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
@@ -222,6 +222,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"hotkey_footer", s.hotkeyFooter ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
+    ok &= write_nr_settings(ini.c_str(), s.nr);      // and DLSS-NR on its views (the folder likewise)
     ok &= write_osd_placement(ini.c_str(), s.osd);
     ok &= write_hotkeys(ini.c_str(), s.hotkeys);
     return ok;
@@ -251,7 +252,7 @@ bool per_game_key(const std::wstring& section, const std::wstring& key) {
     return !(section == L"menu" || section == L"osd" || section == L"hotkeys" || section == L"launcher" ||
              section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
              (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")) ||
-             (section == L"dlss" && key == L"folder"));
+             (section == L"dlss" && key == L"folder") || (section == L"dlss_nr" && key == L"folder"));
 }
 
 namespace {
@@ -366,29 +367,6 @@ bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, c
         ok &= store_game_settings(ini, toId);  // none yet: it starts from the settings in use
     ok &= restore_game_settings(ini, toId);
     return ok;
-}
-
-int migrate_settings(const std::wstring& ini) {
-    if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES ||
-        read_int(ini, L"launcher", kMultiViewDefaultOn, 0) != 0)
-        return 0;
-    // Multi-view rendering on: every file that holds multi_view=0 (the launcher wrote it for everyone while the option
-    // was off by default, greyed out without an RTX card) gets 1. Key by key, so nothing else in a file changes.
-    int changed = 0;
-    const auto switch_on = [&](const std::wstring& file) {
-        if (read_int(file, L"experiment", L"multi_view", 1) == 0 &&
-            WritePrivateProfileStringW(L"experiment", L"multi_view", L"1", file.c_str()))
-            ++changed;
-    };
-    switch_on(ini);
-    for (const std::wstring& folder : {game_settings_folder(ini), profiles_folder(ini)}) {
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(folder, ec))
-            if (entry.is_regular_file(ec) && _wcsicmp(entry.path().extension().c_str(), L".ini") == 0)
-                switch_on(entry.path().wstring());
-    }
-    WritePrivateProfileStringW(L"launcher", kMultiViewDefaultOn, L"1", ini.c_str());
-    return changed;
 }
 
 std::string share_profile(const Profile& profile) {

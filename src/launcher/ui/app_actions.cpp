@@ -255,6 +255,14 @@ int* slider_value(Ctl id) {
     case kMenuPitch: return &app.s.menuPitch;
     case kMenuWidth: return &app.s.menuWidth;
     case kCheekyScale: return &app.s.cheeky.outerScale;
+    case kNrIntensity: return &app.s.nr.intensity;
+    case kNrLocalTone: return &app.s.nr.localTone;
+    case kNrLocalStructure: return &app.s.nr.localStructure;
+    case kNrFocusScale: return &app.s.nr.focusScale;
+    case kNrEdgeBlend: return &app.s.nr.edgeBlend;
+    case kNrPeripheryScale: return &app.s.nr.peripheryScale;
+    case kNrPeripheryCoverage: return &app.s.nr.peripheryCoverage;
+    case kNrLimit: return &app.s.nr.workingLimit;
     case kCheekySupersampling: return &app.s.cheeky.supersampling;
     case kFgSize: return &app.s.cheeky.fgSize;
     case kOsdYaw: return &app.s.osd.yaw;
@@ -297,6 +305,14 @@ Range slider_range(Ctl id) {
     case kMenuPitch: return kMenuPitchRange;
     case kMenuWidth: return kMenuWidthRange;
     case kCheekyScale: return {kCheekyScaleMin, kCheekyScaleMax};
+    case kNrIntensity: return {0, 100};
+    case kNrLocalTone:
+    case kNrLocalStructure: return {0, 200};
+    case kNrFocusScale:
+    case kNrPeripheryScale: return {kNrScaleMin, 100};
+    case kNrEdgeBlend: return {0, kNrEdgeMax};
+    case kNrPeripheryCoverage: return {kNrCoverageMin, 100};
+    case kNrLimit: return {kNrLimitMin, kNrLimitMax};
     case kCheekySupersampling: return {kCheekySupersamplingMin, kCheekySupersamplingMax};
     case kFgSize: return {kCheekyFgSizeMin, kCheekyFgSizeMax};
     case kOsdYaw: return {-kOsdYawMax, kOsdYawMax};
@@ -339,8 +355,6 @@ std::vector<Ctl> focus_order() {
                 order.push_back(kObjectDetail);
             if (game_has(&games::GameFeatures::sharpening))
                 order.push_back(kSharpen);
-            if (game_has(&games::GameFeatures::multiView))
-                order.push_back(kMultiView);
             if (game_has(&games::GameFeatures::nativeQuadViews))
                 order.push_back(kNativeQuad);
             if (game_has(&games::GameFeatures::fovCrop))
@@ -383,6 +397,15 @@ std::vector<Ctl> focus_order() {
             if (own_dlss_available() && app.s.dlss.on)
                 order.insert(order.end(), {kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
                                            kDlssCarVectors});
+            if (own_nr_available())
+                order.push_back(kNrOn);
+            order.push_back(kNrFolder);
+            if (own_nr_available() && app.s.nr.on) {
+                order.insert(order.end(), {kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask,
+                                           kNrOrder, kNrFocusScale, kNrLimit, kNrEdgeBlend, kNrPeriphery});
+                if (app.s.nr.periphery)
+                    order.insert(order.end(), {kNrPeripheryScale, kNrPeripheryCoverage});
+            }
             break;
         }
         if (!game_has(&games::GameFeatures::foveatedDlss))

@@ -329,7 +329,6 @@ int run_window(HINSTANCE instance, int show) {
     app.iniFound = GetFileAttributesW(app.ini.c_str()) != INVALID_FILE_ATTRIBUTES;
     clean_update_folder(std::filesystem::path(app.ini).parent_path().wstring());  // what an install left but its backup
     if (app.iniFound) {
-        migrate_settings(app.ini);  // older settings switched to a new default once (multi-view rendering on)
         // Per-game settings: a game without its own copy yet (the first start after the update, or a new game)
         // starts from the settings in use, so updating changes nothing until a game's settings are changed.
         seed_game_settings(app.ini);

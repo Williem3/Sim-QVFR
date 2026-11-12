@@ -12,6 +12,7 @@
 
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
+#include "engine/dlss_views.h"
 #include "input/hotkeys.h"
 #include "log.h"
 #include "probe/cpu_load.h"
@@ -337,7 +338,14 @@ OsdInput osd_input(int64_t now) {
         case games::QvfrMultiView::nvidia: in.multiView = OsdMultiView::Mvr; break;
         case games::QvfrMultiView::software: in.multiView = OsdMultiView::Smvr; break;
         case games::QvfrMultiView::fallback: in.multiView = OsdMultiView::Fallback; break;
+        case games::QvfrMultiView::eyesOnly: in.multiView = OsdMultiView::EyesOnly; break;
         }
+    }
+    {  // DLSS: views evaluated since the card's last drawing
+        static unsigned long long seen = 0;
+        const unsigned long long total = dlss_evaluations_total();
+        in.dlss = total != seen;
+        seen = total;
     }
     return in;
 }

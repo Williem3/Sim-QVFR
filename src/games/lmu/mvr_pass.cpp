@@ -13,13 +13,16 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
+#include "../../engine/code_patch.h"
 #include "../../engine/nvapi_stereo.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
@@ -29,6 +32,7 @@
 #include "glare_math.h"
 #include "mvr_probe.h"
 #include "tag_viewport.h"
+#include "abi.h"
 #include "yebis_shaders.h"
 
 namespace lmu {
@@ -301,12 +305,15 @@ struct State {
     ComPtr<ID3D11RenderTargetView> slotRtv;
     ComPtr<ID3D11ShaderResourceView> slotSrv;
     UINT slotW = 0, slotH = 0;
+    UINT slotSamples = 1, slotQuality = 0;  // as the scene's target: render targets bound together share them
     ComPtr<ID3D11Buffer> slotWords;
     std::vector<ComPtr<ID3D11ShaderResourceView>> slotViews;
     ID3D11ShaderResourceView* slotViewBound = nullptr;
     ID3D11RenderTargetView* sceneRtvChecked = nullptr;  // the last render target view checked for the scene's (raw)
     bool sceneRtvIsScene = false;
     ID3D11Resource* sceneCheckedAgainst = nullptr;  // the tracker's scene target it was checked against (raw)
+    ID3D11Resource* sceneRtvResource = nullptr;     // that view's texture (raw, compared only) and its description
+    D3D11_TEXTURE2D_DESC sceneRtvDesc{};
     ID3D11BlendState* gameBlend = nullptr;  // raw: bound, so alive
     float blendFactor[4] = {1, 1, 1, 1};
     UINT sampleMask = 0xffffffff;
@@ -329,10 +336,21 @@ struct State {
     // its copy and composite replayed.
     bool focusReplay = false, postWindow = false, focusCopied = false, focusComposited = false;
     bool compositeOk = false;  // this pass's focus composite made (the blit's input)
+    // In the post window before the focus copy: the last draw into a single-sample texture of the resolve's size other
+    // than the resolve's target (a stage between the resolve and YEBIS, whose copy then starts from it: reflections
+    // high, 2026-11-11), raw, compared only; whether its viewports covered the focus view beside the eye; its pixel
+    // shader's checksum (the log). Logged once each: the focus copy from that image, from the resolve instead.
+    ID3D11Resource* stageImage = nullptr;
+    bool stageCovers = false;
+    uint32_t stagePs[4] = {};
+    bool stageImageLogged = false, stageResolveLogged = false;
     // R3 (docs/recon-lmu.md "R3b/R3c design"): the focus view's final beside the eye in the eye's final target. This
     // pass's blit replayed; draws into the eye's final after it are overlays MVR doubles (the driver tags); the eye
     // finals of this frame (the VR UI after the passes is doubled into them too) and their sizes.
     bool focusBlitted = false, overlayTarget = false;
+    // mvr_fsr: FSR on; the eyes' images (raw, compared only); said once.
+    bool fsr = false, fsrLogged = false;
+    ID3D11Resource* fsrEye[2] = {};
     ComPtr<ID3D11Resource> eyeFinal[2];
     bool finalThisFrame[2] = {};
     unsigned finalW[2] = {}, finalH[2] = {};
@@ -395,6 +413,11 @@ bool ours(ID3D11DeviceContext* context) { return context == g.context && g.pass 
 struct Tracker {
     bool on = false;
     bool open = false, resolved = false, blitSeen = false;
+    // The open pass's multisample scene target (raw, compared only) and whether a YEBIS draw (any role) came after its
+    // resolve. A stage between the resolve and YEBIS (reflections high: a single-sample depth for YEBIS made, then the
+    // scene target bound again, 2026-11-11 pass trace) rebinds the pass's own scene: still that pass, not the next's.
+    ID3D11Resource* sceneTarget = nullptr;
+    bool postSeen = false, rebindLogged = false;
     int pass = -1, passes = 0;            // the open tracked pass; tracked passes begun this frame (at most two)
     uint64_t draws = 0;                   // draws on the immediate context this frame (the four draw calls)
     uint64_t begin[2] = {}, end[2] = {};  // the draw count at each tracked pass's begin and end
@@ -414,7 +437,15 @@ struct Tracker {
     // raw, compared only. No reference is held: one of them is the desktop mirror's swapchain back buffer, which the
     // game's ResizeBuffers needs every reference to gone (a reference kept here failed it at the session's start:
     // "Resize swap chain failed", 2026-11-10 19:13).
-    ID3D11Resource* drawnWithDepth[8] = {};
+    ID3D11Resource* drawnWithDepth[32] = {};
+    // MSAA off past a stage (post effects medium and up, 2026-11-12 pass trace): YEBIS's copy reads the stage's image
+    // of the scene, not the scene's target, which YEBIS's composite then draws into. Outside the passes: the copy's
+    // source this frame when it wasn't drawn with depth (raw, compared only) and its size; a draw reading it into a
+    // target of that size drawn with depth teaches the scene's target. In an open single-sample pass: render target
+    // 0 is another texture, bound without depth (a draw into it reading the scene begins the post-processing).
+    ID3D11Resource* stageCandidate = nullptr;
+    UINT candidateW = 0, candidateH = 0;
+    bool offScene = false, stagePostLogged = false;
     unsigned drawnNext = 0;
     bool learnedThisFrame = false;  // no pass begins in the frame the target was learned in (it may be mid-frame)
     bool msaaSinceScene = false;    // a multisample scene seen since the target was learned (MSAA on again)
@@ -427,6 +458,7 @@ struct Tracker {
     bool singleSample = false;  // the open pass began on the learned scene target
     bool msaaFrame = false;     // a multisample scene was bound this frame
     bool sceneLogged = false;
+    bool smallLogged = false;  // a too-small candidate for the scene's target has been said
     MvrTrackStats stats;
     TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
     uint64_t loggedFrames = 0;
@@ -434,16 +466,312 @@ struct Tracker {
     bool menuLogged = false;
 } tr;
 
+// The pass trace (log only): while the tracker drives the passes, three frames' render target binds with depth or a
+// multisample target, resolves, CopySubresourceRegions, YEBIS's draws, the focus post's window and the tracked passes'
+// bounds, in order, to see what the tracker takes for a pass's begin and end. The frames with tracked passes numbered
+// kPassTraceAt (the first renders at the game's own size); a frame without passes is dropped.
+// With [experiment] lmu_pass_trace=1 (mvr_pass_trace) every frame is recorded instead, and a frame is logged whenever
+// its shape is one not seen before this launch: the order of its passes' bounds, resolves, what is bound after a
+// resolve, YEBIS's draws and the focus post's window, with the textures' numbers left out. With it the game's graphics
+// settings as its own files hold them (UserData\Config_DX11_VR.ini, UserData\player\Settings.JSON) and the renderer's
+// post-processing bits, so a run that steps through the game's settings shows which one changes the stream.
+struct PassTrace {
+    bool recording = false;
+    int framesWithPasses = 0, logged = 0, dropped = 0;
+    std::vector<std::string> events;
+    std::vector<const void*> ids;  // the textures mentioned this frame (raw: compared only)
+    int level = 0;                 // mvr_pass_trace
+    std::vector<uint64_t> shapes;  // the shapes logged so far (their hashes)
+    int lastShape = -1;
+    unsigned long long lastSwitchFrame = 0, settingsCheckedFrame = 0;
+    std::string settings;          // the game's settings as last logged
+} pt;
+constexpr int kPassTraceAt[] = {2, 3, 45};
+constexpr std::size_t kPassTraceEvents = 400;
+constexpr std::size_t kPassTraceShapes = 40;
+
+// The game's graphics settings, read from its own files (not its memory): one line.
+std::string pt_game_settings() {
+    wchar_t exe[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (!n || n == MAX_PATH)
+        return "?";
+    const std::filesystem::path user = std::filesystem::path(exe).parent_path() / L"UserData";
+    std::string line;
+    const std::wstring config = (user / L"Config_DX11_VR.ini").wstring();
+    for (const wchar_t* key : {L"EPostProcessingSettings", L"MSAA", L"UseFXAA", L"UpscaleMethod", L"RenderScale", L"ShaderLevel"}) {
+        wchar_t value[64] = {};
+        GetPrivateProfileStringW(L"COMPONENTS", key, L"?", value, 64, config.c_str());
+        char text[160];
+        std::snprintf(text, sizeof(text), "%s%ls=%ls", line.empty() ? "" : " ", key, value);
+        line += text;
+    }
+    std::string json;
+    if (HANDLE f = CreateFileW((user / L"player" / L"Settings.JSON").wstring().c_str(), GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+        f != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1 << 22)) {
+            json.resize(static_cast<std::size_t>(size.QuadPart));
+            DWORD got = 0;
+            if (!ReadFile(f, json.data(), static_cast<DWORD>(json.size()), &got, nullptr))
+                got = 0;
+            json.resize(got);
+        }
+        CloseHandle(f);
+    }
+    line += ";";
+    for (const char* key : {"Environment Reflections", "Road Reflections", "Shadows", "Shadow Blur", "Soft Particles", "Motion blur",
+                            "Rain FX Quality", "Raindrop Flow", "Rainspray Flow", "Opponent Detail", "Player Detail", "Texture Detail",
+                            "Special FX", "Circuit Detail", "Sun Occlusion", "Rearview Driving", "Max Visible Vehicles",
+                            "Heat FX Fade Speed", "Live TV Displays"}) {
+        const std::string quoted = std::string("\"") + key + "\":";
+        const std::size_t at = json.find(quoted);
+        if (at == std::string::npos)
+            continue;
+        std::size_t from = at + quoted.size(), to = json.find_first_of(",\r\n}", from);
+        while (from < json.size() && json[from] == ' ')
+            ++from;
+        line += " " + std::string(key) + " " + json.substr(from, to == std::string::npos ? 8 : to - from) + ",";
+    }
+    // The renderer's own state (a read of the game's memory, this diagnostic's alone): the post-processing bits and the
+    // flags a static reading of its post-processing function names. Their offsets are from that reading, not verified.
+    const std::uintptr_t base = simqvfr::module_base();
+    if (const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer)) {
+        std::uint32_t post = 0, msaa = 0;
+        std::memcpy(&post, renderer + 0x7770c, sizeof(post));
+        std::memcpy(&msaa, renderer + 0x1a1c, sizeof(msaa));
+        char text[160];
+        std::snprintf(text, sizeof(text), " renderer: post bits 0x%08x (bits 24-26: %u%u%u), +0x770fa %u, +0x1a1c %u", post,
+                      (post >> 24) & 1, (post >> 25) & 1, (post >> 26) & 1, static_cast<unsigned>(renderer[0x770fa]), msaa);
+        line += text;
+    }
+    return line;
+}
+
+void pt_event(const char* format, ...) {
+    if (pt.events.size() >= kPassTraceEvents) {
+        ++pt.dropped;
+        return;
+    }
+    char head[32];
+    std::snprintf(head, sizeof(head), "@%llu ", static_cast<unsigned long long>(tr.draws));
+    char body[320];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(body, sizeof(body), format, args);
+    va_end(args);
+    pt.events.push_back(std::string(head) + body);
+}
+
+// A texture as "#n", with its size, format and sample count at its first mention this frame; "-" for none.
+std::string pt_tex(ID3D11Resource* resource) {
+    if (!resource)
+        return "-";
+    for (std::size_t i = 0; i < pt.ids.size(); ++i)
+        if (pt.ids[i] == resource)
+            return "#" + std::to_string(i);
+    pt.ids.push_back(resource);
+    std::string s = "#" + std::to_string(pt.ids.size() - 1);
+    ComPtr<ID3D11Texture2D> t;
+    if (SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&t)))) {
+        D3D11_TEXTURE2D_DESC d;
+        t->GetDesc(&d);
+        char desc[64];
+        std::snprintf(desc, sizeof(desc), "(%ux%u f%d x%u%s)", d.Width, d.Height, static_cast<int>(d.Format),
+                      d.SampleDesc.Count, d.ArraySize > 1 ? " array" : "");
+        s += desc;
+    } else {
+        s += "(not 2D)";
+    }
+    return s;
+}
+
+std::string pt_view(ID3D11View* view) {
+    if (!view)
+        return "-";
+    ComPtr<ID3D11Resource> r;
+    view->GetResource(&r);
+    return pt_tex(r.Get());
+}
+
+// A draw on the game's context with one of YEBIS's pixel shaders (copy, composite, final blit): its input and target.
+void pt_draw(ID3D11DeviceContext* context, const char* call) {
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || !role)
+        return;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    context->PSGetShaderResources(0, 1, &srv);
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    const char* name = role == static_cast<UINT>(YebisRole::copy)        ? "copy"
+                       : role == static_cast<UINT>(YebisRole::composite) ? "composite"
+                       : role == static_cast<UINT>(YebisRole::blit)      ? "final blit"
+                                                                         : "?";
+    const std::string in = pt_view(srv.Get()), out = pt_view(rtv.Get());
+    pt_event("YEBIS %s (%s) t0 %s > %s, %s", name, call, in.c_str(), out.c_str(),
+             tr.open ? ("in tracked pass " + std::to_string(tr.pass)).c_str() : "outside the tracked passes");
+}
+
+// A frame's events written out, a few to a line.
+void pt_log_events() {
+    std::string line;
+    for (const std::string& e : pt.events) {
+        if (!line.empty() && line.size() + e.size() > 1300) {
+            simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+            line.clear();
+        }
+        line += line.empty() ? e : "; " + e;
+    }
+    if (!line.empty())
+        simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
+}
+
+// The frame's shape (PassTrace): per tracked pass, what it began on, what is bound between its resolve and YEBIS's first
+// draw (a stage there is what the first shape rule missed: it took YEBIS's metering copies, which come and go, and every
+// bind after the resolve, for shape), whether YEBIS's first copy reads the resolve, whether the composite and the final
+// blit were seen, and why it ended. A frame without tracked passes: whether YEBIS drew at all. `yebis`: it did.
+std::string pt_shape(bool& yebis) {
+    const auto id_after = [](const std::string& k, const char* mark) -> std::string {
+        const std::size_t at = k.find(mark);
+        if (at == std::string::npos)
+            return {};
+        std::size_t i = at + std::strlen(mark), j = i;
+        while (j < k.size() && k[j] >= '0' && k[j] <= '9')
+            ++j;
+        return k.substr(i, j - i);
+    };
+    const auto size_of = [](const std::string& k, std::size_t from) -> std::string {  // "(WxH fN xS)" right after an id
+        const std::size_t open = k.find('(', from), close = open == std::string::npos ? open : k.find(')', open);
+        return close == std::string::npos ? std::string() : k.substr(open, close - open + 1);
+    };
+    std::string shape, resolveTo;
+    bool inPass = false, resolved = false, copySeen = false, composite = false, blit = false;
+    yebis = false;
+    int passes = 0;
+    for (const std::string& e : pt.events) {
+        const std::size_t space = e.find(' ');
+        const std::string k = space == std::string::npos ? e : e.substr(space + 1);
+        const auto starts = [&k](const char* with) { return k.rfind(with, 0) == 0; };
+        if (starts("YEBIS"))
+            yebis = true;
+        if (starts("P+")) {
+            inPass = true;
+            resolved = copySeen = composite = blit = false;
+            resolveTo.clear();
+            ++passes;
+            shape += k.substr(0, k.find(';')) + " [";
+        } else if (starts("P-") && inPass) {
+            shape += std::string(copySeen ? "" : " NO-COPY") + (composite ? " composite" : " NO-COMPOSITE") +
+                     (blit ? " blit" : " NO-BLIT") + "] " + k.substr(3) + " | ";
+            inPass = false;
+        } else if (!inPass) {
+            continue;
+        } else if (starts("R ")) {
+            resolved = true;
+            resolveTo = id_after(k, "> #");
+            shape += " R";
+        } else if (starts("B ") && resolved && !copySeen) {  // between the resolve and YEBIS: a stage
+            const std::string target = id_after(k, "B #");
+            const std::size_t depthAt = k.find(" depth ");
+            shape += " B(" + (target.empty() ? std::string("-") : target == resolveTo ? std::string("the resolve") : "t" + size_of(k, 2)) +
+                     (depthAt != std::string::npos && k.compare(depthAt + 7, 1, "-") != 0 ? " +depth)" : ")");
+        } else if (starts("YEBIS copy") && resolved && !copySeen) {
+            copySeen = true;
+            const std::string from = id_after(k, "t0 #");
+            shape += from == resolveTo ? " copy<-resolve" : " copy<-OTHER" + size_of(k, k.find("t0 #"));
+        } else if (starts("YEBIS composite") && resolved) {
+            composite = true;
+        } else if (starts("YEBIS final blit") && resolved && copySeen) {
+            blit = true;
+        }
+    }
+    if (inPass)
+        shape += " (open at the frame's end)";
+    if (!passes)
+        shape = yebis ? "no tracked pass, YEBIS drew" : "no tracked pass";
+    return shape;
+}
+
+// The frame end (after the tracker's): the trace logged if this frame is one of kPassTraceAt, or with lmu_pass_trace
+// if its shape is new; the next frame's decided.
+void pt_frame_end(unsigned long long frame, int passes) {
+    if (passes > 0)
+        ++pt.framesWithPasses;
+    const char* const key = "@N = the game's draws this frame so far, #n = a texture (size, format, samples at its first "
+                            "mention); B = a render target bind (target 0, depth), R = a resolve, C = a "
+                            "CopySubresourceRegion, P+/P- = a tracked pass's begin/end, W = the focus post's window opened";
+    if (pt.level && pt.recording) {
+        // The game's settings, when its files change (looked at every two seconds or so).
+        if (frame - pt.settingsCheckedFrame >= 180 || pt.settings.empty()) {
+            pt.settingsCheckedFrame = frame;
+            std::string now = pt_game_settings();
+            if (now != pt.settings) {
+                simqvfr::logf("lmu mvr: pass trace: frame %llu: the game's settings%s: %s", frame, pt.settings.empty() ? "" : " CHANGED",
+                              now.c_str());
+                pt.settings = std::move(now);
+            }
+        }
+        bool yebis = false;
+        const std::string shape = pt_shape(yebis);
+        if (passes > 0 || yebis) {
+            uint64_t hash = 1469598103934665603ull;
+            for (const char c : shape)
+                hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ull;
+            int index = -1;
+            for (std::size_t i = 0; i < pt.shapes.size(); ++i)
+                if (pt.shapes[i] == hash)
+                    index = static_cast<int>(i);
+            if (index < 0 && pt.shapes.size() < kPassTraceShapes) {
+                pt.shapes.push_back(hash);
+                index = static_cast<int>(pt.shapes.size()) - 1;
+                simqvfr::logf("lmu mvr: pass trace: frame %llu: SHAPE %d, new (%d tracked passes): %zu events, %d not logged (over "
+                              "%zu); %s",
+                              frame, index, passes, pt.events.size(), pt.dropped, kPassTraceEvents, key);
+                simqvfr::logf("lmu mvr: pass trace: shape %d with the game's settings: %s", index, pt_game_settings().c_str());
+                pt_log_events();
+                simqvfr::logf("lmu mvr: pass trace: shape %d is: %s", index, shape.c_str());
+                pt.lastShape = index;
+                pt.lastSwitchFrame = frame;
+            } else if (index >= 0 && index != pt.lastShape && frame - pt.lastSwitchFrame >= 45) {
+                simqvfr::logf("lmu mvr: pass trace: frame %llu: shape %d again (was %d; %d tracked passes)", frame, index, pt.lastShape,
+                              passes);
+                pt.lastShape = index;
+                pt.lastSwitchFrame = frame;
+            }
+        }
+    } else if (pt.recording && passes > 0 && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+               pt.framesWithPasses == kPassTraceAt[pt.logged]) {
+        ++pt.logged;
+        simqvfr::logf("lmu mvr: pass trace: frame %llu (number %d with tracked passes, %d of them): %zu events, %d not "
+                      "logged (over %zu); %s",
+                      frame, pt.framesWithPasses, passes, pt.events.size(), pt.dropped, kPassTraceEvents, key);
+        pt_log_events();
+    }
+    pt.events.clear();
+    pt.ids.clear();
+    pt.dropped = 0;
+    pt.recording = tr.on && tr.driveBegin &&
+                   (pt.level ? true
+                             : pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+                                   pt.framesWithPasses + 1 == kPassTraceAt[pt.logged]);
+}
+
 void track_begin(const char* what) {
     tr.open = true;
     tr.pass = tr.passes++;
-    tr.resolved = tr.blitSeen = false;
-    tr.finalTarget = nullptr;
+    tr.resolved = tr.blitSeen = tr.postSeen = false;
+    tr.finalTarget = tr.sceneTarget = nullptr;
     tr.begin[tr.pass] = tr.draws;
     if (tr.actual == 0 && tr.firstBind.empty())
         tr.firstBind = what;
     if (tr.driveBegin)
         tr.driveBegin(tr.pass);  // R4b: the pass's work (mvr_pass_begin among it) now, before its draws
+    if (pt.recording)
+        pt_event("P+%d on %s; its focus view %s (eye %ux%u, focus %ux%u)", tr.pass, what,
+                 g.drawFocus ? "drawn" : "not drawn", g.view.eyeW, g.view.eyeH, g.view.focusW, g.view.focusH);
 }
 
 void track_end(const char* why) {
@@ -459,6 +787,8 @@ void track_end(const char* why) {
                           static_cast<unsigned long long>(tr.draws - tr.begin[tr.pass]));
         }
     }
+    if (pt.recording)
+        pt_event("P-%d at %s", tr.pass, why);
     tr.open = false;
     tr.end[tr.pass] = tr.draws;
     tr.endWhy[tr.pass] = why;
@@ -469,7 +799,8 @@ void track_end(const char* why) {
 // A render target bind on the game's immediate context: a pass begins at the first multisample target bound with a
 // depth target, or with MSAA off the learned scene target bound with one (after the frame's start or the previous
 // pass's end); the open one ends at another target bound after its final blit, or at the next pass's scene (a
-// multisample bind after its resolve; with MSAA off only the final blit or the frame end: YEBIS draws into the scene's
+// multisample bind after its resolve, other than its own scene's bound again before any YEBIS draw: a stage between
+// the resolve and YEBIS does that; with MSAA off only the final blit or the frame end: YEBIS draws into the scene's
 // own target then).
 void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
     ComPtr<ID3D11Resource> r0;
@@ -489,21 +820,48 @@ void track_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilV
     const bool learned = !msaa && !tr.msaaFrame && !tr.learnedThisFrame && dsv && r0 && tr.scene && r0.Get() == tr.scene &&
                          d.Width == tr.sceneDesc.Width && d.Height == tr.sceneDesc.Height &&
                          d.Format == tr.sceneDesc.Format && d.SampleDesc.Count == tr.sceneDesc.SampleDesc.Count;
+    bool multisampleTarget = msaa;  // also without depth (the tracker's own test needs both)
+    if (pt.recording && r0 && !dsv) {
+        ComPtr<ID3D11Texture2D> texture;
+        D3D11_TEXTURE2D_DESC td{};
+        if (SUCCEEDED(r0.As(&texture))) {
+            texture->GetDesc(&td);
+            multisampleTarget = td.SampleDesc.Count > 1;
+        }
+    }
+    if (pt.recording && (dsv || multisampleTarget)) {
+        ComPtr<ID3D11Resource> depthTarget;
+        if (dsv)
+            dsv->GetResource(&depthTarget);
+        const std::string rt = pt_tex(r0.Get()), ds = pt_tex(depthTarget.Get());
+        pt_event("B %s depth %s%s", rt.c_str(), ds.c_str(), tr.open && tr.resolved ? " (after a resolve in the pass)" : "");
+    }
     if (tr.open) {
         const ID3D11Resource* finalOf = tr.singleSample && tr.finalTarget ? tr.finalTarget : g.eyeFinal[tr.pass].Get();
-        if (tr.blitSeen && r0 && r0.Get() != finalOf)
+        if (tr.blitSeen && r0 && r0.Get() != finalOf) {
             track_end("another target after its final blit");
-        else if (msaa && tr.resolved)
+        } else if (msaa && tr.resolved && r0.Get() == tr.sceneTarget && !tr.postSeen) {
+            ++tr.stats.sceneRebinds;  // the pass's own scene again, YEBIS not begun: the same pass
+            if (!tr.rebindLogged) {
+                tr.rebindLogged = true;
+                simqvfr::logf("lmu mvr: pass tracker: frame %llu pass %d: its scene target bound again after its resolve, "
+                              "before YEBIS (a stage between them): the same pass, not the next one's scene",
+                              static_cast<unsigned long long>(g.framesSinceInstall), tr.pass);
+            }
+        } else if (msaa && tr.resolved) {
             track_end("the next pass's scene");
+        }
     }
     if (!tr.open && (msaa || learned) && tr.passes < 2) {
         char what[96];
         std::snprintf(what, sizeof(what), "%ux%u format %d x%u", d.Width, d.Height, static_cast<int>(d.Format),
                       d.SampleDesc.Count);
         track_begin(what);
+        tr.sceneTarget = msaa ? r0.Get() : nullptr;  // raw, compared only
         tr.singleSample = learned;
         tr.stats.singleSamplePasses += learned ? 1 : 0;
     }
+    tr.offScene = tr.open && tr.singleSample && !tr.resolved && r0 && !dsv && r0.Get() != tr.scene;
 }
 
 // The frame end: the open pass ends; this frame's tracked passes against the game's.
@@ -561,9 +919,11 @@ void track_frame_end(unsigned long long frame) {
         }
     }
     tr.passes = tr.actual = 0;
+    tr.stats.lastFrameDraws = tr.draws;
     tr.draws = 0;
     tr.firstBind.clear();
-    tr.msaaFrame = tr.singleSample = tr.learnedThisFrame = false;
+    tr.msaaFrame = tr.singleSample = tr.learnedThisFrame = tr.offScene = false;
+    tr.stageCandidate = nullptr;
     std::fill(std::begin(tr.drawnWithDepth), std::end(tr.drawnWithDepth), nullptr);
     tr.drawnNext = 0;
 }
@@ -684,8 +1044,10 @@ unsigned final_eye_h(const MvrPassView& view) { return view.finalEyeH ? view.fin
 // (`overlay`), the eye's corner of the final to the focus final's (the focus size, 1:1).
 D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v, bool overlay = false, bool scene = false) {
     const unsigned ew = overlay ? final_eye_w(view) : view.eyeW, eh = overlay ? final_eye_h(view) : view.eyeH;
-    const unsigned fw = !overlay && scene && view.focusRenderW ? view.focusRenderW : view.focusW;
-    const unsigned fh = !overlay && scene && view.focusRenderH ? view.focusRenderH : view.focusH;
+    const unsigned fw = overlay ? (view.finalFocusW ? view.finalFocusW : view.focusW)
+                                : scene && view.focusRenderW ? view.focusRenderW : view.focusW;
+    const unsigned fh = overlay ? (view.finalFocusH ? view.finalFocusH : view.focusH)
+                                : scene && view.focusRenderH ? view.focusRenderH : view.focusH;
     const float sx = ew ? static_cast<float>(fw) / static_cast<float>(ew) : 1.0f;
     const float sy = eh ? static_cast<float>(fh) / static_cast<float>(eh) : 1.0f;
     return {v.TopLeftX + v.Width, v.TopLeftY, v.Width * sx, v.Height * sy, v.MinDepth, v.MaxDepth};
@@ -1130,41 +1492,67 @@ inline void om_set_depth_stencil_state(DepthFn real, ID3D11DeviceContext* contex
     }
 }
 
-// Is render target view `rtv` of the scene's target (the tracker's, MSAA off)? The last one asked is remembered.
+// Is render target view `rtv` of the scene's target? With MSAA off the tracker's learned single-sample target; with
+// MSAA on the open pass's multisample target, until its resolve (the pass began at its bind with a depth target, and
+// the game binds no other multisample target with one before the resolve). The last view asked is remembered with its
+// texture's description (the slot target is made to it).
 bool is_scene_rtv(ID3D11RenderTargetView* rtv) {
-    if (rtv == g.sceneRtvChecked && tr.scene == g.sceneCheckedAgainst)
-        return g.sceneRtvIsScene && tr.scene;
-    g.sceneRtvChecked = rtv;
+    if (rtv != g.sceneRtvChecked) {
+        g.sceneRtvChecked = rtv;
+        g.sceneRtvResource = nullptr;
+        g.sceneRtvDesc = {};
+        ComPtr<ID3D11Resource> r;
+        rtv->GetResource(&r);
+        ComPtr<ID3D11Texture2D> texture;
+        if (r && SUCCEEDED(r.As(&texture))) {
+            g.sceneRtvResource = r.Get();
+            texture->GetDesc(&g.sceneRtvDesc);
+        }
+    }
     g.sceneCheckedAgainst = tr.scene;
-    ComPtr<ID3D11Resource> r;
-    rtv->GetResource(&r);
-    g.sceneRtvIsScene = r.Get() == tr.scene && tr.scene && tr.sceneDesc.SampleDesc.Count == 1;
+    if (g.sceneRtvDesc.SampleDesc.Count > 1)  // (the caller is inside a pass: with the tracker driving, its own open one)
+        g.sceneRtvIsScene = !g.afterResolve && !(tr.on && (!tr.open || tr.singleSample || tr.resolved));
+    else
+        g.sceneRtvIsScene = tr.scene && g.sceneRtvResource == tr.scene && tr.sceneDesc.SampleDesc.Count == 1;
     return g.sceneRtvIsScene;
 }
 
-// The slot target at the scene target's size (made again if that changed).
+// The slot target at the scene target's size and sample count (made again if they changed): render targets bound
+// together must share both. With MSAA on it is multisample too (each sample takes the part's slot; DLSS's vectors read
+// sample 0, as they do of the depth).
 bool ensure_slot_target() {
-    const UINT w = tr.sceneDesc.Width, h = tr.sceneDesc.Height;
-    if (g.slotTex && g.slotW == w && g.slotH == h)
+    const UINT w = g.sceneRtvDesc.Width, h = g.sceneRtvDesc.Height;
+    const UINT samples = (std::max)(g.sceneRtvDesc.SampleDesc.Count, 1u), quality = g.sceneRtvDesc.SampleDesc.Quality;
+    if (g.slotTex && g.slotW == w && g.slotH == h && g.slotSamples == samples && g.slotQuality == quality)
         return true;
     g.slotTex.Reset();
     g.slotRtv.Reset();
     g.slotSrv.Reset();
     ComPtr<ID3D11Device> device;
     g.context->GetDevice(&device);
-    const D3D11_TEXTURE2D_DESC t = {w, h, 1, 1, DXGI_FORMAT_R16_UINT, {1, 0}, D3D11_USAGE_DEFAULT,
+    UINT levels = 1;
+    if (samples > 1 && (FAILED(device->CheckMultisampleQualityLevels(DXGI_FORMAT_R16_UINT, samples, &levels)) || quality >= levels)) {
+        g.slotsOn = false;
+        simqvfr::logf("lmu mvr: car slots: no R16_UINT target at the scene's %ux multisampling (quality %u of %u levels); off: the "
+                      "other cars keep the world's vectors",
+                      samples, quality, levels);
+        return false;
+    }
+    const D3D11_TEXTURE2D_DESC t = {w, h, 1, 1, DXGI_FORMAT_R16_UINT, {samples, quality}, D3D11_USAGE_DEFAULT,
                                     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
     if (!w || !h || FAILED(device->CreateTexture2D(&t, nullptr, &g.slotTex)) ||
         FAILED(device->CreateRenderTargetView(g.slotTex.Get(), nullptr, &g.slotRtv)) ||
         FAILED(device->CreateShaderResourceView(g.slotTex.Get(), nullptr, &g.slotSrv))) {
         g.slotTex.Reset();
         g.slotsOn = false;
-        simqvfr::logf("lmu mvr: car slots: the %ux%u slot target couldn't be made; off", w, h);
+        simqvfr::logf("lmu mvr: car slots: the %ux%u x%u slot target couldn't be made; off", w, h, samples);
         return false;
     }
     g.slotW = w;
     g.slotH = h;
-    simqvfr::logf("lmu mvr: car slots: slot target %ux%u (R16_UINT, %.0f MB)", w, h, w * 2.0 * h / 1048576.0);
+    g.slotSamples = samples;
+    g.slotQuality = quality;
+    simqvfr::logf("lmu mvr: car slots: slot target %ux%u x%u (R16_UINT, %.0f MB)", w, h, samples, w * 2.0 * h * samples / 1048576.0);
     return true;
 }
 
@@ -1465,6 +1853,64 @@ ID3D11DepthStencilView* scene_depth(ID3D11Resource* colour) {
     return nullptr;
 }
 
+// FSR (mvr_fsr): this pass's focus composite into the scene's target beside the eye, right after YEBIS's composite
+// drew the eye's there: FSR upscales the whole target into the eye's image, the focus view with it.
+void fsr_place(int eye) {
+    ID3D11Texture2D* image = g.focusPost.image(eye);
+    if (!image || !g.resolved[g.pass])
+        return;
+    const MvrPassView& v = g.view;
+    const D3D11_BOX box{0, 0, 0, v.focusW, v.focusH, 1};
+    const bool was = g.replaying;
+    g.replaying = true;
+    g.context->CopySubresourceRegion(g.resolved[g.pass].Get(), 0, v.eyeW, 0, 0, image, 0, &box);
+    g.replaying = was;
+    ++g.stats.fsrPlaced;
+}
+
+// FSR: a render target bind in a pass whose focus composite was placed (fsr_place). The eye's image bound: FSR has
+// written it, the focus view beside the eye's corner, stretched like it. The focus final is there; from here on the
+// pass's draws into the eye's image are overlays, as after the final blit (focus_blit).
+void fsr_final(UINT n, ID3D11RenderTargetView* const* rtvs) {
+    if (!n || n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL || !rtvs || !rtvs[0])
+        return;
+    const int eye = g.pass & 1;
+    ComPtr<ID3D11Resource> target;
+    rtvs[0]->GetResource(&target);
+    ComPtr<ID3D11Texture2D> texture;
+    if (!target || target.Get() != g.fsrEye[eye] || FAILED(target.As(&texture)))
+        return;
+    g.focusBlitted = true;  // once a pass
+    D3D11_TEXTURE2D_DESC d;
+    texture->GetDesc(&d);
+    MvrPassView& v = g.view;
+    const unsigned ew = final_eye_w(v), eh = final_eye_h(v);
+    const unsigned fw = v.eyeW ? static_cast<unsigned>(std::lround(static_cast<double>(v.focusW) * ew / v.eyeW)) : v.focusW;
+    const unsigned fh = v.eyeH ? static_cast<unsigned>(std::lround(static_cast<double>(v.focusH) * eh / v.eyeH)) : v.focusH;
+    if (ew + fw > d.Width || fh > d.Height) {
+        ++g.stats.focusFailures;
+        return;
+    }
+    v.finalFocusW = g.viewOf[eye].finalFocusW = fw == v.focusW ? 0 : fw;
+    v.finalFocusH = g.viewOf[eye].finalFocusH = fh == v.focusH ? 0 : fh;
+    ++g.stats.focusBlits;
+    ++g.stats.fsrFinals;
+    if (tr.open) {
+        tr.blitSeen = true;
+        tr.finalTarget = target.Get();  // raw, compared only (a single-sample pass ends at another target after it)
+    }
+    g.eyeFinal[eye] = target;
+    g.finalW[eye] = d.Width;
+    g.finalH[eye] = d.Height;
+    g.finalThisFrame[eye] = true;
+    if (!g.fsrLogged) {
+        g.fsrLogged = true;
+        simqvfr::logf("lmu mvr: focus post: pass %d: FSR on: the focus composite beside the eye in the scene's target, "
+                      "upscaled with it; the focus final %ux%u at %u,0 of the eye's %ux%u image",
+                      g.pass, fw, fh, ew, d.Width, d.Height);
+    }
+}
+
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
     if (!ours(context)) {
@@ -1487,6 +1933,8 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
     note_scene_bind(n, rtvs, dsv);
     if (ours(context))  // (a bind the tracker ended the pass at isn't the pass's)
         slot_bind(n, rtvs, dsv);
+    if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
+        fsr_final(n, rtvs);
     g.depthBound = dsv != nullptr;
     g.overlayTarget = overlay_target(n, rtvs);
     update();
@@ -1514,6 +1962,8 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
     note_scene_bind(n, rtvs, dsv);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && ours(context))
         slot_bind(0, nullptr, nullptr);  // car slots: not beside unordered access views
+    if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
+        fsr_final(n, rtvs);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
         g.overlayTarget = overlay_target(n, rtvs);
@@ -1575,6 +2025,11 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
 
 void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11Resource* dst, UINT dstSub,
                                            ID3D11Resource* src, UINT srcSub, DXGI_FORMAT format) {
+    if (pt.recording && context == g.context && !g.replaying) {
+        const std::string from = pt_tex(src), to = pt_tex(dst);
+        pt_event("R %s > %s, %s", from.c_str(), to.c_str(),
+                 tr.open ? ("in tracked pass " + std::to_string(tr.pass)).c_str() : "outside the tracked passes");
+    }
     if (tr.on && tr.open && context == g.context && !g.replaying && src) {
         ComPtr<ID3D11Texture2D> source;
         D3D11_TEXTURE2D_DESC sd{};
@@ -1702,7 +2157,13 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
             }
         }
         g.postWindow = g.focusPost.ready();
+        g.stageImage = nullptr;
+        g.stageCovers = false;
     }
+    if (pt.recording)
+        pt_event("W pass %d: the focus post's window %s (focus view drawn %d, twin binds %llu, box %d)", g.pass,
+                 g.postWindow ? "open" : "not opened", g.drawFocus ? 1 : 0,
+                 static_cast<unsigned long long>(g.passTwinBinds), g.view.box.valid ? 1 : 0);
 }
 
 // The focus post at one of the pass's post-processing draws (the post window open): after YEBIS's copy of the resolved
@@ -1839,20 +2300,61 @@ void focus_post_draw(ID3D11DeviceContext* context) {
         ComPtr<ID3D11Resource> resource;
         if (srv)
             srv->GetResource(&resource);
-        ComPtr<ID3D11Texture2D> texture;
-        if (!resource || resource.Get() != g.resolved[g.pass].Get() || FAILED(resource.As(&texture)))
+        ComPtr<ID3D11Texture2D> texture, resolvedTexture;
+        if (!resource || FAILED(resource.As(&texture)) || !g.resolved[g.pass] ||
+            FAILED(g.resolved[g.pass].As(&resolvedTexture)))
             return;
-        D3D11_TEXTURE2D_DESC d;
+        D3D11_TEXTURE2D_DESC d, rd;
         texture->GetDesc(&d);
-        ComPtr<ID3D11RenderTargetView> copyRtv;
-        context->OMGetRenderTargets(1, &copyRtv, nullptr);
-        g.copyTarget.Reset();
-        if (copyRtv)
-            copyRtv->GetResource(&g.copyTarget);  // the composite reads it (composite_by_bindings)
-        g.replaying = true;
-        g.focusCopied = g.focusPost.after_copy(context, eye, srv.Get(), d.Width, d.Height,
-                                               {g.view.eyeW, 0, g.view.focusW, g.view.focusH});
-        g.replaying = false;
+        resolvedTexture->GetDesc(&rd);
+        const bool fromResolve = resource.Get() == g.resolved[g.pass].Get();
+        // Not the resolve: YEBIS's copy starting from an image of the resolve's size, made by a stage between the
+        // resolve and YEBIS (the composite then reads that image itself, with no copy of the resolve before it). Its
+        // downsamples read smaller textures.
+        if (!fromResolve && (d.SampleDesc.Count != 1 || d.Width != rd.Width || d.Height != rd.Height))
+            return;
+        const FocusPostRegion region{g.view.eyeW, 0, g.view.focusW, g.view.focusH};
+        if (fromResolve) {
+            ComPtr<ID3D11RenderTargetView> copyRtv;
+            context->OMGetRenderTargets(1, &copyRtv, nullptr);
+            g.copyTarget.Reset();
+            if (copyRtv)
+                copyRtv->GetResource(&g.copyTarget);  // the composite reads it (composite_by_bindings)
+            g.replaying = true;
+            g.focusCopied = g.focusPost.after_copy(context, eye, srv.Get(), d.Width, d.Height, region);
+            g.replaying = false;
+        } else {
+            // The focus view's scene: that image's part where the stage's draw covered the focus view, else the
+            // resolve's (the stage left out of the focus view, its picture still right). Copied as it is: this copy is
+            // a downsample's, its constants not the scene's.
+            g.copyTarget = resource;  // what the composite reads (composite_by_bindings)
+            const bool fromStage = resource.Get() == g.stageImage && g.stageCovers;
+            ComPtr<ID3D11ShaderResourceView> source = srv;
+            if (!fromStage) {
+                ComPtr<ID3D11Device> device;
+                context->GetDevice(&device);
+                source.Reset();
+                if (device)
+                    device->CreateShaderResourceView(g.resolved[g.pass].Get(), nullptr, &source);
+            }
+            g.replaying = true;
+            g.focusCopied = source && g.focusPost.scene_from(context, eye, source.Get(), d.Width, d.Height, region);
+            g.replaying = false;
+            ++(fromStage ? g.stats.focusStageCopies : g.stats.focusStageResolves);
+            bool& logged = fromStage ? g.stageImageLogged : g.stageResolveLogged;
+            if (!logged) {
+                logged = true;
+                char maker[96] = "its draw not seen";
+                if (resource.Get() == g.stageImage)
+                    std::snprintf(maker, sizeof(maker), "pixel shader %08x-%08x-%08x-%08x, its viewport %s the focus view",
+                                  g.stagePs[0], g.stagePs[1], g.stagePs[2], g.stagePs[3],
+                                  g.stageCovers ? "over" : "not over");
+                simqvfr::logf("lmu mvr: focus post: pass %d: YEBIS's copy starts from %s, not the resolve: a stage "
+                              "between them made it (%s); the focus view's scene from %s%s",
+                              g.pass, describe(resource.Get()).c_str(), maker, fromStage ? "that image" : "the resolve",
+                              g.focusCopied ? "" : " (failed)");
+            }
+        }
         if (g.focusCopied) {
             ++g.stats.focusCopies;
         } else {
@@ -1883,6 +2385,8 @@ void focus_post_draw(ID3D11DeviceContext* context) {
             g.replaying = false;
         }
         g.compositeOk = ok;
+        if (ok && g.fsr)
+            fsr_place(eye);
         ++(ok ? g.stats.focusComposites : g.stats.focusFailures);
     }
 }
@@ -2258,10 +2762,63 @@ void STDMETHODCALLTYPE copy_subresource_region(ID3D11DeviceContext* context, ID3
     call_real<kHookCopy>(context, dst, dstSub, x, y, z, src, srcSub, box);
     if (context != g.context || g.replaying)
         return;
+    if (pt.recording) {
+        const std::string from = pt_tex(src), to = pt_tex(dst);
+        pt_event("C %s > %s at %u,%u%s", from.c_str(), to.c_str(), x, y, box ? "" : " (whole)");
+    }
     State::CopySeen& c = g.copies[g.copyNext++ % State::kCopiesKept];
     c.dst = dst;
     c.src = src;
     c.frame = g.framesSinceInstall;
+}
+
+// Not every texture YEBIS post-processes is the scene's: LMU does smaller views of the world the same way (a 2560x160
+// one, its mirror's by its shape, was learned in place of the 3120x2505 scene when a race session began on
+// 2026-11-11 22:28; no eye pass was found from then on, so no focus views, no DLSS). The scene's target is of the
+// eye targets' order: nothing under a quarter of an eye's final a side, nor of the scene learned before, takes
+// its place. `count`: a refused one counted and said once.
+bool scene_too_small(const D3D11_TEXTURE2D_DESC& d, bool count) {
+    UINT fw = 0, fh = 0;
+    ComPtr<ID3D11Texture2D> final0;
+    if (g.eyeFinal[0] && SUCCEEDED(g.eyeFinal[0].As(&final0))) {
+        D3D11_TEXTURE2D_DESC fd;
+        final0->GetDesc(&fd);
+        fw = fd.Width;
+        fh = fd.Height;
+    }
+    const bool tooSmall = (fw && (d.Width * 4 < fw || d.Height * 4 < fh)) ||
+                          (tr.sceneDesc.Width && (d.Width * 4 < tr.sceneDesc.Width || d.Height * 4 < tr.sceneDesc.Height));
+    if (tooSmall && count) {
+        ++tr.stats.sceneCandidatesRefused;
+        if (!tr.smallLogged) {
+            tr.smallLogged = true;
+            simqvfr::logf("lmu mvr: pass tracker: a %ux%u target YEBIS's copy reads (drawn with a depth target) isn't taken "
+                          "for the scene's: too small beside the %ux%u scene learned before and the eyes' %ux%u finals",
+                          d.Width, d.Height, tr.sceneDesc.Width, tr.sceneDesc.Height, fw, fh);
+        }
+    }
+    return tooSmall;
+}
+
+// The scene's single-sample target learned: `resource` (raw from here on, compared only), from YEBIS's copy reading
+// it, or (`atComposite`) from its composite drawing into it past a stage.
+void learn_scene(ID3D11Resource* resource, const D3D11_TEXTURE2D_DESC& d, bool atComposite) {
+    const bool again = tr.sceneLogged;
+    tr.scene = resource;
+    tr.sceneDesc = d;
+    tr.learnedThisFrame = true;
+    tr.msaaSinceScene = false;
+    tr.sceneLogged = true;
+    tr.stats.sceneRelearned += again ? 1 : 0;
+    tr.stats.sceneAtComposite += atComposite ? 1 : 0;
+    if (!again || (atComposite && tr.stats.sceneAtComposite == 1))
+        simqvfr::logf("lmu mvr: pass tracker: no multisample scene (MSAA off): the scene's target is %ux%u format %d (%s): "
+                      "the eye passes begin at its binds with depth, their post-processing at %s",
+                      d.Width, d.Height, static_cast<int>(d.Format),
+                      atComposite ? "what YEBIS's composite draws into, drawn with a depth target; its copy reads a "
+                                    "stage's image of it"
+                                  : "what YEBIS's copy reads, drawn with a depth target",
+                      atComposite ? "the stage's draw reading it" : "the copy");
 }
 
 // MSAA off (Tracker::scene): YEBIS's copy, before it draws. Outside the tracked passes, in a frame without a
@@ -2299,22 +2856,153 @@ void copy_before(ID3D11DeviceContext* context) {
         post_begins(context, resource.Get(), resource.Get());
         return;
     }
-    if (tr.open || (resource.Get() == tr.scene && std::memcmp(&d, &tr.sceneDesc, sizeof(d)) == 0) ||
-        !drawn_with_depth(resource.Get()))
+    if (tr.open || (resource.Get() == tr.scene && std::memcmp(&d, &tr.sceneDesc, sizeof(d)) == 0))
         return;
-    tr.scene = resource.Get();
-    tr.sceneDesc = d;
-    tr.learnedThisFrame = true;
-    tr.msaaSinceScene = false;
-    if (!tr.sceneLogged) {
-        tr.sceneLogged = true;
-        simqvfr::logf("lmu mvr: pass tracker: no multisample scene (MSAA off): the scene's target is %ux%u format %d (what "
-                      "YEBIS's copy reads, drawn with a depth target): the eye passes begin at its binds with depth, their "
-                      "post-processing at the copy",
-                      d.Width, d.Height, static_cast<int>(d.Format));
-    } else {
-        ++tr.stats.sceneRelearned;
+    if (!drawn_with_depth(resource.Get())) {
+        // Not the scene's target: perhaps a stage's image of it (learn_at_composite), if of the scene's order.
+        if (!tr.stageCandidate && !scene_too_small(d, false)) {
+            tr.stageCandidate = resource.Get();  // raw, compared only
+            tr.candidateW = d.Width;
+            tr.candidateH = d.Height;
+        }
+        return;
     }
+    if (scene_too_small(d, true))
+        return;
+    learn_scene(resource.Get(), d, false);
+}
+
+// MSAA off past a stage, outside the tracked passes: a draw reading the copy's source of this frame (the stage's image
+// of the scene) into a single-sample target of its size that was drawn with a depth target is YEBIS's composite, by
+// its bindings, and that target the scene's.
+void learn_at_composite(ID3D11DeviceContext* context) {
+    if (tr.msaaFrame || tr.open) {
+        tr.stageCandidate = nullptr;
+        return;
+    }
+    ComPtr<ID3D11ShaderResourceView> srv;
+    context->PSGetShaderResources(0, 1, &srv);
+    ComPtr<ID3D11Resource> source;
+    if (srv)
+        srv->GetResource(&source);
+    if (!source || source.Get() != tr.stageCandidate)
+        return;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    ComPtr<ID3D11Texture2D> texture;
+    if (!target || target.Get() == source.Get() || !drawn_with_depth(target.Get()) || FAILED(target.As(&texture)))
+        return;
+    D3D11_TEXTURE2D_DESC d;
+    texture->GetDesc(&d);
+    if (d.SampleDesc.Count != 1 || d.Width != tr.candidateW || d.Height != tr.candidateH)
+        return;
+    tr.stageCandidate = nullptr;
+    if ((target.Get() == tr.scene && std::memcmp(&d, &tr.sceneDesc, sizeof(d)) == 0) || scene_too_small(d, true))
+        return;
+    learn_scene(target.Get(), d, true);
+}
+
+// MSAA off past a stage, in a pass begun on the scene's target, its post-processing not begun: before a draw into
+// another single-sample texture of the scene's size, bound without depth, that reads the scene's target (the stage's
+// image of the scene, which YEBIS's copy then starts from). The pass's post-processing begins here, as at the copy
+// without a stage: DLAA in place before anything reads the scene, the focus post's window (which then notes the
+// stage's image: note_post_stage). Not YEBIS's blit (a blit reading the scene mid-pass isn't the post's start).
+void stage_before(ID3D11DeviceContext* context) {
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    ComPtr<ID3D11Texture2D> texture;
+    D3D11_TEXTURE2D_DESC d{};
+    if (target && SUCCEEDED(target.As(&texture)))
+        texture->GetDesc(&d);
+    if (!texture || d.SampleDesc.Count != 1 || d.Width != tr.sceneDesc.Width || d.Height != tr.sceneDesc.Height) {
+        tr.offScene = false;  // not a target a stage's image could be: nothing more to look at until the next bind
+        return;
+    }
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    if (ps && SUCCEEDED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) && size == sizeof(role) &&
+        role == static_cast<UINT>(YebisRole::blit))
+        return;
+    ID3D11ShaderResourceView* srvs[8] = {};
+    context->PSGetShaderResources(0, static_cast<UINT>(std::size(srvs)), srvs);
+    ComPtr<ID3D11Resource> scene;
+    for (ID3D11ShaderResourceView* srv : srvs) {
+        if (!srv)
+            continue;
+        ComPtr<ID3D11Resource> r;
+        srv->GetResource(&r);
+        if (r.Get() == tr.scene)
+            scene = r;
+        srv->Release();
+    }
+    if (!scene)
+        return;
+    tr.offScene = false;
+    stamp(g.pass, 1);  // the scene ends, the post-processing starts
+    g.afterResolve = true;
+    tr.resolved = true;
+    ++g.stats.singleSamplePosts;
+    ++g.stats.singleSampleStagePosts;
+    if (!tr.stagePostLogged) {
+        tr.stagePostLogged = true;
+        simqvfr::logf("lmu mvr: pass tracker, MSAA off: frame %llu pass %d: a draw into %s reads the scene's target before "
+                      "YEBIS's copy (a stage between them): the pass's post-processing begins there",
+                      static_cast<unsigned long long>(g.framesSinceInstall), g.pass, describe(target.Get()).c_str());
+    }
+    post_begins(context, scene.Get(), scene.Get());
+}
+
+// After the open tracked pass's resolve, before its post-processing: a draw with a YEBIS pixel shader (any role, as the
+// probe marked it) begins it (track_bind: a rebind of the pass's scene before it stays in the pass).
+void note_post_seen(ID3D11DeviceContext* context) {
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT role = 0, size = sizeof(role);
+    tr.postSeen = ps && SUCCEEDED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) && size == sizeof(role) &&
+                  role != static_cast<UINT>(YebisRole::none);
+}
+
+// In the post window before the focus copy: a draw into a single-sample texture of the resolve's size, other than the
+// resolve's target, noted as a stage's image (the last one wins), with whether its viewports cover the focus view
+// beside the eye (as MVR's rewrite leaves them) and its pixel shader's checksum.
+void note_post_stage(ID3D11DeviceContext* context) {
+    ComPtr<ID3D11RenderTargetView> rtv;
+    context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> target;
+    if (rtv)
+        rtv->GetResource(&target);
+    ComPtr<ID3D11Texture2D> t, r;
+    if (!target || target.Get() == g.resolved[g.pass].Get() || !g.resolved[g.pass] || FAILED(target.As(&t)) ||
+        FAILED(g.resolved[g.pass].As(&r)))
+        return;
+    D3D11_TEXTURE2D_DESC td, rd;
+    t->GetDesc(&td);
+    r->GetDesc(&rd);
+    if (td.SampleDesc.Count != 1 || td.Width != rd.Width || td.Height != rd.Height)
+        return;
+    D3D11_VIEWPORT vp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    UINT n = static_cast<UINT>(std::size(vp));
+    context->RSGetViewports(&n, vp);
+    const MvrPassView& v = g.view;
+    bool covers = false;
+    for (UINT i = 0; i < n && !covers; ++i)
+        covers = vp[i].TopLeftX <= v.eyeW && vp[i].TopLeftY <= 0 && vp[i].TopLeftX + vp[i].Width >= v.eyeW + v.focusW &&
+                 vp[i].TopLeftY + vp[i].Height >= v.focusH;
+    g.stageImage = target.Get();  // raw, compared only
+    g.stageCovers = covers;
+    std::memset(g.stagePs, 0, sizeof(g.stagePs));
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    UINT size = sizeof(g.stagePs);
+    if (ps && (FAILED(ps->GetPrivateData(kShaderChecksumGuid, &size, g.stagePs)) || size != sizeof(g.stagePs)))
+        std::memset(g.stagePs, 0, sizeof(g.stagePs));
 }
 
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
@@ -2324,8 +3012,14 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         ++tr.draws;
         if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, "DrawIndexed", count, start))
             return;
+        if (tr.on && tr.stageCandidate)
+            learn_at_composite(context);
+        if (tr.offScene && ours(context) && g.pass < 2)
+            stage_before(context);
         if (tr.on)
             copy_before(context);
+        if (tr.open && tr.resolved && !tr.postSeen)
+            note_post_seen(context);
     }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
     if (g.carTrack && g.carActive && ours(context)) {
@@ -2341,11 +3035,15 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         game_draw<kHookDrawIndexed>(context, count, start, base);
     if (g.tracing && context == g.context && !g.replaying)
         trace_draw(context, "DrawIndexed", count, start);
+    if (pt.recording && context == g.context && !g.replaying)
+        pt_draw(context, "DrawIndexed");
     if (ours(context) && g.overlayTarget && g.on)
         ++g.stats.overlayDraws;
     if (!g.postWindow || !ours(context))
         return;
     Timed timed(g.time.hooks);
+    if (!g.focusCopied)
+        note_post_stage(context);
     focus_post_draw(context);
 }
 
@@ -2360,6 +3058,12 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         const long long args[] = {static_cast<long long>(a)...};
         if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, kHookName[H], args[0], args[1]))
             return;
+        if (tr.on && tr.stageCandidate)
+            learn_at_composite(context);
+        if (tr.offScene && ours(context) && g.pass < 2)
+            stage_before(context);
+        if (tr.open && tr.resolved && !tr.postSeen)
+            note_post_seen(context);
     }
     const bool outside = context == g.context && !g.replaying && g.pass < 0 && (g.finalThisFrame[0] || g.finalThisFrame[1]);
     bool panel = false;
@@ -2382,8 +3086,14 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         const long long args[] = {static_cast<long long>(a)...};
         trace_draw(context, kHookName[H], args[0], args[1]);
     }
+    if (pt.recording && context == g.context && !g.replaying)
+        pt_draw(context, kHookName[H]);
     if (ours(context) && g.overlayTarget && g.on)
         ++g.stats.overlayDraws;
+    if (g.postWindow && !g.focusCopied && ours(context)) {  // a stage between the resolve and YEBIS may draw this way
+        Timed timed(g.time.hooks);
+        note_post_stage(context);
+    }
     if constexpr (H == kHookDraw) {
         if (ours(context) && tr.open && tr.singleSample && !tr.blitSeen)  // MSAA off: the pass's final blit
             note_final_blit(context);
@@ -2826,8 +3536,8 @@ void save_slot_image(int eye, ID3D11Resource* scene) {
     const UINT fw = g.drawFocus ? (g.view.focusRenderW ? g.view.focusRenderW : g.view.focusW) : 0;
     const UINT fh = g.drawFocus ? (g.view.focusRenderH ? g.view.focusRenderH : g.view.focusH) : 0;
     const UINT w = std::min(g.view.eyeW + fw, g.slotW), h = std::min(std::max(g.view.eyeH, fh), g.slotH);
-    if (!w || !h || !scene || !g.slotTex || tr.sceneDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
-        return;
+    if (!w || !h || !scene || !g.slotTex || g.slotSamples > 1 || tr.sceneDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+        return;  // (the gate image is of a single-sample slot target: MSAA off)
     ComPtr<ID3D11Device> device;
     g.context->GetDevice(&device);
     const auto staged = [&](ID3D11Resource* src, DXGI_FORMAT format, ComPtr<ID3D11Texture2D>& out) {
@@ -3203,6 +3913,12 @@ void mvr_car_slots(int level) {
     }
 }
 
+void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1) {
+    g.fsr = on;
+    g.fsrEye[0] = eye0;
+    g.fsrEye[1] = eye1;
+}
+
 void mvr_focus_replay(bool on) {
     g.focusReplay = on;
     if (!on) {  // nothing doubled after the passes any more (R5's fallback switches it off mid-session)
@@ -3220,10 +3936,10 @@ bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigne
     if (eye < 0 || eye > 1 || !g.finalThisFrame[eye])
         return false;
     const MvrPassView& v = g.viewOf[eye];
-    x = final_eye_w(v);  // as focus_blit put it
+    x = final_eye_w(v);  // as focus_blit put it (or FSR's upscale: fsr_final)
     y = 0;
-    width = v.focusW;
-    height = v.focusH;
+    width = v.finalFocusW ? v.finalFocusW : v.focusW;
+    height = v.finalFocusH ? v.finalFocusH : v.focusH;
     return true;
 }
 
@@ -3321,7 +4037,9 @@ void mvr_frame_end(unsigned long long frame) {
         g.gpuSlot = -1;
     }
     if (tr.on) {
+        const int passes = tr.passes;
         track_frame_end(frame);  // a pass the tracker ends here reads its focus final (mvr_focus_final) first
+        pt_frame_end(frame, passes);
     } else {  // the counts start afresh each frame either way
         tr.passes = tr.actual = 0;
         tr.draws = 0;
@@ -3487,7 +4205,8 @@ void mvr_frame_end(unsigned long long frame) {
             simqvfr::logf("lmu mvr: focus post: %llu copies, %llu composites (%llu by their bindings), %llu final blits; "
                           "overlays doubled: %llu draws in the passes, %llu after them; %llu steps failed; %llu passes "
                           "without the composite after the copy, %llu draws into the resolve's target by another shader "
-                          "(YEBIS's copy and composite pixel shaders marked %llu and %llu times)",
+                          "(YEBIS's copy and composite pixel shaders marked %llu and %llu times); past a stage before "
+                          "YEBIS: %llu copies from its image, %llu from the resolve; %llu scene rebinds kept in their pass",
                           static_cast<unsigned long long>(s.focusCopies),
                           static_cast<unsigned long long>(s.focusComposites),
                           static_cast<unsigned long long>(s.focusCompositesByBindings),
@@ -3498,7 +4217,10 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(s.focusNoComposite),
                           static_cast<unsigned long long>(s.focusUnknownComposites),
                           static_cast<unsigned long long>(probe.yebisCopies),
-                          static_cast<unsigned long long>(probe.yebisComposites));
+                          static_cast<unsigned long long>(probe.yebisComposites),
+                          static_cast<unsigned long long>(s.focusStageCopies),
+                          static_cast<unsigned long long>(s.focusStageResolves),
+                          static_cast<unsigned long long>(tr.stats.sceneRebinds));
         }
         for (int m = 0; m < 2; ++m) {
             if (!g.gpuCounts[m][0])
@@ -3673,10 +4395,27 @@ void mvr_track_drive(TrackFn begin, TrackFn end) {
     tr.driveEnd = end;
 }
 
+void mvr_pass_trace(int level) {
+    pt.level = level;
+    pt.shapes.clear();
+    pt.lastShape = -1;
+    pt.settings.clear();
+    if (level)
+        simqvfr::log_line("lmu mvr: pass trace on (lmu_pass_trace): every frame recorded, a frame logged when its shape is new, "
+                          "with the game's settings as its files hold them");
+}
+
 void mvr_track_passes(bool on) {
     tr.on = on;
     tr.open = false;
     tr.passes = tr.actual = 0;
+    if (!on) {  // off: the single-sample scene's target forgotten (learned again in a frame when on)
+        tr.scene = nullptr;
+        tr.sceneDesc = {};
+        tr.stageCandidate = nullptr;
+        tr.offScene = false;
+    }
+    tr.stats.lastFrameDraws = tr.draws;
     tr.draws = 0;
 }
 

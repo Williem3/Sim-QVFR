@@ -47,7 +47,24 @@ float4 blit_ps(float4 pos : SV_Position, float4 colour : COLOR0) : SV_Target {
 }
 )";
 
+// scene_from's copy: the source read by texel at the focus part's offset (no sampler, no scaling: the scene image is the
+// focus part's size). Its input as copy_vs's output (TEXCOORD0, then the position), for the linkage.
+constexpr char kSceneShader[] = R"(
+Texture2D<float4> source : register(t0);
+cbuffer Origin : register(b0) { float4 origin; };  // xy: the focus part's top-left in the source
+float4 scene_ps(float4 uv : TEXCOORD0, float4 pos : SV_Position) : SV_Target {
+    return source.Load(int3(int2(pos.xy) + int2(origin.xy), 0));
+}
+)";
+
 template <class T> using Com = Microsoft::WRL::ComPtr<T>;
+
+bool compile_ps(ID3D11Device* device, const char* source, size_t bytes, const char* name, const char* entry,
+                Com<ID3D11PixelShader>& out) {
+    Com<ID3DBlob> code, errors;
+    return SUCCEEDED(D3DCompile(source, bytes, name, nullptr, nullptr, entry, "ps_5_0", 0, 0, &code, &errors)) &&
+           SUCCEEDED(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &out));
+}
 
 bool compile_vs(ID3D11Device* device, const char* entry, Com<ID3D11VertexShader>& out) {
     Com<ID3DBlob> code, errors;
@@ -69,10 +86,11 @@ bool FocusPost::initialize(ID3D11Device* device) {
     if (ready_)
         return true;
     if (!device || FAILED(device->CreateDeferredContext(0, &deferred_)) || !compile_vs(device, "copy_vs", copyVs_) ||
-        !compile_vs(device, "composite_vs", compositeVs_) || !compile_blit(device, blitPs_))
+        !compile_vs(device, "composite_vs", compositeVs_) || !compile_blit(device, blitPs_) ||
+        !compile_ps(device, kSceneShader, sizeof(kSceneShader) - 1, "focus-scene", "scene_ps", scenePs_))
         return false;
     const D3D11_BUFFER_DESC rd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-    if (FAILED(device->CreateBuffer(&rd, nullptr, &origin_)))
+    if (FAILED(device->CreateBuffer(&rd, nullptr, &origin_)) || FAILED(device->CreateBuffer(&rd, nullptr, &sceneOrigin_)))
         return false;
     D3D11_RASTERIZER_DESC rs = {};
     rs.FillMode = D3D11_FILL_SOLID;
@@ -140,14 +158,32 @@ bool FocusPost::after_copy(ID3D11DeviceContext* context, int eye, ID3D11ShaderRe
     if (!ready_ || eye < 0 || eye > 1 || !scene || !sceneWidth || !sceneHeight || !focus.width || !focus.height ||
         focus.x + focus.width > sceneWidth || focus.y + focus.height > sceneHeight)
         return false;
-    View& v = views_[eye];
-    v.sceneReady = false;
+    views_[eye].sceneReady = false;
     Com<ID3D11PixelShader> ps;
     Com<ID3D11SamplerState> sampler;
     context->PSGetShader(&ps, nullptr, nullptr);
     context->PSGetSamplers(0, 1, &sampler);
     ID3D11Buffer* constants = snapshot(context, copyConstants_);
-    if (!ps || !constants || !ensure(v.scene, focus.width, focus.height, DXGI_FORMAT_R16G16B16A16_FLOAT))
+    return ps && constants &&
+           copy_scene(context, eye, scene, sceneWidth, sceneHeight, focus, ps.Get(), constants, sampler.Get());
+}
+
+bool FocusPost::scene_from(ID3D11DeviceContext* context, int eye, ID3D11ShaderResourceView* scene, unsigned sceneWidth,
+                           unsigned sceneHeight, const FocusPostRegion& focus) {
+    if (!ready_ || eye < 0 || eye > 1 || !scene || !sceneWidth || !sceneHeight || !focus.width || !focus.height ||
+        focus.x + focus.width > sceneWidth || focus.y + focus.height > sceneHeight)
+        return false;
+    views_[eye].sceneReady = false;
+    const float origin[4] = {static_cast<float>(focus.x), static_cast<float>(focus.y), 0, 0};
+    context->UpdateSubresource(sceneOrigin_.Get(), 0, nullptr, origin, 0, 0);
+    return copy_scene(context, eye, scene, sceneWidth, sceneHeight, focus, scenePs_.Get(), sceneOrigin_.Get(), nullptr);
+}
+
+bool FocusPost::copy_scene(ID3D11DeviceContext* context, int eye, ID3D11ShaderResourceView* scene, unsigned sceneWidth,
+                           unsigned sceneHeight, const FocusPostRegion& focus, ID3D11PixelShader* ps,
+                           ID3D11Buffer* constants, ID3D11SamplerState* sampler) {
+    View& v = views_[eye];
+    if (!ensure(v.scene, focus.width, focus.height, DXGI_FORMAT_R16G16B16A16_FLOAT))
         return false;
     const float rect[4] = {static_cast<float>(focus.x) / sceneWidth, static_cast<float>(focus.y) / sceneHeight,
                            static_cast<float>(focus.width) / sceneWidth, static_cast<float>(focus.height) / sceneHeight};
@@ -156,9 +192,9 @@ bool FocusPost::after_copy(ID3D11DeviceContext* context, int eye, ID3D11ShaderRe
     d->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     d->VSSetShader(copyVs_.Get(), nullptr, 0);
     d->VSSetConstantBuffers(12, 1, rects_.GetAddressOf());
-    d->PSSetShader(ps.Get(), nullptr, 0);
+    d->PSSetShader(ps, nullptr, 0);
     d->PSSetConstantBuffers(0, 1, &constants);
-    d->PSSetSamplers(0, 1, sampler.GetAddressOf());
+    d->PSSetSamplers(0, 1, &sampler);
     d->PSSetShaderResources(0, 1, &scene);
     d->RSSetState(raster_.Get());
     d->OMSetBlendState(blend_.Get(), nullptr, 0xffffffff);
@@ -312,7 +348,9 @@ void FocusPost::shutdown() {
     compositeVs_.Reset();
     rects_.Reset();
     blitPs_.Reset();
+    scenePs_.Reset();
     origin_.Reset();
+    sceneOrigin_.Reset();
     copyConstants_.Reset();
     compositeConstants_.Reset();
     raster_.Reset();

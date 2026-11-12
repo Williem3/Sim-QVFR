@@ -165,7 +165,25 @@ void activate(Ctl id, int option) {
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kDlssSharpening:
+    case kNrStyle:
+    case kNrPreset:
+    case kNrOrder:
     case kHelmetDetail: open_popup(id); return;
+    case kNrOn:
+        if (own_nr_available()) {  // greyed out without DLSS on or the player's nvngx_dlssnr.dll
+            app.s.nr.on = !app.s.nr.on;
+            changed();
+        }
+        return;
+    case kNrAutoMask:
+    case kNrPeriphery:
+        if (own_nr_available() && app.s.nr.on) {
+            bool& value = id == kNrAutoMask ? app.s.nr.autoMask : app.s.nr.periphery;
+            value = !value;
+            changed();
+        }
+        return;
+    case kNrFolder: choose_nr_dll(); return;
     case kDlssOn:
         if (own_dlss_available()) {  // greyed out without QVFR, an RTX card or multi-view rendering
             app.s.dlss.on = !app.s.dlss.on;
@@ -243,12 +261,6 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
-    case kMultiView:  // any GPU: NVIDIA's on an RTX 20 series or newer, Sim-QVFR's own (instancing) on others
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView)) {
-            app.s.multiView = !app.s.multiView;
-            changed();
-        }
-        return;
     case kNativeQuad:  // auto (1) or off (0); a hand-set 2 (asked for behind another layer) becomes off, then auto
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::nativeQuadViews)) {
             app.s.nativeQuad = app.s.nativeQuad ? 0 : 1;
@@ -297,6 +309,7 @@ bool push_button(Ctl id) {
     case kCheekyRuntime:
     case kDlssFolder:
     case kDlssIncluded:
+    case kNrFolder:
     case kUpdateNow:
     case kUpdateDownload:
     case kUpdateInstall:
@@ -356,6 +369,12 @@ bool space_control(Ctl id) {
     case kFgRelease:
     case kDlssOn:
     case kDlssCarVectors:
+    case kNrOn:
+    case kNrAutoMask:
+    case kNrPeriphery:
+    case kNrStyle:
+    case kNrPreset:
+    case kNrOrder:
     case kDlssFocusMode:
     case kDlssFocusPreset:
     case kDlssEyePreset:
@@ -363,7 +382,6 @@ bool space_control(Ctl id) {
     case kOsdOn:
     case kHotkeyFooter:
     case kUpdateCheck:
-    case kMultiView:
     case kNativeQuad:
     case kCropOn:
     case kHelmetOn:

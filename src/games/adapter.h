@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "../engine/dlss_settings.h"
+#include "../engine/nr_settings.h"
 #include "../quad/views4_layout.h"
 #include "../xr.h"
 #include "game.h"
@@ -50,7 +51,8 @@ struct QvfrStart {
 // it off at launch), NVIDIA's multi-view rendering (each focus view drawn in its eye's pass), Sim-QVFR's software
 // multi-view (the same by instancing: any GPU), or multi-view on but given way to the focus views' own passes (it fell
 // back: the driver refused, LMU's FSR on, a device that can't).
-enum class QvfrMultiView { none, nvidia, software, fallback };
+// eyesOnly: the multi-view path is on but no focus views are being made (the eyes alone, at full resolution).
+enum class QvfrMultiView { none, nvidia, software, fallback, eyesOnly };
 
 class GameAdapter {
 public:
@@ -82,6 +84,13 @@ public:
     // eye images (`eyes`, as the game left them after its eye loop) copied into it, and each view's region in it
     // (u0, v0, du, dv; view e the outer view of eye e, e + 2 its focus view). Called in xrEndFrame on the game's render
     // thread (its immediate context). Null: nothing to compose this frame (the eyes are submitted as they are).
+    // With qvfr_separate_views, a frame qvfr_views_atlas has no four views for: the part of each eye's image the game
+    // rendered this frame, from its top-left, in pixels; the layer submits that part. False: the eyes whole.
+    virtual bool qvfr_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) {
+        (void)width;
+        (void)height;
+        return false;
+    }
     virtual ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
         (void)eyes;
         (void)uv;
@@ -114,6 +123,8 @@ public:
     // QVFR: Sim-QVFR's own DLSS ([dlss], GameFeatures::sideLoadedDlss; engine/dlss_settings.h), live: called with the
     // ini's at every reload; the adapter applies what changed (the DLL's folder at the next launch).
     virtual void qvfr_set_dlss(const DlssSettings& settings) { (void)settings; }
+    // QVFR: DLSS-NR on Sim-QVFR's own DLSS views ([dlss_nr], engine/nr_settings.h), live: called as qvfr_set_dlss is.
+    virtual void qvfr_set_nr(const NrSettings& settings) { (void)settings; }
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
     virtual bool qvfr_dlss_held() = 0;
     // The game's render and output target sizes (width, height) as last laid out (0 before the first frame).

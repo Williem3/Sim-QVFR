@@ -30,6 +30,11 @@ public:
     // `focus` part copied the same way into eye `eye`'s scene image.
     bool after_copy(ID3D11DeviceContext* context, int eye, ID3D11ShaderResourceView* scene, unsigned sceneWidth,
                     unsigned sceneHeight, const FocusPostRegion& focus);
+    // Instead of after_copy, when YEBIS's chain starts from an image a stage between the resolve and YEBIS made (its
+    // composite reads that image directly, so no copy of the game's to replay): `scene`'s `focus` part copied texel
+    // for texel, with our own pixel shader, into eye `eye`'s scene image.
+    bool scene_from(ID3D11DeviceContext* context, int eye, ID3D11ShaderResourceView* scene, unsigned sceneWidth,
+                    unsigned sceneHeight, const FocusPostRegion& focus);
     // Right after the eye pass's YEBIS composite, its pixel shader, constant buffer 0, samplers 0-2 and resources still
     // bound (t1 the eye's glare, t2 its 1x1 exposure): the glare's `glareRegion` (the eye's part) resampled through the
     // focus box (`mapping`) into eye `eye`'s glare image, then the composite of the scene image (after_copy, this frame)
@@ -70,12 +75,17 @@ private:
     // The game's constant buffer 0 as bound now, copied (the game rewrites its buffer for every draw).
     ID3D11Buffer* snapshot(ID3D11DeviceContext* context, Com<ID3D11Buffer>& keep);
     bool run(ID3D11DeviceContext* context);  // the deferred context's draws, executed with the game's state restored
+    // after_copy and scene_from: `ps` with `constants` at b0 (and `sampler` at s0, if any) over `focus` of `scene`.
+    bool copy_scene(ID3D11DeviceContext* context, int eye, ID3D11ShaderResourceView* scene, unsigned sceneWidth,
+                    unsigned sceneHeight, const FocusPostRegion& focus, ID3D11PixelShader* ps, ID3D11Buffer* constants,
+                    ID3D11SamplerState* sampler);
 
     bool ready_ = false;
     Com<ID3D11Device> device_;
     Com<ID3D11DeviceContext> deferred_;
     Com<ID3D11VertexShader> copyVs_, compositeVs_;
-    Com<ID3D11PixelShader> blitPs_;
+    Com<ID3D11PixelShader> blitPs_, scenePs_;  // scenePs_: scene_from's texel copy
+    Com<ID3D11Buffer> sceneOrigin_;            // scene_from: the focus part's top-left in the scene
     Com<ID3D11Buffer> rects_;   // the copy's source rect in UV (offset, size)
     Com<ID3D11Buffer> origin_;  // blit_final: the focus region's top-left
     Com<ID3D11Buffer> copyConstants_, compositeConstants_;

@@ -299,6 +299,89 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   static_cast<unsigned long long>(s.slotViews), static_cast<unsigned long long>(s.slotTwinBinds),
                   static_cast<unsigned long long>(s.blendTwins));
     check(s.slotPasses == 4 && s.slotBinds >= 4 && s.slotViews == 2 && s.slotTwinBinds >= 4 && s.blendTwins == 2, what);
+
+    // The game's MSAA on: the scene's target and its depth multisample (4x here). The slot target beside it must be
+    // multisample too (render targets bound together share the sample count), and every sample of the part's pixels
+    // takes its slot: DLSS's vectors read the first, as they do of the depth.
+    {
+        const D3D11_TEXTURE2D_DESC ms = {W, H, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {4, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, 0};
+        D3D11_TEXTURE2D_DESC msDepth = ms;
+        msDepth.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        msDepth.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+        ComPtr<ID3D11Texture2D> sceneMs, depthMs;
+        device->CreateTexture2D(&ms, nullptr, &sceneMs);
+        device->CreateTexture2D(&msDepth, nullptr, &depthMs);
+        sceneRtv.Reset();
+        dsv.Reset();
+        check(sceneMs && depthMs && SUCCEEDED(device->CreateRenderTargetView(sceneMs.Get(), nullptr, &sceneRtv)) &&
+                  SUCCEEDED(device->CreateDepthStencilView(depthMs.Get(), nullptr, &dsv)),
+              "MSAA: a 4x multisample scene target and depth are made");
+        const unsigned long long before = lmu::mvr_pass_stats().slotPasses;
+        frame(moved5);  // the part has its frame before from above
+        D3D11_TEXTURE2D_DESC slotDesc{};
+        if (ID3D11Texture2D* slots = lmu::mvr_car_slot_texture())
+            slots->GetDesc(&slotDesc);
+        std::snprintf(what, sizeof(what), "MSAA: the slot target is %ux%u x%u, %llu passes with it", slotDesc.Width, slotDesc.Height,
+                      slotDesc.SampleDesc.Count, static_cast<unsigned long long>(lmu::mvr_pass_stats().slotPasses - before));
+        check(slotDesc.SampleDesc.Count == 4 && slotDesc.Width == W && slotDesc.Height == H && lmu::mvr_pass_stats().slotPasses - before == 2,
+              what);
+        // Its samples read out: sample `n` of each pixel into a single-sample R16_UINT target.
+        const auto vsFull = compile("float4 main(uint id : SV_VertexID) : SV_Position { float2 uv = float2((id << 1) & 2, id & 2); "
+                                    "return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }",
+                                    "vs_5_0");
+        const auto psRead = compile("Texture2DMS<uint> t : register(t0); cbuffer C : register(b0) { uint n; }; "
+                                    "uint main(float4 p : SV_Position) : SV_Target { return t.Load(int2(p.xy), n); }",
+                                    "ps_5_0");
+        ComPtr<ID3D11VertexShader> full;
+        ComPtr<ID3D11PixelShader> read;
+        ComPtr<ID3D11ShaderResourceView> slotSrv;
+        ComPtr<ID3D11Buffer> sampleCb;
+        const ComPtr<ID3D11Texture2D> out = texture(DXGI_FORMAT_R16_UINT, D3D11_BIND_RENDER_TARGET);
+        ComPtr<ID3D11RenderTargetView> outRtv;
+        const D3D11_BUFFER_DESC cd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        bool ok = vsFull && psRead && lmu::mvr_car_slot_texture() &&
+                  SUCCEEDED(device->CreateVertexShader(vsFull->GetBufferPointer(), vsFull->GetBufferSize(), nullptr, &full)) &&
+                  SUCCEEDED(device->CreatePixelShader(psRead->GetBufferPointer(), psRead->GetBufferSize(), nullptr, &read)) &&
+                  SUCCEEDED(device->CreateShaderResourceView(lmu::mvr_car_slot_texture(), nullptr, &slotSrv)) &&
+                  SUCCEEDED(device->CreateBuffer(&cd, nullptr, &sampleCb)) &&
+                  SUCCEEDED(device->CreateRenderTargetView(out.Get(), nullptr, &outRtv));
+        int part[2] = {-1, -1}, world[2] = {-1, -1};
+        for (int k = 0; k < 2 && ok; ++k) {
+            const UINT sample[4] = {k == 0 ? 0u : 3u, 0, 0, 0};
+            context->UpdateSubresource(sampleCb.Get(), 0, nullptr, sample, 0, 0);
+            context->OMSetRenderTargets(1, outRtv.GetAddressOf(), nullptr);
+            context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+            const D3D11_VIEWPORT all = {0, 0, static_cast<float>(W), static_cast<float>(H), 0, 1};
+            context->RSSetViewports(1, &all);
+            context->IASetInputLayout(nullptr);
+            context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context->VSSetShader(full.Get(), nullptr, 0);
+            context->PSSetShader(read.Get(), nullptr, 0);
+            context->PSSetConstantBuffers(0, 1, sampleCb.GetAddressOf());
+            context->PSSetShaderResources(0, 1, slotSrv.GetAddressOf());
+            context->Draw(3, 0);
+            ID3D11ShaderResourceView* none = nullptr;
+            context->PSSetShaderResources(0, 1, &none);
+            context->OMSetRenderTargets(0, nullptr, nullptr);
+            D3D11_TEXTURE2D_DESC t;
+            out->GetDesc(&t);
+            t.Usage = D3D11_USAGE_STAGING, t.BindFlags = 0, t.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            ComPtr<ID3D11Texture2D> staging;
+            device->CreateTexture2D(&t, nullptr, &staging);
+            context->CopyResource(staging.Get(), out.Get());
+            D3D11_MAPPED_SUBRESOURCE m{};
+            if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                uint16_t a = 0, b = 0;
+                std::memcpy(&a, static_cast<const uint8_t*>(m.pData) + 8 * m.RowPitch + 8 * 2, 2);
+                std::memcpy(&b, static_cast<const uint8_t*>(m.pData) + 8 * m.RowPitch + (W - 8) * 2, 2);
+                part[k] = a, world[k] = b;
+                context->Unmap(staging.Get(), 0);
+            }
+        }
+        std::snprintf(what, sizeof(what), "MSAA: the part's half holds its slot + 1 in sample 0 (%d) and sample 3 (%d), the world's 0 (%d, %d)",
+                      part[0], part[1], world[0], world[1]);
+        check(ok && part[0] == 1 && part[1] == 1 && world[0] == 0 && world[1] == 0, what);
+    }
     context->Flush();
     std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
     return failures ? 1 : 0;

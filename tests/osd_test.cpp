@@ -312,6 +312,14 @@ int SIM_QVFR_TEST_MAIN() {
                   smvr.value == L"SMVR" && smvr.tone == OsdTone::Good && fallback.value == L"Fallback" &&
                   fallback.tone == OsdTone::Warn,
               "the multi-view badge: none without a multi-view path, MVR and SMVR green, Fallback yellow");
+        const OsdRow eyesOnly = badge(OsdMultiView::EyesOnly);
+        check(eyesOnly.value == L"Eyes only" && eyesOnly.tone == OsdTone::Warn && eyesOnly.pill,
+              "the multi-view badge: Eyes only, yellow, while no focus views are being made");
+        in.dlss = true;
+        const OsdRow withDlss = badge(OsdMultiView::Mvr), noneWithDlss = badge(OsdMultiView::None);
+        in.dlss = false;
+        check(withDlss.value == L"MVR + DLSS" && withDlss.tone == OsdTone::Good && noneWithDlss.value.empty(),
+              "the multi-view badge says DLSS while it evaluates views (MVR + DLSS), nothing without a multi-view path");
         const OsdSummary s = osd_summary(in);
         const std::vector<double> history(120, 11.1);
         const std::vector<uint32_t> plain = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), none);

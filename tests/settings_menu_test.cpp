@@ -1062,6 +1062,89 @@ int SIM_QVFR_TEST_MAIN() {
         DeleteFileW(ini.c_str());
     }
 
+    // DLSS-NR on those views (engine/nr_settings.h): its page only where the launch can run it (the player's
+    // nvngx_dlssnr.dll there), its switches and sliders stepped within their ranges, [dlss_nr] read with the menu's values.
+    {
+        SettingsMenu nm;
+        nm.launch = {true, 50, 39, 39};
+        nm.launch.ownDlss = true;
+        const auto page_at = [](const SettingsMenu& s) {
+            const std::vector<MenuPage> pages = menu_pages(s);
+            return static_cast<int>(std::find(pages.begin(), pages.end(), MenuPage::OwnNr) - pages.begin());
+        };
+        check(page_at(nm) == static_cast<int>(menu_pages(nm).size()), "DLSS-NR page: none without the player's DLL at launch");
+        nm.launch.ownNr = true;
+        const std::vector<MenuPage> pages = menu_pages(nm);
+        check(page_at(nm) < static_cast<int>(pages.size()) && pages[page_at(nm) - 1] == MenuPage::OwnDlss &&
+                  pages.back() == MenuPage::Headset,
+              "DLSS-NR page: shown for the launch, after the DLSS page");
+        nm.launch.ownDlss = false;
+        check(page_at(nm) == static_cast<int>(menu_pages(nm).size()), "DLSS-NR page: none without Sim-QVFR's own DLSS");
+        nm.launch.ownDlss = true;
+        nm.page = page_at(nm);
+        check(menu_title(nm) == L"DLSS-NR" && menu_page_items(nm).size() == 2 && menu_page_items(nm)[1] == MenuItem::NrOn,
+              "DLSS-NR page: off, only its switch");
+        nm.selected = 1;
+        check(menu_key(nm, MenuKey::Right) && nm.values.nr.on && menu_page_items(nm).size() == 13 && menu_lines(nm)[1].value == L"On",
+              "DLSS-NR page: on, then the model's settings, the order, the focus working size, the edge blend, the periphery");
+        const auto at = [&](MenuItem item) {
+            const std::vector<MenuItem> items = menu_page_items(nm);
+            return static_cast<int>(std::find(items.begin(), items.end(), item) - items.begin());
+        };
+        nm.selected = at(MenuItem::NrIntensity);
+        check(!menu_key(nm, MenuKey::Right) && nm.values.nr.intensity == 100 && menu_key(nm, MenuKey::Left) &&
+                  nm.values.nr.intensity == 95 && menu_lines(nm)[nm.selected].value == L"95%",
+              "DLSS-NR page: intensity stops at 100%, steps down by 5");
+        nm.selected = at(MenuItem::NrStyle);
+        check(menu_lines(nm)[nm.selected].value == L"Standard" && menu_key(nm, MenuKey::Right) && menu_key(nm, MenuKey::Right) &&
+                  menu_lines(nm)[nm.selected].value == L"Cinematic" && !menu_key(nm, MenuKey::Right),
+              "DLSS-NR page: style steps Standard, Natural, Cinematic, the last");
+        nm.selected = at(MenuItem::NrPreset);
+        check(menu_lines(nm)[nm.selected].value == L"Default" && menu_key(nm, MenuKey::Right) && nm.values.nr.preset == 1 &&
+                  menu_lines(nm)[nm.selected].value == L"A (original)",
+              "DLSS-NR page: preset steps from the runtime's default to A");
+        nm.selected = at(MenuItem::NrLocalTone);
+        for (int i = 0; i < 12; ++i)
+            menu_key(nm, MenuKey::Right);
+        check(nm.values.nr.localTone == 200 && menu_lines(nm)[nm.selected].value == L"200%", "DLSS-NR page: local tone stops at 200%");
+        nm.selected = at(MenuItem::NrOrder);
+        check(menu_lines(nm)[nm.selected].value == L"After DLSS" && menu_key(nm, MenuKey::Right) && nm.values.nr.beforeDlss &&
+                  menu_lines(nm)[nm.selected].value == L"Before DLSS",
+              "DLSS-NR page: it runs after DLSS by default, before it a step on");
+        nm.selected = at(MenuItem::NrFocusScale);
+        for (int i = 0; i < 20; ++i)
+            menu_key(nm, MenuKey::Left);
+        check(nm.values.nr.focusScale == kNrScaleMin, "DLSS-NR page: the focus working size stops at its minimum");
+        nm.selected = at(MenuItem::NrLimit);
+        check(menu_lines(nm)[nm.selected].value == L"1.0 MP a view" && menu_key(nm, MenuKey::Right) && nm.values.nr.workingLimit == 11 &&
+                  menu_lines(nm)[nm.selected].value == L"1.1 MP a view",
+              "DLSS-NR page: the working size limit is 1.0 megapixel a view by default, a tenth a step");
+        nm.selected = at(MenuItem::NrPeriphery);
+        check(!nm.values.nr.periphery && menu_key(nm, MenuKey::Right) && nm.values.nr.periphery && menu_page_items(nm).size() == 15 &&
+                  menu_page_items(nm).back() == MenuItem::NrPeripheryCoverage,
+              "DLSS-NR page: the periphery off by default; on, its working size and coverage follow");
+        nm.selected = at(MenuItem::NrPeripheryCoverage);
+        check(menu_lines(nm)[nm.selected].value == L"100%" && menu_key(nm, MenuKey::Left) && nm.values.nr.peripheryCoverage == 90,
+              "DLSS-NR page: the periphery covered steps down from all of it");
+        const auto has_note = [&](const wchar_t* start) {
+            for (const std::wstring& n : menu_notes(nm))
+                if (n.rfind(start, 0) == 0)
+                    return true;
+            return false;
+        };
+        check(has_note(L"Runs with DLSS on"), "DLSS-NR page: with DLSS off the note says it runs with DLSS on");
+        nm.values.dlss.on = true;
+        check(!has_note(L"Runs with DLSS on"), "DLSS-NR page: with DLSS on, no such note");
+
+        wchar_t temp[MAX_PATH];
+        GetTempPathW(MAX_PATH, temp);
+        const std::wstring ini = std::wstring(temp) + L"simqvfr-menu-nr.ini";
+        DeleteFileW(ini.c_str());
+        check(write_nr_settings(ini.c_str(), nm.values.nr) && read_menu_values(ini.c_str()).nr == nm.values.nr,
+              "[dlss_nr]: the menu's values read what the page wrote");
+        DeleteFileW(ini.c_str());
+    }
+
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }

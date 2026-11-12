@@ -18,6 +18,8 @@
 #include "../log.h"
 #include "dlss_math.h"
 #include "ngx_dlss.h"
+#include "nr_math.h"
+#include "nr_views.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -51,7 +53,11 @@ Texture2D<float> depthIn : register(t0);
 #endif
 // Moving objects (DlssPass::objectSlots, objectMotion): the surface's object slot + 1 (0: the world), each object's
 // motion in the world (rows: a point [x y z 1] times it is where it was the frame before).
+#ifdef MS
+Texture2DMS<uint> slotsIn : register(t1);  // multisample with the scene: its first sample, as the depth's
+#else
 Texture2D<uint> slotsIn : register(t1);
+#endif
 struct Motion {
     float3 r0, r1, r2, r3;
 };
@@ -84,7 +90,11 @@ Out ps(float4 pos : SV_Position) {
     bool car = in_car(ndc, d);
     float4 before = car ? mul(float4(ndc, d, 1), R2) : mul(float4(ndc, d, 1), R);
     if (!car && objects.x > 0) {  // a moving object's surface: its point moved back with it, then into the frame before
+#ifdef MS
+        uint word = slotsIn.Load(p, 0);
+#else
         uint word = slotsIn.Load(int3(p, 0));
+#endif
         if (word > 0 && word <= (uint)objects.x) {
             float4 w = mul(float4(ndc, d, 1), Inv);
             if (abs(w.w) > 1e-20) {
@@ -269,6 +279,7 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
     ComPtr<ID3D11Texture2D> depth, vectors, output, colour[2], depthBefore;
     ComPtr<ID3D11RenderTargetView> depthRtv, vectorsRtv;
     ComPtr<ID3D11ShaderResourceView> depthSrv, colourSrv[2], depthBeforeSrv;
+    ComPtr<ID3D11ShaderResourceView> vectorsSrv;  // DLSS-NR's guide (nr_views.h)
     int colourAt = 0;
     unsigned long long colourFrame[2] = {}, depthBeforeFrame = 0;
     M4 beforeUnjittered[2] = {dlss::identity(), dlss::identity()};  // through the world's view; through the head's
@@ -522,7 +533,8 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
               make(s.vectors, w, h, DXGI_FORMAT_R16G16_FLOAT, targets) && make(s.output, ow, oh, format, targets) &&
               SUCCEEDED(d.device->CreateRenderTargetView(s.depth.Get(), nullptr, &s.depthRtv)) &&
               SUCCEEDED(d.device->CreateRenderTargetView(s.vectors.Get(), nullptr, &s.vectorsRtv)) &&
-              SUCCEEDED(d.device->CreateShaderResourceView(s.depth.Get(), nullptr, &s.depthSrv));
+              SUCCEEDED(d.device->CreateShaderResourceView(s.depth.Get(), nullptr, &s.depthSrv)) &&
+              SUCCEEDED(d.device->CreateShaderResourceView(s.vectors.Get(), nullptr, &s.vectorsSrv));
     for (int i = 0; i < 2 && ok && d.cfg.gate; ++i)
         ok = make(s.colour[i], w, h, format, D3D11_BIND_SHADER_RESOURCE) &&
              SUCCEEDED(d.device->CreateShaderResourceView(s.colour[i].Get(), nullptr, &s.colourSrv[i]));
@@ -932,6 +944,26 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         s.depthBeforeFrame = d.frame;
     }
 
+    // DLSS-NR (nr_views.h) on the view's colour as it is in the scene now, cw x ch from (x, y): before DLSS on the view
+    // as drawn, else on DLSS's output. An eye's view takes its focus view's place from the remap.
+    const auto neural = [&](unsigned cw, unsigned ch) {
+        NrView nv;
+        nv.index = index;
+        nv.scene = resolved;
+        nv.format = format;
+        nv.x = x, nv.y = y, nv.width = cw, nv.height = ch;
+        nv.depth = s.depthSrv.Get();
+        nv.vectors = s.vectorsSrv.Get();
+        nv.guideWidth = w, nv.guideHeight = h;
+        nv.depthInverted = inverted;
+        nv.reset = !history;
+        if (index < 2 && pass.focus)
+            nv.focusKnown = nr::focus_centre(pass.remap, nv.focusU, nv.focusV);
+        nr_run_view(context, nv);
+    };
+    if (nr_view_wanted(index) && nr_before_dlss())
+        neural(w, h);
+
     ++s.runs;
     ngx::Evaluation e;
     e.colour = resolved;
@@ -949,6 +981,8 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
     const bool done = ngx::evaluate(context, s.feature, e, result);
     if (done) {
         context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
+        if (nr_view_wanted(index) && !nr_before_dlss())
+            neural(ow, oh);
         ++d.evaluations;
         ++d.evaluationsTotal;
     } else {
@@ -1289,6 +1323,7 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
 }
 
 void dlss_shutdown() {
+    nr_shutdown();  // its features and its views of this device first
     if (!d.device)
         return;
     for (Slot& s : d.slots) {
@@ -1471,6 +1506,7 @@ void dlss_frame_end(unsigned long long frame) {
         apply_live(live, changes);
     else if (pending)
         apply_live_sharpening(live);
+    nr_frame_end(frame);
     if (!d.cfg.views)
         return;
     {

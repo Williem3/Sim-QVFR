@@ -59,34 +59,6 @@ float resolution_pane(float x, float y, float w, bool draw) {
                      L"0% is off. The soft outer resolution gains the most from it, and shimmers more with it.", draw,
                      Applies::Live);
     }
-    // Multi-view rendering (LMU): each eye's pass draws and finishes its focus view (two passes instead of four). On any
-    // graphics card: NVIDIA's multi-view rendering on an RTX 20 series or newer (asked of the driver once), Sim-QVFR's own
-    // (instancing) on others; the layer checks the game's device at launch.
-    if (game_has(&games::GameFeatures::multiView)) {
-        h += t::kSpace6;
-        const nvapi::Gpu* gpu = nvapi::two_views_gpu();
-        std::wstring desc;
-        if (!qvfr) {
-            desc = L"Available in Quad View Foveated Rendering.";
-        } else {
-            desc = L"Each eye’s pass also draws and finishes its focus view, so the game renders only its own two eye passes "
-                   L"a frame instead of four, and Sim-QVFR changes none of the game’s code.";
-            desc += gpu ? L" On this graphics card with NVIDIA’s multi-view rendering."
-                        : L" On this graphics card with Sim-QVFR’s own (each draw drawn twice by instancing).";
-        }
-        const bool unavailable = !qvfr;
-        const bool shown = app.s.multiView;
-        Row on;
-        on.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
-        on.full = [desc, unavailable, shown](const Rect& r) {
-            checkbox(kMultiView, r, shown, L"Multi-view rendering", desc, unavailable);
-        };
-        h += section(x, y + h, w, L"Multi-view rendering", {on},
-                     L"On by default. Saves CPU and GPU time every frame (in testing about 1.5 ms of CPU, and 1 ms of GPU "
-                     L"with NVIDIA’s or 0.65 ms with Sim-QVFR’s own). Off renders every view in a pass of its own, "
-                     L"changing the game’s code to do it.",
-                     draw, Applies::NextLaunch);
-    }
     // The runtime composing the views (LMU on a Pimax or Varjo runtime: layer/native_quad.cpp): on by default, used
     // only where the runtime offers quad views. The description ends with what the last launch found.
     if (game_has(&games::GameFeatures::nativeQuadViews)) {

@@ -43,7 +43,7 @@ enum class OsdGaze { Off, Unavailable, Tracking, Partial, Lost, Runtime, Runtime
 
 // How the game's focus views are drawn (games/adapter.h QvfrMultiView): the card's badge, by the CPU tile's label.
 // None: no badge.
-enum class OsdMultiView { None, Mvr, Smvr, Fallback };
+enum class OsdMultiView { None, Mvr, Smvr, Fallback, EyesOnly };
 
 // Everything one card shows, gathered over the last window (about half a second).
 struct OsdInput {
@@ -66,6 +66,7 @@ struct OsdInput {
     OsdGaze gaze = OsdGaze::Off;
     uint64_t vramUsed = 0, vramBudget = 0;  // bytes, 0: unknown
     OsdMultiView multiView = OsdMultiView::None;
+    bool dlss = false;  // DLSS evaluated views since the card was last drawn (said beside the multi-view badge)
 };
 
 // What the card takes from Cheeky's runtime snapshot (CheekyRuntime_Snapshot's JSON): whether frame

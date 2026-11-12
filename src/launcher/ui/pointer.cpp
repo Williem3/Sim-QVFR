@@ -105,6 +105,19 @@ void open_popup(Ctl owner) {
             fill(kDlssEyePresets, app.s.dlss.eyePreset);
         else
             fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
+    } else if (owner == kNrStyle || owner == kNrPreset) {  // DLSS-NR in LMU
+        const bool style = owner == kNrStyle;
+        app.popup.items.clear();
+        if (style)
+            for (const DlssChoice& c : kNrStyles)
+                app.popup.items.push_back(c.name);
+        else
+            for (const DlssChoice& c : kNrPresets)
+                app.popup.items.push_back(c.name);
+        app.popup.selected = style ? dlss_choice_index(kNrStyles, app.s.nr.style) : dlss_choice_index(kNrPresets, app.s.nr.preset);
+    } else if (owner == kNrOrder) {
+        app.popup.items = {L"After DLSS", L"Before DLSS"};
+        app.popup.selected = app.s.nr.beforeDlss ? 1 : 0;
     } else if (owner == kCheekyNrPreset) {
         app.popup.items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
         app.popup.selected = app.s.cheeky.nrPreset;
@@ -169,6 +182,12 @@ void choose(Ctl owner, int option) {
     else if (owner == kDlssSharpening)
         app.s.dlss.textureSharpening =
             kDlssTextureSharpening[std::clamp(option, 0, static_cast<int>(std::size(kDlssTextureSharpening)) - 1)].value;
+    else if (owner == kNrStyle)
+        app.s.nr.style = kNrStyles[std::clamp(option, 0, static_cast<int>(std::size(kNrStyles)) - 1)].value;
+    else if (owner == kNrPreset)
+        app.s.nr.preset = kNrPresets[std::clamp(option, 0, static_cast<int>(std::size(kNrPresets)) - 1)].value;
+    else if (owner == kNrOrder)
+        app.s.nr.beforeDlss = option == 1;
     else if (owner == kCheekyNrPreset)
         app.s.cheeky.nrPreset = option;
     else if (owner == kCheekyNrPasses)
@@ -290,6 +309,28 @@ void choose_dlss_dll() {
         if (!folder.empty() && std::filesystem::equivalent(folder, layer_folder(), ec))
             folder.clear();
         app.s.dlss.folder = folder;
+        changed();
+    }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// DLSS-NR: the player's own nvngx_dlssnr.dll (a game that ships DLSS-NR has one; Sim-QVFR includes none). Its folder is
+// saved as [dlss_nr] folder (every game's), read by the game at its next launch.
+void choose_nr_dll() {
+    wchar_t path[MAX_PATH] = {};
+    if (!app.s.nr.folder.empty())
+        wcsncpy_s(path, (app.s.nr.folder + L"\\nvngx_dlssnr.dll").c_str(), _TRUNCATE);
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = app.hwnd;
+    ofn.lpstrFilter = L"NVIDIA DLSS-NR (nvngx_dlssnr.dll)\0nvngx_dlssnr.dll\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"Choose NVIDIA’s nvngx_dlssnr.dll (from a game that ships DLSS-NR)";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&ofn)) {
+        std::wstring folder = path;
+        const size_t slash = folder.find_last_of(L"\\/");
+        app.s.nr.folder = slash == std::wstring::npos ? L"" : folder.substr(0, slash);
         changed();
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);

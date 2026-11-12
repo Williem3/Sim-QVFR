@@ -99,7 +99,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/glare_share.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -214,6 +214,16 @@ if(SIM_QVFR_NGX)
   target_link_libraries(lmu_dlss_check PRIVATE sim_qvfr_core d3d11)
 endif()
 
+# Hardware check of DLSS-NR on the views (tests/nr_views_check.cpp): not in the suite, NGX SDK builds only; needs the
+# player's own nvngx_dlssnr.dll.
+if(SIM_QVFR_NGX)
+  sim_qvfr_test(nr_views_check tests/nr_views_check.cpp)
+  target_include_directories(nr_views_check PRIVATE src ${THIRD_PARTY}/openxr/include)
+  target_compile_definitions(nr_views_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(nr_views_check PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(nr_views_check PRIVATE sim_qvfr_core d3d11)
+endif()
+
 # Hardware check of DLSS called by us through NGX on D3D11 (tests/ngx_dlss_check.cpp): not in the suite, and built only
 # with the NGX SDK (NGX_SDK_DIR above).
 if(SIM_QVFR_NGX)
@@ -222,6 +232,17 @@ if(SIM_QVFR_NGX)
   target_compile_definitions(ngx_dlss_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(ngx_dlss_check PRIVATE /W4 /permissive- /utf-8)
   target_link_libraries(ngx_dlss_check PRIVATE d3d11
+    debug "${NGX_SDK_DIR}/nvsdk_ngx_s_dbg.lib" optimized "${NGX_SDK_DIR}/nvsdk_ngx_s.lib")
+endif()
+
+# Hardware check of NVIDIA's DLSS neural rendering runtime (nvngx_dlssnr.dll) called by us on D3D12
+# (tests/ngx_dlssnr_check.cpp): not in the suite, NGX SDK builds only; the DLL is the player's, never in this repository.
+if(SIM_QVFR_NGX)
+  sim_qvfr_test(ngx_dlssnr_check tests/ngx_dlssnr_check.cpp)
+  target_include_directories(ngx_dlssnr_check PRIVATE "${NGX_SDK_DIR}/include")
+  target_compile_definitions(ngx_dlssnr_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(ngx_dlssnr_check PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(ngx_dlssnr_check PRIVATE d3d12 dxgi
     debug "${NGX_SDK_DIR}/nvsdk_ngx_s_dbg.lib" optimized "${NGX_SDK_DIR}/nvsdk_ngx_s.lib")
 endif()
 
@@ -384,6 +405,17 @@ target_link_libraries(pass_census_test PRIVATE sim_qvfr_core)
 sim_qvfr_test(focus_turn_test tests/focus_turn_test.cpp)
 target_include_directories(focus_turn_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_turn_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+
+# Offline check of LMU's multi-view recovery rule (tests/lmu_mvr_recovery_test.cpp).
+sim_qvfr_test(lmu_mvr_recovery_test tests/lmu_mvr_recovery_test.cpp)
+target_include_directories(lmu_mvr_recovery_test PRIVATE src)
+target_compile_options(lmu_mvr_recovery_test PRIVATE /W4 /permissive- /utf-8)
+
+# Offline check of DLSS-NR's arithmetic and settings (tests/nr_math_test.cpp).
+sim_qvfr_test(nr_math_test tests/nr_math_test.cpp)
+target_include_directories(nr_math_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(nr_math_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(nr_math_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of the converging focus boxes (tests/focus_converge_test.cpp).
 sim_qvfr_test(focus_converge_test tests/focus_converge_test.cpp)

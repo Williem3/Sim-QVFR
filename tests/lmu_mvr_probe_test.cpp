@@ -174,8 +174,8 @@ int SIM_QVFR_TEST_MAIN() {
         std::string why;
         check(simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why), "no multi_view key: on (the default)");
         WritePrivateProfileStringW(L"experiment", L"multi_view", L"0", ini.c_str());
-        check(!simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why) && why == "off (multi_view=0)",
-              "multi_view=0: off");
+        check(simqvfr::games::multi_view_on(&lmu::kGame, ini.c_str(), &why),
+              "multi_view=0 (an ini from before the option went): still on, LMU's QVFR has no other way");
         WritePrivateProfileStringW(L"experiment", L"multi_view", L"1", ini.c_str());
         check(!simqvfr::games::multi_view_on(&ace::kGame, ini.c_str(), &why) && why == "off: not for this game",
               "multi_view=1 for a game without it (ACE): off");

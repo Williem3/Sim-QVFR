@@ -71,7 +71,7 @@ struct PreflightInput {
     // Sim-QVFR's own DLSS ([dlss] on, a game with GameFeatures::sideLoadedDlss, QVFR): whether multi-view rendering,
     // which it needs, is on, and its nvngx_dlss.dll (dlss_dll_path): the one Sim-QVFR includes (ownDlssIncluded) or the
     // one the player chose; found, its version.
-    bool ownDlss = false, ownDlssMultiView = true, ownDlssIncluded = true, ownDlssFound = false;
+    bool ownDlss = false, ownDlssIncluded = true, ownDlssFound = false;
     std::wstring ownDlssPath, ownDlssVersion;
     bool elevated = false;  // the launcher runs as administrator (above medium integrity): the game would too
     bool elevatedRegistration = true;  // then the launch's layers are registered in HKLM for it (explicit_layers.h)

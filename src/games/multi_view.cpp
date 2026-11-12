@@ -13,11 +13,9 @@ bool multi_view_on(const GameInfo* game, const wchar_t* ini, std::string* why) {
             *why = text;
         return on;
     };
-    if (!ini || GetPrivateProfileIntW(L"experiment", L"multi_view", 1, ini) == 0)  // on unless set to 0
-        return say("off (multi_view=0)", false);
     if (!game || !game->features.multiView)
         return say("off: not for this game", false);
-    const bool software = GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
+    const bool software = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
     if (const nvapi::Gpu* gpu = nvapi::two_views_gpu())
         return say((gpu->name.empty() ? std::string("an NVIDIA GPU") : gpu->name) +
                        (software ? ": Sim-QVFR's own (instancing; multi_view_software=1)"
@@ -30,11 +28,6 @@ bool multi_view_on(const GameInfo* game, const wchar_t* ini, std::string* why) {
                    (names.empty() ? ""
                                   : "; NVIDIA's multi-view rendering needs an RTX 20 series or newer, not " + names),
                true);
-}
-
-unsigned lmu_mvr_gate(const wchar_t* ini) {
-    const unsigned gate = ini ? GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini) : 0;
-    return gate && nvapi::two_views_gpu() ? gate : 0;
 }
 
 }  // namespace simqvfr::games
