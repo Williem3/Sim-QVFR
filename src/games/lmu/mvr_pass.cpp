@@ -355,8 +355,12 @@ struct State {
     int copyKnownForTests = -1, blitKnownForTests = -1;
     // mvr_shape_ready: this pass's steps as observe_post_draw saw them; each eye pass's outcome; the last frame's.
     bool obsCopied = false, obsComposited = false, obsFinal = false;
-    ID3D11Resource* obsCopyTarget = nullptr;
+    // Every scene-sized image a draw made from the resolve's target this pass (raw, compared only): the composite
+    // reads one of them, not always the latest (other steps read the resolve too: 2026-11-12 13:20 run, post high).
+    ID3D11Resource* obsCopyTargets[6] = {};
+    unsigned obsCopyCount = 0;
     bool shapeOk[2] = {}, shapeReady = false, shapeForceBad = false;
+    int shapeMissing[2] = {}, shapeMissingLast[2] = {};  // mvr_shape_missing: each eye pass's first step not seen
     ID3D11Resource* fsrEye[2] = {};
     ComPtr<ID3D11Resource> eyeFinal[2];
     bool finalThisFrame[2] = {};
@@ -3069,16 +3073,36 @@ void observe_post_draw(ID3D11DeviceContext* context, bool plainDraw) {
     if (g.obsFinal || !g.resolved[g.pass])
         return;
     const ComPtr<ID3D11Resource> source = ps_input0(context), target = target0(context);
-    if (!source || !target)
+    if (!target)
         return;
     ID3D11Resource* const resolved = g.resolved[g.pass].Get();
     if (!g.obsComposited) {
-        if (source.Get() == resolved) {
+        // A stage needn't read the scene from slot 0 (its depth may be there): any of the first eight.
+        bool readsResolve = source.Get() == resolved;
+        if (!readsResolve && target.Get() != resolved) {
+            ID3D11ShaderResourceView* srvs[8] = {};
+            context->PSGetShaderResources(0, static_cast<UINT>(std::size(srvs)), srvs);
+            for (ID3D11ShaderResourceView* srv : srvs) {
+                if (!srv)
+                    continue;
+                ComPtr<ID3D11Resource> r;
+                srv->GetResource(&r);
+                readsResolve = readsResolve || r.Get() == resolved;
+                srv->Release();
+            }
+        }
+        if (readsResolve) {
             if (scene_sized_copy(target.Get())) {
                 g.obsCopied = true;
-                g.obsCopyTarget = target.Get();  // raw, compared only
+                bool have = false;
+                for (unsigned i = 0; i < g.obsCopyCount && !have; ++i)
+                    have = g.obsCopyTargets[i] == target.Get();
+                if (!have)
+                    g.obsCopyTargets[g.obsCopyCount++ % std::size(g.obsCopyTargets)] = target.Get();
             }
-        } else if (g.obsCopied && target.Get() == resolved && source.Get() == g.obsCopyTarget) {
+        } else if (g.obsCopied && target.Get() == resolved &&
+                   std::find(std::begin(g.obsCopyTargets), std::end(g.obsCopyTargets), source.Get()) !=
+                       std::end(g.obsCopyTargets)) {
             ComPtr<ID3D11ShaderResourceView> exposure;
             context->PSGetShaderResources(2, 1, &exposure);
             ComPtr<ID3D11Resource> r;
@@ -3988,7 +4012,8 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     g.copyTarget.Reset();
     g.compositeOk = g.focusBlitted = g.overlayTarget = false;
     g.obsCopied = g.obsComposited = g.obsFinal = false;
-    g.obsCopyTarget = nullptr;
+    std::fill(std::begin(g.obsCopyTargets), std::end(g.obsCopyTargets), nullptr);
+    g.obsCopyCount = 0;
     {
         const MvrProbeStats known = mvr_probe_stats();
         g.copyUnknown = g.copyKnownForTests >= 0 ? g.copyKnownForTests == 0 : known.yebisCopies == 0;
@@ -4067,8 +4092,10 @@ void mvr_pass_end(int pass) {
         return;
     Timed timed(g.time.hooks);
     slot_unbind();  // car slots: the game's targets and blend state as it bound them
-    if (pass >= 0 && pass < 2)
-        g.shapeOk[pass] = g.afterResolve && g.obsCopied && g.obsComposited && g.obsFinal;
+    if (pass >= 0 && pass < 2) {
+        g.shapeMissing[pass] = !g.afterResolve ? 1 : !g.obsCopied ? 2 : !g.obsComposited ? 3 : !g.obsFinal ? 4 : 0;
+        g.shapeOk[pass] = g.shapeMissing[pass] == 0;
+    }
     g.drawFocus = false;
     g.overlayTarget = false;
     update();  // the game's shader, one view, its own viewports
@@ -4144,6 +4171,11 @@ void mvr_car_slots(int level) {
 }
 
 bool mvr_shape_ready() { return g.shapeReady; }
+const char* mvr_shape_missing(int eye) {
+    static const char* const kWhat[] = {"every step", "no post-processing begun", "no scene copy", "no composite",
+                                        "no final blit", "no pass"};
+    return kWhat[std::clamp(g.shapeMissingLast[eye & 1], 0, 5)];
+}
 void mvr_roles_known_for_tests(int copy, int blit) {
     g.copyKnownForTests = copy;
     g.blitKnownForTests = blit;
@@ -4288,6 +4320,10 @@ void mvr_frame_end(unsigned long long frame) {
     if (g.copyKnownForTests < 0)
         g.copyUnknown = mvr_probe_stats().yebisCopies == 0;
     g.stats.shapeFrames += g.shapeOk[0] && g.shapeOk[1] ? 1 : 0;
+    for (int e = 0; e < 2; ++e) {
+        g.shapeMissingLast[e] = g.shapeOk[e] ? 0 : g.shapeMissing[e] ? g.shapeMissing[e] : 5;
+        g.shapeMissing[e] = 0;
+    }
     g.shapeOk[0] = g.shapeOk[1] = false;
     for (State::SceneBind& b : g.sceneBinds)  // DLAA's: nothing of the game's held between frames
         b = State::SceneBind{};

@@ -1555,6 +1555,11 @@ void four_passes_frame_end() {
             stop_multi_view(why);
         } else {
             const double waited = recovery.waitMs;
+            // While the eyes render alone: what each eye pass's post-processing lacks of the steps the focus views are
+            // made at, now and then (the reason no try is being made).
+            if (recovery.plain() && passes >= 2 && !mvr_shape_ready() && frames % 900 == 0)
+                simqvfr::logf("lmu mvr: frame %llu: the eyes alone, no try: eye 0's pass has %s, eye 1's %s", frames,
+                              mvr_shape_missing(0), mvr_shape_missing(1));
             switch (recovery.frame(passes, frameFinalsOk, now_ms(), mvr_shape_ready())) {
             case MvrRecovery::Event::wentPlain:
                 if (recovery.timesPlain == 1 && twoPassFrames)

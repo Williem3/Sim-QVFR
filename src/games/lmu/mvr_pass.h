@@ -147,6 +147,8 @@ void mvr_focus_replay(bool on);
 // their bindings on the eye's own post-processing, whether or not focus views were drawn. False: a try to draw them
 // would fail (mvr_recovery.h). `mvr_shape_force_bad`: reported false whatever was seen (the recovery's test).
 bool mvr_shape_ready();
+// Eye `eye`'s pass of the last ended frame in words: "every step", or the first step not seen (the log).
+const char* mvr_shape_missing(int eye);
 // Tests: whether the probe knows a YEBIS copy and a final blit shader by checksum (1 yes, 0 no; -1: as the probe's
 // counts say, the default). Unknown: found by their bindings.
 void mvr_roles_known_for_tests(int copy, int blit);

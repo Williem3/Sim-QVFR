@@ -27,12 +27,15 @@ struct MvrRecovery {
     static constexpr unsigned long long kTryFrames = 6;        // the first renders at the full size still, by design
     static constexpr unsigned long long kSettledFrames = 600;  // focus views this long: the wait starts afresh
     static constexpr double kFirstWaitMs = 3000, kMaxWaitMs = 20000;
+    // Not ready for this long: one try all the same, should the frame's steps be there and not seen (a blink a minute
+    // at most, against never coming back).
+    static constexpr double kUnseenWaitMs = 60000;
 
     State state = State::foveated;
     unsigned long long noFinals = 0;  // frames in a row with a pass but without both focus views
     unsigned long long good = 0;      // frames in a row with them
     unsigned long long timesPlain = 0;
-    double retryAtMs = 0, waitMs = 0;
+    double retryAtMs = 0, waitMs = 0, unseenAtMs = 0;
     bool stopped = false;  // stop(): plain for the rest of the session, no more tries
     bool readyFailed = false;  // the focus views were lost, or a try failed, while the frame was ready: timed tries
 
@@ -50,6 +53,7 @@ struct MvrRecovery {
     void new_session() {
         retryAtMs = 0;
         waitMs = 0;
+        unseenAtMs = 0;
         readyFailed = false;
     }
 
@@ -60,7 +64,7 @@ struct MvrRecovery {
         if (state == State::plain) {
             // Only from a frame that rendered both eyes: menus and loading screens don't use up a try. And only
             // while the frame has every step: at once if nothing of ours failed with them there, else on the timer.
-            if (passes >= 2 && ready && (!readyFailed || nowMs >= retryAtMs)) {
+            if (passes >= 2 && ((ready && (!readyFailed || nowMs >= retryAtMs)) || (!ready && nowMs >= unseenAtMs))) {
                 state = State::trying;
                 noFinals = 0;
                 return Event::tryingAgain;
@@ -89,6 +93,7 @@ struct MvrRecovery {
         ++timesPlain;
         waitMs = waitMs > 0 ? (std::min)(waitMs * 2, kMaxWaitMs) : kFirstWaitMs;
         retryAtMs = nowMs + waitMs;
+        unseenAtMs = nowMs + kUnseenWaitMs;
         return Event::wentPlain;
     }
 };

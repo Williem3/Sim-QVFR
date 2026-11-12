@@ -116,9 +116,17 @@ int SIM_QVFR_TEST_MAIN() {
         for (int f = 0; f < 60; ++f, t += frameMs)
             went = went || r.frame(2, false, t, false) == Event::wentPlain;
         bool quiet = went && r.plain();
-        for (int f = 0; f < 20000; ++f, t += frameMs)  // some minutes
+        for (int f = 0; f < 5000; ++f, t += frameMs)  // 55 s
             quiet = quiet && r.frame(2, false, t, false) == Event::none && r.plain();
-        check(quiet && r.timesPlain == 1, "plain while the frame lacks a step: no try in minutes (no blink)");
+        check(quiet && r.timesPlain == 1, "plain while the frame lacks a step: no try for most of a minute (no blink)");
+        {  // a minute of it: one try all the same (the steps may be there and not seen), then a minute more
+            MvrRecovery u = r;
+            double tu = t;
+            int tries = 0;
+            for (int f = 0; f < 10000; ++f, tu += frameMs)  // 111 s more
+                tries += u.frame(2, false, tu, false) == Event::tryingAgain ? 1 : 0;
+            check(tries == 2, "not ready for a minute: one try a minute all the same");
+        }
         const bool tries = r.frame(2, false, t += frameMs, true) == Event::tryingAgain;
         r.frame(2, false, t += frameMs, true);  // the try's first frame still renders at the full size
         check(tries && r.frame(2, true, t += frameMs, true) == Event::recovered,
