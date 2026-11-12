@@ -104,6 +104,7 @@ Settings load_settings(const std::wstring& ini) {
     s.hotkeyFooter = read_int(ini, L"menu", L"hotkey_footer", 1) != 0;
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.dlss = read_dlss_settings(ini.c_str());
+    s.nr = read_nr_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
     s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
     s.cropTop = clamp_to(read_int(ini, L"crop", L"top", 0), kCropRange);
@@ -138,6 +139,7 @@ Settings restored_defaults(const Settings& current) {
     s.hiddenGames = current.hiddenGames;
     s.shownGames = current.shownGames;
     s.gameColors = current.gameColors;
+    s.nr.folder = current.nr.folder;  // where the player's nvngx_dlssnr.dll is: not a setting to lose (Sim-QVFR has none)
     return s;  // [dlss] folder too: back to the nvngx_dlss.dll Sim-QVFR includes
 }
 
@@ -222,6 +224,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"menu", L"hotkey_footer", s.hotkeyFooter ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
+    ok &= write_nr_settings(ini.c_str(), s.nr);      // and DLSS-NR on its views (the folder likewise)
     ok &= write_osd_placement(ini.c_str(), s.osd);
     ok &= write_hotkeys(ini.c_str(), s.hotkeys);
     return ok;
@@ -251,7 +254,7 @@ bool per_game_key(const std::wstring& section, const std::wstring& key) {
     return !(section == L"menu" || section == L"osd" || section == L"hotkeys" || section == L"launcher" ||
              section == L"profiles" || (section == L"experiment" && (key == L"cpu_profile" || key == L"d3d11_capture_hotkey")) ||
              (section == L"cheeky" && (key == L"runtime" || key == L"config_dir")) ||
-             (section == L"dlss" && key == L"folder"));
+             (section == L"dlss" && key == L"folder") || (section == L"dlss_nr" && key == L"folder"));
 }
 
 namespace {

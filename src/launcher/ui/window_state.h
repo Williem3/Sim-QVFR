@@ -49,6 +49,10 @@ enum Ctl {
     // cars' motion.
     kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
     kDlssCarVectors,
+    // DLSS-NR on those views ([dlss_nr], DLSS pane): on, the player's nvngx_dlssnr.dll (Choose…), the model's settings,
+    // where it runs relative to DLSS, the working sizes, the edge blend, the periphery and how much of it.
+    kNrOn, kNrFolder, kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask, kNrOrder,
+    kNrFocusScale, kNrEdgeBlend, kNrPeriphery, kNrPeripheryScale, kNrPeripheryCoverage,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // Multi-view rendering ([experiment] multi_view, Resolution pane): NVIDIA's or Sim-QVFR's own.
@@ -467,6 +471,10 @@ int popup_item_at(float x, float y);
 void choose_cheeky_runtime();
 void choose_dlss_dll();
 void use_included_dlss();
+void choose_nr_dll();
+// pane_dlss.cpp: DLSS-NR can be turned on with these settings (Sim-QVFR's own DLSS available and on, and the player's
+// nvngx_dlssnr.dll chosen and there).
+bool own_nr_available(std::wstring* why = nullptr);
 void choose_game_folder();
 void undo_restore();
 

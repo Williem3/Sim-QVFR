@@ -289,6 +289,15 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
     where DLSS works (the mip bias DLSS asks for). The gain is subtle, most in the periphery. On at launch, it
     changes while you drive without a stutter; turned on from Off, it starts at the next launch (off, it costs
     nothing). If fine patterns shimmer, a step lower.
+  - **DLSS-NR** (experimental, off by default; lower on the same page, or the headset menu's **DLSS-NR** page):
+    NVIDIA's DLSS neural rendering on the same views, with DLSS on. Its model reworks lighting and materials.
+    **You need your own `nvngx_dlssnr.dll`**: it isn't part of NVIDIA's public DLSS SDK, so Sim-QVFR can't include
+    it; a game that ships DLSS-NR has it in its folder, and **Choose…** points Sim-QVFR at it. It is heavy, about
+    2 ms of GPU time for every million pixels it works on (RTX 5070 Ti), so it covers the focus area only unless
+    you turn on **Periphery too**. **Intensity**, **Style**, **Local tone**, **Local structure** and **Auto mask**
+    change at once; **Preset**, the working sizes, how much of the periphery is covered and whether it runs
+    before or after DLSS rebuild it (a short stutter). A lower **working size** costs less and keeps the picture's
+    own detail. **Edge blend** fades the processed area into what isn't processed. Not tested in the headset yet.
   - **Known limits:** other cars smear a little (their own motion isn't known yet), and below DLAA distant
     textures in the focus area are softer. Tested on SteamVR and Pimax's runtime.
   - **How it works:** [the diagram](docs/architecture/LMU-DLSS-ARCHITECTURE.svg).

@@ -25,6 +25,10 @@ does not cover them. You may use them under these terms, which keep NVIDIA's lic
 - NVIDIA provides them as is, without warranties of any kind. To the maximum extent the law allows, NVIDIA and its
   affiliates aren't liable for any damages arising from them.
 
+NVIDIA's DLSS neural rendering runtime (`nvngx_dlssnr.dll`) is not part of NVIDIA's DLSS SDK and is in no release of
+Sim-QVFR nor in this repository: DLSS-NR in Le Mans Ultimate runs only with a copy the player already has (a game
+that ships it), loaded from where it is through NVIDIA's NGX.
+
 NVIDIA, RTX and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation in the U.S. and other
 countries. Sim-QVFR is not sponsored or endorsed by NVIDIA.
 

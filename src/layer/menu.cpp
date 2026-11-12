@@ -13,6 +13,7 @@
 #include "cheeky/cheeky_settings.h"
 #include "engine/dlss_settings.h"
 #include "engine/ngx_dlss.h"
+#include "engine/nr_settings.h"
 #include "games/adapter.h"
 #include "games/game.h"
 #include "ini_put.h"
@@ -188,6 +189,13 @@ void menu_open(int64_t now) {
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&
                                     experiment.views4Layout.secondViewRoom && ngx::built_in();
         menu.model.launch.sharpeningReady = menu.model.launch.ownDlss && experiment.textureSharpeningAtLaunch;
+        // DLSS-NR on those views: with the player's nvngx_dlssnr.dll where [dlss_nr] folder says (Sim-QVFR has none).
+        {
+            const std::wstring folder = read_nr_settings(live.ini.c_str()).folder;
+            menu.model.launch.ownNr =
+                menu.model.launch.ownDlss && !folder.empty() &&
+                GetFileAttributesW((folder + L"\\nvngx_dlssnr.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
+        }
         {
             std::lock_guard guard(quad.mutex);
             menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
@@ -234,12 +242,14 @@ void menu_press(MenuKey key, int64_t now) {
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
-                     ownDlss = menu.model.launch.ownDlss] {
+                     ownDlss = menu.model.launch.ownDlss, ownNr = menu.model.launch.ownNr] {
         write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
             write_dlss_settings(ini.c_str(), values.dlss);
+        if (ownNr)
+            write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
             write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening);
@@ -247,6 +257,8 @@ void menu_press(MenuKey key, int64_t now) {
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)
                 write_dlss_settings(target.c_str(), values.dlss);
+            if (ownNr)
+                write_nr_settings(target.c_str(), values.nr);
             if (target != settings) {  // the panels' places and the overlay are every game's: the launcher's ini
                 write_osd_placement(settings.c_str(), values.overlay);
                 ini_put(settings.c_str(), L"menu", L"yaw", values.placement.yaw);

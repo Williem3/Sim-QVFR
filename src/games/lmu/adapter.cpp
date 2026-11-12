@@ -10,6 +10,7 @@
 #include "../multi_view.h"
 #include "../../engine/dlss_math.h"
 #include "../../engine/dlss_views.h"
+#include "../../engine/nr_views.h"
 #include "dlss_inputs.h"
 #include "four_passes.h"
 #include "game.h"
@@ -188,6 +189,16 @@ public:
         }
         dlss_use_lmu_inputs();  // the pass's matrices from the game's renderer
         simqvfr::dlss_start(dlss);
+        // DLSS-NR on those views (engine/nr_views.h): the player's [dlss_nr], live through qvfr_set_nr. It takes DLSS's
+        // depth and motion vectors, so it runs only while DLSS does; nvngx_dlssnr.dll is the player's own ([dlss_nr]
+        // folder).
+        nrSettings_ = s.ini ? simqvfr::read_nr_settings(s.ini) : simqvfr::NrSettings{};
+        if (nrSettings_.on && !dlss.views)
+            simqvfr::log_line("lmu dlss-nr: on, but DLSS is off: it runs once DLSS is on (it takes DLSS's depth and motion "
+                              "vectors)");
+        simqvfr::NrSettings nr = nrSettings_;
+        nr.on = nr.on && dlssPossible_;
+        simqvfr::nr_start("lmu dlss-nr", nr);
         qvfr_ = four_passes_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
@@ -254,6 +265,17 @@ public:
         live.eyePreset = settings.eyePreset;
         live.textureSharpening = settings.textureSharpening;
         simqvfr::dlss_live(live);
+    }
+    // The player's DLSS-NR settings changed: the module takes them between frames (another folder: the next launch).
+    void qvfr_set_nr(const simqvfr::NrSettings& settings) override {
+        if (!qvfr_ || settings == nrSettings_)
+            return;
+        if (settings.folder != nrSettings_.folder)
+            simqvfr::log_line("lmu dlss-nr: the nvngx_dlssnr.dll folder changed: it applies at the next launch");
+        nrSettings_ = settings;
+        simqvfr::NrSettings live = settings;
+        live.on = live.on && dlssPossible_;
+        simqvfr::nr_live(live);
     }
     void visibility_mask_taken(uint32_t viewIndex) override {
         if (qvfr_)
@@ -338,6 +360,7 @@ private:
     bool glareAtLaunch_ = true;
     // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
     simqvfr::DlssSettings dlssSettings_;
+    simqvfr::NrSettings nrSettings_;
     bool dlssPossible_ = false, dlssRefusedLogged_ = false;
 };
 

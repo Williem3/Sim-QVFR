@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "../engine/dlss_settings.h"
+#include "../engine/nr_settings.h"
 #include "../quad/views4_layout.h"
 #include "../xr.h"
 #include "game.h"
@@ -114,6 +115,8 @@ public:
     // QVFR: Sim-QVFR's own DLSS ([dlss], GameFeatures::sideLoadedDlss; engine/dlss_settings.h), live: called with the
     // ini's at every reload; the adapter applies what changed (the DLL's folder at the next launch).
     virtual void qvfr_set_dlss(const DlssSettings& settings) { (void)settings; }
+    // QVFR: DLSS-NR on Sim-QVFR's own DLSS views ([dlss_nr], engine/nr_settings.h), live: called as qvfr_set_dlss is.
+    virtual void qvfr_set_nr(const NrSettings& settings) { (void)settings; }
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
     virtual bool qvfr_dlss_held() = 0;
     // The game's render and output target sizes (width, height) as last laid out (0 before the first frame).

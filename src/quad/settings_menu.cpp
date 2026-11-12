@@ -94,6 +94,20 @@ constexpr Spec kSpecs[] = {
     {MenuItem::DlssFocusPreset, L"Focus preset", 0, 0, 1},
     {MenuItem::DlssEyePreset, L"Periphery preset", 0, 0, 1},
     {MenuItem::DlssSharpening, L"Texture sharpening", 0, 0, 1},
+    // The DLSS-NR page (engine/nr_settings.h's ranges).
+    {MenuItem::NrOn, L"DLSS-NR", 0, 1, 1},
+    {MenuItem::NrIntensity, L"Intensity", 0, 100, 5},
+    {MenuItem::NrStyle, L"Style", 0, 2, 1},
+    {MenuItem::NrPreset, L"Preset", 0, 2, 1},
+    {MenuItem::NrLocalTone, L"Local tone", 0, 200, 10},
+    {MenuItem::NrLocalStructure, L"Local structure", 0, 200, 10},
+    {MenuItem::NrAutoMask, L"Auto mask", 0, 1, 1},
+    {MenuItem::NrOrder, L"Runs", 0, 1, 1},
+    {MenuItem::NrFocusScale, L"Focus working size", kNrScaleMin, 100, 5},
+    {MenuItem::NrEdgeBlend, L"Edge blend", 0, kNrEdgeMax, 2},
+    {MenuItem::NrPeriphery, L"Periphery too", 0, 1, 1},
+    {MenuItem::NrPeripheryScale, L"Periphery working size", kNrScaleMin, 100, 5},
+    {MenuItem::NrPeripheryCoverage, L"Periphery covered", kNrCoverageMin, 100, 10},
 };
 
 const Spec& spec(MenuItem item) {
@@ -101,6 +115,31 @@ const Spec& spec(MenuItem item) {
         if (s.item == item)
             return s;
     return kSpecs[0];
+}
+
+// The DLSS-NR page's values: a number of NrSettings', or (`flag`) one of its switches. Neither: not its item.
+int* nr_number(NrSettings& n, MenuItem item) {
+    switch (item) {
+    case MenuItem::NrIntensity: return &n.intensity;
+    case MenuItem::NrStyle: return &n.style;
+    case MenuItem::NrPreset: return &n.preset;
+    case MenuItem::NrLocalTone: return &n.localTone;
+    case MenuItem::NrLocalStructure: return &n.localStructure;
+    case MenuItem::NrFocusScale: return &n.focusScale;
+    case MenuItem::NrEdgeBlend: return &n.edgeBlend;
+    case MenuItem::NrPeripheryScale: return &n.peripheryScale;
+    case MenuItem::NrPeripheryCoverage: return &n.peripheryCoverage;
+    default: return nullptr;
+    }
+}
+bool* nr_flag(NrSettings& n, MenuItem item) {
+    switch (item) {
+    case MenuItem::NrOn: return &n.on;
+    case MenuItem::NrAutoMask: return &n.autoMask;
+    case MenuItem::NrOrder: return &n.beforeDlss;
+    case MenuItem::NrPeriphery: return &n.periphery;
+    default: return nullptr;
+    }
 }
 
 int* value_of(MenuValues& v, MenuItem item) {
@@ -176,6 +215,8 @@ std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
     }
     if (menu.launch.qvfr && menu.launch.ownDlss)
         pages.push_back(MenuPage::OwnDlss);
+    if (menu.launch.qvfr && menu.launch.ownDlss && menu.launch.ownNr)
+        pages.push_back(MenuPage::OwnNr);
     pages.push_back(MenuPage::Headset);
     return pages;
 }
@@ -216,6 +257,15 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (menu.values.dlss.on)
             items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset,
                                        MenuItem::DlssSharpening});
+    } else if (page == MenuPage::OwnNr) {
+        items.push_back(MenuItem::NrOn);
+        if (menu.values.nr.on) {
+            items.insert(items.end(), {MenuItem::NrIntensity, MenuItem::NrStyle, MenuItem::NrPreset, MenuItem::NrLocalTone,
+                                       MenuItem::NrLocalStructure, MenuItem::NrAutoMask, MenuItem::NrOrder, MenuItem::NrFocusScale,
+                                       MenuItem::NrEdgeBlend, MenuItem::NrPeriphery});
+            if (menu.values.nr.periphery)
+                items.insert(items.end(), {MenuItem::NrPeripheryScale, MenuItem::NrPeripheryCoverage});
+        }
     } else if (page == MenuPage::Dlss) {
         items.insert(items.end(), {MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
                                    MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
@@ -250,6 +300,7 @@ std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     switch (page) {
     case MenuPage::Dlss: return L"Foveated DLSS";
     case MenuPage::OwnDlss: return L"DLSS";
+    case MenuPage::OwnNr: return L"DLSS-NR";
     case MenuPage::Fg: return L"Frame generation";
     case MenuPage::Headset: return L"Overlay and menu";
     case MenuPage::Shape: return L"Focus shape";
@@ -277,6 +328,8 @@ std::wstring menu_subtitle(const SettingsMenu& menu) {
         return menu.optimizeDetail;
     if (page == MenuPage::OwnDlss)
         return L"NVIDIA DLSS, run by Sim-QVFR through NVIDIA's NGX: changes apply at once";
+    if (page == MenuPage::OwnNr)
+        return L"NVIDIA DLSS neural rendering, your own nvngx_dlssnr.dll (experimental)";
     return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";
 }
 
@@ -311,6 +364,16 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     CheekySettings& c = menu.cheeky.values;
     const int step = key == MenuKey::Right ? 1 : -1;
     DlssSettings& dl = menu.values.dlss;
+    if (bool* flag = nr_flag(menu.values.nr, item)) {
+        *flag = !*flag;
+        return true;
+    }
+    if (int* number = nr_number(menu.values.nr, item)) {  // the ends hold
+        const Spec& range = spec(item);
+        const int before = *number;
+        *number = std::clamp(*number + step * range.step, range.min, range.max);
+        return *number != before;
+    }
     switch (item) {
     case MenuItem::DlssOn: dl.on = !dl.on; return true;
     case MenuItem::DlssFocusMode: {  // DLAA, then each smaller render (no wrap)
@@ -446,6 +509,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.sharpen = std::clamp(read_int(ini, L"quad", L"sharpen_percent", v.sharpen), 0, 100);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
     v.dlss = read_dlss_settings(ini);
+    v.nr = read_nr_settings(ini);
     return v;
 }
 
@@ -617,6 +681,17 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         notes.push_back(L"Each change rebuilds DLSS: a short stutter (not texture sharpening)");
         return notes;
     }
+    if (page == MenuPage::OwnNr) {
+        const NrSettings& n = menu.values.nr;
+        if (n.on && !menu.values.dlss.on)
+            notes.push_back(L"Runs with DLSS on (the DLSS page): it takes DLSS's depth and motion");
+        if (n.on)
+            notes.push_back(n.periphery ? L"Its cost grows with the pixels worked on: lower the working sizes first"
+                                        : L"On the focus views; its cost grows with the pixels worked on");
+        if (n.on)
+            notes.push_back(L"Preset, working sizes, coverage and order rebuild it: a short stutter");
+        return notes;
+    }
     if (page == MenuPage::Dlss || page == MenuPage::Helmet)
         return notes;
     if (page == MenuPage::Shape) {
@@ -676,6 +751,16 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = menu.profile < 0 || menu.profile >= static_cast<int>(menu.profiles.size())
                              ? L"Your own"
                              : menu.profiles[menu.profile] + (menu.profileChanged ? L" (changed)" : L"");
+        else if (items[i] == MenuItem::NrStyle)
+            line.value = dlss_choice_name(kNrStyles, v.nr.style);
+        else if (items[i] == MenuItem::NrPreset)
+            line.value = dlss_choice_name(kNrPresets, v.nr.preset);
+        else if (items[i] == MenuItem::NrOrder)
+            line.value = v.nr.beforeDlss ? L"Before DLSS" : L"After DLSS";
+        else if (const bool* flag = nr_flag(v.nr, items[i]))
+            line.value = *flag ? L"On" : L"Off";
+        else if (const int* number = nr_number(v.nr, items[i]))
+            line.value = std::to_wstring(*number) + L"%";
         else if (items[i] == MenuItem::DlssOn)
             line.value = v.dlss.on ? L"On" : L"Off";
         else if (items[i] == MenuItem::DlssFocusMode)

@@ -13,6 +13,7 @@
 
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/dlss_settings.h"
+#include "../engine/nr_settings.h"
 #include "../input/hotkeys.h"
 #include "../profile/profiles.h"
 #include "../quad/focus_offset.h"
@@ -73,6 +74,9 @@ struct Settings {
     // Sim-QVFR's own DLSS ([dlss], engine/dlss_settings.h; a game with GameFeatures::sideLoadedDlss: LMU); its keys but
     // the DLL's folder apply live. The folder is every game's (not in a game's copy or a profile).
     DlssSettings dlss;
+    // DLSS-NR on those views ([dlss_nr], engine/nr_settings.h); its keys but the DLL's folder apply live. The folder is
+    // every game's, as [dlss]'s.
+    NrSettings nr;
     bool cpuProfile = false;  // [experiment] cpu_profile: the CPU capture hotkey records one (Diagnostics pane)
     // [experiment] d3d11_capture_hotkey: the frame capture hotkey saves the next frame's swapchain images (Diagnostics
     // pane; games composed by the D3D11 compositor).

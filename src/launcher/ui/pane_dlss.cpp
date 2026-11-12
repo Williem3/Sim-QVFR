@@ -34,7 +34,112 @@ bool own_dlss_available(std::wstring* why) {
     return reason.empty();
 }
 
+bool own_nr_available(std::wstring* why) {
+    std::wstring reason;
+    if (!own_dlss_available(&reason))
+        ;  // DLSS's own reason
+    else if (!app.s.dlss.on)
+        reason = L"Needs DLSS on, above: it works from DLSS’s depth and motion.";
+    else if (app.s.nr.folder.empty())
+        reason = L"Choose your nvngx_dlssnr.dll below first.";
+    else if (GetFileAttributesW((app.s.nr.folder + L"\\nvngx_dlssnr.dll").c_str()) == INVALID_FILE_ATTRIBUTES)
+        reason = L"nvngx_dlssnr.dll isn’t in the folder chosen for it.";
+    if (why)
+        *why = reason;
+    return reason.empty();
+}
+
 namespace {
+
+// DLSS-NR ([dlss_nr]): NVIDIA's neural rendering on the views Sim-QVFR's own DLSS works on (engine/nr_views.h).
+float own_nr_pane(float x, float y, float w, bool draw) {
+    float h = 0;
+    std::wstring why;
+    const bool available = own_nr_available(&why);
+    const NrSettings& n = app.s.nr;
+    Row use;
+    const std::wstring useDesc =
+        available ? L"NVIDIA’s DLSS neural rendering (DLSS-NR) on " + game_name() + L"’s views: its model reworks lighting and "
+                    L"materials from the picture, its depth and its motion. Experimental, and heavy: about 2 ms of GPU time "
+                    L"for every million pixels it works on (RTX 5070 Ti)."
+                  : why;
+    use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
+    use.full = [useDesc, available, on = n.on](const Rect& r) { checkbox(kNrOn, r, on, L"Use DLSS-NR", useDesc, !available); };
+    const std::wstring dll = n.folder.empty() ? std::wstring() : n.folder + L"\\nvngx_dlssnr.dll";
+    const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES;
+    const std::wstring version = found ? file_version(dll) : std::wstring();
+    Row file;
+    file.label = L"nvngx_dlssnr.dll";
+    file.desc = n.folder.empty() ? std::wstring(L"Not chosen. Sim-QVFR includes none: it is NVIDIA’s, and comes only with games "
+                                               L"that ship DLSS-NR. Choose the one in such a game’s folder.")
+                : found ? (version.empty() ? std::wstring(L"Found") : L"Version " + version) + L", in " + n.folder + L"."
+                        : L"Not found in " + n.folder + L".";
+    file.controlW = button_width(L"Choose…");
+    file.controlH = t::kControlHeight;
+    file.control = [](const Rect& r) { button(kNrFolder, r, L"Choose…", false); };
+    h += section(x, y, w, L"DLSS-NR (experimental)", {use, file},
+                 L"On and off apply while the game runs; another nvngx_dlssnr.dll at the next launch.", draw, Applies::Live) +
+         t::kSpace6;
+    const bool off = !available || !n.on;
+    std::wstring styles[std::size(kNrStyles)], presets[std::size(kNrPresets)];
+    for (size_t i = 0; i < std::size(kNrStyles); ++i)
+        styles[i] = kNrStyles[i].name;
+    for (size_t i = 0; i < std::size(kNrPresets); ++i)
+        presets[i] = kNrPresets[i].name;
+    Row style = choice_row(kNrStyle, L"Style", styles, static_cast<int>(std::size(styles)), dlss_choice_index(kNrStyles, n.style), off);
+    style.desc = L"The look the model aims for.";
+    Row preset = choice_row(kNrPreset, L"Preset", presets, static_cast<int>(std::size(presets)),
+                            dlss_choice_index(kNrPresets, n.preset), off);
+    preset.desc = L"The model: A is the original, B a faster one in newer DLLs (310.9.16 on). Default is the DLL’s own "
+                  L"choice. A change rebuilds DLSS-NR: a short stutter.";
+    Row mask;
+    const std::wstring maskDesc = L"Lets the model find what it treats differently (skin) by itself.";
+    mask.fullHeight = [maskDesc](float width) { return checkbox_height(maskDesc, width); };
+    mask.full = [maskDesc, off, on = n.autoMask](const Rect& r) { checkbox(kNrAutoMask, r, on, L"Auto mask", maskDesc, off); };
+    h += section(x, y + h, w, L"The model",
+                 {slider_row(kNrIntensity, L"Intensity", L"How much of the model’s change you get: 0% is the picture as it came.",
+                             n.intensity, L"", off),
+                  style, preset,
+                  slider_row(kNrLocalTone, L"Local tone", L"The strength of its local contrast and lighting changes.", n.localTone,
+                             L"", off),
+                  slider_row(kNrLocalStructure, L"Local structure", L"The strength of its changes to fine structure.",
+                             n.localStructure, L"", off),
+                  mask},
+                 L"These follow at once, without a stutter (but Preset).", draw, Applies::Live) +
+         t::kSpace6;
+    const std::wstring orders[] = {L"After DLSS", L"Before DLSS"};
+    Row order = choice_row(kNrOrder, L"Runs", orders, 2, n.beforeDlss ? 1 : 0, off);
+    order.desc = L"After DLSS works on the finished, anti-aliased views. Before DLSS works on the views as drawn, before "
+                 L"anti-aliasing and upscaling: fewer pixels when the focus views are upscaled, and DLSS then smooths its "
+                 L"result.";
+    Row periphery;
+    const std::wstring peripheryDesc = L"Off, only the focus views are processed: where you look. On, the periphery too, at "
+                                       L"its own working size and coverage below.";
+    periphery.fullHeight = [peripheryDesc](float width) { return checkbox_height(peripheryDesc, width); };
+    periphery.full = [peripheryDesc, off, on = n.periphery](const Rect& r) {
+        checkbox(kNrPeriphery, r, on, L"Periphery too", peripheryDesc, off);
+    };
+    const bool noPeriphery = off || !n.periphery;
+    h += section(x, y + h, w, L"Where and how much",
+                 {order,
+                  slider_row(kNrFocusScale, L"Focus working size",
+                             L"What the model works at, a share of the focus view. Lower costs less; the picture "
+                             L"keeps its own detail.",
+                             n.focusScale, L"", off),
+                  slider_row(kNrEdgeBlend, L"Edge blend",
+                             L"The band over which the processed area fades into what isn’t processed around it.", n.edgeBlend,
+                             L"", off),
+                  periphery,
+                  slider_row(kNrPeripheryScale, L"Periphery working size", L"As the focus working size, for the periphery.",
+                             n.peripheryScale, L"", noPeriphery),
+                  slider_row(kNrPeripheryCoverage, L"Periphery covered",
+                             L"How much of each eye’s view the model covers, around the focus area.",
+                             n.peripheryCoverage, L"", noPeriphery)},
+                 L"Working sizes, coverage, order and the periphery rebuild DLSS-NR once you stop changing them: a short "
+                 L"stutter.",
+                 draw, Applies::Live);
+    return h;
+}
 
 // Sim-QVFR's own DLSS ([dlss]): NVIDIA's DLSS through NGX on the game's views, the game's code unchanged.
 float own_dlss_pane(float x, float y, float w, bool draw) {
@@ -127,7 +232,9 @@ float own_dlss_pane(float x, float y, float w, bool draw) {
     };
     h += section(x, y + h, w, L"Advanced", {cars},
                  L"Applies at the next launch, with DLSS on at launch; with DLSS off it costs nothing.", draw,
-                 Applies::NextLaunch);
+                 Applies::NextLaunch) +
+         t::kSpace6;
+    h += own_nr_pane(x, y + h, w, draw);
     return h;
 }
 
