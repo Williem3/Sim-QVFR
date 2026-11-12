@@ -258,6 +258,8 @@ struct MvrTrackStats {
     uint64_t framesWithoutGame = 0, passesWithoutGame = 0;                    // false finds (menus)
     uint64_t singleSamplePasses = 0;  // passes begun on the learned single-sample scene target (MSAA off)
     uint64_t sceneRelearned = 0;      // that target learned again (the game made its targets anew)
+    // Textures YEBIS's copy read outside the passes that were too small to be the scene's target (not learned).
+    uint64_t sceneCandidatesRefused = 0;
     uint64_t singleSampleBlits = 0;   // those passes' final blits seen (their end), with the focus post or without
     uint64_t blitsBeforePost = 0;     // blits reading the scene's target before a pass's post began (not taken)
     uint64_t passesWithoutPost = 0;   // single-sample passes that ended before reaching YEBIS's copy

@@ -2860,6 +2860,9 @@ void four_passes_frame_end() {
                               frames);
             }
             why = nullptr;
+            // Counted afresh from here: a run of such frames must not be what stops multi-view rendering the moment
+            // MSAA comes on (2026-11-11 22:30: it fell back on the first multisample frame after two minutes of these).
+            noFinalsRun = 0;
         }
         if (why)
             fallback_to_four_passes(why);

@@ -971,6 +971,49 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(driveLog == " b0 e0 b1 e1" && posts == 2 && stray.blitsBeforePost == strayBefore.blitsBeforePost + 1 &&
                   stray.passesWithoutPost == strayBefore.passesWithoutPost,
               what);
+        {  // A small view of the world post-processed the same way, outside the passes (LMU's mirror: 2560x160 beside a
+           // 3120x2505 scene): drawn with a depth target, read by YEBIS's copy. It must not be learned in the scene's
+           // place: the next passes are still found on the scene's own target.
+            const UINT mh = H / 8 ? H / 8 : 1;
+            ComPtr<ID3D11Texture2D> mirror = texture(device.Get(), W, mh, DXGI_FORMAT_R16G16B16A16_FLOAT, 1,
+                                                     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+            ComPtr<ID3D11Texture2D> mirrorDepth = texture(device.Get(), W, mh, DXGI_FORMAT_D24_UNORM_S8_UINT, 1, D3D11_BIND_DEPTH_STENCIL);
+            ComPtr<ID3D11RenderTargetView> mirrorRtv;
+            ComPtr<ID3D11ShaderResourceView> mirrorSrv;
+            ComPtr<ID3D11DepthStencilView> mirrorDsv;
+            device->CreateRenderTargetView(mirror.Get(), nullptr, &mirrorRtv);
+            device->CreateShaderResourceView(mirror.Get(), nullptr, &mirrorSrv);
+            device->CreateDepthStencilView(mirrorDepth.Get(), nullptr, &mirrorDsv);
+            const lmu::MvrTrackStats mirrorBefore = lmu::mvr_track_stats();
+            driveLog.clear();
+            context->OMSetRenderTargets(1, mirrorRtv.GetAddressOf(), mirrorDsv.Get());  // drawn with depth, before the eyes
+            context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+            context->IASetInputLayout(nullptr);
+            context->VSSetShader(yebisVs.Get(), nullptr, 0);
+            context->VSSetConstantBuffers(1, 1, rectCb.GetAddressOf());
+            write(context.Get(), standIn.copyCb, standIn.copyData, standIn.copyBytes);
+            context->PSSetShader(standIn.copy, nullptr, 0);
+            context->PSSetConstantBuffers(0, 1, &standIn.copyCb);
+            context->OMSetRenderTargets(1, copyRtv.GetAddressOf(), nullptr);
+            context->PSSetShaderResources(0, 1, mirrorSrv.GetAddressOf());  // YEBIS's copy reads it
+            context->RSSetViewports(1, &eyeVp);
+            context->DrawIndexed(3, 0, 0);
+            ID3D11ShaderResourceView* noInput = nullptr;
+            context->PSSetShaderResources(0, 1, &noInput);
+            eye_pass(0, nullptr, false, standIn, false, true, true);
+            eye_pass(1, nullptr, false, standIn, false, true, true);
+            lmu::mvr_frame_end(100026);
+            const lmu::MvrTrackStats mirrorAfter = lmu::mvr_track_stats();
+            std::snprintf(what, sizeof(what),
+                          "MSAA off, a %ux%u view post-processed outside the passes (a mirror): passes%s, the scene's target "
+                          "learned again %llu times, %llu candidates refused",
+                          W, mh, driveLog.c_str(),
+                          static_cast<unsigned long long>(mirrorAfter.sceneRelearned - mirrorBefore.sceneRelearned),
+                          static_cast<unsigned long long>(mirrorAfter.sceneCandidatesRefused - mirrorBefore.sceneCandidatesRefused));
+            check(driveLog == " b0 e0 b1 e1" && mirrorAfter.sceneRelearned == mirrorBefore.sceneRelearned &&
+                      mirrorAfter.sceneCandidatesRefused == mirrorBefore.sceneCandidatesRefused + 1,
+                  what);
+        }
         driveViews[0] = &view;
         driveViews[1] = &view1;
         const lmu::MvrPassStats before = lmu::mvr_pass_stats();

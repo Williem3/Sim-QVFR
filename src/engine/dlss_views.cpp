@@ -53,7 +53,11 @@ Texture2D<float> depthIn : register(t0);
 #endif
 // Moving objects (DlssPass::objectSlots, objectMotion): the surface's object slot + 1 (0: the world), each object's
 // motion in the world (rows: a point [x y z 1] times it is where it was the frame before).
+#ifdef MS
+Texture2DMS<uint> slotsIn : register(t1);  // multisample with the scene: its first sample, as the depth's
+#else
 Texture2D<uint> slotsIn : register(t1);
+#endif
 struct Motion {
     float3 r0, r1, r2, r3;
 };
@@ -86,7 +90,11 @@ Out ps(float4 pos : SV_Position) {
     bool car = in_car(ndc, d);
     float4 before = car ? mul(float4(ndc, d, 1), R2) : mul(float4(ndc, d, 1), R);
     if (!car && objects.x > 0) {  // a moving object's surface: its point moved back with it, then into the frame before
+#ifdef MS
+        uint word = slotsIn.Load(p, 0);
+#else
         uint word = slotsIn.Load(int3(p, 0));
+#endif
         if (word > 0 && word <= (uint)objects.x) {
             float4 w = mul(float4(ndc, d, 1), Inv);
             if (abs(w.w) > 1e-20) {

@@ -301,12 +301,15 @@ struct State {
     ComPtr<ID3D11RenderTargetView> slotRtv;
     ComPtr<ID3D11ShaderResourceView> slotSrv;
     UINT slotW = 0, slotH = 0;
+    UINT slotSamples = 1, slotQuality = 0;  // as the scene's target: render targets bound together share them
     ComPtr<ID3D11Buffer> slotWords;
     std::vector<ComPtr<ID3D11ShaderResourceView>> slotViews;
     ID3D11ShaderResourceView* slotViewBound = nullptr;
     ID3D11RenderTargetView* sceneRtvChecked = nullptr;  // the last render target view checked for the scene's (raw)
     bool sceneRtvIsScene = false;
     ID3D11Resource* sceneCheckedAgainst = nullptr;  // the tracker's scene target it was checked against (raw)
+    ID3D11Resource* sceneRtvResource = nullptr;     // that view's texture (raw, compared only) and its description
+    D3D11_TEXTURE2D_DESC sceneRtvDesc{};
     ID3D11BlendState* gameBlend = nullptr;  // raw: bound, so alive
     float blendFactor[4] = {1, 1, 1, 1};
     UINT sampleMask = 0xffffffff;
@@ -427,6 +430,7 @@ struct Tracker {
     bool singleSample = false;  // the open pass began on the learned scene target
     bool msaaFrame = false;     // a multisample scene was bound this frame
     bool sceneLogged = false;
+    bool smallLogged = false;  // a too-small candidate for the scene's target has been said
     MvrTrackStats stats;
     TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
     uint64_t loggedFrames = 0;
@@ -1130,41 +1134,67 @@ inline void om_set_depth_stencil_state(DepthFn real, ID3D11DeviceContext* contex
     }
 }
 
-// Is render target view `rtv` of the scene's target (the tracker's, MSAA off)? The last one asked is remembered.
+// Is render target view `rtv` of the scene's target? With MSAA off the tracker's learned single-sample target; with
+// MSAA on the open pass's multisample target, until its resolve (the pass began at its bind with a depth target, and
+// the game binds no other multisample target with one before the resolve). The last view asked is remembered with its
+// texture's description (the slot target is made to it).
 bool is_scene_rtv(ID3D11RenderTargetView* rtv) {
-    if (rtv == g.sceneRtvChecked && tr.scene == g.sceneCheckedAgainst)
-        return g.sceneRtvIsScene && tr.scene;
-    g.sceneRtvChecked = rtv;
+    if (rtv != g.sceneRtvChecked) {
+        g.sceneRtvChecked = rtv;
+        g.sceneRtvResource = nullptr;
+        g.sceneRtvDesc = {};
+        ComPtr<ID3D11Resource> r;
+        rtv->GetResource(&r);
+        ComPtr<ID3D11Texture2D> texture;
+        if (r && SUCCEEDED(r.As(&texture))) {
+            g.sceneRtvResource = r.Get();
+            texture->GetDesc(&g.sceneRtvDesc);
+        }
+    }
     g.sceneCheckedAgainst = tr.scene;
-    ComPtr<ID3D11Resource> r;
-    rtv->GetResource(&r);
-    g.sceneRtvIsScene = r.Get() == tr.scene && tr.scene && tr.sceneDesc.SampleDesc.Count == 1;
+    if (g.sceneRtvDesc.SampleDesc.Count > 1)  // (the caller is inside a pass: with the tracker driving, its own open one)
+        g.sceneRtvIsScene = !g.afterResolve && !(tr.on && (!tr.open || tr.singleSample || tr.resolved));
+    else
+        g.sceneRtvIsScene = tr.scene && g.sceneRtvResource == tr.scene && tr.sceneDesc.SampleDesc.Count == 1;
     return g.sceneRtvIsScene;
 }
 
-// The slot target at the scene target's size (made again if that changed).
+// The slot target at the scene target's size and sample count (made again if they changed): render targets bound
+// together must share both. With MSAA on it is multisample too (each sample takes the part's slot; DLSS's vectors read
+// sample 0, as they do of the depth).
 bool ensure_slot_target() {
-    const UINT w = tr.sceneDesc.Width, h = tr.sceneDesc.Height;
-    if (g.slotTex && g.slotW == w && g.slotH == h)
+    const UINT w = g.sceneRtvDesc.Width, h = g.sceneRtvDesc.Height;
+    const UINT samples = (std::max)(g.sceneRtvDesc.SampleDesc.Count, 1u), quality = g.sceneRtvDesc.SampleDesc.Quality;
+    if (g.slotTex && g.slotW == w && g.slotH == h && g.slotSamples == samples && g.slotQuality == quality)
         return true;
     g.slotTex.Reset();
     g.slotRtv.Reset();
     g.slotSrv.Reset();
     ComPtr<ID3D11Device> device;
     g.context->GetDevice(&device);
-    const D3D11_TEXTURE2D_DESC t = {w, h, 1, 1, DXGI_FORMAT_R16_UINT, {1, 0}, D3D11_USAGE_DEFAULT,
+    UINT levels = 1;
+    if (samples > 1 && (FAILED(device->CheckMultisampleQualityLevels(DXGI_FORMAT_R16_UINT, samples, &levels)) || quality >= levels)) {
+        g.slotsOn = false;
+        simqvfr::logf("lmu mvr: car slots: no R16_UINT target at the scene's %ux multisampling (quality %u of %u levels); off: the "
+                      "other cars keep the world's vectors",
+                      samples, quality, levels);
+        return false;
+    }
+    const D3D11_TEXTURE2D_DESC t = {w, h, 1, 1, DXGI_FORMAT_R16_UINT, {samples, quality}, D3D11_USAGE_DEFAULT,
                                     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
     if (!w || !h || FAILED(device->CreateTexture2D(&t, nullptr, &g.slotTex)) ||
         FAILED(device->CreateRenderTargetView(g.slotTex.Get(), nullptr, &g.slotRtv)) ||
         FAILED(device->CreateShaderResourceView(g.slotTex.Get(), nullptr, &g.slotSrv))) {
         g.slotTex.Reset();
         g.slotsOn = false;
-        simqvfr::logf("lmu mvr: car slots: the %ux%u slot target couldn't be made; off", w, h);
+        simqvfr::logf("lmu mvr: car slots: the %ux%u x%u slot target couldn't be made; off", w, h, samples);
         return false;
     }
     g.slotW = w;
     g.slotH = h;
-    simqvfr::logf("lmu mvr: car slots: slot target %ux%u (R16_UINT, %.0f MB)", w, h, w * 2.0 * h / 1048576.0);
+    g.slotSamples = samples;
+    g.slotQuality = quality;
+    simqvfr::logf("lmu mvr: car slots: slot target %ux%u x%u (R16_UINT, %.0f MB)", w, h, samples, w * 2.0 * h * samples / 1048576.0);
     return true;
 }
 
@@ -2302,6 +2332,33 @@ void copy_before(ID3D11DeviceContext* context) {
     if (tr.open || (resource.Get() == tr.scene && std::memcmp(&d, &tr.sceneDesc, sizeof(d)) == 0) ||
         !drawn_with_depth(resource.Get()))
         return;
+    // Not every such texture is the scene's: LMU post-processes smaller views of the world the same way (a 2560x160
+    // one, its mirror's by its shape, was learned in place of the 3120x2505 scene when a race session began on
+    // 2026-11-11 22:28; no eye pass was found from then on, so no focus views, no DLSS). The scene's target is of the
+    // eye targets' order: nothing under a quarter of an eye's final a side, nor of the scene learned before, takes
+    // its place.
+    {
+        UINT fw = 0, fh = 0;
+        ComPtr<ID3D11Texture2D> final0;
+        if (g.eyeFinal[0] && SUCCEEDED(g.eyeFinal[0].As(&final0))) {
+            D3D11_TEXTURE2D_DESC fd;
+            final0->GetDesc(&fd);
+            fw = fd.Width;
+            fh = fd.Height;
+        }
+        const bool tooSmall = (fw && (d.Width * 4 < fw || d.Height * 4 < fh)) ||
+                           (tr.sceneDesc.Width && (d.Width * 4 < tr.sceneDesc.Width || d.Height * 4 < tr.sceneDesc.Height));
+        if (tooSmall) {
+            ++tr.stats.sceneCandidatesRefused;
+            if (!tr.smallLogged) {
+                tr.smallLogged = true;
+                simqvfr::logf("lmu mvr: pass tracker: a %ux%u target YEBIS's copy reads (drawn with a depth target) isn't taken "
+                              "for the scene's: too small beside the %ux%u scene learned before and the eyes' %ux%u finals",
+                              d.Width, d.Height, tr.sceneDesc.Width, tr.sceneDesc.Height, fw, fh);
+            }
+            return;
+        }
+    }
     tr.scene = resource.Get();
     tr.sceneDesc = d;
     tr.learnedThisFrame = true;
@@ -2826,8 +2883,8 @@ void save_slot_image(int eye, ID3D11Resource* scene) {
     const UINT fw = g.drawFocus ? (g.view.focusRenderW ? g.view.focusRenderW : g.view.focusW) : 0;
     const UINT fh = g.drawFocus ? (g.view.focusRenderH ? g.view.focusRenderH : g.view.focusH) : 0;
     const UINT w = std::min(g.view.eyeW + fw, g.slotW), h = std::min(std::max(g.view.eyeH, fh), g.slotH);
-    if (!w || !h || !scene || !g.slotTex || tr.sceneDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
-        return;
+    if (!w || !h || !scene || !g.slotTex || g.slotSamples > 1 || tr.sceneDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+        return;  // (the gate image is of a single-sample slot target: MSAA off)
     ComPtr<ID3D11Device> device;
     g.context->GetDevice(&device);
     const auto staged = [&](ID3D11Resource* src, DXGI_FORMAT format, ComPtr<ID3D11Texture2D>& out) {
