@@ -161,6 +161,10 @@ void paint() {
     const float contentH = pane_content(contentX, y0, contentW, true);
     const float total = contentH + pad;
     app.scrollMax = std::max(0.0f, total - bodyH);
+    if (app.scroll > app.scrollMax) {  // the page got shorter (a larger window, a card closed): back in range, drawn again
+        app.scroll = app.scrollMax;
+        InvalidateRect(app.hwnd, nullptr, FALSE);
+    }
     draw_highlight();  // the row Find a setting jumped to
     cv.pop_clip();
 

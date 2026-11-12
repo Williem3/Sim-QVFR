@@ -107,6 +107,9 @@ struct Card {
     std::function<void(Settings&)> reset;
     std::wstring chip;  // a warning beside the title (Eye tracker not detected), if any
     int chipTone = 1;
+    // Placed straight under the card before it (in its column), not in the shortest column: a card that depends on
+    // that one's switch (DLSS-NR under DLSS, Frame generation under Foveated DLSS) shows up where it was turned on.
+    bool follows = false;
 };
 
 // The cards in columns (as many of at least 360 px as fit in `w`, up to four), each in the shortest column, in order,

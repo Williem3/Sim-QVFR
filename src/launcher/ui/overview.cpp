@@ -312,9 +312,10 @@ std::vector<Tile> picture_tiles() {
             line += own_dlss_available() && app.s.dlss.on ? L" · DLSS on" : L" · DLSS off";
         if (cheeky)
             line += app.s.cheeky.load ? L" · Foveated DLSS on" : L" · Foveated DLSS off";
+        // It opens the DLSS card where the game has one (its switch is there), else Rendering.
         out.push_back({L"Rendering", line,
                        nativeQuad && q ? (app.s.nativeQuad ? L"Runtime composes where it can" : L"Sim-QVFR composes") : L"",
-                       L"", 3, L"Rendering"});
+                       L"", 3, ownDlss ? L"DLSS" : cheeky ? L"Foveated DLSS" : L"Rendering"});
     }
     for (Tile& tile : out)
         tile.pane = Pane::Picture;

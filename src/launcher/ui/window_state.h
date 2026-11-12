@@ -117,6 +117,8 @@ enum Ctl {
     // The Overview: the profile's segments (option: a preset's index, or Custom), a summary card (option: its index in
     // app.overviewTargets) and the Ko-fi tile.
     kOverviewProfile, kOverviewCard, kKofiTile,
+    // The Preview card's eye: left, both, right (option: its index; app.previewEye).
+    kPreviewEye,
     // Text a screen reader reads (reader_text): never a click target or a Tab stop.
     kText
 };
@@ -423,6 +425,8 @@ struct App {
     Rect panelBody;
     // The Overview's summary cards as last drawn: the card each one opens (kOverviewCard's options).
     std::vector<SearchEntry> overviewTargets;
+    // The Preview card shows the left eye (0), both (1) or the right eye (2): a view, not a setting.
+    int previewEye = 0;
 };
 
 // The window (window_state.cpp).

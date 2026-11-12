@@ -184,7 +184,8 @@ void activate(Ctl id, int option) {
     case kFgScale:
     case kFgPeriphery:
     case kLayerProfile:
-    case kOverviewProfile: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
+    case kOverviewProfile:
+    case kPreviewEye: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
         std::vector<std::wstring> items;
         const int selected = choice_items(id, items);
         if (!items.empty())
@@ -464,6 +465,7 @@ bool space_control(Ctl id) {
     case kHelmetDetail:
     case kLayerProfile:
     case kOverviewProfile:
+    case kPreviewEye:
     case kLayerOn:
     case kDiagCapture:
     case kDiagFrameCapture:

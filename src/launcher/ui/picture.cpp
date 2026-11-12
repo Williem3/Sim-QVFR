@@ -174,6 +174,8 @@ Card preview_card() {
     Card c{Tab::Picture, L"Preview"};
     c.body = [](Body& b) {
         const float w = b.width();
+        // One eye, or both: the crop's outer side is each eye's temple side, so it mirrors.
+        b.segments(kPreviewEye, L"Eye", {L"Left", L"Both", L"Right"}, std::clamp(app.previewEye, 0, 2));
         b.custom(preview(0, 0, w, false), [](const Rect& r) { preview(r.x, r.y, r.w, true); });
         b.custom(16, [](const Rect& r) { preview_legend(r.x, r.y, r.w, true); });
         b.divider();
@@ -268,10 +270,9 @@ std::wstring native_quad_last() {
     return L"";
 }
 
-bool rendering_shown() {
-    return method_shown() || game_has(&games::GameFeatures::nativeQuadViews) || game_has(&games::GameFeatures::sideLoadedDlss) ||
-           game_has(&games::GameFeatures::foveatedDlss);
-}
+// The method (Two-loop only) and the runtime composing the views; DLSS and Foveated DLSS are their own cards, each with its
+// switch.
+bool rendering_shown() { return method_shown() || game_has(&games::GameFeatures::nativeQuadViews); }
 
 Card rendering_card() {
     Card c{Tab::Picture, L"Rendering"};
@@ -295,37 +296,19 @@ Card rendering_card() {
                     b.note(L"Off while frame generation runs: it needs one composed image.");
             }
         }
-        if (game_has(&games::GameFeatures::sideLoadedDlss)) {
-            std::wstring why;
-            if (own_dlss_available(&why))
-                b.toggle(kDlssOn, L"Use DLSS", app.s.dlss.on,
-                         app.s.dlss.on ? L"DLAA on the periphery, DLAA or an upscale on the focus." : L"Off · its options are hidden",
-                         false, Applies::Live);
-            else
-                b.note(L"DLSS: " + why);
-        }
-        if (game_has(&games::GameFeatures::foveatedDlss)) {
-            const bool on = app.s.cheeky.load;
-            b.toggle(kCheekyUse, L"Use Cheeky Foveated DLSS", on,
-                     on ? L"Cheeky’s DLSS runtime in the game: cheaper outer views." : L"Off · its options are hidden", false,
-                     Applies::NextLaunch);
-        }
     };
     c.reset = [](Settings& s) {
         const Settings d;
         s.mode = d.mode;
         s.nativeQuad = d.nativeQuad;
-        s.dlss.on = d.dlss.on;
-        s.cheeky.load = d.cheeky.load;
     };
     return c;
 }
 
 // ---- DLSS and DLSS-NR (Sim-QVFR's own: LMU) ----------------------------------------------------
 
-Card dlss_card() {
-    Card c{Tab::Picture, L"DLSS", Applies::Live};
-    c.body = [](Body& b) {
+void dlss_rows(Body& b) {
+    {
         const DlssSettings& d = app.s.dlss;
         const std::wstring dll = dlss_dll_path(d.folder, layer_folder()), version = file_version(dll);
         const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES, chosen = !d.folder.empty();
@@ -350,12 +333,27 @@ Card dlss_card() {
                      L"Keeps passing cars clean; turn off for headroom.", false, Applies::NextLaunch);
         });
         b.note(L"A change rebuilds DLSS in a running game: a short stutter.");
+    }
+}
+
+// Sim-QVFR's own DLSS (LMU): its switch, or why it can't be used; its options under the switch while it is on.
+Card dlss_card() {
+    Card c{Tab::Picture, L"DLSS", Applies::Live};
+    c.body = [](Body& b) {
+        std::wstring why;
+        if (!own_dlss_available(&why)) {
+            b.note(why);
+            return;
+        }
+        const bool on = app.s.dlss.on;
+        b.toggle(kDlssOn, L"Use DLSS", on,
+                 on ? L"DLAA on the periphery, DLAA or an upscale on the focus." : L"Off · its options and DLSS-NR are hidden");
+        b.reveal(kDlssOn, on, L"Use DLSS",
+                 {L"nvngx_dlss.dll", L"Focus views", L"Focus preset", L"Periphery preset", L"Texture sharpening", L"Other cars’ motion",
+                  L"nvngx_dlssnr.dll", L"Use DLSS-NR"},
+                 dlss_rows);
     };
-    c.reset = [](Settings& s) {  // its options; DLSS stays on, and its DLL goes back to the included one
-        const bool on = s.dlss.on;
-        s.dlss = DlssSettings{};
-        s.dlss.on = on;
-    };
+    c.reset = [](Settings& s) { s.dlss = DlssSettings{}; };  // its switch and options; the DLL back to the included one
     return c;
 }
 
@@ -383,6 +381,7 @@ void nr_rows(Body& c) {
 
 Card nr_card() {
     Card c{Tab::Picture, L"DLSS-NR", Applies::Live};
+    c.follows = true;  // under DLSS, whose switch shows it
     c.body = [](Body& b) {
         const NrSettings& n = app.s.nr;
         const std::wstring dll = n.folder.empty() ? std::wstring() : n.folder + L"\\nvngx_dlssnr.dll";
@@ -417,13 +416,9 @@ Card nr_card() {
 
 // ---- Cheeky Foveated DLSS and its frame generation (ACE, ACC) ----------------------------------
 
-Card cheeky_card() {
-    Card c{Tab::Picture, L"Foveated DLSS", Applies::Live};
-    c.body = [](Body& b) {
+void cheeky_rows(Body& b) {
+    {
         const CheekySettings& k = app.s.cheeky;
-        // Cheeky's author asked for this credit, with the version, wherever the UI controls Cheeky.
-        b.note(cheeky_version_label(app.runtime.cheekyVersion) +
-               (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L""));
         const std::wstring runtime = cheeky_runtime_path(app.ini, layer_folder());
         const bool found = GetFileAttributesW(runtime.c_str()) != INVALID_FILE_ATTRIBUTES;
         b.buttons(L"Runtime",
@@ -462,17 +457,34 @@ Card cheeky_card() {
                                items_of(kCheekyNrPasses));
                    });
                });
-        if (game_has(&games::GameFeatures::frameGeneration))
-            b.toggle(kFgOn, L"Frame generation", k.fg, k.fg ? L"Generated frames between the game’s, from its depth and motion."
-                                                            : L"Off · its options are hidden");
-        else
+        if (!game_has(&games::GameFeatures::frameGeneration))
             b.note(L"Frame generation: " + not_yet());
+    }
+}
+
+// Cheeky Foveated DLSS (ACE, ACC): its credit, its switch, the rest under the switch while it is on, its licence.
+Card cheeky_card() {
+    Card c{Tab::Picture, L"Foveated DLSS", Applies::Live};  // its switch: the next launch
+    c.body = [](Body& b) {
+        // Cheeky's author asked for this credit, with the version, wherever the UI controls Cheeky.
+        b.note(cheeky_version_label(app.runtime.cheekyVersion) +
+               (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L""));
+        const bool on = app.s.cheeky.load;
+        b.toggle(kCheekyUse, L"Use Cheeky Foveated DLSS", on,
+                 on ? L"Cheeky’s DLSS runtime in the game: cheaper outer views." : L"Off · its options and frame generation are hidden",
+                 false, Applies::NextLaunch);
+        b.reveal(kCheekyUse, on, L"Use Cheeky Foveated DLSS",
+                 {L"Runtime", L"OpenXR layer", L"Foveated DLSS", L"Cheaper outer views", L"Outer DLAA scale", L"Outer preset",
+                  L"Focus preset", L"Focus supersampling", L"Fix motion-vector blur", L"DLSS-NR", L"DLSS-NR preset", L"DLSS-NR passes",
+                  L"Frame generation"},
+                 cheeky_rows);
         b.note(L"Cheeky Foveated DLSS is made by ClarkCheekyKent and is free software under the GNU GPL v3 "
                L"(github.com/ClarkCheekyKent/CheekyFoveatedDLSS).");
     };
-    c.reset = [](Settings& s) {  // its processing options; loading it and frame generation are their own switches
+    c.reset = [](Settings& s) {  // its switch and processing options; frame generation is its own card
         const CheekySettings d;
         CheekySettings& k = s.cheeky;
+        k.load = d.load;
         k.processing = d.processing;
         k.outerDlaa = d.outerDlaa;
         k.outerScale = d.outerScale;
@@ -487,9 +499,8 @@ Card cheeky_card() {
     return c;
 }
 
-Card frame_generation_card() {
-    Card c{Tab::Picture, L"Frame generation", Applies::Live};
-    c.body = [](Body& b) {
+void frame_generation_rows(Body& b) {
+    {
         const CheekySettings& k = app.s.cheeky;
         std::vector<std::wstring> items;
         b.segments(kFgMultiplier, L"Multiplier", items_of(kFgMultiplier), choice_items(kFgMultiplier, items));
@@ -504,10 +515,26 @@ Card frame_generation_card() {
         });
         b.note(L"Turn OpenXR Toolkit’s Turbo mode and other frame generation (VectorXR’s) off. Lower scales use less GPU time "
                L"and memory.");
+    }
+}
+
+// Cheeky's frame generation (ACE): its switch, its options under it while it is on. It follows Foveated DLSS, whose
+// switch shows it.
+Card frame_generation_card() {
+    Card c{Tab::Picture, L"Frame generation", Applies::Live};
+    c.follows = true;
+    c.body = [](Body& b) {
+        const bool on = app.s.cheeky.fg;
+        b.toggle(kFgOn, L"Frame generation", on,
+                 on ? L"Generated frames between the game’s, from its depth and motion." : L"Off · its options are hidden");
+        b.reveal(kFgOn, on, L"Frame generation",
+                 {L"Multiplier", L"Center region", L"Center FG scale", L"Periphery FG scale", L"Show the center region", L"Release game"},
+                 frame_generation_rows);
     };
-    c.reset = [](Settings& s) {  // its options; frame generation itself is the Foveated DLSS card's switch
+    c.reset = [](Settings& s) {  // its switch and options
         const CheekySettings d;
         CheekySettings& k = s.cheeky;
+        k.fg = d.fg;
         k.fgMultiplier = d.fgMultiplier;
         k.fgSize = d.fgSize;
         k.fgScale = d.fgScale;
@@ -525,13 +552,15 @@ std::vector<Card> picture_cards() {
         cards.push_back(view_card());
     if (rendering_shown())
         cards.push_back(rendering_card());
-    if (game_has(&games::GameFeatures::sideLoadedDlss) && own_dlss_available() && app.s.dlss.on) {
+    // Each feature's card holds its switch; what its switch turns on follows straight under it.
+    if (game_has(&games::GameFeatures::sideLoadedDlss)) {
         cards.push_back(dlss_card());
-        cards.push_back(nr_card());
+        if (own_dlss_available() && app.s.dlss.on)
+            cards.push_back(nr_card());
     }
-    if (game_has(&games::GameFeatures::foveatedDlss) && app.s.cheeky.load) {
+    if (game_has(&games::GameFeatures::foveatedDlss)) {
         cards.push_back(cheeky_card());
-        if (game_has(&games::GameFeatures::frameGeneration) && app.s.cheeky.fg)
+        if (game_has(&games::GameFeatures::frameGeneration) && app.s.cheeky.load)
             cards.push_back(frame_generation_card());
     }
     return cards;

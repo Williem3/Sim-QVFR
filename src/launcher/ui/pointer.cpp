@@ -78,6 +78,10 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     items.clear();
     if (owner == kOverviewProfile)
         return overview_profile(items);
+    if (owner == kPreviewEye) {
+        items = {L"Left", L"Both", L"Right"};
+        return std::clamp(app.previewEye, 0, 2);
+    }
     if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
         const bool focus = owner == kCheekyFocusPreset;
         const int value = focus ? app.s.cheeky.focusPreset : app.s.cheeky.outerPreset;
@@ -170,7 +174,8 @@ bool segmented_ctl(Ctl id) {
     case kFgScale:
     case kFgPeriphery:
     case kLayerProfile:
-    case kOverviewProfile: return true;
+    case kOverviewProfile:
+    case kPreviewEye: return true;
     default: return false;
     }
 }
@@ -307,6 +312,11 @@ void choose(Ctl owner, int option) {
     }
     if (owner == kOverviewProfile) {  // a preset used, or the profile menu
         choose_overview_profile(option);
+        return;
+    }
+    if (owner == kPreviewEye) {  // a view, not a setting
+        app.previewEye = std::clamp(option, 0, 2);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
     if (owner == kMethod)

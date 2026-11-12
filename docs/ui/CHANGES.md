@@ -28,8 +28,8 @@ The launcher has a new look and layout. Every setting is still there, saved in t
 | Resolution | Picture › Resolution; runtime composition is in Picture › Rendering; crop and helmet are in Picture › View & helmet |
 | Foveation | Picture › Foveation (the legacy method choice is in Picture › Rendering, shown only in Two-loop) |
 | Focus overlay | Merged into Picture › Foveation (Show focus outline) |
-| Preview column | Picture › Preview |
-| DLSS | Picture › Rendering (on or off), then the DLSS and DLSS-NR cards (Le Mans Ultimate), or the Foveated DLSS and Frame generation cards (ACE, ACC) |
+| Preview column | Picture › Preview: the left eye, the right eye (the crop mirrored) or both |
+| DLSS | Picture › DLSS (Le Mans Ultimate), with DLSS-NR under it, or Picture › Foveated DLSS (ACE, ACC), with Frame generation under it. Each card has its switch first and its options open under the switch. |
 | Headset menu | Headset › Settings menu, Performance overlay and Placement |
 | Hotkeys | Headset › Hotkeys, a table. A clash shows a warning on both actions. |
 | Games | Game › Games in the rail (colour presets and Custom…), and Game › LMU options (Run with anti-cheat) |

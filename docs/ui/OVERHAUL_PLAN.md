@@ -293,3 +293,8 @@ The user answered "use your defaults" to the twelve open questions:
   - Fixed on the way: the arrow keys on the colour panel's Brightness now recolour the game, as dragging does (`set_slider`, shared with the screen reader).
   - `CHANGES.md`: what moved where, for the release notes.
   - Not done: Windows' "Make text bigger" setting (text scaling apart from display scaling) is not applied; display scaling at 125 % and 150 % is (the layout is in DIPs).
+- **Review fixes** (after the user's first run of the redesign):
+  - A card was measured with its Mores closed (they are remembered by the card's title, which the measuring pass didn't set), so an open More drew past the card's bottom: Launch checks' ready list, the helmet's own images, DLSS's advanced rows, Frame generation's timing. Cards are now measured under their title.
+  - The page stayed scrolled when the window grew (no scroll left to undo it): paint brings the scroll back in range.
+  - Each feature's card holds its switch, with its options opening under it: DLSS (LMU) holds Use DLSS, Foveated DLSS (ACE, ACC) holds Use Cheeky Foveated DLSS, and Frame generation holds its own switch. What a switch shows follows straight under its card (`Card::follows`): DLSS-NR under DLSS, Frame generation under Foveated DLSS. Rendering keeps the method and the runtime composing the views.
+  - The Preview shows the left eye, both side by side, or the right eye (a view, not a setting). The crop's outer side is each eye's temple side, so it mirrors; the focus shape's corners are the screen's in both eyes, as the compositor draws them.

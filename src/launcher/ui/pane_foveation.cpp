@@ -1,4 +1,4 @@
-// The foveation preview (the Picture tab's Preview card, and the old pages' preview column), its legend and readouts.
+// The foveation preview (the Picture tab's Preview card: the left eye, both, or the right), its legend and readouts.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -16,8 +16,12 @@
 
 namespace simqvfr::launcher::ui::win {
 
-// FoveationPreview (one eye, a schematic) at (x, y), width w. Returns its height.
-float preview(float x, float y, float w, bool draw) {
+namespace {
+
+// One eye, a schematic, at (x, y), width w; `right`: the right eye, its crop mirrored (the outer side is the temple's,
+// so on the right). The focus shape's corners are the screen's in both eyes, as the compositor draws them. Returns its
+// height.
+float preview_eye(float x, float y, float w, bool draw, bool right) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool known = app.runtime.known();
     // The whole eye (the FOV crop is drawn over it); without a recommended size, the kit's example
@@ -42,8 +46,10 @@ float preview(float x, float y, float w, bool draw) {
         const float gx = 0.5f, gy = 0.5f - app.s.offset.for_mode(app.s.eyeTracking) / 100.0f;
         // The kept view (the left eye: its outer side is on the left); the focus region stays inside it.
         const bool cropHere = game_has(&games::GameFeatures::fovCrop);  // none for a game without the crop
-        const float cl = W * static_cast<float>(cropHere && app.s.crop_width() < 1 ? app.s.cropOuter : 0) / 100,
-                    cr = W * static_cast<float>(cropHere && app.s.crop_width() < 1 ? app.s.cropInner : 0) / 100,
+        const int temple = cropHere && app.s.crop_width() < 1 ? app.s.cropOuter : 0,
+                  nose = cropHere && app.s.crop_width() < 1 ? app.s.cropInner : 0;
+        const float cl = W * static_cast<float>(right ? nose : temple) / 100,
+                    cr = W * static_cast<float>(right ? temple : nose) / 100,
                     ct = H * static_cast<float>(cropHere && app.s.crop_height() < 1 ? app.s.cropTop : 0) / 100,
                     cb = H * static_cast<float>(cropHere && app.s.crop_height() < 1 ? app.s.cropBottom : 0) / 100;
         const float fx = std::clamp(gx * W - fw / 2, cl, std::max(cl, W - cr - fw)),
@@ -140,6 +146,25 @@ float preview(float x, float y, float w, bool draw) {
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
     }
     return frameH;
+}
+
+}  // namespace
+
+// The foveation preview at (x, y), width w: the left eye, the right eye, or both side by side, each named under it
+// (the Preview card's Eye choice, app.previewEye). Returns its height.
+float preview(float x, float y, float w, bool draw) {
+    if (app.previewEye != 1)
+        return preview_eye(x, y, w, draw, app.previewEye == 2);
+    const float gap = 12, half = std::floor((w - gap) / 2);
+    const float h = preview_eye(x, y, half, false, false);
+    if (draw) {
+        preview_eye(x, y, half, true, false);
+        preview_eye(x + half + gap, y, half, true, true);
+        app.canvas.text(L"Left eye", t::kSubheadline, {x, y + h + 4, half, 16}, col(app.c->label_secondary), Align::Center);
+        app.canvas.text(L"Right eye", t::kSubheadline, {x + half + gap, y + h + 4, half, 16}, col(app.c->label_secondary),
+                        Align::Center);
+    }
+    return h + 4 + 16;
 }
 
 // What the foveation preview's two marks mean. Returns its height.

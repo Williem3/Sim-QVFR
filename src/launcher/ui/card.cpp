@@ -419,9 +419,13 @@ void Body::more(const std::wstring& label, const std::vector<std::wstring>& hidd
 
 namespace {
 
+// Measured as drawn: under its title, so its Mores (remembered by "title/label") are open or closed as they will draw.
 float card_height(const Card& card, float w) {
+    const std::wstring section = app.drawingSection;
+    app.drawingSection = card.title;
     Body body(0, 0, w - 2 * kPad, false);
     card.body(body);
+    app.drawingSection = section;
     return kHeaderH + 2 + kPad + body.height() + kPad;
 }
 
@@ -484,8 +488,12 @@ float card_grid(const std::vector<Card>& cards, float x, float y, float w, bool 
     const int cols = std::clamp(static_cast<int>((w + gap) / (kCardMinW + gap)), 1, 4);
     const float cw = std::floor((w - gap * (cols - 1)) / cols);
     std::vector<float> colY(static_cast<size_t>(cols), 0.0f);
+    size_t last = 0;
+    bool any = false;
     for (const Card& card : cards) {
-        const size_t c = static_cast<size_t>(std::min_element(colY.begin(), colY.end()) - colY.begin());
+        const size_t c = card.follows && any ? last : static_cast<size_t>(std::min_element(colY.begin(), colY.end()) - colY.begin());
+        last = c;
+        any = true;
         const float h = card_height(card, cw);
         if (draw) {
             const int index = static_cast<int>(app.cardResets.size());
