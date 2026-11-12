@@ -330,6 +330,15 @@ OsdInput osd_input(int64_t now) {
         in.cpuBusiestName = threads.busiestName;
         in.cpuBusiestIsRender = threads.busiestThread == osd.thread;
     }
+    // The game's way of drawing its focus views (LMU: NVIDIA's multi-view rendering, the software one, or the fallback).
+    if (game) {
+        switch (game->qvfr_multi_view()) {
+        case games::QvfrMultiView::none: in.multiView = OsdMultiView::None; break;
+        case games::QvfrMultiView::nvidia: in.multiView = OsdMultiView::Mvr; break;
+        case games::QvfrMultiView::software: in.multiView = OsdMultiView::Smvr; break;
+        case games::QvfrMultiView::fallback: in.multiView = OsdMultiView::Fallback; break;
+        }
+    }
     return in;
 }
 
@@ -383,7 +392,7 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         osd.shownValid = true;
         osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,
                                                       history = std::vector<double>(osd.history.begin(), osd.history.end())] {
-            return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary));
+            return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary), osd_badge(in));
         });
     }
     if (osd.drawing.valid() && osd.drawing.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {

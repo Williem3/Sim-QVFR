@@ -259,9 +259,11 @@ int main() {
         full.gaze = OsdGaze::Tracking;
         full.fgOutputFps = 81;
         full.cpuBusiestName = L"GameThread";
+        full.multiView = OsdMultiView::Smvr;
         const OsdSummary s = osd_summary(full);
         std::vector<double> history(150, 24.6);
-        const std::vector<uint32_t> pixels = draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s));
+        const std::vector<uint32_t> pixels =
+            draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s), osd_badge(full));
         save_card(path, pixels);
     }
     {
@@ -278,6 +280,37 @@ int main() {
         check(pixels.size() == static_cast<size_t>(kOsdWidth) * kOsdHeight && alpha(0, 0) == 0 &&
                   alpha(kOsdWidth - 1, kOsdHeight - 1) == 0 && alpha(kOsdWidth / 2, kOsdHeight / 2) > 0xc0 && text,
               "the card: rounded transparent corners, translucent body, the frame rate drawn");
+    }
+    {
+        // The multi-view badge: its words and colours, and drawn in the CPU tile's label row only (the rest of the card
+        // the same as without it: clear of the labels and numbers, the GPU tile's long label among them).
+        OsdInput in = measured(24.6, 9.1, 12.5, 10.9, 97, 64);
+        const auto badge = [&](OsdMultiView v) {
+            in.multiView = v;
+            return osd_badge(in);
+        };
+        const OsdRow none = badge(OsdMultiView::None), mvr = badge(OsdMultiView::Mvr), smvr = badge(OsdMultiView::Smvr),
+                     fallback = badge(OsdMultiView::Fallback);
+        check(none.value.empty() && mvr.value == L"MVR" && mvr.tone == OsdTone::Good && mvr.pill &&
+                  smvr.value == L"SMVR" && smvr.tone == OsdTone::Good && fallback.value == L"Fallback" &&
+                  fallback.tone == OsdTone::Warn,
+              "the multi-view badge: none without a multi-view path, MVR and SMVR green, Fallback yellow");
+        const OsdSummary s = osd_summary(in);
+        const std::vector<double> history(120, 11.1);
+        const std::vector<uint32_t> plain = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), none);
+        const std::vector<uint32_t> with = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), fallback);
+        int inside = 0, outside = 0;
+        for (int y = 0; y < kOsdHeight; ++y)
+            for (int x = 0; x < kOsdWidth; ++x) {
+                const size_t i = static_cast<size_t>(y) * kOsdWidth + x;
+                const bool corner = x >= 590 && x < 750 && y < 60;  // the CPU tile's label row, right of "CPU"
+                if (plain[i] != with[i])
+                    ++(corner ? inside : outside);
+            }
+        char what[160];
+        std::snprintf(what, sizeof(what), "the badge drawn in the CPU tile's label row (%d pixels), nothing else changed (%d)",
+                      inside, outside);
+        check(inside > 300 && outside == 0, what);
     }
     {
         const std::vector<uint32_t> pixels =

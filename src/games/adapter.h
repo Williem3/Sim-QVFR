@@ -45,6 +45,12 @@ struct QvfrStart {
     const wchar_t* ini = nullptr;  // the game's own [experiment] diagnostics are read from here
 };
 
+// How a game's focus views are drawn, for the performance overlay's badge: no multi-view path (a game without one, or
+// it off at launch), NVIDIA's multi-view rendering (each focus view drawn in its eye's pass), Sim-QVFR's software
+// multi-view (the same by instancing: any GPU), or multi-view on but given way to the focus views' own passes (it fell
+// back: the driver refused, LMU's FSR on, a device that can't).
+enum class QvfrMultiView { none, nvidia, software, fallback };
+
 class GameAdapter {
 public:
     virtual ~GameAdapter() = default;
@@ -136,6 +142,8 @@ public:
     virtual void visibility_mask_taken(uint32_t viewIndex) { (void)viewIndex; }
     // Every xrEndFrame while QVFR runs (its counters into the log).
     virtual void qvfr_frame_end() = 0;
+    // How the focus views were drawn as of the last frame (the overlay's badge). Any thread.
+    virtual QvfrMultiView qvfr_multi_view() const { return QvfrMultiView::none; }
 
     // ---- The game's own experiments and watches, each reading its own ini keys ----
     // The layer was loaded at the game's first vkCreateInstance (GameInfo::earlyLoad, SIM_QVFR_EARLY=1): from DllMain,

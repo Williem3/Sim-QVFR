@@ -89,6 +89,10 @@ bool four_passes_start(const FourPassesRun& run);
 // Every xrEndFrame: counts the passes; gates: at a few frames on track compares passes 2-3 with eyes 0-1 (copies: pixel
 // for pixel; focus: each focus view with its eye's crop).
 void four_passes_frame_end();
+// How the focus views were drawn as of the last frame end (the overlay's badge): NVIDIA's multi-view rendering, the
+// software multi-view (instancing, or instancing taken over from NVIDIA's), the four passes after a fallback, or none
+// (multi-view off at launch, or not running yet). Any thread.
+simqvfr::games::QvfrMultiView four_passes_multi_view();
 // xrCreateSession with a D3D11 binding: the game's device (the pass tracker installs MVR's hooks on it at a frame end).
 void four_passes_device(ID3D11Device* device);
 

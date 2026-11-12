@@ -78,7 +78,8 @@ uint8_t card_alpha(int x, int y) {
 }  // namespace
 
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
-                                     const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows) {
+                                     const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
+                                     const OsdRow& badge) {
     std::vector<uint32_t> out(static_cast<size_t>(kOsdWidth) * kOsdHeight, 0);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -101,7 +102,7 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
                            CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     };
     HFONT labelFont = font(21, FW_NORMAL), bigFont = font(58, FW_SEMIBOLD), unitFont = font(24, FW_NORMAL),
-          detailFont = font(21, FW_NORMAL), valueFont = font(25, FW_SEMIBOLD);
+          detailFont = font(21, FW_NORMAL), valueFont = font(25, FW_SEMIBOLD), badgeFont = font(20, FW_SEMIBOLD);
     SetBkMode(dc, TRANSPARENT);
     fill(dc, 0, 0, kOsdWidth, kOsdHeight, kCard);
 
@@ -120,6 +121,21 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
             text(dc, unitFont, tile.unit, left + valueWidth + 6, tileTop + 50, right, tileTop + 92, kSecondary, DT_LEFT);
         const uint32_t detailColour = tile.tone == OsdTone::Neutral ? kSecondary : tone_colour(tile.tone, true);
         text(dc, detailFont, tile.detail, left, tileTop + 98, right, tileTop + 126, detailColour, DT_LEFT);
+    }
+
+    // The badge: a pill at the right end of the CPU tile's label row (the third tile: its label, "CPU", is short; the
+    // GPU's can be long).
+    if (!badge.value.empty() && !tiles.empty()) {
+        SelectObject(dc, badgeFont);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, badge.value.c_str(), static_cast<int>(badge.value.size()), &size);
+        const int tile = (std::min)(2, static_cast<int>(tiles.size()) - 1);
+        const int right = kMargin + (tile + 1) * tileWidth - 20, left = right - static_cast<int>(size.cx) - 24;
+        const int top = tileTop - 4, bottom = tileTop + 28;
+        const uint32_t colour = tone_colour(badge.tone, true);
+        rounded(dc, left, top, right, bottom, bottom - top, badge.tone == OsdTone::Neutral ? kTrack : mix(kCard, colour, 0.22));
+        text(dc, badgeFont, badge.value, left + 12, top, right - 12, bottom, badge.tone == OsdTone::Neutral ? kSecondary : colour,
+             DT_CENTER);
     }
 
     // Frame times, newest on the right: one bar per frame, coloured by how it met the budget, and the
@@ -188,7 +204,7 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
             out[i] = ((p >> 16) & 0xff) | (p & 0xff00) | ((p & 0xff) << 16) | (static_cast<uint32_t>(card_alpha(px, py)) << 24);
         }
     SelectObject(dc, previous);
-    for (HFONT f : {labelFont, bigFont, unitFont, detailFont, valueFont})
+    for (HFONT f : {labelFont, bigFont, unitFont, detailFont, valueFont, badgeFont})
         DeleteObject(f);
     DeleteObject(bitmap);
     DeleteDC(dc);
