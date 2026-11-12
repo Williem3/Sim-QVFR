@@ -384,7 +384,6 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const fs::path ini = here / L"sim-qvfr.ini";
     if (!fs::exists(ini, ec))
         return fail(L"sim-qvfr.ini not found next to the launcher (" + ini.wstring() + L")");
-    migrate_settings(ini.wstring());  // a launch from the command line too (the window's start did it already)
 
     const std::wstring game = game_folder(ini.wstring());
     const games::GameInfo& info = games::launcher_game();
@@ -424,11 +423,8 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     if (!CopyFileW(ini.c_str(), iniCopy.c_str(), FALSE))
         return fail(L"cannot copy sim-qvfr.ini into " + runFolder.wstring());
     // Multi-view rendering on any GPU: NVIDIA's on an RTX 20 series or newer (engine/nvapi_gpus.h), Sim-QVFR's own
-    // (instancing) on others (the layer checks the game's device). LMU's MVR gates (lmu_mvr) are NVIDIA's alone: off
-    // in this launch's copy on any other GPU, whatever the ini says.
+    // (instancing) on others (the layer checks the game's device).
     const bool multiViewGpu = simqvfr::nvapi::two_views_gpu() != nullptr;
-    if (!multiViewGpu)
-        WritePrivateProfileStringW(L"experiment", L"lmu_mvr", L"0", iniCopy.c_str());
     // The Diagnostics pane's "Next launch without QVFR" ([launcher] baseline_next): baseline=1 in this launch's
     // copy only (ACE's own two views, measured); turned off once ACE has started, so the next launch has QVFR.
     const bool baseline = ini_string(ini.wstring(), L"launcher", L"baseline_next") == L"1";
@@ -471,8 +467,8 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
-    if (info.features.multiView && GetPrivateProfileIntW(L"experiment", L"multi_view", 1, iniCopy.c_str()) != 0)
-        say(std::wstring(L"  multi-view: on, ") +
+    if (info.features.multiView)
+        say(std::wstring(L"  multi-view: ") +
             (multiViewGpu && ini_string(iniCopy.wstring(), L"experiment", L"multi_view_software") != L"1"
                  ? L"NVIDIA's multi-view rendering"
                  : L"Sim-QVFR's own (instancing)") +
@@ -708,7 +704,6 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     const simqvfr::DlssSettings own = simqvfr::read_dlss_settings(ini.c_str());
     in.ownDlss = games::launcher_game().features.sideLoadedDlss && own.on && in.mode == LaunchMode::Qvfr;
     if (in.ownDlss) {
-        in.ownDlssMultiView = GetPrivateProfileIntW(L"experiment", L"multi_view", 1, ini.c_str()) != 0;
         in.ownDlssIncluded = own.folder.empty();
         in.ownDlssPath = dlss_dll_path(own.folder, layer_folder());
         in.ownDlssFound = !in.ownDlssPath.empty() && GetFileAttributesW(in.ownDlssPath.c_str()) != INVALID_FILE_ATTRIBUTES;

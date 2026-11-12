@@ -337,27 +337,20 @@ void load_experiment() {
         experiment.views4Layout.layerFloor = menuPercent / 100.0;
         logf("experiment: views4_menu_scale=%u: the views are made at least %u%% of the native eye for the game's menus%s",
              menuPercent, menuPercent, menuPercent ? "; the scene renders inside them at the views' sizes" : " (off)");
-        // Room for each focus view beside its eye: multi-view rendering (the launcher's multi_view=1, NVIDIA's on an RTX
-        // 20 series or newer, instancing on any other GPU: games/multi_view.h), or lmu_mvr (LMU's gates of NVIDIA's, 1
-        // or 2, on such a GPU).
-        const UINT gate = games::lmu_mvr_gate(ini.c_str());
-        if (!gate && GetPrivateProfileIntW(L"experiment", L"lmu_mvr", 0, ini.c_str()) != 0)
-            log_line("experiment: lmu_mvr ignored: it needs an NVIDIA RTX 20 series or newer");
+        // Room for each focus view beside its eye: multi-view rendering (NVIDIA's on an RTX 20 series or newer,
+        // instancing on any other GPU: games/multi_view.h).
         std::string why;
-        const bool multiView = gate == 0 && games::multi_view_on(games::current_game(), ini.c_str(), &why);
-        const games::GameInfo* current = games::current_game();
-        if (gate == 0 && current && current->features.multiView &&
-            GetPrivateProfileIntW(L"experiment", L"multi_view", 1, ini.c_str()) != 0)
-            logf("multi_view: %s%s", multiView ? "on, " : "", multiView ? (why + ": each eye's pass draws its focus view too").c_str()
-                                                                       : (why + ": the four passes as without it").c_str());
-        experiment.views4Layout.secondViewRoom = gate != 0 || multiView;
+        const bool multiView = games::multi_view_on(games::current_game(), ini.c_str(), &why);
+        if (multiView)
+            logf("multi_view: on, %s: each eye's pass draws its focus view too", why.c_str());
+        experiment.views4Layout.secondViewRoom = multiView;
         // lmu_mvr_beside (default 1): the images the outer views' shape, the focus views at their own width and height
         // beside them (Views4Layout::beside_scale); 0: twice each way.
         experiment.views4Layout.secondViewBeside =
             experiment.views4Layout.secondViewRoom &&
             GetPrivateProfileIntW(L"experiment", L"lmu_mvr_beside", 1, ini.c_str()) != 0;
         if (experiment.views4Layout.secondViewRoom)
-            logf("%s: the views' images %s, room for a focus view beside its eye", gate ? "experiment: lmu_mvr" : "multi_view",
+            logf("multi_view: the views' images %s, room for a focus view beside its eye",
                  experiment.views4Layout.secondViewBeside ? "the outer views' shape" : "twice as large each way");
     }
     // Eye columns (ACC): each instanced pair its own width, unless acc_shared_width=1 (every view the periphery's width,

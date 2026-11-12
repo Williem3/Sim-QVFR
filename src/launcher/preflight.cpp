@@ -254,17 +254,11 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
             L"Neither dxgi.dll nor version.dll there is Cheeky Foveated DLSS’s loader.");
     }
 
-    // Sim-QVFR's own DLSS, when it is on: multi-view rendering, then its nvngx_dlss.dll (the one Sim-QVFR includes, or
+    // Sim-QVFR's own DLSS, when it is on: its nvngx_dlss.dll (the one Sim-QVFR includes, or
     // the player's choice) and its version (made for the 310 series, DLSS 4).
     if (in.ownDlss) {
         const std::wstring where = in.ownDlssPath.empty() ? std::wstring(L"the folder chosen") : in.ownDlssPath;
-        if (!in.ownDlssMultiView) {
-            Check& c = add("own_dlss", CheckTone::Warn, L"DLSS needs multi-view rendering",
-                           L"Use DLSS is on, but multi-view rendering is off (Resolution pane): " + shortName +
-                               L" runs without DLSS.");
-            c.fix = CheckFix::OpenDlss;
-            c.fixLabel = L"Open DLSS";
-        } else if (!in.ownDlssFound && in.ownDlssIncluded) {
+        if (!in.ownDlssFound && in.ownDlssIncluded) {
             Check& c = add("own_dlss", CheckTone::Warn, L"The included nvngx_dlss.dll is missing",
                            L"Use DLSS is on, but the nvngx_dlss.dll Sim-QVFR includes isn’t at " + where +
                                L". Install Sim-QVFR again from its release zip, or choose another nvngx_dlss.dll (DLSS "

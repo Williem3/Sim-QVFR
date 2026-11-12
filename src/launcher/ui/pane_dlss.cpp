@@ -27,8 +27,6 @@ bool own_dlss_available(std::wstring* why) {
         reason = L"Available in Quad View Foveated Rendering.";
     else if (!nvapi::two_views_gpu())
         reason = L"Needs an NVIDIA RTX graphics card (20 series or newer): none was found.";
-    else if (!app.s.multiView)
-        reason = L"Needs multi-view rendering, on the Resolution pane.";
     if (why)
         *why = reason;
     return reason.empty();

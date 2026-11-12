@@ -29,8 +29,16 @@ struct MvrRecovery {
     unsigned long long good = 0;      // frames in a row with them
     unsigned long long timesPlain = 0;
     double retryAtMs = 0, waitMs = 0;
+    bool stopped = false;  // stop(): plain for the rest of the session, no more tries
 
     bool plain() const { return state == State::plain; }
+
+    // Multi-view rendering can't run at all (the driver refused it and instancing couldn't take over, or the game's
+    // device can do neither): the eyes at full resolution for the rest of the session, no tries.
+    void stop() {
+        state = State::plain;
+        stopped = true;
+    }
 
     // The game made its session anew (LMU does on every graphics setting change): what stopped the focus views may
     // be gone, so the next scene frame tries, and the waits start afresh.
@@ -41,6 +49,8 @@ struct MvrRecovery {
 
     // One frame: `passes` eye passes found, `finals` both focus views made, at `nowMs`.
     Event frame(int passes, bool finals, double nowMs) {
+        if (stopped)
+            return Event::none;
         if (state == State::plain) {
             // Only from a frame that rendered both eyes: menus and loading screens don't use up a try.
             if (passes >= 2 && nowMs >= retryAtMs) {

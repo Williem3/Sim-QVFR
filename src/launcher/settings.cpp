@@ -67,7 +67,6 @@ Settings load_settings(const std::wstring& ini) {
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
     s.sharpen = clamp_to(read_int(ini, L"quad", L"sharpen_percent", s.sharpen), kSharpenRange);
-    s.multiView = read_int(ini, L"experiment", L"multi_view", 1) != 0;  // on by default (migrate_settings)
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
@@ -164,7 +163,6 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
     ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
-    ok &= write(ini, L"experiment", L"multi_view", s.multiView ? L"1" : L"0");  // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
@@ -369,29 +367,6 @@ bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, c
         ok &= store_game_settings(ini, toId);  // none yet: it starts from the settings in use
     ok &= restore_game_settings(ini, toId);
     return ok;
-}
-
-int migrate_settings(const std::wstring& ini) {
-    if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES ||
-        read_int(ini, L"launcher", kMultiViewDefaultOn, 0) != 0)
-        return 0;
-    // Multi-view rendering on: every file that holds multi_view=0 (the launcher wrote it for everyone while the option
-    // was off by default, greyed out without an RTX card) gets 1. Key by key, so nothing else in a file changes.
-    int changed = 0;
-    const auto switch_on = [&](const std::wstring& file) {
-        if (read_int(file, L"experiment", L"multi_view", 1) == 0 &&
-            WritePrivateProfileStringW(L"experiment", L"multi_view", L"1", file.c_str()))
-            ++changed;
-    };
-    switch_on(ini);
-    for (const std::wstring& folder : {game_settings_folder(ini), profiles_folder(ini)}) {
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(folder, ec))
-            if (entry.is_regular_file(ec) && _wcsicmp(entry.path().extension().c_str(), L".ini") == 0)
-                switch_on(entry.path().wstring());
-    }
-    WritePrivateProfileStringW(L"launcher", kMultiViewDefaultOn, L"1", ini.c_str());
-    return changed;
 }
 
 std::string share_profile(const Profile& profile) {

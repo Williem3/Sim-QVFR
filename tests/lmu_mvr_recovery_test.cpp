@@ -107,6 +107,15 @@ int SIM_QVFR_TEST_MAIN() {
         t = r.retryAtMs + 1;
         check(r.frame(1, false, t) == Event::none && r.plain(), "and a one-pass frame doesn't start a try");
     }
+    {  // stopped (multi-view can't run at all): plain for good, a new session doesn't revive it
+        MvrRecovery r;
+        r.stop();
+        r.new_session();
+        bool held = r.plain();
+        for (int f = 0; f < 3000; ++f)
+            held = held && r.frame(2, f % 2 == 0, f * frameMs) == Event::none && r.plain();
+        check(held, "stopped: plain for the rest of the session, no tries, whatever the frames bring");
+    }
     std::printf(failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

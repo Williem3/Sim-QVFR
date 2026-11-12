@@ -36,11 +36,6 @@ struct Settings {
     // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening as the views are composed,
     // 0 off (the default) to 100 the strongest (live).
     int sharpen = 0;
-    // [experiment] multi_view (QVFR, a game with GameFeatures::multiView: LMU): multi-view rendering, each eye's pass
-    // drawing its focus view too (games/multi_view.h): NVIDIA's on an RTX 20 series or newer, Sim-QVFR's own (instancing)
-    // on any other GPU. On by default (2026-11-10; migrate_settings switches older settings over once). Next launch;
-    // the layer checks the game's device itself.
-    bool multiView = true;
     // [experiment] native_quad_views (QVFR, a game with GameFeatures::nativeQuadViews: LMU): on a Pimax or Varjo runtime,
     // the runtime composes the four views (layer/native_quad.cpp). 1 auto (the default), 0 off, 2 asked for even with
     // another OpenXR layer between (the runtime's offer unknown). Next launch.
@@ -144,12 +139,6 @@ int seed_game_settings(const std::wstring& ini);
 // Leaving `fromId` for `toId`: the ini stored as `fromId`'s copy, then `toId`'s loaded (a copy of the ini first if
 // it has none). False if a step failed.
 bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId);
-// One-time switches of settings written before a default changed, at the launcher's start and launch (once each:
-// [launcher] marks it done). Multi-view rendering became the default on 2026-11-10 (LMU, any GPU); the launcher had
-// written multi_view=0 for everyone, so the ini, every game's copy and every saved profile with multi_view=0 get 1.
-// A choice made after it is kept. Returns the files changed.
-inline constexpr wchar_t kMultiViewDefaultOn[] = L"multi_view_default_on";
-int migrate_settings(const std::wstring& ini);
 // A profile as text to share: only its keys that differ from the defaults' profile.
 std::string share_profile(const Profile& profile);
 // A shared profile back: the defaults' profile with the text's keys over it, only keys a profile has (and the

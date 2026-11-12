@@ -2628,7 +2628,6 @@ void install_four_pass_extras() {
 // R5: the multi-view path (the tracker driving the game's two passes) gives way to the four passes without MVR, for
 // the rest of the session: at xrCreateSession when the device can't do it, or at a frame end (render thread, between
 // frames) when MVR fails while running. Logged once with `why`.
-bool fellBack = false;
 int badgeLogged = 0;
 bool losingForTest = false;  // lmu_mvr_lose_at's window is open
 std::atomic<int> multiViewNow{0};  // four_passes_multi_view's (a QvfrMultiView), as of the last frame end
@@ -2654,39 +2653,18 @@ void log_multi_view_summary() {
                   u(s.focusUnknownComposites), u(probe.yebisCopies), u(probe.yebisComposites), u(probe.finalBlits));
 }
 
-void fallback_to_four_passes(const char* why) {
-    if (fellBack || !cfg.trackerDrives)
+// Multi-view rendering can't run at all (the driver refused it and instancing couldn't take over, or the game's device
+// can do neither): the eyes alone at full resolution, without focus views, for the rest of the session. Nothing of the
+// game's is hooked in its place (the four passes went on 2026-11-12). Logged once with `why`.
+void stop_multi_view(const char* why) {
+    if (recovery.stopped)
         return;
-    fellBack = true;
-    if (twoPassFrames)  // it ran (not the session start's fallback, where the device can't)
+    if (twoPassFrames)  // it ran (not the session start's stop, where the device can't)
         log_multi_view_summary();
-    mvr_track_drive(nullptr, nullptr);
-    mvr_track_passes(false);
+    recovery.stop();
     mvr_focus_replay(false);
-    mvr_panel_draws(nullptr);  // the menus by the VR UI's hook from now on
-    mvr_mask_stale(nullptr);   // and the mask by its own
-    cfg.trackerDrives = cfg.focusFinal = cfg.focusReplay = cfg.passTracker = false;
-    cfg.mvr = cfg.mvrSkip = false;
-    twoPassFrame = false;
-    menuFrameStarted = menuBackgroundOk = menuPanelDrawn[0] = menuPanelDrawn[1] = false;
-    if (focusMode && !install_mask_hook()) {
-        simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s) and the lens mask couldn't be hooked for the "
-                      "four passes: the eyes only (no focus views) for the rest of the session",
-                      frames, why);
-        return;
-    }
-    if (!install_four_pass_hooks()) {
-        simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s) and the four passes couldn't be installed: "
-                      "the eyes only (no focus views) for the rest of the session",
-                      frames, why);
-        return;
-    }
-    if (qvfrMode) {
-        install_vrui_hook();
-        install_four_pass_extras();
-    }
-    simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s): the four passes from the next frame (the focus "
-                  "views rendered by passes 2-3), for the rest of the session",
+    simqvfr::logf("lmu mvr: frame %llu: multi-view rendering stopped (%s): the eyes alone at full resolution, without "
+                  "focus views, for the rest of the session",
                   frames, why);
 }
 
@@ -2732,9 +2710,8 @@ bool four_passes_start(const FourPassesRun& run) {
             simqvfr::logf("%s: the %s isn't this build's; not installed", tag(), a.name);
             return false;
         }
-    // R4b (cfg.trackerDrives): the game's own two eye passes, found at the d3d11 level, and (R6) the lens mask and the VR
-    // UI from their d3d11 draws: no game code hooked. The four passes' hooks (the mask's, install_four_pass_hooks, the VR
-    // UI's, the extras) only if it falls back to them (fallback_to_four_passes).
+    // The game's own two eye passes, found at the d3d11 level, and the lens mask and the VR UI from their d3d11 draws:
+    // no game code hooked.
     const bool driven = cfg.trackerDrives;
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         simqvfr::logf("%s: MH_Initialize failed", tag());
@@ -2747,57 +2724,15 @@ bool four_passes_start(const FourPassesRun& run) {
             std::lock_guard guard(liveMutex);
             simqvfr::logf("lmu qvfr: on with multi-view rendering and the pass tracker: the game's own two eye passes draw "
                           "the focus views beside the eyes, a %.0f%% x %.0f%% box of each eye's tangent span on the gaze; "
-                          "game code hooked: none (the lens mask and the VR UI handled at their d3d11 draws); the eye "
-                          "loop, the scene render, the post-effect time, the scene skip, glare share, the driver tags, the "
-                          "mask and the VR UI hooked only if it falls back to the four passes",
+                          "game code hooked: none (the lens mask and the VR UI handled at their d3d11 draws)",
                           focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100);
         }
         return true;
     }
-    if (focusMode && !install_mask_hook())  // first: nothing of the eye loop is changed before it is in
-        return false;
-    if (!install_four_pass_hooks())
-        return false;
-    installed = true;
-    if (qvfrMode)
-        install_vrui_hook();
-    if (qvfrMode && cfg.mvr && cfg.mvrSkip) {  // gate D: passes 2-3 may skip the scene; mvr_pass keeps the focus regions
-        cfg.mvrSkip = install_skip();
-        mvr_keep_focus(cfg.mvrSkip);
-        if (cfg.mvrAb > 0)
-            simqvfr::logf("lmu mvr: A/B run: %d frames with MVR, then %d with the four passes alone, in turn (lmu_mvr_ab)",
-                          cfg.mvrAb, cfg.mvrAb);
-        mvr_time_hooks(cfg.mvrTiming);
-        simqvfr::logf("lmu mvr: gate D: %s", cfg.mvrSkip ? "passes 2-3 skip the scene once their eye's pass drew the focus "
-                                                          "view, their post-processing on that region"
-                                                        : "the scene work's functions aren't this build's or couldn't be "
-                                                          "hooked: passes 2-3 render the scene as before");
-    }
-    if (qvfrMode) {
-        install_four_pass_extras();
-        std::lock_guard guard(liveMutex);
-        simqvfr::logf("lmu qvfr: on: the eye loop runs four times every frame, passes 2-3 render focus views (a %.0f%% x "
-                      "%.0f%% box of each eye's tangent span, on the gaze) into the eye targets, set aside for the layer "
-                      "to compose; post-effect frame time held in passes 2-3: %s; hidden-area mask off in them; the VR UI "
-                      "drawn into them: %s",
-                      focusFraction * 100, (focusFractionY > 0 ? focusFractionY : focusFraction) * 100,
-                      holdExposure ? "yes" : "no", vruiHooked ? "yes" : "no");
-        return true;
-    }
-    simqvfr::logf("%s: samples: %d, the first %d scene frames in, then every %d; four passes for %d frames before each "
-                  "(else two, full frame rate)%s",
-                  tag(), cfg.count, cfg.first, cfg.every, cfg.warmup,
-                  cfg.exitWhenDone ? "; the game is asked to close after the last (exit_when_done=1)" : "");
-    if (focusMode)
-        simqvfr::logf("lmu focus: on: the eye loop runs four times, passes 2-3 render focus views (a %.0f%% box of each "
-                      "eye's tangent span, centred on its forward axis) into the eye targets, set aside before the game "
-                      "submits; the eyes are shown as normal; frame time held: %s",
-                      cfg.fraction * 100, holdExposure ? "yes" : "no");
-    else
-        simqvfr::logf("lmu copies: on: the eye loop runs four times, passes 2-3 render eyes 0-1 again and are compared "
-                      "with them; passes 2-3's post-effect frame time %s",
-                      holdExposure ? "held near zero (lmu_copies_hold_exposure=1)" : "as the game sets it (hold off)");
-    return true;
+    simqvfr::logf("%s: LMU's QVFR runs on multi-view rendering only (the four passes went on 2026-11-12), and this run "
+                  "has no room for it (the layer's layout): not installed",
+                  tag());
+    return false;
 }
 
 void four_passes_device(ID3D11Device* device) {
@@ -2805,8 +2740,8 @@ void four_passes_device(ID3D11Device* device) {
     recovery.new_session();  // a graphics setting may have changed: no waiting for the next try
     // R5: the device decides; the game is still in its menus, the eye loop not yet run.
     if (installed && cfg.trackerDrives && !mvr_probe_usable())
-        fallback_to_four_passes("the game's device can't draw two views a pass (no NVIDIA multi-view rendering, and no "
-                                "vertex shader picking the viewport), or multi-view's shader probe is off");
+        stop_multi_view("the game's device can't draw two views a pass (no NVIDIA multi-view rendering, and no vertex "
+                        "shader picking the viewport), or multi-view's shader probe is off");
     else if (installed && cfg.trackerDrives)
         simqvfr::logf("lmu qvfr: multi-view rendering by %s%s", mvr_backend_name(mvr_probe_backend()),
                       mvr_probe_backend() == MvrBackend::nvapi && mvr_probe_instanced()
@@ -2820,7 +2755,7 @@ void four_passes_frame_end() {
     ++frames;
     if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice)  // the tracker sees the menus too
         if (!install_mvr(sessionDevice))
-            fallback_to_four_passes("multi-view's context hooks couldn't be installed");
+            stop_multi_view("multi-view's context hooks couldn't be installed");
     simqvfr::dlss_frame_end(frames);
     if (cfg.mvr) {
         mvr_frame_end(frames);
@@ -2858,7 +2793,7 @@ void four_passes_frame_end() {
         simqvfr::logf("%s: frame %llu: first two-pass frame (focus finals), eyes rendered %d %d", tag(), frames, eyeOfPass[0],
                       eyeOfPass[1]);
     // R5: the multi-view path's health, between frames on the render thread. A driver that refuses multi-view rendering
-    // still gives way to the four passes (fallback_to_four_passes). Focus views that stop coming do not: after
+    // stops it for the session (stop_multi_view: the eyes alone). Focus views that stop coming do not: after
     // half a second the eyes go to full resolution, and it tries again by itself (mvr_recovery.h).
     if (cfg.trackerDrives) {
         // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit; the focus
@@ -2866,9 +2801,7 @@ void four_passes_frame_end() {
         mvr_fsr(fsr_on(), eyeImage[0], eyeImage[1]);
         const char* why = mvr_broken()           ? "the driver refused NVIDIA's multi-view rendering (and instancing "
                                                    "couldn't take over)"
-                          : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
-                              ? "forced by lmu_mvr_fallback_at"
-                              : nullptr;
+                                                 : nullptr;
         if (cfg.loseAt > 0 && cfg.focusReplay && !why) {  // the recovery's test: the focus post off for a while
             const unsigned long long from = static_cast<unsigned long long>(cfg.loseAt);
             const bool lose = sceneFrames >= from && sceneFrames < from + 1800;
@@ -2880,7 +2813,7 @@ void four_passes_frame_end() {
             }
         }
         if (why) {
-            fallback_to_four_passes(why);
+            stop_multi_view(why);
         } else {
             const double waited = recovery.waitMs;
             switch (recovery.frame(passes, frameFinalsOk, now_ms())) {
@@ -2915,9 +2848,7 @@ void four_passes_frame_end() {
     // instancing takes over).
     using simqvfr::games::QvfrMultiView;
     QvfrMultiView way = QvfrMultiView::none;
-    if (fellBack) {
-        way = QvfrMultiView::fallback;
-    } else if (cfg.trackerDrives && cfg.mvr && mvr_probe_backend() != MvrBackend::none) {
+    if (cfg.trackerDrives && cfg.mvr) {
         // The backend's name only while focus views are being made: scene frames without them (plain, or no eye pass
         // found at all, by the frame's draw count) say so.
         const bool scene = passes >= 1 || mvr_track_stats().lastFrameDraws >= 1000;

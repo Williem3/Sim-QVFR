@@ -355,8 +355,6 @@ std::vector<Ctl> focus_order() {
                 order.push_back(kObjectDetail);
             if (game_has(&games::GameFeatures::sharpening))
                 order.push_back(kSharpen);
-            if (game_has(&games::GameFeatures::multiView))
-                order.push_back(kMultiView);
             if (game_has(&games::GameFeatures::nativeQuadViews))
                 order.push_back(kNativeQuad);
             if (game_has(&games::GameFeatures::fovCrop))

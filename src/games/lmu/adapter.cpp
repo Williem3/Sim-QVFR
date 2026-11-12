@@ -40,7 +40,7 @@ class LmuAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     LmuAdapter() : IdentityAdapter(&kGame) {}
 
-    // ---- QVFR (lmu_qvfr=1): the eye loop four times, the focus views composed from an atlas by the D3D11 compositor ----
+    // ---- QVFR (lmu_qvfr=1): the game's two eye passes draw the focus views too, composed by the D3D11 compositor ----
     bool has_qvfr() const override { return analysis() && qvfr_wanted(); }
     bool qvfr_composable() const override { return false; }     // not by the D3D12 compositor:
     bool qvfr_compose_d3d11() const override { return true; }   // LMU is D3D11
@@ -59,27 +59,15 @@ public:
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
         run.layerHeight = s.layout.layer_height();
-        // Multi-view rendering (mvr_pass.h): passes 0-1 draw their focus views too, beside their eyes, where the layer
-        // made room (Views4Layout::secondViewRoom). The launcher's multi_view=1 (games/multi_view.h): the game's own two
-        // eye passes make the focus views (focus post, focus finals, the d3d11 pass tracker), falling back to the four
-        // passes if it can't (four_passes.h); [experiment] lmu_mvr_legacy=1: the four passes with MVR (gate D) as
-        // before. Or lmu_mvr, its gates: 1 (C: passes 2-3 still render theirs, compared at the samples), 2 (D: they skip
-        // the scene); with those and lmu_mvr_legacy the steps' own keys (lmu_focus_replay and on) apply.
-        const UINT gate = simqvfr::games::lmu_mvr_gate(s.ini);
-        const bool legacy = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_legacy", 0, s.ini) != 0;
-        const UINT mvrLevel = gate ? gate : 2;
+        // Multi-view rendering (mvr_pass.h): the game's own two eye passes draw their focus views too, beside their eyes,
+        // where the layer made room (Views4Layout::secondViewRoom), post-process them (focus post, focus finals) and are
+        // found at the d3d11 level (the pass tracker): no game code hooked. The only way LMU's QVFR runs.
         run.mvr = s.layout.secondViewRoom;
-        run.mvrSkip = run.mvr && mvrLevel >= 2;  // passes 2-3 skip the scene
+        run.mvrSkip = run.mvr;
         run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images the outer views' shape, the focus views beside
         if (run.mvr) {
-            run.mvrCompare = gate != 0;  // the gates' samples (images read back and saved): not in a player's run
-            run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, s.ini));
-            run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, s.ini));
-            run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, s.ini));
-            // lmu_mvr_ab=N: N frames with MVR, N without, in turn, each side's cost logged (four_passes.h).
-            run.mvrAb = (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_ab", 0, s.ini)));
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
-            run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
+            run.mvrTiming = GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
             // lmu_pass_trace=1 (diagnostics, log only): the pass tracker's view of each new shape of frame.
             run.passTrace = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_pass_trace", 0, s.ini));
             run.textureSharpening = s.ini && simqvfr::read_dlss_settings(s.ini).textureSharpening != 0;
@@ -103,37 +91,17 @@ public:
                                   : 0;
                 run.mvrTiming = run.mvrTiming || run.carAb > 0;  // its GPU per pass by side
             }
-            const bool player = gate == 0 && !legacy;  // multi_view=1: the two-pass path
-            // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
-            run.focusReplay = player || (s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0);
+            run.focusReplay = true;  // the eye passes post-process their focus views too (focus_post.h)
             // lmu_ui_mips=0: the VR UI panel samples the game's canvas (one mip) in the small periphery too.
             run.uiMips = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_ui_mips", 1, s.ini) != 0;
-            // lmu_focus_final=1 (with it): two eye passes, the focus views from beside the eyes (four_passes.h).
-            run.focusFinal = run.focusReplay && run.mvrSkip &&
-                             (player || GetPrivateProfileIntW(L"experiment", L"lmu_focus_final", 0, s.ini) != 0);
-            if (run.focusFinal) {
-                run.focusFinalAb =
-                    (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_focus_final_ab", 0, s.ini)));
-                run.mvrAb = 0;  // one A/B at a time
-                run.mvrTiming = run.mvrTiming || run.focusFinalAb > 0;
-                run.focusFinalAbPlain =
-                    run.focusFinalAb > 0 && GetPrivateProfileIntW(L"experiment", L"lmu_focus_final_ab_plain", 0, s.ini) != 0;
-            }
-            // lmu_pass_tracker=1 (with the focus post): R4b's d3d11 pass bounds, observe only (four_passes.h).
-            const UINT tracker =
-                player ? 2 : run.focusReplay ? GetPrivateProfileIntW(L"experiment", L"lmu_pass_tracker", 0, s.ini) : 0;
-            run.passTracker = tracker != 0;
-            run.trackerDrives = tracker >= 2 && run.focusFinal;  // =2: it drives the passes, the game hooks off (R4b-2)
-            if (run.trackerDrives) {
-                run.focusFinalAb = 0;  // the game's own two passes: nothing to alternate with
-                run.mvrAb = 0;
+            run.focusFinal = true;     // the focus views from beside the eyes
+            run.passTracker = true;    // the eye passes from the d3d11 calls
+            run.trackerDrives = true;  // and nothing of the game's hooked
+            {
                 // lmu_mvr_backend_ab=N: N frames NVIDIA's single-pass stereo, N instancing, in turn (four_passes.h).
                 run.backendAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_backend_ab", 0,
                                                                                       s.ini)));
                 run.mvrTiming = run.mvrTiming || run.backendAb > 0;
-                // lmu_mvr_fallback_at=N: the fallback to the four passes forced at scene frame N (its test).
-                run.fallbackAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_fallback_at", 0,
-                                                                                      s.ini)));
                 // lmu_mvr_lose_at=N: the focus views lost from scene frame N for 1800 scene frames (the recovery's test).
                 run.loseAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_at", 0,
                                                                                   s.ini)));
@@ -188,7 +156,7 @@ public:
             dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
             dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
             if (dlss.views && !run.trackerDrives) {
-                simqvfr::log_line("lmu dlss: asked for, but it needs the multi-view path (multi_view=1): off");
+                simqvfr::log_line("lmu dlss: asked for, but this run has no multi-view path: off");
                 dlss.views = 0;
             }
         }
@@ -254,8 +222,7 @@ public:
             return;
         if (settings.on && !dlssPossible_) {
             if (!dlssRefusedLogged_)
-                simqvfr::log_line("lmu dlss: turned on, but this run has no multi-view path (multi_view=1, at the next "
-                                  "launch): off");
+                simqvfr::log_line("lmu dlss: turned on, but this run has no multi-view path: off");
             dlssRefusedLogged_ = true;
             dlssSettings_ = settings;
             return;
@@ -310,34 +277,12 @@ public:
         if (!analysis())
             return;
         viewProbe_ = GetPrivateProfileIntW(L"experiment", L"lmu_view_probe", 0, ini) != 0 && view_probe_start();
-        // lmu_mvr_probe=1: every vertex shader converted for NVIDIA's two-view pass and created through NVAPI, log only.
-        // Multi-view rendering (with lmu_qvfr: multi_view=1 on a GPU with it, or lmu_mvr): the probe keeps the converted
-        // shaders, attached to the game's (mvr_pass.h). The layer decides the same at xrCreateInstance (config.cpp).
-        const bool mvr = has_qvfr() && (simqvfr::games::lmu_mvr_gate(ini) != 0 ||
-                                        simqvfr::games::multi_view_on(&kGame, ini));
-        // The player path (multi_view=1, no gate or legacy key): its shaders named too, for the traces (R6).
-        const bool player = mvr && simqvfr::games::lmu_mvr_gate(ini) == 0 &&
-                            GetPrivateProfileIntW(L"experiment", L"lmu_mvr_legacy", 0, ini) == 0;
+        // Multi-view rendering (with lmu_qvfr): the probe keeps the converted shaders, attached to the game's
+        // (mvr_pass.h), its shaders named for the traces. The layer decides the same at xrCreateInstance (config.cpp).
+        // lmu_mvr_probe=1 without it: every vertex shader converted and created through NVAPI, log only.
+        const bool mvr = has_qvfr() && simqvfr::games::multi_view_on(&kGame, ini);
         mvrProbe_ = (mvr || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_probe", 0, ini) != 0) &&
-                    mvr_probe_install(ini, mvr, player);
-        const bool focus = GetPrivateProfileIntW(L"experiment", L"lmu_focus", 0, ini) != 0;
-        const bool copies = GetPrivateProfileIntW(L"experiment", L"lmu_copies", 0, ini) != 0;
-        if (has_qvfr()) {
-            if (focus || copies)
-                simqvfr::log_line("lmu: lmu_qvfr=1: the copies and focus gates don't run (lmu_copies, lmu_focus ignored)");
-            return;
-        }
-        // lmu_focus=1: the focus gate (focus views); lmu_copies=1: the copies gate. Both run the eye loop four times.
-        FourPassesRun run;
-        run.focus = focus;
-        run.holdExposure = GetPrivateProfileIntW(L"experiment", L"lmu_copies_hold_exposure", 1, ini) != 0;
-        run.fraction = GetPrivateProfileIntW(L"experiment", L"focus_percent", 30, ini) / 100.0;
-        run.first = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_first", 300, ini));
-        run.every = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_every", 300, ini));
-        run.count = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_samples", 3, ini));
-        run.warmup = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"gate_warmup", 60, ini));
-        run.exitWhenDone = GetPrivateProfileIntW(L"experiment", L"exit_when_done", 0, ini) != 0;
-        gates_ = (focus || copies) && four_passes_start(run);
+                    mvr_probe_install(ini, mvr, mvr);
     }
     void d3d11_session(ID3D11Device* device) override {
         if (mvrProbe_)
@@ -349,8 +294,6 @@ public:
             mvr_probe_frame_end();
         if (viewProbe_)
             view_probe_frame_end();
-        if (gates_)
-            four_passes_frame_end();
     }
 
 private:
@@ -362,7 +305,6 @@ private:
     }
     bool viewProbe_ = false;
     bool mvrProbe_ = false;
-    bool gates_ = false;
     bool qvfr_ = false;
     simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
     bool glareAtLaunch_ = true;

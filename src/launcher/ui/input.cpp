@@ -261,12 +261,6 @@ void activate(Ctl id, int option) {
             changed();
         }
         return;
-    case kMultiView:  // any GPU: NVIDIA's on an RTX 20 series or newer, Sim-QVFR's own (instancing) on others
-        if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::multiView)) {
-            app.s.multiView = !app.s.multiView;
-            changed();
-        }
-        return;
     case kNativeQuad:  // auto (1) or off (0); a hand-set 2 (asked for behind another layer) becomes off, then auto
         if (app.s.mode == RenderMode::Qvfr && game_has(&games::GameFeatures::nativeQuadViews)) {
             app.s.nativeQuad = app.s.nativeQuad ? 0 : 1;
@@ -388,7 +382,6 @@ bool space_control(Ctl id) {
     case kOsdOn:
     case kHotkeyFooter:
     case kUpdateCheck:
-    case kMultiView:
     case kNativeQuad:
     case kCropOn:
     case kHelmetOn:
