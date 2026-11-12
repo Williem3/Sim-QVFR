@@ -350,6 +350,7 @@ OsdRow osd_badge(const OsdInput& in) {
     case OsdMultiView::Mvr: r.value = L"MVR"; r.tone = OsdTone::Good; break;
     case OsdMultiView::Smvr: r.value = L"SMVR"; r.tone = OsdTone::Good; break;
     case OsdMultiView::Fallback: r.value = L"Fallback"; r.tone = OsdTone::Warn; break;
+    case OsdMultiView::EyesOnly: r.value = L"Eyes only"; r.tone = OsdTone::Warn; break;
     }
     return r;
 }

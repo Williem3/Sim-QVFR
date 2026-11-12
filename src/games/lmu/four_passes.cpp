@@ -33,6 +33,7 @@
 #include "game.h"
 #include "glare_share.h"
 #include "mvr_pass.h"
+#include "mvr_recovery.h"
 #include "mvr_probe.h"
 #include "tag_viewport.h"
 
@@ -735,11 +736,31 @@ void qvfr_before_pass(int p) {
     }
 }
 
+// The focus views stopped coming (mvr_recovery.h): the eyes at full resolution meanwhile, a try again after a wait. No
+// fallback for the session from it.
+MvrRecovery recovery;
+int recoveryLogged = 0;
+unsigned long long eyesOnlyRun = 0;  // scene frames in a row without focus views (the overlay's badge)
+// A frame with eye passes but no four views: the part of each eye's image its pass rendered (the top-left, at the live
+// resolution), which the layer submits in place of the whole image (four_passes_eye_extent).
+bool eyeExtentReady = false;
+unsigned eyeExtent[2][2] = {};
+
 // The next passes' size: render scale and eye render size, the game's own scale times the outer (which = 0) or focus
 // share. At the end of pass 1 (focus) and pass 3 (outer: also what the next frame's VR_UpdateEyes computes).
 void set_next_passes(int which) {
     if (probe_active() || gameScale <= 0)
         return;
+    // Plain (mvr_recovery.h): the eyes at the game's own size, the whole of their targets, until the next try.
+    if (cfg.trackerDrives && recovery.plain()) {
+        *reinterpret_cast<float*>(base() + kRenderScale) = gameScale;
+        lastWritten = gameScale;
+        const auto* recommended = reinterpret_cast<const std::uint32_t*>(base() + kRecommendedSize);
+        auto* size = reinterpret_cast<float*>(base() + kEyeRenderSize);
+        size[0] = static_cast<float>(scaled_size(recommended[0], gameScale));
+        size[1] = static_cast<float>(scaled_size(recommended[1], gameScale));
+        return;
+    }
     // The focus passes beside their eyes (perAxis): their post-processing at the one scale that covers them (YEBIS
     // processes the top-left at the render scale on both axes, whatever the render size says: 2026-11-08 09:28 run),
     // their own width and height recorded (the region their eye's pass drew; they skip the scene, gate D).
@@ -795,8 +816,6 @@ bool mvrFrame = true;         // this frame uses MVR (false: an A/B run's frame 
 bool twoPassFrame = false;
 bool atlasFromFinals = false;
 bool frameFinalsOk = false;          // this frame's focus finals both made (after_two_passes)
-unsigned long long noFinalsRun = 0;  // two-pass frames in a row without them (R5's fallback)
-bool singleSampleRefusalLogged = false;  // MSAA off: the fallback refused (it would hook the game's code), said once
 unsigned finalAt[2][2] = {};  // each focus final's top-left in its eye's texture
 bool finalsMissingLogged = false, twoPassLogged = false, countLogged = false;
 unsigned long long twoPassFrames = 0, finalsMissing = 0;
@@ -1052,7 +1071,7 @@ void mvr_before_pass(int p) {
     }
     MvrPassView v;
     bool draw = false;
-    if (p < 2 && frozen[p] && gameScale > 0) {
+    if (p < 2 && frozen[p] && gameScale > 0 && !recovery.plain()) {  // (plain: no focus view asked for)
         const ClipRemap& r = frozenRemap[p];
         v.eye = p;
         v.remap[0] = static_cast<float>(r.a);
@@ -2835,47 +2854,67 @@ void four_passes_frame_end() {
     if (twoPassFrame && passes >= 2 && twoPassFrames++ == 0)
         simqvfr::logf("%s: frame %llu: first two-pass frame (focus finals), eyes rendered %d %d", tag(), frames, eyeOfPass[0],
                       eyeOfPass[1]);
-    // R5: the multi-view path's health, between frames on the render thread; it gives way to the four passes when MVR
-    // fails while running (fallback_to_four_passes).
+    // R5: the multi-view path's health, between frames on the render thread. A driver that refuses multi-view rendering
+    // and FSR still give way to the four passes (fallback_to_four_passes). Focus views that stop coming do not: after
+    // half a second the eyes go to full resolution, and it tries again by itself (mvr_recovery.h).
     if (cfg.trackerDrives) {
-        if (passes >= 1)
-            noFinalsRun = frameFinalsOk ? 0 : noFinalsRun + 1;
         // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit, which the focus
         // final beside the eye is drawn with; the four passes take FSR's upscale for every view.
         const char* why = mvr_broken()           ? "the driver refused NVIDIA's multi-view rendering (and instancing "
                                                    "couldn't take over)"
                           : fsr_on()             ? "LMU's FSR upscaling is on: it replaces the final blit the focus views "
                                                    "are drawn beside the eyes with"
-                          : noFinalsRun >= 90     ? "no focus views made in 90 frames in a row"
                           : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
                               ? "forced by lmu_mvr_fallback_at"
                               : nullptr;
-        // MSAA off (mvr_pass.h mvr_single_sample_passes): the passes found on the scene's single-sample target, the
-        // focus views not made. The four passes would hook the game's code: the eyes alone instead, said once.
-        if (why && noFinalsRun >= 90 && !mvr_broken() && !fsr_on() && mvr_single_sample_passes()) {
-            if (!singleSampleRefusalLogged) {
-                singleSampleRefusalLogged = true;
-                simqvfr::logf("lmu mvr: frame %llu: no focus views made in 90 frames with MSAA off (the passes found on "
-                              "the scene's single-sample target): not falling back to the four passes, which hook the "
-                              "game's code; the eyes as they are until they come",
-                              frames);
-            }
-            why = nullptr;
-            // Counted afresh from here: a run of such frames must not be what stops multi-view rendering the moment
-            // MSAA comes on (2026-11-11 22:30: it fell back on the first multisample frame after two minutes of these).
-            noFinalsRun = 0;
-        }
-        if (why)
+        if (why) {
             fallback_to_four_passes(why);
+        } else {
+            const double waited = recovery.waitMs;
+            switch (recovery.frame(passes, frameFinalsOk, now_ms())) {
+            case MvrRecovery::Event::wentPlain:
+                if (recovery.timesPlain == 1 && twoPassFrames)
+                    log_multi_view_summary();  // what the focus views didn't get past, once
+                if (recoveryLogged++ < 12 || recovery.timesPlain % 20 == 0)
+                    simqvfr::logf("lmu mvr: frame %llu: no focus views%s: the eyes at full resolution, without foveation, from "
+                                  "the next frame; trying the focus views again in %.0f s (time %llu; MSAA %s)",
+                                  frames, waited > 0 ? " in the try" : " in 45 frames in a row", recovery.waitMs / 1000.0,
+                                  recovery.timesPlain, mvr_single_sample_passes() ? "off" : "on");
+                break;
+            case MvrRecovery::Event::recovered:
+                simqvfr::logf("lmu mvr: frame %llu: the focus views again (after %llu times at full resolution)", frames,
+                              recovery.timesPlain);
+                break;
+            default: break;
+            }
+        }
+    }
+    // A frame with eye passes but no four views: what the layer submits of each eye's image (its rendered part).
+    eyeExtentReady = false;
+    if (cfg.trackerDrives && qvfrMode && passes >= 1 && !atlasReady && viewW && viewH) {
+        for (int e = 0; e < 2; ++e) {
+            eyeExtent[e][0] = passW[e] ? passW[e] : passW[1 - e];
+            eyeExtent[e][1] = passH[e] ? passH[e] : passH[1 - e];
+        }
+        eyeExtentReady = eyeExtent[0][0] && eyeExtent[0][1] && eyeExtent[1][0] && eyeExtent[1][1] &&
+                         (eyeExtent[0][0] < viewW || eyeExtent[0][1] < viewH || eyeExtent[1][0] < viewW || eyeExtent[1][1] < viewH);
     }
     // The overlay's badge: the way this frame's focus views were drawn (the backend as it stands: NVIDIA's until
     // instancing takes over).
     using simqvfr::games::QvfrMultiView;
     QvfrMultiView way = QvfrMultiView::none;
-    if (fellBack)
+    if (fellBack) {
         way = QvfrMultiView::fallback;
-    else if (cfg.trackerDrives && cfg.mvr && mvr_probe_backend() != MvrBackend::none)
-        way = mvr_probe_backend() == MvrBackend::nvapi && !mvr_instanced() ? QvfrMultiView::nvidia : QvfrMultiView::software;
+    } else if (cfg.trackerDrives && cfg.mvr && mvr_probe_backend() != MvrBackend::none) {
+        // The backend's name only while focus views are being made: scene frames without them (plain, or no eye pass
+        // found at all, by the frame's draw count) say so.
+        const bool scene = passes >= 1 || mvr_track_stats().lastFrameDraws >= 1000;
+        if (scene)
+            eyesOnlyRun = frameFinalsOk ? 0 : eyesOnlyRun + 1;
+        way = recovery.plain() || eyesOnlyRun >= MvrRecovery::kNoFinalsFrames ? QvfrMultiView::eyesOnly
+              : mvr_probe_backend() == MvrBackend::nvapi && !mvr_instanced() ? QvfrMultiView::nvidia
+                                                                              : QvfrMultiView::software;
+    }
     multiViewNow.store(static_cast<int>(way), std::memory_order_relaxed);
     if (fourPassFrames == 1 && passes >= 4)
         simqvfr::logf("%s: frame %llu: first four-pass frame, eyes rendered %d %d %d %d; post-effect frame time "
@@ -2894,7 +2933,11 @@ void four_passes_frame_end() {
             atlasReady = false;  // no four views this frame (menus, loading): the layer submits the eyes as they are
             seenCaptureArm = simqvfr::d3d11_capture_armed();  // a frame capture now has no views to save (not later)
             // ... so they render at the game's own scale, filling their targets (the next scene pass sets it again).
-            if (!probe_active() && gameScale > 0 && lastWritten != gameScale) {
+            // Not after a frame that did render an eye (the tracker found one pass of two): the live size stays, or the
+            // next frame's eyes fill their targets, its focus views don't fit and the miss repeats itself for good.
+            if (cfg.trackerDrives && twoPassFrame && passes == 1) {
+                set_next_passes(0);
+            } else if (!probe_active() && gameScale > 0 && lastWritten != gameScale) {
                 *reinterpret_cast<float*>(base() + kRenderScale) = gameScale;
                 lastWritten = gameScale;
             }
@@ -3103,6 +3146,17 @@ void four_passes_set_box(double fractionX, double fractionY) {
 
 simqvfr::games::QvfrMultiView four_passes_multi_view() {
     return static_cast<simqvfr::games::QvfrMultiView>(multiViewNow.load(std::memory_order_relaxed));
+}
+
+bool four_passes_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) {
+    if (!eyeExtentReady)
+        return false;
+    eyeExtentReady = false;  // this frame's
+    for (int e = 0; e < 2; ++e) {
+        width[e] = eyeExtent[e][0];
+        height[e] = eyeExtent[e][1];
+    }
+    return true;
 }
 
 bool four_passes_record(simqvfr::Views4Frame& frame) {

@@ -907,6 +907,7 @@ void track_frame_end(unsigned long long frame) {
         }
     }
     tr.passes = tr.actual = 0;
+    tr.stats.lastFrameDraws = tr.draws;
     tr.draws = 0;
     tr.firstBind.clear();
     tr.msaaFrame = tr.singleSample = tr.learnedThisFrame = false;
@@ -4208,6 +4209,7 @@ void mvr_track_passes(bool on) {
     tr.on = on;
     tr.open = false;
     tr.passes = tr.actual = 0;
+    tr.stats.lastFrameDraws = tr.draws;
     tr.draws = 0;
 }
 

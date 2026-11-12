@@ -262,6 +262,7 @@ using TrackFn = void (*)(int pass);
 void mvr_track_drive(TrackFn begin, TrackFn end);
 struct MvrTrackStats {
     uint64_t frames = 0, matched = 0, countDiffers = 0, beganBefore = 0, endedAfter = 0, passesCompared = 0;
+    uint64_t lastFrameDraws = 0;  // the game's draws in the frame last ended (a scene frame has thousands, a menu few)
     uint64_t startGapSum = 0, startGapMax = 0, endGapSum = 0, endGapMax = 0;  // draws of the game's pass left out
     uint64_t framesWithoutGame = 0, passesWithoutGame = 0;                    // false finds (menus)
     uint64_t singleSamplePasses = 0;  // passes begun on the learned single-sample scene target (MSAA off)

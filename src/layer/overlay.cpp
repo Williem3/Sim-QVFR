@@ -337,6 +337,7 @@ OsdInput osd_input(int64_t now) {
         case games::QvfrMultiView::nvidia: in.multiView = OsdMultiView::Mvr; break;
         case games::QvfrMultiView::software: in.multiView = OsdMultiView::Smvr; break;
         case games::QvfrMultiView::fallback: in.multiView = OsdMultiView::Fallback; break;
+        case games::QvfrMultiView::eyesOnly: in.multiView = OsdMultiView::EyesOnly; break;
         }
     }
     return in;

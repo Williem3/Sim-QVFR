@@ -288,6 +288,9 @@ public:
         return qvfr_ ? four_passes_multi_view() : simqvfr::games::QvfrMultiView::none;
     }
     bool qvfr_latest_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
+    bool qvfr_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) override {
+        return qvfr_ && four_passes_eye_extent(width, height);
+    }
     ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) override {
         return qvfr_ ? four_passes_atlas(eyes, uv) : nullptr;
     }

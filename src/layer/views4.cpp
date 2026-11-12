@@ -883,6 +883,27 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 }
                 std::lock_guard guard(quad.mutex);
                 views4_helmet_submit(session, static_cast<int>(i), helmetLayers, helmetCount, helmetAfter);
+            } else {
+                // No four views this frame, yet the game rendered its eyes into the top-left of their images (the focus
+                // views didn't come): that part of each submitted, over the eye's whole field of view, where the whole
+                // image would show the eye small in a corner.
+                unsigned ew[2] = {}, eh[2] = {};
+                if (game->qvfr_eye_extent(ew, eh)) {
+                    bool cut = true;
+                    for (uint32_t v = 0; v < 2 && cut; ++v) {
+                        const XrRect2Di& r = proj->views[v].subImage.imageRect;
+                        cut = ew[v] > 0 && eh[v] > 0 && static_cast<int32_t>(ew[v]) <= r.extent.width &&
+                              static_cast<int32_t>(eh[v]) <= r.extent.height;
+                    }
+                    if (cut) {
+                        copy.assign(proj->views, proj->views + proj->viewCount);
+                        for (uint32_t v = 0; v < 2; ++v)
+                            copy[v].subImage.imageRect.extent = {static_cast<int32_t>(ew[v]), static_cast<int32_t>(eh[v])};
+                        projections.push_back(*proj);
+                        projections.back().views = copy.data();
+                        layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());
+                    }
+                }
             }
             continue;
         }

@@ -43,7 +43,7 @@ enum class OsdGaze { Off, Unavailable, Tracking, Partial, Lost, Runtime, Runtime
 
 // How the game's focus views are drawn (games/adapter.h QvfrMultiView): the card's badge, by the CPU tile's label.
 // None: no badge.
-enum class OsdMultiView { None, Mvr, Smvr, Fallback };
+enum class OsdMultiView { None, Mvr, Smvr, Fallback, EyesOnly };
 
 // Everything one card shows, gathered over the last window (about half a second).
 struct OsdInput {

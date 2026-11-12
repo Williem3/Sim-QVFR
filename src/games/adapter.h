@@ -51,7 +51,8 @@ struct QvfrStart {
 // it off at launch), NVIDIA's multi-view rendering (each focus view drawn in its eye's pass), Sim-QVFR's software
 // multi-view (the same by instancing: any GPU), or multi-view on but given way to the focus views' own passes (it fell
 // back: the driver refused, LMU's FSR on, a device that can't).
-enum class QvfrMultiView { none, nvidia, software, fallback };
+// eyesOnly: the multi-view path is on but no focus views are being made (the eyes alone, at full resolution).
+enum class QvfrMultiView { none, nvidia, software, fallback, eyesOnly };
 
 class GameAdapter {
 public:
@@ -83,6 +84,13 @@ public:
     // eye images (`eyes`, as the game left them after its eye loop) copied into it, and each view's region in it
     // (u0, v0, du, dv; view e the outer view of eye e, e + 2 its focus view). Called in xrEndFrame on the game's render
     // thread (its immediate context). Null: nothing to compose this frame (the eyes are submitted as they are).
+    // With qvfr_separate_views, a frame qvfr_views_atlas has no four views for: the part of each eye's image the game
+    // rendered this frame, from its top-left, in pixels; the layer submits that part. False: the eyes whole.
+    virtual bool qvfr_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) {
+        (void)width;
+        (void)height;
+        return false;
+    }
     virtual ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
         (void)eyes;
         (void)uv;
