@@ -2629,6 +2629,7 @@ void install_four_pass_extras() {
 // the rest of the session: at xrCreateSession when the device can't do it, or at a frame end (render thread, between
 // frames) when MVR fails while running. Logged once with `why`.
 bool fellBack = false;
+int badgeLogged = 0;
 std::atomic<int> multiViewNow{0};  // four_passes_multi_view's (a QvfrMultiView), as of the last frame end
 
 // What the multi-view path did before it stopped, step by step, so a log shows which one the focus views didn't get past:
@@ -2914,6 +2915,11 @@ void four_passes_frame_end() {
         way = recovery.plain() || eyesOnlyRun >= MvrRecovery::kNoFinalsFrames ? QvfrMultiView::eyesOnly
               : mvr_probe_backend() == MvrBackend::nvapi && !mvr_instanced() ? QvfrMultiView::nvidia
                                                                               : QvfrMultiView::software;
+    }
+    if (static_cast<int>(way) != multiViewNow.load(std::memory_order_relaxed) && badgeLogged++ < 40) {
+        static const char* const kNames[] = {"none", "MVR", "SMVR", "Fallback", "Eyes only"};
+        simqvfr::logf("lmu mvr: frame %llu: the overlay's badge: %s (last frame %d passes, focus views %s)", frames,
+                      kNames[static_cast<int>(way)], passes, frameFinalsOk ? "made" : "not made");
     }
     multiViewNow.store(static_cast<int>(way), std::memory_order_relaxed);
     if (fourPassFrames == 1 && passes >= 4)

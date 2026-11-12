@@ -201,6 +201,7 @@ struct MvrPassStats {
     uint64_t twinBinds = 0, plainBinds = 0, toggles = 0, viewportRewrites = 0, scissorRewrites = 0, stereoErrors = 0;
     uint64_t passesWithFocus = 0, samples = 0, resolves = 0, keptRegions = 0, replacedResolves = 0;
     uint64_t singleSamplePosts = 0;          // MSAA off: passes whose post-processing began at YEBIS's copy
+    uint64_t singleSampleStagePosts = 0;     // of those: at a stage's draw reading the scene, before YEBIS
     uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
     uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
@@ -269,6 +270,7 @@ struct MvrTrackStats {
     uint64_t sceneRelearned = 0;      // that target learned again (the game made its targets anew)
     // Textures YEBIS's copy read outside the passes that were too small to be the scene's target (not learned).
     uint64_t sceneCandidatesRefused = 0;
+    uint64_t sceneAtComposite = 0;    // that target learned from YEBIS's composite (its copy read a stage's image)
     uint64_t singleSampleBlits = 0;   // those passes' final blits seen (their end), with the focus post or without
     uint64_t blitsBeforePost = 0;     // blits reading the scene's target before a pass's post began (not taken)
     uint64_t passesWithoutPost = 0;   // single-sample passes that ended before reaching YEBIS's copy

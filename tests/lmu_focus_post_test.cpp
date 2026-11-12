@@ -464,6 +464,9 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     ComPtr<ID3D11Texture2D> zSingle = texture(device.Get(), W, H, DXGI_FORMAT_R32_FLOAT);
     ComPtr<ID3D11RenderTargetView> zSingleRtv;
     device->CreateRenderTargetView(zSingle.Get(), nullptr, &zSingleRtv);
+    ComPtr<ID3D11Texture2D> depthZ = texture(device.Get(), W, H, DXGI_FORMAT_D24_UNORM_S8_UINT, 1, D3D11_BIND_DEPTH_STENCIL);
+    ComPtr<ID3D11DepthStencilView> dsvZ;
+    device->CreateDepthStencilView(depthZ.Get(), nullptr, &dsvZ);
     ComPtr<ID3D11PixelShader> stagePs = ps(device.Get(), kCopyPs);
     ComPtr<ID3D11Buffer> stageCb = constants(device.Get(), 15 * 16);
     const float wholeRect[4] = {0, 0, 1, 1};
@@ -489,17 +492,17 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         write(context.Get(), rectCb.Get(), eyeRect, sizeof(eyeRect));
         context->VSSetShader(yebisVs.Get(), nullptr, 0);
         context->VSSetConstantBuffers(1, 1, rectCb.GetAddressOf());
-        if (k.stage && !single) {
+        if (k.stage) {
             // A stage between the resolve and YEBIS, as the pass trace showed it: the single-sample depth drawn, the
             // scene's target bound again with its depth, then the stage's image of the resolved scene (x1.5) into the
             // scene copy, which YEBIS's chain starts from.
             context->VSSetShader(plainVs.Get(), nullptr, 0);
             context->PSSetShader(scenePs.Get(), nullptr, 0);
-            context->OMSetRenderTargets(1, zSingleRtv.GetAddressOf(), dsv1.Get());
+            context->OMSetRenderTargets(1, zSingleRtv.GetAddressOf(), dsvZ.Get());
             context->RSSetViewports(1, &whole);
             context->Draw(3, 0);
-            context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), dsv.Get());
-            context->OMSetRenderTargets(1, msaaRtv.GetAddressOf(), nullptr);
+            context->OMSetRenderTargets(1, &sceneTarget, single ? dsv1.Get() : dsv.Get());
+            context->OMSetRenderTargets(1, &sceneTarget, nullptr);
             write(context.Get(), rectCb.Get(), k.stage == 1 ? wholeRect : eyeRect, sizeof(eyeRect));
             write(context.Get(), stageCb.Get(), copyConstants, sizeof(copyConstants));
             context->VSSetShader(yebisVs.Get(), nullptr, 0);
@@ -515,7 +518,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
             context->PSSetConstantBuffers(0, 1, &k.copyCb);
         }
         // The copy of the resolved scene (none past a stage: its image is the scene copy).
-        if (!k.stage || single) {
+        if (!k.stage) {
         write(context.Get(), k.copyCb, k.copyData, k.copyBytes);
         context->PSSetShader(k.copy, nullptr, 0);
         context->PSSetConstantBuffers(0, 1, &k.copyCb);
@@ -1140,6 +1143,61 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(driveLog == " b0 e0 b1 e1" && msaaAgain.resolves == after.resolves + 2 &&
                   msaaAgain.singleSamplePosts == after.singleSamplePosts && !lmu::mvr_single_sample_passes(),
               "MSAA on again: the passes from the multisample binds, their post-processing at the resolve");
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+    {  // MSAA off past a stage (post effects medium and up, the 2026-11-12 pass trace): the stage draws its image of
+       // the scene, YEBIS's copy starts from that image and its composite draws into the scene's target. The copy
+       // never reads the scene's target, so it is learned from the composite (a draw reading the copy's source into a
+       // target of its size drawn with depth); in the passes the post-processing begins at the stage's draw.
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        Kit staged = standIn;
+        staged.stage = 1;
+        lmu::mvr_track_passes(true);  // (off above: the scene's target forgotten)
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100040);
+        const lmu::MvrTrackStats learnBefore = lmu::mvr_track_stats();
+        driveLog.clear();
+        eye_pass(0, nullptr, false, staged, false, true, true);
+        eye_pass(1, nullptr, false, staged, false, true, true);
+        lmu::mvr_frame_end(100041);
+        const lmu::MvrTrackStats learnAfter = lmu::mvr_track_stats();
+        const bool learnedQuietly = driveLog.empty();
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        const lmu::MvrTrackStats trackBefore = lmu::mvr_track_stats();
+        eye_pass(0, nullptr, false, staged, false, true, true);
+        eye_pass(1, nullptr, false, staged, false, true, true);
+        driveFinals = false;
+        lmu::mvr_frame_end(100042);
+        const lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        const lmu::MvrTrackStats trackAfter = lmu::mvr_track_stats();
+        std::snprintf(what, sizeof(what),
+                      "MSAA off past a stage: the scene's target learned at the composite %llu times (%s), then the "
+                      "tracker drives the passes:%s; post-processings begun %llu (%llu at the stage's draw); the focus "
+                      "view's scene from the stage's image %llu, %llu composites, %llu final blits, %llu final blits seen, "
+                      "%llu steps failed, finals %s",
+                      static_cast<unsigned long long>(learnAfter.sceneAtComposite - learnBefore.sceneAtComposite),
+                      learnedQuietly ? "none driven" : "SOME DRIVEN", driveLog.c_str(),
+                      static_cast<unsigned long long>(after.singleSamplePosts - before.singleSamplePosts),
+                      static_cast<unsigned long long>(after.singleSampleStagePosts - before.singleSampleStagePosts),
+                      static_cast<unsigned long long>(after.focusStageCopies - before.focusStageCopies),
+                      static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusBlits - before.focusBlits),
+                      static_cast<unsigned long long>(trackAfter.singleSampleBlits - trackBefore.singleSampleBlits),
+                      static_cast<unsigned long long>(after.focusFailures - before.focusFailures),
+                      driveFinals ? "made" : "NOT MADE");
+        check(learnAfter.sceneAtComposite == learnBefore.sceneAtComposite + 1 && learnedQuietly &&
+                  driveLog == " b0 e0 b1 e1" && after.singleSamplePosts == before.singleSamplePosts + 2 &&
+                  after.singleSampleStagePosts == before.singleSampleStagePosts + 2 &&
+                  after.focusStageCopies == before.focusStageCopies + 2 &&
+                  after.focusComposites == before.focusComposites + 2 && after.focusBlits == before.focusBlits + 2 &&
+                  trackAfter.singleSampleBlits == trackBefore.singleSampleBlits + 2 &&
+                  after.focusFailures == before.focusFailures && driveFinals && lmu::mvr_single_sample_passes(),
+              what);
+        same_as_eye("MSAA off past a stage", 100, true);  // (the finals: driveFinals, read at pass 1's end)
         lmu::mvr_track_drive(nullptr, nullptr);
         lmu::mvr_track_passes(false);
     }
