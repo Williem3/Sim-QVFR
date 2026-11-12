@@ -348,6 +348,9 @@ struct State {
     // pass's blit replayed; draws into the eye's final after it are overlays MVR doubles (the driver tags); the eye
     // finals of this frame (the VR UI after the passes is doubled into them too) and their sizes.
     bool focusBlitted = false, overlayTarget = false;
+    // mvr_fsr: FSR on; the eyes' images (raw, compared only); said once.
+    bool fsr = false, fsrLogged = false;
+    ID3D11Resource* fsrEye[2] = {};
     ComPtr<ID3D11Resource> eyeFinal[2];
     bool finalThisFrame[2] = {};
     unsigned finalW[2] = {}, finalH[2] = {};
@@ -1041,8 +1044,10 @@ unsigned final_eye_h(const MvrPassView& view) { return view.finalEyeH ? view.fin
 // (`overlay`), the eye's corner of the final to the focus final's (the focus size, 1:1).
 D3D11_VIEWPORT focus_viewport_of(const MvrPassView& view, const D3D11_VIEWPORT& v, bool overlay = false, bool scene = false) {
     const unsigned ew = overlay ? final_eye_w(view) : view.eyeW, eh = overlay ? final_eye_h(view) : view.eyeH;
-    const unsigned fw = !overlay && scene && view.focusRenderW ? view.focusRenderW : view.focusW;
-    const unsigned fh = !overlay && scene && view.focusRenderH ? view.focusRenderH : view.focusH;
+    const unsigned fw = overlay ? (view.finalFocusW ? view.finalFocusW : view.focusW)
+                                : scene && view.focusRenderW ? view.focusRenderW : view.focusW;
+    const unsigned fh = overlay ? (view.finalFocusH ? view.finalFocusH : view.focusH)
+                                : scene && view.focusRenderH ? view.focusRenderH : view.focusH;
     const float sx = ew ? static_cast<float>(fw) / static_cast<float>(ew) : 1.0f;
     const float sy = eh ? static_cast<float>(fh) / static_cast<float>(eh) : 1.0f;
     return {v.TopLeftX + v.Width, v.TopLeftY, v.Width * sx, v.Height * sy, v.MinDepth, v.MaxDepth};
@@ -1848,6 +1853,64 @@ ID3D11DepthStencilView* scene_depth(ID3D11Resource* colour) {
     return nullptr;
 }
 
+// FSR (mvr_fsr): this pass's focus composite into the scene's target beside the eye, right after YEBIS's composite
+// drew the eye's there: FSR upscales the whole target into the eye's image, the focus view with it.
+void fsr_place(int eye) {
+    ID3D11Texture2D* image = g.focusPost.image(eye);
+    if (!image || !g.resolved[g.pass])
+        return;
+    const MvrPassView& v = g.view;
+    const D3D11_BOX box{0, 0, 0, v.focusW, v.focusH, 1};
+    const bool was = g.replaying;
+    g.replaying = true;
+    g.context->CopySubresourceRegion(g.resolved[g.pass].Get(), 0, v.eyeW, 0, 0, image, 0, &box);
+    g.replaying = was;
+    ++g.stats.fsrPlaced;
+}
+
+// FSR: a render target bind in a pass whose focus composite was placed (fsr_place). The eye's image bound: FSR has
+// written it, the focus view beside the eye's corner, stretched like it. The focus final is there; from here on the
+// pass's draws into the eye's image are overlays, as after the final blit (focus_blit).
+void fsr_final(UINT n, ID3D11RenderTargetView* const* rtvs) {
+    if (!n || n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL || !rtvs || !rtvs[0])
+        return;
+    const int eye = g.pass & 1;
+    ComPtr<ID3D11Resource> target;
+    rtvs[0]->GetResource(&target);
+    ComPtr<ID3D11Texture2D> texture;
+    if (!target || target.Get() != g.fsrEye[eye] || FAILED(target.As(&texture)))
+        return;
+    g.focusBlitted = true;  // once a pass
+    D3D11_TEXTURE2D_DESC d;
+    texture->GetDesc(&d);
+    MvrPassView& v = g.view;
+    const unsigned ew = final_eye_w(v), eh = final_eye_h(v);
+    const unsigned fw = v.eyeW ? static_cast<unsigned>(std::lround(static_cast<double>(v.focusW) * ew / v.eyeW)) : v.focusW;
+    const unsigned fh = v.eyeH ? static_cast<unsigned>(std::lround(static_cast<double>(v.focusH) * eh / v.eyeH)) : v.focusH;
+    if (ew + fw > d.Width || fh > d.Height) {
+        ++g.stats.focusFailures;
+        return;
+    }
+    v.finalFocusW = g.viewOf[eye].finalFocusW = fw == v.focusW ? 0 : fw;
+    v.finalFocusH = g.viewOf[eye].finalFocusH = fh == v.focusH ? 0 : fh;
+    ++g.stats.focusBlits;
+    ++g.stats.fsrFinals;
+    if (tr.open) {
+        tr.blitSeen = true;
+        tr.finalTarget = target.Get();  // raw, compared only (a single-sample pass ends at another target after it)
+    }
+    g.eyeFinal[eye] = target;
+    g.finalW[eye] = d.Width;
+    g.finalH[eye] = d.Height;
+    g.finalThisFrame[eye] = true;
+    if (!g.fsrLogged) {
+        g.fsrLogged = true;
+        simqvfr::logf("lmu mvr: focus post: pass %d: FSR on: the focus composite beside the eye in the scene's target, "
+                      "upscaled with it; the focus final %ux%u at %u,0 of the eye's %ux%u image",
+                      g.pass, fw, fh, ew, d.Width, d.Height);
+    }
+}
+
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
     if (!ours(context)) {
@@ -1870,6 +1933,8 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
     note_scene_bind(n, rtvs, dsv);
     if (ours(context))  // (a bind the tracker ended the pass at isn't the pass's)
         slot_bind(n, rtvs, dsv);
+    if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
+        fsr_final(n, rtvs);
     g.depthBound = dsv != nullptr;
     g.overlayTarget = overlay_target(n, rtvs);
     update();
@@ -1897,6 +1962,8 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
     note_scene_bind(n, rtvs, dsv);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && ours(context))
         slot_bind(0, nullptr, nullptr);  // car slots: not beside unordered access views
+    if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
+        fsr_final(n, rtvs);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
         g.overlayTarget = overlay_target(n, rtvs);
@@ -2318,6 +2385,8 @@ void focus_post_draw(ID3D11DeviceContext* context) {
             g.replaying = false;
         }
         g.compositeOk = ok;
+        if (ok && g.fsr)
+            fsr_place(eye);
         ++(ok ? g.stats.focusComposites : g.stats.focusFailures);
     }
 }
@@ -3844,6 +3913,12 @@ void mvr_car_slots(int level) {
     }
 }
 
+void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1) {
+    g.fsr = on;
+    g.fsrEye[0] = eye0;
+    g.fsrEye[1] = eye1;
+}
+
 void mvr_focus_replay(bool on) {
     g.focusReplay = on;
     if (!on) {  // nothing doubled after the passes any more (R5's fallback switches it off mid-session)
@@ -3861,10 +3936,10 @@ bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigne
     if (eye < 0 || eye > 1 || !g.finalThisFrame[eye])
         return false;
     const MvrPassView& v = g.viewOf[eye];
-    x = final_eye_w(v);  // as focus_blit put it
+    x = final_eye_w(v);  // as focus_blit put it (or FSR's upscale: fsr_final)
     y = 0;
-    width = v.focusW;
-    height = v.focusH;
+    width = v.finalFocusW ? v.finalFocusW : v.focusW;
+    height = v.finalFocusH ? v.finalFocusH : v.focusH;
     return true;
 }
 

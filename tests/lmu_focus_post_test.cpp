@@ -280,6 +280,7 @@ struct Kit {
     // A stage between the resolve and YEBIS (reflections high, 2026-11-11): 0 none; 1 its image over the whole target;
     // 2 over the eye only. YEBIS's chain then starts from its image (no copy of the resolve).
     int stage = 0;
+    bool fsr = false;  // FSR on: no final blit, the eye's image written whole from the scene's target
 };
 
 std::vector<uint8_t> file_bytes(const std::string& path) {
@@ -442,7 +443,8 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     std::memcpy(view.box.focusTan, focusTan, sizeof(focusTan));
 
     const float copyConstants[15][4] = {{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {1.5f, 1.5f, 1.5f, 1}};
-    const float downConstants[15][4] = {{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {0.1f, 0.1f, 0.1f, 1}};
+    const float unitConstants[15][4] = {{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {1, 1, 1, 1}};
+    const float downConstants[15][4] ={{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {0.1f, 0.1f, 0.1f, 1}};
     float compositeConstants[21][4] = {};
     compositeConstants[20][0] = 1.7f;  // exposure gain
     compositeConstants[20][1] = 0.6f;  // glare
@@ -585,6 +587,23 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         }
         // The game's final blit: the resolved scene's eye part into the eye's final, the quad over the eye from the
         // whole target's viewport, times the vertex colour.
+        // FSR on: no final blit; the upscale's stand-in after the eye's image is bound (the game's compute pass writes
+        // it before the bind): the whole scene target into the eye's image, by a shader that isn't YEBIS's.
+        if (k.fsr) {
+            ID3D11ShaderResourceView* none[3] = {};
+            context->PSSetShaderResources(0, 3, none);
+            context->OMSetRenderTargets(1, eyeFinalRtv.GetAddressOf(), nullptr);
+            write(context.Get(), rectCb.Get(), wholeRect, sizeof(wholeRect));
+            write(context.Get(), stageCb.Get(), unitConstants, sizeof(unitConstants));
+            context->VSSetShader(yebisVs.Get(), nullptr, 0);
+            context->PSSetShader(stagePs.Get(), nullptr, 0);
+            context->PSSetConstantBuffers(0, 1, stageCb.GetAddressOf());
+            context->PSSetSamplers(0, 1, point.GetAddressOf());
+            context->PSSetShaderResources(0, 1, sceneSrv.GetAddressOf());
+            context->RSSetViewports(1, &whole);
+            context->DrawIndexed(3, 0, 0);
+            write(context.Get(), rectCb.Get(), eyeRect, sizeof(eyeRect));
+        } else
         {
             BlitVertex verts[12] = {};
             const float x1 = -1 + 2.0f * eyeW / W, y1 = 1 - 2.0f * eyeH / H, u1 = static_cast<float>(eyeW) / W,
@@ -1198,6 +1217,56 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   after.focusFailures == before.focusFailures && driveFinals && lmu::mvr_single_sample_passes(),
               what);
         same_as_eye("MSAA off past a stage", 100, true);  // (the finals: driveFinals, read at pass 1's end)
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+
+    {  // FSR on (mvr_fsr): no final blit; after YEBIS's composite the game's compute upscale writes the whole scene
+       // target into the eye's image, then binds that image. The focus composite is put beside the eye in the scene's
+       // target right after the composite, so the upscale (here: a copy of the whole target, by an unmarked shader after
+       // the bind) carries it beside the eye; the focus final is found at the eye's image's bind.
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        Kit fsr = standIn;
+        fsr.fsr = true;
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_fsr(true, eyeFinal.Get(), eyeFinal.Get());
+        lmu::mvr_frame_end(100050);
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        driveLog.clear();
+        driveFinals = false;
+        eye_pass(0, nullptr, false, fsr, false, true);
+        unsigned x = 0, y = 0, fw = 0, fh = 0;
+        const bool final0 = lmu::mvr_focus_final(0, x, y, fw, fh) && x == eyeW && y == 0 && fw == focusW && fh == focusH;
+        const std::vector<uint8_t> all = read_rgba8(device.Get(), context.Get(), eyeFinal.Get(), W, H);
+        int worst = 0;
+        unsigned lo = 255, hi = 0;
+        for (unsigned yy = 0; yy < focusH; ++yy)
+            for (unsigned xx = 0; xx < focusW; ++xx)
+                for (unsigned c = 0; c < 3; ++c) {
+                    const uint8_t e = all[(static_cast<size_t>(yy) * W + xx) * 4 + c];
+                    const uint8_t f = all[(static_cast<size_t>(yy) * W + eyeW + xx) * 4 + c];
+                    worst = (std::max)(worst, std::abs(static_cast<int>(e) - static_cast<int>(f)));
+                    lo = (std::min)(lo, static_cast<unsigned>(e));
+                    hi = (std::max)(hi, static_cast<unsigned>(e));
+                }
+        eye_pass(1, nullptr, false, fsr, false, true);
+        lmu::mvr_frame_end(100051);
+        const lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        std::snprintf(what, sizeof(what),
+                      "FSR on, the tracker driving:%s; %llu focus composites put beside the eye, %llu finals found at the "
+                      "eye's image's bind (eye 0's %s), finals %s; the focus final equals the eye's own over the same crop: "
+                      "largest difference %d/255 (the eye's values %u..%u)",
+                      driveLog.c_str(), static_cast<unsigned long long>(after.fsrPlaced - before.fsrPlaced),
+                      static_cast<unsigned long long>(after.fsrFinals - before.fsrFinals), final0 ? "beside the eye" : "NOT THERE",
+                      driveFinals ? "made" : "NOT MADE", worst, lo, hi);
+        check(driveLog == " b0 e0 b1 e1" && after.fsrPlaced == before.fsrPlaced + 2 && after.fsrFinals == before.fsrFinals + 2 &&
+                  after.focusFailures == before.focusFailures && final0 && driveFinals && worst <= 3 && hi - lo >= 100,
+              what);
+        lmu::mvr_fsr(false, nullptr, nullptr);
         lmu::mvr_track_drive(nullptr, nullptr);
         lmu::mvr_track_passes(false);
     }

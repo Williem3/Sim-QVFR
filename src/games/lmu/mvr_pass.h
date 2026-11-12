@@ -41,6 +41,9 @@ struct MvrPassView {
     // The eye's corner of its final (the eye target): eyeW x eyeH stretched by the game's final blit when its render
     // scale isn't 1 (focus_math.h final_extent); 0: as eyeW x eyeH. The focus final goes beside it, at the focus size.
     unsigned finalEyeW = 0, finalEyeH = 0;
+    // The focus final's size beside that corner when it isn't the focus view's own (0: it is). Set by the pass
+    // itself under FSR (mvr_fsr), whose upscale stretches the focus view like the eye.
+    unsigned finalFocusW = 0, finalFocusH = 0;
     FocusBox box{};                 // its tangents and the eye's (the focus post's glare mapping; valid: known)
     // DLAA (engine/dlss_views.h): the clip shift (x += s[0] w, y += s[1] w) the eye's [0] and the focus view's [1] draws carry
     // this frame, which their images lose in DLAA. The overlays drawn after the post (the driver tags, the VR UI) are
@@ -134,6 +137,12 @@ void mvr_time_hooks(bool on);
 // mvr_pass_install: DrawIndexed is hooked only with it on (turned on later, its functions are hooked as pass starts see
 // them).
 void mvr_focus_replay(bool on);
+// LMU's FSR is on (each eye's post-processing ends in FSR's compute upscale of the whole scene target into the eye's
+// image, no final blit to draw the focus final with): the focus composite is put beside the eye in the scene's
+// target right after YEBIS's composite, so FSR's own upscale carries it beside the eye into the eye's image, where
+// the focus final is then taken from. `eye0`, `eye1`: the eyes' images (compared only; the bind of one after the
+// composite is where FSR has written it), null while unknown.
+void mvr_fsr(bool on, ID3D11Resource* eye0, ID3D11Resource* eye1);
 // The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
 // about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
 // MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips
@@ -218,6 +227,7 @@ struct MvrPassStats {
     // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
     // and after them (the VR UI).
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
+    uint64_t fsrPlaced = 0, fsrFinals = 0;  // FSR: focus composites put beside the eye for its upscale; finals found
     uint64_t uiMipFrames = 0;  // frames whose VR UI canvas was copied with mips for the panel (mvr_ui_mips)
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
     // draws replayed for the menus (mvr_redraw_panel).

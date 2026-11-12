@@ -2856,15 +2856,14 @@ void four_passes_frame_end() {
         simqvfr::logf("%s: frame %llu: first two-pass frame (focus finals), eyes rendered %d %d", tag(), frames, eyeOfPass[0],
                       eyeOfPass[1]);
     // R5: the multi-view path's health, between frames on the render thread. A driver that refuses multi-view rendering
-    // and FSR still give way to the four passes (fallback_to_four_passes). Focus views that stop coming do not: after
+    // still gives way to the four passes (fallback_to_four_passes). Focus views that stop coming do not: after
     // half a second the eyes go to full resolution, and it tries again by itself (mvr_recovery.h).
     if (cfg.trackerDrives) {
-        // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit, which the focus
-        // final beside the eye is drawn with; the four passes take FSR's upscale for every view.
+        // FSR on: each eye's post-processing ends in FSR's upscale (compute) instead of the final blit; the focus
+        // composite goes beside the eye before it, so FSR carries it into the eye's image (mvr_fsr).
+        mvr_fsr(fsr_on(), eyeImage[0], eyeImage[1]);
         const char* why = mvr_broken()           ? "the driver refused NVIDIA's multi-view rendering (and instancing "
                                                    "couldn't take over)"
-                          : fsr_on()             ? "LMU's FSR upscaling is on: it replaces the final blit the focus views "
-                                                   "are drawn beside the eyes with"
                           : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
                               ? "forced by lmu_mvr_fallback_at"
                               : nullptr;
