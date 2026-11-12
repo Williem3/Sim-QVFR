@@ -76,8 +76,11 @@ int SIM_QVFR_TEST_MAIN() {
               "a spinning thread is never the busiest (the next one is, 40%) but counts in the process's total");
         check(cpu_load_spins(L"Physics") && cpu_load_spins(L"(aSeeVRClient.dll)") &&
                   cpu_load_spins(L"(virtualdesktop-openxr.dll)") && !cpu_load_spins(L"GameThread") &&
-                  !cpu_load_spins(L""),
-              "spinning threads by description: Physics, the eye tracker's client and Virtual Desktop's pacing");
+                  !cpu_load_spins(L"") && cpu_load_spins(L"Le Mans Ultimate Physics Thread") &&
+                  !cpu_load_spins(L"Le Mans Ultimate Main Thread") && !cpu_load_spins(L" Physics Thread") &&
+                  !cpu_load_spins(L"PhysicsWorker"),
+              "spinning threads by description: ACE's and LMU's physics threads, the eye tracker's client and Virtual "
+              "Desktop's pacing");
         const std::map<uint32_t, double> shares = cpu_load_shares(before, after, 100000);
         check(shares.size() == 3 && close_to(shares.at(1), 1) && close_to(shares.at(2), 90) && close_to(shares.at(3), 40) &&
                   !shares.count(4),

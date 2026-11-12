@@ -79,7 +79,7 @@ uint8_t card_alpha(int x, int y) {
 
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
-                                     const OsdRow& badge) {
+                                     const OsdRow& badge, const std::wstring& clock) {
     std::vector<uint32_t> out(static_cast<size_t>(kOsdWidth) * kOsdHeight, 0);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -140,7 +140,17 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
 
     // Frame times, newest on the right: one bar per frame, coloured by how it met the budget, and the
     // budget as a line. The scale is two budgets (or the slowest frame).
-    const int graphTop = tileTop + 142, graphBottom = graphTop + 60, graphLeft = kMargin, graphRight = kOsdWidth - kMargin;
+    // The clock, if any, at its right end in the cells' value font, grey; the graph stops short of it.
+    const int graphTop = tileTop + 142, graphBottom = graphTop + 60, graphLeft = kMargin;
+    int graphRight = kOsdWidth - kMargin;
+    if (!clock.empty()) {
+        SelectObject(dc, valueFont);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, clock.c_str(), static_cast<int>(clock.size()), &size);
+        text(dc, valueFont, clock, graphRight - static_cast<int>(size.cx), graphTop, graphRight, graphBottom, kSecondary,
+             DT_RIGHT);
+        graphRight -= static_cast<int>(size.cx) + 20;
+    }
     rounded(dc, graphLeft, graphTop, graphRight, graphBottom, 14, kTrack);
     if (!history.empty()) {
         const double slowest = *std::max_element(history.begin(), history.end());

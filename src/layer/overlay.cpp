@@ -16,6 +16,7 @@
 #include "input/hotkeys.h"
 #include "log.h"
 #include "probe/cpu_load.h"
+#include "probe/d3d11_compose_timer.h"
 #include "probe/gpu_frame_timer.h"
 #include "probe/gpu_load.h"
 #include "quad/helmet.h"
@@ -245,10 +246,13 @@ bool osd_resources(XrSession session) {
             osd.adapter = nullptr;
         factory->Release();
     }
-    // D3D11 (ACC, X-Plane): no queue timestamps, so the GPU tile is the whole GPU's load from Windows' engine
-    // counters (probe/gpu_load.h). A D3D12 session started it at xrCreateSession; it stops with the session.
-    if (!graphics.d3d12 && graphics.adapter_luid(luid))
+    // D3D11 (LMU, ACC, X-Plane): no queue timestamps, so the GPU tile is the whole GPU's load from Windows' engine
+    // counters (probe/gpu_load.h), and the busiest thread from the thread sampler. xrCreateSession started both with
+    // views4 or measure on (already running: nothing happens); they stop with the session.
+    if (!graphics.d3d12 && graphics.adapter_luid(luid)) {
         gpu_load_start(static_cast<uint32_t>(luid.HighPart), luid.LowPart);
+        cpu_load_start();
+    }
     log_line(osd.adapter ? "performance overlay: card ready" : "performance overlay: card ready (no VRAM numbers)");
     return true;
 }
@@ -263,6 +267,12 @@ OsdInput osd_input(int64_t now) {
             in.gpuMs = gpu.renderAvg;
             if (experiment.views4Compose)
                 in.composeMs = gpu.composeAvg;
+        }
+        // A D3D11 game (LMU, ACC): no queue timestamps; the layer's composition timed by queries around it.
+        if (experiment.views4ComposeD3D11) {
+            int composed = 0;
+            if (const double ms = d3d11_compose_timer_collect(composed); composed)
+                in.composeMs = ms;
         }
     }
     if (osd.adapter) {
@@ -398,9 +408,12 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         OsdInput in = osd_input(now);
         osd.shown = osd_summary(in);  // also for the log
         osd.shownValid = true;
+        SYSTEMTIME local{};
+        GetLocalTime(&local);  // the card's clock (redrawn every kOsdDrawMs: the minute turns over in time)
         osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,
-                                                      history = std::vector<double>(osd.history.begin(), osd.history.end())] {
-            return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary), osd_badge(in));
+                                                      history = std::vector<double>(osd.history.begin(), osd.history.end()),
+                                                      clock = osd_clock(local.wHour, local.wMinute)] {
+            return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary), osd_badge(in), clock);
         });
     }
     if (osd.drawing.valid() && osd.drawing.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
