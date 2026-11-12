@@ -62,6 +62,26 @@ add_library(minhook STATIC
   ${THIRD_PARTY}/minhook/src/hde/hde64.c)
 target_include_directories(minhook PUBLIC ${THIRD_PARTY}/minhook/include)
 
+# NVIDIA's NGX SDK (its include folder and nvsdk_ngx_s.lib), for DLSS called by us (src/engine/ngx_dlss.h): not in this
+# repository. Unset: the code builds without it and answers that DLSS is unavailable.
+# Its place inside a checkout, gitignored (never committed or published): third_party/nvidia-dlss-sdk, taken when
+# NGX_SDK_DIR isn't given.
+set(SIM_QVFR_NGX_DEFAULT "")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvidia-dlss-sdk/include/nvsdk_ngx.h")
+  set(SIM_QVFR_NGX_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvidia-dlss-sdk")
+endif()
+set(NGX_SDK_DIR "${SIM_QVFR_NGX_DEFAULT}" CACHE PATH "A local NVIDIA NGX SDK (include + nvsdk_ngx_s.lib)")
+set(SIM_QVFR_NGX OFF)
+if(NGX_SDK_DIR AND EXISTS "${NGX_SDK_DIR}/include/nvsdk_ngx.h")
+  set(SIM_QVFR_NGX ON)
+endif()
+# NVIDIA's nvngx_dlss.dll, when the SDK folder has it (package.ps1's -NgxSdk layout): copied beside the layer, where the
+# layer looks for the DLL it includes (ngx_dlss.h), as a release has it.
+set(SIM_QVFR_NGX_DLL "")
+if(SIM_QVFR_NGX AND EXISTS "${NGX_SDK_DIR}/nvngx_dlss.dll")
+  set(SIM_QVFR_NGX_DLL "${NGX_SDK_DIR}/nvngx_dlss.dll")
+endif()
+
 # Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
 # A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
@@ -69,7 +89,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/glare_share.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/glare_share.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -78,6 +98,11 @@ target_compile_definitions(sim_qvfr_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND
 target_compile_options(sim_qvfr_core PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_core PUBLIC minhook bcrypt d3d12 dxgi d3dcompiler windowscodecs ole32 pdh dinput8 dxguid)
 target_precompile_headers(sim_qvfr_core PRIVATE ${SIM_QVFR_PCH})
+if(SIM_QVFR_NGX)
+  target_include_directories(sim_qvfr_core PRIVATE "${NGX_SDK_DIR}/include")
+  target_compile_definitions(sim_qvfr_core PRIVATE SIM_QVFR_NGX)
+  target_link_libraries(sim_qvfr_core PUBLIC debug "${NGX_SDK_DIR}/nvsdk_ngx_s_dbg.lib" optimized "${NGX_SDK_DIR}/nvsdk_ngx_s.lib")
+endif()
 # C, and C-style COM declarations (CINTERFACE before its includes).
 set_source_files_properties(src/probe/d3d12_vtable_index.c src/engine/d3d11_vtables.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -104,6 +129,10 @@ set_target_properties(sim_qvfr PROPERTIES OUTPUT_NAME sim-qvfr)
 sim_qvfr_version_info(sim_qvfr sim-qvfr.dll VFT_DLL "Sim-QVFR OpenXR layer")
 # A linker map next to the DLL, to name the layer's frames in a game's crash call stack (no effect on the code).
 target_link_options(sim_qvfr PRIVATE /MAP)
+if(SIM_QVFR_NGX_DLL)
+  add_custom_command(TARGET sim_qvfr POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SIM_QVFR_NGX_DLL}" $<TARGET_FILE_DIR:sim_qvfr>/nvngx_dlss.dll)
+endif()
 
 add_custom_command(TARGET sim_qvfr POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -165,6 +194,26 @@ target_include_directories(nvapi_stereo_check PRIVATE src)
 target_compile_definitions(nvapi_stereo_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(nvapi_stereo_check PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(nvapi_stereo_check PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
+# Hardware check of LMU's DLAA module outside the game (tests/lmu_dlss_check.cpp): not in the suite, NGX SDK builds only.
+if(SIM_QVFR_NGX)
+  add_executable(lmu_dlss_check tests/lmu_dlss_check.cpp)
+  target_include_directories(lmu_dlss_check PRIVATE src ${THIRD_PARTY}/openxr/include)
+  target_compile_definitions(lmu_dlss_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(lmu_dlss_check PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(lmu_dlss_check PRIVATE sim_qvfr_core d3d11)
+endif()
+
+# Hardware check of DLSS called by us through NGX on D3D11 (tests/ngx_dlss_check.cpp): not in the suite, and built only
+# with the NGX SDK (NGX_SDK_DIR above).
+if(SIM_QVFR_NGX)
+  add_executable(ngx_dlss_check tests/ngx_dlss_check.cpp)
+  target_include_directories(ngx_dlss_check PRIVATE "${NGX_SDK_DIR}/include")
+  target_compile_definitions(ngx_dlss_check PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+  target_compile_options(ngx_dlss_check PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(ngx_dlss_check PRIVATE d3d11
+    debug "${NGX_SDK_DIR}/nvsdk_ngx_s_dbg.lib" optimized "${NGX_SDK_DIR}/nvsdk_ngx_s.lib")
+endif()
 
 # Offline check of LMU's MVR probe on a WARP device (tests/lmu_mvr_probe_test.cpp).
 add_executable(lmu_mvr_probe_test tests/lmu_mvr_probe_test.cpp)
@@ -253,6 +302,37 @@ target_link_libraries(run_exit_test PRIVATE sim_qvfr_core)
 # LMU's focus projection (games/lmu/focus_math.h) against the projection the game builds.
 add_executable(lmu_focus_test tests/lmu_focus_test.cpp)
 target_include_directories(lmu_focus_test PRIVATE src)
+
+# LMU's car part tracking for other cars' motion vectors (games/lmu/car_motion.h): keys, slots, the frame before.
+add_executable(lmu_car_motion_test tests/lmu_car_motion_test.cpp)
+target_include_directories(lmu_car_motion_test PRIVATE src)
+target_link_libraries(lmu_car_motion_test PRIVATE sim_qvfr_core)
+
+# LMU's car tracking in the eye passes on a WARP device (games/lmu/mvr_pass.h mvr_car_track): reflection, hooks, counts.
+add_executable(lmu_car_track_test tests/lmu_car_track_test.cpp)
+target_include_directories(lmu_car_track_test PRIVATE src)
+target_compile_definitions(lmu_car_track_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_car_track_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_car_track_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
+# The car slot target and its pixel shader twin (other cars' motion vectors) on a WARP device (tests/lmu_car_slot_test.cpp).
+add_executable(lmu_car_slot_test tests/lmu_car_slot_test.cpp)
+target_include_directories(lmu_car_slot_test PRIVATE src)
+target_compile_definitions(lmu_car_slot_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_car_slot_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_car_slot_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
+# The car slots in the eye passes on a WARP device (tests/lmu_car_slots_pass_test.cpp): target, twins, blend states.
+add_executable(lmu_car_slots_pass_test tests/lmu_car_slots_pass_test.cpp)
+target_include_directories(lmu_car_slots_pass_test PRIVATE src)
+target_compile_definitions(lmu_car_slots_pass_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_car_slots_pass_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_car_slots_pass_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
+# The maths of the DLAA inputs (engine/dlss_math.h): the FOV jitter and the depth reprojection's vectors.
+add_executable(lmu_dlss_test tests/lmu_dlss_test.cpp)
+target_include_directories(lmu_dlss_test PRIVATE src)
+target_compile_options(lmu_dlss_test PRIVATE /W4 /permissive- /utf-8)
 
 # LMU's glare share (games/lmu/glare_math.h) on a WARP device: YEBIS's region, the eye's halo in the focus view at the
 # same angles, the pointer walk to the texture (tests/lmu_glare_test.cpp).
@@ -384,6 +464,9 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input
   src/launcher/ui/chrome.cpp src/launcher/ui/pointer.cpp src/launcher/ui/input.cpp)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+if(SIM_QVFR_NGX)  # the layer has NGX in it: the About pane credits NVIDIA DLSS (the RTX SDKs licence's attribution)
+  target_compile_definitions(sim_qvfr_launcher PRIVATE SIM_QVFR_NGX)
+endif()
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32)
 target_precompile_headers(sim_qvfr_launcher PRIVATE ${SIM_QVFR_PCH})

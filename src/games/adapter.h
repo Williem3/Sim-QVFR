@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "../engine/dlss_settings.h"
 #include "../quad/views4_layout.h"
 #include "../xr.h"
 #include "game.h"
@@ -110,6 +111,9 @@ public:
     // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and
     // live. 100: the LOD the focus views' pixel density needs, 0: the game's own for its render size.
     virtual void qvfr_set_object_detail(int percent) { (void)percent; }
+    // QVFR: Sim-QVFR's own DLSS ([dlss], GameFeatures::sideLoadedDlss; engine/dlss_settings.h), live: called with the
+    // ini's at every reload; the adapter applies what changed (the DLL's folder at the next launch).
+    virtual void qvfr_set_dlss(const DlssSettings& settings) { (void)settings; }
     // The game upscales with DLSS and the views keep their launch sizes (live resolution: next launch).
     virtual bool qvfr_dlss_held() = 0;
     // The game's render and output target sizes (width, height) as last laid out (0 before the first frame).
@@ -137,6 +141,13 @@ public:
     }
     // The views the game just located (diagnostics; LMU: the FOV its lens mask is built with).
     virtual void qvfr_note_views(const XrView* views, uint32_t count) = 0;
+    // The game's stereo views as it is about to get them, after everything the layer reads from them: a game whose
+    // temporal anti-aliasing is ours (LMU's DLAA) moves their FOV by its sub-pixel jitter here. The layer composes with
+    // the FOV as it was before.
+    virtual void qvfr_jitter_views(XrView* views, uint32_t count) {
+        (void)views;
+        (void)count;
+    }
     // The game fetched view `viewIndex`'s hidden-area mesh (xrGetVisibilityMaskKHR with room for it): a game that turns
     // it into screen space with the FOV it just located (LMU) has a mask for that FOV only.
     virtual void visibility_mask_taken(uint32_t viewIndex) { (void)viewIndex; }

@@ -61,12 +61,16 @@ void md5_block(uint32_t (&s)[4], const uint8_t* block) {
 // ---- tokens ----
 
 enum : uint32_t {
-    kOpAnd = 1, kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMovc = 55, kOpMul = 56, kOpRet = 62, kOpRetc = 63,
-    kOpUshr = 85, kOpDclConstantBuffer = 89, kOpDclIndexRange = 91, kOpDclInput = 95, kOpDclInputSgv = 96,
-    kOpDclInputSiv = 97, kOpDclOutput = 101, kOpDclOutputSgv = 102, kOpDclOutputSiv = 103, kOpDclTemps = 104,
-    kOpDclGlobalFlags = 106,
+    kOpLd = 45, kOpDclResource = 88,
+    kOpAnd = 1, kOpGe = 29, kOpLt = 49, kOpMad = 50, kOpCustomData = 53, kOpMov = 54, kOpMovc = 55, kOpMul = 56,
+    kOpRet = 62, kOpRetc = 63, kOpSample = 69, kOpSampleC = 70, kOpSampleCLz = 71, kOpSampleL = 72, kOpSampleD = 73,
+    kOpSampleB = 74, kOpUshr = 85, kOpDclConstantBuffer = 89, kOpDclIndexRange = 91, kOpDclInput = 95,
+    kOpDclInputSgv = 96, kOpDclInputSiv = 97, kOpDclInputPs = 98, kOpDclInputPsSgv = 99, kOpDclInputPsSiv = 100,
+    kOpDclOutput = 101, kOpDclOutputSgv = 102, kOpDclOutputSiv = 103, kOpDclTemps = 104, kOpDclGlobalFlags = 106,
 };
-enum : uint32_t { kTemp = 0, kInput = 1, kOutput = 2, kImm32 = 4, kImm64 = 5, kConstantBuffer = 8 };
+enum : uint32_t { kInterpolationLinearNoPerspective = 4 };
+enum : uint32_t { kTemp = 0, kInput = 1, kOutput = 2, kImm32 = 4, kImm64 = 5, kResource = 7, kConstantBuffer = 8 };
+enum : uint32_t { kResourceDimensionBuffer = 1, kReturnTypeUint = 4, kNameTarget = 64 };
 // System value names (declarations' name tokens and the signatures' system values share them).
 enum : uint32_t { kNamePosition = 1, kNameRenderTargetArrayIndex = 4, kNameViewportArrayIndex = 5, kNameInstanceId = 8 };
 enum : uint32_t { kComponentUint32 = 1 };
@@ -92,6 +96,10 @@ void dst(std::vector<uint32_t>& out, uint32_t type, uint32_t index, uint32_t mas
 }
 void src_temp(std::vector<uint32_t>& out, uint32_t index, uint32_t swz) {
     out.push_back(operand(2, 1, swz, kTemp, 1));
+    out.push_back(index);
+}
+void src_input(std::vector<uint32_t>& out, uint32_t index, uint32_t swz) {
+    out.push_back(operand(2, 1, swz, kInput, 1));
     out.push_back(index);
 }
 void src_cb(std::vector<uint32_t>& out, uint32_t slot, uint32_t element, uint32_t swz) {
@@ -799,6 +807,294 @@ InstancedView add_instanced_view(const uint8_t* data, size_t size, const Instanc
         chunks[featuresAt].data = sfi0;
     else  // after the program, where the compiler puts it
         chunks.insert(chunks.begin() + programAt + 1, Chunk{fourcc("SFI0"), sfi0});
+    r.bytecode = write_chunks(chunks);
+    return r;
+}
+
+FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMipBiasOptions& options) {
+    FocusMipBias r;
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks)) {
+        r.error = "not a DXBC container";
+        return r;
+    }
+    Chunk* program = nullptr;
+    Chunk* signature = nullptr;
+    for (Chunk& c : chunks) {
+        if (c.fourcc == fourcc("SHDR") || c.fourcc == fourcc("SHEX"))
+            program = &c;
+        else if (c.fourcc == fourcc("ISGN"))
+            signature = &c;
+    }
+    if (!program || !signature || program->data.size() < 8) {
+        r.error = !program ? "no SHDR/SHEX" : "no ISGN (ISG1 not handled)";
+        return r;
+    }
+    std::vector<Element> inputs;
+    if (!read_signature(signature->data, inputs)) {
+        r.error = "unreadable input signature";
+        return r;
+    }
+    Element* position = nullptr;
+    for (Element& el : inputs)
+        if (el.systemValue == kNamePosition)
+            position = &el;
+    if (!position) {
+        r.error = "no SV_Position input";
+        return r;
+    }
+    r.positionRegister = position->reg;
+    const auto* tokens = reinterpret_cast<const uint32_t*>(program->data.data());
+    const uint32_t version = tokens[0], length = tokens[1];
+    if ((version >> 16) != 0) {
+        r.error = "not a pixel shader";
+        return r;
+    }
+    if (size_t{length} * 4 > program->data.size() || length < 2) {
+        r.error = "program length";
+        return r;
+    }
+
+    // First pass: where the declarations end, SV_Position's own declaration, and what there is to bias.
+    uint32_t temps = 0;
+    size_t tempsAt = 0, lastCbDcl = 0, lastInputDcl = 0, firstOutputDcl = 0, firstInstruction = 0, globalFlagsEnd = 2,
+           positionDclAt = 0;
+    for (size_t i = 2; i < length;) {
+        const uint32_t n = length_of(tokens + i);
+        if (n == 0 || i + n > length) {
+            r.error = "instruction walk";
+            return r;
+        }
+        const uint32_t op = opcode_of(tokens[i]);
+        if (!firstInstruction && !is_declaration(op))
+            firstInstruction = i;
+        if (op == kOpDclTemps) {
+            temps = tokens[i + 1];
+            tempsAt = i;
+        } else if (op == kOpDclConstantBuffer) {
+            lastCbDcl = i + n;
+            if (n >= 3 && tokens[i + 2] == options.cbSlot) {
+                r.error = "the bias's constant buffer slot is in use";
+                return r;
+            }
+        } else if (op == kOpDclGlobalFlags) {
+            globalFlagsEnd = i + n;
+        } else if (op == kOpDclInputPs || op == kOpDclInputPsSgv || op == kOpDclInputPsSiv) {
+            lastInputDcl = i + n;
+            Operand o;
+            if (read_operand(tokens + i + 1, n - 1, o) && o.type == kInput && o.index0Immediate &&
+                o.index0 == r.positionRegister)
+                positionDclAt = i;
+        } else if (op == kOpDclOutput || op == kOpDclOutputSgv || op == kOpDclOutputSiv) {
+            if (!firstOutputDcl)
+                firstOutputDcl = i;
+        } else if (op == kOpDclIndexRange) {
+            Operand o;
+            if (read_operand(tokens + i + 1, n - 1, o) && o.type == kInput && o.index0 <= r.positionRegister &&
+                r.positionRegister < o.index0 + tokens[i + n - 1]) {
+                r.error = "SV_Position in an index range";
+                return r;
+            }
+        } else if (op == kOpSample) {
+            ++r.samples;
+        } else if (op == kOpSampleC || op == kOpSampleCLz || op == kOpSampleL || op == kOpSampleD || op == kOpSampleB) {
+            ++r.leftAlone;
+        }
+        i += n;
+    }
+    if (!firstInstruction || r.samples == 0) {
+        r.error = firstInstruction ? "no plain samples" : "no instructions";
+        return r;
+    }
+    r.positionRead = positionDclAt != 0;
+    const uint32_t tempB = temps;
+
+    // The new declarations: the constant buffer, and SV_Position when the shader didn't read it.
+    const std::vector<uint32_t> cbDcl = {instruction(kOpDclConstantBuffer, 4),
+                                         operand(2, 1, swizzle(0, 1, 2, 3), kConstantBuffer, 2), options.cbSlot, 2};
+    std::vector<uint32_t> positionDcl;
+    if (!r.positionRead) {  // dcl_input_ps_siv linear noperspective v<p>.xy, position
+        positionDcl.push_back(instruction(kOpDclInputPsSiv, 4) | (kInterpolationLinearNoPerspective << 11));
+        dst(positionDcl, kInput, r.positionRegister, 0x3);
+        positionDcl.push_back(kNamePosition);
+    }
+    // B.xy = pos.xy >= (x0, y0); B.zw = pos.xy < (x1, y1); B.x = all four ? the focus view's bias : the eye view's.
+    std::vector<uint32_t> prologue;
+    prologue.push_back(instruction(kOpGe, 8));
+    dst(prologue, kTemp, tempB, 0x3);
+    src_input(prologue, r.positionRegister, swizzle(0, 1, 0, 0));
+    src_cb(prologue, options.cbSlot, 0, swizzle(0, 1, 0, 0));
+    prologue.push_back(instruction(kOpLt, 8));
+    dst(prologue, kTemp, tempB, 0xc);
+    src_input(prologue, r.positionRegister, swizzle(0, 0, 0, 1));
+    src_cb(prologue, options.cbSlot, 0, swizzle(0, 0, 2, 3));
+    prologue.push_back(instruction(kOpAnd, 7));
+    dst(prologue, kTemp, tempB, 0x3);
+    src_temp(prologue, tempB, swizzle(0, 1, 0, 0));
+    src_temp(prologue, tempB, swizzle(2, 3, 2, 2));
+    prologue.push_back(instruction(kOpAnd, 7));
+    dst(prologue, kTemp, tempB, 0x1);
+    src_temp(prologue, tempB, swizzle(0, 0, 0, 0));
+    src_temp(prologue, tempB, swizzle(1, 1, 1, 1));
+    prologue.push_back(instruction(kOpMovc, 11));
+    dst(prologue, kTemp, tempB, 0x1);
+    src_temp(prologue, tempB, swizzle(0, 0, 0, 0));
+    src_cb(prologue, options.cbSlot, 1, swizzle(0, 0, 0, 0));
+    src_cb(prologue, options.cbSlot, 1, swizzle(1, 1, 1, 1));
+    const uint32_t bias[2] = {operand(2, 2, 0, kTemp, 1), tempB};  // B.x, select-1
+
+    // Second pass: copy, with the declarations, the prologue and each sample made a sample_b.
+    const size_t cbAt = lastCbDcl ? lastCbDcl : globalFlagsEnd;
+    const size_t positionAt = lastInputDcl    ? lastInputDcl
+                              : firstOutputDcl ? firstOutputDcl
+                              : tempsAt        ? tempsAt
+                                               : firstInstruction;
+    std::vector<uint32_t> out(tokens, tokens + 2);
+    for (size_t i = 2; i < length;) {
+        if (i == cbAt)
+            out.insert(out.end(), cbDcl.begin(), cbDcl.end());
+        if (i == positionAt)
+            out.insert(out.end(), positionDcl.begin(), positionDcl.end());
+        if (i == firstInstruction) {
+            if (!tempsAt)
+                out.insert(out.end(), {instruction(kOpDclTemps, 2), 1u});
+            out.insert(out.end(), prologue.begin(), prologue.end());
+        }
+        const uint32_t n = length_of(tokens + i);
+        const uint32_t op = opcode_of(tokens[i]);
+        const size_t start = out.size();
+        out.insert(out.end(), tokens + i, tokens + i + n);
+        if (i == tempsAt)
+            out[start + 1] = temps + 1;
+        if (i == positionDclAt && ((tokens[i + 1] >> 2) & 3) == 0)
+            out[start + 1] |= 0x3u << 4;  // its mask gains x and y
+        if (op == kOpSample) {  // the opcode and length change; extended tokens (offsets, resource kind) stay
+            out[start] = (out[start] & ~(0x7ffu | (0x7fu << 24))) | kOpSampleB | ((n + 2) << 24);
+            out.insert(out.end(), bias, bias + 2);
+        }
+        i += n;
+    }
+    if (cbAt >= length)
+        out.insert(out.end(), cbDcl.begin(), cbDcl.end());
+    out[1] = static_cast<uint32_t>(out.size());
+
+    position->neverWritten |= 0x3;  // in an input signature: the components read
+    program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
+                         reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
+    signature->data = write_signature(inputs);
+    r.bytecode = write_chunks(chunks);
+    return r;
+}
+
+SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options) {
+    SlotOutput r;
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks)) {
+        r.error = "not a DXBC container";
+        return r;
+    }
+    Chunk* program = nullptr;
+    Chunk* signature = nullptr;
+    for (Chunk& c : chunks) {
+        if (c.fourcc == fourcc("SHDR") || c.fourcc == fourcc("SHEX"))
+            program = &c;
+        else if (c.fourcc == fourcc("OSGN"))
+            signature = &c;
+    }
+    if (!program || !signature || program->data.size() < 8) {
+        r.error = !program ? "no SHDR/SHEX" : "no OSGN (OSG1/OSG5 not handled)";
+        return r;
+    }
+    std::vector<Element> outputs;
+    if (!read_signature(signature->data, outputs)) {
+        r.error = "unreadable output signature";
+        return r;
+    }
+    uint32_t targetName = kNameTarget;
+    for (const Element& el : outputs) {
+        if (el.reg == options.reg || (el.name == "SV_Target" && el.index == options.reg)) {
+            r.error = "the slot's render target is written already";
+            return r;
+        }
+        if (el.name == "SV_Target")
+            targetName = el.systemValue;  // as the compiler records it
+    }
+    const auto* tokens = reinterpret_cast<const uint32_t*>(program->data.data());
+    const uint32_t version = tokens[0], length = tokens[1];
+    if ((version >> 16) != 0) {
+        r.error = "not a pixel shader";
+        return r;
+    }
+    if (size_t{length} * 4 > program->data.size() || length < 2) {
+        r.error = "program length";
+        return r;
+    }
+    // Where the declarations go: the resource after the last resource-like declaration (or the global flags), the output
+    // after the last output declaration (or before the temps / the first instruction).
+    size_t globalFlagsEnd = 2, lastResourceDcl = 0, lastOutputDcl = 0, tempsAt = 0, firstInstruction = 0;
+    for (size_t i = 2; i < length;) {
+        const uint32_t n = length_of(tokens + i);
+        if (n == 0 || i + n > length) {
+            r.error = "instruction walk";
+            return r;
+        }
+        const uint32_t op = opcode_of(tokens[i]);
+        if (!firstInstruction && !is_declaration(op))
+            firstInstruction = i;
+        if (op == kOpDclGlobalFlags) {
+            globalFlagsEnd = i + n;
+        } else if (op == kOpDclResource || op == kOpDclConstantBuffer || op == 90 /* dcl_sampler */ ||
+                   (op >= 143 && op <= 162)) {  // D3D11's resource, UAV and structured declarations among these
+            if (op == kOpDclResource && n >= 3 && tokens[i + 2] == options.srvSlot) {
+                r.error = "the slot's resource is declared already";
+                return r;
+            }
+            lastResourceDcl = i + n;
+        } else if (op == kOpDclOutput || op == kOpDclOutputSgv || op == kOpDclOutputSiv) {
+            lastOutputDcl = i + n;
+        } else if (op == kOpDclTemps) {
+            tempsAt = i;
+        }
+        i += n;
+    }
+    if (!firstInstruction) {
+        r.error = "no instructions";
+        return r;
+    }
+    const std::vector<uint32_t> resourceDcl = {instruction(kOpDclResource, 4) | (kResourceDimensionBuffer << 11),
+                                               operand(0, 0, 0, kResource, 1), options.srvSlot,
+                                               kReturnTypeUint | (kReturnTypeUint << 4) | (kReturnTypeUint << 8) |
+                                                   (kReturnTypeUint << 12)};
+    const std::vector<uint32_t> outputDcl = {instruction(kOpDclOutput, 3), operand(2, 0, 0x1, kOutput, 1), options.reg};
+    // ld o<reg>.x, l(0, 0, 0, 0), t<srvSlot>.xxxx
+    const std::vector<uint32_t> load = {instruction(kOpLd, 10),
+                                        operand(2, 0, 0x1, kOutput, 1), options.reg,
+                                        operand(2, 0, 0, kImm32, 0), 0u, 0u, 0u, 0u,
+                                        operand(2, 1, swizzle(0, 0, 0, 0), kResource, 1), options.srvSlot};
+    const size_t resourceAt = lastResourceDcl ? lastResourceDcl : globalFlagsEnd;
+    const size_t outputAt = lastOutputDcl ? lastOutputDcl : tempsAt ? tempsAt : firstInstruction;
+    std::vector<uint32_t> out(tokens, tokens + 2);
+    for (size_t i = 2; i < length;) {
+        if (i == resourceAt)
+            out.insert(out.end(), resourceDcl.begin(), resourceDcl.end());
+        if (i == outputAt)
+            out.insert(out.end(), outputDcl.begin(), outputDcl.end());
+        if (i == firstInstruction)
+            out.insert(out.end(), load.begin(), load.end());
+        const uint32_t n = length_of(tokens + i);
+        out.insert(out.end(), tokens + i, tokens + i + n);
+        i += n;
+    }
+    out[1] = static_cast<uint32_t>(out.size());
+
+    size_t at = 0;  // by register (a depth output, register ~0, stays last)
+    while (at < outputs.size() && outputs[at].reg < options.reg)
+        ++at;
+    outputs.insert(outputs.begin() + static_cast<std::ptrdiff_t>(at),
+                   Element{"SV_Target", options.reg, targetName, kComponentUint32, options.reg, 0x1, 0xe});
+    program->data.assign(reinterpret_cast<const uint8_t*>(out.data()),
+                         reinterpret_cast<const uint8_t*>(out.data()) + out.size() * 4);
+    signature->data = write_signature(outputs);
     r.bytecode = write_chunks(chunks);
     return r;
 }

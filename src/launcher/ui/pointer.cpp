@@ -2,6 +2,7 @@
 // and runtime pickers.
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <string>
 #include <utility>
 #include <vector>
@@ -88,6 +89,22 @@ void open_popup(Ctl owner) {
                     app.popup.selected = static_cast<int>(app.popup.items.size());
                 app.popup.items.push_back(p.name);
             }
+    } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
+               owner == kDlssSharpening) {  // DLSS in LMU
+        const auto fill = [](const auto& list, int value) {
+            app.popup.items.clear();
+            for (const DlssChoice& c : list)
+                app.popup.items.push_back(c.name);
+            app.popup.selected = dlss_choice_index(list, value, true);
+        };
+        if (owner == kDlssFocusMode)
+            fill(kDlssFocusModes, app.s.dlss.focusScale);
+        else if (owner == kDlssFocusPreset)
+            fill(kDlssFocusPresets, app.s.dlss.focusPreset);
+        else if (owner == kDlssEyePreset)
+            fill(kDlssEyePresets, app.s.dlss.eyePreset);
+        else
+            fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
     } else if (owner == kCheekyNrPreset) {
         app.popup.items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
         app.popup.selected = app.s.cheeky.nrPreset;
@@ -143,6 +160,15 @@ void choose(Ctl owner, int option) {
         app.s.cheeky.focusPreset = kCheekyPresets[option].value;
     else if (owner == kCheekyOuterPreset)
         app.s.cheeky.outerPreset = kCheekyPresets[option + 1].value;  // the list without the game default
+    else if (owner == kDlssFocusMode)
+        app.s.dlss.focusScale = kDlssFocusModes[std::clamp(option, 0, static_cast<int>(std::size(kDlssFocusModes)) - 1)].value;
+    else if (owner == kDlssFocusPreset)
+        app.s.dlss.focusPreset = kDlssFocusPresets[std::clamp(option, 0, static_cast<int>(std::size(kDlssFocusPresets)) - 1)].value;
+    else if (owner == kDlssEyePreset)
+        app.s.dlss.eyePreset = kDlssEyePresets[std::clamp(option, 0, static_cast<int>(std::size(kDlssEyePresets)) - 1)].value;
+    else if (owner == kDlssSharpening)
+        app.s.dlss.textureSharpening =
+            kDlssTextureSharpening[std::clamp(option, 0, static_cast<int>(std::size(kDlssTextureSharpening)) - 1)].value;
     else if (owner == kCheekyNrPreset)
         app.s.cheeky.nrPreset = option;
     else if (owner == kCheekyNrPasses)
@@ -240,6 +266,39 @@ void choose_cheeky_runtime() {
         save_cheeky_runtime(app.ini, path);
         app.iniText = ini_text();
     }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// Sim-QVFR's own DLSS: another nvngx_dlss.dll than the one Sim-QVFR includes (a newer one from a game); its folder is
+// saved as [dlss] folder (every game's), read by the game at its next launch. Choosing the included one saves none.
+void choose_dlss_dll() {
+    wchar_t path[MAX_PATH] = {};
+    const std::wstring current = dlss_dll_path(app.s.dlss.folder, layer_folder());
+    wcsncpy_s(path, current.c_str(), _TRUNCATE);
+    OPENFILENAMEW ofn{sizeof(ofn)};
+    ofn.hwndOwner = app.hwnd;
+    ofn.lpstrFilter = L"NVIDIA DLSS (nvngx_dlss.dll)\0nvngx_dlss.dll\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"Choose NVIDIA’s nvngx_dlss.dll (DLSS 310 or newer)";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (GetOpenFileNameW(&ofn)) {
+        std::wstring folder = path;
+        const size_t slash = folder.find_last_of(L"\\/");
+        folder = slash == std::wstring::npos ? L"" : folder.substr(0, slash);
+        std::error_code ec;
+        if (!folder.empty() && std::filesystem::equivalent(folder, layer_folder(), ec))
+            folder.clear();
+        app.s.dlss.folder = folder;
+        changed();
+    }
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// Use included: back to the nvngx_dlss.dll Sim-QVFR includes.
+void use_included_dlss() {
+    app.s.dlss.folder.clear();
+    changed();
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 

@@ -107,6 +107,8 @@ All of these are off until you turn them on in the launcher:
   low-resolution periphery shimmers a little more with it. X-Plane 12 also runs an FSR sharpening pass of
   its own, so start low there.
 - **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
+- **DLSS in Le Mans Ultimate** (experimental, NVIDIA RTX): Sim-QVFR's own, as LMU has none; see
+  [Le Mans Ultimate](#le-mans-ultimate).
 
 ## Foveated DLSS (optional, NVIDIA RTX only)
 
@@ -271,7 +273,28 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   Turning it off fixed that for the player who reported it.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
   the launcher's **OpenXR layers** page. Use one frame generator at a time.
-- **Not in LMU yet:** Foveated DLSS (LMU has no DLSS of its own).
+- **DLSS** (experimental; NVIDIA RTX 20 series and newer; the launcher's **DLSS** page or the headset menu's):
+  LMU has no DLSS of its own, so Sim-QVFR runs NVIDIA DLSS on LMU's views itself, through NVIDIA's NGX, without
+  changing LMU's code. The periphery gets DLAA; the focus area gets DLAA or an upscale (**Ultra quality** 77%,
+  **Quality** 67%, **Balanced** 58% or **Performance** 50% of its size each way: less GPU time, softer distant
+  textures). It needs multi-view rendering. Changes apply while you drive (each one a short stutter).
+  - **NVIDIA's `nvngx_dlss.dll` is included** (DLSS 310.9.1, from NVIDIA's DLSS SDK). To use a newer one, pick it
+    from a game's folder with **Choose…** on the DLSS page (DLSS 310 or newer); **Use included** goes back.
+    **Launch checks** says when the one chosen is missing or too old.
+  - **Periphery preset:** **K** (the default) is the steadier; **F** costs about half as much and aliases more,
+    which eye tracking keeps out of where you look. **Focus preset:** NVIDIA's default for the mode (K, or M at
+    Performance), or K or M.
+  - **LMU's MSAA can go off** with DLSS on: DLSS then does all the anti-aliasing, for less GPU time.
+  - **Texture sharpening** (off by default; **Focus only** or **Focus and periphery**): textures sampled sharper
+    where DLSS works (the mip bias DLSS asks for). The gain is subtle, most in the periphery. On at launch, it
+    changes while you drive without a stutter; turned on from Off, it starts at the next launch (off, it costs
+    nothing). If fine patterns shimmer, a step lower.
+  - **Known limits:** other cars smear a little (their own motion isn't known yet), and below DLAA distant
+    textures in the focus area are softer. Tested on SteamVR and Pimax's runtime.
+  - **How it works:** [the diagram](docs/architecture/LMU-DLSS-ARCHITECTURE.svg).
+  - Uses NVIDIA DLSS through the NVIDIA NGX SDK. NVIDIA, RTX and DLSS are trademarks of NVIDIA Corporation;
+    Sim-QVFR is not sponsored or endorsed by NVIDIA.
+- **Not in LMU:** Cheeky Foveated DLSS (it works on a game's own DLSS, which LMU doesn't have).
 
 **Anti-cheat.** By default the launcher starts LMU without its anti-cheat (Easy Anti-Cheat), so you can
 only drive offline. **Advanced → Games → Run with anti-cheat** starts LMU through Easy Anti-Cheat with
@@ -337,7 +360,12 @@ Sim-QVFR is free to use, change and share for any **noncommercial** purpose unde
 Required Notice: Copyright (c) 2026 Williem3 (https://github.com/Williem3/Sim-QVFR)
 ```
 
-Third-party parts keep their own licences: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Third-party parts keep their own licences: see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Releases built
+with DLSS contain NVIDIA's DLSS SDK (its NGX library in `sim-qvfr.dll`, and `nvngx_dlss.dll`). These parts are
+NVIDIA's and aren't covered by the PolyForm licence. Their terms are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), with NVIDIA's licence in the release's `licenses` folder. In
+short: use them only as part of Sim-QVFR; don't modify, reverse engineer or redistribute them (to share
+Sim-QVFR, share the link to its release); NVIDIA gives no warranty for them.
 
 ## For developers
 

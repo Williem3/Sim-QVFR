@@ -254,6 +254,43 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
             L"Neither dxgi.dll nor version.dll there is Cheeky Foveated DLSS’s loader.");
     }
 
+    // Sim-QVFR's own DLSS, when it is on: multi-view rendering, then its nvngx_dlss.dll (the one Sim-QVFR includes, or
+    // the player's choice) and its version (made for the 310 series, DLSS 4).
+    if (in.ownDlss) {
+        const std::wstring where = in.ownDlssPath.empty() ? std::wstring(L"the folder chosen") : in.ownDlssPath;
+        if (!in.ownDlssMultiView) {
+            Check& c = add("own_dlss", CheckTone::Warn, L"DLSS needs multi-view rendering",
+                           L"Use DLSS is on, but multi-view rendering is off (Resolution pane): " + shortName +
+                               L" runs without DLSS.");
+            c.fix = CheckFix::OpenDlss;
+            c.fixLabel = L"Open DLSS";
+        } else if (!in.ownDlssFound && in.ownDlssIncluded) {
+            Check& c = add("own_dlss", CheckTone::Warn, L"The included nvngx_dlss.dll is missing",
+                           L"Use DLSS is on, but the nvngx_dlss.dll Sim-QVFR includes isn’t at " + where +
+                               L". Install Sim-QVFR again from its release zip, or choose another nvngx_dlss.dll (DLSS "
+                               L"310 or newer). " + shortName + L" runs without DLSS until then.");
+            c.fix = CheckFix::OpenDlss;
+            c.fixLabel = L"Open DLSS";
+        } else if (!in.ownDlssFound) {
+            Check& c = add("own_dlss", CheckTone::Warn, L"The nvngx_dlss.dll chosen isn’t there",
+                           L"Use DLSS is on, but there is no nvngx_dlss.dll at " + where +
+                               L": DLSS takes the one Sim-QVFR includes instead. Choose another, or Use included.");
+            c.fix = CheckFix::OpenDlss;
+            c.fixLabel = L"Open DLSS";
+        } else if (!in.ownDlssVersion.empty() && version_major(in.ownDlssVersion) < kCheekyDlssMajor) {
+            Check& c = add("own_dlss", CheckTone::Warn, L"DLSS " + in.ownDlssVersion + L" is older than 310",
+                           L"Sim-QVFR is made for DLSS 310 or newer (DLSS 4): with an older nvngx_dlss.dll the "
+                           L"presets may not apply, or DLSS may not start. Choose a newer one, or Use included.");
+            c.fix = CheckFix::OpenDlss;
+            c.fixLabel = L"Open DLSS";
+        } else {
+            add("own_dlss", CheckTone::Ok,
+                L"DLSS ready" + (in.ownDlssVersion.empty() ? std::wstring() : L" (" + in.ownDlssVersion + L")"),
+                (in.ownDlssIncluded ? L"The nvngx_dlss.dll Sim-QVFR includes, at " : L"Your nvngx_dlss.dll, at ") +
+                    in.ownDlssPath + L".");
+        }
+    }
+
     // Cheeky Foveated DLSS, when it is on.
     if (in.cheekyLoad) {
         if (!in.cheekyRuntimeFound) {

@@ -374,6 +374,17 @@ std::vector<Ctl> focus_order() {
             order.push_back(kColor);
         break;
     case Pane::Dlss:
+        if (game_has(&games::GameFeatures::sideLoadedDlss)) {  // Sim-QVFR's own (pane_dlss.cpp)
+            if (own_dlss_available())
+                order.push_back(kDlssOn);
+            if (!app.s.dlss.folder.empty())  // another nvngx_dlss.dll chosen: Use included, left of Choose…
+                order.push_back(kDlssIncluded);
+            order.push_back(kDlssFolder);
+            if (own_dlss_available() && app.s.dlss.on)
+                order.insert(order.end(), {kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
+                                           kDlssCarVectors});
+            break;
+        }
         if (!game_has(&games::GameFeatures::foveatedDlss))
             break;
         order.insert(order.end(), {kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset,

@@ -57,6 +57,9 @@ struct FourPassesRun {
     // YEBIS's copy and composite once more, with the eye's glare and exposure), its final blit beside the eye and the
     // overlays doubled into it (R3).
     bool focusReplay = false;
+    // [experiment] lmu_ui_mips (default 1): the VR UI panel's doubled draws sample a copy of its canvas with mips
+    // (mvr_pass.h mvr_ui_mips); 0: the game's canvas (one mip) as it is.
+    bool uiMips = true;
     // R4a ([experiment] lmu_focus_final, with focusReplay): the game's two eye passes only; the focus views are those
     // focus finals beside the eyes. lmu_focus_final_ab=N: N frames like that, then N with the four passes (gate D), in
     // turn, each side's CPU and GPU per pass logged apart.
@@ -73,6 +76,20 @@ struct FourPassesRun {
     // the lens mask and the VR UI from their d3d11 draws; no scene render, eye loop, post-effect time, scene skip, glare
     // or driver tags hooks; no A/B: the game's own two passes).
     bool trackerDrives = false;
+    // Texture sharpening ([dlss] texture_sharpening) on at launch: its pixel shader hook is installed (mvr_pass.h
+    // mvr_mip_bias_hooks), and the probe makes the twins. Off at launch: neither, at no cost; turned on, the next launch.
+    bool textureSharpening = false;
+    // Other cars' motion vectors, stage 2 ([experiment] lmu_car_track=1, log only): each car part's world matrix tracked
+    // frame to frame from the eye passes' draws (mvr_pass.h mvr_car_track); nothing drawn changes.
+    bool carTrack = false;
+    // Stage 3 ([experiment] lmu_car_vectors, with carTrack): 1 the parts' slots written beside the scene and a gate
+    // image; 2 DLSS's vectors take the parts' motion too (mvr_pass.h mvr_car_slots).
+    int carSlots = 0;
+    // The player's [dlss] car_vectors go on only where DLSS can run (a build with NGX, an RTX card, the tracker's
+    // passes); the [experiment] keys (carForced) as they say. carAb (lmu_car_vectors_ab=N): N frames with the cars'
+    // motion, N without (mvr_pass.h mvr_car_active), in turn; each side's CPU per pass logged, GPU per mvr_pass's modes.
+    bool carForced = false;
+    int carAb = 0;
     // R5: the scene frame at which the multi-view path is made to fall back to the four passes ([experiment]
     // lmu_mvr_fallback_at, a test of the fallback). 0: only when it fails.
     int fallbackAt = 0;

@@ -8,6 +8,9 @@
 #include "../diag_switches.h"
 #include "../identity_adapter.h"
 #include "../multi_view.h"
+#include "../../engine/dlss_math.h"
+#include "../../engine/dlss_views.h"
+#include "dlss_inputs.h"
 #include "four_passes.h"
 #include "game.h"
 #include "glare_share.h"
@@ -76,9 +79,32 @@ public:
             run.mvrAb = (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_ab", 0, s.ini)));
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
             run.mvrTiming = run.mvrAb > 0 || GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
+            run.textureSharpening = s.ini && simqvfr::read_dlss_settings(s.ini).textureSharpening != 0;
+            // Other cars' motion in DLSS's vectors (four_passes.h carTrack, carSlots): the player's [dlss] car_vectors
+            // with DLSS on at launch; or as a diagnostic, [experiment] lmu_car_track=1 (the tracking, log only with
+            // car_vectors=0) and lmu_car_vectors=1 (the slots and a gate image) or 2 (DLSS takes them); 0 (the shipped
+            // ini's): as the player's.
+            {
+                const simqvfr::DlssSettings player = s.ini ? simqvfr::read_dlss_settings(s.ini) : simqvfr::DlssSettings{};
+                const bool playerCars = player.on && player.carVectors;
+                const int track = s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_track", 0, s.ini))
+                                        : 0;
+                const int slots =
+                    s.ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_car_vectors", 0, s.ini)) : 0;
+                run.carForced = track > 0 || slots > 0;
+                run.carTrack = track > 0 || slots > 0 || playerCars;
+                run.carSlots = slots > 0 ? slots : playerCars ? 2 : 0;
+                // lmu_car_vectors_ab=N (with them, a measurement): N frames with the cars' motion, N without, in turn.
+                run.carAb = s.ini ? (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment",
+                                                                                         L"lmu_car_vectors_ab", 0, s.ini)))
+                                  : 0;
+                run.mvrTiming = run.mvrTiming || run.carAb > 0;  // its GPU per pass by side
+            }
             const bool player = gate == 0 && !legacy;  // multi_view=1: the two-pass path
             // lmu_focus_replay=1: the eye passes post-process their focus views too (focus_post.h).
             run.focusReplay = player || (s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, s.ini) != 0);
+            // lmu_ui_mips=0: the VR UI panel samples the game's canvas (one mip) in the small periphery too.
+            run.uiMips = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_ui_mips", 1, s.ini) != 0;
             // lmu_focus_final=1 (with it): two eye passes, the focus views from beside the eyes (four_passes.h).
             run.focusFinal = run.focusReplay && run.mvrSkip &&
                              (player || GetPrivateProfileIntW(L"experiment", L"lmu_focus_final", 0, s.ini) != 0);
@@ -118,6 +144,50 @@ public:
                           "turns it off)",
                           diag_.ini().c_str());
         glareAtLaunch_ = run.glareShare;
+        // Sim-QVFR's own DLSS on the views (engine/dlss_views.h): the player's [dlss] (engine/dlss_settings.h: on, the
+        // nvngx_dlss.dll folder, the focus views' mode and preset, the eyes' preset), live through qvfr_set_dlss; with
+        // the multi-view path only (its eye passes found at the d3d11 level). The inputs' diagnostics are [experiment]
+        // keys: lmu_dlss_jitter=0, lmu_dlss_vectors=0: without that input (a comparison); lmu_dlss_view_inverse,
+        // lmu_dlss_jitter_flip_x/_y: the inputs' conventions, should the log's gate (lmu_dlss_gate=1) or the picture
+        // say they are the other way round.
+        simqvfr::DlssRun dlss;
+        dlss.tag = "lmu dlss";
+        dlssPossible_ = run.trackerDrives;
+        if (s.ini) {
+            const auto key = [&](const wchar_t* name, int fallback) {
+                return static_cast<int>(GetPrivateProfileIntW(L"experiment", name, fallback, s.ini));
+            };
+            const simqvfr::DlssSettings player = simqvfr::read_dlss_settings(s.ini);
+            dlss.views = player.on ? 2 : 0;
+            dlss.dllFolder = player.folder;
+            dlss.preset = player.focusPreset;
+            dlss.eyePreset = player.eyePreset;
+            dlss.focusScale = player.focusScale;
+            dlss.textureSharpening = player.textureSharpening;
+            dlssSettings_ = player;
+            dlss.jitter = key(L"lmu_dlss_jitter", 1) != 0;
+            dlss.vectors = key(L"lmu_dlss_vectors", 1) != 0;
+            dlss.viewInverse = key(L"lmu_dlss_view_inverse", 0) != 0;
+            dlss.depthReversed = key(L"lmu_dlss_depth_reversed", 1) != 0;
+            // lmu_dlss_car=0: the cockpit treated as the world. lmu_dlss_car_box_cm: the car's box about the head, in
+            // centimetres to the left, right, down, up, front and back (engine/dlss_views.h).
+            dlss.car = key(L"lmu_dlss_car", 1) != 0;
+            wchar_t box[96] = {};
+            GetPrivateProfileStringW(L"experiment", L"lmu_dlss_car_box_cm", L"", box, 96, s.ini);
+            int cm[6];
+            if (swscanf_s(box, L"%d,%d,%d,%d,%d,%d", &cm[0], &cm[1], &cm[2], &cm[3], &cm[4], &cm[5]) == 6)
+                for (int i = 0; i < 6; ++i)
+                    dlss.carBox[i] = std::clamp(cm[i], 0, 2000) / 100.0;
+            dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
+            dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
+            dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
+            if (dlss.views && !run.trackerDrives) {
+                simqvfr::log_line("lmu dlss: asked for, but it needs the multi-view path (multi_view=1): off");
+                dlss.views = 0;
+            }
+        }
+        dlss_use_lmu_inputs();  // the pass's matrices from the game's renderer
+        simqvfr::dlss_start(dlss);
         qvfr_ = four_passes_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
@@ -152,6 +222,38 @@ public:
     void qvfr_note_views(const XrView* views, uint32_t count) override {
         if (qvfr_)
             four_passes_note_views(views, count);
+    }
+    void session_destroyed() override {
+        IdentityAdapter::session_destroyed();
+        simqvfr::dlss_shutdown();  // its features and NGX belong to the session's device
+    }
+    // DLAA's jitter (engine/dlss_views.h): the last thing done to the FOV the game locates.
+    void qvfr_jitter_views(XrView* views, uint32_t count) override {
+        if (qvfr_)
+            simqvfr::dlss_jitter_views(views, count);
+    }
+    // The player's DLSS settings changed in the launcher or the headset menu: the module takes them between frames.
+    void qvfr_set_dlss(const simqvfr::DlssSettings& settings) override {
+        if (!qvfr_ || settings == dlssSettings_)
+            return;
+        if (settings.on && !dlssPossible_) {
+            if (!dlssRefusedLogged_)
+                simqvfr::log_line("lmu dlss: turned on, but this run has no multi-view path (multi_view=1, at the next "
+                                  "launch): off");
+            dlssRefusedLogged_ = true;
+            dlssSettings_ = settings;
+            return;
+        }
+        if (settings.folder != dlssSettings_.folder)
+            simqvfr::log_line("lmu dlss: the nvngx_dlss.dll folder changed: it applies at the next launch");
+        dlssSettings_ = settings;
+        simqvfr::DlssLive live;
+        live.on = settings.on;
+        live.focusScale = settings.focusScale;
+        live.preset = settings.focusPreset;
+        live.eyePreset = settings.eyePreset;
+        live.textureSharpening = settings.textureSharpening;
+        simqvfr::dlss_live(live);
     }
     void visibility_mask_taken(uint32_t viewIndex) override {
         if (qvfr_)
@@ -234,6 +336,9 @@ private:
     bool qvfr_ = false;
     simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
     bool glareAtLaunch_ = true;
+    // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
+    simqvfr::DlssSettings dlssSettings_;
+    bool dlssPossible_ = false, dlssRefusedLogged_ = false;
 };
 
 }  // namespace

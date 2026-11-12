@@ -99,21 +99,23 @@ int main() {
         return 1;
     }
     lmu::mvr_set_two_views(&fake_two_views);
-    // The hooks are on every function the context's ten entries hold (with multithread protection off and on, idle and
-    // busy), in d3d11's code; DrawIndexed's eleventh only with the focus post (lmu_focus_post_test). The context's vtable
-    // pointer as it was (its entries are d3d11's to rewrite).
+    // The hooks are on every function the context's eleven entries hold (with multithread protection off and on, idle
+    // and busy), in d3d11's code: ten, and PSSetShader's with texture sharpening possible (mvr_mip_bias_hooks, before the
+    // install); DrawIndexed's only with the focus post (lmu_focus_post_test). The context's vtable pointer as it was (its
+    // entries are d3d11's to rewrite).
+    lmu::mvr_mip_bias_hooks(true);
     void** const ownVtable = *reinterpret_cast<void***>(context.Get());
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
     check(*reinterpret_cast<void***>(context.Get()) == ownVtable, "the context's vtable pointer as it was");
     char what[200];
     const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
     std::snprintf(what, sizeof(what),
-                  "%llu functions hooked for %llu entries (ten: no DrawIndexed without the focus post; two each at least: "
-                  "protection off and on), %llu of them ResolveSubresource's",
+                  "%llu functions hooked for %llu entries (eleven with PSSetShader: no DrawIndexed without the focus post; "
+                  "two each at least: protection off and on), %llu of them ResolveSubresource's",
                   static_cast<unsigned long long>(installed.contextFunctions),
                   static_cast<unsigned long long>(installed.contextEntries),
                   static_cast<unsigned long long>(installed.resolveFunctions));
-    check(installed.contextEntries == 10 && installed.contextFunctions >= 20 && installed.resolveFunctions >= 2, what);
+    check(installed.contextEntries == 11 && installed.contextFunctions >= 22 && installed.resolveFunctions >= 2, what);
     ComPtr<ID3D11DeviceContext4> context4;
     check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
           "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");
@@ -224,6 +226,39 @@ int main() {
           "pass 2 (renders the focus view itself): the game's state");
     lmu::mvr_pass_end(2);
 
+    {  // DLSS super resolution on the focus view (MvrPassView::focusRenderW): the scene draws it at its render size in its
+       // corner; once the pass's post begins (its resolve) the focus viewport is its region again, as the post reads it.
+        lmu::MvrPassView reduced = view;
+        reduced.focusRenderW = 30;
+        reduced.focusRenderH = 25;
+        context->VSSetShader(a.Get(), nullptr, 0);
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+        context->RSSetViewports(1, &eye);
+        lmu::mvr_pass_begin(0, &reduced, false);
+        n = viewports(context.Get(), vps);
+        check(bound_vs(context.Get()) == twin.Get() && n == 2 && same(vps[0], 0, 0, 100, 80) && same(vps[1], 100, 0, 30, 25),
+              "super resolution: the scene's focus viewport at the render size (100,0 30x25)");
+        const D3D11_RECT whole = {0, 0, 100, 80};
+        context->RSSetScissorRects(1, &whole);
+        rn = 16;
+        context->RSGetScissorRects(&rn, rects);
+        check(rn == 2 && rects[1].left == 100 && rects[1].top == 0 && rects[1].right == 130 && rects[1].bottom == 25,
+              "super resolution: the scissor mapped onto it (100,0 - 130,25)");
+        D3D11_TEXTURE2D_DESC md = {64, 64, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {4, 0}, D3D11_USAGE_DEFAULT,
+                                   D3D11_BIND_RENDER_TARGET, 0, 0};
+        ComPtr<ID3D11Texture2D> ms, single;
+        device->CreateTexture2D(&md, nullptr, &ms);
+        md.SampleDesc.Count = 1;
+        device->CreateTexture2D(&md, nullptr, &single);
+        context->ResolveSubresource(single.Get(), 0, ms.Get(), 0, DXGI_FORMAT_R16G16B16A16_FLOAT);
+        context->RSSetViewports(1, &eye);
+        n = viewports(context.Get(), vps);
+        check(ms && single && n == 2 && same(vps[1], 100, 0, 60, 50),
+              "super resolution: after the resolve (the post) the focus viewport at its size (100,0 60x50)");
+        lmu::mvr_pass_end(0);
+        context->RSSetScissorRects(0, nullptr);
+    }
+
     {  // Multithread protection on: d3d11 puts other functions in the context's entries; the hooks are on those too.
         ComPtr<ID3D11Multithread> mt;
         check(SUCCEEDED(context.As(&mt)), "the context's multithread protection");
@@ -285,6 +320,97 @@ int main() {
         lmu::mvr_pass_end(0);
         b->SetPrivateDataInterface(lmu::kMvrTwinGuid, nullptr);
         lmu::mvr_twins_changed();
+    }
+
+    {  // Texture sharpening: the game's pixel shader swapped for its mip bias twin exactly while two views are on in a
+       // pass with a bias; the focus viewport and the two biases in pixel shader buffer 13.
+        const auto pixel_shader = [&](const char* value) {
+            const std::string source = std::string("float4 main() : SV_Target { return ") + value + "; }";
+            ComPtr<ID3DBlob> code, errors;
+            ComPtr<ID3D11PixelShader> ps;
+            if (SUCCEEDED(D3DCompile(source.data(), source.size(), "p", nullptr, nullptr, "main", "ps_5_0", 0, 0, &code,
+                                     &errors)))
+                device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &ps);
+            return ps;
+        };
+        const auto bound_ps = [&] {
+            ID3D11PixelShader* ps = nullptr;
+            context->PSGetShader(&ps, nullptr, nullptr);
+            if (ps)
+                ps->Release();
+            return ps;
+        };
+        ComPtr<ID3D11PixelShader> gamePs = pixel_shader("1"), psTwin = pixel_shader("2"), plainPs = pixel_shader("3");
+        gamePs->SetPrivateDataInterface(lmu::kMvrMipBiasTwinGuid, psTwin.Get());
+        context->RSSetViewports(1, &eye);
+        context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
+        context->VSSetShader(a.Get(), nullptr, 0);
+        context->PSSetShader(gamePs.Get(), nullptr, 0);
+        check(bound_ps() == gamePs.Get(), "texture sharpening: outside a pass, the game's pixel shader");
+        lmu::MvrPassView biased = view;
+        biased.mipBias[0] = -1.0f;   // the eye's
+        biased.mipBias[1] = -1.58f;  // the focus view's
+        lmu::mvr_pass_begin(0, &biased, false);
+        D3D11_BUFFER_DESC sd = {32, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        ComPtr<ID3D11Buffer> staging;
+        device->CreateBuffer(&sd, nullptr, &staging);
+        float constants[8] = {};
+        ID3D11Buffer* bcb = nullptr;
+        context->PSGetConstantBuffers(13, 1, &bcb);
+        if (bcb && staging) {
+            context->CopyResource(staging.Get(), bcb);
+            D3D11_MAPPED_SUBRESOURCE map;
+            if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map))) {
+                std::memcpy(constants, map.pData, sizeof(constants));
+                context->Unmap(staging.Get(), 0);
+            }
+        }
+        if (bcb)
+            bcb->Release();
+        check(bound_ps() == psTwin.Get() && twoViewsOn == 1, "texture sharpening: a pass with a bias, two views: the twin");
+        std::snprintf(what, sizeof(what), "texture sharpening: buffer 13 = the focus viewport (%.0f,%.0f - %.0f,%.0f), focus "
+                      "bias %.2f, eye bias %.2f", constants[0], constants[1], constants[2], constants[3], constants[4],
+                      constants[5]);
+        check(bcb && constants[0] == 100 && constants[1] == 0 && constants[2] == 160 && constants[3] == 50 &&
+                  std::fabs(constants[4] + 1.58f) < 1e-6f && constants[5] == -1.0f,
+              what);
+        context->PSSetShader(plainPs.Get(), nullptr, 0);
+        check(bound_ps() == plainPs.Get(), "texture sharpening: a pixel shader without a twin: itself");
+        context->PSSetShader(gamePs.Get(), nullptr, 0);
+        check(bound_ps() == psTwin.Get(), "texture sharpening: the game's again: its twin");
+        context->VSSetShader(b.Get(), nullptr, 0);
+        check(bound_ps() == gamePs.Get() && twoViewsOn == 0, "texture sharpening: one view (no vertex twin): the game's pixel shader");
+        context->VSSetShader(a.Get(), nullptr, 0);
+        check(bound_ps() == psTwin.Get(), "texture sharpening: two views again: the twin");
+        // The game unbinds all 14 pixel shader buffers (LMU does, once early in each eye pass): the bias buffer is bound
+        // again as two views go on, and within 16 twin binds while they stay on.
+        const auto bias_cb = [&] {
+            ID3D11Buffer* b = nullptr;
+            context->PSGetConstantBuffers(13, 1, &b);
+            if (b)
+                b->Release();
+            return b;
+        };
+        ID3D11Buffer* const ours = bias_cb();
+        ID3D11Buffer* const none[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+        context->PSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, none);
+        check(ours && bias_cb() == nullptr, "texture sharpening: the game unbinds all 14 pixel shader buffers");
+        context->VSSetShader(b.Get(), nullptr, 0);
+        context->VSSetShader(a.Get(), nullptr, 0);
+        check(bias_cb() == ours, "texture sharpening: bound again as two views go on");
+        context->PSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, none);
+        const uint64_t lostBefore = lmu::mvr_pass_stats().biasCbLost;
+        for (int i = 0; i < 16; ++i)
+            context->PSSetShader(gamePs.Get(), nullptr, 0);
+        check(bias_cb() == ours && lmu::mvr_pass_stats().biasCbLost == lostBefore + 1,
+              "texture sharpening: unbound while two views stay on: found within 16 twin binds, bound again, counted");
+        lmu::mvr_pass_end(0);
+        check(bound_ps() == gamePs.Get(), "texture sharpening: pass end: the game's pixel shader");
+        lmu::mvr_pass_begin(0, &view, false);  // no bias: two views, the game's pixel shader
+        check(bound_ps() == gamePs.Get() && twoViewsOn == 1, "texture sharpening: a pass without a bias: the game's pixel shader");
+        lmu::mvr_pass_end(0);
+        const lmu::MvrPassStats ps = lmu::mvr_pass_stats();
+        check(ps.biasPasses == 1 && ps.psTwinBinds >= 3, "texture sharpening: counted (one pass with a bias, its twin binds)");
     }
 
     {  // Gate D: pass 0's resolve keeps its focus region; pass 2's resolve becomes a copy of it into the top-left.

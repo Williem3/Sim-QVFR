@@ -18,6 +18,7 @@
 
 #include <guiddef.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -40,6 +41,12 @@ struct MvrProbeStats {
     uint64_t yebisCopies = 0, yebisComposites = 0;  // YEBIS's copy and composite pixel shaders marked (yebis_shaders.h)
     uint64_t finalBlits = 0;  // the game's final blit pixel shaders marked (yebis_shaders.h)
     uint64_t lensMasks = 0, vruiPanels = 0;  // the lens mask's and VR UI panel's vertex shaders marked (VsRole)
+    // Pixel shaders (lmu_mvr): created, given a mip bias twin (dxbc::add_focus_mip_bias; texture sharpening), and why not.
+    uint64_t pixelCreated = 0, pixelTwinned = 0, pixelRepeats = 0, pixelFailed = 0;
+    std::map<std::string, uint64_t> pixelRefused;
+    // Their slot twins (lmu_car_vectors): made, of a mip bias twin too, not created; why refused.
+    uint64_t slotTwinned = 0, slotBiasTwinned = 0, slotFailed = 0;
+    std::map<std::string, uint64_t> slotRefused;
     double convertMs = 0, maxConvertMs = 0, nvapiMs = 0, instancedMs = 0;
     std::map<std::string, uint64_t> refused;           // why add_second_view didn't convert a shader, and how often
     std::map<std::string, uint64_t> instancedRefused;  // add_instanced_view's
@@ -49,6 +56,17 @@ struct MvrProbeStats {
 // single-pass stereo's and the instanced one.
 inline constexpr GUID kMvrTwinGuid = {0x6d1c4a52, 0x3b8e, 0x4f61, {0x9a, 0x27, 0x5e, 0x10, 0xc3, 0x7b, 0x44, 0xd9}};
 inline constexpr GUID kMvrInstancedTwinGuid = {0x2f7c9e14, 0x58a1, 0x4b3d, {0x8e, 0x06, 0xc1, 0x9d, 0x4a, 0x72, 0x35, 0xb0}};
+// A game pixel shader's twin whose plain samples take a mip bias in the focus view's viewport and another outside it
+// (engine/dxbc_patch.h add_focus_mip_bias; an ID3D11PixelShader): texture sharpening under DLSS (mvr_pass.cpp).
+inline constexpr GUID kMvrMipBiasTwinGuid = {0x5a8e2c71, 0x0d4f, 0x4b96, {0xb1, 0x3e, 0x72, 0x9c, 0x05, 0xd8, 0x6e, 0x2a}};
+// Other cars' motion vectors (lmu_car_track, car_motion.h): where a game vertex shader reads its `worldMatrix`, as two
+// UINTs: the constant buffer slot and the byte offset in it (from the shader's reflection; none when it reads none).
+inline constexpr GUID kVsWorldMatrixGuid = {0x3e9b7a14, 0x6c25, 0x4f81, {0x8d, 0x47, 0xa2, 0x19, 0xe5, 0x6b, 0x0c, 0x73}};
+// Other cars' motion vectors, stage 3 (lmu_car_vectors; engine/dxbc_patch.h add_slot_output): a game pixel shader's twin
+// that also writes the draw's car part slot to render target 1, and the same made of its mip bias twin (ID3D11PixelShader
+// each; texture sharpening with the slots).
+inline constexpr GUID kMvrSlotTwinGuid = {0x7c41d2e9, 0x1b5a, 0x4e0f, {0x9d, 0x33, 0x58, 0xa6, 0x2e, 0xc1, 0x07, 0x94}};
+inline constexpr GUID kMvrSlotBiasTwinGuid = {0x2a96f0c3, 0x84d7, 0x4b21, {0xae, 0x15, 0x6f, 0x0b, 0xd2, 0x39, 0x7e, 0x58}};
 // An input layout with per-instance data: its twin with every per-instance step rate doubled (an ID3D11InputLayout).
 inline constexpr GUID kMvrInstancedLayoutGuid = {0x91e3b6d0, 0x7c42, 0x4e85, {0xa3, 0x5f, 0x0d, 0x28, 0xe6, 0x19, 0xbc, 0x47}};
 
@@ -80,5 +98,10 @@ uint64_t mvr_probe_instanced_layouts();
 // Counts the vertex shaders created on the hooked device (any thread): a shader looked up by its address before may be
 // a new one since (mvr_pass.cpp's twin cache).
 uint64_t mvr_shader_generation();
+// Likewise for the pixel shaders (mvr_pass.cpp's mip bias twin cache).
+uint64_t mvr_pixel_shader_generation();
+// Where a vertex shader's bytecode reads its `worldMatrix` (the constant buffer slot and byte offset, from its
+// reflection; kVsWorldMatrixGuid holds the same). False: it reads none.
+bool mvr_world_matrix_place(const void* code, size_t size, unsigned& slot, unsigned& offset);
 
 }  // namespace lmu

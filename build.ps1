@@ -9,7 +9,8 @@ param([switch]$Test,
       [string]$Filter = '',
       [string]$Target = '',
       [int]$Jobs = 0,
-      [string]$BuildDirectory = '')
+      [string]$BuildDirectory = '',
+      [switch]$NoScan)
 $ErrorActionPreference = 'Stop'
 $repo = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 if (-not $BuildDirectory) { $BuildDirectory = Join-Path $repo 'build' }
@@ -51,6 +52,12 @@ try {
         if ($Filter) { $arguments += @('-R', $Filter) }
         ctest @arguments
         if ($LASTEXITCODE -ne 0) { throw "tests failed (exit $LASTEXITCODE)" }
+    }
+    # Windows Defender's verdict on what was built (tools\defender_scan.ps1): a flagged binary fails the build, false
+    # positive or not. -NoScan skips it (then run the script before committing).
+    if (-not $NoScan) {
+        & (Join-Path $repo 'tools\defender_scan.ps1') -Folder (Join-Path $BuildDirectory 'Release')
+        if ($LASTEXITCODE -ne 0) { throw 'Windows Defender flagged a binary of the build (defender_scan above)' }
     }
 } finally {
     $self.PriorityClass = $priority

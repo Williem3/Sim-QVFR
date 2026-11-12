@@ -19,3 +19,13 @@ docs/recon-xplane.md
 # ... and any later game's (docs/recon-<game>.md), or the old single file
 docs/recon-*.md
 docs/recon.md
+
+# NVIDIA's DLSS SDK (NGX headers and libraries, nvngx_*.dll, its licence): local only, never committed or published.
+# Builds take it from NGX_SDK_DIR (CMake) or package.ps1 -NgxSdk; inside a checkout its place is
+# third_party/nvidia-dlss-sdk/ (CMake finds it there). Its files are ignored anywhere else in the tree too.
+third_party/nvidia-dlss-sdk/
+third_party/ngx-sdk/
+nvsdk_ngx*.h
+nvsdk_ngx*.lib
+nvngx_*.dll
+NVIDIA-RTX-SDKs-LICENSE.txt

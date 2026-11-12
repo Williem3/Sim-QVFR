@@ -736,6 +736,224 @@ void real_shaders(Gpu& g, const char* folder) {
     check(files > 0 && created == converted && matched + skipped == created, what);
 }
 
+// ---- add_focus_mip_bias: a pixel shader's samples biased inside a rectangle ----
+
+// A 256x128 texture whose mip k is all one colour (R = 40 k + 20, G = 200 - 40 k), point-filtered, over a 64x32 target:
+// four texels a pixel each way, so mip 2 (R 100); with a bias of -1, mip 1 (R 60).
+const char* kMipVs = R"(
+struct O { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+O main(uint id : SV_VertexID) {
+    O o;
+    o.uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(o.uv * float2(2, -2) + float2(-1, 1), 0, 1);
+    return o;
+}
+)";
+const char* kMipPsHead = R"(
+Texture2D t : register(t0);
+SamplerState s : register(s0);
+SamplerComparisonState cs : register(s1);
+struct O { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+)";
+uint8_t mip_red(int level) { return static_cast<uint8_t>(40 * level + 20); }
+
+struct MipScene {
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    ComPtr<ID3D11SamplerState> point;
+    ComPtr<ID3D11Texture2D> target, staging;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    bool ok = false;
+};
+
+MipScene mip_scene(Gpu& g) {
+    MipScene m;
+    const std::vector<uint8_t> vsCode = compile(kMipVs, "vs_4_0");
+    D3D11_TEXTURE2D_DESC td = {256, 128, 0, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                               D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    std::vector<std::vector<uint32_t>> levels;
+    levels.reserve(16);  // init holds pointers into them
+    std::vector<D3D11_SUBRESOURCE_DATA> init;
+    for (UINT w = 256, h = 128, level = 0; w || h; w /= 2, h /= 2, ++level) {
+        const UINT lw = std::max(w, 1u), lh = std::max(h, 1u);
+        const uint32_t green = static_cast<uint32_t>(200 - 20 * static_cast<int>(level)) & 0xff;
+        const uint32_t rgba = mip_red(static_cast<int>(level)) | (green << 8) | 0xff000000u;
+        levels.emplace_back(size_t{lw} * lh, rgba);
+        init.push_back({levels.back().data(), lw * 4, 0});
+        if (w <= 1 && h <= 1)
+            break;
+    }
+    td.MipLevels = static_cast<UINT>(init.size());
+    ComPtr<ID3D11Texture2D> texture;
+    D3D11_SAMPLER_DESC sd = {};
+    sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    D3D11_TEXTURE2D_DESC rd = {64, 32, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D11_USAGE_DEFAULT,
+                               D3D11_BIND_RENDER_TARGET, 0, 0};
+    if (vsCode.empty() || FAILED(g.device->CreateVertexShader(vsCode.data(), vsCode.size(), nullptr, &m.vs)) ||
+        FAILED(g.device->CreateTexture2D(&td, init.data(), &texture)) ||
+        FAILED(g.device->CreateShaderResourceView(texture.Get(), nullptr, &m.srv)) ||
+        FAILED(g.device->CreateSamplerState(&sd, &m.point)) || FAILED(g.device->CreateTexture2D(&rd, nullptr, &m.target)) ||
+        FAILED(g.device->CreateRenderTargetView(m.target.Get(), nullptr, &m.rtv)))
+        return m;
+    rd.Usage = D3D11_USAGE_STAGING;
+    rd.BindFlags = 0;
+    rd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    m.ok = SUCCEEDED(g.device->CreateTexture2D(&rd, nullptr, &m.staging));
+    return m;
+}
+
+// Draws the target full through `ps` with b13 = (rect, (inside, outside)); each pixel's RGBA (64x32), empty when not
+// drawn.
+std::vector<uint8_t> mip_draw(Gpu& g, MipScene& m, const std::vector<uint8_t>& ps, const float (&rect)[4], float inside,
+                              float outside = 0) {
+    ComPtr<ID3D11PixelShader> shader;
+    if (!m.ok || FAILED(g.device->CreatePixelShader(ps.data(), ps.size(), nullptr, &shader)))
+        return {};
+    const float constants[8] = {rect[0], rect[1], rect[2], rect[3], inside, outside, 0, 0};
+    ComPtr<ID3D11Buffer> cb = constant_buffer(g, constants, sizeof(constants));
+    const D3D11_VIEWPORT viewport = {0, 0, 64, 32, 0, 1};
+    const float clear[4] = {0, 0, 0, 0};
+    g.context->ClearRenderTargetView(m.rtv.Get(), clear);
+    g.context->OMSetRenderTargets(1, m.rtv.GetAddressOf(), nullptr);
+    g.context->RSSetViewports(1, &viewport);
+    g.context->IASetInputLayout(nullptr);
+    g.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g.context->VSSetShader(m.vs.Get(), nullptr, 0);
+    g.context->PSSetShader(shader.Get(), nullptr, 0);
+    g.context->PSSetShaderResources(0, 1, m.srv.GetAddressOf());
+    g.context->PSSetSamplers(0, 1, m.point.GetAddressOf());
+    g.context->PSSetConstantBuffers(13, 1, cb.GetAddressOf());
+    g.context->Draw(3, 0);
+    g.context->CopyResource(m.staging.Get(), m.target.Get());
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(g.context->Map(m.staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
+        return {};
+    std::vector<uint8_t> red(64 * 32 * 4);
+    for (int y = 0; y < 32; ++y)
+        std::memcpy(red.data() + y * 64 * 4, static_cast<const uint8_t*>(map.pData) + y * map.RowPitch, 64 * 4);
+    g.context->Unmap(m.staging.Get(), 0);
+    return red;
+}
+
+// Pixels whose channel `c` isn't `want`, in x0 <= x < x1 (all rows).
+int off(const std::vector<uint8_t>& px, int x0, int x1, int c, uint8_t want) {
+    int n = 0;
+    for (int y = 0; y < 32; ++y)
+        for (int x = x0; x < x1; ++x)
+            n += px[(y * 64 + x) * 4 + c] != want;
+    return n;
+}
+
+// One pixel shader: the original everywhere mip 2; converted, mip 1 inside the right half (x >= 32) and mip 2 outside;
+// with an empty rectangle, mip 2 everywhere; with -2 inside and -1 outside, mip 0 and mip 1. `levelChannel` (blue): a
+// SampleLevel at mip 3 the bias mustn't touch.
+void mip_case(Gpu& g, MipScene& m, const char* name, const char* body, const char* profile, int samples, int leftAlone,
+              bool levelChannel = false) {
+    const std::string source = std::string(kMipPsHead) + body;
+    const std::vector<uint8_t> original = compile(source.c_str(), profile);
+    const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(original.data(), original.size());
+    const std::string what = std::string("focus mip bias, ") + name;
+    if (original.empty() || b.bytecode.empty()) {
+        check(false, (what + ": converted (" + b.error + ")").c_str());
+        return;
+    }
+    check(dxbc::checksum_ok(b.bytecode.data(), b.bytecode.size()) && b.samples == samples && b.leftAlone == leftAlone,
+          (what + ": converted, checksum, " + std::to_string(b.samples) + " biased, " + std::to_string(b.leftAlone) +
+           " left alone").c_str());
+    const float right[4] = {32, 0, 64, 32}, none[4] = {0, 0, 0, 0};
+    const std::vector<uint8_t> before = mip_draw(g, m, original, right, -1);
+    const std::vector<uint8_t> after = mip_draw(g, m, b.bytecode, right, -1);
+    const std::vector<uint8_t> empty = mip_draw(g, m, b.bytecode, none, -1);
+    const std::vector<uint8_t> both = mip_draw(g, m, b.bytecode, right, -2, -1);
+    const bool drawn = !before.empty() && !after.empty() && !empty.empty() && !both.empty();
+    check(drawn && off(before, 0, 64, 0, mip_red(2)) == 0, (what + ": the original samples mip 2 everywhere").c_str());
+    check(drawn && off(after, 0, 32, 0, mip_red(2)) == 0 && off(after, 32, 64, 0, mip_red(1)) == 0,
+          (what + ": converted, mip 1 inside the rectangle and mip 2 outside").c_str());
+    check(drawn && off(empty, 0, 64, 0, mip_red(2)) == 0, (what + ": an empty rectangle changes nothing").c_str());
+    check(drawn && off(both, 0, 32, 0, mip_red(1)) == 0 && off(both, 32, 64, 0, mip_red(0)) == 0,
+          (what + ": -2 inside and -1 outside, mip 0 and mip 1").c_str());
+    if (levelChannel)
+        check(drawn && off(after, 0, 64, 2, mip_red(3)) == 0, (what + ": SampleLevel stays at mip 3").c_str());
+}
+
+void mip_bias_cases(Gpu& g) {
+    MipScene m = mip_scene(g);
+    check(m.ok, "focus mip bias: the mip texture and target");
+    mip_case(g, m, "ps_4_0 SV_Position not read (as LMU's)", "float4 main(O i) : SV_Target { return t.Sample(s, i.uv); }",
+             "ps_4_0", 1, 0);
+    mip_case(g, m, "ps_4_0 SV_Position.x read",
+             "float4 main(O i) : SV_Target { return t.Sample(s, i.uv) + (i.pos.x < -1 ? 1 : 0); }", "ps_4_0", 1, 0);
+    mip_case(g, m, "ps_5_0 sample with an offset",
+             "float4 main(O i) : SV_Target { return t.Sample(s, i.uv, int2(1, 0)); }", "ps_5_0", 1, 0);
+    mip_case(g, m, "ps_4_0 two samples, a SampleLevel",
+             "float4 main(O i) : SV_Target { float4 a = t.Sample(s, i.uv); float4 c = t.Sample(s, i.uv.yx);"
+             " return float4(a.r, c.g, t.SampleLevel(s, i.uv, 3).r, 1); }",
+             "ps_4_0", 2, 1, true);
+
+    const auto refused = [&](const char* name, const char* body, const char* profile, const char* error) {
+        const std::string source = std::string(kMipPsHead) + body;
+        const std::vector<uint8_t> code = compile(source.c_str(), profile);
+        const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(code.data(), code.size());
+        check(!code.empty() && b.bytecode.empty() && b.error == error,
+              (std::string("focus mip bias refuses ") + name + " (" + b.error + ")").c_str());
+    };
+    refused("a shader without SV_Position", "float4 main(float2 uv : TEXCOORD0) : SV_Target { return t.Sample(s, uv); }",
+            "ps_4_0", "no SV_Position input");
+    refused("one with nothing to bias", "float4 main(O i) : SV_Target { return t.SampleLevel(s, i.uv, 1); }", "ps_4_0",
+            "no plain samples");
+    refused("one using b13", "cbuffer C : register(b13) { float4 k; } float4 main(O i) : SV_Target { return t.Sample(s, i.uv) * k; }",
+            "ps_4_0", "the bias's constant buffer slot is in use");
+    const std::vector<uint8_t> vs = compile(kMipVs, "vs_4_0");
+    const dxbc::FocusMipBias v = dxbc::add_focus_mip_bias(vs.data(), vs.size());
+    check(v.bytecode.empty() && !v.error.empty(), "focus mip bias refuses a vertex shader");
+}
+
+// A game's pixel shaders (PS_*.dxbc, e.g. tools/rdc/view_census.py RDC_PS_BYTECODE; local only): each converted or
+// refused for a reason, and every converted one created by the device.
+void real_pixel_shaders(Gpu& g, const char* folder) {
+    namespace fs = std::filesystem;
+    unsigned files = 0, converted = 0, created = 0, samples = 0;
+    std::map<std::string, unsigned> refused;
+    std::vector<std::string> failed;
+    for (const auto& entry : fs::directory_iterator(folder)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("PS_", 0) != 0 || entry.path().extension() != ".dxbc")
+            continue;
+        ++files;
+        std::vector<uint8_t> code;
+        if (FILE* f = nullptr; _wfopen_s(&f, entry.path().c_str(), L"rb") == 0 && f) {
+            std::fseek(f, 0, SEEK_END);
+            code.resize(static_cast<size_t>(std::ftell(f)));
+            std::fseek(f, 0, SEEK_SET);
+            code.resize(std::fread(code.data(), 1, code.size(), f));
+            std::fclose(f);
+        }
+        const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(code.data(), code.size());
+        if (b.bytecode.empty()) {
+            ++refused[b.error];
+            continue;
+        }
+        ++converted;
+        samples += static_cast<unsigned>(b.samples);
+        ComPtr<ID3D11PixelShader> ps;
+        if (SUCCEEDED(g.device->CreatePixelShader(b.bytecode.data(), b.bytecode.size(), nullptr, &ps)))
+            ++created;
+        else
+            failed.push_back(name);
+    }
+    if (!files)
+        return;
+    std::printf("     game pixel shaders: %u, converted %u (%u samples biased), created %u\n", files, converted, samples,
+                created);
+    for (const auto& [why, n] : refused)
+        std::printf("     refused %u: %s\n", n, why.c_str());
+    for (const std::string& f : failed)
+        std::printf("     not created: %s\n", f.c_str());
+    check(converted > 0 && created == converted, "focus mip bias: every converted game pixel shader is created");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -782,8 +1000,11 @@ int main(int argc, char** argv) {
     check(ps.bytecode.empty() && !ps.error.empty(), "a pixel shader is refused");
 
     instanced_cases(g, plain, pixel);
-    if (argc > 1)  // a game's vertex shaders (logs\shaders of a probe run with lmu_mvr_dump=1): every one both ways
-        real_shaders(g, argv[1]);
+    mip_bias_cases(g);
+    if (argc > 1) {  // a game's shaders: vertex ones (logs\shaders of a probe run with lmu_mvr_dump=1) both ways, pixel
+        real_shaders(g, argv[1]);  // ones through the focus mip bias
+        real_pixel_shaders(g, argv[1]);
+    }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;

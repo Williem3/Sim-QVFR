@@ -44,6 +44,11 @@ enum Ctl {
     kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset, kCheekyFocusPreset,
     kCheekySupersampling, kCheekyMotionFix, kCheekyNr, kCheekyNrPreset, kCheekyNrPasses,
     kFgOn, kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder,
+    // Sim-QVFR's own DLSS ([dlss], DLSS pane; a game with GameFeatures::sideLoadedDlss): on, another nvngx_dlss.dll's
+    // folder (Choose…, Use included), the focus views' mode and preset, the eyes' preset, texture sharpening, the other
+    // cars' motion.
+    kDlssOn, kDlssFolder, kDlssIncluded, kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
+    kDlssCarVectors,
     // The performance overlay ([osd], Headset menu pane).
     kOsdOn, kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel,
     // Multi-view rendering ([experiment] multi_view, Resolution pane): NVIDIA's or Sim-QVFR's own.
@@ -314,6 +319,9 @@ std::wstring game_name();
 std::wstring short_name();
 bool game_has(bool games::GameFeatures::*feature);
 std::wstring not_yet();
+// pane_dlss.cpp: Sim-QVFR's own DLSS can be used with these settings (a game with it, QVFR, an RTX card, multi-view
+// rendering); otherwise `why` says what's missing.
+bool own_dlss_available(std::wstring* why = nullptr);
 Color col(uint32_t rgb, float alpha = 1);
 bool layers_dirty();
 
@@ -457,6 +465,8 @@ int game_index();
 void close_popup(bool accept);
 int popup_item_at(float x, float y);
 void choose_cheeky_runtime();
+void choose_dlss_dll();
+void use_included_dlss();
 void choose_game_folder();
 void undo_restore();
 

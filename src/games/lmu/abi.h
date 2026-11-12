@@ -23,6 +23,8 @@ inline constexpr std::uintptr_t kSetViewParams = 0x5ad9d0;
 inline constexpr std::size_t kParamsEye = 0x0;   // int
 inline constexpr std::size_t kParamsNear = 0x8;  // float
 inline constexpr std::size_t kParamsFar = 0xc;   // float
+inline constexpr std::size_t kParamsView = 0x2c;        // 4x4: the view matrix SetViewParams hands YEBIS (row vectors)
+inline constexpr std::size_t kParamsProjection = 0x94;  // 4x4: the projection it hands YEBIS
 
 // The VR eye loop in the game's frame: its head hands the camera update the eye (edi), its tail counts to 2. [Eye loop]
 inline constexpr std::uintptr_t kEyeLoopHead = 0xcd15f0;

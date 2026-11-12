@@ -10,7 +10,8 @@ targets): draws, instanced draws, distinct vertex and pixel shaders, hull/domain
 the screen position (SV_Position) or sample a depth target. Then the vertex shaders' outputs, the constant buffers both
 eyes bind at each pass's first draw with every value that differs between the eyes (named from the shader reflection
 when it has names), and the API calls each eye makes. RDC_DISASM (optional): a folder for the busiest shaders' text;
-RDC_BYTECODE (optional): a folder for every vertex shader's bytecode (the game's own code: keep it out of the repository).
+RDC_BYTECODE (optional): a folder for every vertex shader's bytecode, RDC_PS_BYTECODE (optional) one for every pixel
+shader's (the game's own code: keep both out of the repository).
 """
 import collections
 import os
@@ -33,6 +34,7 @@ def spans_text(spans):
     return "+".join(f"{first}-{last}" for first, last in spans)
 DISASM = os.environ.get("RDC_DISASM", "")
 BYTECODE = os.environ.get("RDC_BYTECODE", "")  # optional: a folder for every vertex shader's bytecode
+PS_BYTECODE = os.environ.get("RDC_PS_BYTECODE", "")  # optional: a folder for every pixel shader's bytecode
 out = open(OUT, "w", encoding="utf-8")
 
 STAGES = [("VS", rd.ShaderStage.Vertex), ("HS", rd.ShaderStage.Hull), ("DS", rd.ShaderStage.Domain),
@@ -247,14 +249,15 @@ def run():
             for sid, s in sorted(group, key=lambda x: -x[1]["uses"])[:6]:
                 with open(os.path.join(DISASM, f"{sname}_{sid}_{s['uses']}.txt"), "w", encoding="utf-8") as f:
                     f.write(s["text"] or "")
-        if BYTECODE and sname == "VS":  # every vertex shader's DXBC, for offline conversion tests (the game's code:
-            os.makedirs(BYTECODE, exist_ok=True)  # keep it local, never in the repository)
+        folder = BYTECODE if sname == "VS" else PS_BYTECODE if sname == "PS" else ""
+        if folder:  # every vertex or pixel shader's DXBC, for offline conversion tests (the game's code: keep it local,
+            os.makedirs(folder, exist_ok=True)  # never in the repository)
             for sid, s in group:
                 try:
-                    with open(os.path.join(BYTECODE, f"VS_{sid}_{s['uses']}.dxbc"), "wb") as f:
+                    with open(os.path.join(folder, f"{sname}_{sid}_{s['uses']}.dxbc"), "wb") as f:
                         f.write(bytes(s["refl"].rawBytes))
                 except Exception as e:
-                    p(f"- bytecode of VS {sid}: {e!r}")
+                    p(f"- bytecode of {sname} {sid}: {e!r}")
 
     p("## API calls per eye\n")
     keys = sorted(set().union(*(e["calls"].keys() for e in eyes)), key=lambda k: -eyes[0]["calls"].get(k, 0))

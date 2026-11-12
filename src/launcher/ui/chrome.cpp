@@ -64,10 +64,22 @@ static_assert(std::size(kItems) == kPanes, "a sidebar item for every pane");
 
 }  // namespace
 
-// A pane the sidebar lists for this game: Foveated DLSS only where the game has it.
+// A pane the sidebar lists for this game: the DLSS pane only where the game has Cheeky's or Sim-QVFR's own.
 bool pane_shown(int pane) {
-    return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss);
+    return pane != static_cast<int>(Pane::Dlss) || game_has(&games::GameFeatures::foveatedDlss) ||
+           game_has(&games::GameFeatures::sideLoadedDlss);
 }
+
+namespace {
+
+// A pane's name in the sidebar and as its title: the DLSS pane is "DLSS" for a game with Sim-QVFR's own.
+const wchar_t* pane_label(int pane) {
+    if (pane == static_cast<int>(Pane::Dlss) && game_has(&games::GameFeatures::sideLoadedDlss))
+        return L"DLSS";
+    return kItems[pane].label;
+}
+
+}  // namespace
 
 // The shown pane nearest `pane` in `step`'s direction (-1 or 1), or `pane` itself if shown; `from` if none.
 int shown_pane(int pane, int step, int from) {
@@ -117,7 +129,10 @@ std::wstring pane_description(Pane pane) {
     }
     case Pane::Foveation: return L"The size, shape and movement of the sharp focus region.";
     case Pane::Overlay: return L"An outline in the headset that shows where the focus region is.";
-    case Pane::Dlss: return L"Cheaper outer views, a sharper centre and frame generation, with Cheeky Foveated DLSS.";
+    case Pane::Dlss:
+        return game_has(&games::GameFeatures::sideLoadedDlss)
+                   ? L"NVIDIA’s DLSS on the views, run by Sim-QVFR: smooth edges everywhere, a cheaper focus region."
+                   : L"Cheaper outer views, a sharper centre and frame generation, with Cheeky Foveated DLSS.";
     case Pane::Menu: return L"Where the settings menu and the performance overlay float in your view.";
     case Pane::Hotkeys: return L"The keys and wheel buttons for the headset menu and the in-game toggles.";
     case Pane::Games: return L"Which games have a tab, and each game’s colour.";
@@ -300,7 +315,7 @@ void sidebar(float top, float bottom) {
             else if (pointer_in(row))
                 cv.fill(row, col(app.dark ? 0xffffff : 0, 0.05f), t::kRadiusControl);
             sidebar_icon(i, {row.x + 10, row.y + (rowH - 16) / 2, 16, 16}, col(selected ? app.c->accent : app.c->label_muted));
-            cv.text(kItems[i].label, selected ? kBodyStrong : kBodyMedium, {row.x + 10 + 16 + 10, row.y, row.w - 64, rowH},
+            cv.text(pane_label(i), selected ? kBodyStrong : kBodyMedium, {row.x + 10 + 16 + 10, row.y, row.w - 64, rowH},
                     col(selected ? app.c->label : app.c->heading));
             // A mark on Foveation without an eye tracker, and on Launch checks with a problem (red) or warning.
             const bool checksMark = i == static_cast<int>(Pane::Checks) && worst != CheckTone::Ok;
@@ -327,7 +342,7 @@ float pane_header(float x, float y, float w, bool draw) {
     const float dh = app.canvas.measure_height(desc, t::kBody, w);
     if (draw) {
         app.canvas.text(group_of(static_cast<int>(app.pane)), {12, 16, 600, false}, {x, y, w, 16}, col(app.c->label_muted));
-        app.canvas.text(kItems[static_cast<int>(app.pane)].label, t::kLargeTitle, {x, y + 20, w, t::kLargeTitle.lineHeight},
+        app.canvas.text(pane_label(static_cast<int>(app.pane)), t::kLargeTitle, {x, y + 20, w, t::kLargeTitle.lineHeight},
                         col(app.c->label));
         app.canvas.text(desc, t::kBody, {x, y + 20 + t::kLargeTitle.lineHeight + 4, w, dh + 2}, col(app.c->label_secondary),
                         Align::Leading, false, true);

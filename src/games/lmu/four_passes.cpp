@@ -25,6 +25,10 @@
 #include "../../quad/d3d11_view_resample.h"
 #include "../../sha256_file.h"
 #include "abi.h"
+#include "../../engine/dlss_math.h"
+#include "../../engine/dlss_views.h"
+#include "../../engine/ngx_dlss.h"
+#include "../../engine/nvapi_gpus.h"
 #include "focus_math.h"
 #include "game.h"
 #include "glare_share.h"
@@ -339,6 +343,13 @@ bool focus_matrices(int eye, float (&eyeM)[2][16], float (&focusM)[2][16], Focus
     bool ok = true;
     for (int k = 0; k < 2; ++k)
         ok = focus_projection(eyeM[k], fx, fy, cx, cy, box[k], focusM[k]) && ok;
+    // DLAA (engine/dlss_views.h): the eye's projection carries this frame's jitter and its DLAA output doesn't. The box's eye
+    // tangents and place in the eye's image as the output has them: the frame's record (what the layer composes and
+    // submits the periphery with) and the focus post's glare mapping read the output. The matrices stay as rendered.
+    double shiftX, shiftY;
+    if (ok && simqvfr::dlss_eye_clip_shift(eye, shiftX, shiftY))
+        for (int k = 0; k < 2; ++k)
+            simqvfr::dlss::unshift_box(box[k], shiftX, shiftY);
     if (!ok) {
         if (!shapeLogged) {
             shapeLogged = true;
@@ -785,6 +796,7 @@ bool twoPassFrame = false;
 bool atlasFromFinals = false;
 bool frameFinalsOk = false;          // this frame's focus finals both made (after_two_passes)
 unsigned long long noFinalsRun = 0;  // two-pass frames in a row without them (R5's fallback)
+bool singleSampleRefusalLogged = false;  // MSAA off: the fallback refused (it would hook the game's code), said once
 unsigned finalAt[2][2] = {};  // each focus final's top-left in its eye's texture
 bool finalsMissingLogged = false, twoPassLogged = false, countLogged = false;
 unsigned long long twoPassFrames = 0, finalsMissing = 0;
@@ -792,13 +804,22 @@ unsigned long long twoPassFrames = 0, finalsMissing = 0;
 // lmu_mvr_backend_ab's side of this frame: 0 NVIDIA's single-pass stereo, 1 instancing.
 int backendSide = 0;
 bool backendAbOk = false, backendAbLogged = false;
+// lmu_car_vectors_ab's: 0 with the other cars' motion, 1 without; the cars' motion went on at the install.
+int carSide = 0;
+bool carAbLogged = false, carsOn = false;
+bool car_ab_on() { return cfg.carAb > 0 && carsOn; }
 
 // The A/B side of this frame: lmu_focus_final_ab's (0 two passes, 1 four), lmu_mvr_backend_ab's (0 NVIDIA's, 1
 // instancing) or lmu_mvr_ab's (0 MVR, 1 without).
 int ab_side() {
-    return cfg.focusFinalAb > 0 ? (twoPassFrame ? 0 : 1) : cfg.backendAb > 0 ? backendSide : (mvrFrame ? 0 : 1);
+    return cfg.focusFinalAb > 0 ? (twoPassFrame ? 0 : 1)
+           : cfg.backendAb > 0  ? backendSide
+           : cfg.carAb > 0      ? carSide
+                                : (mvrFrame ? 0 : 1);
 }
-bool ab_run() { return cfg.mvrAb > 0 || cfg.focusFinalAb > 0 || (cfg.backendAb > 0 && backendAbOk); }
+bool ab_run() {
+    return cfg.mvrAb > 0 || cfg.focusFinalAb > 0 || (cfg.backendAb > 0 && backendAbOk) || car_ab_on();
+}
 
 // An A/B run (FourPassesRun::mvrAb): each side's CPU per pass since the last cost line, in thread cycles.
 struct AbWindow {
@@ -894,6 +915,20 @@ void pass_end(int p);
 void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start);
 bool install_mvr(ID3D11Device* device) {
     mvr_focus_replay(cfg.focusReplay);  // before the install: the draws hooked for it only
+    mvr_ui_mips(cfg.uiMips);
+    // Texture sharpening's pixel shader hook only when it's on at launch (no cost otherwise; its three settings are live
+    // from then on) and where DLSS can run: a build with NGX, an NVIDIA GPU that draws two views, the passes the
+    // tracker drives (DLSS's only way in).
+    mvr_mip_bias_hooks(cfg.textureSharpening && simqvfr::ngx::built_in() && simqvfr::nvapi::two_views_gpu() != nullptr &&
+                       cfg.trackerDrives);
+    // Other cars' motion: the player's where DLSS can run (as texture sharpening's), the diagnostics' as they say; their
+    // hooks only when on (the tracking before the slots: they need it).
+    const bool cars = cfg.carTrack && (cfg.carForced || (simqvfr::ngx::built_in() &&
+                                                         simqvfr::nvapi::two_views_gpu() != nullptr && cfg.trackerDrives));
+    mvr_car_track(cars);
+    mvr_car_slots(cars ? cfg.carSlots : 0);
+    mvr_car_slot_images(cars && cfg.carForced);  // a freeze each: never the player's
+    carsOn = cars && cfg.carSlots >= 2;  // the A/B measures what players get (DLSS taking the motion)
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {
         cfg.mvr = false;
@@ -980,6 +1015,17 @@ void mvr_before_pass(int p) {
                     mvr_frame_mode(backendSide);
                 }
             }
+            if (car_ab_on()) {  // the other cars' motion this frame or not (between frames)
+                if (!carAbLogged) {
+                    carAbLogged = true;
+                    simqvfr::logf("lmu mvr: other cars' motion A/B: %d frames with it, then %d without, in turn "
+                                  "(lmu_car_vectors_ab)",
+                                  cfg.carAb, cfg.carAb);
+                }
+                carSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.carAb)) % 2);
+                mvr_car_active(carSide == 0);
+                mvr_frame_mode(carSide);
+            }
             // R5c: the four-pass side as plain QVFR (no multi-view: the branch below for every pass) or gate D.
             if (cfg.focusFinalAbPlain && !twoPassFrame)
                 mvrFrame = false;
@@ -1027,6 +1073,28 @@ void mvr_before_pass(int p) {
         real_recommended(recommended);
         v.focusW = scaled_size(recommended[0], gameScale * shareW);
         v.focusH = scaled_size(recommended[1], gameScale * shareH);
+        // DLSS super resolution on the focus view (engine/dlss_views.h dlss_focus_scale): the scene draws it smaller in
+        // the same corner, DLSS upscales it into its region before the post; 1 (its size) unless that's on and working.
+        const double srScale = simqvfr::dlss_focus_scale();
+        v.focusRenderW = simqvfr::dlss::render_size(v.focusW, srScale);
+        v.focusRenderH = simqvfr::dlss::render_size(v.focusH, srScale);
+        // DLAA (engine/dlss_views.h): the focus view's own jitter, through its remap (in the pixels it's drawn at); the
+        // eye's is in its projection. Both are what the overlays after the post are drawn moved back by
+        // (MvrPassView::overlayShift).
+        const float remapB = v.remap[1], remapD = v.remap[3];
+        simqvfr::dlss_focus_jitter(p, v.focusRenderW, v.focusRenderH, v.remap[1], v.remap[3]);
+        v.overlayShift[1][0] = v.remap[1] - remapB;
+        v.overlayShift[1][1] = v.remap[3] - remapD;
+        simqvfr::dlss_eye_clip_shift(p, v.overlayShift[0][0], v.overlayShift[0][1]);
+        simqvfr::dlss_mip_bias(p, v.mipBias[1], v.mipBias[0]);
+        if ((v.mipBias[0] != 0 || v.mipBias[1] != 0) && !mvr_mip_bias_ready()) {  // turned on while the game runs
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                simqvfr::log_line("lmu mvr: texture sharpening turned on, but it was off at launch (its hook and shader "
+                                  "twins weren't made): it starts at the next launch");
+            }
+        }
         // Side by side in the main targets (the scene's), and the focus final beside the eye's corner of its final.
         unsigned room[2];
         main_size(room);
@@ -1895,7 +1963,8 @@ void copy_aside(int p) {
 // pass_end after them, on the render thread.
 double passWall0 = 0;
 unsigned long long passCpu0 = 0;
-bool trackedEyeLogged = false;
+int trackedEyeLogged = 0;                    // tracked passes that rendered another eye: the first 5 logged
+unsigned long long trackedEyeMismatches = 0;  // and counted
 
 void pass_begin(int p) {
     renderThread = GetCurrentThreadId();
@@ -1959,10 +2028,14 @@ void pass_end(int p) {
         void* renderer = *reinterpret_cast<void**>(base() + kRenderer);
         eyeOfPass[p] = renderer ? *reinterpret_cast<const int*>(static_cast<const std::uint8_t*>(renderer) + kRendererViewEye)
                                 : -1;
-        if (cfg.trackerDrives && eyeOfPass[p] != p && !trackedEyeLogged) {
-            trackedEyeLogged = true;
-            simqvfr::logf("lmu mvr: pass tracker: frame %llu: the tracked pass %d rendered the game's eye %d", frames, p,
-                          eyeOfPass[p]);
+        if (cfg.trackerDrives && p < 2 && eyeOfPass[p] != p) {
+            ++trackedEyeMismatches;
+            if (trackedEyeLogged < 5) {
+                ++trackedEyeLogged;
+                simqvfr::logf("lmu mvr: pass tracker: frame %llu: the tracked pass %d rendered the game's eye %d (%llu "
+                              "such passes so far)",
+                              frames, p, eyeOfPass[p], trackedEyeMismatches);
+            }
         }
         if (qvfrMode) {
             qvfr_after_pass(p);
@@ -2725,6 +2798,7 @@ void four_passes_frame_end() {
     if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice)  // the tracker sees the menus too
         if (!install_mvr(sessionDevice))
             fallback_to_four_passes("multi-view's context hooks couldn't be installed");
+    simqvfr::dlss_frame_end(frames);
     if (cfg.mvr) {
         mvr_frame_end(frames);
         frozen[0] = frozen[1] = false;
@@ -2775,6 +2849,18 @@ void four_passes_frame_end() {
                           : cfg.fallbackAt > 0 && sceneFrames >= static_cast<unsigned long long>(cfg.fallbackAt)
                               ? "forced by lmu_mvr_fallback_at"
                               : nullptr;
+        // MSAA off (mvr_pass.h mvr_single_sample_passes): the passes found on the scene's single-sample target, the
+        // focus views not made. The four passes would hook the game's code: the eyes alone instead, said once.
+        if (why && noFinalsRun >= 90 && !mvr_broken() && !fsr_on() && mvr_single_sample_passes()) {
+            if (!singleSampleRefusalLogged) {
+                singleSampleRefusalLogged = true;
+                simqvfr::logf("lmu mvr: frame %llu: no focus views made in 90 frames with MSAA off (the passes found on "
+                              "the scene's single-sample target): not falling back to the four passes, which hook the "
+                              "game's code; the eyes as they are until they come",
+                              frames);
+            }
+            why = nullptr;
+        }
         if (why)
             fallback_to_four_passes(why);
     }
@@ -2898,6 +2984,17 @@ void four_passes_frame_end() {
                               static_cast<unsigned long long>(ms.doubledDraws),
                               static_cast<unsigned long long>(ms.eyeOnlyDraws));
             }
+            if (cfg.mvr && car_ab_on() && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
+                double c[2][2];
+                for (int m = 0; m < 2; ++m)
+                    for (int q = 0; q < 2; ++q)
+                        c[m][q] = ab.cpu[m][q] / tscPerMs / ab.frames[m];
+                simqvfr::logf("lmu mvr A/B (other cars' motion): CPU per pass with it %.2f %.2f ms (%.2f; %u frames), "
+                              "without %.2f %.2f ms (%.2f; %u frames): the cars' motion %+.3f ms per frame (the hooks' "
+                              "detours on both sides)",
+                              c[0][0], c[0][1], c[0][0] + c[0][1], ab.frames[0], c[1][0], c[1][1], c[1][0] + c[1][1],
+                              ab.frames[1], c[0][0] + c[0][1] - c[1][0] - c[1][1]);
+            }
             if (cfg.mvr && cfg.mvrAb > 0 && ab.frames[0] && ab.frames[1] && tscPerMs > 0) {
                 double c[2][4], eyes[2], focus[2];
                 for (int m = 0; m < 2; ++m) {
@@ -2919,9 +3016,10 @@ void four_passes_frame_end() {
         if (frames % 1800 == 0)
             simqvfr::logf("lmu qvfr: frame %llu: %llu scene frames, %llu four-pass, %llu composed, %llu not (the eye images "
                           "unlike the views); VR UI in the focus views %llu, not %llu; last frame %d passes, frame time "
-                          "held in %d calls, mask skipped in %d; views %ux%u; driver tag draws cut %llu, kept %llu",
+                          "held in %d calls, mask skipped in %d; views %ux%u; driver tag draws cut %llu, kept %llu; tracked "
+                          "passes on another eye %llu",
                           frames, sceneFrames, fourPassFrames, composedFrames, refusedFrames, uiDrawn, uiSkipped, passes,
-                          held, maskSkipped, viewW, viewH, labelsCut, labelsKept);
+                          held, maskSkipped, viewW, viewH, labelsCut, labelsKept, trackedEyeMismatches);
         return;
     }
 

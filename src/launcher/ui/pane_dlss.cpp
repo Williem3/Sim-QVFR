@@ -1,12 +1,17 @@
-// The Foveated DLSS pane (Cheeky Foveated DLSS, [cheeky]).
+// The DLSS pane: Cheeky Foveated DLSS ([cheeky]) for a game with DLSS of its own, Sim-QVFR's own DLSS ([dlss]) for a
+// game that ships none (GameFeatures::sideLoadedDlss: LMU).
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <vector>
 
 #include <windows.h>
 
 #include "../launcher.h"
+#include "../preflight.h"
 #include "../settings.h"
+#include "../../engine/dlss_settings.h"
+#include "../../engine/nvapi_gpus.h"
 #include "../../games/game.h"
 #include "window_state.h"
 #include "controls.h"
@@ -14,8 +19,124 @@
 
 namespace simqvfr::launcher::ui::win {
 
+bool own_dlss_available(std::wstring* why) {
+    std::wstring reason;
+    if (!game_has(&games::GameFeatures::sideLoadedDlss))
+        reason = not_yet();
+    else if (app.s.mode != RenderMode::Qvfr)
+        reason = L"Available in Quad View Foveated Rendering.";
+    else if (!nvapi::two_views_gpu())
+        reason = L"Needs an NVIDIA RTX graphics card (20 series or newer): none was found.";
+    else if (!app.s.multiView)
+        reason = L"Needs multi-view rendering, on the Resolution pane.";
+    if (why)
+        *why = reason;
+    return reason.empty();
+}
+
+namespace {
+
+// Sim-QVFR's own DLSS ([dlss]): NVIDIA's DLSS through NGX on the game's views, the game's code unchanged.
+float own_dlss_pane(float x, float y, float w, bool draw) {
+    float h = 0;
+    std::wstring why;
+    const bool available = own_dlss_available(&why);
+    const DlssSettings& d = app.s.dlss;
+    Row use;
+    const std::wstring useDesc =
+        available ? L"NVIDIA’s DLSS on " + game_name() + L"’s views, run by Sim-QVFR through NVIDIA’s NGX (" + short_name() +
+                        L" has none of its own) and changing none of its code: DLAA on the periphery, DLAA or an upscale "
+                        L"on the focus views. With it on, the game’s own MSAA can go off."
+                  : why;
+    use.fullHeight = [useDesc](float width) { return checkbox_height(useDesc, width); };
+    use.full = [useDesc, available, on = d.on](const Rect& r) { checkbox(kDlssOn, r, on, L"Use DLSS", useDesc, !available); };
+    // The DLL: the one Sim-QVFR includes (NVIDIA's, beside the layer), or another the player chose (Use included goes back).
+    const std::wstring dll = dlss_dll_path(d.folder, layer_folder());
+    const std::wstring version = file_version(dll);
+    const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES;
+    const bool chosen = !d.folder.empty();
+    const std::wstring named = version.empty() ? std::wstring(L"Found") : L"Version " + version;
+    Row file;
+    file.label = L"nvngx_dlss.dll";
+    if (!chosen)
+        file.desc = found ? named + L", included with Sim-QVFR. Choose another (a newer one from a game, say) to use it "
+                                    L"instead."
+                          : std::wstring(L"Missing from Sim-QVFR’s folder: install Sim-QVFR again, or choose one from a "
+                                         L"game (DLSS 310 or newer).");
+    else
+        file.desc = found ? named + L", in " + d.folder + L", your choice."
+                          : L"Not found in " + d.folder + L": DLSS takes the one Sim-QVFR includes instead.";
+    const float chooseW = button_width(L"Choose…"), includedW = chosen ? button_width(L"Use included") : 0.0f;
+    file.controlW = chosen ? includedW + t::kSpace3 + chooseW : chooseW;
+    file.controlH = t::kControlHeight;
+    file.control = [chosen, chooseW, includedW](const Rect& r) {
+        if (chosen)
+            button(kDlssIncluded, {r.x, r.y, includedW, r.h}, L"Use included", false);
+        button(kDlssFolder, {r.right() - chooseW, r.y, chooseW, r.h}, L"Choose…", false);
+    };
+    h += section(x, y, w, L"DLSS", {use, file},
+                 L"On and off apply while the game runs; another nvngx_dlss.dll at the next launch. Needs an NVIDIA RTX "
+                 L"graphics card, Quad View Foveated Rendering and multi-view rendering.",
+                 draw, Applies::Live) +
+         t::kSpace6;
+    const bool off = !available || !d.on;
+    std::wstring modes[std::size(kDlssFocusModes)], focusPresets[std::size(kDlssFocusPresets)],
+        eyePresets[std::size(kDlssEyePresets)], sharpenings[std::size(kDlssTextureSharpening)];
+    for (size_t i = 0; i < std::size(kDlssTextureSharpening); ++i)
+        sharpenings[i] = kDlssTextureSharpening[i].name;
+    for (size_t i = 0; i < std::size(kDlssFocusModes); ++i)
+        modes[i] = kDlssFocusModes[i].name;
+    for (size_t i = 0; i < std::size(kDlssFocusPresets); ++i)
+        focusPresets[i] = kDlssFocusPresets[i].name;
+    for (size_t i = 0; i < std::size(kDlssEyePresets); ++i)
+        eyePresets[i] = kDlssEyePresets[i].name;
+    Row mode = choice_row(kDlssFocusMode, L"Focus views", modes, static_cast<int>(std::size(modes)),
+                          dlss_choice_index(kDlssFocusModes, d.focusScale, true), off);
+    mode.desc = L"DLAA draws them at their size. Ultra quality, Quality, Balanced and Performance draw them at 77, 67, 58 "
+                L"or 50% each way and upscale them: less GPU time, softer distant textures. DLSS has no ultra quality "
+                L"model of its own: 77% runs its quality one.";
+    Row focusPreset = choice_row(kDlssFocusPreset, L"Focus preset", focusPresets, static_cast<int>(std::size(focusPresets)),
+                                 dlss_choice_index(kDlssFocusPresets, d.focusPreset), off);
+    focusPreset.desc = L"Default is NVIDIA’s choice for the mode: K, and M at Performance, which costs more.";
+    Row eyePreset = choice_row(kDlssEyePreset, L"Periphery preset", eyePresets, static_cast<int>(std::size(eyePresets)),
+                               dlss_choice_index(kDlssEyePresets, d.eyePreset), off);
+    eyePreset.desc = L"K is the steadier. F costs about half as much with more aliasing: with eye tracking it stays out of "
+                     L"where you look; K suits a fixed focus.";
+    h += section(x, y + h, w, L"DLSS on the views", {mode, focusPreset, eyePreset},
+                 L"Each change rebuilds DLSS in the running game: a short stutter.", draw, Applies::Live) +
+         t::kSpace6;
+    Row sharpening = choice_row(kDlssSharpening, L"Texture sharpening", sharpenings,
+                                static_cast<int>(std::size(sharpenings)),
+                                dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true), off);
+    sharpening.desc = L"Samples textures sharper where DLSS works (the mip bias DLSS asks for). Focus only acts on the focus "
+                      L"area, Focus and periphery on the periphery too, where it shows most. Subtle; if fine patterns "
+                      L"shimmer or show moiré, go back a step.";
+    h += section(x, y + h, w, L"Textures", {sharpening},
+                 L"On at launch, its changes apply at once, without a stutter. Turned on from Off while the game runs, it "
+                 L"starts at the next launch (off, it costs nothing).",
+                 draw, Applies::Live) +
+         t::kSpace6;
+    Row cars;
+    const std::wstring carsDesc =
+        L"Gives DLSS each other car’s own motion, so cars passing, alongside or ahead stay clean instead of smearing. "
+        L"Turn it off for more headroom: in a field of cars it costs about 0.5 ms of CPU and 0.2 to 0.5 ms of GPU a "
+        L"frame.";
+    cars.fullHeight = [carsDesc](float width) { return checkbox_height(carsDesc, width); };
+    cars.full = [carsDesc, off, on = d.carVectors](const Rect& r) {
+        checkbox(kDlssCarVectors, r, on, L"Other cars’ motion", carsDesc, off);
+    };
+    h += section(x, y + h, w, L"Advanced", {cars},
+                 L"Applies at the next launch, with DLSS on at launch; with DLSS off it costs nothing.", draw,
+                 Applies::NextLaunch);
+    return h;
+}
+
+}  // namespace
+
 float dlss_pane(float x, float y, float w, bool draw) {
     float h = 0;
+    if (game_has(&games::GameFeatures::sideLoadedDlss))
+        return own_dlss_pane(x, y, w, draw);
     if (!game_has(&games::GameFeatures::foveatedDlss)) {
         Row note;
         note.label = L"Cheeky Foveated DLSS";

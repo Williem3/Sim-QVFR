@@ -83,4 +83,51 @@ struct InstancedView {
 
 InstancedView add_instanced_view(const uint8_t* data, size_t size, const InstancedViewOptions& options = {});
 
+// add_focus_mip_bias is for DLSS super resolution on a focus view drawn in its eye's pass (either way above: view 1 in
+// its own viewport of the same target). DLSS wants textures sampled with a negative mip bias where it upscales, but one
+// draw draws both views through the same sampler, so the bias comes from the pixel shader: its plain samples (sample,
+// with or without offsets) become sample_b with a bias of the constant buffer's second vector's x inside the rectangle
+// of its first vector (x0, y0, x1, y1 in target pixels: the focus view's viewport) and its y outside it (the eye view's
+// own; 0 samples as before). NVIDIA's DLSS guide (3.5): bias = log2(render width / output width) - 1, so -1 under DLAA.
+// Depth compares (shadows), explicit LODs, gradients, gathers and the shader's own sample_b stay as they are.
+//
+// Needs SV_Position in the input signature (LMU's scene pixel shaders have it, mostly without reading it: the
+// declaration is added then). How: before the first instruction the bias goes into a new temp (ge and lt against the
+// rectangle, and-ed together, then a movc of the two biases); each sample's opcode becomes sample_b with that temp's x
+// as its last operand. Checked on a WARP device and on LMU's 133 scene pixel shaders (tests/dxbc_patch_test.cpp).
+struct FocusMipBiasOptions {
+    uint32_t cbSlot = 13;  // (x0, y0, x1, y1), then (focus view's bias, eye view's bias, -, -)
+};
+
+struct FocusMipBias {
+    std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
+    std::string error;
+    uint32_t positionRegister = 0;  // SV_Position's input register
+    bool positionRead = false;      // the shader declared it itself
+    int samples = 0;                // sample instructions now biased
+    int leftAlone = 0;              // other sample kinds left as they were
+};
+
+FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMipBiasOptions& options = {});
+
+// add_slot_output is for other cars' motion vectors (docs/recon-lmu.md "stage 3"): a pixel shader that also writes, to
+// render target `reg` (SV_Target1 by default, a uint), the first element of a uint buffer at `srvSlot`: the draw's car
+// part slot, bound per draw by the caller (unbound: 0, none). Everything the shader wrote it still writes.
+//
+// How: dcl_resource_buffer (uint) t<srvSlot> and dcl_output o<reg>.x join the declarations, and before the first
+// instruction ld o<reg>.x, l(0, 0, 0, 0), t<srvSlot>.xxxx (an output written once and never again: SM4/5 keep it). The
+// output signature gains SV_Target<reg> (uint, x) after its last element. Refused when the shader already has that
+// output or declares that resource, or isn't a pixel shader.
+struct SlotOutputOptions {
+    uint32_t srvSlot = 127;
+    uint32_t reg = 1;
+};
+
+struct SlotOutput {
+    std::vector<uint8_t> bytecode;  // empty when not converted (`error` says why)
+    std::string error;
+};
+
+SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options = {});
+
 }  // namespace simqvfr::dxbc

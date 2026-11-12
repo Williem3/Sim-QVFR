@@ -2,6 +2,10 @@
 
 Copied unmodified from the upstream repositories; only the files this project builds or includes.
 
+Not here, ever: NVIDIA's DLSS SDK (NGX headers, libraries, `nvngx_*.dll`). Its licence doesn't allow it in a public
+repository, so it stays local (gitignored as `third_party/nvidia-dlss-sdk/`, or anywhere outside the checkout): see
+CONTRIBUTING.md, "DLSS in LMU".
+
 | Folder | Upstream | Version | Licence |
 |---|---|---|---|
 | `minhook/` | https://github.com/TsudaKageyu/minhook | v1.3.4 (`c3fcafdc10146beb5919319d0683e44e3c30d537`) | BSD 2-Clause, with the bundled HDE notice (`minhook/LICENSE.txt`) |

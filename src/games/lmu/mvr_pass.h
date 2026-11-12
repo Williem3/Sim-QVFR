@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "car_motion.h"
 #include "focus_math.h"
 
 struct ID3D11Device;
@@ -33,11 +34,22 @@ struct MvrPassView {
     int eye = 0;
     float remap[4] = {1, 0, 1, 0};    // a, b, c, d: the focus view's clip x = a x + b w, y = c y + d w (focus_math.h)
     unsigned eyeW = 0, eyeH = 0;      // the size the eye renders at (its corner of the targets)
-    unsigned focusW = 0, focusH = 0;  // the focus view's
+    unsigned focusW = 0, focusH = 0;  // the focus view's (its region in the targets, what the post reads)
+    // What the scene's draws draw it at from the same corner (engine/dlss_views.h dlss_focus_scale: smaller for DLSS
+    // super resolution, which upscales it into the region before the post); 0: focusW x focusH.
+    unsigned focusRenderW = 0, focusRenderH = 0;
     // The eye's corner of its final (the eye target): eyeW x eyeH stretched by the game's final blit when its render
     // scale isn't 1 (focus_math.h final_extent); 0: as eyeW x eyeH. The focus final goes beside it, at the focus size.
     unsigned finalEyeW = 0, finalEyeH = 0;
     FocusBox box{};                 // its tangents and the eye's (the focus post's glare mapping; valid: known)
+    // DLAA (engine/dlss_views.h): the clip shift (x += s[0] w, y += s[1] w) the eye's [0] and the focus view's [1] draws carry
+    // this frame, which their images lose in DLAA. The overlays drawn after the post (the driver tags, the VR UI) are
+    // drawn with their viewports moved back by it, so they land where the world is in the image. Zero: no jitter.
+    double overlayShift[2][2] = {};
+    // Texture sharpening (engine/dlss_views.h dlss_mip_bias): the mip bias the eye's [0] and the focus view's [1]
+    // pixels sample with, through the game's pixel shaders' biased twins (engine/dxbc_patch.h add_focus_mip_bias). Both
+    // 0: the game's own pixel shaders.
+    float mipBias[2] = {};
 };
 
 // The immediate context's vtable entries the hooks use (d3d11.h order: ID3D11DeviceChild's 7, then the context's own).
@@ -46,20 +58,28 @@ struct MvrPassView {
 // A hook on one function an entry held misses the calls through the others, so the hooks are on every function each
 // entry is seen holding (mvr_pass.cpp). nvapi_stereo_check lists what d3d11 rewrites.
 namespace context_slot {
-inline constexpr unsigned kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
+inline constexpr unsigned kVSSetConstantBuffers = 7, kMap = 14, kUnmap = 15, kIASetVertexBuffers = 18,
+                          kIASetIndexBuffer = 19;
+inline constexpr unsigned kOMSetBlendState = 35, kOMSetDepthStencilState = 36;  // car slots (mvr_car_slots)
+inline constexpr unsigned kPSSetShader = 9, kVSSetShader = 11, kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20,
                           kDrawInstanced = 21, kGSSetShader = 23, kOMSetRenderTargets = 33,
                           kOMSetRenderTargetsAndUavs = 34, kSOSetTargets = 37, kDrawAuto = 38,
                           kDrawIndexedInstancedIndirect = 39, kDrawInstancedIndirect = 40, kRSSetViewports = 44,
                           kRSSetScissorRects = 45, kCopySubresourceRegion = 46, kResolveSubresource = 57, kHSSetShader = 60,
                           kDSSetShader = 64;
 // The draws and CopySubresourceRegion only with the focus post (mvr_focus_replay) or instancing (the draws doubled);
-// DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone).
+// DrawAuto and the indirect draws only with instancing (their instance count can't be doubled: the eye's alone);
+// PSSetShader only with texture sharpening possible (mvr_mip_bias_hooks); VSSetConstantBuffers, Map, Unmap and the input
+// assembler's buffers only with car tracking (mvr_car_track); the blend and depth-stencil states only with car slots.
 inline constexpr unsigned kHooked[] = {kVSSetShader,       kGSSetShader,        kOMSetRenderTargets,
                                        kOMSetRenderTargetsAndUavs, kSOSetTargets, kRSSetViewports,
                                        kRSSetScissorRects, kResolveSubresource, kHSSetShader,
                                        kDSSetShader,       kDrawIndexed,        kDraw,
                                        kDrawIndexedInstanced, kDrawInstanced, kCopySubresourceRegion,
-                                       kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect};
+                                       kDrawAuto,          kDrawIndexedInstancedIndirect, kDrawInstancedIndirect,
+                                       kPSSetShader,       kVSSetConstantBuffers, kMap, kUnmap,
+                                       kIASetVertexBuffers, kIASetIndexBuffer, kOMSetBlendState,
+                                       kOMSetDepthStencilState};
 }  // namespace context_slot
 
 // The game's immediate context hooked (VSSetShader, the render targets, viewports, scissors, resolves). False: off.
@@ -114,6 +134,43 @@ void mvr_time_hooks(bool on);
 // mvr_pass_install: DrawIndexed is hooked only with it on (turned on later, its functions are hooked as pass starts see
 // them).
 void mvr_focus_replay(bool on);
+// The VR UI panel's canvas (2560x1440 with one mip level, sampled trilinearly: docs/recon-lmu.md "run 8") is drawn
+// about a fifth of its size into a periphery at 20% of native: minified without mips it aliases, and the HUD, menus and
+// MFD shimmer as the panel moves on the pixel grid. On: the panel's doubled draws sample a copy of it with its mips
+// (copied and its mips made once a frame, bound for those draws only).
+void mvr_ui_mips(bool on);
+// Texture sharpening under DLSS (MvrPassView::mipBias): the game's pixel shader binds are hooked (before the install;
+// only when DLSS can run, as each bind then passes through this code) and, while a pass draws two views with a bias,
+// the game's pixel shaders are swapped for their mip bias twins (mvr_probe.h kMvrMipBiasTwinGuid) with the focus
+// viewport and the two biases in pixel shader constant buffer 13.
+void mvr_mip_bias_hooks(bool on);
+// Those hooks are installed (texture sharpening was on at launch and its buffer could be made).
+bool mvr_mip_bias_ready();
+// Other cars' motion vectors, stage 2 ([experiment] lmu_car_track=1, log only; car_motion.h): before the install. In the
+// eye passes, each draw whose vertex shader reads a worldMatrix (mvr_probe.h kVsWorldMatrixGuid) has its matrix read as
+// the game writes the per-draw buffer (Map, Unmap) and its key from the input assembler's buffers, and car_motion keeps
+// it per car part. The log counts them (parts, matched to the frame before) and the hooks' CPU (lmu_mvr_timing=1).
+void mvr_car_track(bool on);
+// Car tracking's counts so far (car_motion.h).
+CarMotionStats mvr_car_stats();
+// Other cars' motion vectors, stage 3 ([experiment] lmu_car_vectors, with car tracking): before the install. In the eye
+// passes the scene's binds get a slot target at render target 1 (R16_UINT, the scene target's size, cleared over the
+// pass's views at its start), the game's pixel shaders their slot twins (mvr_probe.h kMvrSlotTwinGuid), each car part's
+// draw with a frame before its slot (+1; 0 none) at t127, and the blend states twins that write target 1 unblended where
+// the depth state writes depth (transparents leave it). Before DLSS reads the pass: each part's motion, inverse(this
+// frame's world) x the frame before's, uploaded; DlssPass carries both. Level 1: the slots, DLSS as before; 2: DLSS's
+// vectors take the parts' motion.
+void mvr_car_slots(int level);
+// The slots' gate images (logs\captures\lmu-car-slots-*.png, up to two frames' worth, each ~250 ms on the render
+// thread): diagnostics runs only (lmu_car_vectors forced), never the player's option. Off by default.
+void mvr_car_slot_images(bool on);
+// The cars' motion this frame or not (an A/B of its cost, FourPassesRun::carAb; between frames): off, no tracking work,
+// no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
+void mvr_car_active(bool on);
+// Tests: the scene's target as the tracker would learn it (MSAA off; null forgets it), and the slot target (null
+// before its first bind).
+void mvr_test_scene_target(ID3D11Resource* scene);
+ID3D11Texture2D* mvr_car_slot_texture();
 // Eye `eye`'s focus image from the focus post (RGBA16F, as the eye's composite) and the composites into it so far
 // (null, 0: none yet).
 ID3D11Texture2D* mvr_focus_image(int eye, unsigned long long& composites);
@@ -143,6 +200,7 @@ MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector
 struct MvrPassStats {
     uint64_t twinBinds = 0, plainBinds = 0, toggles = 0, viewportRewrites = 0, scissorRewrites = 0, stereoErrors = 0;
     uint64_t passesWithFocus = 0, samples = 0, resolves = 0, keptRegions = 0, replacedResolves = 0;
+    uint64_t singleSamplePosts = 0;          // MSAA off: passes whose post-processing began at YEBIS's copy
     uint64_t lookups = 0, lookupMisses = 0;  // twin lookups, and those not answered by the cache (GetPrivateData)
     uint64_t contextEntries = 0;             // the context's entries hooked (DrawIndexed's with the focus post only)
     uint64_t contextFunctions = 0;           // the context's functions hooked (every one its entries were seen holding)
@@ -155,6 +213,7 @@ struct MvrPassStats {
     // R3: the focus view's final blits beside the eye; overlay draws doubled into it in the passes (the driver tags)
     // and after them (the VR UI).
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
+    uint64_t uiMipFrames = 0;  // frames whose VR UI canvas was copied with mips for the panel (mvr_ui_mips)
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
     // draws replayed for the menus (mvr_redraw_panel).
     uint64_t maskDraws = 0, maskDrawsTwo = 0, maskDropped = 0, panelReplays = 0;
@@ -162,6 +221,19 @@ struct MvrPassStats {
     // them; DrawAuto and indirect draws drawn into the eye alone (no instance count to double).
     uint64_t doubledDraws = 0, layoutSwaps = 0, eyeOnlyDraws = 0;
     uint64_t instancedTakeovers = 0;  // single-pass stereo refused and instancing took over (once a session)
+    // Texture sharpening: passes with a mip bias; pixel shader binds of a twin, of a game shader with none while it
+    // was wanted, and the twin lookups (and those not cached).
+    uint64_t biasPasses = 0, psTwinBinds = 0, psNoTwin = 0, psLookups = 0, psLookupMisses = 0;
+    uint64_t biasCbLost = 0;  // checks that found the bias buffer unbound by the game while a twin was in use (rebound)
+    // Car tracking: matrices read at the per-draw buffer's Unmap; the per-draw buffer learned (again); scene draws
+    // with a worldMatrix before any matrix was read; and those whose shader reads it at another offset (left out);
+    // tracked draws from a dynamic vertex buffer (the game's ring: keyed without their base vertex and offset).
+    uint64_t carMatrixReads = 0, carBufferLearned = 0, carNoMatrix = 0, carOtherOffset = 0, carDynamicVb = 0;
+    uint64_t carVbAsked = 0;  // vertex buffers' usage asked of D3D (once a frame per buffer)
+    // Car slots: passes with the slot target bound, its binds, slot views bound, slot twin binds, binds of shaders
+    // without one while it was bound, blend twins made, motion uploads and the slots in them, gate images saved.
+    uint64_t slotPasses = 0, slotBinds = 0, slotViews = 0, slotTwinBinds = 0, slotNoTwin = 0, blendTwins = 0;
+    uint64_t motionUploads = 0, motionSlots = 0, slotImages = 0;
 };
 MvrPassStats mvr_pass_stats();
 // Single-pass stereo was refused at a draw and instancing couldn't take over (off for the session since): no focus
@@ -184,7 +256,16 @@ struct MvrTrackStats {
     uint64_t frames = 0, matched = 0, countDiffers = 0, beganBefore = 0, endedAfter = 0, passesCompared = 0;
     uint64_t startGapSum = 0, startGapMax = 0, endGapSum = 0, endGapMax = 0;  // draws of the game's pass left out
     uint64_t framesWithoutGame = 0, passesWithoutGame = 0;                    // false finds (menus)
+    uint64_t singleSamplePasses = 0;  // passes begun on the learned single-sample scene target (MSAA off)
+    uint64_t sceneRelearned = 0;      // that target learned again (the game made its targets anew)
+    uint64_t singleSampleBlits = 0;   // those passes' final blits seen (their end), with the focus post or without
+    uint64_t blitsBeforePost = 0;     // blits reading the scene's target before a pass's post began (not taken)
+    uint64_t passesWithoutPost = 0;   // single-sample passes that ended before reaching YEBIS's copy
 };
 MvrTrackStats mvr_track_stats();
+// MSAA off: the tracker has learned the scene's single-sample target (from YEBIS's copy) and seen no multisample scene
+// since. Then the post-processing begins at YEBIS's copy (no resolve), and the four passes aren't fallen back to (they
+// would hook the game's code), whatever happens to the passes.
+bool mvr_single_sample_passes();
 
 }  // namespace lmu

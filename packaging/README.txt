@@ -52,7 +52,8 @@ Setup
   administrator (a note: each launch registers Sim-QVFR for the game, see Start), ACC without OpenComposite
   or with a DLSS too old for Foveated DLSS, Cheeky's dxgi.dll or version.dll loader in the game
   folder, and with Cheeky Foveated DLSS on: its runtime and OpenXR layer, OpenXR Toolkit's place above
-  Cheeky's layer, and Toolkit's Turbo mode with frame generation. The bar at the bottom shows the
+  Cheeky's layer, and Toolkit's Turbo mode with frame generation; with DLSS on in LMU: multi-view
+  rendering, and its nvngx_dlss.dll found and DLSS 310 or newer. The bar at the bottom shows the
   first problem (click it for the list), and Launch asks before starting a game that would crash or
   run without Sim-QVFR.
 - Profiles: the presets Performance, Balanced and Quality (they set the resolution only: the outer
@@ -271,8 +272,24 @@ during a session (the log says why), Sim-QVFR renders the four views by changing
 LMU's own render scale and FSR (its VR graphics settings) work with QVFR: they lower every view's
 resolution on top of Sim-QVFR's sliders. With FSR on, multi-view rendering stops for the session and
 LMU renders the four views on their own. VectorXR works below Sim-QVFR in LMU (its frame generation
-and overlay were tested; turn it on in the OpenXR layers pane). Not in LMU yet: Foveated DLSS (LMU
-has no DLSS of its own).
+and overlay were tested; turn it on in the OpenXR layers pane). Cheeky Foveated DLSS isn't for LMU (it
+works on a game's own DLSS).
+DLSS in LMU (experimental, NVIDIA RTX 20 series and newer, with multi-view rendering): LMU has no DLSS,
+so Sim-QVFR runs NVIDIA DLSS on its views itself, through NVIDIA's NGX, without changing LMU's code.
+The DLSS pane (or the headset menu's DLSS page) turns it on and picks the focus area's mode: DLAA, or
+drawn smaller and upscaled (Ultra quality 77%, Quality 67%, Balanced 58%, Performance 50% each way: less
+GPU time, softer distant textures), and the presets: the periphery K (steadier) or F (about half the
+cost, more aliasing; suits eye tracking). Changes apply while you drive, each with a short stutter.
+Texture sharpening (off by default; Focus only, or Focus and periphery) samples textures sharper where
+DLSS works; the gain is subtle, most in the periphery. On at launch it changes while you drive, without
+a stutter; turned on from Off it starts at the next launch (off, it costs nothing). If fine patterns
+shimmer, a step lower.
+With DLSS on, LMU's MSAA can go off. Other cars smear a little (their motion isn't known yet).
+NVIDIA's nvngx_dlss.dll is included (layer\nvngx_dlss.dll, DLSS 310.9.1). To use a newer one, Choose...
+it in a game's folder in the DLSS pane (DLSS 310 or newer); Use included goes back. Launch checks says
+when the one chosen is missing or too old.
+Uses NVIDIA DLSS through the NVIDIA DLSS SDK (licenses\NVIDIA-RTX-SDKs-LICENSE.txt). NVIDIA, RTX and
+DLSS are trademarks of NVIDIA Corporation; Sim-QVFR is not sponsored or endorsed by NVIDIA.
 Anti-cheat: by default the launcher starts LMU without Easy Anti-Cheat, so offline only. Advanced >
 Games > Run with anti-cheat starts LMU through Easy Anti-Cheat with Sim-QVFR running, at the next
 launch. AT YOUR OWN RISK: Sim-QVFR works inside LMU while it runs. Without multi-view rendering it
@@ -307,3 +324,8 @@ the author's permission. If you share any part of it, changed or not, pass on LI
 line "Required Notice: Copyright (c) 2026 Williem3 (https://github.com/Williem3/Sim-QVFR)".
 Third-party notices: THIRD_PARTY_NOTICES.md. Cheeky Foveated DLSS (optional, separate download) is
 by ClarkCheekyKent, GNU GPL v3: https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS
+NVIDIA's DLSS SDK parts (the NGX library in sim-qvfr.dll and layer\nvngx_dlss.dll, for DLSS in LMU)
+are NVIDIA's and not covered by the PolyForm licence. Your terms for them are in THIRD_PARTY_NOTICES.md
+(NVIDIA's licence: licenses\NVIDIA-RTX-SDKs-LICENSE.txt). In short: use them only as part of Sim-QVFR;
+don't modify, reverse engineer or redistribute them (to share Sim-QVFR, share the link to its
+release); NVIDIA gives no warranty for them.
