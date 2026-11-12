@@ -40,7 +40,7 @@ void applies_tag(float x, float y, Applies applies) {
     const bool live = applies != Applies::NextLaunch;
     const std::wstring text = applies == Applies::Live ? L"Live" : applies == Applies::LiveLowered ? L"Live when lowered" : L"Next launch";
     const Rect r{x, y, std::ceil(app.canvas.measure(text, kBadgeStyle)) + 16, 18};
-    app.canvas.fill(r, col(live ? app.c->success_bg : app.c->segment_track), 9);
+    app.canvas.fill(r, col(live ? app.c->success_bg : app.c->segment_track), t::kRadiusControl);
     app.canvas.text(text, kBadgeStyle, r, col(live ? app.c->success : app.c->label_secondary), Align::Center);
     int index = 0;
     while (text != kHelp[index].label)
@@ -76,8 +76,7 @@ float section(float x, float y, float w, const std::wstring& title, const std::v
         boxH += row_height(row, w);
     const Rect box{x, y + h, w, boxH};
     if (draw) {
-        app.canvas.fill(box, col(app.c->group_bg), t::kRadiusGroup);
-        app.canvas.stroke(box, col(app.c->card_border), 1, t::kRadiusGroup);
+        app.canvas.fill(box, col(app.c->group_bg), t::kRadiusGroup);  // flat: no edge, no shadow
         float ry = box.y;
         for (size_t i = 0; i < rows.size(); ++i) {
             const Row& row = rows[i];

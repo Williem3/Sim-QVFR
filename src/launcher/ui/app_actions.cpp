@@ -2,6 +2,7 @@
 // a running game), the profiles, following the ini, the launch checks, the sliders' values and ranges, the
 // focus order, and Launch (launch_game, main.cpp).
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "../settings.h"
 #include "../session_history.h"
 #include "../../games/game.h"
+#include "../../ini_put.h"
 #include "../../sha256_file.h"
 #include "window_state.h"
 #include "controls.h"
@@ -28,17 +30,45 @@ namespace simqvfr::launcher::ui::win {
 namespace {
 
 bool system_dark() {
-    // SIM_QVFR_LAUNCHER_THEME=light|dark overrides the Windows app theme (for checking both).
+    // SIM_QVFR_LAUNCHER_THEME=light|dark overrides the theme button and the Windows app theme (for checking both).
     wchar_t forced[16] = {};
     if (GetEnvironmentVariableW(L"SIM_QVFR_LAUNCHER_THEME", forced, 16))
         return _wcsicmp(forced, L"dark") == 0;
+    if (app.themeChoice != ThemeChoice::System)
+        return app.themeChoice == ThemeChoice::Dark;
     DWORD light = 1, size = sizeof(light);
     RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
                  L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
     return light == 0;
 }
 
+constexpr const wchar_t* kThemeChoiceNames[] = {L"system", L"light", L"dark"};  // ThemeChoice's order
+
 }  // namespace
+
+// [launcher] ui_theme: system (the default, also for anything else), light or dark. One for every game: [launcher] is
+// in no profile and no game's copy.
+ThemeChoice read_theme_choice() {
+    if (!app.iniFound)
+        return app.themeChoice;
+    wchar_t value[16] = {};
+    GetPrivateProfileStringW(L"launcher", L"ui_theme", L"", value, static_cast<DWORD>(std::size(value)), app.ini.c_str());
+    for (int i = 0; i < 3; ++i)
+        if (_wcsicmp(value, kThemeChoiceNames[i]) == 0)
+            return static_cast<ThemeChoice>(i);
+    return ThemeChoice::System;
+}
+
+// The theme button: following Windows, then light, then dark; kept in the ini (in this window alone without one).
+void cycle_theme() {
+    app.themeChoice = static_cast<ThemeChoice>((static_cast<int>(app.themeChoice) + 1) % 3);
+    if (app.iniFound) {
+        ini_put(app.ini.c_str(), L"launcher", L"ui_theme", kThemeChoiceNames[static_cast<int>(app.themeChoice)]);
+        app.iniText = ini_text();  // not a change follow_ini needs to read back
+    }
+    apply_theme();
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
 
 COLORREF colorref(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
 
@@ -62,15 +92,11 @@ t::Accent game_accent(const games::GameInfo& game) {
     return {a.accent, a.fill, a.onAccent, a.ring};
 }
 
+// The theme's colours. A game's own colour is its marker only (its tab, the rail): selection stays blue and Launch red,
+// whichever game is chosen, so each colour keeps its one meaning.
 void apply_theme() {
     app.dark = system_dark();
     app.theme = app.dark ? t::kDark : t::kLight;
-    const t::Accent a = game_accent(games::launcher_game());
-    app.theme.accent = a.accent;
-    app.theme.accent_fill = a.accent_fill;
-    app.theme.on_accent = a.on_accent;
-    app.theme.focus_ring = a.focus_ring;
-    app.theme.sidebar_selection = a.accent_fill;
     const BOOL dark = app.dark;
     DwmSetWindowAttribute(app.hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
     const COLORREF caption = colorref(app.c->titlebar_bg), text = colorref(app.c->label);
@@ -342,7 +368,7 @@ bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
 bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
 std::vector<Ctl> focus_order() {
-    std::vector<Ctl> order = {kGameTab, kSidebar};
+    std::vector<Ctl> order = {kGameTab, kThemeToggle, kSidebar};
     switch (app.pane) {
     case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
     case Pane::Hotkeys: order.push_back(kHotkeysReset); break;

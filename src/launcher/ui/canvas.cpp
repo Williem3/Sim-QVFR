@@ -4,6 +4,12 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <cwctype>
+
+#include <dwrite_3.h>
+
+#include "font_resources.h"
 
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "dwrite.lib")
@@ -15,17 +21,34 @@ D2D1_COLOR_F d2d(Color c) {
     return D2D1::ColorF(((c.rgb >> 16) & 0xff) / 255.0f, ((c.rgb >> 8) & 0xff) / 255.0f, (c.rgb & 0xff) / 255.0f, c.alpha);
 }
 
-// The first installed family of a list (the kit's font stacks, Windows part).
-std::wstring first_family(IDWriteFactory* dwrite, std::initializer_list<const wchar_t*> names) {
-    ComPtr<IDWriteFontCollection> fonts;
-    dwrite->GetSystemFontCollection(&fonts);
-    for (const wchar_t* name : names) {
-        UINT32 index = 0;
-        BOOL exists = FALSE;
-        if (fonts && SUCCEEDED(fonts->FindFamilyName(name, &index, &exists)) && exists)
+// The bundled fonts' resources (launcher.rc).
+constexpr int kFontResources[] = {IDR_FONT_INTER_REGULAR, IDR_FONT_INTER_MEDIUM, IDR_FONT_INTER_SEMIBOLD, IDR_FONT_INTER_BOLD,
+                                  IDR_FONT_JOST_BOLD,     IDR_FONT_JOST_HEAVY,   IDR_FONT_JOST_BLACK};
+
+// `family` in `fonts`, if it is there.
+bool has_family(IDWriteFontCollection* fonts, const wchar_t* family) {
+    UINT32 index = 0;
+    BOOL exists = FALSE;
+    return fonts && SUCCEEDED(fonts->FindFamilyName(family, &index, &exists)) && exists;
+}
+
+// The first installed family of a comma-separated list ("Segoe UI Variable Text, Segoe UI").
+std::wstring first_installed(IDWriteFontCollection* system, const std::wstring& list) {
+    std::wstring first;
+    for (size_t at = 0; at <= list.size();) {
+        size_t comma = list.find(L',', at);
+        if (comma == std::wstring::npos)
+            comma = list.size();
+        std::wstring name = list.substr(at, comma - at);
+        name.erase(0, name.find_first_not_of(L' '));
+        name.erase(name.find_last_not_of(L' ') + 1);
+        if (first.empty())
+            first = name;
+        if (!name.empty() && has_family(system, name.c_str()))
             return name;
+        at = comma + 1;
     }
-    return *names.begin();
+    return first;
 }
 
 }  // namespace
@@ -37,13 +60,88 @@ bool Canvas::initialize(HWND hwnd) {
         FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
                                    reinterpret_cast<IUnknown**>(dwrite_.GetAddressOf()))))
         return false;
-    systemFamily_ = first_family(dwrite_.Get(), {L"Segoe UI Variable Text", L"Segoe UI"});
-    monoFamily_ = first_family(dwrite_.Get(), {L"Cascadia Mono", L"Consolas"});
+    load_fonts();
     const D2D1_STROKE_STYLE_PROPERTIES props = D2D1::StrokeStyleProperties(
         D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_LINE_JOIN_ROUND);
     factory_->CreateStrokeStyle(props, nullptr, 0, round_.GetAddressOf());
     create_target();
     return target_ != nullptr;
+}
+
+// Inter and Jost from the exe's resources into a font collection of their own (IDWriteFactory5, Windows 10 1703 and
+// newer): the WOFF2 files are unpacked to OpenType first. A family not found there falls back to installed ones.
+void Canvas::load_fonts() {
+    ComPtr<IDWriteFactory5> factory;
+    ComPtr<IDWriteInMemoryFontFileLoader> loader;
+    ComPtr<IDWriteFontSetBuilder1> builder;
+    if (SUCCEEDED(dwrite_.As(&factory)) && SUCCEEDED(factory->CreateInMemoryFontFileLoader(loader.GetAddressOf())) &&
+        SUCCEEDED(factory->RegisterFontFileLoader(loader.Get())) && SUCCEEDED(factory->CreateFontSetBuilder(builder.GetAddressOf()))) {
+        const HMODULE module = GetModuleHandleW(nullptr);
+        bool any = false;
+        for (const int id : kFontResources) {
+            const HRSRC resource = FindResourceW(module, MAKEINTRESOURCEW(id), MAKEINTRESOURCEW(10) /*RT_RCDATA*/);
+            const HGLOBAL memory = resource ? LoadResource(module, resource) : nullptr;
+            const void* data = memory ? LockResource(memory) : nullptr;
+            const DWORD size = resource ? SizeofResource(module, resource) : 0;
+            if (!data || size < 4)
+                continue;
+            ComPtr<IDWriteFontFile> file;
+            if (std::memcmp(data, "wOF2", 4) == 0) {
+                ComPtr<IDWriteFontFileStream> stream;
+                UINT64 unpacked = 0;
+                const void* fragment = nullptr;
+                void* context = nullptr;
+                if (SUCCEEDED(factory->UnpackFontFile(DWRITE_CONTAINER_TYPE_WOFF2, data, size, stream.GetAddressOf())) &&
+                    SUCCEEDED(stream->GetFileSize(&unpacked)) &&
+                    SUCCEEDED(stream->ReadFileFragment(&fragment, 0, unpacked, &context))) {
+                    // No owner: the loader keeps a copy of the bytes.
+                    loader->CreateInMemoryFontFileReference(factory.Get(), fragment, static_cast<UINT32>(unpacked), nullptr,
+                                                            file.GetAddressOf());
+                    stream->ReleaseFileFragment(context);
+                }
+            } else {
+                loader->CreateInMemoryFontFileReference(factory.Get(), data, size, nullptr, file.GetAddressOf());
+            }
+            any |= file && SUCCEEDED(builder->AddFontFile(file.Get()));
+        }
+        ComPtr<IDWriteFontSet> set;
+        ComPtr<IDWriteFontCollection1> collection;
+        if (any && SUCCEEDED(builder->CreateFontSet(set.GetAddressOf())) &&
+            SUCCEEDED(factory->CreateFontCollectionFromFontSet(set.Get(), collection.GetAddressOf())))
+            bundled_ = collection;
+    }
+    ComPtr<IDWriteFontCollection> system;
+    dwrite_->GetSystemFontCollection(&system);
+    for (size_t i = 0; i < std::size(tokens::kFamilies); ++i) {
+        FamilyFont& f = families_[i];
+        if (has_family(bundled_.Get(), tokens::kFamilies[i].name)) {
+            f.name = tokens::kFamilies[i].name;
+            f.collection = bundled_;
+        } else {
+            f.name = first_installed(system.Get(), tokens::kFamilies[i].fallback);
+            f.collection = system;
+        }
+        // Its ascent and descent, from the face nearest its regular weight (Jost's Bold: no lighter one is bundled).
+        UINT32 index = 0;
+        BOOL exists = FALSE;
+        ComPtr<IDWriteFontFamily> fontFamily;
+        ComPtr<IDWriteFont> font;
+        if (f.collection && SUCCEEDED(f.collection->FindFamilyName(f.name.c_str(), &index, &exists)) && exists &&
+            SUCCEEDED(f.collection->GetFontFamily(index, &fontFamily)) &&
+            SUCCEEDED(fontFamily->GetFirstMatchingFont(DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                                                       DWRITE_FONT_STYLE_NORMAL, &font))) {
+            DWRITE_FONT_METRICS m{};
+            font->GetMetrics(&m);
+            if (m.designUnitsPerEm > 0) {
+                f.ascent = static_cast<float>(m.ascent) / m.designUnitsPerEm;
+                f.descent = static_cast<float>(m.descent) / m.designUnitsPerEm;
+            }
+        }
+    }
+}
+
+const Canvas::FamilyFont& Canvas::family(const tokens::TypeStyle& style) const {
+    return families_[std::min(static_cast<size_t>(style.family), std::size(families_) - 1)];
 }
 
 void Canvas::create_target() {
@@ -138,13 +236,6 @@ void Canvas::circle(float cx, float cy, float radius, Color c, bool filled, floa
         target_->FillEllipse(e, brush(c));
     else
         target_->DrawEllipse(e, brush(c), width);
-}
-
-void Canvas::control_shadow(const Rect& r, float radius, bool dark) {
-    // 0 0.5px 1px rgba(0,0,0,0.14 light / 0.45 dark): approximated by a 0.5px offset, 1px larger halo.
-    const float a = dark ? 0.45f : 0.14f;
-    fill({r.x - 0.5f, r.y + 0.5f, r.w + 1, r.h + 0.5f}, {0, a * 0.5f}, radius + 0.5f);
-    fill({r.x, r.y + 0.5f, r.w, r.h}, {0, a}, radius);
 }
 
 void Canvas::path(const char* d, const Rect& r, float box, Color c, float strokeWidth, bool filled) {
@@ -273,67 +364,89 @@ void Canvas::image(const Rect& r, const std::vector<uint32_t>& pixels, int w, in
 }
 
 IDWriteTextFormat* Canvas::format(const tokens::TypeStyle& style, Align align, bool wrap) {
-    const std::wstring key = std::to_wstring(style.size) + L"/" + std::to_wstring(style.weight) + L"/" +
-                             (style.mono ? L"m" : L"s") + std::to_wstring(static_cast<int>(align)) + (wrap ? L"w" : L"");
+    const std::wstring key = std::to_wstring(style.size) + L"/" + std::to_wstring(style.lineHeight) + L"/" +
+                             std::to_wstring(style.weight) + L"/" + std::to_wstring(static_cast<int>(style.family)) + L"/" +
+                             std::to_wstring(static_cast<int>(align)) + (wrap ? L"w" : L"");
     auto it = formats_.find(key);
     if (it != formats_.end())
         return it->second.Get();
+    const FamilyFont& fam = family(style);
     ComPtr<IDWriteTextFormat> f;
-    dwrite_->CreateTextFormat(style.mono ? monoFamily_.c_str() : systemFamily_.c_str(), nullptr,
-                              static_cast<DWRITE_FONT_WEIGHT>(style.weight), DWRITE_FONT_STYLE_NORMAL,
-                              DWRITE_FONT_STRETCH_NORMAL, style.size, L"en-us", &f);
+    dwrite_->CreateTextFormat(fam.name.c_str(), fam.collection.Get(), static_cast<DWRITE_FONT_WEIGHT>(style.weight),
+                              DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, style.size, L"en-us", &f);
     if (!f)
         return nullptr;
     f->SetTextAlignment(align == Align::Center     ? DWRITE_TEXT_ALIGNMENT_CENTER
                         : align == Align::Trailing ? DWRITE_TEXT_ALIGNMENT_TRAILING
                                                    : DWRITE_TEXT_ALIGNMENT_LEADING);
     f->SetWordWrapping(wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
-    // The kit's line heights, baseline at 80% of the line (typical for Segoe UI).
-    f->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, style.lineHeight, style.lineHeight * 0.8f);
+    // The style's line height, with the font's own box (ascent + descent) centred in it.
+    const float box = (fam.ascent + fam.descent) * style.size;
+    f->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, style.lineHeight,
+                      (style.lineHeight - box) / 2 + fam.ascent * style.size);
     formats_[key] = f;
     return f.Get();
 }
 
-float Canvas::text(const std::wstring& s, const tokens::TypeStyle& style, const Rect& r, Color c, Align align, bool vcenter,
-                   bool wrap) {
+// `s` laid out in `style`: upper-cased, letter-spaced and with tabular figures as the style asks.
+ComPtr<IDWriteTextLayout> Canvas::layout(const std::wstring& s, const tokens::TypeStyle& style, Align align, bool wrap,
+                                         float w, float h) {
+    ComPtr<IDWriteTextLayout> out;
     IDWriteTextFormat* f = format(style, align, wrap);
-    if (!f || s.empty())
-        return 0;
-    ComPtr<IDWriteTextLayout> layout;
-    if (FAILED(dwrite_->CreateTextLayout(s.c_str(), static_cast<UINT32>(s.size()), f, r.w, r.h, &layout)))
-        return 0;
-    if (style.mono) {
-        // Tabular figures (the kit's `value` style).
+    if (!f)
+        return out;
+    std::wstring text = s;
+    if (style.upper)
+        for (wchar_t& ch : text)
+            ch = static_cast<wchar_t>(std::towupper(ch));
+    if (FAILED(dwrite_->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), f, w, h, &out)))
+        return nullptr;
+    const DWRITE_TEXT_RANGE all{0, static_cast<UINT32>(text.size())};
+    if (style.tabular) {
         ComPtr<IDWriteTypography> typography;
         if (SUCCEEDED(dwrite_->CreateTypography(&typography))) {
             typography->AddFontFeature({DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES, 1});
-            layout->SetTypography(typography.Get(), {0, static_cast<UINT32>(s.size())});
+            out->SetTypography(typography.Get(), all);
         }
     }
+    if (style.tracking != 0) {  // half before and half after each letter, so centred text stays centred
+        ComPtr<IDWriteTextLayout1> spaced;
+        const float half = style.tracking * style.size / 2;
+        if (SUCCEEDED(out.As(&spaced)))
+            spaced->SetCharacterSpacing(half, half, 0, all);
+    }
+    return out;
+}
+
+float Canvas::text(const std::wstring& s, const tokens::TypeStyle& style, const Rect& r, Color c, Align align, bool vcenter,
+                   bool wrap) {
+    if (s.empty())
+        return 0;
+    const ComPtr<IDWriteTextLayout> l = layout(s, style, align, wrap, r.w, r.h);
+    if (!l)
+        return 0;
     DWRITE_TEXT_METRICS m{};
-    layout->GetMetrics(&m);
+    l->GetMetrics(&m);
     const float y = vcenter ? r.y + (r.h - m.height) / 2 : r.y;
-    target_->DrawTextLayout(D2D1::Point2F(r.x, y), layout.Get(), brush(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    target_->DrawTextLayout(D2D1::Point2F(r.x, y), l.Get(), brush(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
     return m.widthIncludingTrailingWhitespace;
 }
 
 float Canvas::measure(const std::wstring& s, const tokens::TypeStyle& style) {
-    IDWriteTextFormat* f = format(style, Align::Leading, false);
-    ComPtr<IDWriteTextLayout> layout;
-    if (!f || FAILED(dwrite_->CreateTextLayout(s.c_str(), static_cast<UINT32>(s.size()), f, 10000, 1000, &layout)))
+    const ComPtr<IDWriteTextLayout> l = layout(s, style, Align::Leading, false, 10000, 1000);
+    if (!l)
         return 0;
     DWRITE_TEXT_METRICS m{};
-    layout->GetMetrics(&m);
+    l->GetMetrics(&m);
     return m.widthIncludingTrailingWhitespace;
 }
 
 float Canvas::measure_height(const std::wstring& s, const tokens::TypeStyle& style, float width) {
-    IDWriteTextFormat* f = format(style, Align::Leading, true);
-    ComPtr<IDWriteTextLayout> layout;
-    if (!f || FAILED(dwrite_->CreateTextLayout(s.c_str(), static_cast<UINT32>(s.size()), f, width, 10000, &layout)))
+    const ComPtr<IDWriteTextLayout> l = layout(s, style, Align::Leading, true, width, 10000);
+    if (!l)
         return style.lineHeight;
     DWRITE_TEXT_METRICS m{};
-    layout->GetMetrics(&m);
+    l->GetMetrics(&m);
     return m.height;
 }
 

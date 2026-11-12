@@ -327,6 +327,7 @@ int run_window(HINSTANCE instance, int show) {
     OleInitialize(nullptr);  // dragging the report's zip out (SHDoDragDrop)
     app.ini = settings_path();
     app.iniFound = GetFileAttributesW(app.ini.c_str()) != INVALID_FILE_ATTRIBUTES;
+    app.themeChoice = read_theme_choice();  // before the window's first apply_theme
     clean_update_folder(std::filesystem::path(app.ini).parent_path().wstring());  // what an install left but its backup
     if (app.iniFound) {
         // Per-game settings: a game without its own copy yet (the first start after the update, or a new game)

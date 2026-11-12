@@ -253,9 +253,9 @@ float layers_preview(float x, float y, float w, bool draw) {
         for (size_t i = 0; i < chain.size(); ++i) {
             const Rect r{x, y + i * (pill + gap), w, pill};
             const auto& [text, tone] = chain[i];
-            app.canvas.fill(r, col(tone == 0 ? app.c->segment_track : tone == 1 ? app.c->accent_fill : app.c->group_bg), pill / 2);
+            app.canvas.fill(r, col(tone == 0 ? app.c->segment_track : tone == 1 ? app.c->accent_fill : app.c->group_bg), t::kRadiusControl);
             if (tone == 2)
-                app.canvas.stroke(r, col(app.c->separator), 1, pill / 2);
+                app.canvas.stroke(r, col(app.c->control_border), 1, t::kRadiusControl);
             app.canvas.text(text, t::kBody, {r.x + 14, r.y, r.w - 28, r.h}, col(tone == 1 ? app.c->on_accent : app.c->label),
                             Align::Center);
             if (i + 1 < chain.size()) {

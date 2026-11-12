@@ -290,6 +290,7 @@ void activate(Ctl id, int option) {
         return;
     }
     case kLaunch: launch(); return;
+    case kThemeToggle: cycle_theme(); return;
     case kSupport: ShellExecuteW(app.hwnd, L"open", kSupportUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     default: break;
     }
@@ -321,6 +322,7 @@ bool push_button(Ctl id) {
     case kLayerDown:
     case kSupport:
     case kRestore:
+    case kThemeToggle:
     case kLaunch:
     case kHotkeysReset:
     case kHotkeyKey:

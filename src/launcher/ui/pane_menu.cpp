@@ -203,18 +203,17 @@ using Content = std::function<float(float, float, float, bool)>;
 // A card in the preview column: a title (and a pill at its end) over `content`. Returns its height.
 float preview_card(float x, float y, float w, const std::wstring& title, const std::wstring& pill, const Content& content,
                    bool draw) {
-    const float pad = t::kSpace4, head = title.empty() ? 0 : 20 + t::kSpace3, radius = t::kRadiusGroup + 2;
+    const float pad = t::kSpace4, head = title.empty() ? 0 : 20 + t::kSpace3, radius = t::kRadiusGroup;
     const float ch = content(x + pad, y + pad + head, w - 2 * pad, false);
     const float h = pad + head + ch + pad;
     if (draw) {
-        app.canvas.fill({x, y, w, h}, col(app.c->group_bg), radius);
-        app.canvas.stroke({x, y, w, h}, col(app.c->card_border), 1, radius);
+        app.canvas.fill({x, y, w, h}, col(app.c->group_bg), radius);  // flat, as the panes' cards
         if (!title.empty()) {
             app.canvas.text(title, t::kHeadline, {x + pad, y + pad, w - 2 * pad, 20}, col(app.c->label));
             if (!pill.empty()) {
                 const float pw = std::ceil(app.canvas.measure(pill, t::kSubheadline)) + 18;
                 const Rect pr{x + w - pad - pw, y + pad, pw, 20};
-                app.canvas.fill(pr, col(app.dark ? 0xffffff : 0, 0.07f), 10);
+                app.canvas.fill(pr, col(app.c->control_bg), t::kRadiusControl);
                 app.canvas.text(pill, t::kSubheadline, pr, col(app.c->label_secondary), Align::Center);
             }
         }
@@ -228,7 +227,7 @@ Content in_well(Content frame, Content after = nullptr) {
     return [frame, after](float x, float y, float w, bool draw) {
         const float pad = t::kSpace3, fh = frame(x + pad, y + pad, w - 2 * pad, false);
         if (draw) {
-            app.canvas.fill({x, y, w, fh + 2 * pad}, col(app.c->preview_canvas), 10);
+            app.canvas.fill({x, y, w, fh + 2 * pad}, col(app.c->preview_canvas), t::kRadiusGroup);
             frame(x + pad, y + pad, w - 2 * pad, true);
         }
         float h = fh + 2 * pad;

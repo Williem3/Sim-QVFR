@@ -227,17 +227,19 @@ Each phase is one commit on this branch (based on `development`), built with `bu
 7. **Overview hub and Ko-fi placements**, About sheet. Check: summaries match the settings; the empty state; profile switching from the segmented control and the headset menu.
 8. **Polish:** responsive pass at 1024, 1280, 1440 and 1920; accessibility pass (keyboard-only, Narrator, 125 % and 150 % text, reduced motion); copy pass; `docs/ui/CHANGES.md`; screenshots of every tab in both themes at 1440 and 1024 for the PR.
 
-## 6. Open questions for review
+## 6. Decisions (review, 2026-11-12)
 
-1. **Per-game colours.** Today each game's colour (`[launcher] color_<id>`) recolours the Launch button, selection and sliders. The new palette fixes those (red Launch, blue selection, yellow selected game). Keep the colours as a rail marker: a 4 px bar on each game block, and the selected block's notch. The setting stays in Game › Games in the rail with presets + Custom….
-2. **Persisting the theme override.** This needs a new key. I suggest `[launcher] ui_theme = system | light | dark`. `[launcher]` is already out of profiles and per-game copies, and no existing key changes. Is a new key acceptable under §0.2?
-3. **Rail abbreviations.** X-Plane's `shortName` is "X-Plane"; the mockup shows "XP12". I suggest a UI-side table (`xplane` → "XP12") with `shortName` as the fallback, leaving the game table alone. Or add a field to `GameInfo` if you prefer the game table to own it.
-4. **Landing view.** Today the window opens on Launch checks; the brief makes Overview the landing view. Plan: Overview opens first, with an attention banner and the status in the top bar when a check needs attention, and Launch checks lives in the Game tab. OK?
-5. **About and updates.** The brief doesn't place them. Plan: the version in the rail opens an About sheet (updates, disclaimer, NVIDIA and Cheeky notices), and an available update shows as a dot on the version and in the status. Alternative: an About card in the Game tab.
-6. **Report an issue.** Plan: a sheet opened from Game › Get help and from the launch status link, so the Game tab stays short. Alternative: a full card.
-7. **Restore Defaults.** The brief removes the global button, and §0.1 says no feature loss. Plan: per-card "Reset this card" (with confirmation) plus "Restore defaults for <game>…" in the Profile menu, keeping today's Undo and Ctrl+Z. Or drop the global action entirely?
-8. **Fonts.** Jost and Inter are not in the repo. May I download them from their official OFL repositories (github.com/indestructible-type/Jost, github.com/rsms/inter) in Phase 2, or will you supply the files?
-9. **Old design kit.** Replace `docs/qvfr-launcher-kit` with the new tokens and rules, or keep it as history with a "superseded by docs/ui" note?
-10. **Screen readers.** Meeting §6 in full needs a UI Automation provider (none exists today). It is the largest single piece of new work. Do it in Phase 8 as planned, or treat Narrator support as a follow-up after the visual overhaul?
-11. **"Pixels saved" in Last session.** Use that session's own settings (the session record keeps them), or the current settings? I suggest the session's own, so the number describes that run.
-12. **LMU resolution badge.** The Resolution card is tagged "Live when lowered" for every game in QVFR, but LMU's `GameFeatures::liveResolution` is false. I will keep today's tag unless you confirm LMU resolution waits for the next launch, in which case the badge says "Next launch" for LMU (copy only).
+The user answered "use your defaults" to the twelve open questions:
+
+1. **Per-game colours** stay as the game's marker in the rail (a 4 px bar on each block, and the selected block's notch). They no longer recolour Launch, selection or sliders. The setting stays in Game › Games in the rail, with presets and Custom….
+2. **Theme override** is persisted in a new key, `[launcher] ui_theme = system | light | dark`. It is outside profiles and per-game copies, and no existing key changes.
+3. **Rail abbreviations** come from a UI-side table (`xplane` → "XP12"), with `shortName` as the fallback. The game table is unchanged.
+4. **Landing view** is Overview. Launch checks lives in Game › Launch checks; the top bar status and an Overview banner flag problems.
+5. **About and updates** are in an About sheet, opened from the version in the rail. An available update shows as a dot on the version and in the status.
+6. **Report an issue** is a sheet, opened from Game › Get help and from the launch status link.
+7. **Restore Defaults:** each card has "Reset this card" (with confirmation), and the Profile menu has "Restore defaults for <game>…" with today's Undo and Ctrl+Z.
+8. **Fonts:** Jost and Inter are downloaded from their official OFL repositories and bundled.
+9. **Old design kit** stays as history, with a note that `docs/ui` supersedes it.
+10. **Screen readers:** the UI Automation provider is built in Phase 8.
+11. **Pixels saved** in Last session uses that session's own settings.
+12. **LMU resolution badge** keeps today's tag.

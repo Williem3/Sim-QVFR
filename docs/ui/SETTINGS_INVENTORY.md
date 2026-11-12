@@ -40,6 +40,7 @@ Phase 1 of the UI overhaul (`OVERHAUL_PLAN.md`). This file lists every control, 
 | Tab strip | Game tab (one per game) | nav | `[launcher] game`. Switching swaps the per-game keys (`switch_game_settings`) | Launcher | Shown when installed and not hidden, or added by hand (§12). The selected game always shows. | No | Rail › game block |
 | Tab strip | Game tab colour dot and underline | info | `[launcher] color_<id>` (or the built-in palette) | — | — | No | Rail (see plan, open question 1) |
 | Tab strip | Short names when full names don't fit | info | — | — | Window width | — | Rail collapses to abbreviations under 1024 px |
+| Tab strip (new in phase 2) | Theme: following Windows / Light / Dark (sun, moon, half circle; Return or click cycles) | button | `[launcher] ui_theme` (`system`, `light`, `dark`) | Launcher | `SIM_QVFR_LAUNCHER_THEME` overrides it | No | Top bar › ☾ / ☀ |
 | Sidebar | 13 pane rows in 5 groups | nav | — | — | DLSS row only for games with Cheeky or Sim-QVFR's own DLSS (`pane_shown`) | — | Top bar tabs: Overview, Picture, Headset, Game |
 | Sidebar | Attention mark on Foveation (eye tracker missing) | info | runtime.ini `eye_tracking` | — | Eye tracked on and tracker missing | — | Picture tab dot with a word; Overview › Foveation chip |
 | Sidebar | Attention mark on Launch checks (warn or problem) | info | — | — | A check is Warn or Bad | — | Top bar status (opens Game › Launch checks) |

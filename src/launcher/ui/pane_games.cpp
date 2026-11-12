@@ -190,19 +190,22 @@ float games_pane(float x, float y, float w, bool draw) {
     wheel.fullHeight = [](float) { return 184.0f; };
     wheel.full = [&game](const Rect& r) {
         color_wheel({r.x, r.y, r.h, r.h});
-        // What it looks like: the game's tab and a button in its colours.
+        // What it looks like: the game's marker on its tab, chosen (yellow) and not.
         const t::Accent a = game_accent(game);
         const float px = r.x + r.h + t::kSpace6, pw = std::min(260.0f, r.right() - px);
         if (pw < 120)
             return;
-        const Rect tab{px, r.y + 40, pw, 34};
-        app.canvas.fill(tab, col(a.accent_fill, app.dark ? 0.22f : 0.12f), t::kRadiusControl);
-        app.canvas.circle(tab.x + 18, tab.y + tab.h / 2, 4, col(a.accent), true);
-        app.canvas.text(game.name, t::kBody, {tab.x + 30, tab.y, tab.w - 34, tab.h}, col(app.c->label));
-        app.canvas.fill({tab.x + 10, tab.bottom() - 3, tab.w - 20, 3}, col(a.accent), 1.5f);
-        const Rect button{px, tab.bottom() + 16, std::min(pw, 140.0f), t::kControlHeight};
-        app.canvas.fill(button, col(a.accent_fill), t::kRadiusControl);
-        app.canvas.text(L"Launch", kButtonLabel, button, col(a.on_accent), Align::Center);
+        const auto tab = [&](float ty, bool chosen) {
+            const Rect tr{px, ty, pw, 34};
+            app.canvas.fill(tr, col(chosen ? app.c->yellow : app.c->control_bg), t::kRadiusControl);
+            app.canvas.fill({tr.x + 14, tr.y + tr.h / 2 - 4, 8, 8}, col(a.accent_fill));
+            if (chosen)
+                app.canvas.stroke({tr.x + 13.5f, tr.y + tr.h / 2 - 4.5f, 9, 9}, col(app.c->ink, 0.6f), 1);
+            app.canvas.text(game.name, t::kBodyMedium, {tr.x + 30, tr.y, tr.w - 34, tr.h}, col(chosen ? app.c->ink : app.c->label));
+            return tr;
+        };
+        const Rect chosen = tab(r.y + 40, true);
+        tab(chosen.bottom() + 12, false);
         app.canvas.text(L"Preview", t::kSubheadline, {px, r.y + 14, pw, 18}, col(app.c->label_secondary));
     };
     Row reset;

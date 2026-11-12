@@ -219,34 +219,66 @@ float checks_badge(float y, int tone, const Check& first, float maxWidth) {
     return w;
 }
 
-constexpr t::TypeStyle kBodyMedium{t::kBody.size, t::kBody.lineHeight, 500, false};
+constexpr t::TypeStyle kBodyMedium = t::kBodyMedium;
 
-constexpr t::TypeStyle kBodyStrong{t::kBody.size, t::kBody.lineHeight, 600, false};
+constexpr t::TypeStyle kBodyStrong = t::kBodyStrong;
 
-// The app's mark: the game's accent with an eye.
+// The app's mark: a blue square, a red circle and a yellow triangle (Picture, Headset, Game), `size` high.
 void brand_mark(float x, float y, float size) {
-    app.canvas.fill({x, y, size, size}, col(app.c->accent_fill), size * 0.28f);
-    const float g = size * 0.66f, gx = x + (size - g) / 2, gy = y + (size - g) / 2;
-    app.canvas.path("M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z", {gx, gy, g, g}, 24, col(app.c->on_accent), 2.2f);
-    app.canvas.circle(gx + g / 2, gy + g / 2, g * 0.11f, col(app.c->on_accent), false, 2.2f * g / 24);
+    const float s = size * 0.62f, gap = size * 0.14f, top = y + (size - s) / 2;
+    app.canvas.fill({x, top, s, s}, col(app.c->blue));
+    app.canvas.circle(x + s + gap + s / 2, top + s / 2, s / 2, col(app.c->red), true);
+    app.canvas.path("M0 12L6 0L12 12Z", {x + 2 * (s + gap), top, s, s}, 12, col(app.c->yellow), 0, true);
 }
 
-// The tab strip: the app's name, then a tab per game, each marked in its own accent; the chosen one's palette is the
-// window's (apply_theme).
+// The brand mark's width at `size`.
+float brand_width(float size) { return 3 * size * 0.62f + 2 * size * 0.14f; }
+
+// The theme button's glyph: a sun (light), a moon (dark), or a half-filled circle (following Windows).
+void theme_glyph(const Rect& r, Color c) {
+    const float cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    switch (app.themeChoice) {
+    case ThemeChoice::Light:
+        app.canvas.circle(cx, cy, 3.5f, c, false, 1.5f);
+        for (int i = 0; i < 8; ++i) {
+            const float a = i * 3.14159265f / 4, dx = std::cos(a), dy = std::sin(a);
+            app.canvas.line(cx + dx * 5.75f, cy + dy * 5.75f, cx + dx * 7.5f, cy + dy * 7.5f, c, 1.5f);
+        }
+        break;
+    case ThemeChoice::Dark:  // a crescent
+        app.canvas.path("M11.5 3C7.5 1.5 2.5 4.5 2.5 8.5C2.5 12.5 7.5 15 11.5 13C8 12 6.5 10.5 6.5 8C6.5 5.5 8 4 11.5 3Z", r, 16,
+                        c, 1.5f);
+        break;
+    default:
+        app.canvas.circle(cx, cy, 6, c, false, 1.5f);
+        app.canvas.path("M8 2C11.3 2 14 4.7 14 8S11.3 14 8 14Z", r, 16, c, 0, true);
+        break;
+    }
+}
+
+// The tab strip: the app's name, then a tab per game, each with its own colour as a marker; the chosen one in yellow.
 void game_tabs(float W) {
     Canvas& cv = app.canvas;
     const float H = t::kTabbarHeight;
     cv.fill({0, 0, W, H}, col(app.c->titlebar_bg));
     cv.line(0, H - 0.5f, W, H - 0.5f, col(app.c->card_border), 1);
     // The app: its mark, its name and BETA.
-    const float bx = t::kSpace4;
-    brand_mark(bx, (H - 24) / 2, 24);
-    const float nameW = std::ceil(cv.measure(L"Sim-QVFR", kBodyStrong));
-    cv.text(L"Sim-QVFR", kBodyStrong, {bx + 24 + 10, 0, nameW + 2, H}, col(app.c->label));
-    const t::TypeStyle beta{10.5f, 14, 600, false};
-    const float betaW = std::ceil(cv.measure(L"BETA", beta)) + 14, betaX = bx + 24 + 10 + nameW + 8;
-    cv.fill({betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning_bg), 9);
+    const float bx = t::kSpace4, markW = brand_width(20);
+    brand_mark(bx, (H - 20) / 2, 20);
+    const float nameW = std::ceil(cv.measure(L"Sim-QVFR", t::kTitle3));
+    cv.text(L"Sim-QVFR", t::kTitle3, {bx + markW + 10, 0, nameW + 2, H}, col(app.c->label));
+    const t::TypeStyle beta = t::kFootnote;
+    const float betaW = std::ceil(cv.measure(L"BETA", beta)) + 12, betaX = bx + markW + 10 + nameW + 8;
+    cv.fill({betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning_bg), t::kRadiusControl);
     cv.text(L"BETA", beta, {betaX, (H - 18) / 2, betaW, 18}, col(app.c->warning), Align::Center);
+    // Light, dark or following Windows: a button at the strip's end ([launcher] ui_theme).
+    const Rect themeR{W - t::kSpace4 - 32, (H - 32) / 2, 32, 32};
+    if (pointer_in(themeR))
+        cv.fill(themeR, col(app.c->control_hover), t::kRadiusControl);
+    theme_glyph({themeR.x + 8, themeR.y + 8, 16, 16}, col(app.c->label));
+    if (focused(kThemeToggle))
+        focus_ring(themeR, t::kRadiusControl);
+    app.hits.push_back({kThemeToggle, themeR});
     // The games, from the content column's edge; short names when the full ones don't fit.
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
@@ -256,7 +288,7 @@ void game_tabs(float W) {
     for (std::size_t i = 0; i < count; ++i)
         if (game_shown(*all[i]) || all[i] == &games::launcher_game())
             full += tab_width(all[i]->name) + 4;
-    const bool shortNames = x0 + full > W - t::kSpace4;
+    const bool shortNames = x0 + full > themeR.x - t::kSpace4;
     float x = x0;
     for (std::size_t i = 0; i < count; ++i) {
         const games::GameInfo& game = *all[i];
@@ -266,15 +298,16 @@ void game_tabs(float W) {
         const std::wstring label = shortNames ? game.shortName : game.name;
         const t::Accent accent = game_accent(game);
         const Rect tab{x, 8, tab_width(label), H - 16};
-        if (selected)
-            cv.fill(tab, col(accent.accent_fill, app.dark ? 0.22f : 0.12f), t::kRadiusControl);
+        if (selected)  // the selected game: yellow, with ink text (both themes)
+            cv.fill(tab, col(app.c->yellow), t::kRadiusControl);
         else if (pointer_in(tab))
-            cv.fill(tab, col(app.dark ? 0xffffff : 0, 0.06f), t::kRadiusControl);
-        cv.circle(tab.x + 14 + 4, tab.y + tab.h / 2, 4, col(accent.accent), true);
+            cv.fill(tab, col(app.c->control_hover), t::kRadiusControl);
+        // The game's own colour as its marker (Games pane), with an ink edge on the yellow.
+        cv.fill({tab.x + 14, tab.y + tab.h / 2 - 4, 8, 8}, col(accent.accent_fill));
+        if (selected)
+            cv.stroke({tab.x + 13.5f, tab.y + tab.h / 2 - 4.5f, 9, 9}, col(app.c->ink, 0.6f), 1);
         cv.text(label, selected ? kBodyStrong : kBodyMedium, {tab.x + 14 + 8 + 8, tab.y, tab.w - 30, tab.h},
-                col(selected ? app.c->label : app.c->label_secondary));
-        if (selected)  // the chosen tab's edge, in its accent, on the strip's bottom line
-            cv.fill({tab.x + 10, H - 3, tab.w - 20, 3}, col(accent.accent), 1.5f);
+                col(selected ? app.c->ink : app.c->label_secondary));
         if (selected && focused(kGameTab))
             focus_ring(tab, t::kRadiusControl);
         app.hits.push_back({kGameTab, tab, static_cast<int>(i)});
@@ -341,7 +374,7 @@ float pane_header(float x, float y, float w, bool draw) {
     const std::wstring desc = pane_description(app.pane);
     const float dh = app.canvas.measure_height(desc, t::kBody, w);
     if (draw) {
-        app.canvas.text(group_of(static_cast<int>(app.pane)), {12, 16, 600, false}, {x, y, w, 16}, col(app.c->label_muted));
+        app.canvas.text(group_of(static_cast<int>(app.pane)), t::kFootnote, {x, y, w, 16}, col(app.c->label_muted));
         app.canvas.text(pane_label(static_cast<int>(app.pane)), t::kLargeTitle, {x, y + 20, w, t::kLargeTitle.lineHeight},
                         col(app.c->label));
         app.canvas.text(desc, t::kBody, {x, y + 20 + t::kLargeTitle.lineHeight + 4, w, dh + 2}, col(app.c->label_secondary),
@@ -477,7 +510,7 @@ void paint() {
     if (game_running())  // a second launch would start nothing: the game's state is in Launch checks
         button(kLaunch, launchR, short_name() + L" is running", Btn::Secondary);
     else
-        button(kLaunch, launchR, launchLabel, Btn::Primary, kIconPlay);
+        button(kLaunch, launchR, launchLabel, Btn::Launch, kIconPlay);
 
     if (app.sheet.open)
         sheet_card();  // over everything: nothing under it answers
@@ -489,14 +522,13 @@ void paint() {
         const Popup& p = app.popup;
         const float itemH = kMenuItemH;
         const Rect menu = popup_menu_rect();
-        cv.fill({menu.x, menu.y + 4, menu.w, menu.h}, {0, app.dark ? 0.5f : 0.16f}, t::kRadiusGroup);
         cv.fill(menu, col(app.dark ? app.c->control_bg : app.c->group_bg), t::kRadiusGroup);
         cv.stroke(menu, col(app.dark ? app.c->control_hover : app.c->card_border), 1, t::kRadiusGroup);
         for (size_t i = 0; i < p.items.size(); ++i) {
             const Rect item{menu.x + 6, menu.y + 6 + itemH * i, menu.w - 12, itemH};
             const bool hot = static_cast<int>(i) == p.hover;
             if (hot)
-                cv.fill(item, col(app.c->accent_fill), 6);
+                cv.fill(item, col(app.c->accent_fill), t::kRadiusControl);
             if (static_cast<int>(i) == p.selected)
                 cv.path("M3.5 8.2l2.6 2.6L12.5 4.5", {item.x + 8, item.y + (itemH - 14) / 2, 14, 14}, 16,
                         col(hot ? app.c->on_accent : app.c->accent), 1.8f);

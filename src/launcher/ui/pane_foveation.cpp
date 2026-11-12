@@ -267,24 +267,20 @@ namespace {
 // A share as a bar under a readout. Returns its height.
 float meter(float x, float y, float w, double share, uint32_t color, bool draw) {
     if (draw) {
-        app.canvas.fill({x, y, w, 6}, col(app.c->segment_track), 3);
+        app.canvas.fill({x, y, w, 6}, col(app.c->segment_track));
         const float f = static_cast<float>(std::clamp(share, 0.0, 1.0));
         if (f > 0)
-            app.canvas.fill({x, y, std::max(6.0f, w * f), 6}, col(color), 3);
+            app.canvas.fill({x, y, std::max(6.0f, w * f), 6}, col(color));
     }
     return 6;
 }
 
 }  // namespace
 
-// An upper-case group label (the sidebar's, a card's). Returns its height.
+// An upper-case group label (the sidebar's, a card's: kFootnote upper-cases it). Returns its height.
 float eyebrow(float x, float y, float w, const std::wstring& text, bool draw) {
-    if (draw) {
-        std::wstring upper = text;
-        for (wchar_t& ch : upper)
-            ch = static_cast<wchar_t>(towupper(ch));
-        app.canvas.text(upper, t::kFootnote, {x, y, w, t::kFootnote.lineHeight}, col(app.c->label_muted));
-    }
+    if (draw)
+        app.canvas.text(text, t::kFootnote, {x, y, w, t::kFootnote.lineHeight}, col(app.c->label_muted));
     return t::kFootnote.lineHeight;
 }
 

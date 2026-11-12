@@ -90,8 +90,13 @@ enum Ctl {
     // Restore Defaults' Undo.
     kLaunchBadge, kUndoBadge,
     // An open sheet (open_sheet): its buttons (option: the button's index) and its name field.
-    kSheetButton, kSheetField
+    kSheetButton, kSheetField,
+    // The theme button: following Windows, light or dark ([launcher] ui_theme).
+    kThemeToggle
 };
+
+// The theme the window uses: Windows' app theme, or one chosen with the theme button ([launcher] ui_theme).
+enum class ThemeChoice { System, Light, Dark };
 
 inline constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
 
@@ -197,7 +202,8 @@ struct App {
     HWND hwnd = nullptr;
     Canvas canvas;
     bool dark = false;
-    t::Colors theme = t::kLight;  // the system theme's colours with the chosen game's accent (apply_theme)
+    ThemeChoice themeChoice = ThemeChoice::System;  // [launcher] ui_theme (read_theme_choice)
+    t::Colors theme = t::kLight;  // the theme's colours (apply_theme)
     const t::Colors* c = &theme;
     // The pointer (DIPs; off the window: -1) and the control under it in the last frame's hits (hover states).
     float mouseX = -1, mouseY = -1;
@@ -332,6 +338,8 @@ COLORREF colorref(uint32_t rgb);
 t::Accent builtin_accent(const games::GameInfo& game);
 std::wstring game_id(const games::GameInfo& game);
 t::Accent game_accent(const games::GameInfo& game);
+ThemeChoice read_theme_choice();
+void cycle_theme();
 void apply_theme();
 bool eye_warning();
 void push_live();

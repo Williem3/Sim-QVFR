@@ -206,7 +206,6 @@ void help_tip() {
     card.x = std::clamp(card.x, 8.0f, app.canvas.width() - w - 8);
     if (card.bottom() > app.canvas.height() - 8)  // no room under it: above
         card.y = app.tipAnchor.y - 8 - card.h;
-    app.canvas.fill({card.x, card.y + 4, card.w, card.h}, {0, app.dark ? 0.5f : 0.16f}, t::kRadiusGroup);
     app.canvas.fill(card, col(app.dark ? app.c->control_bg : app.c->group_bg), t::kRadiusGroup);
     app.canvas.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, t::kRadiusGroup);
     app.canvas.text(text, t::kCallout, {card.x + pad, card.y + pad, w - 2 * pad, th + 2}, col(app.c->label), Align::Leading, false,
