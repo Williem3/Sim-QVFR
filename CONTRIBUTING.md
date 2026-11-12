@@ -184,10 +184,16 @@ never carries the SDK's headers or libraries (`package.ps1` checks the zip), onl
 (`$dlssReleases`, by git blob hash in github.com/NVIDIA/DLSS): never the development one (`dev`), which has the same
 signature and version. For a newer SDK, add its `rel` DLL's blob hash there.
 
-A release with DLSS goes out only after NVIDIA has been notified (developer.nvidia.com/sw-notification) and has
-approved in writing how the About page, the README and the release notes name NVIDIA and DLSS. Its RTX SDKs licence
-asks for both (its supplement, sections 4 and 7). NVIDIA's names stand on their own: "Sim-QVFR uses NVIDIA DLSS",
-never "Sim-QVFR's DLSS". Until then, release with `-NoDlss`.
+A release with DLSS goes out under NVIDIA's RTX SDKs licence as it stands, which grants the distribution itself
+(section 1c: the SDK in object code inside an application). The rules for it:
+- **Notify NVIDIA first** (developer.nvidia.com/sw-notification; the licence's supplement, section 4).
+- **A text credit only, no NVIDIA logos or mark artwork.** The supplement asks for NVIDIA's written approval of each
+  use of its marks (section 7.2c; no answer counts as not approved), and none has been given. The About page, the
+  README and the release notes name NVIDIA and DLSS only to say what the software uses, with the trademark and
+  "not sponsored or endorsed" lines. When NVIDIA answers, its answer replaces this rule.
+- **NVIDIA's names stand on their own:** "Sim-QVFR uses NVIDIA DLSS", never "Sim-QVFR's DLSS" (section 7.3b).
+- **No promotion with NVIDIA's name:** not in a release title, a banner or a post's headline.
+- **If NVIDIA asks for a change or a removal,** make it at once: `-NoDlss` builds the same release without DLSS.
 
 ## The launcher
 
