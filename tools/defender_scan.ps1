@@ -47,7 +47,14 @@ foreach ($d in $detections) {
         if (-not $path.StartsWith($Folder + '\', [StringComparison]::OrdinalIgnoreCase)) { continue }
         $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
         $line = '{0:yyyy-MM-dd HH:mm:ss} {1}: {2}' -f $d.InitialDetectionTime, $name, $path
-        if ($file -and $file.LastWriteTime -gt $d.InitialDetectionTime) {
+        # The exe-per-test builds' programs (<name>_test.exe, <name>_check.exe) are no longer built: CMake removes
+        # them from a build folder that has the one test program, so one that is gone there was not quarantined.
+        $retired = -not $file -and $path -match '_(test|check)\.exe$' -and
+                   (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $path) 'sim_qvfr_tests.exe'))
+        if ($retired) {
+            Write-Host ('defender_scan: retired (no longer built): {0}, detected {1:yyyy-MM-dd HH:mm} {2}' -f
+                        (Split-Path -Leaf $path), $d.InitialDetectionTime, $name)
+        } elseif ($file -and $file.LastWriteTime -gt $d.InitialDetectionTime) {
             $superseded += [pscustomobject]@{ Path = $path; Time = $d.InitialDetectionTime; Name = $name }
         } else {
             $flagged += "history: $line$(if (-not $file) { ' (gone: quarantined)' })"
