@@ -11,6 +11,7 @@
 #include <MinHook.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -183,6 +184,10 @@ struct PsTwinSet {
 struct HookTime {
     uint64_t hooks = 0, lookups = 0, switches = 0, calls = 0;
     uint64_t cars = 0, carCalls = 0;  // car tracking's own work (not the calls passed on); its hooks' calls
+    uint64_t carReads = 0, carDraws = 0;  // of `cars`: the matrix reads at Unmap, the draws (keys, the table)
+    // Car slots' (the calls they make included): the slot views bound per draw (1 in 16 timed), the target's binds and
+    // the blend states' twins, the motions computed and uploaded.
+    uint64_t slotViews = 0, slotState = 0, motion = 0;
 };
 
 bool timeHooks = false;  // mvr_time_hooks
@@ -273,6 +278,12 @@ struct State {
     UINT worldCbOffset = 0;
     ID3D11Buffer* vbChecked = nullptr;  // the vertex buffer last checked for dynamic usage (reset each frame)
     bool vbDynamic = false;
+    struct VbSeen {  // a vertex buffer's usage as D3D gave it this frame (vb_dynamic)
+        ID3D11Buffer* vb = nullptr;
+        uint64_t frame = 0;
+        bool dynamic = false;
+    };
+    std::array<VbSeen, 512> vbSeen{};
     void* worldMapped = nullptr;
     float matrix[16] = {};
     CarMotion cars;
@@ -306,6 +317,7 @@ struct State {
     std::vector<float> motion;
     uint64_t slotViewsThisPass = 0;
     uint64_t slotImageFrame = 0, slotImageAfter = 900;  // the gate image's frame (both eyes), the earliest next one
+    bool slotImages = false;                             // mvr_car_slot_images
     MvrPassStats carStatsLogged;  // (only its car counts are read)
     // Each pass's multisample resolve target; the sampled regions.
     ComPtr<ID3D11Resource> resolved[4];
@@ -981,7 +993,7 @@ inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Res
     if (timeHooks)
         ++g.time.carCalls;
     if (resource == g.worldRes && g.worldMapped && g.carActive && context == g.context) {
-        SampledTimed timed(g.time.cars, carSampleRead);
+        SampledTimed timed(g.time.carReads, carSampleRead);
         std::memcpy(g.matrix, static_cast<const uint8_t*>(g.worldMapped) + g.worldCbOffset, sizeof(g.matrix));
         g.worldMapped = nullptr;
         g.carMatrix = true;
@@ -1093,6 +1105,7 @@ inline void om_set_blend_state(BlendFn real, ID3D11DeviceContext* context, ID3D1
             g.blendFactor[i] = factor ? factor[i] : 1.0f;
         g.sampleMask = mask;
         if (g.slotsBound) {
+            Timed timed(g.time.slotState);
             real(context, blend_twin(bs, g.depthWrites), g.blendFactor, mask);
             g.blendSwapped = true;
             return;
@@ -1109,8 +1122,10 @@ inline void om_set_depth_stencil_state(DepthFn real, ID3D11DeviceContext* contex
         const bool writes = depth_writes(ds);
         if (writes != g.depthWrites) {
             g.depthWrites = writes;
-            if (g.slotsBound)
+            if (g.slotsBound) {
+                Timed timed(g.time.slotState);
                 apply_blend();
+            }
         }
     }
 }
@@ -1155,11 +1170,13 @@ bool ensure_slot_target() {
 
 // The slot view for this draw at t127: slot `slot`'s (its word slot + 1), or none (-1: the draw isn't a car part with
 // a frame before; unbound reads 0).
+uint32_t carSampleView = 0;  // bind_slot_view's 1 in 16 (SampledTimed's counter)
 void bind_slot_view(int slot) {
     ID3D11ShaderResourceView* view =
         slot >= 0 && static_cast<size_t>(slot) < g.slotViews.size() ? g.slotViews[slot].Get() : nullptr;
     if (view == g.slotViewBound)
         return;
+    SampledTimed timed(g.time.slotViews, carSampleView);
     g.context->PSSetShaderResources(127, 1, &view);
     g.slotViewBound = view;
     if (view) {
@@ -1173,6 +1190,7 @@ void bind_slot_view(int slot) {
 void slot_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
     if (!g.slotsOn)
         return;
+    Timed timed(g.time.slotState);
     const bool was = g.slotsBound;
     g.slotsBound = false;
     if (n == 1 && rtvs && rtvs[0] && dsv && g.carActive && is_scene_rtv(rtvs[0]) && ensure_slot_target()) {
@@ -1207,6 +1225,7 @@ void slot_bind(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilVi
 void slot_unbind() {
     if (!g.slotsBound)
         return;
+    Timed timed(g.time.slotState);
     ID3D11RenderTargetView* rtvs[2] = {};
     ID3D11DepthStencilView* dsv = nullptr;
     g.context->OMGetRenderTargets(2, rtvs, &dsv);
@@ -1220,6 +1239,24 @@ void slot_unbind() {
     bind_slot_view(-1);
     apply_blend();
     update_ps();
+}
+
+// Is this vertex buffer dynamic (the game's ring)? D3D is asked once a frame per buffer: an eye pass changes its vertex
+// buffer at ~550 of its ~1,400 draws but has ~160 of them (lmu-ai_frame11731.rdc), and each GetDesc is a cache miss in
+// the runtime's object. The answer is the frame's alone (a buffer freed since can't pass for one checked before at its
+// address).
+bool vb_dynamic(ID3D11Buffer* vb) {
+    if (!vb)
+        return false;
+    const size_t i = static_cast<size_t>((reinterpret_cast<uintptr_t>(vb) * 0x9E3779B97F4A7C15ull) >> 55);  // 9 bits
+    auto& seen = g.vbSeen[i & (g.vbSeen.size() - 1)];
+    if (seen.vb == vb && seen.frame == g.carFrame)
+        return seen.dynamic;
+    D3D11_BUFFER_DESC d{};
+    vb->GetDesc(&d);
+    seen = {vb, g.carFrame, d.Usage == D3D11_USAGE_DYNAMIC};
+    ++g.stats.carVbAsked;
+    return seen.dynamic;
 }
 
 // A scene draw in an eye pass whose vertex shader reads a worldMatrix: its key and the matrix last written into the
@@ -1261,10 +1298,7 @@ int car_draw(UINT count, UINT start, INT base) {
     // stay put). Checked once per vertex buffer bound (consecutive draws share one).
     if (g.iaVb != g.vbChecked) {
         g.vbChecked = g.iaVb;
-        D3D11_BUFFER_DESC d{};
-        if (g.iaVb)
-            g.iaVb->GetDesc(&d);
-        g.vbDynamic = g.iaVb && d.Usage == D3D11_USAGE_DYNAMIC;
+        g.vbDynamic = vb_dynamic(g.iaVb);
     }
     CarDrawKey key{g.iaVb, g.iaIb, g.iaVbOffset, g.iaIbOffset, start, count, base};
     if (g.vbDynamic) {
@@ -1597,13 +1631,22 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
         slot_unbind();
         slotsDrawn = g.slotsCleared && g.pass < 2;
         if (slotsDrawn && g.motionBuffer) {
-            const size_t moving = g.cars.motion_matrices(g.motion);
-            if (g.motion.size() * sizeof(float) == size_t{kCarSlots} * 48) {
-                g.context->UpdateSubresource(g.motionBuffer.Get(), 0, nullptr, g.motion.data(), 0, 0);
-                ++g.stats.motionUploads;
-                g.stats.motionSlots += moving;
+            {
+                // Only the parts first drawn since the last upload (pass 0: the frame's; pass 1: the few its eye alone
+                // drew), only their range of slots: run 25's A/B found the cars' motion dearer than its tracking alone.
+                Timed timed(g.time.motion);
+                size_t first = 0, last = 0;
+                const size_t moving = g.cars.update_motions(g.motion, first, last);
+                if (moving && first <= last && g.motion.size() * sizeof(float) == size_t{kCarSlots} * 48) {
+                    const D3D11_BOX box = {static_cast<UINT>(first * 48), 0, 0, static_cast<UINT>((last + 1) * 48), 1,
+                                           1};
+                    g.context->UpdateSubresource(g.motionBuffer.Get(), 0, &box, g.motion.data() + first * 12, 0, 0);
+                    ++g.stats.motionUploads;
+                    g.stats.motionSlots += moving;
+                }
             }
-            const bool armed = g.pass == 0 && g.stats.slotImages < 4 && g.slotViewsThisPass >= 50 &&
+            // The gate image (diagnostics runs only: run 26b's two froze the game ~250 ms each, max frame 508 ms).
+            const bool armed = g.slotImages && g.pass == 0 && g.stats.slotImages < 4 && g.slotViewsThisPass >= 50 &&
                                g.framesSinceInstall >= g.slotImageAfter;
             if (armed) {
                 g.slotImageFrame = g.framesSinceInstall;
@@ -2288,7 +2331,7 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
     if (g.carTrack && g.carActive && ours(context)) {
         int slot = -1;
         {
-            SampledTimed timed(g.time.cars, carSampleDraw);
+            SampledTimed timed(g.time.carDraws, carSampleDraw);
             slot = car_draw(count, start, base);
         }
         if (g.slotsBound)
@@ -3027,6 +3070,10 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         g.cars.frame_begin(++g.carFrame);
         g.vbChecked = nullptr;  // a buffer freed since can't pass for one checked before at its address
     }
+    if (g.carTrack) {  // the pass's draws matched by pass 0's order first (car_motion.h)
+        Timed carTimed(g.time.cars);
+        g.cars.pass_begin(pass);
+    }
     g.afterResolve = false;
     if (pass == 0) {  // this frame's timestamps, in a slot whose last frame has been read
         if (g.gpuSlot >= 0) {  // the frame before stopped short of pass 3: its timing left out
@@ -3146,6 +3193,8 @@ void mvr_test_scene_target(ID3D11Resource* scene) {
 ID3D11Texture2D* mvr_car_slot_texture() { return g.slotTex.Get(); }
 
 void mvr_car_active(bool on) { g.carActive = on; }
+
+void mvr_car_slot_images(bool on) { g.slotImages = on; }
 
 void mvr_car_slots(int level) {
     if (!g.context) {  // before the install only (and after mvr_car_track: the slots need the tracking)
@@ -3318,12 +3367,19 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(g.stats.lookupMisses - g.loggedMisses), per(g.time.switches),
                           static_cast<double>(g.time.calls) / frames);
             if (g.carTrack)
-                simqvfr::logf("lmu mvr: car tracking's own CPU %.3f ms per frame (1 in 16 of its draws and of its matrix "
-                              "reads timed, each less the timing's own %llu ticks; not the calls passed on, nor the "
-                              "detours' own cost per call); %.0f calls of its hooks per frame (Map, Unmap, "
-                              "VSSetConstantBuffers, the input assembler's buffers)",
-                              per(g.time.cars), static_cast<unsigned long long>(timedEmptyTicks),
+                simqvfr::logf("lmu mvr: car tracking's own CPU %.3f ms per frame (its matrix reads %.3f, its draws %.3f, "
+                              "the frame's start %.3f; 1 in 16 of its draws and of its matrix reads timed, each less the "
+                              "timing's own %llu ticks; not the calls passed on, nor the detours' own cost per call); %.0f "
+                              "calls of its hooks per frame (Map, Unmap, VSSetConstantBuffers, the input assembler's "
+                              "buffers)",
+                              per(g.time.cars + g.time.carReads + g.time.carDraws), per(g.time.carReads),
+                              per(g.time.carDraws), per(g.time.cars), static_cast<unsigned long long>(timedEmptyTicks),
                               static_cast<double>(g.time.carCalls) / frames);
+            if (g.slotsOn)
+                simqvfr::logf("lmu mvr: car slots' CPU per frame, the calls they make included: slot views %.3f ms (1 in "
+                              "16 timed), the target's binds and the blend states' twins %.3f, the motions computed and "
+                              "uploaded %.3f",
+                              per(g.time.slotViews), per(g.time.slotState), per(g.time.motion));
         }
         g.time = HookTime{};
         g.loggedLookups = g.stats.lookups;
@@ -3358,7 +3414,8 @@ void mvr_frame_end(unsigned long long frame) {
                           "%.1f of objects: %.1f matched to the frame before, %.1f first seen or after a gap, %.2f without "
                           "a free slot); %llu keys held, %.1f freed per frame; per frame the per-draw buffer learned %.2f "
                           "times, matrices read %.1f, draws without one %.2f, at another offset %.2f, from a dynamic vertex "
-                          "buffer %.1f (keyed without their base vertex)",
+                          "buffer %.1f (keyed without their base vertex); vertex buffers' usage asked %.1f; part draws "
+                          "matched by pass 0's order %.1f%% (looked up %.1f out of order, %.1f without an order)",
                           static_cast<unsigned long long>(c.frames - b.frames), pf(c.draws, b.draws),
                           pf(c.identityDraws, b.identityDraws), pf(c.partDraws, b.partDraws), pf(c.matched, b.matched),
                           pf(c.newKeys, b.newKeys), pf(c.full, b.full), static_cast<unsigned long long>(c.live),
@@ -3366,7 +3423,12 @@ void mvr_frame_end(unsigned long long frame) {
                           pf(s.carMatrixReads, g.carStatsLogged.carMatrixReads),
                           pf(s.carNoMatrix, g.carStatsLogged.carNoMatrix),
                           pf(s.carOtherOffset, g.carStatsLogged.carOtherOffset),
-                          pf(s.carDynamicVb, g.carStatsLogged.carDynamicVb));
+                          pf(s.carDynamicVb, g.carStatsLogged.carDynamicVb),
+                          pf(s.carVbAsked, g.carStatsLogged.carVbAsked),
+                          c.partDraws > b.partDraws ? 100.0 * static_cast<double>(c.inOrder - b.inOrder) /
+                                                          static_cast<double>(c.partDraws - b.partDraws)
+                                                    : 0.0,
+                          pf(c.outOfOrder, b.outOfOrder), pf(c.noOrder, b.noOrder));
             g.carLogged = c;
             g.carStatsLogged = s;
         }

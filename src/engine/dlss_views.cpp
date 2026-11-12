@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -337,6 +338,8 @@ struct State {
     // The player's latest change (dlss_live; under the mutex), taken at the next frame end.
     bool livePending = false;
     DlssLive live;
+    std::chrono::steady_clock::time_point liveAt;  // the last dlss_live
+    unsigned liveChanges = 0;                      // dlss_live calls since the last apply
 } d;
 
 // A log line with the run's tag in front ("lmu dlss: ...").
@@ -527,8 +530,16 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
         ok = make(s.depthBefore, w, h, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE) &&
              SUCCEEDED(d.device->CreateShaderResourceView(s.depthBefore.Get(), nullptr, &s.depthBeforeSrv));
     unsigned result = 0;
+    LARGE_INTEGER t0{}, t1{}, freq{};
+    QueryPerformanceCounter(&t0);
     if (ok)
         s.feature = ngx::create(context, w, h, ow, oh, inverted, preset, result);
+    QueryPerformanceCounter(&t1);
+    QueryPerformanceFrequency(&freq);
+    if (s.feature)  // what a live change's stutter is made of: each view's feature made again, on the render thread
+        say("view %d's feature made in %.1f ms (%ux%u%s, preset %s)", index,
+            1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart), w, h,
+            upscale ? " upscaled" : "", dlss::preset_name(preset));
     int made = preset;  // the preset the feature was made with
     if (!s.feature && ok && preset != 0) {  // a DLL without that preset: NGX's default for the mode instead
         unsigned again = 0;
@@ -1363,22 +1374,41 @@ void dlss_live(const DlssLive& live) {
     std::lock_guard guard(d.mutex);
     d.live = live;
     d.livePending = true;
+    d.liveAt = std::chrono::steady_clock::now();
+    ++d.liveChanges;
 }
 
 namespace {
 
-// The player's change, between frames on the render thread (dlss_frame_end).
-void apply_live(const DlssLive& l) {
+// A change that makes features again (each 40-70 ms on the render thread, two per change) waits until the settings
+// have held this long: stepping through the quality modes in the headset menu makes one set, not one per step (run 26a:
+// two changes a second apart, ~120 ms each).
+constexpr auto kLiveSettle = std::chrono::milliseconds(500);
+
+// Does `l` make features again (or release them)?
+bool live_remakes(const DlssLive& l) {
+    const int views = l.on ? 2 : 0;
+    const int scale = (std::max)(33, (std::min)(100, l.focusScale));
+    return views != d.cfg.views || scale != d.cfg.focusScale || l.preset != d.cfg.preset || l.eyePreset != d.cfg.eyePreset;
+}
+
+// Texture sharpening: no feature to make again, from the next pass.
+void apply_live_sharpening(const DlssLive& l) {
+    if (l.textureSharpening == d.cfg.textureSharpening)
+        return;
+    d.cfg.textureSharpening = l.textureSharpening;
+    say("live: texture sharpening %s", l.textureSharpening >= 2   ? "on the focus views and the eyes"
+                                       : l.textureSharpening == 1 ? "on the focus views"
+                                                                  : "off");
+}
+
+// The player's change, between frames on the render thread (dlss_frame_end). `changes`: the dlss_live calls it gathers.
+void apply_live(const DlssLive& l, unsigned changes) {
     const int views = l.on ? 2 : 0;
     const int scale = (std::max)(33, (std::min)(100, l.focusScale));
     const bool was = d.cfg.views > 0 && !d.off;
-    if (l.textureSharpening != d.cfg.textureSharpening) {  // no feature to make again: from the next pass
-        d.cfg.textureSharpening = l.textureSharpening;
-        say("live: texture sharpening %s", l.textureSharpening >= 2   ? "on the focus views and the eyes"
-                                           : l.textureSharpening == 1 ? "on the focus views"
-                                                                      : "off");
-    }
-    if (views == d.cfg.views && scale == d.cfg.focusScale && l.preset == d.cfg.preset && l.eyePreset == d.cfg.eyePreset)
+    apply_live_sharpening(l);
+    if (!live_remakes(l))
         return;
     if (!views && d.cfg.views) {  // off: the features go (NGX stays started until the session ends)
         for (int i = 0; i < 4; ++i) {
@@ -1407,11 +1437,13 @@ void apply_live(const DlssLive& l) {
     }
     d.createFailures = 0;
     if (!views)
-        say("live: off (the features released)");
+        say("live: off (the features released; %u change%s)", changes, changes == 1 ? "" : "s");
     else
-        say("live: %s on the eyes (preset %s), the focus views %s (%d%%, preset %s), %u jitter phases", was ? "DLAA" : "on: DLAA",
-            dlss::preset_name(l.eyePreset >= 0 ? l.eyePreset : l.preset), dlss::focus_mode_name(scale), scale,
-            dlss::preset_name(l.preset), d.phases);
+        say("live: %s on the eyes (preset %s), the focus views %s (%d%%, preset %s), %u jitter phases (%u change%s "
+            "gathered, %lld ms settled)",
+            was ? "DLAA" : "on: DLAA", dlss::preset_name(l.eyePreset >= 0 ? l.eyePreset : l.preset),
+            dlss::focus_mode_name(scale), scale, dlss::preset_name(l.preset), d.phases, changes,
+            changes == 1 ? "" : "s", static_cast<long long>(kLiveSettle.count()));
 }
 
 }  // namespace
@@ -1421,15 +1453,24 @@ unsigned long long dlss_stretched_total() { return d.stretchedTotal; }
 
 void dlss_frame_end(unsigned long long frame) {
     DlssLive live;
-    bool pending;
+    bool pending, settled = true;
+    unsigned changes = 0;
     {
         std::lock_guard guard(d.mutex);
         pending = d.livePending;
         live = d.live;
-        d.livePending = false;
+        if (pending && live_remakes(live) && std::chrono::steady_clock::now() - d.liveAt < kLiveSettle)
+            settled = false;  // kept pending: the features once the player stops changing them
+        if (pending && settled) {
+            d.livePending = false;
+            changes = d.liveChanges;
+            d.liveChanges = 0;
+        }
     }
-    if (pending)
-        apply_live(live);
+    if (pending && settled)
+        apply_live(live, changes);
+    else if (pending)
+        apply_live_sharpening(live);
     if (!d.cfg.views)
         return;
     {

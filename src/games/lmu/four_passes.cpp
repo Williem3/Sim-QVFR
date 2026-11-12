@@ -927,6 +927,7 @@ bool install_mvr(ID3D11Device* device) {
                                                          simqvfr::nvapi::two_views_gpu() != nullptr && cfg.trackerDrives));
     mvr_car_track(cars);
     mvr_car_slots(cars ? cfg.carSlots : 0);
+    mvr_car_slot_images(cars && cfg.carForced);  // a freeze each: never the player's
     carsOn = cars && cfg.carSlots >= 2;  // the A/B measures what players get (DLSS taking the motion)
     mvrInstalled = device && mvr_pass_install(device);
     if (!mvrInstalled) {

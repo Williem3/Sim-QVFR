@@ -158,9 +158,12 @@ CarMotionStats mvr_car_stats();
 // pass's views at its start), the game's pixel shaders their slot twins (mvr_probe.h kMvrSlotTwinGuid), each car part's
 // draw with a frame before its slot (+1; 0 none) at t127, and the blend states twins that write target 1 unblended where
 // the depth state writes depth (transparents leave it). Before DLSS reads the pass: each part's motion, inverse(this
-// frame's world) x the frame before's, uploaded; DlssPass carries both. Level 1: the slots and a gate image (logs\car-
-// slots-*.png), DLSS as before; 2: DLSS's vectors take the parts' motion.
+// frame's world) x the frame before's, uploaded; DlssPass carries both. Level 1: the slots, DLSS as before; 2: DLSS's
+// vectors take the parts' motion.
 void mvr_car_slots(int level);
+// The slots' gate images (logs\captures\lmu-car-slots-*.png, up to two frames' worth, each ~250 ms on the render
+// thread): diagnostics runs only (lmu_car_vectors forced), never the player's option. Off by default.
+void mvr_car_slot_images(bool on);
 // The cars' motion this frame or not (an A/B of its cost, FourPassesRun::carAb; between frames): off, no tracking work,
 // no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
 void mvr_car_active(bool on);
@@ -226,6 +229,7 @@ struct MvrPassStats {
     // with a worldMatrix before any matrix was read; and those whose shader reads it at another offset (left out);
     // tracked draws from a dynamic vertex buffer (the game's ring: keyed without their base vertex and offset).
     uint64_t carMatrixReads = 0, carBufferLearned = 0, carNoMatrix = 0, carOtherOffset = 0, carDynamicVb = 0;
+    uint64_t carVbAsked = 0;  // vertex buffers' usage asked of D3D (once a frame per buffer)
     // Car slots: passes with the slot target bound, its binds, slot views bound, slot twin binds, binds of shaders
     // without one while it was bound, blend twins made, motion uploads and the slots in them, gate images saved.
     uint64_t slotPasses = 0, slotBinds = 0, slotViews = 0, slotTwinBinds = 0, slotNoTwin = 0, blendTwins = 0;
