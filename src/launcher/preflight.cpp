@@ -259,16 +259,15 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     if (in.ownDlss) {
         const std::wstring where = in.ownDlssPath.empty() ? std::wstring(L"the folder chosen") : in.ownDlssPath;
         if (!in.ownDlssFound && in.ownDlssIncluded) {
-            Check& c = add("own_dlss", CheckTone::Warn, L"The included nvngx_dlss.dll is missing",
-                           L"Use DLSS is on, but the nvngx_dlss.dll Sim-QVFR includes isn’t at " + where +
-                               L". Install Sim-QVFR again from its release zip, or choose another nvngx_dlss.dll (DLSS "
-                               L"310 or newer). " + shortName + L" runs without DLSS until then.");
+            Check& c = add("own_dlss", CheckTone::Warn, L"DLSS is on, but NVIDIA’s DLSS file is missing",
+                           L"This copy of Sim-QVFR has no nvngx_dlss.dll (it should be at " + where + L"). " + shortName +
+                               L" runs without DLSS until you install Sim-QVFR again from its release zip, or turn DLSS off.");
             c.fix = CheckFix::OpenDlss;
             c.fixLabel = L"Open DLSS";
         } else if (!in.ownDlssFound) {
-            Check& c = add("own_dlss", CheckTone::Warn, L"The nvngx_dlss.dll chosen isn’t there",
-                           L"Use DLSS is on, but there is no nvngx_dlss.dll at " + where +
-                               L": DLSS takes the one Sim-QVFR includes instead. Choose another, or Use included.");
+            Check& c = add("own_dlss", CheckTone::Warn, L"The DLSS file you chose isn’t there",
+                           L"There is no nvngx_dlss.dll at " + where +
+                               L", so DLSS uses the one Sim-QVFR includes. Choose another, or Use included.");
             c.fix = CheckFix::OpenDlss;
             c.fixLabel = L"Open DLSS";
         } else if (!in.ownDlssVersion.empty() && version_major(in.ownDlssVersion) < kCheekyDlssMajor) {
@@ -288,17 +287,18 @@ std::vector<Check> preflight_checks(const PreflightInput& in) {
     // Cheeky Foveated DLSS, when it is on.
     if (in.cheekyLoad) {
         if (!in.cheekyRuntimeFound) {
-            Check& c = add("cheeky_runtime", CheckTone::Bad, L"Cheeky’s runtime not found",
-                           L"Use Cheeky Foveated DLSS is ticked, but CheekyFoveatedDLSSRuntime.dll isn’t where the layer "
-                           L"looks for it. The game runs without Cheeky.");
+            Check& c = add("cheeky_runtime", CheckTone::Bad, L"Foveated DLSS is on, but Cheeky isn’t installed",
+                           L"Cheeky Foveated DLSS is a separate download, and its files aren’t in Sim-QVFR’s folder, so the "
+                           L"game would run without it. Turn it off, or install it.");
             c.fix = CheckFix::OpenDlss;
             c.fixLabel = L"Open Foveated DLSS";
         }
         if (in.cheekyLayer != CheekyLayer::Enabled) {
             Check& c = add("cheeky_layer", CheckTone::Bad,
-                           in.cheekyLayer == CheekyLayer::Disabled ? L"Cheeky’s OpenXR layer is turned off"
-                                                                   : L"Cheeky’s OpenXR layer isn’t installed",
-                           L"Cheeky’s runtime needs its layer. Run CheekyOpenXRSetup.exe from Cheeky’s official release.");
+                           in.cheekyLayer == CheekyLayer::Disabled ? L"Foveated DLSS is on, but Cheeky’s VR add-on is turned off"
+                                                                   : L"Foveated DLSS is on, but Cheeky’s VR add-on isn’t installed",
+                           L"Cheeky needs its own small VR add-on, which its installer (CheekyOpenXRSetup.exe, in Cheeky’s "
+                           L"official download) sets up. Turn Foveated DLSS off, or install it.");
             c.fix = CheckFix::OpenDlss;
             c.fixLabel = L"Open Foveated DLSS";
         }

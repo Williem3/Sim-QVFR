@@ -242,19 +242,27 @@ Card diagnostics_card() {
                 }
             }
         }
-        // Capturing for help: each at the next launch.
+        // Tools for comparing and for bug reports, each at the next launch: behind a More, unless one is on (then they show,
+        // so it isn't forgotten).
+        const auto tools = [](Body& m) {
+            const std::wstring cpuKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::CpuCapture)].key);
+            const std::wstring frameKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::FrameCapture)].key);
+            m.toggle(kDiagCapture, L"CPU capture", app.s.cpuProfile,
+                     (cpuKey.empty() ? std::wstring(L"Its hotkey") : cpuKey) + L" while driving records 20 s of the busiest threads.",
+                     false, Applies::NextLaunch);
+            m.toggle(kDiagFrameCapture, L"Frame capture", app.s.frameCapture,
+                     (frameKey.empty() ? std::wstring(L"Its hotkey") : frameKey) + L" saves the frame the headset gets, as PNG files.",
+                     false, Applies::NextLaunch);
+            m.toggle(kDiagBaseline, L"Next launch without QVFR", app.s.baselineNext,
+                     L"Once, with QVFR off and still measured, to compare against.", false, Applies::NextLaunch);
+        };
         b.divider();
-        b.group(L"Capture");
-        const std::wstring cpuKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::CpuCapture)].key);
-        const std::wstring frameKey = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::FrameCapture)].key);
-        b.toggle(kDiagCapture, L"CPU capture", app.s.cpuProfile,
-                 (cpuKey.empty() ? std::wstring(L"Its hotkey") : cpuKey) + L" while driving records 20 s of the busiest threads.",
-                 false, Applies::NextLaunch);
-        b.toggle(kDiagFrameCapture, L"Frame capture", app.s.frameCapture,
-                 (frameKey.empty() ? std::wstring(L"Its hotkey") : frameKey) + L" saves the frame the headset gets, as PNG files.",
-                 false, Applies::NextLaunch);
-        b.toggle(kDiagBaseline, L"Next launch without QVFR", app.s.baselineNext,
-                 L"Once, with QVFR off and still measured, to compare against.", false, Applies::NextLaunch);
+        if (app.s.cpuProfile || app.s.frameCapture || app.s.baselineNext) {
+            b.group(L"Tools for comparing and bug reports");
+            tools(b);
+        } else {
+            b.more(L"tools for comparing and bug reports", {L"CPU capture", L"Frame capture", L"Next launch without QVFR"}, tools);
+        }
     };
     return c;
 }

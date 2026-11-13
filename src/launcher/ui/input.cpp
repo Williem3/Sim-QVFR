@@ -122,6 +122,11 @@ void activate(Ctl id, int option) {
         if (option >= 0 && option < static_cast<int>(app.checks.size()))
             fix_check(app.checks[option]);
         return;
+    case kCheckOff:
+        if (option >= 0 && option < static_cast<int>(app.checks.size()))
+            turn_off_for(app.checks[option]);
+        return;
+    case kCheckGuide: ShellExecuteW(app.hwnd, L"open", kCheekyGuideUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagFrameCapture: app.s.frameCapture = !app.s.frameCapture; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
@@ -402,6 +407,8 @@ bool push_button(Ctl id) {
     case kProfileSave:
     case kProfilePaste:
     case kCheckFix:
+    case kCheckOff:
+    case kCheckGuide:
     case kChecksBadge:
     case kUndoBadge:
     case kLaunchBadge:

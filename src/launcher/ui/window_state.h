@@ -119,6 +119,9 @@ enum Ctl {
     kOverviewProfile, kOverviewCard, kKofiTile,
     // The Preview card's eye: left, both, right (option: its index; app.previewEye).
     kPreviewEye,
+    // A launch check's way out (option: its index in app.checks): turn off the feature it is about, or open the guide to
+    // installing it.
+    kCheckOff, kCheckGuide,
     // Text a screen reader reads (reader_text): never a click target or a Tab stop.
     kText
 };
@@ -136,13 +139,19 @@ struct FocusStop {
 // The theme the window uses: Windows' app theme, or one chosen with the theme button ([launcher] ui_theme).
 enum class ThemeChoice { System, Light, Dark };
 
-inline constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Windows’ list"};
+inline constexpr wchar_t kLayerProfileNames[2][40] = {L"Launches from here", L"Every app"};
 
 inline constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 
 inline constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 
 inline constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
+
+// The OpenXR layers card's More (its list, for troubleshooting): Launch checks' Open OpenXR layers opens it.
+inline constexpr wchar_t kLayersMore[] = L"the add-ons and their order";
+
+// The README's guide to installing Cheeky Foveated DLSS (a launch check's How to install).
+inline constexpr wchar_t kCheekyGuideUrl[] = L"https://github.com/Williem3/Sim-QVFR#foveated-dlss-optional-nvidia-rtx-only";
 
 // The exe's hash, done on a worker: its message carries a new std::string (the hex digest).
 inline constexpr UINT kHashedMessage = WM_APP + 1;
@@ -540,6 +549,9 @@ void capture_poll();
 
 // pane_checks.cpp
 void fix_check(const Check& c);
+// A check about a feature that can be turned off (Foveated DLSS, DLSS): what it turns off ("Foveated DLSS"), or empty.
+std::wstring check_feature(const Check& c);
+void turn_off_for(const Check& c);
 
 // pane_games.cpp
 void refresh_installed();
@@ -551,6 +563,8 @@ void load_color_edit();
 void apply_color_edit();
 void set_color_from(float x, float y);
 int color_game_index();
+// Whether the selected game can be raced online with Sim-QVFR (the Online racing card's, the Overview's); `tone`: badge's.
+std::wstring online_status(int& tone);
 void use_color_preset(int preset);
 // The colour panel's content (Custom… on the Games card), and the Game tab's cards.
 float color_panel(float x, float y, float w, bool draw);

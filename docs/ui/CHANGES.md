@@ -32,12 +32,16 @@ The launcher has a new look and layout. Every setting is still there, saved in t
 | DLSS | Picture › DLSS (Le Mans Ultimate), with DLSS-NR under it, or Picture › Foveated DLSS (ACE, ACC), with Frame generation under it. Each card has its switch first and its options open under the switch. |
 | Headset menu | Headset › Settings menu, Performance overlay and Placement |
 | Hotkeys | Headset › Hotkeys, a table. A clash shows a warning on both actions. |
-| Games | Game › Games in the rail (colour presets and Custom…), and Game › LMU options (Run with anti-cheat) |
-| OpenXR layers | Game › OpenXR layers. "Windows' order" is now the card's **⋯ › Reset this card…** |
+| Games | Game › Games in the rail (colour presets and Custom…), and Game › Online racing (offline only, or Le Mans Ultimate's Run with anti-cheat and its risk; also on the Overview) |
+| OpenXR layers | Game › OpenXR layers: a line saying what loads, the list behind "More" (Layers for: Launches from here / Every app). "Windows' order" is now the card's **⋯ › Reset this card…** |
 | Diagnostics | Game › Diagnostics (verdict first, details behind "More: details"), Game › Get help, and Overview's Last session |
 | Report an issue | Game › Get help › **Report an issue…**, which opens over the window. A crash link in the status opens it too. |
 | About | The version at the bottom of the rail (a dot when an update is out) |
 | Restore Defaults | Each card's **⋯ › Reset this card…** (it asks first), and **Restore defaults for <game>** in the profile menu (Undo and Ctrl+Z still work) |
+
+## Renamed
+
+The launcher now uses the headset menu's names: **Periphery resolution** (was Outer resolution), **Focus density** (was Inner resolution), **Focus width** and **Focus height** (were Foveated width and height). The crop's sides are **Outer side (temple)** and **Inner side (nose)**.
 
 ## New
 

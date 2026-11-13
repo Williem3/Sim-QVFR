@@ -152,67 +152,89 @@ std::wstring layer_chain() {
 Card layers_card() {
     Card c{Tab::Game, L"OpenXR layers", Applies::NextLaunch};
     c.body = [](Body& b) {
-        b.segments(kLayerProfile, L"Profile", {kLayerProfileNames[0], kLayerProfileNames[1]}, app.layerProfile);
-        b.note(app.layerProfile == 0
-                   ? L"What " + short_name() + L" loads when you launch it from here. Windows’ own list stays as it is."
-                   : L"What every other app loads, and " + short_name() + L" started from Steam. Changes Windows’ registry.");
-        if (app.layerProfile == 0) {
-            b.group(L"Load order, nearest the game first");
-            for (const std::string& name : app.layerPlan.above)
-                b.status(friendly_layer(name), L"No switch to turn it off per launch, so it stays above the Sim-QVFR layer.", 3,
-                         L"Above");
-            b.status(friendly_layer(kLayerName), L"Always nearest the game.", 3, L"Locked");
-            const int n = static_cast<int>(app.layerPlan.layers.size());
-            for (int i = 0; i < n; ++i) {
-                const PlannedLayer& l = app.layerPlan.layers[i];
-                const std::wstring desc = !l.lock.empty() ? widen(l.lock) : l.systemOn ? L"" : L"Off in Windows";
-                const bool on = l.on, locked = !l.lock.empty();
-                const std::wstring name = friendly_layer(l.name);
-                b.trailing(name, desc, kLayerControlsW, 32,
-                           [=](const Rect& r) { layer_controls(r, name, i, on, locked, i > 0, i + 1 < n); });
+        // What loads, in a line; the list, its order and Windows' own list behind a More (for troubleshooting).
+        int below = 0;
+        std::wstring names;
+        for (const PlannedLayer& l : app.layerPlan.layers)
+            if (l.on) {
+                names += (below++ ? L", " : L"") + friendly_layer(l.name);
             }
-        } else {
-            const int n = static_cast<int>(app.layersDraft.size());
-            for (const bool machine : {true, false}) {
-                bool any = false;
+        b.note(below == 0 ? L"No other VR add-ons load with " + short_name() + L" from here."
+                          : std::to_wstring(below) + (below == 1 ? L" other VR add-on loads" : L" other VR add-ons load") +
+                                L" with " + short_name() + L" from here: " + names + L".");
+        b.more(kLayersMore, {L"Layers for", L"Load order, nearest the game first", L"A frame’s path"}, [](Body& b) {
+            b.segments(kLayerProfile, L"Layers for", {kLayerProfileNames[0], kLayerProfileNames[1]}, app.layerProfile);
+            b.note(app.layerProfile == 0
+                       ? L"What " + short_name() + L" loads when you launch it from here. Windows’ own list stays as it is."
+                       : L"What every other app loads, and " + short_name() + L" started from Steam. Changes Windows’ registry.");
+            if (app.layerProfile == 0) {
+                b.group(L"Load order, nearest the game first");
+                for (const std::string& name : app.layerPlan.above)
+                    b.status(friendly_layer(name), L"No switch to turn it off per launch, so it stays above the Sim-QVFR layer.", 3,
+                             L"Above");
+                b.status(friendly_layer(kLayerName), L"Always nearest the game.", 3, L"Locked");
+                const int n = static_cast<int>(app.layerPlan.layers.size());
                 for (int i = 0; i < n; ++i) {
-                    const SystemLayer& l = app.layersDraft[i];
-                    if (l.machine != machine)
-                        continue;
-                    if (!any) {
-                        b.group(machine ? L"All users" : L"This user");
-                        b.note(machine ? L"Changing these needs administrator rights: Windows asks once when you apply."
-                                       : L"Windows loads these after the machine-wide ones.");
+                    const PlannedLayer& l = app.layerPlan.layers[i];
+                    std::wstring desc = !l.lock.empty() ? widen(l.lock) : l.systemOn ? L"" : L"Off in Windows";
+                    // Cheeky's layer isn't the Picture tab's Use Cheeky Foveated DLSS: say which it is, while that is off.
+                    if (l.name == kCheekyLayer && l.lock.empty()) {
+                        const std::wstring what = !game_has(&games::GameFeatures::foveatedDlss)
+                                                      ? L"Cheeky’s VR add-on, for Foveated DLSS in ACE and ACC"
+                                                  : !app.s.cheeky.load ? L"Cheeky’s VR add-on. Foveated DLSS itself is off (Picture tab)"
+                                                                       : L"";
+                        if (!what.empty())
+                            desc = what + (desc.empty() ? L"" : L" · " + desc);
                     }
-                    any = true;
-                    const bool up = i > 0 && app.layersDraft[i - 1].machine == machine && app.layersDraft[i - 1].lock.empty() &&
-                                    l.lock.empty();
-                    const bool down = i + 1 < n && app.layersDraft[i + 1].machine == machine && l.lock.empty();
-                    // Its manifest's path is its switch's tip, not its line (no developer paths in the text).
-                    std::wstring desc = l.lock.empty() ? std::wstring() : widen(l.lock);
-                    if (l.name.empty())
-                        desc += (desc.empty() ? L"" : L" · ") + std::wstring(L"Its manifest can’t be read");
-                    const bool on = l.on;
-                    const std::wstring name = friendly_layer(l.name, l.manifest), manifest = l.manifest;
+                    const bool on = l.on, locked = !l.lock.empty();
+                    const std::wstring name = friendly_layer(l.name);
                     b.trailing(name, desc, kLayerControlsW, 32,
-                               [=](const Rect& r) { layer_controls(r, name, i, on, false, up, down, manifest); });
+                               [=](const Rect& r) { layer_controls(r, name, i, on, locked, i > 0, i + 1 < n); });
                 }
+            } else {
+                const int n = static_cast<int>(app.layersDraft.size());
+                for (const bool machine : {true, false}) {
+                    bool any = false;
+                    for (int i = 0; i < n; ++i) {
+                        const SystemLayer& l = app.layersDraft[i];
+                        if (l.machine != machine)
+                            continue;
+                        if (!any) {
+                            b.group(machine ? L"All users" : L"This user");
+                            b.note(machine ? L"Changing these needs administrator rights: Windows asks once when you apply."
+                                           : L"Windows loads these after the machine-wide ones.");
+                        }
+                        any = true;
+                        const bool up = i > 0 && app.layersDraft[i - 1].machine == machine && app.layersDraft[i - 1].lock.empty() &&
+                                        l.lock.empty();
+                        const bool down = i + 1 < n && app.layersDraft[i + 1].machine == machine && l.lock.empty();
+                        // Its manifest's path is its switch's tip, not its line (no developer paths in the text).
+                        std::wstring desc = l.lock.empty() ? std::wstring() : widen(l.lock);
+                        if (l.name.empty())
+                            desc += (desc.empty() ? L"" : L" · ") + std::wstring(L"Its manifest can’t be read");
+                        const bool on = l.on;
+                        const std::wstring name = friendly_layer(l.name, l.manifest), manifest = l.manifest;
+                        b.trailing(name, desc, kLayerControlsW, 32,
+                                   [=](const Rect& r) { layer_controls(r, name, i, on, false, up, down, manifest); });
+                    }
+                }
+                if (app.layersDraft.empty())
+                    b.chip(3, L"No OpenXR layers are registered in Windows.");
+                if (layers_dirty()) {
+                    b.chip(1, L"Changes not applied");
+                    b.actions({{kLayerRevert, L"Revert"}, {kLayerApply, L"Apply", Btn::Primary}});
+                }
+                b.note(app.layersLockMoved ? L"The Sim-QVFR layer is not first in its list: applying moves it there."
+                                           : L"The current list is backed up into the logs folder before it changes.");
             }
-            if (app.layersDraft.empty())
-                b.chip(3, L"No OpenXR layers are registered in Windows.");
-            if (layers_dirty()) {
-                b.chip(1, L"Changes not applied");
-                b.actions({{kLayerRevert, L"Revert"}, {kLayerApply, L"Apply", Btn::Primary}});
-            }
-            b.note(app.layersLockMoved ? L"The Sim-QVFR layer is not first in its list: applying moves it there."
-                                       : L"The current list is backed up into the logs folder before it changes.");
-        }
+            b.group(L"A frame’s path");
+            b.note(layer_chain());
+        });
+        b.note(L"Change these only when Launch checks or a guide asks you to.");
         if (!app.layerMessage.empty()) {
             b.chip(app.layerTone, app.layerTone == 0 ? L"Applied" : L"Not applied");
             b.note(app.layerMessage);
         }
-        b.group(L"A frame’s path");
-        b.note(layer_chain());
     };
     // With the launcher, Reset this card forgets the profile: launches follow Windows' order and switches again.
     if (app.layerProfile == 0)

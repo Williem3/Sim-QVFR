@@ -78,21 +78,21 @@ Card resolution_card() {
     c.body = [](Body& b) {
         const Readouts ro = readouts(app.s, app.runtime);
         const bool known = app.runtime.known();
-        b.slider({kOuter, L"Outer resolution", app.s.outer, L"%", known ? px(ro.outer) : L""});
+        b.slider({kOuter, L"Periphery resolution", app.s.outer, L"%", known ? px(ro.outer) : L""});
         if (qvfr()) {
-            b.slider({kInner, L"Inner resolution", app.s.inner, L"%", known ? px(ro.focus) : L""});
+            b.slider({kInner, L"Focus density", app.s.inner, L"%", known ? px(ro.focus) : L""});
             if (game_has(&games::GameFeatures::sharpening))
                 b.slider({kSharpen, L"Sharpening", app.s.sharpen, L"%", app.s.sharpen == 0 ? L"Off" : L""});
             if (game_has(&games::GameFeatures::objectDetail))
                 b.slider({kObjectDetail, L"Object detail", app.s.objectDetail});
         } else {
             b.note(L"In Two-loop the focus density (" + percent(ro.focusDensity) +
-                   L") follows from Outer resolution and the focus size. Inner resolution, sharpening and object detail are "
+                   L") follows from Periphery resolution and the focus size. Focus density, sharpening and object detail are "
                    L"set in Quad View Foveated Rendering.");
-            b.hidden(L"Outer resolution", L"Quad View Foveated Rendering", {L"Inner resolution", L"Sharpening", L"Object detail"});
+            b.hidden(L"Periphery resolution", L"Quad View Foveated Rendering", {L"Focus density", L"Sharpening", L"Object detail"});
         }
         b.note(known ? L"Percent of the headset’s " + std::to_wstring(app.runtime.width) + L" × " +
-                           std::to_wstring(app.runtime.height) + L" per eye; outer and inner are set apart."
+                           std::to_wstring(app.runtime.height) + L" per eye; the periphery and the focus are set apart."
                      : L"Percent of the headset’s resolution; pixel sizes appear after the first launch.");
     };
     c.reset = [](Settings& s) {
@@ -126,7 +126,7 @@ Card foveation_card() {
         b.segments(kMode, L"Foveated mode", items_of(kMode), s.eyeTracking ? 0 : 1);
         if (eye_warning())
             b.note(L"The focus region stays centred until a tracker connects.");
-        b.sliders({kWidth, L"Foveated width", s.width}, {kHeight, L"Foveated height", s.height});
+        b.sliders({kWidth, L"Focus width", s.width}, {kHeight, L"Focus height", s.height});
         b.segments(kShape, L"Shape", items_of(kShape), s.shape.corners ? 1 : 0);
         if (!s.shape.corners) {
             b.slider({kCorner, L"Corner radius", s.corner});
@@ -212,10 +212,10 @@ Card view_card() {
             const Settings& s = app.s;
             b.toggle(kCropOn, L"Crop the view", s.crop,
                      s.crop ? L"Skips the edges of each eye that a helmet covers." : L"Off · top, bottom and sides hidden");
-            b.reveal(kCropOn, s.crop, L"Crop the view", {L"Top", L"Bottom", L"Outer side", L"Inner side"}, [](Body& r) {
+            b.reveal(kCropOn, s.crop, L"Crop the view", {L"Top", L"Bottom", L"Outer side (temple)", L"Inner side (nose)"}, [](Body& r) {
                 const Settings& cs = app.s;
                 r.sliders({kCropTop, L"Top", cs.cropTop}, {kCropBottom, L"Bottom", cs.cropBottom});
-                r.sliders({kCropOuter, L"Outer side", cs.cropOuter}, {kCropInner, L"Inner side", cs.cropInner});
+                r.sliders({kCropOuter, L"Outer side (temple)", cs.cropOuter}, {kCropInner, L"Inner side (nose)", cs.cropInner});
             });
         }
         if (crop && helmet)
@@ -314,7 +314,8 @@ void dlss_rows(Body& b) {
         const bool found = !dll.empty() && GetFileAttributesW(dll.c_str()) != INVALID_FILE_ATTRIBUTES, chosen = !d.folder.empty();
         const std::wstring named = version.empty() ? std::wstring(L"Found") : L"Version " + version;
         const std::wstring text = !chosen ? (found ? named + L", included with Sim-QVFR."
-                                                   : std::wstring(L"Missing: install Sim-QVFR again, or choose one (310 or newer)."))
+                                                   : std::wstring(L"Missing from this copy of Sim-QVFR, so DLSS can’t run: install "
+                                                                  L"Sim-QVFR again, or turn DLSS off."))
                                           : (found ? named + L", your choice." : std::wstring(L"Not where you chose it: the included one is used."));
         std::vector<std::pair<Ctl, std::wstring>> buttons;
         if (chosen)
@@ -422,7 +423,7 @@ void cheeky_rows(Body& b) {
         const std::wstring runtime = cheeky_runtime_path(app.ini, layer_folder());
         const bool found = GetFileAttributesW(runtime.c_str()) != INVALID_FILE_ATTRIBUTES;
         b.buttons(L"Runtime",
-                  found ? L"Found." : L"Not found: put the CheekyFoveatedDLSS folder from Cheeky’s Standalone ZIP next to sim-qvfr.dll, or choose its runtime.",
+                  found ? L"Found." : L"Not installed: Cheeky is a separate download (see Launch checks’ How to install it), or choose where it is.",
                   {{kCheekyRuntime, L"Choose…"}}, Applies::NextLaunch);
         const CheekyLayer layer = cheeky_layer_state();
         b.info(L"OpenXR layer", layer == CheekyLayer::Enabled ? L"Installed" : layer == CheekyLayer::Disabled ? L"Turned off" : L"Not installed");
@@ -437,7 +438,7 @@ void cheeky_rows(Body& b) {
         b.divider();
         b.toggle(kCheekyOn, L"Foveated DLSS", k.processing, L"Off leaves the game’s own DLSS on every view.");
         b.toggle(kCheekyOuter, L"Cheaper outer views", k.outerDlaa,
-                 k.outerDlaa ? L"Cheeky’s own DLAA pass, at a lower resolution." : L"Off · its scale and preset are hidden");
+                 k.outerDlaa ? L"Cheeky’s own DLAA pass on the periphery, at a lower resolution." : L"Off · its scale and preset are hidden");
         b.reveal(kCheekyOuter, k.outerDlaa, L"Cheaper outer views", {L"Outer DLAA scale", L"Outer preset"}, [](Body& r) {
             r.slider({kCheekyScale, L"Outer DLAA scale", app.s.cheeky.outerScale});
             r.popup(kCheekyOuterPreset, L"Outer preset", cheeky_preset_name(app.s.cheeky.outerPreset), items_of(kCheekyOuterPreset));
@@ -471,7 +472,7 @@ Card cheeky_card() {
                (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L""));
         const bool on = app.s.cheeky.load;
         b.toggle(kCheekyUse, L"Use Cheeky Foveated DLSS", on,
-                 on ? L"Cheeky’s DLSS runtime in the game: cheaper outer views." : L"Off · its options and frame generation are hidden",
+                 on ? L"Cheeky’s DLSS runtime in the game: a cheaper periphery." : L"Off · its options and frame generation are hidden",
                  false, Applies::NextLaunch);
         b.reveal(kCheekyUse, on, L"Use Cheeky Foveated DLSS",
                  {L"Runtime", L"OpenXR layer", L"Foveated DLSS", L"Cheaper outer views", L"Outer DLAA scale", L"Outer preset",

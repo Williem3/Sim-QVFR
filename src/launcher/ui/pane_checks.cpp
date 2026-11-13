@@ -30,17 +30,28 @@ Card checks_card() {
             (tone == CheckTone::Bad || tone == CheckTone::Warn ? attention : ready).push_back(i);
         }
         if (bad > 0)
-            b.chip(2, std::to_wstring(bad) + (bad == 1 ? L" problem" : L" problems") + L": Launch asks before starting");
+            b.chip(2, std::to_wstring(bad) + (bad == 1 ? L" problem" : L" problems") + L" · Launch will ask you to confirm first");
         else if (warn > 0)
             b.chip(1, std::to_wstring(warn) + L" to check");
         else
             b.chip(0, L"Ready to launch");
         const auto check_row = [](Body& r, size_t i) {
             const Check& k = app.checks[i];
-            if (!k.fixLabel.empty())
+            const std::wstring feature = check_feature(k);
+            const bool attention = k.tone == CheckTone::Bad || k.tone == CheckTone::Warn;
+            if (attention && !feature.empty()) {  // a way out first: turn it off; then install it (Cheeky) or its own fix
+                r.row(k.title, k.detail, L"");  // the card's chip says it's a problem: its title gets the width
+                std::vector<Body::ButtonSpec> ways = {{kCheckOff, L"Turn " + feature + L" off", Btn::Primary, nullptr, static_cast<int>(i)}};
+                if (k.id == "cheeky_runtime" || k.id == "cheeky_layer")
+                    ways.push_back({kCheckGuide, L"How to install it", Btn::Secondary, nullptr, static_cast<int>(i)});
+                else if (!k.fixLabel.empty())
+                    ways.push_back({kCheckFix, k.fixLabel, Btn::Secondary, nullptr, static_cast<int>(i)});
+                r.actions(ways);
+            } else if (!k.fixLabel.empty()) {
                 r.action(k.title, k.detail, kCheckFix, k.fixLabel, static_cast<int>(i));
-            else
+            } else {
                 r.status(k.title, k.detail, static_cast<int>(k.tone), kToneText[static_cast<int>(k.tone)]);
+            }
         };
         for (size_t i : attention)
             check_row(b, i);
@@ -57,6 +68,29 @@ Card checks_card() {
     return c;
 }
 
+// The feature a check is about, when turning it off clears the check: Cheeky Foveated DLSS's files and versions, Sim-QVFR's
+// own DLSS file.
+std::wstring check_feature(const Check& c) {
+    if (c.id == "cheeky_runtime" || c.id == "cheeky_layer" || c.id == "dlss_version")
+        return L"Foveated DLSS";
+    if (c.id == "own_dlss")
+        return L"DLSS";
+    return L"";
+}
+
+// Turn it off ("Turn Foveated DLSS off"), as its switch would.
+void turn_off_for(const Check& c) {
+    const std::wstring feature = check_feature(c);
+    if (feature == L"Foveated DLSS")
+        app.s.cheeky.load = false;
+    else if (feature == L"DLSS")
+        app.s.dlss.on = false;
+    else
+        return;
+    changed();
+    refresh_checks();
+}
+
 // A launch check's button (preflight.h's CheckFix).
 void fix_check(const Check& c) {
     switch (c.fix) {
@@ -70,11 +104,14 @@ void fix_check(const Check& c) {
         ShellExecuteW(app.hwnd, L"open", L"explorer.exe", select.c_str(), nullptr, SW_SHOWNORMAL);
         return;
     }
-    case CheckFix::OpenLayers: jump_to({L"OpenXR layers", L"OpenXR layers", Pane::Game}); return;
-    case CheckFix::OpenDlss:  // the card with DLSS's switch (Rendering), highlighted
-        jump_to({game_has(&games::GameFeatures::sideLoadedDlss) ? L"Use DLSS" : L"Use Cheeky Foveated DLSS", L"Rendering",
-                 Pane::Picture});
+    case CheckFix::OpenLayers:  // the card, its list open
+        jump_to({L"OpenXR layers", L"OpenXR layers", Pane::Game, L"", L"OpenXR layers/" + std::wstring(kLayersMore)});
         return;
+    case CheckFix::OpenDlss: {  // the card with DLSS's switch, highlighted
+        const bool own = game_has(&games::GameFeatures::sideLoadedDlss);
+        jump_to({own ? L"Use DLSS" : L"Use Cheeky Foveated DLSS", own ? L"DLSS" : L"Foveated DLSS", Pane::Picture});
+        return;
+    }
     case CheckFix::OpenFoveation: jump_to({L"Foveation", L"Foveation", Pane::Picture}); return;
     case CheckFix::TurboOff:
         if (!toolkit_turbo_off(launcher_game_exe()))

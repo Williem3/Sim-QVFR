@@ -139,7 +139,7 @@ float preview_eye(float x, float y, float w, bool draw, bool right) {
         const t::TypeStyle tiny{9.5f * k, 12 * k, 400, false};
         if (known) {
             app.canvas.text(L"Focus " + dims(ro.focus), tiny, R(fx + 6, fy + 4, W - fx - 6, 12), col(app.c->preview_label), Align::Leading, false);
-            app.canvas.text(L"Outer " + dims(ro.outer), tiny, R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label),
+            app.canvas.text(L"Periphery " + dims(ro.outer), tiny, R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label),
                             Align::Leading, false);
         }
         rt->PopLayer();
@@ -227,7 +227,7 @@ float readouts_card(float x, float y, float w, bool draw) {
     const std::wstring dash = L"—";
     float h = eyebrow(x, y, w, L"Per eye", draw) + t::kSpace2;
     h += readout(x, y + h, w, L"Headset", known ? dims(ro.runtime) : dash, draw) + 6;
-    h += readout(x, y + h, w, L"Outer view", known ? dims(ro.outer) : dash, draw) + 6;
+    h += readout(x, y + h, w, L"Periphery view", known ? dims(ro.outer) : dash, draw) + 6;
     h += readout(x, y + h, w, L"Focus view", known ? dims(ro.focus) : dash, draw) + 6;
     h += readout(x, y + h, w, L"Center sharpness", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) + L" PPD" : dash,
                  draw);

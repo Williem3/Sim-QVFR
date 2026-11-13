@@ -19,32 +19,32 @@ constexpr Help kHelp[] = {
     {L"Foveated mode",
      L"Eye tracked: the sharp area follows your eyes, so it can be small and dense; it needs a headset with eye tracking. "
      L"Fixed: the area stays in the centre, so make it larger, since your eyes move off it."},
-    {L"Outer resolution",
+    {L"Periphery resolution",
      L"The wide view around the focus area, a share of the headset’s recommended resolution. It covers most of the view but "
      L"you see it with your side vision, so it is the first to lower: it saves GPU time and VRAM roughly with its pixels. "
      L"The preview’s Pixels per frame shows the total."},
-    {L"Inner resolution",
+    {L"Focus density",
      L"Pixel density inside the focus area, a share of the headset’s native density. Above 100% it renders more pixels than "
      L"the headset shows where you look: sharper text and edges. Its cost grows with the area’s size, so a small area can "
      L"take a high density cheaply. Dragging moves it in 5% steps; the arrow keys move it by 1%."},
     {L"Object detail",
      L"How detailed trees and objects are, and how far away they are still drawn. At 100% they are as sharp in the focus "
-     L"region as its pixel density shows them; lower settings move toward the game’s own detail for the outer resolution. "
+     L"region as its pixel density shows them; lower settings move toward the game’s own detail for the periphery resolution. "
      L"It costs CPU, not GPU: more detail means more objects for X-Plane’s main thread to prepare every frame, often what "
      L"limits the frame rate with QVFR. Lower it if frames stutter in dense scenery; the focus region shows coarser trees."},
     {L"Sharpening",
      L"AMD FidelityFX Contrast Adaptive Sharpening, applied as Sim-QVFR resamples the outer and focus views for the headset "
      L"(when the runtime composes them, on a copy of the outer view). Each pixel is sharpened by how much contrast room it "
      L"has, so soft detail gains the most and edges already sharp gain little. Both views get the same strength, so the focus "
-     L"area’s edge stays even. It costs a little GPU time, and the low outer resolution shimmers more with it. 0% is off; "
+     L"area’s edge stays even. It costs a little GPU time, and a low periphery resolution shimmers more with it. 0% is off; "
      L"it changes while you drive."},
     {L"Brightness",
      L"How light or dark the game’s colour is. The wheel picks its hue and how strong it is; the launcher keeps "
      L"its text and edges readable in light and dark mode."},
-    {L"Foveated width",
+    {L"Focus width",
      L"The focus area’s width, a share of the view. Wider hides the edge between sharp and soft better; its pixels cost "
      L"density × width × height, so a wide area at a high density costs the most."},
-    {L"Foveated height",
+    {L"Focus height",
      L"The focus area’s height, a share of the view. Taller covers more of the dash and mirrors; it costs pixels as the "
      L"width does."},
     {L"Corner radius", L"Rounds the focus area’s corners, so its edge is harder to spot. No cost: the area renders as a rectangle "
@@ -60,8 +60,8 @@ constexpr Help kHelp[] = {
      L"headset shows black there."},
     {L"Top", L"How much of the top of each eye’s view the game doesn’t render. Saves pixels in proportion."},
     {L"Bottom", L"How much of the bottom of each eye’s view the game doesn’t render. Saves pixels in proportion."},
-    {L"Outer side", L"How much of each eye’s temple side the game doesn’t render. Saves pixels in proportion."},
-    {L"Inner side", L"How much of each eye’s nose side the game doesn’t render; the other eye still sees most of it. Saves pixels in "
+    {L"Outer side (temple)", L"How much of each eye’s temple side the game doesn’t render. Saves pixels in proportion."},
+    {L"Inner side (nose)", L"How much of each eye’s nose side the game doesn’t render; the other eye still sees most of it. Saves pixels in "
                     L"proportion."},
     {L"Show a helmet",
      L"Draws a helmet’s visor opening round the view, lit by the scene, in a layer of its own. It costs the headset a layer "
@@ -106,13 +106,13 @@ constexpr Help kHelp[] = {
      L"The session before the last one for this game, and the settings changed in between, so you can see what a change "
      L"did. Compare runs on the same track and car for a fair difference."},
     {L"Run with anti-cheat",
-     L"Starts the game through its anti-cheat (Easy Anti-Cheat), as Steam does, with Sim-QVFR running. Sim-QVFR works inside "
-     L"the game (without multi-view rendering it also changes the game’s code), and the anti-cheat may kick you or ban your "
-     L"account for it: at your own risk. Off starts the game without its anti-cheat, for offline sessions only."},
-    {L"Profile",
-     L"With the launcher: the layers a launch from here loads, below Sim-QVFR, in an order of its own; Windows’ list stays as "
-     L"it is. Windows’ list: what every other app loads (and the game started from Steam), saved in the registry when you "
-     L"apply, with a backup in the logs folder first."},
+     L"Starts the game through its anti-cheat (Easy Anti-Cheat), as Steam does, with Sim-QVFR running, so you can join online "
+     L"servers. Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it: at your own risk. "
+     L"Off starts the game without its anti-cheat, for offline sessions only."},
+    {L"Layers for",
+     L"Launches from here: the VR add-ons (OpenXR layers) a launch from this launcher loads, below Sim-QVFR, in an order of "
+     L"its own; nothing else changes. Every app: Windows’ own list, which every other app uses (and the game started from "
+     L"Steam), saved in the registry when you apply, with a backup in the logs folder first."},
     {L"CPU capture",
      L"At the next launch, the CPU capture hotkey (Ctrl+Alt+C) while driving records for 20 s where the game’s busiest "
      L"threads spend their time, into a cpu-profile file in the logs folder. The headset menu shows when it starts and ends; "
@@ -159,7 +159,7 @@ constexpr Help kHelp[] = {
     {L"Placement", L"The settings menu stays 0.8 m in front of your head, wherever you look."},
     {L"Use DLSS",
      L"Sim-QVFR evaluates NVIDIA’s DLSS on each view, with depth and motion it works out from the game’s own frames, "
-     L"before the game’s post-processing. The game’s code isn’t changed or called. Needs an NVIDIA RTX graphics card. "
+     L"before the game’s post-processing. Needs an NVIDIA RTX graphics card. "
      L"Sim-QVFR includes NVIDIA’s nvngx_dlss.dll; Choose… takes another (a newer one from a game), Use included goes "
      L"back."},
     {L"Periphery preset",

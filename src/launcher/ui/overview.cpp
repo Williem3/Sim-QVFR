@@ -107,8 +107,8 @@ void profile_segments(const Rect& r) {
 // What the picture is, in a line: "Eye tracked · Outer 20% · Focus 150%".
 std::wstring picture_summary() {
     std::wstring s = app.s.eyeTracking ? L"Eye tracked" : L"Fixed";
-    s += L" · Outer " + percent_of(app.s.outer);
-    s += qvfr_mode() ? L" · Focus " + percent_of(app.s.inner) : L" · Two-loop";
+    s += L" · Periphery " + percent_of(app.s.outer);
+    s += qvfr_mode() ? L" · Focus density " + percent_of(app.s.inner) : L" · Two-loop";
     return s;
 }
 
@@ -198,7 +198,23 @@ float game_panel(float x, float y, float w, bool draw) {
         }
         by += 2 + ph;
     }
-    by += 16;
+    by += 10;
+    {  // racing online: the same sentence as the Game tab's card, which it opens
+        int tone = 3;
+        const std::wstring online = online_status(tone);
+        if (draw) {
+            const float bw = std::min(inner, badge_width(online));
+            badge(x + kPad, by + 1, tone, online, inner);
+            const int index = static_cast<int>(app.overviewTargets.size());
+            app.overviewTargets.push_back({L"Online racing", L"Online racing", Pane::Game});
+            const Rect r{x + kPad, by - 1, bw, 24};
+            if (focused(kOverviewCard) && app.focusOption == index)
+                focus_ring(r, t::kRadiusControl);
+            app.hits.push_back({kOverviewCard, r, index, L"Online racing: open its card", L"Online racing: " + online});
+        }
+        by += 24;
+    }
+    by += 14;
     if (draw)
         cv.fill({x + kPad, by, inner, 2}, col(app.c->label));
     by += 2 + 16;
@@ -283,11 +299,11 @@ std::vector<Tile> picture_tiles() {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool known = app.runtime.known(), q = qvfr_mode();
     out.push_back({L"Resolution",
-                   q ? L"Outer " + percent_of(app.s.outer) + L" · Focus " + percent_of(app.s.inner)
-                     : L"Outer " + percent_of(app.s.outer) + L" · Two-loop",
-                   known ? px(ro.outer) + L" outer view" : L"Pixel sizes after the first launch", L"", 3, L"Resolution"});
+                   q ? L"Periphery " + percent_of(app.s.outer) + L" · Focus density " + percent_of(app.s.inner)
+                     : L"Periphery " + percent_of(app.s.outer) + L" · Two-loop",
+                   known ? px(ro.outer) + L" periphery" : L"Pixel sizes after the first launch", L"", 3, L"Resolution"});
     Tile fov{L"Foveation",
-             std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L" · " + std::to_wstring(app.s.width) + L" × " +
+             std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L" · focus " + std::to_wstring(app.s.width) + L" × " +
                  std::to_wstring(app.s.height) + L"%",
              L"", app.s.outline ? L"Outline on" : L"Outline off", 3, L"Foveation"};
     if (eye_warning()) {
@@ -397,7 +413,8 @@ std::vector<Tile> game_tiles() {
         below += l.on ? 1 : 0;
     const bool lastIsThisGame = !sessions.empty() && sessions.front()->id == session_id(app.runtime.session.log);
     out.push_back({L"OpenXR layers",
-                   below == 0 ? L"None below Sim-QVFR" : std::to_wstring(below) + (below == 1 ? L" layer" : L" layers") + L" below Sim-QVFR",
+                   below == 0 ? L"No other VR add-ons"
+                              : std::to_wstring(below) + (below == 1 ? L" other VR add-on" : L" other VR add-ons"),
                    lastIsThisGame && app.runtime.session.layerMs >= 0 ? fixed(L"%.2f ms per frame", app.runtime.session.layerMs) : L"",
                    L"", 3, L"OpenXR layers", Pane::Game});
     return out;

@@ -377,7 +377,8 @@ std::vector<FocusStop> drawn_order(bool panel = false) {
         if (h.r.bottom() < app.scrollArea.y - 2000 || h.r.y > app.scrollArea.bottom() + 2000)
             continue;  // not this page's (an index pass draws far away)
         const bool several = h.id == kCardMenu || h.id == kMore || h.id == kHotkeyKey || h.id == kHotkeyPad ||
-                             h.id == kCheckFix || h.id == kGameShown || h.id == kColorGame || h.id == kColorPreset ||
+                             h.id == kCheckFix || h.id == kCheckOff || h.id == kCheckGuide || h.id == kGameShown ||
+                             h.id == kColorGame || h.id == kColorPreset ||
                              h.id == kOverviewCard || (h.id >= kProfileUse && h.id <= kProfileRevert);
         // A layer's switch and moves: one stop, the list (the arrows pick a row, Space and Ctrl+arrows act on it).
         const bool layer = h.id == kLayerOn || h.id == kLayerUp || h.id == kLayerDown;

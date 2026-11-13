@@ -260,23 +260,41 @@ Card games_card() {
     return c;
 }
 
-// The game's own options (a game with an anti-cheat bootstrapper: LMU): running with its anti-cheat, at the user's risk.
-Card options_card() {
-    const games::GameInfo& game = games::launcher_game();
-    Card c{Tab::Game, std::wstring(game.shortName) + L" options", Applies::NextLaunch};
+// Whether the selected game can be raced online with Sim-QVFR, in one sentence the Overview and the Online racing card
+// share; `tone` is badge's (1 a warning, 3 plain).
+std::wstring online_status(int& tone) {
+    const games::GameInfo& g = games::launcher_game();
+    if (g.antiCheatStart && app.s.antiCheat) {
+        tone = 1;
+        return L"Online at your own risk: the anti-cheat can ban you";
+    }
+    tone = 3;
+    return L"Offline sessions only";
+}
+
+// Online racing, for every game: whether Sim-QVFR can be used online, and for a game with an anti-cheat bootstrapper (LMU)
+// the switch that starts it with its anti-cheat, at the player's risk.
+Card online_card() {
+    Card c{Tab::Game, L"Online racing"};
     c.body = [](Body& b) {
         const games::GameInfo& g = games::launcher_game();
+        int tone = 3;
+        b.chip(tone == 3 ? 3 : tone, online_status(tone));
+        if (!g.antiCheatStart) {
+            b.note(L"Sim-QVFR runs inside " + std::wstring(g.shortName) + L" and changes how it renders. Use it in offline "
+                   L"sessions, and don’t report problems you see with it to the game’s developers.");
+            return;
+        }
         const bool on = app.s.antiCheat;
         b.toggle(kAntiCheat, L"Run with anti-cheat", on,
                  on ? L"Starts " + std::wstring(g.shortName) + L" through its anti-cheat, as Steam does, with Sim-QVFR running."
-                    : L"Off · starts without its anti-cheat (offline sessions only)");
-        if (on) {  // the risk, only while it's on
-            b.chip(1, L"At your own risk");
-            b.note(L"Sim-QVFR works inside the game (without multi-view rendering it also changes the game’s code), and the "
-                   L"anti-cheat may kick you or ban your account for it.");
-        }
+                    : L"Off · " + std::wstring(g.shortName) + L" starts without its anti-cheat, so online servers won’t let you in",
+                 false, Applies::NextLaunch);
+        if (on)  // the risk, only while it's on
+            b.note(L"Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it.");
     };
-    c.reset = [](Settings& s) { s.antiCheat = Settings{}.antiCheat; };
+    if (games::launcher_game().antiCheatStart)
+        c.reset = [](Settings& s) { s.antiCheat = Settings{}.antiCheat; };
     return c;
 }
 
@@ -302,12 +320,10 @@ float color_panel(float x, float y, float w, bool draw) {
     return b.height();
 }
 
-// The Game tab's cards, in order: what's needed before and after a launch first, then the layers, then the games and
-// the game's own options.
+// The Game tab's cards, in order: what everyone needs first (the checks, racing online, getting help), then the last
+// sessions and the games, the OpenXR layers (for troubleshooting) last.
 float game_page(float x, float y, float w, bool draw) {
-    std::vector<Card> cards = {checks_card(), diagnostics_card(), help_card(), layers_card(), games_card()};
-    if (games::launcher_game().antiCheatStart)
-        cards.push_back(options_card());
+    const std::vector<Card> cards = {checks_card(), online_card(), help_card(), diagnostics_card(), games_card(), layers_card()};
     return card_grid(cards, x, y, w, draw);
 }
 

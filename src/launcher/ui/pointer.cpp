@@ -248,7 +248,7 @@ void open_profile_menu() {
     };
     const Readouts ro = readouts(app.s, app.runtime);
     add(PopupRow::Note,
-        std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L"  ·  Outer " + std::to_wstring(app.s.outer) + L"%  ·  Focus " +
+        std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L"  ·  Periphery " + std::to_wstring(app.s.outer) + L"%  ·  Focus density " +
             std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%",
         0);
     add(PopupRow::Separator, L"", 0);

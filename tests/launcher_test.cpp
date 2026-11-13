@@ -311,16 +311,16 @@ void session_history_checks() {
     Settings b = a;
     b.outer = 40;
     const std::vector<std::wstring> one = setting_changes(a, b);
-    check(one.size() == 1 && one[0] == L"Outer 50% \u2192 40%", "sessions: one change, as Outer 50% → 40%");
+    check(one.size() == 1 && one[0] == L"Periphery 50% \u2192 40%", "sessions: one change, as Periphery 50% → 40%");
     check(setting_changes(a, a).empty(), "sessions: no change between the same settings");
     Settings c = b;
     c.crop = true;
     c.inner = 120;
     c.cheeky.load = true;  // on: its details only once it was on before too
     const std::vector<std::wstring> three = setting_changes(a, c);
-    check(three.size() == 4 && three[1] == L"Inner 100% \u2192 120%" && three[2] == L"Crop on" && three[3] == L"Cheeky Foveated DLSS on",
+    check(three.size() == 4 && three[1] == L"Focus density 100% \u2192 120%" && three[2] == L"Crop on" && three[3] == L"Cheeky Foveated DLSS on",
           "sessions: changes in the panes' order, a switch as on or off");
-    check(changes_text(three, 2) == L"Outer 50% \u2192 40%, Inner 100% \u2192 120% and 2 more" &&
+    check(changes_text(three, 2) == L"Periphery 50% \u2192 40%, Focus density 100% \u2192 120% and 2 more" &&
               changes_text({L"A", L"B"}) == L"A and B" && changes_text({L"A"}) == L"A",
           "sessions: changes as one phrase, the rest counted");
     Settings hidden = a;
@@ -355,7 +355,7 @@ void session_history_checks() {
               other_kind_session(records, 2) == 3,
           "sessions: the previous of the same game and kind, and of the other kind");
     check(comparison_text(L"vs previous", records[0], records[3]) ==
-              L"vs previous: +6.5 fps, 90th percentile \u22121.20 ms, after Outer 50% \u2192 40%",
+              L"vs previous: +6.5 fps, 90th percentile \u22121.20 ms, after Periphery 50% \u2192 40%",
           "sessions: the comparison line");
     check(comparison_text(L"vs without QVFR", records[0], records[2]) == L"vs without QVFR: +16.5 fps, 90th percentile \u22122.20 ms",
           "sessions: against a run without QVFR, without settings");
@@ -2065,7 +2065,7 @@ int SIM_QVFR_TEST_MAIN() {
             const Check* gone = find(ownChecks, "own_dlss");
             check(gone && gone->tone == CheckTone::Warn && gone->fix == CheckFix::OpenDlss &&
                       gone->detail.find(L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll") != std::wstring::npos &&
-                      gone->detail.find(L"Install Sim-QVFR again") != std::wstring::npos &&
+                      gone->detail.find(L"install Sim-QVFR again") != std::wstring::npos &&
                       gone->detail.find(L"without DLSS") != std::wstring::npos,
                   "preflight: the included DLL missing warns where it looked, to install again, and that DLSS won't run");
             o.ownDlssIncluded = false;
@@ -2087,7 +2087,7 @@ int SIM_QVFR_TEST_MAIN() {
             const Check* missing = find(ownChecks, "own_dlss");
             check(missing && missing->tone == CheckTone::Warn && missing->fix == CheckFix::OpenDlss &&
                       missing->detail.find(L"K:\\ACE\\nvngx_dlss.dll") != std::wstring::npos &&
-                      missing->detail.find(L"Sim-QVFR includes instead") != std::wstring::npos,
+                      missing->detail.find(L"the one Sim-QVFR includes") != std::wstring::npos,
                   "preflight: a chosen nvngx_dlss.dll gone warns where it looked, and that the included one is taken");
             check(dlss_dll_path(L"", L"C:\\Sim-QVFR\\layer") == L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll" &&
                       dlss_dll_path(L"K:\\ACE", L"C:\\Sim-QVFR\\layer") == L"K:\\ACE\\nvngx_dlss.dll" &&
@@ -2268,8 +2268,8 @@ int SIM_QVFR_TEST_MAIN() {
         const std::vector<Profile> presets = builtin_profiles(true), fixedPresets = builtin_profiles(false);
         check(presets.size() == 3 && presets[0].name == L"Performance" && presets[2].name == L"Quality" &&
                   fixedPresets.size() == 3 && fixedPresets[1].name == L"Balanced" &&
-                  preset_summary(presets[1]) == L"Outer 25% \u00b7 inner 160% \u00b7 focus 28 \u00d7 28%" &&
-                  preset_summary(fixedPresets[1]) == L"Outer 25% \u00b7 inner 140% \u00b7 focus 40 \u00d7 35%",
+                  preset_summary(presets[1]) == L"Periphery 25% \u00b7 focus density 160% \u00b7 focus 28 \u00d7 28%" &&
+                  preset_summary(fixedPresets[1]) == L"Periphery 25% \u00b7 focus density 140% \u00b7 focus 40 \u00d7 35%",
               "profiles: three presets for each foveated mode, by the same names, each summed up");
         // Every preset fits the 8192-pixel limit, keeps the outer views at most 25% and the centre denser than native;
         // the fixed set's area is larger than the eye tracked one's, and less dense.

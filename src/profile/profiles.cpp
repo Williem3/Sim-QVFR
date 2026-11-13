@@ -153,7 +153,7 @@ std::wstring preset_summary(const Profile& profile) {
         else if (k.key == L"focus_height_percent")
             height = k.value;
     }
-    return L"Outer " + outer + L"% · inner " + density + L"% · focus " + width + L" × " + height + L"%";
+    return L"Periphery " + outer + L"% · focus density " + density + L"% · focus " + width + L" × " + height + L"%";
 }
 
 std::wstring profiles_folder(const std::wstring& settingsIni) {

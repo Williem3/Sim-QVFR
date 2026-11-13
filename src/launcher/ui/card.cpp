@@ -285,7 +285,7 @@ void Body::actions(const std::vector<ButtonSpec>& list) {
     }
     if (draw_)
         for (size_t i = 0; i < list.size(); ++i) {
-            button(list[i].id, rects[i], list[i].label, list[i].style, list[i].icon);
+            button(list[i].id, rects[i], list[i].label, list[i].style, list[i].icon, list[i].option);
             record(list[i].label, rects[i]);  // Find a setting finds a button (Report an issue…)
         }
     h_ += y + t::kControlHeight;

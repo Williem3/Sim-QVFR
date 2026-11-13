@@ -59,6 +59,7 @@ public:
         std::wstring label;
         Btn style = Btn::Secondary;
         const char* icon = nullptr;
+        int option = -1;  // which one of several (a check's index)
     };
     void actions(const std::vector<ButtonSpec>& list);
     // Muted text, wrapped (a note, why something isn't available).
@@ -122,7 +123,7 @@ Card checks_card();
 Card diagnostics_card();
 Card help_card();
 Card games_card();
-Card options_card();  // the game's own options (LMU's anti-cheat); only for a game with them
+Card online_card();  // racing online: offline only, or LMU's anti-cheat switch and its risk
 Card layers_card();
 
 // The card menu's Reset this card: asks first, then the card's settings go back to their defaults (a change like any

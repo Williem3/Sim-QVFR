@@ -179,9 +179,9 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         values(L"Method", a.mode == RenderMode::Qvfr ? L"QVFR" : L"Two-loop", qvfr ? L"QVFR" : L"Two-loop");
     if (a.eyeTracking != b.eyeTracking)
         values(L"Foveated mode", a.eyeTracking ? L"Eye tracked" : L"Fixed", b.eyeTracking ? L"Eye tracked" : L"Fixed");
-    values(L"Outer", percent(a.outer), percent(b.outer));
+    values(L"Periphery", percent(a.outer), percent(b.outer));
     if (qvfr && a.mode == RenderMode::Qvfr)  // Two-loop's follows from the outer resolution and the foveated size
-        values(L"Inner", percent(a.inner), percent(b.inner));
+        values(L"Focus density", percent(a.inner), percent(b.inner));
     values(L"Object detail", percent(a.objectDetail), percent(b.objectDetail));
     values(L"Sharpening", percent(a.sharpen), percent(b.sharpen));
     on_off(L"Runtime composition", a.nativeQuad != 0, b.nativeQuad != 0);
@@ -201,8 +201,8 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         if (!(x == y))
             out.push_back(L"Helmet look");
     }
-    values(L"Foveated width", percent(a.width), percent(b.width));
-    values(L"Foveated height", percent(a.height), percent(b.height));
+    values(L"Focus width", percent(a.width), percent(b.width));
+    values(L"Focus height", percent(a.height), percent(b.height));
     if (!a.shape.corners && !b.shape.corners)
         values(L"Corner radius", percent(a.corner), percent(b.corner));
     values(L"Feather", percent(a.feather), percent(b.feather));
