@@ -119,13 +119,14 @@ void sheet_card() {
     const float labelH = s.fieldLabel.empty() ? 0 : t::kCallout.lineHeight + t::kSpace2;
     const float h = pad + t::kTitle3.lineHeight + (textH > 0 ? t::kSpace2 + textH : 0) + (s.field ? t::kSpace4 + labelH + kFieldH : 0) +
                     t::kSpace6 + t::kControlHeight + pad;
-    const float radius = t::kRadiusGroup + 4;
+    const float radius = t::kRadiusGroup;
     const Rect card{std::round((W - w) / 2), std::round(std::max(16.0f, (H - h) / 2 - 24)), w, h};
-    cv.fill({card.x, card.y + 6, card.w, card.h}, {0, app.dark ? 0.5f : 0.18f}, radius);
     cv.fill(card, col(app.c->group_bg), radius);  // the panes' cards: their buttons read on it
     cv.stroke(card, col(app.dark ? app.c->control_hover : app.c->card_border), 1, radius);
     float y = card.y + pad;
     cv.text(s.title, t::kTitle3, {card.x + pad, y, inner, t::kTitle3.lineHeight}, col(app.c->label));
+    reader_text({card.x + pad, y, inner, t::kTitle3.lineHeight}, s.title, 1);
+    reader_text({card.x + pad, y + t::kTitle3.lineHeight, inner, textH}, s.text);
     y += t::kTitle3.lineHeight;
     if (textH > 0) {
         cv.text(s.text, t::kBody, {card.x + pad, y + t::kSpace2, inner, textH + 2}, col(app.c->label_secondary), Align::Leading,

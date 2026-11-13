@@ -6,6 +6,11 @@
 - AMD FidelityFX CAS (Contrast Adaptive Sharpening, `ffx_cas.h` 1.20190610): MIT, Copyright (c) 2017-2019 Advanced
   Micro Devices, Inc. Its filter is ported, not copied, into the compositor's shader (`src/quad/compose_shader.h`,
   `cas_sample`). See `third_party/fidelityfx-cas/LICENSE.txt`.
+- Jost (indestructible-type/Jost): SIL Open Font License 1.1, Copyright 2020 The Jost Project Authors. Its Bold,
+  Heavy and Black weights are embedded in the launcher. See `licenses/Jost-OFL.txt` (`third_party/fonts/jost/OFL.txt`).
+- Inter 4.1 (rsms/inter): SIL Open Font License 1.1, Copyright (c) 2016 The Inter Project Authors. Its Regular,
+  Medium, SemiBold and Bold weights are embedded in the launcher. See `licenses/Inter-OFL.txt`
+  (`third_party/fonts/inter/LICENSE.txt`).
 - NVIDIA DLSS SDK 310.9.1 (github.com/NVIDIA/DLSS): Copyright (c) NVIDIA Corporation. For NVIDIA DLSS in Le Mans
   Ultimate, releases built with DLSS contain its NGX library, statically linked into the layer (`sim-qvfr.dll`),
   and its DLSS runtime, `layer/nvngx_dlss.dll`, as NVIDIA ships it (signed by NVIDIA, unchanged). Neither is in

@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cwctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <string>
 
 #include <windows.h>
@@ -309,16 +311,16 @@ void session_history_checks() {
     Settings b = a;
     b.outer = 40;
     const std::vector<std::wstring> one = setting_changes(a, b);
-    check(one.size() == 1 && one[0] == L"Outer 50% \u2192 40%", "sessions: one change, as Outer 50% → 40%");
+    check(one.size() == 1 && one[0] == L"Periphery 50% \u2192 40%", "sessions: one change, as Periphery 50% → 40%");
     check(setting_changes(a, a).empty(), "sessions: no change between the same settings");
     Settings c = b;
     c.crop = true;
     c.inner = 120;
     c.cheeky.load = true;  // on: its details only once it was on before too
     const std::vector<std::wstring> three = setting_changes(a, c);
-    check(three.size() == 4 && three[1] == L"Inner 100% \u2192 120%" && three[2] == L"Crop on" && three[3] == L"Cheeky Foveated DLSS on",
+    check(three.size() == 4 && three[1] == L"Focus density 100% \u2192 120%" && three[2] == L"Crop on" && three[3] == L"Cheeky Foveated DLSS on",
           "sessions: changes in the panes' order, a switch as on or off");
-    check(changes_text(three, 2) == L"Outer 50% \u2192 40%, Inner 100% \u2192 120% and 2 more" &&
+    check(changes_text(three, 2) == L"Periphery 50% \u2192 40%, Focus density 100% \u2192 120% and 2 more" &&
               changes_text({L"A", L"B"}) == L"A and B" && changes_text({L"A"}) == L"A",
           "sessions: changes as one phrase, the rest counted");
     Settings hidden = a;
@@ -353,7 +355,7 @@ void session_history_checks() {
               other_kind_session(records, 2) == 3,
           "sessions: the previous of the same game and kind, and of the other kind");
     check(comparison_text(L"vs previous", records[0], records[3]) ==
-              L"vs previous: +6.5 fps, 90th percentile \u22121.20 ms, after Outer 50% \u2192 40%",
+              L"vs previous: +6.5 fps, 90th percentile \u22121.20 ms, after Periphery 50% \u2192 40%",
           "sessions: the comparison line");
     check(comparison_text(L"vs without QVFR", records[0], records[2]) == L"vs without QVFR: +16.5 fps, 90th percentile \u22122.20 ms",
           "sessions: against a run without QVFR, without settings");
@@ -537,6 +539,147 @@ void per_game_settings_checks() {
     WritePrivateProfileStringW(L"experiment", L"mode", L"views4", fresh.c_str());
     check(game_settings_target(fresh, L"ace") == fresh && game_settings_target(fresh, L"xplane") == game_settings_file(fresh, L"xplane"),
           "per-game: an ini without [launcher] game means ACE, as the launcher reads it");
+    fs::remove_all(dir, ec);
+}
+
+// Every key of an ini file, "section/key" (lower case) -> value.
+std::map<std::wstring, std::wstring> ini_keys(const std::wstring& ini) {
+    std::map<std::wstring, std::wstring> out;
+    std::vector<wchar_t> sections(64 * 1024), entries(64 * 1024);
+    GetPrivateProfileSectionNamesW(sections.data(), static_cast<DWORD>(sections.size()), ini.c_str());
+    for (const wchar_t* s = sections.data(); *s; s += wcslen(s) + 1) {
+        GetPrivateProfileSectionW(s, entries.data(), static_cast<DWORD>(entries.size()), ini.c_str());
+        for (const wchar_t* e = entries.data(); *e; e += wcslen(e) + 1) {
+            const std::wstring entry = e;
+            const size_t eq = entry.find(L'=');
+            std::wstring key = std::wstring(s) + L"/" + entry.substr(0, eq);
+            std::transform(key.begin(), key.end(), key.begin(), towlower);
+            out[key] = eq == std::wstring::npos ? L"" : entry.substr(eq + 1);
+        }
+    }
+    return out;
+}
+
+// The UI overhaul's guard (docs/ui/OVERHAUL_PLAN.md): every setting the launcher shows, at a value other than its
+// default, survives load and save unchanged (the window's every change is a load_settings, an edit, a save_settings),
+// a profile of them round trips, and the window's own [launcher] ui_theme is in no profile and left alone by a save.
+void settings_round_trip_checks() {
+    const fs::path dir = fs::temp_directory_path() / L"sim-qvfr-round-trip-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir);
+    Settings s;
+    s.eyeTracking = false;
+    s.outer = 37;
+    s.inner = 155;
+    s.objectDetail = 61;
+    s.sharpen = 23;
+    s.nativeQuad = 0;
+    s.width = 44;
+    s.height = 36;
+    s.outline = true;
+    s.color = OutlineColor::Magenta;
+    s.feather = 17;
+    s.corner = 12;
+    s.shape.corners = true;
+    for (int i = 0; i < kFocusCorners; ++i) {
+        s.shape.in[i] = 5 + i;
+        s.shape.vertical[i] = 20 - i;
+    }
+    s.offset.fixed = 3;
+    s.offset.gaze = -2;
+    s.gazeDeadzone = 22;
+    s.menuYaw = -9;
+    s.menuPitch = 5;
+    s.menuWidth = 41;
+    s.hotkeyFooter = false;
+    s.osd = {true, 12, -8, 30};
+    s.crop = true;
+    s.cropTop = 5;
+    s.cropBottom = 7;
+    s.cropOuter = 9;
+    s.cropInner = 3;
+    s.helmet.on = true;
+    s.helmet.rim = 8;
+    s.helmet.corners = 50;
+    s.helmet.light = 60;
+    s.helmet.size = 120;
+    s.helmet.height = -4;
+    s.helmet.depth = 20;
+    s.helmet.visor = VisorPosition::Half;
+    s.helmet.detail = true;
+    s.cheeky = {true, false, false, 60, 12, 11, 130, true, true, 2, 2, true, 3, 40, 75, 25, true, 3};
+    s.dlss.on = true;
+    s.dlss.folder = L"C:\\Games\\dlss";
+    s.dlss.focusScale = 67;
+    s.dlss.focusPreset = 13;
+    s.dlss.eyePreset = 6;
+    s.dlss.textureSharpening = 2;
+    s.dlss.carVectors = false;
+    s.nr.on = true;
+    s.nr.folder = L"C:\\Games\\nr";
+    s.nr.preset = 1;
+    s.nr.style = 2;
+    s.nr.intensity = 70;
+    s.nr.localTone = 120;
+    s.nr.localStructure = 80;
+    s.nr.autoMask = true;
+    s.nr.periphery = true;
+    s.nr.focusScale = 60;
+    s.nr.peripheryScale = 40;
+    s.nr.workingLimit = 15;
+    s.nr.peripheryCoverage = 70;
+    s.nr.edgeBlend = 12;
+    s.nr.beforeDlss = true;
+    s.nr.exposure = 120;
+    s.nr.inputGamma = false;
+    s.nr.autoExposure = false;
+    s.nr.maxGain = 200;
+    s.cpuProfile = true;
+    s.frameCapture = true;
+    s.hotkeys[static_cast<int>(HotkeyAction::Overlay)].key = KeyCombo{'O', true, false, true};
+    s.baselineNext = true;
+    s.antiCheat = true;
+    s.updateCheck = true;
+    s.updateAsked = true;
+    s.hiddenGames = L"xplane";
+    s.shownGames = L"lmu";
+    s.gameColors[L"ace"] = 0x123456;
+    const std::wstring a = (dir / L"a.ini").wstring(), b = (dir / L"b.ini").wstring();
+    check(save_settings(a, s), "round trip: a user's settings, none at its default, save");
+    const auto keysA = ini_keys(a);
+    check(save_settings(b, load_settings(a)) && ini_keys(b) == keysA,
+          "round trip: loaded and saved again, every key comes back with the same value");
+    const auto bytes = [](const std::wstring& path) {
+        std::ifstream in(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    const std::string before = bytes(a);
+    save_settings(a, load_settings(a));
+    check(bytes(a) == before, "round trip: saving what was loaded leaves the file byte for byte as it was");
+    bool spotted = keysA.at(L"quad/gaze") == L"0" && keysA.at(L"experiment/focus_density") == L"155" &&
+                   keysA.at(L"helmet/visor") == L"half" && keysA.at(L"cheeky/fg_release") == L"3" &&
+                   keysA.at(L"dlss_nr/max_gain") == L"200" && keysA.at(L"launcher/color_ace") == L"123456";
+    check(spotted, "round trip: the values are the ones set (not defaults)");
+
+    // A profile of them: saved, read back and applied to another ini, it holds the same keys.
+    const Profile p = settings_profile(load_settings(a), L"Mine");
+    const std::wstring profiles = (dir / L"profiles").wstring();
+    Profile q;
+    check(save_profile(profiles, p) && load_profile(profiles, L"Mine", q, false) && q.keys == p.keys,
+          "round trip: a profile saves and loads with identical keys");
+    const std::wstring c = (dir / L"c.ini").wstring();
+    save_settings(c, Settings{});
+    check(apply_profile(c.c_str(), q) && settings_profile(load_settings(c), L"Mine").keys == p.keys,
+          "round trip: applied to fresh settings, a profile gives back the same picture");
+
+    // The theme button's key: one for every game, kept by a save.
+    WritePrivateProfileStringW(L"launcher", L"ui_theme", L"dark", a.c_str());
+    save_settings(a, load_settings(a));
+    wchar_t theme[16] = {};
+    GetPrivateProfileStringW(L"launcher", L"ui_theme", L"", theme, 16, a.c_str());
+    check(std::wstring(theme) == L"dark" && !per_game_key(L"launcher", L"ui_theme"),
+          "round trip: [launcher] ui_theme stays through a save and is in no profile or game copy");
     fs::remove_all(dir, ec);
 }
 
@@ -1922,7 +2065,7 @@ int SIM_QVFR_TEST_MAIN() {
             const Check* gone = find(ownChecks, "own_dlss");
             check(gone && gone->tone == CheckTone::Warn && gone->fix == CheckFix::OpenDlss &&
                       gone->detail.find(L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll") != std::wstring::npos &&
-                      gone->detail.find(L"Install Sim-QVFR again") != std::wstring::npos &&
+                      gone->detail.find(L"install Sim-QVFR again") != std::wstring::npos &&
                       gone->detail.find(L"without DLSS") != std::wstring::npos,
                   "preflight: the included DLL missing warns where it looked, to install again, and that DLSS won't run");
             o.ownDlssIncluded = false;
@@ -1944,7 +2087,7 @@ int SIM_QVFR_TEST_MAIN() {
             const Check* missing = find(ownChecks, "own_dlss");
             check(missing && missing->tone == CheckTone::Warn && missing->fix == CheckFix::OpenDlss &&
                       missing->detail.find(L"K:\\ACE\\nvngx_dlss.dll") != std::wstring::npos &&
-                      missing->detail.find(L"Sim-QVFR includes instead") != std::wstring::npos,
+                      missing->detail.find(L"the one Sim-QVFR includes") != std::wstring::npos,
                   "preflight: a chosen nvngx_dlss.dll gone warns where it looked, and that the included one is taken");
             check(dlss_dll_path(L"", L"C:\\Sim-QVFR\\layer") == L"C:\\Sim-QVFR\\layer\\nvngx_dlss.dll" &&
                       dlss_dll_path(L"K:\\ACE", L"C:\\Sim-QVFR\\layer") == L"K:\\ACE\\nvngx_dlss.dll" &&
@@ -2125,8 +2268,8 @@ int SIM_QVFR_TEST_MAIN() {
         const std::vector<Profile> presets = builtin_profiles(true), fixedPresets = builtin_profiles(false);
         check(presets.size() == 3 && presets[0].name == L"Performance" && presets[2].name == L"Quality" &&
                   fixedPresets.size() == 3 && fixedPresets[1].name == L"Balanced" &&
-                  preset_summary(presets[1]) == L"Outer 25% \u00b7 inner 160% \u00b7 focus 28 \u00d7 28%" &&
-                  preset_summary(fixedPresets[1]) == L"Outer 25% \u00b7 inner 140% \u00b7 focus 40 \u00d7 35%",
+                  preset_summary(presets[1]) == L"Periphery 25% \u00b7 focus density 160% \u00b7 focus 28 \u00d7 28%" &&
+                  preset_summary(fixedPresets[1]) == L"Periphery 25% \u00b7 focus density 140% \u00b7 focus 40 \u00d7 35%",
               "profiles: three presets for each foveated mode, by the same names, each summed up");
         // Every preset fits the 8192-pixel limit, keeps the outer views at most 25% and the centre denser than native;
         // the fixed set's area is larger than the eye tracked one's, and less dense.
@@ -2429,6 +2572,7 @@ int SIM_QVFR_TEST_MAIN() {
 
     fs::remove_all(folder, ec);
     per_game_settings_checks();
+    settings_round_trip_checks();
     game_tabs_checks();
     launch_status_checks();
     session_history_checks();

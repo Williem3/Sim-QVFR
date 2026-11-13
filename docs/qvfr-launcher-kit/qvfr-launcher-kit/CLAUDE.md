@@ -1,3 +1,5 @@
+> **Superseded.** The launcher now follows `docs/ui` (the "Bauhaus × Flat" overhaul: `docs/ui/OVERHAUL_PLAN.md`, tokens in `docs/ui/tokens.json`). This kit is kept as history; where its rules differ (system font, disable rather than hide, the action bar, Restore Defaults), `docs/ui` wins.
+
 # QVFR Launcher: build guide for Claude Code
 
 This folder is the UI/UX kit for a Windows launcher that starts Assetto Corsa EVO with foveated rendering. Build the real app from it.

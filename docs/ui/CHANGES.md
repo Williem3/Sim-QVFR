@@ -1,0 +1,62 @@
+# Launcher redesign: what moved where
+
+The launcher has a new look and layout. Every setting is still there, saved in the same `sim-qvfr.ini` keys, so your settings, profiles and per-game copies carry over unchanged.
+
+## The new layout
+
+- **Games** are a rail on the left. The selected game is the yellow block. Ctrl+Tab still switches games.
+- **Four tabs** across the top replace the 13-page sidebar:
+  - **Overview**
+  - **Picture**
+  - **Headset**
+  - **Game**
+- **The top bar** also holds:
+  - the theme button (follow Windows, light or dark);
+  - **Find a setting** (Ctrl+K);
+  - the **profile menu**;
+  - the status;
+  - **Launch**, always visible.
+- **Cards:** settings are grouped in cards. A card says when its settings apply: Changes now, Now when lowered, or Next game start.
+- **Progressive disclosure:** settings that depend on a switch are hidden while it is off, and their values are kept.
+
+## Where each page went
+
+| Before | Now |
+|---|---|
+| Launch checks (the start page) | Game › Launch checks. The launcher now opens on **Overview**; the top bar's status shows problems and opens the checks. |
+| Profiles | Overview's Performance / Balanced / Quality / Custom, and the profile menu (Save, Paste, **Manage profiles…**) |
+| Resolution | Picture › Resolution; runtime composition is in Picture › Rendering; crop and helmet are in Picture › View & helmet |
+| Foveation | Picture › Foveation (the legacy method choice is in Picture › Rendering, shown only in Two-loop) |
+| Focus overlay | Merged into Picture › Foveation (Show focus outline) |
+| Preview column | Picture › Preview: the left eye, the right eye (the crop mirrored) or both |
+| DLSS | Picture › DLSS (Le Mans Ultimate), with DLSS-NR under it, or Picture › Foveated DLSS (ACE, ACC), with Frame generation under it. Each card has its switch first and its options open under the switch. |
+| Headset menu | Headset › Settings menu, Performance overlay and Placement |
+| Hotkeys | Headset › Hotkeys, a table. A clash shows a warning on both actions. |
+| Games | Game › Games in the rail (colour presets and Custom…), and Game › Online racing (offline only, or Le Mans Ultimate's Run with anti-cheat and its risk; also on the Overview) |
+| OpenXR layers | Game › OpenXR layers: a line saying what loads, the list behind "More" (Layers for: Launches from here / Every app). "Windows' order" is now the card's **⋯ › Reset this card…** |
+| Diagnostics | Game › Diagnostics (verdict first, details behind "More: details"), Game › Get help, and Overview's Last session |
+| Report an issue | Game › Get help › **Report an issue…**, which opens over the window. A crash link in the status opens it too. |
+| About | The version at the bottom of the rail (a dot when an update is out) |
+| Restore Defaults | Each card's **⋯ › Reset this card…** (it asks first), and **Restore defaults for <game>…** in the profile menu (Undo and Ctrl+Z still work) |
+
+## Renamed
+
+The launcher now uses the headset menu's names: **Periphery resolution** (was Outer resolution), **Focus density** (was Inner resolution), **Focus width** and **Focus height** (were Foveated width and height). The crop's sides are **Outer side (temple)** and **Inner side (nose)**. The menu in the headset is the **Headset menu** everywhere, and the focus shape is **Rectangle** or **Custom corners**.
+
+## New
+
+- **Overview:**
+  - The selected game's profile and the last session: fps against the headset's refresh, slow frames, and pixels saved.
+  - A chart of the last five sessions.
+  - A summary card for each part. A card opens its settings.
+- **Undo:** after a change, a bar at the bottom says what changed ("Feather 20% → 30%") with **Undo**; Ctrl+Z and the profile menu undo it too.
+- **Online racing:** turning on Le Mans Ultimate's anti-cheat asks you first to accept that kicks or bans are your own risk.
+- **Find a setting** (Ctrl+K): type a setting's name and press Return. It opens the tab and highlights the setting, or what shows it.
+- **Theme:** Light and dark follow Windows, or you can choose with the theme button (`[launcher] ui_theme`, the only new key).
+- **Fonts:** Jost and Inter, bundled with the launcher.
+- **Screen readers** (Narrator and others) can read and use every control. Text, card titles, values and the session chart are read too.
+
+## Unchanged
+
+- Launching, the OpenXR layer, profiles, the headset menu, and every `sim-qvfr.ini` key and value.
+- Keyboard use: Tab, the arrow keys, Space and Return. Return still launches when no button has the focus.

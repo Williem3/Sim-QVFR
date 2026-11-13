@@ -1,3 +1,5 @@
+> **Superseded.** The launcher now follows `docs/ui` (the "Bauhaus × Flat" overhaul: `docs/ui/OVERHAUL_PLAN.md`, tokens in `docs/ui/tokens.json`). This kit is kept as history; where its rules differ (system font, disable rather than hide, the action bar, Restore Defaults), `docs/ui` wins.
+
 A Windows launcher that starts Assetto Corsa EVO with foveated rendering, built in the macOS design language: one calm settings window, grouped forms, standard controls, and a live preview of what each setting does.
 
 ## Principles

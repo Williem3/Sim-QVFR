@@ -3,24 +3,25 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "../settings.h"
 #include "window_state.h"
 
 namespace simqvfr::launcher::ui::win {
 
-// Button labels; the Launch button's.
-inline constexpr t::TypeStyle kButtonLabel{14, 20, 500, false};
+// Button labels; the Launch button's (Jost, uppercase).
+inline constexpr t::TypeStyle kButtonLabel = t::kButton;
 
-inline constexpr t::TypeStyle kPrimaryLabel = t::kTitle3;
+inline constexpr t::TypeStyle kPrimaryLabel = t::kLaunch;
 
 // StatusBadge text; measure with it when sizing one.
-inline constexpr t::TypeStyle kBadgeStyle{12, 16, 600, false};
+inline constexpr t::TypeStyle kBadgeStyle = t::kBadge;
 
-// Secondary: a filled grey button. Primary: the game's accent (one per view). Ghost: no fill until the pointer is
-// over it. Tint: the accent at 16% with accent text (an action that adds). Danger: red text, no fill. Support: pink,
-// for Support on Ko-fi.
-enum class Btn { Secondary, Primary, Ghost, Tint, Danger, Support };
+// Secondary: a filled surface-2 button. Primary: blue (one per view). Ghost: no fill until the pointer is over it.
+// Tint: blue at 16% with blue text (an action that adds). Danger: red text, no fill. Support: secondary, with a red
+// heart (Support on Ko-fi). Launch: red with the play triangle, the only red action.
+enum class Btn { Secondary, Primary, Ghost, Tint, Danger, Support, Launch };
 
 // Button glyphs (16 x 16, stroked).
 inline constexpr const char* kIconPlus = "M8 3.5v9M3.5 8h9";
@@ -34,21 +35,28 @@ inline constexpr const char* kIconPlay = "M5 3.25v9.5L12.5 8z";
 inline constexpr const char* kIconHeart =
     "M8 13.5C8 13.5 2 9.9 2 5.9 2 4 3.4 2.75 5 2.75 6.3 2.75 7.4 3.5 8 4.6 8.6 3.5 9.7 2.75 11 2.75 12.6 2.75 14 4 14 5.9 14 9.9 8 13.5 8 13.5Z";
 
-// A switch row: the label (and its description) leading, the switch trailing.
-inline constexpr float kSwitchW = 44, kSwitchH = 26;
+// A switch row: the label (and its description) leading, the switch trailing (a 44 x 24 rounded rectangle).
+inline constexpr float kSwitchW = t::kSwitchWidth, kSwitchH = t::kSwitchHeight;
 
 // controls.cpp
 void focus_ring(const Rect& r, float radius);
+// Text a screen reader reads where it is drawn (accessibility.cpp), in drawn order; `heading` 1-3 for a title.
+void reader_text(const Rect& r, const std::wstring& text, int heading = -1);
 bool focused(Ctl id);
 bool pointer_in(const Rect& r);
 float badge_width(const std::wstring& text);
 float button_width(const std::wstring& label, const t::TypeStyle& style = kButtonLabel);
-void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr);
+// `option`: which of several buttons with one id this is (a hotkey's); its hit carries it, and its focus ring shows
+// only when it is the focused one.
+void button(Ctl id, const Rect& r, const std::wstring& label, Btn style, const char* icon = nullptr, int option = -1);
 void button(Ctl id, const Rect& r, const std::wstring& label, bool primary);
 float popup_width(const std::wstring* items, int count, float minWidth);
 void popup_button(Ctl id, const Rect& r, const std::wstring& value, bool disabled);
 void slider(Ctl id, const Rect& r, int value, Range range, const std::wstring& detail, bool disabled,
             const wchar_t* unit = L"%", bool tenths = false);
+void slider_track(Ctl id, const Rect& track, int value, Range range, bool disabled);
+float segmented_choice_width(const std::vector<std::wstring>& items);
+void segmented_choice(Ctl id, const Rect& r, const std::vector<std::wstring>& items, int selected, bool disabled);
 float checkbox_height(const std::wstring& desc, float width);
 void switch_track(const Rect& s, bool on, bool disabled);
 void checkbox(Ctl id, const Rect& r, bool checked, const std::wstring& label, const std::wstring& desc,

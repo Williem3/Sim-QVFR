@@ -1,2 +1,13 @@
+#include "ui/font_resources.h"
+
 // The launcher's icon (tools/make_app_icon.py builds res/app.ico from assets/app-icon.png).
 1 ICON "res/app.ico"
+
+// Its fonts (ui/font_resources.h): Inter (WOFF2, unpacked by DirectWrite) and Jost (TrueType), SIL OFL 1.1.
+IDR_FONT_INTER_REGULAR RCDATA "../../third_party/fonts/inter/Inter-Regular.woff2"
+IDR_FONT_INTER_MEDIUM RCDATA "../../third_party/fonts/inter/Inter-Medium.woff2"
+IDR_FONT_INTER_SEMIBOLD RCDATA "../../third_party/fonts/inter/Inter-SemiBold.woff2"
+IDR_FONT_INTER_BOLD RCDATA "../../third_party/fonts/inter/Inter-Bold.woff2"
+IDR_FONT_JOST_BOLD RCDATA "../../third_party/fonts/jost/Jost-700-Bold.ttf"
+IDR_FONT_JOST_HEAVY RCDATA "../../third_party/fonts/jost/Jost-800-Heavy.ttf"
+IDR_FONT_JOST_BLACK RCDATA "../../third_party/fonts/jost/Jost-900-Black.ttf"

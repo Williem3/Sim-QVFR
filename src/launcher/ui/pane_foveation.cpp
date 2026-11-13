@@ -1,4 +1,4 @@
-// The Foveation and Focus overlay panes, and the side panel's foveation preview, legend and readouts.
+// The foveation preview (the Picture tab's Preview card: the left eye, both, or the right), its legend and readouts.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -16,98 +16,12 @@
 
 namespace simqvfr::launcher::ui::win {
 
-float foveation_pane(float x, float y, float w, bool draw) {
-    const bool qvfr = app.s.mode == RenderMode::Qvfr;
-    float h = 0;
-    if (eye_warning()) {
-        if (draw)
-            badge(x, y, 1, L"Eye tracker not detected. The focus region stays centered until one connects.", w);
-        h += 20 + t::kSpace6;
-    }
-    Row method, mode;
-    method.label = L"Rendering method";
-    {
-        const std::wstring names[2] = {kMethodNames[0], kMethodNames[1]};
-        method.controlW = popup_width(names, 2, 180);
-    }
-    method.controlH = t::kControlHeight;
-    method.control = [](const Rect& r) { popup_button(kMethod, r, kMethodNames[app.s.mode == RenderMode::Qvfr ? 0 : 1], false); };
-    mode.label = L"Foveated mode";
-    mode.desc = app.s.eyeTracking ? L"The focus region follows your gaze." : L"The focus region stays at the center of each lens.";
-    {
-        const std::wstring names[2] = {kModeNames[0], kModeNames[1]};
-        mode.controlW = popup_width(names, 2, 140);
-    }
-    mode.controlH = t::kControlHeight;
-    mode.control = [](const Rect& r) { popup_button(kMode, r, kModeNames[app.s.eyeTracking ? 0 : 1], false); };
-    h += section(x, y + h, w, L"Mode", method_shown() ? std::vector<Row>{method, mode} : std::vector<Row>{mode},
-                 qvfr ? L"Eye tracked or fixed: whether the sharp focus region follows your eyes."
-                      : L"Two-loop Foveated Interlaced is legacy: it renders each headset frame twice. Switch to Quad View "
-                        L"Foveated Rendering; Two-loop won't be offered again.",
-                 draw, method_shown() ? Applies::NextLaunch : Applies::Live);
-    h += t::kSpace6;
-    h += section(x, y + h, w, L"Focus region",
-                 {slider_row(kWidth, L"Foveated width", L"", app.s.width, L""),
-                  slider_row(kHeight, L"Foveated height", L"", app.s.height, L""),
-                  slider_row(kCorner, L"Corner radius",
-                             app.s.shape.corners ? L"Box shape only." : L"Rounds the corners of the focus region.",
-                             app.s.corner, L"", app.s.shape.corners),
-                  slider_row(kFeather, L"Feather", L"Softens the edge of the focus region.", app.s.feather, L""),
-                  app.s.eyeTracking
-                      ? slider_row(kFocusOffset, L"Gaze offset",
-                                   L"Moves the focus region above (+) or below (−) where you look, if it sits off.",
-                                   app.s.offset.gaze, L"", false, L"°")
-                      : slider_row(kFocusOffset, L"Vertical position",
-                                   L"Raises (+) or lowers (−) the fixed focus region, e.g. toward the road or the dash.",
-                                   app.s.offset.fixed, L"", false, L"°"),
-                  slider_row(kGazeDeadzone, L"Gaze dead-zone",
-                             L"How far your gaze moves before the focus region follows. Higher holds it steadier "
-                             L"against eye-tracker jitter (shimmer with MSAA); 0 follows every sample.",
-                             app.s.gazeDeadzone, L"", !app.s.eyeTracking, L"°", true)},
-                 L"Share of the outer view that the focus view covers. Fixed and eye-tracked modes keep their own "
-                 L"vertical offset.",
-                 draw, Applies::Live);
-    h += t::kSpace6;
-    {
-        const std::wstring names[2] = {kShapeNames[0], kShapeNames[1]};
-        Row shape = choice_row(kShape, L"Shape", names, 2, app.s.shape.corners ? 1 : 0, false);
-        shape.desc = L"Box: a rectangle, with the corner radius above. Corners: move each corner in on its own.";
-        const bool off = !app.s.shape.corners;
-        const auto corner = [&](Ctl id, const wchar_t* label) {
-            return slider_row(id, label, L"", *slider_value(id), L"", off);
-        };
-        h += section(x, y + h, w, L"Focus shape",
-                     {shape, corner(kShapeTopLeftIn, L"Top left in"), corner(kShapeTopLeftDown, L"Top left down"),
-                      corner(kShapeTopRightIn, L"Top right in"), corner(kShapeTopRightDown, L"Top right down"),
-                      corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"),
-                      corner(kShapeBottomRightIn, L"Bottom right in"),
-                      corner(kShapeBottomRightUp, L"Bottom right up")},
-                     L"Pull the top corners in for a trapezoid: more of the dash sharp, at the same cost.",
-                     draw, Applies::Live);
-    }
-    return h;
-}
+namespace {
 
-float overlay_pane(float x, float y, float w, bool draw) {
-    float h = 0;
-    Row show;
-    const std::wstring desc = L"Draws a colored border around the focus region.";
-    show.fullHeight = [desc](float width) { return checkbox_height(desc, width); };
-    show.full = [desc](const Rect& r) { checkbox(kOutline, r, app.s.outline, L"Show focus outline", desc); };
-    Row color;
-    color.label = L"Outline color";
-    color.disabled = !app.s.outline;
-    color.controlW = segmented_width();
-    color.controlH = t::kControlHeight;
-    color.control = [](const Rect& r) { segmented(kColor, r, static_cast<int>(app.s.color), !app.s.outline); };
-    h += section(x, y, w, L"Focus overlay",
-                 {show, color},
-                 L"The outline is drawn into the headset image, to show where the focus region is.", draw, Applies::Live);
-    return h;
-}
-
-// FoveationPreview (one eye, a schematic) at (x, y), width w. Returns its height.
-float preview(float x, float y, float w, bool draw) {
+// One eye, a schematic, at (x, y), width w; `right`: the right eye, its crop mirrored (the outer side is the temple's,
+// so on the right). The focus shape's corners are the screen's in both eyes, as the compositor draws them. Returns its
+// height.
+float preview_eye(float x, float y, float w, bool draw, bool right) {
     const Readouts ro = readouts(app.s, app.runtime);
     const bool known = app.runtime.known();
     // The whole eye (the FOV crop is drawn over it); without a recommended size, the kit's example
@@ -132,8 +46,10 @@ float preview(float x, float y, float w, bool draw) {
         const float gx = 0.5f, gy = 0.5f - app.s.offset.for_mode(app.s.eyeTracking) / 100.0f;
         // The kept view (the left eye: its outer side is on the left); the focus region stays inside it.
         const bool cropHere = game_has(&games::GameFeatures::fovCrop);  // none for a game without the crop
-        const float cl = W * static_cast<float>(cropHere && app.s.crop_width() < 1 ? app.s.cropOuter : 0) / 100,
-                    cr = W * static_cast<float>(cropHere && app.s.crop_width() < 1 ? app.s.cropInner : 0) / 100,
+        const int temple = cropHere && app.s.crop_width() < 1 ? app.s.cropOuter : 0,
+                  nose = cropHere && app.s.crop_width() < 1 ? app.s.cropInner : 0;
+        const float cl = W * static_cast<float>(right ? nose : temple) / 100,
+                    cr = W * static_cast<float>(right ? temple : nose) / 100,
                     ct = H * static_cast<float>(cropHere && app.s.crop_height() < 1 ? app.s.cropTop : 0) / 100,
                     cb = H * static_cast<float>(cropHere && app.s.crop_height() < 1 ? app.s.cropBottom : 0) / 100;
         const float fx = std::clamp(gx * W - fw / 2, cl, std::max(cl, W - cr - fw)),
@@ -223,13 +139,32 @@ float preview(float x, float y, float w, bool draw) {
         const t::TypeStyle tiny{9.5f * k, 12 * k, 400, false};
         if (known) {
             app.canvas.text(L"Focus " + dims(ro.focus), tiny, R(fx + 6, fy + 4, W - fx - 6, 12), col(app.c->preview_label), Align::Leading, false);
-            app.canvas.text(L"Outer " + dims(ro.outer), tiny, R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label),
+            app.canvas.text(L"Periphery " + dims(ro.outer), tiny, R(cl + 8, H - cb - 17, W - cl - cr - 16, 12), col(app.c->preview_label),
                             Align::Leading, false);
         }
         rt->PopLayer();
         app.canvas.stroke(frame, col(app.c->separator), 0.5f, t::kRadiusGroup);
     }
     return frameH;
+}
+
+}  // namespace
+
+// The foveation preview at (x, y), width w: the left eye, the right eye, or both side by side, each named under it
+// (the Preview card's Eye choice, app.previewEye). Returns its height.
+float preview(float x, float y, float w, bool draw) {
+    if (app.previewEye != 1)
+        return preview_eye(x, y, w, draw, app.previewEye == 2);
+    const float gap = 12, half = std::floor((w - gap) / 2);
+    const float h = preview_eye(x, y, half, false, false);
+    if (draw) {
+        preview_eye(x, y, half, true, false);
+        preview_eye(x + half + gap, y, half, true, true);
+        app.canvas.text(L"Left eye", t::kSubheadline, {x, y + h + 4, half, 16}, col(app.c->label_secondary), Align::Center);
+        app.canvas.text(L"Right eye", t::kSubheadline, {x + half + gap, y + h + 4, half, 16}, col(app.c->label_secondary),
+                        Align::Center);
+    }
+    return h + 4 + 16;
 }
 
 // What the foveation preview's two marks mean. Returns its height.
@@ -253,6 +188,7 @@ float preview_legend(float x, float y, float w, bool draw) {
 float readout(float x, float y, float w, const std::wstring& name, const std::wstring& value, bool draw,
               const std::wstring& of) {
     if (draw) {
+        reader_text({x, y, w, 20}, name + L": " + value + (of.empty() ? L"" : L" " + of));
         app.canvas.text(name, t::kBody, {x, y, w / 2, 20}, col(app.c->label_secondary));
         const float ow = of.empty() ? 0 : std::ceil(app.canvas.measure(of, t::kBody)) + 2;
         app.canvas.text(value, t::kBody, {x + w / 2, y, w / 2 - ow - (of.empty() ? 0 : 4), 20}, col(app.c->label), Align::Trailing);
@@ -267,24 +203,20 @@ namespace {
 // A share as a bar under a readout. Returns its height.
 float meter(float x, float y, float w, double share, uint32_t color, bool draw) {
     if (draw) {
-        app.canvas.fill({x, y, w, 6}, col(app.c->segment_track), 3);
+        app.canvas.fill({x, y, w, 6}, col(app.c->segment_track));
         const float f = static_cast<float>(std::clamp(share, 0.0, 1.0));
         if (f > 0)
-            app.canvas.fill({x, y, std::max(6.0f, w * f), 6}, col(color), 3);
+            app.canvas.fill({x, y, std::max(6.0f, w * f), 6}, col(color));
     }
     return 6;
 }
 
 }  // namespace
 
-// An upper-case group label (the sidebar's, a card's). Returns its height.
+// An upper-case group label (the sidebar's, a card's: kFootnote upper-cases it). Returns its height.
 float eyebrow(float x, float y, float w, const std::wstring& text, bool draw) {
-    if (draw) {
-        std::wstring upper = text;
-        for (wchar_t& ch : upper)
-            ch = static_cast<wchar_t>(towupper(ch));
-        app.canvas.text(upper, t::kFootnote, {x, y, w, t::kFootnote.lineHeight}, col(app.c->label_muted));
-    }
+    if (draw)
+        app.canvas.text(text, t::kFootnote, {x, y, w, t::kFootnote.lineHeight}, col(app.c->label_muted));
     return t::kFootnote.lineHeight;
 }
 
@@ -295,7 +227,7 @@ float readouts_card(float x, float y, float w, bool draw) {
     const std::wstring dash = L"—";
     float h = eyebrow(x, y, w, L"Per eye", draw) + t::kSpace2;
     h += readout(x, y + h, w, L"Headset", known ? dims(ro.runtime) : dash, draw) + 6;
-    h += readout(x, y + h, w, L"Outer view", known ? dims(ro.outer) : dash, draw) + 6;
+    h += readout(x, y + h, w, L"Periphery view", known ? dims(ro.outer) : dash, draw) + 6;
     h += readout(x, y + h, w, L"Focus view", known ? dims(ro.focus) : dash, draw) + 6;
     h += readout(x, y + h, w, L"Center sharpness", ro.centerPpd > 0 ? std::to_wstring(std::lround(ro.centerPpd)) + L" PPD" : dash,
                  draw);

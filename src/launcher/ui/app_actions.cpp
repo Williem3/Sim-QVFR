@@ -2,6 +2,7 @@
 // a running game), the profiles, following the ini, the launch checks, the sliders' values and ranges, the
 // focus order, and Launch (launch_game, main.cpp).
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "../settings.h"
 #include "../session_history.h"
 #include "../../games/game.h"
+#include "../../ini_put.h"
 #include "../../sha256_file.h"
 #include "window_state.h"
 #include "controls.h"
@@ -28,17 +30,45 @@ namespace simqvfr::launcher::ui::win {
 namespace {
 
 bool system_dark() {
-    // SIM_QVFR_LAUNCHER_THEME=light|dark overrides the Windows app theme (for checking both).
+    // SIM_QVFR_LAUNCHER_THEME=light|dark overrides the theme button and the Windows app theme (for checking both).
     wchar_t forced[16] = {};
     if (GetEnvironmentVariableW(L"SIM_QVFR_LAUNCHER_THEME", forced, 16))
         return _wcsicmp(forced, L"dark") == 0;
+    if (app.themeChoice != ThemeChoice::System)
+        return app.themeChoice == ThemeChoice::Dark;
     DWORD light = 1, size = sizeof(light);
     RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
                  L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
     return light == 0;
 }
 
+constexpr const wchar_t* kThemeChoiceNames[] = {L"system", L"light", L"dark"};  // ThemeChoice's order
+
 }  // namespace
+
+// [launcher] ui_theme: system (the default, also for anything else), light or dark. One for every game: [launcher] is
+// in no profile and no game's copy.
+ThemeChoice read_theme_choice() {
+    if (!app.iniFound)
+        return app.themeChoice;
+    wchar_t value[16] = {};
+    GetPrivateProfileStringW(L"launcher", L"ui_theme", L"", value, static_cast<DWORD>(std::size(value)), app.ini.c_str());
+    for (int i = 0; i < 3; ++i)
+        if (_wcsicmp(value, kThemeChoiceNames[i]) == 0)
+            return static_cast<ThemeChoice>(i);
+    return ThemeChoice::System;
+}
+
+// The theme button: following Windows, then light, then dark; kept in the ini (in this window alone without one).
+void cycle_theme() {
+    app.themeChoice = static_cast<ThemeChoice>((static_cast<int>(app.themeChoice) + 1) % 3);
+    if (app.iniFound) {
+        ini_put(app.ini.c_str(), L"launcher", L"ui_theme", kThemeChoiceNames[static_cast<int>(app.themeChoice)]);
+        app.iniText = ini_text();  // not a change follow_ini needs to read back
+    }
+    apply_theme();
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
 
 COLORREF colorref(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
 
@@ -62,15 +92,11 @@ t::Accent game_accent(const games::GameInfo& game) {
     return {a.accent, a.fill, a.onAccent, a.ring};
 }
 
+// The theme's colours. A game's own colour is its marker only (its tab, the rail): selection stays blue and Launch red,
+// whichever game is chosen, so each colour keeps its one meaning.
 void apply_theme() {
     app.dark = system_dark();
     app.theme = app.dark ? t::kDark : t::kLight;
-    const t::Accent a = game_accent(games::launcher_game());
-    app.theme.accent = a.accent;
-    app.theme.accent_fill = a.accent_fill;
-    app.theme.on_accent = a.on_accent;
-    app.theme.focus_ring = a.focus_ring;
-    app.theme.sidebar_selection = a.accent_fill;
     const BOOL dark = app.dark;
     DwmSetWindowAttribute(app.hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
     const COLORREF caption = colorref(app.c->titlebar_bg), text = colorref(app.c->label);
@@ -117,6 +143,22 @@ void changed(bool save) {
         app.iniText = ini_text();
         push_live();
         refresh_profiles();  // whether the settings still match the profile in use
+    }
+    if (save) {  // what this change changed, for Undo (the settings session history compares; others aren't offered)
+        const std::vector<std::wstring> diff = setting_changes(app.lastSaved, app.s);
+        if (app.undoing) {
+            app.undoChange.reset();
+            app.undoText = diff.empty() ? L"" : L"Undone: " + changes_text(diff, 2);
+        } else if (!diff.empty()) {
+            app.undoChange = app.lastSaved;
+            app.undoText = changes_text(diff, 2);
+        }
+        if (!diff.empty()) {
+            app.undoUntil = GetTickCount64() + kUndoMs;
+            SetTimer(app.hwnd, kUndoTimer, static_cast<UINT>(kUndoMs + 50), nullptr);
+        }
+        app.lastSaved = app.s;
+        app.undoing = false;
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -188,6 +230,7 @@ void follow_ini() {
     app.iniText = std::move(text);
     app.s = load_settings(app.ini);
     app.undoRestore.reset();
+    settings_reloaded();  // the headset menu's change isn't the launcher's to undo
     refresh_profiles();  // the headset menu may have switched profiles (the action bar names the one in use)
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -332,121 +375,60 @@ Range slider_range(Ctl id) {
     }
 }
 
-namespace {
-
-bool inner_disabled() { return app.s.mode == RenderMode::TwoLoop; }
-
-}  // namespace
-
 // Two-loop is legacy (ini mode=quad still runs it): the method picker shows only while it is chosen, to leave it.
 bool method_shown() { return app.s.mode == RenderMode::TwoLoop; }
 
-std::vector<Ctl> focus_order() {
-    std::vector<Ctl> order = {kGameTab, kSidebar};
-    switch (app.pane) {
-    case Pane::Checks: break;  // the fix buttons are the mouse's (one Ctl for them all)
-    case Pane::Hotkeys: order.push_back(kHotkeysReset); break;
-    case Pane::Profiles: order.insert(order.end(), {kProfileSave, kProfilePaste}); break;  // each profile's buttons: the mouse's  // the bindings are the mouse's, as the fix buttons
-    case Pane::Resolution:
-        order.push_back(kOuter);
-        if (!inner_disabled()) {
-            order.push_back(kInner);
-            if (game_has(&games::GameFeatures::objectDetail))
-                order.push_back(kObjectDetail);
-            if (game_has(&games::GameFeatures::sharpening))
-                order.push_back(kSharpen);
-            if (game_has(&games::GameFeatures::nativeQuadViews))
-                order.push_back(kNativeQuad);
-            if (game_has(&games::GameFeatures::fovCrop))
-                order.push_back(kCropOn);
-            if (app.s.crop && game_has(&games::GameFeatures::fovCrop))
-                order.insert(order.end(), {kCropTop, kCropBottom, kCropOuter, kCropInner});
-            if (game_has(&games::GameFeatures::helmet))
-                order.push_back(kHelmetOn);
-            if (app.s.helmet.on && game_has(&games::GameFeatures::helmet))
-                order.insert(order.end(), {kHelmetRim, kHelmetCorners, kHelmetLight, kVisor, kHelmetSize, kHelmetHeight,
-                                           kHelmetDepth, kHelmetDetail});
-        }
-        break;
-    case Pane::Foveation:
-        if (method_shown())
-            order.push_back(kMethod);
-        order.insert(order.end(), {kMode, kWidth, kHeight});
-        if (!app.s.shape.corners)
-            order.push_back(kCorner);
-        order.insert(order.end(), {kFeather, kFocusOffset});
-        if (app.s.eyeTracking)
-            order.push_back(kGazeDeadzone);
-        order.push_back(kShape);
-        if (app.s.shape.corners)  // in reading order, as the pane lists them
-            order.insert(order.end(), {kShapeTopLeftIn, kShapeTopLeftDown, kShapeTopRightIn, kShapeTopRightDown,
-                                       kShapeBottomLeftIn, kShapeBottomLeftUp, kShapeBottomRightIn, kShapeBottomRightUp});
-        break;
-    case Pane::Overlay:
-        order.push_back(kOutline);
-        if (app.s.outline)
-            order.push_back(kColor);
-        break;
-    case Pane::Dlss:
-        if (game_has(&games::GameFeatures::sideLoadedDlss)) {  // Sim-QVFR's own (pane_dlss.cpp)
-            if (own_dlss_available())
-                order.push_back(kDlssOn);
-            if (!app.s.dlss.folder.empty())  // another nvngx_dlss.dll chosen: Use included, left of Choose…
-                order.push_back(kDlssIncluded);
-            order.push_back(kDlssFolder);
-            if (own_dlss_available() && app.s.dlss.on)
-                order.insert(order.end(), {kDlssFocusMode, kDlssFocusPreset, kDlssEyePreset, kDlssSharpening,
-                                           kDlssCarVectors});
-            if (own_nr_available())
-                order.push_back(kNrOn);
-            order.push_back(kNrFolder);
-            if (own_nr_available() && app.s.nr.on) {
-                order.insert(order.end(), {kNrIntensity, kNrStyle, kNrPreset, kNrLocalTone, kNrLocalStructure, kNrAutoMask,
-                                           kNrOrder, kNrFocusScale, kNrLimit, kNrEdgeBlend, kNrPeriphery});
-                if (app.s.nr.periphery)
-                    order.insert(order.end(), {kNrPeripheryScale, kNrPeripheryCoverage});
-            }
-            break;
-        }
-        if (!game_has(&games::GameFeatures::foveatedDlss))
-            break;
-        order.insert(order.end(), {kCheekyUse, kCheekyRuntime, kCheekyOn, kCheekyOuter, kCheekyScale, kCheekyOuterPreset,
-                                   kCheekyFocusPreset, kCheekySupersampling, kCheekyMotionFix, kCheekyNr});
-        if (app.s.cheeky.nr)
-            order.insert(order.end(), {kCheekyNrPreset, kCheekyNrPasses});
-        if (!game_has(&games::GameFeatures::frameGeneration))
-            break;
-        order.push_back(kFgOn);
-        if (app.s.cheeky.fg)
-            order.insert(order.end(), {kFgMultiplier, kFgSize, kFgScale, kFgPeriphery, kFgRelease, kFgBorder});
-        break;
-    case Pane::Menu:
-        order.insert(order.end(), {kMenuYaw, kMenuPitch, kMenuWidth, kMenuPanel, kHotkeyFooter, kOsdOn});
-        if (app.s.osd.enabled)
-            order.insert(order.end(), {kOsdYaw, kOsdPitch, kOsdSize, kOsdPanel});
-        break;
-    case Pane::Layers:
-        order.insert(order.end(), {kLayerProfile, kLayerList});
-        if (app.layerProfile == 0)
-            order.push_back(kLayerReset);
-        else if (layers_dirty())
-            order.insert(order.end(), {kLayerRevert, kLayerApply});
-        break;
-    case Pane::Games:
-        order.insert(order.end(), {kColorValue, kColorReset});
-        if (games::launcher_game().antiCheatStart)
-            order.push_back(kAntiCheat);
-        break;
-    case Pane::Diagnostics: order.insert(order.end(), {kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs}); break;
-    case Pane::Report:
-        order.insert(order.end(), {kDiagKind, kDiagDescription, kDiagReport});
-        if (!app.reportZip.empty())
-            order.push_back(kDiagZip);
-        order.push_back(kDiagExport);
-        break;
-    case Pane::About: order.insert(order.end(), {kSupport, kUpdateCheck, kUpdateNow}); break;
+namespace {
+
+// The controls of a page of cards in the order they were drawn (card by card, top to bottom), from the last frame's
+// hits: each once, a card's menu once per card. What a disclosure hides was not drawn, so it isn't in the order.
+// In a panel only its own hits were drawn, and its Ko-fi button (About) is one of them.
+std::vector<FocusStop> drawn_order(bool panel = false) {
+    static const Ctl kNotStops[] = {kNone, kPage, kGameTab, kTopTab, kSearch, kProfileMenu, kVersion, kThemeToggle,
+                                    kLaunch, kSupport, kHelpIcon, kSearchResult, kSearchField, kSheetButton, kSheetField,
+                                    kChecksBadge, kLaunchBadge, kUndoBadge, kUpdateBadge, kColorWheel, kDiagZip, kText};
+    std::vector<FocusStop> out;
+    for (const Hit& h : app.hits) {
+        if (std::find(std::begin(kNotStops), std::end(kNotStops), h.id) != std::end(kNotStops) && !(panel && h.id == kSupport))
+            continue;
+        if (h.r.bottom() < app.scrollArea.y - 2000 || h.r.y > app.scrollArea.bottom() + 2000)
+            continue;  // not this page's (an index pass draws far away)
+        const bool several = h.id == kCardMenu || h.id == kMore || h.id == kHotkeyKey || h.id == kHotkeyPad ||
+                             h.id == kCheckFix || h.id == kCheckOff || h.id == kCheckGuide || h.id == kGameShown ||
+                             h.id == kColorGame || h.id == kColorPreset ||
+                             h.id == kOverviewCard || (h.id >= kProfileUse && h.id <= kProfileRevert);
+        // A layer's switch and moves: one stop, the list (the arrows pick a row, Space and Ctrl+arrows act on it).
+        const bool layer = h.id == kLayerOn || h.id == kLayerUp || h.id == kLayerDown;
+        const FocusStop stop{layer ? kLayerList : h.id, several ? h.option : -1};
+        if (std::find(out.begin(), out.end(), stop) == out.end())
+            out.push_back(stop);
     }
-    order.insert(order.end(), {kRestore, kLaunch});
+    return out;
+}
+
+}  // namespace
+
+std::vector<FocusStop> focus_order() {
+    if (app.panel != PanelKind::None) {  // a panel: only its own controls (its ✕ first, as drawn)
+        std::vector<FocusStop> order = drawn_order(true);
+        if (app.panel == PanelKind::Report && !app.reportZip.empty())
+            order.push_back({kDiagZip});  // Return shows it in Explorer
+        return order;
+    }
+    std::vector<FocusStop> order = {{kGameTab}, {kTopTab}, {kPage}};
+    if (tab_pages(tab_of(app.pane)).size() < 2)
+        order.pop_back();  // no page strip
+    switch (app.pane) {
+    case Pane::Overview:
+    case Pane::Picture:
+    case Pane::Headset:
+    case Pane::Game: {
+        const std::vector<FocusStop> drawn = drawn_order();
+        order.insert(order.end(), drawn.begin(), drawn.end());
+        break;
+    }
+    }
+    order.insert(order.end(), {{kThemeToggle}, {kSearch}, {kProfileMenu}, {kLaunch}, {kVersion}});  // the top bar, the rail's foot
     return order;
 }
 
@@ -468,11 +450,11 @@ void launch() {
     app.s = load_settings(app.ini);
     save_settings(app.ini, app.s);
     app.iniText = ini_text();
+    settings_reloaded();
     refresh_checks();
     // Running already (from here or not): Launch checks says how, and Launch starts nothing.
     if (game_running()) {
-        app.pane = Pane::Checks;
-        app.scroll = 0;
+        jump_to({L"Launch checks", L"Launch checks", Pane::Game});
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
@@ -480,8 +462,7 @@ void launch() {
         if (c.id == "game" && c.tone == CheckTone::Bad) {  // its fix, Choose folder…, is in Launch checks
             app.status = Status::Error;
             app.error = game_name() + L" not found: choose its folder in Launch checks.";
-            app.pane = Pane::Checks;
-            app.scroll = 0;
+            jump_to({L"Launch checks", L"Launch checks", Pane::Game});
             InvalidateRect(app.hwnd, nullptr, FALSE);
             return;
         }
@@ -505,8 +486,7 @@ void launch() {
             start_launch();
             return;
         }
-        app.pane = Pane::Checks;
-        app.scroll = 0;
+        jump_to({L"Launch checks", L"Launch checks", Pane::Game});
         InvalidateRect(app.hwnd, nullptr, FALSE);
     };
     open_sheet(std::move(s));

@@ -1,8 +1,9 @@
-// Drawing for the launcher window: Direct2D shapes and DirectWrite text in DIPs (the kit's px at
-// 96 DPI), with the kit's colours (theme_tokens.h) and type styles. One Canvas per window.
+// Drawing for the launcher window: Direct2D shapes and DirectWrite text in DIPs (px at 96 DPI), with the design
+// tokens' colours and type styles (theme_tokens.h) in the bundled fonts (font_resources.h). One Canvas per window.
 #pragma once
 
 #include <cstdint>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -55,8 +56,6 @@ public:
     // Any Direct2D geometry (from factory()), filled, or stroked centred on its edge.
     void fill(ID2D1Geometry* g, Color c);
     void stroke(ID2D1Geometry* g, Color c, float width);
-    // The kit's raised-control shadow: a soft 0.5px drop under a rounded rectangle.
-    void control_shadow(const Rect& r, float radius, bool dark);
     // An SVG path ('d' attribute: M L H V C S Z, absolute or relative) scaled from a `box`-sized
     // viewBox into `r`, stroked (round caps and joins) or filled.
     void path(const char* d, const Rect& r, float box, Color c, float strokeWidth, bool filled = false);
@@ -66,7 +65,7 @@ public:
     // the same (and the target lives): pass a new key when the pixels change.
     void image(const Rect& r, const std::vector<uint32_t>& pixels, int w, int h, uint64_t key);
 
-    // Text in a kit type style. Returns the drawn width.
+    // Text in a type style (its family, weight, tabular figures, uppercase and letter spacing). Returns the drawn width.
     float text(const std::wstring& s, const tokens::TypeStyle& style, const Rect& r, Color c, Align align = Align::Leading,
                bool vcenter = true, bool wrap = false);
     float measure(const std::wstring& s, const tokens::TypeStyle& style);
@@ -75,9 +74,22 @@ public:
 
     ID2D1RenderTarget* target() { return target_.Get(); }
     ID2D1Factory* factory() { return factory_.Get(); }
+    // Whether the bundled fonts loaded (else the families' installed fallbacks draw the text).
+    bool bundled_fonts() const { return bundled_ != nullptr; }
 
 private:
+    // A type style's family as drawn: its name, the collection it is in (null: the system's), and its ascent and
+    // descent as shares of the size (to centre the line box on the font's own box).
+    struct FamilyFont {
+        std::wstring name;
+        ComPtr<IDWriteFontCollection> collection;
+        float ascent = 0.8f, descent = 0.2f;
+    };
+    void load_fonts();
+    const FamilyFont& family(const tokens::TypeStyle& style) const;
     IDWriteTextFormat* format(const tokens::TypeStyle& style, Align align, bool wrap);
+    ComPtr<IDWriteTextLayout> layout(const std::wstring& s, const tokens::TypeStyle& style, Align align, bool wrap, float w,
+                                     float h);
     ID2D1SolidColorBrush* brush(Color c);
     void create_target();
 
@@ -92,7 +104,8 @@ private:
     uint64_t imageKey_ = 0;
     ID2D1RenderTarget* imageTarget_ = nullptr;  // the target image_ was made for
     std::map<std::wstring, ComPtr<IDWriteTextFormat>> formats_;
-    std::wstring systemFamily_, monoFamily_;
+    ComPtr<IDWriteFontCollection> bundled_;  // Inter and Jost, from the exe's resources
+    FamilyFont families_[std::size(tokens::kFamilies)];
 };
 
 }  // namespace simqvfr::launcher::ui

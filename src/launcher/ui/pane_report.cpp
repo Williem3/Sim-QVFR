@@ -1,5 +1,5 @@
-// The Report an issue pane: the report's zip (and dragging it into the issue), exporting the logs, and the
-// description box (a native edit over the canvas).
+// Report an issue (its panel), the report's zip (and dragging it into the issue), exporting the logs, the Get help card,
+// and the description box (a native edit over the canvas).
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -15,6 +15,7 @@
 #include "../../games/game.h"
 #include "launcher_version.h"
 #include "window_state.h"
+#include "card.h"
 #include "controls.h"
 #include "form.h"
 
@@ -152,8 +153,8 @@ float report_zip_section(float x, float y, float w, bool draw);
 
 }  // namespace
 
-// The Report an issue pane: what the last session points to, then the kind of problem, what happened and the
-// button (report_issue).
+// The Report an issue panel's content: what the last session points to, then the kind of problem, what happened and
+// the button (report_issue), then the zip to drag into the issue.
 float report_pane(float x, float y, float w, bool draw) {
     float h = 0;
     // Known causes the last session shows come first: many problems end there.
@@ -206,27 +207,50 @@ float report_pane(float x, float y, float w, bool draw) {
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Opens a GitHub issue with the details filled in, and zips the logs for you to drag into it.",
+                 L"Needs a free GitHub account. Opens a bug report on GitHub with the details filled in, and zips the logs "
+                 L"for you to drag into it.",
                  draw);
     if (!app.reportZip.empty()) {
         h += t::kSpace6;
         h += report_zip_section(x, y + h, w, draw);
     }
-    // The logs alone, when they're asked for without an issue.
-    Row exportRow;
-    exportRow.label = L"Export logs";
-    if (app.exportZip.empty()) {
-        exportRow.desc = L"Zips Sim-QVFR’s and the game’s logs, and shows the zip in Explorer.";
-    } else {
-        const size_t slash = app.exportZip.find_last_of(L'\\');
-        exportRow.desc = L"Saved " + (slash == std::wstring::npos ? app.exportZip : app.exportZip.substr(slash + 1));
-    }
-    exportRow.controlW = button_width(L"Export logs");
-    exportRow.controlH = t::kControlHeight;
-    exportRow.control = [](const Rect& r) { button(kDiagExport, r, L"Export logs", false); };
-    h += t::kSpace6;
-    h += section(x, y + h, w, L"Send logs only", {exportRow}, L"When you’ve been asked for logs: no GitHub issue.", draw);
     return h;
+}
+
+// The Get help card: what the last session points to, then reporting an issue (its panel), exporting the logs alone,
+// copying the summary, the logs folder.
+Card help_card() {
+    Card c{Tab::Game, L"Get help"};
+    c.body = [](Body& b) {
+        const std::vector<Cause> causes = likely_causes(app.s, app.runtime);
+        if (causes.empty())
+            b.note(L"Nothing stood out in the last session.");
+        for (size_t i = 0; i < causes.size() && i < 2; ++i)
+            b.row(causes[i].title, causes[i].fix, L"");
+        if (causes.size() > 2) {
+            std::vector<std::wstring> labels;
+            for (size_t i = 2; i < causes.size(); ++i)
+                labels.push_back(causes[i].title);
+            b.more(std::to_wstring(causes.size() - 2) + L" more causes", labels, [causes](Body& m) {
+                for (size_t i = 2; i < causes.size(); ++i)
+                    m.row(causes[i].title, causes[i].fix, L"");
+            });
+        }
+        b.actions({{kReportOpen, L"Report an issue…", Btn::Primary}});
+        b.note(L"Needs a free GitHub account: it opens a bug report on the developer’s GitHub page with the details filled in, "
+               L"and zips the logs for you to drag into it.");
+        // No GitHub account, or asked for the logs alone: other ways, behind a More.
+        b.more(L"other ways to share", {L"Export logs", L"Copy summary", L"Open logs folder"}, [](Body& m) {
+            m.actions({{kDiagExport, L"Save the logs as a zip"}, {kDiagCopy, L"Copy summary"}, {kDiagLogs, L"Open logs folder"}});
+            m.note(L"No GitHub account? Save the logs as a zip and send it where you ask for help, with a few words on what "
+                   L"happened.");
+        });
+        if (!app.exportZip.empty()) {
+            const size_t slash = app.exportZip.find_last_of(L'\\');
+            b.note(L"Saved " + (slash == std::wstring::npos ? app.exportZip : app.exportZip.substr(slash + 1)) + L" and shown in Explorer.");
+        }
+    };
+    return c;
 }
 
 namespace {
@@ -266,7 +290,7 @@ void place_report_edit() {
     const Rect& r = app.reportEditRect;
     if (!app.reportEdit)
         return;
-    if (!report_edit_fits() || app.popup.open || app.sheet.open) {
+    if (app.panel != PanelKind::Report || !report_edit_fits() || app.popup.open || app.sheet.open) {
         if (GetFocus() == app.reportEdit)
             SetFocus(app.hwnd);
         ShowWindow(app.reportEdit, SW_HIDE);

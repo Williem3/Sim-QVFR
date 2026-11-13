@@ -18,6 +18,7 @@
 #include "../settings.h"
 #include "../../games/game.h"
 #include "window_state.h"
+#include "card.h"
 
 #pragma comment(lib, "comdlg32.lib")
 
@@ -27,7 +28,7 @@ namespace simqvfr::launcher::ui::win {
 
 const Hit* hit_at(float x, float y) {
     for (auto it = app.hits.rbegin(); it != app.hits.rend(); ++it)
-        if (it->r.contains(x, y))
+        if (it->id != kText && it->r.contains(x, y))
             return &*it;
     return nullptr;
 }
@@ -71,31 +72,34 @@ void set_panel_from(float x, float y) {
         push_live();  // the running game moves it as it is dragged; the settings save once it is let go
 }
 
-void open_popup(Ctl owner) {
-    for (const Hit& h : app.hits)
-        if (h.id == owner) {
-            app.popup.anchor = h.r;
-            break;
-        }
-    app.popup.owner = owner;
+// A choice's items and the one chosen now: a pop-up's, or a segmented control's (they share them).
+int choice_items(Ctl owner, std::vector<std::wstring>& items) {
+    int selected = 0;
+    items.clear();
+    if (owner == kOverviewProfile)
+        return overview_profile(items);
+    if (owner == kPreviewEye) {
+        items = {L"Left", L"Both", L"Right"};
+        return std::clamp(app.previewEye, 0, 2);
+    }
     if (owner == kCheekyOuterPreset || owner == kCheekyFocusPreset) {  // Cheeky's presets (the outer views have no game default)
         const bool focus = owner == kCheekyFocusPreset;
         const int value = focus ? app.s.cheeky.focusPreset : app.s.cheeky.outerPreset;
-        app.popup.items.clear();
-        app.popup.selected = 0;
+        items.clear();
+        selected = 0;
         for (const CheekyPreset& p : kCheekyPresets)
             if (focus || p.value != 0) {
                 if (p.value == value)
-                    app.popup.selected = static_cast<int>(app.popup.items.size());
-                app.popup.items.push_back(p.name);
+                    selected = static_cast<int>(items.size());
+                items.push_back(p.name);
             }
     } else if (owner == kDlssFocusMode || owner == kDlssFocusPreset || owner == kDlssEyePreset ||
                owner == kDlssSharpening) {  // DLSS in LMU
-        const auto fill = [](const auto& list, int value) {
-            app.popup.items.clear();
+        const auto fill = [&items, &selected](const auto& list, int value) {
+            items.clear();
             for (const DlssChoice& c : list)
-                app.popup.items.push_back(c.name);
-            app.popup.selected = dlss_choice_index(list, value, true);
+                items.push_back(c.name);
+            selected = dlss_choice_index(list, value, true);
         };
         if (owner == kDlssFocusMode)
             fill(kDlssFocusModes, app.s.dlss.focusScale);
@@ -107,62 +111,215 @@ void open_popup(Ctl owner) {
             fill(kDlssTextureSharpening, app.s.dlss.textureSharpening);
     } else if (owner == kNrStyle || owner == kNrPreset) {  // DLSS-NR in LMU
         const bool style = owner == kNrStyle;
-        app.popup.items.clear();
+        items.clear();
         if (style)
             for (const DlssChoice& c : kNrStyles)
-                app.popup.items.push_back(c.name);
+                items.push_back(c.name);
         else
             for (const DlssChoice& c : kNrPresets)
-                app.popup.items.push_back(c.name);
-        app.popup.selected = style ? dlss_choice_index(kNrStyles, app.s.nr.style) : dlss_choice_index(kNrPresets, app.s.nr.preset);
+                items.push_back(c.name);
+        selected = style ? dlss_choice_index(kNrStyles, app.s.nr.style) : dlss_choice_index(kNrPresets, app.s.nr.preset);
     } else if (owner == kNrOrder) {
-        app.popup.items = {L"After DLSS", L"Before DLSS"};
-        app.popup.selected = app.s.nr.beforeDlss ? 1 : 0;
+        items = {L"After DLSS", L"Before DLSS"};
+        selected = app.s.nr.beforeDlss ? 1 : 0;
     } else if (owner == kCheekyNrPreset) {
-        app.popup.items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
-        app.popup.selected = app.s.cheeky.nrPreset;
+        items.assign(std::begin(kCheekyNrPresets), std::end(kCheekyNrPresets));
+        selected = app.s.cheeky.nrPreset;
     } else if (owner == kFgMultiplier) {
-        app.popup.items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
-        app.popup.selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
+        items.assign(std::begin(kFgMultipliers), std::end(kFgMultipliers));
+        selected = std::clamp(app.s.cheeky.fgMultiplier - 2, 0, 2);
     } else if (owner == kFgRelease) {
-        app.popup.items.assign(std::begin(kCheekyFgReleaseNames), std::end(kCheekyFgReleaseNames));
-        app.popup.selected = cheeky_fg_release_index(app.s.cheeky.fgRelease);
+        items.assign(std::begin(kCheekyFgReleaseNames), std::end(kCheekyFgReleaseNames));
+        selected = cheeky_fg_release_index(app.s.cheeky.fgRelease);
     } else if (owner == kFgScale || owner == kFgPeriphery) {
-        app.popup.items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
-        app.popup.selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
+        items.assign(std::begin(kFgQuarters), std::end(kFgQuarters));
+        selected = std::clamp((owner == kFgScale ? app.s.cheeky.fgScale : app.s.cheeky.fgPeriphery) / 25 - 1, 0, 3);
     } else if (owner == kVisor) {
-        app.popup.items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
-        app.popup.selected = static_cast<int>(app.s.helmet.visor);
+        items.assign(std::begin(kVisorPositionNames), std::end(kVisorPositionNames));
+        selected = static_cast<int>(app.s.helmet.visor);
     } else if (owner == kShape) {
-        app.popup.items.assign(std::begin(kShapeNames), std::end(kShapeNames));
-        app.popup.selected = app.s.shape.corners ? 1 : 0;
+        items.assign(std::begin(kShapeNames), std::end(kShapeNames));
+        selected = app.s.shape.corners ? 1 : 0;
     } else if (owner == kDiagKind) {
-        app.popup.items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
-        app.popup.selected = app.reportKind;
+        items.assign(std::begin(kIssueKinds), std::end(kIssueKinds));
+        selected = app.reportKind;
     } else if (owner == kHelmetDetail) {
-        app.popup.items = {L"Performance (2048)", L"Detail (4096)"};
-        app.popup.selected = app.s.helmet.detail ? 1 : 0;
+        items = {L"Performance", L"Detail"};  // 2048 or 4096 a side: the help says so
+        selected = app.s.helmet.detail ? 1 : 0;
     } else if (owner == kLayerProfile) {
-        app.popup.items = {kLayerProfileNames[0], kLayerProfileNames[1]};
-        app.popup.selected = app.layerProfile;
+        items = {kLayerProfileNames[0], kLayerProfileNames[1]};
+        selected = app.layerProfile;
     } else if (owner == kCheekyNrPasses) {
-        app.popup.items = {L"1 pass", L"2 passes", L"3 passes"};
-        app.popup.selected = app.s.cheeky.nrPasses - 1;
+        items = {L"1 pass", L"2 passes", L"3 passes"};
+        selected = app.s.cheeky.nrPasses - 1;
     } else {
-        app.popup.items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
+        items = owner == kMethod ? std::vector<std::wstring>{kMethodNames[0], kMethodNames[1]}
                                            : std::vector<std::wstring>{kModeNames[0], kModeNames[1]};
-        app.popup.selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
+        selected = owner == kMethod ? (app.s.mode == RenderMode::Qvfr ? 0 : 1) : (app.s.eyeTracking ? 0 : 1);
     }
+    return selected;
+}
+
+// The choices shown as segmented controls (card.cpp); the others open a pop-up menu.
+bool segmented_ctl(Ctl id) {
+    switch (id) {
+    case kMode:
+    case kShape:
+    case kVisor:
+    case kHelmetDetail:
+    case kDlssFocusPreset:
+    case kDlssEyePreset:
+    case kNrOrder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery:
+    case kLayerProfile:
+    case kOverviewProfile:
+    case kPreviewEye: return true;
+    default: return false;
+    }
+}
+
+void open_popup(Ctl owner) {
+    if (owner == kProfileMenu) {
+        open_profile_menu();
+        return;
+    }
+    app.popup.kinds.clear();
+    app.popup.actions.clear();
+    for (const Hit& h : app.hits)
+        if (h.id == owner) {
+            app.popup.anchor = h.r;
+            break;
+        }
+    app.popup.owner = owner;
+    app.popup.selected = choice_items(owner, app.popup.items);
     app.popup.hover = app.popup.selected;
     app.popup.open = true;
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+// A card's ⋯ menu (option: the card's index this frame): Reset this card.
+void open_card_menu(int card) {
+    if (card < 0 || card >= static_cast<int>(app.cardResets.size()))
+        return;
+    Popup& p = app.popup;
+    p = {};
+    p.owner = kCardMenu;
+    for (const Hit& h : app.hits)
+        if (h.id == kCardMenu && h.option == card)
+            p.anchor = h.r;
+    p.items = {L"Reset this card…"};
+    p.actions = {card};
+    p.selected = -1;
+    p.hover = 0;
+    p.open = true;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
 namespace {
 
+// The profile menu's actions besides a profile (its index in app.profileNames, 0 and up).
+enum ProfileAction { kActUpdate = -1, kActRevert = -2, kActSave = -3, kActPaste = -4, kActManage = -5, kActRestore = -6, kActUndo = -7 };
+
+int profile_index(const std::wstring& name) {
+    for (size_t i = 0; i < app.profileNames.size(); ++i)
+        if (_wcsicmp(app.profileNames[i].c_str(), name.c_str()) == 0)
+            return static_cast<int>(i);
+    return -1;
+}
+
+}  // namespace
+
+// The top bar's profile menu: what the settings are now, the presets and saved profiles (the one in use checked), the
+// one in use's Update and Revert once the settings differ from it, saving and pasting, the Profiles page, and Restore
+// Defaults (its Undo stays in the status and Ctrl+Z).
+void open_profile_menu() {
+    Popup& p = app.popup;
+    p = {};
+    p.owner = kProfileMenu;
+    for (const Hit& h : app.hits)
+        if (h.id == kProfileMenu)
+            p.anchor = h.r;
+    const auto add = [&p](PopupRow kind, const std::wstring& text, int action) {
+        p.items.push_back(text);
+        p.kinds.push_back(kind);
+        p.actions.push_back(action);
+    };
+    const Readouts ro = readouts(app.s, app.runtime);
+    add(PopupRow::Note,
+        std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L"  ·  Periphery " + std::to_wstring(app.s.outer) + L"%  ·  Focus density " +
+            std::to_wstring(static_cast<int>(std::lround(ro.focusDensity * 100))) + L"%",
+        0);
+    add(PopupRow::Separator, L"", 0);
+    const int current = profile_index(app.profileCurrent);
+    const size_t presets = builtin_profiles(app.s.eyeTracking).size();
+    p.selected = -1;
+    for (size_t i = 0; i < app.profileNames.size(); ++i) {
+        if (i == presets && presets > 0)
+            add(PopupRow::Separator, L"", 0);
+        const bool inUse = static_cast<int>(i) == current;
+        if (inUse)
+            p.selected = static_cast<int>(p.items.size());
+        add(PopupRow::Item, app.profileNames[i] + (inUse && !app.profileMatches ? L"  ·  changed since" : L""), static_cast<int>(i));
+    }
+    add(PopupRow::Separator, L"", 0);
+    if (current >= 0 && !app.profileMatches) {
+        if (static_cast<size_t>(current) >= presets)
+            add(PopupRow::Item, L"Update " + app.profileCurrent + L" with these settings", kActUpdate);
+        add(PopupRow::Item, L"Revert to " + app.profileCurrent, kActRevert);
+    }
+    add(PopupRow::Item, L"Save current settings…", kActSave);
+    add(PopupRow::Item, L"Paste a shared profile", kActPaste);
+    add(PopupRow::Item, L"Manage profiles…", kActManage);
+    add(PopupRow::Separator, L"", 0);
+    if (app.undoChange)
+        add(PopupRow::Item, L"Undo " + app.undoText + L" (Ctrl+Z)", kActUndo);
+    add(PopupRow::Item, L"Restore defaults for " + short_name() + L"…", kActRestore);
+    p.hover = p.selected;
+    p.open = true;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+namespace {
+
+void profile_menu_action(int option) {
+    if (option < 0 || option >= static_cast<int>(app.popup.actions.size()))
+        return;
+    const int action = app.popup.actions[static_cast<size_t>(option)], current = profile_index(app.profileCurrent);
+    switch (action) {
+    case kActUpdate: activate(kProfileUpdate, current); break;
+    case kActRevert: activate(kProfileRevert, current); break;
+    case kActSave: activate(kProfileSave, -1); break;
+    case kActPaste: activate(kProfilePaste, -1); break;
+    case kActManage: open_panel(PanelKind::Profiles); break;
+    case kActRestore: activate(kRestore, -1); break;
+    case kActUndo: undo_change(); break;
+    default: activate(kProfileUse, action); break;
+    }
+}
+
 void choose(Ctl owner, int option) {
+    if (owner == kProfileMenu) {  // actions, not settings: each saves as it would from its own button
+        profile_menu_action(option);
+        return;
+    }
+    if (owner == kCardMenu) {
+        if (option >= 0 && option < static_cast<int>(app.popup.actions.size()))
+            reset_card(app.popup.actions[static_cast<size_t>(option)]);
+        return;
+    }
     if (owner == kDiagKind) {  // not a setting
         app.reportKind = option;
+        return;
+    }
+    if (owner == kOverviewProfile) {  // a preset used, or the profile menu
+        choose_overview_profile(option);
+        return;
+    }
+    if (owner == kPreviewEye) {  // a view, not a setting
+        app.previewEye = std::clamp(option, 0, 2);
+        InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
     if (owner == kMethod)
@@ -218,6 +375,8 @@ void choose(Ctl owner, int option) {
 
 }  // namespace
 
+void choose_option(Ctl owner, int option) { choose(owner, option); }
+
 // A game tab: [launcher] game, then everything that follows the game (its checks, its features, its palette).
 void select_game(int option) {
     std::size_t count = 0;
@@ -232,12 +391,13 @@ void select_game(int option) {
         app.s = load_settings(app.ini);
         app.iniText = ini_text();
         app.undoRestore.reset();  // it held the other game's settings
+        settings_reloaded();      // and so would Undo
         refresh_profiles();  // the profile in use is the game's
     } else {
         games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
     }
-    if (!pane_shown(static_cast<int>(app.pane)))
-        app.pane = static_cast<Pane>(shown_pane(static_cast<int>(app.pane), -1, 0));
+    if (!pane_shown(static_cast<int>(app.pane)))  // a page this game hasn't (DLSS): its tab's first
+        show_tab(tab_of(app.pane));
     apply_theme();
     refresh_checks();
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -253,19 +413,24 @@ int game_index() {
 }
 
 void close_popup(bool accept) {
-    if (accept && app.popup.hover >= 0)
-        choose(app.popup.owner, app.popup.hover);
+    const Popup p = app.popup;  // choose may open a sheet, or another menu
     app.popup.open = false;
+    if (accept && p.hover >= 0 && (p.kinds.empty() || p.kinds[static_cast<size_t>(p.hover)] == PopupRow::Item))
+        choose(p.owner, p.hover);
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
+// The item at (x, y); -1 for none, a separator or a note.
 int popup_item_at(float x, float y) {
     const Popup& p = app.popup;
-    const float itemH = kMenuItemH;
     const Rect menu = popup_menu_rect();
-    for (size_t i = 0; i < p.items.size(); ++i)
-        if (Rect{menu.x + 6, menu.y + 6 + itemH * i, menu.w - 12, itemH}.contains(x, y))
-            return static_cast<int>(i);
+    float top = menu.y + 6;
+    for (size_t i = 0; i < p.items.size(); ++i) {
+        const float h = popup_row_height(i);
+        if (Rect{menu.x + 6, top, menu.w - 12, h}.contains(x, y))
+            return p.kinds.empty() || p.kinds[i] == PopupRow::Item ? static_cast<int>(i) : -1;
+        top += h;
+    }
     return -1;
 }
 
@@ -384,6 +549,25 @@ void choose_game_folder() {
     refresh_installed();  // found now
     if (app.status == Status::Error)
         app.status = Status::Idle;  // "not found: choose its folder" is answered
+}
+
+// The settings just read from disk are what is saved: nothing of them is the last change (a game switched, the headset menu,
+// a launch).
+void settings_reloaded() {
+    app.lastSaved = app.s;
+    app.undoChange.reset();
+    app.undoText.clear();
+    app.undoUntil = 0;
+}
+
+// The last change undone: the settings before it, saved and sent as any change; the bar says what was undone.
+void undo_change() {
+    if (!app.undoChange)
+        return;
+    app.undoing = true;
+    app.s = *app.undoChange;
+    apply_theme();  // a game's colour may be what comes back
+    changed();
 }
 
 // Restore Defaults' Undo: the settings from before it.

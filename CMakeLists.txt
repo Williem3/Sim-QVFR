@@ -499,18 +499,20 @@ add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input
   src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc
   src/launcher/ui/window_state.cpp src/launcher/ui/app_actions.cpp src/launcher/ui/update_install.cpp
   src/launcher/ui/controls.cpp src/launcher/ui/help.cpp src/launcher/ui/sheet.cpp src/launcher/ui/form.cpp
-  src/launcher/ui/pane_checks.cpp src/launcher/ui/pane_profiles.cpp src/launcher/ui/pane_resolution.cpp
-  src/launcher/ui/pane_foveation.cpp src/launcher/ui/pane_dlss.cpp src/launcher/ui/pane_menu.cpp
+  src/launcher/ui/pane_checks.cpp src/launcher/ui/pane_profiles.cpp src/launcher/ui/picture.cpp src/launcher/ui/headset.cpp src/launcher/ui/card.cpp
+  src/launcher/ui/pane_foveation.cpp src/launcher/ui/pane_menu.cpp
   src/launcher/ui/pane_hotkeys.cpp src/launcher/ui/pane_games.cpp src/launcher/ui/pane_layers.cpp
   src/launcher/ui/pane_diagnostics.cpp src/launcher/ui/pane_report.cpp src/launcher/ui/pane_about.cpp
-  src/launcher/ui/chrome.cpp src/launcher/ui/pointer.cpp src/launcher/ui/input.cpp)
+  src/launcher/ui/panels.cpp src/launcher/ui/overview.cpp src/launcher/ui/accessibility.cpp src/launcher/ui/chrome.cpp src/launcher/ui/shell.cpp src/launcher/ui/search.cpp src/launcher/ui/pointer.cpp
+  src/launcher/ui/input.cpp)
 target_include_directories(sim_qvfr_launcher PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 if(SIM_QVFR_NGX)  # the layer has NGX in it: the About pane credits NVIDIA DLSS (the RTX SDKs licence's attribution)
   target_compile_definitions(sim_qvfr_launcher PRIVATE SIM_QVFR_NGX)
 endif()
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32)
+target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32
+                      oleaut32 uiautomationcore)
 target_precompile_headers(sim_qvfr_launcher PRIVATE ${SIM_QVFR_PCH})
 set_target_properties(sim_qvfr_launcher PROPERTIES OUTPUT_NAME sim-qvfr-launcher)
 sim_qvfr_version_info(sim_qvfr_launcher sim-qvfr-launcher.exe VFT_APP "Sim-QVFR launcher")

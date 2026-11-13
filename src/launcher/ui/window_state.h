@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,12 +30,22 @@ namespace simqvfr::launcher::ui::win {
 
 namespace t = tokens;
 
-enum class Pane { Checks, Profiles, Resolution, Foveation, Overlay, Dlss, Menu, Hotkeys, Games, Layers, Diagnostics, Report, About };
+// The pages, one per tab: the Overview hub (overview.cpp) and the Picture, Headset and Game tabs' cards (picture.cpp,
+// headset.cpp, pane_games.cpp game_page). Manage profiles and About are panels (panels.cpp).
+enum class Pane { Overview, Picture, Headset, Game };
 
-inline constexpr int kPanes = 13;
+inline constexpr int kPanes = 4;
+
+// The top bar's tabs (docs/ui/OVERHAUL_PLAN.md). Until each tab has its cards, the old panes are its pages, picked in a
+// strip under the top bar (shell.cpp kTabPages).
+enum class Tab { Overview, Picture, Headset, Game };
+
+inline constexpr int kTabs = 4;
 
 enum Ctl {
-    kNone, kSidebar, kGameTab /* option: the game's index in games::all_games */, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
+    // kPage: a page (option: its Pane) in the strip under the top bar; kGameTab: a game on the rail (option: its index in
+    // games::all_games).
+    kNone, kPage, kGameTab, kMethod, kMode, kOuter, kInner, kObjectDetail, kWidth, kHeight, kCorner, kFocusOffset, kGazeDeadzone, kOutline, kColor, kFeather, kMenuYaw,
     kMenuPitch, kMenuWidth, kMenuPanel, kSupport, kRestore, kLaunch,
     // The focus area's shape ([quad] focus_shape, Foveation pane): box or corners, then each corner's insets
     // (FocusCorner's order, across then up or down).
@@ -90,10 +101,47 @@ enum Ctl {
     // Restore Defaults' Undo.
     kLaunchBadge, kUndoBadge,
     // An open sheet (open_sheet): its buttons (option: the button's index) and its name field.
-    kSheetButton, kSheetField
+    kSheetButton, kSheetField,
+    // The theme button: following Windows, light or dark ([launcher] ui_theme).
+    kThemeToggle,
+    // The top bar: a tab (option: its Tab), Find a setting, the profile menu; the rail's version (it opens About).
+    kTopTab, kSearch, kProfileMenu, kVersion,
+    // Find a setting's results (option: the result's index) and its field.
+    kSearchResult, kSearchField,
+    // A card's ⋯ menu (option: the card's index this frame), a card's More (option: its index in app.moreKeys), and the
+    // helmet's images folder.
+    kCardMenu, kMore, kHelmetFolder,
+    // Get help's Report an issue… (its panel), an open panel's close button, a colour preset on the Games card (option:
+    // its index in kColorPresets) and Custom… (the colour panel).
+    kReportOpen, kPanelClose, kColorPreset, kColorCustom,
+    // The Overview: the profile's segments (option: a preset's index, or Custom), a summary card (option: its index in
+    // app.overviewTargets) and the Ko-fi tile.
+    kOverviewProfile, kOverviewCard, kKofiTile,
+    // The Preview card's eye: left, both, right (option: its index; app.previewEye).
+    kPreviewEye,
+    // A launch check's way out (option: its index in app.checks): turn off the feature it is about, or open the guide to
+    // installing it.
+    kCheckOff, kCheckGuide,
+    // Text a screen reader reads (reader_text): never a click target or a Tab stop.
+    kText,
+    // The undo bar's Undo (the last change).
+    kUndoChange
 };
 
-inline constexpr wchar_t kLayerProfileNames[2][40] = {L"With the launcher", L"Without the launcher (Windows)"};
+// A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
+enum class PanelKind { None, Report, Color, Profiles, About };
+
+// A stop in the keyboard's Tab order: a control, and which one of several (a card's menu), or -1.
+struct FocusStop {
+    Ctl id;
+    int option = -1;
+    bool operator==(const FocusStop&) const = default;
+};
+
+// The theme the window uses: Windows' app theme, or one chosen with the theme button ([launcher] ui_theme).
+enum class ThemeChoice { System, Light, Dark };
+
+inline constexpr wchar_t kLayerProfileNames[2][40] = {L"Launches from here", L"Every app"};
 
 inline constexpr wchar_t kFgMultipliers[3][4] = {L"2x", L"3x", L"4x"};
 
@@ -101,11 +149,24 @@ inline constexpr wchar_t kFgQuarters[4][8] = {L"25%", L"50%", L"75%", L"100%"};
 
 inline constexpr wchar_t kSupportUrl[] = L"https://ko-fi.com/williem3";
 
+// The OpenXR layers card's More (its list, for troubleshooting): Launch checks' Open OpenXR layers opens it.
+inline constexpr wchar_t kLayersMore[] = L"the add-ons and their order";
+
+// The README's guide to installing Cheeky Foveated DLSS (a launch check's How to install).
+inline constexpr wchar_t kCheekyGuideUrl[] = L"https://github.com/Williem3/Sim-QVFR#foveated-dlss-optional-nvidia-rtx-only";
+
 // The exe's hash, done on a worker: its message carries a new std::string (the hex digest).
 inline constexpr UINT kHashedMessage = WM_APP + 1;
 
 // The update check, done on a worker: its message carries a new UpdateResult.
 inline constexpr UINT kUpdateMessage = WM_APP + 2;
+
+// A screen reader's action, posted to the window (accessibility.cpp): a control pressed (wParam its Ctl, lParam its
+// option), as a click would; a slider set (wParam its Ctl, lParam the value), as the arrow keys would.
+inline constexpr UINT kAccessActivateMessage = WM_APP + 5, kAccessValueMessage = WM_APP + 6;
+
+// A screen reader chose an item of the open pop-up menu (wParam its index).
+inline constexpr UINT kAccessMenuMessage = WM_APP + 7;
 
 // Dev: a development build (no version to compare): the newest release is shown, not offered as an update.
 enum class Update { Off, Checking, UpToDate, Available, Dev, Failed };
@@ -133,8 +194,35 @@ inline constexpr const wchar_t* kHotkeyLabels[kHotkeyActions] = {L"Open or close
 struct Hit {
     Ctl id;
     Rect r;
-    int option = -1;  // sidebar row, segment, popup item
+    int option = -1;  // a page, a segment, a popup item
+    std::wstring tip;  // shown under it while the pointer is over it (help_tip), if any
+    // For screen readers (accessibility.cpp): its own name (a button's label, a segment's item; empty: the row's label),
+    // and its state as drawn (a switch: 0 off, 1 on; a segment, tab or game: 1 the chosen one; -1 none).
+    std::wstring name;
+    int state = -1;  // kText: its heading level (1-3), -1 none
+    std::wstring desc;  // a switch's line under its label
 };
+
+// A label as last drawn (form.cpp section, controls.cpp checkbox): its text, its section's title and its row. Find a
+// setting indexes them and highlights the one it jumps to.
+struct DrawnLabel {
+    std::wstring label, section;
+    Rect r;
+    std::wstring hiddenBy;  // hidden while this switch is off (r is the switch's row)
+    std::wstring more;      // hidden in this More while it is closed (app.moreOpen's key)
+};
+
+// A setting Find a setting can jump to: its label, its section's title, its page, what hides it, and the panel it is in
+// (Manage profiles, About), if any.
+struct SearchEntry {
+    std::wstring label, section;
+    Pane pane;
+    std::wstring hiddenBy, more;
+    PanelKind panel = PanelKind::None;
+};
+
+// app.tip for a hit's own tip text (Hit::tip) rather than an entry of kHelp.
+inline constexpr int kTipText = 100000;
 
 enum class Status { Idle, Starting, Error };
 
@@ -142,11 +230,16 @@ enum class Status { Idle, Starting, Error };
 // or method differ from what it runs with (NextLaunch).
 enum class Live { Off, Applied, NextLaunch };
 
+// A popup row's kind: an item to choose, a separator line, or a note (text that isn't a choice).
+enum class PopupRow : uint8_t { Item, Separator, Note };
+
 struct Popup {
     bool open = false;
     Ctl owner = kNone;
     Rect anchor;
     std::vector<std::wstring> items;
+    std::vector<PopupRow> kinds;  // per item; empty: all are items
+    std::vector<int> actions;     // per item, what it does (the profile menu's: pointer.cpp profile_menu_action)
     int selected = 0, hover = -1;
 };
 
@@ -176,9 +269,24 @@ inline constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 
 inline constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
 
-inline constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
+inline constexpr wchar_t kShapeNames[2][16] = {L"Rectangle", L"Custom corners"};
 
-inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1160, kDefaultHeight = 740;
+inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1280, kDefaultHeight = 838;  // a 1280 x 800 page
+
+// Find a setting's highlight on the row it jumped to, and the timer that clears it.
+inline constexpr UINT_PTR kHighlightTimer = 3;
+
+inline constexpr UINT kHighlightMs = 1600;
+
+// The undo bar after a change: its timer, and how long it shows.
+inline constexpr UINT_PTR kUndoTimer = 5;
+
+inline constexpr unsigned long long kUndoMs = 8000;
+
+// A disclosure's reveal (card.h Body::reveal): its timer, and how long it takes.
+inline constexpr UINT_PTR kRevealTimer = 4;
+
+inline constexpr unsigned long long kRevealMs = 160;
 
 inline constexpr float kTitlebar = t::kTitlebarHeight;  // the kit's window includes its title bar; ours is native
 
@@ -197,7 +305,8 @@ struct App {
     HWND hwnd = nullptr;
     Canvas canvas;
     bool dark = false;
-    t::Colors theme = t::kLight;  // the system theme's colours with the chosen game's accent (apply_theme)
+    ThemeChoice themeChoice = ThemeChoice::System;  // [launcher] ui_theme (read_theme_choice)
+    t::Colors theme = t::kLight;  // the theme's colours (apply_theme)
     const t::Colors* c = &theme;
     // The pointer (DIPs; off the window: -1) and the control under it in the last frame's hits (hover states).
     float mouseX = -1, mouseY = -1;
@@ -208,7 +317,8 @@ struct App {
     std::wstring ini;
     bool iniFound = false;
     std::string iniText;  // the ini's bytes when last read or saved here (follow_ini)
-    Pane pane = Pane::Checks;
+    Pane pane = Pane::Overview;
+    Pane tabPage[kTabs] = {Pane::Overview, Pane::Picture, Pane::Headset, Pane::Game};  // each tab's page
     // The control with the keyboard focus (Tab, or the last one clicked) and, for one of many (a profile's Delete, a
     // check's fix), which (its hit's option; -1 from Tab).
     Ctl focus = kNone;
@@ -299,6 +409,47 @@ struct App {
     Rect sheetEditRect;
     bool sheetFocusField = false;
     bool drawingSheet = false;  // paint is drawing the sheet: its controls show hover
+    // The labels drawn this frame (Find a setting), and the section being drawn (form.cpp).
+    std::vector<DrawnLabel> drawnLabels;
+    std::wstring drawingSection;
+    // Find a setting (search.cpp): open, its field (a native edit over the canvas), the pages' labels as last indexed,
+    // the matches for the field's text and the one Return picks.
+    bool searchOpen = false, searchIndexed = false, searchFocusField = false;
+    HWND searchEdit = nullptr;
+    Rect searchEditRect, searchAnchor;
+    std::vector<SearchEntry> searchIndex;
+    std::vector<int> searchResults;
+    int searchSelected = 0;
+    // The row it jumped to: highlighted until highlightUntil (GetTickCount64), scrolled into view once.
+    DrawnLabel highlight;
+    unsigned long long highlightUntil = 0;
+    bool highlightScroll = false;
+    // A hit's own tip (Hit::tip) under the pointer: its text (app.tip is then kTipText).
+    std::wstring tipText;
+    // The cards drawn this frame (card.cpp): their titles and what each one's Reset this card does.
+    std::vector<std::wstring> cardTitles;
+    std::vector<std::function<void(Settings&)>> cardResets;
+    // The cards' Mores: those open (by key: card title / its label), and this frame's keys (kMore's options).
+    std::set<std::wstring> moreOpen;
+    std::vector<std::wstring> moreKeys;
+    // Disclosures: when each parent (by Ctl) turned on, while its rows slide open, and its state as last drawn.
+    std::map<int, unsigned long long> revealStart;
+    std::map<int, bool> revealLast;
+    // The open panel (panels.cpp), its content's scroll and the content's rect as last drawn.
+    PanelKind panel = PanelKind::None;
+    float panelScroll = 0, panelScrollMax = 0;
+    Rect panelBody;
+    // The Overview's summary cards as last drawn: the card each one opens (kOverviewCard's options).
+    std::vector<SearchEntry> overviewTargets;
+    // The Preview card shows the left eye (0), both (1) or the right eye (2): a view, not a setting.
+    int previewEye = 0;
+    // Undo for the last change (changed()): the settings as last saved, those before the last change and what it changed
+    // ("Feather 20% → 30%"), the bar showing it until undoUntil; undoing: the change being saved is the undo itself.
+    Settings lastSaved;
+    std::optional<Settings> undoChange;
+    std::wstring undoText;
+    unsigned long long undoUntil = 0;
+    bool undoing = false;
 };
 
 // The window (window_state.cpp).
@@ -321,7 +472,7 @@ std::wstring game_name();
 std::wstring short_name();
 bool game_has(bool games::GameFeatures::*feature);
 std::wstring not_yet();
-// pane_dlss.cpp: Sim-QVFR's own DLSS can be used with these settings (a game with it, QVFR, an RTX card, multi-view
+// picture.cpp: Sim-QVFR's own DLSS can be used with these settings (a game with it, QVFR, an RTX card, multi-view
 // rendering); otherwise `why` says what's missing.
 bool own_dlss_available(std::wstring* why = nullptr);
 Color col(uint32_t rgb, float alpha = 1);
@@ -332,6 +483,8 @@ COLORREF colorref(uint32_t rgb);
 t::Accent builtin_accent(const games::GameInfo& game);
 std::wstring game_id(const games::GameInfo& game);
 t::Accent game_accent(const games::GameInfo& game);
+ThemeChoice read_theme_choice();
+void cycle_theme();
 void apply_theme();
 bool eye_warning();
 void push_live();
@@ -344,7 +497,7 @@ void refresh_checks();
 int* slider_value(Ctl id);
 Range slider_range(Ctl id);
 bool method_shown();
-std::vector<Ctl> focus_order();
+std::vector<FocusStop> focus_order();
 void launch();
 
 // update_install.cpp
@@ -377,8 +530,6 @@ void edit_launcher_layers(const std::function<void(LauncherLayers&)>& change);
 void toggle_layer(int i);
 void move_layer(int i, int step);
 void apply_layers();
-float layers_pane(float x, float y, float w, bool draw);
-float layers_preview(float x, float y, float w, bool draw);
 
 // pane_diagnostics.cpp
 std::wstring logs_folder();
@@ -386,7 +537,6 @@ bool copy_text(const std::wstring& text);
 void copy_summary();
 std::wstring clipboard_text();
 bool report_edit_fits();
-float diagnostics_pane(float x, float y, float w, bool draw);
 
 // pane_report.cpp
 void export_logs();
@@ -397,7 +547,7 @@ float report_pane(float x, float y, float w, bool draw);
 void place_report_edit();
 void create_report_edit();
 
-// pane_profiles.cpp
+// pane_profiles.cpp: Manage profiles (a panel), and using, saving and pasting profiles.
 float profiles_pane(float x, float y, float w, bool draw);
 void use_profile(const std::wstring& name);
 void save_current_profile();
@@ -405,15 +555,17 @@ void paste_profile();
 
 // pane_hotkeys.cpp
 void open_pads();
-float hotkeys_pane(float x, float y, float w, bool draw);
+std::wstring pads_found();
 void end_capture();
 void start_capture(int action, bool pad);
 bool capture_key(WPARAM vk);
 void capture_poll();
 
 // pane_checks.cpp
-float checks_pane(float x, float y, float w, bool draw);
 void fix_check(const Check& c);
+// A check about a feature that can be turned off (Foveated DLSS, DLSS): what it turns off ("Foveated DLSS"), or empty.
+std::wstring check_feature(const Check& c);
+void turn_off_for(const Check& c);
 
 // pane_games.cpp
 void refresh_installed();
@@ -424,14 +576,37 @@ const games::GameInfo& color_game();
 void load_color_edit();
 void apply_color_edit();
 void set_color_from(float x, float y);
-float games_pane(float x, float y, float w, bool draw);
+int color_game_index();
+// Whether the selected game can be raced online with Sim-QVFR (the Online racing card's, the Overview's); `tone`: badge's.
+std::wstring online_status(int& tone);
+void use_color_preset(int preset);
+// The colour panel's content (Custom… on the Games card), and the Game tab's cards.
+float color_panel(float x, float y, float w, bool draw);
+float game_page(float x, float y, float w, bool draw);
 
-// pane_resolution.cpp
-float resolution_pane(float x, float y, float w, bool draw);
+// panels.cpp: a panel over the window (Report an issue, a game's colour, Manage profiles, About); Escape or its ✕ closes
+// it. Its title and content are Find a setting's too.
+std::wstring panel_title(PanelKind kind);
+float panel_content(PanelKind kind, float x, float y, float w, bool draw);
+void open_panel(PanelKind kind);
+void close_panel();
+void panel_overlay();
 
-// pane_foveation.cpp
-float foveation_pane(float x, float y, float w, bool draw);
-float overlay_pane(float x, float y, float w, bool draw);
+// accessibility.cpp: UI Automation (screen readers): the window's provider (WM_GETOBJECT), the focus and state events
+// after each paint, and letting go of it when the window closes.
+bool accessibility_object(HWND hwnd, WPARAM wParam, LPARAM lParam, LRESULT& result);  // false: not UIA's request
+void accessibility_after_paint();
+void accessibility_close();
+
+// overview.cpp: the Overview tab, and its profile segments (the presets, then Custom) and the one chosen.
+float overview_page(float x, float y, float w, bool draw);
+int overview_profile(std::vector<std::wstring>& items);
+void choose_overview_profile(int option);
+
+// picture.cpp: the Picture tab's cards.
+float picture_page(float x, float y, float w, bool draw);
+
+// pane_foveation.cpp: the foveation preview, its legend and its readouts (the Preview card's).
 float preview(float x, float y, float w, bool draw);
 float preview_legend(float x, float y, float w, bool draw);
 float readout(float x, float y, float w, const std::wstring& name, const std::wstring& value, bool draw,
@@ -439,22 +614,53 @@ float readout(float x, float y, float w, const std::wstring& name, const std::ws
 float eyebrow(float x, float y, float w, const std::wstring& text, bool draw);
 float readouts_card(float x, float y, float w, bool draw);
 
-// pane_dlss.cpp
-float dlss_pane(float x, float y, float w, bool draw);
 
 // pane_menu.cpp
-float menu_pane(float x, float y, float w, bool draw);
-float side_preview(float x, float y, float w, bool draw);
+float placement_preview(float x, float y, float w, bool draw);
+float placement_caption(float x, float y, float w, bool draw);
+float placement_readouts(float x, float y, float w, bool draw);
 
-// pane_about.cpp
+// headset.cpp: the Headset tab's cards.
+float headset_page(float x, float y, float w, bool draw);
+
+// pane_about.cpp: the About panel's content.
 float about_pane(float x, float y, float w, bool draw);
 
 // chrome.cpp
 bool pane_shown(int pane);
 int shown_pane(int pane, int step, int from);
+const wchar_t* pane_label(int pane);
+float pane_content(float x, float y, float w, bool draw);
 Rect popup_menu_rect();
+float popup_row_height(size_t i);
 void edit_font();
 void paint();
+
+// shell.cpp: the tabs and their pages, the rail, the top bar and the page strip.
+Tab tab_of(Pane pane);
+const wchar_t* tab_label(Tab tab);
+uint32_t section_color(Tab tab);
+void section_shape(Tab tab, float cx, float cy, float size);
+std::vector<Pane> tab_pages(Tab tab);
+void show_tab(Tab tab);
+void show_page(Pane pane);
+float rail_width();
+std::wstring rail_abbreviation(const games::GameInfo& game);
+void rail(float H);
+void topbar(float W);
+float page_strip(float x, float W);
+void undo_bar(float W, float H);
+
+// search.cpp: Find a setting.
+void open_search();
+void close_search();
+void search_changed();
+void search_card();
+void search_index_pages(float x, float w);
+void place_search_edit();
+void create_search_edit();
+void jump_to(const SearchEntry& entry);
+void draw_highlight();
 
 // pointer.cpp
 const Hit* hit_at(float x, float y);
@@ -462,6 +668,13 @@ void set_slider_from_x(float x);
 std::pair<int*, int*> placement_of(Ctl id);
 void set_panel_from(float x, float y);
 void open_popup(Ctl owner);
+void open_profile_menu();
+void open_card_menu(int card);
+// A choice's items and the one chosen (a pop-up's, a segmented control's), and choosing one.
+int choice_items(Ctl owner, std::vector<std::wstring>& items);
+void choose_option(Ctl owner, int option);
+// The choices shown as segmented controls (their arrows step through them).
+bool segmented_ctl(Ctl id);
 void select_game(int option);
 int game_index();
 void close_popup(bool accept);
@@ -470,14 +683,18 @@ void choose_cheeky_runtime();
 void choose_dlss_dll();
 void use_included_dlss();
 void choose_nr_dll();
-// pane_dlss.cpp: DLSS-NR can be turned on with these settings (Sim-QVFR's own DLSS available and on, and the player's
+// picture.cpp: DLSS-NR can be turned on with these settings (Sim-QVFR's own DLSS available and on, and the player's
 // nvngx_dlssnr.dll chosen and there).
 bool own_nr_available(std::wstring* why = nullptr);
 void choose_game_folder();
 void undo_restore();
+// The last change undone (the undo bar's Undo, Ctrl+Z, the profile menu), and the settings now on disk taken as saved.
+void undo_change();
+void settings_reloaded();
 
 // input.cpp
 void activate(Ctl id, int option);
+void set_slider(Ctl id, int value);
 float dip(LPARAM lp, bool y);
 void on_key(WPARAM key);
 

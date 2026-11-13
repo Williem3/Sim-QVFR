@@ -7,6 +7,7 @@
 #include <windowsx.h>
 
 #include "../launch_plan.h"
+#include "../launcher.h"
 #include "../game_tabs.h"
 #include "../settings.h"
 #include "../../engine/nvapi_gpus.h"
@@ -19,31 +20,44 @@ namespace simqvfr::launcher::ui::win {
 void activate(Ctl id, int option) {
     end_capture();  // any click ends catching a hotkey (one on a hotkey's button starts again)
     switch (id) {
-    case kSidebar:
+    case kPage:
         app.pane = static_cast<Pane>(option);
         app.scroll = 0;
-        if (app.pane == Pane::Layers)
+        if (app.pane == Pane::Game) {  // a layer may have changed, a session may have ended
             refresh_layers();
-        if (app.pane == Pane::Hotkeys)
-            open_pads();
-        if (app.pane == Pane::Profiles) {
-            app.profileMessage.clear();
-            refresh_profiles();
-        }
-        if (app.pane == Pane::Diagnostics || app.pane == Pane::Report)
             reload_runtime();
+        }
+        if (app.pane == Pane::Headset)
+            open_pads();
+        if (app.pane == Pane::Overview) {  // the profile in use, the last session, the layers below
+            refresh_profiles();
+            reload_runtime();
+            refresh_layers();
+        }
+        app.tabPage[static_cast<int>(tab_of(app.pane))] = app.pane;  // the tab comes back to it
         break;
+    case kTopTab: show_tab(static_cast<Tab>(std::clamp(option, 0, kTabs - 1))); return;
+    case kSearch: open_search(); return;
+    case kProfileMenu: open_profile_menu(); return;
+    case kVersion: open_panel(PanelKind::About); return;
+    case kSearchResult:
+        if (option >= 0 && option < static_cast<int>(app.searchResults.size()))
+            jump_to(app.searchIndex[static_cast<size_t>(app.searchResults[static_cast<size_t>(option)])]);
+        return;
+    case kSearchField: SetFocus(app.searchEdit); return;
     case kSheetButton: close_sheet(option); return;
-    case kChecksBadge: activate(kSidebar, static_cast<int>(Pane::Checks)); return;
+    case kChecksBadge: jump_to({L"Launch checks", L"Launch checks", Pane::Game}); return;
     case kUndoBadge: undo_restore(); return;
+    case kUndoChange: undo_change(); return;
     case kLaunchBadge: {
         const LaunchOutcome o = app.watch.outcome();
         if (o.link == LaunchLink::Diagnostics) {
-            activate(kSidebar, static_cast<int>(Pane::Diagnostics));
+            jump_to({L"Diagnostics", L"Diagnostics", Pane::Game});
         } else if (o.link == LaunchLink::Report) {
             if (o.state == LaunchState::Crashed)
                 app.reportKind = 1;  // kIssueKinds: Crash or freeze
-            activate(kSidebar, static_cast<int>(Pane::Report));
+            show_page(Pane::Game);
+            open_panel(PanelKind::Report);
             if (o.finished())
                 app.watch.stop();  // seen: Report an issue has its logs
         }
@@ -109,31 +123,67 @@ void activate(Ctl id, int option) {
         if (option >= 0 && option < static_cast<int>(app.checks.size()))
             fix_check(app.checks[option]);
         return;
+    case kCheckOff:
+        if (option >= 0 && option < static_cast<int>(app.checks.size()))
+            turn_off_for(app.checks[option]);
+        return;
+    case kCheckGuide: ShellExecuteW(app.hwnd, L"open", kCheekyGuideUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagFrameCapture: app.s.frameCapture = !app.s.frameCapture; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
-    case kAntiCheat:
-        if (games::launcher_game().antiCheatStart) {
-            app.s.antiCheat = !app.s.antiCheat;
+    case kAntiCheat: {
+        if (!games::launcher_game().antiCheatStart)
+            return;
+        if (app.s.antiCheat) {  // off: at once
+            app.s.antiCheat = false;
             changed();
+            return;
         }
+        // On: only once the player has read and accepted that a kick or a ban is theirs to risk.
+        Sheet s;
+        s.title = L"Run " + short_name() + L" with its anti-cheat?";
+        s.text = L"This lets you join online servers with Sim-QVFR running. The game’s anti-cheat can kick you, or ban your "
+                 L"account, for using Sim-QVFR.\n\nSim-QVFR and its developer are not responsible for any kick or ban. By "
+                 L"turning this on, you accept that risk and the responsibility for it.";
+        s.buttons = {L"Cancel", L"I accept the risk"};
+        s.focus = 0;
+        s.danger = true;
+        s.done = [](int button, const std::wstring&) {
+            if (button != 1)
+                return;
+            app.s.antiCheat = true;
+            changed();
+        };
+        open_sheet(std::move(s));
         return;
+    }
     case kDiagKind: open_popup(id); return;
     case kDiagDescription:
-        if (!report_edit_fits()) {  // scroll the field into view first: the edit shows only then
+        if (app.panel != PanelKind::Report)
+            return;
+        if (!report_edit_fits()) {  // scroll the field into view in the panel first: the edit shows only then
             const Rect& r = app.reportEditRect;
-            const float by = r.bottom() > app.scrollArea.bottom() ? r.bottom() + 5 - app.scrollArea.bottom() : r.y - 5 - app.scrollArea.y;
-            app.scroll = std::clamp(app.scroll + by + (by > 0 ? t::kSpace4 : -t::kSpace4), 0.0f, app.scrollMax);
+            const Rect& body = app.panelBody;
+            const float by = r.bottom() > body.bottom() ? r.bottom() + 5 - body.bottom() : r.y - 5 - body.y;
+            app.panelScroll = std::clamp(app.panelScroll + by + (by > 0 ? t::kSpace4 : -t::kSpace4), 0.0f, app.panelScrollMax);
             RedrawWindow(app.hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
         }
         SetFocus(app.reportEdit);
         return;
+    case kReportOpen: open_panel(PanelKind::Report); return;
+    case kOverviewCard:
+        if (option >= 0 && option < static_cast<int>(app.overviewTargets.size()))
+            jump_to(app.overviewTargets[static_cast<size_t>(option)]);
+        return;
+    case kKofiTile: ShellExecuteW(app.hwnd, L"open", kSupportUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
+    case kPanelClose: close_panel(); return;
+    case kColorPreset: use_color_preset(option); return;
+    case kColorCustom: open_panel(PanelKind::Color); return;
     case kDiagReport: report_issue(); return;
     case kDiagExport: export_logs(); return;
     case kDiagZip: show_report_zip(); return;  // the keyboard's; the mouse drags it (drag_report_zip)
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
-    case kLayerProfile: open_popup(id); return;
     case kLayerOn: app.layerRow = option; toggle_layer(option); break;
     case kLayerUp: move_layer(option, -1); break;
     case kLayerDown: move_layer(option, 1); break;
@@ -149,26 +199,50 @@ void activate(Ctl id, int option) {
         app.layerMessage.clear();
         break;
     case kGameTab: select_game(option); return;
-    case kMethod:
     case kMode:
+    case kShape:
+    case kVisor:
+    case kHelmetDetail:
+    case kDlssFocusPreset:
+    case kDlssEyePreset:
+    case kNrOrder:
+    case kFgMultiplier:
+    case kFgScale:
+    case kFgPeriphery:
+    case kLayerProfile:
+    case kOverviewProfile:
+    case kPreviewEye: {  // segmented: the segment clicked, or (the keyboard's Space) the next one
+        std::vector<std::wstring> items;
+        const int selected = choice_items(id, items);
+        if (!items.empty())
+            choose_option(id, option >= 0 ? option : (selected + 1) % static_cast<int>(items.size()));
+        return;
+    }
+    case kCardMenu: open_card_menu(option); return;
+    case kMore: {
+        if (option < 0 || option >= static_cast<int>(app.moreKeys.size()))
+            return;
+        const std::wstring& key = app.moreKeys[static_cast<size_t>(option)];
+        if (!app.moreOpen.erase(key))
+            app.moreOpen.insert(key);
+        break;
+    }
+    case kHelmetFolder: {
+        const std::wstring folder = layer_folder() + L"\\helmet";
+        CreateDirectoryW(folder.c_str(), nullptr);
+        ShellExecuteW(app.hwnd, L"explore", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return;
+    }
+    case kMethod:
     case kCheekyOuterPreset:
     case kCheekyFocusPreset:
     case kCheekyNrPreset:
     case kCheekyNrPasses:
-    case kFgMultiplier:
-    case kFgScale:
-    case kFgPeriphery:
     case kFgRelease:
-    case kVisor:
-    case kShape:
     case kDlssFocusMode:
-    case kDlssFocusPreset:
-    case kDlssEyePreset:
     case kDlssSharpening:
     case kNrStyle:
-    case kNrPreset:
-    case kNrOrder:
-    case kHelmetDetail: open_popup(id); return;
+    case kNrPreset: open_popup(id); return;
     case kNrOn:
         if (own_nr_available()) {  // greyed out without DLSS on or the player's nvngx_dlssnr.dll
             app.s.nr.on = !app.s.nr.on;
@@ -218,7 +292,7 @@ void activate(Ctl id, int option) {
         if (!app.release.url.empty() && app.release.url.rfind(L"https://github.com/", 0) == 0)
             ShellExecuteW(app.hwnd, L"open", app.release.url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return;
-    case kUpdateBadge: activate(kSidebar, static_cast<int>(Pane::About)); return;
+    case kUpdateBadge: open_panel(PanelKind::About); return;
     case kUpdateInstall: start_install(); InvalidateRect(app.hwnd, nullptr, FALSE); return;
     case kGameShown: {
         std::size_t count = 0;
@@ -286,14 +360,29 @@ void activate(Ctl id, int option) {
         const Settings before = app.s;
         app.s = restored_defaults(app.s);
         changed();
-        app.undoRestore = before;  // the action bar offers Undo until the next change
+        app.undoRestore = before;
+        app.undoUntil = 0;  // the status says it, with its own Undo  // the action bar offers Undo until the next change
         return;
     }
     case kLaunch: launch(); return;
+    case kThemeToggle: cycle_theme(); return;
     case kSupport: ShellExecuteW(app.hwnd, L"open", kSupportUrl, nullptr, nullptr, SW_SHOWNORMAL); return;
     default: break;
     }
     InvalidateRect(app.hwnd, nullptr, FALSE);
+}
+
+// A slider set from the keyboard or a screen reader: within its range, saved and sent as any change (the colour
+// panel's brightness recolours the game, as dragging it does).
+void set_slider(Ctl id, int value) {
+    int* v = slider_value(id);
+    if (!v)
+        return;
+    const Range r = slider_range(id);
+    *v = std::clamp(value, r.min, r.max);
+    if (id == kColorValue)
+        apply_color_edit();
+    changed();
 }
 
 float dip(LPARAM lp, bool y) {
@@ -321,6 +410,13 @@ bool push_button(Ctl id) {
     case kLayerDown:
     case kSupport:
     case kRestore:
+    case kCardMenu:
+    case kMore:
+    case kHelmetFolder:
+    case kThemeToggle:
+    case kSearch:
+    case kProfileMenu:
+    case kVersion:
     case kLaunch:
     case kHotkeysReset:
     case kHotkeyKey:
@@ -333,14 +429,23 @@ bool push_button(Ctl id) {
     case kProfileSave:
     case kProfilePaste:
     case kCheckFix:
+    case kCheckOff:
+    case kCheckGuide:
     case kChecksBadge:
     case kUndoBadge:
+    case kUndoChange:
     case kLaunchBadge:
     case kDiagReport:
     case kDiagZip:
     case kDiagExport:
     case kDiagCopy:
     case kDiagLogs:
+    case kReportOpen:
+    case kPanelClose:
+    case kColorPreset:
+    case kColorCustom:
+    case kOverviewCard:
+    case kKofiTile:
     case kColorReset: return true;
     default: return false;
     }
@@ -389,6 +494,8 @@ bool space_control(Ctl id) {
     case kShape:
     case kHelmetDetail:
     case kLayerProfile:
+    case kOverviewProfile:
+    case kPreviewEye:
     case kLayerOn:
     case kDiagCapture:
     case kDiagFrameCapture:
@@ -411,8 +518,18 @@ void on_key(WPARAM key) {
     const bool shift = GetKeyState(VK_SHIFT) < 0;
     if (app.popup.open) {
         const int n = static_cast<int>(app.popup.items.size());
-        if (key == VK_UP || key == VK_DOWN)
-            app.popup.hover = (app.popup.hover + (key == VK_DOWN ? 1 : n - 1)) % n;
+        const auto item = [](int i) {
+            return app.popup.kinds.empty() || app.popup.kinds[static_cast<size_t>(i)] == PopupRow::Item;
+        };
+        if ((key == VK_UP || key == VK_DOWN) && n > 0) {  // the next item that is one (not a separator or a note)
+            int h = app.popup.hover < 0 ? (key == VK_DOWN ? n - 1 : 0) : app.popup.hover;
+            for (int step = 0; step < n; ++step) {
+                h = (h + (key == VK_DOWN ? 1 : n - 1)) % n;
+                if (item(h))
+                    break;
+            }
+            app.popup.hover = h;
+        }
         else if (key == VK_RETURN || key == VK_SPACE)
             close_popup(true);
         else if (key == VK_ESCAPE)
@@ -420,8 +537,23 @@ void on_key(WPARAM key) {
         InvalidateRect(app.hwnd, nullptr, FALSE);
         return;
     }
-    if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && app.undoRestore) {  // Ctrl+Z: Restore Defaults' Undo
-        undo_restore();
+    if (key == 'K' && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+K: Find a setting
+        open_search();
+        return;
+    }
+    if (key == VK_ESCAPE && app.searchOpen) {
+        close_search();
+        return;
+    }
+    if (key == VK_ESCAPE && app.panel != PanelKind::None) {
+        close_panel();
+        return;
+    }
+    if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && (app.undoRestore || app.undoChange)) {  // Ctrl+Z: Undo
+        if (app.undoRestore)
+            undo_restore();
+        else
+            undo_change();
         return;
     }
     if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game with a tab
@@ -439,11 +571,13 @@ void on_key(WPARAM key) {
     }
     if (key == VK_TAB) {
         const auto order = focus_order();
-        auto it = std::find(order.begin(), order.end(), app.focus);
+        const auto it = std::find_if(order.begin(), order.end(), [](const FocusStop& s) {
+            return s.id == app.focus && (s.option < 0 || s.option == app.focusOption);
+        });
         int i = it == order.end() ? (shift ? 0 : -1) : static_cast<int>(it - order.begin());
         i = (i + (shift ? static_cast<int>(order.size()) - 1 : 1)) % static_cast<int>(order.size());
-        app.focus = order[i];
-        app.focusOption = -1;
+        app.focus = order[static_cast<size_t>(i)].id;
+        app.focusOption = order[static_cast<size_t>(i)].option;
         app.keyboard = true;
         if (app.focus == kDiagDescription)  // typing goes to the description box
             activate(kDiagDescription, -1);
@@ -458,7 +592,7 @@ void on_key(WPARAM key) {
         return;
     }
     app.keyboard = true;
-    if (int* v = slider_value(app.focus)) {
+    if (const int* v = slider_value(app.focus)) {
         const Range r = slider_range(app.focus);
         int nv = *v;
         if (key == VK_LEFT || key == VK_DOWN)
@@ -475,8 +609,14 @@ void on_key(WPARAM key) {
             nv = r.max;
         else
             return;
-        *v = std::clamp(nv, r.min, r.max);
-        changed();
+        set_slider(app.focus, nv);
+        return;
+    }
+    if (segmented_ctl(app.focus) && (key == VK_LEFT || key == VK_RIGHT)) {  // a segmented choice: the arrows step it
+        std::vector<std::wstring> items;
+        const int selected = choice_items(app.focus, items), n = static_cast<int>(items.size());
+        if (n > 0)
+            choose_option(app.focus, std::clamp(selected + (key == VK_RIGHT ? 1 : -1), 0, n - 1));
         return;
     }
     switch (app.focus) {
@@ -505,20 +645,37 @@ void on_key(WPARAM key) {
             return -1;
         };
         int to = -1;
-        if (key == VK_LEFT || key == VK_RIGHT)
-            to = next_shown(game_index() + (key == VK_RIGHT ? 1 : -1), key == VK_RIGHT ? 1 : -1);
+        const bool next = key == VK_RIGHT || key == VK_DOWN;  // the rail is a column; Left and Right still work
+        if (key == VK_LEFT || key == VK_RIGHT || key == VK_UP || key == VK_DOWN)
+            to = next_shown(game_index() + (next ? 1 : -1), next ? 1 : -1);
         else if (key == VK_HOME || key == VK_END)
             to = key == VK_HOME ? next_shown(0, 1) : next_shown(static_cast<int>(count) - 1, -1);
         if (to >= 0)
             select_game(to);
         break;
     }
-    case kSidebar:
-        if (key == VK_UP || key == VK_DOWN) {
-            const int step = key == VK_DOWN ? 1 : -1, here = static_cast<int>(app.pane);
-            activate(kSidebar, shown_pane(std::clamp(here + step, 0, kPanes - 1), step, here));
-        }
+    case kPage: {  // the strip of the tab's pages: Left and Right (Up and Down too) the previous or next page
+        const std::vector<Pane> pages = tab_pages(tab_of(app.pane));
+        const auto at = std::find(pages.begin(), pages.end(), app.pane);
+        if (at == pages.end() || pages.empty())
+            break;
+        const int i = static_cast<int>(at - pages.begin()), n = static_cast<int>(pages.size());
+        if (key == VK_LEFT || key == VK_UP)
+            show_page(pages[static_cast<size_t>((i + n - 1) % n)]);
+        else if (key == VK_RIGHT || key == VK_DOWN)
+            show_page(pages[static_cast<size_t>((i + 1) % n)]);
+        else if (key == VK_HOME || key == VK_END)
+            show_page(key == VK_HOME ? pages.front() : pages.back());
         break;
+    }
+    case kTopTab: {  // the tabs: Left and Right, Home and End
+        const int i = static_cast<int>(tab_of(app.pane));
+        if (key == VK_LEFT || key == VK_RIGHT)
+            show_tab(static_cast<Tab>((i + (key == VK_RIGHT ? 1 : kTabs - 1)) % kTabs));
+        else if (key == VK_HOME || key == VK_END)
+            show_tab(key == VK_HOME ? Tab::Overview : Tab::Game);
+        break;
+    }
     case kMenuPanel:
     case kOsdPanel: {  // arrows move the panel a degree, Page Up / Page Down ten
         const int step = key == VK_PRIOR || key == VK_NEXT ? 10 : 1;
