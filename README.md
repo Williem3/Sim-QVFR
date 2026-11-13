@@ -35,7 +35,8 @@ room to turn the graphics up.
 
 1. **Download** the newest `sim-qvfr-….zip` from the
    [Releases page](https://github.com/Williem3/Sim-QVFR/releases).
-2. **Unzip it** into any folder you like (for example `Documents\Sim-QVFR`). There's no installer.
+2. **Unzip it** into any folder you like (for example `Documents\Sim-QVFR`). There's no installer. Don't
+   use a folder under `Program Files`: the launcher can't save your settings there.
 3. **In Assetto Corsa EVO, turn off the game's own foveated rendering** in its settings. Sim-QVFR does
    this job instead.
 4. **Start Steam and your VR software** (SteamVR, Virtual Desktop, Pimax Play, and so on).
@@ -43,14 +44,14 @@ room to turn the graphics up.
    as administrator (or with UAC turned off) works too: each launch then adds Sim-QVFR's own entries to
    Windows' machine-wide OpenXR layer list and takes them out when the game closes. Nothing else in
    that list changes.
-6. **Pick your game's tab** at the top of the window and **click Launch**. The game starts in VR with
-   Sim-QVFR turned on.
+6. **Pick your game** in the list on the left of the window and **click Launch** (top right). The game
+   starts in VR with Sim-QVFR turned on.
 
 That's it. Always start the game from the launcher when you want Sim-QVFR. If you start the game
 from Steam as normal, it runs without Sim-QVFR.
 
 **Game not found?** If a game isn't installed through Steam, or Steam can't tell the launcher where it
-is, **Launch checks** offers **Choose folder…**: pick the game's folder.
+is, **Launch checks** (the **Game** tab) offers **Choose folder…**: pick the game's folder.
 
 **To remove it**, delete the folder. Nothing else on your PC was changed.
 
@@ -62,24 +63,28 @@ ace-quadview folder.
 ## Choosing your settings
 
 Every setting is in the launcher window, and your choices are saved for you. Each game keeps its own
-settings, so switching tabs switches them. Hover over the **ⓘ** next to any setting to see what it does
-and what it costs. Each section is tagged **Live** (it changes the running game straight away) or
-**Next launch**.
+settings, so picking another game in the list on the left switches them. The launcher has four tabs:
+**Overview**, **Picture**, **Headset** and **Game**, with the settings grouped in cards. Hover over the
+**ⓘ** next to any setting to see what it does and what it costs. Each card says when its settings apply:
+**Changes now**, **Now when lowered** or **Next game start**. **Find a setting** (Ctrl+K) takes you to any
+setting by its name, and **Undo** (or Ctrl+Z) takes back the last change.
 
-- **Not sure where to start?** Open **Profiles** and pick **Performance**, **Balanced** or **Quality**.
-- **Launch checks**, where the launcher opens, lists anything that would stop Sim-QVFR working, with how
-  to fix it. The bar at the bottom of the window shows the first problem, and after you click Launch it
-  tells you whether the game started with Sim-QVFR.
-- **Resolution** sets how sharp the outer view and the sharp area are (**Inner resolution** goes from
-  50% to 400%). **Foveation** sets the sharp area's size and shape, and whether it follows your eyes.
-- **Profiles** also lets you save your own settings, and **Share** or **Paste** them as a line of text
-  to swap with friends.
-- **Hotkeys** lets you pick keyboard keys or wheel buttons for the in-game menu and other actions.
-- **Diagnostics** shows how your last session ran and compares it with the one before.
+- **Not sure where to start?** On the **Overview**, pick **Performance**, **Balanced** or **Quality**. The
+  Overview also shows how your last sessions ran.
+- **Launch checks** (the **Game** tab) lists anything that would stop Sim-QVFR working, with how to fix
+  it. The status in the top bar shows the first problem, and after you click Launch it tells you whether
+  the game started with Sim-QVFR.
+- **Picture › Resolution** sets how sharp the periphery and the focus area are (**Focus density** goes
+  from 50% to 400%). **Picture › Foveation** sets the focus area's size and shape, and whether it follows
+  your eyes.
+- **The profile menu** (top bar) saves your own settings; **Manage profiles…** there can **Share** them as a
+  line of text to swap with friends, and **Paste** one.
+- **Headset › Hotkeys** lets you pick keyboard keys or wheel buttons for the headset menu and other actions.
+- **Game › Diagnostics** shows how your last session ran and compares it with the one before.
 
 ### Changing settings while you play
 
-Press **Ctrl+Alt+arrow keys** (or a wheel button you set in **Hotkeys**) to open the **headset menu**.
+Press **Ctrl+Alt+arrow keys** (or a wheel button you set in **Headset › Hotkeys**) to open the **headset menu**.
 Up and down choose a setting, left and right change it. Changes apply straight away and are saved.
 
 Other in-game hotkeys:
@@ -100,10 +105,10 @@ All of these are off until you turn them on in the launcher:
   the edges of your view that a helmet would hide anyway, for extra speed.
 - **Helmet overlay** (Assetto Corsa EVO, Assetto Corsa Competizione and Le Mans Ultimate): draws a helmet's
   visor around your view. You can swap in your own helmet images.
-- **Sharpening** (all four games; the launcher's **Resolution** page, or the headset menu): AMD FidelityFX
+- **Sharpening** (all four games; **Picture › Resolution** in the launcher, or the headset menu): AMD FidelityFX
   Contrast Adaptive Sharpening as Sim-QVFR puts the views together, the same strength in the focus area and
   the periphery. It sharpens soft detail most and edges that are already sharp least, and changes while you
-  drive. It shows most on a soft image (a low inner resolution, a lower-resolution headset); the
+  drive. It shows most on a soft image (a low focus density, a lower-resolution headset); the
   low-resolution periphery shimmers a little more with it. X-Plane 12 also runs an FSR sharpening pass of
   its own, so start low there.
 - **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
@@ -143,15 +148,15 @@ Once an official Cheeky release includes the fixes, its own download will replac
    `CheekyOpenXRSetup.exe`.
 3. **Copy Cheeky's folder into Sim-QVFR.** In the beta ZIP there's a folder called
    `CheekyFoveatedDLSS`. Copy that whole folder into the `layer` folder inside your Sim-QVFR folder.
-   (If you'd rather keep it somewhere else, use **Choose…** in the launcher's **Foveated DLSS** page to
+   (If you'd rather keep it somewhere else, use **Choose…** in the launcher's **Picture › Foveated DLSS** card to
    point to `CheekyFoveatedDLSSRuntime.dll`.)
 4. **Don't copy `dxgi.dll` or `version.dll`** from Cheeky's ZIPs into the game's folder. If they're
    already there, delete them. Sim-QVFR starts Cheeky itself, and having both makes it fail.
 5. **If you use OpenXR Toolkit:** it has to be *above* Cheeky in the list of OpenXR layers, or the game
-   crashes when it starts. The launcher's **Launch checks** tells you if this is wrong, and you can fix
+   crashes when it starts. The launcher's **Game › Launch checks** tells you if this is wrong, and you can fix
    the order in the free [OpenXR API Layers GUI](https://github.com/fredemmott/OpenXR-API-Layers-GUI).
-6. **Turn it on.** In the launcher, open **Foveated DLSS** and tick **Use Cheeky Foveated DLSS**. The page
-   tells you whether it found everything. After you've launched once, it also shows Cheeky's version.
+6. **Turn it on.** In the launcher, open **Picture › Foveated DLSS** and turn on **Use Cheeky Foveated DLSS**.
+   The card tells you whether it found everything. After you've launched once, it also shows Cheeky's version.
 7. **Click Launch.**
 
 **In Assetto Corsa Competizione, also:**
@@ -163,7 +168,7 @@ Once an official Cheeky release includes the fixes, its own download will replac
 - **For DLSS-NR,** put NVIDIA's `nvngx_dlssnr.dll` in the same `CheekyFoveatedDLSS` folder you copied in step 3
   (Assetto Corsa EVO has one in its own folder; ACC doesn't come with one).
 
-**Frame generation** (Assetto Corsa EVO only for now): tick **Frame generation** on the same page. Before you do:
+**Frame generation** (Assetto Corsa EVO only for now): turn on **Frame generation**, the card under Foveated DLSS. Before you do:
 - Turn off **Turbo mode** in OpenXR Toolkit (the game crashes with it).
 - Don't use another frame generator at the same time, such as VectorXR's.
 
@@ -176,8 +181,8 @@ Once an official Cheeky release includes the fixes, its own download will replac
 ## Assetto Corsa Competizione
 
 Sim-QVFR runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution
-periphery, the headset menu and the performance overlay. Pick the **Assetto Corsa Competizione** tab
-at the top of the launcher, then **Launch**. Eye tracking works without another OpenXR layer.
+periphery, the headset menu and the performance overlay. Pick **Assetto Corsa Competizione** in the
+launcher's game list, then **Launch**. Eye tracking works without another OpenXR layer.
 
 ACC's VR has to run through OpenComposite: [Assetto Corsa Competizione in VR through
 OpenComposite](docs/acc-opencomposite.md) explains the one-time setup, and **Launch checks** tells you
@@ -198,15 +203,15 @@ tells you when it's too old. Cheeky's frame generation isn't available in ACC ye
 ## X-Plane 12
 
 Sim-QVFR runs QVFR in X-Plane 12: a sharp focus area that follows your eyes, a lower-resolution
-periphery, the headset menu and the performance overlay. Pick the **X-Plane 12** tab at the top of the
-launcher, then **Launch**.
+periphery, the headset menu and the performance overlay. Pick **X-Plane 12** in the launcher's game
+list, then **Launch**.
 
 - **Always start X-Plane from the launcher.** Sim-QVFR has to be loaded before X-Plane starts, so
   X-Plane started from Steam or its own shortcut runs without QVFR.
 - **Version 12.4.3-r2.** On any other X-Plane build, QVFR stays off and X-Plane runs as usual.
 - **Changes while you fly:** the resolution sliders and the focus size change straight away, in the
   launcher or the headset menu.
-- **Object detail** (the launcher's **Resolution** page, and the headset menu) sets how much detail
+- **Object detail** (the launcher's **Picture › Resolution**, and the headset menu) sets how much detail
   trees and objects get. 100%, the default, gives them the detail the sharp area needs. Lower values
   cost X-Plane's main thread less, which is often what limits the frame rate with QVFR.
 - **Not in X-Plane:** the view crop, the helmet overlay and Foveated DLSS.
@@ -216,7 +221,12 @@ launcher, then **Launch**.
 
 Sim-QVFR runs QVFR in Le Mans Ultimate: a sharp focus area that follows your eyes, a lower-resolution
 periphery, the headset menu, the performance overlay, the field of view crop and the helmet overlay.
-Pick the **LMU** tab at the top of the launcher, then **Launch**.
+Pick **LMU** in the launcher's game list, then **Launch**.
+
+> **Leave LMU's own VR FOV scale at 100% x 100%.** With any other value, QVFR shows a zoomed-in picture
+> or a picture inside the picture (a known bug, to be fixed). To trim the edges of your view for
+> speed, use Sim-QVFR's own **View crop** instead (the launcher's **Picture › View & helmet**, or the
+> headset menu). If you had LMU's Y scale at 90%, about 8% off the top and bottom gives a similar view.
 
 > **Want more frames?** The **[LMU optimization guide](docs/LMU-OPTIMIZATION-GUIDE.md)** shows how to tell whether
 > your CPU or GPU holds you back, what each setting costs (DLSS, other cars' motion, MSAA, resolution) and what to
@@ -252,22 +262,23 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   - **How it works:** two diagrams show every part of LMU, Direct3D 11 and OpenXR that multi-view rendering
     touches: [with NVIDIA's multi-view rendering](docs/architecture/LMU-MVR-ARCHITECTURE.svg) and
     [with Sim-QVFR's own, on any graphics card](docs/architecture/LMU-NEUTRAL-MVR-ARCHITECTURE.svg).
-- **Runtime composition on Pimax and Varjo headsets** (the launcher's **Resolution** page, on by default):
+- **Runtime composition on Pimax and Varjo headsets** (the launcher's **Picture › Rendering**, **Let the
+  runtime compose**, on by default):
   when your headset's own OpenXR runtime composes quad views itself, Sim-QVFR hands it the four views and the
   runtime puts the focus area on the display at its full resolution. The focus area is then noticeably
-  sharper above 100% inner resolution than when Sim-QVFR composes the image itself, and the periphery a
+  sharper above 100% focus density than when Sim-QVFR composes the image itself, and the periphery a
   little sharper too. The focus area follows the runtime's own eye tracking (its foveated rendering).
   - **Tested on Pimax's OpenXR runtime only.** Varjo's runtime offers the same quad views and should work the
     same way, but it hasn't been tried on a Varjo headset yet. Reports are welcome.
   - **The focus area sits inside the runtime's own focus region.** Sim-QVFR's resolution sliders apply and
     change while you drive, and its focus area is drawn centred where the runtime puts its focus region (the
     runtime's own eye tracking). The runtime shows the focus area only inside that region, so keep the
-    runtime's focus area (Pimax Play, Varjo Base) at least as large as Sim-QVFR's: the launcher's Diagnostics
-    page says when it isn't. The gaze dead-zone and the vertical offset don't apply here; the runtime places
+    runtime's focus area (Pimax Play, Varjo Base) at least as large as Sim-QVFR's: the launcher's
+    **Game › Diagnostics** says when it isn't. The gaze dead-zone and the vertical offset don't apply here; the runtime places
     the region.
   - **On SteamVR and other runtimes nothing changes:** Sim-QVFR composes the image as before. It also does
     with frame generation (Cheeky's or VectorXR's), which needs one composed image, and when another OpenXR
-    layer sits between Sim-QVFR and the runtime. The page shows what the last launch did.
+    layer sits between Sim-QVFR and the runtime. The Rendering card shows what the last launch did.
 - **Sharpening with runtime composition** (Pimax, Varjo): the periphery is sharpened on a copy, which costs a
   little more than when Sim-QVFR composes the image.
 - **LMU's own render scale and FSR** (LMU's VR graphics settings) work with QVFR. They lower every view's
@@ -276,14 +287,15 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
   longer jump, pop in and out or show hard edges with it on, and the same fix covers AMD graphics cards, which
   showed this without MFAA. If you turned MFAA off for LMU, you can turn it back on.
 - **VectorXR** works below Sim-QVFR in LMU (its frame generation and overlay were tested). Turn it on in
-  the launcher's **OpenXR layers** page. Use one frame generator at a time.
-- **DLSS** (experimental; NVIDIA RTX 20 series and newer; the launcher's **DLSS** page or the headset menu's):
+  the launcher's **Game › OpenXR layers**. Use one frame generator at a time.
+- **DLSS** (experimental; NVIDIA RTX 20 series and newer; the launcher's **Picture › DLSS** card, **Use DLSS**,
+  or the headset menu's DLSS page):
   LMU has no DLSS of its own, so Sim-QVFR runs NVIDIA DLSS on LMU's views itself, through NVIDIA's NGX, without
   changing LMU's code. The periphery gets DLAA; the focus area gets DLAA or an upscale (**Ultra quality** 77%,
   **Quality** 67%, **Balanced** 58% or **Performance** 50% of its size each way: less GPU time, softer distant
   textures). Changes apply while you drive (each one a short stutter).
   - **NVIDIA's `nvngx_dlss.dll` is included** (DLSS 310.9.1, from NVIDIA's DLSS SDK). To use a newer one, pick it
-    from a game's folder with **Choose…** on the DLSS page (DLSS 310 or newer); **Use included** goes back.
+    from a game's folder with **Choose…** on the DLSS card (DLSS 310 or newer); **Use included** goes back.
     **Launch checks** says when the one chosen is missing or too old.
   - **Periphery preset:** **K** (the default) is the steadier; **F** costs about half as much and aliases more,
     which eye tracking keeps out of where you look. **Focus preset:** NVIDIA's default for the mode (K, or M at
@@ -293,7 +305,7 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
     where DLSS works (the mip bias DLSS asks for). The gain is subtle, most in the periphery. On at launch, it
     changes while you drive without a stutter; turned on from Off, it starts at the next launch (off, it costs
     nothing). If fine patterns shimmer, a step lower.
-  - **DLSS-NR** (experimental, off by default; lower on the same page, or the headset menu's **DLSS-NR** page):
+  - **DLSS-NR** (experimental, off by default; the **DLSS-NR** card under DLSS, or the headset menu's **DLSS-NR** page):
     NVIDIA's DLSS neural rendering on the same views, with DLSS on. Its model reworks lighting and materials.
     **You need your own `nvngx_dlssnr.dll`**: it isn't part of NVIDIA's public DLSS SDK, so Sim-QVFR can't include
     it; a game that ships DLSS-NR has it in its folder, and **Choose…** points Sim-QVFR at it. It is heavy, about
@@ -312,8 +324,8 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
 - **Not in LMU:** Cheeky Foveated DLSS (it works on a game's own DLSS, which LMU doesn't have).
 
 **Anti-cheat.** By default the launcher starts LMU without its anti-cheat (Easy Anti-Cheat), so you can
-only drive offline. **Advanced → Games → Run with anti-cheat** starts LMU through Easy Anti-Cheat with
-Sim-QVFR running. **This is at your own risk:** Sim-QVFR works inside LMU while it runs. It leaves
+only drive offline. **Run with anti-cheat** (the launcher's **Game › Online racing**) starts LMU through
+Easy Anti-Cheat with Sim-QVFR running; the launcher asks you to accept the risk before it turns on. **This is at your own risk:** Sim-QVFR works inside LMU while it runs. It leaves
 LMU's code unchanged, but hooks LMU's graphics calls and reads and writes LMU's memory. The
 anti-cheat may kick you or ban your account for that. By turning the option on you knowingly
 take responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky Foveated
@@ -328,19 +340,20 @@ car, track and weather, and use the one that runs best for you. Don't run both a
 
 ## Getting help
 
-- **Something not working?** Open the launcher's **Launch checks** first: it explains most problems
+- **Something not working?** Open the launcher's **Game › Launch checks** first: it explains most problems
   and how to fix them.
-- **Game crashing, starting on the desktop instead of in VR, or acting strangely?** Use the launcher's
-  **Report an issue** page. Pick the kind of problem, describe what happened, and it bundles up the logs
-  and opens a GitHub issue for you. Drag the ZIP's tile onto the issue to attach it, then send. Names
+- **Game crashing, starting on the desktop instead of in VR, or acting strangely?** Use **Report an
+  issue…** in the launcher's **Game › Get help**. Pick the kind of problem, describe what happened, and it
+  bundles up the logs and opens a GitHub issue for you (you need a free GitHub account). Drag the ZIP's tile onto the issue to attach it, then send. Names
   and account IDs are taken out of the game's own crash reports before they go in the ZIP.
-- **Someone asked for your logs?** **Export logs**, on the same page, makes the same ZIP without opening
-  an issue.
+- **Someone asked for your logs?** **Save the logs as a zip** (under **Other ways to share**, in the same
+  Get help card) makes the same ZIP without opening an issue.
 - **Can't find the game?** Make sure the game is installed and, for a Steam game, that Steam is running.
-  If the launcher still can't find it, use **Choose folder…** in **Launch checks**.
+  If the launcher still can't find it, use **Choose folder…** in **Game › Launch checks**.
 - **After a game update**, Sim-QVFR turns itself off and the game runs as normal until a new version
   comes out. Your headset shows a message for the first 30 seconds to let you know.
-- **Updates:** the launcher's **About** page can check for new versions and install them for you. Your
+- **Updates:** click the version at the bottom of the launcher's game list (a dot there means an update
+  is out): its **About** panel can check for new versions and install them for you. Your
   settings and profiles are kept.
 
 ## Show your appreciation

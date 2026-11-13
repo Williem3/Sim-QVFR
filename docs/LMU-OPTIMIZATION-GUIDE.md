@@ -22,7 +22,7 @@ All settings named here are in **sim-qvfr-launcher.exe**. Most also appear in th
 
 ## 1. Quick start
 
-1. **Open the launcher, pick the LMU tab and go to Overview.** Pick the **Performance**, **Balanced** or
+1. **Open the launcher, pick LMU in the game list and go to Overview.** Pick the **Performance**, **Balanced** or
    **Quality** profile. Start with **Balanced**.
 2. **Turn on the performance overlay** (Headset tab, **Performance overlay**, or **Ctrl+Alt+P** in the game).
    It shows your frame rate and how long the CPU and GPU take for each frame.
@@ -116,6 +116,10 @@ The two that save GPU time:
 Stops LMU drawing the edges of each eye that the lens or a helmet hides anyway. It saves GPU time and video memory in
 line with the pixels cut. A little at the **Top**, **Bottom** and **Outer side (temple)** is usually invisible in the
 headset. Turn on **Show a helmet** if you'd like the cut edges to look like a visor.
+
+Use this crop, not LMU's own VR **FOV scale**: leave that at 100% x 100%. With any other value Sim-QVFR shows a
+zoomed-in picture or a picture inside the picture (a known bug, to be fixed). If you had LMU's Y scale at 90%, about
+8% off the **Top** and **Bottom** here gives a similar view.
 
 ### 3.6 LMU's own render scale and FSR
 
