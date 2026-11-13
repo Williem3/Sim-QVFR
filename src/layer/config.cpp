@@ -231,6 +231,11 @@ void load_experiment() {
     experiment.replaySaveFirst = GetPrivateProfileIntW(L"experiment", L"replay_save_first", 1800, ini.c_str());
     experiment.replaySaveEvery = std::max(1u, GetPrivateProfileIntW(L"experiment", L"replay_save_every", 900, ini.c_str()));
     experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 3, ini.c_str());
+    {
+        wchar_t targets[16] = {};
+        GetPrivateProfileStringW(L"experiment", L"replay_targets", L"depth", targets, 16, ini.c_str());
+        experiment.replayAllTargets = _wcsicmp(targets, L"all") == 0;
+    }
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
     experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;
     experiment.cpuProfileSeconds =
