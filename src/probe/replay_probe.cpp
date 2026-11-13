@@ -214,8 +214,10 @@ struct Stream {
         D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
         UINT dims[3];
         D3D12_GPU_VIRTUAL_ADDRESS cbv2;  // root 2 (normalReconstructionViewSpace's constants)
+        D3D12_GPU_VIRTUAL_ADDRESS cbv6;  // root 6 (vrAntialiasing's constants)
     };
     std::vector<TileDispatch> tileDispatches;
+    std::vector<ID3D12PipelineState*> dispatchPsos;  // every compute dispatch's pipeline (diagnostics)
 
     void begin(int64_t now) {
         bytes.clear();
@@ -235,6 +237,7 @@ struct Stream {
         computeCbv = 0;
         bindlessUint = {};
         tileDispatches.clear();
+        dispatchPsos.clear();
         std::memset(computeCbvs, 0, sizeof(computeCbvs));
         gfxRoot = nullptr;
         std::memset(gfxTables, 0, sizeof(gfxTables));
@@ -747,6 +750,15 @@ struct Focus {
     ComPtr<ID3D12PipelineState> packPso;
     ComPtr<ID3D12Resource> packConstants, packAa, packMb, packVelocity, packFlags, dlssOut, dlssOutAuto, casOut;
     bool casDone = false;
+    // P2c (MSAA without DLSS): ACE's vrAntialiasing replayed per focus eye: our multisampled colour twin (SRV slot 76),
+    // our scene depth (slot 12), our history (slot 77) -> aaOut (UAV block 32, SRV slot 78), copied into aaHistory.
+    ComPtr<ID3D12RootSignature> aaPatchRoot;
+    ComPtr<ID3D12PipelineState> aaPatchPso;
+    ComPtr<ID3D12Resource> aaConstants, aaOut, aaHistory;
+    ID3D12Resource* aaSource = nullptr;
+    UINT aaSlot = 0;
+    bool aaBroken = false, aaReady = false, aaFresh = true;
+    std::atomic<uint64_t> aaReplays{0};
     // MSAA: single-sample focus copies made from our multisampled twins: depth and velocity by ACE's own resolve passes
     // replayed (SRVs of the twins at slots 74/75, our velocity's SRV 76; UAVs at block offsets 29-31), colour by a
     // ResolveSubresource before the post. Each has a stand-in Twin (not in `twins`) for the code that takes one.
@@ -801,7 +813,7 @@ Focus focus;
 constexpr UINT kTileSlots = 112, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
 // the sky: 80.. our CBV table sets (kSkyRing x kSkyTable), 110/111 our clouds' SRV / UAV
 constexpr UINT kSkyTable = 10, kSkyRing = 3, kSkySlotsFirst = 80, kSkyCloudSrv = 110, kSkySlots = 16, kSkyCloudSize = 512;
-constexpr UINT kFogFirst = 16, kFogUavSlots = 32;
+constexpr UINT kFogFirst = 16, kFogUavSlots = 40;  // 0-11 fog, 24-27 packing, 28 CAS, 29-31 resolves, 32 MSAA AA
 constexpr UINT kShadowSlots = 48, kShadowSlotBytes = 1024;
 constexpr UINT kPostSlots = 16;  // 256 B each
 constexpr UINT kFogSlots = 32, kFogSlotBytes = 16384;  // the injection constants are 15,840 B
@@ -974,6 +986,26 @@ RWByteAddressBuffer dst : register(u0);
 }
 )";
 
+// P2c: ACE's vrAntialiasing constants (272 B, 17 registers) for a focus eye: TextureSize (0.xy) the focus target;
+// inverseViewProj (3-6), viewProj (7-10), prevViewProj (11-14) remapped like the packing's (columns in the registers);
+// viewportOffset / Size (16) the focus eye's.
+constexpr char kAaShader[] = R"(
+cbuffer Src : register(b0) { float4 src[17]; };
+cbuffer P : register(b1) { float box; float ox; float oy; float fw; float fh; float offX; };
+RWByteAddressBuffer dst : register(u0);
+[numthreads(32, 1, 1)] void main(uint i : SV_DispatchThreadID) {
+    if (i >= 17) return;
+    float4 v = src[i];
+    const float a = 1.0 / box;
+    if (i == 0) v.xy = float2(2 * fw, fh);
+    if (i == 3 || i == 4) v *= box;
+    if (i == 6) v = v - ox * src[3] - oy * src[4];
+    if (i >= 7 && i <= 14) { v.x = a * v.x + a * ox * v.w; v.y = a * v.y + a * oy * v.w; }
+    if (i == 16) v = float4(offX, 0, fw, fh);
+    dst.Store4(i * 16, asuint(v));
+}
+)";
+
 // The sky's screen-space clouds for a focus view: the cloud texture the sky draw's cbSky names (CloudsScreenBindless
 // Index, register 4.x; read on the GPU) sampled through the box (eye uv = centre + box x focus uv) into ours.
 constexpr char kSkyCloudShader[] = R"(
@@ -1053,6 +1085,7 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"contrastAdaptiveSharpen") == 0     ? 13
                : std::wcscmp(name, L"resolveDepthCompute") == 0         ? 14
                : std::wcscmp(name, L"resolveDepthVelocityCompute") == 0 ? 15
+               : std::wcsncmp(name, L"vrAntialiasing", 14) == 0         ? 16
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -1323,6 +1356,40 @@ bool focus_compile() {
             logf("replay focus: dlss: the packing constants shader failed (%s); no focus DLSS",
                  errors6 ? static_cast<const char*>(errors6->GetBufferPointer()) : "?");
             focus.dlssBroken = true;
+        }
+    }
+    if (focus.settings.post) {  // P2c: the vrAntialiasing constants
+        ComPtr<ID3DBlob> code7, errors7, blob7;
+        D3D12_ROOT_PARAMETER p7[3] = {};
+        p7[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p7[0].Descriptor = {0, 0};
+        p7[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        p7[1].Constants = {1, 0, 6};
+        p7[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        p7[2].Descriptor = {0, 0};
+        const D3D12_ROOT_SIGNATURE_DESC d7{3, p7, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_HEAP_PROPERTIES heap7{D3D12_HEAP_TYPE_DEFAULT};
+        const D3D12_RESOURCE_DESC buf7{D3D12_RESOURCE_DIMENSION_BUFFER, 0, UINT64{kPostSlots} * 512, 1, 1, 1,
+                                       DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                                       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        bool ok7 = SUCCEEDED(D3DCompile(kAaShader, sizeof(kAaShader) - 1, "focus-aa", nullptr, nullptr, "main", "cs_5_0",
+                                        0, 0, &code7, &errors7)) &&
+                   SUCCEEDED(D3D12SerializeRootSignature(&d7, D3D_ROOT_SIGNATURE_VERSION_1, &blob7, &errors7)) &&
+                   SUCCEEDED(device->CreateRootSignature(0, blob7->GetBufferPointer(), blob7->GetBufferSize(),
+                                                         IID_PPV_ARGS(&focus.aaPatchRoot)));
+        if (ok7) {
+            D3D12_COMPUTE_PIPELINE_STATE_DESC pso7{};
+            pso7.pRootSignature = focus.aaPatchRoot.Get();
+            pso7.CS = {code7->GetBufferPointer(), code7->GetBufferSize()};
+            ok7 = SUCCEEDED(device->CreateComputePipelineState(&pso7, IID_PPV_ARGS(&focus.aaPatchPso))) &&
+                  SUCCEEDED(device->CreateCommittedResource(&heap7, D3D12_HEAP_FLAG_NONE, &buf7,
+                                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                            IID_PPV_ARGS(&focus.aaConstants)));
+        }
+        if (!ok7) {
+            logf("replay focus: msaa: the antialiasing constants shader failed (%s); no focus MSAA resolve",
+                 errors7 ? static_cast<const char*>(errors7->GetBufferPointer()) : "?");
+            focus.aaBroken = true;
         }
     }
     if (focus.settings.sky) {  // the sky's clouds resample
@@ -3426,6 +3493,155 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     return true;
 }
 
+// ---- P2c: the focus views' MSAA antialiasing (DLSS off) -------------------------------------------------------------
+
+// In our post list (open, our heap set): ACE's vrAntialiasing (one dispatch per eye in its post list: per-view constants
+// at root 6; tables t0 colour MS, t1 unused, t2 depthResolveTarget, t3 prev_frame_color, u0 post_process_color, u1
+// unused) replayed per focus eye with its constants patched, from our multisampled colour twin, our scene depth and
+// our history into aaOut, which is then copied into our history. True when done (the tonemap reads aaOut, slot 78).
+bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&centre)[2][2]) {
+    if (focus.aaBroken || !focus.aaPatchPso || !focus.fogUavFirst)
+        return false;
+    const Stream::TileDispatch* aa[2] = {};
+    for (const auto& d : s.tileDispatches)
+        if (d.kind == 16 && d.cbv6) {
+            if (!aa[0])
+                aa[0] = &d;
+            else if (!aa[1])
+                aa[1] = &d;
+        }
+    if (!aa[0] || !aa[1]) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            std::string names;
+            for (ID3D12PipelineState* pso : s.dispatchPsos) {
+                wchar_t n[64] = {};
+                UINT size = sizeof(n) - sizeof(wchar_t);
+                if (pso && SUCCEEDED(pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, n))) {
+                    names += ' ';
+                    for (const wchar_t* c = n; *c; ++c)
+                        names += static_cast<char>(*c);
+                } else {
+                    names += " ?";
+                }
+            }
+            size_t k16 = 0, cb = 0;
+            for (const auto& d : s.tileDispatches)
+                if (d.kind == 16) {
+                    ++k16;
+                    cb += d.cbv6 != 0;
+                }
+            logf("replay focus: msaa: ACE's antialiasing not found as two dispatches in its post list (kind-16 dispatches %zu, "
+                 "with a root-6 CBV %zu); the list's compute dispatches:%s",
+                 k16, cb, names.c_str());
+        }
+        return false;
+    }
+    ID3D12Resource* ms = focus.resolvedColourTwin.eye.Get();  // the multisampled colour twin (see focus_post_record)
+    ID3D12Resource* colour = focus.resolvedColour.Get();
+    if (!ms || !colour)
+        return false;
+    const UINT fw = fw2 / 2;
+    AcquireSRWLockExclusive(&focus.lock);
+    if (focus.aaSource != ms || !focus.aaOut || focus.aaOut->GetDesc().Width != fw2) {
+        retire(focus.aaOut.Get());
+        retire(focus.aaHistory.Get());
+        focus.aaOut.Reset();
+        focus.aaHistory.Reset();
+        D3D12_RESOURCE_DESC d = colour->GetDesc();
+        d.Alignment = 0;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+        const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, read, nullptr, IID_PPV_ARGS(&focus.aaOut))) ||
+            FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, read, nullptr,
+                                                   IID_PPV_ARGS(&focus.aaHistory)))) {
+            log_line("replay focus: msaa: could not make our antialiasing targets; no focus MSAA resolve");
+            focus.aaBroken = true;
+        } else {
+            inReplay = true;
+            const DXGI_FORMAT f = focus.resolvedColourTwin.viewFormat;
+            D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+            v.Format = f;
+            v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+            srvViewOriginal(device.Get(), ms, &v, game_cpu(focus.slotFirst + 76));
+            v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            v.Texture2D.MipLevels = 1;
+            srvViewOriginal(device.Get(), focus.aaHistory.Get(), &v, game_cpu(focus.slotFirst + 77));
+            srvViewOriginal(device.Get(), focus.aaOut.Get(), &v, game_cpu(focus.slotFirst + 78));
+            D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+            u.Format = f;
+            u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            device->CreateUnorderedAccessView(focus.aaOut.Get(), nullptr, &u, game_cpu(focus.fogUavFirst + 32));
+            inReplay = false;
+            focus.aaSource = ms;
+            focus.aaFresh = true;
+            logf("replay focus: msaa: our antialiased focus colour and history %ux%u (ACE's vrAntialiasing replayed)", fw2, fh);
+        }
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (focus.aaBroken || !focus.aaOut)
+        return false;
+    // 1. Per eye: the constants patched.
+    D3D12_GPU_VIRTUAL_ADDRESS cb[2];
+    const float box = static_cast<float>(focus.settings.boxFraction);
+    l->SetComputeRootSignature(focus.aaPatchRoot.Get());
+    l->SetPipelineState(focus.aaPatchPso.Get());
+    for (int e = 0; e < 2; ++e) {
+        cb[e] = focus.aaConstants->GetGPUVirtualAddress() + UINT64{focus.aaSlot++ % kPostSlots} * 512;
+        const float p[6] = {box, -centre[e][0], -centre[e][1], static_cast<float>(fw), static_cast<float>(fh),
+                            static_cast<float>(e * fw)};
+        l->SetComputeRootConstantBufferView(0, aa[e]->cbv6);
+        l->SetComputeRoot32BitConstants(1, 6, p, 0);
+        l->SetComputeRootUnorderedAccessView(2, cb[e]);
+        l->Dispatch(1, 1, 1);
+    }
+    barrier(l, focus.aaConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    // 2. ACE's pipeline per eye. A fresh history (first frame) starts from the current resolve.
+    ID3D12Resource* depth = focus.depthForTiles;
+    const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    if (focus.aaFresh) {
+        barrier(l, colour, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        barrier(l, focus.aaHistory.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        l->CopyResource(focus.aaHistory.Get(), colour);
+        barrier(l, focus.aaHistory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        barrier(l, colour, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        focus.aaFresh = false;
+    }
+    barrier(l, ms, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    barrier(l, depth, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE), read);
+    barrier(l, focus.aaOut.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    for (int e = 0; e < 2; ++e) {
+        const Stream::TileDispatch& d = *aa[e];
+        l->SetComputeRootSignature(d.root);
+        l->SetPipelineState(d.pso);
+        l->SetComputeRootDescriptorTable(0, game_gpu(focus.slotFirst + 76));
+        l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 77));
+        l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + 12));
+        l->SetComputeRootDescriptorTable(3, game_gpu(focus.slotFirst + 77));
+        l->SetComputeRootDescriptorTable(4, game_gpu(focus.fogUavFirst + 32));
+        l->SetComputeRootDescriptorTable(5, game_gpu(focus.fogUavFirst + 32));
+        l->SetComputeRootConstantBufferView(6, cb[e]);
+        l->Dispatch((fw + 7) / 8, (fh + 7) / 8, 1);
+    }
+    barrier(l, focus.aaOut.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    barrier(l, depth, read, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE));
+    barrier(l, ms, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    barrier(l, focus.aaConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // 3. Our history (ACE copies post_process_color into prev_frame_color the same way).
+    barrier(l, focus.aaHistory.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    l->CopyResource(focus.aaHistory.Get(), focus.aaOut.Get());
+    barrier(l, focus.aaHistory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    barrier(l, focus.aaOut.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    if (!focus.aaReady)
+        log_line("replay focus: msaa: the first focus antialiasing recorded (ACE's vrAntialiasing per eye)");
+    focus.aaReady = true;
+    focus.aaReplays.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 // ---- P1: the focus views' post: bloom, tonemap, fxaa -------------------------------------------------------------
 
 // The game's view (srvInfo) a descriptor table points at: its resource and view, or false.
@@ -3446,6 +3662,7 @@ bool table_view(D3D12_GPU_DESCRIPTOR_HANDLE table, ComPtr<ID3D12Resource>& r, D3
 // exposure, grading LUT; its constants with our size); its fxaa into our final focus image. Our slots: 56 our colour
 // twin's SRV, 57 the game veil's SRV, 58/59 our veil UAV/SRV, 60 our tonemapped image's SRV.
 bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw2, UINT fh, const float (&centre)[2][2]);
+bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&centre)[2][2]);
 
 void focus_post_record(List* gameList, const Stream& s) {
     Replay* r = nullptr;
@@ -3670,6 +3887,8 @@ void focus_post_record(List* gameList, const Stream& s) {
     }
     // 1b. P2a: our DLSS per focus eye (ACE's packing replayed for our motion vectors), read by the tonemap below.
     const bool dlssUsed = focus.settings.dlss && focus_dlss_record(l, s, colour, fw2, fh, centre);
+    // 1c. P2c: MSAA without DLSS: ACE's own antialiasing replayed (our colour twin multisampled, ACE's pass present)
+    const bool aaUsed = !dlssUsed && colour == focus.resolvedColour.Get() && focus_aa_record(l, s, fw2, fh, centre);
     // 2. The tonemap constants with our size (register 1: height, width, 1/height, 1/width).
     const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.postConstants->GetGPUVirtualAddress() + UINT64{focus.postSlot++ % kPostSlots} * 256;
     {
@@ -3697,7 +3916,7 @@ void focus_post_record(List* gameList, const Stream& s) {
     l->RSSetScissorRects(1, &rect);
     l->SetGraphicsRootSignature(s.tonemapDraw.root);
     l->SetPipelineState(s.tonemapDraw.pso);
-    const UINT postSource = !dlssUsed ? 56 : focus.casDone ? 73 : 71;
+    const UINT postSource = aaUsed ? 78 : !dlssUsed ? 56 : focus.casDone ? 73 : 71;
     l->SetGraphicsRootDescriptorTable(0, game_gpu(focus.slotFirst + postSource));
     l->SetGraphicsRootDescriptorTable(1, s.tonemapDraw.tables[1]);
     l->SetGraphicsRootDescriptorTable(2, s.tonemapDraw.tables[2]);
@@ -4886,6 +5105,8 @@ void STDMETHODCALLTYPE computeTableHook(List* l, UINT i, D3D12_GPU_DESCRIPTOR_HA
     computeTableOriginal(l, i, h);
 }
 void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
+    if (Stream* s = stream_of(l); s && s->dispatchPsos.size() < 64)
+        s->dispatchPsos.push_back(s->pso);
     if (Stream* s = stream_of(l); s && s->psoKind) {
         Stream::TileDispatch d{};
         d.kind = s->psoKind;
@@ -4899,6 +5120,7 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         d.dims[1] = y;
         d.dims[2] = z;
         d.cbv2 = s->computeCbvs[2];
+        d.cbv6 = s->computeCbvs[6];
         s->tileDispatches.push_back(d);
     }
     dispatchOriginal(l, x, y, z);
@@ -5298,13 +5520,13 @@ void replay_probe_frame_end() {
     if (probeMode == 3) {
         logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; tile replays "
              "%.2f, fog replays %.2f, shadow replays %.2f, per-eye lists %.2f, OIT composites %.2f, atmosphere %.2f, "
-             "post %.2f, refraction %.2f, sky draws %.2f, focus DLSS %.2f (game's %.2f); "
+             "post %.2f, refraction %.2f, sky draws %.2f, focus DLSS %.2f (game's %.2f), focus MSAA AA %.2f; "
              "recording the replays "
              "%.3f ms, recording hooks %.3f ms, the game's own recording of those lists %.3f ms (CPU)",
              static_cast<unsigned long long>(window), s.listsReplayed / n, s.focusReplays / n, s.drawsReplayed / n,
              s.tileReplays / n, s.fogReplays / n, s.shadowReplays / n, s.monoReplays / n, s.oitReplays / n,
              s.atmoReplays / n, s.postReplays / n, s.blurReplays / n, s.skyPatches / n, s.dlssEvaluations / n,
-             gameDlss / n, s.replayMs / n,
+             gameDlss / n, static_cast<double>(focus.aaReplays.exchange(0)) / n, s.replayMs / n,
              s.hookMs / n, s.gameMs / n);
         ++window;
         if (focus.settings.costAb) {  // 2 windows on, 2 off: the first window after each switch settles
