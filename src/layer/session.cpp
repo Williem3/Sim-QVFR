@@ -20,6 +20,7 @@
 #include "probe/gpu_load.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
+#include "probe/replay_probe.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
 #include "quad/session_graphics.h"
@@ -148,12 +149,23 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                     pass_census_arm(experiment.passCensusFrame, 10);
                 }
             }
+            if (experiment.replayProbe) {  // API-level QVFR probes: G5 re-emission cost (1/2), R1 focus depth replay (3)
+                ReplayFocusSettings focusSettings;
+                focusSettings.boxFraction = experiment.replayFocusPercent / 100.0;
+                focusSettings.pixelScale = experiment.replayFocusScalePercent / 100.0;
+                focusSettings.saveFirst = experiment.replaySaveFirst;
+                focusSettings.saveEvery = experiment.replaySaveEvery;
+                focusSettings.saveCount = experiment.replaySaveCount;
+                replay_probe_start(d3d12->device, experiment.replayProbe, d3d12->queue, focusSettings);
+            }
             if (experiment.d3d12Debug)
                 d3d12_debug_attach(d3d12->device);
             std::lock_guard guard(quad.mutex);
             quad.device = d3d12->device;
             quad.queue = d3d12->queue;
-            if (experiment.views4 && experiment.gpuFrameTiming)
+            // views4: up to ACE's eye-image release (and the composition); baseline (measure, no four views): up to
+            // the release of the swapchain the game submits (measuredEyeChain), its own frame.
+            if ((experiment.views4 || experiment.measure) && experiment.gpuFrameTiming)
                 gpu_frame_timer_start(d3d12->device, d3d12->queue);
             if (experiment.views4 || experiment.measure) {  // the whole GPU's and ACE's threads' load (the overlay, the log)
                 const LUID adapter = d3d12->device->GetAdapterLuid();
@@ -239,6 +251,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     }
     gpu_frame_timer_stop();
     d3d11_compose_timer_stop();
+    measuredEyeChain = XR_NULL_HANDLE;  // the session's swapchain
     gpu_load_stop();
     cpu_load_stop();
     pad_watch_stop();

@@ -153,6 +153,8 @@ XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSw
         d3d11_capture_release(swapchain, endFrames);
     if (views4_outline_on())
         views4_outline_draw(swapchain);  // on ACE's queue, after its frame, before the runtime reads it
+    if (!experiment.views4 && swapchain == measuredEyeChain.load(std::memory_order_relaxed))
+        gpu_frame_timer_mark(GpuMark::kRendered);  // baseline with gpu_frame_timing: the game's own frame
     if (experiment.views4Compose) {
         std::lock_guard guard(quad.mutex);
         if (swapchain == quad.appChain) {

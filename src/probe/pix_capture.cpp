@@ -49,13 +49,25 @@ bool pix_capture_load(uint64_t frame) {
         logf("pix: GPU capturer not available (%ls)", dll.empty() ? L"PIX not installed" : dll.c_str());
         return false;
     }
+    if (frame == 0) {
+        logf("pix: capturer loaded from %ls; the frame capture hotkey takes a capture of the next frames",
+             dll.c_str());
+        return true;
+    }
+    pix_capture_arm(frame);
+    return true;
+}
+
+bool pix_capture_arm(uint64_t frame) {
+    if (!beginCapture || capturing || captureFrame != 0)
+        return false;
     std::error_code ec;
     const auto dir = std::filesystem::path(log_directory()) / L"pix";
     std::filesystem::create_directories(dir, ec);
     captureFile = (dir / (L"frame-" + std::to_wstring(frame) + L".wpix")).wstring();
     captureFrame = frame;
-    logf("pix: capturer loaded from %ls; capturing from xrEndFrame %llu to %llu into %ls", dll.c_str(),
-         static_cast<unsigned long long>(frame), static_cast<unsigned long long>(frame + 2), captureFile.c_str());
+    logf("pix: capturing from xrEndFrame %llu to %llu into %ls", static_cast<unsigned long long>(frame),
+         static_cast<unsigned long long>(frame + 2), captureFile.c_str());
     return true;
 }
 
@@ -71,8 +83,11 @@ void pix_capture_frame(uint64_t endFrame) {
     } else if (endFrame == captureFrame + 2 && capturing) {
         const HRESULT hr = endCapture();
         capturing = false;
+        captureFrame = 0;  // the hotkey may arm the next one
         logf("pix: end capture at xrEndFrame %llu: hr=0x%08lx (file %ls)", static_cast<unsigned long long>(endFrame),
              static_cast<unsigned long>(hr), captureFile.c_str());
+    } else if (!capturing && endFrame > captureFrame + 2) {
+        captureFrame = 0;  // a begin that failed: free the hotkey
     }
 }
 

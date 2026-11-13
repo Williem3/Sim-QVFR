@@ -224,6 +224,13 @@ void load_experiment() {
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
+    experiment.replayProbe = static_cast<int>(std::min(3u, GetPrivateProfileIntW(L"experiment", L"replay_probe", 0, ini.c_str())));
+    experiment.replayFocusPercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_percent", 20, ini.c_str()), 5u, 60u);
+    experiment.replayFocusScalePercent =
+        std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_scale_percent", 200, ini.c_str()), 50u, 400u);
+    experiment.replaySaveFirst = GetPrivateProfileIntW(L"experiment", L"replay_save_first", 1800, ini.c_str());
+    experiment.replaySaveEvery = std::max(1u, GetPrivateProfileIntW(L"experiment", L"replay_save_every", 900, ini.c_str()));
+    experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 3, ini.c_str());
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
     experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;
     experiment.cpuProfileSeconds =
@@ -252,6 +259,7 @@ void load_experiment() {
     experiment.d3d12Debug = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) != 0;
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
+    experiment.pixCaptureHotkey = GetPrivateProfileIntW(L"experiment", L"pix_capture_hotkey", 0, ini.c_str()) != 0;
     experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
     // d3d11_capture_hotkey=1: tracked from the start with a frame never reached; the frame capture hotkey arms the next.
     experiment.d3d11CaptureHotkey = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_hotkey", 0, ini.c_str()) == 1;
@@ -308,7 +316,14 @@ void load_experiment() {
     const bool scaledMode = experiment.views4 || experiment.twoLoops || experiment.focusOnly || experiment.doubleRender ||
                             experiment.views3;
     experiment.eyeScale = scaledMode ? eyePercent / 100.0 : 1.0;
-    if (!scaledMode && eyePercent != 100)
+    // baseline_eye_scale=N (measurement only, baseline=1): the game's own two views at N% of the runtime's eye size,
+    // for a baseline the native size can't run (ACE at a Pimax's native size runs out of VRAM).
+    const UINT baselinePercent = GetPrivateProfileIntW(L"experiment", L"baseline_eye_scale", 0, ini.c_str());
+    if (baseline && baselinePercent) {
+        experiment.eyeScale = std::clamp(baselinePercent, 10u, 200u) / 100.0;
+        logf("experiment: baseline_eye_scale=%u: the game's own two views at %.0f%% of the runtime's eye size",
+             baselinePercent, experiment.eyeScale * 100);
+    } else if (!scaledMode && eyePercent != 100)
         logf("experiment: mode=off: the game gets the runtime's own eye size (eye_scale=%u applies to the other modes)",
              eyePercent);
     // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most

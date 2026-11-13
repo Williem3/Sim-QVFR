@@ -108,6 +108,10 @@ struct Experiment {
     bool views4TestHiddenMask = false;     // views4 test: a hidden-area mesh of our own (corners, centre; diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
+    int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (probe/replay_probe.h)
+    UINT replayFocusPercent = 20;          // replay_focus_percent: the focus box, % of each eye's extent (half extent in NDC)
+    UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
+    UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 3;  // replay_save_first/_every/_count
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
@@ -132,6 +136,7 @@ struct Experiment {
     bool d3d12Debug = false;               // D3D12 debug layer, errors into the log (slow; diagnosis only)
     bool gpuValidation = false;            // d3d12_debug=2: plus GPU-based validation (very slow)
     UINT pixCaptureFrame = 0;              // PIX GPU capture from this xrEndFrame (probe/pix_capture.h), 0 = off
+    bool pixCaptureHotkey = false;         // pix_capture_hotkey=1: the frame capture hotkey takes a PIX capture (D3D12)
     bool twoLoops = false;        // round 7: two complete ACE frames per display frame
     bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
@@ -764,6 +769,9 @@ extern SessionGraphics sessionGraphics;
 extern V4D3D11 v4d3d11;
 extern Views4Outline v4outline;
 extern uint64_t endFrames;
+// measure=1 without the four views (baseline): the game's projection swapchain, recorded at xrEndFrame, whose image
+// release ends the GPU frame timer's frame (gpu_frame_timing=1).
+extern std::atomic<XrSwapchain> measuredEyeChain;
 extern uint64_t locates;
 extern CpuTimes cpu;
 extern Pacing pacing;

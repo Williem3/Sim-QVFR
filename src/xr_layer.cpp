@@ -297,7 +297,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         dred_enable();
     if (experiment.d3d12Debug)
         d3d12_debug_enable(experiment.gpuValidation);
-    if (experiment.pixCaptureFrame)  // before ACE creates its D3D12 device
+    if (experiment.pixCaptureFrame || experiment.pixCaptureHotkey)  // before ACE creates its D3D12 device
         pix_capture_load(experiment.pixCaptureFrame);
     game->instance_created(live.ini.c_str(), experiment.mode);
     if (experiment.views4) {
