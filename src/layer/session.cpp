@@ -163,6 +163,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 focusSettings.transparents = experiment.replayTransparents;
                 focusSettings.atmosphere = experiment.replayAtmosphere;
                 focusSettings.costAb = experiment.replayCostAb;
+                focusSettings.sky = experiment.replaySky;
+                focusSettings.diag = experiment.replayDiag;
                 focusSettings.post = experiment.replayPost;
                 replay_probe_start(d3d12->device, experiment.replayProbe, d3d12->queue, focusSettings);
             }

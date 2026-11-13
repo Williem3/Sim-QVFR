@@ -114,11 +114,13 @@ struct Experiment {
     UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 3;  // replay_save_first/_every/_count
     bool replayAllTargets = false;         // replay_targets=all: every stereo scene list (R2), else depth only (R1)
     bool replayTiles = false;              // replay_tiles=1: the focus views' own light tiles (R2b)
-    bool replayFog = false;                // replay_fog=1: the focus views' own volumetric fog (R2c, with tiles)
+    int replayFog = 0;                     // replay_fog=1: focus fog replayed; 2: ACE's grids resampled (R2c, with tiles)
     int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
     int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
-    bool replayCostAb = false;             // replay_cost_ab=1: all focus replays on / off every 1800 frames
+    bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
+    bool replayCostAb = false;
+    bool replayDiag = false;               // replay_diag=1: per-sample fog / atmosphere schedule (the haze band)             // replay_cost_ab=1: all focus replays on / off every 1800 frames
     int replayAtmosphere = 0;              // replay_atmosphere=1: focus copies of the atmosphere maps (R2c); 2 A/B
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images

@@ -15,6 +15,7 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,12 @@
 #include "d3d11_capture.h"  // write_png_bgra
 
 extern "C" size_t simqvfr_slot_SetPipelineState(void);
+extern "C" size_t simqvfr_slot_CreateConstantBufferView(void);
+extern "C" size_t simqvfr_slot_CreateGraphicsPipelineState(void);
+extern "C" size_t simqvfr_slot_CreatePipelineState(void);
+extern "C" size_t simqvfr_slot_CreatePipelineLibrary(void);
+extern "C" size_t simqvfr_slot_LoadGraphicsPipeline(void);
+extern "C" size_t simqvfr_slot_LoadPipeline(void);
 extern "C" size_t simqvfr_slot_DrawInstanced(void);
 extern "C" size_t simqvfr_slot_DrawIndexedInstanced(void);
 extern "C" size_t simqvfr_slot_ExecuteIndirect(void);
@@ -121,6 +128,18 @@ VaFn computeCbvOriginal;
 TableFn computeTableOriginal;
 DispatchFn dispatchOriginal;
 SrvFn srvViewOriginal;
+using CbvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_CONSTANT_BUFFER_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
+using GfxPsoFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_GRAPHICS_PIPELINE_STATE_DESC*, REFIID, void**);
+using StreamPsoFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12Device2*, const D3D12_PIPELINE_STATE_STREAM_DESC*, REFIID, void**);
+CbvFn cbvViewOriginal;
+GfxPsoFn gfxPsoOriginal;
+StreamPsoFn streamPsoOriginal;
+using LibGfxFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12PipelineLibrary*, LPCWSTR, const D3D12_GRAPHICS_PIPELINE_STATE_DESC*,
+                                            REFIID, void**);
+using LibStreamFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12PipelineLibrary1*, LPCWSTR, const D3D12_PIPELINE_STATE_STREAM_DESC*,
+                                               REFIID, void**);
+LibGfxFn libGfxOriginal;
+LibStreamFn libStreamOriginal;
 CopySimpleFn copySimpleOriginal;
 
 enum Op : uint8_t {
@@ -181,6 +200,8 @@ struct Stream {
         SIZE_T rtv;
     };
     PostDraw tonemapDraw{}, fxaaDraw{};
+    bool skyBound = false;              // the bound PSO is the sky's
+    std::vector<UINT64> skyTables;      // root-4 tables (b3..b12, cbSky at b4) the sky draws used
     bool hasTonemap = false, hasFxaa = false;
     struct TileDispatch {
         int kind;
@@ -222,6 +243,8 @@ struct Stream {
         std::memset(gfxConsts, 0, sizeof(gfxConsts));
         lastRtv = 0;
         hasTonemap = hasFxaa = false;
+        skyBound = false;
+        skyTables.clear();
         monoX = monoW = monoH = 0;
         std::memset(oitTables, 0, sizeof(oitTables));
     }
@@ -317,6 +340,7 @@ struct Substitution {
     const std::vector<D3D12_GPU_VIRTUAL_ADDRESS>* to = nullptr;
     const std::vector<std::pair<SIZE_T, SIZE_T>>* targets = nullptr;
     const std::vector<std::pair<UINT64, UINT64>>* tables = nullptr;  // descriptor tables (GPU handles) -> ours
+    const std::vector<std::pair<UINT64, UINT64>>* skyTables = nullptr;  // root 4 -> ours, only around sky draws
 };
 
 SIZE_T map_target(const Substitution* sub, SIZE_T h) {
@@ -327,6 +351,9 @@ SIZE_T map_target(const Substitution* sub, SIZE_T h) {
     return 0;
 }
 
+bool is_sky_pso(ID3D12PipelineState* pso);  // the sky's pipeline (its pixel shader declares cbSky)
+std::atomic<uint64_t> skyPatchCount{0};    // focus sky draws given our cbSky
+
 // Re-emits a stream into `l` (open). Returns the draws emitted, or -1 on a broken stream or a target without a twin.
 int64_t emit(List* l, const Stream& s, const Substitution* sub) {
     const uint8_t* p = s.bytes.data();
@@ -336,11 +363,27 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
         p += sizeof(v);
     };
     int64_t draws = 0;
+    ID3D12PipelineState* curPso = nullptr;
+    UINT64 curTable4 = 0;
+    // A sky draw: root 4 set to our table (cbSky patched) for the draw, the game's back after.
+    const auto skyTable = [&]() -> UINT64 {
+        if (!sub || !sub->skyTables || !curTable4 || !is_sky_pso(curPso))
+            return 0;
+        for (const auto& [from, to] : *sub->skyTables)
+            if (from == curTable4)
+                return to;
+        return 0;
+    };
     while (p < end) {
         const Op op = static_cast<Op>(*p++);
+        const UINT64 skyMine = (op == kDraw || op == kDrawIndexed || op == kIndirect) ? skyTable() : 0;
+        if (skyMine) {
+            l->SetGraphicsRootDescriptorTable(4, D3D12_GPU_DESCRIPTOR_HANDLE{skyMine});
+            skyPatchCount.fetch_add(1, std::memory_order_relaxed);
+        }
         switch (op) {
         case kRootSig: { ID3D12RootSignature* r; get(r); l->SetGraphicsRootSignature(r); break; }
-        case kPso: { ID3D12PipelineState* r; get(r); l->SetPipelineState(r); break; }
+        case kPso: { ID3D12PipelineState* r; get(r); curPso = r; l->SetPipelineState(r); break; }
         case kHeaps: {
             UINT n; get(n);
             ID3D12DescriptorHeap* heaps[2] = {};
@@ -357,6 +400,8 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
                         break;
                     }
             l->SetGraphicsRootDescriptorTable(i, h);
+            if (i == 4)
+                curTable4 = h.ptr;
             break;
         }
         case kConst1: { UINT i, v, o; get(i); get(v); get(o); l->SetGraphicsRoot32BitConstant(i, v, o); break; }
@@ -450,6 +495,8 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
         default:
             return -1;
         }
+        if (skyMine)  // the game's table back for the draws after
+            l->SetGraphicsRootDescriptorTable(4, D3D12_GPU_DESCRIPTOR_HANDLE{curTable4});
     }
     return draws;
 }
@@ -495,7 +542,7 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
@@ -534,7 +581,7 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
         }
     }
     // volumetricFogMapIndex (76.w): ACE's stereo lighting reads voxelGrid0 for both eyes; ours is eye 0's focus grid.
-    if (i == 76 && fogSrv != 0) v.w = asfloat(fogSrv);
+    if (i == 76 && fogSrv != 0) v.w = asfloat(src[84].x > 0 && fogSrv1 != 0 ? fogSrv1 : fogSrv);  // right-eye list: grid 1
     // deferredShadowMapIndex (76.x): ours, from the focus depth (R2c).
     if (i == 76 && shadowSrv != 0) v.x = asfloat(shadowSrv);
     // refractionMapIndex (76.z): our opaqueSceneBlur (P1).
@@ -644,11 +691,13 @@ struct Focus {
     std::vector<ComPtr<ID3D12Resource>> views3d;          // every 3D texture the game made an SRV of (ACE names its
                                                           // resources after their views: names read at the fog pass)
     bool fogMade = false, fogBroken = false, fogHistoryValid = false, fogReady = false, fogMissLogged = false;
+    bool fogResampleViews = false;
     // The fog shaders' UAVs (space 20) are in another table: its base (ACE's 475,136) and our UAVs at its range's top
     // (kFogUavSlots, offset = our bindless fog slot - kFogFirst), guarded like the bindless block.
     UINT uavBaseIndex = 0, fogUavFirst = 0;
     int fogParity = 0;
     std::atomic<uint64_t> fogReplays{0};
+    ComPtr<ID3D12Resource> gameGrid[2];  // ACE's voxelGrid0 / 1 (replay_fog=2: resampled into ours)
     // R2c: the focus views' deferred sun shadow: our normals (UAV slot 28, SRV 14) and shadow (SRV 15, an RTV of ours).
     ComPtr<ID3D12RootSignature> shadowPatchRoot;
     ComPtr<ID3D12PipelineState> shadowPatchPso;
@@ -689,6 +738,16 @@ struct Focus {
     UINT blurMips = 0;
     bool blurBroken = false, blurReady = false, blurMissLogged = false;
     std::atomic<uint64_t> blurReplays{0};
+    // the focus sky (clouds through the box): its PSOs, the game's CBVs, our cbSky copies and table sets
+    std::unordered_set<ID3D12PipelineState*> skyPsos;
+    std::unordered_map<SIZE_T, D3D12_CONSTANT_BUFFER_VIEW_DESC> cbvInfo;
+    SRWLOCK cbvLock = SRWLOCK_INIT;
+    ComPtr<ID3D12RootSignature> skyRoot;
+    ComPtr<ID3D12PipelineState> skyPso;
+    ComPtr<ID3D12Resource> skyConstants, skyClouds;
+    UINT skyRing = 0, skySlot = 0;
+    bool skyBroken = false, skyCloudViews = false, skyMissLogged = false;
+    std::atomic<uint64_t> skyPatches{0};
     SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
     std::atomic<uint64_t> tileReplays{0};
     std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
@@ -707,7 +766,9 @@ Focus focus;
 // Our descriptors at the top of the bindless range: 0-11 tile lists, 12 focus depth, 13 previous colour, 14-15 shadow,
 // 16-27 fog, 28 normals UAV, 29-31 OIT views, 32-55 atmosphere (game SRVs, our SRVs, our UAVs), 56-60 post, 61-66
 // refraction blur.
-constexpr UINT kTileSlots = 80, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
+constexpr UINT kTileSlots = 112, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
+// the sky: 80.. our CBV table sets (kSkyRing x kSkyTable), 110/111 our clouds' SRV / UAV
+constexpr UINT kSkyTable = 10, kSkyRing = 3, kSkySlotsFirst = 80, kSkyCloudSrv = 110, kSkySlots = 16, kSkyCloudSize = 512;
 constexpr UINT kFogFirst = 16, kFogUavSlots = 32;
 constexpr UINT kShadowSlots = 48, kShadowSlotBytes = 1024;
 constexpr UINT kPostSlots = 16;  // 256 B each
@@ -837,11 +898,39 @@ RWTexture2D<float4> dst : register(u0);
 // P1: a constant buffer copied with one register replaced (the tonemap's target size).
 constexpr char kCbPatchShader[] = R"(
 cbuffer Src : register(b0) { float4 src[16]; };
-cbuffer P : register(b1) { uint count; uint reg; uint2 pad; float4 value; };
+cbuffer P : register(b1) { uint count; uint reg; uint mask; uint pad; float4 value; };  // mask 0: all of the register
 RWByteAddressBuffer dst : register(u0);
 [numthreads(16, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= count) return;
-    dst.Store4(i * 16, asuint(i == reg ? value : src[i]));
+    float4 v = src[i];
+    if (i == reg) {
+        if (mask == 0 || (mask & 1)) v.x = value.x;
+        if (mask == 0 || (mask & 2)) v.y = value.y;
+        if (mask == 0 || (mask & 4)) v.z = value.z;
+        if (mask == 0 || (mask & 8)) v.w = value.w;
+    }
+    dst.Store4(i * 16, asuint(v));
+}
+)";
+
+// The sky's screen-space clouds for a focus view: the cloud texture the sky draw's cbSky names (CloudsScreenBindless
+// Index, register 4.x; read on the GPU) sampled through the box (eye uv = centre + box x focus uv) into ours.
+constexpr char kSkyCloudShader[] = R"(
+cbuffer Sky : register(b0) { float4 sky[5]; };
+cbuffer P : register(b1) { float box; float cx; float cy; uint size; };
+Texture2D<float4> bindless[] : register(t0, space1);
+RWTexture2D<float4> dst : register(u0);
+SamplerState lin : register(s0);
+[numthreads(8, 8, 1)] void main(uint2 id : SV_DispatchThreadID) {
+    if (id.x >= size || id.y >= size) return;
+    // ACE's own rule for a bindless index (its shaders: index < range ? index : 1): no clouds (clear sky) is -1, which
+    // reads descriptor 1 (its default texture).
+    uint idx = asuint(sky[4].x);
+    if (idx >= 131072) idx = 1;
+    const float2 uf = (float2(id) + 0.5) / size;
+    const float2 ndc = float2(cx, cy) + box * float2(uf.x * 2 - 1, 1 - uf.y * 2);
+    const float2 ue = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    dst[id] = bindless[NonUniformResourceIndex(idx)].SampleLevel(lin, ue, 0);
 }
 )";
 
@@ -941,7 +1030,7 @@ bool focus_compile() {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor = {0, 0};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants = {1, 0, 31};
+    params[1].Constants = {1, 0, 32};
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {0, 0};
     const D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -1103,7 +1192,7 @@ bool focus_compile() {
             focus.atmoBroken = true;
         }
     }
-    if (focus.settings.post) {  // P1: the constant-buffer patch
+    if (focus.settings.post || focus.settings.sky) {  // P1: the constant-buffer patch (tonemap; the sky's cbSky)
         ComPtr<ID3DBlob> code4, errors4, blob4;
         D3D12_ROOT_PARAMETER p4[3] = {};
         p4[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -1135,6 +1224,55 @@ bool focus_compile() {
             logf("replay focus: post: the constants patch failed (%s); no focus post",
                  errors4 ? static_cast<const char*>(errors4->GetBufferPointer()) : "?");
             focus.postBroken = true;
+        }
+    }
+    if (focus.settings.sky) {  // the sky's clouds resample
+        ComPtr<ID3DBlob> code5, errors5, blob5;
+        D3D12_DESCRIPTOR_RANGE r5[2] = {{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, kBindlessRange, 0, 1, 0},
+                                        {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0}};
+        D3D12_ROOT_PARAMETER p5[4] = {};
+        p5[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p5[0].Descriptor = {0, 0};
+        p5[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        p5[1].Constants = {1, 0, 4};
+        p5[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p5[2].DescriptorTable = {1, &r5[0]};
+        p5[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p5[3].DescriptorTable = {1, &r5[1]};
+        D3D12_STATIC_SAMPLER_DESC lin5{};
+        lin5.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        lin5.AddressU = lin5.AddressV = lin5.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        lin5.MaxLOD = D3D12_FLOAT32_MAX;
+        lin5.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        const D3D12_ROOT_SIGNATURE_DESC d5{4, p5, 1, &lin5, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_COMPUTE_PIPELINE_STATE_DESC pso5{};
+        D3D12_HEAP_PROPERTIES heap5{D3D12_HEAP_TYPE_DEFAULT};
+        const D3D12_RESOURCE_DESC buf5{D3D12_RESOURCE_DIMENSION_BUFFER, 0, UINT64{kSkySlots} * 256, 1, 1, 1, DXGI_FORMAT_UNKNOWN,
+                                       {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        const D3D12_RESOURCE_DESC tex5{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, kSkyCloudSize, kSkyCloudSize, 1, 1,
+                                       DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                                       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        bool ok5 = SUCCEEDED(D3DCompile(kSkyCloudShader, sizeof(kSkyCloudShader) - 1, "focus-sky-clouds", nullptr, nullptr,
+                                        "main", "cs_5_1", D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES, 0, &code5,
+                                        &errors5)) &&
+                   SUCCEEDED(D3D12SerializeRootSignature(&d5, D3D_ROOT_SIGNATURE_VERSION_1, &blob5, &errors5)) &&
+                   SUCCEEDED(device->CreateRootSignature(0, blob5->GetBufferPointer(), blob5->GetBufferSize(),
+                                                         IID_PPV_ARGS(&focus.skyRoot)));
+        if (ok5) {
+            pso5.pRootSignature = focus.skyRoot.Get();
+            pso5.CS = {code5->GetBufferPointer(), code5->GetBufferSize()};
+            ok5 = SUCCEEDED(device->CreateComputePipelineState(&pso5, IID_PPV_ARGS(&focus.skyPso))) &&
+                  SUCCEEDED(device->CreateCommittedResource(&heap5, D3D12_HEAP_FLAG_NONE, &buf5,
+                                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                            IID_PPV_ARGS(&focus.skyConstants))) &&
+                  SUCCEEDED(device->CreateCommittedResource(&heap5, D3D12_HEAP_FLAG_NONE, &tex5,
+                                                            D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, nullptr,
+                                                            IID_PPV_ARGS(&focus.skyClouds)));
+        }
+        if (!ok5) {
+            logf("replay focus: sky: the clouds shader failed (%s); no focus sky",
+                 errors5 ? static_cast<const char*>(errors5->GetBufferPointer()) : "?");
+            focus.skyBroken = true;
         }
     }
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeap{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvSlots};
@@ -1372,9 +1510,17 @@ void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOU
 }
 
 // At the game's Close of a replayable stereo list: our replay of it, recorded now, executed after the game's batch.
+struct SkyPatch {
+    UINT64 gameTable = 0, ourTable = 0;
+    D3D12_GPU_VIRTUAL_ADDRESS gameCbSky = 0, ourCbSky = 0;
+};
+std::vector<SkyPatch> focus_sky_prepare(const Stream& s);
+void focus_sky_record(List* l, const std::vector<SkyPatch>& patches, const float (&centre)[2]);
+
 void focus_record(List* gameList, const Stream& s, bool mono = false) {
     Replay* r = nullptr;
     std::vector<std::pair<SIZE_T, SIZE_T>> focusTargets, eyeTargets;
+    std::vector<SkyPatch> skyPatches;
     // A per-eye list (mono): one eye-size viewport at x 0 (eye 0) or at the eye width (eye 1) of a two-eye target.
     const int monoEye = mono ? (s.monoX > 0 ? 1 : 0) : -1;
     AcquireSRWLockExclusive(&focus.lock);
@@ -1390,6 +1536,8 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
         }
         if (fits)
             r = acquire_replay();
+        if (r && !mono)
+            skyPatches = focus_sky_prepare(s);
         else {
             static int unfitLogged = 0;
             if (unfitLogged++ < 6)
@@ -1418,13 +1566,17 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
             tileTo[i] = focus.ourTile[i];
         }
     int pairs = 4;
+    // replay_diag: sample 1 as set, 2 our fog off, 3 our 3D atmosphere maps on, 4 the sky maps too
+    const uint32_t diagPhase = focus.settings.diag ? focus.samplesTaken.load() : UINT32_MAX;
     const bool atmoOn = focus.atmoReady && !focus.atmoBroken && !focus.tilesBroken &&
-                        (focus.settings.atmosphere != 2 || focus.samplesTaken.load() % 2 == 0);  // A/B: on, off, ...
+                        (focus.settings.diag ? diagPhase >= 2
+                                             : focus.settings.atmosphere != 2 || focus.samplesTaken.load() % 2 == 0);
+    const bool atmoSky = (focus.settings.diag && diagPhase >= 3) || focus.settings.atmosphere == 3;  // 3: + the sky maps
     const bool shadowPhase = focus.settings.shadows != 2 || focus.samplesTaken.load() % 2 == 0;  // A/B: on, off, ...
     const uint32_t shadowSrv = shadowPhase && focus.shadowReady && !focus.shadowBroken && !focus.tilesBroken
                                    ? focus.slotFirst + 15 - focus.baseIndex
                                    : 0;
-    const uint32_t fogSrv = focus.fogMade && focus.fogReady && !focus.fogBroken && !focus.tilesBroken
+    const uint32_t fogSrv = focus.fogMade && focus.fogReady && !focus.fogBroken && !focus.tilesBroken && diagPhase != 1
                                 ? focus.slotFirst + kFogFirst + 1 - focus.baseIndex
                                 : 0;
     if (focus.prevReady && !focus.tilesBroken)
@@ -1442,11 +1594,18 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    if (!skyPatches.empty()) {  // the sky's clouds and cbSky copies, before the draws
+        const float c0[2] = {focus.eyeCentre[0][0], focus.eyeCentre[0][1]};
+        focus_sky_record(l, skyPatches, c0);
+    }
+    std::vector<std::pair<UINT64, UINT64>> skyMap;
+    for (const SkyPatch& sp : skyPatches)
+        skyMap.emplace_back(sp.gameTable, sp.ourTable);
     // 1. The focus constants: one slot per distinct root-1 address.
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slots;
     l->SetComputeRootSignature(focus.patchRoot.Get());
     l->SetPipelineState(focus.patchPso.Get());
-    uint32_t params[31] = {};
+    uint32_t params[32] = {};
     const float box = static_cast<float>(focus.settings.boxFraction);
     const float floats[4] = {box, box, static_cast<float>(fwi), static_cast<float>(fhi)};
     std::memcpy(params, floats, sizeof(floats));
@@ -1457,11 +1616,12 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     // The sky maps (m % 4 = 2, 3) stay ACE's: the sky shader doesn't read them at the eye's screen position (10:23 run:
     // resampled, the focus sky came out uniformly darker).
     for (int m = 0; m < 8; ++m)
-        params[22 + m] = atmoOn && m % 4 < 2 ? focus.slotFirst + 40 + static_cast<UINT>(m) - focus.baseIndex : 0;
+        params[22 + m] = atmoOn && (m % 4 < 2 || atmoSky) ? focus.slotFirst + 40 + static_cast<UINT>(m) - focus.baseIndex : 0;
     params[30] = focus.blurReady && !focus.blurBroken && !focus.tilesBroken
                      ? focus.slotFirst + 62 - focus.baseIndex
                      : 0;
-    l->SetComputeRoot32BitConstants(1, 31, params, 0);
+    params[31] = fogSrv && focus.settings.fog == 2 ? focus.slotFirst + kFogFirst + 6 + 1 - focus.baseIndex : 0;
+    l->SetComputeRoot32BitConstants(1, 32, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         if (sample && !mono) {  // the sample's eye centres come from a stereo list's constants (per-eye lists differ)
@@ -1483,7 +1643,9 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     const UINT views = mono ? 1u : 2u;
     const D3D12_VIEWPORT* fv = mono ? &focusViews[monoEye] : focusViews;
     const D3D12_RECT* fr = mono ? &focusRects[monoEye] : focusRects;
-    const Substitution sub{fv, fr, views, &s.passConstants, &slots, &focusTargets};
+    Substitution sub{fv, fr, views, &s.passConstants, &slots, &focusTargets};
+    if (!skyMap.empty())
+        sub.skyTables = &skyMap;
     l->RSSetViewports(views, fv);  // in case the list sets none itself
     l->RSSetScissorRects(views, fr);
     int64_t draws = emit(l, s, &sub);
@@ -1502,6 +1664,9 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
             draws = -1;
     }
     barrier(l, focus.constants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (!skyPatches.empty())
+        barrier(l, focus.skyConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     l->Close();
     inReplay = false;
     replayTicks.fetch_add(static_cast<uint64_t>(now_ticks() - start), std::memory_order_relaxed);
@@ -1789,6 +1954,110 @@ void focus_tiles_record(List* gameList, const Stream& s) {
         focus.tileReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
+// ---- the focus sky: our copy of the sky draw's CBV table (b3..b12) with cbSky (b4) patched -------------------------
+
+// Under focus.lock (and cbvLock inside): for each sky table this list's sky draws use, a set of our descriptors (a ring of
+// kSkyRing x kSkyTable at slots 80..) recreated from the game's CBVs, b4 a patched cbSky copy (written on the GPU by
+// focus_sky_record). Returns the table map (game GPU handle -> ours) and, per table, (game cbSky address, ours).
+std::vector<SkyPatch> focus_sky_prepare(const Stream& s) {
+    std::vector<SkyPatch> out;
+    if (!focus.settings.sky || focus.skyBroken || !focus.skyPso || !focus.gameHeap || !focus.slotFirst || focus.tilesBroken ||
+        !focus.centresKnown || s.skyTables.empty())
+        return out;
+    if (!focus.skyCloudViews) {
+        inReplay = true;
+        D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+        v.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        v.Texture2D.MipLevels = 1;
+        srvViewOriginal(device.Get(), focus.skyClouds.Get(), &v, game_cpu(focus.slotFirst + kSkyCloudSrv));
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+        u.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        device->CreateUnorderedAccessView(focus.skyClouds.Get(), nullptr, &u, game_cpu(focus.slotFirst + kSkyCloudSrv + 1));
+        inReplay = false;
+        focus.skyCloudViews = true;
+    }
+    const UINT64 heapGpu = focus.gameHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+    const SIZE_T heapCpu = focus.gameHeap->GetCPUDescriptorHandleForHeapStart().ptr;
+    for (const UINT64 table : s.skyTables) {
+        if (out.size() >= 1 || table < heapGpu)
+            break;  // one sky table a list (ACE draws one sky)
+        const UINT base = static_cast<UINT>((table - heapGpu) / focus.increment);
+        D3D12_CONSTANT_BUFFER_VIEW_DESC views[kSkyTable];
+        bool known = true;
+        AcquireSRWLockShared(&focus.cbvLock);
+        for (UINT k = 0; k < kSkyTable && known; ++k) {
+            const auto it = focus.cbvInfo.find(heapCpu + SIZE_T{base + k} * focus.increment);
+            known = it != focus.cbvInfo.end();
+            if (known)
+                views[k] = it->second;
+        }
+        ReleaseSRWLockShared(&focus.cbvLock);
+        if (!known || !views[1].BufferLocation) {
+            if (!focus.skyMissLogged) {
+                focus.skyMissLogged = true;
+                logf("replay focus: sky: the sky table's constant-buffer views (heap index %u..) weren't all seen; no focus "
+                     "sky",
+                     base);
+            }
+            break;
+        }
+        const UINT set = focus.skyRing++ % kSkyRing;
+        const UINT first = focus.slotFirst + kSkySlotsFirst + set * kSkyTable;
+        const UINT64 mine = focus.skyConstants->GetGPUVirtualAddress() + UINT64{focus.skySlot++ % kSkySlots} * 256;
+        inReplay = true;
+        for (UINT k = 0; k < kSkyTable; ++k) {
+            D3D12_CONSTANT_BUFFER_VIEW_DESC v = views[k];
+            if (k == 1) {  // b4: cbSky -> our patched copy
+                v.BufferLocation = mine;
+                v.SizeInBytes = 256;
+            }
+            cbvViewOriginal(device.Get(), v.BufferLocation ? &v : nullptr, game_cpu(first + k));
+        }
+        inReplay = false;
+        out.push_back({table, game_gpu(first).ptr, views[1].BufferLocation, mine});
+    }
+    return out;
+}
+
+// Into the focus replay `l` before its draws: our clouds (the cbSky-named texture through the box, eye 0's centre as
+// ACE's stereo sky reads one for both eyes) and the cbSky copies with 4.x naming our clouds.
+void focus_sky_record(List* l, const std::vector<SkyPatch>& patches, const float (&centre)[2]) {
+    if (patches.empty())
+        return;
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    const float box = static_cast<float>(focus.settings.boxFraction);
+    for (const SkyPatch& sp : patches) {
+        barrier(l, focus.skyClouds.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        uint32_t p[4];
+        const float f[3] = {box, centre[0], centre[1]};
+        std::memcpy(p, f, sizeof(f));
+        p[3] = kSkyCloudSize;
+        l->SetComputeRootSignature(focus.skyRoot.Get());
+        l->SetPipelineState(focus.skyPso.Get());
+        l->SetComputeRootConstantBufferView(0, sp.gameCbSky);
+        l->SetComputeRoot32BitConstants(1, 4, p, 0);
+        l->SetComputeRootDescriptorTable(2, game_gpu(focus.baseIndex));
+        l->SetComputeRootDescriptorTable(3, game_gpu(focus.slotFirst + kSkyCloudSrv + 1));
+        l->Dispatch((kSkyCloudSize + 7) / 8, (kSkyCloudSize + 7) / 8, 1);
+        barrier(l, focus.skyClouds.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        // cbSky copy: register 4.x = our clouds' bindless index
+        uint32_t q[8] = {16, 4, 1, 0};
+        const uint32_t idx = focus.slotFirst + kSkyCloudSrv - focus.baseIndex;
+        std::memcpy(&q[4], &idx, 4);
+        l->SetComputeRootSignature(focus.cbPatchRoot.Get());
+        l->SetPipelineState(focus.cbPatchPso.Get());
+        l->SetComputeRootConstantBufferView(0, sp.gameCbSky);
+        l->SetComputeRoot32BitConstants(1, 8, q, 0);
+        l->SetComputeRootUnorderedAccessView(2, sp.ourCbSky);
+        l->Dispatch(1, 1, 1);
+    }
+    barrier(l, focus.skyConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+}
+
 // ---- R2c: the focus views' volumetric fog ----------------------------------------------------------------------
 
 // Under focus.lock: our grids and histories, like ACE's (its voxelGrid0 / voxelGridHistory_0_0 descriptions).
@@ -1821,6 +2090,8 @@ bool focus_fog_prepare(D3D12_GPU_DESCRIPTOR_HANDLE uavTable) {
     std::string names;
     for (const ComPtr<ID3D12Resource>& v : focus.views3d) {
         const std::string n = debug_name(v.Get());
+        if (n == "voxelGrid0" || n == "voxelGrid1")
+            focus.gameGrid[n.back() - '0'] = v;
         if (n == "voxelGrid0")
             focus.gameGridDesc = v->GetDesc();
         else if (n == "voxelGridHistory_0_0")
@@ -1894,6 +2165,66 @@ void focus_fog_record(List* gameList, const Stream& s) {
     const size_t eyes = std::min<size_t>(1, std::min(inj.size(), sc.size()));
     if (!eyes)
         return;
+    if (focus.settings.fog == 2) {  // ACE's grids resampled through each box: no ACE fog pass replayed
+        Replay* rr = nullptr;
+        float centre[2][2] = {};
+        AcquireSRWLockExclusive(&focus.lock);
+        if (inj[0]->tables[5].ptr == sc[0]->tables[2].ptr && focus_fog_prepare(inj[0]->tables[5]) && focus.atmoPso[1] &&
+            focus.centresKnown && focus.gameGrid[0] && focus.gameGrid[1]) {
+            if (!focus.fogResampleViews) {
+                inReplay = true;
+                for (int e = 0; e < 2; ++e) {
+                    D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+                    v.Format = focus.gameGrid[e]->GetDesc().Format;
+                    v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+                    v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                    v.Texture3D.MipLevels = 1;
+                    srvViewOriginal(device.Get(), focus.gameGrid[e].Get(), &v, game_cpu(focus.slotFirst + 67 + e));
+                }
+                inReplay = false;
+                focus.fogResampleViews = true;
+                log_line("replay focus: fog: resampling ACE's voxelGrid0 / 1 through each focus box (replay_fog=2)");
+            }
+            rr = acquire_replay();
+            std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+        }
+        ReleaseSRWLockExclusive(&focus.lock);
+        if (!rr)
+            return;
+        inReplay = true;
+        rr->allocator->Reset();
+        List* l = rr->list.Get();
+        l->Reset(rr->allocator.Get(), nullptr);
+        ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+        l->SetDescriptorHeaps(1, heaps);
+        l->SetComputeRootSignature(focus.atmoRoot.Get());
+        l->SetPipelineState(focus.atmoPso[1].Get());
+        const float box = static_cast<float>(focus.settings.boxFraction);
+        for (int e = 0; e < 2; ++e) {
+            ID3D12Resource* grid = focus.fogGrid[e].Get();
+            const D3D12_RESOURCE_DESC d = grid->GetDesc();
+            uint32_t p[10] = {};
+            const float f0[3] = {box, centre[e][0], centre[e][1]};
+            std::memcpy(p, f0, sizeof(f0));
+            p[3] = static_cast<uint32_t>(d.Width);
+            p[4] = d.Height;
+            p[5] = d.DepthOrArraySize;
+            barrier(l, grid, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            l->SetComputeRoot32BitConstants(0, 10, p, 0);
+            l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 67 + e));
+            l->SetComputeRootDescriptorTable(2, game_gpu(focus.fogUavFirst + 6 * e));
+            l->Dispatch((p[3] + 7) / 8, (p[4] + 7) / 8, p[5]);
+            barrier(l, grid, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        }
+        l->Close();
+        inReplay = false;
+        AcquireSRWLockExclusive(&focus.lock);
+        focus.pending[gameList].push_back(rr);
+        focus.fogReady = true;
+        ReleaseSRWLockExclusive(&focus.lock);
+        focus.fogReplays.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     Replay* r = nullptr;
     int parity = 0;
     bool fresh = true;
@@ -2868,9 +3199,17 @@ struct SampleJob {
     uint64_t fenceValue = 0, frame = 0;
     double box = 0;
     bool shadowOn = true;  // R2c shadow A/B: whether this sample frame's focus lighting used our deferred shadow
+    uint32_t phase = 0;    // replay_diag: the sample's index (0-based)
     ComPtr<ID3D12Resource> constantsRead;
     std::vector<SampleTarget> targets;
     std::vector<ComPtr<IUnknown>> keep;  // the copy list and twins until the copy is done
+    struct Extra {  // whole textures saved as pictures only (the atmosphere sky maps: ours vs the game's)
+        std::string name;
+        ComPtr<ID3D12Resource> read;
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT foot{};
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    };
+    std::vector<Extra> extras;
 };
 
 // The focus pixel (u, v) of eye `eye`, as a fractional pixel position in the eye reference.
@@ -3052,6 +3391,12 @@ void focus_save(std::shared_ptr<SampleJob> job) {
                         if (inHood)
                             ++hoodAgree;
                     }
+            if (focus.settings.diag) {
+                static const char* const kPhase[4] = {"as set", "our fog OFF", "our 3D atmosphere ON",
+                                                      "our 3D atmosphere + sky maps ON"};
+                logf("replay focus: sample frame %llu: diagnostic phase: %s", static_cast<unsigned long long>(job->frame),
+                     kPhase[std::min<uint32_t>(3, job->phase)]);
+            }
             if (focus.settings.atmosphere == 2)
                 logf("replay focus: sample frame %llu: atmosphere A/B: the focus views %s our atmosphere maps",
                      static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
@@ -3075,6 +3420,46 @@ void focus_save(std::shared_ptr<SampleJob> job) {
                 result = kept;  // the scene colour's result stays the one reported
         }
     }
+    for (const SampleJob::Extra& x : job->extras) {  // pictures only, each at its own median exposure
+        const std::vector<float> v = read_back(x.read.Get(), x.foot, x.format, false);
+        if (v.empty())
+            continue;
+        std::vector<float> sorted;
+        for (size_t i = 0; i < v.size(); i += 7)
+            if (v[i] > 0) sorted.push_back(v[i]);
+        std::sort(sorted.begin(), sorted.end());
+        const float scale = sorted.empty() ? 1.0f : 0.18f / std::max(1e-6f, sorted[sorted.size() / 2]);
+        double mean[3] = {};
+        for (size_t i = 0; i < v.size() / 3; ++i)
+            for (int c = 0; c < 3; ++c) mean[c] += v[i * 3 + c];
+        const double n = static_cast<double>(std::max<size_t>(1, v.size() / 3));
+        double alpha = -1;
+        if (x.format == DXGI_FORMAT_R16G16B16A16_FLOAT) {  // the alpha (cloud coverage / transmittance)
+            void* m = nullptr;
+            if (SUCCEEDED(x.read->Map(0, nullptr, &m))) {
+                double sum = 0;
+                for (UINT y = 0; y < x.foot.Footprint.Height; ++y)
+                    for (UINT xx = 0; xx < x.foot.Footprint.Width; ++xx) {
+                        uint16_t h;
+                        std::memcpy(&h, static_cast<const uint8_t*>(m) + x.foot.Offset + size_t{y} * x.foot.Footprint.RowPitch +
+                                            size_t{xx} * 8 + 6,
+                                    2);
+                        sum += half_to_float(h);
+                    }
+                x.read->Unmap(0, nullptr);
+                alpha = sum / (static_cast<double>(x.foot.Footprint.Width) * x.foot.Footprint.Height);
+            }
+        }
+        if (alpha >= 0)
+            logf("replay focus: sample frame %llu: %s alpha mean %.4f", static_cast<unsigned long long>(job->frame),
+                 x.name.c_str(), alpha);
+        logf("replay focus: sample frame %llu: %s %ux%u mean (%.4f, %.4f, %.4f), median %.4f",
+             static_cast<unsigned long long>(job->frame), x.name.c_str(), x.foot.Footprint.Width, x.foot.Footprint.Height,
+             mean[0] / n, mean[1] / n, mean[2] / n, sorted.empty() ? 0.0f : sorted[sorted.size() / 2]);
+        wchar_t name[160];
+        std::swprintf(name, 160, L"frame-%llu-%hs.png", static_cast<unsigned long long>(job->frame), x.name.c_str());
+        save_picture((dir / name).wstring(), v, x.foot.Footprint.Width, x.foot.Footprint.Height, false, scale);
+    }
     AcquireSRWLockExclusive(&focus.compareLock);
     result.sample = focus.compare.sample + 1;
     focus.compare = result;
@@ -3094,6 +3479,7 @@ void focus_copy_sample() {
     job->frame = focus.copyFrame.load();
     job->box = focus.settings.boxFraction;
     job->shadowOn = (focus.samplesTaken.load() + 1) % 2 == 0;  // counted at the sample frame's end: k + 1 here
+    job->phase = focus.samplesTaken.load() - 1;
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<List> l;
     if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
@@ -3155,6 +3541,56 @@ void focus_copy_sample() {
             job->keep.emplace_back(twin);
         }
         job->targets.push_back(std::move(s));
+    }
+    if (focus.skyCloudViews && focus.skyClouds) {  // our focus clouds (the sky patch), as a picture with its alpha logged
+        SampleJob::Extra x;
+        x.name = "clouds-ours";
+        const D3D12_RESOURCE_DESC d = focus.skyClouds->GetDesc();
+        x.format = d.Format;
+        UINT64 bytes = 0;
+        device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
+        x.read = buffer(bytes);
+        if (x.read) {
+            barrier(l.Get(), focus.skyClouds.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+            dst.PlacedFootprint = x.foot;
+            D3D12_TEXTURE_COPY_LOCATION src{focus.skyClouds.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+            src.SubresourceIndex = 0;
+            l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            barrier(l.Get(), focus.skyClouds.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+            job->keep.emplace_back(focus.skyClouds.Get());
+            job->extras.push_back(std::move(x));
+        }
+    }
+    if (focus.atmoMade) {  // the sky maps of eye 0 (ours resampled, the game's): pictures for the sky investigation
+        const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        for (int m : {2, 3}) {
+            for (int which = 0; which < 2; ++which) {
+                ID3D12Resource* res = which ? focus.atmoGame[m] : focus.atmo[m].Get();
+                if (!res)
+                    continue;
+                SampleJob::Extra x;
+                x.name = std::string(m == 2 ? "skyIn" : "skyOut") + (which ? "-game" : "-ours");
+                const D3D12_RESOURCE_DESC d = res->GetDesc();
+                x.format = d.Format;
+                UINT64 bytes = 0;
+                device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
+                x.read = buffer(bytes);
+                if (!x.read)
+                    continue;
+                const D3D12_RESOURCE_STATES state = which ? read : D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+                barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+                dst.PlacedFootprint = x.foot;
+                D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+                src.SubresourceIndex = 0;
+                l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+                barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
+                job->keep.emplace_back(res);
+                job->extras.push_back(std::move(x));
+            }
+        }
     }
     if (focus.postReady && focus.postLdr && focus.postGameFxaa) {  // P1: our tonemapped focus vs the game's eyes
         const Twin* colourTwin = nullptr;
@@ -3308,6 +3744,122 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
     return hr;
 }
 
+// ---- the sky draw: its pipelines (the pixel shader declares cbSky), the constant-buffer views the game makes -------
+
+bool shader_declares(const D3D12_SHADER_BYTECODE& bc, const char* name) {
+    if (!bc.pShaderBytecode || bc.BytecodeLength < 64 || bc.BytecodeLength > (64u << 20))
+        return false;
+    __try {
+        const char* p = static_cast<const char*>(bc.pShaderBytecode);
+        if (std::memcmp(p, "DXBC", 4) != 0)
+            return false;
+        const size_t n = std::strlen(name);
+        for (size_t i = 0; i + n < bc.BytecodeLength; ++i)
+            if (p[i] == name[0] && std::memcmp(p + i, name, n) == 0 && p[i + n] == 0)
+                return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+// DXIL keeps names inside its bitcode (not as plain text): the sky's pixel shader is known by its container digest
+// (DXBC header bytes 4..19; ACE's sky material, from a PIX capture), the plain name only as a fallback.
+bool is_sky_shader(const D3D12_SHADER_BYTECODE& bc) {
+    static const uint8_t kSkyDigest[16] = {0x24, 0xec, 0x19, 0x36, 0x9f, 0xad, 0x25, 0x4a,
+                                           0xf6, 0x76, 0x8c, 0xb8, 0x33, 0xf9, 0xce, 0xe2};
+    if (bc.pShaderBytecode && bc.BytecodeLength >= 20) {
+        __try {
+            const uint8_t* p = static_cast<const uint8_t*>(bc.pShaderBytecode);
+            if (std::memcmp(p, "DXBC", 4) == 0 && std::memcmp(p + 4, kSkyDigest, 16) == 0)
+                return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+    return shader_declares(bc, "cbSky");
+}
+void count_pipeline() {
+    static std::atomic<uint64_t> seen{0};
+    const uint64_t n = seen.fetch_add(1) + 1;
+    if (n == 1 || n == 100 || n == 1000 || n == 5000)
+        logf("replay focus: sky: %llu pipelines seen being made or loaded", static_cast<unsigned long long>(n));
+}
+void note_sky_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& ps) {
+    if (!pso || !is_sky_shader(ps))
+        return;
+    AcquireSRWLockExclusive(&focus.psoLock);
+    const bool first = focus.skyPsos.empty();
+    focus.skyPsos.insert(pso);
+    ReleaseSRWLockExclusive(&focus.psoLock);
+    if (first)
+        log_line("replay focus: sky: the sky's pipeline seen (its pixel shader declares cbSky)");
+}
+bool is_sky_pso(ID3D12PipelineState* pso) {
+    if (!pso || !focus.settings.sky)
+        return false;
+    AcquireSRWLockShared(&focus.psoLock);
+    const bool sky = focus.skyPsos.count(pso) != 0;
+    ReleaseSRWLockShared(&focus.psoLock);
+    return sky;
+}
+HRESULT STDMETHODCALLTYPE gfxPsoHook(ID3D12Device* d, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID riid, void** out) {
+    const HRESULT hr = gfxPsoOriginal(d, desc, riid, out);
+    count_pipeline();
+    if (SUCCEEDED(hr) && desc && out && *out && riid == __uuidof(ID3D12PipelineState))
+        note_sky_pso(static_cast<ID3D12PipelineState*>(*out), desc->PS);
+    return hr;
+}
+void note_stream_pso(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* pso);
+HRESULT STDMETHODCALLTYPE streamPsoHook(ID3D12Device2* d, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID riid, void** out) {
+    const HRESULT hr = streamPsoOriginal(d, desc, riid, out);
+    if (SUCCEEDED(hr) && out && *out && riid == __uuidof(ID3D12PipelineState))
+        note_stream_pso(desc, *out);
+    return hr;
+}
+// ACE loads its pipelines from its PSO cache (a pipeline library): the same check there.
+HRESULT STDMETHODCALLTYPE libGfxHook(ID3D12PipelineLibrary* lib, LPCWSTR name, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc,
+                                     REFIID riid, void** out) {
+    const HRESULT hr = libGfxOriginal(lib, name, desc, riid, out);
+    count_pipeline();
+    if (SUCCEEDED(hr) && desc && out && *out && riid == __uuidof(ID3D12PipelineState))
+        note_sky_pso(static_cast<ID3D12PipelineState*>(*out), desc->PS);
+    return hr;
+}
+HRESULT STDMETHODCALLTYPE libStreamHook(ID3D12PipelineLibrary1* lib, LPCWSTR name, const D3D12_PIPELINE_STATE_STREAM_DESC* desc,
+                                        REFIID riid, void** out) {
+    const HRESULT hr = libStreamOriginal(lib, name, desc, riid, out);
+    if (SUCCEEDED(hr) && out && *out && riid == __uuidof(ID3D12PipelineState))
+        note_stream_pso(desc, *out);
+    return hr;
+}
+void note_stream_pso(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* pso) {
+    count_pipeline();
+    if (desc && desc->pPipelineStateSubobjectStream) {
+        // Each subobject: its type (a 32-bit enum at a pointer-aligned offset), then its struct, pointer-aligned.
+        const uint8_t* p = static_cast<const uint8_t*>(desc->pPipelineStateSubobjectStream);
+        for (size_t i = 0; i + 8 + sizeof(D3D12_SHADER_BYTECODE) <= desc->SizeInBytes; i += 8) {
+            uint32_t type;
+            std::memcpy(&type, p + i, 4);
+            if (type != D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS)
+                continue;
+            D3D12_SHADER_BYTECODE bc;
+            std::memcpy(&bc, p + i + 8, sizeof(bc));
+            if (is_sky_shader(bc)) {
+                note_sky_pso(static_cast<ID3D12PipelineState*>(pso), bc);
+                break;
+            }
+        }
+    }
+}
+void STDMETHODCALLTYPE cbvViewHook(ID3D12Device* d, const D3D12_CONSTANT_BUFFER_VIEW_DESC* desc,
+                                   D3D12_CPU_DESCRIPTOR_HANDLE dest) {
+    cbvViewOriginal(d, desc, dest);
+    if (inReplay)
+        return;
+    AcquireSRWLockExclusive(&focus.cbvLock);
+    focus.cbvInfo[dest.ptr] = desc ? *desc : D3D12_CONSTANT_BUFFER_VIEW_DESC{};
+    ReleaseSRWLockExclusive(&focus.cbvLock);
+}
+
 // R2c: the transparents replayed now (replay_transparents=2: only before samples 1, 3, ...).
 bool transparents_now() {
     return focus.settings.transparents == 1 || (focus.settings.transparents == 2 && focus.samplesTaken.load() % 2 == 0);
@@ -3387,6 +3939,7 @@ void STDMETHODCALLTYPE psoHook(List* l, ID3D12PipelineState* r) {
         s->pso = r;
         if (focus.settings.tiles)
             s->psoKind = pso_kind(r);
+        s->skyBound = is_sky_pso(r);
     }
     psoOriginal(l, r);
 }
@@ -3633,6 +4186,17 @@ void STDMETHODCALLTYPE copySimpleHook(ID3D12Device* d, UINT n, D3D12_CPU_DESCRIP
         if (ptr >= src.ptr && ptr < src.ptr + SIZE_T{n} * step)
             focus.tileViews.emplace_back(dest.ptr + (ptr - src.ptr), k);
     }
+    if (focus.settings.sky && n <= 4096) {  // CBVs copied (the sky table's)
+        AcquireSRWLockExclusive(&focus.cbvLock);
+        for (UINT i = 0; i < n; ++i) {
+            const auto it = focus.cbvInfo.find(src.ptr + SIZE_T{i} * step);
+            if (it != focus.cbvInfo.end()) {
+                const D3D12_CONSTANT_BUFFER_VIEW_DESC v = it->second;
+                focus.cbvInfo[dest.ptr + SIZE_T{i} * step] = v;
+            }
+        }
+        ReleaseSRWLockExclusive(&focus.cbvLock);
+    }
     if ((focus.settings.transparents || focus.settings.atmosphere || focus.settings.post) && !focus.srvInfo.empty() &&
         n <= 4096)
         for (UINT i = 0; i < n; ++i) {
@@ -3645,11 +4209,19 @@ void STDMETHODCALLTYPE copySimpleHook(ID3D12Device* d, UINT n, D3D12_CPU_DESCRIP
     check_reserved(dest.ptr, n);
     ReleaseSRWLockExclusive(&focus.lock);
 }
+// A draw with the sky's pipeline bound: its root-4 table (cbSky at b4) for the focus replay. Any draw kind (the sky is
+// an indexed draw).
+void note_sky_draw(Stream* s) {
+    if (s->skyBound && s->gfxTables[4].ptr &&
+        std::find(s->skyTables.begin(), s->skyTables.end(), s->gfxTables[4].ptr) == s->skyTables.end())
+        s->skyTables.push_back(s->gfxTables[4].ptr);
+}
 void STDMETHODCALLTYPE drawHook(List* l, UINT a, UINT b, UINT c, UINT d) {
     if (Stream* s = stream_of(l)) {
         HookTimer t(s);
         s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d);
         ++s->draws;
+        note_sky_draw(s);
         if (s->psoKind == 9 || s->psoKind == 10) {  // P1: tonemap, fxaa
             Stream::PostDraw& pd = s->psoKind == 9 ? s->tonemapDraw : s->fxaaDraw;
             pd = {s->pso, s->gfxRoot, {}, s->gfxCbvs[6], {}, s->lastRtv};
@@ -3674,6 +4246,7 @@ void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, U
         HookTimer t(s);
         s->op(kDrawIndexed); s->put(a); s->put(b); s->put(c); s->put(d); s->put(e);
         ++s->draws;
+        note_sky_draw(s);
     }
     drawIndexedOriginal(l, a, b, c, d, e);
 }
@@ -3683,6 +4256,7 @@ void STDMETHODCALLTYPE indirectHook(List* l, ID3D12CommandSignature* sig, UINT m
         HookTimer t(s);
         s->op(kIndirect); s->put(sig); s->put(max); s->put(args); s->put(argsOffset); s->put(count); s->put(countOffset);
         ++s->draws;
+        note_sky_draw(s);
     }
     indirectOriginal(l, sig, max, args, argsOffset, count, countOffset);
 }
@@ -3713,6 +4287,36 @@ void calibrate() {
 }
 
 }  // namespace
+
+namespace {
+bool skyHooksEarly = false;
+}
+
+void replay_probe_early_sky() {
+    if (skyHooksEarly)
+        return;
+    HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
+    using CreateFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+    const auto create = d3d12 ? reinterpret_cast<CreateFn>(GetProcAddress(d3d12, "D3D12CreateDevice")) : nullptr;
+    ComPtr<ID3D12Device1> d;
+    if (!create || FAILED(create(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d)))) {
+        log_line("replay focus: sky: no early D3D12 device; the sky's pipeline hooks wait for the session");
+        return;
+    }
+    void** deviceTable = *reinterpret_cast<void***>(d.Get());
+    bool ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
+              hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
+              hook(deviceTable, simqvfr_slot_CreatePipelineState(), &streamPsoHook, &streamPsoOriginal);
+    ComPtr<ID3D12PipelineLibrary1> lib;
+    if (ok && SUCCEEDED(d->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&lib)))) {
+        void** libTable = *reinterpret_cast<void***>(lib.Get());
+        ok = hook(libTable, simqvfr_slot_LoadGraphicsPipeline(), &libGfxHook, &libGfxOriginal) &&
+             hook(libTable, simqvfr_slot_LoadPipeline(), &libStreamHook, &libStreamOriginal);
+    }
+    skyHooksEarly = ok;
+    logf("replay focus: sky: early hooks (pipeline creation and cache loads, constant-buffer views) %s",
+         ok ? "installed at instance creation" : "FAILED");
+}
 
 bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, const ReplayFocusSettings& settings) {
     if (installed || !d)
@@ -3774,6 +4378,25 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
                  hook(deviceTable, simqvfr_slot_CopyDescriptorsSimple(), &copySimpleHook, &copySimpleOriginal);
         else if (ok)
             srvViewOriginal = reinterpret_cast<SrvFn>(deviceTable[simqvfr_slot_CreateShaderResourceView()]);
+        if (ok && settings.sky && settings.tiles && !skyHooksEarly)
+            ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
+                 hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
+                 hook(deviceTable, simqvfr_slot_CreatePipelineState(), &streamPsoHook, &streamPsoOriginal);
+        if (ok && settings.sky && settings.tiles && !skyHooksEarly) {
+            ComPtr<ID3D12Device1> d1;
+            ComPtr<ID3D12PipelineLibrary1> lib;
+            if (SUCCEEDED(d->QueryInterface(IID_PPV_ARGS(&d1))) &&
+                SUCCEEDED(d1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&lib)))) {
+                void** libTable = *reinterpret_cast<void***>(lib.Get());
+                if (!hook(libTable, simqvfr_slot_LoadGraphicsPipeline(), &libGfxHook, &libGfxOriginal) ||
+                    !hook(libTable, simqvfr_slot_LoadPipeline(), &libStreamHook, &libStreamOriginal))
+                    log_line("replay focus: sky: could not hook the pipeline library");
+            } else {
+                log_line("replay focus: sky: no pipeline library on this device (pipelines from a cache not seen)");
+            }
+        }
+        else if (ok && !skyHooksEarly)
+            cbvViewOriginal = reinterpret_cast<CbvFn>(deviceTable[simqvfr_slot_CreateConstantBufferView()]);
         focus.sampleFrame = settings.saveCount ? settings.saveFirst : UINT64_MAX;
     }
     installed = ok;
@@ -3817,6 +4440,7 @@ ReplayProbeStats replay_probe_take_stats() {
     s.atmoReplays = focus.atmoReplays.exchange(0);
     s.postReplays = focus.postReplays.exchange(0);
     s.blurReplays = focus.blurReplays.exchange(0);
+    s.skyPatches = skyPatchCount.exchange(0);
     s.twinsMade = twinsMade.load();
     s.twinsRemade = twinsRemade.load();
     return s;
@@ -3865,12 +4489,12 @@ void replay_probe_frame_end() {
     if (probeMode == 3) {
         logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; tile replays "
              "%.2f, fog replays %.2f, shadow replays %.2f, per-eye lists %.2f, OIT composites %.2f, atmosphere %.2f, "
-             "post %.2f, refraction %.2f; "
+             "post %.2f, refraction %.2f, sky draws %.2f; "
              "recording the replays "
              "%.3f ms, recording hooks %.3f ms, the game's own recording of those lists %.3f ms (CPU)",
              static_cast<unsigned long long>(window), s.listsReplayed / n, s.focusReplays / n, s.drawsReplayed / n,
              s.tileReplays / n, s.fogReplays / n, s.shadowReplays / n, s.monoReplays / n, s.oitReplays / n,
-             s.atmoReplays / n, s.postReplays / n, s.blurReplays / n, s.replayMs / n,
+             s.atmoReplays / n, s.postReplays / n, s.blurReplays / n, s.skyPatches / n, s.replayMs / n,
              s.hookMs / n, s.gameMs / n);
         ++window;
         if (focus.settings.costAb) {  // 2 windows on, 2 off: the first window after each switch settles

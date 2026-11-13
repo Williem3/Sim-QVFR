@@ -42,7 +42,8 @@ struct ReplayProbeStats {
     uint64_t oitReplays = 0;      // R2c: OIT composites replayed
     uint64_t atmoReplays = 0;     // R2c: atmosphere resamples (8 maps each)
     uint64_t postReplays = 0;     // P1: focus post replays (bloom, tonemap, fxaa)
-    uint64_t blurReplays = 0;     // P1: focus refraction blurs (opaqueSceneBlur: our colour + the eye's mips resampled)
+    uint64_t blurReplays = 0;
+    uint64_t skyPatches = 0;      // focus sky draws given our cbSky (clouds through the box)     // P1: focus refraction blurs (opaqueSceneBlur: our colour + the eye's mips resampled)
 };
 
 // The focus replay's settings (mode 3).
@@ -54,7 +55,9 @@ struct ReplayFocusSettings {
     uint32_t saveCount = 3;
     bool allTargets = false;      // R2: replay every stereo scene list (depth, velocity, colour), not only depth-only ones
     bool tiles = false;           // R2b: the focus views' own light tiles (ACE's tileFrustums + tiledCulling replayed)
-    bool fog = false;             // R2c: the focus views' own volumetric fog grids (needs `tiles`: its descriptors)
+    int fog = 0;                  // R2c: the focus views' own volumetric fog grids (needs `tiles`: its descriptors):
+                                  // 1 ACE's fog passes replayed with focus constants; 2 ACE's grids resampled through
+                                  // each focus box (its values, far scatter included, at the focus positions)
     int shadows = 0;              // R2c: the focus views' own deferred sun shadow (needs `tiles`: its depth view); 2: A/B,
                                   // the lighting uses it at samples 1, 3, ... and not at 2, 4, ... (replayed either way)
     int transparents = 0;         // R2c: the per-eye lists (transparents: one eye-size viewport) into that eye's focus
@@ -62,10 +65,15 @@ struct ReplayFocusSettings {
                                   // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
     bool post = false;            // P1: the focus views' post: the eye's bloom through the box, the game's tonemap and
                                   // fxaa replayed on the focus colour (exposure, grading from the game's own)
-    bool costAb = false;          // cost A/B: every focus replay on for 2 windows (1800 frames), off for 2, ...
+    bool sky = false;             // the sky draw's screen-space clouds: its cbSky (a CBV table entry) patched to name our
+                                  // resampled clouds in the focus replay (needs `tiles`)
+    bool costAb = false;
+    bool diag = false;            // a per-sample schedule: sample 1 as set, 2 our fog off, 3 our 3D atmosphere maps on,
+                                  // 4 also the sky maps (needs `atmosphere` for the maps to exist)          // cost A/B: every focus replay on for 2 windows (1800 frames), off for 2, ...
     int atmosphere = 0;           // R2c: the atmospheric scattering maps (per eye, screen-shaped) resampled through each
                                   // focus box into focus copies the focus pass constants name (needs `tiles`); 2: A/B,
-                                  // named at samples 1, 3, ... and not at 2, 4, ... (resampled either way)
+                                  // named at samples 1, 3, ... and not at 2, 4, ... (resampled either way); 3: the
+                                  // sky maps too (the sky draw reads them at screen position)
 };
 
 // R2b: the focus inverse projection from an eye's (4 rows as the shader uses them, view = rows . clip): the eye's
@@ -77,6 +85,10 @@ bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (
 bool replay_probe_start(ID3D12Device* device, int mode, ID3D12CommandQueue* queue = nullptr,
                         const ReplayFocusSettings& focus = {});
 void replay_probe_frame_end();
+// At instance creation (before the game makes its D3D12 device and pipelines): the sky patch's hooks (pipeline creation,
+// pipeline-library loads, constant-buffer views) on D3D12's shared device vtable, through a throwaway device. The game's
+// pipelines come from its PSO cache before the session; hooks installed at the session see none of them.
+void replay_probe_early_sky();
 bool replay_probe_installed();
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();

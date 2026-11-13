@@ -236,11 +236,13 @@ void load_experiment() {
         GetPrivateProfileStringW(L"experiment", L"replay_targets", L"depth", targets, 16, ini.c_str());
         experiment.replayAllTargets = _wcsicmp(targets, L"all") == 0;
         experiment.replayTiles = GetPrivateProfileIntW(L"experiment", L"replay_tiles", 0, ini.c_str()) != 0;
-        experiment.replayFog = GetPrivateProfileIntW(L"experiment", L"replay_fog", 0, ini.c_str()) != 0;
+        experiment.replayFog = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_fog", 0, ini.c_str()));
         experiment.replayShadows = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_shadows", 0, ini.c_str()));
         experiment.replayTransparents =
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_transparents", 0, ini.c_str()));
         experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
+        experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", 0, ini.c_str()) != 0;
+        experiment.replayDiag = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str()) != 0;
         experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", 0, ini.c_str()) != 0;
         experiment.replayAtmosphere =
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", 0, ini.c_str()));
