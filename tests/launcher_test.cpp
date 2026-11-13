@@ -686,28 +686,81 @@ void settings_round_trip_checks() {
 
 // An elevated launch's registrations (explicit_layers.h), on a scratch key holding someone else's values: only ours
 // are added and taken out, nothing else changes, the key stays, and only what the ledger lists comes out.
-// What older versions left in the logs folder (launcher/leftovers.h): the copies of the game's program, nothing else.
+// What older versions left in their log folders (launcher/leftovers.h): only the copies of a game's program, by name,
+// content, place and kind; nothing else, whatever it is called.
 void leftovers_checks() {
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
-    const fs::path logs = fs::path(temp) / L"simqvfr-leftovers-test";
+    const fs::path root = fs::path(temp) / L"simqvfr-leftovers-test", logs = root / L"logs", layerLogs = root / L"layer" / L"logs";
     std::error_code ec;
-    fs::remove_all(logs, ec);
+    fs::remove_all(root, ec);
     fs::create_directories(logs / L"captures");
-    write_file((logs / L"Le Mans Ultimate-0123456789ab-image.dump").wstring(), std::string(3000, 'x'));
-    write_file((logs / L"Game-ffffffffffff-IMAGE.DUMP").wstring(), std::string(1000, 'x'));
-    write_file((logs / L"session-20261113-090000.log").wstring(), "log");
-    write_file((logs / L"hang-120000.dmp").wstring(), "dump");
-    write_file((logs / L"captures" / L"x-image.dump").wstring(), "nested");
-    const Leftovers r = remove_leftovers(logs.wstring());
-    check(r.removed == 2 && r.bytes == 4000 && !fs::exists(logs / L"Le Mans Ultimate-0123456789ab-image.dump"),
-          "leftovers: the copies of the game's program removed, counted");
-    check(fs::exists(logs / L"session-20261113-090000.log") && fs::exists(logs / L"hang-120000.dmp") &&
-              fs::exists(logs / L"captures" / L"x-image.dump"),
-          "leftovers: logs, hang dumps and subfolders untouched");
-    check(remove_leftovers(logs.wstring()).removed == 0 && remove_leftovers((logs / L"missing").wstring()).removed == 0,
-          "leftovers: nothing more to remove, a missing folder is fine");
-    fs::remove_all(logs, ec);
+    fs::create_directories(layerLogs);
+    // A Windows program as the old copy was: "MZ", the PE header's offset at 0x3c, "PE\0\0" there.
+    std::string program(0x200, '\0');
+    program[0] = 'M';
+    program[1] = 'Z';
+    program[0x3c] = static_cast<char>(0x80);
+    program.replace(0x80, 4, std::string("PE\0\0", 4));
+    const auto put = [](const fs::path& p, const std::string& data) { write_file(p.wstring(), data); return p; };
+    const fs::path lmu = put(logs / L"Le Mans Ultimate-66942337813b-image.dump", program);
+    const fs::path ace = put(layerLogs / L"AssettoCorsaEVO-0123456789ab-image.dump", program);
+    const fs::path lowerName = put(logs / L"le mans ultimate-aaaaaaaaaaaa-image.dump", program);  // the file's own case
+    const fs::path otherGame = put(logs / L"Some Other Game-66942337813b-image.dump", program);
+    // Windows names ignore case: the case variants get hashes of their own, or they would be the copy itself.
+    const fs::path upperHash = put(logs / L"Le Mans Ultimate-ABCDEF123456-image.dump", program);
+    const fs::path shortHash = put(logs / L"Le Mans Ultimate-66942337813-image.dump", program);
+    const fs::path noHash = put(logs / L"Le Mans Ultimate-image.dump", program);
+    const fs::path upperSuffix = put(logs / L"Le Mans Ultimate-888888888888-IMAGE.DUMP", program);
+    const fs::path extra = put(logs / L"Le Mans Ultimate-66942337813b-image.dump.bak", program);
+    const fs::path notProgram = put(logs / L"Le Mans Ultimate-111111111111-image.dump", std::string(4096, 'x'));
+    std::string mzOnly = program;
+    mzOnly.replace(0x80, 4, "XXXX");
+    const fs::path noPe = put(logs / L"Le Mans Ultimate-222222222222-image.dump", mzOnly);
+    const fs::path tiny = put(logs / L"Le Mans Ultimate-333333333333-image.dump", "MZ");
+    const fs::path nested = put(logs / L"captures" / L"Le Mans Ultimate-444444444444-image.dump", program);
+    const fs::path session = put(logs / L"session-20261113-090000.log", "log");
+    const fs::path hang = put(logs / L"hang-120000.dmp", program);
+    fs::create_directories(logs / L"X-Plane-555555555555-image.dump");  // a folder by that name
+    // A link by that name to a program elsewhere: the link isn't removed, nor what it points at (if links can be made).
+    const fs::path target = put(root / L"target.exe", program);
+    std::error_code linkError;
+    fs::create_symlink(target, logs / L"Le Mans Ultimate-666666666666-image.dump", linkError);
+
+    check(is_leftover(lmu) && is_leftover(ace) && is_leftover(lowerName), "leftovers: the old copies' names and content match");
+    check(!is_leftover(otherGame) && !is_leftover(upperHash) && !is_leftover(shortHash) && !is_leftover(noHash) &&
+              !is_leftover(upperSuffix) && !is_leftover(extra),
+          "leftovers: any other name doesn't (another game, the hash's case or length, the suffix)");
+    check(!is_leftover(notProgram) && !is_leftover(noPe) && !is_leftover(tiny),
+          "leftovers: the right name with other content doesn't");
+
+    const Leftovers r = remove_leftovers({logs.wstring(), layerLogs.wstring(), (root / L"missing").wstring()});
+    check(r.removed == 3 && r.bytes == 3 * program.size() && r.files.size() == 3 && !fs::exists(lmu) && !fs::exists(ace) &&
+              !fs::exists(lowerName),
+          "leftovers: the copies in both log folders removed, each named, sizes counted");
+    bool kept = true;
+    for (const fs::path& p : {otherGame, upperHash, shortHash, noHash, upperSuffix, extra, notProgram, noPe, tiny, nested,
+                              session, hang, target})
+        kept = kept && fs::exists(p);
+    check(kept && fs::is_directory(logs / L"X-Plane-555555555555-image.dump"),
+          "leftovers: every other file, subfolders and folders by that name untouched");
+    if (!linkError) {
+        check(fs::is_symlink(fs::symlink_status(logs / L"Le Mans Ultimate-666666666666-image.dump")) && fs::exists(target),
+              "leftovers: a link by that name and its target untouched");
+        // A log folder that is itself a link: not looked into.
+        const fs::path linked = root / L"linked-logs";
+        std::error_code dirLinkError;
+        fs::create_directory_symlink(layerLogs, linked, dirLinkError);
+        const fs::path behind = put(layerLogs / L"Le Mans Ultimate-777777777777-image.dump", program);
+        if (!dirLinkError)
+            check(remove_leftovers({linked.wstring()}).removed == 0 && fs::exists(behind),
+                  "leftovers: a log folder that is a link isn't looked into");
+    } else {
+        std::printf("note leftovers: links can't be made here (no symlink right); their checks skipped\n");
+    }
+    check(remove_leftovers({logs.wstring(), layerLogs.wstring()}).removed == (linkError ? 0 : 1),
+          "leftovers: a second pass finds only what was added since");
+    fs::remove_all(root, ec);
 }
 
 void explicit_layers_checks() {
