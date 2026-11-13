@@ -168,6 +168,7 @@ try {
         'assets\helmet\visor.png'                          = 'layer\helmet\visor.png'
         'manifest\sim-qvfr.ini'                            = 'sim-qvfr.ini'
         'packaging\README.txt'                             = 'README.txt'
+        'docs\LMU-OPTIMIZATION-GUIDE.md'                   = 'LMU-OPTIMIZATION-GUIDE.md'
         'LICENSE.md'                                       = 'LICENSE.md'
         'THIRD_PARTY_NOTICES.md'                           = 'THIRD_PARTY_NOTICES.md'
         'third_party\minhook\LICENSE.txt'                  = 'licenses\MinHook-LICENSE.txt'
