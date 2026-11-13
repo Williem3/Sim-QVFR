@@ -15,6 +15,7 @@
 #include "probe/dred.h"
 #include "probe/pix_capture.h"
 #include "probe/replay_probe.h"
+#include "probe/focus_ngx.h"
 #include "xr.h"
 #include "layer/layer.h"
 
@@ -236,6 +237,8 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     load_experiment();
     if (experiment.replayProbe == 3 && experiment.replaySky && experiment.replayTiles)
         replay_probe_early_sky();  // before the game makes its device and loads its pipelines
+    if (experiment.replayProbe == 3 && experiment.replayDlss)
+        focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features
     // Where the launcher writes live settings while this ACE runs (live_reload).
     runtime_info(L"live_ini", live.ini);
     runtime_info(L"live_pid", std::to_wstring(GetCurrentProcessId()));

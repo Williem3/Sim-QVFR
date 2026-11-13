@@ -117,6 +117,7 @@ struct Experiment {
     int replayFog = 0;                     // replay_fog=1: focus fog replayed; 2: ACE's grids resampled (R2c, with tiles)
     int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
     int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
+    int replayDlss = 0;                    // replay_dlss=1: our DLSS per focus view (P2a)
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
     bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
     bool replayCostAb = false;

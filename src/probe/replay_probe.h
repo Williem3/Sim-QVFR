@@ -43,6 +43,7 @@ struct ReplayProbeStats {
     uint64_t atmoReplays = 0;     // R2c: atmosphere resamples (8 maps each)
     uint64_t postReplays = 0;     // P1: focus post replays (bloom, tonemap, fxaa)
     uint64_t blurReplays = 0;
+    uint64_t dlssEvaluations = 0;  // P2a: our focus DLSS evaluations (both eyes)
     uint64_t skyPatches = 0;      // focus sky draws given our cbSky (clouds through the box)     // P1: focus refraction blurs (opaqueSceneBlur: our colour + the eye's mips resampled)
 };
 
@@ -65,6 +66,8 @@ struct ReplayFocusSettings {
                                   // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
     bool post = false;            // P1: the focus views' post: the eye's bloom through the box, the game's tonemap and
                                   // fxaa replayed on the focus colour (exposure, grading from the game's own)
+    int dlss = 0;                 // P2a: our NVIDIA DLSS per focus view (NGX's exports, inside the game's NGX session),
+                                  // fed by ACE's velocity packing replayed with focus constants (needs `post`)
     bool sky = false;             // the sky draw's screen-space clouds: its cbSky (a CBV table entry) patched to name our
                                   // resampled clouds in the focus replay (needs `tiles`)
     bool costAb = false;

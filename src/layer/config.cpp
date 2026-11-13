@@ -244,6 +244,7 @@ void load_experiment() {
         experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", 0, ini.c_str()) != 0;
         experiment.replayDiag = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str()) != 0;
         experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", 0, ini.c_str()) != 0;
+        experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
         experiment.replayAtmosphere =
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", 0, ini.c_str()));
     }
