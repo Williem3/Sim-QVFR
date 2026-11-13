@@ -164,6 +164,11 @@ struct Stream {
         D3D12_GPU_VIRTUAL_ADDRESS cbv;  // root 5: the eye's 560-B constants
     };
     std::vector<ShadowDraw> shadowDraws;
+    // R2c: a list with one eye-size viewport (ACE's per-eye transparents), and the OIT composite's tables
+    bool monoSeen = false, monoMixed = false;
+    float monoX = 0, monoW = 0, monoH = 0;
+    bool oitDraw = false;
+    D3D12_GPU_DESCRIPTOR_HANDLE oitTables[4] = {};
     struct TileDispatch {
         int kind;
         ID3D12PipelineState* pso;
@@ -200,6 +205,9 @@ struct Stream {
         std::memset(gfxTables, 0, sizeof(gfxTables));
         std::memset(gfxCbvs, 0, sizeof(gfxCbvs));
         shadowDraws.clear();
+        monoSeen = monoMixed = oitDraw = false;
+        monoX = monoW = monoH = 0;
+        std::memset(oitTables, 0, sizeof(oitTables));
     }
     template <class T> void put(const T& v) {
         const size_t at = bytes.size();
@@ -291,6 +299,7 @@ struct Substitution {
     const std::vector<D3D12_GPU_VIRTUAL_ADDRESS>* from = nullptr;
     const std::vector<D3D12_GPU_VIRTUAL_ADDRESS>* to = nullptr;
     const std::vector<std::pair<SIZE_T, SIZE_T>>* targets = nullptr;
+    const std::vector<std::pair<UINT64, UINT64>>* tables = nullptr;  // descriptor tables (GPU handles) -> ours
 };
 
 SIZE_T map_target(const Substitution* sub, SIZE_T h) {
@@ -322,7 +331,17 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
             l->SetDescriptorHeaps(n, heaps);
             break;
         }
-        case kTable: { UINT i; D3D12_GPU_DESCRIPTOR_HANDLE h; get(i); get(h); l->SetGraphicsRootDescriptorTable(i, h); break; }
+        case kTable: {
+            UINT i; D3D12_GPU_DESCRIPTOR_HANDLE h; get(i); get(h);
+            if (sub && sub->tables)
+                for (const auto& [from, to] : *sub->tables)
+                    if (from == h.ptr) {
+                        h.ptr = to;
+                        break;
+                    }
+            l->SetGraphicsRootDescriptorTable(i, h);
+            break;
+        }
         case kConst1: { UINT i, v, o; get(i); get(v); get(o); l->SetGraphicsRoot32BitConstant(i, v, o); break; }
         case kConstN: {
             UINT i, n, o; get(i); get(n); get(o);
@@ -479,10 +498,10 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108))
         v = ay * v + (ay * oy) * src[i + 2];          // y' = c y + d w
     if (i == 38) v.xy = float2(focusSize.x * 2, focusSize.y);
-    if (i == 84) v = float4(0, 0, focusSize.x, focusSize.y);
+    if (i == 84) v = float4(v.x > 0 ? focusSize.x : 0, 0, focusSize.x, focusSize.y);  // a right-eye list: its offset
     if (i >= 29 && i <= 32)  // inverseViewProjection: inverse(R VP) = inverse(VP) inverse(R)
         v = float4(v.x * halfExtent.x, v.y * halfExtent.y, v.z, v.w - v.x * ox - v.y * oy);
-    if (i == 112) v.z = focusSize.x;  // eyeHalfWidthPixels (a float, as ACE writes it)
+    if (i == 112 && v.z != 0) v.z = focusSize.x;  // eyeHalfWidthPixels (a float, as ACE writes it; 0 in per-eye lists)
     // Bindless indices the game's -> ours (R2b tile lists, R2c previous-frame colour): entityTilesIndex (row 0.x),
     // entityTilesIndexRight (112.y), the screen-space map indices (rows 76, 77). Unused pairs never match.
     const uint from[8] = {from0.x, from0.y, from0.z, from0.w, from1.x, from1.y, from1.z, from1.w};
@@ -615,6 +634,10 @@ struct Focus {
     D3D12_CPU_DESCRIPTOR_HANDLE shadowRtv{};
     bool shadowBroken = false, shadowReady = false;
     std::atomic<uint64_t> shadowReplays{0};
+    // R2c: SRVs the game made of its render targets (CPU handle -> resource, view), for the OIT composite's tables
+    std::unordered_map<SIZE_T, std::pair<ComPtr<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC>> srvInfo;
+    std::atomic<uint64_t> monoReplays{0}, oitReplays{0};
+    std::atomic<float> sceneEyeW{0}, sceneEyeH{0};  // the stereo scene lists' eye size: per-eye lists must match it
     SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
     std::atomic<uint64_t> tileReplays{0};
     std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
@@ -772,6 +795,7 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"volumetricFogScatter") == 0        ? 4
                : std::wcscmp(name, L"normalReconstructionViewSpace") == 0 ? 5
                : std::wcscmp(name, L"deferredShadows") == 0             ? 6
+               : std::wcscmp(name, L"oitComposite") == 0                ? 7
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -1036,13 +1060,13 @@ bool record_clear() {
             FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a.Get(), nullptr, IID_PPV_ARGS(&l))))
             return false;
         inReplay = true;
-        const float zero[4] = {};
+        const float zero[4] = {}, one[4] = {1, 1, 1, 1};
         for (const auto& [game, t] : focus.twins) {
             const D3D12_CPU_DESCRIPTOR_HANDLE v = which ? t.eyeView : t.focusView;
             if (t.depth)
                 l->ClearDepthStencilView(v, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
-            else
-                l->ClearRenderTargetView(v, zero, 0, nullptr);
+            else  // ACE clears its OIT reveal target to 1 (nothing in front), everything else to 0
+                l->ClearRenderTargetView(v, t.name == "oitReveal" ? one : zero, 0, nullptr);
         }
         l->Close();
         inReplay = false;
@@ -1173,23 +1197,41 @@ void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOU
 }
 
 // At the game's Close of a replayable stereo list: our replay of it, recorded now, executed after the game's batch.
-void focus_record(List* gameList, const Stream& s) {
+void focus_record(List* gameList, const Stream& s, bool mono = false) {
     Replay* r = nullptr;
     std::vector<std::pair<SIZE_T, SIZE_T>> focusTargets, eyeTargets;
+    // A per-eye list (mono): one eye-size viewport at x 0 (eye 0) or at the eye width (eye 1) of a two-eye target.
+    const int monoEye = mono ? (s.monoX > 0 ? 1 : 0) : -1;
     AcquireSRWLockExclusive(&focus.lock);
     if (focus_prepare(s)) {
-        r = acquire_replay();
+        bool fits = true;
         for (const SIZE_T h : s.targets) {
             const Twin& t = focus.twins.at(focus.views.at(h).resource.Get());
             focusTargets.emplace_back(h, t.focusView.ptr);
             eyeTargets.emplace_back(h, t.eyeView.ptr);
+            if (mono && (static_cast<float>(t.eyeW) != s.monoW || static_cast<float>(t.eyeH) != s.monoH ||
+                         (s.monoX != 0 && s.monoX != s.monoW)))
+                fits = false;  // not one eye of this target (a full-target pass, or another size)
+        }
+        if (fits)
+            r = acquire_replay();
+        else {
+            static int unfitLogged = 0;
+            if (unfitLogged++ < 6)
+                logf("replay focus: per-eye list x %.0f %.0fx%.0f doesn't fit its targets' eye size; skipped", s.monoX,
+                     s.monoW, s.monoH);
+        }
+        if (!mono) {
+            focus.sceneEyeW = s.eyeW;
+            focus.sceneEyeH = s.eyeH;
         }
     }
     // This list's own eye size (ACE's passes differ: the flags pass is half width) and its focus size.
     const double k = focus.settings.boxFraction * focus.settings.pixelScale;
-    const UINT ewi = static_cast<UINT>(s.eyeW), ehi = static_cast<UINT>(s.eyeH);
-    const UINT fwi = std::max(16u, static_cast<UINT>(std::lround(s.eyeW * k)));
-    const UINT fhi = std::max(16u, static_cast<UINT>(std::lround(s.eyeH * k)));
+    const float sEyeW = mono ? s.monoW : s.eyeW, sEyeH = mono ? s.monoH : s.eyeH;
+    const UINT ewi = static_cast<UINT>(sEyeW), ehi = static_cast<UINT>(sEyeH);
+    const UINT fwi = std::max(16u, static_cast<UINT>(std::lround(sEyeW * k)));
+    const UINT fhi = std::max(16u, static_cast<UINT>(std::lround(sEyeH * k)));
     // R2b: the bindless base (root table 18) as the stereo scene lists set it; the tile lists' indices game -> ours.
     uint32_t tileFrom[8] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
     uint32_t tileTo[8] = {};
@@ -1254,9 +1296,12 @@ void focus_record(List* gameList, const Stream& s) {
     const D3D12_VIEWPORT focusViews[2] = {{0, 0, fw, fh, 0, 1}, {fw, 0, fw, fh, 0, 1}};
     const D3D12_RECT focusRects[2] = {{0, 0, static_cast<LONG>(fwi), static_cast<LONG>(fhi)},
                                       {static_cast<LONG>(fwi), 0, static_cast<LONG>(2 * fwi), static_cast<LONG>(fhi)}};
-    const Substitution sub{focusViews, focusRects, 2, &s.passConstants, &slots, &focusTargets};
-    l->RSSetViewports(2, focusViews);  // in case the list sets none itself
-    l->RSSetScissorRects(2, focusRects);
+    const UINT views = mono ? 1u : 2u;
+    const D3D12_VIEWPORT* fv = mono ? &focusViews[monoEye] : focusViews;
+    const D3D12_RECT* fr = mono ? &focusRects[monoEye] : focusRects;
+    const Substitution sub{fv, fr, views, &s.passConstants, &slots, &focusTargets};
+    l->RSSetViewports(views, fv);  // in case the list sets none itself
+    l->RSSetScissorRects(views, fr);
     int64_t draws = emit(l, s, &sub);
     // 3. At sample frames, the same list unchanged into the eye-size references.
     if (sample && draws >= 0) {
@@ -1264,9 +1309,11 @@ void focus_record(List* gameList, const Stream& s) {
         const D3D12_VIEWPORT eyeViews[2] = {{0, 0, ew, eh, 0, 1}, {ew, 0, ew, eh, 0, 1}};
         const D3D12_RECT eyeRects[2] = {{0, 0, static_cast<LONG>(ewi), static_cast<LONG>(ehi)},
                                         {static_cast<LONG>(ewi), 0, static_cast<LONG>(2 * ewi), static_cast<LONG>(ehi)}};
-        const Substitution eyeSub{eyeViews, eyeRects, 2, nullptr, nullptr, &eyeTargets};
-        l->RSSetViewports(2, eyeViews);
-        l->RSSetScissorRects(2, eyeRects);
+        const D3D12_VIEWPORT* ev = mono ? &eyeViews[monoEye] : eyeViews;
+        const D3D12_RECT* er = mono ? &eyeRects[monoEye] : eyeRects;
+        const Substitution eyeSub{ev, er, views, nullptr, nullptr, &eyeTargets};
+        l->RSSetViewports(views, ev);
+        l->RSSetScissorRects(views, er);
         if (emit(l, s, &eyeSub) < 0)
             draws = -1;
     }
@@ -1283,6 +1330,8 @@ void focus_record(List* gameList, const Stream& s) {
     if (draws < 0)
         return;
     listsReplayed.fetch_add(1, std::memory_order_relaxed);
+    if (mono)
+        focus.monoReplays.fetch_add(1, std::memory_order_relaxed);
     callsReplayed.fetch_add(s.calls, std::memory_order_relaxed);
     drawsReplayed.fetch_add(static_cast<uint64_t>(draws), std::memory_order_relaxed);
 }
@@ -1324,6 +1373,20 @@ void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlo
     srvViewOriginal(device.Get(), r, &v, game_cpu(srvSlot));
 }
 
+// Under focus.lock: the twin of the stereo scene depth: single-sample R32_TYPELESS (what the tile and shadow passes
+// read as R32_FLOAT), the largest, ACE's msaaDepth by name on a tie. Not just "the largest depth": flagsDepth (D32) is
+// the same size, and hash order picked it in one run (tiles and shadows stopped, 2026-11-13 10:01).
+const Twin* scene_depth_twin() {
+    const Twin* best = nullptr;
+    for (const auto& [game, tw] : focus.twins) {
+        if (!tw.depth || tw.gameDesc.SampleDesc.Count != 1 || tw.gameDesc.Format != DXGI_FORMAT_R32_TYPELESS)
+            continue;
+        if (!best || tw.eyeW > best->eyeW || (tw.eyeW == best->eyeW && tw.name == "msaaDepth"))
+            best = &tw;
+    }
+    return best;
+}
+
 // Under focus.lock: our tile resources and descriptors for this frame's tile passes; the game's tile-list indices.
 const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
     if (focus.tilesBroken || !focus.bindlessBase.ptr || !frustums.heap)
@@ -1349,12 +1412,9 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
         focus.tilesReady = false;
         focus.frustums[0].Reset();  // views written again below
     }
-    // The focus depth twin: the largest single-sample depth twin (the stereo scene depth).
-    const Twin* depth = nullptr;
-    for (const auto& [game, tw] : focus.twins)
-        if (tw.depth && tw.gameDesc.SampleDesc.Count == 1 && (!depth || tw.eyeW > depth->eyeW))
-            depth = &tw;
-    if (!depth || depth->gameDesc.Format != DXGI_FORMAT_R32_TYPELESS)
+    // The focus depth twin: the stereo scene depth (scene_depth_twin).
+    const Twin* depth = scene_depth_twin();
+    if (!depth)
         return nullptr;
     float tileCount[2];
     std::memcpy(tileCount, frustums.constants + 18, sizeof(tileCount));
@@ -1744,10 +1804,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     ID3D12Resource* depth = nullptr;
     UINT fw = 0, fh = 0;
     AcquireSRWLockExclusive(&focus.lock);
-    const Twin* twin = nullptr;
-    for (const auto& [game, tw] : focus.twins)
-        if (tw.depth && tw.gameDesc.SampleDesc.Count == 1 && (!twin || tw.eyeW > twin->eyeW))
-            twin = &tw;
+    const Twin* twin = scene_depth_twin();
     const bool ok = !focus.shadowBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.shadowPatchPso &&
                     twin && focus.depthForTiles == twin->focus.Get();  // our depth SRV (slot 12) names this twin
     if (ok) {
@@ -1882,6 +1939,87 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     focus.shadowReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.shadowReplays.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ---- R2c: the order-independent-transparency composite --------------------------------------------------------------
+
+// At the game's Close of the list with oitComposite (one full-target draw): again on our twins, with its three tables
+// (accumulation, reveal, flags: fixed descriptors, not bindless) pointing at our views of our twins (slots 29-31).
+void focus_oit_record(List* gameList, const Stream& s) {
+    Replay* r = nullptr;
+    std::vector<std::pair<SIZE_T, SIZE_T>> focusTargets;
+    std::vector<std::pair<UINT64, UINT64>> tables;
+    std::vector<ID3D12Resource*> reads;  // our twins the composite reads (render targets otherwise)
+    UINT fw = 0, fh = 0;
+    AcquireSRWLockExclusive(&focus.lock);
+    static int missLogged = 0;
+    if (focus.gameHeap && focus.slotFirst && !focus.tilesBroken && focus_prepare(s)) {
+        bool ok = true;
+        for (const SIZE_T h : s.targets) {
+            const Twin& t = focus.twins.at(focus.views.at(h).resource.Get());
+            focusTargets.emplace_back(h, t.focusView.ptr);
+            fw = t.focusW;
+            fh = t.focusH;
+        }
+        const UINT64 heapGpu = focus.gameHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+        std::string why;
+        for (UINT k = 1; k <= 3 && ok; ++k) {
+            const UINT64 g = s.oitTables[k].ptr;
+            const auto info = g >= heapGpu ? focus.srvInfo.find(game_cpu(static_cast<UINT>((g - heapGpu) / focus.increment)).ptr)
+                                           : focus.srvInfo.end();
+            const auto twin = info == focus.srvInfo.end() ? focus.twins.end() : focus.twins.find(info->second.first.Get());
+            if (twin == focus.twins.end()) {
+                why = info == focus.srvInfo.end()
+                          ? "table " + std::to_string(k) + "'s view (heap index " +
+                                std::to_string((g - heapGpu) / focus.increment) + ") wasn't seen; " +
+                                std::to_string(focus.srvInfo.size()) + " render-target views known"
+                          : "no twin of " + debug_name(info->second.first.Get());
+                ok = false;
+                break;
+            }
+            D3D12_SHADER_RESOURCE_VIEW_DESC v = info->second.second;
+            inReplay = true;
+            srvViewOriginal(device.Get(), twin->second.focus.Get(), &v, game_cpu(focus.slotFirst + 28 + k));
+            inReplay = false;
+            tables.emplace_back(g, game_gpu(focus.slotFirst + 28 + k).ptr);
+            reads.push_back(twin->second.focus.Get());
+        }
+        if (ok && fw)
+            r = acquire_replay();
+        else if (missLogged < 3 && focus.twins.size() > 8) {  // not before the scene's twins exist
+            ++missLogged;
+            logf("replay focus: OIT composite: not replayed (%s)", why.empty() ? "no target" : why.c_str());
+        }
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    for (ID3D12Resource* t : reads)
+        barrier(l, t, D3D12_RESOURCE_STATE_RENDER_TARGET, read);
+    const D3D12_VIEWPORT view{0, 0, static_cast<float>(2 * fw), static_cast<float>(fh), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(2 * fw), static_cast<LONG>(fh)};
+    Substitution sub{&view, &rect, 1, nullptr, nullptr, &focusTargets};
+    sub.tables = &tables;
+    l->RSSetViewports(1, &view);
+    l->RSSetScissorRects(1, &rect);
+    const int64_t draws = emit(l, s, &sub);
+    for (ID3D12Resource* t : reads)
+        barrier(l, t, read, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    if (draws < 0)
+        r->busy = false;
+    else
+        focus.pending[gameList].push_back(r);
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (draws >= 0)
+        focus.oitReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- R2c: the focus views' previous-frame colour ----------------------------------------------------------------
@@ -2176,7 +2314,7 @@ void focus_save(std::shared_ptr<SampleJob> job) {
             // At the eye's pixel size: k x k focus pixels (one eye pixel's footprint) averaged, compared with the eye
             // at the block's centre.
             const UINT k = std::max(1u, static_cast<UINT>(std::lround(t.fw / std::max(1.0, t.ew * job->box))));
-            uint64_t eyeCompared = 0, eyeAgree = 0;
+            uint64_t eyeCompared = 0, eyeAgree = 0, hoodAgree = 0;
             for (int eye = 0; eye < 2; ++eye)
                 for (UINT v0 = k; v0 + 2 * k <= t.fh; v0 += k)
                     for (UINT u0 = k; u0 + 2 * k <= t.fw; u0 += k) {
@@ -2199,16 +2337,40 @@ void focus_save(std::shared_ptr<SampleJob> job) {
                         }
                         if (same)
                             ++eyeAgree;
+                        // Within the eye's 3x3 neighbourhood around the mapped position (bilinear() checked the edges).
+                        const long px = static_cast<long>(std::floor(x + result.shiftX + 0.5));
+                        const long py = static_cast<long>(std::floor(y + result.shiftY + 0.5));
+                        bool inHood = true;
+                        for (int c = 0; c < 3 && inHood; ++c) {
+                            float lo = 1e30f, hi = -1e30f;
+                            for (long dy = -1; dy <= 1; ++dy)
+                                for (long dx = -1; dx <= 1; ++dx) {
+                                    const long qx = std::clamp(px + dx, 0L, static_cast<long>(t.ew) - 1);
+                                    const long qy = std::clamp(py + dy, 0L, static_cast<long>(t.eh) - 1);
+                                    const float q = e[(static_cast<size_t>(qy) * eStride + static_cast<size_t>(eye) * t.ew +
+                                                       static_cast<size_t>(qx)) * 3 + c];
+                                    lo = std::min(lo, q);
+                                    hi = std::max(hi, q);
+                                }
+                            const float tol = 0.03f * std::max(std::fabs(lo), std::fabs(hi)) + 0.003f;
+                            inHood = a[c] >= lo - tol && a[c] <= hi + tol;
+                        }
+                        if (inHood)
+                            ++hoodAgree;
                     }
+            if (focus.settings.transparents == 2)
+                logf("replay focus: sample frame %llu: transparents A/B: %s",
+                     static_cast<unsigned long long>(job->frame), job->shadowOn ? "replayed" : "NOT replayed");
             if (focus.settings.shadows == 2)
                 logf("replay focus: sample frame %llu: shadow A/B: the focus lighting %s our deferred shadow",
                      static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
             result.colourEyePixels = eyeCompared;
             result.colourEyeAgree = eyeCompared ? static_cast<double>(eyeAgree) / static_cast<double>(eyeCompared) : 0;
+            result.colourHoodAgree = eyeCompared ? static_cast<double>(hoodAgree) / static_cast<double>(eyeCompared) : 0;
             logf("replay focus: sample frame %llu: colour %s at the eye's pixel size (%ux%u focus pixels each): %llu "
-                 "compared, %.1f%% agree",
+                 "compared, %.1f%% agree; %.1f%% within the eye's 3x3 neighbourhood (edge-tolerant)",
                  static_cast<unsigned long long>(job->frame), t.name.c_str(), k, k,
-                 static_cast<unsigned long long>(eyeCompared), result.colourEyeAgree * 100);
+                 static_cast<unsigned long long>(eyeCompared), result.colourEyeAgree * 100, result.colourHoodAgree * 100);
             logf("replay focus: sample frame %llu: colour %s: %llu pixels compared, %.1f%% agree (every channel within 3%%)",
                  static_cast<unsigned long long>(job->frame), t.name.c_str(), static_cast<unsigned long long>(compared),
                  result.colourAgree * 100);
@@ -2255,7 +2417,13 @@ void focus_copy_sample() {
             (t.depth ? depth_supported(t.gameDesc.Format) : colour_supported(t.viewFormat)))
             order.push_back(&t);
     std::stable_sort(order.begin(), order.end(), [](const Twin* a, const Twin* b) {
-        return a->depth != b->depth ? a->depth : a->eyeW > b->eyeW;  // depth first, then the largest
+        // depth first, then the largest, then ACE's scene targets by name (same-size flagsDepth, oit*, velocity)
+        if (a->depth != b->depth)
+            return a->depth;
+        if (a->eyeW != b->eyeW)
+            return a->eyeW > b->eyeW;
+        const auto scene = [](const Twin* t) { return t->name == "msaaDepth" || t->name == "msaaColor"; };
+        return scene(a) && !scene(b);
     });
     for (const Twin* t : order) {
         SampleTarget s;
@@ -2399,6 +2567,11 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
     return hr;
 }
 
+// R2c: the transparents replayed now (replay_transparents=2: only before samples 1, 3, ...).
+bool transparents_now() {
+    return focus.settings.transparents == 1 || (focus.settings.transparents == 2 && focus.samplesTaken.load() % 2 == 0);
+}
+
 HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     const HRESULT hr = closeOriginal(list);
     Stream* s = stream_of(list);
@@ -2414,9 +2587,27 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             focus_fog_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.shadows && s->shadowDraws.size() >= 2)
             focus_shadow_record(list, *s);
+        static std::atomic<int> monoLogged{0};
+        if (SUCCEEDED(hr) && transparents_now() && !s->stereo && s->monoSeen && s->draws > 0 && monoLogged < 24) {
+            const bool taken = !s->oitDraw && !s->monoMixed && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
+                               s->monoW == focus.sceneEyeW.load() && s->monoH == focus.sceneEyeH.load();
+            ++monoLogged;
+            logf("replay focus: per-eye candidate: viewport x %.0f %.0fx%.0f (scene eye %.0fx%.0f), draws %u, pass "
+                 "constants %zu, targets %zu, rtv %d dsv %d, mixed %d, oit %d: %s",
+                 s->monoX, s->monoW, s->monoH, focus.sceneEyeW.load(), focus.sceneEyeH.load(), s->draws,
+                 s->passConstants.size(), s->targets.size(), s->sawRtv ? 1 : 0, s->sawDsv ? 1 : 0, s->monoMixed ? 1 : 0,
+                 s->oitDraw ? 1 : 0, taken ? "replayed" : "skipped");
+        }
         if (SUCCEEDED(hr) && s->replayable(focus.settings.allTargets)) {
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
             focus_record(list, *s);
+        } else if (SUCCEEDED(hr) && transparents_now() && s->oitDraw) {
+            focus_oit_record(list, *s);
+        } else if (SUCCEEDED(hr) && transparents_now() && !s->stereo && s->monoSeen && !s->monoMixed &&
+                   s->draws > 0 && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
+                   s->monoW == focus.sceneEyeW.load() && s->monoH == focus.sceneEyeH.load()) {  // one eye of the scene
+            gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
+            focus_record(list, *s, true);
         }
         return hr;
     }
@@ -2530,6 +2721,15 @@ void STDMETHODCALLTYPE viewportsHook(List* l, UINT n, const D3D12_VIEWPORT* v) {
             s->stereo = true;
             s->eyeW = v[0].Width;
             s->eyeH = v[0].Height;
+        } else if (n == 1 && v[0].TopLeftY == 0 && v[0].Width >= 64) {
+            if (!s->monoSeen) {
+                s->monoSeen = true;
+                s->monoX = v[0].TopLeftX;
+                s->monoW = v[0].Width;
+                s->monoH = v[0].Height;
+            } else if (s->monoX != v[0].TopLeftX || s->monoW != v[0].Width || s->monoH != v[0].Height) {
+                s->monoMixed = true;
+            }
         }
     }
     viewportsOriginal(l, n, v);
@@ -2647,6 +2847,10 @@ void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D
                       ? tile_view_kind(r)
                       : -1;
     AcquireSRWLockExclusive(&focus.lock);
+    if (r && desc && focus.settings.transparents &&
+        (desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D || desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMS) &&
+        (r->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) && focus.srvInfo.size() < 4096)
+        focus.srvInfo[dest.ptr] = {r, *desc};
     if (r && desc && desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE3D && focus.settings.fog &&
         focus.views3d.size() < 256 &&
         std::none_of(focus.views3d.begin(), focus.views3d.end(), [&](const ComPtr<ID3D12Resource>& v) { return v.Get() == r; }))
@@ -2669,6 +2873,14 @@ void STDMETHODCALLTYPE copySimpleHook(ID3D12Device* d, UINT n, D3D12_CPU_DESCRIP
         if (ptr >= src.ptr && ptr < src.ptr + SIZE_T{n} * step)
             focus.tileViews.emplace_back(dest.ptr + (ptr - src.ptr), k);
     }
+    if (focus.settings.transparents && !focus.srvInfo.empty() && n <= 4096)  // views of render targets (OIT tables)
+        for (UINT i = 0; i < n; ++i) {
+            const auto it = focus.srvInfo.find(src.ptr + SIZE_T{i} * step);
+            if (it != focus.srvInfo.end() && focus.srvInfo.size() < 8192) {
+                const auto info = it->second;
+                focus.srvInfo[dest.ptr + SIZE_T{i} * step] = info;
+            }
+        }
     check_reserved(dest.ptr, n);
     ReleaseSRWLockExclusive(&focus.lock);
 }
@@ -2677,6 +2889,10 @@ void STDMETHODCALLTYPE drawHook(List* l, UINT a, UINT b, UINT c, UINT d) {
         HookTimer t(s);
         s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d);
         ++s->draws;
+        if (s->psoKind == 7) {
+            s->oitDraw = true;
+            std::memcpy(s->oitTables, s->gfxTables, sizeof(s->oitTables));
+        }
         if (s->psoKind == 6) {
             Stream::ShadowDraw sd{s->pso, s->gfxRoot, {}, s->gfxCbvs[5]};
             std::memcpy(sd.tables, s->gfxTables, sizeof(sd.tables));
@@ -2828,6 +3044,8 @@ ReplayProbeStats replay_probe_take_stats() {
     s.tileReplays = focus.tileReplays.exchange(0);
     s.fogReplays = focus.fogReplays.exchange(0);
     s.shadowReplays = focus.shadowReplays.exchange(0);
+    s.monoReplays = focus.monoReplays.exchange(0);
+    s.oitReplays = focus.oitReplays.exchange(0);
     s.twinsMade = twinsMade.load();
     s.twinsRemade = twinsRemade.load();
     return s;
@@ -2875,10 +3093,11 @@ void replay_probe_frame_end() {
     const double n = s.frames ? static_cast<double>(s.frames) : 1.0;
     if (probeMode == 3) {
         logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; tile replays "
-             "%.2f, fog replays %.2f, shadow replays %.2f; recording the replays %.3f ms, recording hooks %.3f ms, the "
-             "game's own recording of those lists %.3f ms (CPU)",
+             "%.2f, fog replays %.2f, shadow replays %.2f, per-eye lists %.2f, OIT composites %.2f; recording the replays "
+             "%.3f ms, recording hooks %.3f ms, the game's own recording of those lists %.3f ms (CPU)",
              static_cast<unsigned long long>(window), s.listsReplayed / n, s.focusReplays / n, s.drawsReplayed / n,
-             s.tileReplays / n, s.fogReplays / n, s.shadowReplays / n, s.replayMs / n, s.hookMs / n, s.gameMs / n);
+             s.tileReplays / n, s.fogReplays / n, s.shadowReplays / n, s.monoReplays / n, s.oitReplays / n, s.replayMs / n,
+             s.hookMs / n, s.gameMs / n);
         ++window;
         return;
     }

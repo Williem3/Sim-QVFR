@@ -116,6 +116,7 @@ struct Experiment {
     bool replayTiles = false;              // replay_tiles=1: the focus views' own light tiles (R2b)
     bool replayFog = false;                // replay_fog=1: the focus views' own volumetric fog (R2c, with tiles)
     int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
+    int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)

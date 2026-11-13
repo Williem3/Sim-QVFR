@@ -38,6 +38,8 @@ struct ReplayProbeStats {
     uint64_t tileReplays = 0;     // R2b: focus tile-culling replays executed
     uint64_t fogReplays = 0;      // R2c: focus fog replays executed (both eyes each)
     uint64_t shadowReplays = 0;   // R2c: focus deferred-shadow replays (normals + both eyes' shadow)
+    uint64_t monoReplays = 0;     // R2c: per-eye lists replayed into their eye's focus view
+    uint64_t oitReplays = 0;      // R2c: OIT composites replayed
 };
 
 // The focus replay's settings (mode 3).
@@ -52,6 +54,9 @@ struct ReplayFocusSettings {
     bool fog = false;             // R2c: the focus views' own volumetric fog grids (needs `tiles`: its descriptors)
     int shadows = 0;              // R2c: the focus views' own deferred sun shadow (needs `tiles`: its depth view); 2: A/B,
                                   // the lighting uses it at samples 1, 3, ... and not at 2, 4, ... (replayed either way)
+    int transparents = 0;         // R2c: the per-eye lists (transparents: one eye-size viewport) into that eye's focus
+                                  // view, and the order-independent-transparency composite into the focus colour;
+                                  // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
 };
 
 // R2b: the focus inverse projection from an eye's (4 rows as the shader uses them, view = rows . clip): the eye's
@@ -79,6 +84,8 @@ struct ReplayFocusCompare {
     double colourAgree = 0;       // 0..1: every channel within 3% (+0.003)
     uint64_t colourEyePixels = 0;  // the same at the eye's pixel size: focus blocks averaged to one eye pixel each
     double colourEyeAgree = 0;     // (detail the eye can't hold doesn't count against the focus view)
+    double colourHoodAgree = 0;    // the same blocks within the eye's 3x3 neighbourhood (min..max, + the 3% tolerance):
+                                   // edges a pixel apart in sharpness don't count
 };
 ReplayFocusCompare replay_probe_focus_compare();
 
