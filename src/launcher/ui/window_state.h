@@ -123,7 +123,9 @@ enum Ctl {
     // installing it.
     kCheckOff, kCheckGuide,
     // Text a screen reader reads (reader_text): never a click target or a Tab stop.
-    kText
+    kText,
+    // The undo bar's Undo (the last change).
+    kUndoChange
 };
 
 // A panel (panels.cpp): a modal card over the dimmed window for what doesn't fit a card.
@@ -267,7 +269,7 @@ inline constexpr wchar_t kModeNames[2][16] = {L"Eye tracked", L"Fixed"};
 
 inline constexpr wchar_t kColorNames[3][8] = {L"Teal", L"Magenta", L"Green"};
 
-inline constexpr wchar_t kShapeNames[2][8] = {L"Box", L"Corners"};
+inline constexpr wchar_t kShapeNames[2][16] = {L"Rectangle", L"Custom corners"};
 
 inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1280, kDefaultHeight = 838;  // a 1280 x 800 page
 
@@ -275,6 +277,11 @@ inline constexpr float kMinWidth = 880, kMinHeight = 600, kDefaultWidth = 1280, 
 inline constexpr UINT_PTR kHighlightTimer = 3;
 
 inline constexpr UINT kHighlightMs = 1600;
+
+// The undo bar after a change: its timer, and how long it shows.
+inline constexpr UINT_PTR kUndoTimer = 5;
+
+inline constexpr unsigned long long kUndoMs = 8000;
 
 // A disclosure's reveal (card.h Body::reveal): its timer, and how long it takes.
 inline constexpr UINT_PTR kRevealTimer = 4;
@@ -436,6 +443,13 @@ struct App {
     std::vector<SearchEntry> overviewTargets;
     // The Preview card shows the left eye (0), both (1) or the right eye (2): a view, not a setting.
     int previewEye = 0;
+    // Undo for the last change (changed()): the settings as last saved, those before the last change and what it changed
+    // ("Feather 20% → 30%"), the bar showing it until undoUntil; undoing: the change being saved is the undo itself.
+    Settings lastSaved;
+    std::optional<Settings> undoChange;
+    std::wstring undoText;
+    unsigned long long undoUntil = 0;
+    bool undoing = false;
 };
 
 // The window (window_state.cpp).
@@ -635,6 +649,7 @@ std::wstring rail_abbreviation(const games::GameInfo& game);
 void rail(float H);
 void topbar(float W);
 float page_strip(float x, float W);
+void undo_bar(float W, float H);
 
 // search.cpp: Find a setting.
 void open_search();
@@ -673,6 +688,9 @@ void choose_nr_dll();
 bool own_nr_available(std::wstring* why = nullptr);
 void choose_game_folder();
 void undo_restore();
+// The last change undone (the undo bar's Undo, Ctrl+Z, the profile menu), and the settings now on disk taken as saved.
+void undo_change();
+void settings_reloaded();
 
 // input.cpp
 void activate(Ctl id, int option);

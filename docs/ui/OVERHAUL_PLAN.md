@@ -304,3 +304,11 @@ The user answered "use your defaults" to the twelve open questions:
   - One name per setting, the headset menu's: Periphery resolution, Focus density, Focus width and height; the crop's Outer side (temple) and Inner side (nose). The Overview, the profile menu, the presets' summaries and the sessions' change list say the same (display text; tests follow).
   - The layers card's choice is "Layers for: Launches from here | Every app"; Cheeky's layer row says it isn't the Picture tab's switch.
   - The Game tab leads with Launch checks, Online racing and Get help. OpenXR layers says what loads in a line, its list behind a More (Launch checks' Open OpenXR layers opens it); Diagnostics' capture tools are behind a More unless one is on.
+- **The sim-racer review's findings 6–14, and the anti-cheat disclaimer:**
+  - Run with anti-cheat asks before it turns on: Sim-QVFR and its developer aren't responsible for kicks or bans, and the player accepts that risk ("I accept the risk"; Cancel is the default). Off is at once.
+  - Get help: Report an issue says it needs a free GitHub account; the zip, the summary and the logs folder are "other ways to share", with what to do without GitHub.
+  - The menu in the headset is the Headset menu everywhere; Open or close without a key of its own shows "Any arrow key"; Hotkeys says how to set a wheel button for it.
+  - Undo: every saved change the session history can describe ("Feather 20% → 30%") shows a bar with Undo for 8 s; Ctrl+Z and the profile menu undo it after that too. Reading the ini again (the headset menu, a game switched, a launch) is not a change to undo.
+  - Overview: a first-run line until the first session, plain card lines ("Follows your eyes", "Foveated DLSS on", "4 of 4 games shown"), the presets' trade-off under the profile, and the last session's verdict (Get help's first cause, or smooth at the headset's rate).
+  - Foveation: the shape is Rectangle or Custom corners, and a line under Feather says how to hide the area's edge.
+  - Wording: "Off" alone (or "Off: …" where it says something), Show / Hide for the cards' extra rows, and the badges Changes now, Now when lowered, Next game start. Sharpening, Slow frames, Periphery preset and Let the runtime compose start their help with what they do for the player.

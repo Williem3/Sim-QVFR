@@ -140,7 +140,7 @@ float placement_readouts(float x, float y, float w, bool draw) {
     std::snprintf(size, sizeof(size), "%d° × %d°", app.s.menuWidth, static_cast<int>(std::lround(menu_height_deg(app.s.menuWidth))));
     std::snprintf(metres, sizeof(metres), "%.2f m", 2 * kMenuDistance * std::tan(app.s.menuWidth * 3.14159265 / 360));
     std::snprintf(distance, sizeof(distance), "%.1f m", kMenuDistance);
-    float h = eyebrow(x, y, w, L"Settings menu", draw) + t::kSpace2;
+    float h = eyebrow(x, y, w, L"Headset menu", draw) + t::kSpace2;
     h += readout(x, y + h, w, L"Horizontal", degrees(app.s.menuYaw, L"right", L"left"), draw) + 6;
     h += readout(x, y + h, w, L"Vertical", degrees(app.s.menuPitch, L"up", L"down"), draw) + 6;
     h += readout(x, y + h, w, L"Panel size", widen(size), draw) + 6;

@@ -207,7 +207,8 @@ float report_pane(float x, float y, float w, bool draw) {
         button(kDiagReport, {r.x, r.y, reportW, t::kControlHeight}, L"Report an issue", true);
     };
     h += section(x, y + h, w, L"Describe the problem", {kind, description, report},
-                 L"Opens a GitHub issue with the details filled in, and zips the logs for you to drag into it.",
+                 L"Needs a free GitHub account. Opens a bug report on GitHub with the details filled in, and zips the logs "
+                 L"for you to drag into it.",
                  draw);
     if (!app.reportZip.empty()) {
         h += t::kSpace6;
@@ -230,21 +231,24 @@ Card help_card() {
             std::vector<std::wstring> labels;
             for (size_t i = 2; i < causes.size(); ++i)
                 labels.push_back(causes[i].title);
-            b.more(std::to_wstring(causes.size() - 2) + L" more", labels, [causes](Body& m) {
+            b.more(std::to_wstring(causes.size() - 2) + L" more causes", labels, [causes](Body& m) {
                 for (size_t i = 2; i < causes.size(); ++i)
                     m.row(causes[i].title, causes[i].fix, L"");
             });
         }
-        b.actions({{kReportOpen, L"Report an issue…", Btn::Primary},
-                   {kDiagExport, L"Export logs"},
-                   {kDiagCopy, L"Copy summary"},
-                   {kDiagLogs, L"Open logs folder"}});
+        b.actions({{kReportOpen, L"Report an issue…", Btn::Primary}});
+        b.note(L"Needs a free GitHub account: it opens a bug report on the developer’s GitHub page with the details filled in, "
+               L"and zips the logs for you to drag into it.");
+        // No GitHub account, or asked for the logs alone: other ways, behind a More.
+        b.more(L"other ways to share", {L"Export logs", L"Copy summary", L"Open logs folder"}, [](Body& m) {
+            m.actions({{kDiagExport, L"Save the logs as a zip"}, {kDiagCopy, L"Copy summary"}, {kDiagLogs, L"Open logs folder"}});
+            m.note(L"No GitHub account? Save the logs as a zip and send it where you ask for help, with a few words on what "
+                   L"happened.");
+        });
         if (!app.exportZip.empty()) {
             const size_t slash = app.exportZip.find_last_of(L'\\');
             b.note(L"Saved " + (slash == std::wstring::npos ? app.exportZip : app.exportZip.substr(slash + 1)) + L" and shown in Explorer.");
         }
-        b.note(L"Report an issue opens a GitHub issue with the details filled in and zips the logs for it. Export logs is for "
-               L"when you’re asked for logs alone.");
     };
     return c;
 }

@@ -480,4 +480,32 @@ float page_strip(float x, float W) {
     return H;
 }
 
+// The undo bar: what the last change changed and its Undo, at the page's bottom for a few seconds after it (kUndoMs);
+// after an undo, what was undone.
+void undo_bar(float W, float H) {
+    if (app.undoText.empty() || GetTickCount64() >= app.undoUntil || app.sheet.open || app.panel != PanelKind::None)
+        return;
+    Canvas& cv = app.canvas;
+    const float left = rail_width(), pad = 16, h = 44;
+    const bool canUndo = app.undoChange.has_value();
+    const std::wstring undo = L"Undo";
+    const float uw = canUndo ? std::ceil(cv.measure(undo, t::kBodyStrong)) + 24 : 0;
+    const float tw = std::min(std::ceil(cv.measure(app.undoText, t::kBody)) + 2, W - left - 64 - uw - 3 * pad);
+    const float w = pad + tw + (canUndo ? pad + uw : 0) + pad;
+    const Rect bar{std::round(left + (W - left - w) / 2), H - h - 24, w, h};
+    const uint32_t bg = app.dark ? app.c->surface_3 : app.c->ink, fg = app.dark ? app.c->label : app.c->rail_text;
+    cv.fill(bar, col(bg), t::kRadiusGroup);
+    cv.text(app.undoText, t::kBody, {bar.x + pad, bar.y, tw, h}, col(fg));
+    reader_text(bar, app.undoText);
+    if (canUndo) {
+        const Rect u{bar.right() - pad - uw, bar.y + 6, uw, h - 12};
+        if (pointer_in(u))
+            cv.fill(u, col(fg, 0.12f), t::kRadiusControl);
+        cv.text(undo, t::kBodyStrong, u, col(app.c->yellow), Align::Center);
+        if (focused(kUndoChange))
+            focus_ring(u, t::kRadiusControl);
+        app.hits.push_back({kUndoChange, u, -1, L"Undo (Ctrl+Z)", L"Undo " + app.undoText});
+    }
+}
+
 }  // namespace simqvfr::launcher::ui::win

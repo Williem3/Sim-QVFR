@@ -130,16 +130,17 @@ Card foveation_card() {
         b.segments(kShape, L"Shape", items_of(kShape), s.shape.corners ? 1 : 0);
         if (!s.shape.corners) {
             b.slider({kCorner, L"Corner radius", s.corner});
-            b.hidden(L"Shape", L"Corners", {L"Top left in", L"Top right in", L"Bottom left in", L"Bottom right in"});
+            b.hidden(L"Shape", L"Custom corners", {L"Top left in", L"Top right in", L"Bottom left in", L"Bottom right in"});
         } else {  // each corner's two insets, in the corners' order on the box
             const auto corner = [](Ctl id, const wchar_t* label) { return SliderSpec{id, label, *slider_value(id)}; };
             b.sliders(corner(kShapeTopLeftIn, L"Top left in"), corner(kShapeTopLeftDown, L"Top left down"));
             b.sliders(corner(kShapeTopRightIn, L"Top right in"), corner(kShapeTopRightDown, L"Top right down"));
             b.sliders(corner(kShapeBottomLeftIn, L"Bottom left in"), corner(kShapeBottomLeftUp, L"Bottom left up"));
             b.sliders(corner(kShapeBottomRightIn, L"Bottom right in"), corner(kShapeBottomRightUp, L"Bottom right up"));
-            b.hidden(L"Shape", L"Box", {L"Corner radius"});
+            b.hidden(L"Shape", L"Rectangle", {L"Corner radius"});
         }
         b.slider({kFeather, L"Feather", s.feather});
+        b.note(L"See the edge of the sharp area? Raise Feather, or make the focus larger.");
         if (s.eyeTracking) {
             b.slider({kFocusOffset, L"Gaze offset", s.offset.gaze, L"°"});
             b.slider({kGazeDeadzone, L"Gaze dead-zone", s.gazeDeadzone, L"°", L"", true});
@@ -149,7 +150,7 @@ Card foveation_card() {
         }
         b.divider();
         b.toggle(kOutline, L"Show focus outline", s.outline,
-                 s.outline ? L"Its edge in the headset, to see where it is." : L"Off · its colour is hidden");
+                 s.outline ? L"Its edge in the headset, to see where it is." : L"Off");
         b.reveal(kOutline, s.outline, L"Show focus outline", {L"Outline color"}, outline_color_row);
     };
     c.reset = [](Settings& s) {
@@ -211,7 +212,7 @@ Card view_card() {
         if (crop) {
             const Settings& s = app.s;
             b.toggle(kCropOn, L"Crop the view", s.crop,
-                     s.crop ? L"Skips the edges of each eye that a helmet covers." : L"Off · top, bottom and sides hidden");
+                     s.crop ? L"Skips the edges of each eye that a helmet covers." : L"Off");
             b.reveal(kCropOn, s.crop, L"Crop the view", {L"Top", L"Bottom", L"Outer side (temple)", L"Inner side (nose)"}, [](Body& r) {
                 const Settings& cs = app.s;
                 r.sliders({kCropTop, L"Top", cs.cropTop}, {kCropBottom, L"Bottom", cs.cropBottom});
@@ -223,7 +224,7 @@ Card view_card() {
         if (helmet) {
             const bool on = app.s.helmet.on;
             b.toggle(kHelmetOn, L"Show a helmet", on,
-                     on ? L"A visor opening around the view, lit by the scene." : L"Off · rim, corners and lighting hidden");
+                     on ? L"A visor opening around the view, lit by the scene." : L"Off");
             b.reveal(kHelmetOn, on, L"Show a helmet",
                      {L"Rim", L"Corners", L"Lighting", L"Visor", L"Size", L"Height", L"Depth", L"Detail", L"Helmet images"},
                      helmet_rows);
@@ -288,7 +289,7 @@ Card rendering_card() {
             } else {
                 const bool on = app.s.nativeQuad != 0;
                 b.toggle(kNativeQuad, L"Let the runtime compose", on,
-                         on ? L"On a Pimax or Varjo runtime, the focus region at full resolution." : L"Off · Sim-QVFR composes the views",
+                         on ? L"Pimax or Varjo: your headset’s software draws the focus area, sharper." : L"Off: Sim-QVFR draws the views",
                          false, Applies::NextLaunch);
                 if (on && !native_quad_last().empty())
                     b.note(native_quad_last());
@@ -329,7 +330,7 @@ void dlss_rows(Body& b) {
         b.popup(kDlssSharpening, L"Texture sharpening",
                 kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name,
                 names_of(kDlssTextureSharpening));
-        b.more(L"advanced", {L"Other cars’ motion"}, [](Body& m) {
+        b.more(L"advanced options", {L"Other cars’ motion"}, [](Body& m) {
             m.toggle(kDlssCarVectors, L"Other cars’ motion", app.s.dlss.carVectors,
                      L"Keeps passing cars clean; turn off for headroom.", false, Applies::NextLaunch);
         });
@@ -348,7 +349,7 @@ Card dlss_card() {
         }
         const bool on = app.s.dlss.on;
         b.toggle(kDlssOn, L"Use DLSS", on,
-                 on ? L"DLAA on the periphery, DLAA or an upscale on the focus." : L"Off · its options and DLSS-NR are hidden");
+                 on ? L"DLAA on the periphery, DLAA or an upscale on the focus." : L"Off");
         b.reveal(kDlssOn, on, L"Use DLSS",
                  {L"nvngx_dlss.dll", L"Focus views", L"Focus preset", L"Periphery preset", L"Texture sharpening", L"Other cars’ motion",
                   L"nvngx_dlssnr.dll", L"Use DLSS-NR"},
@@ -365,7 +366,7 @@ void nr_rows(Body& c) {
     c.popup(kNrPreset, L"Preset", kNrPresets[dlss_choice_index(kNrPresets, n.preset)].name, names_of(kNrPresets));
     c.slider({kNrFocusScale, L"Focus working size", n.focusScale});
     c.toggle(kNrPeriphery, L"Periphery too", n.periphery,
-             n.periphery ? L"At least about 2 ms of GPU time more per eye." : L"Off · only the focus views");
+             n.periphery ? L"At least about 2 ms of GPU time more per eye." : L"Off: only the focus views");
     c.reveal(kNrPeriphery, n.periphery, L"Periphery too", {L"Periphery working size", L"Periphery covered"}, [](Body& p) {
         p.slider({kNrPeripheryScale, L"Periphery working size", app.s.nr.peripheryScale});
         p.slider({kNrPeripheryCoverage, L"Periphery covered", app.s.nr.peripheryCoverage});
@@ -396,7 +397,7 @@ Card nr_card() {
         const bool available = own_nr_available(&why);
         if (available)
             b.toggle(kNrOn, L"Use DLSS-NR", n.on,
-                     n.on ? L"Experimental and heavy: about 2 ms of GPU time a megapixel, per view." : L"Off · its options are hidden");
+                     n.on ? L"Experimental and heavy: about 2 ms of GPU time a megapixel, per view." : L"Off");
         else if (!n.folder.empty())
             b.note(why);
         b.reveal(kNrOn, available && n.on, L"Use DLSS-NR",
@@ -438,19 +439,19 @@ void cheeky_rows(Body& b) {
         b.divider();
         b.toggle(kCheekyOn, L"Foveated DLSS", k.processing, L"Off leaves the game’s own DLSS on every view.");
         b.toggle(kCheekyOuter, L"Cheaper outer views", k.outerDlaa,
-                 k.outerDlaa ? L"Cheeky’s own DLAA pass on the periphery, at a lower resolution." : L"Off · its scale and preset are hidden");
+                 k.outerDlaa ? L"Cheeky’s own DLAA pass on the periphery, at a lower resolution." : L"Off");
         b.reveal(kCheekyOuter, k.outerDlaa, L"Cheaper outer views", {L"Outer DLAA scale", L"Outer preset"}, [](Body& r) {
             r.slider({kCheekyScale, L"Outer DLAA scale", app.s.cheeky.outerScale});
             r.popup(kCheekyOuterPreset, L"Outer preset", cheeky_preset_name(app.s.cheeky.outerPreset), items_of(kCheekyOuterPreset));
         });
         b.popup(kCheekyFocusPreset, L"Focus preset", cheeky_preset_name(k.focusPreset), items_of(kCheekyFocusPreset));
-        b.more(L"experimental", {L"Focus supersampling", L"Fix motion-vector blur", L"DLSS-NR", L"DLSS-NR preset", L"DLSS-NR passes"},
+        b.more(L"experimental options", {L"Focus supersampling", L"Fix motion-vector blur", L"DLSS-NR", L"DLSS-NR preset", L"DLSS-NR passes"},
                [](Body& m) {
                    const CheekySettings& ck = app.s.cheeky;
                    m.slider({kCheekySupersampling, L"Focus supersampling", ck.supersampling});
                    m.toggle(kCheekyMotionFix, L"Fix motion-vector blur", ck.motionFix, L"Cheeky’s workaround for smearing; adds GPU work.");
                    m.toggle(kCheekyNr, L"DLSS-NR", ck.nr,
-                            ck.nr ? L"On the focus views (nvngx_dlssnr.dll next to the game)." : L"Off · its preset and passes are hidden");
+                            ck.nr ? L"On the focus views (nvngx_dlssnr.dll next to the game)." : L"Off");
                    m.reveal(kCheekyNr, ck.nr, L"DLSS-NR", {L"DLSS-NR preset", L"DLSS-NR passes"}, [](Body& r) {
                        r.popup(kCheekyNrPreset, L"DLSS-NR preset", items_of(kCheekyNrPreset)[std::clamp(app.s.cheeky.nrPreset, 0, 2)],
                                items_of(kCheekyNrPreset));
@@ -472,7 +473,7 @@ Card cheeky_card() {
                (app.runtime.cheekyVersion.empty() ? L"  ·  its version shows after a launch with it" : L""));
         const bool on = app.s.cheeky.load;
         b.toggle(kCheekyUse, L"Use Cheeky Foveated DLSS", on,
-                 on ? L"Cheeky’s DLSS runtime in the game: a cheaper periphery." : L"Off · its options and frame generation are hidden",
+                 on ? L"Cheeky’s DLSS runtime in the game: a cheaper periphery." : L"Off",
                  false, Applies::NextLaunch);
         b.reveal(kCheekyUse, on, L"Use Cheeky Foveated DLSS",
                  {L"Runtime", L"OpenXR layer", L"Foveated DLSS", L"Cheaper outer views", L"Outer DLAA scale", L"Outer preset",
@@ -527,7 +528,7 @@ Card frame_generation_card() {
     c.body = [](Body& b) {
         const bool on = app.s.cheeky.fg;
         b.toggle(kFgOn, L"Frame generation", on,
-                 on ? L"Generated frames between the game’s, from its depth and motion." : L"Off · its options are hidden");
+                 on ? L"Generated frames between the game’s, from its depth and motion." : L"Off");
         b.reveal(kFgOn, on, L"Frame generation",
                  {L"Multiplier", L"Center region", L"Center FG scale", L"Periphery FG scale", L"Show the center region", L"Release game"},
                  frame_generation_rows);

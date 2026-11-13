@@ -110,6 +110,11 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
                 KillTimer(hwnd, kRevealTimer);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
+        if (wParam == kUndoTimer) {  // the undo bar goes (Ctrl+Z and the profile menu still undo)
+            KillTimer(hwnd, kUndoTimer);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
         if (wParam == kHighlightTimer) {  // Find a setting's highlight ends
             KillTimer(hwnd, kHighlightTimer);
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -393,6 +398,7 @@ int run_window(HINSTANCE instance, int show) {
         // starts from the settings in use, so updating changes nothing until a game's settings are changed.
         seed_game_settings(app.ini);
         app.s = load_settings(app.ini);
+        app.lastSaved = app.s;
         app.sessions = load_sessions(sessions_folder(app.ini));
     }
     reload_runtime();

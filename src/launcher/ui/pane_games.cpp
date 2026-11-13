@@ -288,10 +288,12 @@ Card online_card() {
         const bool on = app.s.antiCheat;
         b.toggle(kAntiCheat, L"Run with anti-cheat", on,
                  on ? L"Starts " + std::wstring(g.shortName) + L" through its anti-cheat, as Steam does, with Sim-QVFR running."
-                    : L"Off · " + std::wstring(g.shortName) + L" starts without its anti-cheat, so online servers won’t let you in",
+                    : L"Off: " + std::wstring(g.shortName) + L" starts without its anti-cheat, so online servers won’t let you in. "
+                      L"Turning it on asks you to accept the risk first.",
                  false, Applies::NextLaunch);
-        if (on)  // the risk, only while it's on
-            b.note(L"Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it.");
+        if (on)  // the risk, only while it's on (accepted when it was turned on)
+            b.note(L"Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it. You accepted "
+                   L"that risk: Sim-QVFR and its developer aren’t responsible for kicks or bans.");
     };
     if (games::launcher_game().antiCheatStart)
         c.reset = [](Settings& s) { s.antiCheat = Settings{}.antiCheat; };

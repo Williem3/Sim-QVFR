@@ -144,6 +144,22 @@ void changed(bool save) {
         push_live();
         refresh_profiles();  // whether the settings still match the profile in use
     }
+    if (save) {  // what this change changed, for Undo (the settings session history compares; others aren't offered)
+        const std::vector<std::wstring> diff = setting_changes(app.lastSaved, app.s);
+        if (app.undoing) {
+            app.undoChange.reset();
+            app.undoText = diff.empty() ? L"" : L"Undone: " + changes_text(diff, 2);
+        } else if (!diff.empty()) {
+            app.undoChange = app.lastSaved;
+            app.undoText = changes_text(diff, 2);
+        }
+        if (!diff.empty()) {
+            app.undoUntil = GetTickCount64() + kUndoMs;
+            SetTimer(app.hwnd, kUndoTimer, static_cast<UINT>(kUndoMs + 50), nullptr);
+        }
+        app.lastSaved = app.s;
+        app.undoing = false;
+    }
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
@@ -214,6 +230,7 @@ void follow_ini() {
     app.iniText = std::move(text);
     app.s = load_settings(app.ini);
     app.undoRestore.reset();
+    settings_reloaded();  // the headset menu's change isn't the launcher's to undo
     refresh_profiles();  // the headset menu may have switched profiles (the action bar names the one in use)
     InvalidateRect(app.hwnd, nullptr, FALSE);
 }
@@ -433,6 +450,7 @@ void launch() {
     app.s = load_settings(app.ini);
     save_settings(app.ini, app.s);
     app.iniText = ini_text();
+    settings_reloaded();
     refresh_checks();
     // Running already (from here or not): Launch checks says how, and Launch starts nothing.
     if (game_running()) {

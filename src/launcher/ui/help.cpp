@@ -33,7 +33,9 @@ constexpr Help kHelp[] = {
      L"It costs CPU, not GPU: more detail means more objects for X-Plane’s main thread to prepare every frame, often what "
      L"limits the frame rate with QVFR. Lower it if frames stutter in dense scenery; the focus region shows coarser trees."},
     {L"Sharpening",
-     L"AMD FidelityFX Contrast Adaptive Sharpening, applied as Sim-QVFR resamples the outer and focus views for the headset "
+     L"Crisper edges and text; too much makes the picture shimmer. Raise it a little if the view looks soft (0% is off); it "
+     L"costs a little GPU time and changes while you drive. How: AMD FidelityFX Contrast Adaptive Sharpening, applied as "
+     L"Sim-QVFR resamples the outer and focus views for the headset "
      L"(when the runtime composes them, on a copy of the outer view). Each pixel is sharpened by how much contrast room it "
      L"has, so soft detail gains the most and edges already sharp gain little. Both views get the same strength, so the focus "
      L"area’s edge stays even. It costs a little GPU time, and a low periphery resolution shimmers more with it. 0% is off; "
@@ -96,9 +98,9 @@ constexpr Help kHelp[] = {
      L"The last session’s average against the headset’s refresh rate, the frame rate it asks for. Below it, the runtime "
      L"fills the gaps (motion smoothing or reprojection), which shows as wobble on moving edges."},
     {L"Slow frames",
-     L"The 90th percentile frame time: one frame in ten took at least this long. Above the frame’s budget (1000 ms divided "
-     L"by the refresh rate) those frames miss the headset’s refresh, and the stutter you feel comes from them, not from the "
-     L"average."},
+     L"How long your slowest frames take: lower is smoother. One frame in ten took at least this long (the 90th "
+     L"percentile). Above the frame’s budget (1000 ms divided by the headset’s refresh rate: 11.1 ms at 90 Hz) those frames "
+     L"miss the headset, and you feel stutter even when the average frame rate looks fine."},
     {L"Limited by",
      L"What held the frame back most of the time: the game’s render thread on the CPU, the GPU, or nothing (the headset’s "
      L"refresh). Lowering resolution helps only when the GPU limits it."},
@@ -107,8 +109,9 @@ constexpr Help kHelp[] = {
      L"did. Compare runs on the same track and car for a fair difference."},
     {L"Run with anti-cheat",
      L"Starts the game through its anti-cheat (Easy Anti-Cheat), as Steam does, with Sim-QVFR running, so you can join online "
-     L"servers. Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it: at your own risk. "
-     L"Off starts the game without its anti-cheat, for offline sessions only."},
+     L"servers. Sim-QVFR runs inside the game, and the anti-cheat may kick you or ban your account for it. Sim-QVFR and its "
+     L"developer aren’t responsible for kicks or bans: turning it on asks you to accept that risk. Off starts the game without "
+     L"its anti-cheat, for offline sessions only."},
     {L"Layers for",
      L"Launches from here: the VR add-ons (OpenXR layers) a launch from this launcher loads, below Sim-QVFR, in an order of "
      L"its own; nothing else changes. Every app: Windows’ own list, which every other app uses (and the game started from "
@@ -124,7 +127,7 @@ constexpr Help kHelp[] = {
     {L"Next launch without QVFR",
      L"Starts the game once with its own two views and QVFR off, still measuring, so Diagnostics can compare the same race with "
      L"and without QVFR. It turns itself off after that launch; the next one has QVFR again. The performance overlay works "
-     L"in it, the settings menu does not."},
+     L"in it, the headset menu does not."},
     {L"Presets for eye tracked foveation",
      L"Starting points that put the pixels in the centre: low outer views and a dense focus area. Eye tracked, the area "
      L"follows your eyes, so it can be small and very sharp. They set the resolution only and keep everything else."},
@@ -163,8 +166,8 @@ constexpr Help kHelp[] = {
      L"Sim-QVFR includes NVIDIA’s nvngx_dlss.dll; Choose… takes another (a newer one from a game), Use included goes "
      L"back."},
     {L"Periphery preset",
-     L"The DLSS model for the outer views. K is steadier at a higher cost; F, the older model, costs about half as much and "
-     L"aliases more. With eye tracking you rarely look there, so F’s savings come cheap; with a fixed focus, K."},
+     L"Steadier or cheaper DLSS outside the focus area. K: a steadier picture, at a higher cost. F: about half the cost, a "
+     L"little more flicker on edges. With eye tracking you rarely look there, so F is usually fine; with a fixed focus, K."},
     {L"Texture sharpening",
      L"DLSS rebuilds detail from frames drawn at a lower resolution, so textures are best sampled a step sharper while it "
      L"runs. Sim-QVFR does that through copies of the game’s shaders, in the focus area alone or in the periphery too. "
@@ -174,28 +177,29 @@ constexpr Help kHelp[] = {
      L"Install downloads the release from GitHub, checks it against the SHA-256 GitHub gives, replaces the program files "
      L"and restarts the launcher; your settings, profiles and changed files stay, and the version you had is kept in the "
      L"update folder. Download opens the release’s page instead."},
-    {L"Live", L"These settings reach the game while it runs, as soon as you change them. Without the game running, they "
+    {L"Changes now", L"These settings reach the game while it runs, as soon as you change them. Without the game running, they "
               L"apply when it starts."},
-    {L"Live when lowered",
+    {L"Now when lowered",
      L"Lowering it reaches a running game at once, and so does raising it back up to what the game started with. Above "
      L"that, it takes effect at the next launch. With DLSS on in the game, the views keep their launch sizes until the "
      L"next launch."},
     {L"Focus region",
      L"Changes reach a running game at once. A focus area wider or taller than the game started with renders at a lower "
      L"density until the next launch, which sizes its view to fit."},
-    {L"Next launch", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
+    {L"Next game start", L"These settings take effect the next time the game starts from the launcher. A running game keeps "
                      L"what it started with."},
     {L"Show the overlay",
      L"The performance overlay in the headset: frame rate, CPU and GPU time and what limits the frame. A little CPU time while "
      L"it shows."},
     // The Picture tab's cards (picture.cpp): what their rows' one line of help leaves out.
     {L"Shape",
-     L"Box: a rectangle, rounded by Corner radius. Corners: each corner moved in on its own. Pull the top corners in for a "
-     L"trapezoid: more of the dash sharp, at the same cost."},
+     L"The shape of the sharp area. Rectangle: rounded by Corner radius. Custom corners: each corner moved in on its own; "
+     L"pull the top corners in for a trapezoid, more of the dash sharp at the same cost. To hide the area’s edge, raise "
+     L"Feather."},
     {L"Outline color", L"The outline’s colour in the headset. It shows while Show focus outline is on."},
     {L"Let the runtime compose",
-     L"On a Pimax or Varjo runtime, the runtime puts the focus region on the display at its full resolution: sharper than "
-     L"Sim-QVFR can compose it. On other runtimes (SteamVR) nothing changes. With the runtime composing, the resolution set "
+     L"Pimax and Varjo: your headset’s own software draws the focus area at full resolution, sharper than Sim-QVFR can. On "
+     L"other headsets (SteamVR) nothing changes. With the runtime composing, the resolution set "
      L"here applies and changes while you drive. The focus area shows inside the runtime’s own focus region (Pimax Play’s or "
      L"Varjo Base’s focus area), centred where the runtime puts it: keep that at least as large as the focus area here. Off "
      L"with frame generation (Cheeky’s or VectorXR’s), which needs one composed image."},

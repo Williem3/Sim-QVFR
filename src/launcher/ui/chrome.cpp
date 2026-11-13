@@ -171,6 +171,7 @@ void paint() {
     page_strip(mainX + pad - 12, W);
     topbar(W);
     rail(Hh);  // last: its notch reaches over the page
+    undo_bar(W, Hh);
 
     if (app.searchOpen)
         search_card();

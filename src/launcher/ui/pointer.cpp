@@ -220,7 +220,7 @@ void open_card_menu(int card) {
 namespace {
 
 // The profile menu's actions besides a profile (its index in app.profileNames, 0 and up).
-enum ProfileAction { kActUpdate = -1, kActRevert = -2, kActSave = -3, kActPaste = -4, kActManage = -5, kActRestore = -6 };
+enum ProfileAction { kActUpdate = -1, kActRevert = -2, kActSave = -3, kActPaste = -4, kActManage = -5, kActRestore = -6, kActUndo = -7 };
 
 int profile_index(const std::wstring& name) {
     for (size_t i = 0; i < app.profileNames.size(); ++i)
@@ -273,7 +273,9 @@ void open_profile_menu() {
     add(PopupRow::Item, L"Paste a shared profile", kActPaste);
     add(PopupRow::Item, L"Manage profiles…", kActManage);
     add(PopupRow::Separator, L"", 0);
-    add(PopupRow::Item, L"Restore defaults for " + short_name(), kActRestore);
+    if (app.undoChange)
+        add(PopupRow::Item, L"Undo " + app.undoText + L" (Ctrl+Z)", kActUndo);
+    add(PopupRow::Item, L"Restore defaults for " + short_name() + L"…", kActRestore);
     p.hover = p.selected;
     p.open = true;
     InvalidateRect(app.hwnd, nullptr, FALSE);
@@ -292,6 +294,7 @@ void profile_menu_action(int option) {
     case kActPaste: activate(kProfilePaste, -1); break;
     case kActManage: open_panel(PanelKind::Profiles); break;
     case kActRestore: activate(kRestore, -1); break;
+    case kActUndo: undo_change(); break;
     default: activate(kProfileUse, action); break;
     }
 }
@@ -388,6 +391,7 @@ void select_game(int option) {
         app.s = load_settings(app.ini);
         app.iniText = ini_text();
         app.undoRestore.reset();  // it held the other game's settings
+        settings_reloaded();      // and so would Undo
         refresh_profiles();  // the profile in use is the game's
     } else {
         games::set_launcher_game(*all[option]);  // for this window only: there is no ini to keep it in
@@ -545,6 +549,25 @@ void choose_game_folder() {
     refresh_installed();  // found now
     if (app.status == Status::Error)
         app.status = Status::Idle;  // "not found: choose its folder" is answered
+}
+
+// The settings just read from disk are what is saved: nothing of them is the last change (a game switched, the headset menu,
+// a launch).
+void settings_reloaded() {
+    app.lastSaved = app.s;
+    app.undoChange.reset();
+    app.undoText.clear();
+    app.undoUntil = 0;
+}
+
+// The last change undone: the settings before it, saved and sent as any change; the bar says what was undone.
+void undo_change() {
+    if (!app.undoChange)
+        return;
+    app.undoing = true;
+    app.s = *app.undoChange;
+    apply_theme();  // a game's colour may be what comes back
+    changed();
 }
 
 // Restore Defaults' Undo: the settings from before it.

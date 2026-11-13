@@ -16,7 +16,7 @@ The launcher has a new look and layout. Every setting is still there, saved in t
   - the **profile menu**;
   - the status;
   - **Launch**, always visible.
-- **Cards:** settings are grouped in cards. A card says when its settings apply: Live, Live when lowered, or Next launch.
+- **Cards:** settings are grouped in cards. A card says when its settings apply: Changes now, Now when lowered, or Next game start.
 - **Progressive disclosure:** settings that depend on a switch are hidden while it is off, and their values are kept.
 
 ## Where each page went
@@ -37,11 +37,11 @@ The launcher has a new look and layout. Every setting is still there, saved in t
 | Diagnostics | Game › Diagnostics (verdict first, details behind "More: details"), Game › Get help, and Overview's Last session |
 | Report an issue | Game › Get help › **Report an issue…**, which opens over the window. A crash link in the status opens it too. |
 | About | The version at the bottom of the rail (a dot when an update is out) |
-| Restore Defaults | Each card's **⋯ › Reset this card…** (it asks first), and **Restore defaults for <game>** in the profile menu (Undo and Ctrl+Z still work) |
+| Restore Defaults | Each card's **⋯ › Reset this card…** (it asks first), and **Restore defaults for <game>…** in the profile menu (Undo and Ctrl+Z still work) |
 
 ## Renamed
 
-The launcher now uses the headset menu's names: **Periphery resolution** (was Outer resolution), **Focus density** (was Inner resolution), **Focus width** and **Focus height** (were Foveated width and height). The crop's sides are **Outer side (temple)** and **Inner side (nose)**.
+The launcher now uses the headset menu's names: **Periphery resolution** (was Outer resolution), **Focus density** (was Inner resolution), **Focus width** and **Focus height** (were Foveated width and height). The crop's sides are **Outer side (temple)** and **Inner side (nose)**. The menu in the headset is the **Headset menu** everywhere, and the focus shape is **Rectangle** or **Custom corners**.
 
 ## New
 
@@ -49,6 +49,8 @@ The launcher now uses the headset menu's names: **Periphery resolution** (was Ou
   - The selected game's profile and the last session: fps against the headset's refresh, slow frames, and pixels saved.
   - A chart of the last five sessions.
   - A summary card for each part. A card opens its settings.
+- **Undo:** after a change, a bar at the bottom says what changed ("Feather 20% → 30%") with **Undo**; Ctrl+Z and the profile menu undo it too.
+- **Online racing:** turning on Le Mans Ultimate's anti-cheat asks you first to accept that kicks or bans are your own risk.
 - **Find a setting** (Ctrl+K): type a setting's name and press Return. It opens the tab and highlights the setting, or what shows it.
 - **Theme:** Light and dark follow Windows, or you can choose with the theme button (`[launcher] ui_theme`, the only new key).
 - **Fonts:** Jost and Inter, bundled with the launcher.

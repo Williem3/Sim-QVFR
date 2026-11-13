@@ -48,6 +48,7 @@ void activate(Ctl id, int option) {
     case kSheetButton: close_sheet(option); return;
     case kChecksBadge: jump_to({L"Launch checks", L"Launch checks", Pane::Game}); return;
     case kUndoBadge: undo_restore(); return;
+    case kUndoChange: undo_change(); return;
     case kLaunchBadge: {
         const LaunchOutcome o = app.watch.outcome();
         if (o.link == LaunchLink::Diagnostics) {
@@ -130,12 +131,32 @@ void activate(Ctl id, int option) {
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagFrameCapture: app.s.frameCapture = !app.s.frameCapture; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
-    case kAntiCheat:
-        if (games::launcher_game().antiCheatStart) {
-            app.s.antiCheat = !app.s.antiCheat;
+    case kAntiCheat: {
+        if (!games::launcher_game().antiCheatStart)
+            return;
+        if (app.s.antiCheat) {  // off: at once
+            app.s.antiCheat = false;
             changed();
+            return;
         }
+        // On: only once the player has read and accepted that a kick or a ban is theirs to risk.
+        Sheet s;
+        s.title = L"Run " + short_name() + L" with its anti-cheat?";
+        s.text = L"This lets you join online servers with Sim-QVFR running. The game’s anti-cheat can kick you, or ban your "
+                 L"account, for using Sim-QVFR.\n\nSim-QVFR and its developer are not responsible for any kick or ban. By "
+                 L"turning this on, you accept that risk and the responsibility for it.";
+        s.buttons = {L"Cancel", L"I accept the risk"};
+        s.focus = 0;
+        s.danger = true;
+        s.done = [](int button, const std::wstring&) {
+            if (button != 1)
+                return;
+            app.s.antiCheat = true;
+            changed();
+        };
+        open_sheet(std::move(s));
         return;
+    }
     case kDiagKind: open_popup(id); return;
     case kDiagDescription:
         if (app.panel != PanelKind::Report)
@@ -339,7 +360,8 @@ void activate(Ctl id, int option) {
         const Settings before = app.s;
         app.s = restored_defaults(app.s);
         changed();
-        app.undoRestore = before;  // the action bar offers Undo until the next change
+        app.undoRestore = before;
+        app.undoUntil = 0;  // the status says it, with its own Undo  // the action bar offers Undo until the next change
         return;
     }
     case kLaunch: launch(); return;
@@ -411,6 +433,7 @@ bool push_button(Ctl id) {
     case kCheckGuide:
     case kChecksBadge:
     case kUndoBadge:
+    case kUndoChange:
     case kLaunchBadge:
     case kDiagReport:
     case kDiagZip:
@@ -526,8 +549,11 @@ void on_key(WPARAM key) {
         close_panel();
         return;
     }
-    if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && app.undoRestore) {  // Ctrl+Z: Restore Defaults' Undo
-        undo_restore();
+    if (key == 'Z' && GetKeyState(VK_CONTROL) < 0 && (app.undoRestore || app.undoChange)) {  // Ctrl+Z: Undo
+        if (app.undoRestore)
+            undo_restore();
+        else
+            undo_change();
         return;
     }
     if (key == VK_TAB && GetKeyState(VK_CONTROL) < 0) {  // Ctrl+Tab, Ctrl+Shift+Tab: the next or previous game with a tab

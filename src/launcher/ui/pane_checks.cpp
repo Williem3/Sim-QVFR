@@ -59,7 +59,7 @@ Card checks_card() {
         for (size_t i : ready)
             labels.push_back(app.checks[i].title);
         if (!ready.empty())
-            b.more(std::to_wstring(ready.size()) + (attention.empty() ? L" checks, all ready" : L" ready"), labels,
+            b.more(attention.empty() ? L"all " + std::to_wstring(ready.size()) + L" checks" : std::to_wstring(ready.size()) + L" ready checks", labels,
                    [ready, check_row](Body& m) {
                        for (size_t i : ready)
                            check_row(m, i);

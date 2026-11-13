@@ -390,7 +390,7 @@ void Body::more(const std::wstring& label, const std::vector<std::wstring>& hidd
     const bool open = app.moreOpen.count(key) > 0;
     const float y = y_ + h_, h = 24;
     if (draw_) {
-        const std::wstring text = (open ? L"Less: " : L"More: ") + label;
+        const std::wstring text = (open ? L"Hide " : L"Show ") + label;
         const float tw = std::ceil(app.canvas.measure(text, t::kBodyMedium));
         const Rect r{x_ - 4, y, tw + 8 + 18, h};
         const int index = static_cast<int>(app.moreKeys.size());
@@ -439,8 +439,8 @@ void draw_card(const Card& card, const Rect& r, int index) {
         if (!card.chip.empty())
             spoken += L", " + card.chip;
         if (card.applies != Applies::None)
-            spoken += card.applies == Applies::Live ? L", live" : card.applies == Applies::LiveLowered ? L", live when lowered"
-                                                                                                      : L", next launch";
+            spoken += card.applies == Applies::Live ? L", changes now" : card.applies == Applies::LiveLowered ? L", changes now when lowered"
+                                                                                                             : L", at the next game start";
         reader_text({r.x, r.y, r.w, kHeaderH}, spoken, 2);
     }
     section_shape(card.section, r.x + kPad + 5, hy + 11, 10);
@@ -459,9 +459,9 @@ void draw_card(const Card& card, const Rect& r, int index) {
         right = m.x - 8;
     }
     if (card.applies != Applies::None) {
-        const std::wstring text = card.applies == Applies::Live          ? L"Live"
-                                  : card.applies == Applies::LiveLowered ? L"Live when lowered"
-                                                                         : L"Next launch";
+        const std::wstring text = card.applies == Applies::Live          ? L"Changes now"
+                                  : card.applies == Applies::LiveLowered ? L"Now when lowered"
+                                                                         : L"Next game start";
         const float tw = std::ceil(cv.measure(text, kBadgeStyle)) + 16;
         applies_tag(right - tw, hy + 2, card.applies);
         right -= tw + 8;

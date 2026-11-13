@@ -213,7 +213,7 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         values(L"Vertical position", degrees(a.offset.fixed), degrees(b.offset.fixed));
     }
     if (a.shape.corners != b.shape.corners)
-        values(L"Focus shape", a.shape.corners ? L"Corners" : L"Box", b.shape.corners ? L"Corners" : L"Box");
+        values(L"Focus shape", a.shape.corners ? L"Custom corners" : L"Rectangle", b.shape.corners ? L"Custom corners" : L"Rectangle");
     else if (a.shape.corners && !(a.shape == b.shape))
         out.push_back(L"Focus shape corners");
     on_off(L"Focus outline", a.outline, b.outline);

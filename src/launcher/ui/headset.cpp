@@ -18,7 +18,7 @@ namespace simqvfr::launcher::ui::win {
 namespace {
 
 Card menu_card() {
-    Card c{Tab::Headset, L"Settings menu", Applies::Live};
+    Card c{Tab::Headset, L"Headset menu", Applies::Live};
     c.body = [](Body& b) {
         b.sliders({kMenuYaw, L"Horizontal", app.s.menuYaw, L"°"}, {kMenuPitch, L"Vertical", app.s.menuPitch, L"°"});
         b.slider({kMenuWidth, L"Size", app.s.menuWidth, L"°"});
@@ -42,7 +42,7 @@ Card overlay_card() {
     c.body = [](Body& b) {
         const bool on = app.s.osd.enabled;
         b.toggle(kOsdOn, L"Show the overlay", on,
-                 on ? L"Frame rate and pacing, CPU and GPU time, what limits the frame, VRAM." : L"Off · its place and size are hidden");
+                 on ? L"Frame rate and pacing, CPU and GPU time, what limits the frame, VRAM." : L"Off");
         b.reveal(kOsdOn, on, L"Show the overlay", {L"Horizontal", L"Vertical", L"Size"}, [](Body& r) {
             r.sliders({kOsdYaw, L"Horizontal", app.s.osd.yaw, L"°"}, {kOsdPitch, L"Vertical", app.s.osd.pitch, L"°"});
             r.slider({kOsdSize, L"Size", app.s.osd.width, L"°"});
@@ -112,7 +112,11 @@ void hotkey_row(const Rect& r, HotkeyAction action) {
         help_icon(label, r.x + lw + 6, r.y + (r.h - t::kBody.lineHeight) / 2);
     }
     const bool keyCapture = app.captureAction == a && !app.capturePad, padCapture = app.captureAction == a && app.capturePad;
-    const std::wstring keyLabel = keyCapture ? L"Press keys…" : k.key.set() ? key_text(k.key) : L"No key";
+    // Open or close without a key of its own: any of the menu's arrow keys opens it.
+    const std::wstring keyLabel = keyCapture   ? L"Press keys…"
+                                  : k.key.set() ? key_text(k.key)
+                                  : a == static_cast<int>(HotkeyAction::MenuToggle) ? L"Any arrow key"
+                                                                                     : L"No key";
     const std::wstring padLabel = padCapture ? L"Press a button…" : k.pad.set() ? control_text(k.pad.control) : L"No button";
     const float x = r.x + c.labelW;
     button(kHotkeyKey, {x, r.y, c.buttonW, r.h}, keyLabel, keyCapture ? Btn::Primary : Btn::Secondary, nullptr, a);
@@ -143,6 +147,8 @@ Card hotkeys_card() {
             app.canvas.text(L"Wheel", t::kFootnote, {r.x + c.labelW + c.buttonW + kHotkeyGap, r.y, c.buttonW, r.h},
                             col(app.c->label_muted));
         });
+        b.note(L"To open the headset menu from your wheel, click No button beside Open or close, then press the button on "
+               L"your wheel.");
         b.group(L"Headset menu");
         hotkey_rows(b, {HotkeyAction::MenuToggle, HotkeyAction::MenuUp, HotkeyAction::MenuDown, HotkeyAction::MenuLeft,
                         HotkeyAction::MenuRight});

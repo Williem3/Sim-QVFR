@@ -10,6 +10,7 @@
 
 #include <windows.h>
 
+#include "../report.h"
 #include "../session_history.h"
 #include "../settings.h"
 #include "../../games/game.h"
@@ -182,7 +183,10 @@ float game_panel(float x, float y, float w, bool draw) {
     by += 14 + 8;
     if (draw)
         profile_segments({x + kPad, by, inner, 34});
-    by += 34 + 10;
+    by += 34 + 4;
+    if (draw)  // the presets' trade-off, in words
+        cv.text(L"Performance: more frames  ·  Quality: sharper", t::kSubheadline, {x + kPad, by, inner, 16}, col(app.c->label_muted));
+    by += 16 + 10;
     const std::wstring summary = picture_summary(), saved = saved_profile_line();
     const float sh = cv.measure_height(summary, t::kCallout, inner);
     if (draw) {
@@ -280,6 +284,30 @@ float game_panel(float x, float y, float w, bool draw) {
                         col(app.c->label_secondary), Align::Trailing);
         }
         by += 16;
+        // What it means: the first likely cause (Get help's), or that it ran at the headset's rate. For the last session
+        // only (the causes read it).
+        if (sessions.front()->id == session_id(app.runtime.session.log)) {
+            const std::vector<Cause> causes = likely_causes(app.s, app.runtime);
+            std::wstring head, line;
+            if (!causes.empty()) {
+                head = causes.front().title;
+                line = causes.front().fix;
+            } else if (target > 0 && last.fps >= target * 0.97) {
+                head = fixed(L"Smooth: at your headset’s %.0f fps.", target);
+            }
+            if (!head.empty()) {
+                const float hh = cv.measure_height(head, t::kBodyStrong, inner);
+                const float lh = line.empty() ? 0 : cv.measure_height(line, t::kCallout, inner);
+                if (draw) {
+                    reader_text({x + kPad, by + 12, inner, hh + lh + 2}, head + (line.empty() ? L"" : L" " + line));
+                    cv.text(head, t::kBodyStrong, {x + kPad, by + 12, inner, hh + 2}, col(app.c->label), Align::Leading, false, true);
+                    if (lh > 0)
+                        cv.text(line, t::kCallout, {x + kPad, by + 14 + hh, inner, lh + 2}, col(app.c->label_secondary),
+                                Align::Leading, false, true);
+                }
+                by += 12 + hh + (lh > 0 ? 2 + lh : 0);
+            }
+        }
     }
     return by + kPad - y;
 }
@@ -303,8 +331,8 @@ std::vector<Tile> picture_tiles() {
                      : L"Periphery " + percent_of(app.s.outer) + L" · Two-loop",
                    known ? px(ro.outer) + L" periphery" : L"Pixel sizes after the first launch", L"", 3, L"Resolution"});
     Tile fov{L"Foveation",
-             std::wstring(app.s.eyeTracking ? L"Eye tracked" : L"Fixed") + L" · focus " + std::to_wstring(app.s.width) + L" × " +
-                 std::to_wstring(app.s.height) + L"%",
+             std::wstring(app.s.eyeTracking ? L"Follows your eyes" : L"Fixed in the middle") + L" · focus " +
+                 std::to_wstring(app.s.width) + L" × " + std::to_wstring(app.s.height) + L"%",
              L"", app.s.outline ? L"Outline on" : L"Outline off", 3, L"Foveation"};
     if (eye_warning()) {
         fov.chip = L"Eye tracker not detected";
@@ -323,11 +351,14 @@ std::vector<Tile> picture_tiles() {
     const bool nativeQuad = game_has(&games::GameFeatures::nativeQuadViews), ownDlss = game_has(&games::GameFeatures::sideLoadedDlss),
                cheeky = game_has(&games::GameFeatures::foveatedDlss);
     if (method_shown() || nativeQuad || ownDlss || cheeky) {
-        std::wstring line = q ? L"QVFR" : L"Two-loop (legacy)";
+        std::wstring line = q ? L"" : L"Legacy method (Two-loop)";
+        const auto add = [&line](const std::wstring& part) { line += (line.empty() ? L"" : L" · ") + part; };
         if (ownDlss)
-            line += own_dlss_available() && app.s.dlss.on ? L" · DLSS on" : L" · DLSS off";
+            add(own_dlss_available() && app.s.dlss.on ? L"DLSS on" : L"DLSS off");
         if (cheeky)
-            line += app.s.cheeky.load ? L" · Foveated DLSS on" : L" · Foveated DLSS off";
+            add(app.s.cheeky.load ? L"Foveated DLSS on" : L"Foveated DLSS off");
+        if (line.empty())
+            line = L"Sim-QVFR draws the views";
         // It opens the DLSS card where the game has one (its switch is there), else Rendering.
         out.push_back({L"Rendering", line,
                        nativeQuad && q ? (app.s.nativeQuad ? L"Runtime composes where it can" : L"Sim-QVFR composes") : L"",
@@ -355,10 +386,10 @@ std::wstring menu_keys() {
 
 std::vector<Tile> headset_tiles() {
     std::vector<Tile> out;
-    out.push_back({L"Menu & overlay",
+    out.push_back({L"Headset menu",
                    L"Menu " + degrees_to(app.s.menuYaw, L"right", L"left") + L", " + degrees_to(app.s.menuPitch, L"up", L"down"),
                    std::to_wstring(app.s.menuWidth) + L"° wide", app.s.osd.enabled ? L"Overlay on" : L"Overlay off", 3,
-                   L"Settings menu", Pane::Headset});
+                   L"Headset menu", Pane::Headset});
     const std::wstring open = key_text(app.s.hotkeys[static_cast<int>(HotkeyAction::MenuToggle)].key);
     int pads = 0;
     bool clash = false;
@@ -405,7 +436,7 @@ std::vector<Tile> game_tiles() {
     std::size_t count = 0;
     games::all_games(count);
     const games::GameInfo& game = games::launcher_game();
-    out.push_back({L"Games", std::to_wstring(shown_game_count()) + L" of " + std::to_wstring(count) + L" in the rail",
+    out.push_back({L"Games", std::to_wstring(shown_game_count()) + L" of " + std::to_wstring(count) + L" games shown",
                    game.antiCheatStart ? (app.s.antiCheat ? L"Anti-cheat on" : L"Anti-cheat off") : L"", L"", 3,
                    L"Games in the rail", Pane::Game});
     int below = 0;
@@ -565,6 +596,19 @@ float overview_page(float x, float y, float w, bool draw) {
     const float ph = game_panel(x, y, pw, draw);
     const float rx = side ? x + pw + 24 : x, rw = side ? w - pw - 24 : w;
     float ry = side ? y : y + ph + 24;
+    if (app.sessions.empty()) {  // no race yet with Sim-QVFR: what to do, in one line
+        const std::wstring hello = L"You’re set. Pick your game on the left, then press Launch. Changes here save as you make them.";
+        const float th = app.canvas.measure_height(hello, t::kBody, rw - 2 * kTilePad - 8);
+        const Rect r{rx, ry, rw, th + 2 * 12};
+        if (draw) {
+            app.canvas.fill(r, col(app.c->surface), t::kRadiusGroup);
+            app.canvas.fill({r.x, r.y, 4, r.h}, col(app.c->blue), t::kRadiusGroup);
+            app.canvas.text(hello, t::kBody, {r.x + kTilePad + 4, r.y + 12, rw - 2 * kTilePad - 8, th + 2}, col(app.c->label),
+                            Align::Leading, false, true);
+            reader_text(r, hello);
+        }
+        ry += r.h + 20;
+    }
     const struct {
         Tab tab;
         std::vector<Tile> tiles;
