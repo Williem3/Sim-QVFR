@@ -152,6 +152,18 @@ struct Stream {
     D3D12_GPU_VIRTUAL_ADDRESS computeCbv = 0;
     D3D12_GPU_DESCRIPTOR_HANDLE tables[8] = {};
     D3D12_GPU_DESCRIPTOR_HANDLE bindlessUint{};  // root table 18 (space 45 in ACE's scene root signature)
+    D3D12_GPU_VIRTUAL_ADDRESS computeCbvs[8] = {};
+    // R2c: graphics state for ACE's deferredShadows draws (root tables / CBVs 0-7 as last set)
+    ID3D12RootSignature* gfxRoot = nullptr;
+    D3D12_GPU_DESCRIPTOR_HANDLE gfxTables[8] = {};
+    D3D12_GPU_VIRTUAL_ADDRESS gfxCbvs[8] = {};
+    struct ShadowDraw {
+        ID3D12PipelineState* pso;
+        ID3D12RootSignature* root;
+        D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
+        D3D12_GPU_VIRTUAL_ADDRESS cbv;  // root 5: the eye's 560-B constants
+    };
+    std::vector<ShadowDraw> shadowDraws;
     struct TileDispatch {
         int kind;
         ID3D12PipelineState* pso;
@@ -161,6 +173,7 @@ struct Stream {
         D3D12_GPU_VIRTUAL_ADDRESS cbv;
         D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
         UINT dims[3];
+        D3D12_GPU_VIRTUAL_ADDRESS cbv2;  // root 2 (normalReconstructionViewSpace's constants)
     };
     std::vector<TileDispatch> tileDispatches;
 
@@ -182,6 +195,11 @@ struct Stream {
         computeCbv = 0;
         bindlessUint = {};
         tileDispatches.clear();
+        std::memset(computeCbvs, 0, sizeof(computeCbvs));
+        gfxRoot = nullptr;
+        std::memset(gfxTables, 0, sizeof(gfxTables));
+        std::memset(gfxCbvs, 0, sizeof(gfxCbvs));
+        shadowDraws.clear();
     }
     template <class T> void put(const T& v) {
         const size_t at = bytes.size();
@@ -441,7 +459,7 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
@@ -481,6 +499,8 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     }
     // volumetricFogMapIndex (76.w): ACE's stereo lighting reads voxelGrid0 for both eyes; ours is eye 0's focus grid.
     if (i == 76 && fogSrv != 0) v.w = asfloat(fogSrv);
+    // deferredShadowMapIndex (76.x): ours, from the focus depth (R2c).
+    if (i == 76 && shadowSrv != 0) v.x = asfloat(shadowSrv);
     dst.Store4(i * 16, asuint(v));
 }
 )";
@@ -584,6 +604,17 @@ struct Focus {
     UINT uavBaseIndex = 0, fogUavFirst = 0;
     int fogParity = 0;
     std::atomic<uint64_t> fogReplays{0};
+    // R2c: the focus views' deferred sun shadow: our normals (UAV slot 28, SRV 14) and shadow (SRV 15, an RTV of ours).
+    ComPtr<ID3D12RootSignature> shadowPatchRoot;
+    ComPtr<ID3D12PipelineState> shadowPatchPso;
+    ComPtr<ID3D12Resource> shadowConstants;
+    uint32_t shadowSlot = 0;
+    ComPtr<ID3D12Resource> normals, shadow;
+    UINT shadowFw = 0, shadowFh = 0;
+    int shadowRtvSlot = -1;
+    D3D12_CPU_DESCRIPTOR_HANDLE shadowRtv{};
+    bool shadowBroken = false, shadowReady = false;
+    std::atomic<uint64_t> shadowReplays{0};
     SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
     std::atomic<uint64_t> tileReplays{0};
     std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
@@ -602,6 +633,7 @@ Focus focus;
 // Our descriptors at the top of the bindless range: 0-11 tile lists, 12 focus depth, 13 previous colour, 16-27 fog.
 constexpr UINT kTileSlots = 32, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
 constexpr UINT kFogFirst = 16, kFogUavSlots = 32;
+constexpr UINT kShadowSlots = 48, kShadowSlotBytes = 1024;
 constexpr UINT kFogSlots = 32, kFogSlotBytes = 16384;  // the injection constants are 15,840 B
 
 // The culling constants (tiledCulling cb0, 240 B: inverseView, view, inverseProjectionMatrix at 128, tileCount 192,
@@ -656,6 +688,41 @@ RWByteAddressBuffer dst : register(u0);
 }
 )";
 
+// R2c: ACE's deferred-shadow constants for the focus views. Mode 0: normalReconstructionViewSpace's (288 B): the
+// inverse projections (left 4-7, right 12-15; columns in the registers) remapped like the fog's (columns 0/1 x box,
+// column 3 - ox c0 - oy c1; ox = P02 = c3.x / c0.x, oy = c3.y / c1.y), bufferSize = both focus views, eyeSplitX and
+// rcpEyeWidth the focus width. Mode 1: deferredShadows' (560 B) for eye `eye`: inverseViewProjection (0-3) the same
+// way, with that eye's centre from the normals constants (b0).
+constexpr char kShadowShader[] = R"(
+cbuffer Normals : register(b0) { float4 nrm[18]; };
+cbuffer Shadow : register(b1) { float4 shd[35]; };
+cbuffer Params : register(b2) { float box; uint mode; uint eye; float fw; float fh; };
+RWByteAddressBuffer dst : register(u0);
+[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
+    if (mode == 0) {
+        if (i >= 18) return;
+        float4 v = nrm[i];
+        if ((i >= 4 && i <= 7) || (i >= 12 && i <= 15)) {
+            const uint b = i < 8 ? 4 : 12;
+            const float ox = nrm[b + 3].x / nrm[b].x, oy = nrm[b + 3].y / nrm[b + 1].y;
+            if (i == b || i == b + 1) v *= box;
+            if (i == b + 3) v = v - ox * nrm[b] - oy * nrm[b + 1];
+        }
+        if (i == 16) v = float4(2 * fw, fh, 1.0 / (2 * fw), 1.0 / fh);
+        if (i == 17) { v.z = fw; v.w = 1.0 / fw; }
+        dst.Store4(i * 16, asuint(v));
+        return;
+    }
+    if (i >= 35) return;
+    float4 v = shd[i];
+    const uint b = eye == 0 ? 4 : 12;
+    const float ox = nrm[b + 3].x / nrm[b].x, oy = nrm[b + 3].y / nrm[b + 1].y;
+    if (i <= 1) v *= box;
+    if (i == 3) v = v - ox * shd[0] - oy * shd[1];
+    dst.Store4(i * 16, asuint(v));
+}
+)";
+
 bool invert(const double (&m)[4][4], double (&out)[4][4]) {
     double a[4][8];
     for (int i = 0; i < 4; ++i)
@@ -703,6 +770,8 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"tiledCulling") == 0                ? 2
                : std::wcscmp(name, L"volumetricFogLightInjection") == 0 ? 3
                : std::wcscmp(name, L"volumetricFogScatter") == 0        ? 4
+               : std::wcscmp(name, L"normalReconstructionViewSpace") == 0 ? 5
+               : std::wcscmp(name, L"deferredShadows") == 0             ? 6
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -745,7 +814,7 @@ bool focus_compile() {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor = {0, 0};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants = {1, 0, 21};
+    params[1].Constants = {1, 0, 22};
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {0, 0};
     const D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -832,6 +901,41 @@ bool focus_compile() {
                                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
                                                        IID_PPV_ARGS(&focus.fogConstants))))
                 focus.fogBroken = true;
+        }
+    }
+    if (focus.settings.shadows) {  // R2c: the deferred-shadow constants copy
+        ComPtr<ID3DBlob> code2, errors2, blob2;
+        D3D12_ROOT_PARAMETER p2[4] = {};
+        p2[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p2[0].Descriptor = {0, 0};
+        p2[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p2[1].Descriptor = {1, 0};
+        p2[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        p2[2].Constants = {2, 0, 5};
+        p2[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        p2[3].Descriptor = {0, 0};
+        const D3D12_ROOT_SIGNATURE_DESC d2{4, p2, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_COMPUTE_PIPELINE_STATE_DESC pso2{};
+        D3D12_HEAP_PROPERTIES heap2{D3D12_HEAP_TYPE_DEFAULT};
+        const D3D12_RESOURCE_DESC buf2{D3D12_RESOURCE_DIMENSION_BUFFER, 0, UINT64{kShadowSlots} * kShadowSlotBytes, 1, 1, 1,
+                                       DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                                       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        if (FAILED(D3DCompile(kShadowShader, sizeof(kShadowShader) - 1, "focus-shadow", nullptr, nullptr, "main", "cs_5_0", 0,
+                              0, &code2, &errors2)) ||
+            FAILED(D3D12SerializeRootSignature(&d2, D3D_ROOT_SIGNATURE_VERSION_1, &blob2, &errors2)) ||
+            FAILED(device->CreateRootSignature(0, blob2->GetBufferPointer(), blob2->GetBufferSize(),
+                                               IID_PPV_ARGS(&focus.shadowPatchRoot)))) {
+            logf("replay focus: shadow: the constants shader failed (%s); no focus shadow",
+                 errors2 ? static_cast<const char*>(errors2->GetBufferPointer()) : "?");
+            focus.shadowBroken = true;
+        } else {
+            pso2.pRootSignature = focus.shadowPatchRoot.Get();
+            pso2.CS = {code2->GetBufferPointer(), code2->GetBufferSize()};
+            if (FAILED(device->CreateComputePipelineState(&pso2, IID_PPV_ARGS(&focus.shadowPatchPso))) ||
+                FAILED(device->CreateCommittedResource(&heap2, D3D12_HEAP_FLAG_NONE, &buf2,
+                                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                       IID_PPV_ARGS(&focus.shadowConstants))))
+                focus.shadowBroken = true;
         }
     }
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeap{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvSlots};
@@ -1097,6 +1201,10 @@ void focus_record(List* gameList, const Stream& s) {
             tileTo[i] = focus.ourTile[i];
         }
     int pairs = 4;
+    const bool shadowPhase = focus.settings.shadows != 2 || focus.samplesTaken.load() % 2 == 0;  // A/B: on, off, ...
+    const uint32_t shadowSrv = shadowPhase && focus.shadowReady && !focus.shadowBroken && !focus.tilesBroken
+                                   ? focus.slotFirst + 15 - focus.baseIndex
+                                   : 0;
     const uint32_t fogSrv = focus.fogMade && focus.fogReady && !focus.fogBroken && !focus.tilesBroken
                                 ? focus.slotFirst + kFogFirst + 1 - focus.baseIndex
                                 : 0;
@@ -1119,14 +1227,15 @@ void focus_record(List* gameList, const Stream& s) {
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slots;
     l->SetComputeRootSignature(focus.patchRoot.Get());
     l->SetPipelineState(focus.patchPso.Get());
-    uint32_t params[21] = {};
+    uint32_t params[22] = {};
     const float box = static_cast<float>(focus.settings.boxFraction);
     const float floats[4] = {box, box, static_cast<float>(fwi), static_cast<float>(fhi)};
     std::memcpy(params, floats, sizeof(floats));
     std::memcpy(params + 4, tileFrom, sizeof(tileFrom));
     std::memcpy(params + 8, tileTo, sizeof(tileTo));
     params[20] = fogSrv;
-    l->SetComputeRoot32BitConstants(1, 21, params, 0);
+    params[21] = shadowSrv;
+    l->SetComputeRoot32BitConstants(1, 22, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         if (sample) {
@@ -1619,6 +1728,162 @@ void focus_fog_record(List* gameList, const Stream& s) {
     focus.fogReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
+// ---- R2c: the focus views' deferred sun shadow --------------------------------------------------------------------
+
+// At the game's Close of the list with normalReconstructionViewSpace (a compute pass over both eyes) and the two
+// deferredShadows draws (one per eye, half resolution): both again for the focus views, from our focus depth into our
+// normals and our deferred shadow (half the focus size). The focus pass constants name ours (deferredShadowMapIndex).
+void focus_shadow_record(List* gameList, const Stream& s) {
+    const Stream::TileDispatch* normalsPass = nullptr;
+    for (const auto& d : s.tileDispatches)
+        if (d.kind == 5)
+            normalsPass = &d;
+    if (!normalsPass || s.shadowDraws.size() < 2 || !normalsPass->cbv2)
+        return;
+    Replay* r = nullptr;
+    ID3D12Resource* depth = nullptr;
+    UINT fw = 0, fh = 0;
+    AcquireSRWLockExclusive(&focus.lock);
+    const Twin* twin = nullptr;
+    for (const auto& [game, tw] : focus.twins)
+        if (tw.depth && tw.gameDesc.SampleDesc.Count == 1 && (!twin || tw.eyeW > twin->eyeW))
+            twin = &tw;
+    const bool ok = !focus.shadowBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.shadowPatchPso &&
+                    twin && focus.depthForTiles == twin->focus.Get();  // our depth SRV (slot 12) names this twin
+    if (ok) {
+        fw = twin->focusW;
+        fh = twin->focusH;
+        depth = twin->focus.Get();
+        if (!focus.normals || fw != focus.shadowFw || fh != focus.shadowFh) {
+            retire(focus.normals.Get());
+            retire(focus.shadow.Get());
+            focus.normals.Reset();
+            focus.shadow.Reset();
+            if (focus.shadowRtvSlot < 0)
+                focus.shadowRtv = view_slot(false, focus.shadowRtvSlot);
+            D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+            const D3D12_RESOURCE_DESC nd{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, UINT64{2} * fw, fh, 1, 1,
+                                         DXGI_FORMAT_R8G8B8A8_SNORM, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                                         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            const D3D12_RESOURCE_DESC sd{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, fw, (fh + 1) / 2, 1, 1,
+                                         DXGI_FORMAT_R16G16_UNORM, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                                         D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+            D3D12_CLEAR_VALUE clear{DXGI_FORMAT_R16G16_UNORM, {0, 0, 0, 0}};
+            if (!focus.shadowRtv.ptr ||
+                FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &nd, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                                                       nullptr, IID_PPV_ARGS(&focus.normals))) ||
+                FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &sd, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                                                       &clear, IID_PPV_ARGS(&focus.shadow)))) {
+                log_line("replay focus: shadow: could not make our normals / shadow; no focus shadow");
+                focus.shadowBroken = true;
+            } else {
+                inReplay = true;
+                D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+                u.Format = DXGI_FORMAT_R8G8B8A8_SNORM;
+                u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                device->CreateUnorderedAccessView(focus.normals.Get(), nullptr, &u, game_cpu(focus.slotFirst + 28));
+                D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+                v.Format = DXGI_FORMAT_R8G8B8A8_SNORM;
+                v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                v.Texture2D.MipLevels = 1;
+                srvViewOriginal(device.Get(), focus.normals.Get(), &v, game_cpu(focus.slotFirst + 14));
+                v.Format = DXGI_FORMAT_R16G16_UNORM;
+                srvViewOriginal(device.Get(), focus.shadow.Get(), &v, game_cpu(focus.slotFirst + 15));
+                D3D12_RENDER_TARGET_VIEW_DESC rv{};
+                rv.Format = DXGI_FORMAT_R16G16_UNORM;
+                rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+                rtvOriginal(device.Get(), focus.shadow.Get(), &rv, focus.shadowRtv);
+                inReplay = false;
+                focus.shadowFw = fw;
+                focus.shadowFh = fh;
+                logf("replay focus: shadow: our normals %ux%u, deferred shadow %ux%u at bindless %u", 2 * fw, fh, fw,
+                     (fh + 1) / 2, focus.slotFirst + 15 - focus.baseIndex);
+            }
+        }
+        if (!focus.shadowBroken)
+            r = acquire_replay();
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    // 1. The constants: normals', then each eye's shadow.
+    const D3D12_GPU_VIRTUAL_ADDRESS base = focus.shadowConstants->GetGPUVirtualAddress();
+    D3D12_GPU_VIRTUAL_ADDRESS mine[3];
+    for (D3D12_GPU_VIRTUAL_ADDRESS& m : mine)
+        m = base + UINT64{focus.shadowSlot++ % kShadowSlots} * kShadowSlotBytes;
+    const float box = static_cast<float>(focus.settings.boxFraction), ffw = static_cast<float>(fw), ffh = static_cast<float>(fh);
+    l->SetComputeRootSignature(focus.shadowPatchRoot.Get());
+    l->SetPipelineState(focus.shadowPatchPso.Get());
+    l->SetComputeRootConstantBufferView(0, normalsPass->cbv2);
+    for (int k = 0; k < 3; ++k) {
+        uint32_t p[5];
+        std::memcpy(&p[0], &box, 4);
+        p[1] = k == 0 ? 0u : 1u;
+        p[2] = k == 0 ? 0u : static_cast<uint32_t>(k - 1);
+        std::memcpy(&p[3], &ffw, 4);
+        std::memcpy(&p[4], &ffh, 4);
+        l->SetComputeRootConstantBufferView(1, k == 0 ? normalsPass->cbv2 : s.shadowDraws[k - 1].cbv);
+        l->SetComputeRoot32BitConstants(2, 5, p, 0);
+        l->SetComputeRootUnorderedAccessView(3, mine[k]);
+        l->Dispatch(1, 1, 1);
+    }
+    barrier(l, focus.shadowConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    // 2. ACE's normal reconstruction from our focus depth into our normals.
+    const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barrier(l, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, read);
+    barrier(l, focus.normals.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    l->SetComputeRootSignature(normalsPass->root);
+    l->SetPipelineState(normalsPass->pso);
+    l->SetComputeRootDescriptorTable(0, game_gpu(focus.slotFirst + 12));
+    l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 28));
+    l->SetComputeRootConstantBufferView(2, mine[0]);
+    l->Dispatch((2 * fw + 7) / 8, (fh + 7) / 8, 1);
+    barrier(l, focus.normals.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    // 3. ACE's deferredShadows, per eye into its half of our shadow.
+    barrier(l, focus.shadow.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    const float zero[4] = {};
+    l->ClearRenderTargetView(focus.shadowRtv, zero, 0, nullptr);
+    l->OMSetRenderTargets(1, &focus.shadowRtv, FALSE, nullptr);
+    l->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const UINT hw = fw / 2, hh = (fh + 1) / 2;
+    for (int e = 0; e < 2; ++e) {
+        const Stream::ShadowDraw& d = s.shadowDraws[e];
+        const D3D12_VIEWPORT vp{static_cast<float>(e * hw), 0, static_cast<float>(e == 0 ? hw : fw - hw),
+                                static_cast<float>(hh), 0, 1};
+        const D3D12_RECT rc{static_cast<LONG>(e * hw), 0, static_cast<LONG>(e == 0 ? hw : fw), static_cast<LONG>(hh)};
+        l->RSSetViewports(1, &vp);
+        l->RSSetScissorRects(1, &rc);
+        l->SetGraphicsRootSignature(d.root);
+        l->SetPipelineState(d.pso);
+        l->SetGraphicsRootDescriptorTable(0, d.tables[0]);
+        l->SetGraphicsRootDescriptorTable(1, game_gpu(focus.slotFirst + 12));
+        l->SetGraphicsRootDescriptorTable(2, game_gpu(focus.slotFirst + 14));
+        l->SetGraphicsRootDescriptorTable(3, d.tables[3]);
+        l->SetGraphicsRootDescriptorTable(4, d.tables[4]);
+        l->SetGraphicsRootConstantBufferView(5, mine[1 + e]);
+        l->DrawInstanced(3, 1, 0, 0);
+    }
+    barrier(l, focus.shadow.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    barrier(l, depth, read, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    barrier(l, focus.shadowConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    focus.pending[gameList].push_back(r);
+    if (!focus.shadowReady)
+        log_line("replay focus: shadow: the first focus deferred-shadow replay recorded");
+    focus.shadowReady = true;
+    ReleaseSRWLockExclusive(&focus.lock);
+    focus.shadowReplays.fetch_add(1, std::memory_order_relaxed);
+}
+
 // ---- R2c: the focus views' previous-frame colour ----------------------------------------------------------------
 
 // Under focus.lock, on the submit thread before a frame's clear: our msaaColor focus twin (last frame's lit focus
@@ -1773,6 +2038,7 @@ struct SampleTarget {
 struct SampleJob {
     uint64_t fenceValue = 0, frame = 0;
     double box = 0;
+    bool shadowOn = true;  // R2c shadow A/B: whether this sample frame's focus lighting used our deferred shadow
     ComPtr<ID3D12Resource> constantsRead;
     std::vector<SampleTarget> targets;
     std::vector<ComPtr<IUnknown>> keep;  // the copy list and twins until the copy is done
@@ -1934,6 +2200,9 @@ void focus_save(std::shared_ptr<SampleJob> job) {
                         if (same)
                             ++eyeAgree;
                     }
+            if (focus.settings.shadows == 2)
+                logf("replay focus: sample frame %llu: shadow A/B: the focus lighting %s our deferred shadow",
+                     static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
             result.colourEyePixels = eyeCompared;
             result.colourEyeAgree = eyeCompared ? static_cast<double>(eyeAgree) / static_cast<double>(eyeCompared) : 0;
             logf("replay focus: sample frame %llu: colour %s at the eye's pixel size (%ux%u focus pixels each): %llu "
@@ -1963,6 +2232,7 @@ void focus_copy_sample() {
     auto job = std::make_shared<SampleJob>();
     job->frame = focus.copyFrame.load();
     job->box = focus.settings.boxFraction;
+    job->shadowOn = (focus.samplesTaken.load() + 1) % 2 == 0;  // counted at the sample frame's end: k + 1 here
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<List> l;
     if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))) ||
@@ -2142,6 +2412,8 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             focus_tiles_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.fog && !s->tileDispatches.empty())
             focus_fog_record(list, *s);
+        if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.shadows && s->shadowDraws.size() >= 2)
+            focus_shadow_record(list, *s);
         if (SUCCEEDED(hr) && s->replayable(focus.settings.allTargets)) {
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
             focus_record(list, *s);
@@ -2160,7 +2432,7 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
 }
 
 void STDMETHODCALLTYPE rootSigHook(List* l, ID3D12RootSignature* r) {
-    if (Stream* s = stream_of(l)) { HookTimer t(s); s->op(kRootSig); s->put(r); }
+    if (Stream* s = stream_of(l)) { HookTimer t(s); s->op(kRootSig); s->put(r); s->gfxRoot = r; }
     rootSigOriginal(l, r);
 }
 void STDMETHODCALLTYPE psoHook(List* l, ID3D12PipelineState* r) {
@@ -2195,6 +2467,8 @@ void STDMETHODCALLTYPE tableHook(List* l, UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h)
         s->put(h);
         if (i == 18)  // ACE's scene root signature: space 45, the bindless uint buffers (tile lists)
             s->bindlessUint = h;
+        if (i < 8)
+            s->gfxTables[i] = h;
     }
     tableOriginal(l, i, h);
 }
@@ -2214,6 +2488,8 @@ void STDMETHODCALLTYPE cbvHook(List* l, UINT i, D3D12_GPU_VIRTUAL_ADDRESS va) {
     if (Stream* s = stream_of(l)) {
         HookTimer t(s);
         s->op(kCbv); s->put(i); s->put(va);
+        if (i < 8)
+            s->gfxCbvs[i] = va;
         if (i == kPassConstantsRoot && std::find(s->passConstants.begin(), s->passConstants.end(), va) == s->passConstants.end())
             s->passConstants.push_back(va);
     }
@@ -2300,7 +2576,10 @@ void STDMETHODCALLTYPE computeConstNHook(List* l, UINT i, UINT n, const void* da
     computeConstNOriginal(l, i, n, data, o);
 }
 void STDMETHODCALLTYPE computeCbvHook(List* l, UINT i, D3D12_GPU_VIRTUAL_ADDRESS va) {
-    if (Stream* s = stream_of(l); s && i == 0) s->computeCbv = va;
+    if (Stream* s = stream_of(l); s && i < 8) {
+        if (i == 0) s->computeCbv = va;
+        s->computeCbvs[i] = va;
+    }
     computeCbvOriginal(l, i, va);
 }
 void STDMETHODCALLTYPE computeTableHook(List* l, UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) {
@@ -2320,6 +2599,7 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         d.dims[0] = x;
         d.dims[1] = y;
         d.dims[2] = z;
+        d.cbv2 = s->computeCbvs[2];
         s->tileDispatches.push_back(d);
     }
     dispatchOriginal(l, x, y, z);
@@ -2393,7 +2673,16 @@ void STDMETHODCALLTYPE copySimpleHook(ID3D12Device* d, UINT n, D3D12_CPU_DESCRIP
     ReleaseSRWLockExclusive(&focus.lock);
 }
 void STDMETHODCALLTYPE drawHook(List* l, UINT a, UINT b, UINT c, UINT d) {
-    if (Stream* s = stream_of(l)) { HookTimer t(s); s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d); ++s->draws; }
+    if (Stream* s = stream_of(l)) {
+        HookTimer t(s);
+        s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d);
+        ++s->draws;
+        if (s->psoKind == 6) {
+            Stream::ShadowDraw sd{s->pso, s->gfxRoot, {}, s->gfxCbvs[5]};
+            std::memcpy(sd.tables, s->gfxTables, sizeof(sd.tables));
+            s->shadowDraws.push_back(sd);
+        }
+    }
     drawOriginal(l, a, b, c, d);
 }
 void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, UINT e) {
@@ -2538,6 +2827,7 @@ ReplayProbeStats replay_probe_take_stats() {
     s.focusReplays = focusReplays.exchange(0);
     s.tileReplays = focus.tileReplays.exchange(0);
     s.fogReplays = focus.fogReplays.exchange(0);
+    s.shadowReplays = focus.shadowReplays.exchange(0);
     s.twinsMade = twinsMade.load();
     s.twinsRemade = twinsRemade.load();
     return s;
@@ -2585,10 +2875,10 @@ void replay_probe_frame_end() {
     const double n = s.frames ? static_cast<double>(s.frames) : 1.0;
     if (probeMode == 3) {
         logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; tile replays "
-             "%.2f, fog replays %.2f; recording the replays %.3f ms, recording hooks %.3f ms, the game's own recording of "
-             "those lists %.3f ms (CPU)",
+             "%.2f, fog replays %.2f, shadow replays %.2f; recording the replays %.3f ms, recording hooks %.3f ms, the "
+             "game's own recording of those lists %.3f ms (CPU)",
              static_cast<unsigned long long>(window), s.listsReplayed / n, s.focusReplays / n, s.drawsReplayed / n,
-             s.tileReplays / n, s.fogReplays / n, s.replayMs / n, s.hookMs / n, s.gameMs / n);
+             s.tileReplays / n, s.fogReplays / n, s.shadowReplays / n, s.replayMs / n, s.hookMs / n, s.gameMs / n);
         ++window;
         return;
     }
