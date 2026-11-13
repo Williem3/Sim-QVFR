@@ -40,6 +40,7 @@ struct ReplayProbeStats {
     uint64_t shadowReplays = 0;   // R2c: focus deferred-shadow replays (normals + both eyes' shadow)
     uint64_t monoReplays = 0;     // R2c: per-eye lists replayed into their eye's focus view
     uint64_t oitReplays = 0;      // R2c: OIT composites replayed
+    uint64_t atmoReplays = 0;     // R2c: atmosphere resamples (8 maps each)
 };
 
 // The focus replay's settings (mode 3).
@@ -57,6 +58,9 @@ struct ReplayFocusSettings {
     int transparents = 0;         // R2c: the per-eye lists (transparents: one eye-size viewport) into that eye's focus
                                   // view, and the order-independent-transparency composite into the focus colour;
                                   // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
+    int atmosphere = 0;           // R2c: the atmospheric scattering maps (per eye, screen-shaped) resampled through each
+                                  // focus box into focus copies the focus pass constants name (needs `tiles`); 2: A/B,
+                                  // named at samples 1, 3, ... and not at 2, 4, ... (resampled either way)
 };
 
 // R2b: the focus inverse projection from an eye's (4 rows as the shader uses them, view = rows . clip): the eye's

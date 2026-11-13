@@ -240,6 +240,8 @@ void load_experiment() {
         experiment.replayShadows = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_shadows", 0, ini.c_str()));
         experiment.replayTransparents =
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_transparents", 0, ini.c_str()));
+        experiment.replayAtmosphere =
+            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", 0, ini.c_str()));
     }
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
     experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;
