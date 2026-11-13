@@ -71,6 +71,7 @@ struct ReplayFocusSettings {
     bool sky = false;             // the sky draw's screen-space clouds: its cbSky (a CBV table entry) patched to name our
                                   // resampled clouds in the focus replay (needs `tiles`)
     bool costAb = false;
+    int diagMode = 0;             // replay_diag value (2: our MSAA refraction source only before samples 1, 3, ...)
     bool diag = false;            // a per-sample schedule: sample 1 as set, 2 our fog off, 3 our 3D atmosphere maps on,
                                   // 4 also the sky maps (needs `atmosphere` for the maps to exist)          // cost A/B: every focus replay on for 2 windows (1800 frames), off for 2, ...
     int atmosphere = 0;           // R2c: the atmospheric scattering maps (per eye, screen-shaped) resampled through each

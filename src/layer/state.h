@@ -121,6 +121,7 @@ struct Experiment {
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
     bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
     bool replayCostAb = false;
+    int replayDiagMode = 0;                // replay_diag=2: MSAA refraction-source A/B by sample
     bool replayDiag = false;               // replay_diag=1: per-sample fog / atmosphere schedule (the haze band)             // replay_cost_ab=1: all focus replays on / off every 1800 frames
     int replayAtmosphere = 0;              // replay_atmosphere=1: focus copies of the atmosphere maps (R2c); 2 A/B
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)

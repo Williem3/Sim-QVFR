@@ -713,6 +713,9 @@ struct Focus {
     // R2c: SRVs the game made of its render targets (CPU handle -> resource, view), for the OIT composite's tables
     std::unordered_map<SIZE_T, std::pair<ComPtr<ID3D12Resource>, D3D12_SHADER_RESOURCE_VIEW_DESC>> srvInfo;
     std::atomic<uint64_t> monoReplays{0}, oitReplays{0};
+    // per frame (logged at sample frames): per-eye lists taken by eye, replayed by eye, unfit, broken (draws < 0)
+    std::atomic<uint32_t> monoTaken[2]{}, monoDone[2]{}, monoUnfit{0}, monoBroken{0}, monoOit{0}, monoMixed{0}, monoInStereo[2]{},
+        monoNoConst{0}, monoNoTarget{0};
     std::atomic<float> sceneEyeW{0}, sceneEyeH{0};  // the stereo scene lists' eye size: per-eye lists must match it
     // R2c: the atmosphere maps' focus copies (m = eye * 4 + map), the eyes' NDC centres (from the tile passes)
     ComPtr<ID3D12RootSignature> atmoRoot;
@@ -743,7 +746,15 @@ struct Focus {
     ComPtr<ID3D12RootSignature> packRoot;
     ComPtr<ID3D12PipelineState> packPso;
     ComPtr<ID3D12Resource> packConstants, packAa, packMb, packVelocity, packFlags, dlssOut, dlssOutAuto, casOut;
-    bool casDone = false;  // this frame's DLSS image sharpened (ACE's CAS replayed: our casOut, SRV slot 73)
+    bool casDone = false;
+    // MSAA: single-sample focus copies made from our multisampled twins: depth and velocity by ACE's own resolve passes
+    // replayed (SRVs of the twins at slots 74/75, our velocity's SRV 76; UAVs at block offsets 29-31), colour by a
+    // ResolveSubresource before the post. Each has a stand-in Twin (not in `twins`) for the code that takes one.
+    ComPtr<ID3D12Resource> resolvedDepth, closestDepth, resolvedVelocity, resolvedColour;
+    Twin resolvedDepthTwin, resolvedVelocityTwin, resolvedColourTwin;
+    ID3D12Resource *resolveDepthSource = nullptr, *resolveVelocitySource = nullptr;
+    bool resolveBroken = false, resolveReady = false;
+    std::atomic<uint64_t> resolveReplays{0};  // this frame's DLSS image sharpened (ACE's CAS replayed: our casOut, SRV slot 73)
     ID3D12Resource *packColour = nullptr, *packVelocityTwin = nullptr, *packFlagsTwin = nullptr;
     UINT packW = 0, packH = 0, packSlot = 0;
     focus_ngx::Feature* ngx[2] = {};
@@ -1040,6 +1051,8 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"gaussianBlur3x3Float4") == 0       ? 11
                : std::wcscmp(name, L"VelocityAndDepthPacking") == 0     ? 12
                : std::wcscmp(name, L"contrastAdaptiveSharpen") == 0     ? 13
+               : std::wcscmp(name, L"resolveDepthCompute") == 0         ? 14
+               : std::wcscmp(name, L"resolveDepthVelocityCompute") == 0 ? 15
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -1536,6 +1549,29 @@ bool focus_prepare(const Stream& s) {
         const ViewInfo& v = focus.views[h];
         if (focus.twins.count(v.resource.Get()))
             continue;
+        // A new game target with the name of an older one of another sample count (MSAA switched live): the older
+        // twins go, so lookups by name find the current ones.
+        const std::string newName = debug_name(v.resource.Get());
+        const D3D12_RESOURCE_DESC nd = v.resource->GetDesc();
+        for (auto it = focus.twins.begin(); it != focus.twins.end();) {
+            Twin& o = it->second;
+            // (only another sample count: the game keeps same-named targets of different sizes side by side)
+            if (o.name == newName && o.depth == v.depth && o.gameDesc.SampleDesc.Count != nd.SampleDesc.Count) {
+                logf("replay focus: the game made %s again (%u -> %u sample(s), %llux%u -> %llux%u): its older twins go",
+                     newName.c_str(), o.gameDesc.SampleDesc.Count, nd.SampleDesc.Count,
+                     static_cast<unsigned long long>(o.gameDesc.Width), o.gameDesc.Height,
+                     static_cast<unsigned long long>(nd.Width), nd.Height);
+                retire(o.focus.Get());
+                retire(o.eye.Get());
+                free_slot(o.depth, o.focusSlot);
+                free_slot(o.depth, o.eyeSlot);
+                it = focus.twins.erase(it);
+                twinsRemade.fetch_add(1);
+                changed = true;
+            } else {
+                ++it;
+            }
+        }
         Twin t;
         t.gameDesc = v.resource->GetDesc();
         t.viewFormat = v.viewFormat != DXGI_FORMAT_UNKNOWN ? v.viewFormat : t.gameDesc.Format;
@@ -1589,6 +1625,8 @@ Replay* acquire_replay() {
 }
 
 void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+    if (from == to || !r)
+        return;
     D3D12_RESOURCE_BARRIER b{};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to};
@@ -1609,6 +1647,8 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     std::vector<SkyPatch> skyPatches;
     // A per-eye list (mono): one eye-size viewport at x 0 (eye 0) or at the eye width (eye 1) of a two-eye target.
     const int monoEye = mono ? (s.monoX > 0 ? 1 : 0) : -1;
+    if (mono)
+        focus.monoTaken[monoEye].fetch_add(1, std::memory_order_relaxed);
     AcquireSRWLockExclusive(&focus.lock);
     if (focus_prepare(s)) {
         bool fits = true;
@@ -1624,15 +1664,26 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
             r = acquire_replay();
         if (r && !mono)
             skyPatches = focus_sky_prepare(s);
-        else {
+        else if (!r && mono && !fits) {
+            focus.monoUnfit.fetch_add(1, std::memory_order_relaxed);
             static int unfitLogged = 0;
             if (unfitLogged++ < 6)
                 logf("replay focus: per-eye list x %.0f %.0fx%.0f doesn't fit its targets' eye size; skipped", s.monoX,
                      s.monoW, s.monoH);
         }
         if (!mono) {
-            focus.sceneEyeW = s.eyeW;
-            focus.sceneEyeH = s.eyeH;
+            // The scene's eye size (what a per-eye list must match): only from lists that write the scene depth
+            // (msaaDepth). ACE's half-width flags pass (flagsDepth) is stereo too; taking its size let per-eye lists
+            // closing on other threads right after it fail the match and drop out (intermittent missing transparents).
+            bool scene = false;
+            for (const SIZE_T h : s.targets) {
+                const Twin& t = focus.twins.at(focus.views.at(h).resource.Get());
+                scene = scene || (t.depth && t.name == "msaaDepth");
+            }
+            if (scene) {
+                focus.sceneEyeW = s.eyeW;
+                focus.sceneEyeH = s.eyeH;
+            }
         }
     }
     // This list's own eye size (ACE's passes differ: the flags pass is half width) and its focus size.
@@ -1762,11 +1813,16 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     else
         focus.pending[gameList].push_back(r);
     ReleaseSRWLockExclusive(&focus.lock);
-    if (draws < 0)
+    if (draws < 0) {
+        if (mono)
+            focus.monoBroken.fetch_add(1, std::memory_order_relaxed);
         return;
+    }
     listsReplayed.fetch_add(1, std::memory_order_relaxed);
-    if (mono)
+    if (mono) {
         focus.monoReplays.fetch_add(1, std::memory_order_relaxed);
+        focus.monoDone[monoEye].fetch_add(1, std::memory_order_relaxed);
+    }
     callsReplayed.fetch_add(s.calls, std::memory_order_relaxed);
     drawsReplayed.fetch_add(static_cast<uint64_t>(draws), std::memory_order_relaxed);
 }
@@ -1811,6 +1867,8 @@ void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlo
 // Under focus.lock: the twin of the stereo scene depth: single-sample R32_TYPELESS (what the tile and shadow passes
 // read as R32_FLOAT), the largest, ACE's msaaDepth by name on a tie. Not just "the largest depth": flagsDepth (D32) is
 // the same size, and hash order picked it in one run (tiles and shadows stopped, 2026-11-13 10:01).
+D3D12_RESOURCE_STATES rest_of(ID3D12Resource* r, D3D12_RESOURCE_STATES otherwise);
+
 const Twin* scene_depth_twin() {
     const Twin* best = nullptr;
     for (const auto& [game, tw] : focus.twins) {
@@ -1819,7 +1877,16 @@ const Twin* scene_depth_twin() {
         if (!best || tw.eyeW > best->eyeW || (tw.eyeW == best->eyeW && tw.name == "msaaDepth"))
             best = &tw;
     }
+    if (!best && focus.resolvedDepth && focus.resolveReady)  // MSAA: our resolve of the multisampled depth twin
+        best = &focus.resolvedDepthTwin;
     return best;
+}
+
+// Our single-sample resolves rest as shader resources; twins rest as their kind (`otherwise`).
+D3D12_RESOURCE_STATES rest_of(ID3D12Resource* r, D3D12_RESOURCE_STATES otherwise) {
+    if (r && (r == focus.resolvedDepth.Get() || r == focus.resolvedVelocity.Get() || r == focus.closestDepth.Get()))
+        return D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    return otherwise;
 }
 
 // Under focus.lock: our tile resources and descriptors for this frame's tile passes; the game's tile-list indices.
@@ -1955,7 +2022,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     l->Reset(r->allocator.Get(), nullptr);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
-    barrier(l, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    barrier(l, depth, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     if (fromShaderResource)
         for (int e = 0; e < 2; ++e)
             for (ID3D12Resource* b : {focus.opaque[e].Get(), focus.transparent[e].Get()})
@@ -2027,7 +2094,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     for (int e = 0; e < 2; ++e)
         for (ID3D12Resource* b : {focus.opaque[e].Get(), focus.transparent[e].Get()})
             barrier(l, b, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
-    barrier(l, depth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    barrier(l, depth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE));
     l->Close();
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
@@ -2508,7 +2575,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     barrier(l, focus.shadowConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     // 2. ACE's normal reconstruction from our focus depth into our normals.
     const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    barrier(l, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, read);
+    barrier(l, depth, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE), read);
     barrier(l, focus.normals.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     l->SetComputeRootSignature(normalsPass->root);
     l->SetPipelineState(normalsPass->pso);
@@ -2542,7 +2609,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
         l->DrawInstanced(3, 1, 0, 0);
     }
     barrier(l, focus.shadow.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
-    barrier(l, depth, read, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    barrier(l, depth, read, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE));
     barrier(l, focus.shadowConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     l->Close();
     inReplay = false;
@@ -2765,6 +2832,19 @@ void focus_atmo_record(List* gameList) {
 // copy of our colour twin (the opaque focus scene: the transparents come later), mips 1-3 the game's blurred mips
 // resampled through each eye's box (both halves). The focus pass constants name it (76.z refraction). Slots: 61 the
 // game blur's SRV, 62 ours (all mips), 64-66 our mips 1-3 (UAV).
+// MSAA: our multisampled colour twin resolved into our single-sample colour (both rest as render targets).
+void resolve_focus_colour(List* l) {
+    ID3D12Resource* ms = focus.resolvedColourTwin.eye.Get();
+    ID3D12Resource* colour = focus.resolvedColour.Get();
+    if (!ms || !colour)
+        return;
+    barrier(l, ms, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
+    barrier(l, colour, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_RESOLVE_DEST);
+    l->ResolveSubresource(colour, 0, ms, 0, focus.resolvedColourTwin.viewFormat);
+    barrier(l, colour, D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    barrier(l, ms, D3D12_RESOURCE_STATE_RESOLVE_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+}
+
 void focus_blur_record(List* gameList) {
     Replay* r = nullptr;
     ID3D12Resource* colour = nullptr;
@@ -2774,6 +2854,10 @@ void focus_blur_record(List* gameList) {
     for (const auto& [game, tw] : focus.twins)
         if (!tw.depth && tw.name == "msaaColor" && tw.gameDesc.SampleDesc.Count == 1)
             twin = &tw;
+    // MSAA: our resolved colour (resolved again here: the opaque scene). replay_diag=2: only before samples 1, 3, ...
+    // (an A/B of the MSAA refraction source)
+    if (!twin && focus.resolvedColour && (focus.settings.diagMode != 2 || focus.samplesTaken.load() % 2 == 0))
+        twin = &focus.resolvedColourTwin;
     if (!focus.blurBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.atmoPso[0] &&
         focus.centresKnown && twin) {
         colour = twin->focus.Get();
@@ -2845,6 +2929,8 @@ void focus_blur_record(List* gameList) {
     l->Reset(r->allocator.Get(), nullptr);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
+    if (colour == focus.resolvedColour.Get())
+        resolve_focus_colour(l);
     // mip 0: our opaque focus colour
     barrier(l, colour, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
     barrier(l, focus.blur.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -2885,6 +2971,156 @@ void focus_blur_record(List* gameList) {
     focus.blurReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.blurReplays.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ---- MSAA: the focus views' depth and velocity resolves ---------------------------------------------------------
+
+// At the game's Close of its resolve list (resolveDepthCompute, resolveDepthVelocityCompute: per pixel, no constants,
+// single-descriptor tables): ACE's two pipelines replayed on our multisampled depth and velocity twins into our
+// single-sample focus depth (stand-in for depthResolveTarget), closest depth and velocity (velocity_n_reactive_mask).
+void focus_resolve_record(List* gameList, const Stream& s) {
+    const Stream::TileDispatch *rd = nullptr, *rdv = nullptr;
+    for (const auto& d : s.tileDispatches) {
+        if (d.kind == 14 && !rd)
+            rd = &d;
+        if (d.kind == 15 && !rdv)
+            rdv = &d;
+    }
+    if (!rd)
+        return;
+    Replay* r = nullptr;
+    std::string why;
+    UINT w = 0, h = 0;
+    ID3D12Resource *msDepth = nullptr, *msVelocity = nullptr;
+    AcquireSRWLockExclusive(&focus.lock);
+    const Twin *depthTwin = nullptr, *velocityTwin = nullptr;
+    for (const auto& [g, tw] : focus.twins) {
+        if (tw.gameDesc.SampleDesc.Count < 2)
+            continue;
+        if (tw.depth && tw.name == "msaaDepth")
+            depthTwin = &tw;
+        else if (!tw.depth && tw.name.find("velocity") != std::string::npos)
+            velocityTwin = &tw;
+    }
+    if (focus.resolveBroken || !focus.gameHeap || !focus.slotFirst || !focus.fogUavFirst || !depthTwin) {
+        why = "the multisampled depth twin, our bindless block or our UAV block (fog) not there";
+    } else {
+        w = 2 * depthTwin->focusW;
+        h = depthTwin->focusH;
+        msDepth = depthTwin->focus.Get();
+        msVelocity = velocityTwin ? velocityTwin->focus.Get() : nullptr;
+        if (focus.resolveDepthSource != msDepth || focus.resolveVelocitySource != msVelocity) {
+            for (ID3D12Resource* old : {focus.resolvedDepth.Get(), focus.closestDepth.Get(), focus.resolvedVelocity.Get()})
+                retire(old);
+            focus.resolvedDepth.Reset();
+            focus.closestDepth.Reset();
+            focus.resolvedVelocity.Reset();
+            focus.resolveReady = false;
+            D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+            D3D12_RESOURCE_DESC d{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, w, h, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0},
+                                  D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+            const D3D12_RESOURCE_STATES read =
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            const auto make = [&](DXGI_FORMAT f, ComPtr<ID3D12Resource>& out) {
+                d.Format = f;
+                return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, read, nullptr,
+                                                                 IID_PPV_ARGS(&out)));
+            };
+            const DXGI_FORMAT velFormat = velocityTwin ? velocityTwin->viewFormat : DXGI_FORMAT_R16G16_FLOAT;
+            if (!make(DXGI_FORMAT_R32_FLOAT, focus.resolvedDepth) || !make(DXGI_FORMAT_R32_FLOAT, focus.closestDepth) ||
+                (velocityTwin && !make(velFormat, focus.resolvedVelocity))) {
+                log_line("replay focus: msaa: could not make our resolved depth / velocity; no focus resolves");
+                focus.resolveBroken = true;
+            } else {
+                inReplay = true;
+                D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+                v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+                v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                v.Format = DXGI_FORMAT_R32_FLOAT;
+                srvViewOriginal(device.Get(), msDepth, &v, game_cpu(focus.slotFirst + 74));
+                if (msVelocity) {
+                    v.Format = velFormat;
+                    srvViewOriginal(device.Get(), msVelocity, &v, game_cpu(focus.slotFirst + 75));
+                }
+                const auto uav = [&](ID3D12Resource* res, UINT offset) {
+                    D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+                    u.Format = res->GetDesc().Format;
+                    u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                    device->CreateUnorderedAccessView(res, nullptr, &u, game_cpu(focus.fogUavFirst + offset));
+                };
+                uav(focus.resolvedDepth.Get(), 29);
+                uav(focus.closestDepth.Get(), 30);
+                if (focus.resolvedVelocity)
+                    uav(focus.resolvedVelocity.Get(), 31);
+                inReplay = false;
+                focus.resolvedDepthTwin = *depthTwin;
+                focus.resolvedDepthTwin.focus = focus.resolvedDepth;
+                focus.resolvedDepthTwin.gameDesc.SampleDesc = {1, 0};
+                focus.resolvedDepthTwin.gameDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+                focus.resolvedDepthTwin.viewFormat = DXGI_FORMAT_R32_FLOAT;
+                focus.resolvedDepthTwin.name = "depthResolveTarget";
+                if (velocityTwin) {
+                    focus.resolvedVelocityTwin = *velocityTwin;
+                    focus.resolvedVelocityTwin.focus = focus.resolvedVelocity;
+                    focus.resolvedVelocityTwin.gameDesc.SampleDesc = {1, 0};
+                    focus.resolvedVelocityTwin.name = "velocity_n_reactive_mask";
+                }
+                focus.resolveDepthSource = msDepth;
+                focus.resolveVelocitySource = msVelocity;
+                logf("replay focus: msaa: our resolved focus depth / closest depth%s %ux%u (from the %u-sample twins%s)",
+                     velocityTwin ? " / velocity" : "", w, h, depthTwin->gameDesc.SampleDesc.Count,
+                     velocityTwin ? (", velocity " + velocityTwin->name).c_str() : ", no velocity twin");
+            }
+        }
+        if (!focus.resolveBroken && focus.resolvedDepth)
+            r = acquire_replay();
+    }
+    static int missLogged = 0;
+    if (!r && !why.empty() && missLogged < 3) {
+        ++missLogged;
+        logf("replay focus: msaa: resolves not replayed (%s)", why.c_str());
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barrier(l, msDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    barrier(l, msVelocity, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    for (ID3D12Resource* res : {focus.resolvedDepth.Get(), focus.closestDepth.Get(), focus.resolvedVelocity.Get()})
+        barrier(l, res, read, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    l->SetComputeRootSignature(rd->root);
+    l->SetPipelineState(rd->pso);
+    l->SetComputeRootDescriptorTable(0, game_gpu(focus.slotFirst + 74));
+    l->SetComputeRootDescriptorTable(1, game_gpu(focus.fogUavFirst + 29));
+    l->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+    if (rdv && msVelocity && focus.resolvedVelocity) {
+        l->SetComputeRootSignature(rdv->root);
+        l->SetPipelineState(rdv->pso);
+        l->SetComputeRootDescriptorTable(0, game_gpu(focus.slotFirst + 74));
+        l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 75));
+        l->SetComputeRootDescriptorTable(2, game_gpu(focus.fogUavFirst + 30));
+        l->SetComputeRootDescriptorTable(3, game_gpu(focus.fogUavFirst + 31));
+        l->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+    }
+    for (ID3D12Resource* res : {focus.resolvedDepth.Get(), focus.closestDepth.Get(), focus.resolvedVelocity.Get()})
+        barrier(l, res, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, read);
+    barrier(l, msVelocity, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    barrier(l, msDepth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    focus.pending[gameList].push_back(r);
+    if (!focus.resolveReady)
+        log_line("replay focus: msaa: the first focus depth / velocity resolve recorded");
+    focus.resolveReady = true;
+    ReleaseSRWLockExclusive(&focus.lock);
+    focus.resolveReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- P2a: our DLSS per focus view ---------------------------------------------------------------------------------
@@ -2953,7 +3189,13 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
             eh = tw.eyeH;
         }
     }
+    if (!ew && focus.resolvedColour) {  // MSAA: the eye size from our resolved colour's stand-in
+        ew = focus.resolvedColourTwin.eyeW;
+        eh = focus.resolvedColourTwin.eyeH;
+    }
     depth = focus.depthForTiles;  // the scene depth twin (slot 12's view)
+    if (!velocityTwin && focus.resolvedVelocity && focus.resolveReady)  // MSAA: our resolve of the velocity twin
+        velocityTwin = &focus.resolvedVelocityTwin;
     if (!velocityTwin || !flagsTwin || !depth || !ew || !focus.fogUavFirst || !focus.uavBaseIndex) {
         why = "the velocity / flags / depth twins or our UAV block (fog) not there";
     } else if (focus.packW != fw2 || focus.packH != fh || focus.packColour != colour ||
@@ -3024,7 +3266,9 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
                                                                                             : twin_named(game[0].colorName, false);
         const std::string& mv = game[0].motionName;
         motionIn = mv == "velocityAndDepthAA" ? focus.packAa.Get() : mv == "velocity" ? focus.packVelocity.Get() : nullptr;
-        ID3D12Resource* depthNamed = game[0].depth ? twin_named(game[0].depthName, true) : nullptr;
+        ID3D12Resource* depthNamed = !game[0].depth                                           ? nullptr
+                                     : game[0].depthName == "closestDepth" && focus.closestDepth ? focus.closestDepth.Get()
+                                                                                                  : twin_named(game[0].depthName, true);
         if (depthNamed)
             depth = depthNamed;
         if (!colourIn || !motionIn)
@@ -3061,9 +3305,9 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     const float k = static_cast<float>(fw) / (static_cast<float>(ew) * box);  // focus pixels per eye pixel (eyeW: per eye)
     const UINT eyeW = ew;
     // 1. The packing, per eye: its constants patched, then ACE's dispatch over our focus eye.
-    barrier(l, focus.packVelocityTwin, D3D12_RESOURCE_STATE_RENDER_TARGET, read);
+    barrier(l, focus.packVelocityTwin, rest_of(focus.packVelocityTwin, D3D12_RESOURCE_STATE_RENDER_TARGET), read);
     barrier(l, focus.packFlagsTwin, D3D12_RESOURCE_STATE_RENDER_TARGET, read);
-    barrier(l, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, read);
+    barrier(l, depth, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE), read);
     D3D12_GPU_VIRTUAL_ADDRESS cb[2];
     for (int e = 0; e < 2; ++e) {
         cb[e] = focus.packConstants->GetGPUVirtualAddress() + UINT64{focus.packSlot++ % kPostSlots} * 512;
@@ -3097,7 +3341,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         l->Dispatch((fw + 7) / 8, (fh + 7) / 8, 1);
     }
     barrier(l, focus.packConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    barrier(l, focus.packVelocityTwin, read, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    barrier(l, focus.packVelocityTwin, read, rest_of(focus.packVelocityTwin, D3D12_RESOURCE_STATE_RENDER_TARGET));
     barrier(l, focus.packFlagsTwin, read, D3D12_RESOURCE_STATE_RENDER_TARGET);
     // 2. Our DLSS, per eye (its own feature and history).
     for (ID3D12Resource* r : {focus.packAa.Get(), focus.packVelocity.Get()})
@@ -3142,7 +3386,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     if (autoPair)
         barrier(l, focus.dlssOutAuto.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     barrier(l, colour, read, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    barrier(l, depth, read, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    barrier(l, depth, read, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE));
     for (ID3D12Resource* r : {focus.packAa.Get(), focus.packVelocity.Get()})
         barrier(l, r, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (!ok)
@@ -3211,9 +3455,41 @@ void focus_post_record(List* gameList, const Stream& s) {
     std::string why;
     AcquireSRWLockExclusive(&focus.lock);
     const Twin* twin = nullptr;
-    for (const auto& [game, tw] : focus.twins)
+    const Twin* colourMs = nullptr;  // MSAA: the multisampled colour twin, resolved into ours first
+    for (const auto& [game, tw] : focus.twins) {
         if (!tw.depth && tw.name == "msaaColor" && tw.gameDesc.SampleDesc.Count == 1)
             twin = &tw;
+        else if (!tw.depth && tw.name == "msaaColor")
+            colourMs = &tw;
+    }
+    if (!twin && colourMs) {
+        if (!focus.resolvedColour || focus.resolvedColourTwin.eye.Get() != colourMs->focus.Get()) {
+            retire(focus.resolvedColour.Get());
+            focus.resolvedColour.Reset();
+            D3D12_RESOURCE_DESC d = colourMs->focus->GetDesc();
+            d.SampleDesc = {1, 0};
+            d.Alignment = 0;  // the multisampled twin's 4 MB placement alignment is refused for one sample
+            d.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+            if (SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                                          nullptr, IID_PPV_ARGS(&focus.resolvedColour)))) {
+                focus.resolvedColourTwin = *colourMs;
+                focus.resolvedColourTwin.focus = focus.resolvedColour;
+                focus.resolvedColourTwin.eye = colourMs->focus;  // here: the multisampled source
+                focus.resolvedColourTwin.gameDesc.SampleDesc = {1, 0};
+                logf("replay focus: msaa: our resolved focus colour %llux%u (from the %u-sample twin)",
+                     static_cast<unsigned long long>(d.Width), d.Height, colourMs->gameDesc.SampleDesc.Count);
+            } else {
+                static bool failLogged = false;
+                if (!failLogged) {
+                    failLogged = true;
+                    log_line("replay focus: msaa: could not make our resolved focus colour");
+                }
+            }
+        }
+        if (focus.resolvedColour)
+            twin = &focus.resolvedColourTwin;
+    }
     if (focus.postBroken || focus.tilesBroken || !focus.gameHeap || !focus.slotFirst || !focus.cbPatchPso ||
         !focus.atmoPso[0] || !focus.centresKnown || !twin) {
         why = "not ready (tiles, centres or the colour twin)";
@@ -3353,7 +3629,7 @@ void focus_post_record(List* gameList, const Stream& s) {
             r = acquire_replay();
     }
     static int missLogged = 0;
-    if (!r && !why.empty() && missLogged < 3 && focus.twins.size() > 8) {
+    if (!r && !why.empty() && missLogged < 3 && focus.twins.size() > 4) {
         ++missLogged;
         logf("replay focus: post: not replayed (%s)", why.c_str());
     }
@@ -3366,6 +3642,10 @@ void focus_post_record(List* gameList, const Stream& s) {
     l->Reset(r->allocator.Get(), nullptr);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
+    // 0. MSAA: our multisampled colour twin resolved into our single-sample colour (as ACE resolves msaaColor into
+    // upscaling before its DLSS).
+    if (colour == focus.resolvedColour.Get())
+        resolve_focus_colour(l);
     // 1. The veil (bloom) through each focus box, both halves.
     const D3D12_RESOURCE_DESC vd = focus.postVeil->GetDesc();
     {
@@ -3476,6 +3756,8 @@ void focus_prev_copy(ID3D12CommandQueue* queue) {
     for (const auto& [game, tw] : focus.twins)
         if (!tw.depth && tw.name == "msaaColor" && tw.gameDesc.SampleDesc.Count == 1)
             colour = &tw;
+    if (!colour && focus.resolvedColour)  // MSAA: last frame's resolve (made in the post)
+        colour = &focus.resolvedColourTwin;
     if (!colour)
         return;
     if (focus.prevSource != colour->focus.Get()) {
@@ -4017,6 +4299,33 @@ void focus_copy_sample() {
             }
         }
     }
+    {  // MSAA: our refraction source's mip 0 (the opaque scene, resolved at the blur) and our resolved colour (the post's)
+        const std::tuple<ID3D12Resource*, const char*, D3D12_RESOURCE_STATES> extra[2] = {
+            {focus.blur.Get(), "blur0-ours", D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE},
+            {focus.resolvedColour.Get(), "colour-resolved", D3D12_RESOURCE_STATE_RENDER_TARGET}};
+        for (const auto& [res, nm, state] : extra) {
+            if (!res || !focus.resolvedColour)
+                continue;
+            SampleJob::Extra x;
+            x.name = nm;
+            const D3D12_RESOURCE_DESC d = res->GetDesc();
+            x.format = d.Format;
+            UINT64 bytes = 0;
+            device->GetCopyableFootprints(&d, 0, 1, 0, &x.foot, nullptr, nullptr, &bytes);
+            x.read = buffer(bytes);
+            if (!x.read)
+                continue;
+            barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION dst{x.read.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+            dst.PlacedFootprint = x.foot;
+            D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+            src.SubresourceIndex = 0;
+            l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
+            job->keep.emplace_back(res);
+            job->extras.push_back(std::move(x));
+        }
+    }
     if (focus.dlssReady && focus.dlssOut && focus.packAa) {  // P2a: our DLSS image and packed motion vectors
         for (int which = 0; which < 2; ++which) {
             ID3D12Resource* res = which ? focus.packAa.Get() : focus.dlssOut.Get();
@@ -4052,6 +4361,8 @@ void focus_copy_sample() {
         for (const auto& [game, t] : focus.twins)
             if (!t.depth && t.name == "msaaColor" && t.gameDesc.SampleDesc.Count == 1)
                 colourTwin = &t;
+        if (!colourTwin && focus.resolvedColour)
+            colourTwin = &focus.resolvedColourTwin;
         const std::pair<ID3D12Resource*, const char*> posts[3] = {
             {focus.postLdr.Get(), "post"}, {focus.postAlt[0].Get(), "post-nodlss"},
             {focus.postAlt[1].Get(), focus.ngxAuto[0] ? "post-auto" : "post-nocas"}};
@@ -4346,6 +4657,10 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             std::any_of(s->tileDispatches.begin(), s->tileDispatches.end(),
                         [](const Stream::TileDispatch& d) { return d.kind == 11; }))
             focus_blur_record(list);
+        if (SUCCEEDED(hr) && focus.settings.tiles &&
+            std::any_of(s->tileDispatches.begin(), s->tileDispatches.end(),
+                        [](const Stream::TileDispatch& d) { return d.kind == 14; }))
+            focus_resolve_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.post && s->hasTonemap && s->hasFxaa)
             focus_post_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.atmosphere &&
@@ -4362,6 +4677,19 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
                  s->monoX, s->monoW, s->monoH, focus.sceneEyeW.load(), focus.sceneEyeH.load(), s->draws,
                  s->passConstants.size(), s->targets.size(), s->sawRtv ? 1 : 0, s->sawDsv ? 1 : 0, s->monoMixed ? 1 : 0,
                  s->oitDraw ? 1 : 0, taken ? "replayed" : "skipped");
+        }
+        if (SUCCEEDED(hr) && s->monoSeen && s->draws > 0 && s->monoW == focus.sceneEyeW.load() &&
+            s->monoH == focus.sceneEyeH.load()) {  // an eye-size per-eye segment: which path it takes
+            if (s->stereo)
+                focus.monoInStereo[s->monoX > 0 ? 1 : 0].fetch_add(1, std::memory_order_relaxed);
+            else if (s->oitDraw)
+                focus.monoOit.fetch_add(1, std::memory_order_relaxed);
+            else if (s->monoMixed)
+                focus.monoMixed.fetch_add(1, std::memory_order_relaxed);
+            else if (s->passConstants.empty())
+                focus.monoNoConst.fetch_add(1, std::memory_order_relaxed);
+            else if (!s->sawRtv && !s->sawDsv)
+                focus.monoNoTarget.fetch_add(1, std::memory_order_relaxed);
         }
         if (SUCCEEDED(hr) && s->replayable(focus.settings.allTargets)) {
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
@@ -4924,11 +5252,23 @@ void replay_probe_frame_end() {
         focus_ngx::install();
     if (probeMode == 3) {
         const uint64_t ended = focus.frame.fetch_add(1);  // the frame that just ended
+        const uint32_t mt0 = focus.monoTaken[0].exchange(0), mt1 = focus.monoTaken[1].exchange(0);
+        const uint32_t md0 = focus.monoDone[0].exchange(0), md1 = focus.monoDone[1].exchange(0);
+        const uint32_t mu = focus.monoUnfit.exchange(0), mb = focus.monoBroken.exchange(0);
+        const uint32_t mo = focus.monoOit.exchange(0), mm = focus.monoMixed.exchange(0);
+        const uint32_t ms0 = focus.monoInStereo[0].exchange(0), ms1 = focus.monoInStereo[1].exchange(0);
+        const uint32_t mc = focus.monoNoConst.exchange(0), mn = focus.monoNoTarget.exchange(0);
+        if (ended == focus.sampleFrame.load())
+            logf("replay focus: frame %llu per-eye lists: taken L %u R %u, replayed L %u R %u, unfit %u, broken %u; "
+                 "eye-size segments not taken: inside a stereo list L %u R %u, with the OIT composite %u, mixed viewports "
+                 "%u, no pass constants %u, no targets %u",
+                 static_cast<unsigned long long>(ended), mt0, mt1, md0, md1, mu, mb, ms0, ms1, mo, mm, mc, mn);
         if (ended == focus.sampleFrame.load()) {
             AcquireSRWLockShared(&focus.lock);
             bool readable = false;
             for (const auto& [game, t] : focus.twins)
                 readable = readable || t.gameDesc.SampleDesc.Count == 1;
+            readable = readable || (focus.resolvedColour && focus.postReady);  // MSAA: the post samples still compare
             const bool ready = focus.ready;
             ReleaseSRWLockShared(&focus.lock);
             if (ready && readable) {
