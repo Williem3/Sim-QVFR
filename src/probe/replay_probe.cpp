@@ -169,6 +169,19 @@ struct Stream {
     float monoX = 0, monoW = 0, monoH = 0;
     bool oitDraw = false;
     D3D12_GPU_DESCRIPTOR_HANDLE oitTables[4] = {};
+    // P1: graphics root constants (root 0) and the first render target as last set; the post draws
+    uint32_t gfxConsts[8] = {};
+    SIZE_T lastRtv = 0;
+    struct PostDraw {
+        ID3D12PipelineState* pso;
+        ID3D12RootSignature* root;
+        D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
+        D3D12_GPU_VIRTUAL_ADDRESS cbv;  // root 6 (tonemap's constants)
+        uint32_t consts[8];             // root 0 (fxaa's)
+        SIZE_T rtv;
+    };
+    PostDraw tonemapDraw{}, fxaaDraw{};
+    bool hasTonemap = false, hasFxaa = false;
     struct TileDispatch {
         int kind;
         ID3D12PipelineState* pso;
@@ -206,6 +219,9 @@ struct Stream {
         std::memset(gfxCbvs, 0, sizeof(gfxCbvs));
         shadowDraws.clear();
         monoSeen = monoMixed = oitDraw = false;
+        std::memset(gfxConsts, 0, sizeof(gfxConsts));
+        lastRtv = 0;
+        hasTonemap = hasFxaa = false;
         monoX = monoW = monoH = 0;
         std::memset(oitTables, 0, sizeof(oitTables));
     }
@@ -479,7 +495,7 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
@@ -521,6 +537,8 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     if (i == 76 && fogSrv != 0) v.w = asfloat(fogSrv);
     // deferredShadowMapIndex (76.x): ours, from the focus depth (R2c).
     if (i == 76 && shadowSrv != 0) v.x = asfloat(shadowSrv);
+    // refractionMapIndex (76.z): our opaqueSceneBlur (P1).
+    if (i == 76 && blurSrv != 0) v.z = asfloat(blurSrv);
     // The atmosphere maps (73.y in-scatter, 73.z out-scatter, 75.x / 75.y sky): our focus copies, the right eye's set
     // for a right-eye list (its own offset, row 84.x > 0), eye 0's otherwise (ACE's stereo lists read _0 for both).
     if (atmo0.x != 0 && (i == 73 || i == 75)) {
@@ -654,6 +672,23 @@ struct Focus {
     float eyeCentre[2][2] = {};
     bool centresKnown = false, atmoMade = false, atmoReady = false, atmoBroken = false, atmoMissLogged = false;
     std::atomic<uint64_t> atmoReplays{0};
+    // P1: the focus post
+    ComPtr<ID3D12RootSignature> cbPatchRoot;
+    ComPtr<ID3D12PipelineState> cbPatchPso;
+    ComPtr<ID3D12Resource> postConstants, postVeil, postLdr, postFinal, postGameFxaa;
+    DXGI_FORMAT postGameFxaaFormat = DXGI_FORMAT_UNKNOWN;
+    ID3D12Resource* postColour = nullptr;
+    UINT postW = 0, postH = 0, postSlot = 0;
+    int postLdrRtvSlot = -1, postFinalRtvSlot = -1;
+    D3D12_CPU_DESCRIPTOR_HANDLE postLdrRtv{}, postFinalRtv{};
+    bool postBroken = false, postReady = false;
+    std::atomic<uint64_t> postReplays{0};
+    // P1: the focus refraction source
+    ComPtr<ID3D12Resource> blur;
+    ID3D12Resource* blurColour = nullptr;
+    UINT blurMips = 0;
+    bool blurBroken = false, blurReady = false, blurMissLogged = false;
+    std::atomic<uint64_t> blurReplays{0};
     SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
     std::atomic<uint64_t> tileReplays{0};
     std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
@@ -670,10 +705,12 @@ struct Focus {
 Focus focus;
 
 // Our descriptors at the top of the bindless range: 0-11 tile lists, 12 focus depth, 13 previous colour, 14-15 shadow,
-// 16-27 fog, 28 normals UAV, 29-31 OIT views, 32-55 atmosphere (game SRVs, our SRVs, our UAVs).
-constexpr UINT kTileSlots = 64, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
+// 16-27 fog, 28 normals UAV, 29-31 OIT views, 32-55 atmosphere (game SRVs, our SRVs, our UAVs), 56-60 post, 61-66
+// refraction blur.
+constexpr UINT kTileSlots = 80, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
 constexpr UINT kFogFirst = 16, kFogUavSlots = 32;
 constexpr UINT kShadowSlots = 48, kShadowSlotBytes = 1024;
+constexpr UINT kPostSlots = 16;  // 256 B each
 constexpr UINT kFogSlots = 32, kFogSlotBytes = 16384;  // the injection constants are 15,840 B
 
 // The culling constants (tiledCulling cb0, 240 B: inverseView, view, inverseProjectionMatrix at 128, tileCount 192,
@@ -767,7 +804,7 @@ RWByteAddressBuffer dst : register(u0);
 // size, row 84; 3D ones with a log-distance slice in z): the focus texel at focus uv takes the eye map at the eye uv
 // the remap gives (eye NDC = centre + box * focus NDC); z slices kept. Built twice: 2D (ATMO_3D 0) and 3D.
 constexpr char kAtmoShader[] = R"(
-cbuffer P : register(b0) { float box; float cx; float cy; uint sx; uint sy; uint sz; };
+cbuffer P : register(b0) { float box; float cx; float cy; uint sx; uint sy; uint sz; uint stereo; float cx1; float cy1; float mipLevel; };
 SamplerState lin : register(s0);
 #if ATMO_3D
 Texture3D<float4> src : register(t0);
@@ -778,14 +815,33 @@ RWTexture2D<float4> dst : register(u0);
 #endif
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
     if (id.x >= sx || id.y >= sy || id.z >= sz) return;
-    const float2 uf = (float2(id.xy) + 0.5) / float2(sx, sy);
-    const float2 ndc = float2(cx, cy) + box * float2(uf.x * 2 - 1, 1 - uf.y * 2);
-    const float2 ue = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    float2 uf = (float2(id.xy) + 0.5) / float2(sx, sy);
+    float2 c = float2(cx, cy);
+    float eye = 0;
+    if (stereo != 0) {  // two eyes side by side (the veil): each half through its own eye's box
+        eye = uf.x >= 0.5 ? 1 : 0;
+        uf.x = uf.x * 2 - eye;
+        if (eye > 0) c = float2(cx1, cy1);
+    }
+    const float2 ndc = c + box * float2(uf.x * 2 - 1, 1 - uf.y * 2);
+    float2 ue = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (stereo != 0) ue.x = (ue.x + eye) * 0.5;
 #if ATMO_3D
     dst[id] = src.SampleLevel(lin, float3(ue, (id.z + 0.5) / sz), 0);
 #else
-    dst[id.xy] = src.SampleLevel(lin, ue, 0);
+    dst[id.xy] = src.SampleLevel(lin, ue, mipLevel);
 #endif
+}
+)";
+
+// P1: a constant buffer copied with one register replaced (the tonemap's target size).
+constexpr char kCbPatchShader[] = R"(
+cbuffer Src : register(b0) { float4 src[16]; };
+cbuffer P : register(b1) { uint count; uint reg; uint2 pad; float4 value; };
+RWByteAddressBuffer dst : register(u0);
+[numthreads(16, 1, 1)] void main(uint i : SV_DispatchThreadID) {
+    if (i >= count) return;
+    dst.Store4(i * 16, asuint(i == reg ? value : src[i]));
 }
 )";
 
@@ -840,6 +896,9 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"deferredShadows") == 0             ? 6
                : std::wcscmp(name, L"oitComposite") == 0                ? 7
                : std::wcscmp(name, L"atmosphericScatteringUpscaling") == 0 ? 8
+               : std::wcscmp(name, L"tonemap") == 0                     ? 9
+               : std::wcscmp(name, L"fxaa") == 0                        ? 10
+               : std::wcscmp(name, L"gaussianBlur3x3Float4") == 0       ? 11
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -882,7 +941,7 @@ bool focus_compile() {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor = {0, 0};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants = {1, 0, 30};
+    params[1].Constants = {1, 0, 31};
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {0, 0};
     const D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -1006,13 +1065,13 @@ bool focus_compile() {
                 focus.shadowBroken = true;
         }
     }
-    if (focus.settings.atmosphere) {  // R2c: the atmosphere resample (2D and 3D)
+    if (focus.settings.atmosphere || focus.settings.post || focus.settings.transparents) {  // atmosphere, veil, blur
         ComPtr<ID3DBlob> blob3, errors3;
         D3D12_DESCRIPTOR_RANGE ranges[2] = {{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0},
                                             {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0}};
         D3D12_ROOT_PARAMETER p3[3] = {};
         p3[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        p3[0].Constants = {0, 0, 6};
+        p3[0].Constants = {0, 0, 10};
         p3[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         p3[1].DescriptorTable = {1, &ranges[0]};
         p3[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1042,6 +1101,40 @@ bool focus_compile() {
             logf("replay focus: atmosphere: the resample shader failed (%s); no focus atmosphere",
                  errors3 ? static_cast<const char*>(errors3->GetBufferPointer()) : "?");
             focus.atmoBroken = true;
+        }
+    }
+    if (focus.settings.post) {  // P1: the constant-buffer patch
+        ComPtr<ID3DBlob> code4, errors4, blob4;
+        D3D12_ROOT_PARAMETER p4[3] = {};
+        p4[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        p4[0].Descriptor = {0, 0};
+        p4[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        p4[1].Constants = {1, 0, 8};
+        p4[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        p4[2].Descriptor = {0, 0};
+        const D3D12_ROOT_SIGNATURE_DESC d4{3, p4, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_COMPUTE_PIPELINE_STATE_DESC pso4{};
+        D3D12_HEAP_PROPERTIES heap4{D3D12_HEAP_TYPE_DEFAULT};
+        const D3D12_RESOURCE_DESC buf4{D3D12_RESOURCE_DIMENSION_BUFFER, 0, UINT64{kPostSlots} * 256, 1, 1, 1,
+                                       DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                                       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        bool ok4 = SUCCEEDED(D3DCompile(kCbPatchShader, sizeof(kCbPatchShader) - 1, "focus-cb-patch", nullptr, nullptr,
+                                        "main", "cs_5_0", 0, 0, &code4, &errors4)) &&
+                   SUCCEEDED(D3D12SerializeRootSignature(&d4, D3D_ROOT_SIGNATURE_VERSION_1, &blob4, &errors4)) &&
+                   SUCCEEDED(device->CreateRootSignature(0, blob4->GetBufferPointer(), blob4->GetBufferSize(),
+                                                         IID_PPV_ARGS(&focus.cbPatchRoot)));
+        if (ok4) {
+            pso4.pRootSignature = focus.cbPatchRoot.Get();
+            pso4.CS = {code4->GetBufferPointer(), code4->GetBufferSize()};
+            ok4 = SUCCEEDED(device->CreateComputePipelineState(&pso4, IID_PPV_ARGS(&focus.cbPatchPso))) &&
+                  SUCCEEDED(device->CreateCommittedResource(&heap4, D3D12_HEAP_FLAG_NONE, &buf4,
+                                                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                            IID_PPV_ARGS(&focus.postConstants)));
+        }
+        if (!ok4) {
+            logf("replay focus: post: the constants patch failed (%s); no focus post",
+                 errors4 ? static_cast<const char*>(errors4->GetBufferPointer()) : "?");
+            focus.postBroken = true;
         }
     }
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeap{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvSlots};
@@ -1353,7 +1446,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slots;
     l->SetComputeRootSignature(focus.patchRoot.Get());
     l->SetPipelineState(focus.patchPso.Get());
-    uint32_t params[30] = {};
+    uint32_t params[31] = {};
     const float box = static_cast<float>(focus.settings.boxFraction);
     const float floats[4] = {box, box, static_cast<float>(fwi), static_cast<float>(fhi)};
     std::memcpy(params, floats, sizeof(floats));
@@ -1365,7 +1458,10 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     // resampled, the focus sky came out uniformly darker).
     for (int m = 0; m < 8; ++m)
         params[22 + m] = atmoOn && m % 4 < 2 ? focus.slotFirst + 40 + static_cast<UINT>(m) - focus.baseIndex : 0;
-    l->SetComputeRoot32BitConstants(1, 30, params, 0);
+    params[30] = focus.blurReady && !focus.blurBroken && !focus.tilesBroken
+                     ? focus.slotFirst + 62 - focus.baseIndex
+                     : 0;
+    l->SetComputeRoot32BitConstants(1, 31, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         if (sample && !mono) {  // the sample's eye centres come from a stereo list's constants (per-eye lists differ)
@@ -2220,7 +2316,7 @@ void focus_atmo_record(List* gameList) {
         const D3D12_RESOURCE_DESC d = focus.atmo[m]->GetDesc();
         const bool is3d = d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D;
         const UINT sz = is3d ? d.DepthOrArraySize : 1;
-        uint32_t p[6];
+        uint32_t p[10] = {};
         const float f[3] = {box, centre[m / 4][0], centre[m / 4][1]};
         std::memcpy(p, f, sizeof(f));
         p[3] = static_cast<uint32_t>(d.Width);
@@ -2228,7 +2324,7 @@ void focus_atmo_record(List* gameList) {
         p[5] = sz;
         barrier(l, focus.atmo[m].Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         l->SetPipelineState(focus.atmoPso[is3d ? 1 : 0].Get());
-        l->SetComputeRoot32BitConstants(0, 6, p, 0);
+        l->SetComputeRoot32BitConstants(0, 10, p, 0);
         l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 32 + m));
         l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + 48 + m));
         l->Dispatch((p[3] + 7) / 8, (p[4] + 7) / 8, sz);
@@ -2244,6 +2340,373 @@ void focus_atmo_record(List* gameList) {
     focus.atmoReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.atmoReplays.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ---- P1: the focus views' refraction source (opaqueSceneBlur) -----------------------------------------------------
+
+// At the game's Close of the list with its opaqueSceneBlur chain (gaussianBlur3x3Float4): our focus version, mip 0 a
+// copy of our colour twin (the opaque focus scene: the transparents come later), mips 1-3 the game's blurred mips
+// resampled through each eye's box (both halves). The focus pass constants name it (76.z refraction). Slots: 61 the
+// game blur's SRV, 62 ours (all mips), 64-66 our mips 1-3 (UAV).
+void focus_blur_record(List* gameList) {
+    Replay* r = nullptr;
+    ID3D12Resource* colour = nullptr;
+    float centre[2][2] = {};
+    AcquireSRWLockExclusive(&focus.lock);
+    const Twin* twin = nullptr;
+    for (const auto& [game, tw] : focus.twins)
+        if (!tw.depth && tw.name == "msaaColor" && tw.gameDesc.SampleDesc.Count == 1)
+            twin = &tw;
+    if (!focus.blurBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.atmoPso[0] &&
+        focus.centresKnown && twin) {
+        colour = twin->focus.Get();
+        std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+        if (!focus.blur || focus.blurColour != colour) {
+            ID3D12Resource* game = nullptr;
+            D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+            for (const auto& [ptr, info] : focus.srvInfo)
+                if (!game && info.second.ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D &&
+                    debug_name(info.first.Get()) == "opaqueSceneBlur") {
+                    game = info.first.Get();
+                    view = info.second;
+                }
+            const D3D12_RESOURCE_DESC cd = colour->GetDesc();
+            if (game && game->GetDesc().MipLevels >= 2 && game->GetDesc().Format == cd.Format) {
+                retire(focus.blur.Get());
+                D3D12_RESOURCE_DESC d = cd;
+                d.MipLevels = std::min<UINT16>(4, game->GetDesc().MipLevels);
+                d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+                D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+                ComPtr<ID3D12Resource> b;
+                if (SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d,
+                                                              D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, nullptr,
+                                                              IID_PPV_ARGS(&b)))) {
+                    inReplay = true;
+                    D3D12_SHADER_RESOURCE_VIEW_DESC gv = view;
+                    gv.Texture2D.MostDetailedMip = 0;
+                    gv.Texture2D.MipLevels = static_cast<UINT>(-1);
+                    srvViewOriginal(device.Get(), game, &gv, game_cpu(focus.slotFirst + 61));
+                    D3D12_SHADER_RESOURCE_VIEW_DESC ov{};
+                    ov.Format = twin->viewFormat;
+                    ov.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                    ov.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                    ov.Texture2D.MipLevels = d.MipLevels;
+                    srvViewOriginal(device.Get(), b.Get(), &ov, game_cpu(focus.slotFirst + 62));
+                    for (UINT m = 1; m < d.MipLevels; ++m) {
+                        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+                        u.Format = twin->viewFormat;
+                        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                        u.Texture2D.MipSlice = m;
+                        device->CreateUnorderedAccessView(b.Get(), nullptr, &u, game_cpu(focus.slotFirst + 63 + m));
+                    }
+                    inReplay = false;
+                    focus.blur = b;
+                    focus.blurColour = colour;
+                    focus.blurMips = d.MipLevels;
+                    logf("replay focus: refraction: our opaqueSceneBlur %llux%u, %u mips (mip 0 our colour, the rest the "
+                         "eye's resampled), at bindless %u",
+                         static_cast<unsigned long long>(d.Width), d.Height, static_cast<unsigned>(d.MipLevels),
+                         focus.slotFirst + 62 - focus.baseIndex);
+                } else {
+                    log_line("replay focus: refraction: could not make our blur; none");
+                    focus.blurBroken = true;
+                }
+            } else if (!focus.blurMissLogged) {
+                focus.blurMissLogged = true;
+                log_line("replay focus: refraction: the game's opaqueSceneBlur not seen yet (or another format)");
+            }
+        }
+        if (focus.blur && !focus.blurBroken)
+            r = acquire_replay();
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    // mip 0: our opaque focus colour
+    barrier(l, colour, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    barrier(l, focus.blur.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_TEXTURE_COPY_LOCATION dst{focus.blur.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    dst.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION src{colour, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    src.SubresourceIndex = 0;
+    l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    barrier(l, colour, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    barrier(l, focus.blur.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // mips 1..: the game's mips through each box
+    const D3D12_RESOURCE_DESC d = focus.blur->GetDesc();
+    const float box = static_cast<float>(focus.settings.boxFraction);
+    l->SetComputeRootSignature(focus.atmoRoot.Get());
+    l->SetPipelineState(focus.atmoPso[0].Get());
+    for (UINT m = 1; m < focus.blurMips; ++m) {
+        uint32_t p[10];
+        const float f0[3] = {box, centre[0][0], centre[0][1]};
+        std::memcpy(p, f0, sizeof(f0));
+        p[3] = std::max<UINT>(1, static_cast<UINT>(d.Width >> m));
+        p[4] = std::max<UINT>(1, d.Height >> m);
+        p[5] = 1;
+        p[6] = 1;
+        std::memcpy(&p[7], &centre[1][0], 4);
+        std::memcpy(&p[8], &centre[1][1], 4);
+        const float mip = static_cast<float>(m);
+        std::memcpy(&p[9], &mip, 4);
+        l->SetComputeRoot32BitConstants(0, 10, p, 0);
+        l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 61));
+        l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + 63 + m));
+        l->Dispatch((p[3] + 7) / 8, (p[4] + 7) / 8, 1);
+    }
+    barrier(l, focus.blur.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    focus.pending[gameList].push_back(r);
+    focus.blurReady = true;
+    ReleaseSRWLockExclusive(&focus.lock);
+    focus.blurReplays.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ---- P1: the focus views' post: bloom, tonemap, fxaa -------------------------------------------------------------
+
+// The game's view (srvInfo) a descriptor table points at: its resource and view, or false.
+bool table_view(D3D12_GPU_DESCRIPTOR_HANDLE table, ComPtr<ID3D12Resource>& r, D3D12_SHADER_RESOURCE_VIEW_DESC& v) {
+    const UINT64 heapGpu = focus.gameHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+    if (table.ptr < heapGpu)
+        return false;
+    const auto it = focus.srvInfo.find(game_cpu(static_cast<UINT>((table.ptr - heapGpu) / focus.increment)).ptr);
+    if (it == focus.srvInfo.end())
+        return false;
+    r = it->second.first;
+    v = it->second.second;
+    return true;
+}
+
+// At the game's Close of its post list (tonemap and fxaa drawn): per frame, the eye's veil (bloom) resampled through
+// each focus box into our veil; the game's tonemap replayed into our focus image (our colour and veil; the game's
+// exposure, grading LUT; its constants with our size); its fxaa into our final focus image. Our slots: 56 our colour
+// twin's SRV, 57 the game veil's SRV, 58/59 our veil UAV/SRV, 60 our tonemapped image's SRV.
+void focus_post_record(List* gameList, const Stream& s) {
+    Replay* r = nullptr;
+    UINT fw2 = 0, fh = 0;
+    ID3D12Resource* colour = nullptr;
+    float centre[2][2] = {};
+    std::string why;
+    AcquireSRWLockExclusive(&focus.lock);
+    const Twin* twin = nullptr;
+    for (const auto& [game, tw] : focus.twins)
+        if (!tw.depth && tw.name == "msaaColor" && tw.gameDesc.SampleDesc.Count == 1)
+            twin = &tw;
+    if (focus.postBroken || focus.tilesBroken || !focus.gameHeap || !focus.slotFirst || !focus.cbPatchPso ||
+        !focus.atmoPso[0] || !focus.centresKnown || !twin) {
+        why = "not ready (tiles, centres or the colour twin)";
+    } else {
+        fw2 = 2 * twin->focusW;
+        fh = twin->focusH;
+        colour = twin->focus.Get();
+        std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+        if (!focus.postLdr || fw2 != focus.postW || fh != focus.postH || focus.postColour != colour) {
+            ComPtr<ID3D12Resource> veil, fxaaTex;
+            D3D12_SHADER_RESOURCE_VIEW_DESC veilView{}, fxaaView{};
+            const auto tonemapRt = focus.views.find(s.tonemapDraw.rtv), fxaaRt = focus.views.find(s.fxaaDraw.rtv);
+            if (!table_view(s.tonemapDraw.tables[3], veil, veilView) || !table_view(s.fxaaDraw.tables[1], fxaaTex, fxaaView) ||
+                tonemapRt == focus.views.end() || fxaaRt == focus.views.end()) {
+                why = "the game's veil / fxaa_texture views or render targets not seen";
+            } else {
+                for (ID3D12Resource* old : {focus.postLdr.Get(), focus.postFinal.Get(), focus.postVeil.Get()})
+                    retire(old);
+                if (focus.postLdrRtvSlot < 0)
+                    focus.postLdrRtv = view_slot(false, focus.postLdrRtvSlot);
+                if (focus.postFinalRtvSlot < 0)
+                    focus.postFinalRtv = view_slot(false, focus.postFinalRtvSlot);
+                D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+                D3D12_RESOURCE_DESC vd = veil->GetDesc();
+                vd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+                vd.MipLevels = 1;
+                D3D12_RESOURCE_DESC ld = fxaaTex->GetDesc();
+                ld.Width = fw2;
+                ld.Height = fh;
+                ld.MipLevels = 1;
+                ld.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+                D3D12_RESOURCE_DESC fd = ld;
+                fd.Format = fxaaRt->second.viewFormat;
+                // ACE's fxaa_texture is typed UNORM with _SRGB views (format casting set up by the game): ours are
+                // typeless, which allows both.
+                const auto typeless = [](DXGI_FORMAT f) {
+                    switch (f) {
+                    case DXGI_FORMAT_R8G8B8A8_UNORM:
+                    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+                        return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+                    case DXGI_FORMAT_B8G8R8A8_UNORM:
+                    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+                        return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+                    default:
+                        return f;
+                    }
+                };
+                ld.Format = typeless(ld.Format);
+                fd.Format = typeless(fd.Format);
+                bool ok = focus.postLdrRtv.ptr && focus.postFinalRtv.ptr;
+                ComPtr<ID3D12Resource> v2, l2, f2;
+                ok = ok &&
+                     SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &vd,
+                                                               D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, nullptr,
+                                                               IID_PPV_ARGS(&v2))) &&
+                     SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &ld,
+                                                               D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, nullptr,
+                                                               IID_PPV_ARGS(&l2))) &&
+                     SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &fd,
+                                                               D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, nullptr,
+                                                               IID_PPV_ARGS(&f2)));
+                if (!ok) {
+                    log_line("replay focus: post: could not make our post targets; no focus post");
+                    focus.postBroken = true;
+                } else {
+                    inReplay = true;
+                    D3D12_SHADER_RESOURCE_VIEW_DESC cv{};
+                    cv.Format = twin->viewFormat;
+                    cv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                    cv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                    cv.Texture2D.MipLevels = 1;
+                    srvViewOriginal(device.Get(), colour, &cv, game_cpu(focus.slotFirst + 56));
+                    srvViewOriginal(device.Get(), veil.Get(), &veilView, game_cpu(focus.slotFirst + 57));
+                    D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+                    u.Format = vd.Format;
+                    u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                    device->CreateUnorderedAccessView(v2.Get(), nullptr, &u, game_cpu(focus.slotFirst + 58));
+                    D3D12_SHADER_RESOURCE_VIEW_DESC ov = veilView;
+                    ov.Texture2D.MostDetailedMip = 0;
+                    ov.Texture2D.MipLevels = 1;
+                    srvViewOriginal(device.Get(), v2.Get(), &ov, game_cpu(focus.slotFirst + 59));
+                    D3D12_SHADER_RESOURCE_VIEW_DESC lv = fxaaView;
+                    lv.Texture2D.MostDetailedMip = 0;
+                    lv.Texture2D.MipLevels = 1;
+                    srvViewOriginal(device.Get(), l2.Get(), &lv, game_cpu(focus.slotFirst + 60));
+                    D3D12_RENDER_TARGET_VIEW_DESC rv{};
+                    rv.Format = tonemapRt->second.viewFormat;
+                    rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+                    rtvOriginal(device.Get(), l2.Get(), &rv, focus.postLdrRtv);
+                    rv.Format = fxaaRt->second.viewFormat;
+                    rtvOriginal(device.Get(), f2.Get(), &rv, focus.postFinalRtv);
+                    inReplay = false;
+                    focus.postVeil = v2;
+                    focus.postLdr = l2;
+                    focus.postFinal = f2;
+                    focus.postW = fw2;
+                    focus.postH = fh;
+                    focus.postColour = colour;
+                    focus.postGameFxaa = fxaaTex;
+                    focus.postGameFxaaFormat = fxaaView.Format;
+                    logf("replay focus: post: our focus post targets %ux%u (tonemap format %d, final %d), veil %llux%u",
+                         fw2, fh, static_cast<int>(rv.Format == fxaaRt->second.viewFormat ? tonemapRt->second.viewFormat
+                                                                                          : rv.Format),
+                         static_cast<int>(fxaaRt->second.viewFormat), static_cast<unsigned long long>(vd.Width), vd.Height);
+                }
+            }
+        }
+        if (focus.postLdr && !focus.postBroken)
+            r = acquire_replay();
+    }
+    static int missLogged = 0;
+    if (!r && !why.empty() && missLogged < 3 && focus.twins.size() > 8) {
+        ++missLogged;
+        logf("replay focus: post: not replayed (%s)", why.c_str());
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    // 1. The veil (bloom) through each focus box, both halves.
+    const D3D12_RESOURCE_DESC vd = focus.postVeil->GetDesc();
+    {
+        const float box = static_cast<float>(focus.settings.boxFraction);
+        uint32_t p[10] = {};
+        const float f0[3] = {box, centre[0][0], centre[0][1]};
+        std::memcpy(p, f0, sizeof(f0));
+        p[3] = static_cast<uint32_t>(vd.Width);
+        p[4] = vd.Height;
+        p[5] = 1;
+        p[6] = 1;  // stereo: two halves
+        std::memcpy(&p[7], &centre[1][0], 4);
+        std::memcpy(&p[8], &centre[1][1], 4);
+        barrier(l, focus.postVeil.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        l->SetComputeRootSignature(focus.atmoRoot.Get());
+        l->SetPipelineState(focus.atmoPso[0].Get());
+        l->SetComputeRoot32BitConstants(0, 10, p, 0);
+        l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 57));
+        l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + 58));
+        l->Dispatch((p[3] + 7) / 8, (p[4] + 7) / 8, 1);
+        barrier(l, focus.postVeil.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    }
+    // 2. The tonemap constants with our size (register 1: height, width, 1/height, 1/width).
+    const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.postConstants->GetGPUVirtualAddress() + UINT64{focus.postSlot++ % kPostSlots} * 256;
+    {
+        uint32_t p[8] = {6, 1, 0, 0};
+        const float size[4] = {static_cast<float>(fh), static_cast<float>(fw2), 1.0f / static_cast<float>(fh),
+                               1.0f / static_cast<float>(fw2)};
+        std::memcpy(&p[4], size, sizeof(size));
+        l->SetComputeRootSignature(focus.cbPatchRoot.Get());
+        l->SetPipelineState(focus.cbPatchPso.Get());
+        l->SetComputeRootConstantBufferView(0, s.tonemapDraw.cbv);
+        l->SetComputeRoot32BitConstants(1, 8, p, 0);
+        l->SetComputeRootUnorderedAccessView(2, mine);
+        l->Dispatch(1, 1, 1);
+        barrier(l, focus.postConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    }
+    const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    const D3D12_VIEWPORT view{0, 0, static_cast<float>(fw2), static_cast<float>(fh), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(fw2), static_cast<LONG>(fh)};
+    // 3. The game's tonemap into our focus image.
+    barrier(l, colour, D3D12_RESOURCE_STATE_RENDER_TARGET, read);
+    barrier(l, focus.postLdr.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    l->OMSetRenderTargets(1, &focus.postLdrRtv, FALSE, nullptr);
+    l->RSSetViewports(1, &view);
+    l->RSSetScissorRects(1, &rect);
+    l->SetGraphicsRootSignature(s.tonemapDraw.root);
+    l->SetPipelineState(s.tonemapDraw.pso);
+    l->SetGraphicsRootDescriptorTable(0, game_gpu(focus.slotFirst + 56));
+    l->SetGraphicsRootDescriptorTable(1, s.tonemapDraw.tables[1]);
+    l->SetGraphicsRootDescriptorTable(2, s.tonemapDraw.tables[2]);
+    l->SetGraphicsRootDescriptorTable(3, game_gpu(focus.slotFirst + 59));
+    l->SetGraphicsRootDescriptorTable(4, s.tonemapDraw.tables[4]);
+    l->SetGraphicsRootDescriptorTable(5, s.tonemapDraw.tables[5]);
+    l->SetGraphicsRootConstantBufferView(6, mine);
+    l->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    l->DrawInstanced(3, 1, 0, 0);
+    barrier(l, focus.postLdr.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    barrier(l, colour, read, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    // 4. The game's fxaa into our final focus image (rcpFrame ours).
+    barrier(l, focus.postFinal.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    l->OMSetRenderTargets(1, &focus.postFinalRtv, FALSE, nullptr);
+    l->SetGraphicsRootSignature(s.fxaaDraw.root);
+    l->SetPipelineState(s.fxaaDraw.pso);
+    uint32_t consts[8];
+    std::memcpy(consts, s.fxaaDraw.consts, sizeof(consts));
+    const float rcp[2] = {1.0f / static_cast<float>(fw2), 1.0f / static_cast<float>(fh)};
+    std::memcpy(consts, rcp, sizeof(rcp));
+    l->SetGraphicsRoot32BitConstants(0, 8, consts, 0);
+    l->SetGraphicsRootDescriptorTable(1, game_gpu(focus.slotFirst + 60));
+    l->DrawInstanced(3, 1, 0, 0);
+    barrier(l, focus.postFinal.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    barrier(l, focus.postConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    focus.pending[gameList].push_back(r);
+    if (!focus.postReady)
+        log_line("replay focus: post: the first focus post replay recorded (bloom, tonemap, fxaa)");
+    focus.postReady = true;
+    ReleaseSRWLockExclusive(&focus.lock);
+    focus.postReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- R2c: the focus views' previous-frame colour ----------------------------------------------------------------
@@ -2377,6 +2840,10 @@ void save_picture(const std::wstring& path, const std::vector<float>& v, UINT w,
                 static_cast<uint8_t>(std::lround((d <= 0 ? 0.0f : std::sqrt(std::min(1.0f, d * scale))) * 255));
         } else {
             for (int c = 0; c < 3; ++c) {
+                if (scale < 0) {  // already display values (8-bit, tonemapped): written as they are
+                    rgb[c] = static_cast<uint8_t>(std::lround(std::clamp(v[i * 3 + c], 0.0f, 1.0f) * 255));
+                    continue;
+                }
                 const float x = std::max(0.0f, v[i * 3 + c] * scale);
                 rgb[c] = static_cast<uint8_t>(std::lround(std::pow(x / (1 + x), 1 / 2.2f) * 255));
             }
@@ -2477,6 +2944,8 @@ void focus_save(std::shared_ptr<SampleJob> job) {
         if (!sorted.empty())
             scale = t.depth ? 1.0f / std::max(1e-6f, sorted[sorted.size() * 99 / 100])
                             : 0.18f / std::max(1e-4f, sorted[sorted.size() / 2]);
+        if (t.name == "post")
+            scale = -1;  // display values: raw
         wchar_t name[160];
         std::swprintf(name, 160, L"frame-%llu-%hs-focus.png", static_cast<unsigned long long>(job->frame), t.name.c_str());
         save_picture((dir / name).wstring(), f, t.fw * 2, t.fh, t.depth, scale);
@@ -2513,7 +2982,8 @@ void focus_save(std::shared_ptr<SampleJob> job) {
                         result.shiftY = dy;
                     }
                 }
-        } else if (!t.depth && result.colourPixels == 0) {  // the largest colour twin
+        } else if (!t.depth && (result.colourPixels == 0 || t.name == "post")) {  // the largest colour twin; P1 post
+            const ReplayFocusCompare kept = result;  // the post comparison logs only
             const bool skyMask = eyeDepthW == t.ew && !eyeDepth.empty();
             uint64_t compared = 0, agree = 0;
             for (int eye = 0; eye < 2; ++eye)
@@ -2601,6 +3071,8 @@ void focus_save(std::shared_ptr<SampleJob> job) {
             logf("replay focus: sample frame %llu: colour %s: %llu pixels compared, %.1f%% agree (every channel within 3%%)",
                  static_cast<unsigned long long>(job->frame), t.name.c_str(), static_cast<unsigned long long>(compared),
                  result.colourAgree * 100);
+            if (t.name == "post")
+                result = kept;  // the scene colour's result stays the one reported
         }
     }
     AcquireSRWLockExclusive(&focus.compareLock);
@@ -2683,6 +3155,44 @@ void focus_copy_sample() {
             job->keep.emplace_back(twin);
         }
         job->targets.push_back(std::move(s));
+    }
+    if (focus.postReady && focus.postLdr && focus.postGameFxaa) {  // P1: our tonemapped focus vs the game's eyes
+        const Twin* colourTwin = nullptr;
+        for (const auto& [game, t] : focus.twins)
+            if (!t.depth && t.name == "msaaColor" && t.gameDesc.SampleDesc.Count == 1)
+                colourTwin = &t;
+        if (colourTwin) {
+            SampleTarget s;
+            s.name = "post";
+            s.format = focus.postGameFxaaFormat;
+            s.fw = focus.postW / 2;
+            s.fh = focus.postH;
+            s.ew = colourTwin->eyeW;
+            s.eh = colourTwin->eyeH;
+            const D3D12_RESOURCE_DESC fd = focus.postLdr->GetDesc(), ed = focus.postGameFxaa->GetDesc();
+            UINT64 fb = 0, eb = 0;
+            device->GetCopyableFootprints(&fd, 0, 1, 0, &s.focusFoot, nullptr, nullptr, &fb);
+            device->GetCopyableFootprints(&ed, 0, 1, 0, &s.eyeFoot, nullptr, nullptr, &eb);
+            s.focusRead = buffer(fb);
+            s.eyeRead = buffer(eb);
+            if (s.focusRead && s.eyeRead && ed.Width == UINT64{2} * s.ew && ed.Height == s.eh) {
+                // ours rests as a shader resource, the game's fxaa_texture as a render target (end of its post list)
+                const std::tuple<ID3D12Resource*, ID3D12Resource*, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_STATES>
+                    pairs[2] = {{focus.postLdr.Get(), s.focusRead.Get(), s.focusFoot, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE},
+                                {focus.postGameFxaa.Get(), s.eyeRead.Get(), s.eyeFoot, D3D12_RESOURCE_STATE_RENDER_TARGET}};
+                for (const auto& [res, read, foot, state] : pairs) {
+                    barrier(l.Get(), res, state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                    D3D12_TEXTURE_COPY_LOCATION dst{read, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+                    dst.PlacedFootprint = foot;
+                    D3D12_TEXTURE_COPY_LOCATION src{res, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+                    src.SubresourceIndex = 0;
+                    l->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+                    barrier(l.Get(), res, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
+                    job->keep.emplace_back(res);
+                }
+                job->targets.push_back(std::move(s));
+            }
+        }
     }
     const uint32_t slot = focus.sampleSlot.load();
     if (slot != UINT32_MAX) {
@@ -2820,6 +3330,12 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             focus_fog_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.shadows && s->shadowDraws.size() >= 2)
             focus_shadow_record(list, *s);
+        if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.transparents &&
+            std::any_of(s->tileDispatches.begin(), s->tileDispatches.end(),
+                        [](const Stream::TileDispatch& d) { return d.kind == 11; }))
+            focus_blur_record(list);
+        if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.post && s->hasTonemap && s->hasFxaa)
+            focus_post_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.atmosphere &&
             std::any_of(s->tileDispatches.begin(), s->tileDispatches.end(),
                         [](const Stream::TileDispatch& d) { return d.kind == 8; }))
@@ -2909,6 +3425,8 @@ void STDMETHODCALLTYPE constNHook(List* l, UINT i, UINT n, const void* data, UIN
         HookTimer t(s);
         s->op(kConstN); s->put(i); s->put(n); s->put(o);
         s->put_bytes(data, size_t{n} * 4);
+        if (i == 0 && o + n <= 8 && data)
+            std::memcpy(s->gfxConsts + o, data, size_t{n} * 4);
     }
     constNOriginal(l, i, n, data, o);
 }
@@ -2983,7 +3501,10 @@ void STDMETHODCALLTYPE omHook(List* l, UINT n, const D3D12_CPU_DESCRIPTOR_HANDLE
                               const D3D12_CPU_DESCRIPTOR_HANDLE* dsv) {
     if (Stream* s = stream_of(l)) {
         HookTimer t(s);
-        if (n > 0) s->sawRtv = true;
+        if (n > 0) {
+            s->sawRtv = true;
+            s->lastRtv = rtvs ? rtvs[0].ptr : 0;
+        }
         if (dsv) s->sawDsv = true;
         if (probeMode == 3) {  // re-emitted onto our twins
             const SIZE_T step = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -3084,7 +3605,7 @@ void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D
                       ? tile_view_kind(r)
                       : -1;
     AcquireSRWLockExclusive(&focus.lock);
-    if (r && desc && (focus.settings.transparents || focus.settings.atmosphere) &&
+    if (r && desc && (focus.settings.transparents || focus.settings.atmosphere || focus.settings.post) &&
         (desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D || desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2DMS ||
          desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE3D) &&
         (r->GetDesc().Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) &&
@@ -3112,7 +3633,8 @@ void STDMETHODCALLTYPE copySimpleHook(ID3D12Device* d, UINT n, D3D12_CPU_DESCRIP
         if (ptr >= src.ptr && ptr < src.ptr + SIZE_T{n} * step)
             focus.tileViews.emplace_back(dest.ptr + (ptr - src.ptr), k);
     }
-    if ((focus.settings.transparents || focus.settings.atmosphere) && !focus.srvInfo.empty() && n <= 4096)
+    if ((focus.settings.transparents || focus.settings.atmosphere || focus.settings.post) && !focus.srvInfo.empty() &&
+        n <= 4096)
         for (UINT i = 0; i < n; ++i) {
             const auto it = focus.srvInfo.find(src.ptr + SIZE_T{i} * step);
             if (it != focus.srvInfo.end() && focus.srvInfo.size() < 8192) {
@@ -3128,6 +3650,13 @@ void STDMETHODCALLTYPE drawHook(List* l, UINT a, UINT b, UINT c, UINT d) {
         HookTimer t(s);
         s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d);
         ++s->draws;
+        if (s->psoKind == 9 || s->psoKind == 10) {  // P1: tonemap, fxaa
+            Stream::PostDraw& pd = s->psoKind == 9 ? s->tonemapDraw : s->fxaaDraw;
+            pd = {s->pso, s->gfxRoot, {}, s->gfxCbvs[6], {}, s->lastRtv};
+            std::memcpy(pd.tables, s->gfxTables, sizeof(pd.tables));
+            std::memcpy(pd.consts, s->gfxConsts, sizeof(pd.consts));
+            (s->psoKind == 9 ? s->hasTonemap : s->hasFxaa) = true;
+        }
         if (s->psoKind == 7) {
             s->oitDraw = true;
             std::memcpy(s->oitTables, s->gfxTables, sizeof(s->oitTables));
@@ -3286,6 +3815,8 @@ ReplayProbeStats replay_probe_take_stats() {
     s.monoReplays = focus.monoReplays.exchange(0);
     s.oitReplays = focus.oitReplays.exchange(0);
     s.atmoReplays = focus.atmoReplays.exchange(0);
+    s.postReplays = focus.postReplays.exchange(0);
+    s.blurReplays = focus.blurReplays.exchange(0);
     s.twinsMade = twinsMade.load();
     s.twinsRemade = twinsRemade.load();
     return s;
@@ -3333,12 +3864,13 @@ void replay_probe_frame_end() {
     const double n = s.frames ? static_cast<double>(s.frames) : 1.0;
     if (probeMode == 3) {
         logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; tile replays "
-             "%.2f, fog replays %.2f, shadow replays %.2f, per-eye lists %.2f, OIT composites %.2f, atmosphere %.2f; "
+             "%.2f, fog replays %.2f, shadow replays %.2f, per-eye lists %.2f, OIT composites %.2f, atmosphere %.2f, "
+             "post %.2f, refraction %.2f; "
              "recording the replays "
              "%.3f ms, recording hooks %.3f ms, the game's own recording of those lists %.3f ms (CPU)",
              static_cast<unsigned long long>(window), s.listsReplayed / n, s.focusReplays / n, s.drawsReplayed / n,
              s.tileReplays / n, s.fogReplays / n, s.shadowReplays / n, s.monoReplays / n, s.oitReplays / n,
-             s.atmoReplays / n, s.replayMs / n,
+             s.atmoReplays / n, s.postReplays / n, s.blurReplays / n, s.replayMs / n,
              s.hookMs / n, s.gameMs / n);
         ++window;
         if (focus.settings.costAb) {  // 2 windows on, 2 off: the first window after each switch settles

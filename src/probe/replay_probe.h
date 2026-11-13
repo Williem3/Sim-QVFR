@@ -41,6 +41,8 @@ struct ReplayProbeStats {
     uint64_t monoReplays = 0;     // R2c: per-eye lists replayed into their eye's focus view
     uint64_t oitReplays = 0;      // R2c: OIT composites replayed
     uint64_t atmoReplays = 0;     // R2c: atmosphere resamples (8 maps each)
+    uint64_t postReplays = 0;     // P1: focus post replays (bloom, tonemap, fxaa)
+    uint64_t blurReplays = 0;     // P1: focus refraction blurs (opaqueSceneBlur: our colour + the eye's mips resampled)
 };
 
 // The focus replay's settings (mode 3).
@@ -58,6 +60,8 @@ struct ReplayFocusSettings {
     int transparents = 0;         // R2c: the per-eye lists (transparents: one eye-size viewport) into that eye's focus
                                   // view, and the order-independent-transparency composite into the focus colour;
                                   // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
+    bool post = false;            // P1: the focus views' post: the eye's bloom through the box, the game's tonemap and
+                                  // fxaa replayed on the focus colour (exposure, grading from the game's own)
     bool costAb = false;          // cost A/B: every focus replay on for 2 windows (1800 frames), off for 2, ...
     int atmosphere = 0;           // R2c: the atmospheric scattering maps (per eye, screen-shaped) resampled through each
                                   // focus box into focus copies the focus pass constants name (needs `tiles`); 2: A/B,
