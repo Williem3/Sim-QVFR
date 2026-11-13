@@ -237,6 +237,7 @@ ComPtr<ID3D12Device> device;
 std::atomic<bool> installed{false};
 int probeMode = 0;
 std::atomic<bool> replayOn{true};
+std::atomic<bool> focusActive{true};  // mode 3 cost A/B: the focus replays recorded at all
 uint32_t minDraws = 16;
 float minWidth = 512.0f;
 double msPerTick = 0, msPerCycle = 0;
@@ -2786,6 +2787,10 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
     ReleaseSRWLockExclusive(&streamsLock);
     current = {list, s};
     s->begin(now_ticks());
+    if (probeMode == 3 && !focusActive.load(std::memory_order_relaxed)) {
+        s->active = false;  // cost A/B off: the hooks pass straight through (no recording)
+        return hr;
+    }
     if (pso) {
         s->op(kPso);
         s->put(pso);
@@ -2807,6 +2812,8 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     listsSeen.fetch_add(1, std::memory_order_relaxed);
     hookCycles.fetch_add(s->hookCycles, std::memory_order_relaxed);
     if (probeMode == 3) {
+        if (!focusActive.load(std::memory_order_relaxed))
+            return hr;  // cost A/B: the game's own frame only
         if (SUCCEEDED(hr) && focus.settings.tiles && !s->tileDispatches.empty())
             focus_tiles_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.fog && !s->tileDispatches.empty())
@@ -3334,6 +3341,14 @@ void replay_probe_frame_end() {
              s.atmoReplays / n, s.replayMs / n,
              s.hookMs / n, s.gameMs / n);
         ++window;
+        if (focus.settings.costAb) {  // 2 windows on, 2 off: the first window after each switch settles
+            const bool on = (window / 2) % 2 == 0;
+            if (on != focusActive.load()) {
+                focusActive = on;
+                logf("replay focus: cost A/B: focus replays now %s (window %llu on)", on ? "ON" : "OFF",
+                     static_cast<unsigned long long>(window));
+            }
+        }
         return;
     }
     logf("replay probe: window %llu (re-emission %s), per frame: lists %.1f (qualifying, re-emitted %.1f), calls "

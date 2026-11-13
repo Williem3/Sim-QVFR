@@ -162,6 +162,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 focusSettings.shadows = experiment.replayShadows;
                 focusSettings.transparents = experiment.replayTransparents;
                 focusSettings.atmosphere = experiment.replayAtmosphere;
+                focusSettings.costAb = experiment.replayCostAb;
                 replay_probe_start(d3d12->device, experiment.replayProbe, d3d12->queue, focusSettings);
             }
             if (experiment.d3d12Debug)

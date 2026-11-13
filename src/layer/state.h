@@ -117,6 +117,7 @@ struct Experiment {
     bool replayFog = false;                // replay_fog=1: the focus views' own volumetric fog (R2c, with tiles)
     int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
     int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
+    bool replayCostAb = false;             // replay_cost_ab=1: all focus replays on / off every 1800 frames
     int replayAtmosphere = 0;              // replay_atmosphere=1: focus copies of the atmosphere maps (R2c); 2 A/B
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images

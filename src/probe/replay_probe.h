@@ -58,6 +58,7 @@ struct ReplayFocusSettings {
     int transparents = 0;         // R2c: the per-eye lists (transparents: one eye-size viewport) into that eye's focus
                                   // view, and the order-independent-transparency composite into the focus colour;
                                   // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
+    bool costAb = false;          // cost A/B: every focus replay on for 2 windows (1800 frames), off for 2, ...
     int atmosphere = 0;           // R2c: the atmospheric scattering maps (per eye, screen-shaped) resampled through each
                                   // focus box into focus copies the focus pass constants name (needs `tiles`); 2: A/B,
                                   // named at samples 1, 3, ... and not at 2, 4, ... (resampled either way)
