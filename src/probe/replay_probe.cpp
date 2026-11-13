@@ -441,7 +441,7 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 tileFrom; uint4 tileTo; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
@@ -465,10 +465,19 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     if (i >= 29 && i <= 32)  // inverseViewProjection: inverse(R VP) = inverse(VP) inverse(R)
         v = float4(v.x * halfExtent.x, v.y * halfExtent.y, v.z, v.w - v.x * ox - v.y * oy);
     if (i == 112) v.z = focusSize.x;  // eyeHalfWidthPixels (a float, as ACE writes it)
-    // The tile lists: the game's bindless indices -> ours (R2b; identity when off).
-    [unroll] for (uint k = 0; k < 4; ++k) {
-        if (i == 0 && asuint(v.x) == tileFrom[k]) v.x = asfloat(tileTo[k]);
-        if (i == 112 && asuint(v.y) == tileFrom[k]) v.y = asfloat(tileTo[k]);
+    // Bindless indices the game's -> ours (R2b tile lists, R2c previous-frame colour): entityTilesIndex (row 0.x),
+    // entityTilesIndexRight (112.y), the screen-space map indices (rows 76, 77). Unused pairs never match.
+    const uint from[8] = {from0.x, from0.y, from0.z, from0.w, from1.x, from1.y, from1.z, from1.w};
+    const uint to[8] = {to0.x, to0.y, to0.z, to0.w, to1.x, to1.y, to1.z, to1.w};
+    [unroll] for (uint k = 0; k < 8; ++k) {
+        if (i == 0 && asuint(v.x) == from[k]) v.x = asfloat(to[k]);
+        if (i == 112 && asuint(v.y) == from[k]) v.y = asfloat(to[k]);
+        if (i == 76 || i == 77) {
+            if (asuint(v.x) == from[k]) v.x = asfloat(to[k]);
+            if (asuint(v.y) == from[k]) v.y = asfloat(to[k]);
+            if (asuint(v.z) == from[k]) v.z = asfloat(to[k]);
+            if (asuint(v.w) == from[k]) v.w = asfloat(to[k]);
+        }
     }
     dst.Store4(i * 16, asuint(v));
 }
@@ -544,7 +553,15 @@ struct Focus {
     bool tilesReady = false, tilesBroken = false;
     uint32_t gameTile[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};  // opaque L/R, transparent L/R (relative)
     uint32_t ourTile[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
-    std::vector<std::pair<SIZE_T, int>> tileViews;  // CPU handles the game wrote its tile-list SRVs to (staging or not)
+    std::vector<std::pair<SIZE_T, int>> tileViews;  // CPU handles the game wrote its named SRVs to (staging or not):
+                                                    // 0-3 tile lists, 4 post_process_color (previous-frame colour)
+    // R2c: the focus views' previous-frame colour (our colour twin copied before each frame's clear).
+    uint32_t gamePrev[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};  // its SRVs (relative)
+    ComPtr<ID3D12Resource> prevColour;
+    ID3D12Resource* prevSource = nullptr;
+    ComPtr<ID3D12CommandAllocator> prevAllocator;
+    ComPtr<List> prevList;
+    bool prevReady = false;
     SIZE_T maxWritten = 0;                          // the highest index the game wrote in the bindless range
     bool collision = false;
     std::unordered_map<ID3D12PipelineState*, int> psoKinds;  // 0 none, 1 tileFrustums, 2 tiledCulling
@@ -666,7 +683,7 @@ bool focus_compile() {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor = {0, 0};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants = {1, 0, 12};
+    params[1].Constants = {1, 0, 20};
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {0, 0};
     const D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -975,7 +992,8 @@ void focus_record(List* gameList, const Stream& s) {
     const UINT fwi = std::max(16u, static_cast<UINT>(std::lround(s.eyeW * k)));
     const UINT fhi = std::max(16u, static_cast<UINT>(std::lround(s.eyeH * k)));
     // R2b: the bindless base (root table 18) as the stereo scene lists set it; the tile lists' indices game -> ours.
-    uint32_t tileFrom[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX}, tileTo[4] = {};
+    uint32_t tileFrom[8] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    uint32_t tileTo[8] = {};
     if (s.bindlessUint.ptr && !focus.bindlessBase.ptr)
         focus.bindlessBase = s.bindlessUint;
     if (focus.tilesReady && !focus.tilesBroken)
@@ -983,6 +1001,12 @@ void focus_record(List* gameList, const Stream& s) {
             tileFrom[i] = focus.gameTile[i];
             tileTo[i] = focus.ourTile[i];
         }
+    if (focus.prevReady && !focus.tilesBroken)
+        for (int i = 0; i < 4; ++i)
+            if (focus.gamePrev[i] != UINT32_MAX) {
+                tileFrom[4 + i] = focus.gamePrev[i];
+                tileTo[4 + i] = focus.slotFirst + 13 - focus.baseIndex;
+            }
     ReleaseSRWLockExclusive(&focus.lock);
     if (!r)
         return;
@@ -996,13 +1020,13 @@ void focus_record(List* gameList, const Stream& s) {
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slots;
     l->SetComputeRootSignature(focus.patchRoot.Get());
     l->SetPipelineState(focus.patchPso.Get());
-    uint32_t params[12] = {};
+    uint32_t params[20] = {};
     const float box = static_cast<float>(focus.settings.boxFraction);
     const float floats[4] = {box, box, static_cast<float>(fwi), static_cast<float>(fhi)};
     std::memcpy(params, floats, sizeof(floats));
     std::memcpy(params + 4, tileFrom, sizeof(tileFrom));
     std::memcpy(params + 8, tileTo, sizeof(tileTo));
-    l->SetComputeRoot32BitConstants(1, 12, params, 0);
+    l->SetComputeRoot32BitConstants(1, 20, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         if (sample) {
@@ -1165,8 +1189,17 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
     for (const auto& [ptr, k] : focus.tileViews)
         if (ptr >= start && ptr < start + SIZE_T{focus.heapSize} * focus.increment) {
             const UINT abs = static_cast<UINT>((ptr - start) / focus.increment);
-            if (abs >= focus.baseIndex)
-                focus.gameTile[k] = abs - focus.baseIndex;
+            if (abs < focus.baseIndex)
+                continue;
+            const uint32_t rel = abs - focus.baseIndex;
+            if (k < 4)
+                focus.gameTile[k] = rel;
+            else  // post_process_color: every view of it (up to 4 distinct)
+                for (uint32_t& g : focus.gamePrev)
+                    if (g == rel || g == UINT32_MAX) {
+                        g = rel;
+                        break;
+                    }
         }
     const bool known = focus.gameTile[0] != UINT32_MAX && focus.gameTile[1] != UINT32_MAX &&
                        focus.gameTile[2] != UINT32_MAX && focus.gameTile[3] != UINT32_MAX;
@@ -1289,6 +1322,66 @@ void focus_tiles_record(List* gameList, const Stream& s) {
         focus.tileReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
+// ---- R2c: the focus views' previous-frame colour ----------------------------------------------------------------
+
+// Under focus.lock, on the submit thread before a frame's clear: our msaaColor focus twin (last frame's lit focus
+// views) copied into prevColour, which the focus pass constants name as previousFrameColor (ACE's SSR reads it).
+void focus_prev_copy(ID3D12CommandQueue* queue) {
+    if (!focus.settings.tiles || focus.tilesBroken || !focus.gameHeap || !focus.slotFirst)
+        return;
+    const Twin* colour = nullptr;
+    for (const auto& [game, tw] : focus.twins)
+        if (!tw.depth && tw.name == "msaaColor" && tw.gameDesc.SampleDesc.Count == 1)
+            colour = &tw;
+    if (!colour)
+        return;
+    if (focus.prevSource != colour->focus.Get()) {
+        retire(focus.prevColour.Get());
+        retire(focus.prevList.Get());
+        retire(focus.prevAllocator.Get());
+        focus.prevColour.Reset();
+        focus.prevList.Reset();
+        focus.prevAllocator.Reset();
+        focus.prevReady = false;
+        D3D12_RESOURCE_DESC d = colour->focus->GetDesc();
+        d.Flags = D3D12_RESOURCE_FLAG_NONE;
+        D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                                                   nullptr, IID_PPV_ARGS(&focus.prevColour))) ||
+            FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&focus.prevAllocator))) ||
+            FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, focus.prevAllocator.Get(), nullptr,
+                                             IID_PPV_ARGS(&focus.prevList)))) {
+            log_line("replay focus: previous-frame colour: could not make our copy");
+            focus.prevSource = colour->focus.Get();
+            return;
+        }
+        D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+        v.Format = colour->viewFormat;
+        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        v.Texture2D.MipLevels = 1;
+        srvViewOriginal(device.Get(), focus.prevColour.Get(), &v, game_cpu(focus.slotFirst + 13));
+        inReplay = true;
+        List* l = focus.prevList.Get();
+        barrier(l, colour->focus.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        barrier(l, focus.prevColour.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        l->CopyResource(focus.prevColour.Get(), colour->focus.Get());
+        barrier(l, focus.prevColour.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        barrier(l, colour->focus.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        l->Close();
+        inReplay = false;
+        focus.prevSource = colour->focus.Get();
+        focus.prevReady = true;
+        logf("replay focus: previous-frame colour: ours at bindless %u (the game's post_process_color views %d %d %d %d)",
+             focus.slotFirst + 13 - focus.baseIndex, static_cast<int>(focus.gamePrev[0]), static_cast<int>(focus.gamePrev[1]),
+             static_cast<int>(focus.gamePrev[2]), static_cast<int>(focus.gamePrev[3]));
+    }
+    if (focus.prevReady) {
+        ID3D12CommandList* lists[] = {focus.prevList.Get()};
+        executeOriginal(queue, 1, lists);
+    }
+}
+
 // ---- Samples: readback, pictures, comparison -----------------------------------------------------------------------
 
 // R11G11B10_FLOAT: 6-bit-mantissa 11-bit floats (red, green) and a 5-bit-mantissa 10-bit float (blue), 5-bit exponents.
@@ -1392,7 +1485,7 @@ struct SampleJob {
 struct Mapper {
     double cx[2], cy[2], box;
     UINT fw, fh, ew, eh;
-    void eye_pixel(int eye, UINT u, UINT v, double& x, double& y) const {
+    void eye_pixel(int eye, double u, double v, double& x, double& y) const {
         const double nx = (u + 0.5) / fw * 2 - 1, ny = 1 - (v + 0.5) / fh * 2;
         x = (cx[eye] + nx * box + 1) * 0.5 * ew - 0.5;
         y = (1 - (cy[eye] + ny * box)) * 0.5 * eh - 0.5;
@@ -1517,6 +1610,39 @@ void focus_save(std::shared_ptr<SampleJob> job) {
                     }
             result.colourPixels = compared;
             result.colourAgree = compared ? static_cast<double>(agree) / static_cast<double>(compared) : 0;
+            // At the eye's pixel size: k x k focus pixels (one eye pixel's footprint) averaged, compared with the eye
+            // at the block's centre.
+            const UINT k = std::max(1u, static_cast<UINT>(std::lround(t.fw / std::max(1.0, t.ew * job->box))));
+            uint64_t eyeCompared = 0, eyeAgree = 0;
+            for (int eye = 0; eye < 2; ++eye)
+                for (UINT v0 = k; v0 + 2 * k <= t.fh; v0 += k)
+                    for (UINT u0 = k; u0 + 2 * k <= t.fw; u0 += k) {
+                        double x, y;
+                        m.eye_pixel(eye, u0 + (k - 1) * 0.5, v0 + (k - 1) * 0.5, x, y);
+                        float b[3];
+                        if (!bilinear(e, eStride, eye, t.ew, t.eh, x + result.shiftX, y + result.shiftY, 3,
+                                      skyMask ? &eyeDepth : nullptr, b))
+                            continue;
+                        float a[3] = {};
+                        for (UINT v = v0; v < v0 + k; ++v)
+                            for (UINT u = u0; u < u0 + k; ++u)
+                                for (int c = 0; c < 3; ++c)
+                                    a[c] += f[(size_t{v} * fStride + static_cast<size_t>(eye) * t.fw + u) * 3 + c];
+                        ++eyeCompared;
+                        bool same = true;
+                        for (int c = 0; c < 3; ++c) {
+                            a[c] /= static_cast<float>(k * k);
+                            same = same && std::fabs(a[c] - b[c]) <= 0.03f * std::max(std::fabs(a[c]), std::fabs(b[c])) + 0.003f;
+                        }
+                        if (same)
+                            ++eyeAgree;
+                    }
+            result.colourEyePixels = eyeCompared;
+            result.colourEyeAgree = eyeCompared ? static_cast<double>(eyeAgree) / static_cast<double>(eyeCompared) : 0;
+            logf("replay focus: sample frame %llu: colour %s at the eye's pixel size (%ux%u focus pixels each): %llu "
+                 "compared, %.1f%% agree",
+                 static_cast<unsigned long long>(job->frame), t.name.c_str(), k, k,
+                 static_cast<unsigned long long>(eyeCompared), result.colourEyeAgree * 100);
             logf("replay focus: sample frame %llu: colour %s: %llu pixels compared, %.1f%% agree (every channel within 3%%)",
                  static_cast<unsigned long long>(job->frame), t.name.c_str(), static_cast<unsigned long long>(compared),
                  result.colourAgree * 100);
@@ -1638,6 +1764,7 @@ void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12Comm
         if (focus.clearedFrame.load() != frame && focus.ready) {
             if (focus.copyPending.load() && !focus.saving.load())
                 focus_copy_sample();  // the sample frame's replays are all done: copy before this frame's clear
+            focus_prev_copy(queue);   // last frame's focus colour, before this frame's clear
             ID3D12CommandList* clear[] = {focus.clearList.Get(), focus.eyeClearList.Get()};
             // The eye references are drawn only at sample frames: cleared only then.
             executeOriginal(queue, focus.sampleFrame.load() == frame ? 2u : 1u, clear);
@@ -1905,6 +2032,7 @@ int tile_view_kind(ID3D12Resource* r) {
     if (n == "entityTileOpaque_r_eye") return 1;
     if (n == "entityTileTransparent_l_eye") return 2;
     if (n == "entityTileTransparent_r_eye") return 3;
+    if (n == "post_process_color") return 4;
     return -1;
 }
 void check_reserved(SIZE_T dest, UINT count) {  // under focus.lock
@@ -1928,7 +2056,10 @@ void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D
     srvViewOriginal(d, r, desc, dest);
     if (inReplay)
         return;
-    const int k = r && desc && desc->ViewDimension == D3D12_SRV_DIMENSION_BUFFER ? tile_view_kind(r) : -1;
+    const int k = r && desc && (desc->ViewDimension == D3D12_SRV_DIMENSION_BUFFER ||
+                                desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE2D)
+                      ? tile_view_kind(r)
+                      : -1;
     AcquireSRWLockExclusive(&focus.lock);
     if (k >= 0)
         focus.tileViews.emplace_back(dest.ptr, k);

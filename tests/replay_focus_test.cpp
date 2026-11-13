@@ -307,6 +307,9 @@ int SIM_QVFR_TEST_MAIN() {
                     static_cast<unsigned long long>(compare.sample), static_cast<unsigned long long>(compare.pixels),
                     compare.agree * 100, compare.shiftX, compare.shiftY,
                     static_cast<unsigned long long>(compare.colourPixels), compare.colourAgree * 100);
+        std::printf("compare %llu: colour at the eye's pixel size %llu pixels, %.2f%% agree\n",
+                    static_cast<unsigned long long>(compare.sample),
+                    static_cast<unsigned long long>(compare.colourEyePixels), compare.colourEyeAgree * 100);
     };
     // Samples at frames 0 and 2, each copied at the next frame's first replay.
     for (int f = 0; f < 4; ++f) {
@@ -316,6 +319,7 @@ int SIM_QVFR_TEST_MAIN() {
             check(compare.agree > 0.97 && compare.shiftX == 0 && compare.shiftY == 0,
                   "depth: focus replay and eye reference agree through the remap, at shift (0, 0)");
             check(compare.colourPixels > 2000 && compare.colourAgree > 0.95, "colour: they agree too");
+            check(compare.colourEyePixels > 100 && compare.colourEyeAgree > 0.95, "colour at the eye's pixel size too");
             eyeW = 320;
             eyeH = 240;
             make_targets();

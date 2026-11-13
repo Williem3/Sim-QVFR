@@ -72,6 +72,8 @@ struct ReplayFocusCompare {
     int shiftX = 0, shiftY = 0;
     uint64_t colourPixels = 0;
     double colourAgree = 0;       // 0..1: every channel within 3% (+0.003)
+    uint64_t colourEyePixels = 0;  // the same at the eye's pixel size: focus blocks averaged to one eye pixel each
+    double colourEyeAgree = 0;     // (detail the eye can't hold doesn't count against the focus view)
 };
 ReplayFocusCompare replay_probe_focus_compare();
 
