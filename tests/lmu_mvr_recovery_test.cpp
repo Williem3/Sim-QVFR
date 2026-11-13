@@ -82,9 +82,9 @@ int SIM_QVFR_TEST_MAIN() {
             const bool waiting = s.frame(2, false, now) == Event::none && s.plain();
             s.new_session();
             const bool tries = s.frame(2, false, now + frameMs) == Event::tryingAgain;
-            const bool back = s.frame(2, false, now + 2 * frameMs) == Event::none &&
-                              s.frame(2, true, now + 3 * frameMs) == Event::recovered;
-            check(waiting && tries && back && s.waitMs == 0,
+            const bool recovers = s.frame(2, false, now + 2 * frameMs) == Event::none &&
+                                  s.frame(2, true, now + 3 * frameMs) == Event::recovered;
+            check(waiting && tries && recovers && s.waitMs == 0,
                   "a new session while plain: the next scene frame is a try, and the waits start afresh");
         }
         // The player changes the setting back: the next try gets its focus views and stays.
