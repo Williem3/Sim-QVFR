@@ -28,8 +28,8 @@ public:
     bool qvfr_latest_frame(Views4Frame&) override { return false; }
     void qvfr_note_views(const XrView*, uint32_t) override {}
     void qvfr_frame_end() override {}
-    // A game being reverse engineered: its decrypted code for static analysis when the exe's code is encrypted on
-    // disk ([experiment] image_dump=0 turns it off). Derived adapters call this first.
+    // A game being analysed: the local analysis tools' hook (probe/local_analysis.h; nothing in a build without them).
+    // Derived adapters call this first.
     void instance_created(const wchar_t* ini, const wchar_t* mode) override;
 
 protected:

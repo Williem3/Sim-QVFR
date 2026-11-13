@@ -3,7 +3,7 @@
 Usage: python import_refs.py <exe> <name substring> [<name substring> ...]
 For each import whose name contains a substring (any case): its IAT slot, then every RIP-relative reference to the
 slot in .text (`call [rip+x]`, `jmp [rip+x]`, `mov reg, [rip+x]`), with the function holding it (bounds from .pdata).
-Works on the decrypted image dump of a packed exe too (its import table is the file's).
+Works on an image of the exe as it runs too (its import table is the file's).
 """
 import bisect
 import struct

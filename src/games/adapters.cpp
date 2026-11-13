@@ -5,7 +5,7 @@
 #include <string>
 
 #include "../log.h"
-#include "../probe/image_dump.h"
+#include "../probe/local_analysis.h"
 #include "identity_adapter.h"
 
 #include "ace/adapter.h"
@@ -20,8 +20,12 @@
 namespace simqvfr::games {
 
 void IdentityAdapter::instance_created(const wchar_t* ini, const wchar_t*) {
-    if (analysis() && GetPrivateProfileIntW(L"experiment", L"image_dump", 1, ini) != 0)
-        image_dump_if_packed();
+#ifdef SIM_QVFR_LOCAL_ANALYSIS
+    if (analysis())
+        local_analysis_instance_created(ini);
+#else
+    (void)ini;
+#endif
 }
 
 GameAdapter& adapter_for(const GameInfo* game) {

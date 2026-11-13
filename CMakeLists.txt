@@ -97,7 +97,7 @@ endif()
 add_library(sim_qvfr_core STATIC
   src/games/games.cpp src/games/multi_view.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
-  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/image_dump.cpp src/probe/run_exit.cpp
+  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
   src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
@@ -317,13 +317,6 @@ target_include_directories(native_quad_test PRIVATE src ${THIRD_PARTY}/openxr/in
 target_compile_definitions(native_quad_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(native_quad_test PRIVATE sim_qvfr_layer)
 
-# The decrypted-image dump (probe/image_dump.h): this exe's own code from memory, relocations undone, equals its file.
-sim_qvfr_test(image_dump_test tests/image_dump_test.cpp)
-target_include_directories(image_dump_test PRIVATE src)
-target_compile_definitions(image_dump_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(image_dump_test PRIVATE sim_qvfr_core)
-target_link_options(image_dump_test PRIVATE /IGNORE:4078)  # its pointer placed in .text on purpose
-
 # Gate runs that end themselves (probe/run_exit.h): WM_CLOSE to this process's visible top-level windows only.
 sim_qvfr_test(run_exit_test tests/run_exit_test.cpp)
 target_include_directories(run_exit_test PRIVATE src)
@@ -488,12 +481,37 @@ configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/l
 add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp src/launcher/launch_watch.cpp
   src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
+  src/launcher/leftovers.cpp
   src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp src/quad/osd.cpp)
 target_include_directories(sim_qvfr_launcher_shared PRIVATE src)
 target_compile_definitions(sim_qvfr_launcher_shared PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(sim_qvfr_launcher_shared PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(sim_qvfr_launcher_shared PUBLIC bcrypt winhttp version)
 target_precompile_headers(sim_qvfr_launcher_shared PRIVATE ${SIM_QVFR_PCH})
+
+# Local analysis tools (src/probe/local_analysis.h): the developer's own, in a folder outside the repository, never
+# committed or released (package.ps1 configures with SIM_QVFR_LOCAL_DIR empty and refuses them). Set the environment
+# variable SIM_QVFR_LOCAL_DIR once and every checkout's dev build has them; a build without the folder has none of it.
+set(SIM_QVFR_LOCAL_DIR "$ENV{SIM_QVFR_LOCAL_DIR}" CACHE PATH "A local folder of analysis tools (never published)")
+if(SIM_QVFR_LOCAL_DIR AND EXISTS "${SIM_QVFR_LOCAL_DIR}/local_analysis.cpp")
+  message(STATUS "Local analysis tools: ${SIM_QVFR_LOCAL_DIR} (never in a release)")
+  file(GLOB _local_sources "${SIM_QVFR_LOCAL_DIR}/*.cpp")
+  list(FILTER _local_sources EXCLUDE REGEX "_test\.cpp$")
+  target_sources(sim_qvfr_core PRIVATE ${_local_sources})
+  set_source_files_properties(${_local_sources} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  target_include_directories(sim_qvfr_core PRIVATE "${SIM_QVFR_LOCAL_DIR}")
+  target_compile_definitions(sim_qvfr_core PUBLIC SIM_QVFR_LOCAL_ANALYSIS)
+  target_compile_definitions(sim_qvfr_launcher_shared PUBLIC SIM_QVFR_LOCAL_ANALYSIS)
+  file(GLOB _local_tests "${SIM_QVFR_LOCAL_DIR}/*_test.cpp")
+  foreach(_local_test IN LISTS _local_tests)
+    get_filename_component(_name ${_local_test} NAME_WE)
+    sim_qvfr_test(${_name} ${_local_test})
+    target_include_directories(${_name} PRIVATE src "${SIM_QVFR_LOCAL_DIR}")
+    target_compile_definitions(${_name} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(${_name} PRIVATE sim_qvfr_core)
+    target_link_options(${_name} PRIVATE /IGNORE:4078)  # image_dump_test places a pointer in .text on purpose
+  endforeach()
+endif()
 
 add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input.cpp src/engine/nvapi_gpus.cpp
   src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc

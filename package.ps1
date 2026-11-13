@@ -104,6 +104,11 @@ $sdkCommitted = Invoke-Native 'git ls-tree' { git -C $repo ls-tree -r --name-onl
     $_ -match '(^|/)(nvsdk_ngx[^/]*\.(h|lib)|nvngx_[^/]*\.dll|NVIDIA-RTX-SDKs-LICENSE\.txt)$|^third_party/(nvidia-dlss-sdk|ngx-sdk)/'
 }
 if ($sdkCommitted) { throw "Commit $short has NVIDIA SDK files in it, which must never be committed: $($sdkCommitted -join ', ')" }
+# The local analysis tools (src/probe/local_analysis.h) are the developer's own: never committed, never released.
+$localCommitted = Invoke-Native 'git ls-tree' { git -C $repo ls-tree -r --name-only $hash } | Where-Object {
+    $_ -match '(^|/)(image_dump[^/]*|local_analysis\.cpp)$|^local/'
+}
+if ($localCommitted) { throw "Commit $short has local analysis tools in it, which must never be committed: $($localCommitted -join ', ')" }
 if (Invoke-Native 'git status' { git -C $repo status --porcelain --untracked-files=no }) {
     Write-Warning "The working tree has uncommitted changes; they are NOT in this package (it is built from $short)."
 }
@@ -132,7 +137,10 @@ try {
     $priority = $self.PriorityClass
     $self.PriorityClass = 'BelowNormal'
     try {
-        $configure = @('-S', $work, '-B', (Join-Path $work 'build'), '-G', 'Ninja Multi-Config', "-DSIM_QVFR_VERSION=$Version ($short)")
+        # Never the local analysis tools, whatever the environment says (SIM_QVFR_LOCAL_DIR).
+        $env:SIM_QVFR_LOCAL_DIR = $null
+        $configure = @('-S', $work, '-B', (Join-Path $work 'build'), '-G', 'Ninja Multi-Config', "-DSIM_QVFR_VERSION=$Version ($short)",
+                       '-DSIM_QVFR_LOCAL_DIR=')
         if ($NgxSdk) { $configure += "-DNGX_SDK_DIR=$NgxSdk" }
         Invoke-Native 'cmake configure' { cmake @configure } | Out-Null
         $build = Invoke-Native 'cmake build' { cmake --build (Join-Path $work 'build') --config Release }
@@ -186,6 +194,15 @@ try {
     # distribution terms; THIRD_PARTY_NOTICES.md).
     $layerBytes = [IO.File]::ReadAllBytes((Join-Path $stage 'layer\sim-qvfr.dll'))
     $hasNgx = [Text.Encoding]::ASCII.GetString($layerBytes).Contains('NVSDK_NGX_D3D11_Init')
+    # No local analysis tool in a release: the layer has none of their log text, and the launcher removes what older
+    # versions left in the logs folder (leftovers.h; compiled out in a build with the tools).
+    if ([Text.Encoding]::ASCII.GetString($layerBytes).Contains('image dump')) { throw 'The layer has a local analysis tool in it' }
+    $launcherBytes = [IO.File]::ReadAllBytes((Join-Path $stage 'sim-qvfr-launcher.exe'))
+    $latin1 = [Text.Encoding]::GetEncoding(28591)  # byte for byte, so a UTF-16 string is found at any offset
+    $leftoverText = $latin1.GetString([Text.Encoding]::Unicode.GetBytes("of the game's program left by an older Sim-QVFR"))
+    if (-not $latin1.GetString($launcherBytes).Contains($leftoverText)) {
+        throw 'The launcher lacks the removal of older versions'' leftovers (built with the local analysis tools?)'
+    }
     if ($NgxSdk -and -not $hasNgx) { throw 'Built with -NgxSdk, but the layer has no NGX in it (CMake did not take the SDK)' }
     if ($NoDlss -and $hasNgx) { throw 'Built with -NoDlss, but the layer has NGX in it' }
     if ($NgxSdk) {

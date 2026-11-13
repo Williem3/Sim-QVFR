@@ -3,8 +3,8 @@
 Usage: python triage_exe.py <game exe> [--steam <Steam folder>] [--strings]
 Prints a Markdown report for the game's recon notes (docs/recon-<id>.md, "## Triage"):
 - the build: size, SHA-256 (GameInfo::builds), PE timestamp, file version;
-- the code: sections with entropy (a packed or encrypted .text needs a dump of the decrypted image before static
-  analysis: the identity run writes one), .pdata function count, RTTI names;
+- the code: sections with entropy (a packed or encrypted .text shows no code to static analysis), .pdata function
+  count, RTTI names;
 - graphics and VR APIs, from imports and from DLL names the exe loads by string (d3d11/d3d12/vulkan, openvr_api,
   a statically linked OpenXR loader, LibOVR), and the OpenXR extensions it names (quad views, eye gaze, ...);
 - anti-cheat (EasyAntiCheat / EOS anti-cheat, BattlEye) and Steam DRM;
@@ -241,8 +241,7 @@ def main():
         print("\n- **Steam DRM (SteamStub)**: a `.bind` section holds the stub (the entry point is in it).")
     if packed:
         print(f"- **Encrypted or packed code** in {', '.join(packed)} (entropy near 8): static analysis of the file shows "
-              "no code. Analyse the decrypted image the identity run writes (`logs\\<exe>-image.dump`) instead; "
-              "the addresses (RVAs) are the same.")
+              "no code.")
     else:
         print("- The code section reads as plain code: the exe can go into Ghidra as it is.")
     pdata = next((s for s in pe.sections if s.Name.startswith(b".pdata")), None)

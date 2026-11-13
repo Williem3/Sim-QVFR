@@ -49,9 +49,7 @@ Two-loop (`mode=quad`) is legacy and not part of the adapter. A new game support
    The layer now switches on in the game but **only logs**: it runs as `mode=off` whatever the ini says,
    turns the session and swapchain logging on, and adds nothing to the game or the headset (no Cheeky,
    menu, overlay or gaze actions). Its log shows the game's OpenXR session: graphics binding, views,
-   swapchain sizes and formats, frame submission. If the exe's code is encrypted on disk (SteamStub), this
-   run also writes the decrypted image to the log folder (`<exe>-<hash>-image.dump`, `probe/image_dump.h`)
-   for static analysis. `acc/` and `xplane/` started this way, and `lmu/` is at this stage now.
+   swapchain sizes and formats, frame submission. `acc/` and `xplane/` started this way, and `lmu/` did too.
    `python tools/session_report.py <session log>` sums up any test run's log.
 3. Implement `GameAdapter` in `<id>/adapter.cpp` and return it from `adapter_for` in `adapters.cpp`.
 4. Add the new `.cpp` files to the shared library in `CMakeLists.txt` (`sim_qvfr_core`: the layer and the

@@ -1,6 +1,6 @@
-"""Check a game's abi.h anchors against its exe (or the decrypted image dump of a packed exe), before any test run.
+"""Check a game's abi.h anchors against its exe (or an image of it as it runs), before any test run.
 
-Usage: python check_anchors.py <exe or image dump> <src/games/<id>/abi.h>
+Usage: python check_anchors.py <exe or image> <src/games/<id>/abi.h>
 Pairs every `kName = 0x...` RVA with its `kNameAnchor[] = {...}` bytes and compares them with the file at that RVA.
 ACE's naming works too: the RVA as `kNameRva` (or each of a `kNameRvas[] = {...}` list) and a sized `kNameAnchor[N]`.
 Also checks `kNameSlot = <vtable rva> + <n> * 8` against `kName = 0x...` (the slot holds base + that function).

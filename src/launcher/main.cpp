@@ -38,6 +38,7 @@
 #include "launch_plan.h"
 #include "launcher.h"
 #include "launcher_version.h"
+#include "leftovers.h"
 #include "preflight.h"
 #include "report.h"
 #include "settings.h"
@@ -416,6 +417,12 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
 
     const std::wstring stamp = stamp_now();
     const fs::path logs = here / L"logs", runFolder = logs / (std::wstring(L"run-") + stamp);
+#ifndef SIM_QVFR_LOCAL_ANALYSIS
+    // Copies of the game's program an older Sim-QVFR left in the logs folder (leftovers.h); a dry run removes nothing.
+    const Leftovers leftovers = dryRun ? Leftovers{} : remove_leftovers(logs.wstring());
+#else
+    const Leftovers leftovers;  // the developer's build keeps them (local analysis tools)
+#endif
     const fs::path log = logs / (std::wstring(L"session-") + stamp + L".log"), iniCopy = runFolder / L"sim-qvfr.ini";
     std::wstring error;
     if (!write_run_folder(runFolder.wstring(), manifest.wstring(), library.wstring(), plan, error))
@@ -475,6 +482,10 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
             L" (the game's device decides at launch)");
     say(L"  run:       " + runFolder.wstring());
     say(L"  layer log: " + log.wstring());
+    if (leftovers.removed > 0)
+        say(L"  logs:      removed " + std::to_wstring(leftovers.removed) + L" cop" + (leftovers.removed == 1 ? L"y" : L"ies") +
+            L" of the game's program left by an older Sim-QVFR (" + std::to_wstring((leftovers.bytes + (1 << 20) - 1) >> 20) +
+            L" MB)");
     std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);
     for (const MovedLayer& m : plan.below)
         order += L" -> " + widen(m.name);

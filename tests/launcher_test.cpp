@@ -26,6 +26,7 @@
 #include "launcher/game_tabs.h"
 #include "launcher/install.h"
 #include "launcher/layer_order.h"
+#include "launcher/leftovers.h"
 #include "launcher/preflight.h"
 #include "launcher/report.h"
 #include "launcher/session_history.h"
@@ -685,6 +686,30 @@ void settings_round_trip_checks() {
 
 // An elevated launch's registrations (explicit_layers.h), on a scratch key holding someone else's values: only ours
 // are added and taken out, nothing else changes, the key stays, and only what the ledger lists comes out.
+// What older versions left in the logs folder (launcher/leftovers.h): the copies of the game's program, nothing else.
+void leftovers_checks() {
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    const fs::path logs = fs::path(temp) / L"simqvfr-leftovers-test";
+    std::error_code ec;
+    fs::remove_all(logs, ec);
+    fs::create_directories(logs / L"captures");
+    write_file((logs / L"Le Mans Ultimate-0123456789ab-image.dump").wstring(), std::string(3000, 'x'));
+    write_file((logs / L"Game-ffffffffffff-IMAGE.DUMP").wstring(), std::string(1000, 'x'));
+    write_file((logs / L"session-20261113-090000.log").wstring(), "log");
+    write_file((logs / L"hang-120000.dmp").wstring(), "dump");
+    write_file((logs / L"captures" / L"x-image.dump").wstring(), "nested");
+    const Leftovers r = remove_leftovers(logs.wstring());
+    check(r.removed == 2 && r.bytes == 4000 && !fs::exists(logs / L"Le Mans Ultimate-0123456789ab-image.dump"),
+          "leftovers: the copies of the game's program removed, counted");
+    check(fs::exists(logs / L"session-20261113-090000.log") && fs::exists(logs / L"hang-120000.dmp") &&
+              fs::exists(logs / L"captures" / L"x-image.dump"),
+          "leftovers: logs, hang dumps and subfolders untouched");
+    check(remove_leftovers(logs.wstring()).removed == 0 && remove_leftovers((logs / L"missing").wstring()).removed == 0,
+          "leftovers: nothing more to remove, a missing folder is fine");
+    fs::remove_all(logs, ec);
+}
+
 void explicit_layers_checks() {
     std::error_code ec;
     const fs::path dir = fs::temp_directory_path() / L"simqvfr-explicit-test";
@@ -2577,6 +2602,7 @@ int SIM_QVFR_TEST_MAIN() {
     launch_status_checks();
     session_history_checks();
     explicit_layers_checks();
+    leftovers_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");
     return failures == 0 ? 0 : 1;
 }

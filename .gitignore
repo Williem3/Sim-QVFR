@@ -12,6 +12,9 @@ __pycache__/
 
 # Disassembly and RTTI dumps of the game executable: local only, never committed
 analysis/
+# Local analysis tools (CMake's SIM_QVFR_LOCAL_DIR; probe/local_analysis.h): the developer's own, never committed. Their
+# usual place is outside every checkout; inside one, local/.
+local/
 # Reverse-engineering notes on the games' engines, one file per game: local only, never committed
 docs/recon-ace.md
 docs/recon-acc.md

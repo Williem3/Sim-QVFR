@@ -1,5 +1,5 @@
 // Le Mans Ultimate 1.4.2.0 (game.h kBuilds[0]): RVAs and anchor bytes. One line per group; the why is in
-// docs/recon-lmu.md "## abi.h". The exe's code is SteamStub-encrypted on disk: the anchors are the decrypted bytes.
+// docs/recon-lmu.md "## abi.h". The anchors are the code's bytes in memory.
 #pragma once
 
 #include <cstddef>
