@@ -1285,29 +1285,36 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         eye_pass(1, nullptr, false, standIn, false, true);
         lmu::mvr_frame_end(100061);
         const bool foveated = lmu::mvr_shape_ready();
+        // Focus views after a frame with both: the draws' shape checks skipped (their CPU), the frame ready all the same.
+        const uint64_t skippedBefore = lmu::mvr_pass_stats().shapeSkippedPasses;
+        eye_pass(0, nullptr, false, standIn, false, true);
+        eye_pass(1, nullptr, false, standIn, false, true);
+        lmu::mvr_frame_end(100062);
+        const bool skipped = lmu::mvr_shape_ready() && lmu::mvr_pass_stats().shapeSkippedPasses == skippedBefore + 2;
         driveViews[0] = driveViews[1] = nullptr;  // the eyes alone (plain: no focus view handed over)
         const lmu::MvrPassStats before = lmu::mvr_pass_stats();
         eye_pass(0, nullptr, false, standIn, false, true);
         eye_pass(1, nullptr, false, standIn, false, true);
-        lmu::mvr_frame_end(100062);
+        lmu::mvr_frame_end(100063);
         const bool plain = lmu::mvr_shape_ready() && lmu::mvr_pass_stats().focusComposites == before.focusComposites;
         Kit staged = standIn;
         staged.stage = 1;
         eye_pass(0, nullptr, false, staged, false, true);
         eye_pass(1, nullptr, false, staged, false, true);
-        lmu::mvr_frame_end(100063);
+        lmu::mvr_frame_end(100064);
         const bool pastStage = lmu::mvr_shape_ready();
         lmu::mvr_shape_force_bad(true);
         eye_pass(0, nullptr, false, standIn, false, true);
         eye_pass(1, nullptr, false, standIn, false, true);
-        lmu::mvr_frame_end(100064);
+        lmu::mvr_frame_end(100065);
         const bool forced = !lmu::mvr_shape_ready();
         lmu::mvr_shape_force_bad(false);
         std::snprintf(what, sizeof(what),
-                      "the frame's shape: not ready without passes (%d), ready with focus views (%d), ready with the eyes "
-                      "alone and no focus post run (%d), past a stage (%d), not ready when forced (%d)",
-                      none, foveated, plain, pastStage, forced);
-        check(none && foveated && plain && pastStage && forced, what);
+                      "the frame's shape: not ready without passes (%d), ready with focus views (%d), ready and not "
+                      "looked at after a frame with them (%d), ready with the eyes alone and no focus post run (%d), past "
+                      "a stage (%d), not ready when forced (%d)",
+                      none, foveated, skipped, plain, pastStage, forced);
+        check(none && foveated && skipped && plain && pastStage && forced, what);
         lmu::mvr_track_drive(nullptr, nullptr);
         lmu::mvr_track_passes(false);
     }

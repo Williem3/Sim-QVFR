@@ -183,6 +183,19 @@ struct PsTwinSet {
     PsTwinEntry entry[2];
     uint8_t next = 0;
 };
+// A pixel shader's YEBIS role (the probe's marking, yebis_shaders.h) by its address, likewise valid until the game
+// creates another pixel shader (mvr_pixel_shader_generation: a new one may take a released one's address): the pass
+// tracker looks at the pixel shader of nearly every draw (copy_before at each DrawIndexed until the frame's first
+// multisample bind, and all through the passes with MSAA off), and GetPrivateData at each cost more than its own work.
+struct PsRoleEntry {
+    ID3D11PixelShader* ps = nullptr;
+    uint32_t epoch = 0;
+    UINT role = 0;
+};
+struct PsRoleSet {
+    PsRoleEntry entry[2];
+    uint8_t next = 0;
+};
 
 // CPU in this code's context hooks (the calls passed on included), in TSC ticks since the last log line.
 struct HookTime {
@@ -192,6 +205,9 @@ struct HookTime {
     // Car slots' (the calls they make included): the slot views bound per draw (1 in 16 timed), the target's binds and
     // the blend states' twins, the motions computed and uploaded.
     uint64_t slotViews = 0, slotState = 0, motion = 0;
+    // The pass tracker's and the frame's shape's looks at the draws (copy_before, observe_post_draw and the like), the
+    // calls they make included; not the draws passed on.
+    uint64_t tracker = 0;
 };
 
 bool timeHooks = false;  // mvr_time_hooks
@@ -223,6 +239,7 @@ struct State {
     uint32_t twinEpoch = 1;
     uint64_t twinGeneration = 0;
     uint64_t loggedLookups = 0, loggedMisses = 0;  // the stats' counts at the last log line
+    uint64_t loggedRoleLookups = 0, loggedRoleMisses = 0, loggedShapeSkipped = 0;
     HookTime time;
     unsigned long long tscAtLog = 0;
     long long qpcAtLog = 0;
@@ -264,6 +281,9 @@ struct State {
     PsTwinSet psTwins[kTwinSets];
     uint32_t psEpoch = 1;
     uint64_t psGeneration = 0;
+    PsRoleSet psRoles[kTwinSets];  // role_of_ps: the pixel shaders' YEBIS roles by address
+    uint32_t roleEpoch = 1;
+    uint64_t roleGeneration = 0;
     ComPtr<ID3D11Buffer> biasCb;
     float biasConstants[8] = {};
     // Car tracking (mvr_car_track; car_motion.h): the vertex shader's constant buffers and the input assembler's buffers
@@ -360,6 +380,9 @@ struct State {
     ID3D11Resource* obsCopyTargets[6] = {};
     unsigned obsCopyCount = 0;
     bool shapeOk[2] = {}, shapeReady = false, shapeForceBad = false;
+    // observe_post_draw this pass: not where it drew focus views after a frame with both (the recovery reads the shape
+    // only while the eyes render alone, or once 45 frames in a row lacked them: every frame then is looked at).
+    bool observeShape = true, lastFrameFinals = false;
     int shapeMissing[2] = {}, shapeMissingLast[2] = {};  // mvr_shape_missing: each eye pass's first step not seen
     ID3D11Resource* fsrEye[2] = {};
     ComPtr<ID3D11Resource> eyeFinal[2];
@@ -612,12 +635,14 @@ std::string pt_view(ID3D11View* view) {
     return pt_tex(r.Get());
 }
 
+UINT role_of_ps(ID3D11PixelShader* ps);
+
 // A draw on the game's context with one of YEBIS's pixel shaders (copy, composite, final blit): its input and target.
 void pt_draw(ID3D11DeviceContext* context, const char* call) {
     ComPtr<ID3D11PixelShader> ps;
     context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || !role)
+    const UINT role = role_of_ps(ps.Get());
+    if (!role)
         return;
     ComPtr<ID3D11ShaderResourceView> srv;
     context->PSGetShaderResources(0, 1, &srv);
@@ -962,9 +987,7 @@ bool blit_by_bindings(ID3D11DeviceContext* context);
 void note_final_blit(ID3D11DeviceContext* context) {
     ComPtr<ID3D11PixelShader> ps;
     context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    const bool marked = ps && SUCCEEDED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) && size == sizeof(role) &&
-                        role == static_cast<UINT>(YebisRole::blit);
+    const bool marked = role_of_ps(ps.Get()) == static_cast<UINT>(YebisRole::blit);
     if (!marked && !(tr.resolved && blit_by_bindings(context)))  // (by its bindings only once the post has begun)
         return;
     ComPtr<ID3D11ShaderResourceView> srv;
@@ -1958,7 +1981,7 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
         slot_bind(n, rtvs, dsv);
     if (g.fsr && g.compositeOk && !g.focusBlitted && ours(context) && g.pass < 2 && g.drawFocus)
         fsr_final(n, rtvs);
-    if (g.fsr && g.obsComposited && !g.obsFinal && ours(context) && g.pass < 2 && n && rtvs && rtvs[0]) {
+    if (g.fsr && g.observeShape && g.obsComposited && !g.obsFinal && ours(context) && g.pass < 2 && n && rtvs && rtvs[0]) {
         ComPtr<ID3D11Resource> bound;  // the shape's final under FSR: the eye's image bound after the composite
         rtvs[0]->GetResource(&bound);
         g.obsFinal = bound && bound.Get() == g.fsrEye[g.pass & 1];
@@ -2294,9 +2317,7 @@ bool composite_by_bindings(ID3D11DeviceContext* context) {
 void focus_post_draw(ID3D11DeviceContext* context) {
     ComPtr<ID3D11PixelShader> ps;
     context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || size != sizeof(role))
-        role = 0;
+    UINT role = role_of_ps(ps.Get());
     if (!role && !g.focusCopied && g.copyUnknown) {
         // No copy shader known by its checksum (a game update compiled it anew): the copy by what it binds. A draw
         // reading the resolve's target into a texture of its size, over the eye only (over the focus view too it is
@@ -2447,9 +2468,7 @@ void focus_post_draw(ID3D11DeviceContext* context) {
 void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
     ComPtr<ID3D11PixelShader> ps;
     context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    const bool marked = ps && SUCCEEDED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) &&
-                        role == static_cast<UINT>(YebisRole::blit);
+    const bool marked = role_of_ps(ps.Get()) == static_cast<UINT>(YebisRole::blit);
     if (!marked && !blit_by_bindings(context))
         return;
     ComPtr<ID3D11ShaderResourceView> srv;
@@ -2880,11 +2899,7 @@ void learn_scene(ID3D11Resource* resource, const D3D11_TEXTURE2D_DESC& d, bool a
 void copy_before(ID3D11DeviceContext* context) {
     if (tr.msaaFrame || g.afterResolve)
         return;
-    ComPtr<ID3D11PixelShader> ps;
-    context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || size != sizeof(role) ||
-        role != static_cast<UINT>(YebisRole::copy))
+    if (marked_role(context) != static_cast<UINT>(YebisRole::copy))
         return;
     ComPtr<ID3D11ShaderResourceView> srv;
     context->PSGetShaderResources(0, 1, &srv);
@@ -2976,11 +2991,7 @@ void stage_before(ID3D11DeviceContext* context) {
         tr.offScene = false;  // not a target a stage's image could be: nothing more to look at until the next bind
         return;
     }
-    ComPtr<ID3D11PixelShader> ps;
-    context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    if (ps && SUCCEEDED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) && size == sizeof(role) &&
-        role == static_cast<UINT>(YebisRole::blit))
+    if (marked_role(context) == static_cast<UINT>(YebisRole::blit))
         return;
     ID3D11ShaderResourceView* srvs[8] = {};
     context->PSGetShaderResources(0, static_cast<UINT>(std::size(srvs)), srvs);
@@ -3015,9 +3026,33 @@ void stage_before(ID3D11DeviceContext* context) {
 UINT marked_role(ID3D11DeviceContext* context) {
     ComPtr<ID3D11PixelShader> ps;
     context->PSGetShader(&ps, nullptr, nullptr);
+    return role_of_ps(ps.Get());
+}
+
+// The cache's answer for `ps` (PsRoleEntry), GetPrivateData only the first time a shader is seen since the game last
+// created one. 0: none (no shader, unmarked, or a role the probe doesn't know).
+UINT role_of_ps(ID3D11PixelShader* ps) {
+    if (!ps)
+        return 0;
+    ++g.stats.roleLookups;
+    if (const uint64_t generation = mvr_pixel_shader_generation(); generation != g.roleGeneration) {
+        g.roleGeneration = generation;
+        ++g.roleEpoch;
+    }
+    PsRoleSet& set = g.psRoles[(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(ps)) * 0x9E3779B97F4A7C15ull) >>
+                               (64 - kTwinSetBits)];
+    for (uint8_t k = 0; k < 2; ++k)
+        if (set.entry[k].epoch == g.roleEpoch && set.entry[k].ps == ps) {
+            set.next = static_cast<uint8_t>(1 - k);
+            return set.entry[k].role;
+        }
+    ++g.stats.roleLookupMisses;
     UINT role = 0, size = sizeof(role);
-    if (!ps || FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || size != sizeof(role))
+    if (FAILED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) || size != sizeof(role))
         role = 0;
+    const uint8_t k = set.entry[0].epoch != g.roleEpoch ? 0 : set.entry[1].epoch != g.roleEpoch ? 1 : set.next;
+    set.next = static_cast<uint8_t>(1 - k);
+    set.entry[k] = {ps, g.roleEpoch, role};
     return role;
 }
 
@@ -3070,7 +3105,7 @@ bool blit_by_bindings(ID3D11DeviceContext* context) {
 // starts from): the composite reads the latest. After the composite a Draw reading the resolve's target into another
 // texture is the final blit (FSR on: the eye's image bound, fsr_final's rule).
 void observe_post_draw(ID3D11DeviceContext* context, bool plainDraw) {
-    if (g.obsFinal || !g.resolved[g.pass])
+    if (!g.observeShape || g.obsFinal || !g.resolved[g.pass])
         return;
     const ComPtr<ID3D11Resource> source = ps_input0(context), target = target0(context);
     if (!target)
@@ -3122,11 +3157,7 @@ void observe_post_draw(ID3D11DeviceContext* context, bool plainDraw) {
 // After the open tracked pass's resolve, before its post-processing: a draw with a YEBIS pixel shader (any role, as the
 // probe marked it) begins it (track_bind: a rebind of the pass's scene before it stays in the pass).
 void note_post_seen(ID3D11DeviceContext* context) {
-    ComPtr<ID3D11PixelShader> ps;
-    context->PSGetShader(&ps, nullptr, nullptr);
-    UINT role = 0, size = sizeof(role);
-    tr.postSeen = ps && SUCCEEDED(ps->GetPrivateData(kYebisRoleGuid, &size, &role)) && size == sizeof(role) &&
-                  role != static_cast<UINT>(YebisRole::none);
+    tr.postSeen = marked_role(context) != static_cast<UINT>(YebisRole::none);
     // No copy shader known by its checksum: the first draw reading the resolve's target begins it.
     if (!tr.postSeen && g.copyUnknown && g.pass >= 0 && g.pass < 4 && g.resolved[g.pass])
         tr.postSeen = ps_input0(context).Get() == g.resolved[g.pass].Get();
@@ -3204,6 +3235,7 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         ++tr.draws;
         if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, "DrawIndexed", count, start))
             return;
+        Timed timed(g.time.tracker);
         if (tr.on && tr.stageCandidate)
             learn_at_composite(context);
         if (tr.on && g.copyUnknown && !tr.open && !tr.msaaFrame)
@@ -3233,8 +3265,10 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         pt_draw(context, "DrawIndexed");
     if (ours(context) && g.overlayTarget && g.on)
         ++g.stats.overlayDraws;
-    if (tr.on && g.afterResolve && ours(context) && g.pass < 2)
+    if (tr.on && g.afterResolve && g.observeShape && ours(context) && g.pass < 2) {
+        Timed timed(g.time.tracker);
         observe_post_draw(context, false);
+    }
     if (!g.postWindow || !ours(context))
         return;
     Timed timed(g.time.hooks);
@@ -3254,6 +3288,7 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         const long long args[] = {static_cast<long long>(a)...};
         if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, kHookName[H], args[0], args[1]))
             return;
+        Timed timed(g.time.tracker);
         if (tr.on && tr.stageCandidate)
             learn_at_composite(context);
         if (tr.offScene && ours(context) && g.pass < 2)
@@ -3286,8 +3321,10 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         pt_draw(context, kHookName[H]);
     if (ours(context) && g.overlayTarget && g.on)
         ++g.stats.overlayDraws;
-    if (tr.on && g.afterResolve && ours(context) && g.pass < 2)
+    if (tr.on && g.afterResolve && g.observeShape && ours(context) && g.pass < 2) {
+        Timed timed(g.time.tracker);
         observe_post_draw(context, H == kHookDraw);
+    }
     if (g.postWindow && !g.focusCopied && ours(context)) {  // a stage between the resolve and YEBIS may draw this way
         Timed timed(g.time.hooks);
         note_post_stage(context);
@@ -4014,6 +4051,8 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     g.obsCopied = g.obsComposited = g.obsFinal = false;
     std::fill(std::begin(g.obsCopyTargets), std::end(g.obsCopyTargets), nullptr);
     g.obsCopyCount = 0;
+    g.observeShape = !g.drawFocus || !g.lastFrameFinals;
+    g.stats.shapeSkippedPasses += pass < 2 && !g.observeShape ? 1 : 0;
     {
         const MvrProbeStats known = mvr_probe_stats();
         g.copyUnknown = g.copyKnownForTests >= 0 ? g.copyKnownForTests == 0 : known.yebisCopies == 0;
@@ -4093,8 +4132,13 @@ void mvr_pass_end(int pass) {
     Timed timed(g.time.hooks);
     slot_unbind();  // car slots: the game's targets and blend state as it bound them
     if (pass >= 0 && pass < 2) {
-        g.shapeMissing[pass] = !g.afterResolve ? 1 : !g.obsCopied ? 2 : !g.obsComposited ? 3 : !g.obsFinal ? 4 : 0;
-        g.shapeOk[pass] = g.shapeMissing[pass] == 0;
+        if (g.observeShape) {
+            g.shapeMissing[pass] = !g.afterResolve ? 1 : !g.obsCopied ? 2 : !g.obsComposited ? 3 : !g.obsFinal ? 4 : 0;
+            g.shapeOk[pass] = g.shapeMissing[pass] == 0;
+        } else {  // not looked at: its focus final made stands for every step (none: not ready, seen the next frame)
+            g.shapeMissing[pass] = 0;
+            g.shapeOk[pass] = g.finalThisFrame[pass & 1];
+        }
     }
     g.drawFocus = false;
     g.overlayTarget = false;
@@ -4315,6 +4359,7 @@ void mvr_frame_end(unsigned long long frame) {
         tr.passes = tr.actual = 0;
         tr.draws = 0;
     }
+    g.lastFrameFinals = g.finalThisFrame[0] && g.finalThisFrame[1];
     g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // the next frame's are its own (a menu frame has none)
     g.shapeReady = g.shapeOk[0] && g.shapeOk[1] && !g.shapeForceBad;
     if (g.copyKnownForTests < 0)
@@ -4364,6 +4409,12 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(g.stats.lookups - g.loggedLookups),
                           static_cast<unsigned long long>(g.stats.lookupMisses - g.loggedMisses), per(g.time.switches),
                           static_cast<double>(g.time.calls) / frames);
+            simqvfr::logf("lmu mvr: the pass tracker's and the frame shape's looks at the draws %.3f ms per frame (not in "
+                          "the hooks' figure above; the draws passed on not included); pixel shader roles: %llu looked up, "
+                          "%llu not cached; %llu eye passes' shape not looked at (focus views drawn after a frame with both)",
+                          per(g.time.tracker), static_cast<unsigned long long>(g.stats.roleLookups - g.loggedRoleLookups),
+                          static_cast<unsigned long long>(g.stats.roleLookupMisses - g.loggedRoleMisses),
+                          static_cast<unsigned long long>(g.stats.shapeSkippedPasses - g.loggedShapeSkipped));
             if (g.carTrack)
                 simqvfr::logf("lmu mvr: car tracking's own CPU %.3f ms per frame (its matrix reads %.3f, its draws %.3f, "
                               "the frame's start %.3f; 1 in 16 of its draws and of its matrix reads timed, each less the "
@@ -4382,6 +4433,9 @@ void mvr_frame_end(unsigned long long frame) {
         g.time = HookTime{};
         g.loggedLookups = g.stats.lookups;
         g.loggedMisses = g.stats.lookupMisses;
+        g.loggedRoleLookups = g.stats.roleLookups;
+        g.loggedRoleMisses = g.stats.roleLookupMisses;
+        g.loggedShapeSkipped = g.stats.shapeSkippedPasses;
         g.qpcAtLog = now.QuadPart;
         g.tscAtLog = tsc;
         const MvrPassStats& s = g.stats;
