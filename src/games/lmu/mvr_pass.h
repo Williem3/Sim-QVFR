@@ -245,6 +245,10 @@ struct MvrPassStats {
     uint64_t focusBlits = 0, overlayDraws = 0, overlaysOutside = 0;
     uint64_t focusCopiesByBindings = 0, focusBlitsByBindings = 0;  // found without a checksum (a game update)
     uint64_t shapeFrames = 0;  // frames whose two eye passes had every step (mvr_shape_ready)
+    // Eye passes whose shape wasn't looked at draw by draw: they drew focus views after a frame with both (their
+    // final made stands for every step: observe_post_draw's checks only matter in the frames the recovery reads them).
+    uint64_t shapeSkippedPasses = 0;
+    uint64_t roleLookups = 0, roleLookupMisses = 0;  // pixel shaders' YEBIS roles looked up, and those not cached
     uint64_t fsrPlaced = 0, fsrFinals = 0;  // FSR: focus composites put beside the eye for its upscale; finals found
     uint64_t uiMipFrames = 0;  // frames whose VR UI canvas was copied with mips for the panel (mvr_ui_mips)
     // R6: the lens mask's draws (by its vertex shader), those with two views, those dropped while stale; the VR UI panel's
