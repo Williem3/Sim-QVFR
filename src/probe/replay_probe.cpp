@@ -47,6 +47,13 @@ extern "C" size_t simqvfr_slot_OMSetRenderTargets(void);
 extern "C" size_t simqvfr_slot_CreateDepthStencilView(void);
 extern "C" size_t simqvfr_slot_CreateRenderTargetView(void);
 extern "C" size_t simqvfr_slot_ExecuteCommandLists(void);
+extern "C" size_t simqvfr_slot_SetComputeRootSignature(void);
+extern "C" size_t simqvfr_slot_SetComputeRoot32BitConstants(void);
+extern "C" size_t simqvfr_slot_SetComputeRootConstantBufferView(void);
+extern "C" size_t simqvfr_slot_SetComputeRootDescriptorTable(void);
+extern "C" size_t simqvfr_slot_Dispatch(void);
+extern "C" size_t simqvfr_slot_CreateShaderResourceView(void);
+extern "C" size_t simqvfr_slot_CopyDescriptorsSimple(void);
 
 namespace simqvfr {
 namespace {
@@ -80,6 +87,11 @@ using DsvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D
 using RtvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_RENDER_TARGET_VIEW_DESC*,
                                        D3D12_CPU_DESCRIPTOR_HANDLE);
 using ExecuteFn = void(STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
+using DispatchFn = void(STDMETHODCALLTYPE*)(List*, UINT, UINT, UINT);
+using SrvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, const D3D12_SHADER_RESOURCE_VIEW_DESC*,
+                                       D3D12_CPU_DESCRIPTOR_HANDLE);
+using CopySimpleFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, UINT, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_DESCRIPTOR_HANDLE,
+                                              D3D12_DESCRIPTOR_HEAP_TYPE);
 
 CloseFn closeOriginal;
 ResetFn resetOriginal;
@@ -103,6 +115,13 @@ OmFn omOriginal;
 DsvFn dsvOriginal;
 RtvFn rtvOriginal;
 ExecuteFn executeOriginal;
+RootSigFn computeRootSigOriginal;
+ConstNFn computeConstNOriginal;
+VaFn computeCbvOriginal;
+TableFn computeTableOriginal;
+DispatchFn dispatchOriginal;
+SrvFn srvViewOriginal;
+CopySimpleFn copySimpleOriginal;
 
 enum Op : uint8_t {
     kRootSig = 1, kPso, kHeaps, kTable, kConst1, kConstN, kCbv, kSrv, kTopology, kIb, kVb, kViewports, kScissors,
@@ -124,6 +143,26 @@ struct Stream {
     float eyeW = 0, eyeH = 0;
     std::vector<SIZE_T> targets;                             // distinct RTV/DSV CPU handles it binds
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> passConstants;  // distinct root-1 addresses, in order
+    // R2b: the compute bindings in effect and ACE's tile passes (found by pipeline name) as they were dispatched.
+    int psoKind = 0;  // 1 tileFrustums, 2 tiledCulling
+    ID3D12PipelineState* pso = nullptr;
+    ID3D12RootSignature* computeRoot = nullptr;
+    ID3D12DescriptorHeap* heap = nullptr;  // the CBV/SRV/UAV heap set
+    uint32_t constants[20] = {};
+    D3D12_GPU_VIRTUAL_ADDRESS computeCbv = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE tables[8] = {};
+    D3D12_GPU_DESCRIPTOR_HANDLE bindlessUint{};  // root table 18 (space 45 in ACE's scene root signature)
+    struct TileDispatch {
+        int kind;
+        ID3D12PipelineState* pso;
+        ID3D12RootSignature* root;
+        ID3D12DescriptorHeap* heap;
+        uint32_t constants[20];
+        D3D12_GPU_VIRTUAL_ADDRESS cbv;
+        D3D12_GPU_DESCRIPTOR_HANDLE tables[8];
+        UINT dims[3];
+    };
+    std::vector<TileDispatch> tileDispatches;
 
     void begin(int64_t now) {
         bytes.clear();
@@ -136,6 +175,13 @@ struct Stream {
         eyeW = eyeH = 0;
         targets.clear();
         passConstants.clear();
+        psoKind = 0;
+        pso = nullptr;
+        computeRoot = nullptr;
+        heap = nullptr;
+        computeCbv = 0;
+        bindlessUint = {};
+        tileDispatches.clear();
     }
     template <class T> void put(const T& v) {
         const size_t at = bytes.size();
@@ -395,28 +441,35 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 tileFrom; uint4 tileTo; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 132) return;
     if (i >= 128) {
-        const uint from[4] = {21, 22, 103, 104};
+        const uint from[4] = {17, 18, 103, 104};
         dst.Store4(i * 16, asuint(src[from[i - 128]]));
         return;
     }
     float4 v = src[i];
     const bool left = i < 64;
-    const float ox = left ? src[21].z : src[103].z;
-    const float oy = left ? src[22].z : src[104].z;
+    const float ox = left ? src[17].z : src[103].z;  // projectionUnjittered: each eye's own centre
+    const float oy = left ? src[18].z : src[104].z;
     const float ax = 1.0 / halfExtent.x, ay = 1.0 / halfExtent.y;
-    if (is_in(i, 13, 17, 21, 25) || is_in(i, 95, 103, 107, 107))
+    if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107))  // viewProjection and the projections
         v = ax * v + (ax * ox) * src[i + 3];          // x' = a x + b w, b = -a * centre = a * ox
-    else if (is_in(i, 14, 18, 22, 26) || is_in(i, 96, 104, 108, 108))
+    else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108))
         v = ay * v + (ay * oy) * src[i + 2];          // y' = c y + d w
     if (i == 38) v.xy = float2(focusSize.x * 2, focusSize.y);
     if (i == 84) v = float4(0, 0, focusSize.x, focusSize.y);
+    if (i >= 29 && i <= 32)  // inverseViewProjection: inverse(R VP) = inverse(VP) inverse(R)
+        v = float4(v.x * halfExtent.x, v.y * halfExtent.y, v.z, v.w - v.x * ox - v.y * oy);
     if (i == 112) v.z = focusSize.x;  // eyeHalfWidthPixels (a float, as ACE writes it)
+    // The tile lists: the game's bindless indices -> ours (R2b; identity when off).
+    [unroll] for (uint k = 0; k < 4; ++k) {
+        if (i == 0 && asuint(v.x) == tileFrom[k]) v.x = asfloat(tileTo[k]);
+        if (i == 112 && asuint(v.y) == tileFrom[k]) v.y = asfloat(tileTo[k]);
+    }
     dst.Store4(i * 16, asuint(v));
 }
 )";
@@ -476,6 +529,27 @@ struct Focus {
     std::unordered_map<ID3D12Resource*, Twin> twins;
     std::vector<SIZE_T> refused;  // handles whose view we never saw (logged once)
     bool viewsMoved = false;      // a view handle now names another resource: twins of orphaned resources go
+    // R2b: the focus views' light tiles. ACE's tile lists are bindless (space 45, root table 18 of its scene root
+    // signature, a 131,072-descriptor range): our descriptors take the top kTileSlots of that range in its heap.
+    ComPtr<ID3D12RootSignature> cullRoot;
+    ComPtr<ID3D12PipelineState> cullPso;      // copies tiledCulling's constants with the focus fields
+    ID3D12DescriptorHeap* gameHeap = nullptr;  // ACE's shader-visible CBV/SRV/UAV heap
+    UINT heapSize = 0, increment = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE bindlessBase{};  // root table 18 as ACE's stereo scene lists set it
+    UINT baseIndex = 0, slotFirst = 0;            // absolute heap indices
+    UINT tilesX = 0, tilesY = 0;                  // the game's tile grid per eye (frameData.tileCount)
+    ComPtr<ID3D12Resource> frustums[2], opaque[2], transparent[2];
+    ID3D12Resource* depthForTiles = nullptr;      // the focus depth twin our depth SRV names
+    bool tilesShaderResource = false;             // opaque/transparent: after a recorded tile replay
+    bool tilesReady = false, tilesBroken = false;
+    uint32_t gameTile[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};  // opaque L/R, transparent L/R (relative)
+    uint32_t ourTile[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    std::vector<std::pair<SIZE_T, int>> tileViews;  // CPU handles the game wrote its tile-list SRVs to (staging or not)
+    SIZE_T maxWritten = 0;                          // the highest index the game wrote in the bindless range
+    bool collision = false;
+    std::unordered_map<ID3D12PipelineState*, int> psoKinds;  // 0 none, 1 tileFrustums, 2 tiledCulling
+    SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
+    std::atomic<uint64_t> tileReplays{0};
     std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
     // samples: armed for a frame (references replayed too), copied before the next frame's clear, saved off-thread
     std::atomic<uint64_t> sampleFrame{UINT64_MAX};
@@ -489,6 +563,97 @@ struct Focus {
 };
 Focus focus;
 
+constexpr UINT kTileSlots = 16, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
+
+// The culling constants (tiledCulling cb0, 240 B: inverseView, view, inverseProjectionMatrix at 128, tileCount 192,
+// entityCount, dimension 208, pixelOffset 216, aabbTolerance) copied with the focus inverse projection and its region
+// of our focus depth twin.
+constexpr char kCullShader[] = R"(
+cbuffer Source : register(b0) { float4 src[15]; };
+cbuffer Params : register(b1) { float4 inverseProjection[4]; int2 dimension; int2 pixelOffset; };
+RWByteAddressBuffer dst : register(u0);
+[numthreads(16, 1, 1)] void main(uint i : SV_DispatchThreadID) {
+    if (i >= 15) return;
+    float4 v = src[i];
+    if (i >= 8 && i < 12) v = inverseProjection[i - 8];
+    if (i == 13) v = float4(asfloat(dimension), asfloat(pixelOffset));
+    dst.Store4(i * 16, asuint(v));
+}
+)";
+
+bool invert(const double (&m)[4][4], double (&out)[4][4]) {
+    double a[4][8];
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 8; ++j)
+            a[i][j] = j < 4 ? m[i][j] : (j - 4 == i ? 1.0 : 0.0);
+    for (int c = 0; c < 4; ++c) {
+        int pivot = c;
+        for (int r = c + 1; r < 4; ++r)
+            if (std::fabs(a[r][c]) > std::fabs(a[pivot][c]))
+                pivot = r;
+        if (std::fabs(a[pivot][c]) < 1e-12)
+            return false;
+        for (int j = 0; j < 8; ++j)
+            std::swap(a[c][j], a[pivot][j]);
+        const double d = a[c][c];
+        for (int j = 0; j < 8; ++j)
+            a[c][j] /= d;
+        for (int r = 0; r < 4; ++r)
+            if (r != c) {
+                const double f = a[r][c];
+                for (int j = 0; j < 8; ++j)
+                    a[r][j] -= f * a[c][j];
+            }
+    }
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j)
+            out[i][j] = a[i][j + 4];
+    return true;
+}
+
+int pso_kind(ID3D12PipelineState* pso) {
+    if (!pso)
+        return 0;
+    AcquireSRWLockShared(&focus.psoLock);
+    const auto it = focus.psoKinds.find(pso);
+    const int known = it == focus.psoKinds.end() ? -1 : it->second;
+    ReleaseSRWLockShared(&focus.psoLock);
+    if (known >= 0)
+        return known;
+    wchar_t name[64] = {};
+    UINT size = sizeof(name) - sizeof(wchar_t);
+    int kind = 0;
+    if (SUCCEEDED(pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)))
+        kind = std::wcscmp(name, L"tileFrustums") == 0 ? 1 : std::wcscmp(name, L"tiledCulling") == 0 ? 2 : 0;
+    AcquireSRWLockExclusive(&focus.psoLock);
+    focus.psoKinds[pso] = kind;
+    ReleaseSRWLockExclusive(&focus.psoLock);
+    return kind;
+}
+
+}  // namespace
+
+// The tile shaders multiply out = M v with M's columns in the 4 registers (tileFrustums' disassembly): eye[4k + i] is
+// M[i][k]. inverse(R P) = inverse(P) inverse(R), R: x' = x / box + (ox / box) w, y' likewise.
+bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&out)[16]) {
+    double q[4][4], p[4][4];
+    for (int i = 0; i < 4; ++i)
+        for (int k = 0; k < 4; ++k)
+            q[i][k] = eye[k * 4 + i];
+    if (!invert(q, p))
+        return false;
+    const double ox = p[0][2], oy = p[1][2];  // P's x and y rows: (sx, 0, ox, 0), (0, sy, oy, 0)
+    for (int i = 0; i < 4; ++i) {
+        out[0 * 4 + i] = static_cast<float>(q[i][0] * box);
+        out[1 * 4 + i] = static_cast<float>(q[i][1] * box);
+        out[2 * 4 + i] = static_cast<float>(q[i][2]);
+        out[3 * 4 + i] = static_cast<float>(q[i][3] - q[i][0] * ox - q[i][1] * oy);
+    }
+    return true;
+}
+
+namespace {
+
 bool focus_compile() {
     ComPtr<ID3DBlob> code, errors;
     if (FAILED(D3DCompile(kPatchShader, sizeof(kPatchShader) - 1, "focus-constants", nullptr, nullptr, "main", "cs_5_0", 0,
@@ -501,7 +666,7 @@ bool focus_compile() {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor = {0, 0};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants = {1, 0, 4};
+    params[1].Constants = {1, 0, 12};
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {0, 0};
     const D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -532,6 +697,31 @@ bool focus_compile() {
     }
     for (int i = kRtvSlots - 1; i >= 0; --i) focus.freeRtv.push_back(i);
     for (int i = kDsvSlots - 1; i >= 0; --i) focus.freeDsv.push_back(i);
+    {  // R2b: the culling-constants copy
+        ComPtr<ID3DBlob> cullCode, cullErrors, cullBlob;
+        D3D12_ROOT_PARAMETER cullParams[3] = {};
+        cullParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        cullParams[0].Descriptor = {0, 0};
+        cullParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        cullParams[1].Constants = {1, 0, 20};
+        cullParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        cullParams[2].Descriptor = {0, 0};
+        const D3D12_ROOT_SIGNATURE_DESC cullDesc{3, cullParams, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_COMPUTE_PIPELINE_STATE_DESC cullPso{};
+        if (FAILED(D3DCompile(kCullShader, sizeof(kCullShader) - 1, "focus-culling", nullptr, nullptr, "main", "cs_5_0", 0, 0,
+                              &cullCode, &cullErrors)) ||
+            FAILED(D3D12SerializeRootSignature(&cullDesc, D3D_ROOT_SIGNATURE_VERSION_1, &cullBlob, &cullErrors)) ||
+            FAILED(device->CreateRootSignature(0, cullBlob->GetBufferPointer(), cullBlob->GetBufferSize(),
+                                               IID_PPV_ARGS(&focus.cullRoot)))) {
+            log_line("replay focus: the culling-constants shader failed; no focus tiles");
+            focus.tilesBroken = true;
+        } else {
+            cullPso.pRootSignature = focus.cullRoot.Get();
+            cullPso.CS = {cullCode->GetBufferPointer(), cullCode->GetBufferSize()};
+            if (FAILED(device->CreateComputePipelineState(&cullPso, IID_PPV_ARGS(&focus.cullPso))))
+                focus.tilesBroken = true;
+        }
+    }
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeap{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvSlots};
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeap{D3D12_DESCRIPTOR_HEAP_TYPE_DSV, kDsvSlots};
     return SUCCEEDED(device->CreateDescriptorHeap(&rtvHeap, IID_PPV_ARGS(&focus.rtvHeap))) &&
@@ -784,6 +974,15 @@ void focus_record(List* gameList, const Stream& s) {
     const UINT ewi = static_cast<UINT>(s.eyeW), ehi = static_cast<UINT>(s.eyeH);
     const UINT fwi = std::max(16u, static_cast<UINT>(std::lround(s.eyeW * k)));
     const UINT fhi = std::max(16u, static_cast<UINT>(std::lround(s.eyeH * k)));
+    // R2b: the bindless base (root table 18) as the stereo scene lists set it; the tile lists' indices game -> ours.
+    uint32_t tileFrom[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX}, tileTo[4] = {};
+    if (s.bindlessUint.ptr && !focus.bindlessBase.ptr)
+        focus.bindlessBase = s.bindlessUint;
+    if (focus.tilesReady && !focus.tilesBroken)
+        for (int i = 0; i < 4; ++i) {
+            tileFrom[i] = focus.gameTile[i];
+            tileTo[i] = focus.ourTile[i];
+        }
     ReleaseSRWLockExclusive(&focus.lock);
     if (!r)
         return;
@@ -797,9 +996,13 @@ void focus_record(List* gameList, const Stream& s) {
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slots;
     l->SetComputeRootSignature(focus.patchRoot.Get());
     l->SetPipelineState(focus.patchPso.Get());
-    const float params[4] = {static_cast<float>(focus.settings.boxFraction), static_cast<float>(focus.settings.boxFraction),
-                             static_cast<float>(fwi), static_cast<float>(fhi)};
-    l->SetComputeRoot32BitConstants(1, 4, params, 0);
+    uint32_t params[12] = {};
+    const float box = static_cast<float>(focus.settings.boxFraction);
+    const float floats[4] = {box, box, static_cast<float>(fwi), static_cast<float>(fhi)};
+    std::memcpy(params, floats, sizeof(floats));
+    std::memcpy(params + 4, tileFrom, sizeof(tileFrom));
+    std::memcpy(params + 8, tileTo, sizeof(tileTo));
+    l->SetComputeRoot32BitConstants(1, 12, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         if (sample) {
@@ -849,6 +1052,241 @@ void focus_record(List* gameList, const Stream& s) {
     listsReplayed.fetch_add(1, std::memory_order_relaxed);
     callsReplayed.fetch_add(s.calls, std::memory_order_relaxed);
     drawsReplayed.fetch_add(static_cast<uint64_t>(draws), std::memory_order_relaxed);
+}
+
+// ---- R2b: the focus views' light tiles ------------------------------------------------------------------------------
+
+D3D12_CPU_DESCRIPTOR_HANDLE game_cpu(UINT index) {
+    D3D12_CPU_DESCRIPTOR_HANDLE h = focus.gameHeap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += static_cast<SIZE_T>(index) * focus.increment;
+    return h;
+}
+D3D12_GPU_DESCRIPTOR_HANDLE game_gpu(UINT index) {
+    D3D12_GPU_DESCRIPTOR_HANDLE h = focus.gameHeap->GetGPUDescriptorHandleForHeapStart();
+    h.ptr += UINT64{index} * focus.increment;
+    return h;
+}
+ComPtr<ID3D12Resource> make_buffer(UINT64 bytes) {
+    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC d{D3D12_RESOURCE_DIMENSION_BUFFER, 0, bytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                          D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+    ComPtr<ID3D12Resource> r;
+    device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                    IID_PPV_ARGS(&r));
+    return r;
+}
+void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlot, UINT srvSlot) {
+    D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+    u.Format = DXGI_FORMAT_UNKNOWN;
+    u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    u.Buffer.NumElements = elements;
+    u.Buffer.StructureByteStride = stride;
+    device->CreateUnorderedAccessView(r, nullptr, &u, game_cpu(uavSlot));
+    D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+    v.Format = DXGI_FORMAT_UNKNOWN;
+    v.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    v.Buffer.NumElements = elements;
+    v.Buffer.StructureByteStride = stride;
+    srvViewOriginal(device.Get(), r, &v, game_cpu(srvSlot));
+}
+
+// Under focus.lock: our tile resources and descriptors for this frame's tile passes; the game's tile-list indices.
+const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
+    if (focus.tilesBroken || !focus.bindlessBase.ptr || !frustums.heap)
+        return nullptr;
+    if (focus.gameHeap != frustums.heap) {
+        const D3D12_DESCRIPTOR_HEAP_DESC d = frustums.heap->GetDesc();
+        if (d.Type != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !(d.Flags & D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE))
+            return nullptr;
+        focus.gameHeap = frustums.heap;
+        focus.heapSize = d.NumDescriptors;
+        focus.increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        focus.baseIndex = static_cast<UINT>((focus.bindlessBase.ptr - focus.gameHeap->GetGPUDescriptorHandleForHeapStart().ptr) /
+                                            focus.increment);
+        focus.slotFirst = focus.baseIndex + kBindlessRange - kTileSlots;
+        if (focus.slotFirst + kTileSlots > focus.heapSize) {
+            logf("replay focus: the bindless range (%u + %u) passes the heap's end (%u): no focus tiles", focus.baseIndex,
+                 kBindlessRange, focus.heapSize);
+            focus.tilesBroken = true;
+            return nullptr;
+        }
+        logf("replay focus: tiles: the game's heap %u descriptors, bindless range from %u, ours %u..%u (the range's top)",
+             focus.heapSize, focus.baseIndex, focus.slotFirst, focus.slotFirst + kTileSlots - 1);
+        focus.tilesReady = false;
+        focus.frustums[0].Reset();  // views written again below
+    }
+    // The focus depth twin: the largest single-sample depth twin (the stereo scene depth).
+    const Twin* depth = nullptr;
+    for (const auto& [game, tw] : focus.twins)
+        if (tw.depth && tw.gameDesc.SampleDesc.Count == 1 && (!depth || tw.eyeW > depth->eyeW))
+            depth = &tw;
+    if (!depth || depth->gameDesc.Format != DXGI_FORMAT_R32_TYPELESS)
+        return nullptr;
+    float tileCount[2];
+    std::memcpy(tileCount, frustums.constants + 18, sizeof(tileCount));
+    const UINT tx = static_cast<UINT>(tileCount[0]), ty = static_cast<UINT>(tileCount[1]);
+    if (!tx || !ty || tx > 4096 || ty > 4096)
+        return nullptr;
+    if (!focus.frustums[0] || tx != focus.tilesX || ty != focus.tilesY) {
+        for (int e = 0; e < 2; ++e)
+            for (ComPtr<ID3D12Resource>* r : {std::addressof(focus.frustums[e]), std::addressof(focus.opaque[e]),
+                                              std::addressof(focus.transparent[e])}) {  // ComPtr overloads operator&
+                retire(r->Get());
+                *r = make_buffer(UINT64{tx} * ty * kTileStride);
+            }
+        focus.tilesX = tx;
+        focus.tilesY = ty;
+        for (int e = 0; e < 2; ++e) {
+            const UINT at = focus.slotFirst + e * 6;
+            structured_views(focus.frustums[e].Get(), tx * ty, 64, at + 0, at + 1);
+            structured_views(focus.opaque[e].Get(), tx * ty * 16, 4, at + 2, at + 3);
+            structured_views(focus.transparent[e].Get(), tx * ty * 16, 4, at + 4, at + 5);
+        }
+        focus.tilesShaderResource = false;
+        focus.depthForTiles = nullptr;
+        for (int e = 0; e < 2; ++e) {  // the indices the focus pass constants carry: SRVs, relative to the base
+            focus.ourTile[e] = focus.slotFirst + e * 6 + 3 - focus.baseIndex;      // opaque L, R
+            focus.ourTile[2 + e] = focus.slotFirst + e * 6 + 5 - focus.baseIndex;  // transparent L, R
+        }
+        logf("replay focus: tiles: the game's grid %ux%u per eye; our tile lists made", tx, ty);
+    }
+    if (focus.depthForTiles != depth->focus.Get()) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+        v.Format = DXGI_FORMAT_R32_FLOAT;
+        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        v.Texture2D.MipLevels = 1;
+        srvViewOriginal(device.Get(), depth->focus.Get(), &v, game_cpu(focus.slotFirst + 12));
+        focus.depthForTiles = depth->focus.Get();
+    }
+    // The game's tile-list SRVs: where it wrote them in its heap (directly, or copied from a staging heap).
+    const SIZE_T start = focus.gameHeap->GetCPUDescriptorHandleForHeapStart().ptr;
+    for (const auto& [ptr, k] : focus.tileViews)
+        if (ptr >= start && ptr < start + SIZE_T{focus.heapSize} * focus.increment) {
+            const UINT abs = static_cast<UINT>((ptr - start) / focus.increment);
+            if (abs >= focus.baseIndex)
+                focus.gameTile[k] = abs - focus.baseIndex;
+        }
+    const bool known = focus.gameTile[0] != UINT32_MAX && focus.gameTile[1] != UINT32_MAX &&
+                       focus.gameTile[2] != UINT32_MAX && focus.gameTile[3] != UINT32_MAX;
+    if (known && !focus.tilesReady)
+        logf("replay focus: tiles: the game's tile lists at bindless %u/%u (opaque) %u/%u (transparent), ours %u/%u %u/%u",
+             focus.gameTile[0], focus.gameTile[1], focus.gameTile[2], focus.gameTile[3], focus.ourTile[0], focus.ourTile[1],
+             focus.ourTile[2], focus.ourTile[3]);
+    static int unknownFrames = 0;
+    if (!known && ++unknownFrames == 300)
+        logf("replay focus: tiles: the game's tile-list views not all seen after 300 tile passes (%u %u %u %u; %zu views "
+             "recorded): they were made before the probe, or by a call it doesn't watch; no focus tiles",
+             focus.gameTile[0], focus.gameTile[1], focus.gameTile[2], focus.gameTile[3], focus.tileViews.size());
+    focus.tilesReady = known;
+    return depth;
+}
+
+// At the game's Close of a list with its tile passes: per eye, tileFrustums and tiledCulling again with the focus
+// view's inverse projection, resolution and depth, into our tile lists. Executed after the game's batch, like the
+// scene replays (before the lighting lists that read them).
+void focus_tiles_record(List* gameList, const Stream& s) {
+    std::vector<const Stream::TileDispatch*> fr, cu;
+    for (const auto& d : s.tileDispatches)
+        (d.kind == 1 ? fr : cu).push_back(&d);
+    if (fr.size() < 2 || cu.size() < 2)
+        return;
+    Replay* r = nullptr;
+    UINT fw = 0, fh = 0;
+    ID3D12Resource* depth = nullptr;
+    bool fromShaderResource = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    const Twin* twin = focus_tiles_prepare(*fr[0]);
+    if (twin && focus.tilesReady)
+        r = acquire_replay();
+    if (r) {
+        fw = twin->focusW;
+        fh = twin->focusH;
+        depth = twin->focus.Get();
+        fromShaderResource = focus.tilesShaderResource;
+        focus.tilesShaderResource = true;
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    const UINT ftx = (fw + 15) / 16, fty = (fh + 15) / 16;  // the focus views' tiles (per eye)
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    barrier(l, depth, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (fromShaderResource)
+        for (int e = 0; e < 2; ++e)
+            for (ID3D12Resource* b : {focus.opaque[e].Get(), focus.transparent[e].Get()})
+                barrier(l, b, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    bool ok = true;
+    for (int e = 0; e < 2 && ok; ++e) {
+        const Stream::TileDispatch& f = *fr[e];
+        const Stream::TileDispatch& c = *cu[e];
+        float eyeInverse[16], focusInverse[16];
+        std::memcpy(eyeInverse, f.constants, sizeof(eyeInverse));
+        if (!replay_focus_inverse_projection(eyeInverse, focus.settings.boxFraction, focusInverse)) {
+            ok = false;
+            break;
+        }
+        // 1. tiledCulling's constants with the focus fields, into our slot.
+        uint32_t cullParams[20];
+        std::memcpy(cullParams, focusInverse, sizeof(focusInverse));
+        const int32_t region[4] = {static_cast<int32_t>(fw), static_cast<int32_t>(fh), static_cast<int32_t>(e * fw), 0};
+        std::memcpy(cullParams + 16, region, sizeof(region));
+        const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
+        const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.constants->GetGPUVirtualAddress() + UINT64{slot} * kSlotBytes;
+        l->SetComputeRootSignature(focus.cullRoot.Get());
+        l->SetPipelineState(focus.cullPso.Get());
+        l->SetComputeRootConstantBufferView(0, c.cbv);
+        l->SetComputeRoot32BitConstants(1, 20, cullParams, 0);
+        l->SetComputeRootUnorderedAccessView(2, mine);
+        l->Dispatch(1, 1, 1);
+        // 2. tileFrustums for the focus view (the game's tile grid kept: frameData.tileCount is the lighting's stride).
+        uint32_t frustumConstants[20];
+        std::memcpy(frustumConstants, f.constants, sizeof(frustumConstants));
+        std::memcpy(frustumConstants, focusInverse, sizeof(focusInverse));
+        const float rcp[2] = {1.0f / static_cast<float>(fw), 1.0f / static_cast<float>(fh)};
+        std::memcpy(frustumConstants + 16, rcp, sizeof(rcp));
+        const UINT at = focus.slotFirst + e * 6;
+        l->SetComputeRootSignature(f.root);
+        l->SetPipelineState(f.pso);
+        l->SetComputeRoot32BitConstants(0, 20, frustumConstants, 0);
+        l->SetComputeRootDescriptorTable(1, game_gpu(at + 0));
+        l->Dispatch((ftx + 15) / 16, (fty + 15) / 16, 1);
+        barrier(l, focus.frustums[e].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        barrier(l, focus.constants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        // 3. tiledCulling: our frustums, our focus depth, the game's entities and matrices, our tile lists.
+        l->SetComputeRootSignature(c.root);
+        l->SetPipelineState(c.pso);
+        l->SetComputeRootConstantBufferView(0, mine);
+        l->SetComputeRootDescriptorTable(1, game_gpu(at + 1));
+        l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + 12));
+        l->SetComputeRootDescriptorTable(3, c.tables[3]);
+        l->SetComputeRootDescriptorTable(4, c.tables[4]);
+        l->SetComputeRootDescriptorTable(5, game_gpu(at + 2));
+        l->SetComputeRootDescriptorTable(6, game_gpu(at + 4));
+        l->Dispatch(ftx, fty, 1);
+        barrier(l, focus.constants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        barrier(l, focus.frustums[e].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    for (int e = 0; e < 2; ++e)
+        for (ID3D12Resource* b : {focus.opaque[e].Get(), focus.transparent[e].Get()})
+            barrier(l, b, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+    barrier(l, depth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    if (ok)
+        focus.pending[gameList] = r;
+    else
+        r->busy = false;
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (ok)
+        focus.tileReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- Samples: readback, pictures, comparison -----------------------------------------------------------------------
@@ -1276,6 +1714,8 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     listsSeen.fetch_add(1, std::memory_order_relaxed);
     hookCycles.fetch_add(s->hookCycles, std::memory_order_relaxed);
     if (probeMode == 3) {
+        if (SUCCEEDED(hr) && focus.settings.tiles && !s->tileDispatches.empty())
+            focus_tiles_record(list, *s);
         if (SUCCEEDED(hr) && s->replayable(focus.settings.allTargets)) {
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
             focus_record(list, *s);
@@ -1298,7 +1738,14 @@ void STDMETHODCALLTYPE rootSigHook(List* l, ID3D12RootSignature* r) {
     rootSigOriginal(l, r);
 }
 void STDMETHODCALLTYPE psoHook(List* l, ID3D12PipelineState* r) {
-    if (Stream* s = stream_of(l)) { HookTimer t(s); s->op(kPso); s->put(r); }
+    if (Stream* s = stream_of(l)) {
+        HookTimer t(s);
+        s->op(kPso);
+        s->put(r);
+        s->pso = r;
+        if (focus.settings.tiles)
+            s->psoKind = pso_kind(r);
+    }
     psoOriginal(l, r);
 }
 void STDMETHODCALLTYPE heapsHook(List* l, UINT n, ID3D12DescriptorHeap* const* heaps) {
@@ -1307,11 +1754,22 @@ void STDMETHODCALLTYPE heapsHook(List* l, UINT n, ID3D12DescriptorHeap* const* h
         s->op(kHeaps);
         s->put(n);
         for (UINT i = 0; i < n; ++i) s->put(heaps[i]);
+        if (focus.settings.tiles)
+            for (UINT i = 0; i < n; ++i)
+                if (heaps[i] && heaps[i]->GetDesc().Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+                    s->heap = heaps[i];
     }
     heapsOriginal(l, n, heaps);
 }
 void STDMETHODCALLTYPE tableHook(List* l, UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) {
-    if (Stream* s = stream_of(l)) { HookTimer t(s); s->op(kTable); s->put(i); s->put(h); }
+    if (Stream* s = stream_of(l)) {
+        HookTimer t(s);
+        s->op(kTable);
+        s->put(i);
+        s->put(h);
+        if (i == 18)  // ACE's scene root signature: space 45, the bindless uint buffers (tile lists)
+            s->bindlessUint = h;
+    }
     tableOriginal(l, i, h);
 }
 void STDMETHODCALLTYPE const1Hook(List* l, UINT i, UINT v, UINT o) {
@@ -1405,6 +1863,93 @@ void STDMETHODCALLTYPE omHook(List* l, UINT n, const D3D12_CPU_DESCRIPTOR_HANDLE
         }
     }
     omOriginal(l, n, rtvs, single, dsv);
+}
+void STDMETHODCALLTYPE computeRootSigHook(List* l, ID3D12RootSignature* r) {
+    if (Stream* s = stream_of(l)) s->computeRoot = r;
+    computeRootSigOriginal(l, r);
+}
+void STDMETHODCALLTYPE computeConstNHook(List* l, UINT i, UINT n, const void* data, UINT o) {
+    if (Stream* s = stream_of(l); s && i == 0 && o + n <= 20 && data)
+        std::memcpy(s->constants + o, data, size_t{n} * 4);
+    computeConstNOriginal(l, i, n, data, o);
+}
+void STDMETHODCALLTYPE computeCbvHook(List* l, UINT i, D3D12_GPU_VIRTUAL_ADDRESS va) {
+    if (Stream* s = stream_of(l); s && i == 0) s->computeCbv = va;
+    computeCbvOriginal(l, i, va);
+}
+void STDMETHODCALLTYPE computeTableHook(List* l, UINT i, D3D12_GPU_DESCRIPTOR_HANDLE h) {
+    if (Stream* s = stream_of(l); s && i < 8) s->tables[i] = h;
+    computeTableOriginal(l, i, h);
+}
+void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
+    if (Stream* s = stream_of(l); s && s->psoKind) {
+        Stream::TileDispatch d{};
+        d.kind = s->psoKind;
+        d.pso = s->pso;
+        d.root = s->computeRoot;
+        d.heap = s->heap;
+        std::memcpy(d.constants, s->constants, sizeof(d.constants));
+        d.cbv = s->computeCbv;
+        std::memcpy(d.tables, s->tables, sizeof(d.tables));
+        d.dims[0] = x;
+        d.dims[1] = y;
+        d.dims[2] = z;
+        s->tileDispatches.push_back(d);
+    }
+    dispatchOriginal(l, x, y, z);
+}
+// The game's tile-list SRVs by resource name; and every descriptor it writes, against our reserved slots.
+int tile_view_kind(ID3D12Resource* r) {
+    const std::string n = debug_name(r);
+    if (n == "entityTileOpaque_l_eye") return 0;
+    if (n == "entityTileOpaque_r_eye") return 1;
+    if (n == "entityTileTransparent_l_eye") return 2;
+    if (n == "entityTileTransparent_r_eye") return 3;
+    return -1;
+}
+void check_reserved(SIZE_T dest, UINT count) {  // under focus.lock
+    if (!focus.gameHeap || focus.collision)
+        return;
+    const SIZE_T start = focus.gameHeap->GetCPUDescriptorHandleForHeapStart().ptr;
+    if (dest < start || dest >= start + SIZE_T{focus.heapSize} * focus.increment)
+        return;
+    const UINT first = static_cast<UINT>((dest - start) / focus.increment), last = first + count - 1;
+    if (last < focus.baseIndex + kBindlessRange)
+        focus.maxWritten = std::max<SIZE_T>(focus.maxWritten, last);
+    if (first < focus.slotFirst + kTileSlots && last >= focus.slotFirst) {
+        focus.collision = true;
+        focus.tilesBroken = true;
+        logf("replay focus: tiles: the game wrote descriptors %u..%u, inside ours (%u..%u): focus tiles off", first, last,
+             focus.slotFirst, focus.slotFirst + kTileSlots - 1);
+    }
+}
+void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D12_SHADER_RESOURCE_VIEW_DESC* desc,
+                                   D3D12_CPU_DESCRIPTOR_HANDLE dest) {
+    srvViewOriginal(d, r, desc, dest);
+    if (inReplay)
+        return;
+    const int k = r && desc && desc->ViewDimension == D3D12_SRV_DIMENSION_BUFFER ? tile_view_kind(r) : -1;
+    AcquireSRWLockExclusive(&focus.lock);
+    if (k >= 0)
+        focus.tileViews.emplace_back(dest.ptr, k);
+    check_reserved(dest.ptr, 1);
+    ReleaseSRWLockExclusive(&focus.lock);
+}
+void STDMETHODCALLTYPE copySimpleHook(ID3D12Device* d, UINT n, D3D12_CPU_DESCRIPTOR_HANDLE dest, D3D12_CPU_DESCRIPTOR_HANDLE src,
+                                      D3D12_DESCRIPTOR_HEAP_TYPE type) {
+    copySimpleOriginal(d, n, dest, src, type);
+    if (inReplay || type != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !n)
+        return;
+    const SIZE_T step = d->GetDescriptorHandleIncrementSize(type);
+    AcquireSRWLockExclusive(&focus.lock);
+    const size_t known = focus.tileViews.size();
+    for (size_t i = 0; i < known; ++i) {
+        const auto [ptr, k] = focus.tileViews[i];
+        if (ptr >= src.ptr && ptr < src.ptr + SIZE_T{n} * step)
+            focus.tileViews.emplace_back(dest.ptr + (ptr - src.ptr), k);
+    }
+    check_reserved(dest.ptr, n);
+    ReleaseSRWLockExclusive(&focus.lock);
 }
 void STDMETHODCALLTYPE drawHook(List* l, UINT a, UINT b, UINT c, UINT d) {
     if (Stream* s = stream_of(l)) { HookTimer t(s); s->op(kDraw); s->put(a); s->put(b); s->put(c); s->put(d); ++s->draws; }
@@ -1505,6 +2050,16 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
              hook(deviceTable, simqvfr_slot_CreateRenderTargetView(), &rtvHook, &rtvOriginal) &&
              hook(*reinterpret_cast<void***>(queue), simqvfr_slot_ExecuteCommandLists(), &executeHook, &executeOriginal) &&
              focus_compile();
+        if (ok && settings.tiles)
+            ok = hook(vtable, simqvfr_slot_SetComputeRootSignature(), &computeRootSigHook, &computeRootSigOriginal) &&
+                 hook(vtable, simqvfr_slot_SetComputeRoot32BitConstants(), &computeConstNHook, &computeConstNOriginal) &&
+                 hook(vtable, simqvfr_slot_SetComputeRootConstantBufferView(), &computeCbvHook, &computeCbvOriginal) &&
+                 hook(vtable, simqvfr_slot_SetComputeRootDescriptorTable(), &computeTableHook, &computeTableOriginal) &&
+                 hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
+                 hook(deviceTable, simqvfr_slot_CreateShaderResourceView(), &srvViewHook, &srvViewOriginal) &&
+                 hook(deviceTable, simqvfr_slot_CopyDescriptorsSimple(), &copySimpleHook, &copySimpleOriginal);
+        else if (ok)
+            srvViewOriginal = reinterpret_cast<SrvFn>(deviceTable[simqvfr_slot_CreateShaderResourceView()]);
         focus.sampleFrame = settings.saveCount ? settings.saveFirst : UINT64_MAX;
     }
     installed = ok;
@@ -1540,6 +2095,7 @@ ReplayProbeStats replay_probe_take_stats() {
     s.hookMs = static_cast<double>(hookCycles.exchange(0)) * msPerCycle;
     s.gameMs = static_cast<double>(gameTicks.exchange(0)) * msPerTick;
     s.focusReplays = focusReplays.exchange(0);
+    s.tileReplays = focus.tileReplays.exchange(0);
     s.twinsMade = twinsMade.load();
     s.twinsRemade = twinsRemade.load();
     return s;

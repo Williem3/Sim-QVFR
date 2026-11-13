@@ -235,6 +235,7 @@ void load_experiment() {
         wchar_t targets[16] = {};
         GetPrivateProfileStringW(L"experiment", L"replay_targets", L"depth", targets, 16, ini.c_str());
         experiment.replayAllTargets = _wcsicmp(targets, L"all") == 0;
+        experiment.replayTiles = GetPrivateProfileIntW(L"experiment", L"replay_tiles", 0, ini.c_str()) != 0;
     }
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
     experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;

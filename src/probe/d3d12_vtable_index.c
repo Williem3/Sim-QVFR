@@ -42,3 +42,10 @@ size_t simqvfr_slot_RSSetScissorRects(void) { return SLOT(ID3D12GraphicsCommandL
 size_t simqvfr_slot_OMSetStencilRef(void) { return SLOT(ID3D12GraphicsCommandListVtbl, OMSetStencilRef); }
 size_t simqvfr_slot_CreateDepthStencilView(void) { return SLOT(ID3D12DeviceVtbl, CreateDepthStencilView); }
 size_t simqvfr_slot_ExecuteCommandLists(void) { return SLOT(ID3D12CommandQueueVtbl, ExecuteCommandLists); }
+size_t simqvfr_slot_SetComputeRootSignature(void) { return SLOT(ID3D12GraphicsCommandListVtbl, SetComputeRootSignature); }
+size_t simqvfr_slot_SetComputeRoot32BitConstants(void) { return SLOT(ID3D12GraphicsCommandListVtbl, SetComputeRoot32BitConstants); }
+size_t simqvfr_slot_SetComputeRootConstantBufferView(void) { return SLOT(ID3D12GraphicsCommandListVtbl, SetComputeRootConstantBufferView); }
+size_t simqvfr_slot_SetComputeRootDescriptorTable(void) { return SLOT(ID3D12GraphicsCommandListVtbl, SetComputeRootDescriptorTable); }
+size_t simqvfr_slot_CreateShaderResourceView(void) { return SLOT(ID3D12DeviceVtbl, CreateShaderResourceView); }
+size_t simqvfr_slot_CreateUnorderedAccessView(void) { return SLOT(ID3D12DeviceVtbl, CreateUnorderedAccessView); }
+size_t simqvfr_slot_CopyDescriptorsSimple(void) { return SLOT(ID3D12DeviceVtbl, CopyDescriptorsSimple); }

@@ -113,6 +113,7 @@ struct Experiment {
     UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
     UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 3;  // replay_save_first/_every/_count
     bool replayAllTargets = false;         // replay_targets=all: every stereo scene list (R2), else depth only (R1)
+    bool replayTiles = false;              // replay_tiles=1: the focus views' own light tiles (R2b)
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)

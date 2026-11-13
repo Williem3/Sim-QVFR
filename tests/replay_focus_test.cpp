@@ -8,6 +8,8 @@
 // each is remade once when the game makes its targets again at another size (frame 2).
 #include <d3dcompiler.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -64,7 +66,55 @@ float4 ps(Out i) : SV_Target {
 
 }  // namespace
 
+// R2b's CPU math: the focus inverse projection for ACE's tile shaders (out = M v, M's columns in the registers). A focus
+// view point (u, v) unprojected with it and projected with the eye's projection must land at the eye's centre + (u, v)
+// times the box.
+void check_inverse_projection() {
+    const double sx = 0.8159, ox = -0.16857, sy = 1.016, oy = 0.02, box = 0.2;
+    const double p[4][4] = {{sx, 0, ox, 0}, {0, sy, oy, 0}, {0, 0, 6.6667e-6, 0.1}, {0, 0, -1, 0}};  // clip = P view
+    // inverse(P) by the probe's own convention check: build M = inverse(P) numerically (Gauss-Jordan on doubles).
+    double a[4][8];
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 8; ++j)
+            a[i][j] = j < 4 ? p[i][j] : (j - 4 == i ? 1.0 : 0.0);
+    for (int c = 0; c < 4; ++c) {
+        int pivot = c;
+        for (int r = c + 1; r < 4; ++r)
+            if (std::fabs(a[r][c]) > std::fabs(a[pivot][c])) pivot = r;
+        for (int j = 0; j < 8; ++j) std::swap(a[c][j], a[pivot][j]);
+        const double d = a[c][c];
+        for (int j = 0; j < 8; ++j) a[c][j] /= d;
+        for (int r = 0; r < 4; ++r)
+            if (r != c) {
+                const double f = a[r][c];
+                for (int j = 0; j < 8; ++j) a[r][j] -= f * a[c][j];
+            }
+    }
+    float eye[16], focus[16];
+    for (int i = 0; i < 4; ++i)
+        for (int k = 0; k < 4; ++k)
+            eye[k * 4 + i] = static_cast<float>(a[i][k + 4]);  // registers = columns
+    check(simqvfr::replay_focus_inverse_projection(eye, box, focus), "focus inverse projection computed");
+    double worst = 0;
+    for (double u : {-0.9, -0.3, 0.0, 0.5, 0.95})
+        for (double v : {-0.8, 0.0, 0.7})
+            for (double z : {0.05, 0.002}) {  // reverse-Z depths
+                const double clip[4] = {u, v, z, 1};
+                double view[4] = {};
+                for (int i = 0; i < 4; ++i)
+                    for (int k = 0; k < 4; ++k) view[i] += focus[k * 4 + i] * clip[k];
+                double e[4] = {};
+                for (int i = 0; i < 4; ++i)
+                    for (int k = 0; k < 4; ++k) e[i] += p[i][k] * view[k];
+                const double ex = e[0] / e[3], ey = e[1] / e[3];
+                worst = std::max({worst, std::fabs(ex - (-ox + u * box)), std::fabs(ey - (-oy + v * box))});
+            }
+    std::printf("inverse projection: worst NDC error %.2e\n", worst);
+    check(worst < 1e-4, "focus NDC unprojects to the eye's centre + focus NDC x box");
+}
+
 int SIM_QVFR_TEST_MAIN() {
+    check_inverse_projection();
     wchar_t temp[MAX_PATH] = {};
     GetTempPathW(MAX_PATH, temp);
     const std::wstring logPath = std::wstring(temp) + L"simqvfr-replay-focus-test.log";

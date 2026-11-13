@@ -35,6 +35,7 @@ struct ReplayProbeStats {
     double gameMs = 0;            // the game's Reset-to-Close time of the qualifying lists (sum over threads)
     uint64_t focusReplays = 0;    // mode 3: focus replays executed
     uint64_t twinsMade = 0, twinsRemade = 0;  // mode 3, since start (not zeroed): twins made, and made again
+    uint64_t tileReplays = 0;     // R2b: focus tile-culling replays executed
 };
 
 // The focus replay's settings (mode 3).
@@ -45,7 +46,13 @@ struct ReplayFocusSettings {
     uint64_t saveEvery = 900;
     uint32_t saveCount = 3;
     bool allTargets = false;      // R2: replay every stereo scene list (depth, velocity, colour), not only depth-only ones
+    bool tiles = false;           // R2b: the focus views' own light tiles (ACE's tileFrustums + tiledCulling replayed)
 };
+
+// R2b: the focus inverse projection from an eye's (4 rows as the shader uses them, view = rows . clip): the eye's
+// projection inverted, its x/y rows remapped around the eye's own centre (half extent `box` in NDC), inverted back.
+// Returns false when the matrix doesn't invert. Exposed for the offline test.
+bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&focus)[16]);
 
 // mode 1/2: re-emission cost (never executed); mode 3: focus depth replay (executed on `queue`).
 bool replay_probe_start(ID3D12Device* device, int mode, ID3D12CommandQueue* queue = nullptr,
