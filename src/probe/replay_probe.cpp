@@ -441,7 +441,7 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
@@ -479,6 +479,8 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
             if (asuint(v.w) == from[k]) v.w = asfloat(to[k]);
         }
     }
+    // volumetricFogMapIndex (76.w): ACE's stereo lighting reads voxelGrid0 for both eyes; ours is eye 0's focus grid.
+    if (i == 76 && fogSrv != 0) v.w = asfloat(fogSrv);
     dst.Store4(i * 16, asuint(v));
 }
 )";
@@ -533,7 +535,7 @@ struct Focus {
     ComPtr<List> clearList, eyeClearList;  // the focus twins every frame; the eye references at sample frames
     SRWLOCK lock = SRWLOCK_INIT;  // pool, pending, twins, views, clear list
     std::vector<std::unique_ptr<Replay>> pool;
-    std::unordered_map<List*, Replay*> pending;  // the game's list -> our replay of it
+    std::unordered_map<List*, std::vector<Replay*>> pending;  // the game's list -> our replays of it, in order
     std::unordered_map<SIZE_T, ViewInfo> views;  // the game's RTV/DSV CPU handles
     std::unordered_map<ID3D12Resource*, Twin> twins;
     std::vector<SIZE_T> refused;  // handles whose view we never saw (logged once)
@@ -563,8 +565,25 @@ struct Focus {
     ComPtr<List> prevList;
     bool prevReady = false;
     SIZE_T maxWritten = 0;                          // the highest index the game wrote in the bindless range
+    SIZE_T maxUavWritten = 0;                       // the highest it wrote below the bindless range (the UAV table)
     bool collision = false;
-    std::unordered_map<ID3D12PipelineState*, int> psoKinds;  // 0 none, 1 tileFrustums, 2 tiledCulling
+    std::unordered_map<ID3D12PipelineState*, int> psoKinds;  // 0 none, 1 tileFrustums, 2 tiledCulling, 3/4 fog
+    // R2c: the focus views' volumetric fog. Per eye our grid and two histories (ping-pong), 3D like ACE's; their views
+    // at our slots 16 + 6e: grid UAV/SRV, history 0 UAV/SRV, history 1 UAV/SRV. ACE's grid SRVs learned by name.
+    ComPtr<ID3D12RootSignature> fogRoot;
+    ComPtr<ID3D12PipelineState> fogPso;
+    ComPtr<ID3D12Resource> fogConstants;  // kFogSlots x kFogSlotBytes, UNORDERED_ACCESS
+    uint32_t fogSlot = 0;
+    ComPtr<ID3D12Resource> fogGrid[2], fogHistory[2][2];
+    D3D12_RESOURCE_DESC gameGridDesc{}, gameHistoryDesc{};  // from ACE's voxelGrid0 / voxelGridHistory_0_0
+    std::vector<ComPtr<ID3D12Resource>> views3d;          // every 3D texture the game made an SRV of (ACE names its
+                                                          // resources after their views: names read at the fog pass)
+    bool fogMade = false, fogBroken = false, fogHistoryValid = false, fogReady = false, fogMissLogged = false;
+    // The fog shaders' UAVs (space 20) are in another table: its base (ACE's 475,136) and our UAVs at its range's top
+    // (kFogUavSlots, offset = our bindless fog slot - kFogFirst), guarded like the bindless block.
+    UINT uavBaseIndex = 0, fogUavFirst = 0;
+    int fogParity = 0;
+    std::atomic<uint64_t> fogReplays{0};
     SRWLOCK psoLock = SRWLOCK_INIT;  // psoKinds only (SetPipelineState is hot)
     std::atomic<uint64_t> tileReplays{0};
     std::atomic<uint64_t> frame{0}, clearedFrame{UINT64_MAX};
@@ -580,7 +599,10 @@ struct Focus {
 };
 Focus focus;
 
-constexpr UINT kTileSlots = 16, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
+// Our descriptors at the top of the bindless range: 0-11 tile lists, 12 focus depth, 13 previous colour, 16-27 fog.
+constexpr UINT kTileSlots = 32, kBindlessRange = 131072, kTileStride = 64;  // 16 uints a tile
+constexpr UINT kFogFirst = 16, kFogUavSlots = 32;
+constexpr UINT kFogSlots = 32, kFogSlotBytes = 16384;  // the injection constants are 15,840 B
 
 // The culling constants (tiledCulling cb0, 240 B: inverseView, view, inverseProjectionMatrix at 128, tileCount 192,
 // entityCount, dimension 208, pixelOffset 216, aabbTolerance) copied with the focus inverse projection and its region
@@ -594,6 +616,42 @@ RWByteAddressBuffer dst : register(u0);
     float4 v = src[i];
     if (i >= 8 && i < 12) v = inverseProjection[i - 8];
     if (i == 13) v = float4(asfloat(dimension), asfloat(pixelOffset));
+    dst.Store4(i * 16, asuint(v));
+}
+)";
+
+// R2c: ACE's fog constants copied for a focus view. Injection (mode 0, 15,840 B: all 990 registers, the tail holds
+// voxelGridSize, cameraForward, shLumaFactor): its matrices' columns are in the
+// registers (column_major, out = M v): viewProjection 4-7 and prevViewProjection 8-11 get x' = a x + a ox w,
+// y' = a y + a oy w per register; invViewProjection 16-19 the inverse (columns 0/1 x box, column 3 - ox c0 - oy c1).
+// The eye's centre (ox, oy) = P02, P12 of P = VP inverse(view): view is rigid, so inverse(view)'s column 2 is the
+// view rotation's row 2 (registers 0-2 .z). temporalReproject (24.z) off for a fresh history; historyIndex and
+// outputIndex (25.z/w) ours. Scatter (mode 1, 32 B): outputIndex and inputIndex (1.x/y) ours.
+constexpr char kFogShader[] = R"(
+cbuffer Source : register(b0) { float4 src[990]; };
+cbuffer Params : register(b1) { float halfExtent; uint mode; uint historySrv; uint outputUav; uint inputSrv; uint fresh; };
+RWByteAddressBuffer dst : register(u0);
+[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
+    if (mode == 1) {
+        if (i >= 2) return;
+        uint4 s = asuint(src[i]);
+        if (i == 1) { s.x = outputUav; s.y = inputSrv; }
+        dst.Store4(i * 16, s);
+        return;
+    }
+    if (i >= 990) return;
+    float4 v = src[i];
+    const float ox = src[4].x * src[0].z + src[5].x * src[1].z + src[6].x * src[2].z;
+    const float oy = src[4].y * src[0].z + src[5].y * src[1].z + src[6].y * src[2].z;
+    const float a = 1.0 / halfExtent;
+    if (i >= 4 && i <= 11) {
+        v.x = a * v.x + a * ox * v.w;
+        v.y = a * v.y + a * oy * v.w;
+    }
+    if (i == 16 || i == 17) v *= halfExtent;
+    if (i == 19) v = v - ox * src[16] - oy * src[17];
+    if (i == 24 && fresh != 0) v.z = asfloat(0u);
+    if (i == 25) { v.z = asfloat(historySrv); v.w = asfloat(outputUav); }
     dst.Store4(i * 16, asuint(v));
 }
 )";
@@ -641,7 +699,11 @@ int pso_kind(ID3D12PipelineState* pso) {
     UINT size = sizeof(name) - sizeof(wchar_t);
     int kind = 0;
     if (SUCCEEDED(pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)))
-        kind = std::wcscmp(name, L"tileFrustums") == 0 ? 1 : std::wcscmp(name, L"tiledCulling") == 0 ? 2 : 0;
+        kind = std::wcscmp(name, L"tileFrustums") == 0                  ? 1
+               : std::wcscmp(name, L"tiledCulling") == 0                ? 2
+               : std::wcscmp(name, L"volumetricFogLightInjection") == 0 ? 3
+               : std::wcscmp(name, L"volumetricFogScatter") == 0        ? 4
+                                                                         : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
     ReleaseSRWLockExclusive(&focus.psoLock);
@@ -683,7 +745,7 @@ bool focus_compile() {
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     params[0].Descriptor = {0, 0};
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    params[1].Constants = {1, 0, 20};
+    params[1].Constants = {1, 0, 21};
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].Descriptor = {0, 0};
     const D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -737,6 +799,39 @@ bool focus_compile() {
             cullPso.CS = {cullCode->GetBufferPointer(), cullCode->GetBufferSize()};
             if (FAILED(device->CreateComputePipelineState(&cullPso, IID_PPV_ARGS(&focus.cullPso))))
                 focus.tilesBroken = true;
+        }
+    }
+    if (focus.settings.fog) {  // R2c: the fog-constants copy
+        ComPtr<ID3DBlob> fogCode, fogErrors, fogBlob;
+        D3D12_ROOT_PARAMETER fogParams[3] = {};
+        fogParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        fogParams[0].Descriptor = {0, 0};
+        fogParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        fogParams[1].Constants = {1, 0, 6};
+        fogParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        fogParams[2].Descriptor = {0, 0};
+        const D3D12_ROOT_SIGNATURE_DESC fogDesc{3, fogParams, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_COMPUTE_PIPELINE_STATE_DESC fogPso{};
+        D3D12_HEAP_PROPERTIES fogHeap{D3D12_HEAP_TYPE_DEFAULT};
+        const D3D12_RESOURCE_DESC fogBuffer{D3D12_RESOURCE_DIMENSION_BUFFER, 0, UINT64{kFogSlots} * kFogSlotBytes, 1, 1, 1,
+                                            DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                                            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+        if (FAILED(D3DCompile(kFogShader, sizeof(kFogShader) - 1, "focus-fog", nullptr, nullptr, "main", "cs_5_0", 0, 0,
+                              &fogCode, &fogErrors)) ||
+            FAILED(D3D12SerializeRootSignature(&fogDesc, D3D_ROOT_SIGNATURE_VERSION_1, &fogBlob, &fogErrors)) ||
+            FAILED(device->CreateRootSignature(0, fogBlob->GetBufferPointer(), fogBlob->GetBufferSize(),
+                                               IID_PPV_ARGS(&focus.fogRoot)))) {
+            logf("replay focus: fog: the constants shader failed (%s); no focus fog",
+                 fogErrors ? static_cast<const char*>(fogErrors->GetBufferPointer()) : "?");
+            focus.fogBroken = true;
+        } else {
+            fogPso.pRootSignature = focus.fogRoot.Get();
+            fogPso.CS = {fogCode->GetBufferPointer(), fogCode->GetBufferSize()};
+            if (FAILED(device->CreateComputePipelineState(&fogPso, IID_PPV_ARGS(&focus.fogPso))) ||
+                FAILED(device->CreateCommittedResource(&fogHeap, D3D12_HEAP_FLAG_NONE, &fogBuffer,
+                                                       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                       IID_PPV_ARGS(&focus.fogConstants))))
+                focus.fogBroken = true;
         }
     }
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeap{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kRtvSlots};
@@ -1001,11 +1096,15 @@ void focus_record(List* gameList, const Stream& s) {
             tileFrom[i] = focus.gameTile[i];
             tileTo[i] = focus.ourTile[i];
         }
+    int pairs = 4;
+    const uint32_t fogSrv = focus.fogMade && focus.fogReady && !focus.fogBroken && !focus.tilesBroken
+                                ? focus.slotFirst + kFogFirst + 1 - focus.baseIndex
+                                : 0;
     if (focus.prevReady && !focus.tilesBroken)
         for (int i = 0; i < 4; ++i)
-            if (focus.gamePrev[i] != UINT32_MAX) {
-                tileFrom[4 + i] = focus.gamePrev[i];
-                tileTo[4 + i] = focus.slotFirst + 13 - focus.baseIndex;
+            if (focus.gamePrev[i] != UINT32_MAX && pairs < 8) {
+                tileFrom[pairs] = focus.gamePrev[i];
+                tileTo[pairs++] = focus.slotFirst + 13 - focus.baseIndex;
             }
     ReleaseSRWLockExclusive(&focus.lock);
     if (!r)
@@ -1020,13 +1119,14 @@ void focus_record(List* gameList, const Stream& s) {
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> slots;
     l->SetComputeRootSignature(focus.patchRoot.Get());
     l->SetPipelineState(focus.patchPso.Get());
-    uint32_t params[20] = {};
+    uint32_t params[21] = {};
     const float box = static_cast<float>(focus.settings.boxFraction);
     const float floats[4] = {box, box, static_cast<float>(fwi), static_cast<float>(fhi)};
     std::memcpy(params, floats, sizeof(floats));
     std::memcpy(params + 4, tileFrom, sizeof(tileFrom));
     std::memcpy(params + 8, tileTo, sizeof(tileTo));
-    l->SetComputeRoot32BitConstants(1, 20, params, 0);
+    params[20] = fogSrv;
+    l->SetComputeRoot32BitConstants(1, 21, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         if (sample) {
@@ -1069,7 +1169,7 @@ void focus_record(List* gameList, const Stream& s) {
     if (draws < 0)
         r->busy = false;  // recorded but never executed: the allocator is reset at its next use
     else
-        focus.pending[gameList] = r;
+        focus.pending[gameList].push_back(r);
     ReleaseSRWLockExclusive(&focus.lock);
     if (draws < 0)
         return;
@@ -1222,7 +1322,8 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
 void focus_tiles_record(List* gameList, const Stream& s) {
     std::vector<const Stream::TileDispatch*> fr, cu;
     for (const auto& d : s.tileDispatches)
-        (d.kind == 1 ? fr : cu).push_back(&d);
+        if (d.kind == 1 || d.kind == 2)
+            (d.kind == 1 ? fr : cu).push_back(&d);
     if (fr.size() < 2 || cu.size() < 2)
         return;
     Replay* r = nullptr;
@@ -1314,12 +1415,208 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     inReplay = false;
     AcquireSRWLockExclusive(&focus.lock);
     if (ok)
-        focus.pending[gameList] = r;
+        focus.pending[gameList].push_back(r);
     else
         r->busy = false;
     ReleaseSRWLockExclusive(&focus.lock);
     if (ok)
         focus.tileReplays.fetch_add(1, std::memory_order_relaxed);
+}
+
+// ---- R2c: the focus views' volumetric fog ----------------------------------------------------------------------
+
+// Under focus.lock: our grids and histories, like ACE's (its voxelGrid0 / voxelGridHistory_0_0 descriptions).
+bool focus_fog_prepare(D3D12_GPU_DESCRIPTOR_HANDLE uavTable) {
+    if (focus.fogBroken || focus.tilesBroken || !focus.gameHeap || !focus.slotFirst || !focus.fogPso || !uavTable.ptr)
+        return false;
+    const UINT64 heapGpu = focus.gameHeap->GetGPUDescriptorHandleForHeapStart().ptr;
+    if (uavTable.ptr < heapGpu || (uavTable.ptr - heapGpu) % focus.increment) {
+        log_line("replay focus: fog: the UAV table isn't in the game's heap; no focus fog");
+        focus.fogBroken = true;
+        return false;
+    }
+    const UINT uavBase = static_cast<UINT>((uavTable.ptr - heapGpu) / focus.increment);
+    if (focus.fogMade)
+        return uavBase == focus.uavBaseIndex;
+    if (uavBase + kBindlessRange > focus.heapSize ||
+        (uavBase + kBindlessRange > focus.slotFirst && uavBase < focus.slotFirst + kTileSlots)) {
+        logf("replay focus: fog: the UAV range (%u + %u) doesn't leave room; no focus fog", uavBase, kBindlessRange);
+        focus.fogBroken = true;
+        return false;
+    }
+    focus.uavBaseIndex = uavBase;
+    focus.fogUavFirst = uavBase + kBindlessRange - kFogUavSlots;
+    if (focus.maxUavWritten >= focus.fogUavFirst) {
+        logf("replay focus: fog: the game already wrote descriptor %llu in our UAV slots (%u..%u); no focus fog",
+             static_cast<unsigned long long>(focus.maxUavWritten), focus.fogUavFirst, focus.fogUavFirst + kFogUavSlots - 1);
+        focus.fogBroken = true;
+        return false;
+    }
+    std::string names;
+    for (const ComPtr<ID3D12Resource>& v : focus.views3d) {
+        const std::string n = debug_name(v.Get());
+        if (n == "voxelGrid0")
+            focus.gameGridDesc = v->GetDesc();
+        else if (n == "voxelGridHistory_0_0")
+            focus.gameHistoryDesc = v->GetDesc();
+        if (names.size() < 300)
+            names += " " + (n.empty() ? std::string("?") : n);
+    }
+    const D3D12_RESOURCE_DESC grid = focus.gameGridDesc;
+    const D3D12_RESOURCE_DESC history = focus.gameHistoryDesc.Dimension ? focus.gameHistoryDesc : focus.gameGridDesc;
+    if (grid.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE3D || history.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE3D) {
+        if (!focus.fogMissLogged) {
+            focus.fogMissLogged = true;
+            logf("replay focus: fog: ACE's voxelGrid0 not among the %zu 3D textures it made views of (%s); no focus fog yet",
+                 focus.views3d.size(), names.empty() ? "none" : names.c_str());
+        }
+        return false;
+    }
+    D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+    const auto make = [&](D3D12_RESOURCE_DESC d, ComPtr<ID3D12Resource>& r, UINT slot) {
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        d.MipLevels = 1;
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+                                                   nullptr, IID_PPV_ARGS(&r))))
+            return false;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+        u.Format = d.Format;
+        u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+        u.Texture3D.WSize = d.DepthOrArraySize;
+        device->CreateUnorderedAccessView(r.Get(), nullptr, &u, game_cpu(focus.fogUavFirst + slot - focus.slotFirst - kFogFirst));
+        D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+        v.Format = d.Format;
+        v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+        v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        v.Texture3D.MipLevels = 1;
+        srvViewOriginal(device.Get(), r.Get(), &v, game_cpu(slot + 1));
+        return true;
+    };
+    inReplay = true;
+    bool ok = true;
+    for (int e = 0; e < 2 && ok; ++e) {
+        const UINT at = focus.slotFirst + kFogFirst + 6 * e;
+        ok = make(grid, focus.fogGrid[e], at) && make(history, focus.fogHistory[e][0], at + 2) &&
+             make(history, focus.fogHistory[e][1], at + 4);
+    }
+    inReplay = false;
+    if (!ok) {
+        log_line("replay focus: fog: could not make our grids; no focus fog");
+        focus.fogBroken = true;
+        return false;
+    }
+    focus.fogMade = true;
+    focus.fogHistoryValid = false;
+    logf("replay focus: fog: our grids %llux%ux%u (format %d), histories format %d, SRVs at bindless %u..%u, UAVs at %u.. "
+         "of the UAV table (base %u); the focus pass constants name eye 0's (volumetricFogMapIndex)",
+         static_cast<unsigned long long>(grid.Width), grid.Height, static_cast<unsigned>(grid.DepthOrArraySize),
+         static_cast<int>(grid.Format), static_cast<int>(history.Format), focus.slotFirst + kFogFirst - focus.baseIndex,
+         focus.slotFirst + kFogFirst + 11 - focus.baseIndex, focus.fogUavFirst - focus.uavBaseIndex, focus.uavBaseIndex);
+    return true;
+}
+
+// At the game's Close of a list with its fog passes (per eye: light injection, then scatter): per eye both again with
+// the focus view's constants, into our history and grid. Executed after the game's batch, before the lighting.
+void focus_fog_record(List* gameList, const Stream& s) {
+    std::vector<const Stream::TileDispatch*> inj, sc;
+    for (const auto& d : s.tileDispatches)
+        if (d.kind == 3)
+            inj.push_back(&d);
+        else if (d.kind == 4)
+            sc.push_back(&d);
+    // ACE's stereo lighting reads eye 0's grid for both eyes (volumetricFogMapIndex = voxelGrid0): eye 0's only.
+    const size_t eyes = std::min<size_t>(1, std::min(inj.size(), sc.size()));
+    if (!eyes)
+        return;
+    Replay* r = nullptr;
+    int parity = 0;
+    bool fresh = true;
+    AcquireSRWLockExclusive(&focus.lock);
+    // ACE's tables: injection 5 and scatter 2 are the UAV table (space 20), the same base.
+    if (inj[0]->tables[5].ptr == sc[0]->tables[2].ptr && focus_fog_prepare(inj[0]->tables[5]))
+        r = acquire_replay();
+    if (r) {
+        parity = focus.fogParity;
+        fresh = !focus.fogHistoryValid;
+        focus.fogParity ^= 1;
+        focus.fogHistoryValid = true;
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    const auto rel = [](UINT slot) { return focus.slotFirst + slot - focus.baseIndex; };  // SRV: bindless-relative
+    const auto relUav = [](UINT slot) { return focus.fogUavFirst + slot - kFogFirst - focus.uavBaseIndex; };
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    for (size_t e = 0; e < eyes; ++e) {
+        const Stream::TileDispatch& in = *inj[e];
+        const Stream::TileDispatch& out = *sc[e];
+        const UINT at = kFogFirst + 6 * static_cast<UINT>(e);
+        ID3D12Resource* history = focus.fogHistory[e][parity].Get();
+        ID3D12Resource* grid = focus.fogGrid[e].Get();
+        // 1. Both constant copies with the focus fields.
+        const uint32_t slotA = focus.fogSlot++ % kFogSlots, slotB = focus.fogSlot++ % kFogSlots;
+        const D3D12_GPU_VIRTUAL_ADDRESS mineA = focus.fogConstants->GetGPUVirtualAddress() + UINT64{slotA} * kFogSlotBytes;
+        const D3D12_GPU_VIRTUAL_ADDRESS mineB = focus.fogConstants->GetGPUVirtualAddress() + UINT64{slotB} * kFogSlotBytes;
+        const float box = static_cast<float>(focus.settings.boxFraction);
+        uint32_t params[6];
+        std::memcpy(params, &box, 4);
+        params[1] = 0;
+        params[2] = rel(at + 3 + 2 * (1 - parity));  // last frame's history, SRV
+        params[3] = relUav(at + 2 + 2 * parity);     // this frame's history, UAV
+        params[4] = 0;
+        params[5] = fresh ? 1u : 0u;
+        l->SetComputeRootSignature(focus.fogRoot.Get());
+        l->SetPipelineState(focus.fogPso.Get());
+        l->SetComputeRootConstantBufferView(0, in.cbv);
+        l->SetComputeRoot32BitConstants(1, 6, params, 0);
+        l->SetComputeRootUnorderedAccessView(2, mineA);
+        l->Dispatch(16, 1, 1);
+        params[1] = 1;
+        params[3] = relUav(at + 0);            // our grid, UAV
+        params[4] = rel(at + 3 + 2 * parity);  // this frame's history, SRV
+        l->SetComputeRootConstantBufferView(0, out.cbv);
+        l->SetComputeRoot32BitConstants(1, 6, params, 0);
+        l->SetComputeRootUnorderedAccessView(2, mineB);
+        l->Dispatch(1, 1, 1);
+        barrier(l, focus.fogConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        // 2. ACE's light injection into our history (reading last frame's).
+        barrier(l, history, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        l->SetComputeRootSignature(in.root);
+        l->SetPipelineState(in.pso);
+        l->SetComputeRootConstantBufferView(0, mineA);
+        for (UINT t = 1; t < 6; ++t)  // ACE's injection root signature: CBV + 5 tables
+            if (in.tables[t].ptr)
+                l->SetComputeRootDescriptorTable(t, in.tables[t]);
+        l->Dispatch(in.dims[0], in.dims[1], in.dims[2]);
+        barrier(l, history, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        // 3. ACE's scatter into our grid.
+        barrier(l, grid, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        l->SetComputeRootSignature(out.root);
+        l->SetPipelineState(out.pso);
+        l->SetComputeRootConstantBufferView(0, mineB);
+        for (UINT t = 1; t < 3; ++t)  // ACE's scatter root signature: CBV + 2 tables
+            if (out.tables[t].ptr)
+                l->SetComputeRootDescriptorTable(t, out.tables[t]);
+        l->Dispatch(out.dims[0], out.dims[1], out.dims[2]);
+        barrier(l, grid, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
+        barrier(l, focus.fogConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    focus.pending[gameList].push_back(r);
+    if (!focus.fogReady)
+        log_line("replay focus: fog: the first focus fog replay recorded; the lighting reads it from the next frame");
+    focus.fogReady = true;  // the next scene replays name our grid (executed after this one: same queue, later batch)
+    ReleaseSRWLockExclusive(&focus.lock);
+    focus.fogReplays.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- R2c: the focus views' previous-frame colour ----------------------------------------------------------------
@@ -1755,7 +2052,7 @@ void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12Comm
         // ID3D12GraphicsCommandList derives singly from ID3D12CommandList: the same object address.
         const auto it = focus.pending.find(reinterpret_cast<List*>(lists[i]));
         if (it != focus.pending.end()) {
-            mine.push_back(it->second);
+            mine.insert(mine.end(), it->second.begin(), it->second.end());
             focus.pending.erase(it);
         }
     }
@@ -1843,6 +2140,8 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     if (probeMode == 3) {
         if (SUCCEEDED(hr) && focus.settings.tiles && !s->tileDispatches.empty())
             focus_tiles_record(list, *s);
+        if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.fog && !s->tileDispatches.empty())
+            focus_fog_record(list, *s);
         if (SUCCEEDED(hr) && s->replayable(focus.settings.allTargets)) {
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
             focus_record(list, *s);
@@ -2044,6 +2343,13 @@ void check_reserved(SIZE_T dest, UINT count) {  // under focus.lock
     const UINT first = static_cast<UINT>((dest - start) / focus.increment), last = first + count - 1;
     if (last < focus.baseIndex + kBindlessRange)
         focus.maxWritten = std::max<SIZE_T>(focus.maxWritten, last);
+    if (first < focus.baseIndex)
+        focus.maxUavWritten = std::max<SIZE_T>(focus.maxUavWritten, std::min<UINT>(last, focus.baseIndex - 1));
+    if (focus.fogUavFirst && !focus.fogBroken && first < focus.fogUavFirst + kFogUavSlots && last >= focus.fogUavFirst) {
+        focus.fogBroken = true;
+        logf("replay focus: fog: the game wrote descriptors %u..%u, inside our UAVs (%u..%u): focus fog off", first, last,
+             focus.fogUavFirst, focus.fogUavFirst + kFogUavSlots - 1);
+    }
     if (first < focus.slotFirst + kTileSlots && last >= focus.slotFirst) {
         focus.collision = true;
         focus.tilesBroken = true;
@@ -2061,7 +2367,11 @@ void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D
                       ? tile_view_kind(r)
                       : -1;
     AcquireSRWLockExclusive(&focus.lock);
-    if (k >= 0)
+    if (r && desc && desc->ViewDimension == D3D12_SRV_DIMENSION_TEXTURE3D && focus.settings.fog &&
+        focus.views3d.size() < 256 &&
+        std::none_of(focus.views3d.begin(), focus.views3d.end(), [&](const ComPtr<ID3D12Resource>& v) { return v.Get() == r; }))
+        focus.views3d.emplace_back(r);
+    if (k >= 0 && k < 5)
         focus.tileViews.emplace_back(dest.ptr, k);
     check_reserved(dest.ptr, 1);
     ReleaseSRWLockExclusive(&focus.lock);
@@ -2227,6 +2537,7 @@ ReplayProbeStats replay_probe_take_stats() {
     s.gameMs = static_cast<double>(gameTicks.exchange(0)) * msPerTick;
     s.focusReplays = focusReplays.exchange(0);
     s.tileReplays = focus.tileReplays.exchange(0);
+    s.fogReplays = focus.fogReplays.exchange(0);
     s.twinsMade = twinsMade.load();
     s.twinsRemade = twinsRemade.load();
     return s;
@@ -2273,10 +2584,11 @@ void replay_probe_frame_end() {
     const ReplayProbeStats s = replay_probe_take_stats();
     const double n = s.frames ? static_cast<double>(s.frames) : 1.0;
     if (probeMode == 3) {
-        logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; recording the "
-             "replays %.3f ms, recording hooks %.3f ms, the game's own recording of those lists %.3f ms (CPU)",
+        logf("replay focus: window %llu, per frame: stereo lists replayed %.2f (executed %.2f), draws %.0f; tile replays "
+             "%.2f, fog replays %.2f; recording the replays %.3f ms, recording hooks %.3f ms, the game's own recording of "
+             "those lists %.3f ms (CPU)",
              static_cast<unsigned long long>(window), s.listsReplayed / n, s.focusReplays / n, s.drawsReplayed / n,
-             s.replayMs / n, s.hookMs / n, s.gameMs / n);
+             s.tileReplays / n, s.fogReplays / n, s.replayMs / n, s.hookMs / n, s.gameMs / n);
         ++window;
         return;
     }

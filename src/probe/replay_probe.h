@@ -36,6 +36,7 @@ struct ReplayProbeStats {
     uint64_t focusReplays = 0;    // mode 3: focus replays executed
     uint64_t twinsMade = 0, twinsRemade = 0;  // mode 3, since start (not zeroed): twins made, and made again
     uint64_t tileReplays = 0;     // R2b: focus tile-culling replays executed
+    uint64_t fogReplays = 0;      // R2c: focus fog replays executed (both eyes each)
 };
 
 // The focus replay's settings (mode 3).
@@ -47,6 +48,7 @@ struct ReplayFocusSettings {
     uint32_t saveCount = 3;
     bool allTargets = false;      // R2: replay every stereo scene list (depth, velocity, colour), not only depth-only ones
     bool tiles = false;           // R2b: the focus views' own light tiles (ACE's tileFrustums + tiledCulling replayed)
+    bool fog = false;             // R2c: the focus views' own volumetric fog grids (needs `tiles`: its descriptors)
 };
 
 // R2b: the focus inverse projection from an eye's (4 rows as the shader uses them, view = rows . clip): the eye's

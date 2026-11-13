@@ -158,6 +158,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 focusSettings.saveCount = experiment.replaySaveCount;
                 focusSettings.allTargets = experiment.replayAllTargets;
                 focusSettings.tiles = experiment.replayTiles;
+                focusSettings.fog = experiment.replayFog;
                 replay_probe_start(d3d12->device, experiment.replayProbe, d3d12->queue, focusSettings);
             }
             if (experiment.d3d12Debug)
