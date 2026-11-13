@@ -260,6 +260,8 @@ its folder.
 
 Le Mans Ultimate
 ----------------
+More frames in LMU: LMU-OPTIMIZATION-GUIDE.md, in this folder, explains which settings cost CPU and GPU
+time (DLSS, other cars' motion, MSAA, resolution) and what to turn down first.
 Pick the LMU tab, then Launch. Started from Steam, LMU runs without QVFR. Sim-QVFR supports LMU
 1.4.2.0 (the Steam build of 23 October 2026); on any other build QVFR stays off and LMU runs as usual.
 Eye tracking, the resolution sliders, the focus size, the field of view crop, the helmet overlay, the

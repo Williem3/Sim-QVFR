@@ -108,7 +108,7 @@ All of these are off until you turn them on in the launcher:
   its own, so start low there.
 - **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
 - **DLSS in Le Mans Ultimate** (experimental, NVIDIA RTX): Sim-QVFR's own, as LMU has none; see
-  [Le Mans Ultimate](#le-mans-ultimate).
+  [Le Mans Ultimate](#le-mans-ultimate) and the [LMU optimization guide](docs/LMU-OPTIMIZATION-GUIDE.md).
 
 ## Foveated DLSS (optional, NVIDIA RTX only)
 
@@ -218,6 +218,10 @@ Sim-QVFR runs QVFR in Le Mans Ultimate: a sharp focus area that follows your eye
 periphery, the headset menu, the performance overlay, the field of view crop and the helmet overlay.
 Pick the **LMU** tab at the top of the launcher, then **Launch**.
 
+> **Want more frames?** The **[LMU optimization guide](docs/LMU-OPTIMIZATION-GUIDE.md)** shows how to tell whether
+> your CPU or GPU holds you back, what each setting costs (DLSS, other cars' motion, MSAA, resolution) and what to
+> turn down first. It's also in the release ZIP as `LMU-OPTIMIZATION-GUIDE.md`.
+
 - **Always start LMU from the launcher.** LMU started from Steam runs without QVFR.
 - **Version 1.4.2.0** (the Steam build of 23 October 2026). On any other build, QVFR stays off and LMU
   runs as usual.
@@ -298,8 +302,10 @@ Pick the **LMU** tab at the top of the launcher, then **Launch**.
     change at once; **Preset**, the working sizes, how much of the periphery is covered and whether it runs
     before or after DLSS rebuild it (a short stutter). A lower **working size** costs less and keeps the picture's
     own detail. **Edge blend** fades the processed area into what isn't processed. Not tested in the headset yet.
-  - **Known limits:** other cars smear a little (their own motion isn't known yet), and below DLAA distant
-    textures in the focus area are softer. Tested on SteamVR and Pimax's runtime.
+  - **Other cars' motion** (on by default, under the DLSS card's advanced options): gives DLSS each other car's own
+    motion, so passing cars stay clean instead of smearing. In a full field it costs about 0.5 ms of CPU and 0.2-0.5 ms
+    of GPU a frame; turn it off for headroom. Applies at the next launch.
+  - **Known limits:** below DLAA, distant textures in the focus area are softer. Tested on SteamVR and Pimax's runtime.
   - **How it works:** [the diagram](docs/architecture/LMU-DLSS-ARCHITECTURE.svg).
   - Uses NVIDIA DLSS through the NVIDIA NGX SDK. NVIDIA, RTX and DLSS are trademarks of NVIDIA Corporation;
     Sim-QVFR is not sponsored or endorsed by NVIDIA.
