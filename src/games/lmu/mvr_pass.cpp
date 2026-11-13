@@ -506,7 +506,8 @@ struct Tracker {
     bool menuLogged = false;
 } tr;
 
-// The pass trace (log only): while the tracker drives the passes, three frames' render target binds with depth or a
+// The pass trace (log only): while the tracker drives the passes, three frames' (one without debug logs: pt_first)
+// render target binds with depth or a
 // multisample target, resolves, CopySubresourceRegions, YEBIS's draws, the focus post's window and the tracked passes'
 // bounds, in order, to see what the tracker takes for a pass's begin and end. The frames with tracked passes numbered
 // kPassTraceAt (the first renders at the game's own size); a frame without passes is dropped.
@@ -527,6 +528,8 @@ struct PassTrace {
     std::string settings;          // the game's settings as last logged
 } pt;
 constexpr int kPassTraceAt[] = {2, 3, 45};
+// The frames of kPassTraceAt traced: every one with debug logs, else the last alone (the passes settled at QVFR's sizes).
+int pt_first() { return simqvfr::log_debug() ? 0 : static_cast<int>(std::size(kPassTraceAt)) - 1; }
 constexpr std::size_t kPassTraceEvents = 400;
 constexpr std::size_t kPassTraceShapes = 40;
 
@@ -784,8 +787,8 @@ void pt_frame_end(unsigned long long frame, int passes) {
                 pt.lastSwitchFrame = frame;
             }
         }
-    } else if (pt.recording && passes > 0 && pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
-               pt.framesWithPasses == kPassTraceAt[pt.logged]) {
+    } else if (pt.recording && passes > 0 && pt_first() + pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+               pt.framesWithPasses == kPassTraceAt[pt_first() + pt.logged]) {
         ++pt.logged;
         simqvfr::logf("lmu mvr: pass trace: frame %llu (number %d with tracked passes, %d of them): %zu events, %d not "
                       "logged (over %zu); %s",
@@ -797,8 +800,8 @@ void pt_frame_end(unsigned long long frame, int passes) {
     pt.dropped = 0;
     pt.recording = tr.on && tr.driveBegin &&
                    (pt.level ? true
-                             : pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
-                                   pt.framesWithPasses + 1 == kPassTraceAt[pt.logged]);
+                             : pt_first() + pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
+                                   pt.framesWithPasses + 1 == kPassTraceAt[pt_first() + pt.logged]);
 }
 
 void track_begin(const char* what) {
@@ -4372,7 +4375,8 @@ void mvr_frame_end(unsigned long long frame) {
     g.shapeOk[0] = g.shapeOk[1] = false;
     for (State::SceneBind& b : g.sceneBinds)  // DLAA's: nothing of the game's held between frames
         b = State::SceneBind{};
-    // The overlay trace: the frames 600, 2400 and 4200 frame ends after the install, each from the frame end before.
+    // The overlay trace (debug logs only): the frames 600, 2400 and 4200 frame ends after the install, each from the
+    // frame end before.
     ++g.framesSinceInstall;
     if (g.tracing) {
         g.tracing = false;
@@ -4381,7 +4385,7 @@ void mvr_frame_end(unsigned long long frame) {
                       g.gpuFrameNo, g.traceDraws, g.traceDropped);
     }
     constexpr unsigned long long kTraceAt[] = {600, 2400, 4200};
-    if (g.focusReplay && g.framesTraced < static_cast<int>(std::size(kTraceAt)) &&
+    if (g.focusReplay && simqvfr::log_debug() && g.framesTraced < static_cast<int>(std::size(kTraceAt)) &&
         g.framesSinceInstall + 1 == kTraceAt[g.framesTraced]) {
         g.tracing = true;
         ++g.framesTraced;

@@ -507,6 +507,11 @@ void start_launch() {
     } else {
         // From here the watch says what became of it: running with Sim-QVFR, without it, closed or crashed.
         app.status = Status::Idle;
+        // The launch took the one-launch settings it ran with (Next launch without QVFR, a Detailed logs launch) in the
+        // ini: the window's copy follows, so the next save doesn't put them back.
+        const Settings now = load_settings(app.ini);
+        app.s.baselineNext = now.baselineNext;
+        app.s.debugLogs = now.debugLogs;
         app.watch.start(launched, games::launcher_game(), runtime_info_path(),
                         game_crashes_folder(games::launcher_game().crashReports));
         refresh_checks();

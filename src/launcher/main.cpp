@@ -39,6 +39,7 @@
 #include "launcher.h"
 #include "launcher_version.h"
 #include "leftovers.h"
+#include "log_retention.h"
 #include "preflight.h"
 #include "report.h"
 #include "settings.h"
@@ -425,6 +426,12 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
 #else
     const Leftovers leftovers;  // the developer's build keeps them (local analysis tools)
 #endif
+    // The logs folder keeps the newest of each kind (log_retention.h), before this launch adds its own; a dry run
+    // removes nothing.
+    const PruneResult pruned = dryRun ? PruneResult{} : prune_logs(logs.wstring());
+    // The Diagnostics pane's Detailed logs ([launcher] debug_logs, launches left): the layer logs at debug level.
+    const int debugLogs = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"launcher", L"debug_logs", 0, ini.c_str())), 0,
+                                     kDebugLogLaunches);
     const fs::path log = logs / (std::wstring(L"session-") + stamp + L".log"), iniCopy = runFolder / L"sim-qvfr.ini";
     std::wstring error;
     if (!write_run_folder(runFolder.wstring(), manifest.wstring(), library.wstring(), plan, error))
@@ -448,6 +455,8 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     if (std::none_of(environment.begin(), environment.end(),
                      [](const std::wstring& e) { return _wcsnicmp(e.c_str(), L"XR_LOADER_DEBUG=", 16) == 0; }))
         variables.emplace_back(L"XR_LOADER_DEBUG", L"warn");
+    if (debugLogs > 0)
+        variables.emplace_back(L"SIM_QVFR_LOG_LEVEL", L"debug");
     // An elevated game's OpenXR loader ignores XR_API_LAYER_PATH and reads explicit layers from HKLM alone, so the
     // manifests XR_ENABLE_API_LAYERS names are registered there for this launch (explicit_layers.h), unless
     // [launcher] elevated_registration=0.
@@ -483,13 +492,19 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
                  : L"Sim-QVFR's own (instancing)") +
             L" (the game's device decides at launch)");
     say(L"  run:       " + runFolder.wstring());
-    say(L"  layer log: " + log.wstring());
+    say(L"  layer log: " + log.wstring() +
+        (debugLogs > 1   ? L" (detailed: this launch and " + std::to_wstring(debugLogs - 1) + L" more)"
+         : debugLogs == 1 ? L" (detailed: this launch, the last)"
+                          : L""));
     if (leftovers.removed > 0)
         say(L"  logs:      removed " + std::to_wstring(leftovers.removed) + L" cop" + (leftovers.removed == 1 ? L"y" : L"ies") +
             L" of the game's program left by an older Sim-QVFR (" + std::to_wstring((leftovers.bytes + (1 << 20) - 1) >> 20) +
             L" MB)");
     for (const std::wstring& file : leftovers.files)
         say(L"             " + file);
+    if (pruned.removed > 0)
+        say(L"  logs:      " + std::to_wstring(pruned.removed) + L" old files removed (" + size_text(pruned.bytes) +
+            L"), the newest " + std::to_wstring(kKeepSessions) + L" sessions kept");
     std::wstring order = std::wstring(info.shortName) + L" -> " + widen(kLayerName);
     for (const MovedLayer& m : plan.below)
         order += L" -> " + widen(m.name);
@@ -595,6 +610,8 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"Started " + std::wstring(info.name) + L" (pid " + std::to_wstring(pi.dwProcessId) + L").");
     if (baseline)  // one launch only
         WritePrivateProfileStringW(L"launcher", L"baseline_next", L"0", ini.c_str());
+    if (debugLogs > 0)
+        WritePrivateProfileStringW(L"launcher", L"debug_logs", std::to_wstring(debugLogs - 1).c_str(), ini.c_str());
     if (pi.hThread)
         CloseHandle(pi.hThread);
     if (launched)

@@ -78,8 +78,9 @@ enum Ctl {
     kLayerProfile, kLayerList, kLayerOn, kLayerUp, kLayerDown, kLayerApply, kLayerRevert, kLayerReset,
     // The Report an issue pane (its kind, the description box, the button, the zip it made to drag into the
     // issue, exporting the logs alone) and the Diagnostics pane (the CPU capture switch, copying the summary, the
-    // logs folder).
+    // logs folder, Detailed logs, clearing the captures).
     kDiagKind, kDiagDescription, kDiagReport, kDiagZip, kDiagExport, kDiagCapture, kDiagFrameCapture, kDiagBaseline, kDiagCopy, kDiagLogs,
+    kDiagDebugLogs, kDiagClearCaptures,
     // Launch checks (preflight.h): a check's fix button (its index in app.checks), the action bar's badge.
     kCheckFix, kChecksBadge,
     // The Hotkeys pane: an action's key and wheel button (option: its HotkeyAction), the reset button.
@@ -537,6 +538,9 @@ bool copy_text(const std::wstring& text);
 void copy_summary();
 std::wstring clipboard_text();
 bool report_edit_fits();
+// The diagnostics' captures and image dumps (log_retention.h diagnostics_paths) to the Recycle Bin; Windows asks first where a drive
+// has none.
+void clear_captures();
 
 // pane_report.cpp
 void export_logs();

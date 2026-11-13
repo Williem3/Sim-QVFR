@@ -79,6 +79,9 @@ struct Settings {
     Hotkeys hotkeys = default_hotkeys();  // [hotkeys] (input/hotkeys.h; the Hotkeys pane): live
     // [launcher] baseline_next: the next launch runs without QVFR (ACE's own two views, measured), once.
     bool baselineNext = false;
+    // [launcher] debug_logs: launches left with detailed (debug) logs (Diagnostics pane, Detailed logs); each launch
+    // takes one, so a tester asked for detailed logs is back to normal ones without remembering to switch them off.
+    int debugLogs = 0;
     // [launcher] anticheat (Games pane, a game with GameInfo::antiCheatStart: LMU): start the game through its
     // anti-cheat's bootstrapper and run Sim-QVFR there too, at the user's risk. Next launch.
     bool antiCheat = false;
@@ -104,6 +107,8 @@ inline constexpr Range kOuterRange{10, 100}, kInnerRange{50, 400}, kSizeRange{10
 // Dragging Inner resolution moves it in steps of this many percent, as the headset menu's Focus density does: its
 // 350 values span fewer pixels than that, so a plain drag skipped round values such as 100% (99, then 101).
 inline constexpr int kInnerDragStep = 5;
+// Detailed logs ([launcher] debug_logs): the launches they last once switched on.
+inline constexpr int kDebugLogLaunches = 3;
 // A slider's value at `share` (0..1) of its travel: on a grid of `step` from range.min, never past range.max.
 int slider_value_at(Range range, double share, int step = 1);
 // The layer's kMenuYawMax, kMenuPitchMax, kMenuWidthMin and kMenuWidthMax.

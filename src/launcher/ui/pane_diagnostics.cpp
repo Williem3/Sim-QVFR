@@ -3,8 +3,10 @@
 #include <vector>
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include "../launcher.h"
+#include "../log_retention.h"
 #include "../settings.h"
 #include "../session_history.h"
 #include "../../games/game.h"
@@ -50,12 +52,45 @@ std::wstring friendly_layers(const std::wstring& names) {
     return out;
 }
 
+// The logs folder's size, walked at most every 10 s (the card is laid out on every paint).
+struct LogsUseCache {
+    ULONGLONG at = 0;
+    LogsUse use;
+} logsUse;
+
+const LogsUse& logs_use_now() {
+    const ULONGLONG now = GetTickCount64();
+    if (!logsUse.at || now - logsUse.at > 10000) {
+        logsUse.use = logs_use(logs_folder());
+        logsUse.at = now;
+    }
+    return logsUse.use;
+}
+
 }  // namespace
 
 std::wstring logs_folder() {
     const std::wstring runtime = runtime_info_path();  // the launcher's folder\runtime.ini
     const size_t slash = runtime.find_last_of(L"\\/");
     return (slash == std::wstring::npos ? std::wstring(L".") : runtime.substr(0, slash)) + L"\\logs";
+}
+
+void clear_captures() {
+    std::wstring list;  // double-null terminated
+    for (const std::wstring& path : diagnostics_paths(logs_folder()))
+        list += path + L'\0';
+    if (list.empty())
+        return;
+    list += L'\0';
+    SHFILEOPSTRUCTW op{};
+    op.hwnd = app.hwnd;
+    op.wFunc = FO_DELETE;
+    op.pFrom = list.c_str();
+    // To the Recycle Bin, without asking; a drive without one (FOF_WANTNUKEWARNING): Windows asks before deleting.
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING | FOF_SILENT;
+    SHFileOperationW(&op);
+    logsUse.at = 0;
+    InvalidateRect(app.hwnd, nullptr, FALSE);
 }
 
 bool copy_text(const std::wstring& text) {
@@ -255,13 +290,29 @@ Card diagnostics_card() {
                      false, Applies::NextLaunch);
             m.toggle(kDiagBaseline, L"Next launch without QVFR", app.s.baselineNext,
                      L"Once, with QVFR off and still measured, to compare against.", false, Applies::NextLaunch);
+            const std::wstring launches = std::to_wstring(app.s.debugLogs > 0 ? app.s.debugLogs : kDebugLogLaunches);
+            m.toggle(kDiagDebugLogs, L"Detailed logs", app.s.debugLogs > 0,
+                     app.s.debugLogs == 1 ? std::wstring(L"The next launch logs everything, for a bug report; then normal logs again.")
+                     : app.s.debugLogs > 1
+                         ? L"The next " + launches + L" launches log everything, for a bug report; then normal logs again."
+                         : L"For a bug report: " + launches + L" launches that log everything, then normal logs again.",
+                     false, Applies::NextLaunch);
+            const LogsUse& use = logs_use_now();
+            const std::wstring kept = L"The newest " + std::to_wstring(kKeepSessions) + L" sessions are kept.";
+            if (use.diagnosticsBytes > 0)
+                m.action(L"Logs folder", kept + L" Captures stay until cleared: " + size_text(use.diagnosticsBytes) + L" of " +
+                                             size_text(use.bytes) + L".",
+                         kDiagClearCaptures, L"Clear captures");
+            else
+                m.row(L"Logs folder", kept, size_text(use.bytes));
         };
         b.divider();
-        if (app.s.cpuProfile || app.s.frameCapture || app.s.baselineNext) {
+        if (app.s.cpuProfile || app.s.frameCapture || app.s.baselineNext || app.s.debugLogs > 0) {
             b.group(L"Tools for comparing and bug reports");
             tools(b);
         } else {
-            b.more(L"tools for comparing and bug reports", {L"CPU capture", L"Frame capture", L"Next launch without QVFR"}, tools);
+            b.more(L"tools for comparing and bug reports",
+                   {L"CPU capture", L"Frame capture", L"Next launch without QVFR", L"Detailed logs", L"Logs folder"}, tools);
         }
     };
     return c;

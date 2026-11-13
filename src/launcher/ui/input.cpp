@@ -131,6 +131,7 @@ void activate(Ctl id, int option) {
     case kDiagCapture: app.s.cpuProfile = !app.s.cpuProfile; changed(); return;
     case kDiagFrameCapture: app.s.frameCapture = !app.s.frameCapture; changed(); return;
     case kDiagBaseline: app.s.baselineNext = !app.s.baselineNext; changed(); return;
+    case kDiagDebugLogs: app.s.debugLogs = app.s.debugLogs > 0 ? 0 : kDebugLogLaunches; changed(); return;
     case kAntiCheat: {
         if (!games::launcher_game().antiCheatStart)
             return;
@@ -184,6 +185,7 @@ void activate(Ctl id, int option) {
     case kDiagZip: show_report_zip(); return;  // the keyboard's; the mouse drags it (drag_report_zip)
     case kDiagCopy: copy_summary(); return;
     case kDiagLogs: ShellExecuteW(app.hwnd, L"explore", logs_folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL); return;
+    case kDiagClearCaptures: clear_captures(); return;
     case kLayerOn: app.layerRow = option; toggle_layer(option); break;
     case kLayerUp: move_layer(option, -1); break;
     case kLayerDown: move_layer(option, 1); break;
@@ -440,6 +442,7 @@ bool push_button(Ctl id) {
     case kDiagExport:
     case kDiagCopy:
     case kDiagLogs:
+    case kDiagClearCaptures:
     case kReportOpen:
     case kPanelClose:
     case kColorPreset:
@@ -500,6 +503,7 @@ bool space_control(Ctl id) {
     case kDiagCapture:
     case kDiagFrameCapture:
     case kDiagBaseline:
+    case kDiagDebugLogs:
     case kDiagKind:
     case kGameShown:
     case kAntiCheat:

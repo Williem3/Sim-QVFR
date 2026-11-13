@@ -128,6 +128,14 @@ constexpr Help kHelp[] = {
      L"Starts the game once with its own two views and QVFR off, still measuring, so Diagnostics can compare the same race with "
      L"and without QVFR. It turns itself off after that launch; the next one has QVFR again. The performance overlay works "
      L"in it, the headset menu does not."},
+    {L"Detailed logs",
+     L"Normal logs say what Sim-QVFR set up, decided and measured. Detailed logs add every step behind that, for a bug "
+     L"report when the developer asks for one. They last three launches and then turn themselves off, so the logs stay "
+     L"small. Send them with Report an issue, or Save the logs as a zip."},
+    {L"Logs folder",
+     L"Each launch adds a session log and a small run folder. The launcher keeps the newest 30 sessions and removes older "
+     L"ones at each launch, and the newest 10 CPU captures. Frame captures and game image dumps stay until you clear them: "
+     L"Clear captures moves them to the Recycle Bin."},
     {L"Presets for eye tracked foveation",
      L"Starting points that put the pixels in the centre: low outer views and a dense focus area. Eye tracked, the area "
      L"follows your eyes, so it can be small and very sharp. They set the resolution only and keep everything else."},

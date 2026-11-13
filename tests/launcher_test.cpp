@@ -27,6 +27,7 @@
 #include "launcher/install.h"
 #include "launcher/layer_order.h"
 #include "launcher/leftovers.h"
+#include "launcher/log_retention.h"
 #include "launcher/preflight.h"
 #include "launcher/report.h"
 #include "launcher/session_history.h"
@@ -292,6 +293,88 @@ void launch_status_checks() {
               "game folder: a folder without the game's exe, or another game's folder, is none");
         fs::remove_all(lib, ec);
     }
+}
+
+// The logs folder's retention (launcher/log_retention.h): the newest of each kind kept, the rest removed, the
+// registration ledgers and the diagnostics' output never touched.
+void log_retention_checks() {
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    const fs::path logs = fs::path(temp) / L"simqvfr-log-retention-test";
+    std::error_code ec;
+    fs::remove_all(logs, ec);
+    fs::create_directories(logs);
+    const auto file = [&](const std::wstring& name, size_t bytes = 10) {
+        write_file((logs / name).wstring(), std::string(bytes, 'x'));
+        return logs / name;
+    };
+    wchar_t stamp[32];
+    for (int i = 0; i < kKeepSessions + 5; ++i) {  // 20261101-000000 .. : sortable stamps, the oldest first
+        swprintf_s(stamp, L"20261101-%06d", i);
+        file(std::wstring(L"session-") + stamp + L".log", 100);
+        fs::create_directories(logs / (std::wstring(L"run-") + stamp));
+        write_file((logs / (std::wstring(L"run-") + stamp) / L"launch.txt").wstring(), "run");
+    }
+    const auto now = fs::file_time_type::clock::now();
+    for (int i = 0; i < kKeepHangDumps + 2; ++i)  // names without a date: their file times decide, hang-5 the newest
+        fs::last_write_time(file(L"hang-1" + std::to_wstring(9 - i) + L"0000.dmp"), now - std::chrono::hours(10 - i));
+    for (int i = 0; i < kKeepRegistryBackups + 4; ++i) {
+        swprintf_s(stamp, L"20261101-%06d", i);
+        file(std::wstring(L"openxr-layers-machine-") + stamp + L".reg");
+    }
+    file(L"openxr-layers-user-20261101-000000.reg");
+    for (int i = 0; i < kKeepReports + 2; ++i) {
+        swprintf_s(stamp, L"20261101-%06d", i);
+        file(std::wstring(L"sim-qvfr-report-") + stamp + L".zip");
+    }
+    fs::create_directories(logs / L"openxr-registrations");
+    write_file((logs / L"openxr-registrations" / L"run-20261101-000000.txt").wstring(), "ledger");
+    fs::create_directories(logs / L"captures");
+    write_file((logs / L"captures" / L"cap01.png").wstring(), std::string(5000, 'c'));
+    {  // an older version's copy of a game's program (leftovers.h): a Windows program by content
+        std::string program(3000, '\0');
+        program[0] = 'M';
+        program[1] = 'Z';
+        program[0x3c] = static_cast<char>(0x80);
+        program.replace(0x80, 4, std::string("PE\0\0", 4));
+        write_file((logs / L"Le Mans Ultimate-0123456789ab-image.dump").wstring(), program);
+    }
+    file(L"something-else.txt");
+
+    const PruneResult r = prune_logs(logs.wstring());
+    const auto count = [&](const wchar_t* prefix) {
+        int n = 0;
+        for (const auto& e : fs::directory_iterator(logs))
+            n += e.path().filename().wstring().rfind(prefix, 0) == 0 ? 1 : 0;
+        return n;
+    };
+    check(count(L"session-") == kKeepSessions && count(L"run-") == kKeepSessions &&
+              !fs::exists(logs / L"session-20261101-000004.log") && fs::exists(logs / L"session-20261101-000005.log") &&
+              !fs::exists(logs / L"run-20261101-000000") && fs::exists(logs / L"run-20261101-000034"),
+          "log retention: the newest session logs and run folders kept, by their stamps");
+    check(count(L"hang-") == kKeepHangDumps && fs::exists(logs / L"hang-130000.dmp") && !fs::exists(logs / L"hang-190000.dmp"),
+          "log retention: the newest hang dumps kept, by their file times");
+    check(count(L"openxr-layers-machine-") == kKeepRegistryBackups + 1 &&
+              fs::exists(logs / L"openxr-layers-machine-20261101-000000.reg") &&
+              !fs::exists(logs / L"openxr-layers-machine-20261101-000001.reg") &&
+              fs::exists(logs / L"openxr-layers-machine-20261101-000013.reg") && count(L"openxr-layers-user-") == 1,
+          "log retention: a hive's oldest registry backup and its newest kept");
+    check(count(L"sim-qvfr-report-") == kKeepReports, "log retention: the newest report zips kept");
+    check(fs::exists(logs / L"openxr-registrations" / L"run-20261101-000000.txt") && fs::exists(logs / L"captures" / L"cap01.png") &&
+              fs::exists(logs / L"Le Mans Ultimate-0123456789ab-image.dump") && fs::exists(logs / L"something-else.txt"),
+          "log retention: ledgers, captures, image dumps and other files untouched");
+    check(r.removed == 5 + 5 + 2 + 3 + 2 && r.bytes >= 5 * 100, "log retention: what was removed, counted");
+    check(prune_logs(logs.wstring()).removed == 0, "log retention: a second pass removes nothing");
+
+    const std::vector<std::wstring> paths = diagnostics_paths(logs.wstring());
+    check(paths.size() == 2 && paths[0].find(L"Le Mans Ultimate") != std::wstring::npos &&
+              paths[1].find(L"captures") != std::wstring::npos,
+          "log retention: the captures folder and the image dump as the diagnostics' output");
+    const LogsUse use = logs_use(logs.wstring());
+    check(use.diagnosticsBytes == 8000 && use.bytes > use.diagnosticsBytes, "log retention: the logs folder's size, the diagnostics' part");
+    check(size_text(512) == L"1 KB" && size_text(5ull << 20) == L"5.0 MB" && size_text(3ull << 29) == L"1.5 GB",
+          "log retention: sizes as text");
+    fs::remove_all(logs, ec);
 }
 
 // The session history (launcher/session_history.h): records kept per session, pruned, compared.
@@ -2654,6 +2737,7 @@ int SIM_QVFR_TEST_MAIN() {
     game_tabs_checks();
     launch_status_checks();
     session_history_checks();
+    log_retention_checks();
     explicit_layers_checks();
     leftovers_checks();
     std::printf("RESULT: %s\n", failures == 0 ? "pass" : "FAIL");

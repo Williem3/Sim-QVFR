@@ -465,6 +465,13 @@ target_compile_options(cheeky_host_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(cheeky_host_test PRIVATE sim_qvfr_core)
 add_dependencies(cheeky_host_test cheeky_fake_runtime)
 
+# Offline check of the layer's log levels, size limit and rotation (tests/log_level_test.cpp).
+sim_qvfr_test(log_level_test tests/log_level_test.cpp)
+target_include_directories(log_level_test PRIVATE src)
+target_compile_definitions(log_level_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(log_level_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(log_level_test PRIVATE sim_qvfr_core)
+
 # Offline check of the hang watch's module log and its minidump, written by the launcher as the dump helper
 # (tests/hang_watch_test.cpp).
 sim_qvfr_test(hang_watch_test tests/hang_watch_test.cpp)
@@ -482,6 +489,7 @@ add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/set
   src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
   src/launcher/leftovers.cpp
+  src/launcher/log_retention.cpp
   src/profile/profiles.cpp src/launcher/update_check.cpp src/launcher/install.cpp src/quad/osd.cpp)
 target_include_directories(sim_qvfr_launcher_shared PRIVATE src)
 target_compile_definitions(sim_qvfr_launcher_shared PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)

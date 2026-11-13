@@ -78,6 +78,7 @@ Settings load_settings(const std::wstring& ini) {
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
     s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
+    s.debugLogs = std::clamp(read_int(ini, L"launcher", L"debug_logs", 0), 0, kDebugLogLaunches);
     s.antiCheat = read_int(ini, L"launcher", L"anticheat", 0) != 0;
     s.updateCheck = read_int(ini, L"launcher", L"update_check", 0) != 0;
     s.updateAsked = read_int(ini, L"launcher", L"update_asked", 0) != 0;
@@ -167,6 +168,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");
+    ok &= write(ini, L"launcher", L"debug_logs", std::to_wstring(s.debugLogs));
     ok &= write(ini, L"launcher", L"anticheat", s.antiCheat ? L"1" : L"0");  // at the next launch
     ok &= write(ini, L"launcher", L"update_check", s.updateCheck ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"update_asked", s.updateAsked ? L"1" : L"0");

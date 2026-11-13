@@ -348,6 +348,11 @@ car, track and weather, and use the one that runs best for you. Don't run both a
   and account IDs are taken out of the game's own crash reports before they go in the ZIP.
 - **Someone asked for your logs?** **Save the logs as a zip** (under **Other ways to share**, in the same
   Get help card) makes the same ZIP without opening an issue.
+- **Asked for detailed logs?** Switch on **Detailed logs** under **Game › Diagnostics** (the tools for
+  comparing and bug reports), play the problem again, then save the logs as a zip. They last three launches
+  and then turn themselves off.
+- **Disk space:** the launcher keeps the logs of your newest 30 sessions and removes older ones as it
+  launches. Frame captures you made stay until you press **Clear captures** under **Diagnostics**.
 - **Can't find the game?** Make sure the game is installed and, for a Steam game, that Steam is running.
   If the launcher still can't find it, use **Choose folder…** in **Game › Launch checks**.
 - **After a game update**, Sim-QVFR turns itself off and the game runs as normal until a new version
