@@ -13,6 +13,7 @@
 #include "log.h"
 #include "probe/cpu_load.h"
 #include "probe/d3d11_capture.h"
+#include "probe/d3d11_compose_timer.h"
 #include "probe/d3d12_trace.h"
 #include "probe/dred.h"
 #include "probe/gpu_frame_timer.h"
@@ -121,6 +122,14 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             if (experiment.views4ComposeD3D11)
                 game->d3d11_session(device);
             cheeky_session_d3d11(device);  // when Cheeky runs in this game (loads_cheeky)
+            if (experiment.views4 || experiment.measure) {  // as D3D12 below: the overlay's GPU split and busiest thread
+                const SessionGraphics graphics{nullptr, nullptr, device};
+                if (LUID adapter{}; graphics.adapter_luid(adapter))
+                    gpu_load_start(static_cast<uint32_t>(adapter.HighPart), adapter.LowPart);
+                cpu_load_start();
+                if (experiment.views4ComposeD3D11)
+                    d3d11_compose_timer_start(device);
+            }
         }
         if (binding && binding->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
             const auto* d3d12 = reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(binding);
@@ -229,6 +238,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.helmetPiecesLoaded = false;
     }
     gpu_frame_timer_stop();
+    d3d11_compose_timer_stop();
     gpu_load_stop();
     cpu_load_stop();
     pad_watch_stop();

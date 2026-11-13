@@ -134,13 +134,17 @@ std::vector<OsdRow> osd_rows(const OsdInput& input, const OsdSummary& summary);
 // SMVR (Sim-QVFR's software multi-view) green, Fallback (the focus views in passes of their own again) yellow.
 OsdRow osd_badge(const OsdInput& input);
 
+// The local time on a 12-hour clock ("9:05 PM"), from the hour (0-23) and minute: the card's clock.
+std::wstring osd_clock(int hour, int minute);
+
 // RGBA8 pixels (sRGB, straight alpha), kOsdWidth x kOsdHeight: a rounded translucent card with the
 // `tiles` across the top, a strip graph of the recent frame times (`history`, ms, oldest first)
-// against the budget, then `rows` as a grid of three columns; `badge` (osd_badge) at the right of the CPU tile's label.
+// against the budget, then `rows` as a grid of three columns; `badge` (osd_badge) at the right of the CPU tile's label;
+// `clock` (osd_clock, empty: none) at the graph's right end, which then leaves room for it.
 inline constexpr int kOsdWidth = 1024, kOsdHeight = 496;
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
-                                     const OsdRow& badge = {});
+                                     const OsdRow& badge = {}, const std::wstring& clock = {});
 
 // The same card with a notice instead of the numbers: `title` in yellow, then `lines`, each a paragraph
 // (wrapped; the first in white, the rest grey). The layer shows it for a while at the session's start when

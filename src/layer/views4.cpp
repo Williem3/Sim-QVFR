@@ -10,6 +10,7 @@
 
 #include "games/adapter.h"
 #include "log.h"
+#include "probe/d3d11_compose_timer.h"
 #include "probe/d3d11_capture.h"
 #include "probe/gpu_frame_timer.h"
 #include "quad/compositor.h"
@@ -859,8 +860,11 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         // or (no four views this frame: menus, loading) submitted as it is. None of the shared-target rects below apply.
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_separate_views()) {
             bool layered = false;
-            if (v4d3d11_compose(session, proj, copy, focusAfter < 0 ? &focusViews : nullptr, &layered,
-                                info->displayTime)) {
+            d3d11_compose_timer_begin();  // the overlay's layer GPU time (probe/d3d11_compose_timer.h)
+            const bool composed = v4d3d11_compose(session, proj, copy, focusAfter < 0 ? &focusViews : nullptr, &layered,
+                                                  info->displayTime);
+            d3d11_compose_timer_end();
+            if (composed) {
                 // A quad view session (native_quad.cpp): the focus views are this layer's views 2-3, which the runtime
                 // composes itself (frames without them get copies of the eyes there, at the layer's bottom edge).
                 const bool quadViews = layered && nativeQuad.active;
@@ -926,8 +930,13 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
             continue;
         if (proj->viewCount == 2 && game->qvfr_eye_columns() && game->qvfr_wants_game_image())
             v4d3d11_game_image(proj, layout);
-        if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_eye_columns() &&
-            v4d3d11_compose(session, proj, copy)) {
+        bool composedColumns = false;
+        if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_eye_columns()) {
+            d3d11_compose_timer_begin();
+            composedColumns = v4d3d11_compose(session, proj, copy);
+            d3d11_compose_timer_end();
+        }
+        if (composedColumns) {
             projections.push_back(*proj);
             projections.back().views = copy.data();
             layers[i] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projections.back());

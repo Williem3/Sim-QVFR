@@ -344,6 +344,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         std::printf("     the debug layer: %s\n", infoQueue ? "on" : "not installed (no linkage check)");
     lmu::mvr_set_two_views(&fake_two_views);
     lmu::mvr_focus_replay(true);  // before the install: DrawIndexed hooked too
+    lmu::mvr_roles_known_for_tests(1, 1);  // the stand-ins carry their roles, as the probe marks the game's
     check(lmu::mvr_pass_install(device.Get()) && lmu::mvr_pass_stats().contextEntries == 16,
           "the immediate context hooked, the four draws and CopySubresourceRegion among its entries (the focus post on)");
 
@@ -1267,6 +1268,120 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                   after.focusFailures == before.focusFailures && final0 && driveFinals && worst <= 3 && hi - lo >= 100,
               what);
         lmu::mvr_fsr(false, nullptr, nullptr);
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+    {  // The frame's shape (mvr_shape_ready): the steps the focus views are made at, seen on the eyes' own
+       // post-processing whether or not focus views are drawn, so the recovery only tries where a try can work.
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100060);
+        const bool none = !lmu::mvr_shape_ready();  // a frame without passes (a menu)
+        eye_pass(0, nullptr, false, standIn, false, true);
+        eye_pass(1, nullptr, false, standIn, false, true);
+        lmu::mvr_frame_end(100061);
+        const bool foveated = lmu::mvr_shape_ready();
+        driveViews[0] = driveViews[1] = nullptr;  // the eyes alone (plain: no focus view handed over)
+        const lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        eye_pass(0, nullptr, false, standIn, false, true);
+        eye_pass(1, nullptr, false, standIn, false, true);
+        lmu::mvr_frame_end(100062);
+        const bool plain = lmu::mvr_shape_ready() && lmu::mvr_pass_stats().focusComposites == before.focusComposites;
+        Kit staged = standIn;
+        staged.stage = 1;
+        eye_pass(0, nullptr, false, staged, false, true);
+        eye_pass(1, nullptr, false, staged, false, true);
+        lmu::mvr_frame_end(100063);
+        const bool pastStage = lmu::mvr_shape_ready();
+        lmu::mvr_shape_force_bad(true);
+        eye_pass(0, nullptr, false, standIn, false, true);
+        eye_pass(1, nullptr, false, standIn, false, true);
+        lmu::mvr_frame_end(100064);
+        const bool forced = !lmu::mvr_shape_ready();
+        lmu::mvr_shape_force_bad(false);
+        std::snprintf(what, sizeof(what),
+                      "the frame's shape: not ready without passes (%d), ready with focus views (%d), ready with the eyes "
+                      "alone and no focus post run (%d), past a stage (%d), not ready when forced (%d)",
+                      none, foveated, plain, pastStage, forced);
+        check(none && foveated && plain && pastStage && forced, what);
+        lmu::mvr_track_drive(nullptr, nullptr);
+        lmu::mvr_track_passes(false);
+    }
+    {  // No YEBIS shader known by its checksum (a game update compiled them anew): the copy and the final blit by what
+       // they bind, the composite as before; MSAA on, then off (the scene's target learned by the composite's
+       // bindings alone).
+        lmu::MvrPassView view1 = view;
+        view1.eye = 1;
+        driveViews[0] = &view;
+        driveViews[1] = &view1;
+        ComPtr<ID3D11PixelShader> copyPlain = ps(device.Get(), kCopyPs), compositePlain = ps(device.Get(), kCompositePs),
+                                  blitPlain = ps(device.Get(), kBlitPs);
+        Kit unknown = standIn;
+        unknown.copy = copyPlain.Get();
+        unknown.composite = compositePlain.Get();
+        unknown.blitPs = blitPlain.Get();
+        lmu::mvr_roles_known_for_tests(0, 0);
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100070);
+        lmu::MvrPassStats before = lmu::mvr_pass_stats();
+        driveLog.clear();
+        driveFinals = false;
+        eye_pass(0, nullptr, false, unknown, false, true);
+        eye_pass(1, nullptr, false, unknown, false, true);
+        lmu::mvr_frame_end(100071);
+        lmu::MvrPassStats after = lmu::mvr_pass_stats();
+        std::snprintf(what, sizeof(what),
+                      "no shader known by checksum, MSAA on:%s; copies by their bindings %llu, composites %llu (%llu by "
+                      "bindings), final blits %llu (%llu by bindings), %llu steps failed, finals %s, the shape %s",
+                      driveLog.c_str(), static_cast<unsigned long long>(after.focusCopiesByBindings - before.focusCopiesByBindings),
+                      static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusCompositesByBindings - before.focusCompositesByBindings),
+                      static_cast<unsigned long long>(after.focusBlits - before.focusBlits),
+                      static_cast<unsigned long long>(after.focusBlitsByBindings - before.focusBlitsByBindings),
+                      static_cast<unsigned long long>(after.focusFailures - before.focusFailures),
+                      driveFinals ? "made" : "NOT MADE", lmu::mvr_shape_ready() ? "ready" : "NOT READY");
+        check(driveLog == " b0 e0 b1 e1" && after.focusCopiesByBindings == before.focusCopiesByBindings + 2 &&
+                  after.focusComposites == before.focusComposites + 2 &&
+                  after.focusCompositesByBindings == before.focusCompositesByBindings + 2 &&
+                  after.focusBlits == before.focusBlits + 2 && after.focusBlitsByBindings == before.focusBlitsByBindings + 2 &&
+                  after.focusFailures == before.focusFailures && driveFinals && lmu::mvr_shape_ready(),
+              what);
+        same_as_eye("no shader known by checksum", 100, true);
+        // MSAA off: the tracker off and on (the learned target forgotten), a frame to learn in, then driven.
+        lmu::mvr_track_passes(false);
+        lmu::mvr_track_passes(true);
+        lmu::mvr_track_drive(&drive_begin, &drive_end);
+        lmu::mvr_frame_end(100072);
+        const lmu::MvrTrackStats learnBefore = lmu::mvr_track_stats();
+        driveLog.clear();
+        eye_pass(0, nullptr, false, unknown, false, true, true);
+        eye_pass(1, nullptr, false, unknown, false, true, true);
+        lmu::mvr_frame_end(100073);
+        const bool learned = lmu::mvr_track_stats().sceneAtComposite == learnBefore.sceneAtComposite + 1 && driveLog.empty();
+        before = lmu::mvr_pass_stats();
+        driveFinals = false;
+        eye_pass(0, nullptr, false, unknown, false, true, true);
+        eye_pass(1, nullptr, false, unknown, false, true, true);
+        lmu::mvr_frame_end(100074);
+        after = lmu::mvr_pass_stats();
+        std::snprintf(what, sizeof(what),
+                      "no shader known by checksum, MSAA off: the scene's target learned by the composite's bindings (%s), "
+                      "then:%s; composites %llu, final blits %llu, %llu steps failed, finals %s, the shape %s",
+                      learned ? "yes" : "NO", driveLog.c_str(),
+                      static_cast<unsigned long long>(after.focusComposites - before.focusComposites),
+                      static_cast<unsigned long long>(after.focusBlits - before.focusBlits),
+                      static_cast<unsigned long long>(after.focusFailures - before.focusFailures),
+                      driveFinals ? "made" : "NOT MADE", lmu::mvr_shape_ready() ? "ready" : "NOT READY");
+        check(learned && driveLog == " b0 e0 b1 e1" && after.focusComposites == before.focusComposites + 2 &&
+                  after.focusBlits == before.focusBlits + 2 && after.focusFailures == before.focusFailures && driveFinals &&
+                  lmu::mvr_shape_ready(),
+              what);
+        lmu::mvr_roles_known_for_tests(1, 1);
         lmu::mvr_track_drive(nullptr, nullptr);
         lmu::mvr_track_passes(false);
     }

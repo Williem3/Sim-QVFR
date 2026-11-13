@@ -104,6 +104,7 @@ public:
                 // lmu_mvr_lose_at=N: the focus views lost from scene frame N for 1800 scene frames (the recovery's test).
                 run.loseAt = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_at", 0,
                                                                                   s.ini)));
+                run.loseShape = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_shape", 0, s.ini) != 0;
             }
         }
         if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)

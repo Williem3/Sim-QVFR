@@ -62,6 +62,9 @@ bool makeSlotTwins = false;    // [experiment] lmu_car_vectors >= 1 (with lmu_ca
 bool markChecksums = false;  // with the focus post: every shader's checksum as private data (the traces' names)
 bool underRenderDoc = false;
 bool forceInstanced = false;  // [experiment] multi_view_software=1: instancing even where NVIDIA's is there
+// [experiment] lmu_mvr_no_checksums=1: no pixel shader is given a YEBIS role by its checksum, as after a game update
+// that compiled them anew: the copy, composite and final blit are then found by what they bind (mvr_pass.cpp).
+bool noRoles = false;
 std::atomic<bool> nvapiUsable{false};
 std::atomic<bool> instancedUsable{false};  // the device lets a vertex shader pick the viewport (D3D11_OPTIONS3)
 std::atomic<uint64_t> perInstanceLayouts{0};
@@ -374,7 +377,7 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
     const HRESULT hr = originalCreatePixelShader(device, code, size, linkage, shader);
     if (FAILED(hr) || !shader || !*shader)
         return hr;
-    const YebisRole role = yebis_role(code, size);
+    const YebisRole role = noRoles ? YebisRole::none : yebis_role(code, size);
     if (role != YebisRole::none) {
         const UINT value = static_cast<UINT>(role);
         (*shader)->SetPrivateData(kYebisRoleGuid, sizeof(value), &value);
@@ -537,6 +540,10 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
         makeSlotTwins = markWorldMatrix && (slots > 0 || playerCars);
     }
     forceInstanced = ini && GetPrivateProfileIntW(L"experiment", L"multi_view_software", 0, ini) != 0;
+    noRoles = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_no_checksums", 0, ini) != 0;
+    if (noRoles)
+        simqvfr::log_line("lmu mvr probe: lmu_mvr_no_checksums=1: no YEBIS shader known by its checksum; the copy, "
+                          "composite and final blit by their bindings");
     markChecksums =
         attach && (nameShaders || (ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0));
     underRenderDoc = GetModuleHandleW(L"renderdoc.dll") != nullptr;
