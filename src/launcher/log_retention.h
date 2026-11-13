@@ -6,11 +6,18 @@
 //   hang-<time>.dmp                                    the newest kKeepHangDumps (by file time: the name has no date)
 //   openxr-layers-machine|user-<stamp>.reg             per hive, the oldest (Windows' layers before Sim-QVFR's first
 //                                                       change) and the newest kKeepRegistryBackups
-//   sim-qvfr-report-<stamp>.zip, sim-qvfr-logs-*.zip   the newest kKeepReports of each
-//   cpu-profile-*.txt                                  the newest kKeepCpuProfiles
-// Never touched: openxr-registrations\ (an elevated launch's ledgers, the unregister sweep needs them) and its log,
-// and the diagnostics' own output (diagnostics_paths: captures*, pix, shaders, image dumps), which the user asked for:
-// the Diagnostics pane shows its size and clears it to the Recycle Bin.
+//   sim-qvfr-report-<stamp>.zip, sim-qvfr-logs-<stamp>.zip   the newest kKeepReports of each
+//   cpu-profile-<stamp>.txt                            the newest kKeepCpuProfiles
+// It never touches anything it can't be sure is Sim-QVFR's own:
+//   - only the exact names above (<stamp> = 8 digits, '-', 6 digits; <time> = 6 digits), directly in the logs folder,
+//     and nothing at all when the logs folder is a link or junction;
+//   - only plain files, never a link or junction; a minidump only if it starts "MDMP", a zip only if it starts "PK";
+//   - a run folder is never removed recursively: the files a launch writes into it go (launch.txt, the ini copy,
+//     openxr-loader.log, openxr-explicit-before.reg, the layer manifests *.json), then the folder only if that left it
+//     empty; a subfolder or any other file keeps it.
+// Never touched either: openxr-registrations\ (an elevated launch's ledgers, the unregister sweep needs them) and its
+// log, and the diagnostics' own output (diagnostics_paths: captures*, pix, shaders, image dumps), which the user asked
+// for: the Diagnostics pane shows its size and clears it to the Recycle Bin.
 #pragma once
 
 #include <cstdint>
