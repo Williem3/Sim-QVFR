@@ -1782,6 +1782,36 @@ bool record_clear() {
 bool focus_prepare(const Stream& s) {
     prune_retired();
     bool changed = false;
+    // Game targets the game itself has released (a DLSS mode or resolution change: it makes its targets again, with
+    // new views beside the old handles): only our own references keep them alive. Their twins and our views of them
+    // go, so lookups by name or size find the current ones (22:21 and 22:38 runs: a stale depth twin picked for the
+    // tiles, the focus replays stopped) and the game's old targets are freed.
+    for (auto t = focus.twins.begin(); t != focus.twins.end();) {
+        ID3D12Resource* const game = t->first;
+        ULONG ours = 0;
+        for (const auto& [h, v] : focus.views)
+            if (v.resource.Get() == game)
+                ++ours;
+        for (const ComPtr<ID3D12Resource>& r : {focus.gameGrid[0], focus.gameGrid[1], focus.postGameFxaa})
+            if (r.Get() == game)
+                ++ours;
+        game->AddRef();
+        const ULONG others = game->Release();  // the references left: ours and the game's
+        if (!ours || others > ours) {
+            ++t;
+            continue;
+        }
+        logf("replay focus: the game released its %s (%llux%u): its twins and our views of it go", t->second.name.c_str(),
+             static_cast<unsigned long long>(t->second.gameDesc.Width), t->second.gameDesc.Height);
+        retire(t->second.focus.Get());
+        retire(t->second.eye.Get());
+        free_slot(t->second.depth, t->second.focusSlot);
+        free_slot(t->second.depth, t->second.eyeSlot);
+        t = focus.twins.erase(t);
+        twinsRemade.fetch_add(1);
+        changed = true;
+        std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == game; });  // frees the target
+    }
     if (focus.viewsMoved) {  // the game made targets again: twins of resources no view names any more are retired
         focus.viewsMoved = false;
         for (auto t = focus.twins.begin(); t != focus.twins.end();) {
