@@ -574,8 +574,12 @@ void replay_unexecuted(const Stream& s) {
 
 // The pass constants copied into our slot with the off-axis focus remap (ACE's layout, recon-ace.md "R1"): left
 // projections at rows 13/17/21/25, right at 95/103/107, each 4 rows x, y, z, w with w = (0,0,-1,0); row 38.xy target
-// size, row 84 the viewport rect, row 112.z eyeHalfWidthPixels. Each eye's centre comes from its unjittered projection
-// (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
+// size, row 84 the viewport rect, row 112.z eyeHalfWidthPixels. Rows 128-131 keep each eye's unjittered x/y rows.
+// Jitter (ACE's DLSS; 21:20 capture): row 85.xy is the frame's jitter in the eye's NDC (0 under MSAA), and the rows named
+// "unjittered" carry it too: 13, 17, 25 and the right eye's 95, 103, 107 are all centre - jitter; only prevProjection
+// (21) and inverseViewProjection (29-32) are without. So each eye's centre is row 17 / 103 plus row 85, and each
+// projection row's own jitter is that centre minus its z. The focus views take the same jitter in their own pixels
+// (the eye's NDC jitter x eye size / focus size), not the box's magnification of it: DLSS takes sub-pixel jitter.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
 cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; float4 gaze; float4 gazePrev; };
@@ -585,7 +589,9 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     if (i >= 132) return;
     if (i >= 128) {
         const uint from[4] = {17, 18, 103, 104};
-        dst.Store4(i * 16, asuint(src[from[i - 128]]));
+        float4 kept = src[from[i - 128]];
+        kept.z += (i & 1) ? src[85].y : src[85].x;  // without the jitter
+        dst.Store4(i * 16, asuint(kept));
         return;
     }
     float4 v = src[i];
@@ -596,13 +602,21 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     const bool rightEye = !left || src[84].x > 0;
     const bool prevRow = (i >= 21 && i <= 28) || (i >= 107 && i <= 110);
     const float2 g = prevRow ? (rightEye ? gazePrev.zw : gazePrev.xy) : (rightEye ? gaze.zw : gaze.xy);
-    const float ox = (left ? src[17].z : src[103].z) - g.x;  // projectionUnjittered: each eye's own centre
-    const float oy = (left ? src[18].z : src[104].z) - g.y;
+    const float2 jitter = src[85].xy;
+    const float ux = (left ? src[17].z : src[103].z) + jitter.x;  // each eye's own centre, without the jitter
+    const float uy = (left ? src[18].z : src[104].z) + jitter.y;
+    const float ox = ux - g.x, oy = uy - g.y;
     const float ax = 1.0 / halfExtent.x, ay = 1.0 / halfExtent.y;
-    if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107))  // viewProjection and the projections
-        v = ax * v + (ax * ox) * src[i + 3];          // x' = a x + b w, b = -a * centre = a * ox
-    else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108))
-        v = ay * v + (ay * oy) * src[i + 2];          // y' = c y + d w
+    // The jitter's scale into the focus view's NDC: the same pixels' worth there as in the eye.
+    const float sx = src[84].z > 0 ? src[84].z / focusSize.x : ax, sy = src[84].w > 0 ? src[84].w / focusSize.y : ay;
+    if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107)) {  // viewProjection and the projections
+        const float own = i == 1 ? jitter.x : ux - v.z;           // this row's own jitter (viewProjection: the frame's)
+        v = ax * v + (ax * ox - own * (ax - sx)) * src[i + 3];    // x' = a x + b w, b = -a * centre = a * ox
+    } else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108)) {
+        const float own = i == 2 ? jitter.y : uy - v.z;
+        v = ay * v + (ay * oy - own * (ay - sy)) * src[i + 2];    // y' = c y + d w
+    }
+    if (i == 85) v.xy = jitter * float2(sx, sy);
     if (i == 38) v.xy = float2(focusSize.x * 2, focusSize.y);
     if (i == 84) v = float4(v.x > 0 ? focusSize.x : 0, 0, focusSize.x, focusSize.y);  // a right-eye list: its offset
     if (i >= 29 && i <= 32)  // inverseViewProjection: inverse(R VP) = inverse(VP) inverse(R)
@@ -1080,8 +1094,8 @@ RWByteAddressBuffer dst : register(u0);
 
 // P2a: ACE's VelocityAndDepthPacking constants (352 B, 22 registers) for a focus eye: inverseViewProj (0-3),
 // viewProj (4-7), prevViewProj (8-11), columns in the registers: x' = a x + a ox w per column, the inverse columns 0/1 x
-// box and column 3 - ox c0 - oy c1 (ox = -the eye's NDC centre); rcpRes and resolution the focus size; the jitters (pixels)
-// x k; pixelOffset the focus eye's; the texture indices ours (SRVs: velocity, depth, flags; UAVs: MB, velocity only,
+// box and column 3 - ox c0 - oy c1 (ox = -the eye's NDC centre); rcpRes and resolution the focus size; the jitters (pixels;
+// 12.zw half the step from last frame's, 14.xy this frame's) as ACE's: the focus views jitter by the same pixels; pixelOffset the focus eye's; the texture indices ours (SRVs: velocity, depth, flags; UAVs: MB, velocity only,
 // flags output, AA).
 constexpr char kPackShader[] = R"(
 cbuffer Src : register(b0) { float4 src[22]; };
@@ -1097,9 +1111,8 @@ RWByteAddressBuffer dst : register(u0);
     if (i == 3) v = v - ox * src[0] - oy * src[1];
     if (i >= 4 && i <= 7) { v.x = a * v.x + a * ox * v.w; v.y = ay * v.y + ay * oy * v.w; }
     if (i >= 8 && i <= 11) { v.x = a * v.x + a * pox * v.w; v.y = ay * v.y + ay * poy * v.w; }  // last frame's box
-    if (i == 12) v = float4(1.0 / fw, 1.0 / fh, v.z * k, v.w * ky);
+    if (i == 12) v.xy = float2(1.0 / fw, 1.0 / fh);
     if (i == 13) { v.x = asfloat(velSrv); v.y = asfloat(depthSrv); }
-    if (i == 14) { v.x *= k; v.y *= ky; }
     if (i == 15) { v.x = asfloat(mbUav); v.y = asfloat(uint(fw)); v.z = asfloat(uint(fh)); }
     if (i == 16) { v.y = asfloat(velOnlyUav); v.w = asfloat(flagsSrv); }
     if (i == 17) v.x = offX;
@@ -3866,7 +3879,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         l->SetComputeRootSignature(focus.packRoot.Get());
         l->SetPipelineState(focus.packPso.Get());
         l->SetComputeRootConstantBufferView(0, pack[e]->cbv);
-        l->SetComputeRoot32BitConstants(1, 14, p, 0);
+        l->SetComputeRoot32BitConstants(1, 18, p, 0);  // all of them: 14-17 are last frame's box and the box height
         l->SetComputeRootUnorderedAccessView(2, cb[e]);
         l->Dispatch(1, 1, 1);
     }
@@ -3903,8 +3916,8 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         in.base[1] = 0;
         in.width = fw;
         in.height = fh;
-        in.jitter[0] = game[e].jitter[0] * k;
-        in.jitter[1] = game[e].jitter[1] * k;
+        in.jitter[0] = game[e].jitter[0];  // the focus views jitter by the same pixels as the eyes (kPatchShader)
+        in.jitter[1] = game[e].jitter[1];
         for (int a = 0; a < 2; ++a) {  // a scale that is a size (|s| > 4): the focus size's; else as ACE's
             const float sz = a == 0 ? static_cast<float>(fw) / static_cast<float>(eyeW)
                                     : static_cast<float>(fh) / static_cast<float>(eh);
@@ -3956,7 +3969,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         break;
     }
     if (!focus.dlssReady)
-        logf("replay focus: dlss: the first focus DLSS recorded (colour %s, depth %s, motion %s -> ours; jitter x %.3f, "
+        logf("replay focus: dlss: the first focus DLSS recorded (colour %s, depth %s, motion %s -> ours; jitter as ACE's (%.2f focus pixels per eye pixel), "
              "motion scale %.4g,%.4g -> ours)",
              game[0].colorName.c_str(), game[0].depthName.c_str(), game[0].motionName.c_str(), k, game[0].motionScale[0],
              game[0].motionScale[1]);
