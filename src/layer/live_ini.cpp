@@ -113,10 +113,8 @@ void live_apply(const LiveSettings& l) {
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
     if (experiment.replayCompose) {
-        // The API path: the box's size is live (the focus views keep their pixels, so their density follows); ACE's
-        // eye size (periphery) and the focus views' pixel size (density) are set at launch.
         // The API path: the focus views' pixels (focus density x box) and the box's size are live; ACE's eye size (the
-        // periphery) is set at launch.
+        // periphery) is live from its launch size down to a quarter of it, above that at the next launch.
         const double boxX = experiment.box_x(l.focusFraction),
                      boxY = experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction);
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);

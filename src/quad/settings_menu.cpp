@@ -715,8 +715,17 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         notes.push_back(menu.dlssState);
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
-    else if (menu.launch.apiPath)
-        notes.push_back(L"Periphery scale applies at the next launch; focus density and mode apply now");
+    else if (menu.launch.apiPath) {
+        // The API path's periphery is live from its launch value down to a quarter of it (the game's eye targets are
+        // made once, at launch); above, at the next launch.
+        const double top = menu.launch.outer, floor = menu.launch.outer / 4;
+        if (menu.values.periphery > top + 0.5)
+            notes.push_back(L"Periphery above its launch value (" + percent(top) + L") applies at the next launch");
+        else if (menu.values.periphery < floor - 0.5)
+            notes.push_back(L"Periphery stays at " + percent(floor) + L" (a quarter of its launch value) until the next launch");
+        else
+            notes.push_back(L"Periphery applies now up to its launch value (" + percent(top) + L"); focus density and mode too");
+    }
     else if (menu.launch.qvfr && !menu.launch.liveResolution)
         notes.push_back(L"Resolution changes apply at the next launch in this game");
     const MenuFit f = menu_fit(menu);
