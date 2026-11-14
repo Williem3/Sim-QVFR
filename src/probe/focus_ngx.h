@@ -79,6 +79,9 @@ void release(Feature* f);
 // ew << 32 | eh << 48: each eye drawn lw x lh of its ew x eh, eye 1 right beside eye 0; 0: off), by a feature of ours
 // of that size in place of the game's.
 void set_eye_live(uint64_t packed);
+// With it, when the game upscales: the region at the output size, ow | oh << 16 | outW << 32 | outH << 48 (0: the
+// output x the same share as the render size).
+void set_eye_live_out(uint64_t packed);
 // False once NGX has been shut down since the feature was made (the game does that on an upscaling change): the
 // feature is dead and must be made again.
 bool alive(const Feature* f);

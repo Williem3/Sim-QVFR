@@ -261,6 +261,7 @@ struct Stream {
     ID3D12RootSignature* cbv5Root = nullptr;   // and root 5's (deferredShadows' constants)
     ID3D12RootSignature* sceneRoot = nullptr;  // ACE's scene root signature (its table 18 was set under it)
     uint64_t eyeState = 0;                     // the live size this list records with (0: off), taken at its Reset
+    uint64_t eyeOut = 0;                       // and the region after the game's DLSS upscale (eye_out), taken with it
     struct EyePatch {
         D3D12_GPU_VIRTUAL_ADDRESS from, to;
         int mode;    // 0 pass constants, 1 tile culling, 2 normal reconstruction, 3 deferred shadows, 4 velocity packing
@@ -310,7 +311,7 @@ struct Stream {
         vpN = scN = 0;
         eyeDirty = eyeScaled = eyeCbv1 = eyeCbv5 = eyeClipped = false;
         cbv1Root = cbv5Root = sceneRoot = nullptr;
-        eyeState = 0;
+        eyeState = eyeOut = 0;
         eyePatches.clear();
     }
     template <class T> void put(const T& v) {
@@ -434,7 +435,8 @@ void tyre_right_draw(List* l, std::vector<std::pair<D3D12_GPU_VIRTUAL_ADDRESS, D
                      D3D12_GPU_VIRTUAL_ADDRESS constants, ID3D12PipelineState* pso, const D3D12_VIEWPORT* vp, UINT vpCount,
                      const D3D12_RECT* sc, UINT scCount, UINT indices, UINT start, INT base, UINT firstInstance);
 std::atomic<uint64_t> skyPatchCount{0};    // focus sky draws given our cbSky
-void atmo_source_region(List* l, bool eyeImage);  // the region of a borrowed eye image in use (the live periphery)
+// The region of a borrowed eye image in use (the live periphery); `output`: an image after the game's DLSS (its output size).
+void atmo_source_region(List* l, bool eyeImage, bool output = false);
 
 // Re-emits a stream into `l` (open). Returns the draws emitted, or -1 on a broken stream or a target without a twin.
 int64_t emit(List* l, const Stream& s, const Substitution* sub) {
@@ -4923,7 +4925,7 @@ void focus_post_record(List* gameList, const Stream& s) {
         l->SetPipelineState(focus.atmoPso[0].Get());
         l->SetComputeRoot32BitConstants(0, 10, p, 0);
         l->SetComputeRoot32BitConstants(0, 1, &boxYBits, 10);  // the box's height (kAtmoShader boxY)
-        atmo_source_region(l, true);
+        atmo_source_region(l, true, true);  // ACE's veil: after its DLSS
         l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 57));
         l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + 58));
         l->Dispatch((p[3] + 7) / 8, (p[4] + 7) / 8, 1);
@@ -5927,6 +5929,9 @@ struct EyeLive {
     std::atomic<float> wanted{1.0f};   // the periphery's share of its launch size (1: off)
     std::atomic<bool> allowed{false};  // the compositor reads the region in use (a composed frame)
     std::atomic<uint64_t> state{0};    // taken at a frame's end: 0 off, else lw | lh << 16 | ew << 32 | eh << 48
+    // with it, when the game's DLSS upscales its eyes (Quality, Balanced, Performance): the region at the output size,
+    // as NGX is told it (focus_ngx: the output x fx, rounded), ow | oh << 16 | outW << 32 | outH << 48; 0: no upscale
+    std::atomic<uint64_t> out{0};
     ComPtr<ID3D12Resource> constants;  // our copies: kEyeSlots x kSlotBytes
     ComPtr<ID3D12PipelineState> pso;   // kEyeShader
     std::atomic<uint32_t> nextSlot{0};
@@ -5961,6 +5966,17 @@ EyeNow eye_now(uint64_t state) {
     n.lw = static_cast<float>(state & 0xffff);
     n.lh = static_cast<float>((state >> 16) & 0xffff);
     return n;
+}
+
+// The passes after the game's DLSS work at its output size: the region there (the scene's own when it doesn't upscale).
+struct EyeOut {
+    float w = 0, h = 0, lw = 0, lh = 0;  // the eye at the output size, and the region in use of it
+};
+EyeOut eye_out(const EyeNow& now, uint64_t out) {
+    if (!out)
+        return {now.ew, now.eh, now.lw, now.lh};
+    return {static_cast<float>((out >> 32) & 0xffff), static_cast<float>(out >> 48), static_cast<float>(out & 0xffff),
+            static_cast<float>((out >> 16) & 0xffff)};
 }
 
 // The thread groups of a by-pixel pass that cover `live` pixels, when `groups` cover `full`: the group's size in pixels
@@ -6130,10 +6146,15 @@ void eye_apply(List* l, Stream* s) {
     }
     // A draw over the whole two-eye target (ACE's fullscreen post draws): the viewport stays (it maps each pixel to
     // itself), a scissor keeps the work to the region in use.
-    const bool whole = now.on && !want && s->vpN == 1 && s->vpAll[0].TopLeftX == 0 && s->vpAll[0].TopLeftY == 0 &&
-                       std::fabs(s->vpAll[0].Width - 2 * now.ew) <= 2 && std::fabs(s->vpAll[0].Height - now.eh) <= 1;
+    // In an upscaling DLSS mode the draws after it (tonemap, fxaa) cover the output size: clipped to the region there.
+    const EyeOut o = eye_out(now, s->eyeOut);
+    const bool at = now.on && !want && s->vpN == 1 && s->vpAll[0].TopLeftX == 0 && s->vpAll[0].TopLeftY == 0;
+    const bool wholeScene = at && std::fabs(s->vpAll[0].Width - 2 * now.ew) <= 2 && std::fabs(s->vpAll[0].Height - now.eh) <= 1;
+    const bool wholeOut = at && !wholeScene && s->eyeOut && std::fabs(s->vpAll[0].Width - 2 * o.w) <= 2 &&
+                          std::fabs(s->vpAll[0].Height - o.h) <= 1;
+    const bool whole = wholeScene || wholeOut;
     if (whole) {
-        D3D12_RECT r{0, 0, static_cast<LONG>(2 * now.lw), static_cast<LONG>(now.lh)};
+        D3D12_RECT r{0, 0, static_cast<LONG>(2 * (wholeOut ? o.lw : now.lw)), static_cast<LONG>(wholeOut ? o.lh : now.lh)};
         if (s->scN) {  // within the game's own
             r.left = std::max(r.left, s->scAll[0].left);
             r.top = std::max(r.top, s->scAll[0].top);
@@ -6231,9 +6252,10 @@ void eye_record(List* gameList, const Stream& s) {
 }
 
 // The region of a borrowed eye image in use (kAtmoShader's ux, uy at constants 11-12; 0: all of it).
-void atmo_source_region(List* l, bool eyeImage) {
+void atmo_source_region(List* l, bool eyeImage, bool output) {
     const EyeNow now = eye_now(eyeImage ? eyeLive.state.load(std::memory_order_relaxed) : 0);
-    const float region[2] = {now.on ? now.fx : 0.0f, now.on ? now.fy : 0.0f};
+    const EyeOut o = eye_out(now, now.on && output ? eyeLive.out.load(std::memory_order_relaxed) : 0);
+    const float region[2] = {now.on ? o.lw / o.w : 0.0f, now.on ? o.lh / o.h : 0.0f};
     l->SetComputeRoot32BitConstants(0, 2, region, 11);
 }
 
@@ -6381,8 +6403,10 @@ HRESULT STDMETHODCALLTYPE resetHook(List* list, ID3D12CommandAllocator* allocato
     ReleaseSRWLockExclusive(&streamsLock);
     current = {list, s};
     s->begin(now_ticks());
-    if (probeMode == 3)
+    if (probeMode == 3) {
         s->eyeState = eyeLive.state.load(std::memory_order_relaxed);
+        s->eyeOut = eyeLive.out.load(std::memory_order_relaxed);
+    }
     if (probeMode == 3 && !focusActive.load(std::memory_order_relaxed)) {
         s->active = false;  // cost A/B off: the hooks pass straight through (no recording)
         return hr;
@@ -6920,9 +6944,12 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
     if (Stream* s = stream_of(l); s && s->eyeState && x && y &&
                                          (s->psoKind == 11 || s->psoKind == 14 || s->psoKind == 15 ||
                                           (s->psoKind >= 20 && s->psoKind <= 24))) {
+        // (at the render or the output size: the larger share covers both; the output region is in whole blocks)
         const EyeNow now = eye_now(s->eyeState);
-        const UINT sx = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * now.fx)) + 1);
-        const UINT sy = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * now.fy)) + 1);
+        const EyeOut o = eye_out(now, s->eyeOut);
+        const float shareX = std::max(now.fx, o.lw / o.w), shareY = std::max(now.fy, o.lh / o.h);
+        const UINT sx = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * shareX)) + 1);
+        const UINT sy = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * shareY)) + 1);
         eyeLive.did[11].fetch_add(1, std::memory_order_relaxed);
         if (eyeLive.said[11].fetch_add(1) < 24)
             logd("replay eye: %s dispatch %ux%u -> %ux%u",
@@ -6956,9 +6983,11 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
     }
     if (Stream* s = stream_of(l); s && s->eyeState && s->psoKind == 13) {
         // contrastAdaptiveSharpen works by pixel over the whole target: over the region in use only.
+        // It runs on the DLSS output: in an upscaling mode, at the output size (the region NGX was given there).
         const EyeNow now = eye_now(s->eyeState);
+        const EyeOut o = eye_out(now, s->eyeOut);
         eyeLive.did[8].fetch_add(1, std::memory_order_relaxed);
-        const UINT sx = eye_groups(x, 2 * now.ew, 2 * now.lw), sy = eye_groups(y, now.eh, now.lh);  // both eyes side by side
+        const UINT sx = eye_groups(x, 2 * o.w, 2 * o.lw), sy = eye_groups(y, o.h, o.lh);  // both eyes side by side
         if (eyeLive.said[8].fetch_add(1) < 2)
             logd("replay eye: contrastAdaptiveSharpen dispatch %ux%u -> %ux%u", x, y, sx, sy);
         dispatchOriginal(l, sx, sy, z);
@@ -7002,8 +7031,9 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
                 x = eye_groups(x, now.ew, now.lw);  // one eye each
                 y = eye_groups(y, now.eh, now.lh);
             } else if (s->psoKind == 5 || s->psoKind == 18) {  // by pixel over the whole target: the region's share, plus one
-                x = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * now.fx)) + 1);
-                y = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * now.fy)) + 1);
+                const EyeOut o = eye_out(now, s->eyeOut);  // (the histogram may run at the output size)
+                x = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * std::max(now.fx, o.lw / o.w))) + 1);
+                y = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * std::max(now.fy, o.lh / o.h))) + 1);
             }
             dispatchOriginal(l, x, y, z);
             computeCbvOriginal(l, rootIndex, va);
@@ -7422,9 +7452,11 @@ void replay_probe_set_eye_scale(double scale) {
 void replay_probe_eye_allow(bool composed) { eyeLive.allowed.store(composed, std::memory_order_relaxed); }
 void replay_probe_gpu_scope(bool compositor) { gpuBatchKind = compositor ? kStepCompose : kStepGame; }
 bool replay_probe_eye_region(float& fx, float& fy) {
+    // The eye image the compositor reads is the game's final one: at its DLSS output size when it upscales.
     const EyeNow now = eye_now(eyeLive.state.load(std::memory_order_relaxed));
-    fx = now.fx;
-    fy = now.fy;
+    const EyeOut o = eye_out(now, now.on ? eyeLive.out.load(std::memory_order_relaxed) : 0);
+    fx = now.on ? o.lw / o.w : 1.0f;
+    fy = now.on ? o.lh / o.h : 1.0f;
     return now.on;
 }
 void replay_probe_set_box(double box, double boxY) {
@@ -7628,6 +7660,31 @@ void replay_probe_frame_end() {
                 const uint64_t lh = std::max<uint64_t>(64, static_cast<uint64_t>(eh * held / 16) * 16);
                 next = lw < e && lh < h ? (lw | lh << 16 | e << 32 | h << 48) : 0;
             }
+            // The game's DLSS upscale, when its feature was made from this eye size: the region at the output size, in
+            // whole 16-pixel blocks (ACE's sharpening works in 16 x 16 groups with no bounds test: a part block ran past
+            // the region onto pixels nothing wrote this frame, and bloom spread them as a white band, 09:52 run). NGX is
+            // given this region (focus_ngx), the compositor and the borrowed bloom read it: DLSS's few rows of extra
+            // vertical scale are undone where the region is mapped onto the eye's view.
+            uint64_t outNext = 0;
+            if (next) {
+                const focus_ngx::CreateInfo c = focus_ngx::create_info();
+                const uint64_t e = (next >> 32) & 0xffff, h = next >> 48;
+                if (c.seen && (c.outWidth != c.width || c.outHeight != c.height) && c.width + 1 >= e && c.width <= e + 1 &&
+                    c.height + 1 >= h && c.height <= h + 1 && c.outWidth < 0x10000 && c.outHeight < 0x10000) {
+                    const auto blocks = [](double v, unsigned full) {
+                        return std::clamp<uint64_t>(static_cast<uint64_t>(std::llround(v / 16)) * 16, 16, full);
+                    };
+                    const uint64_t ow = blocks(c.outWidth * static_cast<double>(next & 0xffff) / e, c.outWidth);
+                    const uint64_t oh = blocks(c.outHeight * static_cast<double>((next >> 16) & 0xffff) / h, c.outHeight);
+                    outNext = ow | oh << 16 | uint64_t{c.outWidth} << 32 | uint64_t{c.outHeight} << 48;
+                }
+            }
+            focus_ngx::set_eye_live_out(outNext);
+            if (const uint64_t outBefore = eyeLive.out.exchange(outNext, std::memory_order_relaxed);
+                outNext != outBefore && outNext)
+                logf("replay eye: live periphery after the game's DLSS upscale: the region %llux%llu of its %llux%llu output",
+                     static_cast<unsigned long long>(outNext & 0xffff), static_cast<unsigned long long>((outNext >> 16) & 0xffff),
+                     static_cast<unsigned long long>((outNext >> 32) & 0xffff), static_cast<unsigned long long>(outNext >> 48));
             if (next != before) {
                 eyeLive.state.store(next, std::memory_order_relaxed);
                 focus_ngx::set_eye_live(next);

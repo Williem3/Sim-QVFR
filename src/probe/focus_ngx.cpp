@@ -40,6 +40,7 @@ Feature* make(ID3D12GraphicsCommandList*, unsigned, unsigned, int, unsigned, uns
 void release(Feature*) {}
 bool alive(const Feature*) { return false; }
 void set_eye_live(uint64_t) {}
+void set_eye_live_out(uint64_t) {}
 bool evaluate(ID3D12GraphicsCommandList*, Feature*, const Inputs&) { return false; }
 
 #else
@@ -101,11 +102,25 @@ struct GameFeature {
     int basePreset = 0;         // the override the game's own feature was made with
     // the live periphery: our feature at the size the eye is drawn now
     NVSDK_NGX_Handle* live = nullptr;
-    unsigned liveW = 0, liveH = 0;
+    unsigned liveW = 0, liveH = 0, liveOutW = 0, liveOutH = 0;
     int livePreset = 0;
 };
 std::vector<GameFeature> gameFeatures;
 std::atomic<uint64_t> eyeLiveState{0};  // set_eye_live
+std::atomic<uint64_t> eyeLiveOut{0};    // set_eye_live_out
+
+// The live region at the output size of a feature with output `outW` x `outH`: the probe's whole-block one when it was
+// worked out for this output, else the output x the render size's share.
+void live_output(unsigned outW, unsigned outH, double fx, double fy, unsigned& ow, unsigned& oh) {
+    const uint64_t o = eyeLiveOut.load(std::memory_order_relaxed);
+    if (o && ((o >> 32) & 0xffff) == outW && (o >> 48) == outH) {
+        ow = static_cast<unsigned>(o & 0xffff);
+        oh = static_cast<unsigned>((o >> 16) & 0xffff);
+        return;
+    }
+    ow = static_cast<unsigned>(std::lround(outW * fx));
+    oh = static_cast<unsigned>(std::lround(outH * fy));
+}
 // Features of ours that were replaced: released a few evaluations later (the GPU may still be running their last one).
 struct OldFeature {
     NVSDK_NGX_Handle* handle;
@@ -401,10 +416,11 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
             return nullptr;
     }
     const unsigned w = static_cast<unsigned>(std::lround(g.info.width * fx)), hgt = static_cast<unsigned>(std::lround(g.info.height * fy));
-    const unsigned ow = static_cast<unsigned>(std::lround(g.info.outWidth * fx)), oh = static_cast<unsigned>(std::lround(g.info.outHeight * fy));
-    if (g.live && g.liveW == w && g.liveH == hgt && g.livePreset == want)
+    unsigned ow = 0, oh = 0;
+    live_output(g.info.outWidth, g.info.outHeight, fx, fy, ow, oh);
+    if (g.live && g.liveW == w && g.liveH == hgt && g.liveOutW == ow && g.liveOutH == oh && g.livePreset == want)
         return g.live;
-    if (g.liveW == w && g.liveH == hgt && g.livePreset == want)
+    if (g.liveW == w && g.liveH == hgt && g.liveOutW == ow && g.liveOutH == oh && g.livePreset == want)
         return nullptr;  // refused at this size before: not tried again until it changes
     NVSDK_NGX_Handle* made = nullptr;
     Bag* b = nullptr;
@@ -444,6 +460,8 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
             f.live = made;
             f.liveW = w;
             f.liveH = hgt;
+            f.liveOutW = ow;
+            f.liveOutH = oh;
             f.livePreset = want;
         }
     ReleaseSRWLockExclusive(&lock);
@@ -539,8 +557,16 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
                     b->Set(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, Y(e.depthBase[1]));
                     b->Set(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X, X(e.motionBase[0]));
                     b->Set(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, Y(e.motionBase[1]));
-                    b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, X(e.outputBase[0]));
-                    b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, Y(e.outputBase[1]));
+                    // the output's bases by the output region's own share (whole blocks when the game upscales)
+                    const CreateInfo made = create_info();
+                    unsigned ow = 0, oh = 0;
+                    live_output(made.outWidth, made.outHeight, fx, fy, ow, oh);
+                    const double ox = made.outWidth ? static_cast<double>(ow) / made.outWidth : fx;
+                    const double oy = made.outHeight ? static_cast<double>(oh) / made.outHeight : fy;
+                    b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X,
+                           static_cast<unsigned>(std::lround(e.outputBase[0] * ox)));
+                    b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y,
+                           static_cast<unsigned>(std::lround(e.outputBase[1] * oy)));
                     b->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, X(e.renderW));
                     b->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, Y(e.renderH));
                     if (fresh)
@@ -842,6 +868,7 @@ void release(Feature* f) {
 bool alive(const Feature* f) { return f && f->generation == generation.load(); }
 
 void set_eye_live(uint64_t packed) { eyeLiveState.store(packed, std::memory_order_relaxed); }
+void set_eye_live_out(uint64_t packed) { eyeLiveOut.store(packed, std::memory_order_relaxed); }
 
 bool evaluate(ID3D12GraphicsCommandList* list, Feature* f, const Inputs& in) {
     if (!f || !f->bag || !f->handle || f->generation != generation.load())
