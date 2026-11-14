@@ -75,6 +75,9 @@ struct Feature;
 Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags = 0, unsigned outWidth = 0,
               unsigned outHeight = 0);
 void release(Feature* f);
+// False once NGX has been shut down since the feature was made (the game does that on an upscaling change): the
+// feature is dead and must be made again.
+bool alive(const Feature* f);
 
 struct Inputs {
     ID3D12Resource *color = nullptr, *depth = nullptr, *motion = nullptr, *output = nullptr, *exposure = nullptr;

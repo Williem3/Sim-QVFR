@@ -38,6 +38,7 @@ uint64_t game_evaluations() { return 0; }
 struct Feature {};
 Feature* make(ID3D12GraphicsCommandList*, unsigned, unsigned, int, unsigned, unsigned) { return nullptr; }
 void release(Feature*) {}
+bool alive(const Feature*) { return false; }
 bool evaluate(ID3D12GraphicsCommandList*, Feature*, const Inputs&) { return false; }
 
 #else
@@ -56,6 +57,18 @@ EvaluateFn evaluateOriginal = nullptr;
 AllocateFn allocateFn = nullptr;
 DestroyFn destroyFn = nullptr;
 ReleaseFn releaseFn = nullptr;
+// NGX's lifetime as the game runs it. A shutdown (the game's, on a change of its upscaling settings) frees every
+// feature and parameter bag made on it, ours too: our handles from before are dead and must not be released or
+// evaluated again (06:23 run: NVSDK_NGX_D3D12_ReleaseFeature read a freed handle, an access violation, 60 ms after a
+// DLAA -> Performance change). `generation` counts the shutdowns; lifeLock is held shared around our own NGX calls.
+using ShutdownFn = NVSDK_NGX_Result (*)();
+using Shutdown1Fn = NVSDK_NGX_Result (*)(ID3D12Device*);
+ShutdownFn shutdownOriginal = nullptr;
+Shutdown1Fn shutdown1Original = nullptr;
+ReleaseFn releaseOriginal = nullptr;  // the game's releases, seen
+SRWLOCK lifeLock = SRWLOCK_INIT;
+std::atomic<uint64_t> generation{1};
+std::atomic<int> releasesLogged{0}, staleLogged{0};
 std::atomic<bool> hooked{false};
 bool tried = false;
 SRWLOCK lock = SRWLOCK_INIT;
@@ -408,11 +421,63 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
     return evaluateOriginal(l, h, bag, callback);
 }
 
+void forget_game_features(const char* which) {
+    AcquireSRWLockExclusive(&lock);
+    const size_t n = gameFeatures.size();
+    gameFeatures.clear();
+    ReleaseSRWLockExclusive(&lock);
+    logf("focus dlss: the game shut NGX down (%s): every feature made before is gone, ours too (%zu of its own recorded); ours are "
+         "made again, not released",
+         which, n);
+}
+
+NVSDK_NGX_Result shutdownHook() {
+    AcquireSRWLockExclusive(&lifeLock);
+    generation.fetch_add(1);
+    forget_game_features("NVSDK_NGX_D3D12_Shutdown");
+    const NVSDK_NGX_Result r = shutdownOriginal();
+    ReleaseSRWLockExclusive(&lifeLock);
+    return r;
+}
+NVSDK_NGX_Result shutdown1Hook(ID3D12Device* device) {
+    AcquireSRWLockExclusive(&lifeLock);
+    generation.fetch_add(1);
+    forget_game_features("NVSDK_NGX_D3D12_Shutdown1");
+    const NVSDK_NGX_Result r = shutdown1Original(device);
+    ReleaseSRWLockExclusive(&lifeLock);
+    return r;
+}
+// The game's own releases: logged (the first few), and our record of that feature goes.
+NVSDK_NGX_Result releaseHook(NVSDK_NGX_Handle* h) {
+    AcquireSRWLockExclusive(&lock);
+    const size_t gone = std::erase_if(gameFeatures, [&](const GameFeature& f) { return f.game == h; });
+    ReleaseSRWLockExclusive(&lock);
+    if (releasesLogged.fetch_add(1) < 16)
+        logf("focus dlss: the game released a feature (%p; %s)", static_cast<const void*>(h),
+             gone ? "one of its eyes'" : "not one we saw made");
+    return releaseOriginal(h);
+}
+
+// releaseFn / destroyFn on a handle NGX may already have freed: an access violation there is caught and reported
+// instead of taking the game down.
+bool guarded_release(NVSDK_NGX_Handle* handle, Bag* bag) {
+    __try {
+        if (handle)
+            releaseFn(handle);
+        if (bag)
+            destroyFn(bag);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 }  // namespace
 
 struct Feature {
     NVSDK_NGX_Handle* handle = nullptr;
     Bag* bag = nullptr;
+    uint64_t generation = 0;  // NGX's lifetime it was made in
 };
 
 bool installed() { return hooked.load(); }
@@ -435,6 +500,8 @@ bool install() {
     allocateFn = reinterpret_cast<AllocateFn>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_AllocateParameters"));
     destroyFn = reinterpret_cast<DestroyFn>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_DestroyParameters"));
     releaseFn = reinterpret_cast<ReleaseFn>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_ReleaseFeature"));
+    void* const shutdown = reinterpret_cast<void*>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_Shutdown"));
+    void* const shutdown1 = reinterpret_cast<void*>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_Shutdown1"));
     if (!create || !evaluate || !allocateFn || !destroyFn || !releaseFn) {
         log_line("focus dlss: _nvngx.dll lacks a D3D12 export (create / evaluate / parameters / release); no focus DLSS");
         return false;
@@ -452,6 +519,18 @@ bool install() {
         if (capability && MH_CreateHook(capability, reinterpret_cast<void*>(&capabilityHook),
                                         reinterpret_cast<void**>(&capabilityOriginal)) == MH_OK)
             MH_QueueEnableHook(capability);
+        // NGX's shutdowns and the game's releases: our features do not outlive a shutdown
+        if (shutdown && MH_CreateHook(shutdown, reinterpret_cast<void*>(&shutdownHook),
+                                      reinterpret_cast<void**>(&shutdownOriginal)) == MH_OK)
+            MH_QueueEnableHook(shutdown);
+        if (shutdown1 && MH_CreateHook(shutdown1, reinterpret_cast<void*>(&shutdown1Hook),
+                                       reinterpret_cast<void**>(&shutdown1Original)) == MH_OK)
+            MH_QueueEnableHook(shutdown1);
+        void* const release = reinterpret_cast<void*>(releaseFn);
+        if (MH_CreateHook(release, reinterpret_cast<void*>(&releaseHook), reinterpret_cast<void**>(&releaseOriginal)) == MH_OK) {
+            releaseFn = releaseOriginal;  // our own releases go past the hook
+            MH_QueueEnableHook(release);
+        }
     }
     if (s == MH_OK) {
         s = MH_CreateHook(evaluate, reinterpret_cast<void*>(&evaluateHook), reinterpret_cast<void**>(&evaluateOriginal));
@@ -566,6 +645,8 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
         return nullptr;
     const CreateInfo c = create_info();
     auto* f = new Feature;
+    AcquireSRWLockShared(&lifeLock);
+    f->generation = generation.load();
     NVSDK_NGX_Result r = allocateFn(&f->bag);
     if (ok(r) && f->bag) {
         Bag* b = f->bag;
@@ -598,6 +679,7 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
     } else {
         logf("focus dlss: NGX parameters not allocated (0x%08x)", static_cast<unsigned>(r));
     }
+    ReleaseSRWLockShared(&lifeLock);
     if (!ok(r) || !f->handle) {
         release(f);
         return nullptr;
@@ -608,15 +690,22 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
 void release(Feature* f) {
     if (!f)
         return;
-    if (f->handle && releaseFn)
-        releaseFn(f->handle);
-    if (f->bag && destroyFn)
-        destroyFn(f->bag);
+    AcquireSRWLockShared(&lifeLock);
+    if (f->generation != generation.load()) {  // NGX was shut down since: it freed the handle and the bag itself
+        if (staleLogged.fetch_add(1) < 8)
+            log_line("focus dlss: a feature of ours from before NGX's shutdown is dropped, not released (NGX freed it)");
+    } else if (releaseFn && destroyFn && !guarded_release(f->handle, f->bag)) {
+        logf("focus dlss: NGX faulted releasing a feature of ours (handle %p): caught; the feature is left to NGX",
+             static_cast<const void*>(f->handle));
+    }
+    ReleaseSRWLockShared(&lifeLock);
     delete f;
 }
 
+bool alive(const Feature* f) { return f && f->generation == generation.load(); }
+
 bool evaluate(ID3D12GraphicsCommandList* list, Feature* f, const Inputs& in) {
-    if (!f || !f->bag || !f->handle)
+    if (!f || !f->bag || !f->handle || f->generation != generation.load())
         return false;
     Bag* b = f->bag;
     b->Set(NVSDK_NGX_Parameter_Color, in.color);

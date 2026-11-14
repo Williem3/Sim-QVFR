@@ -1856,6 +1856,10 @@ size_t sweep_released(bool* used = nullptr) {
     }
     if (dead.empty())
         return 0;
+    // Ours are the last references: dropping them here would destroy the resource at once, while replay lists
+    // recorded this frame (and the ones still queued) may read it. They wait like everything else we let go of.
+    for (ID3D12Resource* r : dead)
+        retire(r);
     if (used) {
         *used = false;
         for (ID3D12Resource* r : focus.atmoGame)
@@ -4143,7 +4147,8 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         return miss("ACE's packing UAV table isn't the bindless UAV range our outputs are in");
     // Our NGX features at the focus eye size (made again on a size change: the old ones are left to NGX's shutdown).
     if (!focus.ngx[0] || !focus.ngx[1] || focus.ngxW != fw || focus.ngxH != fh || focus.ngxOutW != ow2 / 2 || focus.ngxOutH != oh ||
-        focus.ngxPreset != focus_ngx::focus_preset()) {  // or the preset changed (the headset menu)
+        focus.ngxPreset != focus_ngx::focus_preset() ||  // or the preset changed (the headset menu)
+        !focus_ngx::alive(focus.ngx[0]) || !focus_ngx::alive(focus.ngx[1])) {  // or the game shut NGX down since
         focus.ngxPreset = focus_ngx::focus_preset();
         for (int e = 0; e < 2; ++e) {  // the ones before (another size or preset) are released once the GPU is done
             retire_feature(focus.ngx[e]);
