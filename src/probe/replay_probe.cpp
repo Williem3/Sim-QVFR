@@ -741,7 +741,14 @@ struct Focus {
     std::vector<int> freeRtv, freeDsv;  // view slots (OMSetRenderTargets copies a view at record time: reusable at once)
     bool ready = false;
     // Twins and lists of an earlier game setup, kept alive until the GPU has passed the stamped fence value.
-    std::vector<std::pair<uint64_t, ComPtr<IUnknown>>> retired;
+    // (see retire(): freed only once every list recorded up to a few frames later has run)
+    struct Retired {
+        uint64_t frame = 0;   // the frame it was retired in
+        uint64_t fence = 0;   // once aged: the last fence value signalled by then (0: not aged yet)
+        ComPtr<IUnknown> object;
+        focus_ngx::Feature* feature = nullptr;  // or one of our NGX features
+    };
+    std::vector<Retired> retired;
     ComPtr<ID3D12CommandAllocator> clearAllocator, eyeClearAllocator;
     ComPtr<List> clearList, eyeClearList;  // the focus twins every frame; the eye references at sample frames
     SRWLOCK lock = SRWLOCK_INIT;  // pool, pending, twins, views, clear list
@@ -1740,16 +1747,35 @@ std::string debug_name(ID3D12Resource* r) {
     return out;
 }
 
-// Under focus.lock: kept alive until the GPU passes the next fence value (lists in flight may still use it).
+// Under focus.lock: kept alive until no list can still use it. Replays recorded earlier in a frame run later in that
+// frame (and into the next), each batch with its own fence value, so "the next fence value" is too soon: a rebuild
+// retires everything at once, and freeing it after the next batch left later batches reading freed textures (the
+// 05:41 system crash, two seconds after a rebuild). An object waits four frames, then for every fence value signalled
+// by that time.
 void retire(IUnknown* object) {
     if (object)
-        focus.retired.emplace_back(focus.fenceValue.load() + 1, object);
+        focus.retired.push_back({focus.frame.load(), 0, object, nullptr});
+}
+// Our NGX features go the same way (they were left to NGX's shutdown: two a rebuild, 112 in one session).
+void retire_feature(focus_ngx::Feature*& feature) {
+    if (feature)
+        focus.retired.push_back({focus.frame.load(), 0, nullptr, feature});
+    feature = nullptr;
 }
 // Under focus.lock: releases what the GPU is done with.
 void prune_retired() {
-    const uint64_t done = focus.fence->GetCompletedValue();
+    const uint64_t done = focus.fence->GetCompletedValue(), frame = focus.frame.load();
+    for (Focus::Retired& r : focus.retired)
+        if (!r.fence && frame >= r.frame + 4)
+            r.fence = std::max<uint64_t>(1, focus.fenceValue.load());
     focus.retired.erase(std::remove_if(focus.retired.begin(), focus.retired.end(),
-                                       [done](const auto& r) { return r.first <= done; }),
+                                       [done](Focus::Retired& r) {
+                                           if (!r.fence || r.fence > done)
+                                               return false;
+                                           if (r.feature)
+                                               focus_ngx::release(r.feature);
+                                           return true;
+                                       }),
                         focus.retired.end());
 }
 
@@ -1927,8 +1953,10 @@ void focus_rebuild(const char* why) {
     drop(focus.casOut);
     focus.packColour = focus.packVelocityTwin = focus.packFlagsTwin = nullptr;
     focus.packW = focus.packH = focus.packOutW = focus.packOutH = 0;
-    for (int e = 0; e < 2; ++e)
-        focus.ngx[e] = focus.ngxAuto[e] = nullptr;
+    for (int e = 0; e < 2; ++e) {
+        retire_feature(focus.ngx[e]);
+        retire_feature(focus.ngxAuto[e]);
+    }
     focus.ngxW = focus.ngxH = focus.ngxOutW = focus.ngxOutH = 0;
     focus.dlssReady = false;
     focus.dlssFresh = true;
@@ -4117,6 +4145,10 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     if (!focus.ngx[0] || !focus.ngx[1] || focus.ngxW != fw || focus.ngxH != fh || focus.ngxOutW != ow2 / 2 || focus.ngxOutH != oh ||
         focus.ngxPreset != focus_ngx::focus_preset()) {  // or the preset changed (the headset menu)
         focus.ngxPreset = focus_ngx::focus_preset();
+        for (int e = 0; e < 2; ++e) {  // the ones before (another size or preset) are released once the GPU is done
+            retire_feature(focus.ngx[e]);
+            retire_feature(focus.ngxAuto[e]);
+        }
         focus.ngx[0] = focus_ngx::make(l, fw, fh, 0, ow2 / 2, oh);
         focus.ngx[1] = focus.ngx[0] ? focus_ngx::make(l, fw, fh, 0, ow2 / 2, oh) : nullptr;
         focus.ngxOutW = ow2 / 2;
@@ -6470,10 +6502,25 @@ void replay_probe_frame_end() {
                 ReleaseSRWLockExclusive(&focus.psoLock);
             }
             {  // our sizes: the focus density and the Focus views mode, live (everything sized is made again)
-                const double k = focus.outKWanted.exchange(0), ky = focus.outKyWanted.exchange(0);
-                const double scale = focus.renderScaleWanted.exchange(0);
-                const double newK = k > 0 ? k : focus.outK, newKy = ky > 0 ? ky : focus.outKy;
-                const double newScale = scale > 0 && focus.settings.dlss ? std::clamp(scale, 0.4, 1.0) : focus.renderScale;
+                // A change is taken once the value has stood for half a second: stepping a menu item through ten values
+                // is one rebuild, not ten (52 rebuilds in one session before).
+                static double heldK = 0, heldKy = 0, heldScale = 0;
+                static int settle = 0;
+                if (const double k = focus.outKWanted.exchange(0), ky = focus.outKyWanted.exchange(0); k > 0) {
+                    heldK = k;
+                    heldKy = ky > 0 ? ky : k;
+                    settle = 45;
+                }
+                if (const double scale = focus.renderScaleWanted.exchange(0); scale > 0) {
+                    heldScale = scale;
+                    settle = 45;
+                }
+                const bool take = settle > 0 && --settle == 0;
+                const double newK = take && heldK > 0 ? heldK : focus.outK, newKy = take && heldKy > 0 ? heldKy : focus.outKy;
+                const double newScale =
+                    take && heldScale > 0 && focus.settings.dlss ? std::clamp(heldScale, 0.4, 1.0) : focus.renderScale;
+                if (take)
+                    heldK = heldKy = heldScale = 0;
                 if (std::fabs(newK - focus.outK) > 1e-4 || std::fabs(newKy - focus.outKy) > 1e-4 ||
                     std::fabs(newScale - focus.renderScale) > 1e-4) {
                     focus.outK = newK;
