@@ -448,6 +448,10 @@ void menu_render() {
     if (menu.model.launch.nativePpd <= 0)  // known once ACE has rendered a frame
         menu.model.launch.nativePpd = native_center_ppd();
     menu.model.launch.dlssHeld = experiment.views4 && game->qvfr_dlss_held();
+    {  // the helmet's images load when it is first turned on: its page follows (visor, size, height)
+        std::lock_guard guard(quad.mutex);
+        menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
+    }
     const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
                                                          menu_lines(menu.model),
                                                          menu_notes(menu.model), hint, menu_subtitle(menu.model),

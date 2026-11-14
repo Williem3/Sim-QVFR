@@ -235,7 +235,7 @@ void gaze_attach_alone(XrSession session) {
     info.countActionSets = 1;
     info.actionSets = &gaze.set;
     const XrResult r = next.AttachSessionActionSets(session, &info);
-    logf("gaze: attached alone (the game uses no OpenXR input), result=%d", r);
+    logf("gaze: attached alone (the game attached no action sets), result=%d", r);
     gaze.attached = attachedAlone = gaze.syncsOwn = XR_SUCCEEDED(r);
 }
 

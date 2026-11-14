@@ -50,6 +50,10 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     std::vector<const XrCompositionLayerBaseHeader*> menuLayers;
     const XrFrameEndInfo* info = menu_frame(session, frameInfo, withMenu, menuLayers);
     ++endFrames;
+    // The API path's gaze: ACE attaches its action sets (and the layer's gaze with them) at start-up, but not on every
+    // launch (the 18:38 run: none in over two minutes); five seconds in, the layer attaches its own.
+    if (experiment.replayCompose && endFrames == 450)
+        gaze_attach_alone(session);
     if (experiment.pixCaptureFrame || experiment.pixCaptureHotkey)
         pix_capture_frame(endFrames);
     if (sampled(endFrames)) {
