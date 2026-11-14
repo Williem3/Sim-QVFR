@@ -13,6 +13,7 @@
 #include "probe/d3d11_compose_timer.h"
 #include "probe/d3d11_capture.h"
 #include "probe/gpu_frame_timer.h"
+#include "probe/replay_probe.h"
 #include "quad/compositor.h"
 #include "quad/focus_shape.h"
 #include "quad/focus_quad.h"
@@ -144,6 +145,72 @@ void views4_compose() {
              eyes[0].focusTan[2], quad.nativeW, quad.nativeH);
 }
 
+// P3, the API-level path (replay_compose): ACE renders only its two eyes (single-pass stereo); the replay probe has
+// drawn both focus views into its own image. Each eye: the outer view is ACE's eye (its half of the image, over the
+// FOV it was located with), the focus view the probe's image (its half), over the box centred on the eye's forward
+// axis, unturned (the probe's replay renders it there). Composed into the output chain at native size, on ACE's queue.
+void replay_compose() {
+    quad.v4Composed = false;
+    if (!quad.outChain || quad.appAcquired >= quad.appImages.size() || !quad.v4FovValid)
+        return;
+    ID3D12Resource* focusImage = nullptr;
+    D3D12_RESOURCE_STATES focusState{};
+    double box = 0;
+    if (!replay_probe_focus_image(focusImage, focusState, box))
+        return;  // no focus image yet: ACE's eyes go to the headset as they are
+    ID3D12Resource* app = quad.appImages[quad.appAcquired];
+    EyeComposition eyes[2] = {};
+    const HelmetSettings& helmet = helmetSettings;
+    V4Helmet helmetFrame = views4_helmet_start(helmet);
+    const XrExtent2Di extent = views4_output_extent();
+    for (int e = 0; e < 2; ++e) {
+        EyeComposition& c = eyes[e];
+        fov_tangents(quad.v4Fov[e], c.outerTan);
+        double hw, hh;
+        focus_extents(c.outerTan, box, box, hw, hh);
+        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
+                                   static_cast<float>(-hh)};
+        std::memcpy(c.focusTan, focusTan, sizeof(focusTan));
+        const XrQuaternionf none{0, 0, 0, 1};
+        to_matrix(none, c.rotation);
+        const float half[4] = {0.5f * static_cast<float>(e), 0, 0.5f, 1};
+        std::memcpy(c.outerSource, half, sizeof(half));
+        std::memcpy(c.focusSource, half, sizeof(half));
+        c.feather = static_cast<float>(experiment.feather);
+        c.border = experiment.border ? 0.008f : 0.0f;
+        std::memcpy(c.borderColor, experiment.borderColor, sizeof(c.borderColor));
+        c.cornerRadius = static_cast<float>(experiment.cornerRadius);
+        focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
+        c.sharpness = static_cast<float>(experiment.sharpen.load(std::memory_order_relaxed)) / 100.0f;
+        quad.v4Extent[e] = extent;
+        views4_helmet_eye(helmet, helmetFrame, e, c, quad.v4SubmitFov[e], quad.v4Extent[e]);
+    }
+    uint32_t outIndex = 0;
+    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    if (XR_FAILED(next.AcquireSwapchainImage(quad.outChain, &acquire, &outIndex)) || outIndex >= quad.outImages.size()) {
+        quad_fail("replay compose: output acquire failed");
+        return;
+    }
+    ID3D12Resource* out = quad.outImages[outIndex];
+    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) && quad.compositor.capture_outer(app) &&
+                    quad.compositor.compose(focusImage, out, eyes, focusState);
+    next.ReleaseSwapchainImage(quad.outChain, &release);
+    if (!ok) {
+        quad_fail("replay compose failed");
+        return;
+    }
+    quad.v4Composed = true;
+    quad.fallbackRun = 0;
+    views4_helmet_layer(helmet, helmetFrame, eyes, nullptr);
+    if (quad.composed++ == 0)
+        logf("replay compose: first composed frame: eye 0 outer tangents %.3f/%.3f/%.3f/%.3f, focus +-%.3f x +-%.3f "
+             "(box %.0f%%), output %dx%d per eye",
+             eyes[0].outerTan[0], eyes[0].outerTan[1], eyes[0].outerTan[2], eyes[0].outerTan[3], eyes[0].focusTan[1],
+             eyes[0].focusTan[2], box * 100, extent.width, extent.height);
+}
+
 }  // namespace
 
 // Frame A's image is copied before the runtime gets it back; frame B's stays acquired (so this
@@ -155,6 +222,11 @@ XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSw
         views4_outline_draw(swapchain);  // on ACE's queue, after its frame, before the runtime reads it
     if (!experiment.views4 && swapchain == measuredEyeChain.load(std::memory_order_relaxed))
         gpu_frame_timer_mark(GpuMark::kRendered);  // baseline with gpu_frame_timing: the game's own frame
+    if (experiment.replayCompose) {
+        std::lock_guard guard(quad.mutex);
+        if (swapchain == quad.appChain)
+            replay_compose();  // reads ACE's image on its queue before the runtime gets it back
+    }
     if (experiment.views4Compose) {
         std::lock_guard guard(quad.mutex);
         if (swapchain == quad.appChain) {
@@ -836,7 +908,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 v4outline.chain = proj->views[0].subImage.swapchain;  // ACE's eye chain
         }
         auto& copy = views.emplace_back(proj->views, proj->views + proj->viewCount);
-        if (experiment.views4Compose && proj->viewCount == 2) {
+        if ((experiment.views4Compose || experiment.replayCompose) && proj->viewCount == 2) {
             std::lock_guard guard(quad.mutex);
             if (quad.v4Composed && proj->views[0].subImage.swapchain == quad.appChain) {
                 // The composed output, at native size, with ACE's own pose and FOV for each eye.
@@ -858,6 +930,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                 continue;
             }
         }
+        if (experiment.replayCompose)
+            continue;  // the API-level path: not composed this frame (no focus image yet): ACE's eyes as they are
         // Separate views (qvfr_separate_views, LMU): each eye an image of its own, whole; composed from the adapter's atlas,
         // or (no four views this frame: menus, loading) submitted as it is. None of the shared-target rects below apply.
         if (experiment.views4ComposeD3D11 && proj->viewCount == 2 && game->qvfr_separate_views()) {

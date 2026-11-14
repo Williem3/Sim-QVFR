@@ -235,7 +235,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     nativeQuad.foveated = foveatedAdded;
     game = &games::adapter_for(thisGame);
     load_experiment();
-    if (experiment.replayProbe == 3 && experiment.replaySky && experiment.replayTiles)
+    if (experiment.replayProbe == 3 && ((experiment.replaySky && experiment.replayTiles) || experiment.replayTyres))
         replay_probe_early_sky();  // before the game makes its device and loads its pipelines
     if (experiment.replayProbe == 3 && experiment.replayDlss)
         focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features

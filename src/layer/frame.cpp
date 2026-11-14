@@ -86,6 +86,8 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
         game->qvfr_frame_end();
         return views4_submit(session, info);
     }
+    if (experiment.replayCompose)  // P3: the composed output in place of ACE's eyes (views4's submission)
+        return views4_submit(session, info);
     if (experiment.measure && experiment.gpuFrameTiming && !measuredEyeChain.load(std::memory_order_relaxed))
         for (uint32_t i = 0; i < info->layerCount; ++i)
             if (info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {

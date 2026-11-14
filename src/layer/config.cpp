@@ -227,7 +227,7 @@ void load_experiment() {
     experiment.replayProbe = static_cast<int>(std::min(3u, GetPrivateProfileIntW(L"experiment", L"replay_probe", 0, ini.c_str())));
     experiment.replayFocusPercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_percent", 20, ini.c_str()), 5u, 60u);
     experiment.replayFocusScalePercent =
-        std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_scale_percent", 200, ini.c_str()), 50u, 400u);
+        std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_scale_percent", 200, ini.c_str()), 50u, 1000u);
     experiment.replaySaveFirst = GetPrivateProfileIntW(L"experiment", L"replay_save_first", 1800, ini.c_str());
     experiment.replaySaveEvery = std::max(1u, GetPrivateProfileIntW(L"experiment", L"replay_save_every", 900, ini.c_str()));
     experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 3, ini.c_str());
@@ -242,9 +242,12 @@ void load_experiment() {
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_transparents", 0, ini.c_str()));
         experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
         experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", 0, ini.c_str()) != 0;
+        experiment.replayTyres = GetPrivateProfileIntW(L"experiment", L"replay_tyres", 1, ini.c_str()) != 0;
         experiment.replayDiagMode = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str());
         experiment.replayDiag = experiment.replayDiagMode == 1;
         experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", 0, ini.c_str()) != 0;
+        experiment.replayCompose = experiment.replayPost && !experiment.views4 &&
+                                   GetPrivateProfileIntW(L"experiment", L"replay_compose", 0, ini.c_str()) != 0;
         experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
         experiment.replayAtmosphere =
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", 0, ini.c_str()));

@@ -164,6 +164,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 focusSettings.atmosphere = experiment.replayAtmosphere;
                 focusSettings.costAb = experiment.replayCostAb;
                 focusSettings.sky = experiment.replaySky;
+                focusSettings.tyres = experiment.replayTyres;
                 focusSettings.diag = experiment.replayDiag;
                 focusSettings.diagMode = experiment.replayDiagMode;
                 focusSettings.post = experiment.replayPost;
@@ -445,7 +446,7 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
         std::lock_guard guard(v4d3d11.mutex);
         v4d3d11.chains[*swapchain].format = info->format;
     }
-    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose) &&
+    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose || experiment.replayCompose) &&
         (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
         quad_adopt_chain(session, info, *swapchain);
     return r;
@@ -513,7 +514,7 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
         std::lock_guard guard(v4outline.mutex);
         v4outline.acquired[swapchain] = *index;
     }
-    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose)) {
+    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose || experiment.replayCompose)) {
         std::lock_guard guard(quad.mutex);
         if (swapchain == quad.appChain)
             quad.appAcquired = *index;

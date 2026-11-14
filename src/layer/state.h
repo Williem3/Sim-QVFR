@@ -119,6 +119,7 @@ struct Experiment {
     int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
     int replayDlss = 0;                    // replay_dlss=1: our DLSS per focus view (P2a)
     bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
+    bool replayTyres = true;               // replay_tyres=0: ACE's left-eye-only tyres left as they are (single-pass stereo)
     bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
     bool replayCostAb = false;
     int replayDiagMode = 0;                // replay_diag=2: MSAA refraction-source A/B by sample
@@ -176,7 +177,10 @@ struct Experiment {
     double box_x() const { return box_x(focusFraction); }
     double box_y() const { return box_y(focus_y()); }
     // QVFR composes the views itself, by either compositor (views4_compose: ACE's D3D12 one; views4ComposeD3D11).
-    bool composing() const { return views4Compose || views4ComposeD3D11; }
+    bool composing() const { return views4Compose || views4ComposeD3D11 || replayCompose; }
+    // replay_compose=1 (with replay_probe=3 and replay_post): ACE's two eyes composed with the replay probe's focus
+    // images (P3, the API-level path), at native size, through the views4 compositor and output chain.
+    bool replayCompose = false;
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)

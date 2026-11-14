@@ -19,8 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 
-struct ID3D12Device;
-struct ID3D12CommandQueue;
+#include <d3d12.h>
 
 namespace simqvfr {
 
@@ -70,6 +69,9 @@ struct ReplayFocusSettings {
                                   // fed by ACE's velocity packing replayed with focus constants (needs `post`)
     bool sky = false;             // the sky draw's screen-space clouds: its cbSky (a CBV table entry) patched to name our
                                   // resampled clouds in the focus replay (needs `tiles`)
+    bool tyres = false;           // ACE's tyre pipeline has no single-pass-stereo variant (one instance, viewport 0: the left
+                                  // eye only): each tyre draw in a stereo list drawn again for the right eye, in ACE's own
+                                  // lists and in the focus replays
     bool costAb = false;
     int diagMode = 0;             // replay_diag value (2: our MSAA refraction source only before samples 1, 3, ...)
     bool diag = false;            // a per-sample schedule: sample 1 as set, 2 our fog off, 3 our 3D atmosphere maps on,
@@ -94,6 +96,10 @@ void replay_probe_frame_end();
 // pipelines come from its PSO cache before the session; hooks installed at the session see none of them.
 void replay_probe_early_sky();
 bool replay_probe_installed();
+// P3: the focus views' final image (both eyes side by side, after the post: the swapchain's format, typeless), its
+// rest state, and the focus box (half extent in each eye's NDC, centred on its forward axis). False before the first
+// post replay.
+bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();
 // Qualifying thresholds for modes 1/2 (tests use small ones).

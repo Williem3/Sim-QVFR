@@ -82,7 +82,7 @@ void menu_placement_changed(const MenuPlacement& placement) {
     live.menuPlacement = placement;
     menu_place(placement);
     logf("settings menu: moved to %d deg right, %d deg up, %d deg wide", placement.yaw, placement.pitch, placement.width);
-    if (experiment.views4 || experiment.quad)
+    if (experiment.views4 || experiment.quad || experiment.replayCompose)
         menu_open(qpc_now());
 }
 
@@ -173,6 +173,7 @@ void menu_open(int64_t now) {
                                  static_cast<int>(quad.nativeW), static_cast<int>(quad.nativeH), 0,
                                  experiment.eyeScale * 100};
         }
+        menu.model.launch.apiPath = experiment.replayCompose;
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
         menu.model.launch.cropHeight = l.cropHeight * 100;
         const games::GameFeatures features = game_features();  // what the game has: the rest is left out
@@ -471,7 +472,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers) {
     // The performance overlay also while measuring without QVFR (baseline=1), to compare the two; the settings
     // menu only with a method of the layer's (its settings would change nothing in mode=off).
-    const bool method = experiment.views4 || experiment.quad;
+    const bool method = experiment.views4 || experiment.quad || experiment.replayCompose;
     if (live.ini.empty() || (!method && !experiment.measure && !notice_pending()))
         return info;
     // For the launcher's Center PPD: once, when ACE has rendered.

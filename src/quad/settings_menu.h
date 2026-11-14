@@ -133,6 +133,9 @@ struct MenuLaunch {
     // Texture sharpening was on at launch, so its hook and shader twins were made: its settings are live. Off at launch,
     // turning it on applies at the next launch (the page says so).
     bool sharpeningReady = false;
+    // The API-level QVFR test path (ACE: replay_compose): QVFR without the game hooks; the page's name says so (its
+    // items are still the plain set until the path has settings of its own).
+    bool apiPath = false;
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

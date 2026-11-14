@@ -144,6 +144,13 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             }
         }
     }
+    if (experiment.replayCompose && stereo) {  // P3: the FOV ACE renders each eye with, and the crop
+        std::lock_guard guard(quad.mutex);
+        quad.v4Fov[0] = views[0].fov;
+        quad.v4Fov[1] = views[1].fov;
+        quad.v4Crop = crop;
+        quad.v4FovValid = true;
+    }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
     if (narrowThisFrame && capacity > 0 && XR_SUCCEEDED(r)) {
         XrVector3f direction{0, 0, -1};
