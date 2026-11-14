@@ -175,6 +175,7 @@ void menu_open(int64_t now) {
                                  experiment.eyeScale * 100};
         }
         menu.model.launch.apiPath = experiment.replayCompose;
+        menu.model.launch.apiDlss = experiment.replayCompose && experiment.replayDlss != 0;
         menu.model.dlssState.clear();
         if (experiment.replayCompose) {  // what DLSS runs, read each time the menu is drawn
             const focus_ngx::State d = focus_ngx::state();
@@ -269,7 +270,7 @@ void menu_press(MenuKey key, int64_t now) {
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
-                     ownDlss = menu.model.launch.ownDlss, ownNr = menu.model.launch.ownNr] {
+                     ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
         write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);

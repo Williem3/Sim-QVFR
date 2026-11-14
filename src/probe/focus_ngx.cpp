@@ -6,7 +6,9 @@
 #include <cstdio>
 #include <cstring>
 #include <cwctype>
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include <MinHook.h>
 
@@ -25,6 +27,7 @@ bool install() { return false; }
 bool installed() { return false; }
 void preload() {}
 void set_presets(int, int) {}
+int focus_preset() { return 0; }
 void set_options(float, bool) {}
 float jitter_x() { return 1; }
 State state() { return {}; }
@@ -70,6 +73,20 @@ OptimalFn optimalOriginal = nullptr;
 ParametersFn capabilityOriginal = nullptr;
 std::atomic<bool> optimalHooked{false};
 std::atomic<int> optimalLogged{0};
+
+// The game's own SuperSampling features (its eyes), as made: what a replacement with another preset needs.
+struct GameFeature {
+    const NVSDK_NGX_Handle* game = nullptr;
+    CreateInfo info;            // as the game asked
+    int quality = 0;            // as made (DLAA when forced)
+    unsigned creationMask = 1, visibilityMask = 1;
+    int subrects = 0;
+    bool hasSubrects = false;
+    int preset = 0;             // the preset override it runs with now (0: the game's own)
+    NVSDK_NGX_Handle* ours = nullptr;  // our replacement (null: the game's own feature runs)
+    int basePreset = 0;         // the override the game's own feature was made with
+};
+std::vector<GameFeature> gameFeatures;
 
 const char* const kPresetKeys[6] = {
     NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
@@ -225,8 +242,90 @@ NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feat
                 bag->Set(key, static_cast<unsigned>(preset));
             logf("focus dlss: the game's feature (the eyes, the periphery) made with preset %d instead of its own", preset);
         }
+        GameFeature g;
+        g.info = c;
+        g.quality = forcedDlaa.load() ? static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA) : c.quality;
+        if (const unsigned m = get_ui(bag, NVSDK_NGX_Parameter_CreationNodeMask))
+            g.creationMask = m;
+        if (const unsigned m = get_ui(bag, NVSDK_NGX_Parameter_VisibilityNodeMask))
+            g.visibilityMask = m;
+        g.subrects = get_i(bag, NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, &g.hasSubrects);
+        g.preset = g.basePreset = eyePreset.load();
+        const NVSDK_NGX_Result r = createOriginal(l, feature, bag, out);
+        if (ok(r) && out && *out) {
+            g.game = *out;
+            AcquireSRWLockExclusive(&lock);
+            std::erase_if(gameFeatures, [&](const GameFeature& f) { return f.game == g.game; });  // a handle's address reused
+            if (gameFeatures.size() >= 8)
+                gameFeatures.erase(gameFeatures.begin());
+            gameFeatures.push_back(g);
+            ReleaseSRWLockExclusive(&lock);
+        }
+        return r;
     }
     return createOriginal(l, feature, bag, out);
+}
+
+// The eyes' preset changed while running: a feature of ours like the game's with that preset, recorded into the game's
+// list ahead of its evaluation. The game's own feature stays (it releases it itself); an older replacement is left to
+// NGX's shutdown, like our focus features on a size change.
+const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Handle* h, bool& fresh) {
+    const int want = eyePreset.load();
+    GameFeature g;
+    {
+        AcquireSRWLockShared(&lock);
+        const auto at = std::find_if(gameFeatures.begin(), gameFeatures.end(), [&](const GameFeature& f) { return f.game == h; });
+        const bool found = at != gameFeatures.end();
+        if (found)
+            g = *at;
+        ReleaseSRWLockShared(&lock);
+        if (!found)
+            return h;
+    }
+    if (g.preset == want)
+        return g.ours ? g.ours : h;
+    NVSDK_NGX_Handle* made = nullptr;
+    if (want != g.basePreset) {
+        Bag* b = nullptr;
+        NVSDK_NGX_Result r = allocateFn(&b);
+        if (ok(r) && b) {
+            b->Set(NVSDK_NGX_Parameter_CreationNodeMask, g.creationMask);
+            b->Set(NVSDK_NGX_Parameter_VisibilityNodeMask, g.visibilityMask);
+            b->Set(NVSDK_NGX_Parameter_Width, g.info.width);
+            b->Set(NVSDK_NGX_Parameter_Height, g.info.height);
+            b->Set(NVSDK_NGX_Parameter_OutWidth, g.info.outWidth);
+            b->Set(NVSDK_NGX_Parameter_OutHeight, g.info.outHeight);
+            b->Set(NVSDK_NGX_Parameter_PerfQualityValue, g.quality);
+            b->Set(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, g.info.flags);
+            if (g.hasSubrects)
+                b->Set(NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, g.subrects);
+            for (int i = 0; i < 6; ++i) {
+                if (want > 0)
+                    b->Set(kPresetKeys[i], static_cast<unsigned>(want));
+                else if (g.info.presetSet[i])
+                    b->Set(kPresetKeys[i], g.info.presets[i]);
+            }
+            r = createOriginal(l, NVSDK_NGX_Feature_SuperSampling, b, &made);
+            destroyFn(b);
+        }
+        logf("focus dlss: the eyes' (periphery's) feature %ux%u remade with preset %d (0: the game's own): result 0x%08x%s",
+             g.info.width, g.info.height, want, static_cast<unsigned>(r), ok(r) && made ? "" : "; the feature before stays");
+        if (!ok(r) || !made)
+            made = g.ours;  // keep what ran; not tried again until the preset changes
+        else
+            fresh = true;
+    } else {
+        logf("focus dlss: the eyes' (periphery's) preset back to %d: the game's own feature runs again", want);
+        fresh = true;
+    }
+    AcquireSRWLockExclusive(&lock);
+    for (GameFeature& f : gameFeatures)
+        if (f.game == h) {
+            f.preset = want;
+            f.ours = made;
+        }
+    ReleaseSRWLockExclusive(&lock);
+    return made ? made : h;
 }
 
 NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Handle* h, const Bag* bag, void* callback) {
@@ -299,6 +398,11 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
             // The horizontal jitter NGX is told, as really drawn (set_options): the kept evaluation holds the game's.
             if (const float sx = jitterX.load(); sx != 1.0f)
                 const_cast<Bag*>(bag)->Set(NVSDK_NGX_Parameter_Jitter_Offset_X, e.jitter[0] * sx);
+            bool fresh = false;
+            const NVSDK_NGX_Handle* const use = eye_feature(l, h, fresh);
+            if (fresh)  // another feature than last frame's: no history of its own
+                const_cast<Bag*>(bag)->Set(NVSDK_NGX_Parameter_Reset, 1);
+            return evaluateOriginal(l, use, bag, callback);
         }
     }
     return evaluateOriginal(l, h, bag, callback);
@@ -407,9 +511,12 @@ CreateInfo create_info() {
 uint64_t game_evaluations() { return evaluations.load(); }
 
 void set_presets(int eye, int focus) {
-    eyePreset.store(eye);
-    focusPreset.store(focus);
+    const int eyeBefore = eyePreset.exchange(eye), focusBefore = focusPreset.exchange(focus);
+    if (eyeBefore != eye || focusBefore != focus)
+        logf("focus dlss: presets: the eyes (periphery) %d, the focus views %d (0: the game's own)", eye, focus);
 }
+
+int focus_preset() { return focusPreset.load(); }
 
 void set_options(float jitter, bool dlaa) {
     jitterX.store(jitter);

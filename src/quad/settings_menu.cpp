@@ -290,6 +290,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             method.insert(at == method.end() ? at : at + 1, MenuItem::FocusQuadDistance);
         }
         items.insert(items.end(), method.begin(), method.end());
+        if (menu.launch.apiDlss)  // the API path's DLSS: the periphery's and the focus views' presets, live
+            items.insert(items.end(), {MenuItem::DlssEyePreset, MenuItem::DlssFocusPreset});
         if (menu.launch.qvfr)  // last: Up from the page switch reaches it
             items.push_back(MenuItem::Optimize);
     }
@@ -773,7 +775,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
                          (v.dlss.focusScale < 100 ? L" (" + std::to_wstring(v.dlss.focusScale) + L"%)" : L"");
         else if (items[i] == MenuItem::DlssFocusPreset)
             line.value = v.dlss.focusPreset ? dlss_choice_name(kDlssFocusPresets, v.dlss.focusPreset)
-                                            : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
+                         : menu.launch.apiDlss  ? L"The game's own"
+                                                : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
         else if (items[i] == MenuItem::DlssEyePreset)
             line.value = dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset);
         else if (items[i] == MenuItem::DlssSharpening)

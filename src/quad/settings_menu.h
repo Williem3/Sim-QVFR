@@ -136,6 +136,7 @@ struct MenuLaunch {
     // The API-level QVFR test path (ACE: replay_compose): QVFR without the game hooks; the page's name says so (its
     // items are still the plain set until the path has settings of its own).
     bool apiPath = false;
+    bool apiDlss = false;  // the API path with DLSS: the two presets on the settings page ([dlss] eye_preset, focus_preset)
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.

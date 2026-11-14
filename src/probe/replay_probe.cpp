@@ -889,6 +889,7 @@ struct Focus {
     focus_ngx::Feature* ngxAuto[2] = {};  // replay_dlss=2: DLSS's own auto-exposure, no exposure texture (SRV slot 72)
     int dlssPhase = -1;
     UINT ngxW = 0, ngxH = 0;
+    int ngxPreset = 0;  // focus_ngx::focus_preset() the features were made with
     uint64_t ngxUsed[2] = {};
     bool dlssBroken = false, dlssReady = false, dlssFresh = true;
     std::atomic<uint64_t> dlssEvaluations{0};
@@ -3828,7 +3829,9 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     if (pack[0]->tables[2].ptr != game_gpu(focus.uavBaseIndex).ptr)
         return miss("ACE's packing UAV table isn't the bindless UAV range our outputs are in");
     // Our NGX features at the focus eye size (made again on a size change: the old ones are left to NGX's shutdown).
-    if (!focus.ngx[0] || !focus.ngx[1] || focus.ngxW != fw || focus.ngxH != fh) {
+    if (!focus.ngx[0] || !focus.ngx[1] || focus.ngxW != fw || focus.ngxH != fh ||
+        focus.ngxPreset != focus_ngx::focus_preset()) {  // or the preset changed (the headset menu)
+        focus.ngxPreset = focus_ngx::focus_preset();
         focus.ngx[0] = focus_ngx::make(l, fw, fh);
         focus.ngx[1] = focus.ngx[0] ? focus_ngx::make(l, fw, fh) : nullptr;
         if (focus.settings.dlss == 3 && focus.ngx[1]) {  // A/B: a pair with DLSS's own auto-exposure (flag 0x40)

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "engine/dlss_math.h"
+#include "engine/dlss_settings.h"
 #include "games/game.h"
 #include "games/multi_view.h"
 #include "ini_put.h"
@@ -251,11 +252,10 @@ void load_experiment() {
                                    GetPrivateProfileIntW(L"experiment", L"replay_compose", 0, ini.c_str()) != 0;
         experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
-            wchar_t text[8] = {};
-            GetPrivateProfileStringW(L"experiment", L"replay_dlss_eye_preset", L"", text, 8, ini.c_str());
-            experiment.replayDlssEyePreset = dlss::preset_from_text(text, 0);
-            GetPrivateProfileStringW(L"experiment", L"replay_dlss_focus_preset", L"", text, 8, ini.c_str());
-            experiment.replayDlssFocusPreset = dlss::preset_from_text(text, 0);
+            // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
+            const DlssSettings player = read_dlss_settings(ini.c_str());
+            experiment.replayDlssEyePreset = player.eyePreset;
+            experiment.replayDlssFocusPreset = player.focusPreset;
             experiment.replayDlssJitterX =
                 std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_dlss_jitter_x_percent", 50, ini.c_str()), 10u, 200u) / 100.0;
             experiment.replayDlssPeripheryDlaa =
