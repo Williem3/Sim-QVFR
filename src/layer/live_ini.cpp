@@ -22,6 +22,8 @@
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "probe/focus_ngx.h"
+#include "probe/replay_probe.h"
 
 namespace simqvfr::layer {
 
@@ -67,14 +69,16 @@ void live_apply(const LiveSettings& l) {
                  kVisorPositionNames[static_cast<int>(l.helmet.visor)], l.helmet.debugLight ? ", showing its light" : "");
         helmetSettings = l.helmet;
     }
-    if (experiment.views4) {
+    if (experiment.views4 || experiment.replayCompose) {
         const FovCrop before = experiment.crop();
         experiment.set_crop(l.crop);
         if (before.top != l.crop.top || before.bottom != l.crop.bottom || before.outer != l.crop.outer ||
             before.inner != l.crop.inner)
             logf("live: FOV crop top %.0f%%, bottom %.0f%%, outer %.0f%%, inner %.0f%%%s", l.crop.top * 100,
                  l.crop.bottom * 100, l.crop.outer * 100, l.crop.inner * 100,
-                 game->qvfr_dlss_held() ? " (DLSS is on: the views keep their launch sizes until the next launch)" : "");
+                 experiment.views4 && game->qvfr_dlss_held()
+                     ? " (DLSS is on: the views keep their launch sizes until the next launch)"
+                     : "");
     }
     experiment.focusFraction = l.focusFraction;
     experiment.focusFractionY = l.focusFractionY;
@@ -108,6 +112,27 @@ void live_apply(const LiveSettings& l) {
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
+    if (experiment.replayCompose) {
+        // The API path: the focus views' pixels (focus density x box) and the box's size are live; ACE's eye size (the
+        // periphery) is live from its launch size down to a quarter of it, above that at the next launch.
+        const double boxX = experiment.box_x(l.focusFraction),
+                     boxY = experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction);
+        const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
+        if (experiment.replayEyeShareX > 0 && experiment.replayEyeShareY > 0) {
+            const double bx = std::clamp(boxX, 0.05, 0.6), by = std::clamp(boxY, 0.05, 0.6);
+            replay_probe_set_size(std::clamp(wanted.focus / experiment.replayEyeShareX / bx, 0.5, 12.0) * bx,
+                                  std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
+        }
+        replay_probe_set_box(boxX, boxY);
+        // The periphery: live below its launch size (ACE's eyes drawn into a smaller region of its launch-size targets).
+        const double launchOuter = experiment.eyeScale > 0 ? experiment.eyeScale : 1.0;
+        const double share = std::clamp(wanted.outer / launchOuter, 0.25, 1.0);
+        replay_probe_set_eye_scale(share);
+        logf("live: API path: the focus box and focus density apply now; the periphery at %.0f%% of its launch size (%.0f%% of "
+             "the native eye, launched at %.0f%%)%s",
+             share * 100, wanted.outer * 100, launchOuter * 100,
+             wanted.outer > launchOuter + 1e-6 ? ": above the launch size needs the next launch" : "");
+    }
     if (experiment.views4 && game_features().liveResolution)
         live_resolution(l);
     else if (experiment.views4)
@@ -256,6 +281,16 @@ void live_reload() {
     if (experiment.views4 && game_features().sideLoadedDlss) {
         game->qvfr_set_dlss(s->menu.dlss);  // [dlss], read with the menu's values: the adapter applies a change
         game->qvfr_set_nr(s->menu.nr);      // [dlss_nr] likewise
+    }
+    if (experiment.replayCompose && experiment.replayDlss)  // the API path: the two presets, live
+    {
+        focus_ngx::set_presets(s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
+        static int scaleSent = 0;  // the Focus views mode, live
+        if (scaleSent != s->menu.dlss.focusScale) {
+            scaleSent = s->menu.dlss.focusScale;
+            experiment.replayDlssFocusScale = scaleSent;
+            replay_probe_set_size(0, 0, scaleSent / 100.0);
+        }
     }
     menu_values_changed(*s);
     menu_placement_changed(s->menuPlacement);

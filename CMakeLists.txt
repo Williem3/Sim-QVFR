@@ -97,9 +97,9 @@ endif()
 add_library(sim_qvfr_core STATIC
   src/games/games.cpp src/games/multi_view.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
-  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
+  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/replay_probe.cpp src/probe/focus_ngx.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -171,6 +171,18 @@ sim_qvfr_test(d3d12_trace_test tests/d3d12_trace_test.cpp)
 target_include_directories(d3d12_trace_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(d3d12_trace_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(d3d12_trace_test PRIVATE sim_qvfr_core)
+
+# Offline check of the re-emission probe (API-level QVFR gate G5) on a WARP device (tests/replay_probe_test.cpp).
+sim_qvfr_test(replay_probe_test tests/replay_probe_test.cpp)
+target_include_directories(replay_probe_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(replay_probe_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(replay_probe_test PRIVATE sim_qvfr_core)
+
+# Offline check of the focus depth replay (API-level QVFR step R1) on a WARP device (tests/replay_focus_test.cpp).
+sim_qvfr_test(replay_focus_test tests/replay_focus_test.cpp)
+target_include_directories(replay_focus_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(replay_focus_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(replay_focus_test PRIVATE sim_qvfr_core)
 
 # Offline check of the quad compositor on a WARP device (tests/compositor_test.cpp).
 sim_qvfr_test(compositor_test tests/compositor_test.cpp)

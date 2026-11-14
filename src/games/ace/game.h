@@ -13,8 +13,10 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     "ace", L"Assetto Corsa EVO", L"ACE", L"AssettoCorsaEVO.exe", L"Assetto Corsa EVO", L"", L"3058630", L"-vr",
     nullptr,                   // OpenXR of its own
     L"nvngx_dlss.dll",         // its DLSS (310.9.1 in this build)
-    // Everything but object detail (X-Plane's) and the LMU-only multi-view rendering and runtime composition.
-    {true, true, true, true, true, false, false, false, true},
+    // Everything but object detail (X-Plane's) and the LMU-only multi-view rendering and runtime composition; no Cheeky
+    // Foveated DLSS or its frame generation since QVFR is the API path (2026-11-14: its own focus DLSS; Cheeky untried
+    // there).
+    {false, true, true, true, false, false, false, false, true},
     kBuilds, std::size(kBuilds),
 };
 

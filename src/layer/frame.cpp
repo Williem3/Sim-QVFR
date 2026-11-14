@@ -9,6 +9,7 @@
 #include "probe/d3d12_trace.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
+#include "probe/replay_probe.h"
 #include "probe/pix_capture.h"
 #include "probe/probe.h"
 #include "xr.h"
@@ -49,7 +50,11 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     std::vector<const XrCompositionLayerBaseHeader*> menuLayers;
     const XrFrameEndInfo* info = menu_frame(session, frameInfo, withMenu, menuLayers);
     ++endFrames;
-    if (experiment.pixCaptureFrame)
+    // The API path's gaze: ACE attaches its action sets (and the layer's gaze with them) at start-up, but not on every
+    // launch (the 18:38 run: none in over two minutes); five seconds in, the layer attaches its own.
+    if (experiment.replayCompose && endFrames == 450)
+        gaze_attach_alone(session);
+    if (experiment.pixCaptureFrame || experiment.pixCaptureHotkey)
         pix_capture_frame(endFrames);
     if (sampled(endFrames)) {
         logf("xrEndFrame frame=%llu time=%lld layers=%u", static_cast<unsigned long long>(endFrames),
@@ -78,11 +83,26 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     }
     if (experiment.passCensus)
         pass_census_frame_end();
+    if (experiment.replayProbe)
+        replay_probe_frame_end();
     game->frame_end();
     if (experiment.views4) {
         game->qvfr_frame_end();
         return views4_submit(session, info);
     }
+    if (experiment.replayCompose)  // P3: the composed output in place of ACE's eyes (views4's submission)
+        return views4_submit(session, info);
+    if (experiment.measure && experiment.gpuFrameTiming && !measuredEyeChain.load(std::memory_order_relaxed))
+        for (uint32_t i = 0; i < info->layerCount; ++i)
+            if (info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+                const auto* proj = reinterpret_cast<const XrCompositionLayerProjection*>(info->layers[i]);
+                if (proj->viewCount && proj->views[0].subImage.swapchain) {
+                    measuredEyeChain = proj->views[0].subImage.swapchain;
+                    logf("views4 gpu: baseline: ACE's frame ends at the release of swapchain %p (its projection layer)",
+                         static_cast<void*>(proj->views[0].subImage.swapchain));
+                }
+                break;
+            }
     if (!experiment.twoLoops)
         return next.EndFrame(session, info);
 

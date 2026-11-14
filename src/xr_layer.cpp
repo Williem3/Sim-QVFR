@@ -14,6 +14,9 @@
 #include "log.h"
 #include "probe/dred.h"
 #include "probe/pix_capture.h"
+#include "probe/replay_probe.h"
+#include "games/ace/stereo_flag.h"
+#include "probe/focus_ngx.h"
 #include "xr.h"
 #include "layer/layer.h"
 
@@ -233,6 +236,17 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     nativeQuad.foveated = foveatedAdded;
     game = &games::adapter_for(thisGame);
     load_experiment();
+    // ACE's API path draws its focus views from ACE's single-pass stereo lists: on before ACE makes its renderer.
+    if (experiment.replayCompose && std::strcmp(thisGame->id, "ace") == 0)
+        ace_single_pass_stereo_on();
+    if (experiment.replayProbe == 3 && ((experiment.replaySky && experiment.replayTiles) || experiment.replayTyres))
+        replay_probe_early_sky();  // before the game makes its device and loads its pipelines
+    if (experiment.replayProbe == 3 && experiment.replayDlss)
+        focus_ngx::set_presets(experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
+    if (experiment.replayProbe == 3 && experiment.replayDlss)
+        focus_ngx::set_options(static_cast<float>(experiment.replayDlssJitterX), experiment.replayDlssPeripheryDlaa);
+    if (experiment.replayProbe == 3 && experiment.replayDlss)
+        focus_ngx::preload();  // NGX's exports detoured before the game makes its DLSS features
     // Where the launcher writes live settings while this ACE runs (live_reload).
     runtime_info(L"live_ini", live.ini);
     runtime_info(L"live_pid", std::to_wstring(GetCurrentProcessId()));
@@ -297,7 +311,7 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
         dred_enable();
     if (experiment.d3d12Debug)
         d3d12_debug_enable(experiment.gpuValidation);
-    if (experiment.pixCaptureFrame)  // before ACE creates its D3D12 device
+    if (experiment.pixCaptureFrame || experiment.pixCaptureHotkey)  // before ACE creates its D3D12 device
         pix_capture_load(experiment.pixCaptureFrame);
     game->instance_created(live.ini.c_str(), experiment.mode);
     if (experiment.views4) {

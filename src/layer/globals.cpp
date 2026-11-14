@@ -57,6 +57,8 @@ Views4Outline v4outline;
 
 uint64_t endFrames = 0;
 
+std::atomic<XrSwapchain> measuredEyeChain{XR_NULL_HANDLE};
+
 uint64_t locates = 0;
 
 CpuTimes cpu;

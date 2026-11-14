@@ -111,20 +111,22 @@ All of these are off until you turn them on in the launcher:
   drive. It shows most on a soft image (a low focus density, a lower-resolution headset); the
   low-resolution periphery shimmers a little more with it. X-Plane 12 also runs an FSR sharpening pass of
   its own, so start low there.
-- **Foveated DLSS and frame generation:** for NVIDIA RTX cards, see the next section.
+- **Foveated DLSS** (Assetto Corsa Competizione): for NVIDIA RTX cards, see the next section.
 - **DLSS in Le Mans Ultimate** (experimental, NVIDIA RTX): Sim-QVFR's own, as LMU has none; see
   [Le Mans Ultimate](#le-mans-ultimate) and the [LMU optimization guide](docs/LMU-OPTIMIZATION-GUIDE.md).
 
 ## Foveated DLSS (optional, NVIDIA RTX only)
 
-In Assetto Corsa EVO and Competizione (X-Plane 12 has no DLSS), if you have an NVIDIA RTX graphics card,
+In Assetto Corsa Competizione, if you have an NVIDIA RTX graphics card,
 Sim-QVFR can use
 [Cheeky Foveated DLSS](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS) by
 [ClarkCheekyKent](https://github.com/ClarkCheekyKent), **integrated with his permission**. It adds:
 
 - **Foveated DLSS:** cheaper DLSS on the outer view, full-quality DLSS in the sharp area.
 - **Extra sharp-area options (experimental):** supersampling, a fix for motion blur, and DLSS-NR.
-- **Frame generation (experimental):** extra frames made between the game's own frames.
+
+(Assetto Corsa EVO doesn't use Cheeky Foveated DLSS any more: QVFR there has DLSS of its own for the sharp area. See
+[Assetto Corsa EVO](#assetto-corsa-evo).)
 
 Cheeky Foveated DLSS is a separate, free download (GNU GPL v3). It isn't included with Sim-QVFR.
 
@@ -135,14 +137,14 @@ ZIP named here:
 
 | Download | Where | What it's for |
 | --- | --- | --- |
-| `CheekyFoveatedDLSS-0.6.3-Standalone-sim-qvfr-support.zip` | [Cheeky Foveated DLSS v0.6.3-sim-qvfr-support](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-sim-qvfr-support) | The DLSS files themselves. This build includes fixes both games need: Assetto Corsa EVO (the official build shows the outer view shrunk, like "picture in picture") and Assetto Corsa Competizione (the official build crashes ACC at start and can't tell its views apart). Older builds such as `v0.6.3-ace.2` don't work with ACC. |
+| `CheekyFoveatedDLSS-0.6.3-Standalone-sim-qvfr-support.zip` | [Cheeky Foveated DLSS v0.6.3-sim-qvfr-support](https://github.com/Williem3/CheekyFoveatedDLSS/releases/tag/v0.6.3-sim-qvfr-support) | The DLSS files themselves. This build includes the fixes ACC needs (the official build crashes ACC at start and can't tell its views apart). Older builds such as `v0.6.3-ace.2` don't work with ACC. |
 | `CheekyFoveatedDLSS-0.6.3-Standalone-TEST-SIGNED.zip` | [Cheeky Foveated DLSS v0.6.3](https://github.com/ClarkCheekyKent/CheekyFoveatedDLSS/releases/tag/v0.6.3) (official) | Only for its installer, `CheekyOpenXRSetup.exe`. |
 
 Once an official Cheeky release includes the fixes, its own download will replace both.
 
 ### Setting it up
 
-1. **Turn on DLSS** in the game's graphics settings (Assetto Corsa EVO or Competizione). Foveated DLSS works
+1. **Turn on DLSS** in Assetto Corsa Competizione's graphics settings. Foveated DLSS works
    on the game's own DLSS, so it has to be on.
 2. **Run Cheeky's installer.** In the official ZIP, open the `OpenXR` folder and run
    `CheekyOpenXRSetup.exe`.
@@ -166,17 +168,31 @@ Once an official Cheeky release includes the fixes, its own download will replac
   as DLSS Swapper does it). **Launch checks** tells you when it's too old and shows you the file. Steam's
   **Verify integrity of game files** puts the original back.
 - **For DLSS-NR,** put NVIDIA's `nvngx_dlssnr.dll` in the same `CheekyFoveatedDLSS` folder you copied in step 3
-  (Assetto Corsa EVO has one in its own folder; ACC doesn't come with one).
-
-**Frame generation** (Assetto Corsa EVO only for now): turn on **Frame generation**, the card under Foveated DLSS. Before you do:
-- Turn off **Turbo mode** in OpenXR Toolkit (the game crashes with it).
-- Don't use another frame generator at the same time, such as VectorXR's.
+  (ACC doesn't come with one).
 
 **Good to know:**
 - Most DLSS settings change straight away, in the launcher or the headset menu. Resolution changes
   take effect the next time you start the game.
 - **Show the center region** draws an outline around the full-quality area, so you can check it
   follows your eyes.
+
+## Assetto Corsa EVO
+
+QVFR in Assetto Corsa EVO now works at the graphics level: the game draws its own two eyes (with its own
+single-pass stereo, which Sim-QVFR turns on), and Sim-QVFR draws the sharp focus area from the game's own
+drawing work, without changing any of the game's code. It uses less CPU than the earlier method and the same
+GPU time for the same picture, and the periphery's resolution can be lowered while you drive.
+
+- **DLSS:** with DLSS on in the game, Sim-QVFR runs DLSS of its own for the sharp area (the headset menu's **Focus
+  views** and **Focus preset**); the outer view uses preset F. Cheeky Foveated DLSS and its frame generation aren't used
+  in Assetto Corsa EVO any more.
+- **Anti-aliasing:** use **MSAA** or **DLSS** (any DLSS mode) in the game's settings. Other upscalers such as
+  FSR haven't been tested yet: if you use one and something looks wrong, switch to MSAA and tell us.
+- **ACEvoPerf users:** leave `single_pass_stereo` out of `acevo_perf.ini` (or set it to `true`). Set to
+  `false` there, it turns off what QVFR needs and the focus area won't appear.
+- **The earlier method** is still there for a while, in case the new one shows a problem the old one didn't:
+  add `ace_legacy_views4=1` under `[experiment]` in `sim-qvfr.ini`. It will be removed in a later release, so
+  if you need it, please tell us why.
 
 ## Assetto Corsa Competizione
 
@@ -380,6 +396,11 @@ Thanks to [ClarkCheekyKent](https://github.com/ClarkCheekyKent) for
 DLSS, DLSS-NR and frame generation features, and for his permission to integrate it into Sim-QVFR.
 Cheeky Foveated DLSS is free software under the GNU GPL v3. Sim-QVFR loads it as a separate download
 and doesn't include it. The launcher and the headset menu show its version wherever they control it.
+
+Thanks to ecstra for [ACEvoPerf](https://github.com/Williem3/ACEvoPerf), open source under the MIT licence.
+Its way of finding Assetto Corsa EVO's engine settings by name solved the problem of turning on the game's own
+single-pass stereo, which QVFR in Assetto Corsa EVO is built on, without depending on addresses that change with
+each game update.
 
 ## Licence
 

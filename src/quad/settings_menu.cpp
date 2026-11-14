@@ -290,6 +290,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             method.insert(at == method.end() ? at : at + 1, MenuItem::FocusQuadDistance);
         }
         items.insert(items.end(), method.begin(), method.end());
+        if (menu.launch.apiDlss)  // the API path's DLSS: the focus views' mode and preset, live (the periphery: F, fixed)
+            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset});
         if (menu.launch.qvfr)  // last: Up from the page switch reaches it
             items.push_back(MenuItem::Optimize);
     }
@@ -308,7 +310,7 @@ std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     case MenuPage::Shape: return L"Focus shape";
     case MenuPage::Crop: return L"View crop";
     case MenuPage::Helmet: return L"Helmet";
-    default: return menu.launch.qvfr ? L"QVFR" : L"Two-loop (legacy)";
+    default: return menu.launch.apiPath ? L"QVFR (API path)" : menu.launch.qvfr ? L"QVFR" : L"Two-loop (legacy)";
     }
 }
 
@@ -709,8 +711,21 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
             notes.push_back(L"Less crop than at launch: the periphery is softer until the next launch");
         return notes;
     }
+    if (!menu.dlssState.empty())
+        notes.push_back(menu.dlssState);
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
+    else if (menu.launch.apiPath) {
+        // The API path's periphery is live from its launch value down to a quarter of it (the game's eye targets are
+        // made once, at launch); above, at the next launch.
+        const double top = menu.launch.outer, floor = menu.launch.outer / 4;
+        if (menu.values.periphery > top + 0.5)
+            notes.push_back(L"Periphery above its launch value (" + percent(top) + L") applies at the next launch");
+        else if (menu.values.periphery < floor - 0.5)
+            notes.push_back(L"Periphery stays at " + percent(floor) + L" (a quarter of its launch value) until the next launch");
+        else
+            notes.push_back(L"Periphery applies now up to its launch value (" + percent(top) + L"); focus density and mode too");
+    }
     else if (menu.launch.qvfr && !menu.launch.liveResolution)
         notes.push_back(L"Resolution changes apply at the next launch in this game");
     const MenuFit f = menu_fit(menu);
@@ -771,7 +786,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
                          (v.dlss.focusScale < 100 ? L" (" + std::to_wstring(v.dlss.focusScale) + L"%)" : L"");
         else if (items[i] == MenuItem::DlssFocusPreset)
             line.value = v.dlss.focusPreset ? dlss_choice_name(kDlssFocusPresets, v.dlss.focusPreset)
-                                            : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
+                         : menu.launch.apiDlss  ? L"The game's own"
+                                                : (v.dlss.focusScale == 50 ? L"Default (M)" : L"Default (K)");
         else if (items[i] == MenuItem::DlssEyePreset)
             line.value = dlss_choice_name(kDlssEyePresets, v.dlss.eyePreset);
         else if (items[i] == MenuItem::DlssSharpening)

@@ -88,7 +88,10 @@ public:
     bool capture_outer(ID3D12Resource* appImage);
     bool has_outer() const { return outerValid_; }
     // Draws both eyes into `output` (a double-wide swapchain image), side by side.
-    bool compose(ID3D12Resource* focusImage, ID3D12Resource* output, const EyeComposition (&eyes)[2]);
+    // focusState: the focus image's state before and after (RENDER_TARGET for a swapchain image; the replay probe's focus
+    // image rests as a shader resource).
+    bool compose(ID3D12Resource* focusImage, ID3D12Resource* output, const EyeComposition (&eyes)[2],
+                 D3D12_RESOURCE_STATES focusState = D3D12_RESOURCE_STATE_RENDER_TARGET);
     // Draws the helmet layer into `target` (a kHelmetLayerFormat swapchain image in RENDER_TARGET state):
     // the frame's light (from the outer copy capture_outer made), then the pieces, premultiplied, with alpha
     // = how much of the scene they hide. False without pieces.

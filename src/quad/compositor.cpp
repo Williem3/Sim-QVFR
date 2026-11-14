@@ -240,7 +240,8 @@ bool QuadCompositor::capture_outer(ID3D12Resource* appImage) {
     return outerValid_;
 }
 
-bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output, const EyeComposition (&eyes)[2]) {
+bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output, const EyeComposition (&eyes)[2],
+                             D3D12_RESOURCE_STATES focusState) {
     if (!ready_ || !outerValid_ || !focusImage || !output)
         return false;
     const UINT slotIndex = slotIndex_ % kSlots;
@@ -258,9 +259,11 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
     device_->CreateRenderTargetView(output, &rtvDesc, rtv);
 
     ID3D12GraphicsCommandList* list = slot->list.Get();
-    D3D12_RESOURCE_BARRIER toRead =
-        transition(focusImage, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    list->ResourceBarrier(1, &toRead);
+    // (a focus image resting as ALL_SHADER_RESOURCE is already readable by the pixel shader)
+    const bool focusTransition = focusState != D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE;
+    D3D12_RESOURCE_BARRIER toRead = transition(focusImage, focusState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    if (focusTransition)
+        list->ResourceBarrier(1, &toRead);
     ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
     list->SetDescriptorHeaps(1, heaps);
     list->SetGraphicsRootSignature(rootSignature_.Get());
@@ -287,9 +290,9 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
         list->SetGraphicsRoot32BitConstants(0, kConstants, constants, 0);
         list->DrawInstanced(3, 1, 0, 0);
     }
-    D3D12_RESOURCE_BARRIER back =
-        transition(focusImage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    list->ResourceBarrier(1, &back);
+    D3D12_RESOURCE_BARRIER back = transition(focusImage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, focusState);
+    if (focusTransition)
+        list->ResourceBarrier(1, &back);
     const bool ok = submit(*slot);
     if (ok && lightCopied)
         lightCopyFence_ = slot->fenceValue;

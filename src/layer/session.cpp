@@ -20,6 +20,7 @@
 #include "probe/gpu_load.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
+#include "probe/replay_probe.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
 #include "quad/session_graphics.h"
@@ -56,11 +57,11 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     const double viewHeight = layout.layer_height();
     const double widthScale = experiment.views4 ? (separate || oneSize ? viewWidth
                                                    : columns ? layout.column_eye_width() : layout.eye_width())
-                                                : experiment.eyeScale;
+                                                : experiment.eyeScale * (experiment.replayCompose ? experiment.crop().kept_width() : 1.0);
     const double heightScale = experiment.views4
                                    ? (separate ? viewHeight : oneSize ? 2 * viewHeight
                                                             : columns ? layout.column_eye_height() : layout.eye_height())
-                                   : experiment.eyeScale;
+                                   : experiment.eyeScale * (experiment.replayCompose ? experiment.crop().kept_height() : 1.0);
     if ((oneSize || separate) && stereo &&
         (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight || layout.layerFloor > 0 ||
          layout.secondViewRoom))
@@ -148,12 +149,59 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                     pass_census_arm(experiment.passCensusFrame, 10);
                 }
             }
+            if (experiment.replayProbe) {  // API-level QVFR probes: G5 re-emission cost (1/2), R1 focus depth replay (3)
+                ReplayFocusSettings focusSettings;
+                focusSettings.boxFraction = experiment.replayFocusPercent / 100.0;
+                focusSettings.pixelScale = experiment.replayFocusScalePercent / 100.0;
+                if (experiment.replayCompose) {
+                    // The API path takes [quad]'s sizes: the box a share of the (cropped) view ACE renders, the focus
+                    // views focus_percent x focus_density of the native eye wide, against ACE's eye at periphery_scale.
+                    const double box = std::clamp(experiment.box_x(), 0.05, 0.6);
+                    const double eye = experiment.eyeScale * experiment.crop().kept_width();
+                    const double k = eye > 0 ? experiment.views4Layout.focus / eye : box * 2;
+                    focusSettings.boxFraction = box;
+                    focusSettings.pixelScale = std::clamp(k / box, 0.5, 12.0);
+                    // The same vertically: a crop keeps different shares of the eye's width and height, and the focus
+                    // height may be set on its own.
+                    const double boxY = std::clamp(experiment.box_y(), 0.05, 0.6);
+                    const double eyeY = experiment.eyeScale * experiment.crop().kept_height();
+                    const double kY = eyeY > 0 ? experiment.views4Layout.focusHeight / eyeY : boxY * 2;
+                    focusSettings.boxFractionY = boxY;
+                    focusSettings.pixelScaleY = std::clamp(kY / boxY, 0.5, 12.0);
+                    experiment.replayEyeShareX = eye;  // for the live sizes (live_ini)
+                    experiment.replayEyeShareY = eyeY;
+                }
+                focusSettings.saveFirst = experiment.replaySaveFirst;
+                focusSettings.saveEvery = experiment.replaySaveEvery;
+                focusSettings.saveCount = experiment.replaySaveCount;
+                focusSettings.allTargets = experiment.replayAllTargets;
+                focusSettings.tiles = experiment.replayTiles;
+                focusSettings.fog = experiment.replayFog;
+                focusSettings.shadows = experiment.replayShadows;
+                focusSettings.transparents = experiment.replayTransparents;
+                focusSettings.atmosphere = experiment.replayAtmosphere;
+                focusSettings.costAb = experiment.replayCostAb;
+                focusSettings.sky = experiment.replaySky;
+                focusSettings.tyres = experiment.replayTyres;
+                focusSettings.gpuSteps = experiment.replayGpuSteps;
+                focusSettings.recordTiming = experiment.replayRecordTiming;
+                focusSettings.cullProbe = experiment.replayCullProbe;
+                focusSettings.cull = experiment.replayCull;
+                focusSettings.diag = experiment.replayDiag;
+                focusSettings.diagMode = experiment.replayDiagMode;
+                focusSettings.post = experiment.replayPost;
+                focusSettings.dlss = experiment.replayDlss;
+                focusSettings.dlssScale = experiment.replayDlssFocusScale / 100.0;
+                replay_probe_start(d3d12->device, experiment.replayProbe, d3d12->queue, focusSettings);
+            }
             if (experiment.d3d12Debug)
                 d3d12_debug_attach(d3d12->device);
             std::lock_guard guard(quad.mutex);
             quad.device = d3d12->device;
             quad.queue = d3d12->queue;
-            if (experiment.views4 && experiment.gpuFrameTiming)
+            // views4: up to ACE's eye-image release (and the composition); baseline (measure, no four views): up to
+            // the release of the swapchain the game submits (measuredEyeChain), its own frame.
+            if ((experiment.views4 || experiment.measure) && experiment.gpuFrameTiming)
                 gpu_frame_timer_start(d3d12->device, d3d12->queue);
             if (experiment.views4 || experiment.measure) {  // the whole GPU's and ACE's threads' load (the overlay, the log)
                 const LUID adapter = d3d12->device->GetAdapterLuid();
@@ -239,6 +287,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     }
     gpu_frame_timer_stop();
     d3d11_compose_timer_stop();
+    measuredEyeChain = XR_NULL_HANDLE;  // the session's swapchain
     gpu_load_stop();
     cpu_load_stop();
     pad_watch_stop();
@@ -420,7 +469,7 @@ XrResult XRAPI_CALL layerCreateSwapchain(XrSession session, const XrSwapchainCre
         std::lock_guard guard(v4d3d11.mutex);
         v4d3d11.chains[*swapchain].format = info->format;
     }
-    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose) &&
+    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose || experiment.replayCompose) &&
         (info->usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
         quad_adopt_chain(session, info, *swapchain);
     return r;
@@ -488,7 +537,7 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
         std::lock_guard guard(v4outline.mutex);
         v4outline.acquired[swapchain] = *index;
     }
-    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose)) {
+    if (XR_SUCCEEDED(r) && (experiment.quad || experiment.views4Compose || experiment.replayCompose)) {
         std::lock_guard guard(quad.mutex);
         if (swapchain == quad.appChain)
             quad.appAcquired = *index;

@@ -108,6 +108,34 @@ struct Experiment {
     bool views4TestHiddenMask = false;     // views4 test: a hidden-area mesh of our own (corners, centre; diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
+    int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (probe/replay_probe.h)
+    UINT replayFocusPercent = 20;          // replay_focus_percent: the focus box, % of each eye's extent (half extent in NDC)
+    UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
+    UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 0;  // replay_save_first/_every/_count
+    bool replayAllTargets = false;         // replay_targets=all: every stereo scene list (R2), else depth only (R1)
+    bool replayTiles = false;              // replay_tiles=1: the focus views' own light tiles (R2b)
+    int replayFog = 0;                     // replay_fog=1: focus fog replayed; 2: ACE's grids resampled (R2c, with tiles)
+    int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
+    int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
+    int replayCull = 0;                    // replay_cull=1|2|3: focus culling (computed only, used, used in alternate windows)
+    bool replayCullProbe = false;          // replay_cull_probe=1 (diagnostic): focus replays without one kind of draw by window
+    bool replayRecordTiming = false;       // replay_record_timing=1 (diagnostic): the focus replays' recording by phase
+    bool replayGpuSteps = false;           // replay_gpu_steps=1 (diagnostic): GPU time by step ("replay gpu:" lines)
+    bool replayEyeCapture = false;         // replay_eye_capture=1 (diagnostic): PNGs after each live periphery change
+    int replayDlssEyePreset = 0;           // replay_dlss_eye_preset=F|K|M..: the eyes' (periphery's) NGX preset (empty: ACE's)
+    int replayDlssFocusPreset = 0;         // replay_dlss_focus_preset: our focus features' (empty: ACE's)
+    double replayDlssJitterX = 0.5;        // replay_dlss_jitter_x_percent=50: the share of ACE's x jitter NGX is told
+    bool replayDlssPeripheryDlaa = true;   // replay_dlss_periphery_dlaa=1: the eyes at DLAA in every in-game DLSS mode
+    int replayDlssFocusScale = 100;        // [dlss] focus_scale: the focus views' DLSS mode on the API path (launch)
+    double replayEyeShareX = 0, replayEyeShareY = 0;  // the API path: ACE's eye size as a share of the native eye (launch)
+    int replayDlss = 0;                    // replay_dlss=1: our DLSS per focus view (P2a)
+    bool replayPost = false;               // replay_post=1: the focus views' tonemap + fxaa + bloom (P1)
+    bool replayTyres = true;               // replay_tyres=0: ACE's left-eye-only tyres left as they are (single-pass stereo)
+    bool replaySky = false;                // replay_sky=1: the sky draw's clouds through the focus box
+    bool replayCostAb = false;
+    int replayDiagMode = 0;                // replay_diag=2: MSAA refraction-source A/B by sample
+    bool replayDiag = false;               // replay_diag=1: per-sample fog / atmosphere schedule (the haze band)             // replay_cost_ab=1: all focus replays on / off every 1800 frames
+    int replayAtmosphere = 0;              // replay_atmosphere=1: focus copies of the atmosphere maps (R2c); 2 A/B
     UINT d3d11CaptureFrame = 0;           // D3D11 games: save each swapchain's image from this frame (probe/d3d11_capture.h)
     bool d3d11CaptureHotkey = false;      // D3D11 games: the frame capture hotkey saves the next frame's images
     bool views4FocusCull = false;          // views4: focus views skip draws outside their frustum (views4.h)
@@ -132,6 +160,7 @@ struct Experiment {
     bool d3d12Debug = false;               // D3D12 debug layer, errors into the log (slow; diagnosis only)
     bool gpuValidation = false;            // d3d12_debug=2: plus GPU-based validation (very slow)
     UINT pixCaptureFrame = 0;              // PIX GPU capture from this xrEndFrame (probe/pix_capture.h), 0 = off
+    bool pixCaptureHotkey = false;         // pix_capture_hotkey=1: the frame capture hotkey takes a PIX capture (D3D12)
     bool twoLoops = false;        // round 7: two complete ACE frames per display frame
     bool focusInB = false;        // round 8: two_loops frame B renders the focus FOV (A keeps the full FOV)
     double eyeScale = 1.0;        // round 8: scales the recommended eye size ACE sees (linear)
@@ -159,7 +188,14 @@ struct Experiment {
     double box_x() const { return box_x(focusFraction); }
     double box_y() const { return box_y(focus_y()); }
     // QVFR composes the views itself, by either compositor (views4_compose: ACE's D3D12 one; views4ComposeD3D11).
-    bool composing() const { return views4Compose || views4ComposeD3D11; }
+    bool composing() const { return views4Compose || views4ComposeD3D11 || replayCompose; }
+    // replay_compose=1 (with replay_probe=3 and replay_post): ACE's two eyes composed with the replay probe's focus
+    // images (P3, the API-level path), at native size, through the views4 compositor and output chain.
+    bool replayCompose = false;
+    // ACE's QVFR is the API path (2026-11-14): mode=views4 (what the launcher writes for QVFR) runs ACE's own two eyes
+    // with the focus views replayed at the D3D12 level, no game code hooked; the replay_* keys default to that set.
+    // [experiment] ace_legacy_views4=1 keeps the old 4views path (deprecated, to be removed).
+    bool apiPath = false;
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)
@@ -764,6 +800,9 @@ extern SessionGraphics sessionGraphics;
 extern V4D3D11 v4d3d11;
 extern Views4Outline v4outline;
 extern uint64_t endFrames;
+// measure=1 without the four views (baseline): the game's projection swapchain, recorded at xrEndFrame, whose image
+// release ends the GPU frame timer's frame (gpu_frame_timing=1).
+extern std::atomic<XrSwapchain> measuredEyeChain;
 extern uint64_t locates;
 extern CpuTimes cpu;
 extern Pacing pacing;

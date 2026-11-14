@@ -2241,9 +2241,10 @@ int SIM_QVFR_TEST_MAIN() {
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
                   acc::kGame.features.foveatedDlss && acc::kGame.features.helmet &&
-                  acc::kGame.features.liveResolution && acc::kGame.features.fovCrop && ace::kGame.features.foveatedDlss &&
+                  acc::kGame.features.liveResolution && acc::kGame.features.fovCrop && !ace::kGame.features.foveatedDlss &&
                   ace::kGame.features.helmet && ace::kGame.features.liveResolution && ace::kGame.features.fovCrop,
-              "games: ACC through OpenComposite, its exe in a subfolder, with every feature ACE has");
+              "games: ACC through OpenComposite, its exe in a subfolder, with every feature ACE has and Foveated DLSS "
+              "(not ACE's any more)");
         check(!find(checks, "opencomposite"), "preflight: ACE needs no OpenComposite");
         simqvfr::games::set_launcher_game(acc::kGame);
         in.openComposite = OpenComposite::Valve;

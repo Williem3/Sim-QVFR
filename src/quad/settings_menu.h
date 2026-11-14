@@ -133,6 +133,11 @@ struct MenuLaunch {
     // Texture sharpening was on at launch, so its hook and shader twins were made: its settings are live. Off at launch,
     // turning it on applies at the next launch (the page says so).
     bool sharpeningReady = false;
+    // The API-level QVFR test path (ACE: replay_compose): QVFR without the game hooks; the page's name says so (its
+    // items are still the plain set until the path has settings of its own).
+    bool apiPath = false;
+    int apiFocusScale = 100;  // the focus views' mode this launch runs ([dlss] focus_scale at launch)
+    bool apiDlss = false;  // the API path with DLSS: the two presets on the settings page ([dlss] eye_preset, focus_preset)
 };
 
 // Cheeky Foveated DLSS, when the layer runs it: its version (for the credit line) and [cheeky]'s live keys.
@@ -150,6 +155,7 @@ struct SettingsMenu {
     int selected = 0;
     std::wstring optimizeStatus;  // the optimizer's line, short (empty: not run yet)
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
+    std::wstring dlssState;  // the API path: what DLSS runs on the periphery and the focus views (empty: nothing to say)
     std::wstring notice;  // a passing message under the title of any page (a CPU capture running or done; empty: none)
     int optimizeRequest = 0;      // set by menu_key on Optimize: 1 run or stop, -1 undo; the layer takes it
     // The profiles' names (the presets first), the one in use (-1: none) and whether a value changed since, and

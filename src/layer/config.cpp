@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <string>
 
+#include "engine/dlss_math.h"
+#include "engine/dlss_settings.h"
 #include "games/game.h"
 #include "games/multi_view.h"
 #include "ini_put.h"
@@ -176,6 +178,22 @@ void load_experiment() {
         logf("experiment: %ls has no QVFR yet: log only, running as mode=off (ini mode=%ls)", game->info()->name, mode);
     if (logOnly)
         wcscpy_s(mode, L"off");
+    // ACE's QVFR: the API path (state.h apiPath) unless the deprecated 4views path is asked for. It runs as mode=off
+    // underneath (ACE renders its own two eyes; nothing of views4's), with the replay keys defaulting on below.
+    {
+        const bool ace = std::strcmp(game->info()->id, "ace") == 0;
+        const bool qvfr = !baseline && !logOnly && _wcsicmp(mode, L"views4") == 0;
+        const bool legacy = GetPrivateProfileIntW(L"experiment", L"ace_legacy_views4", 0, ini.c_str()) != 0;
+        experiment.apiPath = ace && qvfr && !legacy;
+        if (experiment.apiPath) {
+            log_line("experiment: ACE's QVFR: the API path (its own two eyes, the focus views replayed at the D3D12 level; "
+                     "ace_legacy_views4=1 for the old 4views path)");
+            wcscpy_s(mode, L"off");
+        } else if (ace && qvfr) {
+            log_line("experiment: ACE's QVFR: the legacy 4views path (ace_legacy_views4=1); DEPRECATED, to be removed in a "
+                     "later release: the API path is the default");
+        }
+    }
     experiment.focusOnly = _wcsicmp(mode, L"focus_only") == 0;
     experiment.doubleRender = _wcsicmp(mode, L"double_render") == 0;
     experiment.views3 = _wcsicmp(mode, L"views3") == 0;
@@ -224,6 +242,63 @@ void load_experiment() {
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
+    // The API path's steps: on by default there (each key still overrides), off otherwise.
+    const UINT api = experiment.apiPath ? 1u : 0u;
+    experiment.replayProbe =
+        static_cast<int>(std::min(3u, GetPrivateProfileIntW(L"experiment", L"replay_probe", api * 3, ini.c_str())));
+    experiment.replayFocusPercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_percent", 20, ini.c_str()), 5u, 60u);
+    experiment.replayFocusScalePercent =
+        std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_scale_percent", 200, ini.c_str()), 50u, 1000u);
+    experiment.replaySaveFirst = GetPrivateProfileIntW(L"experiment", L"replay_save_first", 1800, ini.c_str());
+    experiment.replaySaveEvery = std::max(1u, GetPrivateProfileIntW(L"experiment", L"replay_save_every", 900, ini.c_str()));
+    experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 0, ini.c_str());
+    {
+        wchar_t targets[16] = {};
+        GetPrivateProfileStringW(L"experiment", L"replay_targets", api ? L"all" : L"depth", targets, 16, ini.c_str());
+        experiment.replayAllTargets = _wcsicmp(targets, L"all") == 0;
+        experiment.replayTiles = GetPrivateProfileIntW(L"experiment", L"replay_tiles", api, ini.c_str()) != 0;
+        experiment.replayFog = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_fog", api * 2, ini.c_str()));
+        experiment.replayShadows = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_shadows", api, ini.c_str()));
+        experiment.replayTransparents =
+            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_transparents", api, ini.c_str()));
+        experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
+        experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", api, ini.c_str()) != 0;
+        experiment.replayTyres = GetPrivateProfileIntW(L"experiment", L"replay_tyres", 1, ini.c_str()) != 0;
+        experiment.replayDiagMode = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str());
+        experiment.replayDiag = experiment.replayDiagMode == 1;
+        experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", api, ini.c_str()) != 0;
+        experiment.replayCompose = experiment.replayPost && !experiment.views4 &&
+                                   GetPrivateProfileIntW(L"experiment", L"replay_compose", api, ini.c_str()) != 0;
+        experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", api, ini.c_str());
+        experiment.replayEyeCapture = GetPrivateProfileIntW(L"experiment", L"replay_eye_capture", 0, ini.c_str()) != 0;
+        experiment.replayGpuSteps = GetPrivateProfileIntW(L"experiment", L"replay_gpu_steps", 0, ini.c_str()) != 0;
+        experiment.replayRecordTiming =
+            GetPrivateProfileIntW(L"experiment", L"replay_record_timing", 0, ini.c_str()) != 0;
+        experiment.replayCullProbe = GetPrivateProfileIntW(L"experiment", L"replay_cull_probe", 0, ini.c_str()) != 0;
+        experiment.replayCull = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_cull", api * 2, ini.c_str()));
+        {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
+            // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
+            const DlssSettings player = read_dlss_settings(ini.c_str());
+            // The periphery (ACE's own eyes): F. K smeared the right eye's periphery in ACE, on the game's own feature too
+            // and with ACE's own jitter (2026-11-13 runs 22:39 and after), F was clean; pinned to F on the API path until
+            // K's smear is explained (2026-11-14, the user: a later release).
+            experiment.replayDlssEyePreset = experiment.apiPath ? 6 : player.eyePreset;
+            experiment.replayDlssFocusPreset = player.focusPreset;
+            experiment.replayDlssFocusScale = player.focusScale;  // the focus views' mode: DLAA 100, 67, 58, 50
+            experiment.replayDlssJitterX =
+                std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_dlss_jitter_x_percent", 50, ini.c_str()), 10u, 200u) / 100.0;
+            experiment.replayDlssPeripheryDlaa =
+                GetPrivateProfileIntW(L"experiment", L"replay_dlss_periphery_dlaa", 0, ini.c_str()) != 0;
+            if (experiment.replayDlss)
+                logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every in-game "
+                     "mode %s", experiment.replayDlssJitterX * 100, experiment.replayDlssPeripheryDlaa ? "on" : "off");
+            if (experiment.replayDlss && (experiment.replayDlssEyePreset || experiment.replayDlssFocusPreset))
+                logf("experiment: API path DLSS presets: the eyes (periphery) %d, the focus views %d (0: ACE's own)",
+                     experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
+        }
+        experiment.replayAtmosphere =
+            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", api * 4, ini.c_str()));
+    }
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
     experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;
     experiment.cpuProfileSeconds =
@@ -234,7 +309,8 @@ void load_experiment() {
     experiment.cpuProfileSlowMs =
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_slow_ms", 0, ini.c_str())), 0, 1000);
     experiment.measure =
-        GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline;
+        GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline ||
+        experiment.apiPath;  // (the overlay's GPU and thread figures, as views4 has them)
     experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
     experiment.views4FocusCull = GetPrivateProfileIntW(L"experiment", L"views4_focus_cull", 0, ini.c_str()) != 0;
     experiment.views4FocusCullMargin =
@@ -252,6 +328,7 @@ void load_experiment() {
     experiment.d3d12Debug = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) != 0;
     experiment.gpuValidation = GetPrivateProfileIntW(L"experiment", L"d3d12_debug", 0, ini.c_str()) >= 2;
     experiment.pixCaptureFrame = GetPrivateProfileIntW(L"experiment", L"pix_capture_frame", 0, ini.c_str());
+    experiment.pixCaptureHotkey = GetPrivateProfileIntW(L"experiment", L"pix_capture_hotkey", 0, ini.c_str()) != 0;
     experiment.d3d11CaptureFrame = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_frame", 0, ini.c_str());
     // d3d11_capture_hotkey=1: tracked from the start with a frame never reached; the frame capture hotkey arms the next.
     experiment.d3d11CaptureHotkey = GetPrivateProfileIntW(L"experiment", L"d3d11_capture_hotkey", 0, ini.c_str()) == 1;
@@ -298,7 +375,28 @@ void load_experiment() {
     if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
-    experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
+    // Diagnostics that write pictures by themselves, time the GPU or change the picture to measure it run only in a
+    // Detailed logs launch (the launcher's Diagnostics pane: SIM_QVFR_LOG_LEVEL=debug), whatever the ini says. Captures
+    // the player asks for with a hotkey stay.
+    if (!log_debug()) {
+        const bool any = experiment.replaySaveCount || experiment.captureEverySeconds || experiment.replayEyeCapture ||
+                         experiment.replayGpuSteps || experiment.replayCullProbe || experiment.replayCull == 3 ||
+                         experiment.replayCostAb || experiment.replayRecordTiming ||
+                         experiment.pixCaptureFrame || (experiment.d3d11CaptureFrame && !experiment.d3d11CaptureHotkey);
+        experiment.replaySaveCount = 0;
+        experiment.captureEverySeconds = 0;
+        experiment.replayEyeCapture = experiment.replayGpuSteps = experiment.replayCullProbe = experiment.replayCostAb = false;
+        experiment.replayRecordTiming = false;
+        if (experiment.replayCull == 3)  // the alternating A/B: the culling simply on
+            experiment.replayCull = 2;
+        experiment.pixCaptureFrame = 0;
+        if (!experiment.d3d11CaptureHotkey)
+            experiment.d3d11CaptureFrame = 0;
+        if (any)
+            log_line("experiment: diagnostics set in the ini (automatic captures, GPU step timing, A/B probes) are off: they "
+                     "run only in a Detailed logs launch (the launcher's Diagnostics pane)");
+    }
+    experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 0, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
@@ -308,13 +406,28 @@ void load_experiment() {
     const bool scaledMode = experiment.views4 || experiment.twoLoops || experiment.focusOnly || experiment.doubleRender ||
                             experiment.views3;
     experiment.eyeScale = scaledMode ? eyePercent / 100.0 : 1.0;
-    if (!scaledMode && eyePercent != 100)
+    // baseline_eye_scale=N (measurement only, baseline=1): the game's own two views at N% of the runtime's eye size,
+    // for a baseline the native size can't run (ACE at a Pimax's native size runs out of VRAM).
+    const UINT baselinePercent = GetPrivateProfileIntW(L"experiment", L"baseline_eye_scale", 0, ini.c_str());
+    if (baseline && baselinePercent) {
+        experiment.eyeScale = std::clamp(baselinePercent, 10u, 200u) / 100.0;
+        logf("experiment: baseline_eye_scale=%u: the game's own two views at %.0f%% of the runtime's eye size",
+             baselinePercent, experiment.eyeScale * 100);
+    } else if (!scaledMode && eyePercent != 100)
         logf("experiment: mode=off: the game gets the runtime's own eye size (eye_scale=%u applies to the other modes)",
              eyePercent);
     // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most
     // either can be live.
     const Views4Sizes sizes = views4_sizes(ini.c_str(), experiment.focusFraction, experiment.focusFractionY);
-    const FovCrop launchCrop = experiment.views4 ? settings.crop : FovCrop{};
+    const FovCrop launchCrop = experiment.views4 || experiment.replayCompose ? settings.crop : FovCrop{};
+    // The API path (replay_compose): ACE's own two eyes are the periphery, at [quad] periphery_scale of the native eye
+    // (set at launch: ACE sizes its targets once); the focus views take focus_percent and focus_density.
+    if (experiment.replayCompose) {
+        experiment.eyeScale = sizes.outer;
+        logf("experiment: API path: ACE's two eyes at the periphery's %.0f%% of the native eye; focus views %.0f%% x %.0f%% "
+             "of the native eye (box %.0f%%, density from focus_density)",
+             sizes.outer * 100, sizes.focus * 100, sizes.focus * 100, experiment.focusFraction.load() * 100);
+    }
     experiment.set_crop(launchCrop);
     helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),

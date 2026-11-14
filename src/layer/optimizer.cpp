@@ -14,6 +14,7 @@
 #include "probe/d3d11_capture.h"
 #include "probe/gpu_frame_timer.h"
 #include "probe/gpu_load.h"
+#include "probe/pix_capture.h"
 #include "quad/osd.h"
 #include "quad/qvfr_optimizer.h"
 #include "quad/settings_menu.h"
@@ -198,13 +199,20 @@ void profile_notice(const std::wstring& text, int64_t ms) {
 // The frame capture hotkey (d3d11_capture_hotkey, probe/d3d11_capture.h): each press saves the next frame's swapchain
 // images, the game's and the composed output: what the headset gets at that moment.
 void frame_capture_poll() {
-    if (!experiment.d3d11CaptureHotkey)
+    if (!experiment.d3d11CaptureHotkey && !experiment.pixCaptureHotkey)
         return;
     const bool held = hotkey_held(HotkeyAction::FrameCapture);
     const bool pressed = held && !frameCaptureHotkeyHeld;
     frameCaptureHotkeyHeld = held;
-    if (pressed && d3d11_capture_arm(endFrames + 1))
+    if (pressed && experiment.d3d11CaptureHotkey && d3d11_capture_arm(endFrames + 1))
         profile_notice(L"Frame capture: saved to the logs folder (captures)", 2500);
+    // pix_capture_hotkey (D3D12): a PIX GPU capture of the next frames, into the logs folder's pix folder.
+    if (pressed && experiment.pixCaptureHotkey) {
+        if (pix_capture_arm(endFrames + 1))
+            profile_notice(L"PIX capture: saved to the logs folder (pix)", 2500);
+        else
+            log_line("pix: the frame capture hotkey: no capture (one is running, or no PIX capturer)");
+    }
 }
 
 void cpu_profile_poll() {

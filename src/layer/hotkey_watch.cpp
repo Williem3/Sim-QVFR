@@ -164,7 +164,8 @@ std::wstring hotkey_footer(bool helmetOn) {
     const Entry entries[] = {{HotkeyAction::Overlay, L"Overlay", true},
                              {HotkeyAction::Visor, L"Visor", helmetOn},
                              {HotkeyAction::CpuCapture, L"CPU capture", experiment.cpuProfile},
-                             {HotkeyAction::FrameCapture, L"Frame capture", experiment.d3d11CaptureHotkey}};
+                             {HotkeyAction::FrameCapture, L"Frame capture",
+                              experiment.d3d11CaptureHotkey || experiment.pixCaptureHotkey}};
     std::wstring out;
     for (const Entry& e : entries) {
         const Hotkey& h = hotkeys[static_cast<int>(e.action)];

@@ -27,6 +27,7 @@
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "probe/focus_ngx.h"
 
 namespace simqvfr::layer {
 
@@ -82,7 +83,7 @@ void menu_placement_changed(const MenuPlacement& placement) {
     live.menuPlacement = placement;
     menu_place(placement);
     logf("settings menu: moved to %d deg right, %d deg up, %d deg wide", placement.yaw, placement.pitch, placement.width);
-    if (experiment.views4 || experiment.quad)
+    if (experiment.views4 || experiment.quad || experiment.replayCompose)
         menu_open(qpc_now());
 }
 
@@ -173,6 +174,36 @@ void menu_open(int64_t now) {
                                  static_cast<int>(quad.nativeW), static_cast<int>(quad.nativeH), 0,
                                  experiment.eyeScale * 100};
         }
+        menu.model.launch.apiPath = experiment.replayCompose;
+        menu.model.launch.apiDlss = experiment.replayCompose && experiment.replayDlss != 0;
+        menu.model.launch.apiFocusScale = experiment.replayDlssFocusScale;
+        menu.model.dlssState.clear();
+        if (experiment.replayCompose) {  // what DLSS runs, read each time the menu is drawn
+            const focus_ngx::State d = focus_ngx::state();
+            const auto letter = [](int preset) {
+                return preset > 0 && preset <= 26 ? std::wstring(1, static_cast<wchar_t>(L'A' + preset - 1))
+                                                  : std::wstring(L"default");
+            };
+            static const wchar_t* const kModes[] = {L"Performance", L"Balanced", L"Quality", L"Ultra Performance",
+                                                    L"Ultra Quality", L"DLAA"};
+            const std::wstring mode = d.gameQuality >= 0 && d.gameQuality <= 5 ? kModes[d.gameQuality] : L"?";
+            if (!experiment.replayDlss) {
+                menu.model.dlssState = L"DLSS: off for the focus views (replay_dlss=0)";
+            } else if (!d.seen) {
+                menu.model.dlssState = L"DLSS: off in the game: periphery and focus without DLSS";
+            } else {
+                const bool dlaa = d.width == d.outWidth && d.height == d.outHeight;
+                const std::wstring focusMode = dlss_choice_name(kDlssFocusModes, experiment.replayDlssFocusScale);
+                if (!dlaa)  // the game renders its eyes smaller in its other modes, and the focus views with them
+                    menu.model.dlssState = L"Set the game's DLSS to DLAA (now " + mode + L"): the focus mode is picked here";
+                else
+                    menu.model.dlssState = L"DLSS: periphery DLAA preset " + letter(d.eyePreset) + L", focus " +
+                                           (d.focusRunning ? focusMode + L" preset " + letter(d.focusPreset)
+                                                           : std::wstring(L"not running"));
+            }
+        }
+        if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
+            menu.model.launch.qvfr = true;
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
         menu.model.launch.cropHeight = l.cropHeight * 100;
         const games::GameFeatures features = game_features();  // what the game has: the rest is left out
@@ -184,6 +215,8 @@ void menu_open(int64_t now) {
         menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
         menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
         menu.model.launch.liveResolution = features.liveResolution;
+        if (experiment.replayCompose)
+            menu.model.launch.liveResolution = false;  // periphery and density: the next launch
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&
@@ -242,7 +275,7 @@ void menu_press(MenuKey key, int64_t now) {
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
-                     ownDlss = menu.model.launch.ownDlss, ownNr = menu.model.launch.ownNr] {
+                     ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
         write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
@@ -443,6 +476,10 @@ void menu_render() {
     if (menu.model.launch.nativePpd <= 0)  // known once ACE has rendered a frame
         menu.model.launch.nativePpd = native_center_ppd();
     menu.model.launch.dlssHeld = experiment.views4 && game->qvfr_dlss_held();
+    {  // the helmet's images load when it is first turned on: its page follows (visor, size, height)
+        std::lock_guard guard(quad.mutex);
+        menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
+    }
     const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
                                                          menu_lines(menu.model),
                                                          menu_notes(menu.model), hint, menu_subtitle(menu.model),
@@ -471,7 +508,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers) {
     // The performance overlay also while measuring without QVFR (baseline=1), to compare the two; the settings
     // menu only with a method of the layer's (its settings would change nothing in mode=off).
-    const bool method = experiment.views4 || experiment.quad;
+    const bool method = experiment.views4 || experiment.quad || experiment.replayCompose;
     if (live.ini.empty() || (!method && !experiment.measure && !notice_pending()))
         return info;
     // For the launcher's Center PPD: once, when ACE has rendered.
