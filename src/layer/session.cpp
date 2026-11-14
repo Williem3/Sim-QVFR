@@ -161,6 +161,13 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                     const double k = eye > 0 ? experiment.views4Layout.focus / eye : box * 2;
                     focusSettings.boxFraction = box;
                     focusSettings.pixelScale = std::clamp(k / box, 0.5, 12.0);
+                    // The same vertically: a crop keeps different shares of the eye's width and height, and the focus
+                    // height may be set on its own.
+                    const double boxY = std::clamp(experiment.box_y(), 0.05, 0.6);
+                    const double eyeY = experiment.eyeScale * experiment.crop().kept_height();
+                    const double kY = eyeY > 0 ? experiment.views4Layout.focusHeight / eyeY : boxY * 2;
+                    focusSettings.boxFractionY = boxY;
+                    focusSettings.pixelScaleY = std::clamp(kY / boxY, 0.5, 12.0);
                 }
                 focusSettings.saveFirst = experiment.replaySaveFirst;
                 focusSettings.saveEvery = experiment.replaySaveEvery;

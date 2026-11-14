@@ -50,6 +50,9 @@ struct ReplayProbeStats {
 struct ReplayFocusSettings {
     double boxFraction = 0.20;    // the focus box's half extent in each eye's NDC (0.2: 20% of the eye's tangent extent)
     double pixelScale = 2.0;      // focus pixels per eye pixel
+    double boxFractionY = 0;      // the box's half extent in NDC y, when it differs from x's (0: the same): a FOV crop
+                                  // or a focus height of its own
+    double pixelScaleY = 0;       // focus pixels per eye pixel, vertically (0: pixelScale)
     uint64_t saveFirst = 1800;    // the first sample frame (xrEndFrame count), then every `saveEvery`, `saveCount` times
     uint64_t saveEvery = 900;
     uint32_t saveCount = 3;
@@ -86,7 +89,7 @@ struct ReplayFocusSettings {
 // projection inverted, its x/y rows remapped around the eye's own centre (half extent `box` in NDC), inverted back.
 // Returns false when the matrix doesn't invert. Exposed for the offline test.
 bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&focus)[16], double gazeX = 0,
-                                     double gazeY = 0);
+                                     double gazeY = 0, double boxY = 0);
 
 // mode 1/2: re-emission cost (never executed); mode 3: focus depth replay (executed on `queue`).
 bool replay_probe_start(ID3D12Device* device, int mode, ID3D12CommandQueue* queue = nullptr,
@@ -101,13 +104,14 @@ bool replay_probe_installed();
 // rest state, and the focus box (half extent in each eye's NDC, centred on its forward axis). False before the first
 // post replay.
 // `offset`: each eye's box centre off its forward axis in that eye's NDC (the gaze, as this frame's passes used it).
-bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box, float (&offset)[2][2]);
+bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box, float (&offset)[2][2],
+                              double* boxY = nullptr);
 // The gaze: where each eye's focus box should sit, off the eye's forward axis in the eye's NDC (x right, y up; 0: on
 // the axis). Taken at the frame's end for the next frame; the box is kept inside the eye's image.
 void replay_probe_set_gaze(const float (&ndc)[2][2]);
 // The focus box's half extent in each eye's NDC, while running: taken at the frame's end. The focus views keep their
 // pixel size (made at the start), so their density changes with it.
-void replay_probe_set_box(double box);
+void replay_probe_set_box(double box, double boxY = 0);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();
 // Qualifying thresholds for modes 1/2 (tests use small ones).

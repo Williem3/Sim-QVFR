@@ -114,7 +114,8 @@ void live_apply(const LiveSettings& l) {
     if (experiment.replayCompose) {
         // The API path: the box's size is live (the focus views keep their pixels, so their density follows); ACE's
         // eye size (periphery) and the focus views' pixel size (density) are set at launch.
-        replay_probe_set_box(experiment.box_x(l.focusFraction));
+        replay_probe_set_box(experiment.box_x(l.focusFraction),
+                             experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction));
         log_line("live: API path: the focus box's size applies now; periphery and focus density at the next launch");
     }
     if (experiment.views4 && game_features().liveResolution)

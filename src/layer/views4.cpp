@@ -157,7 +157,8 @@ void replay_compose() {
     D3D12_RESOURCE_STATES focusState{};
     double box = 0;
     float gazeNdc[2][2] = {};  // each eye's box centre off its forward axis, as this frame's focus image was drawn
-    if (!replay_probe_focus_image(focusImage, focusState, box, gazeNdc))
+    double boxY = 0;
+    if (!replay_probe_focus_image(focusImage, focusState, box, gazeNdc, &boxY))
         return;  // no focus image yet: ACE's eyes go to the headset as they are
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
     EyeComposition eyes[2] = {};
@@ -168,7 +169,7 @@ void replay_compose() {
         EyeComposition& c = eyes[e];
         fov_tangents(quad.v4Fov[e], c.outerTan);
         double hw, hh;
-        focus_extents(c.outerTan, box, box, hw, hh);
+        focus_extents(c.outerTan, box, boxY, hw, hh);
         // The box's centre: the gaze offset (the eye's NDC) in tangents of the FOV ACE rendered.
         const float cx = gazeNdc[e][0] * 0.5f * (c.outerTan[1] - c.outerTan[0]);
         const float cy = gazeNdc[e][1] * 0.5f * (c.outerTan[2] - c.outerTan[3]);
