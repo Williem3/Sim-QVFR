@@ -85,7 +85,8 @@ struct ReplayFocusSettings {
 // R2b: the focus inverse projection from an eye's (4 rows as the shader uses them, view = rows . clip): the eye's
 // projection inverted, its x/y rows remapped around the eye's own centre (half extent `box` in NDC), inverted back.
 // Returns false when the matrix doesn't invert. Exposed for the offline test.
-bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&focus)[16]);
+bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&focus)[16], double gazeX = 0,
+                                     double gazeY = 0);
 
 // mode 1/2: re-emission cost (never executed); mode 3: focus depth replay (executed on `queue`).
 bool replay_probe_start(ID3D12Device* device, int mode, ID3D12CommandQueue* queue = nullptr,
@@ -99,7 +100,11 @@ bool replay_probe_installed();
 // P3: the focus views' final image (both eyes side by side, after the post: the swapchain's format, typeless), its
 // rest state, and the focus box (half extent in each eye's NDC, centred on its forward axis). False before the first
 // post replay.
-bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box);
+// `offset`: each eye's box centre off its forward axis in that eye's NDC (the gaze, as this frame's passes used it).
+bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box, float (&offset)[2][2]);
+// The gaze: where each eye's focus box should sit, off the eye's forward axis in the eye's NDC (x right, y up; 0: on
+// the axis). Taken at the frame's end for the next frame; the box is kept inside the eye's image.
+void replay_probe_set_gaze(const float (&ndc)[2][2]);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();
 // Qualifying thresholds for modes 1/2 (tests use small ones).

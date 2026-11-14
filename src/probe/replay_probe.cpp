@@ -576,7 +576,7 @@ void replay_unexecuted(const Stream& s) {
 // (rows 21/22 and 103/104: ndc centre = -row.z). Rows 128-131 keep those unjittered x/y rows.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
-cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; };
+cbuffer Params : register(b1) { float2 halfExtent; float2 focusSize; uint4 from0; uint4 from1; uint4 to0; uint4 to1; uint fogSrv; uint shadowSrv; uint4 atmo0; uint4 atmo1; uint blurSrv; uint fogSrv1; float4 gaze; float4 gazePrev; };
 RWByteAddressBuffer dst : register(u0);
 bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || r == c || r == d; }
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
@@ -588,8 +588,14 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     }
     float4 v = src[i];
     const bool left = i < 64;
-    const float ox = left ? src[17].z : src[103].z;  // projectionUnjittered: each eye's own centre
-    const float oy = left ? src[18].z : src[104].z;
+    // The box's centre off the eye's forward axis (the gaze; NDC, per eye: gaze.xy left, .zw right; a right-eye list
+    // holds its eye in the left rows). The previous frame's projections take the previous frame's centre, so velocities
+    // and reprojection stay right while the box moves.
+    const bool rightEye = !left || src[84].x > 0;
+    const bool prevRow = (i >= 21 && i <= 28) || (i >= 107 && i <= 110);
+    const float2 g = prevRow ? (rightEye ? gazePrev.zw : gazePrev.xy) : (rightEye ? gaze.zw : gaze.xy);
+    const float ox = (left ? src[17].z : src[103].z) - g.x;  // projectionUnjittered: each eye's own centre
+    const float oy = (left ? src[18].z : src[104].z) - g.y;
     const float ax = 1.0 / halfExtent.x, ay = 1.0 / halfExtent.y;
     if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107))  // viewProjection and the projections
         v = ax * v + (ax * ox) * src[i + 3];          // x' = a x + b w, b = -a * centre = a * ox
@@ -633,8 +639,8 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
 
 // kPatchShader's Params as 32-bit values, at HLSL's packing (a vector never straddles a 16-byte register): 0-3 the
 // floats, 4-11 from, 12-19 to, 20 fogSrv, 21 shadowSrv, (22-23 padding), 24-27 atmo0, 28-31 atmo1, 32 blurSrv, 33
-// fogSrv1.
-constexpr UINT kPatchParams = 36;
+// fogSrv1, (34-35 padding), 36-39 gaze, 40-43 gazePrev.
+constexpr UINT kPatchParams = 44;
 // ACE's tyre shaders have no single-pass-stereo variant (the vertex shader takes no instance id and writes no viewport
 // index; 16:43 capture): the pass constants copied with the right eye's matrices in the left eye's rows, for a second
 // draw into the right eye's viewport. The tyre VS reads view (5-8), prevView (9-12), projection (13-16) and
@@ -783,6 +789,10 @@ struct Focus {
     ComPtr<ID3D12Resource> atmo[8];
     ID3D12Resource* atmoGame[8] = {};
     float eyeCentre[2][2] = {};
+    // The focus box's centre off each eye's forward axis, in the eye's NDC (the gaze): asked for by the layer
+    // (replay_probe_set_gaze), taken at the frame's end for the next frame's lists (every pass of a frame uses one
+    // centre), clamped so the box stays inside the eye's image; last frame's for the previous-frame projections.
+    float gazeWanted[2][2] = {}, gazeOffset[2][2] = {}, gazePrev[2][2] = {};
     // replay_atmosphere=4: ACE's atmosphericScattering + upscaling replayed per focus eye (ray grid narrowed to the box):
     // our low-res sky maps and the upscaling intermediates, per eye [in low, out low, in intermediate, out
     // intermediate] (SRV at slot 112 + 8 e + 2 k, UAV + 1); our grid constants.
@@ -924,7 +934,7 @@ RWByteAddressBuffer dst : register(u0);
 // outputIndex (25.z/w) ours. Scatter (mode 1, 32 B): outputIndex and inputIndex (1.x/y) ours.
 constexpr char kFogShader[] = R"(
 cbuffer Source : register(b0) { float4 src[990]; };
-cbuffer Params : register(b1) { float halfExtent; uint mode; uint historySrv; uint outputUav; uint inputSrv; uint fresh; };
+cbuffer Params : register(b1) { float halfExtent; uint mode; uint historySrv; uint outputUav; uint inputSrv; uint fresh; float gx; float gy; };
 RWByteAddressBuffer dst : register(u0);
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (mode == 1) {
@@ -936,8 +946,8 @@ RWByteAddressBuffer dst : register(u0);
     }
     if (i >= 990) return;
     float4 v = src[i];
-    const float ox = src[4].x * src[0].z + src[5].x * src[1].z + src[6].x * src[2].z;
-    const float oy = src[4].y * src[0].z + src[5].y * src[1].z + src[6].y * src[2].z;
+    const float ox = src[4].x * src[0].z + src[5].x * src[1].z + src[6].x * src[2].z - gx;  // less the gaze offset
+    const float oy = src[4].y * src[0].z + src[5].y * src[1].z + src[6].y * src[2].z - gy;
     const float a = 1.0 / halfExtent;
     if (i >= 4 && i <= 11) {
         v.x = a * v.x + a * ox * v.w;
@@ -959,7 +969,7 @@ RWByteAddressBuffer dst : register(u0);
 constexpr char kShadowShader[] = R"(
 cbuffer Normals : register(b0) { float4 nrm[18]; };
 cbuffer Shadow : register(b1) { float4 shd[35]; };
-cbuffer Params : register(b2) { float box; uint mode; uint eye; float fw; float fh; };
+cbuffer Params : register(b2) { float box; uint mode; uint eye; float fw; float fh; float4 gaze; };  // gaze: value 8
 RWByteAddressBuffer dst : register(u0);
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (mode == 0) {
@@ -967,7 +977,8 @@ RWByteAddressBuffer dst : register(u0);
         float4 v = nrm[i];
         if ((i >= 4 && i <= 7) || (i >= 12 && i <= 15)) {
             const uint b = i < 8 ? 4 : 12;
-            const float ox = nrm[b + 3].x / nrm[b].x, oy = nrm[b + 3].y / nrm[b + 1].y;
+            const float2 g = i < 8 ? gaze.xy : gaze.zw;
+            const float ox = nrm[b + 3].x / nrm[b].x - g.x, oy = nrm[b + 3].y / nrm[b + 1].y - g.y;
             if (i == b || i == b + 1) v *= box;
             if (i == b + 3) v = v - ox * nrm[b] - oy * nrm[b + 1];
         }
@@ -979,7 +990,8 @@ RWByteAddressBuffer dst : register(u0);
     if (i >= 35) return;
     float4 v = shd[i];
     const uint b = eye == 0 ? 4 : 12;
-    const float ox = nrm[b + 3].x / nrm[b].x, oy = nrm[b + 3].y / nrm[b + 1].y;
+    const float2 g = eye == 0 ? gaze.xy : gaze.zw;
+    const float ox = nrm[b + 3].x / nrm[b].x - g.x, oy = nrm[b + 3].y / nrm[b + 1].y - g.y;
     if (i <= 1) v *= box;
     if (i == 3) v = v - ox * shd[0] - oy * shd[1];
     dst.Store4(i * 16, asuint(v));
@@ -1046,7 +1058,7 @@ RWByteAddressBuffer dst : register(u0);
 constexpr char kPackShader[] = R"(
 cbuffer Src : register(b0) { float4 src[22]; };
 cbuffer P : register(b1) { float box; float ox; float oy; float k; float fw; float fh; float offX; uint velSrv;
-                           uint depthSrv; uint flagsSrv; uint mbUav; uint velOnlyUav; uint flagsUav; uint aaUav; };
+                           uint depthSrv; uint flagsSrv; uint mbUav; uint velOnlyUav; uint flagsUav; uint aaUav; float pox; float poy; };
 RWByteAddressBuffer dst : register(u0);
 [numthreads(32, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 22) return;
@@ -1054,7 +1066,8 @@ RWByteAddressBuffer dst : register(u0);
     const float a = 1.0 / box;
     if (i <= 1) v *= box;
     if (i == 3) v = v - ox * src[0] - oy * src[1];
-    if (i >= 4 && i <= 11) { v.x = a * v.x + a * ox * v.w; v.y = a * v.y + a * oy * v.w; }
+    if (i >= 4 && i <= 7) { v.x = a * v.x + a * ox * v.w; v.y = a * v.y + a * oy * v.w; }
+    if (i >= 8 && i <= 11) { v.x = a * v.x + a * pox * v.w; v.y = a * v.y + a * poy * v.w; }  // last frame's box
     if (i == 12) v = float4(1.0 / fw, 1.0 / fh, v.z * k, v.w * k);
     if (i == 13) { v.x = asfloat(velSrv); v.y = asfloat(depthSrv); }
     if (i == 14) { v.x *= k; v.y *= k; }
@@ -1072,7 +1085,7 @@ RWByteAddressBuffer dst : register(u0);
 // viewportOffset / Size (16) the focus eye's.
 constexpr char kAaShader[] = R"(
 cbuffer Src : register(b0) { float4 src[17]; };
-cbuffer P : register(b1) { float box; float ox; float oy; float fw; float fh; float offX; };
+cbuffer P : register(b1) { float box; float ox; float oy; float fw; float fh; float offX; float pox; float poy; };
 RWByteAddressBuffer dst : register(u0);
 [numthreads(32, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 17) return;
@@ -1081,7 +1094,8 @@ RWByteAddressBuffer dst : register(u0);
     if (i == 0) v.xy = float2(2 * fw, fh);
     if (i == 3 || i == 4) v *= box;
     if (i == 6) v = v - ox * src[3] - oy * src[4];
-    if (i >= 7 && i <= 14) { v.x = a * v.x + a * ox * v.w; v.y = a * v.y + a * oy * v.w; }
+    if (i >= 7 && i <= 10) { v.x = a * v.x + a * ox * v.w; v.y = a * v.y + a * oy * v.w; }
+    if (i >= 11 && i <= 14) { v.x = a * v.x + a * pox * v.w; v.y = a * v.y + a * poy * v.w; }  // last frame's box
     if (i == 16) v = float4(offX, 0, fw, fh);
     dst.Store4(i * 16, asuint(v));
 }
@@ -1196,14 +1210,15 @@ int pso_kind(ID3D12PipelineState* pso) {
 
 // The tile shaders multiply out = M v with M's columns in the 4 registers (tileFrustums' disassembly): eye[4k + i] is
 // M[i][k]. inverse(R P) = inverse(P) inverse(R), R: x' = x / box + (ox / box) w, y' likewise.
-bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&out)[16]) {
+bool replay_focus_inverse_projection(const float (&eye)[16], double box, float (&out)[16], double gazeX, double gazeY) {
     double q[4][4], p[4][4];
     for (int i = 0; i < 4; ++i)
         for (int k = 0; k < 4; ++k)
             q[i][k] = eye[k * 4 + i];
     if (!invert(q, p))
         return false;
-    const double ox = p[0][2], oy = p[1][2];  // P's x and y rows: (sx, 0, ox, 0), (0, sy, oy, 0)
+    // P's x and y rows: (sx, 0, ox, 0), (0, sy, oy, 0); the box's centre is -ox, -oy plus the gaze offset
+    const double ox = p[0][2] - gazeX, oy = p[1][2] - gazeY;
     for (int i = 0; i < 4; ++i) {
         out[0 * 4 + i] = static_cast<float>(q[i][0] * box);
         out[1 * 4 + i] = static_cast<float>(q[i][1] * box);
@@ -1318,7 +1333,7 @@ bool focus_compile() {
         fogParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         fogParams[0].Descriptor = {0, 0};
         fogParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        fogParams[1].Constants = {1, 0, 6};
+        fogParams[1].Constants = {1, 0, 8};
         fogParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         fogParams[2].Descriptor = {0, 0};
         const D3D12_ROOT_SIGNATURE_DESC fogDesc{3, fogParams, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -1353,7 +1368,7 @@ bool focus_compile() {
         p2[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         p2[1].Descriptor = {1, 0};
         p2[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        p2[2].Constants = {2, 0, 5};
+        p2[2].Constants = {2, 0, 12};
         p2[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         p2[3].Descriptor = {0, 0};
         const D3D12_ROOT_SIGNATURE_DESC d2{4, p2, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -1458,7 +1473,7 @@ bool focus_compile() {
         p6[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         p6[0].Descriptor = {0, 0};
         p6[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        p6[1].Constants = {1, 0, 14};
+        p6[1].Constants = {1, 0, 16};
         p6[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         p6[2].Descriptor = {0, 0};
         const D3D12_ROOT_SIGNATURE_DESC d6{3, p6, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -1492,7 +1507,7 @@ bool focus_compile() {
         p7[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         p7[0].Descriptor = {0, 0};
         p7[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        p7[1].Constants = {1, 0, 6};
+        p7[1].Constants = {1, 0, 8};
         p7[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         p7[2].Descriptor = {0, 0};
         const D3D12_ROOT_SIGNATURE_DESC d7{3, p7, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -1837,6 +1852,13 @@ Replay* acquire_replay() {
     return focus.pool.back().get();
 }
 
+// Each eye's box centre in its NDC: the eye's forward axis plus the gaze offset of this frame (under focus.lock).
+void focus_centres(float (&centre)[2][2]) {
+    for (int e = 0; e < 2; ++e)
+        for (int k = 0; k < 2; ++k)
+            centre[e][k] = focus.eyeCentre[e][k] + focus.gazeOffset[e][k];
+}
+
 void barrier(List* l, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
     if (from == to || !r)
         return;
@@ -1967,6 +1989,9 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     const uint32_t shadowSrv = shadowPhase && focus.shadowReady && !focus.shadowBroken && !focus.tilesBroken
                                    ? focus.slotFirst + 15 - focus.baseIndex
                                    : 0;
+    float gazeNow[4], gazeBefore[4];  // this frame's box centres off the eyes' axes, and last frame's
+    std::memcpy(gazeNow, focus.gazeOffset, sizeof(gazeNow));
+    std::memcpy(gazeBefore, focus.gazePrev, sizeof(gazeBefore));
     const uint32_t fogSrv = focus.fogMade && focus.fogReady && !focus.fogBroken && !focus.tilesBroken && diagPhase != 1
                                 ? focus.slotFirst + kFogFirst + 1 - focus.baseIndex
                                 : 0;
@@ -1986,7 +2011,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
     if (!skyPatches.empty()) {  // the sky's clouds and cbSky copies, before the draws
-        const float c0[2] = {focus.eyeCentre[0][0], focus.eyeCentre[0][1]};
+        const float c0[2] = {focus.eyeCentre[0][0] + focus.gazeOffset[0][0], focus.eyeCentre[0][1] + focus.gazeOffset[0][1]};
         focus_sky_record(l, skyPatches, c0);
     }
     std::vector<std::pair<UINT64, UINT64>> skyMap;
@@ -2011,6 +2036,8 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     params[32] = focus.blurReady && !focus.blurBroken && !focus.tilesBroken
                      ? focus.slotFirst + 62 - focus.baseIndex
                      : 0;
+    std::memcpy(params + 36, gazeNow, sizeof(gazeNow));
+    std::memcpy(params + 40, gazeBefore, sizeof(gazeBefore));
     params[33] = fogSrv && focus.settings.fog == 2 ? focus.slotFirst + kFogFirst + 6 + 1 - focus.baseIndex : 0;
     l->SetComputeRoot32BitConstants(1, kPatchParams, params, 0);
     for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.passConstants) {
@@ -2300,7 +2327,8 @@ void focus_tiles_record(List* gameList, const Stream& s) {
                 ReleaseSRWLockExclusive(&focus.lock);
             }
         }
-        if (!replay_focus_inverse_projection(eyeInverse, focus.settings.boxFraction, focusInverse)) {
+        if (!replay_focus_inverse_projection(eyeInverse, focus.settings.boxFraction, focusInverse, focus.gazeOffset[e][0],
+                                             focus.gazeOffset[e][1])) {
             ok = false;
             break;
         }
@@ -2594,7 +2622,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
                 log_line("replay focus: fog: resampling ACE's voxelGrid0 / 1 through each focus box (replay_fog=2)");
             }
             rr = acquire_replay();
-            std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+            focus_centres(centre);
         }
         ReleaseSRWLockExclusive(&focus.lock);
         if (!rr)
@@ -2668,8 +2696,9 @@ void focus_fog_record(List* gameList, const Stream& s) {
         const D3D12_GPU_VIRTUAL_ADDRESS mineA = focus.fogConstants->GetGPUVirtualAddress() + UINT64{slotA} * kFogSlotBytes;
         const D3D12_GPU_VIRTUAL_ADDRESS mineB = focus.fogConstants->GetGPUVirtualAddress() + UINT64{slotB} * kFogSlotBytes;
         const float box = static_cast<float>(focus.settings.boxFraction);
-        uint32_t params[6];
+        uint32_t params[8];
         std::memcpy(params, &box, 4);
+        std::memcpy(params + 6, focus.gazeOffset[e], 8);  // gx, gy
         params[1] = 0;
         params[2] = rel(at + 3 + 2 * (1 - parity));  // last frame's history, SRV
         params[3] = relUav(at + 2 + 2 * parity);     // this frame's history, UAV
@@ -2678,14 +2707,14 @@ void focus_fog_record(List* gameList, const Stream& s) {
         l->SetComputeRootSignature(focus.fogRoot.Get());
         l->SetPipelineState(focus.fogPso.Get());
         l->SetComputeRootConstantBufferView(0, in.cbv);
-        l->SetComputeRoot32BitConstants(1, 6, params, 0);
+        l->SetComputeRoot32BitConstants(1, 8, params, 0);
         l->SetComputeRootUnorderedAccessView(2, mineA);
         l->Dispatch(16, 1, 1);
         params[1] = 1;
         params[3] = relUav(at + 0);            // our grid, UAV
         params[4] = rel(at + 3 + 2 * parity);  // this frame's history, SRV
         l->SetComputeRootConstantBufferView(0, out.cbv);
-        l->SetComputeRoot32BitConstants(1, 6, params, 0);
+        l->SetComputeRoot32BitConstants(1, 8, params, 0);
         l->SetComputeRootUnorderedAccessView(2, mineB);
         l->Dispatch(1, 1, 1);
         barrier(l, focus.fogConstants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -2816,14 +2845,15 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     l->SetPipelineState(focus.shadowPatchPso.Get());
     l->SetComputeRootConstantBufferView(0, normalsPass->cbv2);
     for (int k = 0; k < 3; ++k) {
-        uint32_t p[5];
+        uint32_t p[12] = {};
         std::memcpy(&p[0], &box, 4);
         p[1] = k == 0 ? 0u : 1u;
         p[2] = k == 0 ? 0u : static_cast<uint32_t>(k - 1);
         std::memcpy(&p[3], &ffw, 4);
         std::memcpy(&p[4], &ffh, 4);
+        std::memcpy(&p[8], focus.gazeOffset, sizeof(focus.gazeOffset));
         l->SetComputeRootConstantBufferView(1, k == 0 ? normalsPass->cbv2 : s.shadowDraws[k - 1].cbv);
-        l->SetComputeRoot32BitConstants(2, 5, p, 0);
+        l->SetComputeRoot32BitConstants(2, 12, p, 0);
         l->SetComputeRootUnorderedAccessView(3, mine[k]);
         l->Dispatch(1, 1, 1);
     }
@@ -3183,7 +3213,7 @@ void focus_atmo_record(List* gameList, const Stream& s) {
         r = acquire_replay();
     if (r && focus.settings.atmosphere == 4 && focus.atmoGridPso)
         replayMaps = focus_atmo_work_prepare();
-    std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+    focus_centres(centre);
     ReleaseSRWLockExclusive(&focus.lock);
     if (!r)
         return;
@@ -3261,7 +3291,7 @@ void focus_blur_record(List* gameList) {
     if (!focus.blurBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.atmoPso[0] &&
         focus.centresKnown && twin) {
         colour = twin->focus.Get();
-        std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+        focus_centres(centre);
         if (!focus.blur || focus.blurColour != colour) {
             ID3D12Resource* game = nullptr;
             D3D12_SHADER_RESOURCE_VIEW_DESC view{};
@@ -3711,10 +3741,13 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     D3D12_GPU_VIRTUAL_ADDRESS cb[2];
     for (int e = 0; e < 2; ++e) {
         cb[e] = focus.packConstants->GetGPUVirtualAddress() + UINT64{focus.packSlot++ % kPostSlots} * 512;
-        uint32_t p[14] = {};
+        uint32_t p[16] = {};
         const float f[7] = {box, -centre[e][0], -centre[e][1], k, static_cast<float>(fw), static_cast<float>(fh),
                             static_cast<float>(e * fw)};
         std::memcpy(p, f, sizeof(f));
+        const float before[2] = {-(centre[e][0] - focus.gazeOffset[e][0] + focus.gazePrev[e][0]),
+                                 -(centre[e][1] - focus.gazeOffset[e][1] + focus.gazePrev[e][1])};
+        std::memcpy(p + 14, before, sizeof(before));
         const UINT rel = focus.slotFirst - focus.baseIndex, urel = focus.fogUavFirst - focus.uavBaseIndex;
         p[7] = rel + 69;   // velocity
         p[8] = rel + 12;   // depth
@@ -3924,10 +3957,11 @@ bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&
     l->SetPipelineState(focus.aaPatchPso.Get());
     for (int e = 0; e < 2; ++e) {
         cb[e] = focus.aaConstants->GetGPUVirtualAddress() + UINT64{focus.aaSlot++ % kPostSlots} * 512;
-        const float p[6] = {box, -centre[e][0], -centre[e][1], static_cast<float>(fw), static_cast<float>(fh),
-                            static_cast<float>(e * fw)};
+        const float p[8] = {box, -centre[e][0], -centre[e][1], static_cast<float>(fw), static_cast<float>(fh),
+                            static_cast<float>(e * fw), -(centre[e][0] - focus.gazeOffset[e][0] + focus.gazePrev[e][0]),
+                            -(centre[e][1] - focus.gazeOffset[e][1] + focus.gazePrev[e][1])};
         l->SetComputeRootConstantBufferView(0, aa[e]->cbv6);
-        l->SetComputeRoot32BitConstants(1, 6, p, 0);
+        l->SetComputeRoot32BitConstants(1, 8, p, 0);
         l->SetComputeRootUnorderedAccessView(2, cb[e]);
         l->Dispatch(1, 1, 1);
     }
@@ -4047,7 +4081,7 @@ void focus_post_record(List* gameList, const Stream& s) {
         fw2 = 2 * twin->focusW;
         fh = twin->focusH;
         colour = twin->focus.Get();
-        std::memcpy(centre, focus.eyeCentre, sizeof(centre));
+        focus_centres(centre);
         if (!focus.postLdr || fw2 != focus.postW || fh != focus.postH || focus.postColour != colour ||
             focus.postFxaa != s.hasFxaa) {
             ComPtr<ID3D12Resource> veil, fxaaTex;
@@ -5877,10 +5911,19 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
 
 bool replay_probe_installed() { return installed; }
 
-bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box) {
+void replay_probe_set_gaze(const float (&ndc)[2][2]) {
+    if (probeMode != 3)
+        return;
+    AcquireSRWLockExclusive(&focus.lock);
+    std::memcpy(focus.gazeWanted, ndc, sizeof(focus.gazeWanted));
+    ReleaseSRWLockExclusive(&focus.lock);
+}
+
+bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& state, double& box, float (&offset)[2][2]) {
     if (probeMode != 3)
         return false;
     AcquireSRWLockShared(&focus.lock);
+    std::memcpy(offset, focus.gazeOffset, sizeof(focus.gazeOffset));
     // Only a focus image of this frame (or the one before: ACE records on other threads): in ACE's menus, pause and
     // loading screens no scene is drawn and the last focus image would sit black or stale over the menu.
     const uint64_t at = focus.postFrame.load(std::memory_order_relaxed), now = focus.frame.load(std::memory_order_relaxed);
@@ -5939,6 +5982,17 @@ void replay_probe_frame_end() {
         focus_ngx::install();
     if (probeMode == 3) {
         const uint64_t ended = focus.frame.fetch_add(1);  // the frame that just ended
+        {  // the next frame's box centre: the gaze asked for, clamped so the box stays inside the eye's image
+            AcquireSRWLockExclusive(&focus.lock);
+            std::memcpy(focus.gazePrev, focus.gazeOffset, sizeof(focus.gazePrev));
+            const float limit = 1.0f - static_cast<float>(focus.settings.boxFraction);
+            for (int e = 0; e < 2; ++e)
+                for (int k = 0; k < 2; ++k) {
+                    const float c = focus.eyeCentre[e][k] + focus.gazeWanted[e][k];
+                    focus.gazeOffset[e][k] = focus.centresKnown ? std::clamp(c, -limit, limit) - focus.eyeCentre[e][k] : 0.0f;
+                }
+            ReleaseSRWLockExclusive(&focus.lock);
+        }
         const uint32_t mt0 = focus.monoTaken[0].exchange(0), mt1 = focus.monoTaken[1].exchange(0);
         const uint32_t md0 = focus.monoDone[0].exchange(0), md1 = focus.monoDone[1].exchange(0);
         const uint32_t mu = focus.monoUnfit.exchange(0), mb = focus.monoBroken.exchange(0);

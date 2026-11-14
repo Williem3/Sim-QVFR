@@ -156,7 +156,8 @@ void replay_compose() {
     ID3D12Resource* focusImage = nullptr;
     D3D12_RESOURCE_STATES focusState{};
     double box = 0;
-    if (!replay_probe_focus_image(focusImage, focusState, box))
+    float gazeNdc[2][2] = {};  // each eye's box centre off its forward axis, as this frame's focus image was drawn
+    if (!replay_probe_focus_image(focusImage, focusState, box, gazeNdc))
         return;  // no focus image yet: ACE's eyes go to the headset as they are
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
     EyeComposition eyes[2] = {};
@@ -168,8 +169,11 @@ void replay_compose() {
         fov_tangents(quad.v4Fov[e], c.outerTan);
         double hw, hh;
         focus_extents(c.outerTan, box, box, hw, hh);
-        const float focusTan[4] = {static_cast<float>(-hw), static_cast<float>(hw), static_cast<float>(hh),
-                                   static_cast<float>(-hh)};
+        // The box's centre: the gaze offset (the eye's NDC) in tangents of the FOV ACE rendered.
+        const float cx = gazeNdc[e][0] * 0.5f * (c.outerTan[1] - c.outerTan[0]);
+        const float cy = gazeNdc[e][1] * 0.5f * (c.outerTan[2] - c.outerTan[3]);
+        const float focusTan[4] = {cx - static_cast<float>(hw), cx + static_cast<float>(hw), cy + static_cast<float>(hh),
+                                   cy - static_cast<float>(hh)};
         std::memcpy(c.focusTan, focusTan, sizeof(focusTan));
         const XrQuaternionf none{0, 0, 0, 1};
         to_matrix(none, c.rotation);

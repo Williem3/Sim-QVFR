@@ -11,6 +11,7 @@
 #include "quad/fov_crop.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "probe/replay_probe.h"
 
 namespace simqvfr::layer {
 
@@ -144,12 +145,74 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
             }
         }
     }
-    if (experiment.replayCompose && stereo) {  // P3: the FOV ACE renders each eye with, and the crop
-        std::lock_guard guard(quad.mutex);
-        quad.v4Fov[0] = views[0].fov;
-        quad.v4Fov[1] = views[1].fov;
-        quad.v4Crop = crop;
-        quad.v4FovValid = true;
+    if (experiment.replayCompose && stereo) {  // the API path: the FOV ACE renders each eye with, the crop, the gaze
+        {
+            std::lock_guard guard(quad.mutex);
+            quad.v4Fov[0] = views[0].fov;
+            quad.v4Fov[1] = views[1].fov;
+            quad.v4Crop = crop;
+            // Each eye against the head (the eyes' middle orientation) and from the eyes' middle: the helmet's frame.
+            XrQuaternionf a = views[0].pose.orientation, b = views[1].pose.orientation;
+            if (a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0)
+                b = {-b.x, -b.y, -b.z, -b.w};
+            XrQuaternionf head{a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w};
+            const float n = std::sqrt(head.x * head.x + head.y * head.y + head.z * head.z + head.w * head.w);
+            if (n > 1e-6f) {
+                head = {head.x / n, head.y / n, head.z / n, head.w / n};
+                quad.v4EyeTurn[0] = qmul(qconj(head), views[0].pose.orientation);
+                quad.v4EyeTurn[1] = qmul(qconj(head), views[1].pose.orientation);
+                const XrVector3f& p0 = views[0].pose.position;
+                const XrVector3f& p1 = views[1].pose.position;
+                const XrVector3f half{(p0.x - p1.x) / 2, (p0.y - p1.y) / 2, (p0.z - p1.z) / 2};
+                quad.v4EyeOffset[0] = rotate(qconj(head), half);
+                quad.v4EyeOffset[1] = {-quad.v4EyeOffset[0].x, -quad.v4EyeOffset[0].y, -quad.v4EyeOffset[0].z};
+            }
+            quad.v4FovValid = true;
+        }
+        // The gaze as views4 takes it (dead-zone, vertical offset, [quad] converge_m), but the box moves inside each
+        // eye's image instead of a camera turning: its centre off the eye's forward axis, in the eye's NDC.
+        if (!(experiment.gaze && gaze_skips_space(info->space, info->displayTime))) {
+            float tan[2][2] = {};
+            bool valid[2] = {};
+            XrVector3f direction{0, 0, -1};
+            const bool gazing = experiment.gaze && (gaze_now(session, info->space, info->displayTime, direction) ||
+                                                    runtime_gaze(info->space, info->displayTime, direction));
+            steady_gaze(gazing, direction);
+            const int offset = gazing ? experiment.gazeOffsetY : experiment.fixedOffsetY;
+            for (int e = 0; e < 2; ++e) {
+                if (gazing) {
+                    const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
+                    valid[e] = d.z < -0.1f;
+                    if (valid[e]) {
+                        tan[e][0] = d.x / -d.z;
+                        tan[e][1] = d.y / -d.z;
+                    }
+                } else {
+                    valid[e] = offset != 0;
+                }
+            }
+            if (experiment.convergeM > 0) {
+                const XrVector3f eyePos[2] = {views[0].pose.position, views[1].pose.position};
+                const XrQuaternionf eyeOri[2] = {views[0].pose.orientation, views[1].pose.orientation};
+                const XrVector3f aim = gazing ? direction : rotate_by(eyes_middle(eyeOri), XrVector3f{0, 0, -1});
+                converged_tangents(eyePos, eyeOri, eyes_middle(eyePos), aim, experiment.convergeM, tan, valid);
+            }
+            float ndc[2][2] = {};
+            for (int e = 0; e < 2; ++e) {
+                if (!valid[e])
+                    continue;
+                if (offset != 0)
+                    tan[e][1] = static_cast<float>(offset_tan_y(tan[e][1], offset));
+                const XrFovf& f = views[e].fov;
+                const float halfW = 0.5f * (std::tan(f.angleRight) - std::tan(f.angleLeft));
+                const float halfH = 0.5f * (std::tan(f.angleUp) - std::tan(f.angleDown));
+                if (halfW > 1e-4f && halfH > 1e-4f) {
+                    ndc[e][0] = tan[e][0] / halfW;
+                    ndc[e][1] = tan[e][1] / halfH;
+                }
+            }
+            replay_probe_set_gaze(ndc);
+        }
     }
     const bool narrowThisFrame = experiment.focusOnly || (experiment.twoLoops && experiment.focusInB && loops.inB);
     if (narrowThisFrame && capacity > 0 && XR_SUCCEEDED(r)) {
