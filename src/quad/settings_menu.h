@@ -136,6 +136,7 @@ struct MenuLaunch {
     // The API-level QVFR test path (ACE: replay_compose): QVFR without the game hooks; the page's name says so (its
     // items are still the plain set until the path has settings of its own).
     bool apiPath = false;
+    int apiFocusScale = 100;  // the focus views' mode this launch runs ([dlss] focus_scale at launch)
     bool apiDlss = false;  // the API path with DLSS: the two presets on the settings page ([dlss] eye_preset, focus_preset)
 };
 

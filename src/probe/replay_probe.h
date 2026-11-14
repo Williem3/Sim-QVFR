@@ -68,6 +68,8 @@ struct ReplayFocusSettings {
                                   // 2: A/B, replayed before samples 1, 3, ... and not before 2, 4, ...
     bool post = false;            // P1: the focus views' post: the eye's bloom through the box, the game's tonemap and
                                   // fxaa replayed on the focus colour (exposure, grading from the game's own)
+    double dlssScale = 1.0;       // the focus views' DLSS mode: their render size as a share of their output size each way
+                                  // (1: DLAA; 0.67 Quality, 0.58 Balanced, 0.5 Performance); with `dlss`
     int dlss = 0;                 // P2a: our NVIDIA DLSS per focus view (NGX's exports, inside the game's NGX session),
                                   // fed by ACE's velocity packing replayed with focus constants (needs `post`)
     bool sky = false;             // the sky draw's screen-space clouds: its cbSky (a CBV table entry) patched to name our

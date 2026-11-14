@@ -256,10 +256,11 @@ void load_experiment() {
             const DlssSettings player = read_dlss_settings(ini.c_str());
             experiment.replayDlssEyePreset = player.eyePreset;
             experiment.replayDlssFocusPreset = player.focusPreset;
+            experiment.replayDlssFocusScale = player.focusScale;  // the focus views' mode: DLAA 100, 67, 58, 50
             experiment.replayDlssJitterX =
                 std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_dlss_jitter_x_percent", 50, ini.c_str()), 10u, 200u) / 100.0;
             experiment.replayDlssPeripheryDlaa =
-                GetPrivateProfileIntW(L"experiment", L"replay_dlss_periphery_dlaa", 1, ini.c_str()) != 0;
+                GetPrivateProfileIntW(L"experiment", L"replay_dlss_periphery_dlaa", 0, ini.c_str()) != 0;
             if (experiment.replayDlss)
                 logf("experiment: API path DLSS: NGX told %.0f%% of ACE's horizontal jitter; periphery DLAA in every in-game "
                      "mode %s", experiment.replayDlssJitterX * 100, experiment.replayDlssPeripheryDlaa ? "on" : "off");

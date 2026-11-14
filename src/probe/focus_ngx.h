@@ -71,12 +71,16 @@ uint64_t game_evaluations();
 struct Feature;
 // Our SuperSampling feature at the focus size (render = output: DLAA), with the game's flags, quality and presets.
 // Recorded into `list`; nullptr (result logged) when NGX refuses.
-Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags = 0);
+// outWidth / outHeight (0: as the render size): the output size of a feature that upscales, its mode by the ratio.
+Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags = 0, unsigned outWidth = 0,
+              unsigned outHeight = 0);
 void release(Feature* f);
 
 struct Inputs {
     ID3D12Resource *color = nullptr, *depth = nullptr, *motion = nullptr, *output = nullptr, *exposure = nullptr;
     unsigned base[2] = {};  // every input's and the output's subrect base (one eye of a side-by-side target)
+    unsigned outBase[2] = {};  // the output's own base when `ownOutBase` (a feature that upscales)
+    bool ownOutBase = false;
     unsigned width = 0, height = 0;
     float jitter[2] = {}, motionScale[2] = {1, 1};
     const EyeEval* game = nullptr;  // pre-exposure, exposure scale, sharpness, frame time copied as the game set them

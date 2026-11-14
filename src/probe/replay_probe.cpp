@@ -830,6 +830,9 @@ struct Focus {
     // can change while running (replay_probe_set_box, taken at a frame's end), the focus pixels stay, so the density
     // follows. 0: no change asked.
     double sizeK = 0, sizeKy = 0;
+    // Our DLSS upscaling the focus views (settings.dlssScale < 1): sizeK / sizeKy are the render size (the twins'), and
+    // the output size (our DLSS image, the post targets, the image composed) is the render size over this.
+    double renderScale = 1.0;
     std::atomic<double> boxYWanted{0};
     std::atomic<double> boxWanted{0};
     // replay_atmosphere=4: ACE's atmosphericScattering + upscaling replayed per focus eye (ray grid narrowed to the box):
@@ -888,7 +891,7 @@ struct Focus {
     focus_ngx::Feature* ngx[2] = {};
     focus_ngx::Feature* ngxAuto[2] = {};  // replay_dlss=2: DLSS's own auto-exposure, no exposure texture (SRV slot 72)
     int dlssPhase = -1;
-    UINT ngxW = 0, ngxH = 0;
+    UINT ngxW = 0, ngxH = 0, ngxOutW = 0, ngxOutH = 0, packOutW = 0, packOutH = 0;
     int ngxPreset = 0;  // focus_ngx::focus_preset() the features were made with
     uint64_t ngxUsed[2] = {};
     bool dlssBroken = false, dlssReady = false, dlssFresh = true;
@@ -3691,7 +3694,8 @@ ID3D12Resource* twin_named(const std::string& name, bool depth) {  // under focu
 // focus constants into our four outputs, then our NGX DLSS feature for that eye over our colour twin, depth twin and
 // packed motion vectors (each input the counterpart of what ACE's own evaluation named) into our DLSS image (slot 71).
 // True when both eyes were evaluated (the tonemap then reads our DLSS image).
-bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw2, UINT fh, const float (&centre)[2][2]) {
+bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw2, UINT fh, UINT ow2, UINT oh,
+                       const float (&centre)[2][2]) {
     if (focus.dlssBroken || !focus.packPso || !focus_ngx::installed())
         return false;
     const Stream::TileDispatch* pack[2] = {};
@@ -3745,7 +3749,8 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         velocityTwin = &focus.resolvedVelocityTwin;
     if (!velocityTwin || !flagsTwin || !depth || !ew || !focus.fogUavFirst || !focus.uavBaseIndex) {
         why = "the velocity / flags / depth twins or our UAV block (fog) not there";
-    } else if (focus.packW != fw2 || focus.packH != fh || focus.packColour != colour ||
+    } else if (focus.packW != fw2 || focus.packH != fh || focus.packOutW != ow2 || focus.packOutH != oh ||
+               focus.packColour != colour ||
                focus.packVelocityTwin != velocityTwin->focus.Get() || focus.packFlagsTwin != flagsTwin->focus.Get()) {
         for (ID3D12Resource* old : {focus.packAa.Get(), focus.packMb.Get(), focus.packVelocity.Get(), focus.packFlags.Get(),
                                     focus.dlssOut.Get(), focus.dlssOutAuto.Get(), focus.casOut.Get()})
@@ -3759,11 +3764,13 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         };
         // ACE's DLSS output format (post_process_color) for our DLSS image
         const DXGI_FORMAT outFormat = game[0].output ? game[0].output->GetDesc().Format : DXGI_FORMAT_R11G11B10_FLOAT;
-        const bool ok = make(DXGI_FORMAT_R16G16B16A16_FLOAT, focus.packAa, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
+        const bool ok0 = make(DXGI_FORMAT_R16G16B16A16_FLOAT, focus.packAa, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
                         make(DXGI_FORMAT_R16G16B16A16_FLOAT, focus.packMb, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
                         make(DXGI_FORMAT_R16G16_FLOAT, focus.packVelocity, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
-                        make(DXGI_FORMAT_R16_FLOAT, focus.packFlags, D3D12_RESOURCE_STATE_UNORDERED_ACCESS) &&
-                        make(outFormat, focus.dlssOut, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE) &&
+                        make(DXGI_FORMAT_R16_FLOAT, focus.packFlags, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        d.Width = ow2;  // our DLSS image and its sharpened copy: the output size
+        d.Height = oh;
+        const bool ok = ok0 && make(outFormat, focus.dlssOut, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE) &&
                         make(outFormat, focus.dlssOutAuto, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE) &&
                         make(outFormat, focus.casOut, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
         if (!ok) {
@@ -3797,6 +3804,8 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
             uav(focus.casOut.Get(), 28);
             inReplay = false;
             focus.packW = fw2;
+            focus.packOutW = ow2;
+            focus.packOutH = oh;
             focus.packH = fh;
             focus.packColour = colour;
             focus.packVelocityTwin = velocityTwin->focus.Get();
@@ -3829,14 +3838,16 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     if (pack[0]->tables[2].ptr != game_gpu(focus.uavBaseIndex).ptr)
         return miss("ACE's packing UAV table isn't the bindless UAV range our outputs are in");
     // Our NGX features at the focus eye size (made again on a size change: the old ones are left to NGX's shutdown).
-    if (!focus.ngx[0] || !focus.ngx[1] || focus.ngxW != fw || focus.ngxH != fh ||
+    if (!focus.ngx[0] || !focus.ngx[1] || focus.ngxW != fw || focus.ngxH != fh || focus.ngxOutW != ow2 / 2 || focus.ngxOutH != oh ||
         focus.ngxPreset != focus_ngx::focus_preset()) {  // or the preset changed (the headset menu)
         focus.ngxPreset = focus_ngx::focus_preset();
-        focus.ngx[0] = focus_ngx::make(l, fw, fh);
-        focus.ngx[1] = focus.ngx[0] ? focus_ngx::make(l, fw, fh) : nullptr;
+        focus.ngx[0] = focus_ngx::make(l, fw, fh, 0, ow2 / 2, oh);
+        focus.ngx[1] = focus.ngx[0] ? focus_ngx::make(l, fw, fh, 0, ow2 / 2, oh) : nullptr;
+        focus.ngxOutW = ow2 / 2;
+        focus.ngxOutH = oh;
         if (focus.settings.dlss == 3 && focus.ngx[1]) {  // A/B: a pair with DLSS's own auto-exposure (flag 0x40)
-            focus.ngxAuto[0] = focus_ngx::make(l, fw, fh, 0x40);
-            focus.ngxAuto[1] = focus.ngxAuto[0] ? focus_ngx::make(l, fw, fh, 0x40) : nullptr;
+            focus.ngxAuto[0] = focus_ngx::make(l, fw, fh, 0x40, ow2 / 2, oh);
+            focus.ngxAuto[1] = focus.ngxAuto[0] ? focus_ngx::make(l, fw, fh, 0x40, ow2 / 2, oh) : nullptr;
         }
         focus.ngxW = fw;
         focus.ngxH = fh;
@@ -3918,6 +3929,9 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         in.exposure = game[e].exposure;  // ACE's own (its 1x1 luminance or none)
         in.base[0] = e * fw;
         in.base[1] = 0;
+        in.outBase[0] = e * (ow2 / 2);  // the output's half of our DLSS image
+        in.outBase[1] = 0;
+        in.ownOutBase = true;
         in.width = fw;
         in.height = fh;
         // the focus views jitter by the same pixels as the eyes (kPatchShader); x as really drawn (focus_ngx)
@@ -3961,7 +3975,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         l->SetComputeRoot32BitConstants(0, 1, d.constants, 0);
         l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + 71));
         l->SetComputeRootDescriptorTable(2, game_gpu(focus.fogUavFirst + 28));
-        l->Dispatch((fw2 + 15) / 16, (fh + 15) / 16, 1);
+        l->Dispatch((ow2 + 15) / 16, (oh + 15) / 16, 1);
         barrier(l, focus.casOut.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
         focus.casDone = true;
         static bool casLogged = false;
@@ -4156,12 +4170,13 @@ bool table_view(D3D12_GPU_DESCRIPTOR_HANDLE table, ComPtr<ID3D12Resource>& r, D3
 // each focus box into our veil; the game's tonemap replayed into our focus image (our colour and veil; the game's
 // exposure, grading LUT; its constants with our size); its fxaa into our final focus image. Our slots: 56 our colour
 // twin's SRV, 57 the game veil's SRV, 58/59 our veil UAV/SRV, 60 our tonemapped image's SRV.
-bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw2, UINT fh, const float (&centre)[2][2]);
+bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw2, UINT fh, UINT ow2, UINT oh,
+                       const float (&centre)[2][2]);
 bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&centre)[2][2]);
 
 void focus_post_record(List* gameList, const Stream& s) {
     Replay* r = nullptr;
-    UINT fw2 = 0, fh = 0;
+    UINT fw2 = 0, fh = 0, ow2 = 0, oh = 0;  // the focus views' render size and their output size (our DLSS upscaling)
     ID3D12Resource* colour = nullptr;
     float centre[2][2] = {};
     std::string why;
@@ -4208,9 +4223,16 @@ void focus_post_record(List* gameList, const Stream& s) {
     } else {
         fw2 = 2 * twin->focusW;
         fh = twin->focusH;
+        // Our DLSS upscaling: the post works on its output, the focus views' full size.
+        ow2 = fw2;
+        oh = fh;
+        if (focus.settings.dlss && focus.renderScale < 0.999) {
+            ow2 = 2 * std::max(16u, static_cast<UINT>(std::lround(twin->focusW / focus.renderScale)));
+            oh = std::max(16u, static_cast<UINT>(std::lround(twin->focusH / focus.renderScale)));
+        }
         colour = twin->focus.Get();
         focus_centres(centre);
-        if (!focus.postLdr || fw2 != focus.postW || fh != focus.postH || focus.postColour != colour ||
+        if (!focus.postLdr || ow2 != focus.postW || oh != focus.postH || focus.postColour != colour ||
             focus.postFxaa != s.hasFxaa) {
             ComPtr<ID3D12Resource> veil, fxaaTex;
             D3D12_SHADER_RESOURCE_VIEW_DESC veilView{}, fxaaView{};
@@ -4243,8 +4265,8 @@ void focus_post_record(List* gameList, const Stream& s) {
                 vd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
                 vd.MipLevels = 1;
                 D3D12_RESOURCE_DESC ld = fxaaTex->GetDesc();
-                ld.Width = fw2;
-                ld.Height = fh;
+                ld.Width = ow2;
+                ld.Height = oh;
                 ld.MipLevels = 1;
                 ld.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
                 D3D12_RESOURCE_DESC fd = ld;
@@ -4316,8 +4338,8 @@ void focus_post_record(List* gameList, const Stream& s) {
                         a.Reset();
                     }
                     focus.postFinal = f2;
-                    focus.postW = fw2;
-                    focus.postH = fh;
+                    focus.postW = ow2;
+                    focus.postH = oh;
                     focus.postColour = colour;
                     focus.postFxaa = s.hasFxaa;
                     focus.postGameFxaa = s.hasFxaa ? fxaaTex : nullptr;  // the samples' comparison: only ACE's fxaa_texture
@@ -4402,15 +4424,15 @@ void focus_post_record(List* gameList, const Stream& s) {
         barrier(l, focus.postVeil.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     }
     // 1b. P2a: our DLSS per focus eye (ACE's packing replayed for our motion vectors), read by the tonemap below.
-    const bool dlssUsed = focus.settings.dlss && focus_dlss_record(l, s, colour, fw2, fh, centre);
+    const bool dlssUsed = focus.settings.dlss && focus_dlss_record(l, s, colour, fw2, fh, ow2, oh, centre);
     // 1c. P2c: MSAA without DLSS: ACE's own antialiasing replayed (our colour twin multisampled, ACE's pass present)
     const bool aaUsed = !dlssUsed && colour == focus.resolvedColour.Get() && focus_aa_record(l, s, fw2, fh, centre);
     // 2. The tonemap constants with our size (register 1: height, width, 1/height, 1/width).
     const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.postConstants->GetGPUVirtualAddress() + UINT64{focus.postSlot++ % kPostSlots} * 256;
     {
         uint32_t p[8] = {6, 1, 0, 0};
-        const float size[4] = {static_cast<float>(fh), static_cast<float>(fw2), 1.0f / static_cast<float>(fh),
-                               1.0f / static_cast<float>(fw2)};
+        const float size[4] = {static_cast<float>(oh), static_cast<float>(ow2), 1.0f / static_cast<float>(oh),
+                               1.0f / static_cast<float>(ow2)};
         std::memcpy(&p[4], size, sizeof(size));
         l->SetComputeRootSignature(focus.cbPatchRoot.Get());
         l->SetPipelineState(focus.cbPatchPso.Get());
@@ -4422,8 +4444,8 @@ void focus_post_record(List* gameList, const Stream& s) {
                 D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     }
     const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    const D3D12_VIEWPORT view{0, 0, static_cast<float>(fw2), static_cast<float>(fh), 0, 1};
-    const D3D12_RECT rect{0, 0, static_cast<LONG>(fw2), static_cast<LONG>(fh)};
+    const D3D12_VIEWPORT view{0, 0, static_cast<float>(ow2), static_cast<float>(oh), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(ow2), static_cast<LONG>(oh)};
     // 3. The game's tonemap into our focus image.
     barrier(l, colour, D3D12_RESOURCE_STATE_RENDER_TARGET, read);
     ID3D12Resource* const tonemapTarget = s.hasFxaa ? focus.postLdr.Get() : focus.postFinal.Get();
@@ -4464,7 +4486,7 @@ void focus_post_record(List* gameList, const Stream& s) {
         l->SetPipelineState(s.fxaaDraw.pso);
         uint32_t consts[8];
         std::memcpy(consts, s.fxaaDraw.consts, sizeof(consts));
-        const float rcp[2] = {1.0f / static_cast<float>(fw2), 1.0f / static_cast<float>(fh)};
+        const float rcp[2] = {1.0f / static_cast<float>(ow2), 1.0f / static_cast<float>(oh)};
         std::memcpy(consts, rcp, sizeof(rcp));
         l->SetGraphicsRoot32BitConstants(0, 8, consts, 0);
         l->SetGraphicsRootDescriptorTable(1, game_gpu(focus.slotFirst + 60));
@@ -5965,7 +5987,8 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
     calibrate();
     if (mode == 3)
         focus.settings = settings;  // before any hook reads it
-        focus.sizeK = settings.boxFraction * settings.pixelScale;
+        focus.renderScale = settings.dlss ? std::clamp(settings.dlssScale, 0.4, 1.0) : 1.0;
+        focus.sizeK = settings.boxFraction * settings.pixelScale * focus.renderScale;
         focus.sizeKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
                        (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale);
     void** vtable = *reinterpret_cast<void***>(list.Get());

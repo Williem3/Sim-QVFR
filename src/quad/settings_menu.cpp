@@ -291,7 +291,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         }
         items.insert(items.end(), method.begin(), method.end());
         if (menu.launch.apiDlss)  // the API path's DLSS: the periphery's and the focus views' presets, live
-            items.insert(items.end(), {MenuItem::DlssEyePreset, MenuItem::DlssFocusPreset});
+            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset});
         if (menu.launch.qvfr)  // last: Up from the page switch reaches it
             items.push_back(MenuItem::Optimize);
     }
@@ -713,6 +713,8 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     }
     if (!menu.dlssState.empty())
         notes.push_back(menu.dlssState);
+    if (menu.launch.apiDlss && menu.values.dlss.focusScale != menu.launch.apiFocusScale)
+        notes.push_back(L"Focus views mode applies at the next launch");
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
     else if (menu.launch.qvfr && !menu.launch.liveResolution)

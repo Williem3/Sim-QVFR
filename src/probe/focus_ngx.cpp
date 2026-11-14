@@ -36,7 +36,7 @@ bool latest(int, EyeEval&) { return false; }
 CreateInfo create_info() { return {}; }
 uint64_t game_evaluations() { return 0; }
 struct Feature {};
-Feature* make(ID3D12GraphicsCommandList*, unsigned, unsigned, int) { return nullptr; }
+Feature* make(ID3D12GraphicsCommandList*, unsigned, unsigned, int, unsigned, unsigned) { return nullptr; }
 void release(Feature*) {}
 bool evaluate(ID3D12GraphicsCommandList*, Feature*, const Inputs&) { return false; }
 
@@ -550,7 +550,18 @@ State state() {
     return s;
 }
 
-Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags) {
+Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags, unsigned outWidth,
+              unsigned outHeight) {
+    if (!outWidth || !outHeight) {
+        outWidth = width;
+        outHeight = height;
+    }
+    // the mode by the ratio (NGX refuses UltraQuality: the LMU work), DLAA at render = output
+    const double ratio = static_cast<double>(width) / outWidth;
+    const int mode = (width == outWidth && height == outHeight) ? static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA)
+                     : ratio >= 0.62                            ? static_cast<int>(NVSDK_NGX_PerfQuality_Value_MaxQuality)
+                     : ratio >= 0.54                            ? static_cast<int>(NVSDK_NGX_PerfQuality_Value_Balanced)
+                                                                : static_cast<int>(NVSDK_NGX_PerfQuality_Value_MaxPerf);
     if (!hooked.load())
         return nullptr;
     const CreateInfo c = create_info();
@@ -562,11 +573,11 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
         b->Set(NVSDK_NGX_Parameter_VisibilityNodeMask, 1u);
         b->Set(NVSDK_NGX_Parameter_Width, width);
         b->Set(NVSDK_NGX_Parameter_Height, height);
-        b->Set(NVSDK_NGX_Parameter_OutWidth, width);
-        b->Set(NVSDK_NGX_Parameter_OutHeight, height);
-        // DLAA (render = output); the game's flags when its creation was seen, else HDR colour, reverse depth and
+        b->Set(NVSDK_NGX_Parameter_OutWidth, outWidth);
+        b->Set(NVSDK_NGX_Parameter_OutHeight, outHeight);
+        // DLAA (render = output) or the mode by the ratio; the game's flags when its creation was seen, else HDR colour, reverse depth and
         // motion vectors at render size (ACE's targets: R11G11B10 linear, reverse-Z).
-        b->Set(NVSDK_NGX_Parameter_PerfQualityValue, static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA));
+        b->Set(NVSDK_NGX_Parameter_PerfQualityValue, mode);
         const int flags = (c.seen ? c.flags
                                   : (NVSDK_NGX_DLSS_Feature_Flags_IsHDR | NVSDK_NGX_DLSS_Feature_Flags_DepthInverted |
                                      NVSDK_NGX_DLSS_Feature_Flags_MVLowRes)) |
@@ -581,8 +592,8 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
                 b->Set(kPresetKeys[i], c.presets[i]);
         }
         r = createOriginal(list, NVSDK_NGX_Feature_SuperSampling, b, &f->handle);
-        logf("focus dlss: our feature %ux%u (DLAA, flags 0x%x, preset %s%d, the game's creation %s): result 0x%08x", width,
-             height, flags, ownPreset > 0 ? "ours " : "the game's ", ownPreset > 0 ? ownPreset : static_cast<int>(c.presets[0]),
+        logf("focus dlss: our feature %ux%u -> %ux%u (mode %d, flags 0x%x, preset %s%d, the game's creation %s): result 0x%08x",
+             width, height, outWidth, outHeight, mode, flags, ownPreset > 0 ? "ours " : "the game's ", ownPreset > 0 ? ownPreset : static_cast<int>(c.presets[0]),
              c.seen ? "seen" : "not seen", static_cast<unsigned>(r));
     } else {
         logf("focus dlss: NGX parameters not allocated (0x%08x)", static_cast<unsigned>(r));
@@ -619,10 +630,12 @@ bool evaluate(ID3D12GraphicsCommandList* list, Feature* f, const Inputs& in) {
     b->Set(NVSDK_NGX_Parameter_MV_Scale_Y, in.motionScale[1]);
     b->Set(NVSDK_NGX_Parameter_Reset, in.reset ? 1 : 0);
     for (const char* k : {NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_X, NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X,
-                          NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X, NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X})
+                          NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X})
         b->Set(k, in.base[0]);
+    b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X, in.ownOutBase ? in.outBase[0] : in.base[0]);
+    b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y, in.ownOutBase ? in.outBase[1] : in.base[1]);
     for (const char* k : {NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_Y, NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y,
-                          NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_Y})
+                          NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y})
         b->Set(k, in.base[1]);
     b->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, in.width);
     b->Set(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, in.height);

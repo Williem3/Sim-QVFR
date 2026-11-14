@@ -176,6 +176,7 @@ void menu_open(int64_t now) {
         }
         menu.model.launch.apiPath = experiment.replayCompose;
         menu.model.launch.apiDlss = experiment.replayCompose && experiment.replayDlss != 0;
+        menu.model.launch.apiFocusScale = experiment.replayDlssFocusScale;
         menu.model.dlssState.clear();
         if (experiment.replayCompose) {  // what DLSS runs, read each time the menu is drawn
             const focus_ngx::State d = focus_ngx::state();
@@ -192,9 +193,13 @@ void menu_open(int64_t now) {
                 menu.model.dlssState = L"DLSS: off in the game: periphery and focus without DLSS";
             } else {
                 const bool dlaa = d.width == d.outWidth && d.height == d.outHeight;
-                menu.model.dlssState = L"DLSS (in-game " + mode + L"): periphery " + (dlaa ? std::wstring(L"DLAA") : mode + L", upscaled") +
-                                       L" preset " + letter(d.eyePreset) + L", focus " +
-                                       (d.focusRunning ? L"DLAA preset " + letter(d.focusPreset) : std::wstring(L"not running"));
+                const std::wstring focusMode = dlss_choice_name(kDlssFocusModes, experiment.replayDlssFocusScale);
+                if (!dlaa)  // the game renders its eyes smaller in its other modes, and the focus views with them
+                    menu.model.dlssState = L"Set the game's DLSS to DLAA (now " + mode + L"): the focus mode is picked here";
+                else
+                    menu.model.dlssState = L"DLSS: periphery DLAA preset " + letter(d.eyePreset) + L", focus " +
+                                           (d.focusRunning ? focusMode + L" preset " + letter(d.focusPreset)
+                                                           : std::wstring(L"not running"));
             }
         }
         if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
