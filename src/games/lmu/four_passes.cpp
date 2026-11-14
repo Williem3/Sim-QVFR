@@ -1494,7 +1494,7 @@ void four_passes_frame_end() {
             main_size(mainWH);
             if (cfg.mvr) {
                 const MvrSizeCutStats c = mvr_size_cut_stats();
-                simqvfr::logd("lmu qvfr: frame %llu: live resolution: eyes %ux%u %ux%u cut in %ux%u main targets (the "
+                simqvfr::logf("lmu qvfr: frame %llu: live resolution: eyes %ux%u %ux%u cut in %ux%u main targets (the "
                               "game's render scale %.3f); since launch %llu viewports and %llu scissors cut, %llu left",
                               frames, sceneW[0], sceneH[0], sceneW[1], sceneH[1], mainWH[0], mainWH[1], gameScale,
                               c.viewports, c.scissors, c.left);
