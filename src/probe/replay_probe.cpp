@@ -2065,6 +2065,9 @@ bool focus_prepare(const Stream& s) {
     return true;
 }
 
+extern std::atomic<int> remakeEpoch;
+bool miss_allowed(int& epoch, int& count, int limit);
+
 // Under focus.lock: a free replay entry (its last execution done).
 Replay* acquire_replay() {
     const uint64_t done = focus.fence->GetCompletedValue();
@@ -2073,8 +2076,20 @@ Replay* acquire_replay() {
             r->busy = true;
             return r.get();
         }
-    if (focus.pool.size() >= 96)
+    if (focus.pool.size() >= 96) {
+        static int epoch = 0, count = 0;
+        if (miss_allowed(epoch, count, 3)) {
+            size_t busy = 0, waiting = 0;
+            for (const auto& r : focus.pool) {
+                busy += r->busy ? 1 : 0;
+                waiting += !r->busy && r->fence > done ? 1 : 0;
+            }
+            logf("replay focus: no free replay entry (%zu in the pool: %zu busy, %zu waiting on the GPU; fence done %llu of %llu)",
+                 focus.pool.size(), busy, waiting, static_cast<unsigned long long>(done),
+                 static_cast<unsigned long long>(focus.fenceValue.load()));
+        }
         return nullptr;
+    }
     auto r = std::make_unique<Replay>();
     if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&r->allocator))) ||
         FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, r->allocator.Get(), nullptr,
@@ -2553,8 +2568,13 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     for (const auto& d : s.tileDispatches)
         if (d.kind == 1 || d.kind == 2)
             (d.kind == 1 ? fr : cu).push_back(&d);
-    if (fr.size() < 2 || cu.size() < 2)
+    if (fr.size() < 2 || cu.size() < 2) {
+        static int epoch = 0, count = 0;
+        if ((!fr.empty() || !cu.empty()) && miss_allowed(epoch, count, 3))
+            logf("replay focus: tiles: not replayed (the list has %zu tileFrustums and %zu tiledCulling dispatches of %zu)",
+                 fr.size(), cu.size(), s.tileDispatches.size());
         return;
+    }
     Replay* r = nullptr;
     UINT fw = 0, fh = 0;
     ID3D12Resource* depth = nullptr;
@@ -2563,6 +2583,17 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     const Twin* twin = focus_tiles_prepare(*fr[0]);
     if (twin && focus.tilesReady)
         r = acquire_replay();
+    if (static int epoch = 0, count = 0; !r && miss_allowed(epoch, count, 4)) {
+        float tileCount[2];
+        std::memcpy(tileCount, fr[0]->constants + 18, sizeof(tileCount));
+        const Twin* const d = scene_depth_twin();
+        logf("replay focus: tiles: not replayed (prepared %d, ready %d, broken %d, bindless base %d, the list's heap %d (ours %d), "
+             "depth twin %s, the game's tile count %.0fx%.0f, its lists at %u %u %u %u, our lists %ux%u)",
+             twin ? 1 : 0, focus.tilesReady ? 1 : 0, focus.tilesBroken ? 1 : 0, focus.bindlessBase.ptr ? 1 : 0,
+             fr[0]->heap ? 1 : 0, fr[0]->heap == focus.gameHeap ? 1 : 0, d ? d->name.c_str() : "none", tileCount[0],
+             tileCount[1], focus.gameTile[0], focus.gameTile[1], focus.gameTile[2], focus.gameTile[3], focus.tilesX,
+             focus.tilesY);
+    }
     if (r) {
         fw = twin->focusW;
         fh = twin->focusH;
