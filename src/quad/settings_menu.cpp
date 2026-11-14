@@ -291,7 +291,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         }
         items.insert(items.end(), method.begin(), method.end());
         if (menu.launch.apiDlss)  // the API path's DLSS: the periphery's and the focus views' presets, live
-            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset});
+            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset});  // the periphery: F only
         if (menu.launch.qvfr)  // last: Up from the page switch reaches it
             items.push_back(MenuItem::Optimize);
     }

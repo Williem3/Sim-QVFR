@@ -254,7 +254,9 @@ void load_experiment() {
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
             // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
             const DlssSettings player = read_dlss_settings(ini.c_str());
-            experiment.replayDlssEyePreset = player.eyePreset;
+            // The periphery (ACE's own eyes): preset F only. K smears the right eye's periphery in ACE, on the game's own
+            // feature too and with ACE's own jitter (2026-11-13 runs 22:39 and after); F is clean.
+            experiment.replayDlssEyePreset = 6;
             experiment.replayDlssFocusPreset = player.focusPreset;
             experiment.replayDlssFocusScale = player.focusScale;  // the focus views' mode: DLAA 100, 67, 58, 50
             experiment.replayDlssJitterX =

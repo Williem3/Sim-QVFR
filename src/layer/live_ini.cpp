@@ -269,7 +269,7 @@ void live_reload() {
         game->qvfr_set_nr(s->menu.nr);      // [dlss_nr] likewise
     }
     if (experiment.replayCompose && experiment.replayDlss)  // the API path: the two presets, live
-        focus_ngx::set_presets(s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
+        focus_ngx::set_presets(experiment.replayDlssEyePreset, s->menu.dlss.focusPreset);  // the periphery stays on F
     menu_values_changed(*s);
     menu_placement_changed(s->menuPlacement);
     osd_placement_changed(s->osd, s->cheeky);
