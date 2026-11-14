@@ -57,11 +57,11 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
     const double viewHeight = layout.layer_height();
     const double widthScale = experiment.views4 ? (separate || oneSize ? viewWidth
                                                    : columns ? layout.column_eye_width() : layout.eye_width())
-                                                : experiment.eyeScale;
+                                                : experiment.eyeScale * (experiment.replayCompose ? experiment.crop().kept_width() : 1.0);
     const double heightScale = experiment.views4
                                    ? (separate ? viewHeight : oneSize ? 2 * viewHeight
                                                             : columns ? layout.column_eye_height() : layout.eye_height())
-                                   : experiment.eyeScale;
+                                   : experiment.eyeScale * (experiment.replayCompose ? experiment.crop().kept_height() : 1.0);
     if ((oneSize || separate) && stereo &&
         (layout.outer_width() != layout.focus || layout.outer_height() != layout.focusHeight || layout.layerFloor > 0 ||
          layout.secondViewRoom))
@@ -153,6 +153,15 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                 ReplayFocusSettings focusSettings;
                 focusSettings.boxFraction = experiment.replayFocusPercent / 100.0;
                 focusSettings.pixelScale = experiment.replayFocusScalePercent / 100.0;
+                if (experiment.replayCompose) {
+                    // The API path takes [quad]'s sizes: the box a share of the (cropped) view ACE renders, the focus
+                    // views focus_percent x focus_density of the native eye wide, against ACE's eye at periphery_scale.
+                    const double box = std::clamp(experiment.box_x(), 0.05, 0.6);
+                    const double eye = experiment.eyeScale * experiment.crop().kept_width();
+                    const double k = eye > 0 ? experiment.views4Layout.focus / eye : box * 2;
+                    focusSettings.boxFraction = box;
+                    focusSettings.pixelScale = std::clamp(k / box, 0.5, 12.0);
+                }
                 focusSettings.saveFirst = experiment.replaySaveFirst;
                 focusSettings.saveEvery = experiment.replaySaveEvery;
                 focusSettings.saveCount = experiment.replaySaveCount;

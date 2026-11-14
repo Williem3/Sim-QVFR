@@ -308,7 +308,7 @@ std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     case MenuPage::Shape: return L"Focus shape";
     case MenuPage::Crop: return L"View crop";
     case MenuPage::Helmet: return L"Helmet";
-    default: return menu.launch.qvfr ? L"QVFR" : menu.launch.apiPath ? L"QVFR (API path)" : L"Two-loop (legacy)";
+    default: return menu.launch.apiPath ? L"QVFR (API path)" : menu.launch.qvfr ? L"QVFR" : L"Two-loop (legacy)";
     }
 }
 

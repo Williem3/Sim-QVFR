@@ -105,6 +105,9 @@ bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& sta
 // The gaze: where each eye's focus box should sit, off the eye's forward axis in the eye's NDC (x right, y up; 0: on
 // the axis). Taken at the frame's end for the next frame; the box is kept inside the eye's image.
 void replay_probe_set_gaze(const float (&ndc)[2][2]);
+// The focus box's half extent in each eye's NDC, while running: taken at the frame's end. The focus views keep their
+// pixel size (made at the start), so their density changes with it.
+void replay_probe_set_box(double box);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();
 // Qualifying thresholds for modes 1/2 (tests use small ones).

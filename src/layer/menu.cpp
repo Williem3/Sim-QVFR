@@ -174,6 +174,8 @@ void menu_open(int64_t now) {
                                  experiment.eyeScale * 100};
         }
         menu.model.launch.apiPath = experiment.replayCompose;
+        if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
+            menu.model.launch.qvfr = true;
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop
         menu.model.launch.cropHeight = l.cropHeight * 100;
         const games::GameFeatures features = game_features();  // what the game has: the rest is left out
@@ -185,6 +187,8 @@ void menu_open(int64_t now) {
         menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
         menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
         menu.model.launch.liveResolution = features.liveResolution;
+        if (experiment.replayCompose)
+            menu.model.launch.liveResolution = false;  // periphery and density: the next launch
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&

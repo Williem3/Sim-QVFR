@@ -350,7 +350,15 @@ void load_experiment() {
     // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most
     // either can be live.
     const Views4Sizes sizes = views4_sizes(ini.c_str(), experiment.focusFraction, experiment.focusFractionY);
-    const FovCrop launchCrop = experiment.views4 ? settings.crop : FovCrop{};
+    const FovCrop launchCrop = experiment.views4 || experiment.replayCompose ? settings.crop : FovCrop{};
+    // The API path (replay_compose): ACE's own two eyes are the periphery, at [quad] periphery_scale of the native eye
+    // (set at launch: ACE sizes its targets once); the focus views take focus_percent and focus_density.
+    if (experiment.replayCompose) {
+        experiment.eyeScale = sizes.outer;
+        logf("experiment: API path: ACE's two eyes at the periphery's %.0f%% of the native eye; focus views %.0f%% x %.0f%% "
+             "of the native eye (box %.0f%%, density from focus_density)",
+             sizes.outer * 100, sizes.focus * 100, sizes.focus * 100, experiment.focusFraction.load() * 100);
+    }
     experiment.set_crop(launchCrop);
     helmetSettings = experiment.composing() ? settings.helmet : HelmetSettings{};  // before any session (either compositor)
     experiment.views4Layout = views4_layout(sizes.outer, sizes.focus, sizes.focusHeight, launchCrop.kept_width(),

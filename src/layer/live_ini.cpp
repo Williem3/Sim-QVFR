@@ -22,6 +22,7 @@
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "probe/replay_probe.h"
 
 namespace simqvfr::layer {
 
@@ -67,14 +68,16 @@ void live_apply(const LiveSettings& l) {
                  kVisorPositionNames[static_cast<int>(l.helmet.visor)], l.helmet.debugLight ? ", showing its light" : "");
         helmetSettings = l.helmet;
     }
-    if (experiment.views4) {
+    if (experiment.views4 || experiment.replayCompose) {
         const FovCrop before = experiment.crop();
         experiment.set_crop(l.crop);
         if (before.top != l.crop.top || before.bottom != l.crop.bottom || before.outer != l.crop.outer ||
             before.inner != l.crop.inner)
             logf("live: FOV crop top %.0f%%, bottom %.0f%%, outer %.0f%%, inner %.0f%%%s", l.crop.top * 100,
                  l.crop.bottom * 100, l.crop.outer * 100, l.crop.inner * 100,
-                 game->qvfr_dlss_held() ? " (DLSS is on: the views keep their launch sizes until the next launch)" : "");
+                 experiment.views4 && game->qvfr_dlss_held()
+                     ? " (DLSS is on: the views keep their launch sizes until the next launch)"
+                     : "");
     }
     experiment.focusFraction = l.focusFraction;
     experiment.focusFractionY = l.focusFractionY;
@@ -108,6 +111,12 @@ void live_apply(const LiveSettings& l) {
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,
          l.gaze ? 1 : 0, l.offset.fixed, l.offset.gaze, l.gazeDeadzone);
     logf("live: focus shape %ls", focus_shape_text(l.shape).c_str());
+    if (experiment.replayCompose) {
+        // The API path: the box's size is live (the focus views keep their pixels, so their density follows); ACE's
+        // eye size (periphery) and the focus views' pixel size (density) are set at launch.
+        replay_probe_set_box(experiment.box_x(l.focusFraction));
+        log_line("live: API path: the focus box's size applies now; periphery and focus density at the next launch");
+    }
     if (experiment.views4 && game_features().liveResolution)
         live_resolution(l);
     else if (experiment.views4)

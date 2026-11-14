@@ -793,6 +793,11 @@ struct Focus {
     // (replay_probe_set_gaze), taken at the frame's end for the next frame's lists (every pass of a frame uses one
     // centre), clamped so the box stays inside the eye's image; last frame's for the previous-frame projections.
     float gazeWanted[2][2] = {}, gazeOffset[2][2] = {}, gazePrev[2][2] = {};
+    // The focus views' size as a share of the eye's (box x pixels per eye pixel), fixed at the start: the box's size
+    // can change while running (replay_probe_set_box, taken at a frame's end), the focus pixels stay, so the density
+    // follows. 0: no change asked.
+    double sizeK = 0;
+    std::atomic<double> boxWanted{0};
     // replay_atmosphere=4: ACE's atmosphericScattering + upscaling replayed per focus eye (ray grid narrowed to the box):
     // our low-res sky maps and the upscaling intermediates, per eye [in low, out low, in intermediate, out
     // intermediate] (SRV at slot 112 + 8 e + 2 k, UAV + 1); our grid constants.
@@ -1772,7 +1777,7 @@ bool focus_prepare(const Stream& s) {
             changed = true;
         }
     }
-    const double k = focus.settings.boxFraction * focus.settings.pixelScale;
+    const double k = focus.sizeK;
     for (const SIZE_T h : s.targets) {
         const ViewInfo& v = focus.views[h];
         if (focus.twins.count(v.resource.Get()))
@@ -1960,7 +1965,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
         }
     }
     // This list's own eye size (ACE's passes differ: the flags pass is half width) and its focus size.
-    const double k = focus.settings.boxFraction * focus.settings.pixelScale;
+    const double k = focus.sizeK;
     const float sEyeW = mono ? s.monoW : s.eyeW, sEyeH = mono ? s.monoH : s.eyeH;
     const UINT ewi = static_cast<UINT>(sEyeW), ehi = static_cast<UINT>(sEyeH);
     const UINT fwi = std::max(16u, static_cast<UINT>(std::lround(sEyeW * k)));
@@ -5832,6 +5837,7 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
     calibrate();
     if (mode == 3)
         focus.settings = settings;  // before any hook reads it
+        focus.sizeK = settings.boxFraction * settings.pixelScale;
     void** vtable = *reinterpret_cast<void***>(list.Get());
     bool ok =
         hook(vtable, simqvfr_slot_Reset(), &resetHook, &resetOriginal) &&
@@ -5911,6 +5917,11 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
 
 bool replay_probe_installed() { return installed; }
 
+void replay_probe_set_box(double box) {
+    if (probeMode == 3)
+        focus.boxWanted.store(std::clamp(box, 0.05, 0.6));
+}
+
 void replay_probe_set_gaze(const float (&ndc)[2][2]) {
     if (probeMode != 3)
         return;
@@ -5985,6 +5996,12 @@ void replay_probe_frame_end() {
         {  // the next frame's box centre: the gaze asked for, clamped so the box stays inside the eye's image
             AcquireSRWLockExclusive(&focus.lock);
             std::memcpy(focus.gazePrev, focus.gazeOffset, sizeof(focus.gazePrev));
+            if (const double wanted = focus.boxWanted.exchange(0); wanted > 0 && wanted != focus.settings.boxFraction) {
+                focus.settings.boxFraction = wanted;  // the same focus pixels over another share of the eye
+                focus.settings.pixelScale = focus.sizeK / wanted;
+                logf("replay focus: the focus box now %.1f%% of the eye's view: %.2f focus pixels per eye pixel (the focus "
+                     "views keep their pixels)", wanted * 100, focus.settings.pixelScale);
+            }
             const float limit = 1.0f - static_cast<float>(focus.settings.boxFraction);
             for (int e = 0; e < 2; ++e)
                 for (int k = 0; k < 2; ++k) {
