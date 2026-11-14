@@ -1792,6 +1792,9 @@ bool focus_prepare(const Stream& s) {
         for (const auto& [h, v] : focus.views)
             if (v.resource.Get() == game)
                 ++ours;
+        for (const auto& [h, v] : focus.srvInfo)  // our record of the game's shader views of it
+            if (v.first.Get() == game)
+                ++ours;
         for (const ComPtr<ID3D12Resource>& r : {focus.gameGrid[0], focus.gameGrid[1], focus.postGameFxaa})
             if (r.Get() == game)
                 ++ours;
@@ -1810,7 +1813,8 @@ bool focus_prepare(const Stream& s) {
         t = focus.twins.erase(t);
         twinsRemade.fetch_add(1);
         changed = true;
-        std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == game; });  // frees the target
+        std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == game; });
+        std::erase_if(focus.srvInfo, [&](const auto& v) { return v.second.first.Get() == game; });  // frees the target
     }
     if (focus.viewsMoved) {  // the game made targets again: twins of resources no view names any more are retired
         focus.viewsMoved = false;
