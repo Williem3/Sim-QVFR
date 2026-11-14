@@ -12,6 +12,7 @@ CONTRIBUTING.md, "DLSS in LMU".
 | `openxr/include/openxr/` | https://github.com/KhronosGroup/OpenXR-SDK | release-1.1.49 (`977f6675bc0057d5a54ed290cb5c71c699b1c0ab`) | Apache-2.0 OR MIT (SPDX headers; `openxr/LICENSES/`) |
 | `nvapi/` | https://github.com/NVIDIA/nvapi | main of 2026-09-18 (`70d337db9186e968eab622f7e786de7e437faf3d`) | MIT (SPDX headers; `nvapi/License.txt`) |
 | `fidelityfx-cas/` | https://github.com/GPUOpen-Effects/FidelityFX-CAS | `ffx_cas.h` 1.20190610 | MIT (`fidelityfx-cas/LICENSE.txt`, the header's notice): the licence only; the filter is ported into `src/quad/compose_shader.h` |
+| `acevoperf/` | https://github.com/Williem3/ACEvoPerf | `06f788b30dcc` | MIT (`acevoperf/LICENSE.txt`): the licence only; its engine-flag scan's approach is followed in `src/games/ace/stereo_flag.cpp` |
 | `fonts/jost/` | https://github.com/indestructible-type/Jost | `35f141c970538f1ed0f235789c19156b3ce2a762` | SIL OFL 1.1 (`fonts/jost/OFL.txt`) |
 | `fonts/inter/` | https://github.com/rsms/inter | 4.1 (`353b61b9f4430d5f420d56605a6e7993e0941470`) | SIL OFL 1.1 (`fonts/inter/LICENSE.txt`) |
 

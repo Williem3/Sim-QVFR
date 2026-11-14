@@ -183,6 +183,7 @@ try {
         'third_party\openxr\LICENSES\Apache-2.0.txt'       = 'licenses\OpenXR-Apache-2.0.txt'
         'third_party\openxr\LICENSES\MIT.txt'              = 'licenses\OpenXR-MIT.txt'
         'third_party\fidelityfx-cas\LICENSE.txt'           = 'licenses\FidelityFX-CAS-LICENSE.txt'
+        'third_party\acevoperf\LICENSE.txt'                = 'licenses\ACEvoPerf-LICENSE.txt'
         'third_party\fonts\jost\OFL.txt'                   = 'licenses\Jost-OFL.txt'
         'third_party\fonts\inter\LICENSE.txt'              = 'licenses\Inter-OFL.txt'
     }

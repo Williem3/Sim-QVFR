@@ -6,6 +6,9 @@
 - AMD FidelityFX CAS (Contrast Adaptive Sharpening, `ffx_cas.h` 1.20190610): MIT, Copyright (c) 2017-2019 Advanced
   Micro Devices, Inc. Its filter is ported, not copied, into the compositor's shader (`src/quad/compose_shader.h`,
   `cas_sample`). See `third_party/fidelityfx-cas/LICENSE.txt`.
+- ACEvoPerf (github.com/Williem3/ACEvoPerf): MIT, Copyright (c) 2026 ecstra. Its engine-flag scan's approach is
+  followed, written anew, in `src/games/ace/stereo_flag.cpp` (finding Assetto Corsa EVO's single-pass stereo flag by
+  name). See `licenses/ACEvoPerf-LICENSE.txt` (`third_party/acevoperf/LICENSE.txt`).
 - Jost (indestructible-type/Jost): SIL Open Font License 1.1, Copyright 2020 The Jost Project Authors. Its Bold,
   Heavy and Black weights are embedded in the launcher. See `licenses/Jost-OFL.txt` (`third_party/fonts/jost/OFL.txt`).
 - Inter 4.1 (rsms/inter): SIL Open Font License 1.1, Copyright (c) 2016 The Inter Project Authors. Its Regular,

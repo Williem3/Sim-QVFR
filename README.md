@@ -396,6 +396,11 @@ DLSS, DLSS-NR and frame generation features, and for his permission to integrate
 Cheeky Foveated DLSS is free software under the GNU GPL v3. Sim-QVFR loads it as a separate download
 and doesn't include it. The launcher and the headset menu show its version wherever they control it.
 
+Thanks to ecstra for [ACEvoPerf](https://github.com/Williem3/ACEvoPerf), open source under the MIT licence.
+Its way of finding Assetto Corsa EVO's engine settings by name solved the problem of turning on the game's own
+single-pass stereo, which QVFR in Assetto Corsa EVO is built on, without depending on addresses that change with
+each game update.
+
 ## Licence
 
 Sim-QVFR is free to use, change and share for any **noncommercial** purpose under the
