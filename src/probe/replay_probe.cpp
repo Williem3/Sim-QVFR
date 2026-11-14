@@ -4348,7 +4348,7 @@ void focus_post_record(List* gameList, const Stream& s) {
                         log_line("replay focus: post: ACE's post has no fxaa draw (its menus): the tonemap goes straight "
                                  "into our final focus image");
                     logf("replay focus: post: our focus post targets %ux%u (tonemap format %d, final %d), veil %llux%u",
-                         fw2, fh, static_cast<int>(rv.Format == fxaaRt->second.viewFormat ? tonemapRt->second.viewFormat
+                         ow2, oh, static_cast<int>(rv.Format == fxaaRt->second.viewFormat ? tonemapRt->second.viewFormat
                                                                                           : rv.Format),
                          static_cast<int>(fxaaRt->second.viewFormat), static_cast<unsigned long long>(vd.Width), vd.Height);
                 }
@@ -5990,7 +5990,7 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
         focus.renderScale = settings.dlss ? std::clamp(settings.dlssScale, 0.4, 1.0) : 1.0;
         focus.sizeK = settings.boxFraction * settings.pixelScale * focus.renderScale;
         focus.sizeKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
-                       (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale);
+                       (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale) * focus.renderScale;
     void** vtable = *reinterpret_cast<void***>(list.Get());
     bool ok =
         hook(vtable, simqvfr_slot_Reset(), &resetHook, &resetOriginal) &&
