@@ -142,6 +142,9 @@ bool replay_probe_eye_region(float& fx, float& fy);
 ReplayProbeStats replay_probe_take_stats();
 // Qualifying thresholds for modes 1/2 (tests use small ones).
 void replay_probe_set_thresholds(uint32_t minDraws, float minViewportWidth);
+// A pipeline-state stream's vertex and pixel shaders, its subobjects walked as the runtime reads them (for tests).
+bool replay_probe_stream_shaders(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, D3D12_SHADER_BYTECODE& vs,
+                                 D3D12_SHADER_BYTECODE& ps);
 // Mode 3: the last sample's comparison (tests): depth pixels compared and the share that agree within 1% (best shift);
 // colour (the first colour twin of a supported format) at that shift.
 struct ReplayFocusCompare {

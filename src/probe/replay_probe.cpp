@@ -6622,28 +6622,77 @@ HRESULT STDMETHODCALLTYPE libStreamHook(ID3D12PipelineLibrary1* lib, LPCWSTR nam
         note_stream_pso(desc, *out);
     return hr;
 }
+// A pipeline-state stream's subobjects, walked as the runtime reads them: each starts pointer-aligned with its type (a
+// 32-bit enum), its struct follows at that struct's own alignment. (Testing every 8 bytes for the VS / PS type, as
+// before, took other subobjects' data for shaders: the guarded faults in is_sky_shader, 13-22 a session.) An unknown
+// type ends the walk: its size isn't known, so nothing after it can be found.
+bool stream_shaders(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, D3D12_SHADER_BYTECODE& vs, D3D12_SHADER_BYTECODE& ps) {
+    vs = ps = {};
+    if (!desc || !desc->pPipelineStateSubobjectStream)
+        return false;
+    const auto* p = static_cast<const uint8_t*>(desc->pPipelineStateSubobjectStream);
+    const size_t total = desc->SizeInBytes;
+    const auto up = [](size_t v, size_t a) { return (v + a - 1) / a * a; };
+    size_t at = 0;
+    while (at + sizeof(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE) <= total) {
+        D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type;
+        std::memcpy(&type, p + at, sizeof(type));
+        size_t size = 0, align = 0;
+        switch (type) {
+#define SUBOBJECT(t, T)     case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_##t: size = sizeof(T); align = alignof(T); break;
+            SUBOBJECT(ROOT_SIGNATURE, ID3D12RootSignature*)
+            SUBOBJECT(VS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(PS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(DS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(HS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(GS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(CS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(STREAM_OUTPUT, D3D12_STREAM_OUTPUT_DESC)
+            SUBOBJECT(BLEND, D3D12_BLEND_DESC)
+            SUBOBJECT(SAMPLE_MASK, UINT)
+            SUBOBJECT(RASTERIZER, D3D12_RASTERIZER_DESC)
+            SUBOBJECT(DEPTH_STENCIL, D3D12_DEPTH_STENCIL_DESC)
+            SUBOBJECT(INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC)
+            SUBOBJECT(IB_STRIP_CUT_VALUE, D3D12_INDEX_BUFFER_STRIP_CUT_VALUE)
+            SUBOBJECT(PRIMITIVE_TOPOLOGY, D3D12_PRIMITIVE_TOPOLOGY_TYPE)
+            SUBOBJECT(RENDER_TARGET_FORMATS, D3D12_RT_FORMAT_ARRAY)
+            SUBOBJECT(DEPTH_STENCIL_FORMAT, DXGI_FORMAT)
+            SUBOBJECT(SAMPLE_DESC, DXGI_SAMPLE_DESC)
+            SUBOBJECT(NODE_MASK, UINT)
+            SUBOBJECT(CACHED_PSO, D3D12_CACHED_PIPELINE_STATE)
+            SUBOBJECT(FLAGS, D3D12_PIPELINE_STATE_FLAGS)
+            SUBOBJECT(DEPTH_STENCIL1, D3D12_DEPTH_STENCIL_DESC1)
+            SUBOBJECT(VIEW_INSTANCING, D3D12_VIEW_INSTANCING_DESC)
+            SUBOBJECT(AS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(MS, D3D12_SHADER_BYTECODE)
+            SUBOBJECT(DEPTH_STENCIL2, D3D12_DEPTH_STENCIL_DESC2)
+            SUBOBJECT(RASTERIZER1, D3D12_RASTERIZER_DESC1)
+            SUBOBJECT(RASTERIZER2, D3D12_RASTERIZER_DESC2)
+#undef SUBOBJECT
+        default:
+            return vs.pShaderBytecode || ps.pShaderBytecode;
+        }
+        const size_t inner = up(at + sizeof(type), align);
+        if (inner + size > total)
+            break;
+        if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS)
+            std::memcpy(&vs, p + inner, sizeof(vs));
+        else if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS)
+            std::memcpy(&ps, p + inner, sizeof(ps));
+        at = up(inner + size, sizeof(void*));
+    }
+    return vs.pShaderBytecode || ps.pShaderBytecode;
+}
 void note_stream_pso(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* pso) {
     count_pipeline();
-    if (desc && desc->pPipelineStateSubobjectStream) {
-        // Each subobject: its type (a 32-bit enum at a pointer-aligned offset), then its struct, pointer-aligned.
-        const uint8_t* p = static_cast<const uint8_t*>(desc->pPipelineStateSubobjectStream);
-        for (size_t i = 0; i + 8 + sizeof(D3D12_SHADER_BYTECODE) <= desc->SizeInBytes; i += 8) {
-            uint32_t type;
-            std::memcpy(&type, p + i, 4);
-            if (type != D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS && type != D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS)
-                continue;
-            D3D12_SHADER_BYTECODE bc;
-            std::memcpy(&bc, p + i + 8, sizeof(bc));
-            if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS) {
-                note_tyre_pso(static_cast<ID3D12PipelineState*>(pso), bc);
-                continue;
-            }
-            if (is_sky_shader(bc)) {
-                note_sky_pso(static_cast<ID3D12PipelineState*>(pso), bc);
-                break;
-            }
-        }
-    }
+    D3D12_SHADER_BYTECODE vs, ps;
+    if (!stream_shaders(desc, vs, ps))
+        return;
+    auto* const state = static_cast<ID3D12PipelineState*>(pso);
+    if (vs.pShaderBytecode)
+        note_tyre_pso(state, vs);
+    if (ps.pShaderBytecode)
+        note_sky_pso(state, ps);
 }
 void STDMETHODCALLTYPE cbvViewHook(ID3D12Device* d, const D3D12_CONSTANT_BUFFER_VIEW_DESC* desc,
                                    D3D12_CPU_DESCRIPTOR_HANDLE dest) {
@@ -7950,6 +7999,11 @@ void replay_probe_frame_end() {
         logf("replay probe: re-emission now %s (A/B window %llu)", replayOn.load() ? "on" : "off",
              static_cast<unsigned long long>(window));
     }
+}
+
+bool replay_probe_stream_shaders(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, D3D12_SHADER_BYTECODE& vs,
+                                 D3D12_SHADER_BYTECODE& ps) {
+    return stream_shaders(desc, vs, ps);
 }
 
 }  // namespace simqvfr

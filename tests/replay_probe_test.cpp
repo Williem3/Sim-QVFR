@@ -35,6 +35,45 @@ int SIM_QVFR_TEST_MAIN() {
         std::puts("no WARP D3D12 device");
         return 2;
     }
+    {  // a pipeline-state stream as d3dx12's subobject helpers lay it out: the shaders found by walking it, not by
+       // values that equal a shader type's number elsewhere (the sample mask 1 = VS, rasterizer fields 2 = PS)
+        struct alignas(void*) Root { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE t; ID3D12RootSignature* v; };
+        struct alignas(void*) Mask { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE t; UINT v; };
+        struct alignas(void*) Shader { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE t; D3D12_SHADER_BYTECODE v; };
+        struct alignas(void*) Raster { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE t; D3D12_RASTERIZER_DESC v; };
+        struct alignas(void*) Formats { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE t; D3D12_RT_FORMAT_ARRAY v; };
+        struct Stream {
+            Root root;
+            Mask mask;
+            Raster raster;
+            Shader vs;
+            Formats formats;
+            Shader ps;
+        } stream{};
+        static const uint8_t vsBytes[8] = {}, psBytes[8] = {};
+        stream.root = {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, nullptr};
+        stream.mask = {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, 1};
+        stream.raster.t = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER;
+        stream.raster.v.FillMode = D3D12_FILL_MODE_WIREFRAME;  // 2
+        stream.raster.v.CullMode = D3D12_CULL_MODE_FRONT;      // 2
+        stream.vs = {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS, {vsBytes, sizeof(vsBytes)}};
+        stream.formats.t = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS;
+        stream.formats.v.NumRenderTargets = 1;
+        stream.ps = {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, {psBytes, sizeof(psBytes)}};
+        const D3D12_PIPELINE_STATE_STREAM_DESC desc{sizeof(stream), &stream};
+        D3D12_SHADER_BYTECODE vs{}, ps{};
+        check(simqvfr::replay_probe_stream_shaders(&desc, vs, ps) && vs.pShaderBytecode == vsBytes &&
+                  vs.BytecodeLength == sizeof(vsBytes) && ps.pShaderBytecode == psBytes && ps.BytecodeLength == sizeof(psBytes),
+              "pipeline stream: the vertex and pixel shaders found by walking the subobjects");
+        struct alignas(void*) Unknown { D3D12_PIPELINE_STATE_SUBOBJECT_TYPE t; UINT v; };
+        struct { Shader vs; Unknown odd; Shader ps; } partial{};
+        partial.vs = {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS, {vsBytes, sizeof(vsBytes)}};
+        partial.odd = {static_cast<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE>(99), 2};
+        partial.ps = {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, {psBytes, sizeof(psBytes)}};
+        const D3D12_PIPELINE_STATE_STREAM_DESC partialDesc{sizeof(partial), &partial};
+        check(simqvfr::replay_probe_stream_shaders(&partialDesc, vs, ps) && vs.pShaderBytecode == vsBytes && !ps.pShaderBytecode,
+              "pipeline stream: an unknown subobject type ends the walk (nothing after it guessed)");
+    }
     simqvfr::replay_probe_set_thresholds(4, 256.0f);
     check(simqvfr::replay_probe_start(device.Get(), 1), "probe installs");
 
