@@ -233,7 +233,7 @@ struct Stream {
     UINT vpN = 0, scN = 0;
     D3D12_VIEWPORT vpAll[4] = {};
     D3D12_RECT scAll[4] = {};
-    bool eyeDirty = false, eyeScaled = false, eyeCbv1 = false, eyeCbv5 = false;
+    bool eyeDirty = false, eyeScaled = false, eyeCbv1 = false, eyeCbv5 = false, eyeClipped = false;
     ID3D12RootSignature* cbv1Root = nullptr;   // the root signature root 1's address was set under
     ID3D12RootSignature* cbv5Root = nullptr;   // and root 5's (deferredShadows' constants)
     ID3D12RootSignature* sceneRoot = nullptr;  // ACE's scene root signature (its table 18 was set under it)
@@ -283,7 +283,7 @@ struct Stream {
         monoX = monoW = monoH = 0;
         std::memset(oitTables, 0, sizeof(oitTables));
         vpN = scN = 0;
-        eyeDirty = eyeScaled = eyeCbv1 = eyeCbv5 = false;
+        eyeDirty = eyeScaled = eyeCbv1 = eyeCbv5 = eyeClipped = false;
         cbv1Root = cbv5Root = sceneRoot = nullptr;
         eyeState = 0;
         eyePatches.clear();
@@ -1292,6 +1292,11 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"atmosphericScattering") == 0       ? 17
                : std::wcscmp(name, L"histogram") == 0                   ? 18
                : std::wcscmp(name, L"histogramAverage") == 0            ? 19
+               : std::wcscmp(name, L"gaussianBlur3x3Float3") == 0       ? 20
+               : std::wcscmp(name, L"veilLumaDownsample") == 0          ? 21
+               : std::wcscmp(name, L"veilDownsample") == 0              ? 22
+               : std::wcscmp(name, L"veilUpsample") == 0                ? 23
+               : std::wcscmp(name, L"hiZGeneration") == 0               ? 24
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -5549,6 +5554,11 @@ void focus_copy_sample() {
 //   histogram (root 4): resolution (0.zw); histogramAverage (root 3): pixelCount (0.x): the exposure meters the region.
 // contrastAdaptiveSharpen runs over the region only: over the unused area (exactly 0) it wrote invalid values, which
 // ACE's bloom then spread into the picture (07:28 captures: white outside, pink fringes inside).
+// The rest of ACE's whole-target work, for its cost: its by-pixel compute passes (the two gaussian blurs, the veil's
+// downsamples and upsamples, hiZGeneration, the normals) are dispatched over the region's share of their groups plus
+// one (each output pixel still reads its own place in the source: only fewer are made); its whole-target fullscreen
+// draws (OIT composite, tonemap, fxaa, the copies) keep their viewport, which maps each pixel to itself, and get a
+// scissor around the region.
 // ACE's whole-target passes (OIT composite, sharpening, bloom, tonemap, fxaa) run unchanged over the whole target: each
 // pixel maps to itself, so the smaller picture stays where it is. NGX is told the smaller regions (focus_ngx). The
 // compositor and the focus views' borrowed inputs (bloom, refraction mips) read the region in use.
@@ -5598,8 +5608,9 @@ struct EyeLive {
     std::atomic<uint64_t> lists{0}, patches{0}, executed{0};
     // what was changed, by kind (the 900-frame line): scene state applied (stereo, one eye), deferred shadows, the
     // tile-frustum constants, tile culling, normals, packing; scene-root draws left alone for their viewport's shape
-    std::atomic<uint64_t> did[12] = {};  // (8 sharpening, 9 histogram, 10 histogramAverage)
-    std::atomic<int> said[12] = {};  // first uses described
+    // (8 sharpening, 9 histogram, 10 histogramAverage, 11 by-pixel post dispatches shrunk, 12 whole-target draws clipped)
+    std::atomic<uint64_t> did[14] = {};
+    std::atomic<int> said[14] = {};  // first uses described
     std::atomic<int> shapesSaid{0};
     bool tried = false, ready = false;
     int whyNot = -1;
@@ -5788,6 +5799,36 @@ void eye_apply(List* l, Stream* s) {
         if (s->gfxRoot == s->cbv5Root)
             cbvOriginal(l, 5, s->gfxCbvs[5]);
         s->eyeCbv5 = false;
+    }
+    // A draw over the whole two-eye target (ACE's fullscreen post draws): the viewport stays (it maps each pixel to
+    // itself), a scissor keeps the work to the region in use.
+    const bool whole = now.on && !want && s->vpN == 1 && s->vpAll[0].TopLeftX == 0 && s->vpAll[0].TopLeftY == 0 &&
+                       std::fabs(s->vpAll[0].Width - 2 * now.ew) <= 2 && std::fabs(s->vpAll[0].Height - now.eh) <= 1;
+    if (whole) {
+        D3D12_RECT r{0, 0, static_cast<LONG>(2 * now.lw), static_cast<LONG>(now.lh)};
+        if (s->scN) {  // within the game's own
+            r.left = std::max(r.left, s->scAll[0].left);
+            r.top = std::max(r.top, s->scAll[0].top);
+            r.right = std::max(r.left, std::min(r.right, s->scAll[0].right));
+            r.bottom = std::max(r.top, std::min(r.bottom, s->scAll[0].bottom));
+        }
+        scissorsOriginal(l, 1, &r);
+        s->eyeClipped = true;
+        eyeLive.did[12].fetch_add(1, std::memory_order_relaxed);
+        if (eyeLive.said[12].fetch_add(1) < 10) {
+            wchar_t name[64] = {};
+            UINT size = sizeof(name) - sizeof(wchar_t);
+            if (!s->pso || FAILED(s->pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)))
+                name[0] = 0;
+            logf("replay eye: a whole-target draw clipped to the region: pipeline '%ls', viewport %.0fx%.0f, scissor %ld,%ld..%ld,%ld "
+                 "(the game's %ld,%ld..%ld,%ld)",
+                 name, s->vpAll[0].Width, s->vpAll[0].Height, r.left, r.top, r.right, r.bottom, s->scN ? s->scAll[0].left : 0,
+                 s->scN ? s->scAll[0].top : 0, s->scN ? s->scAll[0].right : 0, s->scN ? s->scAll[0].bottom : 0);
+        }
+    } else if (s->eyeClipped) {
+        if (!want && s->scN)  // (a scaled draw has just set its own)
+            scissorsOriginal(l, s->scN, s->scAll);
+        s->eyeClipped = false;
     }
 }
 
@@ -6403,7 +6444,7 @@ void STDMETHODCALLTYPE scissorsHook(List* l, UINT n, const D3D12_RECT* r) {
         if (n == 2) std::memcpy(s->sc, r, sizeof(s->sc));
         s->scN = n <= 4 ? n : 0;
         std::memcpy(s->scAll, r, sizeof(D3D12_RECT) * s->scN);
-        if (s->eyeScaled)  // ours go back at the next draw
+        if (s->eyeScaled || s->eyeClipped)  // ours go back at the next draw
             s->eyeDirty = true;
     }
     scissorsOriginal(l, n, r);
@@ -6482,7 +6523,23 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
     }
     if (Stream* s = stream_of(l); s && s->psoKind == 16)
         eyeLive.aaFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    // The live periphery: these passes' constants name the eye's size; ours for the dispatch, the game's own back after.
+    // The live periphery: ACE's by-pixel post passes over the region's share of their groups, plus one (the next
+    // pass's taps just past the region read something made this frame).
+    if (Stream* s = stream_of(l); s && s->eyeState && x && y && (s->psoKind == 11 || (s->psoKind >= 20 && s->psoKind <= 24))) {
+        const EyeNow now = eye_now(s->eyeState);
+        const UINT sx = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * now.fx)) + 1);
+        const UINT sy = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * now.fy)) + 1);
+        eyeLive.did[11].fetch_add(1, std::memory_order_relaxed);
+        if (eyeLive.said[11].fetch_add(1) < 24)
+            logf("replay eye: %s dispatch %ux%u -> %ux%u",
+                 s->psoKind == 11 ? "gaussianBlur3x3Float4" : s->psoKind == 20 ? "gaussianBlur3x3Float3"
+                 : s->psoKind == 21 ? "veilLumaDownsample" : s->psoKind == 22 ? "veilDownsample"
+                 : s->psoKind == 23 ? "veilUpsample" : "hiZGeneration",
+                 x, y, sx, sy);
+        dispatchOriginal(l, sx, sy, z);
+        return;
+    }
+    // These passes' constants name the eye's size; ours for the dispatch, the game's own back after.
     if (Stream* s = stream_of(l); s && s->eyeState && s->psoKind == 1) {
         // tileFrustums takes its sizes as root constants (root 0: the inverse projection, 1 / the eye's size at 16-17,
         // tileCount at 18-19): the reciprocal of the size in use for the dispatch, the game's own back after.
@@ -6537,6 +6594,9 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
             if (s->psoKind == 2 || s->psoKind == 12) {  // per-eye passes: only the region in use (packing must not write past its eye)
                 x = eye_groups(x, now.ew, now.lw);  // one eye each
                 y = eye_groups(y, now.eh, now.lh);
+            } else if (s->psoKind == 5 || s->psoKind == 18) {  // by pixel over the whole target: the region's share, plus one
+                x = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * now.fx)) + 1);
+                y = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * now.fy)) + 1);
             }
             dispatchOriginal(l, x, y, z);
             computeCbvOriginal(l, rootIndex, va);
@@ -7073,12 +7133,14 @@ void replay_probe_frame_end() {
                 logf("replay eye: over 900 frames: %.2f of ACE's lists a frame read our constants (%.2f copies a frame), %.2f "
                      "copy lists run a frame; state applied a frame: stereo passes %.2f, one-eye passes %.2f, deferred shadows "
                      "%.2f, tileFrustums %.2f, tiledCulling %.2f, normals %.2f, packing %.2f, sharpening %.2f, histogram %.2f, "
-                     "histogram average %.2f; scene-root draws left at their own size %.2f",
+                     "histogram average %.2f, other post dispatches shrunk %.2f, whole-target draws clipped %.2f; scene-root draws "
+                     "left at their own size %.2f",
                      eyeLive.lists.exchange(1) / 900.0, eyeLive.patches.exchange(0) / 900.0, eyeLive.executed.exchange(0) / 900.0,
                      eyeLive.did[0].exchange(0) / 900.0, eyeLive.did[1].exchange(0) / 900.0, eyeLive.did[2].exchange(0) / 900.0,
                      eyeLive.did[3].exchange(0) / 900.0, eyeLive.did[4].exchange(0) / 900.0, eyeLive.did[5].exchange(0) / 900.0,
                      eyeLive.did[6].exchange(0) / 900.0, eyeLive.did[8].exchange(0) / 900.0, eyeLive.did[9].exchange(0) / 900.0,
-                     eyeLive.did[10].exchange(0) / 900.0, eyeLive.did[7].exchange(0) / 900.0);
+                     eyeLive.did[10].exchange(0) / 900.0, eyeLive.did[11].exchange(0) / 900.0, eyeLive.did[12].exchange(0) / 900.0,
+                     eyeLive.did[7].exchange(0) / 900.0);
         }
         {  // the next frame's box centre: the gaze asked for, clamped so the box stays inside the eye's image
             AcquireSRWLockExclusive(&focus.lock);
