@@ -158,8 +158,12 @@ void replay_compose() {
     double box = 0;
     float gazeNdc[2][2] = {};  // each eye's box centre off its forward axis, as this frame's focus image was drawn
     double boxY = 0;
+    replay_probe_eye_allow(false);  // until this frame is composed: the uncomposed fallback shows ACE's whole image
     if (!replay_probe_focus_image(focusImage, focusState, box, gazeNdc, &boxY))
         return;  // no focus image yet: ACE's eyes go to the headset as they are
+    // The live periphery: the share of ACE's eye image this frame was drawn into (its top left).
+    float eyeX = 1, eyeY = 1;
+    replay_probe_eye_region(eyeX, eyeY);
     ID3D12Resource* app = quad.appImages[quad.appAcquired];
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
@@ -179,7 +183,8 @@ void replay_compose() {
         const XrQuaternionf none{0, 0, 0, 1};
         to_matrix(none, c.rotation);
         const float half[4] = {0.5f * static_cast<float>(e), 0, 0.5f, 1};
-        std::memcpy(c.outerSource, half, sizeof(half));
+        const float outer[4] = {0.5f * static_cast<float>(e) * eyeX, 0, 0.5f * eyeX, eyeY};
+        std::memcpy(c.outerSource, outer, sizeof(outer));
         std::memcpy(c.focusSource, half, sizeof(half));
         c.feather = static_cast<float>(experiment.feather);
         c.border = experiment.border ? 0.008f : 0.0f;
@@ -201,6 +206,20 @@ void replay_compose() {
     ID3D12Resource* out = quad.outImages[outIndex];
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) && quad.compositor.capture_outer(app) &&
                     quad.compositor.compose(focusImage, out, eyes, focusState);
+    if (experiment.replayEyeCapture) {  // diagnostic: ACE's whole eye image and the composed left eye, about two seconds
+                                        // after each change of the live periphery (up to 12 a session)
+        static float lastX = -1;
+        static int due = 0, taken = 0;
+        if (eyeX != lastX) {
+            lastX = eyeX;
+            due = 150;
+        }
+        if (due > 0 && --due == 0 && taken < 12 && ok) {
+            ++taken;
+            logf("replay eye: capture with the periphery at %.0f%% x %.0f%% of its launch size", eyeX * 100, eyeY * 100);
+            views4_capture(app, out);
+        }
+    }
     next.ReleaseSwapchainImage(quad.outChain, &release);
     if (!ok) {
         quad_fail("replay compose failed");
@@ -208,6 +227,7 @@ void replay_compose() {
     }
     quad.v4Composed = true;
     quad.fallbackRun = 0;
+    replay_probe_eye_allow(true);
     views4_helmet_layer(helmet, helmetFrame, eyes, nullptr);
     if (quad.composed++ == 0)
         logf("replay compose: first composed frame: eye 0 outer tangents %.3f/%.3f/%.3f/%.3f, focus +-%.3f x +-%.3f "

@@ -118,6 +118,13 @@ void replay_probe_set_gaze(const float (&ndc)[2][2]);
 // sized is then made again.
 void replay_probe_set_size(double k, double kY, double renderScale);
 void replay_probe_set_box(double box, double boxY = 0);
+// The live periphery: ACE's own eyes drawn at `scale` (0.25..1) of their launch size each way, into the top left of its
+// launch-size targets (1: off). Taken at a frame's end once the value has settled; only while the compositor reads the
+// region in use (replay_probe_eye_allow, each frame: whether the frame was composed).
+void replay_probe_set_eye_scale(double scale);
+void replay_probe_eye_allow(bool composed);
+// The share of each eye's launch-size image in use, each way (true while the live periphery is in effect).
+bool replay_probe_eye_region(float& fx, float& fy);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();
 // Qualifying thresholds for modes 1/2 (tests use small ones).

@@ -117,6 +117,7 @@ struct Experiment {
     int replayFog = 0;                     // replay_fog=1: focus fog replayed; 2: ACE's grids resampled (R2c, with tiles)
     int replayShadows = 0;                 // replay_shadows=1: the focus views' own deferred shadow (R2c, with tiles); 2 A/B
     int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
+    bool replayEyeCapture = false;         // replay_eye_capture=1 (diagnostic): PNGs after each live periphery change
     int replayDlssEyePreset = 0;           // replay_dlss_eye_preset=F|K|M..: the eyes' (periphery's) NGX preset (empty: ACE's)
     int replayDlssFocusPreset = 0;         // replay_dlss_focus_preset: our focus features' (empty: ACE's)
     double replayDlssJitterX = 0.5;        // replay_dlss_jitter_x_percent=50: the share of ACE's x jitter NGX is told

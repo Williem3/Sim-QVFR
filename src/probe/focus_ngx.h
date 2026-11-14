@@ -75,6 +75,10 @@ struct Feature;
 Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags = 0, unsigned outWidth = 0,
               unsigned outHeight = 0);
 void release(Feature* f);
+// The live periphery: the game's own DLSS evaluations run on the region of its eye targets in use (lw | lh << 16 |
+// ew << 32 | eh << 48: each eye drawn lw x lh of its ew x eh, eye 1 right beside eye 0; 0: off), by a feature of ours
+// of that size in place of the game's.
+void set_eye_live(uint64_t packed);
 // False once NGX has been shut down since the feature was made (the game does that on an upscaling change): the
 // feature is dead and must be made again.
 bool alive(const Feature* f);

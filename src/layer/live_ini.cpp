@@ -126,7 +126,14 @@ void live_apply(const LiveSettings& l) {
                                   std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
         }
         replay_probe_set_box(boxX, boxY);
-        log_line("live: API path: the focus box and focus density apply now; the periphery's scale at the next launch");
+        // The periphery: live below its launch size (ACE's eyes drawn into a smaller region of its launch-size targets).
+        const double launchOuter = experiment.eyeScale > 0 ? experiment.eyeScale : 1.0;
+        const double share = std::clamp(wanted.outer / launchOuter, 0.25, 1.0);
+        replay_probe_set_eye_scale(share);
+        logf("live: API path: the focus box and focus density apply now; the periphery at %.0f%% of its launch size (%.0f%% of "
+             "the native eye, launched at %.0f%%)%s",
+             share * 100, wanted.outer * 100, launchOuter * 100,
+             wanted.outer > launchOuter + 1e-6 ? ": above the launch size needs the next launch" : "");
     }
     if (experiment.views4 && game_features().liveResolution)
         live_resolution(l);
@@ -279,7 +286,7 @@ void live_reload() {
     }
     if (experiment.replayCompose && experiment.replayDlss)  // the API path: the two presets, live
     {
-        focus_ngx::set_presets(experiment.replayDlssEyePreset, s->menu.dlss.focusPreset);  // the periphery stays on F
+        focus_ngx::set_presets(s->menu.dlss.eyePreset, s->menu.dlss.focusPreset);
         static int scaleSent = 0;  // the Focus views mode, live
         if (scaleSent != s->menu.dlss.focusScale) {
             scaleSent = s->menu.dlss.focusScale;
