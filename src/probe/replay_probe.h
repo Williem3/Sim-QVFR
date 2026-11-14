@@ -86,6 +86,9 @@ struct ReplayFocusSettings {
     bool gpuSteps = false;        // replay_gpu_steps=1 (diagnostic): GPU time by step from timestamps on ACE's queue, one
                                   // frame in sixteen, logged every 900 frames ("replay gpu:")
     bool costAb = false;
+    bool recordTiming = false;    // replay_record_timing=1 (diagnostic): where the CPU time recording the focus scene
+                                  // replays goes (lock wait, work under the lock, setup, re-emission, its sky checks,
+                                  // Close), logged every 900 frames at debug level ("replay record:")
     int diagMode = 0;             // replay_diag value (2: our MSAA refraction source only before samples 1, 3, ...)
     bool diag = false;            // a per-sample schedule: sample 1 as set, 2 our fog off, 3 our 3D atmosphere maps on,
                                   // 4 also the sky maps (needs `atmosphere` for the maps to exist)          // cost A/B: every focus replay on for 2 windows (1800 frames), off for 2, ...

@@ -119,6 +119,7 @@ struct Experiment {
     int replayTransparents = 0;            // replay_transparents=1: per-eye lists + OIT composite (R2c); 2 A/B
     int replayCull = 0;                    // replay_cull=1|2|3: focus culling (computed only, used, used in alternate windows)
     bool replayCullProbe = false;          // replay_cull_probe=1 (diagnostic): focus replays without one kind of draw by window
+    bool replayRecordTiming = false;       // replay_record_timing=1 (diagnostic): the focus replays' recording by phase
     bool replayGpuSteps = false;           // replay_gpu_steps=1 (diagnostic): GPU time by step ("replay gpu:" lines)
     bool replayEyeCapture = false;         // replay_eye_capture=1 (diagnostic): PNGs after each live periphery change
     int replayDlssEyePreset = 0;           // replay_dlss_eye_preset=F|K|M..: the eyes' (periphery's) NGX preset (empty: ACE's)

@@ -362,6 +362,15 @@ thread_local bool replayBroken = false;
 
 std::atomic<uint64_t> listsSeen{0}, listsReplayed{0}, callsReplayed{0}, drawsReplayed{0}, focusReplays{0};
 std::atomic<uint64_t> replayTicks{0}, hookCycles{0}, gameTicks{0}, frames{0};
+// replay_record_timing (diagnostic): focus_record's CPU time by phase, in QPC ticks, summed over threads.
+struct RecordTiming {
+    bool on = false;
+    std::atomic<uint64_t> lists{0}, lockWait{0}, underLock{0}, setup{0}, emit{0}, skyChecks{0}, close{0}, after{0},
+        maxList{0}, ops{0}, draws{0};
+};
+RecordTiming recordTiming;
+thread_local uint64_t skyCheckTicks = 0;  // emit's sky checks on this thread (read around one emit)
+thread_local uint64_t emitOps = 0;
 std::atomic<uint64_t> twinsMade{0}, twinsRemade{0};
 uint64_t windowFrames = 0, window = 0;
 
@@ -464,7 +473,17 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
     };
     while (p < end) {
         const Op op = static_cast<Op>(*p++);
-        const UINT64 skyMine = (op == kDraw || op == kDrawIndexed || op == kIndirect) ? skyTable() : 0;
+        UINT64 skyMine = 0;
+        if (op == kDraw || op == kDrawIndexed || op == kIndirect) {
+            if (recordTiming.on) {
+                const int64_t t = now_ticks();
+                skyMine = skyTable();
+                skyCheckTicks += static_cast<uint64_t>(now_ticks() - t);
+            } else {
+                skyMine = skyTable();
+            }
+        }
+        ++emitOps;
         if (skyMine) {
             l->SetGraphicsRootDescriptorTable(4, D3D12_GPU_DESCRIPTOR_HANDLE{skyMine});
             skyPatchCount.fetch_add(1, std::memory_order_relaxed);
@@ -848,6 +867,7 @@ struct Focus {
     std::unordered_map<ID3D12Resource*, Twin> twins;
     std::vector<SIZE_T> refused;  // handles whose view we never saw (logged once)
     bool viewsMoved = false;      // a view handle now names another resource: twins of orphaned resources go
+    uint64_t releaseChecked = UINT64_MAX;  // the frame focus_prepare last looked for game targets only we still hold
     // R2b: the focus views' light tiles. ACE's tile lists are bindless (space 45, root table 18 of its scene root
     // signature, a 131,072-descriptor range): our descriptors take the top kTileSlots of that range in its heap.
     ComPtr<ID3D12RootSignature> cullRoot;
@@ -2108,29 +2128,41 @@ bool focus_prepare(const Stream& s) {
     // new views beside the old handles): only our own references keep them alive. Their twins and our views of them
     // go, so lookups by name or size find the current ones (22:21 and 22:38 runs: a stale depth twin picked for the
     // tiles, the focus replays stopped) and the game's old targets are freed.
+    // Every 10 frames, not at every list: our view records hold every view the game ever made (tens of thousands of
+    // shader views on a big track with traffic), and a scan per twin per list under focus.lock took ~7 ms a frame and
+    // held ACE's render workers waiting on the lock (Nordschleife 10:26 run, replay_record_timing). One pass over the
+    // records counts our references to every twin's game target at once.
     std::vector<ID3D12Resource*> released;
-    for (auto t = focus.twins.begin(); t != focus.twins.end();) {
-        ID3D12Resource* const game = t->first;
-        ULONG ours = 0;
+    const uint64_t frameNow = focus.frame.load(std::memory_order_relaxed);
+    if (!focus.twins.empty() && (focus.releaseChecked == UINT64_MAX || frameNow - focus.releaseChecked >= 10)) {
+        focus.releaseChecked = frameNow;
+        std::vector<std::pair<ID3D12Resource*, ULONG>> ours;  // a twin's game target, our references to it
+        ours.reserve(focus.twins.size());
+        for (const auto& [game, t] : focus.twins)
+            ours.emplace_back(game, 0);
+        const auto count = [&ours](ID3D12Resource* r) {
+            for (auto& [game, n] : ours)
+                if (game == r) {
+                    ++n;
+                    return;
+                }
+        };
         for (const auto& [h, v] : focus.views)
-            if (v.resource.Get() == game)
-                ++ours;
+            count(v.resource.Get());
         for (const auto& [h, v] : focus.srvInfo)  // our record of the game's shader views of it
-            if (v.first.Get() == game)
-                ++ours;
+            count(v.first.Get());
         for (const ComPtr<ID3D12Resource>& r : {focus.gameGrid[0], focus.gameGrid[1], focus.postGameFxaa})
-            if (r.Get() == game)
-                ++ours;
-        game->AddRef();
-        const ULONG others = game->Release();  // the references left: ours and the game's
-        if (!ours || others > ours) {
-            ++t;
-            continue;
+            count(r.Get());
+        for (const auto& [game, n] : ours) {
+            game->AddRef();
+            const ULONG others = game->Release();  // the references left: ours and the game's
+            if (!n || others > n)
+                continue;
+            const Twin& t = focus.twins.at(game);
+            logd("replay focus: the game released its %s (%llux%u)", t.name.c_str(),
+                 static_cast<unsigned long long>(t.gameDesc.Width), t.gameDesc.Height);
+            released.push_back(game);
         }
-        logd("replay focus: the game released its %s (%llux%u)", t->second.name.c_str(),
-             static_cast<unsigned long long>(t->second.gameDesc.Width), t->second.gameDesc.Height);
-        released.push_back(game);
-        ++t;
     }
     if (!released.empty()) {
         for (ID3D12Resource* game : released) {  // our records of its views go (which frees the target)
@@ -2439,7 +2471,10 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     const int monoEye = mono ? (s.monoX > 0 ? 1 : 0) : -1;
     if (mono)
         focus.monoTaken[monoEye].fetch_add(1, std::memory_order_relaxed);
+    const bool timed = recordTiming.on;
+    const int64_t tEntry = timed ? now_ticks() : 0;
     AcquireSRWLockExclusive(&focus.lock);
+    const int64_t tLocked = timed ? now_ticks() : 0;
     if (focus_prepare(s)) {
         bool fits = true;
         for (const SIZE_T h : s.targets) {
@@ -2530,6 +2565,10 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     if (!r)
         return;
     const int64_t start = now_ticks();
+    if (timed) {
+        recordTiming.lockWait.fetch_add(static_cast<uint64_t>(tLocked - tEntry), std::memory_order_relaxed);
+        recordTiming.underLock.fetch_add(static_cast<uint64_t>(start - tLocked), std::memory_order_relaxed);
+    }
     const bool sample = focus.sampleFrame.load() == focus.frame.load();
     inReplay = true;
     r->allocator->Reset();
@@ -2624,7 +2663,18 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     (sub.argsFrom ? cull.listsCulled : cull.listsWhole).fetch_add(1, std::memory_order_relaxed);
     l->RSSetViewports(views, fv);  // in case the list sets none itself
     l->RSSetScissorRects(views, fr);
+    const int64_t tEmit = timed ? now_ticks() : 0;
+    if (timed)
+        skyCheckTicks = emitOps = 0;
     int64_t draws = emit(l, s, &sub);
+    const int64_t tEmitted = timed ? now_ticks() : 0;
+    if (timed) {
+        recordTiming.setup.fetch_add(static_cast<uint64_t>(tEmit - start), std::memory_order_relaxed);
+        recordTiming.emit.fetch_add(static_cast<uint64_t>(tEmitted - tEmit), std::memory_order_relaxed);
+        recordTiming.skyChecks.fetch_add(skyCheckTicks, std::memory_order_relaxed);
+        recordTiming.ops.fetch_add(emitOps, std::memory_order_relaxed);
+        recordTiming.draws.fetch_add(static_cast<uint64_t>(std::max<int64_t>(0, draws)), std::memory_order_relaxed);
+    }
     // 3. At sample frames, the same list unchanged into the eye-size references.
     if (sample && draws >= 0) {
         const float ew = static_cast<float>(ewi), eh = static_cast<float>(ehi);
@@ -2643,15 +2693,27 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     if (!skyPatches.empty())
         barrier(l, focus.skyConstants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    const int64_t tClose = timed ? now_ticks() : 0;
     l->Close();
     inReplay = false;
-    replayTicks.fetch_add(static_cast<uint64_t>(now_ticks() - start), std::memory_order_relaxed);
+    const int64_t tClosed = now_ticks();
+    replayTicks.fetch_add(static_cast<uint64_t>(tClosed - start), std::memory_order_relaxed);
+    if (timed) {
+        recordTiming.close.fetch_add(static_cast<uint64_t>(tClosed - tClose), std::memory_order_relaxed);
+        recordTiming.lists.fetch_add(1, std::memory_order_relaxed);
+        const uint64_t whole = static_cast<uint64_t>(tClosed - tEntry);
+        uint64_t seen = recordTiming.maxList.load(std::memory_order_relaxed);
+        while (whole > seen && !recordTiming.maxList.compare_exchange_weak(seen, whole, std::memory_order_relaxed)) {
+        }
+    }
     AcquireSRWLockExclusive(&focus.lock);
     if (draws < 0)
         r->busy = false;  // recorded but never executed: the allocator is reset at its next use
     else
         focus.pending[gameList].push_back(r);
     ReleaseSRWLockExclusive(&focus.lock);
+    if (timed)  // (mostly the wait for focus.lock again)
+        recordTiming.after.fetch_add(static_cast<uint64_t>(now_ticks() - tClosed), std::memory_order_relaxed);
     if (draws < 0) {
         if (mono)
             focus.monoBroken.fetch_add(1, std::memory_order_relaxed);
@@ -7369,6 +7431,10 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
                  "alternate 900-frame windows)",
                  ok ? "on" : "could not hook", settings.cull);
         }
+        recordTiming.on = ok && settings.recordTiming;
+        if (recordTiming.on)
+            logf("replay record: the focus replays' recording timed by phase (replay_record_timing=1; \"replay record:\" "
+                 "lines every 900 frames)");
         if (ok && settings.gpuSteps) {  // GPU time by step: the timestamps' heap, their readback, the resolve's list
             const D3D12_QUERY_HEAP_DESC qh{D3D12_QUERY_HEAP_TYPE_TIMESTAMP, kStepQueries, 0};
             const D3D12_HEAP_PROPERTIES rh{D3D12_HEAP_TYPE_READBACK};
@@ -7848,6 +7914,20 @@ void replay_probe_frame_end() {
              s.atmoReplays / n, s.postReplays / n, s.blurReplays / n, s.skyPatches / n, s.dlssEvaluations / n,
              gameDlss / n, static_cast<double>(focus.aaReplays.exchange(0)) / n, s.replayMs / n,
              s.hookMs / n, s.gameMs / n);
+        if (recordTiming.on) {
+            RecordTiming& t = recordTiming;
+            const double lists = static_cast<double>(std::max<uint64_t>(1, t.lists.load()));
+            const auto ms = [&](std::atomic<uint64_t>& v) { return static_cast<double>(v.exchange(0)) * msPerTick / n; };
+            const double listsN = static_cast<double>(t.lists.exchange(0)) / n;
+            const double ops = static_cast<double>(t.ops.exchange(0)) / lists, draws = static_cast<double>(t.draws.exchange(0)) / lists;
+            const double lockWait = ms(t.lockWait), underLock = ms(t.underLock), setup = ms(t.setup), emit = ms(t.emit),
+                         sky = ms(t.skyChecks), close = ms(t.close), after = ms(t.after);
+            logd("replay record: ms a frame over %.2f focus scene replays (summed over threads): waiting for the focus lock "
+                 "%.3f, under it %.3f, setup (constants, sky) %.3f, re-emission %.3f (its sky checks %.3f), Close %.3f, the "
+                 "lock again after %.3f; per replay %.0f ops, %.0f draws; the slowest replay %.3f ms",
+                 listsN, lockWait, underLock, setup, emit, sky, close, after, ops, draws,
+                 static_cast<double>(t.maxList.exchange(0)) * msPerTick);
+        }
         ++window;
         if (focus.settings.costAb) {  // 2 windows on, 2 off: the first window after each switch settles
             const bool on = (window / 2) % 2 == 0;

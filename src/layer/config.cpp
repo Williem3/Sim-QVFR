@@ -253,6 +253,8 @@ void load_experiment() {
         experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
         experiment.replayEyeCapture = GetPrivateProfileIntW(L"experiment", L"replay_eye_capture", 0, ini.c_str()) != 0;
         experiment.replayGpuSteps = GetPrivateProfileIntW(L"experiment", L"replay_gpu_steps", 0, ini.c_str()) != 0;
+        experiment.replayRecordTiming =
+            GetPrivateProfileIntW(L"experiment", L"replay_record_timing", 0, ini.c_str()) != 0;
         experiment.replayCullProbe = GetPrivateProfileIntW(L"experiment", L"replay_cull_probe", 0, ini.c_str()) != 0;
         experiment.replayCull = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_cull", 0, ini.c_str()));
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
@@ -359,11 +361,12 @@ void load_experiment() {
     if (!log_debug()) {
         const bool any = experiment.replaySaveCount || experiment.captureEverySeconds || experiment.replayEyeCapture ||
                          experiment.replayGpuSteps || experiment.replayCullProbe || experiment.replayCull == 3 ||
-                         experiment.replayCostAb ||
+                         experiment.replayCostAb || experiment.replayRecordTiming ||
                          experiment.pixCaptureFrame || (experiment.d3d11CaptureFrame && !experiment.d3d11CaptureHotkey);
         experiment.replaySaveCount = 0;
         experiment.captureEverySeconds = 0;
         experiment.replayEyeCapture = experiment.replayGpuSteps = experiment.replayCullProbe = experiment.replayCostAb = false;
+        experiment.replayRecordTiming = false;
         if (experiment.replayCull == 3)  // the alternating A/B: the culling simply on
             experiment.replayCull = 2;
         experiment.pixCaptureFrame = 0;
