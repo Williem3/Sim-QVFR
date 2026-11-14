@@ -6145,10 +6145,20 @@ void eye_apply(List* l, Stream* s) {
         const D3D12_VIEWPORT& v = s->vpAll[0];
         // (shadow maps and cubemaps are square powers of two: not worth a line)
         const bool square = v.Width == v.Height && (static_cast<UINT>(v.Width) & (static_cast<UINT>(v.Width) - 1)) == 0;
-        if (!square && eyeLive.shapesSaid.fetch_add(1) < 16)
+        if (!square && eyeLive.shapesSaid.fetch_add(1) < 16) {  // which pass: its pipeline and render target by name
+            wchar_t name[64] = {};
+            UINT size = sizeof(name) - sizeof(wchar_t);
+            if (!s->pso || FAILED(s->pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)))
+                name[0] = 0;
+            std::string target = "?";
+            AcquireSRWLockShared(&focus.lock);
+            if (const auto t = focus.views.find(s->lastRtv); s->lastRtv && t != focus.views.end())
+                target = debug_name(t->second.resource.Get());
+            ReleaseSRWLockShared(&focus.lock);
             logd("replay eye: a scene-root draw left at its own size: %u viewport(s), the first %.1f,%.1f %.1fx%.1f (the eye "
-                 "%.0fx%.0f)",
-                 s->vpN, v.TopLeftX, v.TopLeftY, v.Width, v.Height, now.ew, now.eh);
+                 "%.0fx%.0f); pipeline '%ls', render target '%s'",
+                 s->vpN, v.TopLeftX, v.TopLeftY, v.Width, v.Height, now.ew, now.eh, name, target.c_str());
+        }
     }
     if (want) {
         const int kind = shadows ? 2 : s->vpN == 2 ? 0 : 1;
