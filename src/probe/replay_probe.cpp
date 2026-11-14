@@ -163,6 +163,7 @@ struct Stream {
     float eyeW = 0, eyeH = 0;
     std::vector<SIZE_T> targets;                             // distinct RTV/DSV CPU handles it binds
     std::vector<D3D12_GPU_VIRTUAL_ADDRESS> passConstants;  // distinct root-1 addresses, in order
+    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> frameConstants;  // distinct root-0 addresses (frameData: tileCount)
     // R2b: the compute bindings in effect and ACE's tile passes (found by pipeline name) as they were dispatched.
     int psoKind = 0;  // 1 tileFrustums, 2 tiledCulling
     ID3D12PipelineState* pso = nullptr;
@@ -238,6 +239,7 @@ struct Stream {
         eyeW = eyeH = 0;
         targets.clear();
         passConstants.clear();
+        frameConstants.clear();
         psoKind = 0;
         pso = nullptr;
         computeRoot = nullptr;
@@ -443,7 +445,7 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
         }
         case kCbv: {
             UINT i; D3D12_GPU_VIRTUAL_ADDRESS va; get(i); get(va);
-            if (sub && sub->from && i == kPassConstantsRoot)
+            if (sub && sub->from && (i == kPassConstantsRoot || i == 0))  // pass constants; frameData (root 0)
                 for (size_t k = 0; k < sub->from->size(); ++k)
                     if ((*sub->from)[k] == va) {
                         va = (*sub->to)[k];
@@ -664,6 +666,21 @@ RWByteAddressBuffer dst : register(u0);
 )";
 constexpr UINT kTyreSlots = 64, kTyreSlotBytes = 2048;
 
+// frameData (root 0, 1136 B) for the focus replays: tileCount (uint2 at 0, the lighting's tile-list stride) is the
+// focus views' own grid. The game's grid is its eye's; a focus view with more pixels than the eye has more tiles, and
+// with the game's stride its lists wrapped and ran out (18:39 capture: a dark band and blocks in the focus image).
+constexpr char kFrameShader[] = R"(
+cbuffer Src : register(b0) { float4 src[72]; };
+cbuffer P : register(b1) { uint tx; uint ty; };
+RWByteAddressBuffer dst : register(u0);
+[numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
+    if (i >= 72) return;
+    uint4 v = asuint(src[i]);
+    if (i == 0) { v.x = tx; v.y = ty; }
+    dst.Store4(i * 16, v);
+}
+)";
+
 constexpr UINT kSlotBytes = 4096;  // 2 KB constants + 4 kept rows, CBV-aligned
 constexpr UINT kSlots = 512;
 constexpr UINT kRtvSlots = 32, kDsvSlots = 16;
@@ -727,7 +744,8 @@ struct Focus {
     UINT heapSize = 0, increment = 0;
     D3D12_GPU_DESCRIPTOR_HANDLE bindlessBase{};  // root table 18 as ACE's stereo scene lists set it
     UINT baseIndex = 0, slotFirst = 0;            // absolute heap indices
-    UINT tilesX = 0, tilesY = 0;                  // the game's tile grid per eye (frameData.tileCount)
+    UINT tilesX = 0, tilesY = 0;                  // the focus views' tile grid per eye (our lists' size and stride)
+    ComPtr<ID3D12PipelineState> framePso;         // kFrameShader on patchRoot
     ComPtr<ID3D12Resource> frustums[2], opaque[2], transparent[2];
     ID3D12Resource* depthForTiles = nullptr;      // the focus depth twin our depth SRV names
     bool tilesShaderResource = false;             // opaque/transparent: after a recorded tile replay
@@ -920,12 +938,13 @@ constexpr UINT kFogSlots = 32, kFogSlotBytes = 16384;  // the injection constant
 // of our focus depth twin.
 constexpr char kCullShader[] = R"(
 cbuffer Source : register(b0) { float4 src[15]; };
-cbuffer Params : register(b1) { float4 inverseProjection[4]; int2 dimension; int2 pixelOffset; };
+cbuffer Params : register(b1) { float4 inverseProjection[4]; int2 dimension; int2 pixelOffset; float2 tiles; };
 RWByteAddressBuffer dst : register(u0);
 [numthreads(16, 1, 1)] void main(uint i : SV_DispatchThreadID) {
     if (i >= 15) return;
     float4 v = src[i];
     if (i >= 8 && i < 12) v = inverseProjection[i - 8];
+    if (i == 12) v.xy = tiles;  // tileCount: the focus views' own grid
     if (i == 13) v = float4(asfloat(dimension), asfloat(pixelOffset));
     dst.Store4(i * 16, asuint(v));
 }
@@ -1287,6 +1306,17 @@ bool focus_compile() {
     }
     for (int i = kRtvSlots - 1; i >= 0; --i) focus.freeRtv.push_back(i);
     for (int i = kDsvSlots - 1; i >= 0; --i) focus.freeDsv.push_back(i);
+    {  // frameData with the focus tile grid
+        ComPtr<ID3DBlob> frameCode, frameErrors;
+        D3D12_COMPUTE_PIPELINE_STATE_DESC framePso{};
+        framePso.pRootSignature = focus.patchRoot.Get();
+        if (SUCCEEDED(D3DCompile(kFrameShader, sizeof(kFrameShader) - 1, "focus-frame-data", nullptr, nullptr, "main", "cs_5_0",
+                                 0, 0, &frameCode, &frameErrors))) {
+            framePso.CS = {frameCode->GetBufferPointer(), frameCode->GetBufferSize()};
+            if (FAILED(device->CreateComputePipelineState(&framePso, IID_PPV_ARGS(&focus.framePso))))
+                log_line("replay focus: tiles: the frameData copy could not be made; the focus views keep the game's tile grid");
+        }
+    }
     if (focus.settings.tyres) {  // the right eye's tyres: the constants copy
         ComPtr<ID3DBlob> tyreCode, tyreErrors, tyreBlob;
         D3D12_ROOT_PARAMETER tyreParams[2] = {};
@@ -1322,7 +1352,7 @@ bool focus_compile() {
         cullParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         cullParams[0].Descriptor = {0, 0};
         cullParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        cullParams[1].Constants = {1, 0, 20};
+        cullParams[1].Constants = {1, 0, 22};
         cullParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         cullParams[2].Descriptor = {0, 0};
         const D3D12_ROOT_SIGNATURE_DESC cullDesc{3, cullParams, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -2013,6 +2043,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     const uint32_t shadowSrv = shadowPhase && focus.shadowReady && !focus.shadowBroken && !focus.tilesBroken
                                    ? focus.slotFirst + 15 - focus.baseIndex
                                    : 0;
+    const UINT focusTilesX = focus.tilesReady && !focus.tilesBroken && focus.framePso ? focus.tilesX : 0, focusTilesY = focus.tilesY;
     float gazeNow[4], gazeBefore[4];  // this frame's box centres off the eyes' axes, and last frame's
     std::memcpy(gazeNow, focus.gazeOffset, sizeof(gazeNow));
     std::memcpy(gazeBefore, focus.gazePrev, sizeof(gazeBefore));
@@ -2078,6 +2109,22 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
         l->Dispatch(3, 1, 1);
         slots.push_back(mine);
     }
+    // frameData with the focus tile grid (tileCount: the stride of our tile lists), one copy per root-0 address.
+    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> constantsFrom = s.passConstants;
+    if (focusTilesX) {
+        l->SetPipelineState(focus.framePso.Get());
+        const uint32_t grid[2] = {focusTilesX, focusTilesY};
+        l->SetComputeRoot32BitConstants(1, 2, grid, 0);
+        for (const D3D12_GPU_VIRTUAL_ADDRESS va : s.frameConstants) {
+            const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
+            const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.constants->GetGPUVirtualAddress() + UINT64{slot} * kSlotBytes;
+            l->SetComputeRootConstantBufferView(0, va);
+            l->SetComputeRootUnorderedAccessView(2, mine);
+            l->Dispatch(2, 1, 1);
+            constantsFrom.push_back(va);
+            slots.push_back(mine);
+        }
+    }
     barrier(l, focus.constants.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     // 2. Both focus views into the focus twins.
     const float fw = static_cast<float>(fwi), fh = static_cast<float>(fhi);
@@ -2087,7 +2134,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     const UINT views = mono ? 1u : 2u;
     const D3D12_VIEWPORT* fv = mono ? &focusViews[monoEye] : focusViews;
     const D3D12_RECT* fr = mono ? &focusRects[monoEye] : focusRects;
-    Substitution sub{fv, fr, views, &s.passConstants, &slots, &focusTargets};
+    Substitution sub{fv, fr, views, &constantsFrom, &slots, &focusTargets};
     if (!skyMap.empty())
         sub.skyTables = &skyMap;
     l->RSSetViewports(views, fv);  // in case the list sets none itself
@@ -2227,9 +2274,15 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
         return nullptr;
     float tileCount[2];
     std::memcpy(tileCount, frustums.constants + 18, sizeof(tileCount));
-    const UINT tx = static_cast<UINT>(tileCount[0]), ty = static_cast<UINT>(tileCount[1]);
+    UINT tx = static_cast<UINT>(tileCount[0]), ty = static_cast<UINT>(tileCount[1]);
     if (!tx || !ty || tx > 4096 || ty > 4096)
         return nullptr;
+    // Our lists at the focus views' own grid (16-pixel tiles of the focus twin), when frameData can be given it.
+    const UINT gameTx = tx, gameTy = ty;
+    if (focus.framePso) {
+        tx = (depth->focusW + 15) / 16;
+        ty = (depth->focusH + 15) / 16;
+    }
     if (!focus.frustums[0] || tx != focus.tilesX || ty != focus.tilesY) {
         for (int e = 0; e < 2; ++e)
             for (ComPtr<ID3D12Resource>* r : {std::addressof(focus.frustums[e]), std::addressof(focus.opaque[e]),
@@ -2251,7 +2304,8 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
             focus.ourTile[e] = focus.slotFirst + e * 6 + 3 - focus.baseIndex;      // opaque L, R
             focus.ourTile[2 + e] = focus.slotFirst + e * 6 + 5 - focus.baseIndex;  // transparent L, R
         }
-        logf("replay focus: tiles: the game's grid %ux%u per eye; our tile lists made", tx, ty);
+        logf("replay focus: tiles: the game's grid %ux%u per eye; our tile lists made at %ux%u (the focus views' own)", gameTx,
+             gameTy, tx, ty);
     }
     if (focus.depthForTiles != depth->focus.Get()) {
         D3D12_SHADER_RESOURCE_VIEW_DESC v{};
@@ -2359,24 +2413,27 @@ void focus_tiles_record(List* gameList, const Stream& s) {
             break;
         }
         // 1. tiledCulling's constants with the focus fields, into our slot.
-        uint32_t cullParams[20];
+        uint32_t cullParams[22];
         std::memcpy(cullParams, focusInverse, sizeof(focusInverse));
         const int32_t region[4] = {static_cast<int32_t>(fw), static_cast<int32_t>(fh), static_cast<int32_t>(e * fw), 0};
         std::memcpy(cullParams + 16, region, sizeof(region));
+        const float tiles[2] = {static_cast<float>(focus.tilesX), static_cast<float>(focus.tilesY)};
+        std::memcpy(cullParams + 20, tiles, sizeof(tiles));
         const uint32_t slot = focus.nextSlot.fetch_add(1) % kSlots;
         const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.constants->GetGPUVirtualAddress() + UINT64{slot} * kSlotBytes;
         l->SetComputeRootSignature(focus.cullRoot.Get());
         l->SetPipelineState(focus.cullPso.Get());
         l->SetComputeRootConstantBufferView(0, c.cbv);
-        l->SetComputeRoot32BitConstants(1, 20, cullParams, 0);
+        l->SetComputeRoot32BitConstants(1, 22, cullParams, 0);
         l->SetComputeRootUnorderedAccessView(2, mine);
         l->Dispatch(1, 1, 1);
-        // 2. tileFrustums for the focus view (the game's tile grid kept: frameData.tileCount is the lighting's stride).
+        // 2. tileFrustums for the focus view, at the focus grid (frameData's tileCount is given it in the scene replays).
         uint32_t frustumConstants[20];
         std::memcpy(frustumConstants, f.constants, sizeof(frustumConstants));
         std::memcpy(frustumConstants, focusInverse, sizeof(focusInverse));
         const float rcp[2] = {1.0f / static_cast<float>(fw), 1.0f / static_cast<float>(fh)};
         std::memcpy(frustumConstants + 16, rcp, sizeof(rcp));
+        std::memcpy(frustumConstants + 18, tiles, sizeof(tiles));  // tileCount (floats at 72): our grid
         const UINT at = focus.slotFirst + e * 6;
         l->SetComputeRootSignature(f.root);
         l->SetPipelineState(f.pso);
@@ -5492,6 +5549,8 @@ void STDMETHODCALLTYPE cbvHook(List* l, UINT i, D3D12_GPU_VIRTUAL_ADDRESS va) {
             s->gfxCbvs[i] = va;
         if (i == kPassConstantsRoot && std::find(s->passConstants.begin(), s->passConstants.end(), va) == s->passConstants.end())
             s->passConstants.push_back(va);
+        if (i == 0 && std::find(s->frameConstants.begin(), s->frameConstants.end(), va) == s->frameConstants.end())
+            s->frameConstants.push_back(va);
     }
     cbvOriginal(l, i, va);
 }
