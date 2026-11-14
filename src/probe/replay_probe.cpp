@@ -577,8 +577,9 @@ void replay_unexecuted(const Stream& s) {
 // size, row 84 the viewport rect, row 112.z eyeHalfWidthPixels. Rows 128-131 keep each eye's unjittered x/y rows.
 // Jitter (ACE's DLSS; 21:20 capture): row 85.xy is the frame's jitter in the eye's NDC (0 under MSAA), and the rows named
 // "unjittered" carry it too: 13, 17, 25 and the right eye's 95, 103, 107 are all centre - jitter; only prevProjection
-// (21) and inverseViewProjection (29-32) are without. So each eye's centre is row 17 / 103 plus row 85, and each
-// projection row's own jitter is that centre minus its z. The focus views take the same jitter in their own pixels
+// (21) and inverseViewProjection (29-32) are without. So each eye's centre is row 17 / 103 plus row 85, and the rows'
+// own jitter is row 85 by that list (not read back from a row's z: 21:38 capture, the focus views drawn 0.14 of the
+// eye's NDC off). The focus views take the same jitter in their own pixels
 // (the eye's NDC jitter x eye size / focus size), not the box's magnification of it: DLSS takes sub-pixel jitter.
 constexpr char kPatchShader[] = R"(
 cbuffer Source : register(b0) { float4 src[128]; };
@@ -610,10 +611,10 @@ bool is_in(uint r, uint a, uint b, uint c, uint d) { return r == a || r == b || 
     // The jitter's scale into the focus view's NDC: the same pixels' worth there as in the eye.
     const float sx = src[84].z > 0 ? src[84].z / focusSize.x : ax, sy = src[84].w > 0 ? src[84].w / focusSize.y : ay;
     if (is_in(i, 1, 13, 17, 21) || is_in(i, 25, 95, 103, 107)) {  // viewProjection and the projections
-        const float own = i == 1 ? jitter.x : ux - v.z;           // this row's own jitter (viewProjection: the frame's)
+        const float own = i == 21 ? 0 : jitter.x;                 // this row's own jitter: all but prevProjection carry it
         v = ax * v + (ax * ox - own * (ax - sx)) * src[i + 3];    // x' = a x + b w, b = -a * centre = a * ox
     } else if (is_in(i, 2, 14, 18, 22) || is_in(i, 26, 96, 104, 108)) {
-        const float own = i == 2 ? jitter.y : uy - v.z;
+        const float own = i == 22 ? 0 : jitter.y;
         v = ay * v + (ay * oy - own * (ay - sy)) * src[i + 2];    // y' = c y + d w
     }
     if (i == 85) v.xy = jitter * float2(sx, sy);
