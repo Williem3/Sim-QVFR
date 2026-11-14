@@ -77,6 +77,14 @@ struct ReplayFocusSettings {
     bool tyres = false;           // ACE's tyre pipeline has no single-pass-stereo variant (one instance, viewport 0: the left
                                   // eye only): each tyre draw in a stereo list drawn again for the right eye, in ACE's own
                                   // lists and in the focus replays
+    int cull = 0;                 // replay_cull: ACE's instance visibility pass replayed with the focus frustums, the focus
+                                  // replays' indirect draws from its results: 1 computed only, 2 used, 3 used in alternate
+                                  // 900-frame windows (an A/B)
+    bool cullProbe = false;       // replay_cull_probe=1 (diagnostic): by 900-frame window, the focus scene replays whole,
+                                  // without their ExecuteIndirect draws, without their direct draws: each kind's GPU share
+                                  // (with gpuSteps); the focus picture is missing those objects meanwhile
+    bool gpuSteps = false;        // replay_gpu_steps=1 (diagnostic): GPU time by step from timestamps on ACE's queue, one
+                                  // frame in sixteen, logged every 900 frames ("replay gpu:")
     bool costAb = false;
     int diagMode = 0;             // replay_diag value (2: our MSAA refraction source only before samples 1, 3, ...)
     bool diag = false;            // a per-sample schedule: sample 1 as set, 2 our fog off, 3 our 3D atmosphere maps on,
@@ -123,6 +131,8 @@ void replay_probe_set_box(double box, double boxY = 0);
 // region in use (replay_probe_eye_allow, each frame: whether the frame was composed).
 void replay_probe_set_eye_scale(double scale);
 void replay_probe_eye_allow(bool composed);
+// GPU time by step: the batches this thread executes from now on are our compositor's (true) or the game's (false).
+void replay_probe_gpu_scope(bool compositor);
 // The share of each eye's launch-size image in use, each way (true while the live periphery is in effect).
 bool replay_probe_eye_region(float& fx, float& fy);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).

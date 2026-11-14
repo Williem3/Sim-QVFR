@@ -590,7 +590,7 @@ NVSDK_NGX_Result releaseHook(NVSDK_NGX_Handle* h) {
     const size_t gone = std::erase_if(gameFeatures, [&](const GameFeature& f) { return f.game == h; });
     ReleaseSRWLockExclusive(&lock);
     if (releasesLogged.fetch_add(1) < 16)
-        logf("focus dlss: the game released a feature (%p; %s)", static_cast<const void*>(h),
+        logd("focus dlss: the game released a feature (%p; %s)", static_cast<const void*>(h),
              gone ? "one of its eyes'" : "not one we saw made");
     return releaseOriginal(h);
 }
@@ -830,7 +830,7 @@ void release(Feature* f) {
     AcquireSRWLockShared(&lifeLock);
     if (f->generation != generation.load()) {  // NGX was shut down since: it freed the handle and the bag itself
         if (staleLogged.fetch_add(1) < 8)
-            log_line("focus dlss: a feature of ours from before NGX's shutdown is dropped, not released (NGX freed it)");
+            logd("focus dlss: a feature of ours from before NGX's shutdown is dropped, not released (NGX freed it)");
     } else if (releaseFn && destroyFn && !guarded_release(f->handle, f->bag)) {
         logf("focus dlss: NGX faulted releasing a feature of ours (handle %p): caught; the feature is left to NGX",
              static_cast<const void*>(f->handle));

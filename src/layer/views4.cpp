@@ -204,8 +204,10 @@ void replay_compose() {
         return;
     }
     ID3D12Resource* out = quad.outImages[outIndex];
+    replay_probe_gpu_scope(true);
     const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) && quad.compositor.capture_outer(app) &&
                     quad.compositor.compose(focusImage, out, eyes, focusState);
+    replay_probe_gpu_scope(false);
     if (experiment.replayEyeCapture) {  // diagnostic: ACE's whole eye image and the composed left eye, about two seconds
                                         // after each change of the live periphery (up to 12 a session)
         static float lastX = -1;

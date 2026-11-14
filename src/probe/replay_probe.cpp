@@ -60,6 +60,7 @@ extern "C" size_t simqvfr_slot_SetComputeRoot32BitConstants(void);
 extern "C" size_t simqvfr_slot_SetComputeRootConstantBufferView(void);
 extern "C" size_t simqvfr_slot_SetComputeRootDescriptorTable(void);
 extern "C" size_t simqvfr_slot_Dispatch(void);
+extern "C" size_t simqvfr_slot_CopyBufferRegion(void);
 extern "C" size_t simqvfr_slot_CreateShaderResourceView(void);
 extern "C" size_t simqvfr_slot_CopyDescriptorsSimple(void);
 
@@ -128,6 +129,8 @@ ConstNFn computeConstNOriginal;
 VaFn computeCbvOriginal;
 TableFn computeTableOriginal;
 DispatchFn dispatchOriginal;
+using CopyRegionFn = void(STDMETHODCALLTYPE*)(List*, ID3D12Resource*, UINT64, ID3D12Resource*, UINT64, UINT64);
+CopyRegionFn copyRegionOriginal;
 SrvFn srvViewOriginal;
 using CbvFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_CONSTANT_BUFFER_VIEW_DESC*, D3D12_CPU_DESCRIPTOR_HANDLE);
 using GfxPsoFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12Device*, const D3D12_GRAPHICS_PIPELINE_STATE_DESC*, REFIID, void**);
@@ -228,6 +231,26 @@ struct Stream {
     };
     std::vector<TileDispatch> tileDispatches;
     std::vector<ID3D12PipelineState*> dispatchPsos;  // every compute dispatch's pipeline (diagnostics)
+    // ACE's instance visibility pass (focus culling): root 0's constants as last set (visibilityGlobals, 52 values), its
+    // culling and finalize dispatches, and the buffer copies of the list (the count and command templates).
+    uint32_t visConsts[64] = {};
+    struct VisDispatch {
+        int kind;  // 25 cull, 26 its directional-shadow variant, 27 finalize
+        ID3D12PipelineState* pso;
+        ID3D12RootSignature* root;
+        ID3D12DescriptorHeap* heap;
+        uint32_t consts[52];
+        D3D12_GPU_DESCRIPTOR_HANDLE tables[10];
+        UINT dims[3];
+    };
+    std::vector<VisDispatch> visDispatches;
+    struct BufferCopy {
+        ID3D12Resource* dst;
+        UINT64 dstOffset;
+        ID3D12Resource* src;
+        UINT64 srcOffset, bytes;
+    };
+    std::vector<BufferCopy> bufferCopies;
     // The live periphery (eye_apply): every viewport and scissor as the game last set them, what of ours is in effect
     // in the game's own list, and the constants this list needs patched before it runs.
     UINT vpN = 0, scN = 0;
@@ -265,6 +288,8 @@ struct Stream {
         bindlessUint = {};
         tileDispatches.clear();
         dispatchPsos.clear();
+        visDispatches.clear();
+        bufferCopies.clear();
         std::memset(computeCbvs, 0, sizeof(computeCbvs));
         std::memset(computeCbvRoots, 0, sizeof(computeCbvRoots));
         gfxRoot = nullptr;
@@ -381,7 +406,18 @@ struct Substitution {
     const std::vector<std::pair<SIZE_T, SIZE_T>>* targets = nullptr;
     const std::vector<std::pair<UINT64, UINT64>>* tables = nullptr;  // descriptor tables (GPU handles) -> ours
     const std::vector<std::pair<UINT64, UINT64>>* skyTables = nullptr;  // root 4 -> ours, only around sky draws
+    int skip = 0;  // replay_cull_probe (diagnostic): 1 the indirect draws left out, 2 the direct draws
+    // Focus culling: the game's indirect command buffer -> ours, and vertex buffer views inside its visible-instances
+    // buffer -> the same place in ours.
+    ID3D12Resource* argsFrom = nullptr;
+    ID3D12Resource* argsTo = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS vbFrom = 0, vbTo = 0;
+    UINT64 vbBytes = 0;
 };
+// replay_cull_probe: what this 900-frame window's focus scene replays leave out (0 nothing, 1 ExecuteIndirect, 2 the
+// direct draws), and how many of each kind they emitted.
+std::atomic<int> cullProbePhase{0};
+std::atomic<uint64_t> probeIndirect{0}, probeDirect{0};
 
 SIZE_T map_target(const Substitution* sub, SIZE_T h) {
     if (sub && sub->targets)
@@ -492,7 +528,16 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
         case kVb: {
             UINT first, n; uint8_t has; get(first); get(n); get(has);
             const auto* views = reinterpret_cast<const D3D12_VERTEX_BUFFER_VIEW*>(p);
-            l->IASetVertexBuffers(first, n, has ? views : nullptr);
+            D3D12_VERTEX_BUFFER_VIEW mine[16];
+            if (has && sub && sub->vbBytes && n <= 16) {  // focus culling: our visible instances
+                std::memcpy(mine, views, sizeof(D3D12_VERTEX_BUFFER_VIEW) * n);
+                for (UINT i = 0; i < n; ++i)
+                    if (mine[i].BufferLocation >= sub->vbFrom && mine[i].BufferLocation < sub->vbFrom + sub->vbBytes)
+                        mine[i].BufferLocation = sub->vbTo + (mine[i].BufferLocation - sub->vbFrom);
+                l->IASetVertexBuffers(first, n, mine);
+            } else {
+                l->IASetVertexBuffers(first, n, has ? views : nullptr);
+            }
             if (has) p += sizeof(D3D12_VERTEX_BUFFER_VIEW) * n;
             break;
         }
@@ -535,9 +580,20 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
             l->OMSetRenderTargets(count, count ? rtvs : nullptr, FALSE, hasDsv ? &dsv : nullptr);
             break;
         }
-        case kDraw: { UINT a, b, c, d; get(a); get(b); get(c); get(d); l->DrawInstanced(a, b, c, d); ++draws; break; }
+        case kDraw: {
+            UINT a, b, c, d; get(a); get(b); get(c); get(d);
+            if (sub && sub->skip == 2)
+                break;
+            l->DrawInstanced(a, b, c, d);
+            ++draws;
+            break;
+        }
         case kDrawIndexed: {
             UINT a, b, c, e; INT d; get(a); get(b); get(c); get(d); get(e);
+            if (sub && sub->skip == 2)
+                break;
+            if (sub && sub->targets)
+                probeDirect.fetch_add(1, std::memory_order_relaxed);
             l->DrawIndexedInstanced(a, b, c, d, e);
             ++draws;
             if (curTyre && b == 1 && curCbv1)
@@ -548,6 +604,12 @@ int64_t emit(List* l, const Stream& s, const Substitution* sub) {
             ID3D12CommandSignature* sig; UINT max; ID3D12Resource* args; UINT64 argsOffset; ID3D12Resource* count;
             UINT64 countOffset;
             get(sig); get(max); get(args); get(argsOffset); get(count); get(countOffset);
+            if (sub && sub->skip == 1)
+                break;
+            if (sub && sub->targets)
+                probeIndirect.fetch_add(1, std::memory_order_relaxed);
+            if (sub && sub->argsFrom && args == sub->argsFrom)
+                args = sub->argsTo;  // focus culling: our draw arguments
             l->ExecuteIndirect(sig, max, args, argsOffset, count, countOffset);
             ++draws;
             break;
@@ -1297,6 +1359,9 @@ int pso_kind(ID3D12PipelineState* pso) {
                : std::wcscmp(name, L"veilDownsample") == 0              ? 22
                : std::wcscmp(name, L"veilUpsample") == 0                ? 23
                : std::wcscmp(name, L"hiZGeneration") == 0               ? 24
+               : std::wcscmp(name, L"InstanceVisibilityInstanceCull") == 0 ? 25
+               : std::wcscmp(name, L"InstanceVisibilityInstanceCullForDirectionalShadowDepth") == 0 ? 26
+               : std::wcscmp(name, L"InstanceVisibilityFinalizeDrawCommands") == 0 ? 27
                                                                          : 0;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds[pso] = kind;
@@ -2193,6 +2258,73 @@ extern std::atomic<int> remakeEpoch;
 bool miss_allowed(int& epoch, int& count, int limit);
 
 // Under focus.lock: a free replay entry (its last execution done).
+// ---- Focus culling (replay_cull) -----------------------------------------------------------------------------------
+// The focus replays draw each eye's whole draw list into a view covering a small part of it: ~2.4 ms of GPU a frame in
+// geometry, whatever the focus views' size (2026-11-14: 9x fewer focus pixels saved 0.3 ms). About 1.4 ms of it is
+// ExecuteIndirect draws, whose instances and draw arguments come from ACE's instance visibility pass. That pass is
+// replayed for the focus views: the eyes' culling dispatches again (the ones with dualFrustumCull set: left eye's
+// frustum from viewProjectionTransform, right eye's from mainViewProjectionTransform), both matrices remapped to the
+// focus boxes, writing our own visible-instances and count buffers; then ACE's finalize into our own command buffer.
+// The focus replays' ExecuteIndirect calls and instance vertex buffer views are pointed at ours. Draws ACE issues
+// directly are not culled.
+struct FocusCull {
+    std::atomic<int> mode{0};  // 0 off, 1 computed only, 2 used by the focus replays, 3 used in alternate 900-frame windows
+    std::atomic<bool> use{false};  // this window's replays read ours
+    std::atomic<uint64_t> gameInstancesVa{0}, gameInstancesBytes{0};  // ACE's visible-instances buffer
+    std::atomic<uint64_t> readyFrame{UINT64_MAX};  // the frame ours hold the culling of
+    // under focus.lock
+    ComPtr<ID3D12Resource> instances, counts, commands;
+    ID3D12Resource* gameCommands = nullptr;
+    D3D12_GPU_VIRTUAL_ADDRESS instancesVa = 0;
+    UINT64 instancesBytes = 0, countsBytes = 0, commandsBytes = 0;
+    bool broken = false;
+    std::atomic<uint64_t> culls{0}, listsCulled{0}, listsWhole{0};
+};
+FocusCull cull;
+constexpr UINT kCullSlot = 130;  // of our descriptors: instances UAV, counts UAV, counts SRV, commands UAV, (its SRV)
+
+// ---- GPU time by step (replay_gpu_steps=1) --------------------------------------------------------------------------
+// Where a frame's GPU time goes, from D3D12 timestamps on ACE's queue: one frame in sixteen, every list of ours stamps
+// its start (the post list three times), and a one-command list of ours stamps the start of each batch of the game's
+// (or of our compositor's) and the end of what we add after it. Sorted by time, each stamp owns the stretch up to the
+// next: lists run one after another on the queue. Summed by kind and averaged over the samples of a 900-frame window.
+// A list recorded in one frame and run in the next is not stamped: its time falls to the stamp before it.
+constexpr UINT kStepQueries = 256;
+enum : uint8_t {
+    kStepScene, kStepMono, kStepTiles, kStepFog, kStepShadow, kStepOit, kStepAtmo, kStepBlur, kStepResolve, kStepPostVeil,
+    kStepPostDlss, kStepPostTone, kStepEyeCopies, kStepCull, kStepGame, kStepCompose, kStepGap, kStepKinds
+};
+struct GpuSteps {
+    bool on = false;
+    ComPtr<ID3D12QueryHeap> heap;
+    ComPtr<ID3D12Resource> readback;
+    ComPtr<ID3D12CommandAllocator> allocator;  // the resolve's
+    ComPtr<List> list;
+    std::atomic<uint64_t> frame{UINT64_MAX};  // the frame (focus.frame) whose lists are stamped
+    std::atomic<uint32_t> next{0};
+    uint8_t kinds[kStepQueries] = {};
+    // the frame-end thread's
+    int phase = 0;  // 0 idle, 1 stamping / waiting to resolve, 2 waiting to read
+    uint64_t at = 0;
+    uint32_t resolved = 0;
+    double sum[kStepKinds] = {};
+    uint32_t samples = 0, dropped = 0;
+    uint64_t frequency = 0;
+};
+GpuSteps gpuSteps;
+thread_local uint8_t gpuBatchKind = kStepGame;  // what the batches this thread executes are (replay_probe_gpu_scope)
+
+// In a list of ours being recorded: a timestamp where `kind` starts.
+void gpu_stamp(List* l, uint8_t kind) {
+    if (gpuSteps.frame.load(std::memory_order_relaxed) != focus.frame.load(std::memory_order_relaxed))
+        return;
+    const uint32_t i = gpuSteps.next.fetch_add(1);
+    if (i >= kStepQueries)
+        return;
+    gpuSteps.kinds[i] = kind;
+    l->EndQuery(gpuSteps.heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i);
+}
+
 Replay* acquire_replay() {
     const uint64_t done = focus.fence->GetCompletedValue();
     for (auto& r : focus.pool)
@@ -2401,6 +2533,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, mono ? kStepMono : kStepScene);
     if (!skyPatches.empty()) {  // the sky's clouds and cbSky copies, before the draws
         const float c0[2] = {focus.eyeCentre[0][0] + focus.gazeOffset[0][0], focus.eyeCentre[0][1] + focus.gazeOffset[0][1]};
         focus_sky_record(l, skyPatches, c0);
@@ -2473,6 +2606,20 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
     Substitution sub{fv, fr, views, &constantsFrom, &slots, &focusTargets};
     if (!skyMap.empty())
         sub.skyTables = &skyMap;
+    sub.skip = cullProbePhase.load(std::memory_order_relaxed);
+    if (cull.use.load(std::memory_order_relaxed) &&
+        cull.readyFrame.load(std::memory_order_relaxed) == focus.frame.load(std::memory_order_relaxed)) {
+        AcquireSRWLockShared(&focus.lock);
+        if (cull.commands && cull.instances && cull.gameCommands && !cull.broken) {
+            sub.argsFrom = cull.gameCommands;
+            sub.argsTo = cull.commands.Get();
+            sub.vbFrom = cull.gameInstancesVa.load();
+            sub.vbTo = cull.instancesVa;
+            sub.vbBytes = cull.instancesBytes;
+        }
+        ReleaseSRWLockShared(&focus.lock);
+    }
+    (sub.argsFrom ? cull.listsCulled : cull.listsWhole).fetch_add(1, std::memory_order_relaxed);
     l->RSSetViewports(views, fv);  // in case the list sets none itself
     l->RSSetScissorRects(views, fr);
     int64_t draws = emit(l, s, &sub);
@@ -2733,6 +2880,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepTiles);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     barrier(l, depth, rest_of(depth, D3D12_RESOURCE_STATE_DEPTH_WRITE), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -3130,6 +3278,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepFog);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     for (size_t e = 0; e < eyes; ++e) {
@@ -3287,6 +3436,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepShadow);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     // 1. The constants: normals', then each eye's shadow.
@@ -3419,6 +3569,7 @@ void focus_oit_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepOit);
     const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     for (ID3D12Resource* t : reads)
         barrier(l, t, D3D12_RESOURCE_STATE_RENDER_TARGET, read);
@@ -3678,6 +3829,7 @@ void focus_atmo_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepAtmo);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     const bool replayed = replayMaps && focus_atmo_replay(l, s, centre);
@@ -3818,6 +3970,7 @@ void focus_blur_record(List* gameList) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepBlur);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     if (colour == focus.resolvedColour.Get())
@@ -3982,6 +4135,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepResolve);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     const D3D12_RESOURCE_STATES read = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
@@ -4742,6 +4896,7 @@ void focus_post_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepPostVeil);
     ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
     l->SetDescriptorHeaps(1, heaps);
     // 0. MSAA: our multisampled colour twin resolved into our single-sample colour (as ACE resolves msaaColor into
@@ -4775,9 +4930,11 @@ void focus_post_record(List* gameList, const Stream& s) {
         barrier(l, focus.postVeil.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     }
     // 1b. P2a: our DLSS per focus eye (ACE's packing replayed for our motion vectors), read by the tonemap below.
+    gpu_stamp(l, kStepPostDlss);
     const bool dlssUsed = focus.settings.dlss && focus_dlss_record(l, s, colour, fw2, fh, ow2, oh, centre);
     // 1c. P2c: MSAA without DLSS: ACE's own antialiasing replayed (our colour twin multisampled, ACE's pass present)
     const bool aaUsed = !dlssUsed && colour == focus.resolvedColour.Get() && focus_aa_record(l, s, fw2, fh, centre);
+    gpu_stamp(l, kStepPostTone);
     // 2. The tonemap constants with our size (register 1: height, width, 1/height, 1/width).
     const D3D12_GPU_VIRTUAL_ADDRESS mine = focus.postConstants->GetGPUVirtualAddress() + UINT64{focus.postSlot++ % kPostSlots} * 256;
     {
@@ -5536,6 +5693,170 @@ void focus_copy_sample() {
     std::thread(focus_save, job).detach();
 }
 
+// At the game's Close of its instance visibility list: the eyes' culling again for the focus views, into our buffers.
+void focus_cull_record(List* gameList, const Stream& s) {
+    static int epoch = 0, missed = 0;
+    const auto miss = [&](const char* why) {
+        if (miss_allowed(epoch, missed, 4))
+            logf("replay cull: not this frame (%s)", why);
+    };
+    std::vector<const Stream::VisDispatch*> eyes;
+    const Stream::VisDispatch* finalize = nullptr;
+    for (const Stream::VisDispatch& d : s.visDispatches) {
+        if (d.kind == 25 && d.consts[49] != 0)  // dualFrustumCull: the two eyes
+            eyes.push_back(&d);
+        else if (d.kind == 27)
+            finalize = &d;
+    }
+    if (eyes.empty() || !finalize)
+        return miss(eyes.empty() ? "no culling dispatch with two frustums in ACE's visibility list" : "no finalize dispatch");
+    // The count and command templates ACE copied in from its upload buffer, by their targets' names.
+    const Stream::BufferCopy* countsCopy = nullptr;
+    const Stream::BufferCopy* commandsCopy = nullptr;
+    for (const Stream::BufferCopy& c : s.bufferCopies) {
+        const std::string name = debug_name(c.dst);
+        if (name.rfind("instanceVisibilityPerLodCount", 0) == 0)
+            countsCopy = &c;
+        else if (name.rfind("instancesIndirectCommandBuffer", 0) == 0)
+            commandsCopy = &c;
+    }
+    if (!countsCopy || !commandsCopy)
+        return miss("the copies into ACE's count and command buffers were not seen in its visibility list");
+    uint64_t gameVa = 0;
+    std::memcpy(&gameVa, eyes[0]->consts + 20, 8);  // outputInstancesBufferAddress
+    cull.gameInstancesVa.store(gameVa, std::memory_order_relaxed);
+    const uint64_t gameBytes = cull.gameInstancesBytes.load(std::memory_order_relaxed);
+    if (!gameVa || !gameBytes)
+        return miss("the size of ACE's visible-instances buffer is not known yet (no vertex buffer view at its address seen)");
+    Replay* r = nullptr;
+    float centre[2][2];
+    AcquireSRWLockExclusive(&focus.lock);
+    const bool base = focus.gameHeap && focus.slotFirst && focus.gameHeap == finalize->heap && !cull.broken && focus.centresKnown;
+    if (base) {
+        const UINT64 countsBytes = countsCopy->dst->GetDesc().Width, commandsBytes = commandsCopy->dst->GetDesc().Width;
+        if (!cull.instances || cull.instancesBytes != gameBytes || cull.countsBytes != countsBytes ||
+            cull.commandsBytes != commandsBytes) {
+            retire(cull.instances.Get());
+            retire(cull.counts.Get());
+            retire(cull.commands.Get());
+            const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
+            const auto make = [&](UINT64 bytes, D3D12_RESOURCE_STATES state, ComPtr<ID3D12Resource>& out) {
+                const D3D12_RESOURCE_DESC d{D3D12_RESOURCE_DIMENSION_BUFFER, 0, bytes, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                                            D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+                out.Reset();
+                return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d, state, nullptr, IID_PPV_ARGS(&out)));
+            };
+            // (their states between our lists: what the draws read them in, and the counts ready to be written)
+            if (!make(gameBytes, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, cull.instances) ||
+                !make(countsBytes, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, cull.counts) ||
+                !make(commandsBytes, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, cull.commands)) {
+                cull.broken = true;
+                log_line("replay cull: our buffers could not be made; the focus replays stay whole");
+            } else {
+                cull.instancesBytes = gameBytes;
+                cull.countsBytes = countsBytes;
+                cull.commandsBytes = commandsBytes;
+                cull.instancesVa = cull.instances->GetGPUVirtualAddress();
+                D3D12_UNORDERED_ACCESS_VIEW_DESC raw{};  // instanceOutputs: a RWByteAddressBuffer
+                raw.Format = DXGI_FORMAT_R32_TYPELESS;
+                raw.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+                raw.Buffer.NumElements = static_cast<UINT>(gameBytes / 4);
+                raw.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+                device->CreateUnorderedAccessView(cull.instances.Get(), nullptr, &raw, game_cpu(focus.slotFirst + kCullSlot));
+                structured_views(cull.counts.Get(), static_cast<UINT>(countsBytes / 4), 4, focus.slotFirst + kCullSlot + 1,
+                                 focus.slotFirst + kCullSlot + 2);
+                structured_views(cull.commands.Get(), static_cast<UINT>(commandsBytes / 32), 32, focus.slotFirst + kCullSlot + 3,
+                                 focus.slotFirst + kCullSlot + 4);
+                logf("replay cull: our buffers made: visible instances %llu B (ACE's at 0x%llx), counts %llu B, commands %llu B "
+                     "(%llu draws); %zu eye dispatches a frame",
+                     static_cast<unsigned long long>(gameBytes), static_cast<unsigned long long>(gameVa),
+                     static_cast<unsigned long long>(countsBytes), static_cast<unsigned long long>(commandsBytes),
+                     static_cast<unsigned long long>(commandsBytes / 32), eyes.size());
+            }
+        }
+        cull.gameCommands = commandsCopy->dst;
+        if (!cull.broken && countsCopy->bytes <= cull.countsBytes && commandsCopy->bytes <= cull.commandsBytes)
+            r = acquire_replay();
+        focus_centres(centre);
+    }
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return miss(base ? "no replay entry, or ACE's copies are larger than our buffers" : "the heap, our slots or the eyes' centres aren't known yet");
+    // Each eye's frustum remapped to its focus box (a margin wider): x' = a (x - cx w), y' = b (y - cy w). In ACE's
+    // visibilityGlobals each register holds one input coordinate's share of clip x, y, z, w (the shader builds its
+    // planes as -(register.w + register.x) and so on, one component per register): x, y and w are components 0, 1, 3 of
+    // every register.
+    const float box = static_cast<float>(focus.settings.boxFraction) * 1.15f, boxY = focus_box_y() * 1.15f;
+    const auto remap = [&](uint32_t* m, const float (&c)[2]) {
+        float v[16];
+        std::memcpy(v, m, sizeof(v));
+        for (int k = 0; k < 4; ++k) {
+            v[4 * k] = (v[4 * k] - c[0] * v[4 * k + 3]) / box;
+            v[4 * k + 1] = (v[4 * k + 1] - c[1] * v[4 * k + 3]) / boxY;
+        }
+        std::memcpy(m, v, sizeof(v));
+    };
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepCull);
+    ID3D12DescriptorHeap* heaps[] = {focus.gameHeap};
+    l->SetDescriptorHeaps(1, heaps);
+    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+    barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, D3D12_RESOURCE_STATE_COPY_DEST);
+    l->CopyBufferRegion(cull.counts.Get(), countsCopy->dstOffset, countsCopy->src, countsCopy->srcOffset, countsCopy->bytes);
+    l->CopyBufferRegion(cull.commands.Get(), commandsCopy->dstOffset, commandsCopy->src, commandsCopy->srcOffset, commandsCopy->bytes);
+    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    barrier(l, cull.instances.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    const uint64_t mineVa = cull.instancesVa;
+    for (const Stream::VisDispatch* d : eyes) {
+        uint32_t c[52];
+        std::memcpy(c, d->consts, sizeof(c));
+        remap(c, centre[0]);
+        remap(c + 28, centre[1]);
+        std::memcpy(c + 20, &mineVa, 8);
+        l->SetComputeRootSignature(d->root);
+        l->SetPipelineState(d->pso);
+        l->SetComputeRoot32BitConstants(0, 52, c, 0);
+        for (UINT t = 1; t <= 4; ++t)
+            l->SetComputeRootDescriptorTable(t, d->tables[t]);
+        l->SetComputeRootDescriptorTable(5, game_gpu(focus.slotFirst + kCullSlot));
+        l->SetComputeRootDescriptorTable(6, game_gpu(focus.slotFirst + kCullSlot + 1));
+        l->SetComputeRootDescriptorTable(7, d->tables[7]);  // ACE's stats
+        l->Dispatch(d->dims[0], d->dims[1], d->dims[2]);
+    }
+    D3D12_RESOURCE_BARRIER uav{};
+    uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    l->ResourceBarrier(1, &uav);
+    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    l->SetComputeRootSignature(finalize->root);
+    l->SetPipelineState(finalize->pso);
+    l->SetComputeRootDescriptorTable(0, finalize->tables[0]);
+    l->SetComputeRootDescriptorTable(1, game_gpu(focus.slotFirst + kCullSlot + 2));
+    l->SetComputeRootDescriptorTable(2, game_gpu(focus.slotFirst + kCullSlot + 3));
+    l->SetComputeRootDescriptorTable(3, finalize->tables[3]);
+    l->Dispatch(finalize->dims[0], finalize->dims[1], finalize->dims[2]);
+    barrier(l, cull.instances.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    barrier(l, cull.commands.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    barrier(l, cull.counts.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    l->Close();
+    inReplay = false;
+    AcquireSRWLockExclusive(&focus.lock);
+    focus.pending[gameList].push_back(r);
+    ReleaseSRWLockExclusive(&focus.lock);
+    cull.readyFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    cull.culls.fetch_add(1, std::memory_order_relaxed);
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true))
+        logd("replay cull: the first focus culling recorded: %zu eye dispatches (the first %ux%ux%u), finalize %ux%ux%u; box "
+             "%.3f x %.3f around %.3f,%.3f and %.3f,%.3f; counts copied %llu B, commands %llu B",
+             eyes.size(), eyes[0]->dims[0], eyes[0]->dims[1], eyes[0]->dims[2], finalize->dims[0], finalize->dims[1],
+             finalize->dims[2], box, boxY, centre[0][0], centre[0][1], centre[1][0], centre[1][1],
+             static_cast<unsigned long long>(countsCopy->bytes), static_cast<unsigned long long>(commandsCopy->bytes));
+}
+
 // ---- The live periphery: ACE's own eyes drawn into a smaller region of its launch-size targets ---------------------
 //
 // ACE sizes its eye targets once, from the size the layer offers at launch. To change the periphery's resolution while
@@ -5729,7 +6050,7 @@ void eye_apply(List* l, Stream* s) {
             UINT size = sizeof(name) - sizeof(wchar_t);
             if (!s->pso || FAILED(s->pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)))
                 name[0] = 0;
-            logf("replay eye: an eye-shaped draw outside the scene passes follows the eye's size: pipeline '%ls', %u viewport(s), "
+            logd("replay eye: an eye-shaped draw outside the scene passes follows the eye's size: pipeline '%ls', %u viewport(s), "
                  "the first %.1f,%.1f %.1fx%.1f",
                  name, s->vpN, s->vpAll[0].TopLeftX, s->vpAll[0].TopLeftY, s->vpAll[0].Width, s->vpAll[0].Height);
         }
@@ -5740,7 +6061,7 @@ void eye_apply(List* l, Stream* s) {
         // (shadow maps and cubemaps are square powers of two: not worth a line)
         const bool square = v.Width == v.Height && (static_cast<UINT>(v.Width) & (static_cast<UINT>(v.Width) - 1)) == 0;
         if (!square && eyeLive.shapesSaid.fetch_add(1) < 16)
-            logf("replay eye: a scene-root draw left at its own size: %u viewport(s), the first %.1f,%.1f %.1fx%.1f (the eye "
+            logd("replay eye: a scene-root draw left at its own size: %u viewport(s), the first %.1f,%.1f %.1fx%.1f (the eye "
                  "%.0fx%.0f)",
                  s->vpN, v.TopLeftX, v.TopLeftY, v.Width, v.Height, now.ew, now.eh);
     }
@@ -5748,7 +6069,7 @@ void eye_apply(List* l, Stream* s) {
         const int kind = shadows ? 2 : s->vpN == 2 ? 0 : 1;
         eyeLive.did[kind].fetch_add(1, std::memory_order_relaxed);
         if (!other && eyeLive.said[kind].fetch_add(1) < 3)
-            logf("replay eye: %s: %u viewport(s), the first %.1f,%.1f %.1fx%.1f -> %.1f,%.1f %.1fx%.1f; %u scissor(s), the "
+            logd("replay eye: %s: %u viewport(s), the first %.1f,%.1f %.1fx%.1f -> %.1f,%.1f %.1fx%.1f; %u scissor(s), the "
                  "first %ld,%ld..%ld,%ld; constants %s",
                  kind == 2 ? "deferred shadows" : kind == 0 ? "a stereo scene pass" : "a one-eye scene pass", s->vpN,
                  s->vpAll[0].TopLeftX, s->vpAll[0].TopLeftY, s->vpAll[0].Width, s->vpAll[0].Height,
@@ -5820,7 +6141,7 @@ void eye_apply(List* l, Stream* s) {
             UINT size = sizeof(name) - sizeof(wchar_t);
             if (!s->pso || FAILED(s->pso->GetPrivateData(WKPDID_D3DDebugObjectNameW, &size, name)))
                 name[0] = 0;
-            logf("replay eye: a whole-target draw clipped to the region: pipeline '%ls', viewport %.0fx%.0f, scissor %ld,%ld..%ld,%ld "
+            logd("replay eye: a whole-target draw clipped to the region: pipeline '%ls', viewport %.0fx%.0f, scissor %ld,%ld..%ld,%ld "
                  "(the game's %ld,%ld..%ld,%ld)",
                  name, s->vpAll[0].Width, s->vpAll[0].Height, r.left, r.top, r.right, r.bottom, s->scN ? s->scAll[0].left : 0,
                  s->scN ? s->scAll[0].top : 0, s->scN ? s->scAll[0].right : 0, s->scN ? s->scAll[0].bottom : 0);
@@ -5868,6 +6189,7 @@ void eye_record(List* gameList, const Stream& s) {
     r->allocator->Reset();
     List* l = r->list.Get();
     l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kStepEyeCopies);
     barrier(l, eyeLive.constants.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     l->SetComputeRootSignature(focus.patchRoot.Get());
     for (const Stream::EyePatch& p : s.eyePatches) {
@@ -5908,7 +6230,32 @@ void atmo_source_region(List* l, bool eyeImage) {
     l->SetComputeRoot32BitConstants(0, 2, region, 11);
 }
 
-void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists) {
+// A one-command list of ours on the queue now: a timestamp where `kind` starts (GPU time by step).
+void gpu_marker(ID3D12CommandQueue* queue, uint8_t kind) {
+    AcquireSRWLockExclusive(&focus.lock);
+    Replay* r = eye_acquire();
+    ReleaseSRWLockExclusive(&focus.lock);
+    if (!r)
+        return;
+    const bool was = inReplay;
+    inReplay = true;
+    r->allocator->Reset();
+    List* l = r->list.Get();
+    l->Reset(r->allocator.Get(), nullptr);
+    gpu_stamp(l, kind);
+    l->Close();
+    inReplay = was;
+    ID3D12CommandList* one[] = {l};
+    executeOriginal(queue, 1, one);
+    const uint64_t value = focus.fenceValue.fetch_add(1) + 1;
+    queue->Signal(focus.fence.Get(), value);
+    AcquireSRWLockExclusive(&focus.lock);
+    r->fence = value;
+    r->busy = false;
+    ReleaseSRWLockExclusive(&focus.lock);
+}
+
+void execute_batch(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists, bool stamped) {
     std::vector<Replay*> eyeFirst;  // the live periphery: our constants copies, ahead of the lists that read them
     if (probeMode == 3 && queue == focus.queue.Get() && eyeLive.lists.load(std::memory_order_relaxed)) {
         AcquireSRWLockExclusive(&focus.lock);
@@ -5927,6 +6274,8 @@ void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12Comm
             executeOriginal(queue, static_cast<UINT>(ours.size()), ours.data());
         }
     }
+    if (stamped)
+        gpu_marker(queue, gpuBatchKind);  // the game's batch (or our compositor's) starts here
     executeOriginal(queue, n, lists);
     if (!eyeFirst.empty()) {
         const uint64_t value = focus.fenceValue.fetch_add(1) + 1;
@@ -5979,6 +6328,14 @@ void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12Comm
     }
     ReleaseSRWLockExclusive(&focus.lock);
     focusReplays.fetch_add(mine.size(), std::memory_order_relaxed);
+}
+
+void STDMETHODCALLTYPE executeHook(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists) {
+    const bool stamped = gpuSteps.on && probeMode == 3 && queue == focus.queue.Get() &&
+                         gpuSteps.frame.load(std::memory_order_relaxed) == focus.frame.load(std::memory_order_relaxed);
+    execute_batch(queue, n, lists, stamped);
+    if (stamped)
+        gpu_marker(queue, kStepGap);  // what follows until the next batch is not this batch's
 }
 
 void note_view(ID3D12Resource* resource, DXGI_FORMAT format, D3D12_CPU_DESCRIPTOR_HANDLE handle, bool depth) {
@@ -6220,6 +6577,9 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     hookCycles.fetch_add(s->hookCycles, std::memory_order_relaxed);
     if (!s->eyePatches.empty())  // (whatever Close returned: the list's bindings name our copies)
         eye_record(list, *s);
+    if (SUCCEEDED(hr) && probeMode == 3 && focusActive.load(std::memory_order_relaxed) && !s->visDispatches.empty() &&
+        cull.mode.load(std::memory_order_relaxed))
+        focus_cull_record(list, *s);
     if (probeMode == 3) {
         if (!focusActive.load(std::memory_order_relaxed))
             return hr;  // cost A/B: the game's own frame only
@@ -6405,6 +6765,11 @@ void STDMETHODCALLTYPE vbHook(List* l, UINT start, UINT n, const D3D12_VERTEX_BU
         HookTimer t(s);
         s->op(kVb); s->put(start); s->put(n); s->put(static_cast<uint8_t>(views != nullptr));
         if (views) s->put_bytes(views, sizeof(D3D12_VERTEX_BUFFER_VIEW) * n);
+        if (views)  // focus culling: the size of ACE's visible-instances buffer, from a view at its address
+            if (const uint64_t va = cull.gameInstancesVa.load(std::memory_order_relaxed))
+                for (UINT i = 0; i < n; ++i)
+                    if (views[i].BufferLocation == va && views[i].SizeInBytes > cull.gameInstancesBytes.load(std::memory_order_relaxed))
+                        cull.gameInstancesBytes.store(views[i].SizeInBytes, std::memory_order_relaxed);
     }
     vbOriginal(l, start, n, views);
 }
@@ -6487,7 +6852,15 @@ void STDMETHODCALLTYPE computeRootSigHook(List* l, ID3D12RootSignature* r) {
 void STDMETHODCALLTYPE computeConstNHook(List* l, UINT i, UINT n, const void* data, UINT o) {
     if (Stream* s = stream_of(l); s && i == 0 && o + n <= 20 && data)
         std::memcpy(s->constants + o, data, size_t{n} * 4);
+    if (Stream* s = stream_of(l); s && i == 0 && o + n <= 64 && data && cull.mode.load(std::memory_order_relaxed))
+        std::memcpy(s->visConsts + o, data, size_t{n} * 4);
     computeConstNOriginal(l, i, n, data, o);
+}
+void STDMETHODCALLTYPE copyRegionHook(List* l, ID3D12Resource* dst, UINT64 dstOffset, ID3D12Resource* src, UINT64 srcOffset,
+                                      UINT64 bytes) {
+    if (Stream* s = stream_of(l); s && s->bufferCopies.size() < 64)
+        s->bufferCopies.push_back({dst, dstOffset, src, srcOffset, bytes});
+    copyRegionOriginal(l, dst, dstOffset, src, srcOffset, bytes);
 }
 void STDMETHODCALLTYPE computeCbvHook(List* l, UINT i, D3D12_GPU_VIRTUAL_ADDRESS va) {
     if (Stream* s = stream_of(l); s && i < 8) {
@@ -6523,6 +6896,20 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
     }
     if (Stream* s = stream_of(l); s && s->psoKind == 16)
         eyeLive.aaFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    if (Stream* s = stream_of(l); s && s->psoKind >= 25 && s->psoKind <= 27 && cull.mode.load(std::memory_order_relaxed) &&
+        s->visDispatches.size() < 64) {
+        Stream::VisDispatch d{};
+        d.kind = s->psoKind;
+        d.pso = s->pso;
+        d.root = s->computeRoot;
+        d.heap = s->heap;
+        std::memcpy(d.consts, s->visConsts, sizeof(d.consts));
+        std::memcpy(d.tables, s->tables, sizeof(d.tables));
+        d.dims[0] = x;
+        d.dims[1] = y;
+        d.dims[2] = z;
+        s->visDispatches.push_back(d);
+    }
     // The live periphery: ACE's by-pixel post passes over the region's share of their groups, plus one (the next
     // pass's taps just past the region read something made this frame).
     if (Stream* s = stream_of(l); s && s->eyeState && x && y && (s->psoKind == 11 || (s->psoKind >= 20 && s->psoKind <= 24))) {
@@ -6531,7 +6918,7 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         const UINT sy = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * now.fy)) + 1);
         eyeLive.did[11].fetch_add(1, std::memory_order_relaxed);
         if (eyeLive.said[11].fetch_add(1) < 24)
-            logf("replay eye: %s dispatch %ux%u -> %ux%u",
+            logd("replay eye: %s dispatch %ux%u -> %ux%u",
                  s->psoKind == 11 ? "gaussianBlur3x3Float4" : s->psoKind == 20 ? "gaussianBlur3x3Float3"
                  : s->psoKind == 21 ? "veilLumaDownsample" : s->psoKind == 22 ? "veilDownsample"
                  : s->psoKind == 23 ? "veilUpsample" : "hiZGeneration",
@@ -6551,7 +6938,7 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         computeConstNOriginal(l, 0, 2, mine, 16);
         eyeLive.did[3].fetch_add(1, std::memory_order_relaxed);
         if (eyeLive.said[3].fetch_add(1) < 2)
-            logf("replay eye: tileFrustums %ux%u: constants 16-17 %.6g, %.6g (1 / %.1f x %.1f) -> %.6g, %.6g; tile count %.0fx%.0f",
+            logd("replay eye: tileFrustums %ux%u: constants 16-17 %.6g, %.6g (1 / %.1f x %.1f) -> %.6g, %.6g; tile count %.0fx%.0f",
                  x, y, rcp[0], rcp[1], rcp[0] != 0 ? 1 / rcp[0] : 0, rcp[1] != 0 ? 1 / rcp[1] : 0, mine[0], mine[1],
                  float_from_bits(s->constants[18]), float_from_bits(s->constants[19]));
         dispatchOriginal(l, std::max<UINT>(1, static_cast<UINT>(std::ceil(x * now.fx))),
@@ -6565,7 +6952,7 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         eyeLive.did[8].fetch_add(1, std::memory_order_relaxed);
         const UINT sx = eye_groups(x, 2 * now.ew, 2 * now.lw), sy = eye_groups(y, now.eh, now.lh);  // both eyes side by side
         if (eyeLive.said[8].fetch_add(1) < 2)
-            logf("replay eye: contrastAdaptiveSharpen dispatch %ux%u -> %ux%u", x, y, sx, sy);
+            logd("replay eye: contrastAdaptiveSharpen dispatch %ux%u -> %ux%u", x, y, sx, sy);
         dispatchOriginal(l, sx, sy, z);
         return;
     }
@@ -6586,7 +6973,7 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
             const int mode = s->psoKind == 2 ? 1 : s->psoKind == 5 ? 2 : s->psoKind == 12 ? 4 : s->psoKind == 18 ? 5 : 6;
             eyeLive.did[kind].fetch_add(1, std::memory_order_relaxed);
             if (eyeLive.said[kind].fetch_add(1) < 2)
-                logf("replay eye: %s dispatch %ux%ux%u: root %u constants ours",
+                logd("replay eye: %s dispatch %ux%ux%u: root %u constants ours",
                      kind == 4 ? "tiledCulling" : kind == 5 ? "normalReconstructionViewSpace" : kind == 6 ? "VelocityAndDepthPacking"
                      : kind == 9 ? "histogram" : "histogramAverage",
                      x, y, z, rootIndex);
@@ -6924,6 +7311,30 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
              hook(deviceTable, simqvfr_slot_CreateRenderTargetView(), &rtvHook, &rtvOriginal) &&
              hook(*reinterpret_cast<void***>(queue), simqvfr_slot_ExecuteCommandLists(), &executeHook, &executeOriginal) &&
              focus_compile();
+        if (ok && settings.cull) {  // focus culling: the buffer copies of ACE's visibility list
+            cull.mode = settings.cull;
+            cull.use = settings.cull == 2;
+            ok = hook(vtable, simqvfr_slot_CopyBufferRegion(), &copyRegionHook, &copyRegionOriginal);
+            logf("replay cull: focus culling %s (replay_cull=%d: 1 computed only, 2 used by the focus replays, 3 used in "
+                 "alternate 900-frame windows)",
+                 ok ? "on" : "could not hook", settings.cull);
+        }
+        if (ok && settings.gpuSteps) {  // GPU time by step: the timestamps' heap, their readback, the resolve's list
+            const D3D12_QUERY_HEAP_DESC qh{D3D12_QUERY_HEAP_TYPE_TIMESTAMP, kStepQueries, 0};
+            const D3D12_HEAP_PROPERTIES rh{D3D12_HEAP_TYPE_READBACK};
+            const D3D12_RESOURCE_DESC rb{D3D12_RESOURCE_DIMENSION_BUFFER, 0, UINT64{kStepQueries} * 8, 1, 1, 1,
+                                         DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE};
+            gpuSteps.on = SUCCEEDED(d->CreateQueryHeap(&qh, IID_PPV_ARGS(&gpuSteps.heap))) &&
+                          SUCCEEDED(d->CreateCommittedResource(&rh, D3D12_HEAP_FLAG_NONE, &rb, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                               nullptr, IID_PPV_ARGS(&gpuSteps.readback))) &&
+                          SUCCEEDED(d->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&gpuSteps.allocator))) &&
+                          SUCCEEDED(d->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, gpuSteps.allocator.Get(), nullptr,
+                                                         IID_PPV_ARGS(&gpuSteps.list))) &&
+                          SUCCEEDED(gpuSteps.list->Close()) && SUCCEEDED(queue->GetTimestampFrequency(&gpuSteps.frequency)) &&
+                          gpuSteps.frequency > 0;
+            logf("replay gpu: GPU time by step %s (replay_gpu_steps=1: one frame in sixteen stamped)",
+                 gpuSteps.on ? "on" : "could not start");
+        }
         if (ok && settings.tiles)
             ok = hook(vtable, simqvfr_slot_SetComputeRootSignature(), &computeRootSigHook, &computeRootSigOriginal) &&
                  hook(vtable, simqvfr_slot_SetComputeRoot32BitConstants(), &computeConstNHook, &computeConstNOriginal) &&
@@ -6989,6 +7400,7 @@ void replay_probe_set_eye_scale(double scale) {
     eyeLive.wanted.store(static_cast<float>(std::clamp(scale, 0.25, 1.0)), std::memory_order_relaxed);
 }
 void replay_probe_eye_allow(bool composed) { eyeLive.allowed.store(composed, std::memory_order_relaxed); }
+void replay_probe_gpu_scope(bool compositor) { gpuBatchKind = compositor ? kStepCompose : kStepGame; }
 bool replay_probe_eye_region(float& fx, float& fy) {
     const EyeNow now = eye_now(eyeLive.state.load(std::memory_order_relaxed));
     fx = now.fx;
@@ -7076,6 +7488,96 @@ void replay_probe_frame_end() {
         focus_ngx::install();
     if (probeMode == 3) {
         const uint64_t ended = focus.frame.fetch_add(1);  // the frame that just ended
+        if (focus.settings.cullProbe && ended % 900 == 0) {  // the window that just ended, then the next one's phase
+            static const char* const kPhase[] = {"everything drawn", "the indirect draws left out", "the direct draws left out"};
+            const int was = cullProbePhase.load();
+            const int now = static_cast<int>((ended / 900) % 3);
+            logf("replay cull probe: the window that ended had %s in the focus scene replays (%.0f indirect and %.0f direct draws "
+                 "a frame emitted, both eyes' lists); the next: %s",
+                 kPhase[was], probeIndirect.exchange(0) / 900.0, probeDirect.exchange(0) / 900.0, kPhase[now]);
+            cullProbePhase.store(now);
+        }
+        if (cull.mode.load() && ended % 900 == 0) {
+            const bool was = cull.use.load();
+            if (cull.mode.load() == 3)
+                cull.use.store((ended / 900) % 2 == 1);
+            logd("replay cull: over 900 frames: %.2f cullings a frame; focus scene lists a frame drawn from ours %.2f, whole "
+                 "%.2f; this window the replays read %s, the next %s",
+                 cull.culls.exchange(0) / 900.0, cull.listsCulled.exchange(0) / 900.0, cull.listsWhole.exchange(0) / 900.0,
+                 was ? "our culled buffers" : "ACE's", cull.use.load() ? "ours" : "ACE's");
+        }
+        if (gpuSteps.on) {  // GPU time by step
+            GpuSteps& g = gpuSteps;
+            if (g.phase == 0 && ended % 16 == 0) {
+                g.next = 0;
+                g.frame = ended + 1;  // the frame starting now
+                g.at = ended + 3;
+                g.phase = 1;
+            } else if (g.phase == 1 && ended >= g.at) {
+                g.frame = UINT64_MAX;
+                g.resolved = std::min<uint32_t>(g.next.load(), kStepQueries);
+                if (g.resolved >= 2 && SUCCEEDED(g.allocator->Reset()) && SUCCEEDED(g.list->Reset(g.allocator.Get(), nullptr))) {
+                    g.list->ResolveQueryData(g.heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, g.resolved, g.readback.Get(), 0);
+                    g.list->Close();
+                    ID3D12CommandList* one[] = {g.list.Get()};
+                    executeOriginal(focus.queue.Get(), 1, one);
+                    g.at = ended + 3;
+                    g.phase = 2;
+                } else {
+                    g.phase = 0;
+                }
+            } else if (g.phase == 2 && ended >= g.at) {
+                g.phase = 0;
+                const D3D12_RANGE range{0, size_t{g.resolved} * 8};
+                void* data = nullptr;
+                if (SUCCEEDED(g.readback->Map(0, &range, &data)) && data) {
+                    std::vector<std::pair<uint64_t, uint8_t>> marks;
+                    uint64_t last = 0;
+                    for (uint32_t i = 0; i < g.resolved; ++i) {
+                        uint64_t t;
+                        std::memcpy(&t, static_cast<const uint8_t*>(data) + size_t{i} * 8, 8);
+                        marks.emplace_back(t, g.kinds[i]);
+                        last = std::max(last, t);
+                    }
+                    const D3D12_RANGE none{0, 0};
+                    g.readback->Unmap(0, &none);
+                    // (a stamp whose list never ran this time holds an older sample's value)
+                    std::erase_if(marks, [&](const auto& m) { return m.first == 0 || last - m.first > g.frequency / 10; });
+                    std::sort(marks.begin(), marks.end());
+                    double sum[kStepKinds] = {}, total = 0;
+                    for (size_t i = 0; i + 1 < marks.size(); ++i) {
+                        const double ms = static_cast<double>(marks[i + 1].first - marks[i].first) * 1000.0 /
+                                          static_cast<double>(g.frequency);
+                        sum[marks[i].second] += ms;
+                        total += ms;
+                    }
+                    if (marks.size() >= 4 && total < 100.0) {
+                        for (int k = 0; k < kStepKinds; ++k)
+                            g.sum[k] += sum[k];
+                        ++g.samples;
+                    } else {
+                        ++g.dropped;
+                    }
+                }
+            }
+            if (ended % 900 == 0 && g.samples) {
+                const double n = g.samples;
+                double ours = 0;
+                for (int k = 0; k < kStepGame; ++k)
+                    ours += g.sum[k];
+                logf("replay gpu: ms a frame over %u stamped frames (%u dropped): ACE's own lists %.2f; ours %.2f = scene replays "
+                     "%.2f, one-eye replays %.2f, tiles %.2f, fog %.2f, shadow %.2f, OIT %.2f, atmosphere %.2f, refraction %.2f, "
+                     "resolve %.2f, post: bloom share %.2f, DLSS %.2f, tonemap and after %.2f, live periphery copies %.2f, focus "
+                     "culling %.2f; our compositor %.2f; between batches %.2f",
+                     g.samples, g.dropped, g.sum[kStepGame] / n, ours / n, g.sum[kStepScene] / n, g.sum[kStepMono] / n,
+                     g.sum[kStepTiles] / n, g.sum[kStepFog] / n, g.sum[kStepShadow] / n, g.sum[kStepOit] / n, g.sum[kStepAtmo] / n,
+                     g.sum[kStepBlur] / n, g.sum[kStepResolve] / n, g.sum[kStepPostVeil] / n, g.sum[kStepPostDlss] / n,
+                     g.sum[kStepPostTone] / n, g.sum[kStepEyeCopies] / n, g.sum[kStepCull] / n, g.sum[kStepCompose] / n,
+                     g.sum[kStepGap] / n);
+                std::fill(std::begin(g.sum), std::end(g.sum), 0.0);
+                g.samples = g.dropped = 0;
+            }
+        }
         {  // The live periphery: the size the next frame's lists take. A new value is taken once it has stood for a
            // third of a second (stepping a menu item is one change: each makes NGX features of that size).
             static float held = 1.0f;
@@ -7130,7 +7632,7 @@ void replay_probe_frame_end() {
                     log_line("replay eye: live periphery off: ACE's eyes at their launch size");
             }
             if (next && ended % 900 == 0)
-                logf("replay eye: over 900 frames: %.2f of ACE's lists a frame read our constants (%.2f copies a frame), %.2f "
+                logd("replay eye: over 900 frames: %.2f of ACE's lists a frame read our constants (%.2f copies a frame), %.2f "
                      "copy lists run a frame; state applied a frame: stereo passes %.2f, one-eye passes %.2f, deferred shadows "
                      "%.2f, tileFrustums %.2f, tiledCulling %.2f, normals %.2f, packing %.2f, sharpening %.2f, histogram %.2f, "
                      "histogram average %.2f, other post dispatches shrunk %.2f, whole-target draws clipped %.2f; scene-root draws "

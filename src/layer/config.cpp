@@ -252,6 +252,9 @@ void load_experiment() {
                                    GetPrivateProfileIntW(L"experiment", L"replay_compose", 0, ini.c_str()) != 0;
         experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
         experiment.replayEyeCapture = GetPrivateProfileIntW(L"experiment", L"replay_eye_capture", 0, ini.c_str()) != 0;
+        experiment.replayGpuSteps = GetPrivateProfileIntW(L"experiment", L"replay_gpu_steps", 0, ini.c_str()) != 0;
+        experiment.replayCullProbe = GetPrivateProfileIntW(L"experiment", L"replay_cull_probe", 0, ini.c_str()) != 0;
+        experiment.replayCull = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_cull", 0, ini.c_str()));
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
             // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
             const DlssSettings player = read_dlss_settings(ini.c_str());
@@ -350,6 +353,25 @@ void load_experiment() {
     if (GetFileAttributesExW(ini.c_str(), GetFileExInfoStandard, &attributes))
         live.written = attributes.ftLastWriteTime;
     experiment.captureEverySeconds = GetPrivateProfileIntW(L"quad", L"capture_every_s", 0, ini.c_str());
+    // Diagnostics that write pictures by themselves, time the GPU or change the picture to measure it run only in a
+    // Detailed logs launch (the launcher's Diagnostics pane: SIM_QVFR_LOG_LEVEL=debug), whatever the ini says. Captures
+    // the player asks for with a hotkey stay.
+    if (!log_debug()) {
+        const bool any = experiment.replaySaveCount || experiment.captureEverySeconds || experiment.replayEyeCapture ||
+                         experiment.replayGpuSteps || experiment.replayCullProbe || experiment.replayCull == 3 ||
+                         experiment.pixCaptureFrame || (experiment.d3d11CaptureFrame && !experiment.d3d11CaptureHotkey);
+        experiment.replaySaveCount = 0;
+        experiment.captureEverySeconds = 0;
+        experiment.replayEyeCapture = experiment.replayGpuSteps = experiment.replayCullProbe = false;
+        if (experiment.replayCull == 3)  // the alternating A/B: the culling simply on
+            experiment.replayCull = 2;
+        experiment.pixCaptureFrame = 0;
+        if (!experiment.d3d11CaptureHotkey)
+            experiment.d3d11CaptureFrame = 0;
+        if (any)
+            log_line("experiment: diagnostics set in the ini (automatic captures, GPU step timing, A/B probes) are off: they "
+                     "run only in a Detailed logs launch (the launcher's Diagnostics pane)");
+    }
     experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
