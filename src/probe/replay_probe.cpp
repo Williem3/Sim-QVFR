@@ -1776,6 +1776,17 @@ bool record_clear() {
     return true;
 }
 
+// The rate-limited "why not" lines print again after every remake of the game's targets (remakeEpoch): a step that
+// goes quiet after a mode or resolution change in the game says why.
+std::atomic<int> remakeEpoch{0};
+bool miss_allowed(int& epoch, int& count, int limit) {
+    if (const int e = remakeEpoch.load(); epoch != e) {
+        epoch = e;
+        count = 0;
+    }
+    return count++ < limit;
+}
+
 // Under focus.lock: twins for every target the list binds, each sized from its own game target (two eyes side by
 // side); a twin is made again when its game target's format, size or samples change (a resolution or MSAA change in
 // the game's settings).
@@ -1812,6 +1823,7 @@ bool focus_prepare(const Stream& s) {
         free_slot(t->second.depth, t->second.eyeSlot);
         t = focus.twins.erase(t);
         twinsRemade.fetch_add(1);
+        remakeEpoch.fetch_add(1);
         changed = true;
         std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == game; });
         std::erase_if(focus.srvInfo, [&](const auto& v) { return v.second.first.Get() == game; });  // frees the target
@@ -1846,6 +1858,10 @@ bool focus_prepare(const Stream& s) {
                 focus.refused.push_back(h);
                 log_line("replay focus: a stereo list binds a target view created before the probe; that list is not replayed");
             }
+            static int epoch = 0, count = 0;
+            if (miss_allowed(epoch, count, 4))
+                logf("replay focus: a list binds a target view (handle %llx) with no record of ours; not replayed (%zu refused)",
+                     static_cast<unsigned long long>(h), focus.refused.size());
             return false;
         }
         const auto t = focus.twins.find(v->second.resource.Get());
@@ -2045,10 +2061,16 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
             skyPatches = focus_sky_prepare(s);
         else if (!r && mono && !fits) {
             focus.monoUnfit.fetch_add(1, std::memory_order_relaxed);
-            static int unfitLogged = 0;
-            if (unfitLogged++ < 6)
-                logf("replay focus: per-eye list x %.0f %.0fx%.0f doesn't fit its targets' eye size; skipped", s.monoX,
-                     s.monoW, s.monoH);
+            static int unfitEpoch = 0, unfitLogged = 0;
+            if (miss_allowed(unfitEpoch, unfitLogged, 6)) {
+                std::string sizes;
+                for (const SIZE_T h : s.targets) {
+                    const Twin& t = focus.twins.at(focus.views.at(h).resource.Get());
+                    sizes += " " + t.name + " " + std::to_string(t.eyeW) + "x" + std::to_string(t.eyeH);
+                }
+                logf("replay focus: per-eye list x %.0f %.0fx%.0f doesn't fit its targets' eye size (%s); skipped", s.monoX,
+                     s.monoW, s.monoH, sizes.c_str());
+            }
         }
         if (!mono) {
             // The scene's eye size (what a per-eye list must match): only from lists that write the scene depth
@@ -2645,8 +2667,13 @@ bool focus_fog_prepare(D3D12_GPU_DESCRIPTOR_HANDLE uavTable) {
         return false;
     }
     const UINT uavBase = static_cast<UINT>((uavTable.ptr - heapGpu) / focus.increment);
-    if (focus.fogMade)
+    if (focus.fogMade) {
+        static int epoch = 0, count = 0;
+        if (uavBase != focus.uavBaseIndex && miss_allowed(epoch, count, 3))
+            logf("replay focus: fog: the game's UAV table is at %u now, ours were made for %u; no focus fog", uavBase,
+                 focus.uavBaseIndex);
         return uavBase == focus.uavBaseIndex;
+    }
     if (uavBase + kBindlessRange > focus.heapSize ||
         (uavBase + kBindlessRange > focus.slotFirst && uavBase < focus.slotFirst + kTileSlots)) {
         logf("replay focus: fog: the UAV range (%u + %u) doesn't leave room; no focus fog", uavBase, kBindlessRange);
@@ -2916,6 +2943,10 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     const Twin* twin = scene_depth_twin();
     const bool ok = !focus.shadowBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.shadowPatchPso &&
                     twin && focus.depthForTiles == twin->focus.Get();  // our depth SRV (slot 12) names this twin
+    if (static int epoch = 0, count = 0; !ok && focus.shadowPatchPso && miss_allowed(epoch, count, 3))
+        logf("replay focus: shadow: not replayed (broken %d, tiles broken %d, depth twin %s %ux%u, the tiles' depth %s)",
+             focus.shadowBroken ? 1 : 0, focus.tilesBroken ? 1 : 0, twin ? twin->name.c_str() : "none", twin ? twin->eyeW : 0,
+             twin ? twin->eyeH : 0, twin && focus.depthForTiles == twin->focus.Get() ? "the same" : "another");
     if (ok) {
         fw = twin->focusW;
         fh = twin->focusH;
@@ -3098,8 +3129,7 @@ void focus_oit_record(List* gameList, const Stream& s) {
         }
         if (ok && fw)
             r = acquire_replay();
-        else if (missLogged < 3 && focus.twins.size() > 8) {  // not before the scene's twins exist
-            ++missLogged;
+        else if (static int epoch = 0; focus.twins.size() > 8 && miss_allowed(epoch, missLogged, 3)) {  // not before the scene's twins exist
             logf("replay focus: OIT composite: not replayed (%s)", why.empty() ? "no target" : why.c_str());
         }
     }
@@ -3743,8 +3773,8 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     focus_ngx::EyeEval game[2];
     static int missLogged = 0;
     const auto miss = [&](const char* why) {
-        if (missLogged < 4) {
-            ++missLogged;
+        static int epoch = 0;
+        if (miss_allowed(epoch, missLogged, 4)) {
             logf("replay focus: dlss: not this frame (%s)", why);
         }
         return false;
@@ -4415,8 +4445,8 @@ void focus_post_record(List* gameList, const Stream& s) {
             r = acquire_replay();
     }
     static int missLogged = 0;
-    if (!r && !why.empty() && missLogged < 3 && focus.twins.size() > 4) {
-        ++missLogged;
+    static int missEpoch = 0;
+    if (!r && !why.empty() && focus.twins.size() > 4 && miss_allowed(missEpoch, missLogged, 3)) {
         logf("replay focus: post: not replayed (%s)", why.c_str());
     }
     ReleaseSRWLockExclusive(&focus.lock);
