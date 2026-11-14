@@ -55,6 +55,7 @@ CreateInfo made;
 EyeEval eyes[2];
 std::atomic<uint64_t> evaluations{0};
 int logged = 0;  // whole evaluations logged
+std::atomic<int> eyePreset{0}, focusPreset{0};  // set_presets: 0 the game's own
 
 const char* const kPresetKeys[6] = {
     NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
@@ -131,6 +132,17 @@ NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feat
              "presets DLAA %u Q %u B %u P %u UP %u UQ %u",
              c.width, c.height, c.outWidth, c.outHeight, c.quality, c.flags, c.presets[0], c.presets[1], c.presets[2],
              c.presets[3], c.presets[4], c.presets[5]);
+        if (c.width != c.outWidth || c.height != c.outHeight)
+            logf("focus dlss: the game's mode upscales its eyes (%ux%u -> %ux%u): the periphery is not DLAA in this mode; the "
+                 "focus views are drawn from its render-size targets",
+                 c.width, c.height, c.outWidth, c.outHeight);
+        // The eyes' (the periphery's) preset override: the game's feature made with ours for every mode (the one change
+        // to the game's NGX calls; `made` keeps the game's own for our focus features).
+        if (const int preset = eyePreset.load(); preset > 0) {
+            for (const char* key : kPresetKeys)
+                bag->Set(key, static_cast<unsigned>(preset));
+            logf("focus dlss: the game's feature (the eyes, the periphery) made with preset %d instead of its own", preset);
+        }
     }
     return createOriginal(l, feature, bag, out);
 }
@@ -300,6 +312,11 @@ CreateInfo create_info() {
 
 uint64_t game_evaluations() { return evaluations.load(); }
 
+void set_presets(int eye, int focus) {
+    eyePreset.store(eye);
+    focusPreset.store(focus);
+}
+
 Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags) {
     if (!hooked.load())
         return nullptr;
@@ -323,12 +340,17 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
                           extraFlags;
         b->Set(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, flags);
         b->Set(NVSDK_NGX_Parameter_DLSS_Enable_Output_Subrects, 1);
-        for (int i = 0; i < 6; ++i)
-            if (c.presetSet[i])
+        const int ownPreset = focusPreset.load();  // the focus views' preset override (0: the game's presets)
+        for (int i = 0; i < 6; ++i) {
+            if (ownPreset > 0)
+                b->Set(kPresetKeys[i], static_cast<unsigned>(ownPreset));
+            else if (c.presetSet[i])
                 b->Set(kPresetKeys[i], c.presets[i]);
+        }
         r = createOriginal(list, NVSDK_NGX_Feature_SuperSampling, b, &f->handle);
-        logf("focus dlss: our feature %ux%u (DLAA, flags 0x%x, the game's creation %s): result 0x%08x", width, height,
-             flags, c.seen ? "seen" : "not seen", static_cast<unsigned>(r));
+        logf("focus dlss: our feature %ux%u (DLAA, flags 0x%x, preset %s%d, the game's creation %s): result 0x%08x", width,
+             height, flags, ownPreset > 0 ? "ours " : "the game's ", ownPreset > 0 ? ownPreset : static_cast<int>(c.presets[0]),
+             c.seen ? "seen" : "not seen", static_cast<unsigned>(r));
     } else {
         logf("focus dlss: NGX parameters not allocated (0x%08x)", static_cast<unsigned>(r));
     }

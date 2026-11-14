@@ -1,7 +1,8 @@
 // P2a: NVIDIA DLSS for the focus views, at the NGX API (the driver's _nvngx.dll exports, which the game's own NGX
 // library calls with its arguments unchanged). Detours on CreateFeature / EvaluateFeature read what the game sends
 // (logged, and the latest evaluation of each eye kept); our own SuperSampling features, one per focus view, are made
-// and evaluated through the same exports inside the game's NGX session. Nothing in the game's calls is changed.
+// and evaluated through the same exports inside the game's NGX session. The game's calls pass unchanged, but for the
+// eyes' preset override (set_presets) at its feature creation.
 #pragma once
 
 #include <d3d12.h>
@@ -40,6 +41,9 @@ bool install();
 // game's own load gets the same module and its feature creation is seen (its create flags, presets).
 void preload();
 bool installed();
+// NGX render presets by number (0: the game's own): `eye` for the game's own feature (its eyes, the periphery), set at its
+// creation in place of the game's; `focus` for our focus features. Before the game makes its features.
+void set_presets(int eye, int focus);
 bool latest(int eye, EyeEval& out);  // eye 0 / 1 by the colour subrect (x > 0: the right eye)
 CreateInfo create_info();
 uint64_t game_evaluations();

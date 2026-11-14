@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 
+#include "engine/dlss_math.h"
 #include "games/game.h"
 #include "games/multi_view.h"
 #include "ini_put.h"
@@ -249,6 +250,16 @@ void load_experiment() {
         experiment.replayCompose = experiment.replayPost && !experiment.views4 &&
                                    GetPrivateProfileIntW(L"experiment", L"replay_compose", 0, ini.c_str()) != 0;
         experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
+        {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
+            wchar_t text[8] = {};
+            GetPrivateProfileStringW(L"experiment", L"replay_dlss_eye_preset", L"", text, 8, ini.c_str());
+            experiment.replayDlssEyePreset = dlss::preset_from_text(text, 0);
+            GetPrivateProfileStringW(L"experiment", L"replay_dlss_focus_preset", L"", text, 8, ini.c_str());
+            experiment.replayDlssFocusPreset = dlss::preset_from_text(text, 0);
+            if (experiment.replayDlss && (experiment.replayDlssEyePreset || experiment.replayDlssFocusPreset))
+                logf("experiment: API path DLSS presets: the eyes (periphery) %d, the focus views %d (0: ACE's own)",
+                     experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
+        }
         experiment.replayAtmosphere =
             static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", 0, ini.c_str()));
     }
