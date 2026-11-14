@@ -295,85 +295,158 @@ void launch_status_checks() {
     }
 }
 
-// prune_logs never touches what it can't be sure is Sim-QVFR's own: other names, other content, links, a run folder's
-// unknown contents, a linked logs folder. 40 of each kind, so every kind is over its limit.
-void log_retention_strict_checks() {
-    wchar_t temp[MAX_PATH];
-    GetTempPathW(MAX_PATH, temp);
-    const fs::path root = fs::path(temp) / L"simqvfr-log-retention-strict", logs = root / L"logs";
-    std::error_code ec;
-    fs::remove_all(root, ec);
-    fs::create_directories(logs);
-    const auto put = [](const fs::path& p, const std::string& data) { write_file(p.wstring(), data); return p; };
-    wchar_t stamp[32];
-    for (int i = 0; i < 40; ++i) {  // ours, 40 of each: the oldest go
-        swprintf_s(stamp, L"20261101-%06d", i + 100);
-        put(logs / (std::wstring(L"session-") + stamp + L".log"), "log");
-        fs::create_directories(logs / (std::wstring(L"run-") + stamp));
-        put(logs / (std::wstring(L"run-") + stamp) / L"launch.txt", "run");
-        put(logs / (std::wstring(L"sim-qvfr-report-") + stamp + L".zip"), "PKzip");
-    }
-    // Not ours, by name: a letter in the stamp, a longer stamp, another extension, another case.
-    const fs::path badStamp = put(logs / L"session-2026110a-000000.log", "x");
-    const fs::path longStamp = put(logs / L"session-20261101-0000000.log", "x");
-    const fs::path otherExt = put(logs / L"session-20261101-000000.log.txt", "x");
-    const fs::path upper = put(logs / L"SESSION-20261101-000001.LOG", "x");
-    // Not ours, by content: a .dmp that isn't a minidump, a .zip that isn't a zip.
-    const fs::path notDump = put(logs / L"hang-010101.dmp", "not a minidump");
-    for (int i = 0; i < 8; ++i)
-        put(logs / (L"hang-02020" + std::to_wstring(i) + L".dmp"), "MDMP");
-    const fs::path notZip = put(logs / L"sim-qvfr-report-20261101-000000.zip", "not a zip");
-    // The oldest run folders with what a launch doesn't write: a subfolder, a file of the user's.
-    const fs::path withSub = logs / L"run-20261101-000100", withFile = logs / L"run-20261101-000101";
-    fs::create_directories(withSub / L"mine");
-    put(withSub / L"mine" / L"keep.txt", "keep");
-    const fs::path userFile = put(withFile / L"my-notes.txt", "keep");
-    // A link named like a session log and a run folder, each to something elsewhere.
-    const fs::path outside = root / L"outside";
-    fs::create_directories(outside);
-    const fs::path outsideFile = put(outside / L"precious.txt", "keep"), outsideInner = put(outside / L"launch.txt", "keep");
-    std::error_code l1, l2;
-    fs::create_symlink(outsideFile, logs / L"session-20261101-000000.log", l1);
-    fs::create_directory_symlink(outside, logs / L"run-20261101-000000", l2);
-
-    const PruneResult r = prune_logs(logs.wstring());
-    int sessions = 0, runs = 0;
-    for (const auto& e : fs::directory_iterator(logs)) {
-        const std::wstring n = e.path().filename().wstring();
-        sessions += n.rfind(L"session-20261101-0001", 0) == 0 ? 1 : 0;
-        runs += n.rfind(L"run-20261101-0001", 0) == 0 ? 1 : 0;
-    }
-    check(r.removed > 0 && sessions == kKeepSessions, "log retention strict: ours pruned to the newest");
-    check(fs::exists(badStamp) && fs::exists(longStamp) && fs::exists(otherExt) && fs::exists(upper),
-          "log retention strict: names not exactly ours untouched");
-    check(fs::exists(notDump) && fs::exists(notZip), "log retention strict: a .dmp or .zip without its signature untouched");
-    check(fs::exists(withSub / L"mine" / L"keep.txt") && fs::exists(userFile) && !fs::exists(withFile / L"launch.txt") &&
-              runs == kKeepSessions + 2,
-          "log retention strict: a run folder with anything else keeps it, only the launch's files go");
-    if (!l1 && !l2)
-        check(fs::exists(outsideFile) && fs::exists(outsideInner) && fs::is_symlink(logs / L"session-20261101-000000.log") &&
-                  fs::is_symlink(logs / L"run-20261101-000000"),
-              "log retention strict: links named like ours, and what they point at, untouched");
-    else
-        std::printf("note log retention strict: links can't be made here; their checks skipped\n");
+// prune_logs never touches what it can't be sure is Sim-QVFR's own: other names, other content, links, a run folder's
+
+// unknown contents, a linked logs folder. 40 of each kind, so every kind is over its limit.
+
+void log_retention_strict_checks() {
+
+    wchar_t temp[MAX_PATH];
+
+    GetTempPathW(MAX_PATH, temp);
+
+    const fs::path root = fs::path(temp) / L"simqvfr-log-retention-strict", logs = root / L"logs";
+
+    std::error_code ec;
+
+    fs::remove_all(root, ec);
+
+    fs::create_directories(logs);
+
+    const auto put = [](const fs::path& p, const std::string& data) { write_file(p.wstring(), data); return p; };
+
+    wchar_t stamp[32];
+
+    for (int i = 0; i < 40; ++i) {  // ours, 40 of each: the oldest go
+
+        swprintf_s(stamp, L"20261101-%06d", i + 100);
+
+        put(logs / (std::wstring(L"session-") + stamp + L".log"), "log");
+
+        fs::create_directories(logs / (std::wstring(L"run-") + stamp));
+
+        put(logs / (std::wstring(L"run-") + stamp) / L"launch.txt", "run");
+
+        put(logs / (std::wstring(L"sim-qvfr-report-") + stamp + L".zip"), "PKzip");
+
+    }
+
+    // Not ours, by name: a letter in the stamp, a longer stamp, another extension, another case.
+
+    const fs::path badStamp = put(logs / L"session-2026110a-000000.log", "x");
+
+    const fs::path longStamp = put(logs / L"session-20261101-0000000.log", "x");
+
+    const fs::path otherExt = put(logs / L"session-20261101-000000.log.txt", "x");
+
+    const fs::path upper = put(logs / L"SESSION-20261101-000001.LOG", "x");
+
+    // Not ours, by content: a .dmp that isn't a minidump, a .zip that isn't a zip.
+
+    const fs::path notDump = put(logs / L"hang-010101.dmp", "not a minidump");
+
+    for (int i = 0; i < 8; ++i)
+
+        put(logs / (L"hang-02020" + std::to_wstring(i) + L".dmp"), "MDMP");
+
+    const fs::path notZip = put(logs / L"sim-qvfr-report-20261101-000000.zip", "not a zip");
+
+    // The oldest run folders with what a launch doesn't write: a subfolder, a file of the user's.
+
+    const fs::path withSub = logs / L"run-20261101-000100", withFile = logs / L"run-20261101-000101";
+
+    fs::create_directories(withSub / L"mine");
+
+    put(withSub / L"mine" / L"keep.txt", "keep");
+
+    const fs::path userFile = put(withFile / L"my-notes.txt", "keep");
+
+    // A link named like a session log and a run folder, each to something elsewhere.
+
+    const fs::path outside = root / L"outside";
+
+    fs::create_directories(outside);
+
+    const fs::path outsideFile = put(outside / L"precious.txt", "keep"), outsideInner = put(outside / L"launch.txt", "keep");
+
+    std::error_code l1, l2;
+
+    fs::create_symlink(outsideFile, logs / L"session-20261101-000000.log", l1);
+
+    fs::create_directory_symlink(outside, logs / L"run-20261101-000000", l2);
+
+
+
+    const PruneResult r = prune_logs(logs.wstring());
+
+    int sessions = 0, runs = 0;
+
+    for (const auto& e : fs::directory_iterator(logs)) {
+
+        const std::wstring n = e.path().filename().wstring();
+
+        sessions += n.rfind(L"session-20261101-0001", 0) == 0 ? 1 : 0;
+
+        runs += n.rfind(L"run-20261101-0001", 0) == 0 ? 1 : 0;
+
+    }
+
+    check(r.removed > 0 && sessions == kKeepSessions, "log retention strict: ours pruned to the newest");
+
+    check(fs::exists(badStamp) && fs::exists(longStamp) && fs::exists(otherExt) && fs::exists(upper),
+
+          "log retention strict: names not exactly ours untouched");
+
+    check(fs::exists(notDump) && fs::exists(notZip), "log retention strict: a .dmp or .zip without its signature untouched");
+
+    check(fs::exists(withSub / L"mine" / L"keep.txt") && fs::exists(userFile) && !fs::exists(withFile / L"launch.txt") &&
+
+              runs == kKeepSessions + 2,
+
+          "log retention strict: a run folder with anything else keeps it, only the launch's files go");
+
+    if (!l1 && !l2)
+
+        check(fs::exists(outsideFile) && fs::exists(outsideInner) && fs::is_symlink(logs / L"session-20261101-000000.log") &&
+
+                  fs::is_symlink(logs / L"run-20261101-000000"),
+
+              "log retention strict: links named like ours, and what they point at, untouched");
+
+    else
+
+        std::printf("note log retention strict: links can't be made here; their checks skipped\n");
+
     // A captures folder that is a link: never offered to Clear captures.
     std::error_code l4;
     fs::create_directory_symlink(outside, logs / L"captures", l4);
     if (!l4)
         check(diagnostics_paths(logs.wstring()).empty(), "log retention strict: a linked captures folder isn't offered to clear");
-    // A logs folder that is itself a link: not looked into.
-    std::error_code l3;
-    const fs::path linkedLogs = root / L"linked-logs";
-    fs::create_directory_symlink(logs, linkedLogs, l3);
-    if (!l3) {
-        for (int i = 0; i < 40; ++i)
-            put(logs / (L"cpu-profile-20261102-0000" + std::to_wstring(10 + i) + L".txt"), "p");
+    // A logs folder that is itself a link: not looked into.
+
+    std::error_code l3;
+
+    const fs::path linkedLogs = root / L"linked-logs";
+
+    fs::create_directory_symlink(logs, linkedLogs, l3);
+
+    if (!l3) {
+
+        for (int i = 0; i < 40; ++i)
+
+            put(logs / (L"cpu-profile-20261102-0000" + std::to_wstring(10 + i) + L".txt"), "p");
+
         check(prune_logs(linkedLogs.wstring()).removed == 0 && diagnostics_paths(linkedLogs.wstring()).empty(),
-              "log retention strict: a linked logs folder isn't looked into");
-    }
-    fs::remove_all(root, ec);
-}
-
+              "log retention strict: a linked logs folder isn't looked into");
+
+    }
+
+    fs::remove_all(root, ec);
+
+}
+
+
+
 // The logs folder's retention (launcher/log_retention.h): the newest of each kind kept, the rest removed, the
 // registration ledgers and the diagnostics' output never touched.
 void log_retention_checks() {
@@ -2241,9 +2314,10 @@ int SIM_QVFR_TEST_MAIN() {
         check(acc::kGame.openComposite && !ace::kGame.openComposite && std::wstring(acc::kGame.exeFolder) ==
                   L"AC2\\Binaries\\Win64" && std::wstring(ace::kGame.exeFolder).empty() &&
                   acc::kGame.features.foveatedDlss && acc::kGame.features.helmet &&
-                  acc::kGame.features.liveResolution && acc::kGame.features.fovCrop && ace::kGame.features.foveatedDlss &&
+                  acc::kGame.features.liveResolution && acc::kGame.features.fovCrop && !ace::kGame.features.foveatedDlss &&
                   ace::kGame.features.helmet && ace::kGame.features.liveResolution && ace::kGame.features.fovCrop,
-              "games: ACC through OpenComposite, its exe in a subfolder, with every feature ACE has");
+              "games: ACC through OpenComposite, its exe in a subfolder, with every feature ACE has and Foveated DLSS "
+              "(not ACE's any more)");
         check(!find(checks, "opencomposite"), "preflight: ACE needs no OpenComposite");
         simqvfr::games::set_launcher_game(acc::kGame);
         in.openComposite = OpenComposite::Valve;

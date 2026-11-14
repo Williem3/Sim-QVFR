@@ -503,8 +503,8 @@ int SIM_QVFR_TEST_MAIN() {
                   "a game without frame generation: the Foveated DLSS page, not the Frame generation one");
         }
         check(acc::kGame.features.foveatedDlss && !acc::kGame.features.frameGeneration &&
-                  ace::kGame.features.frameGeneration,
-              "games: ACC has Foveated DLSS but not its frame generation yet; ACE has both");
+                  !ace::kGame.features.foveatedDlss && !ace::kGame.features.frameGeneration,
+              "games: ACC has Foveated DLSS but not its frame generation yet; ACE neither (its API path has DLSS of its own)");
         check(menu_pages(c).size() == 7 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
               "with Cheeky: seven pages, the first the QVFR items under the page switch");

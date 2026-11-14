@@ -74,7 +74,7 @@ constexpr Help kHelp[] = {
      L"Runs Cheeky Foveated DLSS inside the game, for the DLSS options below. Needs an NVIDIA RTX GPU, DLSS on in the game, and Cheeky’s "
      L"download. Applies at the next launch."},
     {L"Cheaper outer views",
-     L"The outer views get Cheeky’s DLAA at a lower resolution instead of ACE’s DLSS: GPU time saved on the views you see "
+     L"The outer views get Cheeky’s DLAA at a lower resolution instead of the game’s DLSS: GPU time saved on the views you see "
      L"least."},
     {L"Outer DLAA scale", L"The resolution of that cheaper pass. Lower saves more GPU time and softens the side view."},
     {L"Focus supersampling", L"Renders the focus views above their size before DLSS: a sharper centre, for more GPU time."},
