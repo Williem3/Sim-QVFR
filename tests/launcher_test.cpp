@@ -18,6 +18,7 @@
 #include "games/ace/game.h"
 #include "games/acc/game.h"
 #include "games/lmu/game.h"
+#include "games/ats/game.h"
 #include "games/xplane/game.h"
 #include "input/hotkeys.h"
 #include "launcher/launch_plan.h"
@@ -2217,8 +2218,8 @@ int SIM_QVFR_TEST_MAIN() {
         // The launcher's game ([launcher] game): by id in any case; ACC's launch and what it has so far.
         std::size_t count = 0;
         const simqvfr::games::GameInfo* const* all = simqvfr::games::all_games(count);
-        check(count == 4 && all[0] == &ace::kGame && all[1] == &acc::kGame && all[2] == &xplane::kGame &&
-                  all[3] == &lmu::kGame && simqvfr::games::game_by_id("ACC") == &acc::kGame &&
+        check(count == 5 && all[0] == &ace::kGame && all[1] == &acc::kGame && all[2] == &xplane::kGame &&
+                  all[3] == &lmu::kGame && all[4] == &ats::kGame && simqvfr::games::game_by_id("ATS") == &ats::kGame && simqvfr::games::game_by_id("ACC") == &acc::kGame &&
                   simqvfr::games::game_by_id("XPlane") == &xplane::kGame && simqvfr::games::game_by_id("LMU") == &lmu::kGame &&
                   simqvfr::games::game_by_id("nope") == nullptr,
               "games: the launcher's list, found by id in any case");

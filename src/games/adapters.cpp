@@ -12,6 +12,8 @@
 #include "ace/game.h"
 #include "acc/adapter.h"
 #include "acc/game.h"
+#include "ats/adapter.h"
+#include "ats/game.h"
 #include "lmu/adapter.h"
 #include "lmu/game.h"
 #include "xplane/adapter.h"
@@ -68,6 +70,8 @@ GameAdapter& adapter_for(const GameInfo* game) {
         return ::xplane::adapter();
     if (game == &::lmu::kGame)  // identity only, with log-only probes (docs/recon-lmu.md)
         return ::lmu::adapter();
+    if (game == &::ats::kGame)  // identity only, with log-only D3D11 probes (docs/recon-ats.md)
+        return ::ats::adapter();
     return none;
 }
 
