@@ -709,6 +709,8 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
             notes.push_back(L"Less crop than at launch: the periphery is softer until the next launch");
         return notes;
     }
+    if (!menu.dlssState.empty())
+        notes.push_back(menu.dlssState);
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
     else if (menu.launch.qvfr && !menu.launch.liveResolution)

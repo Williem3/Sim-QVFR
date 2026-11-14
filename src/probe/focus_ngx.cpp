@@ -24,6 +24,11 @@ namespace simqvfr::focus_ngx {
 bool install() { return false; }
 bool installed() { return false; }
 void preload() {}
+void set_presets(int, int) {}
+void set_options(float, bool) {}
+float jitter_x() { return 1; }
+State state() { return {}; }
+void note_focus_running(bool) {}
 bool latest(int, EyeEval&) { return false; }
 CreateInfo create_info() { return {}; }
 uint64_t game_evaluations() { return 0; }
@@ -56,6 +61,15 @@ EyeEval eyes[2];
 std::atomic<uint64_t> evaluations{0};
 int logged = 0;  // whole evaluations logged
 std::atomic<int> eyePreset{0}, focusPreset{0};  // set_presets: 0 the game's own
+std::atomic<float> jitterX{1.0f};        // set_options
+std::atomic<bool> peripheryDlaa{false};  // set_options
+std::atomic<bool> forcedDlaa{false}, focusRunning{false};
+using OptimalFn = NVSDK_NGX_Result (*)(Bag*);
+using ParametersFn = NVSDK_NGX_Result (*)(Bag**);
+OptimalFn optimalOriginal = nullptr;
+ParametersFn capabilityOriginal = nullptr;
+std::atomic<bool> optimalHooked{false};
+std::atomic<int> optimalLogged{0};
 
 const char* const kPresetKeys[6] = {
     NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,        NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
@@ -110,6 +124,60 @@ float get_f(const Bag* b, const char* k, bool* has = nullptr) {
     return h ? v : 0;
 }
 
+// NGX's DLSS optimal-settings query (the callback a parameter bag hands out): the game asks it for its render size in
+// the chosen mode. With peripheryDlaa the answer is render = output for every mode, so the game draws its eyes at full
+// size and its feature (made as DLAA in createHook) only antialiases.
+NVSDK_NGX_Result optimalHook(Bag* p) {
+    const NVSDK_NGX_Result r = optimalOriginal(p);
+    if (!p || !ok(r))
+        return r;
+    const unsigned w = get_ui(p, NVSDK_NGX_Parameter_Width), h = get_ui(p, NVSDK_NGX_Parameter_Height);
+    const unsigned ow = get_ui(p, NVSDK_NGX_Parameter_OutWidth), oh = get_ui(p, NVSDK_NGX_Parameter_OutHeight);
+    const int quality = get_i(p, NVSDK_NGX_Parameter_PerfQualityValue);
+    const bool force = peripheryDlaa.load() && w && h && ow && oh && (ow != w || oh != h);
+    if (optimalLogged.fetch_add(1) < 12)
+        logf("focus dlss: the game asked NGX's optimal settings: target %ux%u, quality %d -> render %ux%u%s", w, h, quality,
+             ow, oh, force ? "; answered render = target (periphery DLAA)" : "");
+    if (force) {
+        p->Set(NVSDK_NGX_Parameter_OutWidth, w);
+        p->Set(NVSDK_NGX_Parameter_OutHeight, h);
+        p->Set(NVSDK_NGX_Parameter_DLSS_Get_Dynamic_Max_Render_Width, w);
+        p->Set(NVSDK_NGX_Parameter_DLSS_Get_Dynamic_Max_Render_Height, h);
+        p->Set(NVSDK_NGX_Parameter_DLSS_Get_Dynamic_Min_Render_Width, w);
+        p->Set(NVSDK_NGX_Parameter_DLSS_Get_Dynamic_Min_Render_Height, h);
+    }
+    return r;
+}
+
+// A parameter bag NGX hands the game: the optimal-settings callback it carries, detoured once.
+void hook_optimal(Bag* bag) {
+    if (!bag || optimalHooked.load())
+        return;
+    void* callback = nullptr;
+    if (!ok(bag->Get(NVSDK_NGX_Parameter_DLSSOptimalSettingsCallback, &callback)) || !callback)
+        return;
+    if (optimalHooked.exchange(true))
+        return;
+    MH_STATUS s = MH_CreateHook(callback, reinterpret_cast<void*>(&optimalHook), reinterpret_cast<void**>(&optimalOriginal));
+    if (s == MH_OK)
+        s = MH_EnableHook(callback);
+    logf("focus dlss: NGX's DLSS optimal-settings query %s", s == MH_OK ? "detoured" : MH_StatusToString(s));
+}
+
+NVSDK_NGX_Result capabilityHook(Bag** out) {
+    const NVSDK_NGX_Result r = capabilityOriginal(out);
+    if (ok(r) && out)
+        hook_optimal(*out);
+    return r;
+}
+
+NVSDK_NGX_Result allocateHook(Bag** out) {
+    const NVSDK_NGX_Result r = allocateFn(out);
+    if (ok(r) && out)
+        hook_optimal(*out);
+    return r;
+}
+
 NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feature, Bag* bag, NVSDK_NGX_Handle** out) {
     if (feature == NVSDK_NGX_Feature_SuperSampling && bag) {
         CreateInfo c;
@@ -136,6 +204,20 @@ NVSDK_NGX_Result createHook(ID3D12GraphicsCommandList* l, NVSDK_NGX_Feature feat
             logf("focus dlss: the game's mode upscales its eyes (%ux%u -> %ux%u): the periphery is not DLAA in this mode; the "
                  "focus views are drawn from its render-size targets",
                  c.width, c.height, c.outWidth, c.outHeight);
+        // The periphery at DLAA in every in-game mode: with the optimal-settings query answered render = output, the
+        // game's feature is made as DLAA (`made` keeps the game's own mode).
+        forcedDlaa = false;
+        if (peripheryDlaa.load() && c.quality != static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA)) {
+            if (c.width == c.outWidth && c.height == c.outHeight) {
+                bag->Set(NVSDK_NGX_Parameter_PerfQualityValue, static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA));
+                forcedDlaa = true;
+                logf("focus dlss: the game's feature (in-game mode %d) made as DLAA: the periphery at %ux%u", c.quality,
+                     c.width, c.height);
+            } else {
+                log_line("focus dlss: periphery DLAA asked, but the game still renders its eyes smaller than its output in "
+                         "this mode (its render size does not come from NGX's optimal-settings query)");
+            }
+        }
         // The eyes' (the periphery's) preset override: the game's feature made with ours for every mode (the one change
         // to the game's NGX calls; `made` keeps the game's own for our focus features).
         if (const int preset = eyePreset.load(); preset > 0) {
@@ -214,6 +296,9 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
                      e.hasFrameTime ? "" : "(unset) ", e.frameTime, e.reset, describe(e.transparency).c_str(),
                      describe(e.bias).c_str());
             }
+            // The horizontal jitter NGX is told, as really drawn (set_options): the kept evaluation holds the game's.
+            if (const float sx = jitterX.load(); sx != 1.0f)
+                const_cast<Bag*>(bag)->Set(NVSDK_NGX_Parameter_Jitter_Offset_X, e.jitter[0] * sx);
         }
     }
     return evaluateOriginal(l, h, bag, callback);
@@ -255,6 +340,15 @@ bool install() {
         return false;
     }
     MH_STATUS s = MH_CreateHook(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));
+    {  // the parameter bags NGX hands out (for the optimal-settings query): not needed for the rest
+        void* const allocate = reinterpret_cast<void*>(allocateFn);
+        void* const capability = reinterpret_cast<void*>(GetProcAddress(ngx, "NVSDK_NGX_D3D12_GetCapabilityParameters"));
+        if (MH_CreateHook(allocate, reinterpret_cast<void*>(&allocateHook), reinterpret_cast<void**>(&allocateFn)) == MH_OK)
+            MH_QueueEnableHook(allocate);
+        if (capability && MH_CreateHook(capability, reinterpret_cast<void*>(&capabilityHook),
+                                        reinterpret_cast<void**>(&capabilityOriginal)) == MH_OK)
+            MH_QueueEnableHook(capability);
+    }
     if (s == MH_OK) {
         s = MH_CreateHook(evaluate, reinterpret_cast<void*>(&evaluateHook), reinterpret_cast<void**>(&evaluateOriginal));
         if (s != MH_OK)
@@ -315,6 +409,38 @@ uint64_t game_evaluations() { return evaluations.load(); }
 void set_presets(int eye, int focus) {
     eyePreset.store(eye);
     focusPreset.store(focus);
+}
+
+void set_options(float jitter, bool dlaa) {
+    jitterX.store(jitter);
+    peripheryDlaa.store(dlaa);
+}
+
+float jitter_x() { return jitterX.load(); }
+
+void note_focus_running(bool running) { focusRunning.store(running); }
+
+State state() {
+    const CreateInfo c = create_info();
+    State s;
+    s.seen = c.seen;
+    s.forcedDlaa = forcedDlaa.load();
+    s.gameQuality = c.quality;
+    s.width = c.width;
+    s.height = c.height;
+    s.outWidth = c.outWidth;
+    s.outHeight = c.outHeight;
+    // the preset slot NGX reads: DLAA's when the feature is DLAA, else the mode's (the override fills them all)
+    const int slot = (s.forcedDlaa || c.quality == static_cast<int>(NVSDK_NGX_PerfQuality_Value_DLAA)) ? 0
+                     : c.quality == static_cast<int>(NVSDK_NGX_PerfQuality_Value_MaxQuality)         ? 1
+                     : c.quality == static_cast<int>(NVSDK_NGX_PerfQuality_Value_Balanced)           ? 2
+                     : c.quality == static_cast<int>(NVSDK_NGX_PerfQuality_Value_MaxPerf)            ? 3
+                     : c.quality == static_cast<int>(NVSDK_NGX_PerfQuality_Value_UltraPerformance)   ? 4
+                                                                                                     : 5;
+    s.eyePreset = eyePreset.load() > 0 ? eyePreset.load() : static_cast<int>(c.presets[slot]);
+    s.focusPreset = focusPreset.load() > 0 ? focusPreset.load() : static_cast<int>(c.presets[0]);
+    s.focusRunning = focusRunning.load();
+    return s;
 }
 
 Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, int extraFlags) {

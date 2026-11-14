@@ -27,6 +27,7 @@
 #include "quad/settings_menu.h"
 #include "xr.h"
 #include "layer/layer.h"
+#include "probe/focus_ngx.h"
 
 namespace simqvfr::layer {
 
@@ -174,6 +175,27 @@ void menu_open(int64_t now) {
                                  experiment.eyeScale * 100};
         }
         menu.model.launch.apiPath = experiment.replayCompose;
+        menu.model.dlssState.clear();
+        if (experiment.replayCompose) {  // what DLSS runs, read each time the menu is drawn
+            const focus_ngx::State d = focus_ngx::state();
+            const auto letter = [](int preset) {
+                return preset > 0 && preset <= 26 ? std::wstring(1, static_cast<wchar_t>(L'A' + preset - 1))
+                                                  : std::wstring(L"default");
+            };
+            static const wchar_t* const kModes[] = {L"Performance", L"Balanced", L"Quality", L"Ultra Performance",
+                                                    L"Ultra Quality", L"DLAA"};
+            const std::wstring mode = d.gameQuality >= 0 && d.gameQuality <= 5 ? kModes[d.gameQuality] : L"?";
+            if (!experiment.replayDlss) {
+                menu.model.dlssState = L"DLSS: off for the focus views (replay_dlss=0)";
+            } else if (!d.seen) {
+                menu.model.dlssState = L"DLSS: off in the game: periphery and focus without DLSS";
+            } else {
+                const bool dlaa = d.width == d.outWidth && d.height == d.outHeight;
+                menu.model.dlssState = L"DLSS (in-game " + mode + L"): periphery " + (dlaa ? std::wstring(L"DLAA") : mode + L", upscaled") +
+                                       L" preset " + letter(d.eyePreset) + L", focus " +
+                                       (d.focusRunning ? L"DLAA preset " + letter(d.focusPreset) : std::wstring(L"not running"));
+            }
+        }
         if (experiment.replayCompose)  // QVFR's own pages and items: the same [quad] keys drive this path
             menu.model.launch.qvfr = true;
         menu.model.launch.cropWidth = l.cropWidth * 100;  // the launch crop

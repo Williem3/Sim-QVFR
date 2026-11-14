@@ -153,6 +153,7 @@ struct SettingsMenu {
     int selected = 0;
     std::wstring optimizeStatus;  // the optimizer's line, short (empty: not run yet)
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
+    std::wstring dlssState;  // the API path: what DLSS runs on the periphery and the focus views (empty: nothing to say)
     std::wstring notice;  // a passing message under the title of any page (a CPU capture running or done; empty: none)
     int optimizeRequest = 0;      // set by menu_key on Optimize: 1 run or stop, -1 undo; the layer takes it
     // The profiles' names (the presets first), the one in use (-1: none) and whether a value changed since, and

@@ -3917,7 +3917,8 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
         in.base[1] = 0;
         in.width = fw;
         in.height = fh;
-        in.jitter[0] = game[e].jitter[0];  // the focus views jitter by the same pixels as the eyes (kPatchShader)
+        // the focus views jitter by the same pixels as the eyes (kPatchShader); x as really drawn (focus_ngx)
+        in.jitter[0] = game[e].jitter[0] * focus_ngx::jitter_x();
         in.jitter[1] = game[e].jitter[1];
         for (int a = 0; a < 2; ++a) {  // a scale that is a size (|s| > 4): the focus size's; else as ACE's
             const float sz = a == 0 ? static_cast<float>(fw) / static_cast<float>(eyeW)
@@ -3975,6 +3976,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
              game[0].colorName.c_str(), game[0].depthName.c_str(), game[0].motionName.c_str(), k, game[0].motionScale[0],
              game[0].motionScale[1]);
     focus.dlssReady = true;
+    focus_ngx::note_focus_running(true);
     focus.dlssFresh = false;
     focus.dlssEvaluations.fetch_add(2, std::memory_order_relaxed);
     return true;
