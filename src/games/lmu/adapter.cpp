@@ -69,6 +69,8 @@ public:
             run.mvrTiming = GetPrivateProfileIntW(L"experiment", L"lmu_mvr_timing", 0, s.ini) != 0;
             // lmu_pass_trace=1 (diagnostics, log only): the pass tracker's view of each new shape of frame.
             run.passTrace = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_pass_trace", 0, s.ini));
+            // lmu_post_census=1-3 (diagnostics, log only): the eye pass's draws in detail (docs/recon-lmu.md "Census").
+            run.postCensus = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_post_census", 0, s.ini));
             run.textureSharpening = s.ini && simqvfr::read_dlss_settings(s.ini).textureSharpening != 0;
             // Other cars' motion in DLSS's vectors (four_passes.h carTrack, carSlots): the player's [dlss] car_vectors
             // with DLSS on at launch; or as a diagnostic, [experiment] lmu_car_track=1 (the tracking, log only with
@@ -107,9 +109,6 @@ public:
                 run.loseShape = s.ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_lose_shape", 0, s.ini) != 0;
             }
         }
-        if (s.ini)  // diagnostic: the render scale changed live for 120 frames (four_passes.h)
-            run.renderScaleProbe =
-                std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_render_scale_probe", 0, s.ini)), 0, 100);
         // Sim-QVFR's own DLSS on the views (engine/dlss_views.h): the player's [dlss] (engine/dlss_settings.h: on, the
         // nvngx_dlss.dll folder, the focus views' mode and preset, the eyes' preset), live through qvfr_set_dlss; with
         // the multi-view path only (its eye passes found at the d3d11 level). The inputs' diagnostics are [experiment]

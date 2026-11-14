@@ -19,6 +19,7 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1161,6 +1162,125 @@ void update_bias_constants(const D3D11_VIEWPORT* focus) {
     }
 }
 
+// ---- Live resolution (mvr_size_cut; docs/recon-lmu.md "Census run 3"): the live resolution without writing into the game.
+// The game renders at its own size; in a tracked eye pass before its post every viewport and scissor that is the game's
+// render size (0,0 full W x H) is cut to the live eye's (0,0 eye W x H), as the game's own render size would have made
+// them. Not cut: a draw into a full-size 32-bit single-channel target (the post's depth copy, which today covers the whole
+// target: the focus view beside the eye needs its depth too).
+struct SizeCut {
+    bool on = false;
+    unsigned fullW = 0, fullH = 0, eyeW = 0, eyeH = 0;
+    unsigned long long viewports = 0, scissors = 0, left = 0;  // since the install: cut, cut, left as they were
+    bool leftLogged = false, cutLogged = false;
+    // The game's own rects as it set them (g.vps / g.scs hold them cut): the cut is decided again from these at each
+    // render target bind, since the game may set a viewport before binding the target it is for (its depth copy does).
+    UINT vpCount = 0, scCount = 0;
+    D3D11_VIEWPORT vps[kMaxRects] = {};
+    D3D11_RECT scs[kMaxRects] = {};
+} sizeCut;
+
+// The game's rects stored as it set them: its viewports (its RSSetViewports), its scissors (RSSetScissorRects), both as
+// the pass begins (read from the context, which holds them as the game set them outside the passes).
+void keep_game_vps() {
+    sizeCut.vpCount = g.vpCount;
+    std::memcpy(sizeCut.vps, g.vps, g.vpCount * sizeof(D3D11_VIEWPORT));
+}
+void keep_game_scs() {
+    sizeCut.scCount = g.scCount;
+    std::memcpy(sizeCut.scs, g.scs, g.scCount * sizeof(D3D11_RECT));
+}
+
+bool cut_active() { return sizeCut.on && g.pass >= 0 && g.pass < 2 && !g.afterResolve; }
+
+bool is_full(float x, float y, float w, float h) {
+    return std::fabs(x) < 0.5f && std::fabs(y) < 0.5f && std::fabs(w - static_cast<float>(sizeCut.fullW)) < 0.5f &&
+           std::fabs(h - static_cast<float>(sizeCut.fullH)) < 0.5f;
+}
+
+// The bound render target 0 is one the cut leaves alone (a full-size R32 target: the post's depth copy).
+bool cut_excluded() {
+    ComPtr<ID3D11RenderTargetView> rtv;
+    g.context->OMGetRenderTargets(1, &rtv, nullptr);
+    ComPtr<ID3D11Resource> r;
+    ComPtr<ID3D11Texture2D> t;
+    if (!rtv)
+        return false;
+    rtv->GetResource(&r);
+    if (!r || FAILED(r.As(&t)))
+        return false;
+    D3D11_TEXTURE2D_DESC d;
+    t->GetDesc(&d);
+    const bool r32 = d.Format >= DXGI_FORMAT_R32_TYPELESS && d.Format <= DXGI_FORMAT_R32_SINT;
+    const bool excluded = r32 && d.Width == sizeCut.fullW && d.Height == sizeCut.fullH;
+    if (excluded && !sizeCut.leftLogged) {
+        sizeCut.leftLogged = true;
+        simqvfr::logf("lmu mvr: live resolution: pass %d: a full-size viewport into %ux%u f%d (the post's depth copy) left "
+                      "as the game set it (counted from now on)",
+                      g.pass, d.Width, d.Height, static_cast<int>(d.Format));
+    }
+    return excluded;
+}
+
+// g.vps / g.scs = the game's own rects, cut where they are its render size and the bound target isn't excluded. True:
+// they differ from what they were (to be applied again).
+bool cut_rects() {
+    if (!cut_active())
+        return false;
+    // From the game's own rects (as it set them), so that a bind of an excluded target gives its full rects back.
+    D3D11_VIEWPORT before[kMaxRects];
+    D3D11_RECT beforeSc[kMaxRects];
+    const UINT vpBefore = g.vpCount, scBefore = g.scCount;
+    std::memcpy(before, g.vps, sizeof(before));
+    std::memcpy(beforeSc, g.scs, sizeof(beforeSc));
+    g.vpCount = sizeCut.vpCount;
+    std::memcpy(g.vps, sizeCut.vps, g.vpCount * sizeof(D3D11_VIEWPORT));
+    g.scCount = sizeCut.scCount;
+    std::memcpy(g.scs, sizeCut.scs, g.scCount * sizeof(D3D11_RECT));
+    bool any = false, checked = false, excluded = false;
+    const auto skip = [&] {
+        if (!checked) {
+            checked = true;
+            excluded = cut_excluded();
+        }
+        return excluded;
+    };
+    for (UINT i = 0; i < g.vpCount; ++i) {
+        D3D11_VIEWPORT& v = g.vps[i];
+        if (!is_full(v.TopLeftX, v.TopLeftY, v.Width, v.Height))
+            continue;
+        if (skip()) {
+            ++sizeCut.left;
+            continue;
+        }
+        v.Width = static_cast<float>(sizeCut.eyeW);
+        v.Height = static_cast<float>(sizeCut.eyeH);
+        ++sizeCut.viewports;
+        any = true;
+    }
+    for (UINT i = 0; i < g.scCount; ++i) {
+        D3D11_RECT& r = g.scs[i];
+        if (!is_full(static_cast<float>(r.left), static_cast<float>(r.top), static_cast<float>(r.right - r.left),
+                     static_cast<float>(r.bottom - r.top)))
+            continue;
+        if (skip())
+            continue;
+        r.right = static_cast<LONG>(sizeCut.eyeW);
+        r.bottom = static_cast<LONG>(sizeCut.eyeH);
+        ++sizeCut.scissors;
+        any = true;
+    }
+    const bool changed = g.vpCount != vpBefore || g.scCount != scBefore ||
+                         std::memcmp(before, g.vps, g.vpCount * sizeof(D3D11_VIEWPORT)) != 0 ||
+                         std::memcmp(beforeSc, g.scs, g.scCount * sizeof(D3D11_RECT)) != 0;
+    if (any && !sizeCut.cutLogged) {
+        sizeCut.cutLogged = true;
+        simqvfr::logf("lmu mvr: live resolution: pass %d: the game's %ux%u viewports and scissors cut to the eye's %ux%u (the "
+                      "first; counted from now on)",
+                      g.pass, sizeCut.fullW, sizeCut.fullH, sizeCut.eyeW, sizeCut.eyeH);
+    }
+    return changed;
+}
+
 void apply_viewports() {
     if (g.on && g.vpCount == 1) {
         const D3D11_VIEWPORT first = first_viewport();
@@ -1187,6 +1307,27 @@ void apply_scissors() {
     } else if (g.scCount) {
         realRSSetScissorRects(g.context, g.scCount, g.scs);
     }
+}
+
+// Live resolution: the post-processing begins (the multisample resolve; MSAA off, the draw that starts it): from here every
+// draw is at its target's size, as with the writes, so the game's own rects are given back (its first stage draws with
+// the full viewport it set before binding its target, over the focus view beside the eye).
+void rects_uncut() {
+    if (!sizeCut.on || g.pass < 0 || g.pass > 1)
+        return;
+    const bool vpSame = g.vpCount == sizeCut.vpCount &&
+                        std::memcmp(g.vps, sizeCut.vps, g.vpCount * sizeof(D3D11_VIEWPORT)) == 0;
+    const bool scSame = g.scCount == sizeCut.scCount &&
+                        std::memcmp(g.scs, sizeCut.scs, g.scCount * sizeof(D3D11_RECT)) == 0;
+    if (vpSame && scSame)
+        return;
+    g.vpCount = sizeCut.vpCount;
+    std::memcpy(g.vps, sizeCut.vps, g.vpCount * sizeof(D3D11_VIEWPORT));
+    g.scCount = sizeCut.scCount;
+    std::memcpy(g.scs, sizeCut.scs, g.scCount * sizeof(D3D11_RECT));
+    apply_viewports();
+    if (g.scCount)
+        apply_scissors();
 }
 
 const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
@@ -1991,7 +2132,13 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
     }
     g.depthBound = dsv != nullptr;
     g.overlayTarget = overlay_target(n, rtvs);
+    const bool recut = cut_rects();  // live resolution: the cut decided again for the target now bound
     update();
+    if (recut) {
+        apply_viewports();
+        if (g.scCount)
+            apply_scissors();
+    }
 }
 
 void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* context, UINT n,
@@ -2035,6 +2182,8 @@ void STDMETHODCALLTYPE rs_set_viewports(ID3D11DeviceContext* context, UINT n, co
     g.vpCount = std::min<UINT>(n, kMaxRects);
     if (vps)
         std::memcpy(g.vps, vps, g.vpCount * sizeof(D3D11_VIEWPORT));
+    keep_game_vps();
+    cut_rects();  // live resolution: the game's render size cut to the eye's
     apply_viewports();
 }
 
@@ -2048,6 +2197,8 @@ void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n
     g.scCount = std::min<UINT>(n, kMaxRects);
     if (rects)
         std::memcpy(g.scs, rects, g.scCount * sizeof(D3D11_RECT));
+    keep_game_scs();
+    cut_rects();
     if (!g.scCount)
         realRSSetScissorRects(context, 0, nullptr);
     else
@@ -2105,6 +2256,7 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
     if (multisample) {
         stamp(g.pass, 1);  // the scene ends, the post-processing starts
         g.afterResolve = true;
+        rects_uncut();
     }
     if (multisample && g.replaceResolve && g.keptOk[eye]) {
         // Gate D: the scene this pass skipped is the focus view its eye's pass drew: into the top-left instead. Cleared
@@ -2921,6 +3073,7 @@ void copy_before(ID3D11DeviceContext* context) {
             return;
         stamp(g.pass, 1);  // the scene ends, the post-processing starts
         g.afterResolve = true;
+        rects_uncut();
         tr.resolved = true;
         ++g.stats.singleSamplePosts;
         post_begins(context, resource.Get(), resource.Get());
@@ -3013,6 +3166,7 @@ void stage_before(ID3D11DeviceContext* context) {
     tr.offScene = false;
     stamp(g.pass, 1);  // the scene ends, the post-processing starts
     g.afterResolve = true;
+    rects_uncut();
     tr.resolved = true;
     ++g.stats.singleSamplePosts;
     ++g.stats.singleSampleStagePosts;
@@ -3231,6 +3385,325 @@ void learn_by_signature(ID3D11DeviceContext* context) {
     learn_scene(target.Get(), d, true);
 }
 
+// ---- Post census (mvr_post_census; diagnostics, log only): what the eye's post-processing draws with ----
+// Zero writes (docs/recon-lmu.md "Zero writes"): YEBIS's region follows the game's render scale by itself, so before its
+// draws can be scaled at the d3d11 level, every draw of tracked pass 0 from its resolve (or post start) to its end is
+// logged at a sampled frame: shaders, target, the game's viewport and scissor, the inputs, the first vertices and the
+// first constants of each bound buffer. Two censuses at two live resolutions in one run show what follows the scale.
+struct PostCensus {
+    int level = 0;
+    bool active = false;
+    int draws = 0;
+    unsigned long long next = 0;  // framesSinceInstall of the next census
+    unsigned long long taken = 0;
+    unsigned lastEye[2] = {};     // the eye size of the last census (a new size: a census at the next pass 0)
+    // Level 2: each bound constant buffer's whole bound range saved (logs\census\c<N>_d<draw>_<stage><slot>.bin) for
+    // the first kCensusDumps censuses at a new eye size; with lmu_mvr_dump=1's shaders, read offline.
+    bool dumpThis = false;
+    int dumps = 0;
+} census;
+constexpr int kCensusDumps = 4;
+constexpr int kCensusDraws = 120;
+constexpr unsigned long long kCensusEvery = 900;
+
+// `bytes` of `buffer` from `offset`, read back through a staging copy (a stall: census frames only).
+bool census_read(ID3D11Buffer* buffer, UINT offset, UINT bytes, std::vector<std::uint8_t>& out) {
+    out.clear();
+    if (!buffer || !bytes)
+        return false;
+    D3D11_BUFFER_DESC bd;
+    buffer->GetDesc(&bd);
+    if (offset >= bd.ByteWidth)
+        return false;
+    bytes = (std::min)(bytes, bd.ByteWidth - offset);
+    ComPtr<ID3D11Device> device;
+    g.context->GetDevice(&device);
+    D3D11_BUFFER_DESC sd{};
+    sd.ByteWidth = (bytes + 15) & ~15u;
+    sd.Usage = D3D11_USAGE_STAGING;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Buffer> staging;
+    if (FAILED(device->CreateBuffer(&sd, nullptr, &staging)))
+        return false;
+    const D3D11_BOX box{offset, 0, 0, offset + bytes, 1, 1};
+    const bool replaying = g.replaying;
+    g.replaying = true;  // our own calls: the hooks pass them on
+    g.context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, buffer, 0, &box);
+    D3D11_MAPPED_SUBRESOURCE m;
+    const bool mapped = SUCCEEDED(g.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m));
+    if (mapped) {
+        out.assign(static_cast<const std::uint8_t*>(m.pData), static_cast<const std::uint8_t*>(m.pData) + bytes);
+        g.context->Unmap(staging.Get(), 0);
+    }
+    g.replaying = replaying;
+    return mapped;
+}
+
+std::string census_floats(const std::vector<std::uint8_t>& bytes, std::size_t count) {
+    std::string s;
+    const std::size_t n = (std::min)(count, bytes.size() / 4);
+    for (std::size_t i = 0; i < n; ++i) {
+        float f;
+        std::memcpy(&f, bytes.data() + i * 4, 4);
+        char v[24];
+        std::snprintf(v, sizeof(v), "%s%.5g", i ? (i % 4 ? "," : " | ") : "", f);
+        s += v;
+    }
+    return s;
+}
+
+template <typename Shader>
+uint32_t census_checksum(Shader* shader) {
+    uint32_t c[4] = {};
+    UINT size = sizeof(c);
+    return shader && SUCCEEDED(shader->GetPrivateData(kShaderChecksumGuid, &size, c)) && size == sizeof(c) ? c[0] : 0;
+}
+
+// Level 2: `cb`'s bound range (num constants from first; 0: the whole buffer from first) saved for offline reading.
+void census_save(ID3D11Buffer* cb, UINT first, UINT num, const char* stage, UINT slot) {
+    D3D11_BUFFER_DESC bd;
+    cb->GetDesc(&bd);
+    const UINT offset = first * 16;
+    if (offset >= bd.ByteWidth)
+        return;
+    const UINT bytes = (std::min)(num ? num * 16 : bd.ByteWidth - offset, bd.ByteWidth - offset);
+    std::vector<std::uint8_t> data;
+    if (!census_read(cb, offset, bytes, data))
+        return;
+    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"census";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    wchar_t name[64];
+    swprintf_s(name, L"c%llu_d%d_%hs%u.bin", census.taken, census.draws - 1, stage, slot);
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, (dir / name).c_str(), L"wb") == 0 && f) {
+        std::fwrite(data.data(), 1, data.size(), f);
+        std::fclose(f);
+    }
+}
+
+// The constant buffers 0-3 of a stage: their first 8 float4s from the bound first constant.
+template <typename Get>
+std::string census_cbs(Get get, const char* stage) {
+    std::string s;
+    for (UINT slot = 0; slot < 4; ++slot) {
+        ID3D11Buffer* cb = nullptr;
+        UINT first = 0, num = 0;
+        get(slot, &cb, &first, &num);
+        if (!cb)
+            continue;
+        if (census.dumpThis)
+            census_save(cb, first, num, stage, slot);
+        std::vector<std::uint8_t> bytes;
+        if (census_read(cb, first * 16, 128, bytes)) {
+            char head[48];
+            std::snprintf(head, sizeof(head), " cb%u@%u: ", slot, first);
+            s += head + census_floats(bytes, 32);
+        }
+        cb->Release();
+    }
+    return s;
+}
+
+void census_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    if (census.draws++ >= kCensusDraws)
+        return;
+    ComPtr<ID3D11VertexShader> vs;
+    context->VSGetShader(&vs, nullptr, nullptr);
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    ID3D11RenderTargetView* rtvs[2] = {};
+    ComPtr<ID3D11DepthStencilView> dsv;
+    context->OMGetRenderTargets(2, rtvs, &dsv);
+    std::string targets;
+    for (ID3D11RenderTargetView* rtv : rtvs) {
+        if (!rtv)
+            continue;
+        ComPtr<ID3D11Resource> r;
+        rtv->GetResource(&r);
+        targets += (targets.empty() ? "" : "+") + describe(r.Get());
+        rtv->Release();
+    }
+    std::string inputs;
+    ID3D11ShaderResourceView* srvs[4] = {};
+    context->PSGetShaderResources(0, 4, srvs);
+    for (int i = 0; i < 4; ++i) {
+        if (!srvs[i])
+            continue;
+        ComPtr<ID3D11Resource> r;
+        srvs[i]->GetResource(&r);
+        D3D11_SHADER_RESOURCE_VIEW_DESC vd;
+        srvs[i]->GetDesc(&vd);
+        char mip[16] = "";
+        if (vd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D && vd.Texture2D.MostDetailedMip)
+            std::snprintf(mip, sizeof(mip), " mip%u", vd.Texture2D.MostDetailedMip);
+        inputs += " t" + std::to_string(i) + " " + describe(r.Get()) + mip;
+        srvs[i]->Release();
+    }
+    char head[400];
+    std::snprintf(head, sizeof(head),
+                  "lmu mvr: post census %llu: #%d %s(%lld,%lld) vs %08x ps %08x > %s%s; vp %u [%.1f,%.1f %.1fx%.1f] sc %u "
+                  "[%ld,%ld,%ld,%ld]; inputs%s",
+                  census.taken, census.draws - 1, call, a, b, census_checksum(vs.Get()), census_checksum(ps.Get()),
+                  targets.empty() ? "-" : targets.c_str(), dsv ? " +depth" : "", g.vpCount, g.vps[0].TopLeftX,
+                  g.vps[0].TopLeftY, g.vps[0].Width, g.vps[0].Height, g.scCount, g.scs[0].left, g.scs[0].top,
+                  g.scs[0].right, g.scs[0].bottom, inputs.empty() ? " none" : inputs.c_str());
+    // The first vertices of slot 0 (a full-screen quad's UVs, if baked in), from the draw's first vertex.
+    std::string verts;
+    ComPtr<ID3D11Buffer> vb;
+    UINT stride = 0, offset = 0;
+    context->IAGetVertexBuffers(0, 1, &vb, &stride, &offset);
+    if (vb && stride && stride <= 64) {
+        const bool indexed = std::strcmp(call, "DrawIndexed") == 0;
+        const UINT first = indexed ? 0 : static_cast<UINT>(b);  // DrawIndexed: base vertex unknown here, from 0
+        std::vector<std::uint8_t> bytes;
+        if (census_read(vb.Get(), offset + first * stride, stride * 4, bytes)) {
+            char s[32];
+            std::snprintf(s, sizeof(s), " vb stride %u:", stride);
+            verts = s;
+            for (std::size_t v = 0; v * stride < bytes.size(); ++v) {
+                std::vector<std::uint8_t> one(bytes.begin() + v * stride,
+                                              bytes.begin() + (std::min)(bytes.size(), (v + 1) * stride));
+                verts += " [" + census_floats(one, 8) + "]";
+            }
+        }
+    }
+    // The bound first constants (PSSetConstantBuffers1: YEBIS's $Globals is one 64 KB buffer at offsets), through
+    // ID3D11DeviceContext1; without it, from offset 0.
+    ComPtr<ID3D11DeviceContext1> c1;
+    context->QueryInterface(IID_PPV_ARGS(&c1));
+    const std::string vcb = census_cbs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
+        if (c1)
+            c1->VSGetConstantBuffers1(s, 1, cb, f, n);
+        else
+            context->VSGetConstantBuffers(s, 1, cb);
+    }, "vs");
+    const std::string pcb = census_cbs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
+        if (c1)
+            c1->PSGetConstantBuffers1(s, 1, cb, f, n);
+        else
+            context->PSGetConstantBuffers(s, 1, cb);
+    }, "ps");
+    simqvfr::logf("%s;%s", head, verts.empty() ? " no vertex buffer" : verts.c_str());
+    if (!vcb.empty())
+        simqvfr::logf("lmu mvr: post census %llu: #%d vs constants:%s", census.taken, census.draws - 1, vcb.c_str());
+    if (!pcb.empty())
+        simqvfr::logf("lmu mvr: post census %llu: #%d ps constants:%s", census.taken, census.draws - 1, pcb.c_str());
+}
+
+// Level 3: the whole pass from its start, one line a draw (shaders, targets, viewport, scissor and whether the
+// rasterizer uses it), and every bound constant buffer of both stages (slots 0-13) saved once per distinct content as
+// logs\census\c<N>_<hash>.bin, named in the line: an offline diff between eye sizes finds what follows the size.
+constexpr int kCensusWholeDraws = 2500;
+std::unordered_set<std::uint64_t> censusSaved;  // this census's saved contents
+
+std::uint64_t census_hash(const std::vector<std::uint8_t>& bytes) {
+    std::uint64_t h = 1469598103934665603ull;
+    for (std::uint8_t b : bytes)
+        h = (h ^ b) * 1099511628211ull;
+    return h;
+}
+
+template <typename Get>
+std::string census_refs(Get get, const char* stage) {
+    std::string s;
+    for (UINT slot = 0; slot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++slot) {
+        ID3D11Buffer* cb = nullptr;
+        UINT first = 0, num = 0;
+        get(slot, &cb, &first, &num);
+        if (!cb)
+            continue;
+        D3D11_BUFFER_DESC bd;
+        cb->GetDesc(&bd);
+        const UINT offset = first * 16;
+        std::vector<std::uint8_t> data;
+        if (offset < bd.ByteWidth &&
+            census_read(cb, offset, (std::min)(num ? num * 16 : bd.ByteWidth - offset, bd.ByteWidth - offset), data)) {
+            const std::uint64_t h = census_hash(data);
+            if (censusSaved.insert(h).second) {
+                const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"census";
+                std::error_code ec;
+                std::filesystem::create_directories(dir, ec);
+                wchar_t name[64];
+                swprintf_s(name, L"c%llu_%016llx.bin", census.taken, static_cast<unsigned long long>(h));
+                FILE* f = nullptr;
+                if (_wfopen_s(&f, (dir / name).c_str(), L"wb") == 0 && f) {
+                    std::fwrite(data.data(), 1, data.size(), f);
+                    std::fclose(f);
+                }
+            }
+            char ref[48];
+            std::snprintf(ref, sizeof(ref), " %s%u=%016llx", stage, slot, static_cast<unsigned long long>(h));
+            s += ref;
+        }
+        cb->Release();
+    }
+    return s;
+}
+
+void census_draw_whole(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    if (census.draws++ >= kCensusWholeDraws)
+        return;
+    ComPtr<ID3D11VertexShader> vs;
+    context->VSGetShader(&vs, nullptr, nullptr);
+    ComPtr<ID3D11PixelShader> ps;
+    context->PSGetShader(&ps, nullptr, nullptr);
+    ID3D11RenderTargetView* rtvs[2] = {};
+    ComPtr<ID3D11DepthStencilView> dsv;
+    context->OMGetRenderTargets(2, rtvs, &dsv);
+    std::string targets;
+    for (ID3D11RenderTargetView* rtv : rtvs) {
+        if (!rtv)
+            continue;
+        ComPtr<ID3D11Resource> r;
+        rtv->GetResource(&r);
+        targets += (targets.empty() ? "" : "+") + describe(r.Get());
+        rtv->Release();
+    }
+    if (dsv) {
+        ComPtr<ID3D11Resource> r;
+        dsv->GetResource(&r);
+        targets += " z " + describe(r.Get());
+    }
+    ComPtr<ID3D11RasterizerState> rs;
+    context->RSGetState(&rs);
+    D3D11_RASTERIZER_DESC rd{};
+    if (rs)
+        rs->GetDesc(&rd);
+    ComPtr<ID3D11DeviceContext1> c1;
+    context->QueryInterface(IID_PPV_ARGS(&c1));
+    const std::string refs =
+        census_refs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
+            if (c1)
+                c1->VSGetConstantBuffers1(s, 1, cb, f, n);
+            else
+                context->VSGetConstantBuffers(s, 1, cb);
+        }, "vs") +
+        census_refs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
+            if (c1)
+                c1->PSGetConstantBuffers1(s, 1, cb, f, n);
+            else
+                context->PSGetConstantBuffers(s, 1, cb);
+        }, "ps");
+    simqvfr::logf("lmu mvr: pass census %llu: #%d %s %s(%lld,%lld) vs %08x ps %08x > %s; vp %u [%.1f,%.1f %.1fx%.1f] sc %u%s "
+                  "[%ld,%ld,%ld,%ld];%s",
+                  census.taken, census.draws - 1, g.afterResolve ? "post" : "scene", call, a, b, census_checksum(vs.Get()),
+                  census_checksum(ps.Get()), targets.empty() ? "-" : targets.c_str(), g.vpCount, g.vps[0].TopLeftX,
+                  g.vps[0].TopLeftY, g.vps[0].Width, g.vps[0].Height, g.scCount, rd.ScissorEnable ? " on" : " off",
+                  g.scs[0].left, g.scs[0].top, g.scs[0].right, g.scs[0].bottom, refs.c_str());
+}
+
+bool census_here(ID3D11DeviceContext* context) {
+    return census.active && g.pass == 0 && (census.level >= 3 || g.afterResolve) && ours(context);
+}
+
+void census_any(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    if (census.level >= 3)
+        census_draw_whole(context, call, a, b);
+    else
+        census_draw(context, call, a, b);
+}
+
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
     if (g.slotsBound && g.vsRole == VsRole::lensMask && ours(context))
         bind_slot_view(-1);  // car slots: the lens mask is no car part (it may return before the parts' step below)
@@ -3260,6 +3733,8 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         if (g.slotsBound)
             bind_slot_view(slot);
     }
+    if (census_here(context))  // the state as the game set it, before the draw
+        census_any(context, "DrawIndexed", count, start);
     if (!outside || !double_outside<kHookDrawIndexed>(context, count, start, base))
         game_draw<kHookDrawIndexed>(context, count, start, base);
     if (g.tracing && context == g.context && !g.replaying)
@@ -3307,6 +3782,10 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
             const long long args[] = {static_cast<long long>(a)...};
             call_panel_fn(context, false, static_cast<unsigned>(args[0]), static_cast<unsigned>(args[1]));
         }
+    }
+    if (census_here(context)) {
+        const long long args[] = {static_cast<long long>(a)...};
+        census_any(context, kHookName[H], args[0], args[1]);
     }
     if (!outside || !double_outside<H>(context, a...))
         game_draw<H>(context, a...);
@@ -4041,6 +4520,29 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         }
     }
     g.pass = pass;
+    if (pass == 0 && census.level) {  // a census every kCensusEvery frames, and at the first pass 0 at a new eye size
+        const unsigned w = view ? view->eyeW : 0, h = view ? view->eyeH : 0;
+        const bool resized = w && (w != census.lastEye[0] || h != census.lastEye[1]);
+        // (level 3, the whole pass: only at a new size, its reads stall the frame for a while)
+        census.active = census.level >= 3 ? resized && census.dumps < kCensusDumps
+                                          : g.framesSinceInstall >= census.next || resized;
+        if (census.active) {
+            census.next = g.framesSinceInstall + kCensusEvery;
+            census.lastEye[0] = w;
+            census.lastEye[1] = h;
+            census.draws = 0;
+            ++census.taken;
+            census.dumpThis = census.level == 2 && resized && census.dumps < kCensusDumps;
+            if (census.level >= 3 || census.dumpThis)
+                ++census.dumps;
+            censusSaved.clear();
+            simqvfr::logf("lmu mvr: post census %llu: frame %llu, pass 0: eye %ux%u (its final %ux%u), focus %ux%u%s; every "
+                          "draw from the resolve (or the post's start) to the pass's end follows%s",
+                          census.taken, g.framesSinceInstall, w, h, view ? view->finalEyeW : 0, view ? view->finalEyeH : 0,
+                          view ? view->focusW : 0, view ? view->focusH : 0, view ? "" : " (no focus view this frame)",
+                          census.dumpThis ? ", its constant buffers saved to logs\\census" : "");
+        }
+    }
     if (pass < 2) {  // the tracker's comparison
         tr.actualBegin[pass] = tr.draws;
         tr.actual = (std::max)(tr.actual, pass + 1);
@@ -4119,8 +4621,26 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
         apply_blend();
     g.stats.biasPasses += g.bias ? 1 : 0;
     read_bindings();
+    keep_game_vps();
+    keep_game_scs();
+    const bool cutNow = cut_rects();  // live resolution: the rects the game set before the pass began
     update();
+    if (cutNow) {  // (update applies them only when the two views turn on or off)
+        apply_viewports();
+        if (g.scCount)
+            apply_scissors();
+    }
 }
+
+void mvr_size_cut(bool on, unsigned fullW, unsigned fullH, unsigned eyeW, unsigned eyeH) {
+    sizeCut.on = on && fullW && fullH && eyeW && eyeH && (eyeW != fullW || eyeH != fullH);
+    sizeCut.fullW = fullW;
+    sizeCut.fullH = fullH;
+    sizeCut.eyeW = eyeW;
+    sizeCut.eyeH = eyeH;
+}
+
+MvrSizeCutStats mvr_size_cut_stats() { return {sizeCut.viewports, sizeCut.scissors, sizeCut.left}; }
 
 void mvr_replay_lists_plain(bool on) {
     if (g.listsAsBefore.exchange(!on) != !on)
@@ -4172,6 +4692,11 @@ void mvr_pass_end(int pass) {
         }
     }
     g.focusCopied = false;
+    if (pass == 0 && census.active) {
+        census.active = false;
+        simqvfr::logf("lmu mvr: post census %llu: pass 0 ended, %d draws after its resolve%s", census.taken, census.draws,
+                      census.draws > kCensusDraws ? " (the first ones logged)" : "");
+    }
     if (pass >= 0 && pass < 2)
         tr.actualEnd[pass] = tr.draws;
     g.pass = -1;
@@ -4749,6 +5274,14 @@ void mvr_pass_trace(int level) {
     if (level)
         simqvfr::log_line("lmu mvr: pass trace on (lmu_pass_trace): every frame recorded, a frame logged when its shape is new, "
                           "with the game's settings as its files hold them");
+}
+
+void mvr_post_census(int level) {
+    census = PostCensus{};
+    census.level = level;
+    if (level)
+        simqvfr::log_line("lmu mvr: post census on (lmu_post_census): every draw after tracked pass 0's resolve logged with "
+                          "its viewport, inputs, first vertices and constants, every 900 frames and at each new eye size");
 }
 
 void mvr_track_passes(bool on) {

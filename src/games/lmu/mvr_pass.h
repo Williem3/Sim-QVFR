@@ -292,6 +292,22 @@ void mvr_track_passes(bool on);
 // target binds, resolves and YEBIS draws are recorded and a frame is logged whenever its shape is new this launch, with
 // the game's graphics settings as its own files hold them. 0: off.
 void mvr_pass_trace(int level);
+// Diagnostics, [experiment] lmu_post_census=1 (log only; docs/recon-lmu.md "Zero writes"): every draw of tracked pass 0
+// after its resolve (the post-processing, the final blit, the overlays) logged with its shaders, targets, the game's
+// viewport and scissor, inputs, first vertices and the first constants of each bound buffer; every 900 frames and at the
+// first pass 0 at a new eye size (a live resolution change). Reads buffers back: a stall on those frames. 0: off.
+// 2: also each bound buffer's whole range saved (logs\census) for the first 4 censuses at a new size. 3: the whole pass
+// from its start instead, one line a draw, every constant buffer (slots 0-13) saved once per distinct content; only at
+// the first 4 new sizes (each such frame stalls for a while).
+void mvr_post_census(int level);
+// The live resolution with no write into the game (docs/recon-lmu.md "Census run 3"; the game renders at its own size). For the next eye passes (0-1), until their post begins: every viewport and scissor of the game's render
+// size (0,0 fullW x fullH) cut to the eye's (0,0 eyeW x eyeH), at the game's call and as the pass begins; a full-size R32
+// target's (the post's depth copy) left. Off, or eye = full: nothing cut.
+void mvr_size_cut(bool on, unsigned fullW, unsigned fullH, unsigned eyeW, unsigned eyeH);
+struct MvrSizeCutStats {
+    unsigned long long viewports = 0, scissors = 0, left = 0;  // since the install
+};
+MvrSizeCutStats mvr_size_cut_stats();
 // R4b-2: the tracker drives the passes: `begin(p)` at a tracked pass's begin (before its draws), `end(p)` at its end, on
 // the render thread inside the context's hooks; their work calls mvr_pass_begin / mvr_pass_end as the game's scene
 // render hook did. Null: observe only.

@@ -257,8 +257,9 @@ Pick **LMU** in the launcher's game list, then **Launch**.
     stays that way for the session. The log says why.
   - **It doesn't patch LMU's code.** With multi-view rendering, Sim-QVFR works through OpenXR and Direct3D 11
     only: it doesn't change, hook or call any of LMU's own code. In LMU's memory it reads a few values (the
-    cameras, the eye being drawn, the render size) and writes just two, the render scale and the eye render size, which set each
-    view's resolution and let it change while you drive.
+    cameras, the eye being drawn, the render scale) and writes nothing. Each view's resolution, and its live
+    changes while you drive, are set in the Direct3D 11 calls: LMU renders at its own size and Sim-QVFR draws
+    the eye into the part of its image the periphery's resolution needs.
   - **How it works:** two diagrams show every part of LMU, Direct3D 11 and OpenXR that multi-view rendering
     touches: [with NVIDIA's multi-view rendering](docs/architecture/LMU-MVR-ARCHITECTURE.svg) and
     [with Sim-QVFR's own, on any graphics card](docs/architecture/LMU-NEUTRAL-MVR-ARCHITECTURE.svg).
@@ -326,7 +327,7 @@ Pick **LMU** in the launcher's game list, then **Launch**.
 **Anti-cheat.** By default the launcher starts LMU without its anti-cheat (Easy Anti-Cheat), so you can
 only drive offline. **Run with anti-cheat** (the launcher's **Game › Online racing**) starts LMU through
 Easy Anti-Cheat with Sim-QVFR running; the launcher asks you to accept the risk before it turns on. **This is at your own risk:** Sim-QVFR works inside LMU while it runs. It leaves
-LMU's code unchanged, but hooks LMU's graphics calls and reads and writes LMU's memory. The
+LMU's code unchanged, but hooks LMU's graphics calls and reads LMU's memory. The
 anti-cheat may kick you or ban your account for that. By turning the option on you knowingly
 take responsibility for that. Sim-QVFR doesn't hide from, bypass or change the anti-cheat. Cheeky Foveated
 DLSS always stays off with this option on.
