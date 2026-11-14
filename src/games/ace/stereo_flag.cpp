@@ -1,4 +1,5 @@
-// The flag search follows ACEvoPerf's engine-flag scan (MIT, the same author), narrowed to one flag.
+// The flag search follows the approach of ACEvoPerf's engine-flag scan (MIT licence, copyright 2026 ecstra), narrowed
+// to one flag and written anew here.
 #include "stereo_flag.h"
 
 #include <cstdint>
