@@ -1802,6 +1802,52 @@ bool miss_allowed(int& epoch, int& count, int limit) {
 // 2026-11-13/14 runs). Called when the game remakes its targets (a DLSS mode or resolution change in its menu) and
 // when our own sizes change (the headset menu's focus density and Focus views mode). Pipelines, constants buffers,
 // view slots of single resources, the game's view records and the bindless block's place stay.
+// Under focus.lock: our records of the game's views (target views, shader views, its 3D textures) whose resource the
+// game has released: only our own references keep it alive. They go, so lookups by name (the atmosphere maps, the fog
+// grids) find the game's current resources and the old ones are freed. 05:29 run: after a mode change the atmosphere
+// maps were found by name among stale records, ours were sized from them and resampled from them (the dark focus sky).
+// Returns how many resources were let go; `used` when one of them is a resource a step found by name and still reads
+// (an atmosphere map, a fog grid): that step must start over.
+size_t sweep_released(bool* used = nullptr) {
+    std::unordered_map<ID3D12Resource*, ULONG> ours;
+    for (const auto& [h, v] : focus.views)
+        if (v.resource)
+            ++ours[v.resource.Get()];
+    for (const auto& [h, v] : focus.srvInfo)
+        if (v.first)
+            ++ours[v.first.Get()];
+    for (const ComPtr<ID3D12Resource>& r : focus.views3d)
+        if (r)
+            ++ours[r.Get()];
+    for (const ComPtr<ID3D12Resource>& r : {focus.gameGrid[0], focus.gameGrid[1], focus.postGameFxaa})
+        if (r)
+            ++ours[r.Get()];
+    std::unordered_set<ID3D12Resource*> dead;
+    for (const auto& [r, count] : ours) {
+        r->AddRef();
+        if (r->Release() <= count && !focus.twins.count(r))  // (a twin's target goes through focus_prepare's check)
+            dead.insert(r);
+    }
+    if (dead.empty())
+        return 0;
+    if (used) {
+        *used = false;
+        for (ID3D12Resource* r : focus.atmoGame)
+            *used = *used || (r && dead.count(r));
+        for (const ComPtr<ID3D12Resource>& r : focus.gameGrid)
+            *used = *used || (r && dead.count(r.Get()));
+    }
+    for (int e = 0; e < 2; ++e)
+        if (dead.count(focus.gameGrid[e].Get()))
+            focus.gameGrid[e].Reset();
+    if (dead.count(focus.postGameFxaa.Get()))
+        focus.postGameFxaa.Reset();
+    std::erase_if(focus.views, [&](const auto& v) { return dead.count(v.second.resource.Get()) != 0; });
+    std::erase_if(focus.srvInfo, [&](const auto& v) { return dead.count(v.second.first.Get()) != 0; });
+    std::erase_if(focus.views3d, [&](const ComPtr<ID3D12Resource>& r) { return dead.count(r.Get()) != 0; });
+    return dead.size();
+}
+
 void focus_rebuild(const char* why) {
     const auto drop = [](ComPtr<ID3D12Resource>& r) {
         retire(r.Get());
@@ -1907,6 +1953,9 @@ void focus_rebuild(const char* why) {
     focus.blurColour = nullptr;
     focus.blurMips = 0;
     focus.blurReady = focus.blurMissLogged = false;
+    const size_t swept = sweep_released();
+    if (swept)
+        logf("replay focus: %zu released game resources let go of (our records of their views)", swept);
     focus.psoFlush = 300;
     AcquireSRWLockExclusive(&focus.psoLock);
     focus.psoKinds.clear();
@@ -5716,6 +5765,9 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
                         [](const Stream::TileDispatch& d) { return d.kind == 8; }))
             focus_atmo_record(list, *s);
         static std::atomic<int> monoLogged{0};
+        static std::atomic<int> monoEpoch{0};
+        if (const int e = remakeEpoch.load(); monoEpoch.exchange(e) != e)
+            monoLogged = 8;  // after a rebuild: the next 16 candidates are described again
         if (SUCCEEDED(hr) && transparents_now() && !s->stereo && s->monoSeen && s->draws > 0 && monoLogged < 24) {
             const bool taken = !s->oitDraw && !s->monoMixed && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
                                std::fabs(s->monoW - focus.sceneEyeW.load()) <= 1 && s->monoH == focus.sceneEyeH.load();
@@ -6407,6 +6459,11 @@ void replay_probe_frame_end() {
             AcquireSRWLockExclusive(&focus.lock);
             std::memcpy(focus.gazePrev, focus.gazeOffset, sizeof(focus.gazePrev));
             if (focus.psoFlush.load() > 0) {  // after a rebuild: the pipelines' kinds read from their names again
+                // and anything the game released since (it lets go of its old textures over several frames): the
+                // steps that found a resource by name start over with the current ones
+                bool used = false;
+                if (focus.psoFlush.load() % 10 == 0 && sweep_released(&used) > 0 && used)
+                    focus_rebuild("the game released a texture a focus step still read");
                 focus.psoFlush.fetch_sub(1);
                 AcquireSRWLockExclusive(&focus.psoLock);
                 focus.psoKinds.clear();
