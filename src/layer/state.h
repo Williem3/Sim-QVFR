@@ -192,6 +192,10 @@ struct Experiment {
     // replay_compose=1 (with replay_probe=3 and replay_post): ACE's two eyes composed with the replay probe's focus
     // images (P3, the API-level path), at native size, through the views4 compositor and output chain.
     bool replayCompose = false;
+    // ACE's QVFR is the API path (2026-11-14): mode=views4 (what the launcher writes for QVFR) runs ACE's own two eyes
+    // with the focus views replayed at the D3D12 level, no game code hooked; the replay_* keys default to that set.
+    // [experiment] ace_legacy_views4=1 keeps the old 4views path (deprecated, to be removed).
+    bool apiPath = false;
     bool quad = false;            // quad pipeline: two_loops + b_focus, composited into one native-size image
     std::atomic<double> feather = 0.10;    // quad: blend band, as a fraction of the focus box
     std::atomic<double> cornerRadius = 0;  // rounded focus box: radius as a share of half its shorter side (0 = square)

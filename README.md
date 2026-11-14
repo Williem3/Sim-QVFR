@@ -178,6 +178,21 @@ Once an official Cheeky release includes the fixes, its own download will replac
 - **Show the center region** draws an outline around the full-quality area, so you can check it
   follows your eyes.
 
+## Assetto Corsa EVO
+
+QVFR in Assetto Corsa EVO now works at the graphics level: the game draws its own two eyes (with its own
+single-pass stereo, which Sim-QVFR turns on), and Sim-QVFR draws the sharp focus area from the game's own
+drawing work, without changing any of the game's code. It uses less CPU than the earlier method and the same
+GPU time for the same picture, and the periphery's resolution can be lowered while you drive.
+
+- **Anti-aliasing:** use **MSAA** or **DLSS** (any DLSS mode) in the game's settings. Other upscalers such as
+  FSR haven't been tested yet: if you use one and something looks wrong, switch to MSAA and tell us.
+- **ACEvoPerf users:** leave `single_pass_stereo` out of `acevo_perf.ini` (or set it to `true`). Set to
+  `false` there, it turns off what QVFR needs and the focus area won't appear.
+- **The earlier method** is still there for a while, in case the new one shows a problem the old one didn't:
+  add `ace_legacy_views4=1` under `[experiment]` in `sim-qvfr.ini`. It will be removed in a later release, so
+  if you need it, please tell us why.
+
 ## Assetto Corsa Competizione
 
 Sim-QVFR runs QVFR in ACC: a sharp focus area that follows your eyes, a lower-resolution

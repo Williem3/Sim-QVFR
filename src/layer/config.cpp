@@ -178,6 +178,22 @@ void load_experiment() {
         logf("experiment: %ls has no QVFR yet: log only, running as mode=off (ini mode=%ls)", game->info()->name, mode);
     if (logOnly)
         wcscpy_s(mode, L"off");
+    // ACE's QVFR: the API path (state.h apiPath) unless the deprecated 4views path is asked for. It runs as mode=off
+    // underneath (ACE renders its own two eyes; nothing of views4's), with the replay keys defaulting on below.
+    {
+        const bool ace = std::strcmp(game->info()->id, "ace") == 0;
+        const bool qvfr = !baseline && !logOnly && _wcsicmp(mode, L"views4") == 0;
+        const bool legacy = GetPrivateProfileIntW(L"experiment", L"ace_legacy_views4", 0, ini.c_str()) != 0;
+        experiment.apiPath = ace && qvfr && !legacy;
+        if (experiment.apiPath) {
+            log_line("experiment: ACE's QVFR: the API path (its own two eyes, the focus views replayed at the D3D12 level; "
+                     "ace_legacy_views4=1 for the old 4views path)");
+            wcscpy_s(mode, L"off");
+        } else if (ace && qvfr) {
+            log_line("experiment: ACE's QVFR: the legacy 4views path (ace_legacy_views4=1); DEPRECATED, to be removed in a "
+                     "later release: the API path is the default");
+        }
+    }
     experiment.focusOnly = _wcsicmp(mode, L"focus_only") == 0;
     experiment.doubleRender = _wcsicmp(mode, L"double_render") == 0;
     experiment.views3 = _wcsicmp(mode, L"views3") == 0;
@@ -226,7 +242,10 @@ void load_experiment() {
     experiment.views4EyeCamera =
         GetPrivateProfileIntW(L"experiment", L"views4_focus_eye_camera", 0, ini.c_str()) != 0;
     experiment.passCensus = GetPrivateProfileIntW(L"experiment", L"pass_census", 0, ini.c_str()) != 0;
-    experiment.replayProbe = static_cast<int>(std::min(3u, GetPrivateProfileIntW(L"experiment", L"replay_probe", 0, ini.c_str())));
+    // The API path's steps: on by default there (each key still overrides), off otherwise.
+    const UINT api = experiment.apiPath ? 1u : 0u;
+    experiment.replayProbe =
+        static_cast<int>(std::min(3u, GetPrivateProfileIntW(L"experiment", L"replay_probe", api * 3, ini.c_str())));
     experiment.replayFocusPercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_percent", 20, ini.c_str()), 5u, 60u);
     experiment.replayFocusScalePercent =
         std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_scale_percent", 200, ini.c_str()), 50u, 1000u);
@@ -235,28 +254,28 @@ void load_experiment() {
     experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 0, ini.c_str());
     {
         wchar_t targets[16] = {};
-        GetPrivateProfileStringW(L"experiment", L"replay_targets", L"depth", targets, 16, ini.c_str());
+        GetPrivateProfileStringW(L"experiment", L"replay_targets", api ? L"all" : L"depth", targets, 16, ini.c_str());
         experiment.replayAllTargets = _wcsicmp(targets, L"all") == 0;
-        experiment.replayTiles = GetPrivateProfileIntW(L"experiment", L"replay_tiles", 0, ini.c_str()) != 0;
-        experiment.replayFog = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_fog", 0, ini.c_str()));
-        experiment.replayShadows = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_shadows", 0, ini.c_str()));
+        experiment.replayTiles = GetPrivateProfileIntW(L"experiment", L"replay_tiles", api, ini.c_str()) != 0;
+        experiment.replayFog = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_fog", api * 2, ini.c_str()));
+        experiment.replayShadows = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_shadows", api, ini.c_str()));
         experiment.replayTransparents =
-            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_transparents", 0, ini.c_str()));
+            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_transparents", api, ini.c_str()));
         experiment.replayCostAb = GetPrivateProfileIntW(L"experiment", L"replay_cost_ab", 0, ini.c_str()) != 0;
-        experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", 0, ini.c_str()) != 0;
+        experiment.replaySky = GetPrivateProfileIntW(L"experiment", L"replay_sky", api, ini.c_str()) != 0;
         experiment.replayTyres = GetPrivateProfileIntW(L"experiment", L"replay_tyres", 1, ini.c_str()) != 0;
         experiment.replayDiagMode = GetPrivateProfileIntW(L"experiment", L"replay_diag", 0, ini.c_str());
         experiment.replayDiag = experiment.replayDiagMode == 1;
-        experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", 0, ini.c_str()) != 0;
+        experiment.replayPost = GetPrivateProfileIntW(L"experiment", L"replay_post", api, ini.c_str()) != 0;
         experiment.replayCompose = experiment.replayPost && !experiment.views4 &&
-                                   GetPrivateProfileIntW(L"experiment", L"replay_compose", 0, ini.c_str()) != 0;
-        experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", 0, ini.c_str());
+                                   GetPrivateProfileIntW(L"experiment", L"replay_compose", api, ini.c_str()) != 0;
+        experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", api, ini.c_str());
         experiment.replayEyeCapture = GetPrivateProfileIntW(L"experiment", L"replay_eye_capture", 0, ini.c_str()) != 0;
         experiment.replayGpuSteps = GetPrivateProfileIntW(L"experiment", L"replay_gpu_steps", 0, ini.c_str()) != 0;
         experiment.replayRecordTiming =
             GetPrivateProfileIntW(L"experiment", L"replay_record_timing", 0, ini.c_str()) != 0;
         experiment.replayCullProbe = GetPrivateProfileIntW(L"experiment", L"replay_cull_probe", 0, ini.c_str()) != 0;
-        experiment.replayCull = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_cull", 0, ini.c_str()));
+        experiment.replayCull = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_cull", api * 2, ini.c_str()));
         {  // the API path's DLSS presets, by letter (F the cheaper older model, K, M ...); empty: ACE's own
             // [dlss] eye_preset (K or F) and focus_preset (empty: ACE's own), the headset menu's two items
             const DlssSettings player = read_dlss_settings(ini.c_str());
@@ -278,7 +297,7 @@ void load_experiment() {
                      experiment.replayDlssEyePreset, experiment.replayDlssFocusPreset);
         }
         experiment.replayAtmosphere =
-            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", 0, ini.c_str()));
+            static_cast<int>(GetPrivateProfileIntW(L"experiment", L"replay_atmosphere", api * 4, ini.c_str()));
     }
     experiment.gpuFrameTiming = GetPrivateProfileIntW(L"experiment", L"gpu_frame_timing", 0, ini.c_str()) != 0;
     experiment.cpuProfile = GetPrivateProfileIntW(L"experiment", L"cpu_profile", 0, ini.c_str()) != 0;
@@ -290,7 +309,8 @@ void load_experiment() {
     experiment.cpuProfileSlowMs =
         std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_profile_slow_ms", 0, ini.c_str())), 0, 1000);
     experiment.measure =
-        GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline;
+        GetPrivateProfileIntW(L"experiment", L"measure", 0, ini.c_str()) != 0 || experiment.cpuProfile || baseline ||
+        experiment.apiPath;  // (the overlay's GPU and thread figures, as views4 has them)
     experiment.passCensusFrame = std::max(1u, GetPrivateProfileIntW(L"experiment", L"pass_census_frame", 1500, ini.c_str()));
     experiment.views4FocusCull = GetPrivateProfileIntW(L"experiment", L"views4_focus_cull", 0, ini.c_str()) != 0;
     experiment.views4FocusCullMargin =

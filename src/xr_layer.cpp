@@ -15,6 +15,7 @@
 #include "probe/dred.h"
 #include "probe/pix_capture.h"
 #include "probe/replay_probe.h"
+#include "games/ace/stereo_flag.h"
 #include "probe/focus_ngx.h"
 #include "xr.h"
 #include "layer/layer.h"
@@ -235,6 +236,9 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     nativeQuad.foveated = foveatedAdded;
     game = &games::adapter_for(thisGame);
     load_experiment();
+    // ACE's API path draws its focus views from ACE's single-pass stereo lists: on before ACE makes its renderer.
+    if (experiment.replayCompose && std::strcmp(thisGame->id, "ace") == 0)
+        ace_single_pass_stereo_on();
     if (experiment.replayProbe == 3 && ((experiment.replaySky && experiment.replayTiles) || experiment.replayTyres))
         replay_probe_early_sky();  // before the game makes its device and loads its pipelines
     if (experiment.replayProbe == 3 && experiment.replayDlss)
