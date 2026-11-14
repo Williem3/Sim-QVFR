@@ -168,6 +168,8 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
                     const double kY = eyeY > 0 ? experiment.views4Layout.focusHeight / eyeY : boxY * 2;
                     focusSettings.boxFractionY = boxY;
                     focusSettings.pixelScaleY = std::clamp(kY / boxY, 0.5, 12.0);
+                    experiment.replayEyeShareX = eye;  // for the live sizes (live_ini)
+                    experiment.replayEyeShareY = eyeY;
                 }
                 focusSettings.saveFirst = experiment.replaySaveFirst;
                 focusSettings.saveEvery = experiment.replaySaveEvery;

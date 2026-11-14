@@ -713,10 +713,10 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     }
     if (!menu.dlssState.empty())
         notes.push_back(menu.dlssState);
-    if (menu.launch.apiDlss && menu.values.dlss.focusScale != menu.launch.apiFocusScale)
-        notes.push_back(L"Focus views mode applies at the next launch");
     if (menu.launch.qvfr && menu.launch.dlssHeld)
         notes.push_back(L"DLSS is on: resolution changes apply at the next launch");
+    else if (menu.launch.apiPath)
+        notes.push_back(L"Periphery scale applies at the next launch; focus density and mode apply now");
     else if (menu.launch.qvfr && !menu.launch.liveResolution)
         notes.push_back(L"Resolution changes apply at the next launch in this game");
     const MenuFit f = menu_fit(menu);

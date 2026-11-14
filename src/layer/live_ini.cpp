@@ -115,9 +115,18 @@ void live_apply(const LiveSettings& l) {
     if (experiment.replayCompose) {
         // The API path: the box's size is live (the focus views keep their pixels, so their density follows); ACE's
         // eye size (periphery) and the focus views' pixel size (density) are set at launch.
-        replay_probe_set_box(experiment.box_x(l.focusFraction),
-                             experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction));
-        log_line("live: API path: the focus box's size applies now; periphery and focus density at the next launch");
+        // The API path: the focus views' pixels (focus density x box) and the box's size are live; ACE's eye size (the
+        // periphery) is set at launch.
+        const double boxX = experiment.box_x(l.focusFraction),
+                     boxY = experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction);
+        const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
+        if (experiment.replayEyeShareX > 0 && experiment.replayEyeShareY > 0) {
+            const double bx = std::clamp(boxX, 0.05, 0.6), by = std::clamp(boxY, 0.05, 0.6);
+            replay_probe_set_size(std::clamp(wanted.focus / experiment.replayEyeShareX / bx, 0.5, 12.0) * bx,
+                                  std::clamp(wanted.focusHeight / experiment.replayEyeShareY / by, 0.5, 12.0) * by, 0);
+        }
+        replay_probe_set_box(boxX, boxY);
+        log_line("live: API path: the focus box and focus density apply now; the periphery's scale at the next launch");
     }
     if (experiment.views4 && game_features().liveResolution)
         live_resolution(l);
@@ -269,7 +278,15 @@ void live_reload() {
         game->qvfr_set_nr(s->menu.nr);      // [dlss_nr] likewise
     }
     if (experiment.replayCompose && experiment.replayDlss)  // the API path: the two presets, live
+    {
         focus_ngx::set_presets(experiment.replayDlssEyePreset, s->menu.dlss.focusPreset);  // the periphery stays on F
+        static int scaleSent = 0;  // the Focus views mode, live
+        if (scaleSent != s->menu.dlss.focusScale) {
+            scaleSent = s->menu.dlss.focusScale;
+            experiment.replayDlssFocusScale = scaleSent;
+            replay_probe_set_size(0, 0, scaleSent / 100.0);
+        }
+    }
     menu_values_changed(*s);
     menu_placement_changed(s->menuPlacement);
     osd_placement_changed(s->osd, s->cheeky);

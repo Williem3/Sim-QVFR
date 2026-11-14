@@ -835,6 +835,10 @@ struct Focus {
     double renderScale = 1.0;
     std::atomic<double> boxYWanted{0};
     std::atomic<double> boxWanted{0};
+    // Our sizes asked while running (the headset menu; taken at a frame's end, then focus_rebuild): the focus views'
+    // output size as a share of the eye's each way (focus density), and the render share of it (Focus views mode).
+    std::atomic<double> outKWanted{0}, outKyWanted{0}, renderScaleWanted{0};
+    double outK = 0, outKy = 0;  // as set (sizeK = outK x renderScale)
     // replay_atmosphere=4: ACE's atmosphericScattering + upscaling replayed per focus eye (ray grid narrowed to the box):
     // our low-res sky maps and the upscaling intermediates, per eye [in low, out low, in intermediate, out
     // intermediate] (SRV at slot 112 + 8 e + 2 k, UAV + 1); our grid constants.
@@ -1779,12 +1783,128 @@ bool record_clear() {
 // The rate-limited "why not" lines print again after every remake of the game's targets (remakeEpoch): a step that
 // goes quiet after a mode or resolution change in the game says why.
 std::atomic<int> remakeEpoch{0};
+std::atomic<uint64_t> focusRebuilds{0};
 bool miss_allowed(int& epoch, int& count, int limit) {
     if (const int e = remakeEpoch.load(); epoch != e) {
         epoch = e;
         count = 0;
     }
     return count++ < limit;
+}
+
+// Under focus.lock: everything the focus views sized or learned from the game's targets goes, so the next lists
+// build it again exactly as at launch (a launch works in every mode; state carried across a size change did not:
+// 2026-11-13/14 runs). Called when the game remakes its targets (a DLSS mode or resolution change in its menu) and
+// when our own sizes change (the headset menu's focus density and Focus views mode). Pipelines, constants buffers,
+// view slots of single resources, the game's view records and the bindless block's place stay.
+void focus_rebuild(const char* why) {
+    const auto drop = [](ComPtr<ID3D12Resource>& r) {
+        retire(r.Get());
+        r.Reset();
+    };
+    for (auto& [game, t] : focus.twins) {
+        retire(t.focus.Get());
+        retire(t.eye.Get());
+        free_slot(t.depth, t.focusSlot);
+        free_slot(t.depth, t.eyeSlot);
+    }
+    focus.twins.clear();
+    focus.refused.clear();
+    focus.viewsMoved = false;
+    focus.ready = false;
+    // the light tiles
+    for (int e = 0; e < 2; ++e) {
+        drop(focus.frustums[e]);
+        drop(focus.opaque[e]);
+        drop(focus.transparent[e]);
+    }
+    focus.tilesX = focus.tilesY = 0;
+    focus.depthForTiles = nullptr;
+    focus.tilesShaderResource = false;
+    focus.tilesReady = false;
+    for (uint32_t& g : focus.gameTile)
+        g = UINT32_MAX;
+    for (uint32_t& g : focus.gamePrev)
+        g = UINT32_MAX;
+    drop(focus.prevColour);
+    focus.prevSource = nullptr;
+    focus.prevReady = false;
+    // fog (its UAV block's place is found again with the game's UAV table)
+    for (int e = 0; e < 2; ++e) {
+        drop(focus.fogGrid[e]);
+        drop(focus.fogHistory[e][0]);
+        drop(focus.fogHistory[e][1]);
+        focus.gameGrid[e].Reset();
+    }
+    focus.fogMade = focus.fogHistoryValid = focus.fogReady = focus.fogMissLogged = focus.fogResampleViews = false;
+    focus.uavBaseIndex = focus.fogUavFirst = 0;
+    // shadow
+    drop(focus.normals);
+    drop(focus.shadow);
+    focus.shadowFw = focus.shadowFh = 0;
+    focus.shadowReady = false;
+    focus.sceneEyeW = 0;
+    focus.sceneEyeH = 0;
+    // atmosphere
+    for (ComPtr<ID3D12Resource>& r : focus.atmo)
+        drop(r);
+    for (ID3D12Resource*& r : focus.atmoGame)
+        r = nullptr;
+    for (auto& eye : focus.atmoSkyWork)
+        for (ComPtr<ID3D12Resource>& r : eye)
+            drop(r);
+    focus.atmoWorkMade = focus.atmoReplayLogged = focus.atmoMade = focus.atmoReady = focus.atmoMissLogged = false;
+    focus.centresKnown = false;
+    // post
+    drop(focus.postVeil);
+    drop(focus.postLdr);
+    drop(focus.postFinal);
+    drop(focus.postAlt[0]);
+    drop(focus.postAlt[1]);
+    focus.postGameFxaa.Reset();
+    focus.postColour = nullptr;
+    focus.postW = focus.postH = 0;
+    focus.postReady = false;
+    focus.postFrame = UINT64_MAX;  // no focus image until the post runs again: the eyes are shown as they are
+    // our DLSS (the features are left to NGX's shutdown, as on a size change before)
+    drop(focus.packAa);
+    drop(focus.packMb);
+    drop(focus.packVelocity);
+    drop(focus.packFlags);
+    drop(focus.dlssOut);
+    drop(focus.dlssOutAuto);
+    drop(focus.casOut);
+    focus.packColour = focus.packVelocityTwin = focus.packFlagsTwin = nullptr;
+    focus.packW = focus.packH = focus.packOutW = focus.packOutH = 0;
+    for (int e = 0; e < 2; ++e)
+        focus.ngx[e] = focus.ngxAuto[e] = nullptr;
+    focus.ngxW = focus.ngxH = focus.ngxOutW = focus.ngxOutH = 0;
+    focus.dlssReady = false;
+    focus.dlssFresh = true;
+    focus.casDone = false;
+    // MSAA antialiasing and resolves
+    drop(focus.aaOut);
+    drop(focus.aaHistory);
+    focus.aaSource = nullptr;
+    focus.aaReady = false;
+    focus.aaFresh = true;
+    drop(focus.resolvedDepth);
+    drop(focus.closestDepth);
+    drop(focus.resolvedVelocity);
+    drop(focus.resolvedColour);
+    focus.resolvedDepthTwin = Twin{};
+    focus.resolvedVelocityTwin = Twin{};
+    focus.resolvedColourTwin = Twin{};
+    focus.resolveDepthSource = focus.resolveVelocitySource = nullptr;
+    focus.resolveReady = false;
+    // refraction
+    drop(focus.blur);
+    focus.blurColour = nullptr;
+    focus.blurMips = 0;
+    focus.blurReady = focus.blurMissLogged = false;
+    remakeEpoch.fetch_add(1);
+    focusRebuilds.fetch_add(1);
+    logf("replay focus: rebuilt from nothing (%s): twins, tiles, fog, shadow, atmosphere, post and DLSS are made again", why);
 }
 
 // Under focus.lock: twins for every target the list binds, each sized from its own game target (two eyes side by
@@ -1797,6 +1917,7 @@ bool focus_prepare(const Stream& s) {
     // new views beside the old handles): only our own references keep them alive. Their twins and our views of them
     // go, so lookups by name or size find the current ones (22:21 and 22:38 runs: a stale depth twin picked for the
     // tiles, the focus replays stopped) and the game's old targets are freed.
+    std::vector<ID3D12Resource*> released;
     for (auto t = focus.twins.begin(); t != focus.twins.end();) {
         ID3D12Resource* const game = t->first;
         ULONG ours = 0;
@@ -1815,18 +1936,19 @@ bool focus_prepare(const Stream& s) {
             ++t;
             continue;
         }
-        logf("replay focus: the game released its %s (%llux%u): its twins and our views of it go", t->second.name.c_str(),
+        logf("replay focus: the game released its %s (%llux%u)", t->second.name.c_str(),
              static_cast<unsigned long long>(t->second.gameDesc.Width), t->second.gameDesc.Height);
-        retire(t->second.focus.Get());
-        retire(t->second.eye.Get());
-        free_slot(t->second.depth, t->second.focusSlot);
-        free_slot(t->second.depth, t->second.eyeSlot);
-        t = focus.twins.erase(t);
-        twinsRemade.fetch_add(1);
-        remakeEpoch.fetch_add(1);
+        released.push_back(game);
+        ++t;
+    }
+    if (!released.empty()) {
+        for (ID3D12Resource* game : released) {  // our records of its views go (which frees the target)
+            std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == game; });
+            std::erase_if(focus.srvInfo, [&](const auto& v) { return v.second.first.Get() == game; });
+        }
+        twinsRemade.fetch_add(released.size());
+        focus_rebuild("the game made its targets again");
         changed = true;
-        std::erase_if(focus.views, [&](const auto& v) { return v.second.resource.Get() == game; });
-        std::erase_if(focus.srvInfo, [&](const auto& v) { return v.second.first.Get() == game; });  // frees the target
     }
     if (focus.viewsMoved) {  // the game made targets again: twins of resources no view names any more are retired
         focus.viewsMoved = false;
@@ -2051,8 +2173,9 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
             const Twin& t = focus.twins.at(focus.views.at(h).resource.Get());
             focusTargets.emplace_back(h, t.focusView.ptr);
             eyeTargets.emplace_back(h, t.eyeView.ptr);
-            if (mono && (static_cast<float>(t.eyeW) != s.monoW || static_cast<float>(t.eyeH) != s.monoH ||
-                         (s.monoX != 0 && s.monoX != s.monoW)))
+            // (within a pixel: an odd double-wide target leaves each eye half a pixel off)
+            if (mono && (std::fabs(static_cast<float>(t.eyeW) - s.monoW) > 1 || static_cast<float>(t.eyeH) != s.monoH ||
+                         (s.monoX != 0 && std::fabs(s.monoX - s.monoW) > 1)))
                 fits = false;  // not one eye of this target (a full-target pass, or another size)
         }
         if (fits)
@@ -5544,7 +5667,7 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
         static std::atomic<int> monoLogged{0};
         if (SUCCEEDED(hr) && transparents_now() && !s->stereo && s->monoSeen && s->draws > 0 && monoLogged < 24) {
             const bool taken = !s->oitDraw && !s->monoMixed && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
-                               s->monoW == focus.sceneEyeW.load() && s->monoH == focus.sceneEyeH.load();
+                               std::fabs(s->monoW - focus.sceneEyeW.load()) <= 1 && s->monoH == focus.sceneEyeH.load();
             ++monoLogged;
             logf("replay focus: per-eye candidate: viewport x %.0f %.0fx%.0f (scene eye %.0fx%.0f), draws %u, pass "
                  "constants %zu, targets %zu, rtv %d dsv %d, mixed %d, oit %d: %s",
@@ -5552,7 +5675,7 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
                  s->passConstants.size(), s->targets.size(), s->sawRtv ? 1 : 0, s->sawDsv ? 1 : 0, s->monoMixed ? 1 : 0,
                  s->oitDraw ? 1 : 0, taken ? "replayed" : "skipped");
         }
-        if (SUCCEEDED(hr) && s->monoSeen && s->draws > 0 && s->monoW == focus.sceneEyeW.load() &&
+        if (SUCCEEDED(hr) && s->monoSeen && s->draws > 0 && std::fabs(s->monoW - focus.sceneEyeW.load()) <= 1 &&
             s->monoH == focus.sceneEyeH.load()) {  // an eye-size per-eye segment: which path it takes
             if (s->stereo)
                 focus.monoInStereo[s->monoX > 0 ? 1 : 0].fetch_add(1, std::memory_order_relaxed);
@@ -5572,7 +5695,7 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             focus_oit_record(list, *s);
         } else if (SUCCEEDED(hr) && transparents_now() && !s->stereo && s->monoSeen && !s->monoMixed &&
                    s->draws > 0 && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
-                   s->monoW == focus.sceneEyeW.load() && s->monoH == focus.sceneEyeH.load()) {  // one eye of the scene
+                   std::fabs(s->monoW - focus.sceneEyeW.load()) <= 1 && s->monoH == focus.sceneEyeH.load()) {  // one eye of the scene
             gameTicks.fetch_add(static_cast<uint64_t>(now_ticks() - s->resetTicks), std::memory_order_relaxed);
             focus_record(list, *s, true);
         }
@@ -6052,6 +6175,9 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
     if (mode == 3)
         focus.settings = settings;  // before any hook reads it
         focus.renderScale = settings.dlss ? std::clamp(settings.dlssScale, 0.4, 1.0) : 1.0;
+        focus.outK = settings.boxFraction * settings.pixelScale;
+        focus.outKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
+                      (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale);
         focus.sizeK = settings.boxFraction * settings.pixelScale * focus.renderScale;
         focus.sizeKy = (settings.boxFractionY > 0 ? settings.boxFractionY : settings.boxFraction) *
                        (settings.pixelScaleY > 0 ? settings.pixelScaleY : settings.pixelScale) * focus.renderScale;
@@ -6133,6 +6259,17 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
 }
 
 bool replay_probe_installed() { return installed; }
+
+void replay_probe_set_size(double k, double kY, double renderScale) {
+    if (probeMode != 3)
+        return;
+    if (k > 0) {  // 0: that one stays as it is
+        focus.outKWanted.store(k);
+        focus.outKyWanted.store(kY > 0 ? kY : k);
+    }
+    if (renderScale > 0)
+        focus.renderScaleWanted.store(renderScale);
+}
 
 void replay_probe_set_box(double box, double boxY) {
     if (probeMode != 3)
@@ -6218,6 +6355,26 @@ void replay_probe_frame_end() {
         {  // the next frame's box centre: the gaze asked for, clamped so the box stays inside the eye's image
             AcquireSRWLockExclusive(&focus.lock);
             std::memcpy(focus.gazePrev, focus.gazeOffset, sizeof(focus.gazePrev));
+            {  // our sizes: the focus density and the Focus views mode, live (everything sized is made again)
+                const double k = focus.outKWanted.exchange(0), ky = focus.outKyWanted.exchange(0);
+                const double scale = focus.renderScaleWanted.exchange(0);
+                const double newK = k > 0 ? k : focus.outK, newKy = ky > 0 ? ky : focus.outKy;
+                const double newScale = scale > 0 && focus.settings.dlss ? std::clamp(scale, 0.4, 1.0) : focus.renderScale;
+                if (std::fabs(newK - focus.outK) > 1e-4 || std::fabs(newKy - focus.outKy) > 1e-4 ||
+                    std::fabs(newScale - focus.renderScale) > 1e-4) {
+                    focus.outK = newK;
+                    focus.outKy = newKy;
+                    focus.renderScale = newScale;
+                    focus.sizeK = newK * newScale;
+                    focus.sizeKy = newKy * newScale;
+                    focus.settings.pixelScale = focus.sizeK / focus.settings.boxFraction;
+                    focus.settings.pixelScaleY =
+                        focus.sizeKy / (focus.settings.boxFractionY > 0 ? focus.settings.boxFractionY : focus.settings.boxFraction);
+                    logf("replay focus: sizes now: focus views %.1f%% x %.1f%% of the eye's size, rendered at %.0f%% of that",
+                         newK * 100, newKy * 100, newScale * 100);
+                    focus_rebuild("our focus sizes changed");
+                }
+            }
             const double wanted = focus.boxWanted.exchange(0), wantedY = focus.boxYWanted.exchange(0);
             if (wanted > 0 && (wanted != focus.settings.boxFraction || (wantedY > 0 && wantedY != focus.settings.boxFractionY))) {
                 focus.settings.boxFraction = wanted;  // the same focus pixels over another share of the eye

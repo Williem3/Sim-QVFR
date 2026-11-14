@@ -113,6 +113,10 @@ bool replay_probe_focus_image(ID3D12Resource*& image, D3D12_RESOURCE_STATES& sta
 void replay_probe_set_gaze(const float (&ndc)[2][2]);
 // The focus box's half extent in each eye's NDC, while running: taken at the frame's end. The focus views keep their
 // pixel size (made at the start), so their density changes with it.
+// The focus views' output size as a share of the eye's size each way (focus density x focus box) and the share of it
+// they are rendered at (the Focus views DLSS mode; 1: DLAA), while running: taken at a frame's end, everything
+// sized is then made again.
+void replay_probe_set_size(double k, double kY, double renderScale);
 void replay_probe_set_box(double box, double boxY = 0);
 // The counters since the last call, then zeroed (tests; the frame-end report uses them too).
 ReplayProbeStats replay_probe_take_stats();
