@@ -780,6 +780,11 @@ struct Focus {
     SIZE_T maxUavWritten = 0;                       // the highest it wrote below the bindless range (the UAV table)
     bool collision = false;
     std::unordered_map<ID3D12PipelineState*, int> psoKinds;  // 0 none, 1 tileFrustums, 2 tiledCulling, 3/4 fog
+    // psoKinds is keyed by address and read from the pipeline's name once. The game makes its pipelines again on a
+    // DLSS mode change, and a new pipeline at a freed one's address took the old answer (05:26 run: tiledCulling no
+    // longer known after the switch, so no tile replay and nothing after it). After a rebuild the answers are thrown
+    // away for this many frames (names read again: one lookup per pipeline a frame), covering pipelines made around it.
+    std::atomic<int> psoFlush{0};
     // R2c: the focus views' volumetric fog. Per eye our grid and two histories (ping-pong), 3D like ACE's; their views
     // at our slots 16 + 6e: grid UAV/SRV, history 0 UAV/SRV, history 1 UAV/SRV. ACE's grid SRVs learned by name.
     ComPtr<ID3D12RootSignature> fogRoot;
@@ -1902,6 +1907,10 @@ void focus_rebuild(const char* why) {
     focus.blurColour = nullptr;
     focus.blurMips = 0;
     focus.blurReady = focus.blurMissLogged = false;
+    focus.psoFlush = 300;
+    AcquireSRWLockExclusive(&focus.psoLock);
+    focus.psoKinds.clear();
+    ReleaseSRWLockExclusive(&focus.psoLock);
     remakeEpoch.fetch_add(1);
     focusRebuilds.fetch_add(1);
     logf("replay focus: rebuilt from nothing (%s): twins, tiles, fog, shadow, atmosphere, post and DLSS are made again", why);
@@ -5534,7 +5543,13 @@ void count_pipeline() {
         logf("replay focus: sky: %llu pipelines seen being made or loaded", static_cast<unsigned long long>(n));
 }
 void note_sky_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& ps) {
-    if (!pso || !is_sky_shader(ps))
+    if (!pso)
+        return;
+    AcquireSRWLockExclusive(&focus.psoLock);  // a pipeline just made: what an older one at this address was is forgotten
+    focus.skyPsos.erase(pso);
+    focus.psoKinds.erase(pso);
+    ReleaseSRWLockExclusive(&focus.psoLock);
+    if (!is_sky_shader(ps))
         return;
     AcquireSRWLockExclusive(&focus.psoLock);
     const bool first = focus.skyPsos.empty();
@@ -5549,6 +5564,11 @@ void note_sky_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& ps) {
 void note_tyre_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& vs) {
     if (!pso)
         return;
+    AcquireSRWLockExclusive(&focus.psoLock);  // a pipeline just made: an older one's record at this address goes
+    focus.tyrePsos.erase(pso);
+    focus.vsSeen.erase(pso);
+    focus.psoKinds.erase(pso);
+    ReleaseSRWLockExclusive(&focus.psoLock);
     const uint8_t bits = static_cast<uint8_t>((shader_declares(vs, "BONEWEIGHTS") ? 1 : 0) | (shader_declares(vs, "MATERIALID") ? 2 : 0) |
                                               (shader_declares(vs, "SV_Position") ? 4 : 0) |
                                               (shader_declares(vs, "SV_InstanceID") ? 8 : 0) |
@@ -6386,6 +6406,12 @@ void replay_probe_frame_end() {
         {  // the next frame's box centre: the gaze asked for, clamped so the box stays inside the eye's image
             AcquireSRWLockExclusive(&focus.lock);
             std::memcpy(focus.gazePrev, focus.gazeOffset, sizeof(focus.gazePrev));
+            if (focus.psoFlush.load() > 0) {  // after a rebuild: the pipelines' kinds read from their names again
+                focus.psoFlush.fetch_sub(1);
+                AcquireSRWLockExclusive(&focus.psoLock);
+                focus.psoKinds.clear();
+                ReleaseSRWLockExclusive(&focus.psoLock);
+            }
             {  // our sizes: the focus density and the Focus views mode, live (everything sized is made again)
                 const double k = focus.outKWanted.exchange(0), ky = focus.outKyWanted.exchange(0);
                 const double scale = focus.renderScaleWanted.exchange(0);
