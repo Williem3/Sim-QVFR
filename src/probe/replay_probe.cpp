@@ -2125,7 +2125,7 @@ bool focus_prepare(const Stream& s) {
             ++t;
             continue;
         }
-        logf("replay focus: the game released its %s (%llux%u)", t->second.name.c_str(),
+        logd("replay focus: the game released its %s (%llux%u)", t->second.name.c_str(),
              static_cast<unsigned long long>(t->second.gameDesc.Width), t->second.gameDesc.Height);
         released.push_back(game);
         ++t;
@@ -2240,7 +2240,7 @@ bool focus_prepare(const Stream& s) {
             logf("replay focus: could not make twins of %s", t.name.c_str());
             return false;
         }
-        logf("replay focus: twin of %s (%s, format %d, %u sample(s)): focus %ux%u per eye (box %.0f%%, %.2f focus pixels "
+        logd("replay focus: twin of %s (%s, format %d, %u sample(s)): focus %ux%u per eye (box %.0f%%, %.2f focus pixels "
              "per eye pixel), reference %ux%u per eye",
              t.name.c_str(), t.depth ? "depth" : "colour", static_cast<int>(t.gameDesc.Format), t.gameDesc.SampleDesc.Count,
              t.focusW, t.focusH, focus.settings.boxFraction * 100, focus.settings.pixelScale, t.eyeW, t.eyeH);
@@ -2462,7 +2462,7 @@ void focus_record(List* gameList, const Stream& s, bool mono = false) {
                     const Twin& t = focus.twins.at(focus.views.at(h).resource.Get());
                     sizes += " " + t.name + " " + std::to_string(t.eyeW) + "x" + std::to_string(t.eyeH);
                 }
-                logf("replay focus: per-eye list x %.0f %.0fx%.0f doesn't fit its targets' eye size (%s); skipped", s.monoX,
+                logd("replay focus: per-eye list x %.0f %.0fx%.0f doesn't fit its targets' eye size (%s); skipped", s.monoX,
                      s.monoW, s.monoH, sizes.c_str());
             }
         }
@@ -2746,7 +2746,7 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
             focus.tilesBroken = true;
             return nullptr;
         }
-        logf("replay focus: tiles: the game's heap %u descriptors, bindless range from %u, ours %u..%u (the range's top)",
+        logd("replay focus: tiles: the game's heap %u descriptors, bindless range from %u, ours %u..%u (the range's top)",
              focus.heapSize, focus.baseIndex, focus.slotFirst, focus.slotFirst + kTileSlots - 1);
         focus.tilesReady = false;
         focus.frustums[0].Reset();  // views written again below
@@ -2819,7 +2819,7 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
     const bool known = focus.gameTile[0] != UINT32_MAX && focus.gameTile[1] != UINT32_MAX &&
                        focus.gameTile[2] != UINT32_MAX && focus.gameTile[3] != UINT32_MAX;
     if (known && !focus.tilesReady)
-        logf("replay focus: tiles: the game's tile lists at bindless %u/%u (opaque) %u/%u (transparent), ours %u/%u %u/%u",
+        logd("replay focus: tiles: the game's tile lists at bindless %u/%u (opaque) %u/%u (transparent), ours %u/%u %u/%u",
              focus.gameTile[0], focus.gameTile[1], focus.gameTile[2], focus.gameTile[3], focus.ourTile[0], focus.ourTile[1],
              focus.ourTile[2], focus.ourTile[3]);
     static int unknownFrames = 0;
@@ -2842,7 +2842,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
     if (fr.size() < 2 || cu.size() < 2) {
         static int epoch = 0, count = 0;
         if ((!fr.empty() || !cu.empty()) && miss_allowed(epoch, count, 3))
-            logf("replay focus: tiles: not replayed (the list has %zu tileFrustums and %zu tiledCulling dispatches of %zu)",
+            logd("replay focus: tiles: not replayed (the list has %zu tileFrustums and %zu tiledCulling dispatches of %zu)",
                  fr.size(), cu.size(), s.tileDispatches.size());
         return;
     }
@@ -2858,7 +2858,7 @@ void focus_tiles_record(List* gameList, const Stream& s) {
         float tileCount[2];
         std::memcpy(tileCount, fr[0]->constants + 18, sizeof(tileCount));
         const Twin* const d = scene_depth_twin();
-        logf("replay focus: tiles: not replayed (prepared %d, ready %d, broken %d, bindless base %d, the list's heap %d (ours %d), "
+        logd("replay focus: tiles: not replayed (prepared %d, ready %d, broken %d, bindless base %d, the list's heap %d (ours %d), "
              "depth twin %s, the game's tile count %.0fx%.0f, its lists at %u %u %u %u, our lists %ux%u)",
              twin ? 1 : 0, focus.tilesReady ? 1 : 0, focus.tilesBroken ? 1 : 0, focus.bindlessBase.ptr ? 1 : 0,
              fr[0]->heap ? 1 : 0, fr[0]->heap == focus.gameHeap ? 1 : 0, d ? d->name.c_str() : "none", tileCount[0],
@@ -3346,7 +3346,7 @@ void focus_fog_record(List* gameList, const Stream& s) {
     AcquireSRWLockExclusive(&focus.lock);
     focus.pending[gameList].push_back(r);
     if (!focus.fogReady)
-        log_line("replay focus: fog: the first focus fog replay recorded; the lighting reads it from the next frame");
+        logd("replay focus: fog: the first focus fog replay recorded; the lighting reads it from the next frame");
     focus.fogReady = true;  // the next scene replays name our grid (executed after this one: same queue, later batch)
     ReleaseSRWLockExclusive(&focus.lock);
     focus.fogReplays.fetch_add(1, std::memory_order_relaxed);
@@ -3372,7 +3372,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     const bool ok = !focus.shadowBroken && !focus.tilesBroken && focus.gameHeap && focus.slotFirst && focus.shadowPatchPso &&
                     twin && focus.depthForTiles == twin->focus.Get();  // our depth SRV (slot 12) names this twin
     if (static int epoch = 0, count = 0; !ok && focus.shadowPatchPso && miss_allowed(epoch, count, 3))
-        logf("replay focus: shadow: not replayed (broken %d, tiles broken %d, depth twin %s %ux%u, the tiles' depth %s)",
+        logd("replay focus: shadow: not replayed (broken %d, tiles broken %d, depth twin %s %ux%u, the tiles' depth %s)",
              focus.shadowBroken ? 1 : 0, focus.tilesBroken ? 1 : 0, twin ? twin->name.c_str() : "none", twin ? twin->eyeW : 0,
              twin ? twin->eyeH : 0, twin && focus.depthForTiles == twin->focus.Get() ? "the same" : "another");
     if (ok) {
@@ -3422,7 +3422,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
                 inReplay = false;
                 focus.shadowFw = fw;
                 focus.shadowFh = fh;
-                logf("replay focus: shadow: our normals %ux%u, deferred shadow %ux%u at bindless %u", 2 * fw, fh, fw,
+                logd("replay focus: shadow: our normals %ux%u, deferred shadow %ux%u at bindless %u", 2 * fw, fh, fw,
                      (fh + 1) / 2, focus.slotFirst + 15 - focus.baseIndex);
             }
         }
@@ -3507,7 +3507,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
     AcquireSRWLockExclusive(&focus.lock);
     focus.pending[gameList].push_back(r);
     if (!focus.shadowReady)
-        log_line("replay focus: shadow: the first focus deferred-shadow replay recorded");
+        logd("replay focus: shadow: the first focus deferred-shadow replay recorded");
     focus.shadowReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.shadowReplays.fetch_add(1, std::memory_order_relaxed);
@@ -3559,7 +3559,7 @@ void focus_oit_record(List* gameList, const Stream& s) {
         if (ok && fw)
             r = acquire_replay();
         else if (static int epoch = 0; focus.twins.size() > 8 && miss_allowed(epoch, missLogged, 3)) {  // not before the scene's twins exist
-            logf("replay focus: OIT composite: not replayed (%s)", why.empty() ? "no target" : why.c_str());
+            logd("replay focus: OIT composite: not replayed (%s)", why.empty() ? "no target" : why.c_str());
         }
     }
     ReleaseSRWLockExclusive(&focus.lock);
@@ -3622,7 +3622,7 @@ bool focus_atmo_prepare() {
         if (!game[m]) {
             if (!focus.atmoMissLogged) {
                 focus.atmoMissLogged = true;
-                logf("replay focus: atmosphere: %s%d not among the %zu views seen yet", kAtmoNames[m % 4], m / 4,
+                logd("replay focus: atmosphere: %s%d not among the %zu views seen yet", kAtmoNames[m % 4], m / 4,
                      focus.srvInfo.size());
             }
             return false;
@@ -3660,7 +3660,7 @@ bool focus_atmo_prepare() {
         return false;
     }
     const D3D12_RESOURCE_DESC a = game[0]->GetDesc(), b = game[2]->GetDesc();
-    logf("replay focus: atmosphere: our maps made (3D %llux%ux%u, sky %llux%u), at bindless %u..%u",
+    logd("replay focus: atmosphere: our maps made (3D %llux%ux%u, sky %llux%u), at bindless %u..%u",
          static_cast<unsigned long long>(a.Width), a.Height, static_cast<unsigned>(a.DepthOrArraySize),
          static_cast<unsigned long long>(b.Width), b.Height, focus.slotFirst + 40 - focus.baseIndex,
          focus.slotFirst + 47 - focus.baseIndex);
@@ -3862,7 +3862,7 @@ void focus_atmo_record(List* gameList, const Stream& s) {
     AcquireSRWLockExclusive(&focus.lock);
     focus.pending[gameList].push_back(r);
     if (!focus.atmoReady)
-        logf("replay focus: atmosphere: first resample recorded (eye centres %.4f,%.4f and %.4f,%.4f)", centre[0][0],
+        logd("replay focus: atmosphere: first resample recorded (eye centres %.4f,%.4f and %.4f,%.4f)", centre[0][0],
              centre[0][1], centre[1][0], centre[1][1]);
     focus.atmoReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
@@ -3947,7 +3947,7 @@ void focus_blur_record(List* gameList) {
                     focus.blur = b;
                     focus.blurColour = colour;
                     focus.blurMips = d.MipLevels;
-                    logf("replay focus: refraction: our opaqueSceneBlur %llux%u, %u mips (mip 0 our colour, the rest the "
+                    logd("replay focus: refraction: our opaqueSceneBlur %llux%u, %u mips (mip 0 our colour, the rest the "
                          "eye's resampled), at bindless %u",
                          static_cast<unsigned long long>(d.Width), d.Height, static_cast<unsigned>(d.MipLevels),
                          focus.slotFirst + 62 - focus.baseIndex);
@@ -3957,7 +3957,7 @@ void focus_blur_record(List* gameList) {
                 }
             } else if (!focus.blurMissLogged) {
                 focus.blurMissLogged = true;
-                log_line("replay focus: refraction: the game's opaqueSceneBlur not seen yet (or another format)");
+                logd("replay focus: refraction: the game's opaqueSceneBlur not seen yet (or another format)");
             }
         }
         if (focus.blur && !focus.blurBroken)
@@ -4115,7 +4115,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
                 }
                 focus.resolveDepthSource = msDepth;
                 focus.resolveVelocitySource = msVelocity;
-                logf("replay focus: msaa: our resolved focus depth / closest depth%s %ux%u (from the %u-sample twins%s)",
+                logd("replay focus: msaa: our resolved focus depth / closest depth%s %ux%u (from the %u-sample twins%s)",
                      velocityTwin ? " / velocity" : "", w, h, depthTwin->gameDesc.SampleDesc.Count,
                      velocityTwin ? (", velocity " + velocityTwin->name).c_str() : ", no velocity twin");
             }
@@ -4126,7 +4126,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
     static int missLogged = 0;
     if (!r && !why.empty() && missLogged < 3) {
         ++missLogged;
-        logf("replay focus: msaa: resolves not replayed (%s)", why.c_str());
+        logd("replay focus: msaa: resolves not replayed (%s)", why.c_str());
     }
     ReleaseSRWLockExclusive(&focus.lock);
     if (!r)
@@ -4166,7 +4166,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
     AcquireSRWLockExclusive(&focus.lock);
     focus.pending[gameList].push_back(r);
     if (!focus.resolveReady)
-        log_line("replay focus: msaa: the first focus depth / velocity resolve recorded");
+        logd("replay focus: msaa: the first focus depth / velocity resolve recorded");
     focus.resolveReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.resolveReplays.fetch_add(1, std::memory_order_relaxed);
@@ -4210,7 +4210,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
     const auto miss = [&](const char* why) {
         static int epoch = 0;
         if (miss_allowed(epoch, missLogged, 4)) {
-            logf("replay focus: dlss: not this frame (%s)", why);
+            logd("replay focus: dlss: not this frame (%s)", why);
         }
         return false;
     };
@@ -4309,7 +4309,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
             focus.packColour = colour;
             focus.packVelocityTwin = velocityTwin->focus.Get();
             focus.packFlagsTwin = flagsTwin->focus.Get();
-            logf("replay focus: dlss: our packing outputs and DLSS image %ux%u (output format %d); velocity twin format %d, "
+            logd("replay focus: dlss: our packing outputs and DLSS image %ux%u (output format %d); velocity twin format %d, "
                  "flags %d",
                  fw2, fh, static_cast<int>(outFormat), static_cast<int>(velocityTwin->viewFormat),
                  static_cast<int>(flagsTwin->viewFormat));
@@ -4487,12 +4487,12 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
             casLogged = true;
             float sharp;
             std::memcpy(&sharp, d.constants, 4);
-            logf("replay focus: dlss: ACE's CAS replayed on our DLSS image (its constant 0x%08x / %.4g)", d.constants[0], sharp);
+            logd("replay focus: dlss: ACE's CAS replayed on our DLSS image (its constant 0x%08x / %.4g)", d.constants[0], sharp);
         }
         break;
     }
     if (!focus.dlssReady)
-        logf("replay focus: dlss: the first focus DLSS recorded (colour %s, depth %s, motion %s -> ours; jitter as ACE's (%.2f focus pixels per eye pixel), "
+        logd("replay focus: dlss: the first focus DLSS recorded (colour %s, depth %s, motion %s -> ours; jitter as ACE's (%.2f focus pixels per eye pixel), "
              "motion scale %.4g,%.4g -> ours)",
              game[0].colorName.c_str(), game[0].depthName.c_str(), game[0].motionName.c_str(), k, game[0].motionScale[0],
              game[0].motionScale[1]);
@@ -4588,7 +4588,7 @@ bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&
             inReplay = false;
             focus.aaSource = ms;
             focus.aaFresh = true;
-            logf("replay focus: msaa: our antialiased focus colour and history %ux%u (ACE's vrAntialiasing replayed)", fw2, fh);
+            logd("replay focus: msaa: our antialiased focus colour and history %ux%u (ACE's vrAntialiasing replayed)", fw2, fh);
         }
     }
     ReleaseSRWLockExclusive(&focus.lock);
@@ -4649,7 +4649,7 @@ bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&
     barrier(l, focus.aaHistory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     barrier(l, focus.aaOut.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE);
     if (!focus.aaReady)
-        log_line("replay focus: msaa: the first focus antialiasing recorded (ACE's vrAntialiasing per eye)");
+        logd("replay focus: msaa: the first focus antialiasing recorded (ACE's vrAntialiasing per eye)");
     focus.aaReady = true;
     focus.aaReplays.fetch_add(1, std::memory_order_relaxed);
     return true;
@@ -4708,7 +4708,7 @@ void focus_post_record(List* gameList, const Stream& s) {
                 focus.resolvedColourTwin.focus = focus.resolvedColour;
                 focus.resolvedColourTwin.eye = colourMs->focus;  // here: the multisampled source
                 focus.resolvedColourTwin.gameDesc.SampleDesc = {1, 0};
-                logf("replay focus: msaa: our resolved focus colour %llux%u (from the %u-sample twin)",
+                logd("replay focus: msaa: our resolved focus colour %llux%u (from the %u-sample twin)",
                      static_cast<unsigned long long>(d.Width), d.Height, colourMs->gameDesc.SampleDesc.Count);
             } else {
                 static bool failLogged = false;
@@ -4851,7 +4851,7 @@ void focus_post_record(List* gameList, const Stream& s) {
                     if (!s.hasFxaa)
                         log_line("replay focus: post: ACE's post has no fxaa draw (its menus): the tonemap goes straight "
                                  "into our final focus image");
-                    logf("replay focus: post: our focus post targets %ux%u (tonemap format %d, final %d), veil %llux%u",
+                    logd("replay focus: post: our focus post targets %ux%u (tonemap format %d, final %d), veil %llux%u",
                          ow2, oh, static_cast<int>(rv.Format == fxaaRt->second.viewFormat ? tonemapRt->second.viewFormat
                                                                                           : rv.Format),
                          static_cast<int>(fxaaRt->second.viewFormat), static_cast<unsigned long long>(vd.Width), vd.Height);
@@ -4887,7 +4887,7 @@ void focus_post_record(List* gameList, const Stream& s) {
     static int missLogged = 0;
     static int missEpoch = 0;
     if (!r && !why.empty() && focus.twins.size() > 4 && miss_allowed(missEpoch, missLogged, 3)) {
-        logf("replay focus: post: not replayed (%s)", why.c_str());
+        logd("replay focus: post: not replayed (%s)", why.c_str());
     }
     ReleaseSRWLockExclusive(&focus.lock);
     if (!r)
@@ -5007,7 +5007,7 @@ void focus_post_record(List* gameList, const Stream& s) {
     AcquireSRWLockExclusive(&focus.lock);
     focus.pending[gameList].push_back(r);
     if (!focus.postReady)
-        log_line("replay focus: post: the first focus post replay recorded (bloom, tonemap, fxaa)");
+        logd("replay focus: post: the first focus post replay recorded (bloom, tonemap, fxaa)");
     focus.postReady = true;
     ReleaseSRWLockExclusive(&focus.lock);
     focus.postFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
@@ -5066,7 +5066,7 @@ void focus_prev_copy(ID3D12CommandQueue* queue) {
         inReplay = false;
         focus.prevSource = colour->focus.Get();
         focus.prevReady = true;
-        logf("replay focus: previous-frame colour: ours at bindless %u (the game's post_process_color views %d %d %d %d)",
+        logd("replay focus: previous-frame colour: ours at bindless %u (the game's post_process_color views %d %d %d %d)",
              focus.slotFirst + 13 - focus.baseIndex, static_cast<int>(focus.gamePrev[0]), static_cast<int>(focus.gamePrev[1]),
              static_cast<int>(focus.gamePrev[2]), static_cast<int>(focus.gamePrev[3]));
     }
@@ -5370,26 +5370,26 @@ void focus_save(std::shared_ptr<SampleJob> job) {
             if (focus.settings.diag) {
                 static const char* const kPhase[4] = {"as set", "our fog OFF", "our 3D atmosphere ON",
                                                       "our 3D atmosphere + sky maps ON"};
-                logf("replay focus: sample frame %llu: diagnostic phase: %s", static_cast<unsigned long long>(job->frame),
+                logd("replay focus: sample frame %llu: diagnostic phase: %s", static_cast<unsigned long long>(job->frame),
                      kPhase[std::min<uint32_t>(3, job->phase)]);
             }
             if (focus.settings.atmosphere == 2)
-                logf("replay focus: sample frame %llu: atmosphere A/B: the focus views %s our atmosphere maps",
+                logd("replay focus: sample frame %llu: atmosphere A/B: the focus views %s our atmosphere maps",
                      static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
             if (focus.settings.transparents == 2)
-                logf("replay focus: sample frame %llu: transparents A/B: %s",
+                logd("replay focus: sample frame %llu: transparents A/B: %s",
                      static_cast<unsigned long long>(job->frame), job->shadowOn ? "replayed" : "NOT replayed");
             if (focus.settings.shadows == 2)
-                logf("replay focus: sample frame %llu: shadow A/B: the focus lighting %s our deferred shadow",
+                logd("replay focus: sample frame %llu: shadow A/B: the focus lighting %s our deferred shadow",
                      static_cast<unsigned long long>(job->frame), job->shadowOn ? "used" : "did NOT use");
             result.colourEyePixels = eyeCompared;
             result.colourEyeAgree = eyeCompared ? static_cast<double>(eyeAgree) / static_cast<double>(eyeCompared) : 0;
             result.colourHoodAgree = eyeCompared ? static_cast<double>(hoodAgree) / static_cast<double>(eyeCompared) : 0;
-            logf("replay focus: sample frame %llu: colour %s at the eye's pixel size (%ux%u focus pixels each): %llu "
+            logd("replay focus: sample frame %llu: colour %s at the eye's pixel size (%ux%u focus pixels each): %llu "
                  "compared, %.1f%% agree; %.1f%% within the eye's 3x3 neighbourhood (edge-tolerant)",
                  static_cast<unsigned long long>(job->frame), t.name.c_str(), k, k,
                  static_cast<unsigned long long>(eyeCompared), result.colourEyeAgree * 100, result.colourHoodAgree * 100);
-            logf("replay focus: sample frame %llu: colour %s: %llu pixels compared, %.1f%% agree (every channel within 3%%)",
+            logd("replay focus: sample frame %llu: colour %s: %llu pixels compared, %.1f%% agree (every channel within 3%%)",
                  static_cast<unsigned long long>(job->frame), t.name.c_str(), static_cast<unsigned long long>(compared),
                  result.colourAgree * 100);
             if (t.name.rfind("post", 0) == 0)
@@ -5427,9 +5427,9 @@ void focus_save(std::shared_ptr<SampleJob> job) {
             }
         }
         if (alpha >= 0)
-            logf("replay focus: sample frame %llu: %s alpha mean %.4f", static_cast<unsigned long long>(job->frame),
+            logd("replay focus: sample frame %llu: %s alpha mean %.4f", static_cast<unsigned long long>(job->frame),
                  x.name.c_str(), alpha);
-        logf("replay focus: sample frame %llu: %s %ux%u mean (%.4f, %.4f, %.4f), median %.4f",
+        logd("replay focus: sample frame %llu: %s %ux%u mean (%.4f, %.4f, %.4f), median %.4f",
              static_cast<unsigned long long>(job->frame), x.name.c_str(), x.foot.Footprint.Width, x.foot.Footprint.Height,
              mean[0] / n, mean[1] / n, mean[2] / n, sorted.empty() ? 0.0f : sorted[sorted.size() / 2]);
         wchar_t name[160];
@@ -5440,7 +5440,7 @@ void focus_save(std::shared_ptr<SampleJob> job) {
     result.sample = focus.compare.sample + 1;
     focus.compare = result;
     ReleaseSRWLockExclusive(&focus.compareLock);
-    logf("replay focus: sample frame %llu: depth %llu pixels compared, %.1f%% agree within 1%% at the best shift (%d, %d) "
+    logd("replay focus: sample frame %llu: depth %llu pixels compared, %.1f%% agree within 1%% at the best shift (%d, %d) "
          "eye pixels; eye centres (%.4f, %.4f) and (%.4f, %.4f); images in logs\\replay",
          static_cast<unsigned long long>(job->frame), static_cast<unsigned long long>(result.pixels), result.agree * 100,
          result.shiftX, result.shiftY, cx[0], cy[0], cx[1], cy[1]);
@@ -5680,7 +5680,7 @@ void focus_copy_sample() {
     l->Close();
     inReplay = false;
     if (job->targets.empty()) {
-        log_line("replay focus: no twin of a format the sample can read (multisampled, or not depth / colour)");
+        logd("replay focus: no twin of a format the sample can read (multisampled, or not depth / colour)");
         return;
     }
     ID3D12CommandList* lists[] = {l.Get()};
@@ -5698,7 +5698,7 @@ void focus_cull_record(List* gameList, const Stream& s) {
     static int epoch = 0, missed = 0;
     const auto miss = [&](const char* why) {
         if (miss_allowed(epoch, missed, 4))
-            logf("replay cull: not this frame (%s)", why);
+            logd("replay cull: not this frame (%s)", why);
     };
     std::vector<const Stream::VisDispatch*> eyes;
     const Stream::VisDispatch* finalize = nullptr;
@@ -5873,6 +5873,9 @@ void focus_cull_record(List* gameList, const Stream& s) {
 //   deferredShadows (root 5): uvScaleAndOffset (row 32).
 //   VelocityAndDepthPacking (cb0): rcpRes (row 12), resolution (15.yz), pixelOffset (17.xy), uvScaleAndOffset (18).
 //   histogram (root 4): resolution (0.zw); histogramAverage (root 3): pixelCount (0.x): the exposure meters the region.
+//   vrAntialiasing (MSAA's resolve, root 6, one dispatch per eye): viewportOffset / viewportSize (row 16). Its pixel is
+//     the offset plus the thread id, its NDC (id + 0.5) / viewportSize through the eye's own matrices, its history pixel
+//     the offset plus last frame's uv x the size: all follow row 16. TextureSize (0.xy) is not read.
 // contrastAdaptiveSharpen runs over the region only: over the unused area (exactly 0) it wrote invalid values, which
 // ACE's bloom then spread into the picture (07:28 captures: white outside, pink fringes inside).
 // The rest of ACE's whole-target work, for its cost: its by-pixel compute passes (the two gaussian blurs, the veil's
@@ -5883,13 +5886,15 @@ void focus_cull_record(List* gameList, const Stream& s) {
 // ACE's whole-target passes (OIT composite, sharpening, bloom, tonemap, fxaa) run unchanged over the whole target: each
 // pixel maps to itself, so the smaller picture stays where it is. NGX is told the smaller regions (focus_ngx). The
 // compositor and the focus views' borrowed inputs (bloom, refraction mips) read the region in use.
-// Not handled yet: ACE's own antialiasing under MSAA (off then); the histogram's flags lookup (by uv over the target).
+// ACE's MSAA depth resolves (resolveDepthCompute, resolveDepthVelocityCompute) have no constants: by pixel over the
+// target, shrunk like the other by-pixel passes.
+// Not handled yet: the histogram's flags lookup (by uv over the target).
 constexpr char kEyeShader[] = R"(
 cbuffer Source : register(b0) { float4 src[35]; };
 cbuffer Params : register(b1) { uint mode; float fx; float fy; };
 RWByteAddressBuffer dst : register(u0);
 [numthreads(64, 1, 1)] void main(uint i : SV_DispatchThreadID) {
-    const uint rows = mode == 1 ? 15 : mode == 2 ? 18 : mode == 3 ? 35 : mode == 4 ? 22 : mode == 5 ? 2 : 3;
+    const uint rows = mode == 1 ? 15 : mode == 2 ? 18 : mode == 3 ? 35 : mode == 4 ? 22 : mode == 5 ? 2 : mode == 7 ? 17 : 3;
     if (i >= rows) return;
     float4 v = src[i];
     const float4 f = float4(fx, fy, fx, fy);
@@ -5905,6 +5910,8 @@ RWByteAddressBuffer dst : register(u0);
         if (i == 0) { uint4 r = asuint(v); r.z = uint(round(r.z * fx)); r.w = uint(round(r.w * fy)); v = asfloat(r); }
     } else if (mode == 6) {  // histogramAverage: uint pixelCount
         if (i == 0) { uint4 r = asuint(v); r.x = uint(round(r.x * fx * fy)); v = asfloat(r); }
+    } else if (mode == 7) {  // vrAntialiasing: float2 viewportOffset, float2 viewportSize (whole pixels)
+        if (i == 16) v = round(v * f);
     } else {  // velocity and depth packing
         if (i == 12) v.xy = v.xy / f.xy;
         if (i == 15) { int4 r = asint(v); r.y = int(round(r.y * fx)); r.z = int(round(r.z * fy)); v = asfloat(r); }
@@ -5920,7 +5927,6 @@ struct EyeLive {
     std::atomic<float> wanted{1.0f};   // the periphery's share of its launch size (1: off)
     std::atomic<bool> allowed{false};  // the compositor reads the region in use (a composed frame)
     std::atomic<uint64_t> state{0};    // taken at a frame's end: 0 off, else lw | lh << 16 | ew << 32 | eh << 48
-    std::atomic<uint64_t> aaFrame{0};  // the last frame ACE's own antialiasing (MSAA) ran in
     ComPtr<ID3D12Resource> constants;  // our copies: kEyeSlots x kSlotBytes
     ComPtr<ID3D12PipelineState> pso;   // kEyeShader
     std::atomic<uint32_t> nextSlot{0};
@@ -5929,7 +5935,8 @@ struct EyeLive {
     std::atomic<uint64_t> lists{0}, patches{0}, executed{0};
     // what was changed, by kind (the 900-frame line): scene state applied (stereo, one eye), deferred shadows, the
     // tile-frustum constants, tile culling, normals, packing; scene-root draws left alone for their viewport's shape
-    // (8 sharpening, 9 histogram, 10 histogramAverage, 11 by-pixel post dispatches shrunk, 12 whole-target draws clipped)
+    // (8 sharpening, 9 histogram, 10 histogramAverage, 11 by-pixel post dispatches shrunk, 12 whole-target draws clipped,
+    // 13 MSAA's resolve)
     std::atomic<uint64_t> did[14] = {};
     std::atomic<int> said[14] = {};  // first uses described
     std::atomic<int> shapesSaid{0};
@@ -6424,7 +6431,7 @@ void count_pipeline() {
     static std::atomic<uint64_t> seen{0};
     const uint64_t n = seen.fetch_add(1) + 1;
     if (n == 1 || n == 100 || n == 1000 || n == 5000)
-        logf("replay focus: sky: %llu pipelines seen being made or loaded", static_cast<unsigned long long>(n));
+        logd("replay focus: sky: %llu pipelines seen being made or loaded", static_cast<unsigned long long>(n));
 }
 void note_sky_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& ps) {
     if (!pso)
@@ -6440,7 +6447,7 @@ void note_sky_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& ps) {
     focus.skyPsos.insert(pso);
     ReleaseSRWLockExclusive(&focus.psoLock);
     if (first)
-        log_line("replay focus: sky: the sky's pipeline seen (its pixel shader declares cbSky)");
+        logd("replay focus: sky: the sky's pipeline seen (its pixel shader declares cbSky)");
 }
 // ACE's tyre pipelines, by the vertex shader's signatures (plain text in the container; the cbuffer name
 // bindlessVehicleTyres sits in bitcode): a skinned scene vertex shader (BONEWEIGHTS, MATERIALID, SV_Position) that takes
@@ -6474,7 +6481,7 @@ void note_tyre_pso(ID3D12PipelineState* pso, const D3D12_SHADER_BYTECODE& vs) {
     const size_t count = focus.tyrePsos.size();
     ReleaseSRWLockExclusive(&focus.psoLock);
     if (added && count <= 8)
-        logf("replay focus: tyres: ACE's tyre pipeline %zu seen (%p; no single-pass-stereo variant: one viewport)", count,
+        logd("replay focus: tyres: ACE's tyre pipeline %zu seen (%p; no single-pass-stereo variant: one viewport)", count,
              static_cast<void*>(pso));
 }
 // True for ACE's tyre pipelines, and for a pipeline whose creation we never saw (its vertex shader unknown: in a
@@ -6612,7 +6619,7 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
             const bool taken = !s->oitDraw && !s->monoMixed && !s->passConstants.empty() && (s->sawRtv || s->sawDsv) &&
                                std::fabs(s->monoW - focus.sceneEyeW.load()) <= 1 && s->monoH == focus.sceneEyeH.load();
             ++monoLogged;
-            logf("replay focus: per-eye candidate: viewport x %.0f %.0fx%.0f (scene eye %.0fx%.0f), draws %u, pass "
+            logd("replay focus: per-eye candidate: viewport x %.0f %.0fx%.0f (scene eye %.0fx%.0f), draws %u, pass "
                  "constants %zu, targets %zu, rtv %d dsv %d, mixed %d, oit %d: %s",
                  s->monoX, s->monoW, s->monoH, focus.sceneEyeW.load(), focus.sceneEyeH.load(), s->draws,
                  s->passConstants.size(), s->targets.size(), s->sawRtv ? 1 : 0, s->sawDsv ? 1 : 0, s->monoMixed ? 1 : 0,
@@ -6894,8 +6901,6 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         d.cbv1 = s->computeCbvs[1];
         s->tileDispatches.push_back(d);
     }
-    if (Stream* s = stream_of(l); s && s->psoKind == 16)
-        eyeLive.aaFrame.store(focus.frame.load(std::memory_order_relaxed), std::memory_order_relaxed);
     if (Stream* s = stream_of(l); s && s->psoKind >= 25 && s->psoKind <= 27 && cull.mode.load(std::memory_order_relaxed) &&
         s->visDispatches.size() < 64) {
         Stream::VisDispatch d{};
@@ -6912,14 +6917,17 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
     }
     // The live periphery: ACE's by-pixel post passes over the region's share of their groups, plus one (the next
     // pass's taps just past the region read something made this frame).
-    if (Stream* s = stream_of(l); s && s->eyeState && x && y && (s->psoKind == 11 || (s->psoKind >= 20 && s->psoKind <= 24))) {
+    if (Stream* s = stream_of(l); s && s->eyeState && x && y &&
+                                         (s->psoKind == 11 || s->psoKind == 14 || s->psoKind == 15 ||
+                                          (s->psoKind >= 20 && s->psoKind <= 24))) {
         const EyeNow now = eye_now(s->eyeState);
         const UINT sx = std::min<UINT>(x, static_cast<UINT>(std::ceil(x * now.fx)) + 1);
         const UINT sy = std::min<UINT>(y, static_cast<UINT>(std::ceil(y * now.fy)) + 1);
         eyeLive.did[11].fetch_add(1, std::memory_order_relaxed);
         if (eyeLive.said[11].fetch_add(1) < 24)
             logd("replay eye: %s dispatch %ux%u -> %ux%u",
-                 s->psoKind == 11 ? "gaussianBlur3x3Float4" : s->psoKind == 20 ? "gaussianBlur3x3Float3"
+                 s->psoKind == 11 ? "gaussianBlur3x3Float4" : s->psoKind == 14 ? "resolveDepthCompute"
+                 : s->psoKind == 15 ? "resolveDepthVelocityCompute" : s->psoKind == 20 ? "gaussianBlur3x3Float3"
                  : s->psoKind == 21 ? "veilLumaDownsample" : s->psoKind == 22 ? "veilDownsample"
                  : s->psoKind == 23 ? "veilUpsample" : "hiZGeneration",
                  x, y, sx, sy);
@@ -6957,8 +6965,9 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         return;
     }
     if (Stream* s = stream_of(l); s && s->eyeState && (s->psoKind == 2 || s->psoKind == 5 || s->psoKind == 12 ||
-                                                       s->psoKind == 18 || s->psoKind == 19)) {
-        const UINT rootIndex = s->psoKind == 5 ? 2u : s->psoKind == 18 ? 4u : s->psoKind == 19 ? 3u : 0u;
+                                                       s->psoKind == 16 || s->psoKind == 18 || s->psoKind == 19)) {
+        const UINT rootIndex =
+            s->psoKind == 5 ? 2u : s->psoKind == 16 ? 6u : s->psoKind == 18 ? 4u : s->psoKind == 19 ? 3u : 0u;
         const bool bound = s->computeCbvs[rootIndex] && s->computeCbvRoots[rootIndex] == s->computeRoot;
         if (!bound) {
             static std::atomic<int> missed{0};
@@ -6969,16 +6978,27 @@ void STDMETHODCALLTYPE dispatchHook(List* l, UINT x, UINT y, UINT z) {
         }
         if (const D3D12_GPU_VIRTUAL_ADDRESS va = bound ? s->computeCbvs[rootIndex] : 0) {
             const EyeNow now = eye_now(s->eyeState);
-            const int kind = s->psoKind == 2 ? 4 : s->psoKind == 5 ? 5 : s->psoKind == 12 ? 6 : s->psoKind == 18 ? 9 : 10;
-            const int mode = s->psoKind == 2 ? 1 : s->psoKind == 5 ? 2 : s->psoKind == 12 ? 4 : s->psoKind == 18 ? 5 : 6;
+            const int kind = s->psoKind == 2    ? 4
+                             : s->psoKind == 5  ? 5
+                             : s->psoKind == 12 ? 6
+                             : s->psoKind == 16 ? 13
+                             : s->psoKind == 18 ? 9
+                                                : 10;
+            const int mode = s->psoKind == 2    ? 1
+                             : s->psoKind == 5  ? 2
+                             : s->psoKind == 12 ? 4
+                             : s->psoKind == 16 ? 7
+                             : s->psoKind == 18 ? 5
+                                                : 6;
             eyeLive.did[kind].fetch_add(1, std::memory_order_relaxed);
             if (eyeLive.said[kind].fetch_add(1) < 2)
                 logd("replay eye: %s dispatch %ux%ux%u: root %u constants ours",
                      kind == 4 ? "tiledCulling" : kind == 5 ? "normalReconstructionViewSpace" : kind == 6 ? "VelocityAndDepthPacking"
-                     : kind == 9 ? "histogram" : "histogramAverage",
+                     : kind == 13 ? "vrAntialiasing" : kind == 9 ? "histogram" : "histogramAverage",
                      x, y, z, rootIndex);
             computeCbvOriginal(l, rootIndex, eye_slot(s, va, mode, 0, 0));
-            if (s->psoKind == 2 || s->psoKind == 12) {  // per-eye passes: only the region in use (packing must not write past its eye)
+            if (s->psoKind == 2 || s->psoKind == 12 || s->psoKind == 16) {  // per-eye passes: only the region in use
+                // (packing must not write past its eye; the resolve stops at its viewportSize anyway)
                 x = eye_groups(x, now.ew, now.lw);  // one eye each
                 y = eye_groups(y, now.eh, now.lh);
             } else if (s->psoKind == 5 || s->psoKind == 18) {  // by pixel over the whole target: the region's share, plus one
@@ -7138,7 +7158,7 @@ void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, U
                     info = it->second;
                 const size_t known = focus.tyrePsos.size(), all = focus.vsSeen.size();
                 ReleaseSRWLockShared(&focus.psoLock);
-                logf("replay focus: tyres: one-instance draw in a stereo list: pipeline %p, %u indices, drawn again %d, creation "
+                logd("replay focus: tyres: one-instance draw in a stereo list: pipeline %p, %u indices, drawn again %d, creation "
                      "seen %d (vertex shader %u B, digest %02x%02x%02x%02x, signature bits %u), pass constants %d, compute root "
                      "%d, our copy pipeline %d, tyre pipelines known %zu of %zu seen",
                      static_cast<void*>(s->pso), a, s->tyreBound ? 1 : 0, seen ? 1 : 0, info.length, info.digest[0],
@@ -7178,7 +7198,7 @@ void STDMETHODCALLTYPE drawIndexedHook(List* l, UINT a, UINT b, UINT c, INT d, U
             }
             inReplay = false;
             if (!focus.tyreGameLogged.exchange(true))
-                logf("replay focus: tyres: ACE's tyre draws drawn again for the right eye (viewport %.0f, %.0f %.0fx%.0f)",
+                logd("replay focus: tyres: ACE's tyre draws drawn again for the right eye (viewport %.0f, %.0f %.0fx%.0f)",
                      s->vp[1].TopLeftX, s->vp[1].TopLeftY, s->vp[1].Width, s->vp[1].Height);
             return;
         }
@@ -7598,12 +7618,10 @@ void replay_probe_frame_end() {
                 next = 0;
             else if (!eyeLive.allowed.load(std::memory_order_relaxed))
                 next = 0, why = 1;
-            else if (ended - eyeLive.aaFrame.load(std::memory_order_relaxed) < 4 && eyeLive.aaFrame.load() != 0)
-                next = 0, why = 2;
             else if (!eye_ready())
-                next = 0, why = 3;
+                next = 0, why = 2;
             else if (ew < 256 || eh < 256 || ew > 60000 || eh > 60000)
-                why = 4;  // the scene's eye size not known (just rebuilt): the size before stays
+                why = 3;  // the scene's eye size not known (just rebuilt): the size before stays
             else if (settle == 0) {
                 const uint64_t e = static_cast<uint64_t>(std::lround(ew)), h = static_cast<uint64_t>(std::lround(eh));
                 const uint64_t lw = std::max<uint64_t>(64, static_cast<uint64_t>(ew * held / 16) * 16);
@@ -7617,8 +7635,8 @@ void replay_probe_frame_end() {
             if (next != reported || why != eyeLive.whyNot) {
                 reported = next;
                 eyeLive.whyNot = why;
-                static const char* const kWhy[] = {"", "no composed frame yet", "ACE's own antialiasing (MSAA) is on: not handled",
-                                                   "our constants pipeline failed", "the scene's eye size isn't known yet"};
+                static const char* const kWhy[] = {"", "no composed frame yet", "our constants pipeline failed",
+                                                   "the scene's eye size isn't known yet"};
                 if (next)
                     logf("replay eye: live periphery: ACE's eyes drawn at %llux%llu of its %llux%llu (%.0f%% of the launch "
                          "size each way)%s%s",
@@ -7635,13 +7653,15 @@ void replay_probe_frame_end() {
                 logd("replay eye: over 900 frames: %.2f of ACE's lists a frame read our constants (%.2f copies a frame), %.2f "
                      "copy lists run a frame; state applied a frame: stereo passes %.2f, one-eye passes %.2f, deferred shadows "
                      "%.2f, tileFrustums %.2f, tiledCulling %.2f, normals %.2f, packing %.2f, sharpening %.2f, histogram %.2f, "
-                     "histogram average %.2f, other post dispatches shrunk %.2f, whole-target draws clipped %.2f; scene-root draws "
+                     "histogram average %.2f, MSAA resolve %.2f, other post dispatches shrunk %.2f, whole-target draws clipped %.2f; "
+                     "scene-root draws "
                      "left at their own size %.2f",
                      eyeLive.lists.exchange(1) / 900.0, eyeLive.patches.exchange(0) / 900.0, eyeLive.executed.exchange(0) / 900.0,
                      eyeLive.did[0].exchange(0) / 900.0, eyeLive.did[1].exchange(0) / 900.0, eyeLive.did[2].exchange(0) / 900.0,
                      eyeLive.did[3].exchange(0) / 900.0, eyeLive.did[4].exchange(0) / 900.0, eyeLive.did[5].exchange(0) / 900.0,
                      eyeLive.did[6].exchange(0) / 900.0, eyeLive.did[8].exchange(0) / 900.0, eyeLive.did[9].exchange(0) / 900.0,
-                     eyeLive.did[10].exchange(0) / 900.0, eyeLive.did[11].exchange(0) / 900.0, eyeLive.did[12].exchange(0) / 900.0,
+                     eyeLive.did[10].exchange(0) / 900.0, eyeLive.did[13].exchange(0) / 900.0, eyeLive.did[11].exchange(0) / 900.0,
+                     eyeLive.did[12].exchange(0) / 900.0,
                      eyeLive.did[7].exchange(0) / 900.0);
         }
         {  // the next frame's box centre: the gaze asked for, clamped so the box stays inside the eye's image
@@ -7720,11 +7740,11 @@ void replay_probe_frame_end() {
         const uint32_t mc = focus.monoNoConst.exchange(0), mn = focus.monoNoTarget.exchange(0);
         if (ended == focus.sampleFrame.load() && focus.settings.diagMode == 3) {
             const uint32_t ph = focus.samplesTaken.load() % 4;
-            logf("replay focus: sky diagnostic: sample frame %llu: sky maps %s, cbSky %s",
+            logd("replay focus: sky diagnostic: sample frame %llu: sky maps %s, cbSky %s",
                  static_cast<unsigned long long>(ended), (ph & 1) ? "ours" : "ACE's", (ph & 2) ? "ours" : "ACE's");
         }
         if (ended == focus.sampleFrame.load())
-            logf("replay focus: frame %llu per-eye lists: taken L %u R %u, replayed L %u R %u, unfit %u, broken %u; "
+            logd("replay focus: frame %llu per-eye lists: taken L %u R %u, replayed L %u R %u, unfit %u, broken %u; "
                  "eye-size segments not taken: inside a stereo list L %u R %u, with the OIT composite %u, mixed viewports "
                  "%u, no pass constants %u, no targets %u",
                  static_cast<unsigned long long>(ended), mt0, mt1, md0, md1, mu, mb, ms0, ms1, mo, mm, mc, mn);
@@ -7745,7 +7765,7 @@ void replay_probe_frame_end() {
             } else {
                 // Nothing replayed yet, or only multisampled twins (not copyable to a buffer): postponed, not counted.
                 if (ready)
-                    log_line("replay focus: the game's targets are multisampled; the sample waits for MSAA off");
+                    logd("replay focus: the game's targets are multisampled; the sample waits for MSAA off");
                 focus.sampleFrame = ended + focus.settings.saveEvery;
             }
         }

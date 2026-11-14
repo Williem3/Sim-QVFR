@@ -98,6 +98,8 @@ int walk_stack(const EntryRegisters& regs, uint64_t (&frames)[kStackFrames]) {
 }
 
 void log_call(size_t id, const EntryRegisters& regs, uint64_t call, bool withStack) {
+    if (!log_debug())  // RE detail: Detailed logs launches only
+        return;
     char line[1400];
     int n = std::snprintf(line, sizeof(line), "probe %s call=%llu frame=%llu this=%p arg2=%lld caller=%s",
                           ace::kProbeTargets[id].name, static_cast<unsigned long long>(call),
@@ -110,7 +112,7 @@ void log_call(size_t id, const EntryRegisters& regs, uint64_t call, bool withSta
         for (int i = 1; i < count && n < static_cast<int>(sizeof(line)) - 64; ++i)
             n += std::snprintf(line + n, sizeof(line) - n, " %s", describe(frames[i]).c_str());
     }
-    log_line(line);
+    logd("%s", line);
 }
 
 // Called by every stub before it jumps to the original function. Must never throw.
@@ -268,10 +270,10 @@ void probe_frame_end() {
             for (size_t i = 0; i < kProbeCount; ++i)
                 n += std::snprintf(line + n, sizeof(line) - n, " %s=%llu", ace::kProbeTargets[i].name,
                                    static_cast<unsigned long long>(probes[i].calls.load()));
-            log_line(line);
+            logd("%s", line);
         }
     } else if (f % kSequenceEveryFrames == 0) {
-        logf("probe sequence begin frame=%llu (next %d frames, every probed call in order)",
+        logd("probe sequence begin frame=%llu (next %d frames, every probed call in order)",
              static_cast<unsigned long long>(f), kSequenceFrames);
         sequenceFramesLeft = kSequenceFrames;
         sequenceActive = true;

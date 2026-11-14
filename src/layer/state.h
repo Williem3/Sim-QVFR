@@ -111,7 +111,7 @@ struct Experiment {
     int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (probe/replay_probe.h)
     UINT replayFocusPercent = 20;          // replay_focus_percent: the focus box, % of each eye's extent (half extent in NDC)
     UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
-    UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 3;  // replay_save_first/_every/_count
+    UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 0;  // replay_save_first/_every/_count
     bool replayAllTargets = false;         // replay_targets=all: every stereo scene list (R2), else depth only (R1)
     bool replayTiles = false;              // replay_tiles=1: the focus views' own light tiles (R2b)
     int replayFog = 0;                     // replay_fog=1: focus fog replayed; 2: ACE's grids resampled (R2c, with tiles)

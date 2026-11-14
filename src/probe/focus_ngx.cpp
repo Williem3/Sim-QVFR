@@ -430,7 +430,7 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
         destroyFn(b);
     }
     ReleaseSRWLockShared(&lifeLock);
-    logf("focus dlss: live periphery: a feature of ours %ux%u -> %ux%u in place of the game's %ux%u -> %ux%u (preset %d, 0: "
+    (ok(r) && made ? logd : logf)("focus dlss: live periphery: a feature of ours %ux%u -> %ux%u in place of the game's %ux%u -> %ux%u (preset %d, 0: "
          "the game's own): result 0x%08x%s",
          w, hgt, ow, oh, g.info.width, g.info.height, g.info.outWidth, g.info.outHeight, want, static_cast<unsigned>(r),
          ok(r) && made ? "" : "; the game's own evaluation runs on its whole eye");
@@ -507,13 +507,13 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
             }
             ReleaseSRWLockExclusive(&lock);
             if (logIt) {
-                logf("focus dlss: game evaluation %llu (eye %d): colour %s base %u,%u; depth %s base %u,%u; motion %s base "
+                logd("focus dlss: game evaluation %llu (eye %d): colour %s base %u,%u; depth %s base %u,%u; motion %s base "
                      "%u,%u scale %.4g,%.4g; output %s base %u,%u; render %ux%u",
                      static_cast<unsigned long long>(n), eye, describe(e.color).c_str(), e.colorBase[0], e.colorBase[1],
                      describe(e.depth).c_str(), e.depthBase[0], e.depthBase[1], describe(e.motion).c_str(),
                      e.motionBase[0], e.motionBase[1], e.motionScale[0], e.motionScale[1], describe(e.output).c_str(),
                      e.outputBase[0], e.outputBase[1], e.renderW, e.renderH);
-                logf("focus dlss:   jitter %.4f,%.4f; exposure texture %s; pre-exposure %s%.4g; exposure scale %s%.4g; "
+                logd("focus dlss:   jitter %.4f,%.4f; exposure texture %s; pre-exposure %s%.4g; exposure scale %s%.4g; "
                      "sharpness %.3g; frame time %s%.3g ms; reset %d; transparency mask %s; bias mask %s",
                      e.jitter[0], e.jitter[1], describe(e.exposure).c_str(), e.hasPreExposure ? "" : "(unset) ",
                      e.preExposure, e.hasExposureScale ? "" : "(unset) ", e.exposureScale, e.sharpness,
@@ -810,7 +810,7 @@ Feature* make(ID3D12GraphicsCommandList* list, unsigned width, unsigned height, 
                 b->Set(kPresetKeys[i], c.presets[i]);
         }
         r = createOriginal(list, NVSDK_NGX_Feature_SuperSampling, b, &f->handle);
-        logf("focus dlss: our feature %ux%u -> %ux%u (mode %d, flags 0x%x, preset %s%d, the game's creation %s): result 0x%08x",
+        (ok(r) && f->handle ? logd : logf)("focus dlss: our feature %ux%u -> %ux%u (mode %d, flags 0x%x, preset %s%d, the game's creation %s): result 0x%08x",
              width, height, outWidth, outHeight, mode, flags, ownPreset > 0 ? "ours " : "the game's ", ownPreset > 0 ? ownPreset : static_cast<int>(c.presets[0]),
              c.seen ? "seen" : "not seen", static_cast<unsigned>(r));
     } else {

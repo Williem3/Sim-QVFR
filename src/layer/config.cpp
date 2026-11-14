@@ -232,7 +232,7 @@ void load_experiment() {
         std::clamp(GetPrivateProfileIntW(L"experiment", L"replay_focus_scale_percent", 200, ini.c_str()), 50u, 1000u);
     experiment.replaySaveFirst = GetPrivateProfileIntW(L"experiment", L"replay_save_first", 1800, ini.c_str());
     experiment.replaySaveEvery = std::max(1u, GetPrivateProfileIntW(L"experiment", L"replay_save_every", 900, ini.c_str()));
-    experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 3, ini.c_str());
+    experiment.replaySaveCount = GetPrivateProfileIntW(L"experiment", L"replay_save_count", 0, ini.c_str());
     {
         wchar_t targets[16] = {};
         GetPrivateProfileStringW(L"experiment", L"replay_targets", L"depth", targets, 16, ini.c_str());
@@ -359,10 +359,11 @@ void load_experiment() {
     if (!log_debug()) {
         const bool any = experiment.replaySaveCount || experiment.captureEverySeconds || experiment.replayEyeCapture ||
                          experiment.replayGpuSteps || experiment.replayCullProbe || experiment.replayCull == 3 ||
+                         experiment.replayCostAb ||
                          experiment.pixCaptureFrame || (experiment.d3d11CaptureFrame && !experiment.d3d11CaptureHotkey);
         experiment.replaySaveCount = 0;
         experiment.captureEverySeconds = 0;
-        experiment.replayEyeCapture = experiment.replayGpuSteps = experiment.replayCullProbe = false;
+        experiment.replayEyeCapture = experiment.replayGpuSteps = experiment.replayCullProbe = experiment.replayCostAb = false;
         if (experiment.replayCull == 3)  // the alternating A/B: the culling simply on
             experiment.replayCull = 2;
         experiment.pixCaptureFrame = 0;
@@ -372,7 +373,7 @@ void load_experiment() {
             log_line("experiment: diagnostics set in the ini (automatic captures, GPU step timing, A/B probes) are off: they "
                      "run only in a Detailed logs launch (the launcher's Diagnostics pane)");
     }
-    experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 1, ini.c_str()) != 0;
+    experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 0, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
     // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
