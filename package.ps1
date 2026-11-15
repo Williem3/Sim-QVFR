@@ -12,11 +12,16 @@
 # re-signed: NGX checks it), NVIDIA's licence in licenses\. Or -NoDlss for a release without DLSS. One of the two is
 # required, so no release leaves DLSS out by accident.
 #   powershell -ExecutionPolicy Bypass -File package.ps1 -NgxSdk E:\path\to\dlss-sdk [-Sign]
+# AMD FSR in LMU (an experiment, [experiment] lmu_fsr): -FfxSdk <folder> builds with AMD's FSR SDK headers (FidelityFX
+# SDK 2.x: Kits\FidelityFX\..., never in this repository) and ships AMD's signed amd_fidelityfx_loader_dx12.dll and
+# amd_fidelityfx_upscaler_dx12.dll from its bin\ beside the layer (AMD's signatures kept), AMD's licence
+# (Kits\FidelityFX\docs\license.md) in licenses\. Optional: without it the layer has no FSR.
 param([string]$Version = '',
       [string]$Commit = 'HEAD',
       [string]$OutputDirectory = '',
       [string]$NgxSdk = '',
       [switch]$NoDlss,
+      [string]$FfxSdk = '',
       [string[]]$SkipTest = @(),  # test builds only: ctest names left out of the run (VERSION.txt says so)
       [switch]$Sign,
       [switch]$NoScan,  # local builds only: skips the Windows Defender scan before zipping
@@ -64,6 +69,24 @@ if ($NgxSdk) {
     $dlssInfo = (Get-Item -LiteralPath $dlssDll).VersionInfo
     if ($dlssInfo.FileMajorPart -lt 310) { throw "$dlssDll is DLSS $($dlssInfo.FileMajorPart): 310 or newer needed" }
     $dlssVersion = '{0}.{1}.{2}.{3}' -f $dlssInfo.FileMajorPart, $dlssInfo.FileMinorPart, $dlssInfo.FileBuildPart, $dlssInfo.FilePrivatePart
+}
+
+# FSR: the headers, AMD's signed DLLs and AMD's licence checked before anything is built.
+$fsrDlls = @('amd_fidelityfx_loader_dx12.dll', 'amd_fidelityfx_upscaler_dx12.dll')
+if ($FfxSdk) {
+    $FfxSdk = [IO.Path]::GetFullPath($FfxSdk)
+    foreach ($needed in @('Kits\FidelityFX\upscalers\include\ffx_upscale.h', 'Kits\FidelityFX\api\include\dx12\ffx_api_dx12.h',
+                          'Kits\FidelityFX\docs\license.md') + ($fsrDlls | ForEach-Object { "bin\$_" })) {
+        if (-not (Test-Path -LiteralPath (Join-Path $FfxSdk $needed))) { throw "The FSR SDK folder $FfxSdk has no $needed" }
+    }
+    $fsrVersions = foreach ($dll in $fsrDlls) {
+        $path = Join-Path $FfxSdk "bin\$dll"
+        $signature = Get-AuthenticodeSignature -LiteralPath $path
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Advanced Micro Devices') {
+            throw "$path isn't signed by AMD ($($signature.Status))"
+        }
+        '{0} {1}' -f $dll, (Get-Item -LiteralPath $path).VersionInfo.ProductVersion
+    }
 }
 
 if ($Sign) {
@@ -142,6 +165,7 @@ try {
         $configure = @('-S', $work, '-B', (Join-Path $work 'build'), '-G', 'Ninja Multi-Config', "-DSIM_QVFR_VERSION=$Version ($short)",
                        '-DSIM_QVFR_LOCAL_DIR=')
         if ($NgxSdk) { $configure += "-DNGX_SDK_DIR=$NgxSdk" }
+        $configure += "-DFFX_SDK_DIR=$FfxSdk"  # empty: no FSR (a local FFX_SDK_DIR never leaks in)
         Invoke-Native 'cmake configure' { cmake @configure } | Out-Null
         $build = Invoke-Native 'cmake build' { cmake --build (Join-Path $work 'build') --config Release }
         $warnings = $build | Where-Object { $_ -match ': warning ' }
@@ -213,6 +237,14 @@ try {
     } else {
         Write-Host '  DLSS: not in this release (-NoDlss)'
     }
+    $hasFsr = $latin1.GetString($layerBytes).Contains($latin1.GetString([Text.Encoding]::Unicode.GetBytes('amd_fidelityfx_upscaler_dx12.dll')))
+    if ($FfxSdk -and -not $hasFsr) { throw 'Built with -FfxSdk, but the layer has no FSR in it (CMake did not take the headers)' }
+    if (-not $FfxSdk -and $hasFsr) { throw 'Built without -FfxSdk, but the layer has FSR in it' }
+    if ($FfxSdk) {
+        foreach ($dll in $fsrDlls) { Copy-Item -LiteralPath (Join-Path $FfxSdk "bin\$dll") -Destination (Join-Path $stage "layer\$dll") }
+        Copy-Item -LiteralPath (Join-Path $FfxSdk 'Kits\FidelityFX\docs\license.md') -Destination (Join-Path $stage 'licenses\AMD-FidelityFX-SDK-LICENSE.md')
+        Write-Host "  FSR: built with AMD's FSR SDK headers; $($fsrVersions -join ', ') in layer\, AMD's licence in licenses\"
+    }
     # Of the SDK, only what its licence lets a release carry: its library compiled into sim-qvfr.dll, nvngx_dlss.dll
     # and the licence. No header, no .lib, no other NVIDIA file.
     $dlssShipped = Join-Path $stage 'layer\nvngx_dlss.dll'
@@ -235,6 +267,7 @@ try {
     }
     $dlssLine = if ($NgxSdk) { "DLSS: built with NVIDIA's DLSS SDK $dlssSdk, its nvngx_dlss.dll $dlssVersion included" } else { 'DLSS: not built in' }
     $versionText = "Sim-QVFR $Version`r`ncommit $hash`r`n$dlssLine"
+    if ($FfxSdk) { $versionText += "`r`nFSR (experiment): AMD's $($fsrVersions -join ', ') included" }
     if ($SkipTest) { $versionText += "`r`ntests skipped: $($SkipTest -join ', ')" }
     Set-Content -LiteralPath (Join-Path $stage 'VERSION.txt') -Value $versionText -Encoding ASCII
     Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
