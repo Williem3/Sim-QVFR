@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cmath>
 
 #include "../../log.h"
@@ -46,6 +47,21 @@ public:
     // The focus box follows the gaze: where it points on each eye's screen (x right, y down, 0..1), from the eye's
     // field of view. Untracked: straight ahead (not the screen's middle: the eyes' fields of view are lopsided).
     bool wants_gaze() const override { return cornerPercent_ > 0 && focusPercent_ > 0; }
+    // The overlay and the headset menu, and the menu's sizes live ([quad] periphery_scale and focus_percent: the menu
+    // shows what runs, so they apply from the first read on; [experiment] ats_corner / ats_focus size the launch and
+    // switch the path on).
+    bool shows_overlay() const override { return cornerPercent_ > 0; }
+    void live_sizes(double periphery, double focusX, double, bool gaze) override {
+        const int corner = static_cast<int>(std::lround(periphery * 100)), focus = static_cast<int>(std::lround(focusX * 100));
+        gaze_ = gaze;
+        if (!liveSeen_ || corner != liveCorner_ || focus != liveFocus_) {
+            simqvfr::logf("ats: the menu's sizes: periphery %d%%, focus box %d%%", corner, focus);
+            corner_set_live(corner, focus);
+        }
+        liveSeen_ = true;
+        liveCorner_ = corner;
+        liveFocus_ = focus;
+    }
     void qvfr_note_views(const XrView* views, uint32_t count) override {
         for (uint32_t e = 0; e < count && e < 2; ++e) {
             fov_[e][0] = std::tan(views[e].fov.angleLeft);
@@ -57,7 +73,8 @@ public:
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override {
         float screen[2][2];
         for (int e = 0; e < 2; ++e) {
-            const float x = valid[e] ? tan[e][0] : 0, y = valid[e] ? tan[e][1] : 0;
+            const bool tracked = valid[e] && gaze_;  // eye tracking off in the menu: straight ahead
+            const float x = tracked ? tan[e][0] : 0, y = tracked ? tan[e][1] : 0;
             const float w = fov_[e][1] - fov_[e][0], h = fov_[e][3] - fov_[e][2];
             screen[e][0] = w > 0 ? (x - fov_[e][0]) / w : 0.5f;
             screen[e][1] = h > 0 ? (fov_[e][3] - y) / h : 0.5f;
@@ -93,6 +110,9 @@ public:
 private:
     bool passProbe_ = false, shaderProbe_ = false;
     int cornerPercent_ = 0, focusPercent_ = 0;
+    bool liveSeen_ = false;
+    std::atomic<bool> gaze_{true};
+    int liveCorner_ = 0, liveFocus_ = 0;
     float fov_[2][4] = {};  // each eye's tangents: left, right, down, up
 };
 

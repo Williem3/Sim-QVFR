@@ -185,6 +185,13 @@ public:
     // A game without the layer's QVFR pipeline that follows the gaze itself (ATS's API-level focus view): the layer
     // sets its gaze actions up and calls qvfr_note_views and qvfr_set_gaze at every stereo xrLocateViews.
     virtual bool wants_gaze() const { return false; }
+    // A game whose QVFR runs through none of the layer's own methods (no compositor of ours: the game's own layers go
+    // on) but still shows the overlay and the headset menu, and takes the menu's sizes live: the periphery's and the
+    // focus box's shares of the eye (0..1) and eye tracking on or off, at every live read of the ini.
+    virtual bool shows_overlay() const { return false; }
+    virtual void live_sizes(double periphery, double focusX, double focusY, bool gaze) {
+        (void)periphery, (void)focusX, (void)focusY, (void)gaze;
+    }
     // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
     // it begins, the runtime may have no views to answer with.
     virtual void session_running(bool running) { (void)running; }

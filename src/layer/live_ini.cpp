@@ -107,6 +107,10 @@ void live_apply(const LiveSettings& l) {
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.composing());
+    if (game->shows_overlay()) {
+        const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
+        game->live_sizes(wanted.outer, l.focusFraction, l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction, l.gaze);
+    }
     logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
          "gaze %d deg, gaze dead-zone %.1f deg",
          l.focusFraction * 100, experiment.focus_y() * 100, l.feather * 100, l.cornerRadius * 100, l.border ? 1 : 0,

@@ -54,6 +54,9 @@ void corner_releasing(XrSwapchain chain);
 // Where each eye's focus box should be centred on that eye's screen (x right, y down, 0..1; any thread). Taken at each
 // frame's start; the box is kept inside the screen.
 void corner_set_gaze(const float (&screen)[2][2]);
+// The headset menu's sizes, live (any thread; taken at the next frame's start): the eye's corner and the focus box, in
+// percent of the eye on each axis. Kept to what fits: the focus box 10..60, the corner 25..(100 - the focus box).
+void corner_set_live(int percent, int focusPercent);
 CornerStats corner_stats();
 void corner_session_end();
 

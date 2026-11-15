@@ -196,7 +196,7 @@ void osd_hotkey() {
 }
 
 bool osd_resources(XrSession session) {
-    if (!game->has_qvfr())  // log only: nothing of ours in the headset
+    if (!game->has_qvfr() && !game->shows_overlay())  // log only: nothing of ours in the headset
         return false;
     if (osd.chain)
         return true;

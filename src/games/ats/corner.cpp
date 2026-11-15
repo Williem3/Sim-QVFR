@@ -157,6 +157,7 @@ struct State {
     // The focus boxes: each eye's top-left on its screen (x right, y down), this frame's and the frame before's (the
     // reprojections land in the last frame's box). From the gaze (corner_set_gaze), taken at the frame's start.
     std::atomic<float> gaze[2][2] = {{0.5f, 0.5f}, {0.5f, 0.5f}};
+    std::atomic<int> livePercent{0}, liveFocusPercent{0};  // corner_set_live's, 0: none yet
     float box[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}}, prevBox[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}};
     bool postPhase = false;  // past this eye's scene: the eye is the one whose final blit comes next
     int blits = 0;           // final blits into the headset's images this frame
@@ -172,6 +173,14 @@ struct State {
     // reprojection matrices between the frame before's box (0) and this frame's (1), live.
     int jumpBursts = 0;
     bool jumpKeyDown = false, historyKeyDown = false, historyCurrentBox = false;
+    // Where our own time goes (the submission side: what the calls cost on the render thread), per bucket, and the frame
+    // rate, logged every 450 frames; Ctrl+Alt+G switches the focus view's work off and on, live, for an A/B.
+    enum { kTimeFocusDraws, kTimeReplays, kTimeRewrites, kTimeMirrors, kTimeRelease, kTimes };
+    int64_t ticks[kTimes] = {};
+    uint64_t timed[kTimes] = {};
+    int64_t perfSince = 0;
+    uint64_t perfFrame = 0;
+    bool focusOff = false, focusKeyDown = false;
     bool occlusionKeyDown = false, ownOcclusion = false;  // Ctrl+Alt+A: the half-size passes replayed for the focus view
     // Stage 2: the focus view beside the corner.
     int focusPercent = 0;
@@ -237,6 +246,42 @@ float4 feather(O i) : SV_Target {
     return float4(src.SampleLevel(s, i.uv, 0).rgb, saturate(min(e.x, e.y)));
 }
 )";
+
+struct Timed {  // a bucket's time, for as long as it lives
+    int bucket;
+    LARGE_INTEGER start;
+    explicit Timed(int b) : bucket(b) { QueryPerformanceCounter(&start); }
+    ~Timed() {
+        LARGE_INTEGER end;
+        QueryPerformanceCounter(&end);
+        g.ticks[bucket] += end.QuadPart - start.QuadPart;
+        ++g.timed[bucket];
+    }
+};
+bool focus_on() { return g.focusPercent && !g.focusOff; }
+
+void perf_line() {
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    const uint64_t frames = g.stats.frames - g.perfFrame;
+    if (g.perfSince && frames) {
+        const double seconds = static_cast<double>(now.QuadPart - g.perfSince) / freq.QuadPart;
+        const auto ms = [&](int b) { return g.ticks[b] * 1000.0 / freq.QuadPart / frames; };
+        const auto per = [&](int b) { return static_cast<double>(g.timed[b]) / frames; };
+        simqvfr::logf("ats perf: %.1f fps over %.1f s, the focus view %s; per frame on the render thread: two-view draws "
+                      "%.0f in %.2f ms, replays %.0f in %.2f ms, eye rewrites %.0f in %.2f ms, mirrors %.1f in %.2f ms, "
+                      "release %.1f in %.2f ms",
+                      frames / seconds, seconds, g.focusOff ? "OFF (Ctrl+Alt+G)" : g.focusPercent ? "on" : "not set",
+                      per(State::kTimeFocusDraws), ms(State::kTimeFocusDraws), per(State::kTimeReplays), ms(State::kTimeReplays),
+                      per(State::kTimeRewrites), ms(State::kTimeRewrites), per(State::kTimeMirrors), ms(State::kTimeMirrors),
+                      per(State::kTimeRelease), ms(State::kTimeRelease));
+    }
+    g.perfSince = now.QuadPart;
+    g.perfFrame = g.stats.frames;
+    for (int b = 0; b < State::kTimes; ++b)
+        g.ticks[b] = 0, g.timed[b] = 0;
+}
 
 void swap_bound(bool on);
 void two_views(bool on);
@@ -325,6 +370,22 @@ void take_frame_end() {
     g.blits = 0;
     g.postPhase = false;
     g.remapEye = -1;
+    if (const int want = g.livePercent.load(std::memory_order_relaxed); want > 0 && g.eyeW) {  // the menu's sizes
+        const int wantFocus = g.focusPercent ? std::clamp(g.liveFocusPercent.load(std::memory_order_relaxed), 10, 60) : 0;
+        const int corner = std::clamp(want, 25, wantFocus ? 100 - wantFocus : 99);
+        if (corner != static_cast<int>(std::lround(g.percent)) || wantFocus != g.focusPercent) {
+            simqvfr::logf("ats corner: live: the eye's corner %d%% (was %.0f%%), the focus box %d%% (was %d%%)%s", corner,
+                          g.percent, wantFocus, g.focusPercent, corner != want ? ": the corner cut to what fits beside the box" : "");
+            g.percent = static_cast<float>(corner);
+            if (wantFocus != g.focusPercent) {  // the twins are the old box's size
+                g.focusPercent = wantFocus;
+                g.texes.clear();
+                g.twinViews.clear();
+                g.twinBytes = 0;
+            }
+            exact_fraction();
+        }
+    }
     if (g.focusPercent) {  // this frame's boxes
         const float beta = g.focusPercent / 100.0f;
         for (int e = 0; e < 2; ++e)
@@ -358,6 +419,8 @@ void take_frame_end() {
         apply_views();      // the next frame's shared work at the game's own sizes
         swap_bound(false);  // and the game's own constant buffers
     }
+    if (g.stats.frames % 450 == 0)
+        perf_line();
     if (g.stats.frames % 900 == 0)
         simqvfr::logf("ats corner: %llu frames, %llu with the eyes in the corner; draws rewritten: pair %llu, rect %llu, "
                       "pixel rect %llu, nothing to rewrite %llu; other targets skipped %llu; copy failures %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu, twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
@@ -564,6 +627,7 @@ void refresh(Mirror& m) {
     if (m.refreshedFrame == g.stats.frames || !big_scratch(m.bytes))
         return;
     m.refreshedFrame = g.stats.frames;
+    const Timed timed(State::kTimeMirrors);
     const D3D11_BOX box = {0, 0, 0, m.bytes, 1, 1};
     g.context->CopySubresourceRegion(g.bigIn.Get(), 0, 0, 0, 0, m.game.Get(), 0, &box);
     const struct {
@@ -1221,8 +1285,14 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     if (!g.active || GetCurrentThreadId() != g.thread)
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
-        if (g.focusPercent && g.mvr && g.depthBound && g.fullSize)
+        if (focus_on() && g.mvr && g.depthBound && g.fullSize) {
+            const Timed t(State::kTimeFocusDraws);
             focus_draw();
+        } else if (g.twoViews) {  // switched off mid-frame: one view again
+            two_views(false);
+            g.viewsDual = false;
+            apply_views();
+        }
         return;
     }
     if (entry != ch::kDraw && entry != ch::kDrawInstanced)
@@ -1247,11 +1317,17 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         ++g.stats.skipped;
         return;
     }
-    const bool vs = rewrite(g.vs, g.vsCb.Get(), false);
-    const bool ps = rewrite(g.ps, g.psCb.Get(), true);
+    bool vs, ps;
+    {
+        const Timed t(State::kTimeRewrites);
+        vs = rewrite(g.vs, g.vsCb.Get(), false);
+        ps = rewrite(g.ps, g.psCb.Get(), true);
+    }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
-    if (g.focusPercent && g.mvr && g.boundSwapchain && count != 3 && entry == ch::kDraw)
+    if (focus_on() && g.mvr && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
+        const Timed t(State::kTimeFocusDraws);
         focus_draw();
+    }
     ++g.stats.patched[vs || ps ? 1 : 0];  // the rule itself is the GPU's (the first frames' log names the draws)
     if (g.loggedDraws < 60) {
         ++g.loggedDraws;
@@ -1278,9 +1354,11 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
     // with every scene. The full-size upsample that follows is replayed, reading the eye's half-size occlusion and
     // depth through the box (twin_of fills a twin from the eye where the region has no content), against the focus
     // view's own full-size depth. Ctrl+Alt+A: the focus view's own occlusion again, live.
-    if (entry == ch::kDraw && count == 3 && g.focusPercent && g.active && g.cut &&
-        (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread)
+    if (entry == ch::kDraw && count == 3 && focus_on() && g.active && g.cut &&
+        (g.ownOcclusion ? g.boundW * 2 + 2 >= g.eyeW : g.boundW == g.eyeW) && GetCurrentThreadId() == g.thread) {
+        const Timed t(State::kTimeReplays);
         replay(count, start);  // into the headset's image too: its final blit
+    }
     if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
         if (g.blits < 2 && g.boundChainEye >= 0 && g.passEye[g.blits] != g.boundChainEye) {
             g.passEye[g.blits] = g.boundChainEye;
@@ -1762,6 +1840,13 @@ void poll_burst_key() {
         simqvfr::logf("ats focus: Ctrl+Alt+H: the reprojections use %s", g.historyCurrentBox ? "this frame's box" : "the frame before's box");
     }
     g.historyKeyDown = h;
+    const bool gk = ctrlAlt && (GetAsyncKeyState('G') & 0x8000);
+    if (gk && !g.focusKeyDown && g.focusPercent) {
+        perf_line();  // what the state so far cost, then the other
+        g.focusOff = !g.focusOff;
+        simqvfr::logf("ats focus: Ctrl+Alt+G: the focus view's draws and passes are %s", g.focusOff ? "OFF" : "on");
+    }
+    g.focusKeyDown = gk;
     const bool a = ctrlAlt && (GetAsyncKeyState('A') & 0x8000);
     if (a && !g.occlusionKeyDown && g.focusPercent) {
         g.ownOcclusion = !g.ownOcclusion;
@@ -1975,7 +2060,10 @@ void corner_releasing(XrSwapchain chain) {
     const UINT ch = static_cast<UINT>(std::max(1L, std::lround(d.Height * g.fy)));
     if (burst)
         shoot(image, chainIdx, released, false, false);
-    c.scaled = upscale(image, cw, ch, c.eye >= 0 ? c.eye : chainIdx & 1);
+    {
+        const Timed t(State::kTimeRelease);
+        c.scaled = upscale(image, cw, ch, c.eye >= 0 ? c.eye : chainIdx & 1);
+    }
     if (burst)
         shoot(image, chainIdx, released, true, c.scaled);
 }
@@ -1985,6 +2073,11 @@ void corner_set_gaze(const float (&screen)[2][2]) {
         for (int a = 0; a < 2; ++a)
             if (screen[e][a] == screen[e][a])  // not NaN
                 g.gaze[e][a].store(screen[e][a], std::memory_order_relaxed);
+}
+
+void corner_set_live(int percent, int focusPercent) {
+    g.liveFocusPercent.store(focusPercent, std::memory_order_relaxed);
+    g.livePercent.store(percent, std::memory_order_relaxed);
 }
 
 CornerStats corner_stats() { return g.stats; }
