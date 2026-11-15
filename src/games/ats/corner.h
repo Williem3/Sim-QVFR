@@ -57,6 +57,9 @@ void corner_set_gaze(const float (&screen)[2][2]);
 // The headset menu's sizes, live (any thread; taken at the next frame's start): the eye's corner and the focus box, in
 // percent of the eye on each axis. Kept to what fits: the focus box 10..60, the corner 25..(100 - the focus box).
 void corner_set_live(int percent, int focusPercent);
+// How the focus view's scene draws go out this frame (any thread; the overlay's badge): 0 no focus view, 1 NVIDIA's
+// multi-view rendering, 2 Sim-QVFR's own (instancing), 3 the focus view switched off (Ctrl+Alt+G: the eyes alone).
+int corner_way();
 CornerStats corner_stats();
 void corner_session_end();
 

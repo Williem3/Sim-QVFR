@@ -75,7 +75,13 @@ struct Detours {
         } else {
             ++depth;
             observe<E>(context, a...);
-            real(context, a...);
+            bool replaced = false;
+            if constexpr (E == kDrawIndexed || E == kDraw || E == kDrawIndexedInstanced || E == kDrawInstanced) {
+                if (g.observers.draw_replace)
+                    replaced = g.observers.draw_replace(context, E, call<E>(a...));
+            }
+            if (!replaced)
+                real(context, a...);
             if constexpr (E == kDrawIndexed || E == kDraw || E == kDrawIndexedInstanced || E == kDrawInstanced ||
                           E == kDrawIndexedInstancedIndirect || E == kDrawInstancedIndirect) {
                 if (g.observers.draw_after)
@@ -106,6 +112,29 @@ struct Detours {
                 real(c, a...);
         }
         --depth;
+    }
+
+    template <Entry X>
+    static DrawCall call(A... a) {
+        const auto args = std::make_tuple(a...);
+        DrawCall d;
+        d.count = std::get<0>(args);
+        if constexpr (X == kDrawIndexed) {
+            d.start = std::get<1>(args);
+            d.baseVertex = std::get<2>(args);
+        } else if constexpr (X == kDraw) {
+            d.start = std::get<1>(args);
+        } else if constexpr (X == kDrawIndexedInstanced) {
+            d.instances = std::get<1>(args);
+            d.start = std::get<2>(args);
+            d.baseVertex = std::get<3>(args);
+            d.startInstance = std::get<4>(args);
+        } else if constexpr (X == kDrawInstanced) {
+            d.instances = std::get<1>(args);
+            d.start = std::get<2>(args);
+            d.startInstance = std::get<3>(args);
+        }
+        return d;
     }
 
     template <Entry X>

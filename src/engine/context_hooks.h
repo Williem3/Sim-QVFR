@@ -38,6 +38,12 @@ enum Entry : int {
     kEntries
 };
 
+// A draw's arguments, for `draw_replace` (the ones a kind lacks: instances 1, the rest 0).
+struct DrawCall {
+    UINT count = 0, instances = 1, start = 0, startInstance = 0;
+    INT baseVertex = 0;
+};
+
 struct Observers {
     // OMSetRenderTargets and the render-target half of OMSetRenderTargetsAndUnorderedAccessViews (count
     // D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL: unchanged, not reported).
@@ -48,6 +54,10 @@ struct Observers {
     // ExecuteCommandList, before it runs (d3d11 replays the list through the context's own functions: those calls are
     // seen too, inside it).
     void (*execute)(ID3D11DeviceContext* context, ID3D11CommandList* list) = nullptr;
+    // The four direct draws (not the indirect ones), after `draw`: return true when the observer drew in the game's
+    // place (its own calls on the context go straight through); the game's call is then not passed on. `draw_after`
+    // still runs.
+    bool (*draw_replace)(ID3D11DeviceContext* context, Entry entry, const DrawCall& call) = nullptr;
     // After any draw went on (the same arguments as `draw`): to put back what the observer changed before it.
     // `start`: Draw's StartVertexLocation (0 for the other draws).
     void (*draw_after)(ID3D11DeviceContext* context, Entry entry, UINT count, UINT instances, UINT start) = nullptr;

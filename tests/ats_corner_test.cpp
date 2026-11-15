@@ -16,7 +16,9 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include "engine/dxbc_patch.h"
 #include "games/ats/corner.h"
+#include "games/lmu/mvr_probe.h"
 #include "games/ats/corner_rules.h"
 
 using Microsoft::WRL::ComPtr;
@@ -341,6 +343,71 @@ void warp_checks() {
     ComPtr<ID3D11Buffer> ib;
     device->CreateBuffer(&ibd, &ibi, &ib);
     context->OMSetRenderTargets(4, gbs, dsv.Get());  // frame 2's G-buffer: the corner again, the mirror refreshed
+    {  // Stage 2 without NVIDIA's: an indexed scene draw whose shader carries an instanced twin goes out doubled, its
+       // second instance into the focus region beside the corner (WARP lets a vertex shader pick the viewport).
+        D3D11_FEATURE_DATA_D3D11_OPTIONS3 o3{};
+        const bool can = SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS3, &o3, sizeof(o3))) &&
+                         o3.VPAndRTArrayIndexFromAnyShaderFeedingRasterizer;
+        const ComPtr<ID3DBlob> sceneVs = compile(
+            "float4 main(float2 v : POSITION) : SV_Position { return float4(v.x * 2 - 1, 1 - v.y * 2, 0.5, 1); }", "vs_5_0");
+        const ComPtr<ID3DBlob> scenePs = compile("float4 main() : SV_Target { return 5; }", "ps_5_0");
+        ComPtr<ID3D11VertexShader> svs, twin;
+        ComPtr<ID3D11PixelShader> sps;
+        device->CreateVertexShader(sceneVs->GetBufferPointer(), sceneVs->GetBufferSize(), nullptr, &svs);
+        device->CreatePixelShader(scenePs->GetBufferPointer(), scenePs->GetBufferSize(), nullptr, &sps);
+        const simqvfr::dxbc::InstancedView iv = simqvfr::dxbc::add_instanced_view(
+            static_cast<const uint8_t*>(sceneVs->GetBufferPointer()), sceneVs->GetBufferSize());
+        if (!iv.bytecode.empty())
+            device->CreateVertexShader(iv.bytecode.data(), iv.bytecode.size(), nullptr, &twin);
+        if (!can) {
+            std::printf("     (this device has no viewport index from a vertex shader: the instancing check is skipped)\n");
+        } else if (!svs || !sps || !twin) {
+            check(false, "the scene shader and its instanced twin created");
+        } else {
+            svs->SetPrivateDataInterface(lmu::kMvrInstancedTwinGuid, twin.Get());
+            context->ClearRenderTargetView(gb[0].Get(), clear);
+            context->ClearDepthStencilView(dsv.Get(), D3D11_CLEAR_DEPTH, 1, 0);
+            context->RSSetViewports(1, &full);
+            context->VSSetShader(svs.Get(), nullptr, 0);
+            context->PSSetShader(sps.Get(), nullptr, 0);
+            context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+            context->DrawIndexed(3, 0, 0);
+            ID3D11VertexShader* after = nullptr;
+            context->VSGetShader(&after, nullptr, nullptr);
+            check(after == svs.Get(), "the game's own vertex shader bound again after the doubled draw");
+            if (after)
+                after->Release();
+            context->VSSetShader(vs.Get(), nullptr, 0);
+            context->PSSetShader(ps.Get(), nullptr, 0);
+            D3D11_TEXTURE2D_DESC gd;
+            gbTex[0]->GetDesc(&gd);
+            gd.Usage = D3D11_USAGE_STAGING;
+            gd.BindFlags = 0;
+            gd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            ComPtr<ID3D11Texture2D> gs;
+            device->CreateTexture2D(&gd, nullptr, &gs);
+            context->CopyResource(gs.Get(), gbTex[0].Get());
+            D3D11_MAPPED_SUBRESOURCE gm;
+            if (SUCCEEDED(context->Map(gs.Get(), 0, D3D11_MAP_READ, 0, &gm))) {
+                // R16G16B16A16_FLOAT: 5.0 is 0x4500, the clear's -1.0 is 0xBC00.
+                const auto red = [&](UINT x, UINT y) {
+                    return *(reinterpret_cast<const unsigned short*>(static_cast<const char*>(gm.pData) + y * gm.RowPitch) + x * 4);
+                };
+                const UINT fx0 = W / 2, fw = 384, fh = 307;
+                std::printf("     instancing: corner %04x %04x, focus region %04x %04x, right of it %04x, below it %04x\n",
+                            red(4, 4), red(W / 2 - 2, H / 2 - 2), red(fx0 + 2, 2), red(fx0 + fw - 2, fh - 2), red(fx0 + fw + 8, 8),
+                            red(fx0 + 8, fh + 8));
+                check(red(4, 4) == 0x4500 && red(W / 2 - 2, H / 2 - 2) == 0x4500, "instancing: the eye's instance fills the corner");
+                check(red(fx0 + 2, 2) == 0x4500 && red(fx0 + fw - 2, fh - 2) == 0x4500,
+                      "instancing: the second instance fills the focus region beside the corner");
+                check(red(fx0 + fw + 8, 8) == 0xBC00 && red(fx0 + 8, fh + 8) == 0xBC00 && red(8, H / 2 + 8) == 0xBC00,
+                      "instancing: nothing drawn outside the corner and the focus region");
+                context->Unmap(gs.Get(), 0);
+            } else {
+                check(false, "the G-buffer read back (instancing)");
+            }
+        }
+    }
     context->ClearRenderTargetView(out.Get(), clear);
     context->OMSetRenderTargets(1, outs, nullptr);
     context->RSSetViewports(1, &full);

@@ -51,6 +51,16 @@ public:
     // shows what runs, so they apply from the first read on; [experiment] ats_corner / ats_focus size the launch and
     // switch the path on).
     bool shows_overlay() const override { return cornerPercent_ > 0; }
+    // The overlay's badge: MVR (NVIDIA's multi-view rendering) or SMVR (Sim-QVFR's own, instancing), as drawn this frame.
+    simqvfr::games::QvfrMultiView qvfr_multi_view() const override {
+        using simqvfr::games::QvfrMultiView;
+        switch (corner_way()) {
+            case 1: return QvfrMultiView::nvidia;
+            case 2: return QvfrMultiView::software;
+            case 3: return QvfrMultiView::eyesOnly;
+            default: return QvfrMultiView::none;
+        }
+    }
     void live_sizes(double periphery, double focusX, double, bool gaze) override {
         const int corner = static_cast<int>(std::lround(periphery * 100)), focus = static_cast<int>(std::lround(focusX * 100));
         gaze_ = gaze;

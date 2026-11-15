@@ -158,6 +158,7 @@ struct State {
     // reprojections land in the last frame's box). From the gaze (corner_set_gaze), taken at the frame's start.
     std::atomic<float> gaze[2][2] = {{0.5f, 0.5f}, {0.5f, 0.5f}};
     std::atomic<int> livePercent{0}, liveFocusPercent{0};  // corner_set_live's, 0: none yet
+    std::atomic<int> way{0};  // corner_way's, set at each frame's start
     float box[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}}, prevBox[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}};
     bool postPhase = false;  // past this eye's scene: the eye is the one whose final blit comes next
     int blits = 0;           // final blits into the headset's images this frame
@@ -188,6 +189,14 @@ struct State {
     bool twoViews = false;                      // NVAPI's two views on
     bool viewsDual = false;                     // two viewports (corner, focus) set by us
     ComPtr<ID3D11Buffer> remapCb;
+    // The focus view's scene draws without NVIDIA's: Sim-QVFR's own multi-view rendering by instancing. The game
+    // shader's instanced twin (view = SV_InstanceID & 1, SV_ViewportArrayIndex = view), every such draw with twice its
+    // instances, a layout with per-instance data swapped for its twin (step rates doubled) around the draw. Where the
+    // device lets a vertex shader pick the viewport (D3D11_OPTIONS3). The way in use: NVIDIA's where it is there,
+    // unless [experiment] multi_view_software=1; Ctrl+Alt+I switches between the two, live.
+    bool instanced = false, preferInstanced = false, instancingKeyDown = false;
+    bool instancedDraw = false;  // focus_draw bound an instanced twin: this draw goes out doubled
+    uint64_t doubled = 0, doubledLayouts = 0;
     ID3D11VertexShader* gameVs = nullptr;  // the game's shader while its twin draws (a reference held)
     uint64_t focusDraws = 0, noTwin = 0;
     ComPtr<ID3D11Texture2D> gbufferTex;  // the G-buffer's first target while its pass runs
@@ -272,7 +281,11 @@ void perf_line() {
         simqvfr::logf("ats perf: %.1f fps over %.1f s, the focus view %s; per frame on the render thread: two-view draws "
                       "%.0f in %.2f ms, replays %.0f in %.2f ms, eye rewrites %.0f in %.2f ms, mirrors %.1f in %.2f ms, "
                       "release %.1f in %.2f ms",
-                      frames / seconds, seconds, g.focusOff ? "OFF (Ctrl+Alt+G)" : g.focusPercent ? "on" : "not set",
+                      frames / seconds, seconds,
+                      g.focusOff ? "OFF (Ctrl+Alt+G)"
+                                 : !g.focusPercent ? "not set"
+                                                   : g.instanced && (g.preferInstanced || !g.mvr) ? "on (instancing)"
+                                                                                                  : g.mvr ? "on (NVIDIA's)" : "on (passes only)",
                       per(State::kTimeFocusDraws), ms(State::kTimeFocusDraws), per(State::kTimeReplays), ms(State::kTimeReplays),
                       per(State::kTimeRewrites), ms(State::kTimeRewrites), per(State::kTimeMirrors), ms(State::kTimeMirrors),
                       per(State::kTimeRelease), ms(State::kTimeRelease));
@@ -419,8 +432,15 @@ void take_frame_end() {
         apply_views();      // the next frame's shared work at the game's own sizes
         swap_bound(false);  // and the game's own constant buffers
     }
+    g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) ? 0
+                : g.focusOff ? 3
+                : g.instanced && (g.preferInstanced || !g.mvr) ? 2 : 1,
+                std::memory_order_relaxed);
     if (g.stats.frames % 450 == 0)
         perf_line();
+    if (g.stats.frames % 900 == 0 && g.doubled)
+        simqvfr::logf("ats focus: instancing: %llu draws doubled so far, %llu of them with a per-instance layout's twin",
+                      static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
     if (g.stats.frames % 900 == 0)
         simqvfr::logf("ats corner: %llu frames, %llu with the eyes in the corner; draws rewritten: pair %llu, rect %llu, "
                       "pixel rect %llu, nothing to rewrite %llu; other targets skipped %llu; copy failures %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu, twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
@@ -1251,20 +1271,26 @@ void focus_draw() {
     g.context->VSGetShader(&vs, nullptr, nullptr);
     if (!vs)
         return;
+    const bool instancing = g.instanced && (g.preferInstanced || !g.mvr);
     ID3D11VertexShader* twin = nullptr;
     UINT size = sizeof(twin);
-    if (FAILED(vs->GetPrivateData(lmu::kMvrTwinGuid, &size, &twin)) || !twin) {
+    if (FAILED(vs->GetPrivateData(instancing ? lmu::kMvrInstancedTwinGuid : lmu::kMvrTwinGuid, &size, &twin)) || !twin) {
         vs->Release();
         ++g.noTwin;
         two_views(false);
+        if (g.viewsDual) {  // this draw into the eye alone
+            g.viewsDual = false;
+            apply_views();
+        }
         return;
     }
-    two_views(true);
-    if (!g.twoViews) {
+    two_views(!instancing);
+    if (!instancing && !g.twoViews) {
         twin->Release();
         vs->Release();
         return;
     }
+    g.instancedDraw = instancing;
     dual_views();
     if (const int eye = current_eye(); eye != g.remapEye) {  // this eye's box
         float r[4];
@@ -1281,11 +1307,44 @@ void focus_draw() {
     ++g.focusDraws;
 }
 
+// A draw whose shader focus_draw swapped for its instanced twin: drawn here with twice its instances, in the game's place.
+bool on_draw_replace(ID3D11DeviceContext*, ch::Entry entry, const ch::DrawCall& d) {
+    if (!g.instancedDraw)
+        return false;
+    g.instancedDraw = false;
+    ID3D11DeviceContext1* c = g.context.Get();
+    // Per-instance vertex data: the layout's twin, each step rate doubled, so a pair reads one instance's.
+    ComPtr<ID3D11InputLayout> layout, twin;
+    c->IAGetInputLayout(&layout);
+    if (layout) {
+        UINT size = sizeof(void*);
+        ID3D11InputLayout* t = nullptr;
+        if (SUCCEEDED(layout->GetPrivateData(lmu::kMvrInstancedLayoutGuid, &size, &t)) && t) {
+            twin.Attach(t);
+            c->IASetInputLayout(t);
+            ++g.doubledLayouts;
+        }
+    }
+    switch (entry) {
+        case ch::kDrawIndexed: c->DrawIndexedInstanced(d.count, 2, d.start, d.baseVertex, 0); break;
+        case ch::kDrawIndexedInstanced:
+            c->DrawIndexedInstanced(d.count, d.instances * 2, d.start, d.baseVertex, d.startInstance);
+            break;
+        case ch::kDraw: c->DrawInstanced(d.count, 2, d.start, 0); break;
+        default: c->DrawInstanced(d.count, d.instances * 2, d.start, d.startInstance); break;
+    }
+    if (twin)
+        c->IASetInputLayout(layout.Get());
+    ++g.doubled;
+    return true;
+}
+
 void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
+    g.instancedDraw = false;
     if (!g.active || GetCurrentThreadId() != g.thread)
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
-        if (focus_on() && g.mvr && g.depthBound && g.fullSize) {
+        if (focus_on() && (g.mvr || g.instanced) && g.depthBound && g.fullSize) {
             const Timed t(State::kTimeFocusDraws);
             focus_draw();
         } else if (g.twoViews) {  // switched off mid-frame: one view again
@@ -1324,7 +1383,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         ps = rewrite(g.ps, g.psCb.Get(), true);
     }
     // The UI panels drawn onto the headset's image (quads placed in the world): with two views, like the scene.
-    if (focus_on() && g.mvr && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
+    if (focus_on() && (g.mvr || g.instanced) && g.boundSwapchain && count != 3 && entry == ch::kDraw) {
         const Timed t(State::kTimeFocusDraws);
         focus_draw();
     }
@@ -1847,6 +1906,18 @@ void poll_burst_key() {
         simqvfr::logf("ats focus: Ctrl+Alt+G: the focus view's draws and passes are %s", g.focusOff ? "OFF" : "on");
     }
     g.focusKeyDown = gk;
+    const bool ik = ctrlAlt && (GetAsyncKeyState('I') & 0x8000);
+    if (ik && !g.instancingKeyDown && g.focusPercent) {
+        if (g.mvr && g.instanced) {
+            perf_line();  // what the way so far cost, then the other
+            g.preferInstanced = !g.preferInstanced;
+            simqvfr::logf("ats focus: Ctrl+Alt+I: the focus view's scene draws by %s",
+                          g.preferInstanced ? "Sim-QVFR's own multi-view rendering (instancing)" : "NVIDIA's multi-view rendering");
+        } else {
+            simqvfr::logf("ats focus: Ctrl+Alt+I: only one way here (NVIDIA's %d, instancing %d)", g.mvr ? 1 : 0, g.instanced ? 1 : 0);
+        }
+    }
+    g.instancingKeyDown = ik;
     const bool a = ctrlAlt && (GetAsyncKeyState('A') & 0x8000);
     if (a && !g.occlusionKeyDown && g.focusPercent) {
         g.ownOcclusion = !g.ownOcclusion;
@@ -1910,6 +1981,7 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     o.targets = &on_targets;
     o.draw = &on_draw;
     o.draw_after = &on_draw_after;
+    o.draw_replace = &on_draw_replace;
     o.viewports = &on_viewports;
     o.scissors = &on_scissors;
     o.constant_buffers = &on_constant_buffers;
@@ -1925,15 +1997,27 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
         const float remap[4] = {100.0f / focusPercent, 0, 100.0f / focusPercent, 0};
         const D3D11_BUFFER_DESC rd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
         const D3D11_SUBRESOURCE_DATA ri = {remap, 0, 0};
-        g.focusPercent = focusPercent;  // the full-screen passes' replays need no NVAPI
-        g.mvr = support.xyzw && SUCCEEDED(device->CreateBuffer(&rd, &ri, &g.remapCb));
-        if (g.mvr) {
+        g.focusPercent = focusPercent;  // the full-screen passes' replays need neither way
+        const bool remapCb = SUCCEEDED(device->CreateBuffer(&rd, &ri, &g.remapCb));
+        // The two ways to the scene draws' second view: NVIDIA's (the probe attached its twins unless
+        // multi_view_software=1), and instancing where a vertex shader may pick the viewport.
+        const lmu::MvrBackend probed = lmu::mvr_probe_backend();
+        D3D11_FEATURE_DATA_D3D11_OPTIONS3 o3{};
+        g.instanced = remapCb && SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS3, &o3, sizeof(o3))) &&
+                      o3.VPAndRTArrayIndexFromAnyShaderFeedingRasterizer;
+        g.mvr = remapCb && support.xyzw && probed != lmu::MvrBackend::instanced;
+        g.preferInstanced = g.instanced && !g.mvr;
+        if (g.mvr || g.instanced) {
             wanted |= (1u << ch::kDrawIndexed) | (1u << ch::kDrawIndexedInstanced);
             simqvfr::logf("ats focus: on: each eye pass's indexed scene draws also draw the middle %d%% of the view beside "
-                          "the corner, by NVIDIA's multi-view rendering (Ctrl+Alt+B saves the G-buffers)", focusPercent);
+                          "the corner, by %s (NVIDIA's %s, instancing %s; Ctrl+Alt+I switches where both are; Ctrl+Alt+B "
+                          "saves the G-buffers)",
+                          focusPercent, g.mvr ? "NVIDIA's multi-view rendering" : "Sim-QVFR's own multi-view rendering (instancing)",
+                          g.mvr ? "there" : support.xyzw ? "not used (multi_view_software=1)" : "not on this device",
+                          g.instanced ? "there" : "not on this device");
         } else {
-            simqvfr::logf("ats focus: NVIDIA's two views aren't there on this device (loaded %d, xyzw %d, %s): only the "
-                          "full-screen passes are drawn for the focus region",
+            simqvfr::logf("ats focus: neither NVIDIA's two views (loaded %d, xyzw %d, %s) nor a viewport index from the "
+                          "vertex shader on this device: only the full-screen passes are drawn for the focus region",
                           support.loaded, support.xyzw, simqvfr::nvapi::status_name(support.status));
         }
     } else if (focusPercent > 0) {
@@ -2079,6 +2163,8 @@ void corner_set_live(int percent, int focusPercent) {
     g.liveFocusPercent.store(focusPercent, std::memory_order_relaxed);
     g.livePercent.store(percent, std::memory_order_relaxed);
 }
+
+int corner_way() { return g.context ? g.way.load(std::memory_order_relaxed) : 0; }
 
 CornerStats corner_stats() { return g.stats; }
 
