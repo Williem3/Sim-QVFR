@@ -71,6 +71,8 @@ enum Ctl {
     kNativeQuad,
     // Sharpening ([quad] sharpen_percent, Resolution pane).
     kSharpen,
+    // One eye off ([quad] eye_off, Headset tab's Vision card; a game with GameFeatures::eyeOff).
+    kEyeOff,
     // The FOV crop ([crop], Resolution pane).
     kCropOn, kCropTop, kCropBottom, kCropOuter, kCropInner,
     // The helmet overlay ([helmet], Resolution pane).

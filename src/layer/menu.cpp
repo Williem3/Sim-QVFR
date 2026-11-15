@@ -214,6 +214,7 @@ void menu_open(int64_t now) {
         menu.model.launch.fgPage = features.frameGeneration;
         menu.model.launch.objectDetail = features.objectDetail;  // X-Plane only
         menu.model.launch.sharpening = features.sharpening;
+        menu.model.launch.eyeOff = features.eyeOff;
         menu.model.launch.focusQuads = experiment.focusLayer == 2 && !nativeQuad.active;  // its test: the quads' distance
         menu.model.launch.runtimeComposes = nativeQuad.active;  // Pimax / Varjo: the box inside their focus region
         menu.model.launch.liveResolution = features.liveResolution;
@@ -290,8 +291,9 @@ void menu_press(MenuKey key, int64_t now) {
     menu.lastWrite = ini_write_later([ini = live.ini, settings = menu.settingsIni, values = menu.model.values,
                      cheeky = menu.model.cheeky, qvfr = menu.model.launch.qvfr, detail = menu.model.launch.objectDetail,
                      quads = menu.model.launch.focusQuads, sharpening = menu.model.launch.sharpening,
+                     eyeOff = menu.model.launch.eyeOff,
                      ownDlss = menu.model.launch.ownDlss || menu.model.launch.apiDlss, ownNr = menu.model.launch.ownNr] {
-        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening);
+        write_menu_values(ini.c_str(), values, qvfr, detail, quads, sharpening, eyeOff);
         if (cheeky.available)
             write_cheeky_settings(ini.c_str(), cheeky.values, false);
         if (ownDlss)
@@ -300,7 +302,7 @@ void menu_press(MenuKey key, int64_t now) {
             write_nr_settings(ini.c_str(), values.nr);
         if (!settings.empty()) {
             const std::wstring target = game_settings_ini(settings);
-            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening);
+            write_menu_values(target.c_str(), values, qvfr, detail, quads, sharpening, eyeOff);
             if (cheeky.available)
                 write_cheeky_settings(target.c_str(), cheeky.values, false);
             if (ownDlss)

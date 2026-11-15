@@ -320,6 +320,7 @@ struct State {
     // the depth state's writing; the default blend state's twins ([0] target 1 kept, [1] written); each slot's motion.
     int slotsLevel = 0;
     bool carActive = true;  // mvr_car_active (an A/B's side)
+    int eyeOff = -1;        // mvr_eye_off: the eye pass (0-1) whose DLSS is left out; -1 none
     bool slotsOn = false, slotsBound = false, slotsCleared = false;
     ComPtr<ID3D11DeviceContext1> context1;
     ComPtr<ID3D11Texture2D> slotTex;
@@ -2357,7 +2358,7 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
     // was set up: it stretches what DLSS can't upscale.
     const bool smaller = (g.view.focusRenderW && g.view.focusRenderW < g.view.focusW) ||
                          (g.view.focusRenderH && g.view.focusRenderH < g.view.focusH);
-    if (g.pass < 2 && (simqvfr::dlss_wanted() || smaller) && g.view.eyeW && g.view.eyeH) {
+    if (g.pass < 2 && g.pass != g.eyeOff && (simqvfr::dlss_wanted() || smaller) && g.view.eyeW && g.view.eyeH) {
         // DLAA on the eye (and its focus view beside it) before anything reads the resolved scene. Its draws and copies
         // pass these hooks untouched; single-pass stereo is off meanwhile (the scene's last shader may have left it on).
         simqvfr::DlssPass dp;
@@ -4872,6 +4873,7 @@ void mvr_test_scene_target(ID3D11Resource* scene) {
 ID3D11Texture2D* mvr_car_slot_texture() { return g.slotTex.Get(); }
 
 void mvr_car_active(bool on) { g.carActive = on; }
+void mvr_eye_off(int eye) { g.eyeOff = eye == 0 || eye == 1 ? eye : -1; }
 
 void mvr_car_slot_images(bool on) { g.slotImages = on; }
 

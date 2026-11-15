@@ -9,6 +9,7 @@
 #include "cheeky/cheeky_settings.h"
 #include "input/hotkeys.h"
 #include "quad/compositor.h"
+#include "quad/eye_off.h"
 #include "quad/helmet.h"
 #include "quad/osd.h"
 #include "quad/session_graphics.h"
@@ -187,6 +188,12 @@ void native_quad_install(XrInstance instance, PFN_xrGetInstanceProcAddr gipa);
 void native_quad_plan(XrInstance instance, XrSystemId system);
 // At xrDestroySession: the session's counts logged, the state reset.
 void native_quad_session_ended();
+
+// eye_off.cpp (quad/eye_off.h): one eye off at the runtime's xrEndFrame. Installed into `next` before native quad
+// views' wrappers, so it is the last of the layer's before the runtime.
+void eye_off_install();
+// At xrDestroySession: its black image released, the counts logged.
+void eye_off_session_ended();
 
 // xr_layer.cpp
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function);

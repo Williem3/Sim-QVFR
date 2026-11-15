@@ -36,6 +36,9 @@ struct Settings {
     // [quad] sharpen_percent (QVFR, a game with GameFeatures::sharpening: all four): CAS sharpening as the views are composed,
     // 0 off (the default) to 100 the strongest (live).
     int sharpen = 0;
+    // [quad] eye_off (a game with GameFeatures::eyeOff: LMU; quad/eye_off.h): 0 both eyes on (the default), 1 the left
+    // eye off, 2 the right. The headset shows that eye black and the game renders little of it (live).
+    int eyeOff = 0;
     // [experiment] native_quad_views (QVFR, a game with GameFeatures::nativeQuadViews: LMU): on a Pimax or Varjo runtime,
     // the runtime composes the four views (layer/native_quad.cpp). 1 auto (the default), 0 off, 2 asked for even with
     // another OpenXR layer between (the runtime's offer unknown). Next launch.

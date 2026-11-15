@@ -386,7 +386,9 @@ XrResult XRAPI_CALL layerCreateApiLayerInstance(const XrInstanceCreateInfo* info
     else
         gaze_init(*instance);
     if (ok)
-        native_quad_install(*instance, gipa);  // its wrappers below everything else of this layer's
+        eye_off_install();  // right above the runtime: it sees the frame as the runtime will
+    if (ok)
+        native_quad_install(*instance, gipa);  // its wrappers below everything else of this layer's but eye off's
     else
         nativeQuad.extension = false;
     return r;

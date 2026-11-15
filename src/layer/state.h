@@ -242,6 +242,7 @@ struct LiveSettings {
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
     int sharpen = 0;         // [quad] sharpen_percent, percent (a game with GameFeatures::sharpening); 0 off
+    int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
 };
 

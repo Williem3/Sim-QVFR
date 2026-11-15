@@ -93,6 +93,10 @@ void live_apply(const LiveSettings& l) {
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
+    if (eye_off() != l.eyeOff) {
+        set_eye_off(l.eyeOff);
+        logf("live: %s", eye_off_name(l.eyeOff));
+    }
     if (experiment.focusLayer == 2 && experiment.focusQuadDistance.exchange(l.focusQuadDistance) != l.focusQuadDistance)
         logf("live: focus_layer=2: the focus quads %d m out", l.focusQuadDistance);
     bool gazeAvailable;

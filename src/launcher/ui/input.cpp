@@ -205,6 +205,7 @@ void activate(Ctl id, int option) {
     case kShape:
     case kVisor:
     case kHelmetDetail:
+    case kEyeOff:
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kNrOrder:
@@ -496,6 +497,7 @@ bool space_control(Ctl id) {
     case kVisor:
     case kShape:
     case kHelmetDetail:
+    case kEyeOff:
     case kLayerProfile:
     case kOverviewProfile:
     case kPreviewEye:

@@ -23,6 +23,7 @@
 #include "../../probe/d3d11_capture.h"
 #include "../../probe/run_exit.h"
 #include "../../quad/d3d11_view_resample.h"
+#include "../../quad/eye_off.h"
 #include "../../sha256_file.h"
 #include "abi.h"
 #include "../../engine/dlss_math.h"
@@ -475,6 +476,32 @@ void set_final_size(int p) {
 
 bool plain_now();  // the eyes at the game's own size meanwhile (mvr_recovery.h; below)
 
+// ---- One eye off ([quad] eye_off, quad/eye_off.h; GameFeatures::eyeOff) ----
+// The setting as each frame's pass 0 reads it, so both passes of a frame agree. That eye's pass draws no focus view,
+// its scene is cut to kOffEyeSize square in the corner (mvr_size_cut: its pixels' work gone; its draws, the
+// post-processing over its targets and the game's own CPU stay), DLSS leaves it out (mvr_eye_off), and the frame is
+// QVFR's with the other eye's focus final alone (after_two_passes). The layer shows black in that eye (eye_off.cpp).
+constexpr unsigned kOffEyeSize = 16;
+int frameEyeOff = simqvfr::kEyeOffNone;
+int loggedEyeOff = simqvfr::kEyeOffNone;
+unsigned long long offEyePasses = 0;  // eye passes rendered off since the session began (the log)
+void eye_off_frame_begin() {
+    const int eye = simqvfr::eye_off();
+    frameEyeOff = eye;
+    mvr_eye_off(eye);
+    if (eye != loggedEyeOff) {
+        loggedEyeOff = eye;
+        simqvfr::logf("lmu qvfr: frame %llu: %s%s (%llu eye passes rendered off so far)", frames,
+                      simqvfr::eye_off_name(eye),
+                      eye == simqvfr::kEyeOffNone
+                          ? ""
+                          : ": its pass with no focus view, its scene cut to 16x16, no DLSS on it (the headset shows it "
+                            "black)",
+                      offEyePasses);
+    }
+}
+bool off_pass(int p) { return p < 2 && p == frameEyeOff; }
+
 // At a pass's start: the game's own scale (first seen, or changed by the game: its video settings) and the size the pass's
 // eye is cut to (the whole of the main targets while recovery shows the eyes alone).
 void qvfr_before_pass(int p) {
@@ -682,7 +709,9 @@ void mvr_before_pass(int p) {
     }
     MvrPassView v;
     bool draw = false;
-    if (p < 2 && frozen[p] && gameScale > 0 && !recovery.plain()) {  // (plain: no focus view asked for)
+    if (off_pass(p)) {
+        // The eye that's off: no focus view (nothing of it is shown).
+    } else if (p < 2 && frozen[p] && gameScale > 0 && !recovery.plain()) {  // (plain: no focus view asked for)
         const ClipRemap& r = frozenRemap[p];
         v.eye = p;
         v.remap[0] = static_cast<float>(r.a);
@@ -1102,6 +1131,18 @@ void after_two_passes() {
             set_final_size(q);
         bool ok = true;
         for (int e = 0; e < 2 && ok; ++e) {
+            if (off_pass(e)) {
+                // The eye that's off drew none: the frame is QVFR's with the other's alone. Its focus view's record
+                // stays valid (its box, a few pixels from the eye's corner), so the composition runs as for any frame;
+                // the layer shows the eye black whatever it holds.
+                finalAt[e][0] = finalAt[e][1] = 0;
+                passW[2 + e] = passH[2 + e] = std::min(kOffEyeSize, std::min(viewW, viewH));
+                extentW[2 + e] = passW[2 + e];
+                extentH[2 + e] = passH[2 + e];
+                if (frozen[e])
+                    boxes[e] = frozenBox[e];
+                continue;
+            }
             unsigned x = 0, y = 0, w = 0, h = 0;
             const bool final = mvr_focus_final(e, x, y, w, h);
             ok = final && frozen[e] && x + w <= viewW && y + h <= viewH && w && h;
@@ -1162,13 +1203,19 @@ void pass_begin(int p) {
     if (p == 0) {
         atlasReady = menuReady = false;  // a new frame: its own four views, or none
         frameFinalsOk = false;
+        eye_off_frame_begin();
     }
     unsigned long long hook0 = thread_cycles();
     qvfr_before_pass(p);  // live resolution: the size this pass renders at
     if (cfg.mvr && p < 2) {
         unsigned m[2];
         main_size(m);
-        mvr_size_cut(!plain_now(), m[0], m[1], sceneW[p], sceneH[p]);
+        if (off_pass(p)) {  // the eye that's off: a few pixels, whatever the live size or a recovery
+            ++offEyePasses;
+            mvr_size_cut(true, m[0], m[1], std::min(kOffEyeSize, m[0]), std::min(kOffEyeSize, m[1]));
+        } else {
+            mvr_size_cut(!plain_now(), m[0], m[1], sceneW[p], sceneH[p]);
+        }
         mvr_before_pass(p);
     }
     if (p == 0)  // the frame capture hotkey as this frame's first pass sees it (capture_views)
@@ -1636,8 +1683,11 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     // Each only as far as its pass rendered (live resolution: the top-left of the launch-size targets).
     const unsigned long long c0 = thread_cycles();
     gpuSpans.mark(3, 0);
-    atlas_in(eyes[0], 0, 0, passW[0], passH[0]);
-    atlas_in(eyes[1], viewW, 0, passW[1], passH[1]);
+    // The eye that's off: only the few pixels its pass drew (the headset shows it black).
+    const auto eyeW = [](int e) { return off_pass(e) ? std::min(kOffEyeSize, passW[e]) : passW[e]; };
+    const auto eyeH = [](int e) { return off_pass(e) ? std::min(kOffEyeSize, passH[e]) : passH[e]; };
+    atlas_in(eyes[0], 0, 0, eyeW(0), eyeH(0));
+    atlas_in(eyes[1], viewW, 0, eyeW(1), eyeH(1));
     if (atlasFromFinals) {  // R4a: the focus finals beside the eyes, the VR UI doubled onto them
         atlasFromFinals = false;
         atlas_in_from(eyes[0], finalAt[0][0], finalAt[0][1], 0, viewH, passW[2], passH[2]);

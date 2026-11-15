@@ -53,6 +53,23 @@ Card overlay_card() {
     return c;
 }
 
+// One eye off ([quad] eye_off): for a player who sees with one eye.
+Card vision_card() {
+    Card c{Tab::Headset, L"Vision", Applies::Live};
+    c.body = [](Body& b) {
+        std::vector<std::wstring> items;
+        const int selected = choice_items(kEyeOff, items);
+        b.segments(kEyeOff, L"Eye off", items, selected);
+        b.note(app.s.eyeOff == 0
+                   ? L"For a player who sees with one eye: the eye you choose shows black, and the game stops rendering "
+                     L"most of it, which saves GPU time."
+                   : L"That eye shows black, and the game renders only a few pixels of it. The headset menu’s Overlay and "
+                     L"menu page changes it too.");
+    };
+    c.reset = [](Settings& s) { s.eyeOff = Settings{}.eyeOff; };
+    return c;
+}
+
 Card placement_card() {
     Card c{Tab::Headset, L"Placement", Applies::Live};
     c.body = [](Body& b) {
@@ -164,7 +181,12 @@ Card hotkeys_card() {
     return c;
 }
 
-std::vector<Card> headset_cards() { return {menu_card(), overlay_card(), placement_card(), hotkeys_card()}; }
+std::vector<Card> headset_cards() {
+    std::vector<Card> cards = {menu_card(), overlay_card(), placement_card(), hotkeys_card()};
+    if (game_has(&games::GameFeatures::eyeOff))  // a game whose eye passes can be turned off (LMU)
+        cards.insert(cards.begin() + 2, vision_card());
+    return cards;
+}
 
 }  // namespace
 

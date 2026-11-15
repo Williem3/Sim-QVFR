@@ -54,6 +54,8 @@ LiveSettings read_live(const wchar_t* ini) {
         l.objectDetail = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"object_detail", 100, ini)), 0, 100);
     if (features.sharpening)
         l.sharpen = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"sharpen_percent", 0, ini)), 0, 100);
+    if (features.eyeOff)
+        l.eyeOff = eye_off_from_ini(static_cast<int>(GetPrivateProfileIntW(L"quad", L"eye_off", 0, ini)));
     l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
     const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
     l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
@@ -367,6 +369,9 @@ void load_experiment() {
     experiment.gazeDeadzone = settings.gazeDeadzone;
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
+    set_eye_off(settings.eyeOff);
+    if (settings.eyeOff != kEyeOffNone)
+        logf("experiment: %s ([quad] eye_off: that eye shows black)", eye_off_name(settings.eyeOff));
     live.ini = ini;
     live.restartKeys = restart_keys(ini.c_str(), experiment.views4);
     live.menuPlacement = read_menu_placement(ini.c_str());

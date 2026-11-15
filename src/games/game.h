@@ -34,6 +34,10 @@ struct GameFeatures {
     // elsewhere. It starts with the first frame that draws the world per eye: the menus and the garage show as without
     // Sim-QVFR. The launcher says so (its Rendering card, the overview, the launch log); not multiView's layout.
     bool layerMultiView = false;
+    // One eye off ([quad] eye_off, live; quad/eye_off.h): an accessibility option for a player who sees with one eye.
+    // The layer shows black in that eye for any game; a game with this also stops rendering most of it (LMU: no focus
+    // view, its scene cut to a few pixels, no DLSS on it). Offered in the launcher and the headset menu only with this.
+    bool eyeOff = false;
 };
 
 struct GameInfo {

@@ -32,6 +32,10 @@ constexpr Help kHelp[] = {
      L"region as its pixel density shows them; lower settings move toward the game’s own detail for the periphery resolution. "
      L"It costs CPU, not GPU: more detail means more objects for X-Plane’s main thread to prepare every frame, often what "
      L"limits the frame rate with QVFR. Lower it if frames stutter in dense scenery; the focus region shows coarser trees."},
+    {L"Eye off",
+     L"For a player who sees with one eye. The eye you choose shows black in the headset, and the game draws no focus view "
+     L"for it, renders only a few pixels of its scene and skips DLSS on it, so the GPU does much less. The game still prepares "
+     L"that eye’s frame, so the CPU saves little. With both eyes seeing, a black eye is uncomfortable: leave it at None."},
     {L"Sharpening",
      L"Crisper edges and text; too much makes the picture shimmer. Raise it a little if the view looks soft (0% is off); it "
      L"costs a little GPU time and changes while you drive. How: AMD FidelityFX Contrast Adaptive Sharpening, applied as "

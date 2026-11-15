@@ -192,6 +192,9 @@ void mvr_car_slot_images(bool on);
 // The cars' motion this frame or not (an A/B of its cost, FourPassesRun::carAb; between frames): off, no tracking work,
 // no slot target, no motion for DLSS; only the hooks' detours stay. On by default.
 void mvr_car_active(bool on);
+// One eye off ([quad] eye_off; four_passes.cpp): eye pass `eye` (0-1; -1 none) gets no DLSS (nor DLAA, nor the focus
+// view's upscale: it draws none). Between frames.
+void mvr_eye_off(int eye);
 // Tests: the scene's target as the tracker would learn it (MSAA off; null forgets it), and the slot target (null
 // before its first bind).
 void mvr_test_scene_target(ID3D11Resource* scene);

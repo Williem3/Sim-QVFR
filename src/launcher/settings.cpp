@@ -67,6 +67,7 @@ Settings load_settings(const std::wstring& ini) {
     s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
     s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
     s.sharpen = clamp_to(read_int(ini, L"quad", L"sharpen_percent", s.sharpen), kSharpenRange);
+    s.eyeOff = std::clamp(read_int(ini, L"quad", L"eye_off", 0), 0, 2);
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
     s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
@@ -213,6 +214,7 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
     ok &= write(ini, L"quad", L"corner_radius_percent", n(s.corner));
     ok &= write(ini, L"quad", L"gaze", s.eyeTracking ? L"1" : L"0");
+    ok &= write(ini, L"quad", L"eye_off", n(std::clamp(s.eyeOff, 0, 2)));  // QVFR or not (the layer's black eye)
     ok &= write_focus_offset(ini.c_str(), s.offset);
     ok &= write_gaze_deadzone(ini.c_str(), s.gazeDeadzone);
     ok &= write_focus_shape(ini.c_str(), s.shape);

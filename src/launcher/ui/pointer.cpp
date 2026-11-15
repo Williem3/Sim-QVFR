@@ -148,6 +148,9 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
     } else if (owner == kHelmetDetail) {
         items = {L"Performance", L"Detail"};  // 2048 or 4096 a side: the help says so
         selected = app.s.helmet.detail ? 1 : 0;
+    } else if (owner == kEyeOff) {
+        items = {L"None", L"Left", L"Right"};  // [quad] eye_off's 0, 1, 2
+        selected = std::clamp(app.s.eyeOff, 0, 2);
     } else if (owner == kLayerProfile) {
         items = {kLayerProfileNames[0], kLayerProfileNames[1]};
         selected = app.layerProfile;
@@ -169,6 +172,7 @@ bool segmented_ctl(Ctl id) {
     case kShape:
     case kVisor:
     case kHelmetDetail:
+    case kEyeOff:
     case kDlssFocusPreset:
     case kDlssEyePreset:
     case kNrOrder:
@@ -363,6 +367,8 @@ void choose(Ctl owner, int option) {
         app.s.helmet.visor = static_cast<VisorPosition>(std::clamp(option, 0, 2));
     else if (owner == kHelmetDetail)
         app.s.helmet.detail = option == 1;
+    else if (owner == kEyeOff)
+        app.s.eyeOff = std::clamp(option, 0, 2);
     else if (owner == kShape)
         app.s.shape.corners = option == 1;
     else if (owner == kLayerProfile) {

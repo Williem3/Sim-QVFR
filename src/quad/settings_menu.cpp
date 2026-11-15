@@ -24,6 +24,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Periphery, L"Periphery", 10, 100, 5},  {MenuItem::Density, L"Focus density", 50, 400, 5},
     {MenuItem::ObjectDetail, L"Object detail", 0, 100, 10},  // the launcher's kObjectDetailRange
     {MenuItem::Sharpening, L"Sharpening", 0, 100, 5},        // the launcher's kSharpenRange
+    {MenuItem::EyeOff, L"Eye off", 0, 2, 1},                 // [quad] eye_off: none, left, right
     {MenuItem::FocusQuadDistance, L"Focus quad distance", 0, kFocusQuadSteps - 1, 1},  // steps of kFocusQuadDistances
     {MenuItem::Width, L"Focus width", 10, 100, 1},     {MenuItem::Height, L"Focus height", 10, 100, 1},
     {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
@@ -156,6 +157,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Density: return &v.density;
     case MenuItem::ObjectDetail: return &v.objectDetail;
     case MenuItem::Sharpening: return &v.sharpen;
+    case MenuItem::EyeOff: return &v.eyeOff;
     case MenuItem::FocusQuadDistance: return &v.focusQuadStep;
     case MenuItem::Width: return &v.width;
     case MenuItem::Height: return &v.height;
@@ -240,6 +242,8 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     std::vector<MenuItem> items = {MenuItem::Page};
     const MenuPage page = menu_page(menu);
     if (page == MenuPage::Headset) {
+        if (menu.launch.eyeOff)  // a game with it: first on the page
+            items.push_back(MenuItem::EyeOff);
         items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
                                    MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
     } else if (page == MenuPage::Fg) {
@@ -528,6 +532,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.helmet = read_helmet_settings(ini);
     v.objectDetail = std::clamp(read_int(ini, L"experiment", L"object_detail", v.objectDetail), 0, 100);
     v.sharpen = std::clamp(read_int(ini, L"quad", L"sharpen_percent", v.sharpen), 0, 100);
+    v.eyeOff = std::clamp(read_int(ini, L"quad", L"eye_off", 0), 0, 2);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
     v.dlss = read_dlss_settings(ini);
     v.nr = read_nr_settings(ini);
@@ -535,8 +540,10 @@ MenuValues read_menu_values(const wchar_t* ini) {
 }
 
 bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
-                       bool sharpening) {
+                       bool sharpening, bool eyeOff) {
     bool ok = true;
+    if (eyeOff)  // QVFR or not: the layer shows the eye black either way
+        ok &= write(ini, L"quad", L"eye_off", std::clamp(v.eyeOff, 0, 2));
     if (qvfr && sharpening)
         ok &= write(ini, L"quad", L"sharpen_percent", std::clamp(v.sharpen, 0, 100));
     if (qvfr && focusQuads)
@@ -887,6 +894,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = std::to_wstring(focus_quad_metres(v.focusQuadStep)) + L" m";
         else if (items[i] == MenuItem::Sharpening && v.sharpen == 0)
             line.value = L"Off";
+        else if (items[i] == MenuItem::EyeOff)
+            line.value = v.eyeOff == 1 ? L"Left (right eye only)" : v.eyeOff == 2 ? L"Right (left eye only)" : L"None";
         else if (items[i] == MenuItem::HelmetDetail)
             line.value = kHelmetDetailNames[v.helmet.detail ? 1 : 0];
         else if (items[i] == MenuItem::HelmetDepth)

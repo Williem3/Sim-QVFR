@@ -184,6 +184,10 @@ std::vector<std::wstring> setting_changes(const Settings& a, const Settings& b) 
         values(L"Focus density", percent(a.inner), percent(b.inner));
     values(L"Object detail", percent(a.objectDetail), percent(b.objectDetail));
     values(L"Sharpening", percent(a.sharpen), percent(b.sharpen));
+    {
+        const auto eye = [](int v) { return std::wstring(v == 1 ? L"Left" : v == 2 ? L"Right" : L"None"); };
+        values(L"Eye off", eye(a.eyeOff), eye(b.eyeOff));  // a session with one eye off renders far less
+    }
     on_off(L"Runtime composition", a.nativeQuad != 0, b.nativeQuad != 0);
     on_off(L"Crop", a.crop, b.crop);
     if (a.crop && b.crop) {
