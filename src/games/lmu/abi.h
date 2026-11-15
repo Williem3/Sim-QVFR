@@ -45,28 +45,15 @@ inline constexpr std::uintptr_t kRenderer = 0x1b12be8;      // cubeDirectX11*
 inline constexpr std::size_t kRendererViewEye = 0x77388;    // int: the view params' eye (SetViewParams copies them here)
 inline constexpr std::uintptr_t kGetCurrentEyeTarget = 0x5ad930;  // texture object* (cubeDirectX11*)
 inline constexpr std::uint8_t kGetCurrentEyeTargetAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0x01};
-inline constexpr std::uintptr_t kTextureSurface = 0x550e60;  // surface* (texture object*, usage)
-inline constexpr std::uint8_t kTextureSurfaceAnchor[] = {0x85, 0xd2, 0x75, 0x02, 0x8b, 0x11, 0x0f, 0xba, 0xe2, 0x09};
-inline constexpr unsigned kRenderTargetUsage = 0x2000;
-inline constexpr std::uintptr_t kSurfaceD3D = 0x605220;      // the surface's D3D11 object (not AddRef'd)
-inline constexpr std::uint8_t kSurfaceD3DAnchor[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0xe8};
 
 // The per-eye projections VR_UpdateEyes writes each frame; each pass's camera update copies its eye's into the camera. [Eye projection slots]
 inline constexpr std::uintptr_t kEyeProjection = 0x1b1bf74;     // eye e at + e * kEyeSlotStride: the camera's +0x360
 inline constexpr std::uintptr_t kEyeProjectionFar = 0x1b1c04c;  // the same with a fixed far plane: the camera's +0x58c
 inline constexpr std::size_t kEyeSlotStride = 0x6c;
 inline constexpr std::size_t kSlotMatrix = 4;  // the row-major 4x4 (left-handed, row vectors) after an int
-// The eye render textures (texture objects), eye e at + e * 8. [Eye textures]
-inline constexpr std::uintptr_t kEyeTextures = 0x1b1c740;
-// The render scale (float): the main targets are recommended x it, the eye targets recommended; GetRenderSize reads it
-// each call, so a pass renders into the top-left ceil(recommended x scale) of the launch-size targets (probe run
-// 2026-11-07); the final blit or FSR stretches the main target over the eye target (focus_math.h). [Live resolution]
+// The game's render scale (float, read only): main targets = recommended x it, the eye targets recommended. [Live resolution]
 inline constexpr std::uintptr_t kRenderScale = 0x199cc18;
 inline constexpr std::uintptr_t kRecommendedSize = 0x1b1c654;  // uint32 width, height (the runtime's, as offered)
-// The frame's eye render size (float width, height = ceil(recommended x scale)), set once per frame by VR_UpdateEyes and
-// copied into the camera at each pass's head (with the VR state block, 0x418 bytes from 0x1b1be30): a pass renders at
-// the size this holds when its camera is set up, not at the scale in effect during the pass (live run 2026-11-08).
-inline constexpr std::uintptr_t kEyeRenderSize = 0x1b1c240;
 // The renderer's FSR 1 (FSR.cpp, made at device init); method != 0: the post's end upscales, no final blit. [FSR]
 inline constexpr std::size_t kRendererFsr = 0x1778;  // FSR object*
 inline constexpr std::size_t kFsrMethod = 0x40;      // int: UpscaleMethod (0 off)

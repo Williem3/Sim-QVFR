@@ -1,8 +1,8 @@
 // LMU's QVFR (the file's name is from its first form, the eye loop run four times, which went on 2026-11-12): the game's
 // own two eye passes draw their focus views too (multi-view rendering, mvr_pass.h), found and driven at the d3d11 level
 // (the pass tracker), and the layer composes all four views from the eyes' images (the focus finals beside the eyes).
-// No game code is hooked or patched. What is written into the game: its render scale and eye render size, once a
-// frame (live resolution: the eyes at the periphery's size inside their targets).
+// No game code is hooked or patched and nothing is written into the game: the live resolution (the eyes at the
+// periphery's size inside their targets) is the eye passes' viewports and scissors cut at the d3d11 level (mvr_size_cut).
 #pragma once
 
 #include "../adapter.h"
@@ -16,10 +16,6 @@ struct FourPassesRun {
     bool qvfr = false;           // QVFR: composed by the layer
     double fraction = 0.3;       // the focus box: share of each eye's tangent width
     double fractionY = 0;        // and height (<= 0: as `fraction`)
-    // QVFR diagnostic ([experiment] lmu_render_scale_probe, percent; 0 off): 600 scene frames in, the render scale is
-    // set to this share for 120 frames and then restored, the eye and focus images saved at its middle: what LMU renders
-    // when only the scale changes (the live resolution lever, docs/recon-lmu.md).
-    int renderScaleProbe = 0;
     // QVFR: frames without the eye loop (menus) composed at the native eye with the UI drawn at that size
     // ([experiment] lmu_menu_native, default on); the views' layer in native eye widths and heights (the native size
     // is the size offered over it).
@@ -28,13 +24,14 @@ struct FourPassesRun {
     // Multi-view rendering (mvr_pass.h): the eye passes draw their focus views too, beside the eye.
     bool mvr = false;
     bool mvrSkip = false;
-    // The focus views beside their eyes in images of the outer views' shape (Views4Layout::secondViewBeside): the eyes render at
-    // one scale (the larger of their shares: YEBIS follows the render scale on both axes), the focus views at their own
-    // width and height (four_passes_set_live_axes), drawn by their eye's pass, post-processed at the scale that covers them.
+    // The focus views beside their eyes in images of the outer views' shape (Views4Layout::secondViewBeside): the eyes at
+    // one share on both axes, the focus views at their own width and height (four_passes_set_live_axes), drawn by their
+    // eye's pass.
     bool perAxis = false;
     // The CPU in the context hooks timed and logged (lmu_mvr_timing, any A/B run).
     bool mvrTiming = false;
     int passTrace = 0;  // [experiment] lmu_pass_trace (mvr_pass.h mvr_pass_trace)
+    int postCensus = 0;  // [experiment] lmu_post_census (mvr_pass.h mvr_post_census)
     // MVR ([experiment] lmu_focus_replay, default off): each eye pass also post-processes its focus view (focus_post.h:
     // YEBIS's copy and composite once more, with the eye's glare and exposure), its final blit beside the eye and the
     // overlays doubled into it (R3).

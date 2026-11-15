@@ -37,8 +37,6 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="s" x="257.2" y="116">Detours in Microsoft’s d3d11.dll</text>
 <circle cx="495.4" cy="112" r="5" fill="var(--label-secondary)"/>
 <text class="s" x="506.4" y="116">Read</text>
-<circle cx="559.8" cy="112" r="5" fill="var(--warning)"/>
-<text class="s" x="570.8" y="116">Written</text>
 <g transform="translate(20,160)">
 <text class="hdr" x="0" y="-14">LMU.exe</text>
 <text class="hdr" x="400" y="-14">Sim-QVFR, loaded as an OpenXR API layer</text>
@@ -60,34 +58,29 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="bt" x="42" y="236" text-anchor="middle" fill="var(--group-bg)">R</text>
 <text class="s" x="60" y="228">Read once at start: a few byte strings</text>
 <text class="s" x="60" y="244">confirm the build is 1.4.2.0.</text>
-<rect x="16" y="290" width="288" height="358" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<rect x="16" y="290" width="288" height="300" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
 <text class="t" x="32" y="316">Game data</text>
-<text class="s" x="32" y="334">Plain reads and writes of values</text>
-<rect x="28" y="348" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
-<circle cx="48" cy="373" r="9" fill="var(--warning)"/>
-<text class="bt" x="48" y="377" text-anchor="middle" fill="var(--group-bg)">W</text>
+<text class="s" x="32" y="334">Plain reads of values</text>
+<rect x="28" y="348" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="373" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="377" text-anchor="middle" fill="var(--group-bg)">R</text>
 <text class="t" x="66" y="368">Render scale</text>
 <text class="ms" x="66" y="386">0x199cc18 · float</text>
-<rect x="28" y="406" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
-<circle cx="48" cy="431" r="9" fill="var(--warning)"/>
-<text class="bt" x="48" y="435" text-anchor="middle" fill="var(--group-bg)">W</text>
-<text class="t" x="66" y="426">Eye render size</text>
-<text class="ms" x="66" y="444">0x1b1c240 · width, height</text>
+<rect x="28" y="406" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="431" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="435" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="426">Recommended size</text>
+<text class="ms" x="66" y="444">0x1b1c654 · width, height</text>
 <rect x="28" y="464" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="489" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="493" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="484">Recommended size</text>
-<text class="ms" x="66" y="502">0x1b1c654 · width, height</text>
+<text class="t" x="66" y="484">Eye projections</text>
+<text class="ms" x="66" y="502">0x1b1bf74, 0x1b1c04c</text>
 <rect x="28" y="522" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="547" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="551" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="542">Eye projections</text>
-<text class="ms" x="66" y="560">0x1b1bf74, 0x1b1c04c</text>
-<rect x="28" y="580" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
-<circle cx="48" cy="605" r="9" fill="var(--label-secondary)"/>
-<text class="bt" x="48" y="609" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="600">Eye being drawn, FSR on</text>
-<text class="ms" x="66" y="618">Renderer +0x77388, +0x1778</text>
+<text class="t" x="66" y="542">Eye being drawn, FSR on</text>
+<text class="ms" x="66" y="560">Renderer +0x77388, +0x1778</text>
 <rect x="400" y="0" width="320" height="246" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
 <text class="t" x="416" y="26">OpenXR layer</text>
 <text class="m" x="416" y="54">xrEnumerateViewConfigurationViews</text>
@@ -117,7 +110,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="s" x="426" y="536">holding, in d3d11.dll (MinHook)</text>
 <text class="m" x="426" y="560">OMSetRenderTargets → pass bounds</text>
 <text class="m" x="426" y="578">VSSetShader → instanced twin</text>
-<text class="m" x="426" y="596">RSSetViewports → + focus viewport</text>
+<text class="m" x="426" y="596">RSSet* → eye cut to size, + focus</text>
 <text class="m" x="426" y="614">Draw* → twice the instances</text>
 <text class="m" x="426" y="632">DrawAuto, indirect → eye only</text>
 <text class="m" x="426" y="650">Draw* → focus post, mask, VR UI</text>
@@ -147,23 +140,23 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="pv" x="997" y="558" text-anchor="middle">Focus view</text>
 <text class="pvs" x="997" y="575" text-anchor="middle">odd instances</text>
 <text class="s" x="796" y="658">LMU’s own eye target, in one pass. The</text>
-<text class="s" x="796" y="674">render scale keeps the eye in its corner.</text>
+<text class="s" x="796" y="674">eye’s viewports, cut, keep it in its corner.</text>
 <path d="M304,110 L398,110" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
 <text class="lab" x="352" y="102" text-anchor="middle" fill="var(--label-secondary)">OpenXR</text>
 <path d="M304,174 C354,174 352,390 398,390" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
 <text class="lab" x="352" y="282" text-anchor="middle" fill="var(--label-secondary)">D3D11</text>
 <text class="lab" x="352" y="298" text-anchor="middle" fill="var(--label-secondary)">calls</text>
-<path d="M400,430 C356,430 350,400 306,400" stroke="var(--warning)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
-<text class="lab" x="354" y="428" text-anchor="middle" fill="var(--warning)">Writes 2</text>
-<path d="M400,540 C356,540 350,548 306,548" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<path d="M400,430 C356,430 350,400 306,400" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="428" text-anchor="middle" fill="var(--label-secondary)">Reads 1</text>
+<path d="M400,540 C356,540 350,548 306,490" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
 <text class="lab" x="354" y="538.0" text-anchor="middle" fill="var(--label-secondary)">Reads 3</text>
-<path d="M400,150 C350,150 352,480 306,490" stroke="var(--label-secondary)" stroke-width="1.4" fill="none" stroke-dasharray="2 4" marker-end="url(#ah)"/>
+<path d="M400,150 C350,150 352,480 306,432" stroke="var(--label-secondary)" stroke-width="1.4" fill="none" stroke-dasharray="2 4" marker-end="url(#ah)"/>
 <path d="M720,140 L778,140" stroke="var(--overlay-teal)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
 <text class="lab" x="749" y="132" text-anchor="middle" fill="var(--overlay-teal)">Frame</text>
 <path d="M708,402 L778,402" stroke="var(--overlay-magenta)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
 <text class="lab" x="744" y="394" text-anchor="middle" fill="var(--overlay-magenta)">2 × instances</text>
 </g>
-<text class="foot" x="20" y="884">Grey arrows are calls LMU makes anyway. Dashed arrows are Sim-QVFR reading and writing values in LMU’s data; the dotted one is</text>
+<text class="foot" x="20" y="884">Grey arrows are calls LMU makes anyway. Dashed arrows are Sim-QVFR reading values in LMU’s data; the dotted one is</text>
 <text class="foot" x="20" y="901">the layer reading the recommended size LMU took. No arrow points into LMU’s code.</text>
 <text class="foot" x="20" y="918">On an NVIDIA RTX card NVIDIA’s multi-view rendering is used instead (LMU-MVR-ARCHITECTURE.svg). If the device can’t let a vertex shader pick</text>
 <text class="foot" x="20" y="935">the viewport, both eyes render at full resolution without focus views; LMU’s code stays unchanged. From src/games/lmu/ on development (ab9e7a2).</text>

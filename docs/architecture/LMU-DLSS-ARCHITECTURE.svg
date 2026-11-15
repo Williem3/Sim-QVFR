@@ -43,8 +43,6 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="s" x="491" y="116">Added for DLSS</text>
 <circle cx="600" cy="112" r="5" fill="var(--label-secondary)"/>
 <text class="s" x="611" y="116">Read</text>
-<circle cx="664" cy="112" r="5" fill="var(--warning)"/>
-<text class="s" x="675" y="116">Written</text>
 <g transform="translate(20,160)">
 <text class="hdr" x="0" y="-14">LMU.exe</text>
 <text class="hdr" x="400" y="-14">Sim-QVFR, loaded as an OpenXR API layer</text>
@@ -68,44 +66,39 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <text class="sd" x="56" y="220">Builds each eye’s projection from the</text>
 <text class="sd" x="56" y="236">FOV it locates: the jitter rides in there.</text>
 
-<rect x="16" y="270" width="288" height="474" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
+<rect x="16" y="270" width="288" height="416" rx="8" fill="var(--control-bg)" stroke="var(--control-border)"/>
 <text class="t" x="32" y="296">Game data</text>
-<text class="s" x="32" y="314">Plain reads and writes of values</text>
-<rect x="28" y="328" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
-<circle cx="48" cy="353" r="9" fill="var(--warning)"/>
-<text class="bt" x="48" y="357" text-anchor="middle" fill="var(--group-bg)">W</text>
+<text class="s" x="32" y="314">Plain reads of values</text>
+<rect x="28" y="328" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="353" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="357" text-anchor="middle" fill="var(--group-bg)">R</text>
 <text class="t" x="66" y="348">Render scale</text>
 <text class="ms" x="66" y="366">0x199cc18 · float</text>
-<rect x="28" y="386" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--warning)" stroke-width="1.5"/>
-<circle cx="48" cy="411" r="9" fill="var(--warning)"/>
-<text class="bt" x="48" y="415" text-anchor="middle" fill="var(--group-bg)">W</text>
-<text class="t" x="66" y="406">Eye render size</text>
-<text class="ms" x="66" y="424">0x1b1c240 · width, height</text>
+<rect x="28" y="386" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
+<circle cx="48" cy="411" r="9" fill="var(--label-secondary)"/>
+<text class="bt" x="48" y="415" text-anchor="middle" fill="var(--group-bg)">R</text>
+<text class="t" x="66" y="406">Recommended size</text>
+<text class="ms" x="66" y="424">0x1b1c654 · width, height</text>
 <rect x="28" y="444" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="469" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="473" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="464">Recommended size</text>
-<text class="ms" x="66" y="482">0x1b1c654 · width, height</text>
+<text class="t" x="66" y="464">Eye projections</text>
+<text class="ms" x="66" y="482">0x1b1bf74, 0x1b1c04c</text>
 <rect x="28" y="502" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
 <circle cx="48" cy="527" r="9" fill="var(--label-secondary)"/>
 <text class="bt" x="48" y="531" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="522">Eye projections</text>
-<text class="ms" x="66" y="540">0x1b1bf74, 0x1b1c04c</text>
-<rect x="28" y="560" width="264" height="50" rx="8" fill="var(--group-bg)" stroke="var(--control-border)"/>
-<circle cx="48" cy="585" r="9" fill="var(--label-secondary)"/>
+<text class="t" x="66" y="522">Eye being drawn</text>
+<text class="ms" x="66" y="540">Renderer +0x77388 · int</text>
+<rect x="28" y="560" width="264" height="50" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
+<circle cx="48" cy="585" r="9" fill="var(--dlss)"/>
 <text class="bt" x="48" y="589" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="580">Eye being drawn</text>
-<text class="ms" x="66" y="598">Renderer +0x77388 · int</text>
+<text class="t" x="66" y="580">Pass view matrix</text>
+<text class="ms" x="66" y="598">Renderer +0x77388 +0x2c · 4×4</text>
 <rect x="28" y="618" width="264" height="50" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
 <circle cx="48" cy="643" r="9" fill="var(--dlss)"/>
 <text class="bt" x="48" y="647" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="638">Pass view matrix</text>
-<text class="ms" x="66" y="656">Renderer +0x77388 +0x2c · 4×4</text>
-<rect x="28" y="676" width="264" height="50" rx="8" fill="var(--dlss-bg)" stroke="var(--dlss)" stroke-width="1.5"/>
-<circle cx="48" cy="701" r="9" fill="var(--dlss)"/>
-<text class="bt" x="48" y="705" text-anchor="middle" fill="var(--group-bg)">R</text>
-<text class="t" x="66" y="696">Pass projection</text>
-<text class="ms" x="66" y="714">+0x94 · else the eye’s slot above</text>
+<text class="t" x="66" y="638">Pass projection</text>
+<text class="ms" x="66" y="656">+0x94 · else the eye’s slot above</text>
 
 <!-- Sim-QVFR: OpenXR layer -->
 <rect x="400" y="0" width="320" height="230" rx="12" fill="var(--group-bg)" stroke="var(--overlay-teal)" stroke-width="1.5"/>
@@ -203,12 +196,12 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 <path d="M304,174 C354,174 352,380 398,380" stroke="var(--label-muted)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
 <text class="lab" x="352" y="282" text-anchor="middle" fill="var(--label-secondary)">D3D11</text>
 <text class="lab" x="352" y="298" text-anchor="middle" fill="var(--label-secondary)">calls</text>
-<path d="M400,150 C350,150 352,462 306,469" stroke="var(--label-secondary)" stroke-width="1.4" fill="none" stroke-dasharray="2 4" marker-end="url(#ah)"/>
-<path d="M400,440 C356,440 350,392 306,392" stroke="var(--warning)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
-<text class="lab" x="354" y="424" text-anchor="middle" fill="var(--warning)">Writes 2</text>
-<path d="M400,492 C356,492 350,540 306,540" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<path d="M400,150 C350,150 352,462 306,411" stroke="var(--label-secondary)" stroke-width="1.4" fill="none" stroke-dasharray="2 4" marker-end="url(#ah)"/>
+<path d="M400,440 C356,440 350,392 306,392" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<text class="lab" x="354" y="424" text-anchor="middle" fill="var(--label-secondary)">Reads 1</text>
+<path d="M400,492 C356,492 350,540 306,482" stroke="var(--label-secondary)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
 <text class="lab" x="354" y="510" text-anchor="middle" fill="var(--label-secondary)">Reads 3</text>
-<path d="M400,650 C356,650 350,672 306,672" stroke="var(--dlss)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+<path d="M400,650 C356,650 350,672 306,614" stroke="var(--dlss)" stroke-width="1.8" fill="none" stroke-dasharray="5 4" marker-end="url(#ah)"/>
 <text class="lab" x="354" y="656" text-anchor="middle" fill="var(--dlss)">Reads 2</text>
 <path d="M560,512 L560,530" stroke="var(--dlss)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
 <path d="M720,140 L778,140" stroke="var(--overlay-teal)" stroke-width="2" fill="none" marker-end="url(#ah)"/>
