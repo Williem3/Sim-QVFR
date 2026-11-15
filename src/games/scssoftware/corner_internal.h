@@ -93,6 +93,8 @@ struct State {
     std::atomic<uint32_t> mirrorGen[kMirrorIds] = {};
     std::atomic<int> mirrorIdCount{0};
     std::atomic<bool> activeNow{false};  // the eyes in the corner (g.active, for the other threads)
+    // A session start or end asked for and not done yet (service_lifecycle): the swapchain calls leave the state alone.
+    std::atomic<bool> lifecyclePending{false};
     std::atomic<uint64_t> otherWrites{0}, otherWritesActive{0};
     std::atomic<DWORD> otherWriter{0};
     bool otherWriterLogged = false;
@@ -309,6 +311,7 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT);
 void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT start);
 bool make_resources();
 void release_all();
+void service_lifecycle();  // the session start and end the main thread asked for, done at an xrEndFrame
 
 // corner_math.cpp
 bool focus_on();

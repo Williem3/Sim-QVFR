@@ -48,8 +48,18 @@ the performance overlay and the headset menu were switched on for ATS. Dozens of
 update, inside the runtime and the GPU driver; the game's frame-wait thread was waiting on a runtime lock behind it.
 Which of the overlay's runtime calls it was is not known.
 
-**Next step.** The hang watch now logs the frame thread's last runtime call. Read that line at the next freeze. A long
-session with the overlay off and the menu closed would say whether the overlay is the trigger.
+**Third freeze (2026-11-15 06:57, ATS, Pimax).** The hang watch named the stuck call: the runtime's xrEndFrame. The
+dump has the render thread in our xrEndFrame, then Pimax's, then its client library, spinning inside d3d11.dll; no other
+thread was in our code. Just before, the game ended and started its OpenXR session three times in 13 s (on its main
+thread, while its render thread kept drawing). Each start ran our install there, and the install issues commands on the
+game's immediate context (a Flush, one of ours, multithread protection switched on and off), which isn't thread-safe;
+each end released what the render thread's hooks were using. Both now wait for the render thread's next xrEndFrame
+(service_lifecycle), with a test of the restart sequence. Whether that was the freeze's trigger isn't known: the two
+earlier freezes had no such restarts on record.
+
+**Next step.** Repeat what led to the third freeze (a menu, a graphics setting applied: the session restarts) on the
+current build, on the Pimax runtime. A freeze again with the same stack: the Pimax runtime's own; then a long ATS
+session on SteamVR, and a log of the D3D11 calls the runtime makes through our hooks inside xrEndFrame.
 
 ## Indirect draws are not counted
 

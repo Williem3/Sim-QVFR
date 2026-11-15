@@ -37,7 +37,10 @@ struct CornerStats {
     uint64_t skipped = 0;  // non-indexed draws into other targets (the UI canvases, the desktop mirror)
 };
 
-// xrCreateSession: the corner set up on the game's device ([experiment] scs_corner percent). False: off.
+// xrCreateSession: the corner set up on the game's device ([experiment] scs_corner percent), at the session's first
+// xrEndFrame (corner_frame_end, on the thread that ends the frames: the install issues commands on the game's
+// immediate context, which the game's main thread, where sessions start, mustn't). False: the request refused (no
+// device, a share out of range); the install's own outcome is in the log (corner_on() after that xrEndFrame).
 // `focusPercent` ([experiment] scs_focus; 0: off): every indexed scene draw of an eye pass (a full-size target with
 // depth) also draws that eye's focus view, the middle `focusPercent`% of its field of view on each axis, into the room
 // right of the corner: by NVIDIA's multi-view rendering or Sim-QVFR's own (instancing), whichever the device has (the
@@ -69,6 +72,7 @@ void corner_set_look(float feather, float cornerRadius, bool border, const float
 // multi-view rendering, 2 Sim-QVFR's own (instancing), 3 the focus view switched off (dev builds' Ctrl+Alt+G).
 int corner_way();
 CornerStats corner_stats();
+// xrDestroySession (the game's main thread): observing stops at once; everything is released at the next xrEndFrame.
 void corner_session_end();
 
 }  // namespace scs

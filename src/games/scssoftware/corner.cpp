@@ -461,9 +461,9 @@ bool make_resources() {
 }
 
 // Everything tied to the device and the session, released and reset: at session end, and on every way out of
-// corner_install that leaves QVFR off (a second session may come on another thread or another device; every
-// resource of ours keeps the device alive). What other threads set (the gaze, the live sizes, the look), the player's
-// toggles and the running counts stay. The context's hooks are gone before this runs (or never were).
+// install_now that leaves QVFR off (a second session may come on another thread or another device; every resource of
+// ours keeps the device alive). What other threads set (the gaze, the live sizes, the look), the player's toggles and
+// the running counts stay. On the thread that ends the frames (service_lifecycle); the context's hooks are off first.
 void release_all() {
     if (g.context)
         two_views(false);
@@ -552,7 +552,29 @@ void release_all() {
 
 using namespace detail;
 
-bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
+namespace {
+
+// Session start and end come on the game's main thread (xrCreateSession, xrDestroySession) while its render thread
+// keeps drawing on the same immediate context, which isn't thread-safe: the install's probing (a Flush, a command of
+// ours, multithread protection switched on and off) and the end's release of everything the observers use would run
+// beside the render thread's own commands (ATS 2026-11-15 06:57: three session restarts in 13 s, then a freeze inside
+// the runtime's xrEndFrame). So both are requests, done by the thread that ends the frames, at its next xrEndFrame
+// (service_lifecycle): between its commands, with none of our code running beside it.
+struct Lifecycle {
+    std::mutex mutex;
+    bool end = false;      // a session ended: release everything
+    bool install = false;  // a session started: install on `device`
+    ComPtr<ID3D11Device> device;
+    int percent = 0, focusPercent = 0;
+} lifecycle;
+
+void end_now() {
+    simqvfr::logf("scs corner: at session end: %llu frames, %llu with the eyes in the corner",
+                  static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames));
+    release_all();  // the session's swapchains go with it (ATS makes new ones when its AA setting changes)
+}
+
+bool install_now(ID3D11Device* device, int percent, int focusPercent) {
     if (!device || percent <= 0 || percent >= 100 || g.context)
         return g.context != nullptr;
     g.device = device;
@@ -640,6 +662,44 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     return true;
 }
 
+}  // namespace
+
+void detail::service_lifecycle() {
+    bool end = false, install = false;
+    ComPtr<ID3D11Device> device;
+    int percent = 0, focusPercent = 0;
+    {
+        std::lock_guard lock(lifecycle.mutex);
+        if (!lifecycle.end && !lifecycle.install)
+            return;
+        end = lifecycle.end;
+        install = lifecycle.install;
+        device = std::move(lifecycle.device);
+        percent = lifecycle.percent;
+        focusPercent = lifecycle.focusPercent;
+        lifecycle.end = lifecycle.install = false;
+        g.lifecyclePending.store(false, std::memory_order_release);
+    }
+    if (end && g.context) {
+        end_now();
+        simqvfr::logf("scs corner: the session's end done on thread %lu, at its first xrEndFrame after", GetCurrentThreadId());
+    }
+    if (install && device && !g.context && install_now(device.Get(), percent, focusPercent))
+        simqvfr::logf("scs corner: installed on thread %lu, at the session's first xrEndFrame", GetCurrentThreadId());
+}
+
+bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
+    if (!device || percent <= 0 || percent >= 100)
+        return false;
+    std::lock_guard lock(lifecycle.mutex);
+    lifecycle.install = true;
+    lifecycle.device = device;
+    lifecycle.percent = percent;
+    lifecycle.focusPercent = focusPercent;
+    g.lifecyclePending.store(true, std::memory_order_release);
+    return true;
+}
+
 bool corner_on() { return g.context != nullptr; }
 
 void corner_set_gaze(const float (&screen)[2][2]) {
@@ -668,13 +728,18 @@ int corner_way() { return g.context ? g.way.load(std::memory_order_relaxed) : 0;
 
 CornerStats corner_stats() { return g.stats; }
 
+// The game's main thread, at xrDestroySession: observing stops now (the hooks pass every new call straight on; one
+// already inside an observer finishes with everything still there), the release waits for the render thread's next
+// xrEndFrame (service_lifecycle). An install not done yet is dropped with its session.
 void corner_session_end() {
+    std::lock_guard lock(lifecycle.mutex);
+    lifecycle.install = false;
+    lifecycle.device.Reset();
     if (!g.context)
         return;
     ch::uninstall();
-    simqvfr::logf("scs corner: at session end: %llu frames, %llu with the eyes in the corner",
-                  static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames));
-    release_all();  // the session's swapchains go with it (ATS makes new ones when its AA setting changes)
+    lifecycle.end = true;
+    g.lifecyclePending.store(true, std::memory_order_release);
 }
 
 }  // namespace scs

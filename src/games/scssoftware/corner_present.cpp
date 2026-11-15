@@ -303,6 +303,10 @@ State::Chain* chain_of(XrSwapchain handle, PFN_xrEnumerateSwapchainImages enumer
 using namespace detail;
 
 const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumerateSwapchainImages enumerate) {
+    // First the session start or end the main thread asked for: here, on the thread that ends the frames, between its
+    // commands (corner.cpp, service_lifecycle). A frame of a session being set up goes out as drawn.
+    if (g.lifecyclePending.load(std::memory_order_acquire))
+        service_lifecycle();
     if (!g.context)
         return info;
     g.endFrames.fetch_add(1, std::memory_order_release);
@@ -360,8 +364,8 @@ const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumera
 }
 
 void corner_acquired(XrSwapchain chain, uint32_t index, PFN_xrEnumerateSwapchainImages enumerate) {
-    if (!g.context)
-        return;
+    if (!g.context || g.lifecyclePending.load(std::memory_order_acquire))
+        return;  // off, or a session's start or end still to be done: the state is the old session's
     std::lock_guard lock(g.frameMutex);
     if (State::Chain* c = chain_of(chain, enumerate)) {
         c->held.push_back(index);
@@ -375,7 +379,7 @@ void corner_acquired(XrSwapchain chain, uint32_t index, PFN_xrEnumerateSwapchain
 }
 
 void corner_releasing(XrSwapchain chain) {
-    if (!g.context)
+    if (!g.context || g.lifecyclePending.load(std::memory_order_acquire))
         return;
     // The image this release hands back: the oldest the game holds (taken under the lock: corner_acquired may grow the
     // list from another thread meanwhile).

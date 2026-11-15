@@ -206,7 +206,10 @@ void warp_checks() {
         context->Unmap(gameCb.Get(), 0);
     }
 
-    check(scs::corner_install(device.Get(), 50, 30) && scs::corner_on(), "corner installed (50%, focus 30%) on a WARP device");
+    // The install is asked for at xrCreateSession and done at the session's first xrEndFrame (the render thread's).
+    check(scs::corner_install(device.Get(), 50, 30) && !scs::corner_on(), "corner install asked for, nothing done yet");
+    check(scs::corner_frame_end(nullptr, &fake_enumerate) == nullptr && scs::corner_on(),
+          "corner installed (50%, focus 30%) on a WARP device at the first xrEndFrame");
 
     // The game's frame: a G-buffer bind (the corner starts), then a full-screen pass into an eye-sized target.
     ID3D11RenderTargetView* const gbs[] = {gb[0].Get(), gb[1].Get(), gb[2].Get(), gb[3].Get()};
@@ -530,7 +533,22 @@ void warp_checks() {
     if (boundPs)
         boundPs->Release();
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
+
+    // A session restart as ATS does it (2026-11-15: three in 13 s before a freeze): the main thread ends the session and
+    // starts the next; nothing is released or installed until the render thread's next xrEndFrame does both, in order.
     scs::corner_session_end();
+    check(scs::corner_on(), "session end asked for: the state stays until the render thread's xrEndFrame");
+    context->OMSetRenderTargets(1, outs, nullptr);
+    context->RSSetViewports(1, &full);
+    seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    check(seenCount == 1 && seen.Width == W, "after the session's end, the game's viewport passes uncut");
+    check(scs::corner_install(device.Get(), 50, 30), "the next session's install asked for");
+    scs::corner_frame_end(nullptr, &fake_enumerate);
+    check(scs::corner_on(), "the old session released and the new one installed at that xrEndFrame");
+    scs::corner_session_end();
+    scs::corner_frame_end(nullptr, &fake_enumerate);
+    check(!scs::corner_on() && SUCCEEDED(device->GetDeviceRemovedReason()), "the last session's end done at its xrEndFrame");
 }
 
 }  // namespace
