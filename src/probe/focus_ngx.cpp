@@ -324,7 +324,7 @@ const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NG
     }
     if (g.preset == want)
         return g.ours ? g.ours : h;
-    NVSDK_NGX_Handle* made = nullptr;
+    NVSDK_NGX_Handle* created = nullptr;
     if (want != g.basePreset) {
         Bag* b = nullptr;
         NVSDK_NGX_Result r = allocateFn(&b);
@@ -345,13 +345,13 @@ const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NG
                 else if (g.info.presetSet[i])
                     b->Set(kPresetKeys[i], g.info.presets[i]);
             }
-            r = createOriginal(l, NVSDK_NGX_Feature_SuperSampling, b, &made);
+            r = createOriginal(l, NVSDK_NGX_Feature_SuperSampling, b, &created);
             destroyFn(b);
         }
         logf("focus dlss: the eyes' (periphery's) feature %ux%u remade with preset %d (0: the game's own): result 0x%08x%s",
-             g.info.width, g.info.height, want, static_cast<unsigned>(r), ok(r) && made ? "" : "; the feature before stays");
-        if (!ok(r) || !made)
-            made = g.ours;  // keep what ran; not tried again until the preset changes
+             g.info.width, g.info.height, want, static_cast<unsigned>(r), ok(r) && created ? "" : "; the feature before stays");
+        if (!ok(r) || !created)
+            created = g.ours;  // keep what ran; not tried again until the preset changes
         else
             fresh = true;
     } else {
@@ -362,10 +362,10 @@ const NVSDK_NGX_Handle* eye_feature(ID3D12GraphicsCommandList* l, const NVSDK_NG
     for (GameFeature& f : gameFeatures)
         if (f.game == h) {
             f.preset = want;
-            f.ours = made;
+            f.ours = created;
         }
     ReleaseSRWLockExclusive(&lock);
-    return made ? made : h;
+    return created ? created : h;
 }
 
 bool guarded_release(NVSDK_NGX_Handle* handle, Bag* bag);
@@ -422,7 +422,7 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
         return g.live;
     if (g.liveW == w && g.liveH == hgt && g.liveOutW == ow && g.liveOutH == oh && g.livePreset == want)
         return nullptr;  // refused at this size before: not tried again until it changes
-    NVSDK_NGX_Handle* made = nullptr;
+    NVSDK_NGX_Handle* created = nullptr;
     Bag* b = nullptr;
     AcquireSRWLockShared(&lifeLock);
     NVSDK_NGX_Result r = allocateFn(&b);
@@ -442,22 +442,22 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
             else if (g.info.presetSet[i])
                 b->Set(kPresetKeys[i], g.info.presets[i]);
         }
-        r = createOriginal(l, NVSDK_NGX_Feature_SuperSampling, b, &made);
+        r = createOriginal(l, NVSDK_NGX_Feature_SuperSampling, b, &created);
         destroyFn(b);
     }
     ReleaseSRWLockShared(&lifeLock);
-    (ok(r) && made ? logd : logf)("focus dlss: live periphery: a feature of ours %ux%u -> %ux%u in place of the game's %ux%u -> %ux%u (preset %d, 0: "
+    (ok(r) && created ? logd : logf)("focus dlss: live periphery: a feature of ours %ux%u -> %ux%u in place of the game's %ux%u -> %ux%u (preset %d, 0: "
          "the game's own): result 0x%08x%s",
          w, hgt, ow, oh, g.info.width, g.info.height, g.info.outWidth, g.info.outHeight, want, static_cast<unsigned>(r),
-         ok(r) && made ? "" : "; the game's own evaluation runs on its whole eye");
+         ok(r) && created ? "" : "; the game's own evaluation runs on its whole eye");
     if (!ok(r))
-        made = nullptr;
+        created = nullptr;
     NVSDK_NGX_Handle* old = nullptr;
     AcquireSRWLockExclusive(&lock);
     for (GameFeature& f : gameFeatures)
         if (f.game == h) {
             old = f.live;
-            f.live = made;
+            f.live = created;
             f.liveW = w;
             f.liveH = hgt;
             f.liveOutW = ow;
@@ -466,8 +466,8 @@ const NVSDK_NGX_Handle* live_feature(ID3D12GraphicsCommandList* l, const NVSDK_N
         }
     ReleaseSRWLockExclusive(&lock);
     retire_feature_later(old);
-    fresh = fresh || made != nullptr;
-    return made;
+    fresh = fresh || created != nullptr;
+    return created;
 }
 
 NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Handle* h, const Bag* bag, void* callback) {
@@ -558,9 +558,9 @@ NVSDK_NGX_Result evaluateHook(ID3D12GraphicsCommandList* l, const NVSDK_NGX_Hand
                     b->Set(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X, X(e.motionBase[0]));
                     b->Set(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, Y(e.motionBase[1]));
                     // the output's bases by the output region's own share (whole blocks when the game upscales)
-                    const CreateInfo made = create_info();
+                    const CreateInfo created = create_info();
                     unsigned ow = 0, oh = 0;
-                    live_output(made.outWidth, made.outHeight, fx, fy, ow, oh);
+                    live_output(created.outWidth, created.outHeight, fx, fy, ow, oh);
                     const double ox = made.outWidth ? static_cast<double>(ow) / made.outWidth : fx;
                     const double oy = made.outHeight ? static_cast<double>(oh) / made.outHeight : fy;
                     b->Set(NVSDK_NGX_Parameter_DLSS_Output_Subrect_Base_X,
