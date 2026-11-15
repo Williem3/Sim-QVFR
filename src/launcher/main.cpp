@@ -485,7 +485,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     say(L"  settings:  " + ini.wstring() + L" (mode=" + (mode.empty() ? L"off" : mode) + L"), snapshot in the run folder");
     if (baseline)
         say(L"  baseline:  this launch without QVFR, measuring (the Diagnostics pane's Next launch without QVFR)");
-    if (info.features.multiView)
+    if (info.features.multiView || info.features.layerMultiView)
         say(std::wstring(L"  multi-view: ") +
             (multiViewGpu && ini_string(iniCopy.wstring(), L"experiment", L"multi_view_software") != L"1"
                  ? L"NVIDIA's multi-view rendering"

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "../../dev_build.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
 #include "../../probe/run_exit.h"
@@ -288,7 +289,7 @@ void gates_image(ID3D11Texture2D* image, const int (&rects)[4][4]) {
     const unsigned long long rendered = views_rendered_frames();
     if (!armed) {
         bool start = false;
-        if (cfg.hotkey) {
+        if (cfg.hotkey && simqvfr::kDevBuild) {  // the hotkey: development builds only (dev_build.h)
             const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
             const bool key = down(VK_CONTROL) && down(VK_MENU) && down('G');
             start = key && !keyHeld;
@@ -301,7 +302,7 @@ void gates_image(ID3D11Texture2D* image, const int (&rects)[4][4]) {
         armed = true;
         armedAt = rendered;
         simqvfr::logf("%s: frame %llu: samples counted from here (%s)", tag(), endFrames,
-                      cfg.hotkey ? "Ctrl+Alt+G" : "the first four-view frame");
+                      cfg.hotkey && simqvfr::kDevBuild ? "Ctrl+Alt+G" : "the first four-view frame");
     }
     const unsigned long long due = armedAt + static_cast<unsigned long long>(cfg.first) +
                                    static_cast<unsigned long long>(taken) * static_cast<unsigned long long>(cfg.every);

@@ -315,6 +315,33 @@ std::vector<ProfileKey> game_copy_keys(const std::wstring& ini) {
 
 }  // namespace
 
+// A game's first copy: the settings in use, with the sizes the game starts a fresh install with (GameInfo::defaults).
+std::vector<ProfileKey> first_game_copy(std::vector<ProfileKey> keys, const std::wstring& gameId) {
+    std::size_t count = 0;
+    const games::GameInfo* const* all = games::all_games(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (_wcsicmp(widen_id(all[i]->id).c_str(), gameId.c_str()) != 0)
+            continue;
+        const games::GameInfo::Defaults& d = all[i]->defaults;
+        const std::pair<const wchar_t*, int> sizes[] = {{L"periphery_scale", d.periphery}, {L"focus_density", d.density},
+                                                        {L"focus_percent", d.focusWidth}, {L"focus_height_percent", d.focusHeight}};
+        for (const auto& [key, value] : sizes) {
+            if (value <= 0)
+                continue;
+            const std::wstring text = std::to_wstring(value);
+            bool found = false;
+            for (ProfileKey& k : keys)
+                if (_wcsicmp(k.section.c_str(), L"experiment") == 0 && _wcsicmp(k.key.c_str(), key) == 0) {
+                    k.value = text;
+                    found = true;
+                }
+            if (!found)
+                keys.push_back({L"experiment", key, text});
+        }
+    }
+    return keys;
+}
+
 bool store_game_settings(const std::wstring& ini, const std::wstring& gameId) {
     if (gameId.empty() || is_preset_name(gameId) || GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
         return false;
@@ -358,15 +385,16 @@ int seed_game_settings(const std::wstring& ini) {
             continue;
         if (keys.empty())
             keys = game_copy_keys(ini);
-        made += write_game_copy(file, keys) ? 1 : 0;
+        made += write_game_copy(file, first_game_copy(keys, widen_id(all[i]->id))) ? 1 : 0;
     }
     return made;
 }
 
 bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId) {
     bool ok = store_game_settings(ini, fromId);
-    if (GetFileAttributesW(game_settings_file(ini, toId).c_str()) == INVALID_FILE_ATTRIBUTES)
-        ok &= store_game_settings(ini, toId);  // none yet: it starts from the settings in use
+    if (GetFileAttributesW(game_settings_file(ini, toId).c_str()) == INVALID_FILE_ATTRIBUTES)  // none yet: it starts from
+        ok &= !toId.empty() && !is_preset_name(toId) &&                                         // the settings in use and
+              write_game_copy(game_settings_file(ini, toId), first_game_copy(game_copy_keys(ini), toId));  // its own sizes
     ok &= restore_game_settings(ini, toId);
     return ok;
 }

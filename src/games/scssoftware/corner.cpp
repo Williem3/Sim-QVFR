@@ -16,6 +16,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "../../dev_build.h"
 #include "../../engine/context_hooks.h"
 #include "../../engine/nvapi_stereo.h"
 #include "../lmu/mvr_probe.h"
@@ -24,7 +25,7 @@
 #include "corner_rules.h"
 #include "pass_probe.h"
 
-namespace ats {
+namespace scs {
 namespace {
 
 using Microsoft::WRL::ComPtr;
@@ -40,6 +41,8 @@ struct Mirror {
     ComPtr<ID3D11Buffer> game, copy;
     UINT bytes = 0;
     uint64_t refreshedFrame = ~0ull;
+    int id = -1;           // its slot in State::mirrorIds (-1: none free: another thread's writes go unseen)
+    uint32_t seenGen = 0;  // State::mirrorGen[id] as of the copy
 };
 
 struct Range {
@@ -79,6 +82,22 @@ struct State {
     ComPtr<ID3D11UnorderedAccessView> bigOutView;
     UINT bigBytes = 0;
     uint64_t mirrorRefreshes = 0, mirrorSwaps = 0, midFrameWrites = 0;
+    // Writes (Unmap) to a mirrored buffer from a thread other than the one drawing the eyes: our copy is made on the
+    // drawing thread, so another thread's write would leave the rest of the frame reading the copy's older contents. Such
+    // a write bumps the buffer's generation, and its next bind copies it again (refresh). Counted too (ETS2 2026-11-15:
+    // markers flashing in one eye for single frames; ATS: 8,629 such writes, none with the eyes in the corner). The
+    // buffers' identities are kept here for the other threads to compare with.
+    static constexpr int kMirrorIds = 16;
+    std::atomic<ID3D11Resource*> mirrorIds[kMirrorIds] = {};
+    std::atomic<uint32_t> mirrorGen[kMirrorIds] = {};
+    std::atomic<int> mirrorIdCount{0};
+    std::atomic<bool> activeNow{false};  // the eyes in the corner (g.active, for the other threads)
+    std::atomic<uint64_t> otherWrites{0}, otherWritesActive{0};
+    std::atomic<DWORD> otherWriter{0};
+    bool otherWriterLogged = false;
+    // Ctrl+Alt+N: the scene draws read the game's own buffers (no mirror copies), live; the full-screen passes keep their
+    // per-draw rewrite (it reads the game's buffer itself).
+    bool mirrorsOff = false, mirrorsKeyDown = false;
     Range vs, ps;
     CornerStats stats;
     uint64_t loggedDraws = 0;
@@ -103,7 +122,8 @@ struct State {
     ComPtr<ID3D11Texture2D> scratch;
     ComPtr<ID3D11ShaderResourceView> scratchView;
     D3D11_TEXTURE2D_DESC scratchDesc{};
-    // Stage 4: the focus region of a released image, drawn over the box of the scaled-up eye. Ctrl+Alt+F: on / off.
+    // Stage 4: the focus region of a released image, drawn over the box of the scaled-up eye. Dev builds' Ctrl+Alt+K:
+    // on / off.
     ComPtr<ID3D11Texture2D> focusScratch;
     ComPtr<ID3D11ShaderResourceView> focusScratchView;
     D3D11_TEXTURE2D_DESC focusScratchDesc{};
@@ -128,8 +148,6 @@ struct State {
     };
     std::vector<Target> targets;
     uint64_t upscaled = 0, upscaleMisses = 0, otherThreadReleases = 0, heldTwo = 0;
-    // The burst recorder (Ctrl+Alt+B): each image released to the runtime over the next kBurstFrames frames, at a
-    // quarter of its size, before and after the scale-up, read back after the burst and written as PNGs.
     // Stage 3: the full-screen passes drawn again for the focus view. A game texture's focus region is written by
     // the two-view scene draws and by these replays; a replay reads its inputs from "twins": textures of ours, as large
     // as the game's, with the region copied to their top-left (Prism's passes address a region from the origin only).
@@ -141,10 +159,13 @@ struct State {
         uint64_t copiedSerial = ~0ull;
         bool zero = true, failed = false;
         UINT mips = 1;
+        uint64_t usedFrame = 0;  // the last frame it was read or written (evict_unused)
+        uint64_t bytes = 0;      // its twin's share of twinBytes
     };
     std::unordered_map<ID3D11Texture2D*, Tex> texes;
     struct TwinView {
-        ComPtr<ID3D11ShaderResourceView> game, twin;
+        ComPtr<ID3D11ShaderResourceView> game, twin;  // the game's view (and so its texture) kept while this lives
+        uint64_t usedFrame = 0;
     };
     std::unordered_map<ID3D11ShaderResourceView*, TwinView> twinViews;
     ID3D11Texture2D* boundRt[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};  // raw, compared only
@@ -172,11 +193,29 @@ struct State {
     bool postPhase = false;  // past this eye's scene: the eye is the one whose final blit comes next
     int blits = 0;           // final blits into the headset's images this frame
     int boundChainEye = -1;  // the eye of the swapchain image bound
+    // The game's Scaling setting isn't 100%: its eye targets aren't the size of the headset's images, so its final blit
+    // resamples (ETS2 at 75%: 3896x3128 into 5192x4168, 2026-11-15). The path doesn't handle that and stays off for the
+    // session's frames: the game draws as without Sim-QVFR. Checked whenever the eye's size is (re)learned.
+    bool scaleMismatch = false;
     int remapEye = -1;       // the eye whose remap the scene draws' constant buffer holds
-    // The eye of the frame's first and second pass: learned from the headset image each pass's final blit goes to
+    // The eye of the frame's first and second pass: set at the first scene's G-buffer bind from the order learned for
+    // the headset image being drawn (below); where that isn't known yet, the order of the frame before's final blits
     // (ATS draws the right eye first; nothing here assumes an order).
     int passEye[2] = {0, 1};
-    bool passEyeLogged = false;
+    int passEyeLogs = 0;  // the first wrong frames logged, the rest counted
+    // ETS2 at 100% Scaling: the eye order follows the headset image index (bursts 2026-11-15 04:47 and 05:07, two
+    // sessions: images 0 and 1 right eye first, both scenes then both post chains; image 2 left eye first, each eye's
+    // scene, post and final blit in turn; Prism's render graph orders the eyes, their images among its resources). The
+    // frame before's order was wrong two frames in three: the focus view drawn at the other eye's box, blinking. (Each
+    // eye's depth buffer as the key was measured at 05:06: the eyes share it.) So the first final blit's eye is learned
+    // per image index, and looked up at the next frame with that index. An index seen with both orders counts a conflict
+    // and keeps the latest.
+    static constexpr int kOrderImages = 8;
+    std::atomic<int> acquiredIndex{-1};  // the left eye's swapchain's last acquired image (corner_acquired)
+    int frameImage = -1;                 // this frame's, taken at its first scene
+    int firstEyeByImage[kOrderImages] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    bool orderLogged = false;
+    uint64_t orderHits = 0, orderMisses = 0, orderConflicts = 0, orderChanges = 0;
     uint64_t boxMoves = 0;
     // Diagnostics for what shows only while the box jumps (S5 run 2: far terrain gone for a moment as the gaze arrives):
     // Ctrl+Alt+J arms a burst at each of the next three jumps of more than 8% of the screen; Ctrl+Alt+H switches the
@@ -207,9 +246,12 @@ struct State {
     bool instancedDraw = false;  // focus_draw bound an instanced twin: this draw goes out doubled
     uint64_t doubled = 0, doubledLayouts = 0;
     ID3D11VertexShader* gameVs = nullptr;  // the game's shader while its twin draws (a reference held)
+    ComPtr<ID3D11Buffer> gameCb13;         // the game's vertex b13 while the remap is bound there (gameVs set)
     uint64_t focusDraws = 0, noTwin = 0;
     ComPtr<ID3D11Texture2D> gbufferTex;  // the G-buffer's first target while its pass runs
     int gbufferPasses = 0;               // this frame
+    // The burst recorder (dev builds' Ctrl+Alt+B): each image released to the runtime over the next kBurstFrames frames,
+    // at a quarter of its size, before and after the scale-up, read back after the burst and written as PNGs.
     struct Shot {
         std::wstring tag;
         unsigned w = 0, h = 0;
@@ -297,7 +339,7 @@ void perf_line() {
         const double seconds = static_cast<double>(now.QuadPart - g.perfSince) / freq.QuadPart;
         const auto ms = [&](int b) { return g.ticks[b] * 1000.0 / freq.QuadPart / frames; };
         const auto per = [&](int b) { return static_cast<double>(g.timed[b]) / frames; };
-        simqvfr::logf("ats perf: %.1f fps over %.1f s, the focus view %s; per frame on the render thread: two-view draws "
+        simqvfr::logf("scs perf: %.1f fps over %.1f s, the focus view %s; per frame on the render thread: two-view draws "
                       "%.0f in %.2f ms, replays %.0f in %.2f ms, eye rewrites %.0f in %.2f ms, mirrors %.1f in %.2f ms, "
                       "release %.1f in %.2f ms",
                       frames / seconds, seconds,
@@ -387,9 +429,39 @@ void exact_fraction() {
     // Whole pixels of the eye's own targets on each axis.
     g.fx = std::max(1.0f, std::round(g.percent / 100.0f * g.eyeW)) / static_cast<float>(g.eyeW);
     g.fy = std::max(1.0f, std::round(g.percent / 100.0f * g.eyeH)) / static_cast<float>(g.eyeH);
-    simqvfr::logf("ats corner: eye targets %ux%u, the eye drawn into their top-left %ux%u (%.4f x %.4f)", g.eyeW, g.eyeH,
+    simqvfr::logf("scs corner: eye targets %ux%u, the eye drawn into their top-left %ux%u (%.4f x %.4f)", g.eyeW, g.eyeH,
                   static_cast<unsigned>(std::lround(g.fx * g.eyeW)), static_cast<unsigned>(std::lround(g.fy * g.eyeH)),
                   g.fx, g.fy);
+}
+
+// Twins and twin views no draw has used for kEvictFrames frames, let go: the game made new targets (a menu, a loading
+// pause: ETS2 2026-11-15, 11 twins and 112 MB grew to 33 and 337 MB), and a twin view holds the game's old texture
+// alive with it. Used ones are touched every frame (twin_of, twin_view, mark_bound_written).
+constexpr uint64_t kEvictFrames = 900;
+void evict_unused() {
+    const uint64_t now = g.stats.frames;
+    const auto stale = [now](uint64_t used) { return now - used > kEvictFrames; };
+    size_t views = 0, twins = 0;
+    for (auto it = g.twinViews.begin(); it != g.twinViews.end();)
+        if (stale(it->second.usedFrame)) {
+            it = g.twinViews.erase(it);
+            ++views;
+        } else {
+            ++it;
+        }
+    for (auto it = g.texes.begin(); it != g.texes.end();)
+        if (stale(it->second.usedFrame)) {
+            g.twinBytes -= std::min(g.twinBytes, it->second.bytes);
+            twins += it->second.twin ? 1 : 0;
+            it = g.texes.erase(it);
+        } else {
+            ++it;
+        }
+    if (views || twins)
+        simqvfr::logf("scs focus: %zu twins and %zu twin views unused for %llu frames let go (%zu twins left, %.0f MB at "
+                      "most)",
+                      twins, views, static_cast<unsigned long long>(kEvictFrames), g.texes.size(),
+                      g.twinBytes / 1048576.0);
 }
 
 void take_frame_end() {
@@ -398,6 +470,8 @@ void take_frame_end() {
         return;
     g.seenEndFrames = ends;
     ++g.stats.frames;
+    if (g.stats.frames % kEvictFrames == 0)
+        evict_unused();
     g.stats.cornerFrames += g.thisFrameCornered ? 1 : 0;
     g.thisFrameCornered = false;
     g.gbufferPasses = 0;
@@ -406,6 +480,7 @@ void take_frame_end() {
     g.blits = 0;
     g.postPhase = false;
     g.remapEye = -1;
+    g.frameImage = -1;
     if (const int want = g.livePercent.load(std::memory_order_relaxed); want > 0 && g.eyeW) {  // the menu's sizes
         const int wantFocus = g.focusPercent ? std::clamp(g.liveFocusPercent.load(std::memory_order_relaxed), 10, 60) : 0;
         int wantY = g.liveFocusPercentY.load(std::memory_order_relaxed);
@@ -419,7 +494,7 @@ void take_frame_end() {
         const int corner = std::clamp(want, 25, std::max(25, room));
         if (corner != static_cast<int>(std::lround(g.percent)) || wantFocus != g.focusPercent || wantY != g.focusPercentY ||
             density != g.density) {
-            simqvfr::logf("ats corner: live: the eye's corner %d%% (was %.0f%%), the focus box %d%% x %d%% at %.0f%% density "
+            simqvfr::logf("scs corner: live: the eye's corner %d%% (was %.0f%%), the focus box %d%% x %d%% at %.0f%% density "
                           "(was %d%% x %d%% at %.0f%%)%s",
                           corner, g.percent, wantFocus, wantY, density * 100, g.focusPercent, g.focusPercentY, g.density * 100,
                           corner != want ? ": the corner cut to what fits beside the focus region" : "");
@@ -432,6 +507,8 @@ void take_frame_end() {
                 g.texes.clear();
                 g.twinViews.clear();
                 g.twinBytes = 0;
+                g.stretches.clear();  // and the scratches sized for them (else each slider step adds a set)
+                g.crops.clear();
             }
             exact_fraction();
         }
@@ -457,7 +534,7 @@ void take_frame_end() {
             --g.jumpBursts;
             g.burstFramesLeft = kBurstFrames;
             g.burstStartFrame = g.stats.frames;
-            simqvfr::logf("ats focus: the box jumped %.2f of the screen (view 0 %.3f,%.3f -> %.3f,%.3f): recording the next "
+            simqvfr::logf("scs focus: the box jumped %.2f of the screen (view 0 %.3f,%.3f -> %.3f,%.3f): recording the next "
                           "%d frames (%d more armed)", jump, g.prevBox[0][0], g.prevBox[0][1], g.box[0][0], g.box[0][1],
                           kBurstFrames, g.jumpBursts);
         }
@@ -465,26 +542,26 @@ void take_frame_end() {
     g.gbufferTex.Reset();
     if (g.active) {
         g.active = false;
+        g.activeNow.store(false, std::memory_order_relaxed);
         two_views(false);
         apply_views();      // the next frame's shared work at the game's own sizes
         swap_bound(false);  // and the game's own constant buffers
     }
-    g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) ? 0
+    g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) || g.scaleMismatch ? 0
                 : g.focusOff ? 3
                 : g.instanced && (g.preferInstanced || !g.mvr) ? 2 : 1,
                 std::memory_order_relaxed);
     if (g.stats.frames % 450 == 0)
         perf_line();
     if (g.stats.frames % 900 == 0 && g.doubled)
-        simqvfr::logf("ats focus: instancing: %llu draws doubled so far, %llu of them with a per-instance layout's twin",
+        simqvfr::logf("scs focus: instancing: %llu draws doubled so far, %llu of them with a per-instance layout's twin",
                       static_cast<unsigned long long>(g.doubled), static_cast<unsigned long long>(g.doubledLayouts));
     if (g.stats.frames % 900 == 0)
-        simqvfr::logf("ats corner: %llu frames, %llu with the eyes in the corner; draws rewritten: pair %llu, rect %llu, "
-                      "pixel rect %llu, nothing to rewrite %llu; other targets skipped %llu; copy failures %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu, twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
+        simqvfr::logf("scs corner: %llu frames, %llu with the eyes in the corner; draws rewritten %llu, nothing to rewrite "
+                      "%llu; other targets skipped %llu; mirrors %zu, refreshed %llu times, written after their copy %llu, bound sets swapped %llu; eye images scaled back %llu, cut instead %llu, images acquired ahead %llu; focus draws %llu, without a twin %llu, passes replayed %llu, twins %zu (%.0f MB at most), region copies %llu, taken from the eye %llu, eye images composed %llu; boxes at %.3f,%.3f and %.3f,%.3f (moved %llu times); rewrites without the shader's declared constants %llu",
                       static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames),
-                      static_cast<unsigned long long>(g.stats.patched[1]), static_cast<unsigned long long>(g.stats.patched[2]),
-                      static_cast<unsigned long long>(g.stats.patched[3]), static_cast<unsigned long long>(g.stats.patched[0]),
-                      static_cast<unsigned long long>(g.stats.skipped), static_cast<unsigned long long>(g.stats.copyFailures),
+                      static_cast<unsigned long long>(g.stats.rewritten), static_cast<unsigned long long>(g.stats.notRewritten),
+                      static_cast<unsigned long long>(g.stats.skipped),
                       g.mirrors.size(), static_cast<unsigned long long>(g.mirrorRefreshes),
                       static_cast<unsigned long long>(g.midFrameWrites), static_cast<unsigned long long>(g.mirrorSwaps),
                       static_cast<unsigned long long>(g.upscaled), static_cast<unsigned long long>(g.upscaleMisses),
@@ -494,7 +571,68 @@ void take_frame_end() {
                       static_cast<unsigned long long>(g.stretched), static_cast<unsigned long long>(g.composed), g.box[0][0], g.box[0][1],
                       g.box[1][0], g.box[1][1], static_cast<unsigned long long>(g.boxMoves),
                       static_cast<unsigned long long>(g.undeclared));
-    ch::rescan();
+    if (g.stats.frames % 900 == 0 && g.focusPercent) {
+        char table[64] = "";
+        for (int i = 0; i < State::kOrderImages; ++i)
+            if (g.firstEyeByImage[i] >= 0) {
+                const size_t n = strlen(table);
+                snprintf(table + n, sizeof(table) - n, " %d:%s", i, g.firstEyeByImage[i] ? "R" : "L");
+            }
+        simqvfr::logf("scs focus: the eye order: from the headset image %llu frames, from the frame before's %llu; first "
+                      "eye by image index%s; conflicts %llu; frames whose first scene was drawn for the other eye %llu",
+                      static_cast<unsigned long long>(g.orderHits), static_cast<unsigned long long>(g.orderMisses),
+                      table[0] ? table : " (none yet)", static_cast<unsigned long long>(g.orderConflicts),
+                      static_cast<unsigned long long>(g.orderChanges));
+    }
+    if (const DWORD w = g.otherWriter.load(std::memory_order_relaxed); w && !g.otherWriterLogged) {
+        g.otherWriterLogged = true;
+        simqvfr::logf("scs corner: thread %lu writes a mirrored constant buffer (the eyes are drawn on %lu): our copy can be "
+                      "older than the game's buffer for the rest of that frame",
+                      static_cast<unsigned long>(w), static_cast<unsigned long>(g.thread));
+    }
+    if (g.stats.frames % 900 == 0 && !g.mirrors.empty())
+        simqvfr::logf("scs corner: mirrors %s (Ctrl+Alt+N); writes to them from other threads %llu, %llu with the eyes in "
+                      "the corner",
+                      g.mirrorsOff ? "OFF" : "on", static_cast<unsigned long long>(g.otherWrites.load(std::memory_order_relaxed)),
+                      static_cast<unsigned long long>(g.otherWritesActive.load(std::memory_order_relaxed)));
+}
+
+// The frame's first scene pass begins (its G-buffer bind): the order learned for the headset image being drawn.
+void scene_eye() {
+    if (g.gbufferPasses != 1)
+        return;
+    const int image = g.acquiredIndex.load(std::memory_order_acquire);
+    g.frameImage = image >= 0 && image < State::kOrderImages ? image : -1;
+    const int first = g.frameImage >= 0 ? g.firstEyeByImage[g.frameImage] : -1;
+    if (first < 0) {
+        ++g.orderMisses;
+        return;
+    }
+    ++g.orderHits;
+    g.passEye[0] = first;
+    g.passEye[1] = 1 - first;
+}
+
+// The frame's first final blit went to `eye`: the order of this frame's image index.
+void learn_order(int eye) {
+    if (g.frameImage < 0 || eye < 0)
+        return;
+    int& known = g.firstEyeByImage[g.frameImage];
+    if (known >= 0 && known != eye && ++g.orderConflicts <= 8)
+        simqvfr::logf("scs focus: headset image %d drawn with the %s eye first, before with the %s (%llu such)",
+                      g.frameImage, eye ? "right" : "left", known ? "right" : "left",
+                      static_cast<unsigned long long>(g.orderConflicts));
+    known = eye;
+    if (!g.orderLogged) {
+        int learned = 0;
+        for (int i : g.firstEyeByImage)
+            learned += i >= 0 ? 1 : 0;
+        if (learned >= 3) {
+            g.orderLogged = true;
+            simqvfr::log_line("scs focus: each frame's eye order now from the headset image it draws (learned from the "
+                              "final blits)");
+        }
+    }
 }
 
 void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
@@ -515,13 +653,33 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
             return;
         g.thread = self;
         g.seenEndFrames = g.endFrames.load(std::memory_order_acquire);
-        simqvfr::logf("ats corner: following thread %lu (its first G-buffer bind)", static_cast<unsigned long>(self));
+        simqvfr::logf("scs corner: following thread %lu (its first G-buffer bind)", static_cast<unsigned long>(self));
     }
     take_frame_end();
     if (gbuffer && w * h >= g.eyeW * g.eyeH && (w != g.eyeW || h != g.eyeH)) {
         g.eyeW = w;
         g.eyeH = h;
         exact_fraction();
+        unsigned imageW = 0, imageH = 0;
+        {
+            std::lock_guard lock(g.frameMutex);
+            for (const State::Chain& c : g.chains)
+                if (!c.images.empty() && c.images[0]) {
+                    D3D11_TEXTURE2D_DESC d;
+                    c.images[0]->GetDesc(&d);
+                    imageW = d.Width;
+                    imageH = d.Height;
+                    break;
+                }
+        }
+        // Within a few texels (ATS: 5192 against the recommended 5190).
+        const bool mismatch = imageW && (imageW > w + 8 || w > imageW + 8 || imageH > h + 8 || h > imageH + 8);
+        if (mismatch != g.scaleMismatch || mismatch)
+            simqvfr::logf("scs corner: the eye's targets are %ux%u, the headset's images %ux%u: %s", w, h, imageW, imageH,
+                          mismatch ? "the game's Scaling isn't 100%; QVFR stays OFF until it is (set Scaling to 100% in the "
+                                     "game's graphics settings)"
+                                   : "the same size");
+        g.scaleMismatch = mismatch;
     }
     const bool eyeGbuffer = gbuffer && w == g.eyeW && h == g.eyeH;
     if (g.gbufferTex) {  // the G-buffer pass ends at this bind (unless it binds the same targets again)
@@ -543,6 +701,7 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         res.As(&g.gbufferTex);
         ++g.gbufferPasses;
         g.postPhase = false;
+        scene_eye();
     }
     g.boundMarked = false;
     g.boundSwapchain = false;
@@ -551,7 +710,10 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         if (g.focusPercent && rtvs && i < count && rtvs[i]) {
             ComPtr<ID3D11Resource> res;
             rtvs[i]->GetResource(&res);
-            g.boundRt[i] = static_cast<ID3D11Texture2D*>(res.Get());  // compared only
+            D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+            res->GetType(&dim);
+            if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)  // a 2D texture's (compared, and its desc read by the burst)
+                g.boundRt[i] = static_cast<ID3D11Texture2D*>(res.Get());
         }
     }
     g.boundChainEye = -1;
@@ -572,11 +734,13 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
     if (!(g.depthBound && g.fullSize))
         two_views(false);
     const bool wasCut = g.active && g.cut;
-    if (gbuffer && w == g.eyeW && h == g.eyeH && !g.active) {
+    if (gbuffer && w == g.eyeW && h == g.eyeH && !g.active && !g.scaleMismatch) {
         g.active = true;
         g.thisFrameCornered = true;
         g.cornerNow.store(true, std::memory_order_release);
-        swap_bound(true);  // the binds made before this one, to our rewritten copies
+        g.activeNow.store(true, std::memory_order_relaxed);
+        if (!g.mirrorsOff)
+            swap_bound(true);  // the binds made before this one, to our rewritten copies
     }
     g.boundW = w;
     g.boundH = h;
@@ -679,11 +843,14 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
     g.context->CSSetConstantBuffers(0, 1, c0);
 }
 
-// This frame's copy of a mirrored buffer: the game's data copied and every eye-shaped pair rewritten.
+// This frame's copy of a mirrored buffer: the game's data copied and every eye-shaped pair rewritten. Copied again
+// after the game writes it: on the drawing thread (on_unmap clears refreshedFrame) or on another (its generation).
 void refresh(Mirror& m) {
-    if (m.refreshedFrame == g.stats.frames || !big_scratch(m.bytes))
+    const uint32_t gen = m.id >= 0 ? g.mirrorGen[m.id].load(std::memory_order_acquire) : 0;
+    if ((m.refreshedFrame == g.stats.frames && gen == m.seenGen) || !big_scratch(m.bytes))
         return;
     m.refreshedFrame = g.stats.frames;
+    m.seenGen = gen;
     const Timed timed(State::kTimeMirrors);
     const D3D11_BOX box = {0, 0, 0, m.bytes, 1, 1};
     g.context->CopySubresourceRegion(g.bigIn.Get(), 0, 0, 0, 0, m.game.Get(), 0, &box);
@@ -693,6 +860,7 @@ void refresh(Mirror& m) {
         float w, h, p0, p1;
         float unused[8];
     } p = {g.fx, g.fy, m.bytes / 16, 0, static_cast<float>(g.eyeW), static_cast<float>(g.eyeH), 0, 0, {}};
+    static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64);
     g.context->CopySubresourceRegion(m.copy.Get(), 0, 0, 0, 0, g.bigOut.Get(), 0, &box);
     ++g.mirrorRefreshes;
@@ -715,11 +883,17 @@ Mirror* learn(ID3D11Buffer* b) {
     m.bytes = d.ByteWidth & ~15u;
     const D3D11_BUFFER_DESC cd = {m.bytes, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     if (FAILED(g.device->CreateBuffer(&cd, nullptr, &m.copy))) {
-        simqvfr::logf("ats corner: a copy of the game's %u-byte constant buffer couldn't be made", d.ByteWidth);
+        simqvfr::logf("scs corner: a copy of the game's %u-byte constant buffer couldn't be made", d.ByteWidth);
         return nullptr;
     }
+    if (const int n = g.mirrorIdCount.load(std::memory_order_relaxed); n < State::kMirrorIds) {
+        m.id = n;
+        g.mirrorGen[n].store(0, std::memory_order_relaxed);
+        g.mirrorIds[n].store(b, std::memory_order_relaxed);
+        g.mirrorIdCount.store(n + 1, std::memory_order_release);
+    }
     g.mirrors.push_back(m);
-    simqvfr::logf("ats corner: the game's constant buffer %p (%u bytes, usage %u) mirrored (%zu so far)",
+    simqvfr::logf("scs corner: the game's constant buffer %p (%u bytes, usage %u) mirrored (%zu so far)",
                   static_cast<void*>(b), d.ByteWidth, static_cast<unsigned>(d.Usage), g.mirrors.size());
     return &g.mirrors.back();
 }
@@ -763,11 +937,23 @@ void swap_bound(bool on) {
     }
 }
 
-// The game wrote a buffer: a mirrored one written during the corner is copied again at its next bind (its pool's
-// buffers can be filled mid-frame, after this frame's copy was made: the stale copy flickered on the cab roof, S1 run 2).
+// The game wrote a buffer: a mirrored one is copied again at its next bind (its pool's buffers can be filled mid-frame,
+// after this frame's copy was made: the stale copy flickered on the cab roof, S1 run 2). From another thread: through
+// the buffer's generation (refresh), since the mirror list is the drawing thread's.
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT) {
-    if (GetCurrentThreadId() != g.thread)
+    if (const DWORD self = GetCurrentThreadId(); self != g.thread) {
+        const int n = g.mirrorIdCount.load(std::memory_order_acquire);
+        for (int i = 0; i < n; ++i)
+            if (g.mirrorIds[i].load(std::memory_order_relaxed) == resource) {
+                g.mirrorGen[i].fetch_add(1, std::memory_order_release);
+                g.otherWrites.fetch_add(1, std::memory_order_relaxed);
+                if (g.activeNow.load(std::memory_order_relaxed))
+                    g.otherWritesActive.fetch_add(1, std::memory_order_relaxed);
+                g.otherWriter.store(self, std::memory_order_relaxed);
+                break;
+            }
         return;
+    }
     for (Mirror& m : g.mirrors)
         if (static_cast<ID3D11Resource*>(m.game.Get()) == resource) {
             if (g.active && m.refreshedFrame == g.stats.frames)
@@ -778,7 +964,7 @@ void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT) {
 }
 
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out) {
-    if (!g.active || GetCurrentThreadId() != g.thread)
+    if (!g.active || g.mirrorsOff || GetCurrentThreadId() != g.thread)
         return false;
     bool changed = false;
     for (UINT i = 0; i < count; ++i) {
@@ -792,9 +978,8 @@ bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buf
     return changed;
 }
 
-// The game's slot-0 range of one stage rewritten into `ours` (the GPU's copy). False: left as the game bound it.
-// The eye the pass being drawn belongs to: a headset image's own; in an eye's scene the pass's (they come in view
-// order); past it (the post-processing, which with TAA comes after both scenes) the eye whose final blit is next.
+// The eye the pass being drawn belongs to: a headset image's own; in an eye's scene the pass's (scene_eye: the order
+// learned for this frame's headset image); past it (the post-processing) the eye whose final blit is next.
 int current_eye() {
     if (g.boundSwapchain && g.boundChainEye >= 0)
         return g.boundChainEye;
@@ -834,6 +1019,8 @@ unsigned twin_h(unsigned h) {
 float twin_fx() { return focus_fx() * g.eyeW / twin_full(g.eyeW, focus_fx()); }
 float twin_fy() { return focus_fy() * g.eyeH / twin_full(g.eyeH, focus_fy()); }
 
+// The game's slot-0 range of one stage rewritten into `ours` (the GPU's copy) and bound in its place for this draw
+// (put_back undoes it). False: left as the game bound it.
 bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
     ID3D11Buffer* buf = nullptr;
     UINT first = 0, count = 0;
@@ -850,8 +1037,15 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
     D3D11_BUFFER_DESC d;
     buf->GetDesc(&d);
     const UINT total = d.ByteWidth / 16;
-    if (count == 0 || first + count > total)  // a plain bind: the whole buffer
-        first = 0, count = std::min(total, kMaxVectors);
+    if (count == 0) {  // a plain bind: the whole buffer
+        first = 0, count = total;
+    } else if (first + count > total) {  // a range bound past the buffer's end (it reads zeros there): what is in it
+        if (first >= total) {
+            r = Range{};
+            return false;
+        }
+        count = total - first;
+    }
     count = std::min(count, kMaxVectors);
     if (!count)
         return false;
@@ -894,6 +1088,7 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
     } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u),
            {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
            focus ? focus_fy() : g.fy, {}};
+    static_assert(sizeof(p) == 64, "run_cs's params are 64 bytes");
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
     run_cs(g.patchCs.Get(), g.rawInView.Get(), g.rawOutView.Get(), &p, 1);
@@ -930,6 +1125,7 @@ void mark_bound_written() {
             State::Tex& x = g.texes[t];
             ++x.writeSerial;
             x.writeFrame = g.stats.frames;
+            x.usedFrame = g.stats.frames;
         }
 }
 
@@ -1068,6 +1264,7 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
 // has no focus content: zero). Null: no twin.
 State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
     State::Tex& t = g.texes[game];
+    t.usedFrame = g.stats.frames;
     if (t.failed)
         return nullptr;
     if (!t.twin) {
@@ -1088,7 +1285,7 @@ State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
             FAILED(g.device->CreateRenderTargetView(t.twin.Get(), &rv, &t.twinRtv))) {
             t.twin.Reset();
             t.failed = true;
-            simqvfr::logf("ats focus: no twin for a %ux%u texture of format %d (%d mips): its replays read the game's own",
+            simqvfr::logf("scs focus: no twin for a %ux%u texture of format %d (%d mips): its replays read the game's own",
                           d.Width, d.Height, static_cast<int>(d.Format), static_cast<int>(d.MipLevels));
             return nullptr;
         }
@@ -1098,8 +1295,9 @@ State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
         t.mips = d.MipLevels;
         const float none[4] = {};
         g.context->ClearRenderTargetView(t.twinRtv.Get(), none);
-        g.twinBytes += static_cast<uint64_t>(td.Width) * td.Height * 8;  // an upper estimate (16-bit RGBA)
-        simqvfr::logf("ats focus: twin %zu: %ux%u for a %ux%u texture of format %d, %d mips", g.texes.size(), td.Width,
+        t.bytes = static_cast<uint64_t>(td.Width) * td.Height * 8;  // an upper estimate (16-bit RGBA)
+        g.twinBytes += t.bytes;
+        simqvfr::logf("scs focus: twin %zu: %ux%u for a %ux%u texture of format %d, %d mips", g.texes.size(), td.Width,
                       td.Height, d.Width, d.Height, static_cast<int>(d.Format), static_cast<int>(d.MipLevels));
     }
     const bool content = t.writeFrame != ~0ull && g.stats.frames - t.writeFrame <= 1;
@@ -1133,6 +1331,7 @@ State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
 // The twin's view for a game view (the same format and mips).
 ID3D11ShaderResourceView* twin_view(ID3D11ShaderResourceView* gameView, State::Tex& t) {
     State::TwinView& v = g.twinViews[gameView];
+    v.usedFrame = g.stats.frames;
     if (!v.twin) {
         D3D11_SHADER_RESOURCE_VIEW_DESC sd;
         gameView->GetDesc(&sd);
@@ -1156,7 +1355,7 @@ void shoot_stage(const D3D11_RECT& f, const char* inputs) {
     if (g.stats.frames == g.burstStartFrame) {
         ID3D11PixelShader* ps = nullptr;
         g.context->PSGetShader(&ps, nullptr, nullptr);
-        simqvfr::logf("ats focus: burst stage %02d eye %d: target %ux%u format %d, shader %p, inputs%s", stage, eye, d.Width,
+        simqvfr::logf("scs focus: burst stage %02d eye %d: target %ux%u format %d, shader %p, inputs%s", stage, eye, d.Width,
                       d.Height, static_cast<int>(d.Format), static_cast<void*>(ps), inputs);
         if (ps)
             ps->Release();
@@ -1270,7 +1469,7 @@ void two_views(bool on) {
         return;
     const int status = simqvfr::nvapi::set_two_views(g.context.Get(), on);
     if (status != 0 && on) {
-        simqvfr::logf("ats focus: NVIDIA's two views refused (%s): the focus view's scene draws are off for this session",
+        simqvfr::logf("scs focus: NVIDIA's two views refused (%s): the focus view's scene draws are off for this session",
                       simqvfr::nvapi::status_name(status));
         g.mvr = false;
         return;
@@ -1339,6 +1538,8 @@ void focus_draw() {
         g.remapEye = eye;
     }
     ID3D11Buffer* const remap[] = {g.remapCb.Get()};
+    g.gameCb13.Reset();
+    g.context->VSGetConstantBuffers(13, 1, g.gameCb13.GetAddressOf());  // put back after the draw, with the shader
     g.context->VSSetConstantBuffers(13, 1, remap);
     g.context->VSSetShader(twin, nullptr, 0);
     twin->Release();
@@ -1358,10 +1559,13 @@ bool on_draw_replace(ID3D11DeviceContext*, ch::Entry entry, const ch::DrawCall& 
     c->IAGetInputLayout(&layout);
     if (layout) {
         UINT size = sizeof(void*);
-        ID3D11InputLayout* t = nullptr;
-        if (SUCCEEDED(layout->GetPrivateData(lmu::kMvrInstancedLayoutGuid, &size, &t)) && t) {
-            twin.Attach(t);
-            c->IASetInputLayout(t);
+        IUnknown* stored = nullptr;  // SetPrivateDataInterface's: an IUnknown, asked for the layout (as LMU's doubled_draw)
+        if (SUCCEEDED(layout->GetPrivateData(lmu::kMvrInstancedLayoutGuid, &size, &stored)) && stored) {
+            stored->QueryInterface(IID_PPV_ARGS(twin.GetAddressOf()));
+            stored->Release();
+        }
+        if (twin) {
+            c->IASetInputLayout(twin.Get());
             ++g.doubledLayouts;
         }
     }
@@ -1427,10 +1631,10 @@ void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
         const Timed t(State::kTimeFocusDraws);
         focus_draw();
     }
-    ++g.stats.patched[vs || ps ? 1 : 0];  // the rule itself is the GPU's (the first frames' log names the draws)
+    ++(vs || ps ? g.stats.rewritten : g.stats.notRewritten);  // the rule itself is the GPU's (the first frames' log names the draws)
     if (g.loggedDraws < 60) {
         ++g.loggedDraws;
-        simqvfr::logf("ats corner: draw %u vertices into %ux%u (%s): vertex range %u+%u, pixel range %u+%u rewritten",
+        simqvfr::logf("scs corner: draw %u vertices into %ux%u (%s): vertex range %u+%u, pixel range %u+%u rewritten",
                       count, g.boundW, g.boundH, g.cut ? "eye-shaped, cut" : "small", g.vs.first, g.vs.count, g.ps.first,
                       g.ps.count);
     }
@@ -1441,6 +1645,9 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         g.context->VSSetShader(g.gameVs, nullptr, 0);
         g.gameVs->Release();
         g.gameVs = nullptr;
+        ID3D11Buffer* const cb13[] = {g.gameCb13.Get()};  // the game's b13 again (null if it had none)
+        g.context->VSSetConstantBuffers(13, 1, cb13);
+        g.gameCb13.Reset();
     }
     if (g.vs.game || g.ps.game) {
         put_back(g.vs, false);
@@ -1459,15 +1666,22 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         replay(count, start);  // into the headset's image too: its final blit
     }
     if (entry == ch::kDraw && count == 3 && g.boundSwapchain && g.active) {
-        if (g.blits < 2 && g.boundChainEye >= 0 && g.passEye[g.blits] != g.boundChainEye) {
+        if (g.blits < 2 && g.boundChainEye >= 0) {
+            // The first scene was drawn for the other eye's box: a frame whose focus view is the wrong one.
+            if (g.blits == 0 && g.passEye[0] != g.boundChainEye) {
+                ++g.orderChanges;
+                if (g.passEyeLogs < 8) {
+                    ++g.passEyeLogs;
+                    simqvfr::logf("scs focus: the frame's first final blit is view %d's (%s eye), its scene was drawn as "
+                                  "view %d's (headset image %d)%s",
+                                  g.boundChainEye, g.boundChainEye == 0 ? "left" : "right", g.passEye[0], g.frameImage,
+                                  g.passEyeLogs == 8 ? " (further ones counted in the summary)" : "");
+                }
+            }
+            if (g.blits == 0)
+                learn_order(g.boundChainEye);
             g.passEye[g.blits] = g.boundChainEye;
             g.passEye[1 - g.blits] = 1 - g.boundChainEye;
-            g.passEyeLogged = false;
-        }
-        if (!g.passEyeLogged && g.blits == 1) {
-            g.passEyeLogged = true;
-            simqvfr::logf("ats focus: the frame's first pass is view %d's (%s eye), its second view %d's", g.passEye[0],
-                          g.passEye[0] == 0 ? "left" : "right", g.passEye[1]);
         }
         ++g.blits;  // an eye's final blit: the next post-processing is the other eye's
     }
@@ -1479,7 +1693,7 @@ bool make_resources() {
     D3D11_BUFFER_DESC rawOut = raw;
     rawOut.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
     const D3D11_BUFFER_DESC cb = {kMaxVectors * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-    const D3D11_BUFFER_DESC params = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC params = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};  // run_cs's
     D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
     sv.Format = DXGI_FORMAT_R32_TYPELESS;
     sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
@@ -1489,17 +1703,17 @@ bool make_resources() {
     uv.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
     uv.Buffer = {0, kMaxVectors * 4, D3D11_BUFFER_UAV_FLAG_RAW};
     ComPtr<ID3DBlob> code, errors;
-    if (FAILED(D3DCompile(kCornerPatchCs, sizeof(kCornerPatchCs) - 1, "ats-corner", nullptr, nullptr, "main", "cs_5_0",
+    if (FAILED(D3DCompile(kCornerPatchCs, sizeof(kCornerPatchCs) - 1, "scs-corner", nullptr, nullptr, "main", "cs_5_0",
                           D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors))) {
-        simqvfr::logf("ats corner: the rewrite shader didn't compile: %s",
+        simqvfr::logf("scs corner: the rewrite shader didn't compile: %s",
                       errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return false;
     }
     ComPtr<ID3DBlob> mirrorCode;
     errors.Reset();
-    if (FAILED(D3DCompile(kCornerMirrorCs, sizeof(kCornerMirrorCs) - 1, "ats-corner-mirror", nullptr, nullptr, "main",
+    if (FAILED(D3DCompile(kCornerMirrorCs, sizeof(kCornerMirrorCs) - 1, "scs-corner-mirror", nullptr, nullptr, "main",
                           "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &mirrorCode, &errors))) {
-        simqvfr::logf("ats corner: the mirror shader didn't compile: %s",
+        simqvfr::logf("scs corner: the mirror shader didn't compile: %s",
                       errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
         return false;
     }
@@ -1535,8 +1749,8 @@ bool blit_resources() {
     if (g.blitPs)
         return true;
     ComPtr<ID3DBlob> vs, ps, errors;
-    if (FAILED(D3DCompile(kBlit, sizeof(kBlit) - 1, "ats-corner-blit", nullptr, nullptr, "vs", "vs_5_0", 0, 0, &vs, &errors)) ||
-        FAILED(D3DCompile(kBlit, sizeof(kBlit) - 1, "ats-corner-blit", nullptr, nullptr, "ps", "ps_5_0", 0, 0, &ps, &errors)))
+    if (FAILED(D3DCompile(kBlit, sizeof(kBlit) - 1, "scs-corner-blit", nullptr, nullptr, "vs", "vs_5_0", 0, 0, &vs, &errors)) ||
+        FAILED(D3DCompile(kBlit, sizeof(kBlit) - 1, "scs-corner-blit", nullptr, nullptr, "ps", "ps_5_0", 0, 0, &ps, &errors)))
         return false;
     D3D11_SAMPLER_DESC sd{};
     sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1547,9 +1761,9 @@ bool blit_resources() {
     rd.CullMode = D3D11_CULL_NONE;
     rd.DepthClipEnable = TRUE;
     ComPtr<ID3DBlob> fps, sps;
-    if (SUCCEEDED(D3DCompile(kBlit, sizeof(kBlit) - 1, "ats-corner-blit", nullptr, nullptr, "squash", "ps_5_0", 0, 0, &sps, &errors)))
+    if (SUCCEEDED(D3DCompile(kBlit, sizeof(kBlit) - 1, "scs-corner-blit", nullptr, nullptr, "squash", "ps_5_0", 0, 0, &sps, &errors)))
         g.device->CreatePixelShader(sps->GetBufferPointer(), sps->GetBufferSize(), nullptr, &g.squashPs);
-    if (FAILED(D3DCompile(kBlit, sizeof(kBlit) - 1, "ats-corner-blit", nullptr, nullptr, "feather", "ps_5_0", 0, 0, &fps, &errors)))
+    if (FAILED(D3DCompile(kBlit, sizeof(kBlit) - 1, "scs-corner-blit", nullptr, nullptr, "feather", "ps_5_0", 0, 0, &fps, &errors)))
         return false;
     D3D11_BLEND_DESC bd{};
     bd.RenderTarget[0] = {TRUE, D3D11_BLEND_SRC_ALPHA, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_OP_ADD, D3D11_BLEND_ONE,
@@ -1916,76 +2130,87 @@ void write_burst() {
     SYSTEMTIME t;
     GetLocalTime(&t);
     wchar_t folder[64];
-    swprintf_s(folder, L"ats-burst-%02u%02u%02u", t.wHour, t.wMinute, t.wSecond);
+    swprintf_s(folder, L"scs-burst-%02u%02u%02u", t.wHour, t.wMinute, t.wSecond);
     const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"captures" / folder;
-    simqvfr::logf("ats corner: burst of %zu images read back; writing them to %ls", all.size(), dir.c_str());
+    simqvfr::logf("scs corner: burst of %zu images read back; writing them to %ls", all.size(), dir.c_str());
     std::thread([all = std::move(all), dir]() {
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
         size_t written = 0;
         for (const auto& p : all)
             written += simqvfr::write_png_bgra((dir / p.name).wstring(), p.bgra, p.w, p.h) ? 1 : 0;
-        simqvfr::logf("ats corner: burst written: %zu of %zu PNGs in %ls", written, all.size(), dir.c_str());
+        simqvfr::logf("scs corner: burst written: %zu of %zu PNGs in %ls", written, all.size(), dir.c_str());
     }).detach();
 }
 
-// Ctrl+Alt+B pressed (edge): a burst starts with the next release.
-void poll_burst_key() {
-    const bool down = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
-                      (GetAsyncKeyState('B') & 0x8000);
-    if (down && !g.hotkeyDown && g.burstFramesLeft == 0 && g.shots.empty()) {
+// The diagnostic hotkeys, Ctrl+Alt with: B a burst from the next release; K the focus view composed or not; J bursts at
+// the next three box jumps; H the reprojections' box; G the focus view's work off; I NVIDIA's multi-view or instancing;
+// A the focus view's own occlusion; N the mirrors off. (Not F: the player's frame capture hotkey.)
+[[maybe_unused]] void poll_diag_keys() {  // unused in a release (poll_diag_hotkeys)
+    const bool chord = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000);
+    // `key` pressed with the chord since the last poll (`held`: its state then).
+    const auto pressed = [chord](int key, bool& held) {
+        const bool down = chord && (GetAsyncKeyState(key) & 0x8000);
+        const bool edge = down && !held;
+        held = down;
+        return edge;
+    };
+    if (pressed('B', g.hotkeyDown) && g.burstFramesLeft == 0 && g.shots.empty()) {
         g.burstFramesLeft = kBurstFrames;
         g.burstStartFrame = g.stats.frames;
-        simqvfr::logf("ats corner: Ctrl+Alt+B: recording the next %d frames' released images (before and after the "
+        simqvfr::logf("scs corner: Ctrl+Alt+B: recording the next %d frames' released images (before and after the "
                       "scale-up, a quarter size)", kBurstFrames);
     }
-    g.hotkeyDown = down;
-    const bool f = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000) &&
-                   (GetAsyncKeyState('F') & 0x8000);
-    if (f && !g.composeKeyDown && g.focusPercent) {
+    if (pressed('K', g.composeKeyDown) && g.focusPercent) {
         g.composeFocus = !g.composeFocus;
-        simqvfr::logf("ats focus: Ctrl+Alt+F: the focus view %s", g.composeFocus ? "composed over the box" : "not composed");
+        simqvfr::logf("scs focus: Ctrl+Alt+K: the focus view %s", g.composeFocus ? "composed over the box" : "not composed");
     }
-    g.composeKeyDown = f;
-    const bool ctrlAlt = (GetAsyncKeyState(VK_CONTROL) & 0x8000) && (GetAsyncKeyState(VK_MENU) & 0x8000);
-    const bool j = ctrlAlt && (GetAsyncKeyState('J') & 0x8000);
-    if (j && !g.jumpKeyDown && g.focusPercent) {
+    if (pressed('J', g.jumpKeyDown) && g.focusPercent) {
         g.jumpBursts = 3;
-        simqvfr::log_line("ats focus: Ctrl+Alt+J: the next three jumps of the box are recorded");
+        simqvfr::log_line("scs focus: Ctrl+Alt+J: the next three jumps of the box are recorded");
     }
-    g.jumpKeyDown = j;
-    const bool h = ctrlAlt && (GetAsyncKeyState('H') & 0x8000);
-    if (h && !g.historyKeyDown && g.focusPercent) {
+    if (pressed('H', g.historyKeyDown) && g.focusPercent) {
         g.historyCurrentBox = !g.historyCurrentBox;
-        simqvfr::logf("ats focus: Ctrl+Alt+H: the reprojections use %s", g.historyCurrentBox ? "this frame's box" : "the frame before's box");
+        simqvfr::logf("scs focus: Ctrl+Alt+H: the reprojections use %s", g.historyCurrentBox ? "this frame's box" : "the frame before's box");
     }
-    g.historyKeyDown = h;
-    const bool gk = ctrlAlt && (GetAsyncKeyState('G') & 0x8000);
-    if (gk && !g.focusKeyDown && g.focusPercent) {
+    if (pressed('G', g.focusKeyDown) && g.focusPercent) {
         perf_line();  // what the state so far cost, then the other
         g.focusOff = !g.focusOff;
-        simqvfr::logf("ats focus: Ctrl+Alt+G: the focus view's draws and passes are %s", g.focusOff ? "OFF" : "on");
+        simqvfr::logf("scs focus: Ctrl+Alt+G: the focus view's draws and passes are %s", g.focusOff ? "OFF" : "on");
     }
-    g.focusKeyDown = gk;
-    const bool ik = ctrlAlt && (GetAsyncKeyState('I') & 0x8000);
-    if (ik && !g.instancingKeyDown && g.focusPercent) {
+    if (pressed('I', g.instancingKeyDown) && g.focusPercent) {
         if (g.mvr && g.instanced) {
             perf_line();  // what the way so far cost, then the other
             g.preferInstanced = !g.preferInstanced;
-            simqvfr::logf("ats focus: Ctrl+Alt+I: the focus view's scene draws by %s",
+            simqvfr::logf("scs focus: Ctrl+Alt+I: the focus view's scene draws by %s",
                           g.preferInstanced ? "Sim-QVFR's own multi-view rendering (instancing)" : "NVIDIA's multi-view rendering");
         } else {
-            simqvfr::logf("ats focus: Ctrl+Alt+I: only one way here (NVIDIA's %d, instancing %d)", g.mvr ? 1 : 0, g.instanced ? 1 : 0);
+            simqvfr::logf("scs focus: Ctrl+Alt+I: only one way here (NVIDIA's %d, instancing %d)", g.mvr ? 1 : 0, g.instanced ? 1 : 0);
         }
     }
-    g.instancingKeyDown = ik;
-    const bool a = ctrlAlt && (GetAsyncKeyState('A') & 0x8000);
-    if (a && !g.occlusionKeyDown && g.focusPercent) {
+    if (pressed('A', g.occlusionKeyDown) && g.focusPercent) {
         g.ownOcclusion = !g.ownOcclusion;
-        simqvfr::logf("ats focus: Ctrl+Alt+A: the focus view's ambient occlusion is %s",
+        simqvfr::logf("scs focus: Ctrl+Alt+A: the focus view's ambient occlusion is %s",
                       g.ownOcclusion ? "its own (the half-size passes replayed)" : "the eye's, through the box");
     }
-    g.occlusionKeyDown = a;
+    if (pressed('N', g.mirrorsKeyDown)) {
+        g.mirrorsOff = !g.mirrorsOff;
+        if (g.active) {
+            const ch::Bypass bypass;  // our own binds (at a release: outside an observer), not seen by on_constant_buffers
+            swap_bound(!g.mirrorsOff);  // what is bound now: the game's buffers back, or our copies
+        }
+        simqvfr::logf("scs corner: Ctrl+Alt+N: the scene draws read %s (writes to them from other threads so far: %llu, "
+                      "%llu with the eyes in the corner)",
+                      g.mirrorsOff ? "the game's own constant buffers (mirrors OFF)" : "our copies (mirrors on)",
+                      static_cast<unsigned long long>(g.otherWrites.load(std::memory_order_relaxed)),
+                      static_cast<unsigned long long>(g.otherWritesActive.load(std::memory_order_relaxed)));
+    }
+}
+
+// The diagnostic hotkeys exist in development builds only (dev_build.h): a release reads no key here.
+void poll_diag_hotkeys() {
+    if constexpr (simqvfr::kDevBuild)
+        poll_diag_keys();
 }
 
 State::Chain* chain_of(XrSwapchain handle, PFN_xrEnumerateSwapchainImages enumerate) {
@@ -2005,9 +2230,97 @@ State::Chain* chain_of(XrSwapchain handle, PFN_xrEnumerateSwapchainImages enumer
     for (const auto& i : images)
         c.images.push_back(i.texture);
     g.chains.push_back(c);
-    simqvfr::logf("ats corner: swapchain %p: %u images known (the corner is scaled back over them at xrEndFrame)",
+    simqvfr::logf("scs corner: swapchain %p: %u images known (the corner is scaled back over them at xrEndFrame)",
                   static_cast<void*>(handle), count);
     return &g.chains.back();
+}
+
+// Everything tied to the device and the session, released and reset: at session end, and on every way out of
+// corner_install that leaves QVFR off (a second session may come on another thread or another device; every
+// resource of ours keeps the device alive). What other threads set (the gaze, the live sizes, the look), the player's
+// toggles and the running counts stay. The context's hooks are gone before this runs (or never were).
+void release_all() {
+    if (g.context)
+        two_views(false);
+    if (g.gameVs) {
+        g.gameVs->Release();
+        g.gameVs = nullptr;
+    }
+    g.gameCb13.Reset();
+    g.thread = 0;
+    g.active = false;
+    g.activeNow.store(false, std::memory_order_relaxed);
+    g.cornerNow.store(false, std::memory_order_relaxed);
+    g.seenEndFrames = g.endFrames.load(std::memory_order_acquire);
+    g.thisFrameCornered = false;
+    g.cut = g.smallTarget = false;
+    g.eyeW = g.eyeH = 0;  // learned again at the next session's first G-buffer bind
+    g.scaleMismatch = false;
+    g.viewportCount = g.scissorCount = 0;
+    g.viewsDual = g.twoViews = false;
+    g.instancedDraw = false;
+    g.mvr = g.instanced = false;
+    g.focusPercent = 0;
+    g.boundSwapchain = g.boundMarked = false;
+    g.boundChainEye = -1;
+    std::fill(std::begin(g.boundRt), std::end(g.boundRt), nullptr);
+    g.gbufferTex.Reset();
+    g.gbufferPasses = g.blits = 0;
+    g.postPhase = false;
+    g.remapEye = -1;
+    // The eye order: new swapchains, learned again.
+    g.acquiredIndex.store(-1, std::memory_order_relaxed);
+    g.frameImage = -1;
+    std::fill(std::begin(g.firstEyeByImage), std::end(g.firstEyeByImage), -1);
+    g.orderLogged = false;
+    // The rewrite's and the mirrors' resources.
+    g.vs = Range{};
+    g.ps = Range{};
+    g.vsFocus = Range{};
+    g.psFocus = Range{};
+    g.rawIn.Reset(), g.rawOut.Reset(), g.params.Reset(), g.vsCb.Reset(), g.psCb.Reset(), g.vsCbFocus.Reset(),
+        g.psCbFocus.Reset();
+    g.rawInView.Reset();
+    g.rawOutView.Reset();
+    g.patchCs.Reset();
+    g.mirrorCs.Reset();
+    g.mirrorIdCount.store(0, std::memory_order_release);  // first: the other threads stop comparing
+    for (auto& id : g.mirrorIds)
+        id.store(nullptr, std::memory_order_relaxed);
+    g.mirrors.clear();
+    g.bigIn.Reset(), g.bigOut.Reset(), g.bigInView.Reset(), g.bigOutView.Reset();
+    g.bigBytes = 0;
+    // The focus view's.
+    g.remapCb.Reset();
+    g.lookCb.Reset();
+    g.twinViews.clear();
+    g.texes.clear();
+    g.twinBytes = 0;
+    g.stretches.clear();
+    // The headset images' and the blits'.
+    {
+        std::lock_guard lock(g.frameMutex);
+        g.chains.clear();
+        g.targets.clear();
+    }
+    g.scratch.Reset(), g.scratchView.Reset();
+    g.scratchDesc = {};
+    g.focusScratch.Reset(), g.focusScratchView.Reset();
+    g.focusScratchDesc = {};
+    g.blitVs.Reset();
+    g.blitPs.Reset(), g.featherPs.Reset(), g.squashPs.Reset();
+    g.featherBlend.Reset();
+    g.linear.Reset();
+    g.raster.Reset();
+    // The burst recorder's.
+    g.shots.clear();
+    g.crops.clear();
+    g.sources.clear();
+    g.burstTex.Reset(), g.burstRtv.Reset();
+    g.burstDesc = {};
+    g.burstFramesLeft = 0;
+    g.context.Reset();
+    g.device.Reset();
 }
 
 }  // namespace
@@ -2019,22 +2332,20 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
     ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
     if (FAILED(context.As(&g.context))) {
-        simqvfr::log_line("ats corner: no ID3D11DeviceContext1 (ranged constant buffers): off");
-        g.device.Reset();
+        simqvfr::log_line("scs corner: no ID3D11DeviceContext1 (ranged constant buffers): off");
+        release_all();
         return false;
     }
     D3D11_FEATURE_DATA_D3D11_OPTIONS opt{};
     device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &opt, sizeof(opt));
     if (!opt.ConstantBufferOffsetting || !opt.ConstantBufferPartialUpdate) {
-        simqvfr::log_line("ats corner: the device can't bind or update part of a constant buffer: off");
-        g.device.Reset();
-        g.context.Reset();
+        simqvfr::log_line("scs corner: the device can't bind or update part of a constant buffer: off");
+        release_all();
         return false;
     }
     if (!make_resources()) {
-        simqvfr::log_line("ats corner: its buffers or shader couldn't be made: off");
-        g.device.Reset();
-        g.context.Reset();
+        simqvfr::log_line("scs corner: its buffers or shader couldn't be made: off");
+        release_all();
         return false;
     }
     g.percent = static_cast<float>(percent);
@@ -2062,8 +2373,9 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
         g.focusPercentY = focusPercent;
         g.density = 1;
         const D3D11_BUFFER_DESC ld = {32, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-        device->CreateBuffer(&ld, nullptr, &g.lookCb);
-        const bool remapCb = SUCCEEDED(device->CreateBuffer(&rd, &ri, &g.remapCb));
+        // The composed box's edge (the feather shader's b1): without it the shader would read whatever the game bound.
+        const bool lookCb = SUCCEEDED(device->CreateBuffer(&ld, nullptr, &g.lookCb));
+        const bool remapCb = lookCb && SUCCEEDED(device->CreateBuffer(&rd, &ri, &g.remapCb));
         // The two ways to the scene draws' second view: NVIDIA's (the probe attached its twins unless
         // multi_view_software=1), and instancing where a vertex shader may pick the viewport.
         const lmu::MvrBackend probed = lmu::mvr_probe_backend();
@@ -2074,32 +2386,28 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
         g.preferInstanced = g.instanced && !g.mvr;
         if (g.mvr || g.instanced) {
             wanted |= (1u << ch::kDrawIndexed) | (1u << ch::kDrawIndexedInstanced);
-            simqvfr::logf("ats focus: on: each eye pass's indexed scene draws also draw the middle %d%% of the view beside "
-                          "the corner, by %s (NVIDIA's %s, instancing %s; Ctrl+Alt+I switches where both are; Ctrl+Alt+B "
-                          "saves the G-buffers)",
+            simqvfr::logf("scs focus: on: each eye pass's indexed scene draws also draw the middle %d%% of the view beside "
+                          "the corner, by %s (NVIDIA's %s, instancing %s%s)",
                           focusPercent, g.mvr ? "NVIDIA's multi-view rendering" : "Sim-QVFR's own multi-view rendering (instancing)",
                           g.mvr ? "there" : support.xyzw ? "not used (multi_view_software=1)" : "not on this device",
-                          g.instanced ? "there" : "not on this device");
+                          g.instanced ? "there" : "not on this device",
+                          simqvfr::kDevBuild ? "; Ctrl+Alt+I switches where both are; Ctrl+Alt+B saves the G-buffers" : "");
         } else {  // no way to a second view on this GPU: the game is left as it is
-            simqvfr::logf("ats focus: neither NVIDIA's two views (loaded %d, xyzw %d, %s) nor a viewport index from the "
+            simqvfr::logf("scs focus: neither NVIDIA's two views (loaded %d, xyzw %d, %s) nor a viewport index from the "
                           "vertex shader on this device: QVFR stays off, the game draws as without Sim-QVFR",
                           support.loaded, support.xyzw, simqvfr::nvapi::status_name(support.status));
-            g.focusPercent = 0;
-            g.remapCb.Reset();
-            g.device.Reset();
-            g.context.Reset();
+            release_all();
             return false;
         }
     } else if (focusPercent > 0) {
-        simqvfr::logf("ats focus: off: %d%% doesn't fit beside a %d%% corner", focusPercent, percent);
+        simqvfr::logf("scs focus: off: %d%% doesn't fit beside a %d%% corner", focusPercent, percent);
     }
     if (!ch::install(g.context.Get(), wanted, o)) {
-        simqvfr::log_line("ats corner: the context couldn't be hooked: off");
-        g.device.Reset();
-        g.context.Reset();
+        simqvfr::log_line("scs corner: the context couldn't be hooked: off");
+        release_all();
         return false;
     }
-    simqvfr::logf("ats corner: on: each eye drawn into the top-left %d%% of its targets on each axis (log of the first "
+    simqvfr::logf("scs corner: on: each eye drawn into the top-left %d%% of its targets on each axis (log of the first "
                   "rewritten draws follows; a summary every 900 frames)",
                   percent);
     return true;
@@ -2111,6 +2419,10 @@ const XrFrameEndInfo* corner_frame_end(const XrFrameEndInfo* info, PFN_xrEnumera
     if (!g.context)
         return info;
     g.endFrames.fetch_add(1, std::memory_order_release);
+    // The context's entries hooked again if the game's mode changed them: on its own thread, between its commands
+    // (context_hooks.h), never inside an observer.
+    if (g.thread && GetCurrentThreadId() == g.thread)
+        ch::rescan();
     // The frame being submitted: whether its eyes went into the corner (ATS draws a frame, then ends it).
     const bool cornered = g.cornerNow.exchange(false, std::memory_order_acq_rel);
     if (g.burstFramesLeft > 0 && g.thread && GetCurrentThreadId() == g.thread && --g.burstFramesLeft == 0)
@@ -2166,8 +2478,11 @@ void corner_acquired(XrSwapchain chain, uint32_t index, PFN_xrEnumerateSwapchain
     std::lock_guard lock(g.frameMutex);
     if (State::Chain* c = chain_of(chain, enumerate)) {
         c->held.push_back(index);
+        const int eye = c->eye >= 0 ? c->eye : static_cast<int>((c - g.chains.data()) & 1);
+        if (eye == 0)  // the key of the frame's eye order (scene_eye)
+            g.acquiredIndex.store(static_cast<int>(index), std::memory_order_release);
         if (c->held.size() > 1 && g.heldTwo++ == 0)
-            simqvfr::logf("ats corner: the game acquires its next swapchain image before releasing the last one (%zu held): "
+            simqvfr::logf("scs corner: the game acquires its next swapchain image before releasing the last one (%zu held): "
                           "each release scales the oldest", c->held.size());
     }
 }
@@ -2175,9 +2490,11 @@ void corner_acquired(XrSwapchain chain, uint32_t index, PFN_xrEnumerateSwapchain
 void corner_releasing(XrSwapchain chain) {
     if (!g.context)
         return;
-    // The image this release hands back: the oldest the game holds.
+    // The image this release hands back: the oldest the game holds (taken under the lock: corner_acquired may grow the
+    // list from another thread meanwhile).
     int chainIdx = -1;
     uint32_t released = ~0u;
+    ID3D11Texture2D* image = nullptr;
     {
         std::lock_guard lock(g.frameMutex);
         for (size_t i = 0; i < g.chains.size(); ++i)
@@ -2185,29 +2502,39 @@ void corner_releasing(XrSwapchain chain) {
                 chainIdx = static_cast<int>(i);
                 released = g.chains[i].held.front();
                 g.chains[i].held.pop_front();
+                if (released < g.chains[i].images.size())
+                    image = g.chains[i].images[released];
                 break;
             }
     }
-    if (chainIdx < 0 || released >= g.chains[chainIdx].images.size())
+    if (!image)
         return;
-    if (g.thread && GetCurrentThreadId() == g.thread)
-        poll_burst_key();
-    const bool burst = g.burstFramesLeft > 0 && g.thread && GetCurrentThreadId() == g.thread;
-    if (burst && !g.active) {  // a frame without its eyes in the corner, recorded too
+    // The drawing thread's own state only on it; elsewhere the published copy.
+    const bool onThread = g.thread && GetCurrentThreadId() == g.thread;
+    const bool active = onThread ? g.active : g.activeNow.load(std::memory_order_relaxed);
+    if (onThread)
+        poll_diag_hotkeys();
+    const bool burst = onThread && g.burstFramesLeft > 0;
+    if (burst && !active) {  // a frame without its eyes in the corner, recorded too
         std::lock_guard lock(g.frameMutex);
-        shoot(g.chains[chainIdx].images[released], chainIdx, released, true, false);
+        shoot(image, chainIdx, released, true, false);
     }
-    if (!g.active)
+    if (!active)
         return;  // a frame without its eyes in the corner: the image as the game drew it
-    if (GetCurrentThreadId() != g.thread) {
+    if (!onThread) {
         if (g.otherThreadReleases++ == 0)
-            simqvfr::log_line("ats corner: a swapchain image released off the render thread: not scaled (the corner is cut "
+            simqvfr::log_line("scs corner: a swapchain image released off the render thread: not scaled (the corner is cut "
                               "at xrEndFrame instead)");
         return;
     }
     std::lock_guard lock(g.frameMutex);
-    State::Chain& c = g.chains[chainIdx];
-    ID3D11Texture2D* image = c.images[released];
+    State::Chain* found = nullptr;  // found again: the list may have changed since
+    for (State::Chain& x : g.chains)
+        if (x.handle == chain)
+            found = &x;
+    if (!found)
+        return;
+    State::Chain& c = *found;
     D3D11_TEXTURE2D_DESC d;
     image->GetDesc(&d);
     const UINT cw = static_cast<UINT>(std::max(1L, std::lround(d.Width * g.fx)));
@@ -2252,19 +2579,9 @@ void corner_session_end() {
     if (!g.context)
         return;
     ch::uninstall();
-    std::lock_guard lock(g.frameMutex);
-    g.chains.clear();  // the session's swapchains go with it (ATS makes new ones when its AA setting changes)
-    g.targets.clear();
-    two_views(false);
-    g.remapCb.Reset();
-    g.gbufferTex.Reset();
-    g.twinViews.clear();
-    g.texes.clear();
-    g.twinBytes = 0;
-    simqvfr::logf("ats corner: at session end: %llu frames, %llu with the eyes in the corner",
+    simqvfr::logf("scs corner: at session end: %llu frames, %llu with the eyes in the corner",
                   static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames));
-    g.context.Reset();
-    g.device.Reset();
+    release_all();  // the session's swapchains go with it (ATS makes new ones when its AA setting changes)
 }
 
-}  // namespace ats
+}  // namespace scs

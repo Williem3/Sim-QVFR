@@ -1,4 +1,4 @@
-// Offline check of ATS's eye-pass probe (games/ats/pass_probe.h) and the context hooks under it (engine/context_hooks.h).
+// Offline check of the SCS games' eye-pass probe (games/scssoftware/pass_probe.h) and the context hooks under it (engine/context_hooks.h).
 // The tracker gets the bind sequence of the 100% capture (docs/recon-ats.md "Capture census at Scaling 100%"): shared
 // work with 512-wide probe G-buffers, two eye passes back to back, the post from a quarter-size target. Then the hooks on
 // a WARP device: binds and draws reach the observers, also after the context's multithread protection went on (d3d11
@@ -14,7 +14,7 @@
 #include <wrl/client.h>
 
 #include "engine/context_hooks.h"
-#include "games/ats/pass_probe.h"
+#include "games/scssoftware/pass_probe.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -27,7 +27,7 @@ void check(bool ok, const char* what) {
     failures += ok ? 0 : 1;
 }
 
-using ats::PassTracker;
+using scs::PassTracker;
 
 PassTracker::Bind bind(unsigned targets, bool depth, unsigned w, unsigned h, int id) {
     PassTracker::Bind b;
@@ -103,7 +103,7 @@ void tracker_checks() {
     check(cut.passes == 1 && cut.end[0] == PassTracker::End::frameEnd && cut.pass[0].draws == 10,
           "a pass still open at xrEndFrame is ended by it");
 
-    ats::PassSummary s;
+    scs::PassSummary s;
     s.add(f);
     s.add(g);
     s.add(menu);

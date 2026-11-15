@@ -349,10 +349,13 @@ std::vector<Tile> picture_tiles() {
                        L"", 3, L"View & helmet"});
     }
     const bool nativeQuad = game_has(&games::GameFeatures::nativeQuadViews), ownDlss = game_has(&games::GameFeatures::sideLoadedDlss),
-               cheeky = game_has(&games::GameFeatures::foveatedDlss);
-    if (method_shown() || nativeQuad || ownDlss || cheeky) {
+               cheeky = game_has(&games::GameFeatures::foveatedDlss),
+               layerMv = game_has(&games::GameFeatures::layerMultiView);
+    if (method_shown() || nativeQuad || ownDlss || cheeky || layerMv) {
         std::wstring line = q ? L"" : L"Legacy method (Two-loop)";
         const auto add = [&line](const std::wstring& part) { line += (line.empty() ? L"" : L" · ") + part; };
+        if (layerMv && q)
+            add(L"Focus view by " + layer_multi_view_way());
         if (ownDlss)
             add(own_dlss_available() && app.s.dlss.on ? L"DLSS on" : L"DLSS off");
         if (cheeky)

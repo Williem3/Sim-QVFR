@@ -10,43 +10,46 @@
 #include "../identity_adapter.h"
 #include "../lmu/mvr_probe.h"
 #include "corner.h"
-#include "game.h"
+#include "ats/game.h"
+#include "ets2/game.h"
 #include "pass_probe.h"
 
-namespace ats {
+namespace scs {
 namespace {
 
-// Identity only: the layer logs and QVFR doesn't start. Two log-only probes on the game's D3D11 device, each on unless
-// its [experiment] key is 0:
-//   - ats_pass_probe: the eye passes found from the render-target binds, their CPU time and draws (pass_probe.h);
-//   - ats_shader_probe: every vertex shader converted to draw a second view and created through NVAPI (gate MV2 of the
-//     multi-view playbook), then released. LMU's probe for now (its log lines say "lmu mvr probe"); it moves to
-//     src/engine when ATS needs more of it than counting.
-// And stage 1 of its QVFR, off unless asked: ats_corner = N (percent): each eye drawn into the top-left N% of its own
-// targets on each axis, the layer submitting that corner (corner.h). The pass probe stays off with it (one set of
-// context hooks).
-class AtsAdapter final : public simqvfr::games::IdentityAdapter {
+// QVFR at the D3D11 level (corner.h), on unless mode is off or [experiment] scs_qvfr=0. Its parts:
+//   - scs_shader_probe: every vertex shader given its twins (NVIDIA's two views and the instanced one) at creation.
+//     LMU's probe for now (its log lines say "lmu mvr probe"); it moves to src/engine with the rest of LMU's multi-view;
+//   - the corner and the focus view (scs_corner / scs_focus, percent);
+//   - scs_pass_probe: log-only, the eye passes found from the render-target binds (pass_probe.h); off while the corner
+//     runs (one set of context hooks).
+class ScsAdapter final : public simqvfr::games::IdentityAdapter {
 public:
-    AtsAdapter() : IdentityAdapter(&kGame) {}
+    explicit ScsAdapter(const simqvfr::games::GameInfo* game) : IdentityAdapter(game) {}
 
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
         IdentityAdapter::instance_created(ini, mode);
-        passProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"ats_pass_probe", 1, ini) != 0;
-        shaderProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"ats_shader_probe", 1, ini) != 0;
+        passProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"scs_pass_probe", 1, ini) != 0;
+        shaderProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"scs_shader_probe", 1, ini) != 0;
         // QVFR at the D3D11 level: on by default, with the launcher's QVFR switch ([experiment] mode other than off) and
-        // [experiment] ats_qvfr (default 1). The focus view's scene draws by NVIDIA's multi-view rendering where the
+        // [experiment] scs_qvfr (default 1). The focus view's scene draws by NVIDIA's multi-view rendering where the
         // device has it, by Sim-QVFR's own (instancing) on every other GPU: the corner picks at xrCreateSession.
-        // ats_corner / ats_focus: the launch's sizes in percent (70 / 30; 0: that part off); the headset menu's sizes
-        // ([quad] periphery_scale, focus_percent) take over at the first live read.
+        // scs_corner / scs_focus: the launch's sizes in percent (70 / 30; 0: that part off); the headset menu's sizes
+        // ([experiment] periphery_scale, focus_percent) take over at the first live read.
         wchar_t iniMode[32] = L"";
         if (ini)
             GetPrivateProfileStringW(L"experiment", L"mode", L"off", iniMode, 32, ini);
         const bool qvfr = analysis() && ini && _wcsicmp(iniMode, L"off") != 0 &&
-                          GetPrivateProfileIntW(L"experiment", L"ats_qvfr", 1, ini) != 0;
-        cornerPercent_ = qvfr ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"ats_corner", 70, ini)) : 0;
+                          GetPrivateProfileIntW(L"experiment", L"scs_qvfr", 1, ini) != 0;
+        const simqvfr::games::GameInfo::Defaults& sizes = info()->defaults;
+        cornerPercent_ = qvfr ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"scs_corner",
+                                                                        sizes.periphery > 0 ? sizes.periphery : 70, ini))
+                              : 0;
         if (cornerPercent_ <= 0 || cornerPercent_ >= 100)
             cornerPercent_ = 0;
-        focusPercent_ = cornerPercent_ ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"ats_focus", 30, ini)) : 0;
+        focusPercent_ = cornerPercent_ ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"scs_focus",
+                                                                                 sizes.focusWidth > 0 ? sizes.focusWidth : 30, ini))
+                                       : 0;
         if (focusPercent_ < 0 || focusPercent_ + cornerPercent_ > 100)
             focusPercent_ = cornerPercent_ <= 90 ? std::min(30, 100 - cornerPercent_) : 0;
         if (focusPercent_ > 0)
@@ -55,7 +58,7 @@ public:
             shaderProbe_ = lmu::mvr_probe_install(ini, focusPercent_ > 0);
         if (cornerPercent_)
             passProbe_ = false;
-        simqvfr::logf("ats: QVFR at the D3D11 level %s (mode=%ls, ats_qvfr): corner %d%%, focus box %d%%; probes: pass %s, "
+        simqvfr::logf("scs: QVFR at the D3D11 level %s (mode=%ls, scs_qvfr): corner %d%%, focus box %d%%; probes: pass %s, "
                       "shader %s",
                       cornerPercent_ ? "on" : "off", iniMode, cornerPercent_, focusPercent_, passProbe_ ? "on" : "off",
                       shaderProbe_ ? "on" : "off");
@@ -64,8 +67,8 @@ public:
     // The focus box follows the gaze: where it points on each eye's screen (x right, y down, 0..1), from the eye's
     // field of view. Untracked: straight ahead (not the screen's middle: the eyes' fields of view are lopsided).
     bool wants_gaze() const override { return cornerPercent_ > 0 && focusPercent_ > 0; }
-    // The overlay and the headset menu, and the menu's sizes live ([quad] periphery_scale and focus_percent: the menu
-    // shows what runs, so they apply from the first read on; [experiment] ats_corner / ats_focus size the launch and
+    // The overlay and the headset menu, and the menu's sizes live ([experiment] periphery_scale and focus_percent: the menu
+    // shows what runs, so they apply from the first read on; [experiment] scs_corner / scs_focus size the launch and
     // switch the path on).
     bool shows_overlay() const override { return cornerPercent_ > 0; }
     // The overlay's badge: MVR (NVIDIA's multi-view rendering) or SMVR (Sim-QVFR's own, instancing), as drawn this frame.
@@ -83,7 +86,7 @@ public:
                   fy = static_cast<int>(std::lround(v.focusY * 100)), density = static_cast<int>(std::lround(v.density * 100));
         gaze_ = v.gaze;
         if (!liveSeen_ || corner != liveCorner_ || fx != liveFocus_ || fy != liveFocusY_ || density != liveDensity_) {
-            simqvfr::logf("ats: the menu's sizes: periphery %d%%, focus box %d%% x %d%% at %d%% density", corner, fx, fy, density);
+            simqvfr::logf("scs: the menu's sizes: periphery %d%%, focus box %d%% x %d%% at %d%% density", corner, fx, fy, density);
             corner_set_live(corner, fx, fy, density);
         }
         corner_set_look(static_cast<float>(v.feather), static_cast<float>(v.cornerRadius), v.border, v.borderColor);
@@ -149,9 +152,9 @@ private:
 
 }  // namespace
 
-simqvfr::games::GameAdapter& adapter() {
-    static AtsAdapter a;
-    return a;
+simqvfr::games::GameAdapter& adapter(const simqvfr::games::GameInfo* game) {
+    static ScsAdapter ats(&::ats::kGame), ets2(&::ets2::kGame);
+    return game == &::ets2::kGame ? ets2 : ats;
 }
 
-}  // namespace ats
+}  // namespace scs

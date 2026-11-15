@@ -1,7 +1,7 @@
-// ATS's eye passes found from the D3D11 calls alone, log only ([experiment] ats_pass_probe, default 1): the first step
-// of its API-level QVFR (docs/recon-ats.md "API-level QVFR design"). Nothing the game draws changes.
+// ATS's eye passes found from the D3D11 calls alone, log only ([experiment] scs_pass_probe, default 1): the first step
+// of its API-level QVFR (docs/recon-ats.md, local "API-level QVFR design"). Nothing the game draws changes.
 //
-// What the capture census showed (docs/recon-ats.md "Capture census at Scaling 100%"): after the shared work (shadows,
+// What the capture census showed (docs/recon-ats.md, local "Capture census at Scaling 100%"): after the shared work (shadows,
 // probes, a deferred reflection renderer at 512x512 / 512x1024), each eye binds a G-buffer of 4 render targets with a
 // depth target at the eye's size, then draws its AO at half size, light volumes and the forward pass; the eyes run back
 // to back; post-processing for both starts at a quarter-size target (luminance) after the second eye. So:
@@ -21,7 +21,7 @@
 
 struct ID3D11Device;
 
-namespace ats {
+namespace scs {
 
 // The bookkeeping, without D3D11 (tests drive it with plain sizes and times).
 class PassTracker {
@@ -89,4 +89,4 @@ bool pass_probe_install(ID3D11Device* device);
 void pass_probe_frame_end();
 void pass_probe_session_end();
 
-}  // namespace ats
+}  // namespace scs

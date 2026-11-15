@@ -11,7 +11,7 @@
 #include "../../engine/context_hooks.h"
 #include "../../log.h"
 
-namespace ats {
+namespace scs {
 
 // ---- PassTracker ----
 
@@ -169,7 +169,7 @@ void log_frame(const PassTracker::Frame& f) {
         at += std::snprintf(passes + at, sizeof(passes) - at, " | pass %d %.2f ms %llu draws (%llu instanced), ended by %s",
                             p, f.pass[p].ms, static_cast<unsigned long long>(f.pass[p].draws),
                             static_cast<unsigned long long>(f.pass[p].instanced), PassTracker::end_name(f.end[p]));
-    simqvfr::logf("ats pass probe: frame %llu: eye %ux%u, shared %.2f ms %llu draws%s | post+rest %.2f ms %llu draws",
+    simqvfr::logf("scs pass probe: frame %llu: eye %ux%u, shared %.2f ms %llu draws%s | post+rest %.2f ms %llu draws",
                   static_cast<unsigned long long>(g.frames), f.eyeWidth, f.eyeHeight, f.shared.ms,
                   static_cast<unsigned long long>(f.shared.draws), passes, f.post.ms,
                   static_cast<unsigned long long>(f.post.draws));
@@ -186,7 +186,7 @@ void take_frame_end(double t) {
     if (f.eyeWidth != g.loggedWidth || f.eyeHeight != g.loggedHeight) {
         g.loggedWidth = f.eyeWidth;
         g.loggedHeight = f.eyeHeight;
-        simqvfr::logf("ats pass probe: the eye passes' G-buffer is %ux%u", f.eyeWidth, f.eyeHeight);
+        simqvfr::logf("scs pass probe: the eye passes' G-buffer is %ux%u", f.eyeWidth, f.eyeHeight);
     }
     if (f.passes > 0 && g.detailed < 4) {
         ++g.detailed;
@@ -194,7 +194,7 @@ void take_frame_end(double t) {
     }
     g.summary.add(f);
     if (g.summary.frames >= 900) {
-        simqvfr::logf("ats pass probe: %s; binds on other threads %llu, command lists %llu", g.summary.line().c_str(),
+        simqvfr::logf("scs pass probe: %s; binds on other threads %llu, command lists %llu", g.summary.line().c_str(),
                       static_cast<unsigned long long>(g.otherThreadBinds), static_cast<unsigned long long>(g.lists));
         g.summary = PassSummary{};
     }
@@ -235,7 +235,7 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
         }
         g.thread = self;
         g.seenEndFrames = g.endFrames.load(std::memory_order_acquire);
-        simqvfr::logf("ats pass probe: following thread %lu (its first G-buffer bind, %ux%u; %llu binds before it on "
+        simqvfr::logf("scs pass probe: following thread %lu (its first G-buffer bind, %ux%u; %llu binds before it on "
                       "any thread)", static_cast<unsigned long>(self), b.width, b.height,
                       static_cast<unsigned long long>(g.otherThreadBinds));
         g.otherThreadBinds = 0;
@@ -275,11 +275,11 @@ bool pass_probe_install(ID3D11Device* device) {
                             (1u << ch::kDrawInstanced) | (1u << ch::kDrawIndexedInstancedIndirect) |
                             (1u << ch::kDrawInstancedIndirect) | (1u << ch::kExecuteCommandList);
     if (!ch::install(context.Get(), wanted, o)) {
-        simqvfr::log_line("ats pass probe: the context couldn't be hooked: off");
+        simqvfr::log_line("scs pass probe: the context couldn't be hooked: off");
         return false;
     }
     g.context = context.Get();
-    simqvfr::log_line("ats pass probe: on (log only): eye passes found from the D3D11 render-target binds, timed on the "
+    simqvfr::log_line("scs pass probe: on (log only): eye passes found from the D3D11 render-target binds, timed on the "
                       "render thread; a summary every 900 frames");
     return true;
 }
@@ -294,8 +294,8 @@ void pass_probe_session_end() {
         return;
     simqvfr::context_hooks::uninstall();
     if (const std::string last = g.summary.line(); !last.empty())
-        simqvfr::logf("ats pass probe: at session end: %s", last.c_str());
+        simqvfr::logf("scs pass probe: at session end: %s", last.c_str());
     g.context = nullptr;
 }
 
-}  // namespace ats
+}  // namespace scs

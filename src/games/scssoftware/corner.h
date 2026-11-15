@@ -1,6 +1,8 @@
-// ATS's eyes drawn into a corner of the game's own targets, at the D3D11 level only (stage 1 of its API-level QVFR:
-// docs/recon-ats.md "Stage 1 design notes"; [experiment] ats_corner = the corner's share of each axis in percent, 0 off).
-// The room this leaves beside each eye is where its focus view goes at stage 2.
+// QVFR for SCS Software's games (American Truck Simulator, Euro Truck Simulator 2) at the D3D11 and OpenXR level only: no
+// game code hooked, no game memory written. Each eye is drawn into a corner of the game's own targets ([experiment]
+// scs_corner, the corner's share of each axis in percent), its focus view into the room beside it in the same pass (by
+// NVIDIA's multi-view rendering or by instancing), the full-screen passes replayed for the focus region, and the eye
+// scaled back over each headset image at its release. Design and runs: the local recon notes (docs/recon-ats.md).
 //
 // From an eye pass's first G-buffer bind to the frame's end, on the render thread (the one that bound it):
 //   - viewports and scissors are cut to the corner whenever the bound target has the eye's shape (the eye's targets, its
@@ -25,21 +27,22 @@
 
 struct ID3D11Device;
 
-namespace ats {
+namespace scs {
 
 struct CornerStats {
     uint64_t frames = 0, cornerFrames = 0;
-    uint64_t patched[4] = {};  // draws by CornerRule (none, pair, rect, pixelRect), vertex and pixel ranges together
-    uint64_t skipped = 0;      // non-indexed draws into other targets (the UI canvases, the desktop mirror)
-    uint64_t copyFailures = 0;
+    // Non-indexed draws into the eye's targets: constant ranges rewritten by us (which rule applied is the GPU's), or
+    // left as the game bound them (nothing of ours to rewrite).
+    uint64_t rewritten = 0, notRewritten = 0;
+    uint64_t skipped = 0;  // non-indexed draws into other targets (the UI canvases, the desktop mirror)
 };
 
-// xrCreateSession: the corner set up on the game's device ([experiment] ats_corner percent). False: off.
-// `focusPercent` ([experiment] ats_focus, stage 2; 0: off): every indexed scene draw of an eye pass (a full-size target
-// with depth) also draws that eye's focus view, the middle `focusPercent`% of its field of view on each axis at the
-// targets' own density, into the room right of the corner, through NVIDIA's multi-view rendering: the game shader's
-// twin (lmu::mvr_probe attaches it at creation), two viewports, the clip remap in vertex constant buffer 13. Nothing
-// reads that region yet: Ctrl+Alt+B also saves each eye's first G-buffer target whole, to compare it with the eye.
+// xrCreateSession: the corner set up on the game's device ([experiment] scs_corner percent). False: off.
+// `focusPercent` ([experiment] scs_focus; 0: off): every indexed scene draw of an eye pass (a full-size target with
+// depth) also draws that eye's focus view, the middle `focusPercent`% of its field of view on each axis, into the room
+// right of the corner: by NVIDIA's multi-view rendering or Sim-QVFR's own (instancing), whichever the device has (the
+// game shader's twins: lmu::mvr_probe attaches them at creation), two viewports, the clip remap in vertex constant
+// buffer 13 (the game's own put back after each draw). The focus view is composed over the eye's box at each release.
 bool corner_install(ID3D11Device* device, int percent, int focusPercent = 0);
 bool corner_on();
 // Every xrEndFrame (any thread): `info` with each projection view's image rectangle cut to the corner when the frame
@@ -63,9 +66,9 @@ void corner_set_live(int percent, int focusPercent, int focusPercentY, int densi
 // the outline and its colour (linear RGB).
 void corner_set_look(float feather, float cornerRadius, bool border, const float (&color)[4]);
 // How the focus view's scene draws go out this frame (any thread; the overlay's badge): 0 no focus view, 1 NVIDIA's
-// multi-view rendering, 2 Sim-QVFR's own (instancing), 3 the focus view switched off (Ctrl+Alt+G: the eyes alone).
+// multi-view rendering, 2 Sim-QVFR's own (instancing), 3 the focus view switched off (dev builds' Ctrl+Alt+G).
 int corner_way();
 CornerStats corner_stats();
 void corner_session_end();
 
-}  // namespace ats
+}  // namespace scs

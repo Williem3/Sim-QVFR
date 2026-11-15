@@ -1,4 +1,5 @@
-// Live diagnostic switches for a game's render passes, for developers ([experiment] <prefix>_diag=1 at launch;
+// Live diagnostic switches for a game's render passes, for developers (development builds only, dev_build.h;
+// [experiment] <prefix>_diag=1 at launch;
 // manifest/sim-qvfr.ini): switch k (0 based) toggles with Ctrl+Alt+<k + 1>, and the ini's <prefix>_diag_<name>_off = 1
 // sets it (re-read every 45 frames, from the launcher's own ini so it can be edited while the game runs). Each game
 // decides what a switch turns off (X-Plane: shader edits; ACC: console variables).
@@ -9,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "../dev_build.h"
+
 namespace simqvfr::games {
 
 class DiagSwitches {
@@ -16,7 +19,8 @@ public:
     // At launch: on with [experiment] <prefix>_diag=1 in `ini`; `names` the switches, in hotkey order (at most 9).
     // The keys are then read from SIM_QVFR_SETTINGS (the launcher's ini), else `ini`. False: off.
     bool start(const wchar_t* ini, const wchar_t* prefix, std::vector<std::wstring> names) {
-        if (!ini || GetPrivateProfileIntW(L"experiment", (std::wstring(prefix) + L"_diag").c_str(), 0, ini) != 1)
+        // Development builds only (dev_build.h): a release ignores <prefix>_diag.
+        if (!kDevBuild || !ini || GetPrivateProfileIntW(L"experiment", (std::wstring(prefix) + L"_diag").c_str(), 0, ini) != 1)
             return false;
         wchar_t settings[MAX_PATH] = {};
         const DWORD n = GetEnvironmentVariableW(L"SIM_QVFR_SETTINGS", settings, MAX_PATH);

@@ -1,4 +1,4 @@
-// Offline check of ATS's corner (games/ats/corner.h, corner_rules.h; docs/recon-ats.md "Stage 1 design notes").
+// Offline check of the SCS games' corner (games/scssoftware/corner.h, corner_rules.h; docs/recon-ats.md "Stage 1 design notes").
 // 1. The rules on the constant ranges captured from the game (ats_frame5585.rdc): the deferred pair, the source
 //    rectangle, the histogram's pixel rectangle, and ranges left alone.
 // 2. On a WARP device through the real hooks: a G-buffer bind starts the corner; a full-screen pass shaped like Prism's
@@ -17,9 +17,9 @@
 #include <wrl/client.h>
 
 #include "engine/dxbc_patch.h"
-#include "games/ats/corner.h"
+#include "games/scssoftware/corner.h"
 #include "games/lmu/mvr_probe.h"
-#include "games/ats/corner_rules.h"
+#include "games/scssoftware/corner_rules.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -47,60 +47,60 @@ XrResult XRAPI_CALL fake_enumerate(XrSwapchain, uint32_t capacity, uint32_t* cou
 }
 
 void rules_checks() {
-    using ats::CornerRule;
+    using scs::CornerRule;
     {  // VS 152: the screen rectangle stays, the pair is rewritten
         float v[4][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 25.4547f}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
-        const CornerRule r = ats::corner_patch(v, 4, 0.5f, 0.25f);
-        check(r == CornerRule::pair && ats::corner_eq(v[0], 0, 0, 1, 1) && ats::corner_eq(v[2], 0.5f, 0.25f, 2, 4) &&
-                  ats::corner_eq(v[3], 2596, 1042, 0.5f, 0.25f) && v[1][3] == 25.4547f,
+        const CornerRule r = scs::corner_patch(v, 4, 0.5f, 0.25f);
+        check(r == CornerRule::pair && scs::corner_eq(v[0], 0, 0, 1, 1) && scs::corner_eq(v[2], 0.5f, 0.25f, 2, 4) &&
+                  scs::corner_eq(v[3], 2596, 1042, 0.5f, 0.25f) && v[1][3] == 25.4547f,
               "rules: VS 152's pair rewritten, its screen rectangle and parameters kept");
     }
     {  // VS 629: the pair at 3
         float v[5][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 0}, {0.5f, 0.5f, 5, 0}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
-        check(ats::corner_patch(v, 5, 0.5f, 0.5f) == CornerRule::pair && ats::corner_eq(v[3], 0.5f, 0.5f, 2, 2) &&
-                  ats::corner_eq(v[4], 2596, 2084, 0.5f, 0.5f) && ats::corner_eq(v[2], 0.5f, 0.5f, 5, 0),
+        check(scs::corner_patch(v, 5, 0.5f, 0.5f) == CornerRule::pair && scs::corner_eq(v[3], 0.5f, 0.5f, 2, 2) &&
+                  scs::corner_eq(v[4], 2596, 2084, 0.5f, 0.5f) && scs::corner_eq(v[2], 0.5f, 0.5f, 5, 0),
               "rules: VS 629's pair at its fourth vector rewritten");
     }
     {  // PS 631: other vectors around the pair kept
         float v[7][4] = {{0.5f, 0.5f, 1, 1}, {2.0944f, 0, 8, 1.2f}, {0.974004f, 0.25f, 0.2f, 0}, {1, 1, 1, 1},
                          {5192, 4168, 1, 1}, {2.70692f, 3.66836f, 5.02198f, 0}, {1.01879f, -0.984434f, -2.45128f, 1.96858f}};
-        const CornerRule r = ats::corner_patch(v, 7, 0.75f, 0.75f, false);
-        check(r == CornerRule::pair && ats::corner_eq(v[0], 0.5f, 0.5f, 1, 1) && close_to(v[3][2], 1 / 0.75f) &&
-                  ats::corner_eq(v[4], 3894, 3126, 0.75f, 0.75f) && v[6][0] == 1.01879f,
+        const CornerRule r = scs::corner_patch(v, 7, 0.75f, 0.75f, false);
+        check(r == CornerRule::pair && scs::corner_eq(v[0], 0.5f, 0.5f, 1, 1) && close_to(v[3][2], 1 / 0.75f) &&
+                  scs::corner_eq(v[4], 3894, 3126, 0.75f, 0.75f) && v[6][0] == 1.01879f,
               "rules: PS 631's pair rewritten, the AO parameters and view-ray vectors kept");
     }
     {  // VS 593 (the luminance downsample): the source rectangle
         float v[4][4] = {{1, -0.5f, 0.5f, 0.121109f}, {0, 0, 1, 1}, {5192, 4168, 1, 1}, {1.52588e-05f, 26.3437f, 0.102486f, 0}};
-        const CornerRule r = ats::corner_patch(v, 4, 0.5f, 0.5f);
-        check(r == CornerRule::rect && ats::corner_eq(v[1], 0, 0, 0.5f, 0.5f) && ats::corner_eq(v[2], 5192, 4168, 1, 1),
+        const CornerRule r = scs::corner_patch(v, 4, 0.5f, 0.5f);
+        check(r == CornerRule::rect && scs::corner_eq(v[1], 0, 0, 0.5f, 0.5f) && scs::corner_eq(v[2], 5192, 4168, 1, 1),
               "rules: VS 593's source rectangle cut, its source size kept");
     }
     {  // VS 571 (a bloom downsample, two vectors) with another draw's pair left behind it in the block: the cause of
        // the strobe. The rectangle is cut all the same, the left-over untouched.
         float v[16][4] = {{1, -0.5f, 0.5f, 0.121109f}, {0, 0, 1, 1}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
-        const CornerRule r = ats::corner_patch(v, 16, 0.7f, 0.7f);
-        check(r == CornerRule::rect && ats::corner_eq(v[1], 0, 0, 0.7f, 0.7f) && ats::corner_eq(v[2], 1, 1, 1, 1) &&
-                  ats::corner_eq(v[3], 5192, 4168, 1, 1),
+        const CornerRule r = scs::corner_patch(v, 16, 0.7f, 0.7f);
+        check(r == CornerRule::rect && scs::corner_eq(v[1], 0, 0, 0.7f, 0.7f) && scs::corner_eq(v[2], 1, 1, 1, 1) &&
+                  scs::corner_eq(v[3], 5192, 4168, 1, 1),
               "rules: a downsample's rectangle cut although another draw's pair is left behind it");
     }
     {  // VS 394 (a blur: rectangle times the pair): only the rectangle, or the blur would shrink twice
         float v[5][4] = {{1, -0.5f, 0.5f, 1}, {0, 0, 1, 1}, {1, 1, 1, 1}, {5192, 4168, 1, 1}, {2.7f, 3.6f, 5, 0}};
-        check(ats::corner_patch(v, 5, 0.7f, 0.7f) == CornerRule::rect && ats::corner_eq(v[1], 0, 0, 0.7f, 0.7f) &&
-                  ats::corner_eq(v[2], 1, 1, 1, 1),
+        check(scs::corner_patch(v, 5, 0.7f, 0.7f) == CornerRule::rect && scs::corner_eq(v[1], 0, 0, 0.7f, 0.7f) &&
+                  scs::corner_eq(v[2], 1, 1, 1, 1),
               "rules: VS 394's rectangle cut once (its pair kept whole)");
     }
     {  // VS 62 (the final blit) with a left-over pair behind it: the source cut, the destination kept
         float v[16][4] = {{0, 0, 1, 1}, {0, 0, 1, 1}, {7, 7, 7, 7}, {1, 1, 1, 1}, {1298, 1042, 1, 1}};
-        const CornerRule r = ats::corner_patch(v, 16, 0.5f, 0.5f);
-        check(r == CornerRule::rect && ats::corner_eq(v[0], 0, 0, 0.5f, 0.5f) && ats::corner_eq(v[1], 0, 0, 1, 1) &&
-                  ats::corner_eq(v[3], 1, 1, 1, 1),
+        const CornerRule r = scs::corner_patch(v, 16, 0.5f, 0.5f);
+        check(r == CornerRule::rect && scs::corner_eq(v[0], 0, 0, 0.5f, 0.5f) && scs::corner_eq(v[1], 0, 0, 1, 1) &&
+                  scs::corner_eq(v[3], 1, 1, 1, 1),
               "rules: VS 62's source rectangle cut, its destination kept, a left-over pair ignored");
     }
     {  // VS 388 (the histogram): its pixel rectangle in the luminance target
         float v[3][4] = {{1298, 1042, 1, 1}, {0, 24.75f, 1290, 992}, {0, 0, 0, 0}};
-        const CornerRule r = ats::corner_patch(v, 3, 0.5f, 0.5f);
-        check(r == CornerRule::pixelRect && ats::corner_eq(v[1], 0, 12.375f, 645, 496) &&
-                  ats::corner_eq(v[0], 1298, 1042, 1, 1),
+        const CornerRule r = scs::corner_patch(v, 3, 0.5f, 0.5f);
+        check(r == CornerRule::pixelRect && scs::corner_eq(v[1], 0, 12.375f, 645, 496) &&
+                  scs::corner_eq(v[0], 1298, 1042, 1, 1),
               "rules: VS 388's pixel rectangle cut");
     }
     {  // a scene draw's matrix rows, and a pixel range without a pair: nothing
@@ -110,8 +110,8 @@ void rules_checks() {
         float w[2][4] = {{0.000192604f, 0.000239923f, 0.000856936f, -0.00152038f}, {0, 0, 1, 1}};
         float wBefore[2][4];
         std::memcpy(wBefore, w, sizeof(w));
-        check(ats::corner_patch(v, 4, 0.5f, 0.5f) == CornerRule::none && std::memcmp(before, v, sizeof(v)) == 0 &&
-                  ats::corner_patch(w, 2, 0.5f, 0.5f, false) == CornerRule::none && std::memcmp(wBefore, w, sizeof(w)) == 0,
+        check(scs::corner_patch(v, 4, 0.5f, 0.5f) == CornerRule::none && std::memcmp(before, v, sizeof(v)) == 0 &&
+                  scs::corner_patch(w, 2, 0.5f, 0.5f, false) == CornerRule::none && std::memcmp(wBefore, w, sizeof(w)) == 0,
               "rules: a vertex range of another layout and a pixel range without a pair left alone");
     }
 }
@@ -206,7 +206,7 @@ void warp_checks() {
         context->Unmap(gameCb.Get(), 0);
     }
 
-    check(ats::corner_install(device.Get(), 50, 30) && ats::corner_on(), "corner installed (50%, focus 30%) on a WARP device");
+    check(scs::corner_install(device.Get(), 50, 30) && scs::corner_on(), "corner installed (50%, focus 30%) on a WARP device");
 
     // The game's frame: a G-buffer bind (the corner starts), then a full-screen pass into an eye-sized target.
     ID3D11RenderTargetView* const gbs[] = {gb[0].Get(), gb[1].Get(), gb[2].Get(), gb[3].Get()};
@@ -307,13 +307,13 @@ void warp_checks() {
         context->ClearRenderTargetView(dv.Get(), decoyClear);
     }
     decoyImage = decoyTex.Get();
-    const XrFrameEndInfo* sent = ats::corner_frame_end(&info, &fake_enumerate);  // the image not seen bound yet: the cut
+    const XrFrameEndInfo* sent = scs::corner_frame_end(&info, &fake_enumerate);  // the image not seen bound yet: the cut
     const auto* sentProj = reinterpret_cast<const XrCompositionLayerProjection*>(sent->layers[0]);
     check(sent != &info && sentProj->views[1].subImage.imageRect.extent.width == static_cast<int32_t>(W / 2) &&
               sentProj->views[1].subImage.imageRect.extent.height == static_cast<int32_t>(H / 2) &&
               views[1].subImage.imageRect.extent.width == static_cast<int32_t>(W),
           "the frame's end submits each eye's corner (the game's own structures untouched)");
-    check(ats::corner_frame_end(&info, &fake_enumerate) == &info, "a frame without its eyes in the corner (a menu) is submitted as drawn");
+    check(scs::corner_frame_end(&info, &fake_enumerate) == &info, "a frame without its eyes in the corner (a menu) is submitted as drawn");
     context->OMSetRenderTargets(1, outs, nullptr);
     seenCount = 1;
     context->RSGetViewports(&seenCount, &seen);
@@ -473,9 +473,9 @@ void warp_checks() {
             check(false, "the copy read back");
         }
     }
-    ats::corner_acquired(XR_NULL_HANDLE, 0, &fake_enumerate);  // the game's image for this frame
-    ats::corner_acquired(XR_NULL_HANDLE, 1, &fake_enumerate);  // and its next one, before releasing this (as ATS does)
-    ats::corner_releasing(XR_NULL_HANDLE);                      // hands back image 0: scaled before the runtime reads it
+    scs::corner_acquired(XR_NULL_HANDLE, 0, &fake_enumerate);  // the game's image for this frame
+    scs::corner_acquired(XR_NULL_HANDLE, 1, &fake_enumerate);  // and its next one, before releasing this (as ATS does)
+    scs::corner_releasing(XR_NULL_HANDLE);                      // hands back image 0: scaled before the runtime reads it
     {
         D3D11_TEXTURE2D_DESC dsd;
         decoyTex->GetDesc(&dsd);
@@ -494,7 +494,7 @@ void warp_checks() {
             check(false, "the decoy read back");
         }
     }
-    const XrFrameEndInfo* sent2 = ats::corner_frame_end(&info, &fake_enumerate);
+    const XrFrameEndInfo* sent2 = scs::corner_frame_end(&info, &fake_enumerate);
     const auto* sentProj2 = reinterpret_cast<const XrCompositionLayerProjection*>(sent2->layers[0]);
     check(sentProj2->views[0].subImage.imageRect.extent.width == static_cast<int32_t>(W) &&
               sentProj2->views[0].subImage.imageRect.extent.height == static_cast<int32_t>(H),
@@ -530,7 +530,7 @@ void warp_checks() {
     if (boundPs)
         boundPs->Release();
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
-    ats::corner_session_end();
+    scs::corner_session_end();
 }
 
 }  // namespace

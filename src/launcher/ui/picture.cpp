@@ -36,6 +36,17 @@ bool own_dlss_available(std::wstring* why) {
     return reason.empty();
 }
 
+std::wstring layer_multi_view_way(bool full) {
+    // What the layer picks at the game's device (scssoftware/corner.cpp): NVIDIA's where the card has it, else instancing.
+    if (const nvapi::Gpu* gpu = nvapi::two_views_gpu()) {
+        if (!full)
+            return L"NVIDIA’s multi-view rendering";
+        return L"NVIDIA’s multi-view rendering, on your " + std::wstring(gpu->name.begin(), gpu->name.end());
+    }
+    return full ? L"Sim-QVFR’s own multi-view rendering (instancing), since no NVIDIA RTX card (20 series or newer) was found"
+                : L"Sim-QVFR’s multi-view rendering";
+}
+
 bool own_nr_available(std::wstring* why) {
     std::wstring reason;
     if (!own_dlss_available(&reason))
@@ -271,9 +282,12 @@ std::wstring native_quad_last() {
     return L"";
 }
 
-// The method (Two-loop only) and the runtime composing the views; DLSS and Foveated DLSS are their own cards, each with its
-// switch.
-bool rendering_shown() { return method_shown() || game_has(&games::GameFeatures::nativeQuadViews); }
+// The method (Two-loop only), the runtime composing the views, and how a layer multi-view game draws its focus view; DLSS
+// and Foveated DLSS are their own cards, each with its switch.
+bool rendering_shown() {
+    return method_shown() || game_has(&games::GameFeatures::nativeQuadViews) ||
+           game_has(&games::GameFeatures::layerMultiView);
+}
 
 Card rendering_card() {
     Card c{Tab::Picture, L"Rendering"};
@@ -295,6 +309,15 @@ Card rendering_card() {
                     b.note(native_quad_last());
                 if (on && app.runtime.session.frameGeneration)  // only when it matters
                     b.note(L"Off while frame generation runs: it needs one composed image.");
+            }
+        }
+        if (game_has(&games::GameFeatures::layerMultiView)) {
+            if (!qvfr()) {
+                b.note(L"The focus view is drawn in Quad View Foveated Rendering.");
+            } else {
+                b.note(L"Each eye’s pass also draws its focus view, by " + layer_multi_view_way(true) + L".");
+                b.note(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the first frame that "
+                       L"draws the world for each eye.");
             }
         }
     };

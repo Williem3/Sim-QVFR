@@ -1,11 +1,11 @@
-// American Truck Simulator's identity (../game.h). Known by its identity alone so far: the layer only logs there
-// (docs/recon-ats.md). Its VR renders with D3D11 and reaches OpenXR on its own (a Khronos loader linked into the exe).
-// Its QVFR is to come through the OpenXR and D3D11 layers alone: no game code hooked, no game memory written.
+// American Truck Simulator's identity (../../game.h). Its VR renders with D3D11 and reaches OpenXR on its own (a Khronos
+// loader linked into the exe). Its QVFR runs through the OpenXR and D3D11 layers alone (../corner.h): no game code
+// hooked, no game memory written.
 #pragma once
 
 #include <iterator>
 
-#include "../game.h"
+#include "../../game.h"
 
 namespace ats {
 
@@ -19,8 +19,12 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"-openxr -experimental_vr -rdevice dx11",
     nullptr,                   // OpenXR of its own
     nullptr,                   // no DLSS
-    {false, false, false, false, false, false},
+    // QVFR through the D3D11 layer, the focus view by multi-view rendering (layerMultiView); nothing else yet.
+    {false, false, false, false, false, false, false, false, false, false, true},
     kBuilds, std::size(kBuilds),
+    false,                     // no early load
+    nullptr, nullptr, nullptr, // no crash reporter of its own, no anti-cheat
+    {40, 150, 25, 25},         // a fresh install: periphery 40%, focus density 150%, focus box 25% x 25%
 };
 
 }  // namespace ats
