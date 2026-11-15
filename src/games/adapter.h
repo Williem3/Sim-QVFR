@@ -189,9 +189,17 @@ public:
     // on) but still shows the overlay and the headset menu, and takes the menu's sizes live: the periphery's and the
     // focus box's shares of the eye (0..1) and eye tracking on or off, at every live read of the ini.
     virtual bool shows_overlay() const { return false; }
-    virtual void live_sizes(double periphery, double focusX, double focusY, bool gaze) {
-        (void)periphery, (void)focusX, (void)focusY, (void)gaze;
-    }
+    struct LiveView {
+        double periphery = 1;           // the eye's own density, a share of native (0..1)
+        double focusX = 0.3, focusY = 0.3;  // the focus box's shares of the eye's screen
+        double density = 1;             // the focus view's density, a share of native
+        double feather = 0.1;           // the box's blended edge, a share of half its shorter side
+        double cornerRadius = 0;        // rounded corners, a share of half its shorter side
+        bool border = false;            // the outline
+        float borderColor[4] = {0, 1, 0, 1};
+        bool gaze = true;               // eye tracking
+    };
+    virtual void live_view(const LiveView& view) { (void)view; }
     // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
     // it begins, the runtime may have no views to answer with.
     virtual void session_running(bool running) { (void)running; }

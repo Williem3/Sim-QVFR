@@ -28,6 +28,7 @@
 #include "xr.h"
 #include "layer/layer.h"
 #include "probe/focus_ngx.h"
+#include "probe/hang_watch.h"
 
 namespace simqvfr::layer {
 
@@ -220,6 +221,10 @@ void menu_open(int64_t now) {
         if (game->shows_overlay()) {  // QVFR at the D3D11 level (ATS): the settings page, its sizes live
             menu.model.launch.qvfr = true;
             menu.model.launch.liveResolution = true;
+            menu.model.launch.cropPage = false;  // no view crop, helmet, focus shape or optimizer on this path
+            menu.model.launch.helmetPage = false;
+            menu.model.launch.shapePage = false;
+            menu.model.launch.optimize = false;
         }
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.
@@ -493,11 +498,16 @@ void menu_render() {
     uint32_t index = 0;
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     wait.timeout = 100'000'000;
+    hang_watch_stage("menu panel: xrAcquireSwapchainImage");
     if (XR_FAILED(next.AcquireSwapchainImage(menu.chain, nullptr, &index)))
         return;
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() &&
-                    menu.upload && menu.upload->upload(menu.images[index], pixels);
+    hang_watch_stage("menu panel: xrWaitSwapchainImage");
+    bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() && menu.upload;
+    hang_watch_stage("menu panel: the upload");
+    ok = ok && menu.upload->upload(menu.images[index], pixels);
+    hang_watch_stage("menu panel: xrReleaseSwapchainImage");
     next.ReleaseSwapchainImage(menu.chain, nullptr);
+    hang_watch_stage("menu panel: done");
     if (ok) {
         menu.uploaded = true;
         menu.dirty = false;

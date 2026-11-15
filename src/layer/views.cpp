@@ -59,6 +59,14 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
                 tan[e][1] = d.y / -d.z;
             }
         }
+        // The menu's vertical offset: on the gaze when tracked, on straight ahead otherwise (focus_offset.h).
+        for (int e = 0; e < 2; ++e) {
+            const bool tracked = gazing && valid[e];
+            tan[e][0] = tracked ? tan[e][0] : 0;
+            tan[e][1] = static_cast<float>(offset_tan_y(tracked ? tan[e][1] : 0,
+                                                        tracked ? experiment.gazeOffsetY : experiment.fixedOffsetY));
+            valid[e] = true;
+        }
         game->qvfr_set_gaze(tan, valid, gazing);
     }
     if (experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) {

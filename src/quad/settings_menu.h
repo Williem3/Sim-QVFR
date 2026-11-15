@@ -116,6 +116,8 @@ struct MenuLaunch {
     // while it runs (otherwise at the next launch).
     bool cropPage = true, helmetPage = true, liveResolution = true;
     bool fgPage = true;  // Cheeky's frame generation page (GameFeatures::frameGeneration)
+    // The Focus shape page and the optimizer: off for a game whose path has neither (ATS).
+    bool shapePage = true, optimize = true;
     // Object detail on the settings page (GameFeatures::objectDetail): off unless the layer says the game has it, so
     // no other game ever shows it.
     bool objectDetail = false;

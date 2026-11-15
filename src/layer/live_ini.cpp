@@ -109,7 +109,17 @@ void live_apply(const LiveSettings& l) {
                         l.gaze && experiment.composing());
     if (game->shows_overlay()) {
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
-        game->live_sizes(wanted.outer, l.focusFraction, l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction, l.gaze);
+        games::GameAdapter::LiveView v;
+        v.periphery = wanted.outer;
+        v.focusX = l.focusFraction;
+        v.focusY = l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction;
+        v.density = wanted.density;
+        v.feather = l.feather;
+        v.cornerRadius = l.cornerRadius;
+        v.border = l.border;
+        std::memcpy(v.borderColor, l.borderColor, sizeof(v.borderColor));
+        v.gaze = l.gaze;
+        game->live_view(v);
     }
     logf("live: focus box %.0f%% x %.0f%%, feather %.0f%%, corners %.0f%%, outline %d, gaze %d, offset fixed %d deg, "
          "gaze %d deg, gaze dead-zone %.1f deg",

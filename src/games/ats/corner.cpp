@@ -158,6 +158,15 @@ struct State {
     // reprojections land in the last frame's box). From the gaze (corner_set_gaze), taken at the frame's start.
     std::atomic<float> gaze[2][2] = {{0.5f, 0.5f}, {0.5f, 0.5f}};
     std::atomic<int> livePercent{0}, liveFocusPercent{0};  // corner_set_live's, 0: none yet
+    std::atomic<int> liveFocusPercentY{0}, liveDensity{100};
+    // The box's height as a share of the eye's screen (focusPercent: its width) and the focus view's density: its
+    // region in the targets is box x density of them.
+    int focusPercentY = 0;
+    float density = 1;
+    // corner_set_look's: the composed box's edge.
+    std::atomic<float> lookFeather{0.12f}, lookRadius{0}, lookColor[3] = {0, 1, 0};
+    std::atomic<bool> lookBorder{false};
+    ComPtr<ID3D11Buffer> lookCb;
     std::atomic<int> way{0};  // corner_way's, set at each frame's start
     float box[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}}, prevBox[2][2] = {{0.35f, 0.35f}, {0.35f, 0.35f}};
     bool postPhase = false;  // past this eye's scene: the eye is the one whose final blit comes next
@@ -249,10 +258,20 @@ float4 squash(O i) : SV_Target {
     float3 c = max(src.SampleLevel(s, i.uv, 0).rgb, 0);
     return float4(c / (1 + c), 1);
 }
-// The focus view over the box: fading out over the outer 6% on each side.
+// The focus view over the box: a rounded box, its edge blended into the eye's picture, an outline if asked for.
+// `look`: the blend's width and the corner radius in units of half the box's shorter side, outline on, the box's
+// width over its height in pixels.
+cbuffer Look : register(b1) { float4 look; float4 lookColor; };
 float4 feather(O i) : SV_Target {
-    float2 e = min(i.uv, 1 - i.uv) / 0.06;
-    return float4(src.SampleLevel(s, i.uv, 0).rgb, saturate(min(e.x, e.y)));
+    float2 half = look.w >= 1 ? float2(look.w, 1) : float2(1, 1 / look.w);
+    float2 q = abs(i.uv * 2 - 1) * half;
+    float r = saturate(look.y);
+    float2 dd = q - (half - r);
+    float inside = r - (length(max(dd, 0)) + min(max(dd.x, dd.y), 0));  // from the edge inwards
+    float3 c = src.SampleLevel(s, i.uv, 0).rgb;
+    if (look.z > 0.5 && inside < 0.012)
+        return float4(lookColor.rgb, inside >= 0 ? 1 : 0);
+    return float4(c, saturate(inside / max(look.x, 0.002)));
 }
 )";
 
@@ -298,6 +317,10 @@ void perf_line() {
 
 void swap_bound(bool on);
 void two_views(bool on);
+float beta_x();
+float beta_y();
+float focus_fx();
+float focus_fy();
 bool blit_resources();
 DXGI_FORMAT srgb_view(DXGI_FORMAT f);
 void shoot(ID3D11Texture2D* image, int chain, uint32_t index, bool after, bool scaled, const wchar_t* tag = nullptr);
@@ -385,13 +408,27 @@ void take_frame_end() {
     g.remapEye = -1;
     if (const int want = g.livePercent.load(std::memory_order_relaxed); want > 0 && g.eyeW) {  // the menu's sizes
         const int wantFocus = g.focusPercent ? std::clamp(g.liveFocusPercent.load(std::memory_order_relaxed), 10, 60) : 0;
-        const int corner = std::clamp(want, 25, wantFocus ? 100 - wantFocus : 99);
-        if (corner != static_cast<int>(std::lround(g.percent)) || wantFocus != g.focusPercent) {
-            simqvfr::logf("ats corner: live: the eye's corner %d%% (was %.0f%%), the focus box %d%% (was %d%%)%s", corner,
-                          g.percent, wantFocus, g.focusPercent, corner != want ? ": the corner cut to what fits beside the box" : "");
+        int wantY = g.liveFocusPercentY.load(std::memory_order_relaxed);
+        wantY = wantFocus ? std::clamp(wantY > 0 ? wantY : wantFocus, 10, 80) : 0;
+        // The focus region is box x density of the targets: it keeps what it asks for first, up to the room beside a
+        // 25% corner and the targets' height; the corner takes what the region leaves.
+        float density = std::clamp(g.liveDensity.load(std::memory_order_relaxed), 25, 400) / 100.0f;
+        if (wantFocus)
+            density = std::min({density, 75.0f / wantFocus, 100.0f / wantY});
+        const int room = wantFocus ? static_cast<int>(std::floor(100 - wantFocus * density)) : 99;
+        const int corner = std::clamp(want, 25, std::max(25, room));
+        if (corner != static_cast<int>(std::lround(g.percent)) || wantFocus != g.focusPercent || wantY != g.focusPercentY ||
+            density != g.density) {
+            simqvfr::logf("ats corner: live: the eye's corner %d%% (was %.0f%%), the focus box %d%% x %d%% at %.0f%% density "
+                          "(was %d%% x %d%% at %.0f%%)%s",
+                          corner, g.percent, wantFocus, wantY, density * 100, g.focusPercent, g.focusPercentY, g.density * 100,
+                          corner != want ? ": the corner cut to what fits beside the focus region" : "");
             g.percent = static_cast<float>(corner);
-            if (wantFocus != g.focusPercent) {  // the twins are the old box's size
-                g.focusPercent = wantFocus;
+            const float oldFx = g.focusPercent ? focus_fx() : 0, oldFy = g.focusPercent ? focus_fy() : 0;
+            g.focusPercent = wantFocus;
+            g.focusPercentY = wantY;
+            g.density = density;
+            if (wantFocus && (focus_fx() != oldFx || focus_fy() != oldFy)) {  // the twins are the old region's size
                 g.texes.clear();
                 g.twinViews.clear();
                 g.twinBytes = 0;
@@ -400,9 +437,9 @@ void take_frame_end() {
         }
     }
     if (g.focusPercent) {  // this frame's boxes
-        const float beta = g.focusPercent / 100.0f;
         for (int e = 0; e < 2; ++e)
             for (int a = 0; a < 2; ++a) {
+                const float beta = a ? beta_y() : beta_x();
                 g.prevBox[e][a] = g.box[e][a];
                 const float centre = g.gaze[e][a].load(std::memory_order_relaxed);
                 const float edge = std::min(std::max(centre - beta / 2, 0.0f), 1 - beta);
@@ -766,15 +803,19 @@ int current_eye() {
 
 // The clip remap of a box: the focus view's clip position from the eye's (x' = a x + b w, y' = c y + d w).
 void box_remap(const float (&box)[2], float (&out)[4]) {
-    const float beta = g.focusPercent / 100.0f;
-    out[0] = 1 / beta;
-    out[1] = (1 - 2 * box[0] - beta) / beta;
-    out[2] = 1 / beta;
-    out[3] = (2 * box[1] + beta - 1) / beta;
+    const float bx = beta_x(), by = beta_y();
+    out[0] = 1 / bx;
+    out[1] = (1 - 2 * box[0] - bx) / bx;
+    out[2] = 1 / by;
+    out[3] = (2 * box[1] + by - 1) / by;
 }
 
-float focus_fx() { return std::max(1.0f, std::round(g.focusPercent / 100.0f * g.eyeW)) / static_cast<float>(g.eyeW); }
-float focus_fy() { return std::max(1.0f, std::round(g.focusPercent / 100.0f * g.eyeH)) / static_cast<float>(g.eyeH); }
+// The box's shares of the eye's screen.
+float beta_x() { return g.focusPercent / 100.0f; }
+float beta_y() { return (g.focusPercentY > 0 ? g.focusPercentY : g.focusPercent) / 100.0f; }
+// The focus region's shares of a full-size target: the box at the focus view's density, in whole texels.
+float focus_fx() { return std::max(1.0f, std::round(beta_x() * g.density * g.eyeW)) / static_cast<float>(g.eyeW); }
+float focus_fy() { return std::max(1.0f, std::round(beta_y() * g.density * g.eyeH)) / static_cast<float>(g.eyeH); }
 
 // A twin holds the focus region at its origin and a little of the eye's picture around it, no more: 4% past the region
 // on each axis, in multiples of 8 texels at full size so the half- and eighth-size textures' twins keep the same share.
@@ -844,7 +885,6 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
     }
     // The focus view: the middle focusPercent of the eye's screen on each axis; its clip is the eye's scaled about the
     // centre (the remap the scene draws' twins use).
-    const float beta = g.focusPercent / 100.0f;
     const int eye = current_eye();
     struct {
         float fx, fy;
@@ -852,7 +892,8 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
         float box[4], remap[4];
         float px, py, pad[2];
     } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u),
-           {g.box[eye][0], g.box[eye][1], beta, beta}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx, focus ? focus_fy() : g.fy, {}};
+           {g.box[eye][0], g.box[eye][1], beta_x(), beta_y()}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx,
+           focus ? focus_fy() : g.fy, {}};
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
     run_cs(g.patchCs.Get(), g.rawInView.Get(), g.rawOutView.Get(), &p, 1);
@@ -918,18 +959,18 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     }
     if (!blit_resources())
         return false;
-    const float beta = g.focusPercent / 100.0f;
+    const float bx = beta_x(), by = beta_y();
     const float* b = g.box[current_eye()];
     const UINT x = static_cast<UINT>(std::lround(g.fx * d.Width * b[0])), y = static_cast<UINT>(std::lround(g.fy * d.Height * b[1]));
-    extent = std::min(extent, (1 - std::max(b[0], b[1])) / beta);  // no further than the eye's own edge
+    extent = std::min({extent, (1 - b[0]) / bx, (1 - b[1]) / by});  // no further than the eye's own edge
     {
         const D3D11_RECT r = focus_rect_in(d.Width, d.Height);  // nor than the twin's
         extent = std::min(extent, std::min(static_cast<float>(twin_w(d.Width)) / std::max<LONG>(1, r.right - r.left),
                                            static_cast<float>(twin_h(d.Height)) / std::max<LONG>(1, r.bottom)));
     }
     extent = std::max(1.0f, extent);
-    const UINT w = std::max<UINT>(1, static_cast<UINT>(std::lround(g.fx * d.Width * beta * extent)));
-    const UINT h = std::max<UINT>(1, static_cast<UINT>(std::lround(g.fy * d.Height * beta * extent)));
+    const UINT w = std::max<UINT>(1, static_cast<UINT>(std::lround(g.fx * d.Width * bx * extent)));
+    const UINT h = std::max<UINT>(1, static_cast<UINT>(std::lround(g.fy * d.Height * by * extent)));
     if (x + w > d.Width || y + h > d.Height)
         return false;
     State::Stretch* st = nullptr;
@@ -1123,10 +1164,9 @@ void shoot_stage(const D3D11_RECT& f, const char* inputs) {
     if (d.SampleDesc.Count != 1)
         return;
     // The focus region, and the eye's own picture of the box (the game's draw just before): the same pass, both views.
-    const float beta = g.focusPercent / 100.0f;
     const float* b = g.box[std::min(std::max(eye, 0), 1)];
     const LONG ex = std::lround(g.fx * d.Width * b[0]), ey = std::lround(g.fy * d.Height * b[1]);
-    const D3D11_RECT rects[2] = {f, {ex, ey, ex + std::lround(g.fx * d.Width * beta), ey + std::lround(g.fy * d.Height * beta)}};
+    const D3D11_RECT rects[2] = {f, {ex, ey, ex + std::lround(g.fx * d.Width * beta_x()), ey + std::lround(g.fy * d.Height * beta_y())}};
     const bool isFloat = d.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || d.Format == DXGI_FORMAT_R11G11B10_FLOAT ||
                          d.Format == DXGI_FORMAT_R16_FLOAT || d.Format == DXGI_FORMAT_R32_FLOAT ||
                          d.Format == DXGI_FORMAT_R16G16_FLOAT || d.Format == DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -1241,8 +1281,8 @@ void two_views(bool on) {
 // The focus view's rectangle in a full-size target: right of the corner, from the top.
 D3D11_RECT focus_rect() {
     const LONG x = static_cast<LONG>(std::lround(g.fx * g.eyeW));
-    const LONG w = std::min<LONG>(std::lround(g.focusPercent / 100.0 * g.eyeW), static_cast<LONG>(g.eyeW) - x);
-    const LONG h = std::min<LONG>(std::lround(g.focusPercent / 100.0 * g.eyeH), static_cast<LONG>(g.eyeH));
+    const LONG w = std::min<LONG>(std::lround(focus_fx() * g.eyeW), static_cast<LONG>(g.eyeW) - x);
+    const LONG h = std::min<LONG>(std::lround(focus_fy() * g.eyeH), static_cast<LONG>(g.eyeH));
     return {x, 0, x + w, h};
 }
 
@@ -1652,16 +1692,37 @@ bool upscale(ID3D11Texture2D* image, UINT cw, UINT ch, int eye) {
     c->PSSetShaderResources(0, 1, src);
     c->PSSetSamplers(0, 1, s);
     c->Draw(3, 0);
-    if (focus) {  // over the box: the middle focusPercent of the image on each axis
-        const float beta = g.focusPercent / 100.0f;
+    if (focus) {  // over the box: the focus region stretched (or shrunk) to its share of the image
         const float* b = g.box[std::min(std::max(eye, 0), 1)];
-        const D3D11_VIEWPORT bv = {b[0] * d.Width, b[1] * d.Height, beta * d.Width, beta * d.Height, 0, 1};
+        const D3D11_VIEWPORT bv = {b[0] * d.Width, b[1] * d.Height, beta_x() * d.Width, beta_y() * d.Height, 0, 1};
         c->RSSetViewports(1, &bv);
         ID3D11ShaderResourceView* fsrc[] = {g.focusScratchView.Get()};
         c->PSSetShaderResources(0, 1, fsrc);
         c->PSSetShader(g.featherPs.Get(), nullptr, 0);
         c->OMSetBlendState(g.featherBlend.Get(), nullptr, 0xffffffff);
+        // The edge: the game's own buffer in pixel slot 1 kept and put back.
+        ID3D11Buffer* gameCb = nullptr;
+        UINT gameFirst = 0, gameCount = 0;
+        c->PSGetConstantBuffers1(1, 1, &gameCb, &gameFirst, &gameCount);
+        if (g.lookCb) {
+            const float look[8] = {std::max(0.0f, g.lookFeather.load(std::memory_order_relaxed)),
+                                   g.lookRadius.load(std::memory_order_relaxed),
+                                   g.lookBorder.load(std::memory_order_relaxed) ? 1.0f : 0.0f,
+                                   bv.Height > 0 ? bv.Width / bv.Height : 1.0f,
+                                   g.lookColor[0].load(std::memory_order_relaxed), g.lookColor[1].load(std::memory_order_relaxed),
+                                   g.lookColor[2].load(std::memory_order_relaxed), 1};
+            c->UpdateSubresource(g.lookCb.Get(), 0, nullptr, look, 0, 0);
+            ID3D11Buffer* const cb[] = {g.lookCb.Get()};
+            c->PSSetConstantBuffers(1, 1, cb);
+        }
         c->Draw(3, 0);
+        ID3D11Buffer* const put[] = {gameCb};
+        if (gameCb && gameCount)
+            c->PSSetConstantBuffers1(1, 1, put, &gameFirst, &gameCount);
+        else
+            c->PSSetConstantBuffers(1, 1, put);
+        if (gameCb)
+            gameCb->Release();
         ++g.composed;
     }
 
@@ -1998,6 +2059,10 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
         const D3D11_BUFFER_DESC rd = {16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
         const D3D11_SUBRESOURCE_DATA ri = {remap, 0, 0};
         g.focusPercent = focusPercent;  // the full-screen passes' replays need neither way
+        g.focusPercentY = focusPercent;
+        g.density = 1;
+        const D3D11_BUFFER_DESC ld = {32, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        device->CreateBuffer(&ld, nullptr, &g.lookCb);
         const bool remapCb = SUCCEEDED(device->CreateBuffer(&rd, &ri, &g.remapCb));
         // The two ways to the scene draws' second view: NVIDIA's (the probe attached its twins unless
         // multi_view_software=1), and instancing where a vertex shader may pick the viewport.
@@ -2164,9 +2229,19 @@ void corner_set_gaze(const float (&screen)[2][2]) {
                 g.gaze[e][a].store(screen[e][a], std::memory_order_relaxed);
 }
 
-void corner_set_live(int percent, int focusPercent) {
+void corner_set_live(int percent, int focusPercent, int focusPercentY, int densityPercent) {
     g.liveFocusPercent.store(focusPercent, std::memory_order_relaxed);
+    g.liveFocusPercentY.store(focusPercentY, std::memory_order_relaxed);
+    g.liveDensity.store(densityPercent, std::memory_order_relaxed);
     g.livePercent.store(percent, std::memory_order_relaxed);
+}
+
+void corner_set_look(float feather, float cornerRadius, bool border, const float (&color)[4]) {
+    g.lookFeather.store(feather, std::memory_order_relaxed);
+    g.lookRadius.store(cornerRadius, std::memory_order_relaxed);
+    g.lookBorder.store(border, std::memory_order_relaxed);
+    for (int i = 0; i < 3; ++i)
+        g.lookColor[i].store(color[i], std::memory_order_relaxed);
 }
 
 int corner_way() { return g.context ? g.way.load(std::memory_order_relaxed) : 0; }

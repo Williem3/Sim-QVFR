@@ -17,6 +17,10 @@ namespace simqvfr {
 void hang_watch_arm(unsigned seconds);
 // At every xrEndFrame.
 void hang_watch_frame();
+// What the frame thread is about to ask of the runtime (a string literal; null: nothing of ours): the watch names it
+// when it fires, so a frame stuck inside the runtime says in which call (ATS on Pimax, 2026-11-14: stuck under the
+// overlay's code in xrEndFrame, inside the runtime and the GPU driver).
+void hang_watch_stage(const char* stage);
 // At xrDestroySession: no frames are due until the next session.
 void hang_watch_disarm();
 // Tests: the helper to start (instead of the launcher next to this module); before the first arm.

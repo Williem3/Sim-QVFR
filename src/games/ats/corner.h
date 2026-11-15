@@ -54,9 +54,14 @@ void corner_releasing(XrSwapchain chain);
 // Where each eye's focus box should be centred on that eye's screen (x right, y down, 0..1; any thread). Taken at each
 // frame's start; the box is kept inside the screen.
 void corner_set_gaze(const float (&screen)[2][2]);
-// The headset menu's sizes, live (any thread; taken at the next frame's start): the eye's corner and the focus box, in
-// percent of the eye on each axis. Kept to what fits: the focus box 10..60, the corner 25..(100 - the focus box).
-void corner_set_live(int percent, int focusPercent);
+// The headset menu's sizes, live (any thread; taken at the next frame's start), in percent: the eye's corner (its
+// density), the focus box's width and height as shares of the eye's screen, and the focus view's density (its region
+// in the targets is box x density of them). Kept to what fits: box 10..60 x 10..80, the density to the room there is
+// (beside a 25% corner, and the targets' height), the corner 25..what the focus region leaves.
+void corner_set_live(int percent, int focusPercent, int focusPercentY, int densityPercent);
+// How the box sits on the eye (any thread): its blended edge and rounded corners as shares of half its shorter side,
+// the outline and its colour (linear RGB).
+void corner_set_look(float feather, float cornerRadius, bool border, const float (&color)[4]);
 // How the focus view's scene draws go out this frame (any thread; the overlay's badge): 0 no focus view, 1 NVIDIA's
 // multi-view rendering, 2 Sim-QVFR's own (instancing), 3 the focus view switched off (Ctrl+Alt+G: the eyes alone).
 int corner_way();

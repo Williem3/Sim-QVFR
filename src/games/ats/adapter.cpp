@@ -78,16 +78,20 @@ public:
             default: return QvfrMultiView::none;
         }
     }
-    void live_sizes(double periphery, double focusX, double, bool gaze) override {
-        const int corner = static_cast<int>(std::lround(periphery * 100)), focus = static_cast<int>(std::lround(focusX * 100));
-        gaze_ = gaze;
-        if (!liveSeen_ || corner != liveCorner_ || focus != liveFocus_) {
-            simqvfr::logf("ats: the menu's sizes: periphery %d%%, focus box %d%%", corner, focus);
-            corner_set_live(corner, focus);
+    void live_view(const LiveView& v) override {
+        const int corner = static_cast<int>(std::lround(v.periphery * 100)), fx = static_cast<int>(std::lround(v.focusX * 100)),
+                  fy = static_cast<int>(std::lround(v.focusY * 100)), density = static_cast<int>(std::lround(v.density * 100));
+        gaze_ = v.gaze;
+        if (!liveSeen_ || corner != liveCorner_ || fx != liveFocus_ || fy != liveFocusY_ || density != liveDensity_) {
+            simqvfr::logf("ats: the menu's sizes: periphery %d%%, focus box %d%% x %d%% at %d%% density", corner, fx, fy, density);
+            corner_set_live(corner, fx, fy, density);
         }
+        corner_set_look(static_cast<float>(v.feather), static_cast<float>(v.cornerRadius), v.border, v.borderColor);
         liveSeen_ = true;
         liveCorner_ = corner;
-        liveFocus_ = focus;
+        liveFocus_ = fx;
+        liveFocusY_ = fy;
+        liveDensity_ = density;
     }
     void qvfr_note_views(const XrView* views, uint32_t count) override {
         for (uint32_t e = 0; e < count && e < 2; ++e) {
@@ -139,7 +143,7 @@ private:
     int cornerPercent_ = 0, focusPercent_ = 0;
     bool liveSeen_ = false;
     std::atomic<bool> gaze_{true};
-    int liveCorner_ = 0, liveFocus_ = 0;
+    int liveCorner_ = 0, liveFocus_ = 0, liveFocusY_ = 0, liveDensity_ = 0;
     float fov_[2][4] = {};  // each eye's tangents: left, right, down, up
 };
 
