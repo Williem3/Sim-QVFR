@@ -94,7 +94,9 @@ inline CornerRule corner_patch(float (*v)[4], int count, float fx, float fy, boo
 //     whose last is the negative of the other's third row, the other's last (0,0,0,1)): its x and y rows through the
 //     clip remap (x' = a x + b w, y' = c y + d w), so the reprojections of the TAA and the AO land in the focus view.
 inline constexpr char kCornerPatchCs[] = R"(
-cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; };
+// `px`: the region's share of the texture size the game names (f itself, except for a focus replay: its inputs are twins,
+// smaller than the game's textures, so the region's share of a twin (f) isn't its share of the game's size (px)).
+cbuffer Params : register(b0) { float2 f; uint count; uint flags; float4 box; float4 remap; float2 px; float2 pad; };
 ByteAddressBuffer src : register(t0);
 RWByteAddressBuffer dst : register(u0);
 float4 at(uint i) { return asfloat(src.Load4(i * 16)); }
@@ -108,7 +110,7 @@ bool pairAt(uint p) {
     if (!eq(a, float4(1, 1, 1, 1)) || !isSize(b))
         return false;
     dst.Store4(p * 16, asuint(float4(f, 1 / f)));
-    dst.Store4((p + 1) * 16, asuint(float4(f * b.xy, f)));
+    dst.Store4((p + 1) * 16, asuint(float4(px * b.xy, f)));
     if ((flags & 3) == 2 && p + 3 < count) {  // the focus view's ray
         float4 ray = at(p + 3);
         dst.Store4((p + 3) * 16, asuint(float4(ray.xy + box.xy * ray.zw, box.zw * ray.zw)));
@@ -168,7 +170,7 @@ void remapMatrix(uint j) {  // rows j, j+1 (x, y) with row j+3 (w)
         dst.Store4(0, asuint(float4(0, 0, f)));
     } else if (isSize(a) && b.x >= 0 && b.y >= 0 && b.z > 0 && b.w > 0 && b.x + b.z <= a.x && b.y + b.w <= a.y &&
                !(b.z == 1 && b.w == 1)) {
-        dst.Store4(16, asuint(b * float4(f, f)));
+        dst.Store4(16, asuint(b * float4(px, px)));
     }
 }
 )";

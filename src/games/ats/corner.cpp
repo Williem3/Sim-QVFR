@@ -530,7 +530,7 @@ bool big_scratch(UINT bytes) {
     return true;
 }
 
-// Runs `cs` from `in` to `out` with `params` (32 bytes), the game's compute state kept and put back.
+// Runs `cs` from `in` to `out` with `params` (64 bytes), the game's compute state kept and put back.
 void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11UnorderedAccessView* out, const void* params,
             UINT groups) {
     ComPtr<ID3D11ComputeShader> gameCs;
@@ -570,7 +570,7 @@ void refresh(Mirror& m) {
         float fx, fy;
         UINT count, pad;
         float w, h, p0, p1;
-        float unused[4];
+        float unused[8];
     } p = {g.fx, g.fy, m.bytes / 16, 0, static_cast<float>(g.eyeW), static_cast<float>(g.eyeH), 0, 0, {}};
     run_cs(g.mirrorCs.Get(), g.bigInView.Get(), g.bigOutView.Get(), &p, (m.bytes / 16 + 63) / 64);
     g.context->CopySubresourceRegion(m.copy.Get(), 0, 0, 0, 0, g.bigOut.Get(), 0, &box);
@@ -692,6 +692,23 @@ void box_remap(const float (&box)[2], float (&out)[4]) {
 float focus_fx() { return std::max(1.0f, std::round(g.focusPercent / 100.0f * g.eyeW)) / static_cast<float>(g.eyeW); }
 float focus_fy() { return std::max(1.0f, std::round(g.focusPercent / 100.0f * g.eyeH)) / static_cast<float>(g.eyeH); }
 
+// A twin holds the focus region at its origin and a little of the eye's picture around it, no more: 4% past the region
+// on each axis, in multiples of 8 texels at full size so the half- and eighth-size textures' twins keep the same share.
+// (At the game's own size the 34 twins of a 5192x4168 eye took up to 4.3 GB.)
+unsigned twin_full(unsigned eye, float focus) {
+    const unsigned n = (static_cast<unsigned>(std::ceil(focus * eye * 1.04f)) + 7) / 8 * 8;
+    return std::min(eye, std::max(8u, n));
+}
+unsigned twin_w(unsigned w) {
+    return std::max(1u, static_cast<unsigned>(std::lround(static_cast<double>(twin_full(g.eyeW, focus_fx())) * w / g.eyeW)));
+}
+unsigned twin_h(unsigned h) {
+    return std::max(1u, static_cast<unsigned>(std::lround(static_cast<double>(twin_full(g.eyeH, focus_fy())) * h / g.eyeH)));
+}
+// The focus region's share of a twin (what focus_fx is of a texture of the game's).
+float twin_fx() { return focus_fx() * g.eyeW / twin_full(g.eyeW, focus_fx()); }
+float twin_fy() { return focus_fy() * g.eyeH / twin_full(g.eyeH, focus_fy()); }
+
 bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
     ID3D11Buffer* buf = nullptr;
     UINT first = 0, count = 0;
@@ -731,10 +748,15 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
             shader.Attach(s);
         }
         UINT vectors = 0, size = sizeof(vectors);
-        if (shader && SUCCEEDED(shader->GetPrivateData(lmu::kCb0VectorsGuid, &size, &vectors)) && vectors)
+        if (shader && SUCCEEDED(shader->GetPrivateData(lmu::kCb0VectorsGuid, &size, &vectors))) {
+            if (!vectors) {  // the shader reads no constants from slot 0: nothing of its to rewrite
+                r = Range{};
+                return false;
+            }
             declared = std::min(count, vectors);
-        else
+        } else {
             ++g.undeclared;
+        }
     }
     // The focus view: the middle focusPercent of the eye's screen on each axis; its clip is the eye's scaled about the
     // centre (the remap the scene draws' twins use).
@@ -744,8 +766,9 @@ bool rewrite(Range& r, ID3D11Buffer* ours, bool pixel, bool focus = false) {
         float fx, fy;
         UINT count, flags;
         float box[4], remap[4];
-    } p = {focus ? focus_fx() : g.fx, focus ? focus_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u),
-           {g.box[eye][0], g.box[eye][1], beta, beta}, {1, 0, 1, 0}};
+        float px, py, pad[2];
+    } p = {focus ? twin_fx() : g.fx, focus ? twin_fy() : g.fy, declared, (pixel ? 0u : 1u) | (focus ? 2u : 0u),
+           {g.box[eye][0], g.box[eye][1], beta, beta}, {1, 0, 1, 0}, focus ? focus_fx() : g.fx, focus ? focus_fy() : g.fy, {}};
     if (focus)  // the reprojections: into the frame before's box (Ctrl+Alt+H: this frame's)
         box_remap(g.historyCurrentBox ? g.box[eye] : g.prevBox[eye], p.remap);
     run_cs(g.patchCs.Get(), g.rawInView.Get(), g.rawOutView.Get(), &p, 1);
@@ -814,7 +837,13 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     const float beta = g.focusPercent / 100.0f;
     const float* b = g.box[current_eye()];
     const UINT x = static_cast<UINT>(std::lround(g.fx * d.Width * b[0])), y = static_cast<UINT>(std::lround(g.fy * d.Height * b[1]));
-    extent = std::max(1.0f, std::min(extent, (1 - std::max(b[0], b[1])) / beta));  // no further than the eye's own edge
+    extent = std::min(extent, (1 - std::max(b[0], b[1])) / beta);  // no further than the eye's own edge
+    {
+        const D3D11_RECT r = focus_rect_in(d.Width, d.Height);  // nor than the twin's
+        extent = std::min(extent, std::min(static_cast<float>(twin_w(d.Width)) / std::max<LONG>(1, r.right - r.left),
+                                           static_cast<float>(twin_h(d.Height)) / std::max<LONG>(1, r.bottom)));
+    }
+    extent = std::max(1.0f, extent);
     const UINT w = std::max<UINT>(1, static_cast<UINT>(std::lround(g.fx * d.Width * beta * extent)));
     const UINT h = std::max<UINT>(1, static_cast<UINT>(std::lround(g.fy * d.Height * beta * extent)));
     if (x + w > d.Width || y + h > d.Height)
@@ -865,8 +894,7 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     c->RSGetScissorRects(&scCount, sc);
 
     const D3D11_RECT f = focus_rect_in(d.Width, d.Height);
-    const float ow = std::min<float>((f.right - f.left) * extent, static_cast<float>(d.Width));
-    const float oh = std::min<float>(f.bottom * extent, static_cast<float>(d.Height));
+    const float ow = (f.right - f.left) * extent, oh = f.bottom * extent;
     const D3D11_VIEWPORT out = {0, 0, ow, oh, 0, 1};
     const D3D11_RECT outRect = {0, 0, static_cast<LONG>(std::ceil(ow)), static_cast<LONG>(std::ceil(oh))};
     ID3D11RenderTargetView* target[] = {t.twinRtv.Get()};
@@ -919,6 +947,11 @@ State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
         return nullptr;
     if (!t.twin) {
         D3D11_TEXTURE2D_DESC td = d;
+        td.Width = std::max(twin_w(d.Width), static_cast<unsigned>(focus_rect_in(d.Width, d.Height).right - focus_rect_in(d.Width, d.Height).left));
+        td.Height = std::max(twin_h(d.Height), static_cast<unsigned>(focus_rect_in(d.Width, d.Height).bottom));
+        for (UINT most = 1 + static_cast<UINT>(std::floor(std::log2(static_cast<double>(std::max(td.Width, td.Height)))));
+             td.MipLevels > most;)
+            td.MipLevels = most;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
         td.MiscFlags = d.MipLevels != 1 ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
         td.Usage = D3D11_USAGE_DEFAULT;
@@ -940,9 +973,9 @@ State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
         t.mips = d.MipLevels;
         const float none[4] = {};
         g.context->ClearRenderTargetView(t.twinRtv.Get(), none);
-        g.twinBytes += static_cast<uint64_t>(d.Width) * d.Height * 8;  // an upper estimate (16-bit RGBA)
-        simqvfr::logf("ats focus: twin %zu: %ux%u format %d, %d mips", g.texes.size(), d.Width, d.Height,
-                      static_cast<int>(d.Format), static_cast<int>(d.MipLevels));
+        g.twinBytes += static_cast<uint64_t>(td.Width) * td.Height * 8;  // an upper estimate (16-bit RGBA)
+        simqvfr::logf("ats focus: twin %zu: %ux%u for a %ux%u texture of format %d, %d mips", g.texes.size(), td.Width,
+                      td.Height, d.Width, d.Height, static_cast<int>(d.Format), static_cast<int>(d.MipLevels));
     }
     const bool content = t.writeFrame != ~0ull && g.stats.frames - t.writeFrame <= 1;
     if (content && t.copiedSerial != t.writeSerial) {
@@ -1269,7 +1302,7 @@ bool make_resources() {
     D3D11_BUFFER_DESC rawOut = raw;
     rawOut.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
     const D3D11_BUFFER_DESC cb = {kMaxVectors * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
-    const D3D11_BUFFER_DESC params = {48, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+    const D3D11_BUFFER_DESC params = {64, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
     sv.Format = DXGI_FORMAT_R32_TYPELESS;
     sv.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;

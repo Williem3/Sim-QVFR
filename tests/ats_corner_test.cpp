@@ -264,7 +264,8 @@ void warp_checks() {
               "texture fractions run 0..f (the lookups stay inside the corner)");
         check(outside[0] == -1 && right[0] == -1, "nothing drawn outside the corner and the focus region");
         // Stage 3: the pass drawn again over the focus region (right of the corner, 30% each way), addressed from the
-        // origin of its inputs' twins: screen fractions 0..1 across the region, texture fractions 0..0.3.
+        // origin of its inputs' twins: screen fractions 0..1 across the region, texture fractions 0..the region's share
+        // of a twin (a twin is the region and 4% more, in multiples of 8 texels: 400x320 for 384x307).
         const UINT fx0 = W / 2, fw = 384, fh = 307;
         const float* f0 = px(fx0, 0);
         const float* f1 = px(fx0 + fw - 1, fh - 1);
@@ -272,8 +273,8 @@ void warp_checks() {
         std::printf("     focus region first %.4f %.4f %.4f %.4f; last %.4f %.4f %.4f %.4f; below %.1f\n", f0[0], f0[1], f0[2],
                     f0[3], f1[0], f1[1], f1[2], f1[3], below[0]);
         check(close_to(f0[0], 0.5f / fw, 2e-3f) && close_to(f1[0], 1 - 0.5f / fw, 2e-3f) && close_to(f1[1], 1 - 0.5f / fh, 3e-3f) &&
-                  close_to(f1[2], 0.3f, 2e-3f) && close_to(f1[3], 0.3f, 2e-3f) && below[0] == -1,
-              "the pass drawn again over the focus region: screen fractions 0..1, texture fractions 0..0.3");
+                  close_to(f1[2], 384.0f / 400, 3e-3f) && close_to(f1[3], 307.0f / 320, 4e-3f) && below[0] == -1,
+              "the pass drawn again over the focus region: screen fractions 0..1, texture fractions 0..its share of a twin");
         context->Unmap(staging.Get(), 0);
     } else {
         check(false, "the target read back");
