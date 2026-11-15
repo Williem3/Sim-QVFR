@@ -1019,6 +1019,23 @@ int SIM_QVFR_TEST_MAIN() {
               "DLSS page: texture sharpening turned on with it off at launch: the note says the next launch");
         dm.launch.sharpeningReady = true;
         check(!has_note(L"Texture sharpening was off at launch"), "DLSS page: on at launch: no such note (its settings live)");
+        {  // AMD FSR, an experiment (MenuLaunch::fsr): the Upscaler row after the switch; NGX's presets go under FSR
+            SettingsMenu fm = dm;
+            fm.launch.fsr = true;
+            check(menu_page_items(fm).size() == 7 && menu_page_items(fm)[2] == MenuItem::DlssUpscaler &&
+                      menu_lines(fm)[2].value == L"NVIDIA DLSS",
+                  "DLSS page with FSR allowed: the Upscaler row, NVIDIA DLSS by default");
+            fm.selected = 2;
+            fm.values.dlss.focusScale = 100;
+            const std::vector<MenuItem> items = (menu_key(fm, MenuKey::Right), menu_page_items(fm));
+            check(fm.values.dlss.upscaler == 1 && menu_lines(fm)[2].value == L"AMD FSR" && items.size() == 5 &&
+                      items[3] == MenuItem::DlssFocusMode && items[4] == MenuItem::DlssSharpening &&
+                      menu_lines(fm)[3].value == L"Native AA",
+                  "DLSS page: Right takes AMD FSR; its rows: the focus views (DLAA named Native AA) and texture sharpening");
+            check(menu_key(fm, MenuKey::Left) && fm.values.dlss.upscaler == 0 && menu_page_items(fm).size() == 7,
+                  "DLSS page: back to NVIDIA DLSS, its presets again");
+            check(menu_page_items(dm).size() == 6, "DLSS page without the experiment: no Upscaler row");
+        }
 
         wchar_t temp[MAX_PATH];
         GetTempPathW(MAX_PATH, temp);
@@ -1044,8 +1061,13 @@ int SIM_QVFR_TEST_MAIN() {
         mine.eyePreset = 11;
         mine.textureSharpening = 2;
         mine.carVectors = false;
+        check(fresh.upscaler == 0 && old.upscaler == 0, "[dlss]: upscaler NVIDIA DLSS unless the file says fsr");
+        mine.upscaler = 1;
         check(write_dlss_settings(ini.c_str(), mine) && read_dlss_settings(ini.c_str()) == mine,
-              "[dlss]: written and read back (the other cars' motion off too), ahead of the older keys");
+              "[dlss]: written and read back (the other cars' motion off, AMD FSR too), ahead of the older keys");
+        wchar_t text0[16] = {};
+        GetPrivateProfileStringW(L"dlss", L"upscaler", L"", text0, 16, ini.c_str());
+        check(std::wstring(text0) == L"fsr", "[dlss]: the upscaler written by name");
         wchar_t text[16] = {};
         GetPrivateProfileStringW(L"dlss", L"focus_preset", L"", text, 16, ini.c_str());
         const std::wstring focusText = text;

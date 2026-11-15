@@ -146,6 +146,16 @@ public:
             dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
             dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
             dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
+            // AMD FSR in DLSS's place (engine/fsr_upscale.h), an experiment: lmu_fsr=1 lets [dlss] upscaler=fsr choose it
+            // (live) and runs FSR on an AMD GPU whatever it says; lmu_fsr_provider=3 the newest FSR 3.x even where FSR 4 is
+            // offered; lmu_fsr_folder AMD's two DLLs' folder (else beside the layer, then beside the game).
+            fsrAllowed_ = key(L"lmu_fsr", 0) != 0;
+            dlss.upscaler = fsrAllowed_ ? player.upscaler : 0;
+            dlss.fsrOnAmd = fsrAllowed_;
+            dlss.fsrProvider = key(L"lmu_fsr_provider", 0) == 3 ? 3 : 0;
+            wchar_t fsrFolder[MAX_PATH] = {};
+            GetPrivateProfileStringW(L"experiment", L"lmu_fsr_folder", L"", fsrFolder, MAX_PATH, s.ini);
+            dlss.fsrFolder = fsrFolder;
             if (dlss.views && !run.trackerDrives) {
                 simqvfr::log_line("lmu dlss: asked for, but this run has no multi-view path: off");
                 dlss.views = 0;
@@ -233,6 +243,7 @@ public:
         live.preset = settings.focusPreset;
         live.eyePreset = settings.eyePreset;
         live.textureSharpening = settings.textureSharpening;
+        live.upscaler = fsrAllowed_ ? settings.upscaler : 0;
         simqvfr::dlss_live(live);
     }
     // The player's DLSS-NR settings changed: the module takes them between frames (another folder: the next launch).
@@ -305,6 +316,7 @@ private:
     bool qvfr_ = false;
     // The player's DLSS settings as last applied, and whether this run can run DLSS at all (the multi-view path).
     simqvfr::DlssSettings dlssSettings_;
+    bool fsrAllowed_ = false;  // [experiment] lmu_fsr: AMD FSR may run the views
     simqvfr::NrSettings nrSettings_;
     simqvfr::games::DiagSwitches diag_;  // lmu_diag=1
     bool dlssPossible_ = false, dlssRefusedLogged_ = false;

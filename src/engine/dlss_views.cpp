@@ -17,6 +17,7 @@
 
 #include "../log.h"
 #include "dlss_math.h"
+#include "fsr_upscale.h"
 #include "ngx_dlss.h"
 #include "nr_math.h"
 #include "nr_views.h"
@@ -275,6 +276,11 @@ struct Slot {  // a view: eye 0, eye 1, focus 0, focus 1
     bool inverted = false;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     ngx::Feature* feature = nullptr;
+    fsr::View* fsrView = nullptr;  // AMD FSR's context instead (DlssRun::upscaler): its shared textures are depth,
+                                   // vectors, output and colourIn
+    int backend = -1;              // the upscaler it was made by (State::backend)
+    bool infinite = false;         // FSR: made for an infinite far plane
+    ComPtr<ID3D11Texture2D> colourIn;  // FSR: the view's colour copied in (FSR reads no sub-rectangle of the scene)
     bool refused = false;  // the feature couldn't be made at this size
     ComPtr<ID3D11Texture2D> depth, vectors, output, colour[2], depthBefore;
     ComPtr<ID3D11RenderTargetView> depthRtv, vectorsRtv;
@@ -351,7 +357,20 @@ struct State {
     DlssLive live;
     std::chrono::steady_clock::time_point liveAt;  // the last dlss_live
     unsigned liveChanges = 0;                      // dlss_live calls since the last apply
+    // The upscaler running the views (DlssRun::upscaler as resolved for the GPU): 0 NGX, 1 AMD FSR; -1 none started.
+    int backend = -1;
+    unsigned vendor = 0;  // the game's adapter's PCI vendor id
+    // FSR's camera inputs: the time between frames, the far plane's kind (made into its contexts).
+    double frameMs = 11.1;
+    std::chrono::steady_clock::time_point lastFrameEnd{};
+    bool cameraInfinite = false;
+    bool fsrProviderNamed = false;
 } d;
+
+// The camera AMD FSR takes per view (NGX takes none of it).
+struct Camera {
+    float nearM = 0.1f, farM = 10000.0f, fovY = 1.5f;
+};
 
 // A log line with the run's tag in front ("lmu dlss: ...").
 void say(const char* format, ...) {
@@ -429,23 +448,7 @@ bool initialize(ID3D11DeviceContext* context) {
         give_up("its buffers couldn't be made");
         return false;
     }
-    std::string why;
-    const std::wstring data = (std::filesystem::path(simqvfr::log_directory()) / L"ngx").wstring();
-    if (!ngx::start(d.device.Get(), d.cfg.dllFolder.c_str(), data.c_str(), why)) {
-        give_up(why.c_str());
-        return false;
-    }
-    char focusMode[96] = "";
-    if (d.cfg.views >= 2)
-        std::snprintf(focusMode, sizeof(focusMode), " and the focus views (%s, %d%%)", dlss::focus_mode_name(d.cfg.focusScale),
-                      d.cfg.focusScale);
-    const std::wstring lookedIn =
-        d.cfg.dllFolder.empty() ? std::wstring(L"Sim-QVFR's folder") : d.cfg.dllFolder + L", then Sim-QVFR's folder";
-    say("NGX started on the game's device (nvngx_dlss.dll looked for in %ls); views: the eyes%s; jitter %s (%u phases); "
-                  "presets: the eyes %s, the focus views %s",
-                  lookedIn.c_str(), focusMode,
-                  d.cfg.jitter ? "on" : "off", d.phases,
-                  dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
+    d.vendor = fsr::adapter_vendor(d.device.Get());
     d.ready = true;
     return true;
 }
@@ -507,85 +510,186 @@ bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT 
     return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
 }
 
+// The upscaler the run asks for on this GPU: AMD FSR when asked, or on an AMD GPU with fsrOnAmd (NGX can't run there).
+int wanted_backend() {
+    return d.cfg.upscaler == 1 || (d.cfg.fsrOnAmd && d.vendor == fsr::kVendorAmd) ? 1 : 0;
+}
+
+const char* backend_name(int backend) { return backend == 1 ? "AMD FSR" : "NVIDIA DLSS"; }
+
+// A view's feature let go of by its upscaler (FSR's once both devices are through its work, with our views of its
+// textures), the slot emptied.
+void release_slot(Slot& s) {
+    if (s.feature)
+        ngx::release(s.feature);
+    if (s.fsrView) {
+        ComPtr<ID3D11DeviceContext> context;
+        if (d.device)
+            d.device->GetImmediateContext(&context);
+        IUnknown* const keep[] = {s.depth.Get(),    s.vectors.Get(),    s.output.Get(),   s.colourIn.Get(),
+                                  s.depthRtv.Get(), s.vectorsRtv.Get(), s.depthSrv.Get(), s.vectorsSrv.Get()};
+        fsr::release(context.Get(), s.fsrView, keep, static_cast<unsigned>(std::size(keep)));
+    }
+    s = Slot{};
+}
+
+// The upscaler the run asks for, started (once a session each; a second start answers as the first did). False: it
+// couldn't start (given up for the session, the log says why).
+bool start_backend() {
+    const int want = wanted_backend();
+    if (d.backend == want)
+        return true;
+    std::string why;
+    char focusMode[96] = "";
+    if (d.cfg.views >= 2)
+        std::snprintf(focusMode, sizeof(focusMode), " and the focus views (%s, %d%%)",
+                      want == 1 && d.cfg.focusScale >= 100 ? "native AA" : dlss::focus_mode_name(d.cfg.focusScale),
+                      d.cfg.focusScale);
+    if (want == 1) {
+        const fsr::Provider provider = d.cfg.fsrProvider == 3 ? fsr::Provider::Fsr3 : fsr::Provider::Newest;
+        if (!fsr::start(d.device.Get(), d.cfg.fsrFolder.c_str(), provider, why)) {
+            give_up(("AMD FSR: " + why).c_str());
+            return false;
+        }
+        const std::wstring folder = fsr::loaded_folder();
+        say("AMD FSR started on our Direct3D 12 device on the game's graphics card (vendor 0x%04x%s; AMD's runtime from %ls); "
+            "providers it offers here: %s; asked for: %s; views: the eyes%s; jitter %s (%u phases); NGX's presets don't apply",
+            d.vendor, d.cfg.upscaler == 1 ? "" : ", FSR as the GPU is AMD's", folder.c_str(), fsr::providers().c_str(),
+            provider == fsr::Provider::Fsr3 ? "the newest FSR 3.x" : "the newest", focusMode, d.cfg.jitter ? "on" : "off",
+            d.phases);
+    } else {
+        const std::wstring data = (std::filesystem::path(simqvfr::log_directory()) / L"ngx").wstring();
+        if (!ngx::start(d.device.Get(), d.cfg.dllFolder.c_str(), data.c_str(), why)) {
+            give_up(why.c_str());
+            return false;
+        }
+        const std::wstring lookedIn =
+            d.cfg.dllFolder.empty() ? std::wstring(L"Sim-QVFR's folder") : d.cfg.dllFolder + L", then Sim-QVFR's folder";
+        say("NGX started on the game's device (nvngx_dlss.dll looked for in %ls); views: the eyes%s; jitter %s (%u phases); "
+            "presets: the eyes %s, the focus views %s",
+            lookedIn.c_str(), focusMode, d.cfg.jitter ? "on" : "off", d.phases,
+            dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
+    }
+    for (Slot& s : d.slots)  // another upscaler's features: made again by this one at their next pass
+        if (s.feature || s.fsrView)
+            release_slot(s);
+    d.backend = want;
+    return true;
+}
+
 // The view's feature and textures at these sizes, drawn at w x h and made into ow x oh (made again when they change: a
-// live resolution change, super resolution starting or stopping).
+// live resolution change, super resolution starting or stopping, another upscaler).
 bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsigned h, unsigned ow, unsigned oh,
             DXGI_FORMAT format, bool inverted) {
-    const int preset = index < 2 && d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset;  // the eyes are views 0-1
+    const bool amd = d.backend == 1;
+    // NGX's presets (the eyes are views 0-1); FSR has none.
+    const int preset = amd ? 0 : index < 2 && d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset;
+    const bool infinite = amd && d.cameraInfinite;
     if (s.width == w && s.height == h && s.outWidth == ow && s.outHeight == oh && s.format == format &&
-        s.inverted == inverted && s.preset == preset)
-        return s.feature != nullptr;
-    if (s.feature) {
-        ngx::release(s.feature);
+        s.inverted == inverted && s.preset == preset && s.backend == d.backend && s.infinite == infinite)
+        return s.feature != nullptr || s.fsrView != nullptr;
+    if (s.feature || s.fsrView) {
+        release_slot(s);
         ++d.recreated;
     }
     s = Slot{};
-    s.width = w;
-    s.height = h;
-    s.outWidth = ow;
-    s.outHeight = oh;
-    s.preset = preset;
-    s.format = format;
-    s.inverted = inverted;
+    const auto note = [&] {  // what the slot is for (kept after a refusal: not tried again at the same sizes)
+        s.width = w, s.height = h, s.outWidth = ow, s.outHeight = oh, s.preset = preset, s.format = format;
+        s.inverted = inverted, s.backend = d.backend, s.infinite = infinite;
+    };
+    note();
     const bool upscale = ow != w || oh != h;
     const UINT targets = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-    bool ok = make(s.depth, w, h, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) &&
-              make(s.vectors, w, h, DXGI_FORMAT_R16G16_FLOAT, targets) && make(s.output, ow, oh, format, targets) &&
-              SUCCEEDED(d.device->CreateRenderTargetView(s.depth.Get(), nullptr, &s.depthRtv)) &&
-              SUCCEEDED(d.device->CreateRenderTargetView(s.vectors.Get(), nullptr, &s.vectorsRtv)) &&
-              SUCCEEDED(d.device->CreateShaderResourceView(s.depth.Get(), nullptr, &s.depthSrv)) &&
-              SUCCEEDED(d.device->CreateShaderResourceView(s.vectors.Get(), nullptr, &s.vectorsSrv));
+    unsigned result = 0;
+    LARGE_INTEGER t0{}, t1{}, freq{};
+    QueryPerformanceCounter(&t0);
+    bool ok = true;
+    if (amd) {  // FSR's context first: our depth, vectors and its output are its shared textures
+        s.fsrView = fsr::create(w, h, ow, oh, format, inverted, infinite, result);
+        ok = s.fsrView != nullptr;
+        if (ok) {
+            const fsr::Textures t = fsr::textures(s.fsrView);
+            s.depth = t.depth;
+            s.vectors = t.vectors;
+            s.output = t.output;
+            s.colourIn = t.colour;
+        }
+    } else {
+        ok = make(s.depth, w, h, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE) &&
+             make(s.vectors, w, h, DXGI_FORMAT_R16G16_FLOAT, targets) && make(s.output, ow, oh, format, targets);
+    }
+    const bool textures = ok;
+    ok = ok && SUCCEEDED(d.device->CreateRenderTargetView(s.depth.Get(), nullptr, &s.depthRtv)) &&
+         SUCCEEDED(d.device->CreateRenderTargetView(s.vectors.Get(), nullptr, &s.vectorsRtv)) &&
+         SUCCEEDED(d.device->CreateShaderResourceView(s.depth.Get(), nullptr, &s.depthSrv)) &&
+         SUCCEEDED(d.device->CreateShaderResourceView(s.vectors.Get(), nullptr, &s.vectorsSrv));
     for (int i = 0; i < 2 && ok && d.cfg.gate; ++i)
         ok = make(s.colour[i], w, h, format, D3D11_BIND_SHADER_RESOURCE) &&
              SUCCEEDED(d.device->CreateShaderResourceView(s.colour[i].Get(), nullptr, &s.colourSrv[i]));
     if (ok && d.cfg.gate)  // the gate's depth test: the frame before's depth
         ok = make(s.depthBefore, w, h, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE) &&
              SUCCEEDED(d.device->CreateShaderResourceView(s.depthBefore.Get(), nullptr, &s.depthBeforeSrv));
-    unsigned result = 0;
-    LARGE_INTEGER t0{}, t1{}, freq{};
-    QueryPerformanceCounter(&t0);
-    if (ok)
+    if (ok && !amd)
         s.feature = ngx::create(context, w, h, ow, oh, inverted, preset, result);
     QueryPerformanceCounter(&t1);
     QueryPerformanceFrequency(&freq);
-    if (s.feature)  // what a live change's stutter is made of: each view's feature made again, on the render thread
-        say("view %d's feature made in %.1f ms (%ux%u%s, preset %s)", index,
+    if (amd ? ok : s.feature != nullptr)  // what a live change's stutter is made of: each view's feature made again
+        say("view %d's feature made in %.1f ms (%ux%u%s, %s%s)", index,
             1000.0 * static_cast<double>(t1.QuadPart - t0.QuadPart) / static_cast<double>(freq.QuadPart), w, h,
-            upscale ? " upscaled" : "", dlss::preset_name(preset));
-    int made = preset;  // the preset the feature was made with
-    if (!s.feature && ok && preset != 0) {  // a DLL without that preset: NGX's default for the mode instead
+            upscale ? " upscaled" : "", amd ? "AMD FSR" : "preset ", amd ? "" : dlss::preset_name(preset));
+    int madeWith = preset;  // the preset the feature was made with
+    if (!amd && !s.feature && ok && preset != 0) {  // a DLL without that preset: NGX's default for the mode instead
         unsigned again = 0;
         s.feature = ngx::create(context, w, h, ow, oh, inverted, 0, again);
         if (s.feature) {
             say("view %d: NGX refused preset %s (NGX 0x%08x): made with its default for the mode instead", index,
                 dlss::preset_name(preset), result);
-            made = 0;
+            madeWith = 0;
         } else {
             result = again;
         }
     }
-    if (!s.feature) {
-        s.refused = true;
-        say("view %d's feature at %ux%u%s (preset %s, format %d) couldn't be made (%s, NGX 0x%08x)", index, w, h,
+    if (!(amd ? ok : s.feature != nullptr)) {
+        say("view %d's feature at %ux%u%s (preset %s, format %d) couldn't be made (%s, %s 0x%08x)", index, w, h,
             upscale ? " for an upscale" : "", dlss::preset_name(preset), static_cast<int>(format),
-            ok ? "NGX refused" : "its textures", result);
+            !textures && !amd ? "its textures" : amd ? (textures ? "its views" : "FSR refused") : "NGX refused",
+            amd ? "FSR" : "NGX", result);
+        if (s.fsrView || s.feature)
+            release_slot(s);
+        note();
+        s.refused = true;
         if (upscale) {  // the focus views go back to their size and DLAA (from the next frame: dlss_focus_scale)
             if (!d.focusSrOff)
-                say("super resolution on the focus views off for this session: they're drawn at their size with DLAA");
+                say("super resolution on the focus views off for this session: they're drawn at their size with %s",
+                    amd ? "FSR's native AA" : "DLAA");
             d.focusSrOff = true;
         } else if (++d.createFailures >= 4) {
             give_up("the features can't be made");
         }
         return false;
     }
+    if (amd) {
+        if (upscale)
+            say("view %d's FSR context made at %ux%u up to %ux%u (%s, %d%%, format %d, depth %s%s)", index, w, h, ow, oh,
+                dlss::focus_mode_name(d.cfg.focusScale), d.cfg.focusScale, static_cast<int>(format),
+                inverted ? "inverted" : "0 near", infinite ? ", infinite far plane" : "");
+        else
+            say("view %d's FSR context made at %ux%u (native AA, format %d, depth %s%s)", index, w, h,
+                static_cast<int>(format), inverted ? "inverted" : "0 near", infinite ? ", infinite far plane" : "");
+        if (!d.fsrProviderNamed) {
+            d.fsrProviderNamed = true;
+            say("FSR provider in use: %s", fsr::provider_in_use().c_str());
+        }
+        return true;
+    }
     // NGX's own line on the preset it took for the feature's mode follows (ngx_dlss.cpp), "ngx: (DLAA) Using App hint
     // Preset F" or "... using title default Preset K".
     if (upscale)
         say("view %d's DLSS feature made at %ux%u up to %ux%u (%s, preset %s, format %d, depth %s)", index, w, h, ow, oh,
-            dlss::focus_mode_name(d.cfg.focusScale), dlss::preset_name(made), static_cast<int>(format),
+            dlss::focus_mode_name(d.cfg.focusScale), dlss::preset_name(madeWith), static_cast<int>(format),
             inverted ? "inverted" : "0 near");
     else
-        say("view %d's DLAA feature made at %ux%u (preset %s, format %d, depth %s)", index, w, h, dlss::preset_name(made),
+        say("view %d's DLAA feature made at %ux%u (preset %s, format %d, depth %s)", index, w, h, dlss::preset_name(madeWith),
             static_cast<int>(format), inverted ? "inverted" : "0 near");
     if (!d.dllNamed) {  // which one NGX took: the player's, Sim-QVFR's own, or one beside the game's exe
         d.dllNamed = true;
@@ -866,7 +970,7 @@ void check_vectors(ID3D11DeviceContext* context, Slot& s, int index, bool car) {
 bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMAT format, int index, unsigned x, unsigned y,
               unsigned w, unsigned h, unsigned ow, unsigned oh, const M4 rendered[2], const M4 unjittered[2],
               const Jitter& jitter, double shiftX, double shiftY, bool inverted, const double depthTerms[2], CarTest car,
-              const DlssPass& pass) {
+              const DlssPass& pass, const Camera& camera) {
     Slot& s = d.slots[index];
     if (!ensure(context, s, index, w, h, ow, oh, format, inverted)) {
         ++d.failures;
@@ -965,20 +1069,43 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         neural(w, h);
 
     ++s.runs;
-    ngx::Evaluation e;
-    e.colour = resolved;
-    e.colourX = x;
-    e.colourY = y;
-    e.depth = s.depth.Get();
-    e.vectors = s.vectors.Get();
-    e.output = s.output.Get();
-    e.width = w;
-    e.height = h;
-    e.jitterX = jitter.on ? static_cast<float>(d.cfg.flipX ? -jitter.sx : jitter.sx) : 0;
-    e.jitterY = jitter.on ? static_cast<float>(d.cfg.flipY ? -jitter.sy : jitter.sy) : 0;
-    e.reset = !history;
+    // The jitter in render pixels, as it reached the projection (x right, y down): NGX's and FSR's convention alike
+    // (FSR's sample puts it in as the clip shift 2 jx / w, -2 jy / h: dlss::clip_shift_for's).
+    const float jx = jitter.on ? static_cast<float>(d.cfg.flipX ? -jitter.sx : jitter.sx) : 0;
+    const float jy = jitter.on ? static_cast<float>(d.cfg.flipY ? -jitter.sy : jitter.sy) : 0;
     unsigned result = 0;
-    const bool done = ngx::evaluate(context, s.feature, e, result);
+    bool done = false;
+    if (s.fsrView) {
+        // FSR reads no sub-rectangle of the scene: the view's colour copied into its own texture (the one copy DLSS
+        // doesn't make; depth and vectors were drawn into FSR's textures above).
+        const D3D11_BOX box{x, y, 0, x + w, y + h, 1};
+        context->CopySubresourceRegion(s.colourIn.Get(), 0, 0, 0, 0, resolved, 0, &box);
+        fsr::Evaluation fe;
+        fe.width = w;
+        fe.height = h;
+        fe.jitterX = jx;
+        fe.jitterY = jy;
+        fe.reset = !history;
+        fe.cameraNear = camera.nearM;
+        fe.cameraFar = camera.farM;
+        fe.fovY = camera.fovY;
+        fe.frameMs = static_cast<float>(d.frameMs);
+        done = fsr::evaluate(context, s.fsrView, fe, result);
+    } else {
+        ngx::Evaluation e;
+        e.colour = resolved;
+        e.colourX = x;
+        e.colourY = y;
+        e.depth = s.depth.Get();
+        e.vectors = s.vectors.Get();
+        e.output = s.output.Get();
+        e.width = w;
+        e.height = h;
+        e.jitterX = jx;
+        e.jitterY = jy;
+        e.reset = !history;
+        done = ngx::evaluate(context, s.feature, e, result);
+    }
     if (done) {
         context->CopySubresourceRegion(resolved, 0, x, y, 0, s.output.Get(), 0, nullptr);  // ow x oh, from (x, y)
         if (nr_view_wanted(index) && !nr_before_dlss())
@@ -987,7 +1114,7 @@ bool run_view(ID3D11DeviceContext* context, ID3D11Resource* resolved, DXGI_FORMA
         ++d.evaluationsTotal;
     } else {
         if (d.failures < 5)
-            say("frame %llu view %d: the evaluation failed (NGX 0x%08x)", d.frame, index, result);
+            say("frame %llu view %d: the evaluation failed (%s 0x%08x)", d.frame, index, s.fsrView ? "FSR" : "NGX", result);
         ++d.failures;
     }
     s.beforeUnjittered[0] = unjittered[0];
@@ -1077,10 +1204,16 @@ void dlss_start(const DlssRun& run) {
     d.cfg.focusScale = (std::max)(33, (std::min)(100, run.focusScale));
     // The jitter's sequence: as long as the smallest render asks (the eyes and the focus views share its phase).
     d.phases = d.cfg.views >= 2 ? dlss::jitter_phases(d.cfg.focusScale / 100.0) : dlss::kJitterPhases;
-    if (run.views && !ngx::built_in()) {
+    if (run.views && !ngx::built_in() && !(fsr::built_in() && (run.upscaler == 1 || run.fsrOnAmd))) {
         say("asked for, but this build has no NGX SDK (CMake: NGX_SDK_DIR): off");
         d.cfg.views = 0;
     }
+    if (run.views && (run.upscaler == 1 || run.fsrOnAmd) && !fsr::built_in()) {
+        say("AMD FSR asked for, but this build has no FSR SDK (CMake: FFX_SDK_DIR): DLSS instead");
+        d.cfg.upscaler = 0;
+        d.cfg.fsrOnAmd = false;
+    }
+    d.backend = d.ready ? d.backend : -1;
     char focusMode[160] = "";
     if (d.cfg.views >= 2 && d.cfg.focusScale < 100)
         std::snprintf(focusMode, sizeof(focusMode), ", DLSS %s on the focus views (drawn at %d%% of their size each way, "
@@ -1098,6 +1231,9 @@ void dlss_start(const DlssRun& run) {
                       d.cfg.carBox[4], d.cfg.carBox[5], d.cfg.viewInverse ? ", view matrix inverted" : "",
                       d.cfg.gate ? ", gate on" : "",
                       dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
+    if (d.cfg.views && (d.cfg.upscaler == 1 || d.cfg.fsrOnAmd))
+        say("the upscaler: %s (AMD's provider: %s)", d.cfg.upscaler == 1 ? "AMD FSR" : "AMD FSR on an AMD GPU, else NVIDIA DLSS",
+            d.cfg.fsrProvider == 3 ? "the newest FSR 3.x" : "the newest it offers");
 }
 
 bool dlss_wanted() { return d.cfg.views > 0 && !d.off; }
@@ -1210,6 +1346,8 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
         return;
     if (!d.ready && !initialize(context))
         return;
+    if (!start_backend())  // the upscaler asked for (a live change may have switched it)
+        return;
     ComPtr<ID3D11Texture2D> scene;
     if (FAILED(resolved->QueryInterface(IID_PPV_ARGS(&scene))))
         return;
@@ -1258,6 +1396,20 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
     const bool inverted = d.cfg.depthReversed;
     const M4 used = inverted ? dlss::reversed_depth(projection) : projection;
     const double depthTerms[2] = {used[10], used[14]};  // depth = m10 + m14 / distance (w = z)
+    // FSR's camera: the planes from the depth terms, the vertical FOV from the eye's y scale (the focus view's through
+    // its remap). NGX takes none of it.
+    Camera eyeCamera, focusCamera;
+    {
+        double nearM = 0, farM = 0;
+        bool infinite = false;
+        if (dlss::near_far(depthTerms[0], depthTerms[1], nearM, farM, infinite)) {
+            eyeCamera.nearM = focusCamera.nearM = static_cast<float>(nearM);
+            eyeCamera.farM = focusCamera.farM = static_cast<float>(farM);
+            d.cameraInfinite = infinite;
+        }
+        eyeCamera.fovY = static_cast<float>(dlss::vertical_fov(projection[5]));
+        focusCamera.fovY = static_cast<float>(dlss::vertical_fov(projection[5], pass.remap[2]));
+    }
     // Two ways a pixel got here from the frame before: with the world (the game's view matrix: the car's travel and
     // the head's motion), and with the player's seat (the eye's pose in the tracking space: the head's motion alone).
     // What lies in the car's box about the head takes the second (the shader tests each pixel's place in the tracking
@@ -1306,7 +1458,7 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
         const M4 unjittered[2] = {dlss::mul(vp[0], off), dlss::mul(vp[1], off)};
         eyeDone = run_view(context, resolved, sd.Format, pass.eye, 0, 0, pass.eyeWidth, pass.eyeHeight, pass.eyeWidth,
                            pass.eyeHeight, vp, unjittered, eyeJitter, eyeJitter.cx, eyeJitter.cy, inverted, depthTerms, car,
-                           pass);
+                           pass, eyeCamera);
     }
     if (focus && !d.off) {  // the focus view: the eye's clip through its remap (which carries its own jitter)
         const M4 remap = dlss::clip_remap_matrix(pass.remap[0], pass.remap[1], pass.remap[2], pass.remap[3]);
@@ -1315,7 +1467,8 @@ void dlss_after_resolve(ID3D11DeviceContext* context, ID3D11Resource* resolved, 
         const M4 rendered[2] = {dlss::mul(vp[0], remap), dlss::mul(vp[1], remap)};
         const M4 unjittered[2] = {dlss::mul(vp[0], plain), dlss::mul(vp[1], plain)};
         focusDone = run_view(context, resolved, sd.Format, 2 + pass.eye, pass.eyeWidth, 0, rw, rh, fw, fh, rendered,
-                             unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car, pass);
+                             unjittered, focusJitter, focusJitter.cx, focusJitter.cy, inverted, depthTerms, car, pass,
+                             focusCamera);
         if (focusDone)
             focusLeft = false;
     }
@@ -1326,14 +1479,17 @@ void dlss_shutdown() {
     nr_shutdown();  // its features and its views of this device first
     if (!d.device)
         return;
-    for (Slot& s : d.slots) {
-        if (s.feature)
-            ngx::release(s.feature);
-        s = Slot{};
+    for (Slot& s : d.slots)
+        release_slot(s);
+    if (d.ready) {
+        ngx::shutdown(d.device.Get());  // each only if it started
+        ComPtr<ID3D11DeviceContext> context;
+        d.device->GetImmediateContext(&context);
+        fsr::shutdown(context.Get());
     }
-    if (d.ready)
-        ngx::shutdown(d.device.Get());
     d.ready = false;
+    d.backend = -1;
+    d.fsrProviderNamed = false;
     d.depthFor = nullptr;
     d.depthSrv.Reset();
     d.vs.Reset();
@@ -1361,7 +1517,7 @@ void dlss_shutdown() {
         d.eye[0] = d.eye[1] = d.focus[0] = d.focus[1] = Jitter{};
     }
     d.firstLogged = false;
-    say("shut down (features released, NGX stopped)");
+    say("shut down (features released, NGX and FSR stopped)");
 }
 
 void dlss_set_matrices(PassMatricesFn fn) { d.matrices = fn; }
@@ -1418,13 +1574,14 @@ namespace {
 // A change that makes features again (each 40-70 ms on the render thread, two per change) waits until the settings
 // have held this long: stepping through the quality modes in the headset menu makes one set, not one per step (run 26a:
 // two changes a second apart, ~120 ms each).
-constexpr auto kLiveSettle = std::chrono::milliseconds(500);
+auto kLiveSettle = std::chrono::milliseconds(500);
 
 // Does `l` make features again (or release them)?
 bool live_remakes(const DlssLive& l) {
     const int views = l.on ? 2 : 0;
     const int scale = (std::max)(33, (std::min)(100, l.focusScale));
-    return views != d.cfg.views || scale != d.cfg.focusScale || l.preset != d.cfg.preset || l.eyePreset != d.cfg.eyePreset;
+    return views != d.cfg.views || scale != d.cfg.focusScale || l.preset != d.cfg.preset || l.eyePreset != d.cfg.eyePreset ||
+           l.upscaler != d.cfg.upscaler;
 }
 
 // Texture sharpening: no feature to make again, from the next pass.
@@ -1445,18 +1602,16 @@ void apply_live(const DlssLive& l, unsigned changes) {
     apply_live_sharpening(l);
     if (!live_remakes(l))
         return;
-    if (!views && d.cfg.views) {  // off: the features go (NGX stays started until the session ends)
-        for (int i = 0; i < 4; ++i) {
-            Slot& s = d.slots[i];
-            if (s.feature)
-                ngx::release(s.feature);
-            s = Slot{};
-        }
+    const bool otherUpscaler = l.upscaler != d.cfg.upscaler;
+    if ((!views && d.cfg.views) || otherUpscaler) {  // off (NGX and FSR stay started until the session ends), or
+        for (Slot& s : d.slots)                       // the other upscaler's to make
+            release_slot(s);
     }
     {
         std::lock_guard guard(d.mutex);  // the jitter reads these on xrLocateViews' thread
-        if (views && !was)
+        if ((views && !was) || otherUpscaler)
             d.off = false;  // on again: a session's earlier refusal (NGX, the features) is tried once more
+        d.cfg.upscaler = l.upscaler;
         d.cfg.views = views;
         d.cfg.focusScale = scale;
         d.cfg.preset = l.preset;
@@ -1471,6 +1626,9 @@ void apply_live(const DlssLive& l, unsigned changes) {
         d.evaluated[0] = d.evaluated[1] = d.focusEvaluated[0] = d.focusEvaluated[1] = false;
     }
     d.createFailures = 0;
+    if (otherUpscaler)
+        say("live: the upscaler is now %s%s", backend_name(wanted_backend()),
+            wanted_backend() != l.upscaler ? " (the GPU is AMD's)" : "");
     if (!views)
         say("live: off (the features released; %u change%s)", changes, changes == 1 ? "" : "s");
     else
@@ -1483,7 +1641,9 @@ void apply_live(const DlssLive& l, unsigned changes) {
 
 }  // namespace
 
+void dlss_live_settle_for_tests(int ms) { kLiveSettle = std::chrono::milliseconds(ms < 0 ? 0 : ms); }
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
+int dlss_upscaler_in_use() { return d.backend; }
 unsigned long long dlss_stretched_total() { return d.stretchedTotal; }
 
 void dlss_frame_end(unsigned long long frame) {
@@ -1507,6 +1667,13 @@ void dlss_frame_end(unsigned long long frame) {
     else if (pending)
         apply_live_sharpening(live);
     nr_frame_end(frame);
+    {  // FSR's frame time (its own clock between frame ends), and its released contexts collected
+        const auto now = std::chrono::steady_clock::now();
+        if (d.lastFrameEnd.time_since_epoch().count())
+            d.frameMs = std::clamp(std::chrono::duration<double, std::milli>(now - d.lastFrameEnd).count(), 1.0, 100.0);
+        d.lastFrameEnd = now;
+        fsr::collect();
+    }
     if (!d.cfg.views)
         return;
     {
@@ -1548,6 +1715,13 @@ void dlss_frame_end(unsigned long long frame) {
                 d.slots[1].width, d.slots[1].height, focusSizes[0], focusSizes[1],
                 d.jitterDead ? "none (it doesn't reach the projection)" : !d.signDecided ? "not settled yet"
                 : d.sign[0] > 0 && d.sign[1] > 0 ? "as asked" : "negated on an axis");
+            if (d.backend == 1) {  // FSR's own GPU time per view (its D3D12 queue's timestamps)
+                double ms[4];
+                for (int i = 0; i < 4; ++i)
+                    ms[i] = fsr::take_gpu_ms(d.slots[i].fsrView);
+                say("FSR GPU per evaluation: eyes %.2f %.2f ms, focus views %.2f %.2f ms (%s); frame %.1f ms", ms[0], ms[1], ms[2],
+                    ms[3], fsr::provider_in_use().c_str(), d.frameMs);
+            }
         }
         d.evaluations = d.failures = d.recreated = d.jitteredFrames = d.stretched = d.objectViews = 0;
     }

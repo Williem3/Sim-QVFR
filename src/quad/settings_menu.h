@@ -49,8 +49,9 @@ enum class MenuItem {
     // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
     Sharpening,
     // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
-    // the focus views' mode and preset, the eyes' preset, texture sharpening.
-    DlssOn, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening,
+    // the focus views' mode and preset, the eyes' preset, texture sharpening; with MenuLaunch::fsr the upscaler (DLSS or
+    // AMD FSR, an experiment).
+    DlssOn, DlssUpscaler, DlssFocusMode, DlssFocusPreset, DlssEyePreset, DlssSharpening,
     // The DLSS-NR page ([dlss_nr], engine/nr_settings.h), for a launch that can run it (MenuLaunch::ownNr): on, the
     // model's settings, where it runs relative to DLSS, the focus views' working size, the edge blend, the periphery
     // and how much of it at what working size.
@@ -130,6 +131,8 @@ struct MenuLaunch {
     // Sim-QVFR's own DLSS can run in this launch (GameFeatures::sideLoadedDlss, QVFR with the multi-view path, a build
     // with the NGX SDK): its DLSS page ([dlss]), live.
     bool ownDlss = false;
+    // AMD FSR may run those views instead (the game's experiment key, LMU: [experiment] lmu_fsr=1): the page's Upscaler.
+    bool fsr = false;
     // DLSS-NR can run in this launch: ownDlss and the player's nvngx_dlssnr.dll in [dlss_nr] folder. Its page, live.
     bool ownNr = false;
     // Texture sharpening was on at launch, so its hook and shader twins were made: its settings are live. Off at launch,

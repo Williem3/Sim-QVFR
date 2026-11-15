@@ -29,6 +29,9 @@ struct DlssSettings {
     // car_vectors: the game's other cars' own motion in DLSS's vectors where the game's side tracks them (LMU:
     // games/lmu/mvr_pass.h mvr_car_slots); with DLSS on at launch only (next launch). On: moving cars stay clean.
     bool carVectors = true;
+    // upscaler: what runs the views, 0 NVIDIA DLSS ("dlss"), 1 AMD FSR ("fsr"; live). An experiment: taken only where the
+    // game's [experiment] key allows it (LMU: lmu_fsr=1), else DLSS (engine/dlss_views.h DlssRun::upscaler).
+    int upscaler = 0;
     bool operator==(const DlssSettings&) const = default;
 };
 
@@ -126,6 +129,8 @@ inline DlssSettings read_dlss_settings(const wchar_t* ini) {
             kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, _wtoi(sharpening.c_str()), true)].value;
     const std::wstring cars = dlss_detail::read_text(ini, L"dlss", L"car_vectors", found);
     s.carVectors = !found || cars.empty() || _wtoi(cars.c_str()) != 0;
+    const std::wstring upscaler = dlss_detail::read_text(ini, L"dlss", L"upscaler", found);
+    s.upscaler = found && (_wcsicmp(upscaler.c_str(), L"fsr") == 0 || upscaler == L"1") ? 1 : 0;
     return s;
 }
 
@@ -139,6 +144,7 @@ inline bool write_dlss_settings(const wchar_t* ini, const DlssSettings& s) {
     ok &= ini_put(ini, L"dlss", L"texture_sharpening",
                   kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, s.textureSharpening, true)].value);
     ok &= ini_put(ini, L"dlss", L"car_vectors", s.carVectors ? 1 : 0);
+    ok &= ini_put(ini, L"dlss", L"upscaler", s.upscaler == 1 ? L"fsr" : L"dlss");
     return ok;
 }
 

@@ -32,3 +32,8 @@ nvsdk_ngx*.h
 nvsdk_ngx*.lib
 nvngx_*.dll
 NVIDIA-RTX-SDKs-LICENSE.txt
+
+# AMD's FSR SDK (FidelityFX SDK 2.x headers) and AMD's signed FSR DLLs: kept local like NVIDIA's (FFX_SDK_DIR, or
+# third_party/amd-fsr-sdk/ inside a checkout); a release carries the DLLs only as AMD's licence allows.
+third_party/amd-fsr-sdk/
+amd_fidelityfx_*.dll

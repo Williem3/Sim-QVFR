@@ -110,6 +110,28 @@ int SIM_QVFR_TEST_MAIN() {
     check(render_size(1000, 1.0) == 1000 && render_size(1000, 0.5) == 500 && render_size(1001, 0.5) == 501 &&
               render_size(1517, 0.67) == 1016 && render_size(1, 0.33) == 1 && render_size(800, 1.2) == 800,
           "the render size is the output's times the scale, rounded, within 1..output");
+    {  // AMD FSR's camera: near and far from the depth terms, both conventions; the vertical FOV from the y scale
+        const M4 rev = reversed_depth(p);
+        double n = 0, f = 0, nr = 0, fr = 0;
+        bool inf = true, infr = true;
+        const bool plainOk = near_far(p[10], p[14], n, f, inf), revOk = near_far(rev[10], rev[14], nr, fr, infr);
+        std::printf("     FSR camera: ordinary near %.4f far %.1f%s, reversed near %.4f far %.1f%s\n", n, f, inf ? " (infinite)" : "",
+                    nr, fr, infr ? " (infinite)" : "");
+        // LMU's as measured (run 3): reversed depth, m10 -3.7e-6, m14 0.075: near 0.075 m, far ~20 km.
+        double ln = 0, lf = 0;
+        bool linf = true;
+        const bool lmuOk = near_far(-3.7e-6, 0.075, ln, lf, linf);
+        double zn = 0, zf = 0;
+        bool zinf = false;
+        const bool zeroOk = near_far(0.0, 0.075, zn, zf, zinf);  // reversed with an infinite far plane
+        check(plainOk && revOk && near(n, nr, 1e-9) && near(f, fr, 1e-6 * f) && !inf && !infr && n > 0 && f > n,
+              "FSR's near and far are the same planes from either depth convention");
+        check(lmuOk && near(ln, 0.075, 1e-6) && near(lf, 0.075 / 3.7e-6, 1) && !linf, "LMU's measured terms give 0.075 m and ~20 km");
+        check(zeroOk && zinf && near(zn, 0.075, 1e-9) && zf == 1e6, "an infinite far plane is said so");
+        check(near(vertical_fov(1.0), 3.14159265358979 / 2, 1e-9) && near(vertical_fov(1.0, 2.0), 2 * std::atan(0.5), 1e-12) &&
+                  vertical_fov(0) == 0,
+              "the vertical FOV from the y scale, a focus view's through its remap");
+    }
 
     // The located FOV moved by the jitter: LMU's projection of it shows the image moved by exactly those pixels.
     const double sx = 0.3, sy = -0.2;

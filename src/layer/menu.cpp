@@ -231,6 +231,9 @@ void menu_open(int64_t now) {
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&
                                     experiment.views4Layout.secondViewRoom && ngx::built_in();
         menu.model.launch.sharpeningReady = menu.model.launch.ownDlss && experiment.textureSharpeningAtLaunch;
+        // AMD FSR in DLSS's place, an experiment (LMU's [experiment] lmu_fsr=1, games/lmu/adapter.cpp): the Upscaler row.
+        menu.model.launch.fsr = menu.model.launch.ownDlss && !live.ini.empty() &&
+                                GetPrivateProfileIntW(L"experiment", L"lmu_fsr", 0, live.ini.c_str()) != 0;
         // DLSS-NR on those views: with the player's nvngx_dlssnr.dll where [dlss_nr] folder says (Sim-QVFR has none).
         {
             const std::wstring folder = read_nr_settings(live.ini.c_str()).folder;

@@ -99,6 +99,20 @@ if(SIM_QVFR_NGX AND EXISTS "${NGX_SDK_DIR}/nvngx_dlss.dll")
   set(SIM_QVFR_NGX_DLL "${NGX_SDK_DIR}/nvngx_dlss.dll")
 endif()
 
+# AMD's FSR SDK headers (Kits/FidelityFX/api/include, Kits/FidelityFX/upscalers/include; FidelityFX SDK 2.x), for AMD FSR
+# called by us (src/engine/fsr_upscale.h): not in this repository. Nothing of it is linked: AMD's signed
+# amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_upscaler_dx12.dll are loaded at run time. Unset: the code builds
+# without it and answers that FSR is unavailable. Its place inside a checkout, gitignored: third_party/amd-fsr-sdk.
+set(SIM_QVFR_FFX_DEFAULT "")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd-fsr-sdk/Kits/FidelityFX/upscalers/include/ffx_upscale.h")
+  set(SIM_QVFR_FFX_DEFAULT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amd-fsr-sdk")
+endif()
+set(FFX_SDK_DIR "${SIM_QVFR_FFX_DEFAULT}" CACHE PATH "A local AMD FSR SDK (FidelityFX SDK 2.x headers)")
+set(SIM_QVFR_FFX OFF)
+if(FFX_SDK_DIR AND EXISTS "${FFX_SDK_DIR}/Kits/FidelityFX/upscalers/include/ffx_upscale.h")
+  set(SIM_QVFR_FFX ON)
+endif()
+
 # Every source the layer shares with its tests except the layer itself (sim_qvfr_layer below), compiled once.
 # A test links this and takes only the objects it references.
 add_library(sim_qvfr_core STATIC
@@ -106,7 +120,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/replay_probe.cpp src/probe/focus_ngx.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -119,6 +133,12 @@ if(SIM_QVFR_NGX)
   target_include_directories(sim_qvfr_core PRIVATE "${NGX_SDK_DIR}/include")
   target_compile_definitions(sim_qvfr_core PRIVATE SIM_QVFR_NGX)
   target_link_libraries(sim_qvfr_core PUBLIC debug "${NGX_SDK_DIR}/nvsdk_ngx_s_dbg.lib" optimized "${NGX_SDK_DIR}/nvsdk_ngx_s.lib")
+endif()
+if(SIM_QVFR_FFX)
+  # Only fsr_upscale.cpp includes AMD's headers.
+  set_property(SOURCE src/engine/fsr_upscale.cpp APPEND PROPERTY INCLUDE_DIRECTORIES
+    "${FFX_SDK_DIR}/Kits/FidelityFX/api/include" "${FFX_SDK_DIR}/Kits/FidelityFX/upscalers/include")
+  set_property(SOURCE src/engine/fsr_upscale.cpp APPEND PROPERTY COMPILE_DEFINITIONS SIM_QVFR_FFX)
 endif()
 # C, and C-style COM declarations (CINTERFACE before its includes).
 set_source_files_properties(src/probe/d3d12_vtable_index.c src/engine/d3d11_vtables.cpp

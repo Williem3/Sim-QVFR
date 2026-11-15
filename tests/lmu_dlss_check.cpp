@@ -2,7 +2,11 @@
 // with a stand-in for the game's side. Not part of the test suite (no _test suffix): it needs an NVIDIA RTX GPU, a build
 // with the NGX SDK and a folder holding nvngx_dlss.dll.
 //
-//   sim_qvfr_tests lmu_dlss_check <folder with nvngx_dlss.dll> [frames]
+//   sim_qvfr_tests lmu_dlss_check <folder with nvngx_dlss.dll> [frames] [fsr=<folder with AMD's two FSR DLLs>]
+//
+// With fsr=: the same parts with AMD FSR running the views (DlssRun::upscaler 1, engine/fsr_upscale.h: our D3D12 device
+// beside this D3D11 one, FSR 3.1 on an NVIDIA GPU); NVIDIA's preset and refusal checks are left out, FSR's own lines
+// checked instead.
 //
 // Each frame, as the game and the layer's hooks would: the stereo views located (their FOV jittered by the module), the
 // projection built from that FOV as LMU builds it, a camera that moves, an eye and its focus view side by side in a
@@ -51,6 +55,23 @@ void check(bool ok, const char* what) {
 
 ComPtr<ID3D11Device> device;
 ComPtr<ID3D11DeviceContext> context;
+
+// The GPU through everything queued, as a game's frame pacing keeps it from running ahead (an event query waited for).
+// FSR's bridge skips an evaluation with six frames of its work still queued (fsr::kBacklog): this check's frames,
+// unpaced, would run that far ahead in a millisecond.
+bool paced = false;
+void pace() {
+    if (!paced)
+        return;
+    D3D11_QUERY_DESC qd{D3D11_QUERY_EVENT, 0};
+    ComPtr<ID3D11Query> query;
+    if (FAILED(device->CreateQuery(&qd, &query)))
+        return;
+    context->End(query.Get());
+    BOOL done = FALSE;
+    for (int i = 0; i < 20000 && context->GetData(query.Get(), &done, sizeof(done), 0) != S_OK; ++i)
+        Sleep(0);
+}
 
 // One row of an RGBA16F texture, as floats (red only).
 std::vector<float> row_of(ID3D11Texture2D* texture, unsigned x, unsigned y, unsigned w) {
@@ -287,10 +308,23 @@ double shifted_difference(const std::vector<float>& a, const std::vector<float>&
 
 int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     if (argc < 2) {
-        std::printf("usage: lmu_dlss_check <folder with nvngx_dlss.dll> [frames]\n");
+        std::printf("usage: lmu_dlss_check <folder with nvngx_dlss.dll> [frames] [fsr=<folder with AMD's FSR DLLs>]\n");
         return 2;
     }
-    const int frames = argc > 2 ? (std::max)(120, _wtoi(argv[2])) : 400;
+    std::wstring fsrFolder;
+    bool fsrMode = false, flip = false;
+    int frames = 400;
+    for (int i = 2; i < argc; ++i) {
+        if (std::wcsncmp(argv[i], L"fsr=", 4) == 0)
+            fsrMode = true, fsrFolder = argv[i] + 4;
+        else if (std::wcscmp(argv[i], L"flip") == 0)  // a control: the jitter handed to the upscaler negated both ways
+            flip = true;
+        else
+            frames = (std::max)(120, _wtoi(argv[i]));
+    }
+    paced = fsrMode;
+    if (fsrMode)
+        std::printf("     AMD FSR runs the views (its DLLs from %ls)\n", fsrFolder.c_str());
     wchar_t temp[MAX_PATH];
     GetTempPathW(MAX_PATH, temp);
     const std::wstring log = std::wstring(temp) + L"sim-qvfr-lmu-dlss-check.log";
@@ -350,6 +384,12 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     run.dllFolder = argv[1];
     run.gate = true;
     run.eyePreset = 6;  // the first part: the eyes on preset F (lmu_dlss_eye_preset=F), the focus views on NGX's default
+    run.upscaler = fsrMode ? 1 : 0;
+    run.flipX = run.flipY = flip;
+    // The live part's changes taken at their frame's end, as the check expects (the game waits 500 ms for the player to
+    // stop stepping through the modes).
+    simqvfr::dlss_live_settle_for_tests(0);
+    run.fsrFolder = fsrFolder;
     simqvfr::dlss_start(run);
     check(simqvfr::dlss_wanted(), "the module takes the run (a build with the NGX SDK)");
 
@@ -427,10 +467,13 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
             }
         }
         simqvfr::dlss_frame_end(static_cast<unsigned long long>(f + 1));
+        pace();
     }
     std::printf("     %llu evaluations in %d frames\n", simqvfr::dlss_evaluations_total(), frames);
     check(simqvfr::dlss_wanted(), "the module is still on at the end");
     check(simqvfr::dlss_evaluations_total() == static_cast<unsigned long long>(frames) * 4, "every view of every frame was evaluated");
+    if (fsrMode)
+        check(simqvfr::dlss_upscaler_in_use() == 1, "AMD FSR ran the views");
     std::printf("     the caller's state differed after %d of %d calls\n", stateLost, frames * 2);
     check(stateKept, "the caller's render target, depth target, shader input and viewport are bound as before after every call");
     check(rewritten, "the eye's and the focus view's parts of the scene are rewritten");
@@ -549,6 +592,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         for (unsigned f = 0; f < partFrames && scene.ps && resolvedRtv; ++f) {
             if (liveTest) {
                 simqvfr::DlssLive change;
+                change.upscaler = fsrMode ? 1 : 0;
                 if (f == 30) {
                     change.on = false;
                     simqvfr::dlss_live(change);
@@ -560,6 +604,9 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                     simqvfr::dlss_live(change);
                 } else if (f == 105) {  // "ultra quality": NGX has no such mode for an upscale; its quality mode takes 77%
                     change.on = true, change.focusScale = 77, change.preset = 0, change.eyePreset = 11;
+                    simqvfr::dlss_live(change);
+                } else if (f == 112 && fsrMode) {  // FSR: the upscaler switched live to DLSS, the rest as it was
+                    change.on = true, change.focusScale = 77, change.preset = 0, change.eyePreset = 11, change.upscaler = 0;
                     simqvfr::dlss_live(change);
                 }
                 if (f == 31 || f == 61 || f == 90 || f == 119)  // the evaluations so far at each stretch's ends
@@ -574,6 +621,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
             if (refusals && f == 30) {  // everything at the eyes' size refused; the eyes' preset changed, so they are made again
                 simqvfr::ngx::refuse_for_tests(sceneEyeW, -1);
                 simqvfr::DlssLive change;
+                change.upscaler = fsrMode ? 1 : 0;
                 change.on = true, change.focusScale = 100, change.preset = 0, change.eyePreset = 11;
                 simqvfr::dlss_live(change);
             }
@@ -731,6 +779,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                 stretchOff = !simqvfr::dlss_wanted() && simqvfr::dlss_focus_scale() == 1.0;
             }
             simqvfr::dlss_frame_end(static_cast<unsigned long long>(frames) + part * sceneFrames + f + 1);
+            pace();
         }
         matricesFail = false;
         simqvfr::dlss_shutdown();
@@ -847,8 +896,9 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     // The focus views in DLSS performance mode.
     const std::string srPart = starts[6] == std::string::npos ? "" : all.substr(starts[6], starts[7] - starts[6]);
     char made[96];
-    std::snprintf(made, sizeof(made), "view 2's DLSS feature made at %ux%u up to %ux%u (performance", focusW / 2, focusH / 2,
-                  focusW, focusH);
+    std::snprintf(made, sizeof(made), fsrMode ? "view 2's FSR context made at %ux%u up to %ux%u (performance"
+                                              : "view 2's DLSS feature made at %ux%u up to %ux%u (performance",
+                  focusW / 2, focusH / 2, focusW, focusH);
     char gateView[48];
     std::snprintf(gateView, sizeof(gateView), "view 2 (%ux%u)", focusW / 2, focusH / 2);
     std::printf("     super resolution: %d gate lines, depth fit in %d classes, not in %d\n", upscaled.lines, upscaled.depthFit,
@@ -856,8 +906,9 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     check(srPart.find("DLSS performance on the focus views") != std::string::npos && srPart.find(made) != std::string::npos &&
               srPart.find("(32 phases)") != std::string::npos,
           "super resolution: the focus views' features made at half size up to their size, 32 jitter phases");
-    check(srPart.find("ngx: (Perf) App hint Preset Unspecified or Overridden, using title default Preset M") != std::string::npos,
-          "super resolution: NGX's line says it took preset M, its default for performance");
+    if (!fsrMode)
+        check(srPart.find("ngx: (Perf) App hint Preset Unspecified or Overridden, using title default Preset M") != std::string::npos,
+              "super resolution: NGX's line says it took preset M, its default for performance");
 
     // The presets per view (the first part: the eyes on F, the focus views on NGX's default), as made and as NGX took them.
     const std::string firstPart = starts[0] == std::string::npos ? "" : all.substr(starts[0], starts[1] - starts[0]);
@@ -870,12 +921,27 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
         return found != std::string::npos && firstPart.find(what, found) != std::string::npos &&
                firstPart.find(what, found) < at;
     };
-    check(firstPart.find("presets: the eyes F, the focus views default") != std::string::npos && eyeAt != std::string::npos &&
-              focusAt != std::string::npos,
-          "presets: the eyes' features made with F, the focus views' with NGX's default");
-    check(ngx_line_before(eyeAt, "Using App hint Preset F") &&
-              ngx_line_before(focusAt, "using title default Preset K"),
-          "presets: NGX's lines say it took F for the eyes and K (its DLAA default) for the focus views");
+    if (fsrMode) {
+        char fsrEye[96], fsrFocus[96];
+        std::snprintf(fsrEye, sizeof(fsrEye), "view 0's FSR context made at 1600x1280 (native AA");
+        std::snprintf(fsrFocus, sizeof(fsrFocus), "view 2's FSR context made at %ux%u (native AA", focusW, focusH);
+        const size_t providerAt = firstPart.find("FSR provider in use: ");
+        std::printf("     %s\n", providerAt == std::string::npos
+                                     ? "(no provider named)"
+                                     : firstPart.substr(providerAt, firstPart.find('\n', providerAt) - providerAt).c_str());
+        check(firstPart.find("AMD FSR started") != std::string::npos && firstPart.find(fsrEye) != std::string::npos &&
+                  firstPart.find(fsrFocus) != std::string::npos && providerAt != std::string::npos,
+              "FSR: started on our D3D12 device, the eyes' and focus views' contexts made at native AA, the provider named");
+        check(all.find("the evaluation failed") == std::string::npos && all.find("couldn't be made") == std::string::npos,
+              "FSR: no evaluation failed, nothing refused");
+    } else {
+        check(firstPart.find("presets: the eyes F, the focus views default") != std::string::npos && eyeAt != std::string::npos &&
+                  focusAt != std::string::npos,
+              "presets: the eyes' features made with F, the focus views' with NGX's default");
+        check(ngx_line_before(eyeAt, "Using App hint Preset F") &&
+                  ngx_line_before(focusAt, "using title default Preset K"),
+              "presets: NGX's lines say it took F for the eyes and K (its DLAA default) for the focus views");
+    }
     check(srScaled, "super resolution: the focus views asked to be drawn at half size from the frame after NGX started");
     check(upscaled.lines >= 4 && upscaled.depthFit == 2 * upscaled.lines && upscaled.depthNot == 0 &&
               srPart.find(gateView) != std::string::npos,
@@ -896,7 +962,9 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                 placement[2][2], bilinearDiff > 0 ? 100 * placement[2][2] / bilinearDiff : 0.0, bilinearDiff);
     // Measured 2026-11-10 (RTX 5070 Ti, nvngx_dlss.dll 310.9.1 from ACE): 32% with the inputs right; 54% with the focus view's
     // jitter computed for its full size instead of its render size (a control, the inputs' likeliest mistake).
-    check(placed && bilinearDiff > 0 && placement[2][2] < 0.45 * bilinearDiff,
+    // FSR 3.1.5 (amd_fidelityfx_upscaler_dx12.dll 4.1.1, on the same 5070 Ti, 2026-11-15): 52% with the inputs right, 93%
+    // with the jitter handed to it negated (`flip`, the control: placed a pixel off too). Its bound sits between.
+    check(placed && bilinearDiff > 0 && placement[2][2] < (fsrMode ? 0.7 : 0.45) * bilinearDiff,
           "super resolution: converged, DLSS's upscale is far nearer the full-size render than a bilinear upscale (jitter "
           "and vectors in render pixels)");
     std::printf("     DLSS given up in a frame: %llu focus views stretched, the row beyond the render %s, differing from the "
@@ -909,16 +977,22 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
     // The live part.
     const std::string livePart = starts[7] == std::string::npos ? "" : all.substr(starts[7], starts[8] - starts[7]);
     char liveFocus[96];
-    std::snprintf(liveFocus, sizeof(liveFocus), "view 2's DLSS feature made at %ux%u up to %ux%u (quality, preset default",
+    std::snprintf(liveFocus, sizeof(liveFocus),
+                  fsrMode ? "view 2's FSR context made at %ux%u up to %ux%u (quality"
+                          : "view 2's DLSS feature made at %ux%u up to %ux%u (quality, preset default",
                   simqvfr::dlss::render_size(focusW, 0.67), simqvfr::dlss::render_size(focusH, 0.67), focusW, focusH);
     char liveFocusM[80];
-    std::snprintf(liveFocusM, sizeof(liveFocusM), "view 2's DLAA feature made at %ux%u (preset M", focusW, focusH);
+    std::snprintf(liveFocusM, sizeof(liveFocusM),
+                  fsrMode ? "view 2's FSR context made at %ux%u (native AA" : "view 2's DLAA feature made at %ux%u (preset M",
+                  focusW, focusH);
     char liveEye[80];
-    std::snprintf(liveEye, sizeof(liveEye), "view 0's DLAA feature made at %ux%u (preset F", sceneEyeW, sceneEyeH);
+    std::snprintf(liveEye, sizeof(liveEye),
+                  fsrMode ? "view 0's FSR context made at %ux%u (native AA" : "view 0's DLAA feature made at %ux%u (preset F",
+                  sceneEyeW, sceneEyeH);
     std::printf("     live: evaluations %llu at the off, %llu at the on again, %llu at the switch to DLAA M, %llu at the end; "
                 "focus scale %.2f while off, %.2f after\n",
                 liveAt[0], liveAt[1], liveAt[2], liveAt[3], liveScaleOff, liveScaleOn);
-    check(livePart.find("live: off (the features released)") != std::string::npos && liveAt[1] == liveAt[0] &&
+    check(livePart.find("live: off (the features released") != std::string::npos && liveAt[1] == liveAt[0] &&
               !liveWantedOff && liveScaleOff == 1.0,
           "live: off takes at the frame's end: no evaluations, the focus views at their size");
     check(livePart.find("live: on: DLAA on the eyes (preset F), the focus views quality (67%, preset default)") != std::string::npos &&
@@ -926,14 +1000,26 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
               std::fabs(liveScaleOn - 0.67) < 1e-9 && liveAt[2] - liveAt[1] == 4 * 29,
           "live: on again at quality with F on the eyes: features made with them, every view evaluated each frame");
     char liveFocus77[96];
-    std::snprintf(liveFocus77, sizeof(liveFocus77), "view 2's DLSS feature made at %ux%u up to %ux%u (ultra quality",
+    std::snprintf(liveFocus77, sizeof(liveFocus77),
+                  fsrMode ? "view 2's FSR context made at %ux%u up to %ux%u (ultra quality"
+                          : "view 2's DLSS feature made at %ux%u up to %ux%u (ultra quality",
                   simqvfr::dlss::render_size(focusW, 0.77), simqvfr::dlss::render_size(focusH, 0.77), focusW, focusH);
-    check(livePart.find(liveFocusM) != std::string::npos && livePart.find("ngx: (DLAA) Using App hint Preset M") != std::string::npos &&
+    check(livePart.find(liveFocusM) != std::string::npos &&
+              (fsrMode || livePart.find("ngx: (DLAA) Using App hint Preset M") != std::string::npos) &&
               liveAt[3] - liveAt[2] == 4 * 29,
           "live: the focus views to DLAA on preset M (NGX took M), then 77%: every view still evaluated each frame");
     check(livePart.find(liveFocus77) != std::string::npos && livePart.find("couldn't be made") == std::string::npos &&
-              livePart.find("ngx: (Quality) App hint Preset Unspecified or Overridden, using title default Preset K") != std::string::npos,
+              (fsrMode ||
+               livePart.find("ngx: (Quality) App hint Preset Unspecified or Overridden, using title default Preset K") != std::string::npos),
           "live: 77% (\"ultra quality\") made in NGX's quality mode, nothing refused");
+    if (fsrMode) {
+        char liveDlss[96];
+        std::snprintf(liveDlss, sizeof(liveDlss), "view 0's DLAA feature made at %ux%u (preset K", sceneEyeW, sceneEyeH);
+        const size_t switchAt = livePart.find("live: the upscaler is now NVIDIA DLSS");
+        check(switchAt != std::string::npos && livePart.find(liveDlss, switchAt) != std::string::npos &&
+                  livePart.find("NGX started", switchAt) != std::string::npos,
+              "live: FSR switched to DLSS: NGX started, the views' DLSS features made, every view still evaluated");
+    }
 
     // The refusals part.
     const std::string refusedPart = starts[8] == std::string::npos ? "" : all.substr(starts[8]);
@@ -941,6 +1027,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
                 "FOV %s)\n",
                 refusedAt[0], refusedAt[1], refusedJitterEarly ? "on" : "OFF", refusedJitterLate ? "ON" : "off",
                 refusedFovMovedLate ? "MOVED" : "as located");
+    if (!fsrMode) {  // NGX's refusals (ngx::refuse_for_tests): FSR has no presets to refuse
     check(refusedPart.find("view 0: NGX refused preset F") != std::string::npos &&
               refusedPart.find("made with its default for the mode instead") != std::string::npos && refusedJitterEarly,
           "refusals: a refused preset made with NGX's default instead, the eyes jittered and processed");
@@ -949,6 +1036,7 @@ int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
               refusedPart.find("off for this session") == std::string::npos,
           "refusals: eyes that can't be made get no jitter (their FOV as located), the focus views still processed, DLSS "
           "not given up");
+    }
     simqvfr::ngx::refuse_for_tests(0, 0);
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
