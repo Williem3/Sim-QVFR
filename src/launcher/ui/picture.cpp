@@ -12,6 +12,7 @@
 #include "../launcher.h"
 #include "../preflight.h"
 #include "../settings.h"
+#include "../../dev_build.h"
 #include "../../engine/dlss_settings.h"
 #include "../../engine/nr_settings.h"
 #include "../../engine/nvapi_gpus.h"
@@ -23,13 +24,36 @@
 
 namespace simqvfr::launcher::ui::win {
 
-bool own_dlss_available(std::wstring* why) {
+// No NVIDIA RTX card here (AMD, Intel, an older NVIDIA): the game's upscaler is AMD FSR (engine/dlss_views.h: the layer
+// runs FSR where DLSS can't), with the same [dlss] settings, its card in DLSS's place.
+// Development builds only: SIM_QVFR_LAUNCHER_GPU=fsr shows the FSR card on an RTX PC (to check it).
+bool fsr_pc() {
+    if constexpr (kDevBuild) {
+        wchar_t forced[8] = {};
+        if (GetEnvironmentVariableW(L"SIM_QVFR_LAUNCHER_GPU", forced, 8) && _wcsicmp(forced, L"fsr") == 0)
+            return true;
+    }
+    return nvapi::two_views_gpu() == nullptr;
+}
+
+const wchar_t* upscaler_name() { return fsr_pc() ? L"FSR" : L"DLSS"; }
+
+bool own_upscaler_available(std::wstring* why) {
     std::wstring reason;
     if (!game_has(&games::GameFeatures::sideLoadedDlss))
         reason = not_yet();
     else if (app.s.mode != RenderMode::Qvfr)
         reason = L"Available in Quad View Foveated Rendering.";
-    else if (!nvapi::two_views_gpu())
+    if (why)
+        *why = reason;
+    return reason.empty();
+}
+
+bool own_dlss_available(std::wstring* why) {
+    std::wstring reason;
+    if (!own_upscaler_available(&reason))
+        ;  // the game's or the mode's reason
+    else if (fsr_pc())
         reason = L"Needs an NVIDIA RTX graphics card (20 series or newer): none was found.";
     if (why)
         *why = reason;
@@ -444,6 +468,58 @@ Card nr_card() {
     return c;
 }
 
+// ---- AMD FSR (LMU, a PC without an NVIDIA RTX card: DLSS's place, the same [dlss] settings) ---------
+
+// Which FSR this PC gets, from AMD's own query (engine/fsr_probe.h), said in a sentence.
+std::wstring fsr_offer_text() {
+    const fsr::Offer& o = app.fsrOffer;
+    if (app.fsrProbing || !o.checked)
+        return L"Asking AMD’s FSR which version your graphics card gets…";
+    if (!o.why.empty())
+        return o.why;
+    const std::wstring name = fsr::offer_name(o);
+    return name + L" on your " + o.gpu + (o.major >= 4 ? L": AMD’s machine-learned upscaler." : L": AMD’s analytic upscaler.") +
+           L" Included with Sim-QVFR.";
+}
+
+void fsr_rows(Body& b) {
+    const DlssSettings& d = app.s.dlss;
+    b.note(fsr_offer_text());
+    b.popup(kDlssFocusMode, L"Focus views", kFsrFocusModes[dlss_choice_index(kFsrFocusModes, d.focusScale, true)].name,
+            names_of(kFsrFocusModes));
+    b.popup(kDlssSharpening, L"Texture sharpening",
+            kDlssTextureSharpening[dlss_choice_index(kDlssTextureSharpening, d.textureSharpening, true)].name,
+            names_of(kDlssTextureSharpening));
+    b.more(L"advanced options", {L"Other cars’ motion"}, [](Body& m) {
+        m.toggle(kDlssCarVectors, L"Other cars’ motion", app.s.dlss.carVectors,
+                 L"Keeps passing cars clean; turn off for headroom.", false, Applies::NextLaunch);
+    });
+    b.note(L"A change rebuilds FSR in a running game: a short stutter.");
+}
+
+// AMD FSR in DLSS's place: its switch is DLSS's ([dlss] on), its options DLSS's but the presets (FSR has none).
+Card fsr_card() {
+    Card c{Tab::Picture, L"FSR (experimental)", Applies::Live};
+    c.body = [](Body& b) {
+        std::wstring why;
+        if (!own_upscaler_available(&why)) {
+            b.note(why);
+            return;
+        }
+        b.note(L"Experimental: Sim-QVFR’s FSR is built like its DLSS, but without AMD hardware to test on so far it has only "
+               L"run as FSR 3.1 on an NVIDIA card. FSR 4 is untested.");
+        const bool on = app.s.dlss.on;
+        b.toggle(kDlssOn, L"Use FSR", on, on ? L"Native AA on the periphery, native AA or an upscale on the focus." : L"Off");
+        b.reveal(kDlssOn, on, L"Use FSR", {L"Focus views", L"Texture sharpening", L"Other cars’ motion"}, fsr_rows);
+    };
+    c.reset = [](Settings& s) {  // its switch and options; DLSS's own DLL choice kept
+        const std::wstring folder = s.dlss.folder;
+        s.dlss = DlssSettings{};
+        s.dlss.folder = folder;
+    };
+    return c;
+}
+
 // ---- Cheeky Foveated DLSS and its frame generation (ACE, ACC) ----------------------------------
 
 void cheeky_rows(Body& b) {
@@ -583,7 +659,9 @@ std::vector<Card> picture_cards() {
     if (rendering_shown())
         cards.push_back(rendering_card());
     // Each feature's card holds its switch; what its switch turns on follows straight under it.
-    if (game_has(&games::GameFeatures::sideLoadedDlss)) {
+    if (game_has(&games::GameFeatures::sideLoadedDlss) && fsr_pc()) {
+        cards.push_back(fsr_card());  // no NVIDIA RTX card: AMD FSR, the same settings
+    } else if (game_has(&games::GameFeatures::sideLoadedDlss)) {
         cards.push_back(dlss_card());
         if (own_dlss_available() && app.s.dlss.on)
             cards.push_back(nr_card());

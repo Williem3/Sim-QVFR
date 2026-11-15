@@ -24,7 +24,7 @@ namespace simqvfr::fsr {
 bool built_in();
 // The PCI vendor id of `device`'s adapter (0x1002 AMD, 0x10de NVIDIA, 0x8086 Intel); 0 when not known.
 unsigned adapter_vendor(ID3D11Device* device);
-inline constexpr unsigned kVendorAmd = 0x1002;
+inline constexpr unsigned kVendorAmd = 0x1002, kVendorNvidia = 0x10de;
 
 // Which of the runtime's providers: the newest it offers on this GPU (FSR 4 on the GPUs it supports, else 3.1), or the
 // newest FSR 3.x even where 4 is offered (an A/B).

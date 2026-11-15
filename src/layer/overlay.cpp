@@ -357,6 +357,7 @@ OsdInput osd_input(int64_t now) {
         const unsigned long long total = dlss_evaluations_total();
         in.dlss = total != seen;
         seen = total;
+        in.upscaler = dlss_upscaler_badge();  // DLSS, or AMD FSR's version where it runs instead
     }
     return in;
 }

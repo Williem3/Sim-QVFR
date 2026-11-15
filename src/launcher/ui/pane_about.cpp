@@ -136,6 +136,23 @@ float about_pane(float x, float y, float w, bool draw) {
     }
     h += t::kSpace6 + 16 + t::kSpace2 + vh;
 #endif
+#ifdef SIM_QVFR_FFX
+    // AMD's FSR SDK licence: redistributions reproduce AMD's notices (licenses\AMD-FidelityFX-SDK-LICENSE.md, beside
+    // AMD's signed DLLs in layer\). AMD's names stand on their own, as NVIDIA's do.
+    const std::wstring amd =
+        L"In Le Mans Ultimate on a PC without an NVIDIA RTX graphics card, Sim-QVFR uses AMD FSR (experimental) through "
+        L"the AMD FSR SDK and includes AMD’s amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_upscaler_dx12.dll, under "
+        L"AMD’s licence (licenses\\AMD-FidelityFX-SDK-LICENSE.md). AMD, FSR and FidelityFX are trademarks of Advanced Micro "
+        L"Devices, Inc. Sim-QVFR is not sponsored or endorsed by AMD.";
+    const float ah = app.canvas.measure_height(amd, t::kCallout, w);
+    if (draw) {
+        app.canvas.text(L"AMD FSR", t::kHeadline, {x, y + h + t::kSpace6, w, 16}, col(app.c->label));
+        reader_text({x, y + h + t::kSpace6, w, 16 + t::kSpace2 + ah}, L"AMD FSR. " + amd);
+        app.canvas.text(amd, t::kCallout, {x, y + h + t::kSpace6 + 16 + t::kSpace2, w, ah + 2},
+                        col(app.c->label_secondary), Align::Leading, false, true);
+    }
+    h += t::kSpace6 + 16 + t::kSpace2 + ah;
+#endif
     return h;
 }
 

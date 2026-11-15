@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
@@ -365,6 +366,7 @@ struct State {
     std::chrono::steady_clock::time_point lastFrameEnd{};
     bool cameraInfinite = false;
     bool fsrProviderNamed = false;
+    bool ngxRefused = false;  // NGX didn't start on this device: FSR in its place (fsrWhereNoDlss)
 } d;
 
 // The camera AMD FSR takes per view (NGX takes none of it).
@@ -510,10 +512,14 @@ bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT 
     return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
 }
 
-// The upscaler the run asks for on this GPU: AMD FSR when asked, or on an AMD GPU with fsrOnAmd (NGX can't run there).
+// The upscaler the run asks for on this GPU: AMD FSR when asked, or with fsrWhereNoDlss where NGX can't run (a GPU not
+// NVIDIA's, or NGX refused to start).
 int wanted_backend() {
-    return d.cfg.upscaler == 1 || (d.cfg.fsrOnAmd && d.vendor == fsr::kVendorAmd) ? 1 : 0;
+    return d.cfg.upscaler == 1 || (d.cfg.fsrWhereNoDlss && (d.vendor != fsr::kVendorNvidia || d.ngxRefused)) ? 1 : 0;
 }
+
+// The overlay's name for what runs (dlss_upscaler_badge): 0 DLSS, else FSR's provider major * 100 + minor.
+std::atomic<int> badge{0};
 
 const char* backend_name(int backend) { return backend == 1 ? "AMD FSR" : "NVIDIA DLSS"; }
 
@@ -560,11 +566,17 @@ bool start_backend() {
     } else {
         const std::wstring data = (std::filesystem::path(simqvfr::log_directory()) / L"ngx").wstring();
         if (!ngx::start(d.device.Get(), d.cfg.dllFolder.c_str(), data.c_str(), why)) {
+            if (d.cfg.fsrWhereNoDlss && fsr::built_in() && !d.ngxRefused) {  // an older NVIDIA card: FSR instead
+                d.ngxRefused = true;
+                say("NGX didn't start (%s): AMD FSR in its place", why.c_str());
+                return start_backend();
+            }
             give_up(why.c_str());
             return false;
         }
         const std::wstring lookedIn =
             d.cfg.dllFolder.empty() ? std::wstring(L"Sim-QVFR's folder") : d.cfg.dllFolder + L", then Sim-QVFR's folder";
+        badge = 0;
         say("NGX started on the game's device (nvngx_dlss.dll looked for in %ls); views: the eyes%s; jitter %s (%u phases); "
             "presets: the eyes %s, the focus views %s",
             lookedIn.c_str(), focusMode, d.cfg.jitter ? "on" : "off", d.phases,
@@ -680,6 +692,10 @@ bool ensure(ID3D11DeviceContext* context, Slot& s, int index, unsigned w, unsign
             d.fsrProviderNamed = true;
             say("FSR provider in use: %s", fsr::provider_in_use().c_str());
         }
+        int major = 0, minor = 0;
+        if (sscanf_s(fsr::provider_in_use().c_str(), "%d.%d", &major, &minor) < 1)
+            major = 3, minor = 1;
+        badge = major * 100 + minor;
         return true;
     }
     // NGX's own line on the preset it took for the feature's mode follows (ngx_dlss.cpp), "ngx: (DLAA) Using App hint
@@ -1204,14 +1220,14 @@ void dlss_start(const DlssRun& run) {
     d.cfg.focusScale = (std::max)(33, (std::min)(100, run.focusScale));
     // The jitter's sequence: as long as the smallest render asks (the eyes and the focus views share its phase).
     d.phases = d.cfg.views >= 2 ? dlss::jitter_phases(d.cfg.focusScale / 100.0) : dlss::kJitterPhases;
-    if (run.views && !ngx::built_in() && !(fsr::built_in() && (run.upscaler == 1 || run.fsrOnAmd))) {
+    if (run.views && !ngx::built_in() && !(fsr::built_in() && (run.upscaler == 1 || run.fsrWhereNoDlss))) {
         say("asked for, but this build has no NGX SDK (CMake: NGX_SDK_DIR): off");
         d.cfg.views = 0;
     }
-    if (run.views && (run.upscaler == 1 || run.fsrOnAmd) && !fsr::built_in()) {
+    if (run.views && (run.upscaler == 1 || run.fsrWhereNoDlss) && !fsr::built_in()) {
         say("AMD FSR asked for, but this build has no FSR SDK (CMake: FFX_SDK_DIR): DLSS instead");
         d.cfg.upscaler = 0;
-        d.cfg.fsrOnAmd = false;
+        d.cfg.fsrWhereNoDlss = false;
     }
     d.backend = d.ready ? d.backend : -1;
     char focusMode[160] = "";
@@ -1231,8 +1247,9 @@ void dlss_start(const DlssRun& run) {
                       d.cfg.carBox[4], d.cfg.carBox[5], d.cfg.viewInverse ? ", view matrix inverted" : "",
                       d.cfg.gate ? ", gate on" : "",
                       dlss::preset_name(d.cfg.eyePreset >= 0 ? d.cfg.eyePreset : d.cfg.preset), dlss::preset_name(d.cfg.preset));
-    if (d.cfg.views && (d.cfg.upscaler == 1 || d.cfg.fsrOnAmd))
-        say("the upscaler: %s (AMD's provider: %s)", d.cfg.upscaler == 1 ? "AMD FSR" : "AMD FSR on an AMD GPU, else NVIDIA DLSS",
+    if (d.cfg.views && (d.cfg.upscaler == 1 || d.cfg.fsrWhereNoDlss))
+        say("the upscaler: %s (AMD's provider: %s)",
+            d.cfg.upscaler == 1 ? "AMD FSR" : "NVIDIA DLSS, AMD FSR where DLSS can't run (not an NVIDIA GPU, or NGX refuses)",
             d.cfg.fsrProvider == 3 ? "the newest FSR 3.x" : "the newest it offers");
 }
 
@@ -1490,6 +1507,7 @@ void dlss_shutdown() {
     d.ready = false;
     d.backend = -1;
     d.fsrProviderNamed = false;
+    d.ngxRefused = false;
     d.depthFor = nullptr;
     d.depthSrv.Reset();
     d.vs.Reset();
@@ -1644,6 +1662,16 @@ void apply_live(const DlssLive& l, unsigned changes) {
 void dlss_live_settle_for_tests(int ms) { kLiveSettle = std::chrono::milliseconds(ms < 0 ? 0 : ms); }
 unsigned long long dlss_evaluations_total() { return d.evaluationsTotal; }
 int dlss_upscaler_in_use() { return d.backend; }
+
+const wchar_t* dlss_upscaler_badge() {
+    switch (badge.load()) {
+    case 0: return L"DLSS";
+    case 400: case 401: case 402: case 403: case 404: case 405: return L"FSR4";
+    case 301: return L"FSR3.1";
+    case 300: return L"FSR3";
+    default: return badge.load() >= 400 ? L"FSR4" : badge.load() >= 300 ? L"FSR3" : L"FSR";
+    }
+}
 unsigned long long dlss_stretched_total() { return d.stretchedTotal; }
 
 void dlss_frame_end(unsigned long long frame) {

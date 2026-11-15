@@ -101,7 +101,9 @@ int choice_items(Ctl owner, std::vector<std::wstring>& items) {
                 items.push_back(c.name);
             selected = dlss_choice_index(list, value, true);
         };
-        if (owner == kDlssFocusMode)
+        if (owner == kDlssFocusMode && fsr_pc())  // AMD FSR's names: native AA for DLAA
+            fill(kFsrFocusModes, app.s.dlss.focusScale);
+        else if (owner == kDlssFocusMode)
             fill(kDlssFocusModes, app.s.dlss.focusScale);
         else if (owner == kDlssFocusPreset)
             fill(kDlssFocusPresets, app.s.dlss.focusPreset);

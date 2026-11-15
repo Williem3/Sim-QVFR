@@ -173,6 +173,11 @@ constexpr Help kHelp[] = {
      L"before the game’s post-processing. Needs an NVIDIA RTX graphics card. "
      L"Sim-QVFR includes NVIDIA’s nvngx_dlss.dll; Choose… takes another (a newer one from a game), Use included goes "
      L"back."},
+    {L"Use FSR",
+     L"Experimental. On a PC without an NVIDIA RTX graphics card, Sim-QVFR evaluates AMD FSR on each view in DLSS’s place, "
+     L"with the same depth and motion: FSR 4 where AMD’s software offers it for your card (Radeon RX 9000, and newer "
+     L"drivers on RX 7000 and 6000), FSR 3.1 elsewhere. Sim-QVFR includes AMD’s FSR files. Tested only as FSR 3.1 on an "
+     L"NVIDIA card so far: tell us how it runs on yours."},
     {L"Periphery preset",
      L"Steadier or cheaper DLSS outside the focus area. K: a steadier picture, at a higher cost. F: about half the cost, a "
      L"little more flicker on edges. With eye tracking you rarely look there, so F is usually fine; with a fixed focus, K."},

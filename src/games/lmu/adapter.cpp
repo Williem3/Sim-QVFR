@@ -146,12 +146,13 @@ public:
             dlss.flipX = key(L"lmu_dlss_jitter_flip_x", 0) != 0;
             dlss.flipY = key(L"lmu_dlss_jitter_flip_y", 0) != 0;
             dlss.gate = key(L"lmu_dlss_gate", 0) != 0;
-            // AMD FSR in DLSS's place (engine/fsr_upscale.h), an experiment: lmu_fsr=1 lets [dlss] upscaler=fsr choose it
-            // (live) and runs FSR on an AMD GPU whatever it says; lmu_fsr_provider=3 the newest FSR 3.x even where FSR 4 is
-            // offered; lmu_fsr_folder AMD's two DLLs' folder (else beside the layer, then beside the game).
+            // AMD FSR in DLSS's place (engine/fsr_upscale.h; experimental): wherever DLSS can't run (not an NVIDIA GPU,
+            // or NGX refuses to start), the launcher's FSR card. On an RTX card, lmu_fsr=1 (a test) lets [dlss]
+            // upscaler=fsr choose it, live. lmu_fsr_provider=3 the newest FSR 3.x even where FSR 4 is offered;
+            // lmu_fsr_folder AMD's two DLLs' folder (else beside the layer, then beside the game).
             fsrAllowed_ = key(L"lmu_fsr", 0) != 0;
             dlss.upscaler = fsrAllowed_ ? player.upscaler : 0;
-            dlss.fsrOnAmd = fsrAllowed_;
+            dlss.fsrWhereNoDlss = true;  // a PC without an NVIDIA RTX card: AMD FSR, the launcher's FSR card
             dlss.fsrProvider = key(L"lmu_fsr_provider", 0) == 3 ? 3 : 0;
             wchar_t fsrFolder[MAX_PATH] = {};
             GetPrivateProfileStringW(L"experiment", L"lmu_fsr_folder", L"", fsrFolder, MAX_PATH, s.ini);

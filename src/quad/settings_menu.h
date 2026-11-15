@@ -133,6 +133,8 @@ struct MenuLaunch {
     bool ownDlss = false;
     // AMD FSR may run those views instead (the game's experiment key, LMU: [experiment] lmu_fsr=1): the page's Upscaler.
     bool fsr = false;
+    // AMD FSR runs them: no NVIDIA RTX card on this PC (experimental). The page is FSR's, without NGX's presets.
+    bool fsrPc = false;
     // DLSS-NR can run in this launch: ownDlss and the player's nvngx_dlssnr.dll in [dlss_nr] folder. Its page, live.
     bool ownNr = false;
     // Texture sharpening was on at launch, so its hook and shader twins were made: its settings are live. Off at launch,

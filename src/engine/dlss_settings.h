@@ -42,6 +42,9 @@ struct DlssChoice {
 };
 inline constexpr DlssChoice kDlssFocusModes[] = {
     {100, L"DLAA"}, {77, L"Ultra quality"}, {67, L"Quality"}, {58, L"Balanced"}, {50, L"Performance"}};
+// The same modes as AMD FSR names them (engine/fsr_upscale.h): its native AA for DLAA; FSR takes any render size.
+inline constexpr DlssChoice kFsrFocusModes[] = {
+    {100, L"Native AA"}, {77, L"Ultra quality"}, {67, L"Quality"}, {58, L"Balanced"}, {50, L"Performance"}};
 // The focus views' preset: NGX's default for the mode (K; M at Performance), or either.
 inline constexpr DlssChoice kDlssFocusPresets[] = {{0, L"Default"}, {11, L"K"}, {13, L"M"}};
 // The eyes': K, the steadier, or F, the older model at about half the cost with more aliasing (eye tracking keeps that

@@ -13,6 +13,7 @@
 #include "cheeky/cheeky_settings.h"
 #include "engine/dlss_settings.h"
 #include "engine/ngx_dlss.h"
+#include "engine/nvapi_gpus.h"
 #include "engine/nr_settings.h"
 #include "games/adapter.h"
 #include "games/game.h"
@@ -234,11 +235,13 @@ void menu_open(int64_t now) {
         // AMD FSR in DLSS's place, an experiment (LMU's [experiment] lmu_fsr=1, games/lmu/adapter.cpp): the Upscaler row.
         menu.model.launch.fsr = menu.model.launch.ownDlss && !live.ini.empty() &&
                                 GetPrivateProfileIntW(L"experiment", L"lmu_fsr", 0, live.ini.c_str()) != 0;
+        // No NVIDIA RTX card: AMD FSR runs those views (games/lmu/adapter.cpp), the page is FSR's.
+        menu.model.launch.fsrPc = menu.model.launch.ownDlss && nvapi::two_views_gpu() == nullptr;
         // DLSS-NR on those views: with the player's nvngx_dlssnr.dll where [dlss_nr] folder says (Sim-QVFR has none).
         {
             const std::wstring folder = read_nr_settings(live.ini.c_str()).folder;
             menu.model.launch.ownNr =
-                menu.model.launch.ownDlss && !folder.empty() &&
+                menu.model.launch.ownDlss && !menu.model.launch.fsrPc && !folder.empty() &&
                 GetFileAttributesW((folder + L"\\nvngx_dlssnr.dll").c_str()) != INVALID_FILE_ATTRIBUTES;
         }
         {

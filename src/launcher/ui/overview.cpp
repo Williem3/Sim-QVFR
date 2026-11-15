@@ -356,7 +356,7 @@ std::vector<Tile> picture_tiles() {
         if (multiView && q)
             add(L"Focus view by " + multi_view_way());
         if (ownDlss)
-            add(own_dlss_available() && app.s.dlss.on ? L"DLSS on" : L"DLSS off");
+            add(std::wstring(upscaler_name()) + (own_upscaler_available() && app.s.dlss.on ? L" on" : L" off"));
         if (cheeky)
             add(app.s.cheeky.load ? L"Foveated DLSS on" : L"Foveated DLSS off");
         if (line.empty())
@@ -364,7 +364,7 @@ std::vector<Tile> picture_tiles() {
         // It opens the DLSS card where the game has one (its switch is there), else Rendering.
         out.push_back({L"Rendering", line,
                        nativeQuad && q ? (app.s.nativeQuad ? L"Runtime composes where it can" : L"Sim-QVFR composes") : L"",
-                       L"", 3, ownDlss ? L"DLSS" : cheeky ? L"Foveated DLSS" : L"Rendering"});
+                       L"", 3, ownDlss ? (fsr_pc() ? L"FSR (experimental)" : L"DLSS") : cheeky ? L"Foveated DLSS" : L"Rendering"});
     }
     for (Tile& tile : out)
         tile.pane = Pane::Picture;

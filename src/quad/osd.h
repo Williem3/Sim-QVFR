@@ -67,6 +67,7 @@ struct OsdInput {
     uint64_t vramUsed = 0, vramBudget = 0;  // bytes, 0: unknown
     OsdMultiView multiView = OsdMultiView::None;
     bool dlss = false;  // DLSS evaluated views since the card was last drawn (said beside the multi-view badge)
+    std::wstring upscaler = L"DLSS";  // what evaluated them: "DLSS", "FSR4", "FSR3.1" (engine/dlss_views.h)
 };
 
 // What the card takes from Cheeky's runtime snapshot (CheekyRuntime_Snapshot's JSON): whether frame

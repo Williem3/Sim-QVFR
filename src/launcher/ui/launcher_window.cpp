@@ -54,6 +54,8 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         // The window opens on Overview (docs/ui/OVERHAUL_PLAN.md §6.4); the top bar's status names what the launch checks
         // found (often a new day: a game update, Steam closed) and opens them. A tuning session keeps its page.
         show_tab(Tab::Overview);
+        if (fsr_pc())  // which AMD FSR this PC gets, for the FSR card
+            start_fsr_probe();
         if (app.s.updateCheck)
             start_update_check();
         else if (app.iniFound && !app.s.updateAsked)
@@ -73,6 +75,14 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPar
         install_done(reinterpret_cast<InstallResult*>(lParam));
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case kFsrProbedMessage: {
+        const std::unique_ptr<fsr::Offer> offer(reinterpret_cast<fsr::Offer*>(lParam));
+        app.fsrOffer = *offer;
+        app.fsrOffer.checked = app.fsrOffer.checked || !app.fsrOffer.why.empty();  // asked: not again
+        app.fsrProbing = false;
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
     case kHashedMessage: {
         const std::unique_ptr<std::string> sha(reinterpret_cast<std::string*>(lParam));
         app.exeSha = *sha;

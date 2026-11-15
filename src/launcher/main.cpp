@@ -734,7 +734,9 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.cheekyFg = dlss && cheeky.fg && games::launcher_game().features.frameGeneration;
     // Sim-QVFR's own DLSS: on for a QVFR launch of a game with it; its DLL where the layer will look.
     const simqvfr::DlssSettings own = simqvfr::read_dlss_settings(ini.c_str());
-    in.ownDlss = games::launcher_game().features.sideLoadedDlss && own.on && in.mode == LaunchMode::Qvfr;
+    // Without an NVIDIA RTX card the layer runs AMD FSR in DLSS's place: no nvngx_dlss.dll to check.
+    in.ownDlss = games::launcher_game().features.sideLoadedDlss && own.on && in.mode == LaunchMode::Qvfr &&
+                 simqvfr::nvapi::two_views_gpu() != nullptr;
     if (in.ownDlss) {
         in.ownDlssIncluded = own.folder.empty();
         in.ownDlssPath = dlss_dll_path(own.folder, layer_folder());

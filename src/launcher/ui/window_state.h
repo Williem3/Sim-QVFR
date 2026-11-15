@@ -20,6 +20,7 @@
 #include "../session_history.h"
 #include "../settings.h"
 #include "../update_check.h"
+#include "../../engine/fsr_probe.h"
 #include "../../games/game.h"
 #include "../../input/hotkeys.h"
 #include "../../input/pad_input.h"
@@ -168,6 +169,9 @@ inline constexpr UINT kAccessActivateMessage = WM_APP + 5, kAccessValueMessage =
 
 // A screen reader chose an item of the open pop-up menu (wParam its index).
 inline constexpr UINT kAccessMenuMessage = WM_APP + 7;
+
+// AMD's FSR provider query, done on a worker (engine/fsr_probe.h): its message carries a new fsr::Offer.
+inline constexpr UINT kFsrProbedMessage = WM_APP + 8;
 
 // Dev: a development build (no version to compare): the newest release is shown, not offered as an update.
 enum class Update { Off, Checking, UpToDate, Available, Dev, Failed };
@@ -363,6 +367,9 @@ struct App {
     uint64_t hashedStamp = 0;
     std::string exeSha;
     bool hashing = false;
+    // Which AMD FSR this PC gets (a PC without an NVIDIA RTX card: the FSR card), asked once on a worker at start.
+    fsr::Offer fsrOffer;
+    bool fsrProbing = false;
     // The Hotkeys pane: the action catching a press (-1: none), from the keyboard or (capturePad) a wheel or
     // controller, whose controls already held when it started don't count (captureHeld).
     int captureAction = -1;
@@ -476,6 +483,15 @@ std::wstring not_yet();
 // picture.cpp: Sim-QVFR's own DLSS can be used with these settings (a game with it, QVFR, an RTX card, multi-view
 // rendering); otherwise `why` says what's missing.
 bool own_dlss_available(std::wstring* why = nullptr);
+// picture.cpp: this PC upscales with AMD FSR instead (no NVIDIA RTX card: AMD, Intel, older NVIDIA): the FSR card in
+// DLSS's place, the same [dlss] settings.
+bool fsr_pc();
+// picture.cpp: the game's own upscaler, DLSS or FSR, can be used with these settings (a game with it, QVFR).
+bool own_upscaler_available(std::wstring* why = nullptr);
+// "DLSS" or "FSR", as this PC gets it.
+const wchar_t* upscaler_name();
+// app_actions.cpp: AMD's FSR provider query started on a worker (once).
+void start_fsr_probe();
 // picture.cpp: the game draws its focus views by multi-view rendering (GameFeatures::multiView or layerMultiView: LMU,
 // ATS, ETS2), and how on this PC: NVIDIA's multi-view rendering on an RTX 20 series or newer, Sim-QVFR's own
 // (instancing) elsewhere. `full`: with why, for the Rendering card.

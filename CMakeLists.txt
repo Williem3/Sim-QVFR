@@ -574,7 +574,7 @@ if(SIM_QVFR_LOCAL_DIR AND EXISTS "${SIM_QVFR_LOCAL_DIR}/local_analysis.cpp")
   endforeach()
 endif()
 
-add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input.cpp src/engine/nvapi_gpus.cpp
+add_executable(sim_qvfr_launcher WIN32 src/launcher/main.cpp src/input/pad_input.cpp src/engine/nvapi_gpus.cpp src/engine/fsr_probe.cpp
   src/launcher/ui/launcher_window.cpp src/launcher/ui/canvas.cpp src/probe/hang_dump.cpp src/launcher/launcher.rc
   src/launcher/ui/window_state.cpp src/launcher/ui/app_actions.cpp src/launcher/ui/update_install.cpp
   src/launcher/ui/controls.cpp src/launcher/ui/help.cpp src/launcher/ui/sheet.cpp src/launcher/ui/form.cpp
@@ -589,8 +589,13 @@ target_compile_definitions(sim_qvfr_launcher PRIVATE UNICODE _UNICODE WIN32_LEAN
 if(SIM_QVFR_NGX)  # the layer has NGX in it: the About pane credits NVIDIA DLSS (the RTX SDKs licence's attribution)
   target_compile_definitions(sim_qvfr_launcher PRIVATE SIM_QVFR_NGX)
 endif()
+if(SIM_QVFR_FFX)  # the layer has AMD FSR in it: the FSR card asks AMD's runtime which FSR, the About pane credits AMD
+  target_compile_definitions(sim_qvfr_launcher PRIVATE SIM_QVFR_FFX)
+  set_property(SOURCE src/engine/fsr_probe.cpp TARGET_DIRECTORY sim_qvfr_launcher APPEND PROPERTY INCLUDE_DIRECTORIES
+    "${FFX_SDK_DIR}/Kits/FidelityFX/api/include" "${FFX_SDK_DIR}/Kits/FidelityFX/upscalers/include")
+endif()
 target_compile_options(sim_qvfr_launcher PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32
+target_link_libraries(sim_qvfr_launcher PRIVATE sim_qvfr_launcher_shared shell32 d2d1 dwrite dwmapi comdlg32 bcrypt dinput8 dxguid winhttp version ole32 d3d12 dxgi
                       oleaut32 uiautomationcore)
 target_precompile_headers(sim_qvfr_launcher PRIVATE ${SIM_QVFR_PCH})
 set_target_properties(sim_qvfr_launcher PROPERTIES OUTPUT_NAME sim-qvfr-launcher)

@@ -18,6 +18,7 @@
 #include "../settings.h"
 #include "../session_history.h"
 #include "../../games/game.h"
+#include "../../engine/fsr_probe.h"
 #include "../../ini_put.h"
 #include "../../sha256_file.h"
 #include "window_state.h"
@@ -26,6 +27,15 @@
 #pragma comment(lib, "dwmapi.lib")
 
 namespace simqvfr::launcher::ui::win {
+
+void start_fsr_probe() {
+    if (app.fsrProbing || app.fsrOffer.checked)
+        return;
+    app.fsrProbing = true;
+    std::thread([hwnd = app.hwnd, folder = layer_folder()] {  // a D3D12 device and AMD's 28 MB DLL: under a second
+        PostMessageW(hwnd, kFsrProbedMessage, 0, reinterpret_cast<LPARAM>(new fsr::Offer(fsr::probe_offer(folder))));
+    }).detach();
+}
 
 namespace {
 

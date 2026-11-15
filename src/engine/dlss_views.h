@@ -59,10 +59,12 @@ struct DlssRun {
     int textureSharpening = 0;
     // The upscaler that runs the views (the same inputs, jitter and modes either way): 0 NVIDIA DLSS (NGX on the game's
     // D3D11 device), 1 AMD FSR (engine/fsr_upscale.h: our D3D12 device beside the game's; FSR 4 where AMD's runtime
-    // offers it, else 3.1; its "native AA" for DLAA; NGX's presets don't apply). fsrOnAmd: on an AMD GPU (DXGI vendor
+    // offers it, else 3.1; its "native AA" for DLAA; NGX's presets don't apply). fsrWhereNoDlss: where DLSS can't run (a
+    // GPU not NVIDIA's by its DXGI vendor id, or NGX refusing to start: an older NVIDIA card), FSR whatever `upscaler`
+    // says.
     // 0x1002), where NGX can't run, FSR whatever `upscaler` says.
     int upscaler = 0;
-    bool fsrOnAmd = false;
+    bool fsrWhereNoDlss = false;
     std::wstring fsrFolder;  // AMD's two DLLs' folder, looked in first (empty: beside the layer, then the game's exe)
     int fsrProvider = 0;     // 0 the newest AMD's runtime offers on this GPU, 3 the newest FSR 3.x (fsr::Provider)
 };
@@ -144,6 +146,9 @@ void dlss_shutdown();
 
 // The upscaler running the views now (DlssRun::upscaler as resolved for the GPU): 0 DLSS, 1 FSR; -1 none started yet.
 int dlss_upscaler_in_use();
+// Its name for the overlay, from any thread: "DLSS", "FSR4", "FSR3.1" (the provider AMD's runtime took); "DLSS" until
+// one is known.
+const wchar_t* dlss_upscaler_badge();
 
 // The evaluations that succeeded since the start, and the focus views stretched instead (checks outside the game).
 unsigned long long dlss_evaluations_total();

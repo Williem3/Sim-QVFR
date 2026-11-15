@@ -366,7 +366,7 @@ OsdRow osd_badge(const OsdInput& in) {
     case OsdMultiView::EyesOnly: r.value = L"Eyes only"; r.tone = OsdTone::Warn; break;
     }
     if (in.dlss && !r.value.empty())  // only while it runs: a pass the tracker lost has no DLSS either
-        r.value += L" + DLSS";
+        r.value += L" + " + (in.upscaler.empty() ? std::wstring(L"DLSS") : in.upscaler);
     return r;
 }
 

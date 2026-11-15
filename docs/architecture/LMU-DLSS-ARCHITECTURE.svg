@@ -281,11 +281,11 @@ text { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI 
 </g>
 <!-- AMD FSR in DLSS's place (an experiment) -->
 <rect x="20" y="1238" width="1080" height="112" rx="12" fill="var(--group-bg)" stroke="var(--dlss)" stroke-width="1.5" stroke-dasharray="6 4"/>
-<text class="t" x="36" y="1262">AMD FSR in DLSS’s place (experiment: [experiment] lmu_fsr=1, then [dlss] upscaler=fsr or the headset menu’s Upscaler row)</text>
+<text class="t" x="36" y="1262">AMD FSR in DLSS’s place (experimental): on a PC without an NVIDIA RTX card, the launcher’s FSR card; on RTX, a test key</text>
 <text class="s" x="36" y="1282">The same inputs, jitter, modes and live controls; FSR “native AA” for DLAA, any render size for the focus modes; NGX’s presets don’t apply.</text>
 <text class="s" x="36" y="1300">AMD’s runtime is D3D12 only: Sim-QVFR’s own D3D12 device on LMU’s graphics card, textures and a fence shared with LMU’s D3D11 device.</text>
 <text class="s" x="36" y="1318">Depth and vectors are drawn straight into FSR’s textures; the view’s colour is copied in (FSR reads no sub-rectangle), the output copied back.</text>
-<text class="sd" x="36" y="1336">AMD’s signed amd_fidelityfx_loader/upscaler_dx12.dll: FSR 4 where it offers it (RDNA 4), else FSR 3.1 (NVIDIA too); AMD GPUs run FSR.</text>
+<text class="sd" x="36" y="1336">AMD’s signed amd_fidelityfx_loader/upscaler_dx12.dll: FSR 4 where AMD offers it (RDNA 4), else FSR 3.1; the overlay says which.</text>
 <text class="foot" x="20" y="1372">Violet marks what DLSS adds to the multi-view path (LMU-MVR-ARCHITECTURE.svg); the rest is as there. Still no arrow points into LMU’s code:</text>
 <text class="foot" x="20" y="1389">the jitter reaches LMU through the FOV it asks for, and DLSS runs between LMU’s own D3D11 calls. Needs multi-view rendering; off by default.</text>
 <text class="foot" x="20" y="1406">The motion vectors come from depth, the cockpit’s from the head pose, other cars’ from their own per-draw motion (car_vectors); texture sharpening</text>

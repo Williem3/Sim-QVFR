@@ -261,13 +261,13 @@ void activate(Ctl id, int option) {
         return;
     case kNrFolder: choose_nr_dll(); return;
     case kDlssOn:
-        if (own_dlss_available()) {  // greyed out without QVFR, an RTX card or multi-view rendering
+        if (own_upscaler_available()) {  // greyed out without QVFR (DLSS or, without an RTX card, FSR)
             app.s.dlss.on = !app.s.dlss.on;
             changed();
         }
         return;
     case kDlssCarVectors:
-        if (own_dlss_available() && app.s.dlss.on) {  // greyed out while DLSS is off
+        if (own_upscaler_available() && app.s.dlss.on) {  // greyed out while DLSS (or FSR) is off
             app.s.dlss.carVectors = !app.s.dlss.carVectors;
             changed();
         }

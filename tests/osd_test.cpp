@@ -345,6 +345,15 @@ int SIM_QVFR_TEST_MAIN() {
         in.dlss = false;
         check(withDlss.value == L"MVR + DLSS" && withDlss.tone == OsdTone::Good && noneWithDlss.value.empty(),
               "the multi-view badge says DLSS while it evaluates views (MVR + DLSS), nothing without a multi-view path");
+        in.dlss = true;
+        in.upscaler = L"FSR4";
+        const OsdRow withFsr = badge(OsdMultiView::Smvr);
+        in.upscaler = L"FSR3.1";
+        const OsdRow withFsr3 = badge(OsdMultiView::Mvr);
+        in.dlss = false;
+        in.upscaler = L"DLSS";
+        check(withFsr.value == L"SMVR + FSR4" && withFsr3.value == L"MVR + FSR3.1",
+              "the multi-view badge names AMD FSR's version where it runs instead (SMVR + FSR4, MVR + FSR3.1)");
         const OsdSummary s = osd_summary(in);
         const std::vector<double> history(120, 11.1);
         const std::vector<uint32_t> plain = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), none);

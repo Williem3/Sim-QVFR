@@ -112,6 +112,11 @@ constexpr Spec kSpecs[] = {
     {MenuItem::NrLimit, L"Working size limit", kNrLimitMin, kNrLimitMax, 1},  // tenths of a megapixel a view
 };
 
+// AMD FSR runs the DLSS page's views: a PC without an NVIDIA RTX card, or the experiment's Upscaler on FSR.
+bool fsr_runs(const SettingsMenu& menu) {
+    return menu.launch.fsrPc || (menu.launch.fsr && menu.values.dlss.upscaler == 1);
+}
+
 const Spec& spec(MenuItem item) {
     for (const Spec& s : kSpecs)
         if (s.item == item)
@@ -259,9 +264,9 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             items.insert(items.end(), {MenuItem::HelmetRim, MenuItem::HelmetCorners, MenuItem::HelmetLight, MenuItem::HelmetDebug});
     } else if (page == MenuPage::OwnDlss) {
         items.push_back(MenuItem::DlssOn);
-        // AMD FSR (an experiment) has no NGX presets: their rows go while it runs the views.
-        const bool fsr = menu.launch.fsr && menu.values.dlss.upscaler == 1;
-        if (menu.values.dlss.on && menu.launch.fsr)
+        // AMD FSR has no NGX presets: their rows go while it runs the views. The Upscaler row is the RTX test's only.
+        const bool fsr = fsr_runs(menu);
+        if (menu.values.dlss.on && menu.launch.fsr && !menu.launch.fsrPc)
             items.push_back(MenuItem::DlssUpscaler);
         if (menu.values.dlss.on && fsr)
             items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssSharpening});
@@ -312,7 +317,7 @@ namespace {
 std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     switch (page) {
     case MenuPage::Dlss: return L"Foveated DLSS";
-    case MenuPage::OwnDlss: return L"DLSS";
+    case MenuPage::OwnDlss: return fsr_runs(menu) ? L"FSR" : L"DLSS";
     case MenuPage::OwnNr: return L"DLSS-NR";
     case MenuPage::Fg: return L"Frame generation";
     case MenuPage::Headset: return L"Overlay and menu";
@@ -339,6 +344,8 @@ std::wstring menu_subtitle(const SettingsMenu& menu) {
         return L"The runtime composes the views: the focus area shows inside its own focus region";
     if (page == MenuPage::Settings)
         return menu.optimizeDetail;
+    if (page == MenuPage::OwnDlss && fsr_runs(menu))
+        return L"AMD FSR, run by Sim-QVFR (experimental): changes apply at once";
     if (page == MenuPage::OwnDlss)
         return L"NVIDIA DLSS, run by Sim-QVFR through NVIDIA's NGX: changes apply at once";
     if (page == MenuPage::OwnNr)
@@ -686,6 +693,12 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
             notes.push_back(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off");
         return notes;
     }
+    if (page == MenuPage::OwnDlss && fsr_runs(menu)) {
+        if (menu.values.dlss.on && menu.values.dlss.textureSharpening != 0 && !menu.launch.sharpeningReady)
+            notes.push_back(L"Texture sharpening was off at launch: it starts at the next launch");
+        notes.push_back(L"Each change rebuilds FSR: a short stutter (not texture sharpening)");
+        return notes;
+    }
     if (page == MenuPage::OwnDlss) {
         if (menu.values.dlss.on)
             notes.push_back(menu.values.dlss.eyePreset == 6 ? L"Periphery F: cheaper, more aliasing; suits eye tracking"
@@ -767,7 +780,7 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
     const MenuFit fit = menu_fit(menu);
     for (size_t i = 0; i < items.size(); ++i) {
         MenuLine line;
-        line.label = spec(items[i]).label;
+        line.label = items[i] == MenuItem::DlssOn && fsr_runs(menu) ? L"FSR" : spec(items[i]).label;
         line.selected = static_cast<int>(i) == menu.selected;
         if (items[i] == MenuItem::Page)
             line.value = page_name(menu, menu_page(menu));
@@ -793,7 +806,7 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = v.dlss.on ? L"On" : L"Off";
         else if (items[i] == MenuItem::DlssUpscaler)
             line.value = v.dlss.upscaler == 1 ? L"AMD FSR" : L"NVIDIA DLSS";
-        else if (items[i] == MenuItem::DlssFocusMode && menu.launch.fsr && v.dlss.upscaler == 1 && v.dlss.focusScale >= 100)
+        else if (items[i] == MenuItem::DlssFocusMode && fsr_runs(menu) && v.dlss.focusScale >= 100)
             line.value = L"Native AA";
         else if (items[i] == MenuItem::DlssFocusMode)
             line.value = std::wstring(dlss_choice_name(kDlssFocusModes, v.dlss.focusScale)) +

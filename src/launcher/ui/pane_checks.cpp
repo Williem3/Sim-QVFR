@@ -109,7 +109,8 @@ void fix_check(const Check& c) {
         return;
     case CheckFix::OpenDlss: {  // the card with DLSS's switch, highlighted
         const bool own = game_has(&games::GameFeatures::sideLoadedDlss);
-        jump_to({own ? L"Use DLSS" : L"Use Cheeky Foveated DLSS", own ? L"DLSS" : L"Foveated DLSS", Pane::Picture});
+        jump_to({own ? (fsr_pc() ? L"Use FSR" : L"Use DLSS") : L"Use Cheeky Foveated DLSS",
+                 own ? (fsr_pc() ? L"FSR (experimental)" : L"DLSS") : L"Foveated DLSS", Pane::Picture});
         return;
     }
     case CheckFix::OpenFoveation: jump_to({L"Foveation", L"Foveation", Pane::Picture}); return;

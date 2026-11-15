@@ -1036,6 +1036,17 @@ int SIM_QVFR_TEST_MAIN() {
                   "DLSS page: back to NVIDIA DLSS, its presets again");
             check(menu_page_items(dm).size() == 6, "DLSS page without the experiment: no Upscaler row");
         }
+        {  // A PC without an NVIDIA RTX card: AMD FSR runs the views; the page is FSR's, no presets, no Upscaler row
+            SettingsMenu am = dm;
+            am.launch.fsrPc = true;
+            am.launch.fsr = true;  // the RTX test's key changes nothing here
+            am.values.dlss.focusScale = 100;
+            const std::vector<MenuItem> items = menu_page_items(am);
+            check(menu_title(am) == L"FSR" && items.size() == 4 && items[1] == MenuItem::DlssOn &&
+                      items[2] == MenuItem::DlssFocusMode && items[3] == MenuItem::DlssSharpening &&
+                      menu_lines(am)[1].label == L"FSR" && menu_lines(am)[2].value == L"Native AA",
+                  "FSR page without an RTX card: titled FSR, its switch FSR, Native AA, no presets or Upscaler row");
+        }
 
         wchar_t temp[MAX_PATH];
         GetTempPathW(MAX_PATH, temp);
