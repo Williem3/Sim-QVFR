@@ -476,9 +476,11 @@ std::wstring not_yet();
 // picture.cpp: Sim-QVFR's own DLSS can be used with these settings (a game with it, QVFR, an RTX card, multi-view
 // rendering); otherwise `why` says what's missing.
 bool own_dlss_available(std::wstring* why = nullptr);
-// picture.cpp: how a game with GameFeatures::layerMultiView draws its focus view on this PC: NVIDIA's multi-view
-// rendering on an RTX 20 series or newer, Sim-QVFR's own (instancing) elsewhere. `full`: with why, for the Rendering card.
-std::wstring layer_multi_view_way(bool full = false);
+// picture.cpp: the game draws its focus views by multi-view rendering (GameFeatures::multiView or layerMultiView: LMU,
+// ATS, ETS2), and how on this PC: NVIDIA's multi-view rendering on an RTX 20 series or newer, Sim-QVFR's own
+// (instancing) elsewhere. `full`: with why, for the Rendering card.
+bool multi_view_game();
+std::wstring multi_view_way(bool full = false);
 Color col(uint32_t rgb, float alpha = 1);
 bool layers_dirty();
 

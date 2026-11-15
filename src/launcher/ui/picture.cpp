@@ -36,8 +36,13 @@ bool own_dlss_available(std::wstring* why) {
     return reason.empty();
 }
 
-std::wstring layer_multi_view_way(bool full) {
-    // What the layer picks at the game's device (scssoftware/corner.cpp): NVIDIA's where the card has it, else instancing.
+bool multi_view_game() {
+    return game_has(&games::GameFeatures::multiView) || game_has(&games::GameFeatures::layerMultiView);
+}
+
+std::wstring multi_view_way(bool full) {
+    // What the layer picks at the game's device (games/multi_view.h; scssoftware/corner.cpp): NVIDIA's where the card
+    // has it, else instancing.
     if (const nvapi::Gpu* gpu = nvapi::two_views_gpu()) {
         if (!full)
             return L"NVIDIA’s multi-view rendering";
@@ -282,11 +287,10 @@ std::wstring native_quad_last() {
     return L"";
 }
 
-// The method (Two-loop only), the runtime composing the views, and how a layer multi-view game draws its focus view; DLSS
-// and Foveated DLSS are their own cards, each with its switch.
+// The method (Two-loop only), the runtime composing the views, and how a multi-view game (LMU, ATS, ETS2) draws its
+// focus views; DLSS and Foveated DLSS are their own cards, each with its switch.
 bool rendering_shown() {
-    return method_shown() || game_has(&games::GameFeatures::nativeQuadViews) ||
-           game_has(&games::GameFeatures::layerMultiView);
+    return method_shown() || game_has(&games::GameFeatures::nativeQuadViews) || multi_view_game();
 }
 
 Card rendering_card() {
@@ -311,13 +315,14 @@ Card rendering_card() {
                     b.note(L"Off while frame generation runs: it needs one composed image.");
             }
         }
-        if (game_has(&games::GameFeatures::layerMultiView)) {
+        if (multi_view_game()) {
             if (!qvfr()) {
                 b.note(L"The focus view is drawn in Quad View Foveated Rendering.");
             } else {
-                b.note(L"Each eye’s pass also draws its focus view, by " + layer_multi_view_way(true) + L".");
-                b.note(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the first frame that "
-                       L"draws the world for each eye.");
+                b.note(L"Each eye’s pass also draws its focus view, by " + multi_view_way(true) + L".");
+                if (game_has(&games::GameFeatures::layerMultiView))  // ATS, ETS2: the path starts with the first eye pass
+                    b.note(L"The menus and the garage show as without Sim-QVFR: the focus view starts with the first frame "
+                           L"that draws the world for each eye.");
             }
         }
     };
