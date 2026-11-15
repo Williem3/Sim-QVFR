@@ -19,6 +19,7 @@
 #include "probe/d3d11_compose_timer.h"
 #include "probe/gpu_frame_timer.h"
 #include "probe/gpu_load.h"
+#include "probe/hang_watch.h"
 #include "quad/helmet.h"
 #include "quad/menu_panel.h"
 #include "quad/osd.h"
@@ -196,7 +197,7 @@ void osd_hotkey() {
 }
 
 bool osd_resources(XrSession session) {
-    if (!game->has_qvfr())  // log only: nothing of ours in the headset
+    if (!game->has_qvfr() && !game->shows_overlay())  // log only: nothing of ours in the headset
         return false;
     if (osd.chain)
         return true;
@@ -421,12 +422,17 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         uint32_t index = 0;
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         wait.timeout = 100'000'000;
+        hang_watch_stage("overlay card: xrAcquireSwapchainImage");
         if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
-            const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() &&
-                            osd.upload && osd.upload->upload(osd.images[index], pixels);
+            hang_watch_stage("overlay card: xrWaitSwapchainImage");
+            bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() && osd.upload;
+            hang_watch_stage("overlay card: the upload");
+            ok = ok && osd.upload->upload(osd.images[index], pixels);
+            hang_watch_stage("overlay card: xrReleaseSwapchainImage");
             next.ReleaseSwapchainImage(osd.chain, nullptr);
             osd.uploaded = osd.uploaded || ok;
         }
+        hang_watch_stage("overlay card: done");
     }
     return osd.uploaded ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&osd.layer) : nullptr;
 }

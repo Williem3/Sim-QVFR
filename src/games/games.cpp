@@ -10,6 +10,8 @@
 #include "ace/game.h"
 #include "acc/game.h"
 #include "lmu/game.h"
+#include "scssoftware/ats/game.h"
+#include "scssoftware/ets2/game.h"
 #include "xplane/game.h"
 
 namespace simqvfr::games {
@@ -17,7 +19,8 @@ namespace simqvfr::games {
 namespace {
 
 // Every game Sim-QVFR supports. A new game adds its game.h here (src/games/README.md).
-constexpr const GameInfo* kGames[] = {&::ace::kGame, &::acc::kGame, &::xplane::kGame, &::lmu::kGame};
+constexpr const GameInfo* kGames[] = {&::ace::kGame, &::acc::kGame, &::xplane::kGame, &::lmu::kGame, &::ats::kGame,
+                                     &::ets2::kGame};
 
 const GameInfo* chosen = &::ace::kGame;
 

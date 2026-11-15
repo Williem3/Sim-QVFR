@@ -205,7 +205,9 @@ std::vector<MenuItem> menu_items(bool qvfr) {
 }
 
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
-    std::vector<MenuPage> pages = {MenuPage::Settings, MenuPage::Shape};
+    std::vector<MenuPage> pages = {MenuPage::Settings};
+    if (menu.launch.shapePage)
+        pages.push_back(MenuPage::Shape);
     if (menu.launch.qvfr && menu.launch.cropPage)
         pages.push_back(MenuPage::Crop);
     if (menu.launch.qvfr && menu.launch.helmetPage)
@@ -292,7 +294,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         items.insert(items.end(), method.begin(), method.end());
         if (menu.launch.apiDlss)  // the API path's DLSS: the focus views' mode and preset, live (the periphery: F, fixed)
             items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset});
-        if (menu.launch.qvfr)  // last: Up from the page switch reaches it
+        if (menu.launch.qvfr && menu.launch.optimize)  // last: Up from the page switch reaches it
             items.push_back(MenuItem::Optimize);
     }
     return items;

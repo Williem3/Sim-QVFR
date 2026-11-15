@@ -18,6 +18,7 @@ constexpr wchar_t kHelperName[] = L"sim-qvfr-launcher.exe";
 constexpr DWORD kHelperWaitMs = 120000;
 
 std::atomic<bool> armed{false}, started{false}, framed{false};
+std::atomic<const char*> stage{nullptr};  // hang_watch_stage's
 std::atomic<unsigned> limit{0};          // seconds without a frame
 std::atomic<uint64_t> lastFrame{0};      // GetTickCount64 at xrCreateSession or the last xrEndFrame
 // Resolved at the first arm, before the watch thread starts: finding them takes the loader lock
@@ -99,6 +100,8 @@ DWORD WINAPI watch(void*) {
         const unsigned seconds = limit.load();
         if (!armed || GetTickCount64() - lastFrame.load() < seconds * 1000ull)
             continue;
+        if (const char* at = stage.load(std::memory_order_relaxed))
+            logf("hang watch: the frame thread's last runtime call of ours: %s", at);
         if (framed)
             logf("hang watch: no xrEndFrame for %u s mid-session; the game looks stuck", seconds);
         else
@@ -152,6 +155,8 @@ void hang_watch_arm(unsigned seconds) {
             CloseHandle(thread);
     }
 }
+
+void hang_watch_stage(const char* s) { stage.store(s, std::memory_order_relaxed); }
 
 void hang_watch_frame() {
     lastFrame = GetTickCount64();

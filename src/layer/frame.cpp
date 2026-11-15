@@ -48,7 +48,9 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
 XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     XrFrameEndInfo withMenu{};
     std::vector<const XrCompositionLayerBaseHeader*> menuLayers;
+    hang_watch_stage("overlay and menu: before");
     const XrFrameEndInfo* info = menu_frame(session, frameInfo, withMenu, menuLayers);
+    hang_watch_stage("overlay and menu: done");
     ++endFrames;
     // The API path's gaze: ACE attaches its action sets (and the layer's gaze with them) at start-up, but not on every
     // launch (the 18:38 run: none in over two minutes); five seconds in, the layer attaches its own.
@@ -103,8 +105,13 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
                 }
                 break;
             }
-    if (!experiment.twoLoops)
-        return next.EndFrame(session, info);
+    if (!experiment.twoLoops) {
+        const XrFrameEndInfo* adjusted = game->adjust_frame_end(info, next.EnumerateSwapchainImages);
+        hang_watch_stage("the runtime's xrEndFrame");
+        const XrResult result = next.EndFrame(session, adjusted);
+        hang_watch_stage("after xrEndFrame");
+        return result;
+    }
 
     std::unique_lock lock(loops.mutex);
     if (!loops.active) {

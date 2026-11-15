@@ -21,6 +21,13 @@ set(SIM_QVFR_PCH <algorithm> <atomic> <cmath> <cstdint> <cstdio> <cstring> <file
 # The release this code is headed for: the About pane names it, and package.ps1 uses it when -Version is left out.
 set(SIM_QVFR_RELEASE "1.1.1-beta")
 set(SIM_QVFR_VERSION "dev" CACHE STRING "Version shown by the launcher (package.ps1 sets it)")
+# A development build (version "dev") or a release: diagnostic hotkeys and switches exist in development builds only
+# (src/dev_build.h).
+if(SIM_QVFR_VERSION STREQUAL "dev")
+  add_compile_definitions(SIM_QVFR_DEV_BUILD=1)
+else()
+  add_compile_definitions(SIM_QVFR_DEV_BUILD=0)
+endif()
 
 # Windows version info for a binary (src/version_info.rc.in): numbers from the version's leading digits
 # ("1.0.0-beta (abc1234)" -> 1,0,0,0), or from SIM_QVFR_RELEASE in a "dev" build.
@@ -99,7 +106,7 @@ add_library(sim_qvfr_core STATIC
   src/probe/probe.cpp src/probe/hang_watch.cpp
   src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/replay_probe.cpp src/probe/focus_ngx.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -271,6 +278,20 @@ target_include_directories(object_vtable_test PRIVATE src)
 target_compile_definitions(object_vtable_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(object_vtable_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(object_vtable_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+
+# Offline check of the SCS games' eye-pass probe and the D3D11 context hooks on a WARP device (tests/scs_pass_probe_test.cpp).
+sim_qvfr_test(scs_pass_probe_test tests/scs_pass_probe_test.cpp)
+target_include_directories(scs_pass_probe_test PRIVATE src)
+target_compile_definitions(scs_pass_probe_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(scs_pass_probe_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(scs_pass_probe_test PRIVATE sim_qvfr_core d3d11)
+
+# Offline check of the SCS games' corner (their API-level QVFR) on a WARP device (tests/scs_corner_test.cpp).
+sim_qvfr_test(scs_corner_test tests/scs_corner_test.cpp)
+target_include_directories(scs_corner_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(scs_corner_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(scs_corner_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(scs_corner_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of LMU's multi-view rendering in the eye passes on a WARP device (tests/lmu_mvr_pass_test.cpp).
 sim_qvfr_test(lmu_mvr_pass_test tests/lmu_mvr_pass_test.cpp)

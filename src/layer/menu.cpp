@@ -28,6 +28,7 @@
 #include "xr.h"
 #include "layer/layer.h"
 #include "probe/focus_ngx.h"
+#include "probe/hang_watch.h"
 
 namespace simqvfr::layer {
 
@@ -83,7 +84,7 @@ void menu_placement_changed(const MenuPlacement& placement) {
     live.menuPlacement = placement;
     menu_place(placement);
     logf("settings menu: moved to %d deg right, %d deg up, %d deg wide", placement.yaw, placement.pitch, placement.width);
-    if (experiment.views4 || experiment.quad || experiment.replayCompose)
+    if (experiment.views4 || experiment.quad || experiment.replayCompose || game->shows_overlay())
         menu_open(qpc_now());
 }
 
@@ -217,6 +218,14 @@ void menu_open(int64_t now) {
         menu.model.launch.liveResolution = features.liveResolution;
         if (experiment.replayCompose)
             menu.model.launch.liveResolution = false;  // periphery and density: the next launch
+        if (game->shows_overlay()) {  // QVFR at the D3D11 level (ATS): the settings page, its sizes live
+            menu.model.launch.qvfr = true;
+            menu.model.launch.liveResolution = true;
+            menu.model.launch.cropPage = false;  // no view crop, helmet, focus shape or optimizer on this path
+            menu.model.launch.helmetPage = false;
+            menu.model.launch.shapePage = false;
+            menu.model.launch.optimize = false;
+        }
         // Sim-QVFR's own DLSS: a game with it, in QVFR on the multi-view path (the room beside each eye), in a build
         // with the NGX SDK.
         menu.model.launch.ownDlss = features.sideLoadedDlss && experiment.views4 &&
@@ -405,7 +414,7 @@ void menu_controllers(XrSession session, int64_t now) {
 }
 
 bool menu_resources(XrSession session) {
-    if (!game->has_qvfr())  // log only: nothing of ours in the headset
+    if (!game->has_qvfr() && !game->shows_overlay())  // log only: nothing of ours in the headset
         return false;
     if (menu.chain)
         return true;
@@ -489,11 +498,16 @@ void menu_render() {
     uint32_t index = 0;
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     wait.timeout = 100'000'000;
+    hang_watch_stage("menu panel: xrAcquireSwapchainImage");
     if (XR_FAILED(next.AcquireSwapchainImage(menu.chain, nullptr, &index)))
         return;
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() &&
-                    menu.upload && menu.upload->upload(menu.images[index], pixels);
+    hang_watch_stage("menu panel: xrWaitSwapchainImage");
+    bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() && menu.upload;
+    hang_watch_stage("menu panel: the upload");
+    ok = ok && menu.upload->upload(menu.images[index], pixels);
+    hang_watch_stage("menu panel: xrReleaseSwapchainImage");
     next.ReleaseSwapchainImage(menu.chain, nullptr);
+    hang_watch_stage("menu panel: done");
     if (ok) {
         menu.uploaded = true;
         menu.dirty = false;
@@ -508,7 +522,7 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
                                  std::vector<const XrCompositionLayerBaseHeader*>& layers) {
     // The performance overlay also while measuring without QVFR (baseline=1), to compare the two; the settings
     // menu only with a method of the layer's (its settings would change nothing in mode=off).
-    const bool method = experiment.views4 || experiment.quad || experiment.replayCompose;
+    const bool method = experiment.views4 || experiment.quad || experiment.replayCompose || game->shows_overlay();
     if (live.ini.empty() || (!method && !experiment.measure && !notice_pending()))
         return info;
     // For the launcher's Center PPD: once, when ACE has rendered.

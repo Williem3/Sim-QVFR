@@ -29,6 +29,11 @@ struct GameFeatures {
     // Sim-QVFR's own DLSS for a game that ships none, "side-loaded" ([dlss], engine/dlss_settings.h, live): NGX called
     // at the API level on the game's views (engine/dlss_views.h); needs the multi-view path (LMU).
     bool sideLoadedDlss = false;
+    // QVFR through the D3D11 layer alone, the focus view drawn in each eye's pass (SCS Software's games:
+    // scssoftware/corner.h): by NVIDIA's multi-view rendering on an RTX 20 series or newer, by Sim-QVFR's own (instancing)
+    // elsewhere. It starts with the first frame that draws the world per eye: the menus and the garage show as without
+    // Sim-QVFR. The launcher says so (its Rendering card, the overview, the launch log); not multiView's layout.
+    bool layerMultiView = false;
 };
 
 struct GameInfo {
@@ -64,6 +69,12 @@ struct GameInfo {
     // anticheat=1 the launcher starts the game through it and the layer runs as in any launch: Sim-QVFR patches game
     // code and the anti-cheat sees that as it is, so the user takes the risk of being kicked or banned.
     const wchar_t* antiCheatStart = nullptr;
+    // The sizes a fresh install starts this game with, in percent (0: the launcher's own defaults): the periphery's
+    // density, the focus views' density, the focus box's width and height. The launcher writes them into the game's
+    // first copy of the settings (settings.cpp); a copy that exists is left alone.
+    struct Defaults {
+        int periphery = 0, density = 0, focusWidth = 0, focusHeight = 0;
+    } defaults = {};
 };
 
 // [launcher] anticheat=1 in the ini (the launcher's Games pane): the user runs Sim-QVFR with the game's anti-cheat.

@@ -112,7 +112,7 @@ void gaze_init(XrInstance instance) {
         gaze.appSyncs = 0;
         gaze.space = XR_NULL_HANDLE;
     }
-    if ((!experiment.quad && !experiment.composing()) || !next.CreateActionSet)
+    if ((!experiment.quad && !experiment.composing() && !game->wants_gaze()) || !next.CreateActionSet)
         return;
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
     strcpy_s(setInfo.actionSetName, "simqvfr_gaze");
