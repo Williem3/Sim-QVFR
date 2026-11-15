@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 
 #include "../../log.h"
@@ -32,16 +33,32 @@ public:
         IdentityAdapter::instance_created(ini, mode);
         passProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"ats_pass_probe", 1, ini) != 0;
         shaderProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"ats_shader_probe", 1, ini) != 0;
-        focusPercent_ = analysis() && ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"ats_focus", 0, ini)) : 0;
-        if (shaderProbe_)  // with the focus view on, each shader keeps its twin (the scene draws bind it)
-            shaderProbe_ = lmu::mvr_probe_install(ini, focusPercent_ > 0);
-        cornerPercent_ = analysis() && ini ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"ats_corner", 0, ini)) : 0;
+        // QVFR at the D3D11 level: on by default, with the launcher's QVFR switch ([experiment] mode other than off) and
+        // [experiment] ats_qvfr (default 1). The focus view's scene draws by NVIDIA's multi-view rendering where the
+        // device has it, by Sim-QVFR's own (instancing) on every other GPU: the corner picks at xrCreateSession.
+        // ats_corner / ats_focus: the launch's sizes in percent (70 / 30; 0: that part off); the headset menu's sizes
+        // ([quad] periphery_scale, focus_percent) take over at the first live read.
+        wchar_t iniMode[32] = L"";
+        if (ini)
+            GetPrivateProfileStringW(L"experiment", L"mode", L"off", iniMode, 32, ini);
+        const bool qvfr = analysis() && ini && _wcsicmp(iniMode, L"off") != 0 &&
+                          GetPrivateProfileIntW(L"experiment", L"ats_qvfr", 1, ini) != 0;
+        cornerPercent_ = qvfr ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"ats_corner", 70, ini)) : 0;
         if (cornerPercent_ <= 0 || cornerPercent_ >= 100)
             cornerPercent_ = 0;
+        focusPercent_ = cornerPercent_ ? static_cast<int>(GetPrivateProfileIntW(L"experiment", L"ats_focus", 30, ini)) : 0;
+        if (focusPercent_ < 0 || focusPercent_ + cornerPercent_ > 100)
+            focusPercent_ = cornerPercent_ <= 90 ? std::min(30, 100 - cornerPercent_) : 0;
+        if (focusPercent_ > 0)
+            shaderProbe_ = true;  // the scene draws need the shaders' twins
+        if (shaderProbe_)  // with the focus view on, each shader keeps its twin (the scene draws bind it)
+            shaderProbe_ = lmu::mvr_probe_install(ini, focusPercent_ > 0);
         if (cornerPercent_)
             passProbe_ = false;
-        simqvfr::logf("ats: identity only, log-only probes: pass %s, shader %s; corner %d%%", passProbe_ ? "on" : "off",
-                      shaderProbe_ ? "on" : "off", cornerPercent_);
+        simqvfr::logf("ats: QVFR at the D3D11 level %s (mode=%ls, ats_qvfr): corner %d%%, focus box %d%%; probes: pass %s, "
+                      "shader %s",
+                      cornerPercent_ ? "on" : "off", iniMode, cornerPercent_, focusPercent_, passProbe_ ? "on" : "off",
+                      shaderProbe_ ? "on" : "off");
     }
     bool observes_d3d11() const override { return passProbe_ || shaderProbe_ || cornerPercent_; }
     // The focus box follows the gaze: where it points on each eye's screen (x right, y down, 0..1), from the eye's

@@ -2015,10 +2015,15 @@ bool corner_install(ID3D11Device* device, int percent, int focusPercent) {
                           focusPercent, g.mvr ? "NVIDIA's multi-view rendering" : "Sim-QVFR's own multi-view rendering (instancing)",
                           g.mvr ? "there" : support.xyzw ? "not used (multi_view_software=1)" : "not on this device",
                           g.instanced ? "there" : "not on this device");
-        } else {
+        } else {  // no way to a second view on this GPU: the game is left as it is
             simqvfr::logf("ats focus: neither NVIDIA's two views (loaded %d, xyzw %d, %s) nor a viewport index from the "
-                          "vertex shader on this device: only the full-screen passes are drawn for the focus region",
+                          "vertex shader on this device: QVFR stays off, the game draws as without Sim-QVFR",
                           support.loaded, support.xyzw, simqvfr::nvapi::status_name(support.status));
+            g.focusPercent = 0;
+            g.remapCb.Reset();
+            g.device.Reset();
+            g.context.Reset();
+            return false;
         }
     } else if (focusPercent > 0) {
         simqvfr::logf("ats focus: off: %d%% doesn't fit beside a %d%% corner", focusPercent, percent);
