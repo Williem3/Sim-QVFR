@@ -243,6 +243,7 @@ void replay_compose() {
 // Frame A's image is copied before the runtime gets it back; frame B's stays acquired (so this
 // layer may still read it) until B's xrEndFrame has composed it.
 XrResult XRAPI_CALL layerReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* info) {
+    game->swapchain_releasing(swapchain);  // the game's last change before the runtime reads the image (ATS's corner)
     if (experiment.d3d11CaptureFrame)
         d3d11_capture_release(swapchain, endFrames);
     if (views4_outline_on())

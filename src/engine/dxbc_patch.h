@@ -130,4 +130,8 @@ struct SlotOutput {
 
 SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOptions& options = {});
 
+// How many vectors (16 bytes) of the constant buffer in `slot` the shader declares; 0: none, or not a shader. What lies
+// past that in a bound range is not the shader's (a pooled buffer's leftovers).
+uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot);
+
 }  // namespace simqvfr::dxbc

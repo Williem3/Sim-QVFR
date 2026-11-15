@@ -104,7 +104,7 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
                 break;
             }
     if (!experiment.twoLoops)
-        return next.EndFrame(session, info);
+        return next.EndFrame(session, game->adjust_frame_end(info, next.EnumerateSwapchainImages));
 
     std::unique_lock lock(loops.mutex);
     if (!loops.active) {

@@ -18,12 +18,14 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 // d3d11.h order: IUnknown 3 + ID3D11DeviceChild 4, then ID3D11DeviceContext's own.
-constexpr unsigned kSlot[kEntries] = {33, 34, 12, 13, 20, 21, 39, 40, 58};
+constexpr unsigned kSlot[kEntries] = {33, 34, 12, 13, 20, 21, 39, 40, 58, 44, 45, 119, 123, 15};
 constexpr const char* kName[kEntries] = {"OMSetRenderTargets",   "OMSetRenderTargetsAndUnorderedAccessViews",
                                          "DrawIndexed",          "Draw",
                                          "DrawIndexedInstanced", "DrawInstanced",
                                          "DrawIndexedInstancedIndirect", "DrawInstancedIndirect",
-                                         "ExecuteCommandList"};
+                                         "ExecuteCommandList",   "RSSetViewports",
+                                         "RSSetScissorRects",    "VSSetConstantBuffers1",
+                                         "PSSetConstantBuffers1", "Unmap"};
 constexpr int kFunctions = 4;  // per entry: LMU's measurements found 4 on WARP and an RTX 5070 Ti
 
 struct Functions {
@@ -50,14 +52,75 @@ struct Detours {
     template <int N>
     static void STDMETHODCALLTYPE fn(ID3D11DeviceContext* context, A... a) {
         using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...);
-        if (depth == 0 && context == g.context) {
+        const Fn real = reinterpret_cast<Fn>(g.functions[E].real[N]);
+        if (depth != 0 || context != g.context) {
+            ++depth;
+            real(context, a...);
+            --depth;
+            return;
+        }
+        if constexpr (E == kRSSetViewports || E == kRSSetScissorRects) {
+            filter<E>(real, context, a...);
+        } else if constexpr (E == kVSSetConstantBuffers1 || E == kPSSetConstantBuffers1) {
+            const auto args = std::make_tuple(a...);
+            const UINT start = std::get<0>(args), count = std::get<1>(args);
+            ID3D11Buffer* out[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+            ++depth;
+            if (g.observers.constant_buffers && std::get<2>(args) && count <= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT &&
+                g.observers.constant_buffers(context, E == kPSSetConstantBuffers1, start, count, std::get<2>(args), out))
+                real(context, start, count, out, std::get<3>(args), std::get<4>(args));
+            else
+                real(context, a...);
+            --depth;
+        } else {
             ++depth;
             observe<E>(context, a...);
+            real(context, a...);
+            if constexpr (E == kDrawIndexed || E == kDraw || E == kDrawIndexedInstanced || E == kDrawInstanced ||
+                          E == kDrawIndexedInstancedIndirect || E == kDrawInstancedIndirect) {
+                if (g.observers.draw_after)
+                    after<E>(context, a...);
+            }
             --depth;
         }
+    }
+
+    template <Entry X, typename Fn>
+    static void filter(Fn real, ID3D11DeviceContext* c, A... a) {
+        const auto args = std::make_tuple(a...);
+        const UINT count = std::get<0>(args);
         ++depth;
-        reinterpret_cast<Fn>(g.functions[E].real[N])(context, a...);
+        if constexpr (X == kRSSetViewports) {
+            D3D11_VIEWPORT out[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+            if (g.observers.viewports && count <= D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE &&
+                g.observers.viewports(c, count, std::get<1>(args), out))
+                real(c, count, out);
+            else
+                real(c, a...);
+        } else {
+            D3D11_RECT out[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+            if (g.observers.scissors && count <= D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE &&
+                g.observers.scissors(c, count, std::get<1>(args), out))
+                real(c, count, out);
+            else
+                real(c, a...);
+        }
         --depth;
+    }
+
+    template <Entry X>
+    static void after(ID3D11DeviceContext* c, A... a) {
+        if constexpr (X == kDraw) {
+            const auto args = std::make_tuple(a...);
+            g.observers.draw_after(c, X, std::get<0>(args), 1, std::get<1>(args));
+        } else if constexpr (X == kDrawIndexed) {
+            g.observers.draw_after(c, X, std::get<0>(std::make_tuple(a...)), 1, 0);
+        } else if constexpr (X == kDrawIndexedInstanced || X == kDrawInstanced) {
+            const auto args = std::make_tuple(a...);
+            g.observers.draw_after(c, X, std::get<0>(args), std::get<1>(args), 0);
+        } else {
+            g.observers.draw_after(c, X, 0, 0, 0);
+        }
     }
     template <std::size_t... N>
     static void* get(int n, std::index_sequence<N...>) {
@@ -87,6 +150,10 @@ struct Detours {
         } else if constexpr (X == kExecuteCommandList) {
             if (o.execute)
                 o.execute(c, std::get<0>(std::make_tuple(a...)));
+        } else if constexpr (X == kUnmap) {
+            const auto args = std::make_tuple(a...);
+            if (o.unmap)
+                o.unmap(c, std::get<0>(args), std::get<1>(args));
         }
     }
 };
@@ -106,6 +173,13 @@ void* detour_for(int e, int n) {
         case kDrawIndexedInstancedIndirect: return Detours<kDrawIndexedInstancedIndirect, ID3D11Buffer*, UINT>::get(n);
         case kDrawInstancedIndirect: return Detours<kDrawInstancedIndirect, ID3D11Buffer*, UINT>::get(n);
         case kExecuteCommandList: return Detours<kExecuteCommandList, ID3D11CommandList*, BOOL>::get(n);
+        case kRSSetViewports: return Detours<kRSSetViewports, UINT, const D3D11_VIEWPORT*>::get(n);
+        case kRSSetScissorRects: return Detours<kRSSetScissorRects, UINT, const D3D11_RECT*>::get(n);
+        case kVSSetConstantBuffers1:
+            return Detours<kVSSetConstantBuffers1, UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*>::get(n);
+        case kPSSetConstantBuffers1:
+            return Detours<kPSSetConstantBuffers1, UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*>::get(n);
+        case kUnmap: return Detours<kUnmap, ID3D11Resource*, UINT>::get(n);
         default: return nullptr;
     }
 }
@@ -207,6 +281,9 @@ void uninstall() {
     std::lock_guard lock(g.mutex);
     g.context = nullptr;
 }
+
+Bypass::Bypass() { ++depth; }
+Bypass::~Bypass() { --depth; }
 
 Stats stats() {
     std::lock_guard lock(g.mutex);

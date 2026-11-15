@@ -526,6 +526,8 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
 XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo* info,
                                                uint32_t* index) {
     const XrResult r = next.AcquireSwapchainImage(swapchain, info, index);
+    if (XR_SUCCEEDED(r))
+        game->swapchain_acquired(swapchain, *index, next.EnumerateSwapchainImages);
     if (XR_SUCCEEDED(r) && experiment.d3d11CaptureFrame)
         d3d11_capture_acquired(swapchain, *index);
     if (XR_SUCCEEDED(r) && v4d3d11_tracks_chains()) {

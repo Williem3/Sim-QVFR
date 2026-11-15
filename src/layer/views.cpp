@@ -42,6 +42,25 @@ XrResult locate_views(XrSession session, const XrViewLocateInfo* info, XrViewSta
     if (stereo)
         for (int i = 0; i < 2; ++i)
             views[i].fov = crop_fov(views[i].fov, crop, i);
+    if (!experiment.views4 && stereo && game->wants_gaze() &&
+        !(experiment.gaze && gaze_skips_space(info->space, info->displayTime))) {
+        // The gaze as tangents in each eye's frame (as for views4 below, without its convergence and offsets).
+        game->qvfr_note_views(views, std::min(*countOutput, capacity));
+        float tan[2][2] = {};
+        bool valid[2] = {};
+        XrVector3f direction{0, 0, -1};
+        const bool gazing = experiment.gaze && gaze_now(session, info->space, info->displayTime, direction);
+        steady_gaze(gazing, direction);
+        for (int e = 0; e < 2 && gazing; ++e) {
+            const XrVector3f d = rotate(qconj(views[e].pose.orientation), direction);
+            valid[e] = d.z < -0.1f;
+            if (valid[e]) {
+                tan[e][0] = d.x / -d.z;
+                tan[e][1] = d.y / -d.z;
+            }
+        }
+        game->qvfr_set_gaze(tan, valid, gazing);
+    }
     if (experiment.views4 && XR_SUCCEEDED(r) && views && countOutput) {
         game->qvfr_note_views(views, std::min(*countOutput, capacity));
         if (views4_outline_on() && *countOutput >= 2 && capacity >= 2) {

@@ -962,6 +962,15 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         --argc;
         ++argv;
     }
+    {  // a shader's declared constants (what a ranged bind holds past them isn't the shader's)
+        const std::vector<uint8_t> ps = compile(
+            "cbuffer C : register(b0) { float4 a[23]; }; cbuffer D : register(b2) { float4 d[5]; };"
+            "float4 main(float4 p : SV_Position) : SV_Target { return a[22] + a[3] + d[4]; }", "ps_5_0");
+        check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 0) == 23, "declared constants: cb0 of 23 vectors");
+        check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 2) == 5, "declared constants: cb2 of 5 vectors");
+        check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 1) == 0, "declared constants: no cb1");
+        check(dxbc::constant_buffer_vectors(ps.data(), 12, 0) == 0, "declared constants: not a container");
+    }
     Gpu g;
     if (FAILED(D3D11CreateDevice(nullptr, driverType, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &g.device,
                                  nullptr, &g.context))) {

@@ -182,12 +182,31 @@ public:
     // observes_d3d11() asks for it (a game's log-only D3D11 probes, ATS).
     virtual void d3d11_session(ID3D11Device* device) { (void)device; }
     virtual bool observes_d3d11() const { return false; }
+    // A game without the layer's QVFR pipeline that follows the gaze itself (ATS's API-level focus view): the layer
+    // sets its gaze actions up and calls qvfr_note_views and qvfr_set_gaze at every stereo xrLocateViews.
+    virtual bool wants_gaze() const { return false; }
     // The OpenXR session began (true: xrBeginSession succeeded) or is being created or destroyed (false). Until
     // it begins, the runtime may have no views to answer with.
     virtual void session_running(bool running) { (void)running; }
     virtual void session_destroyed() {}
     // Every xrEndFrame.
     virtual void frame_end() {}
+    // Every xrEndFrame of a game without the layer's own submission (identity games): the frame to submit, `info` itself
+    // or a copy the adapter keeps until its next call (ATS's corner: each eye image's rectangle cut).
+    // xrAcquireSwapchainImage succeeded for one of the game's swapchains (`enumerate`: the next layer's
+    // xrEnumerateSwapchainImages), and xrReleaseSwapchainImage is about to hand an image back to the runtime: the last
+    // moment to change it (ATS's corner scales its eye back over the whole image there).
+    virtual void swapchain_acquired(XrSwapchain chain, uint32_t index, PFN_xrEnumerateSwapchainImages enumerate) {
+        (void)chain;
+        (void)index;
+        (void)enumerate;
+    }
+    virtual void swapchain_releasing(XrSwapchain chain) { (void)chain; }
+    // `enumerate`: the next layer's xrEnumerateSwapchainImages (the swapchains' images, if the adapter draws into them).
+    virtual const XrFrameEndInfo* adjust_frame_end(const XrFrameEndInfo* info, PFN_xrEnumerateSwapchainImages enumerate) {
+        (void)enumerate;
+        return info;
+    }
 };
 
 // The adapter for `game` (null: the one that does nothing). Lives for the process.

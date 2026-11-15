@@ -1,0 +1,475 @@
+// Offline check of ATS's corner (games/ats/corner.h, corner_rules.h; docs/recon-ats.md "Stage 1 design notes").
+// 1. The rules on the constant ranges captured from the game (ats_frame5585.rdc): the deferred pair, the source
+//    rectangle, the histogram's pixel rectangle, and ranges left alone.
+// 2. On a WARP device through the real hooks: a G-buffer bind starts the corner; a full-screen pass shaped like Prism's
+//    (its vertex shader's rectangle and normalized_to_texture/viewport_size pair, the pixel shader's pixel lookups and
+//    screen fractions, constants bound by range in a dynamic buffer) draws only into the corner, with screen fractions
+//    0..1 across it and texture fractions 0..f; the game's own constants are bound again after the draw; the frame's
+//    end cuts the submitted rectangle and the next frame's shared work gets the game's own viewport back.
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+#include <windows.h>
+#include <d3d11_1.h>
+#include <d3dcompiler.h>
+#include <wrl/client.h>
+
+#include "games/ats/corner.h"
+#include "games/ats/corner_rules.h"
+
+using Microsoft::WRL::ComPtr;
+
+namespace {
+
+int failures = 0;
+
+void check(bool ok, const char* what) {
+    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
+    failures += ok ? 0 : 1;
+}
+
+bool close_to(float a, float b, float tol = 1e-4f) { return std::fabs(a - b) <= tol; }
+
+// A stand-in for the runtime's xrEnumerateSwapchainImages: two images, the test's eye target and a decoy.
+ID3D11Texture2D* swapImage = nullptr;
+ID3D11Texture2D* decoyImage = nullptr;
+XrResult XRAPI_CALL fake_enumerate(XrSwapchain, uint32_t capacity, uint32_t* count, XrSwapchainImageBaseHeader* images) {
+    *count = 2;
+    if (capacity >= 2 && images) {
+        reinterpret_cast<XrSwapchainImageD3D11KHR*>(images)[0].texture = swapImage;
+        reinterpret_cast<XrSwapchainImageD3D11KHR*>(images)[1].texture = decoyImage;
+    }
+    return XR_SUCCESS;
+}
+
+void rules_checks() {
+    using ats::CornerRule;
+    {  // VS 152: the screen rectangle stays, the pair is rewritten
+        float v[4][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 25.4547f}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
+        const CornerRule r = ats::corner_patch(v, 4, 0.5f, 0.25f);
+        check(r == CornerRule::pair && ats::corner_eq(v[0], 0, 0, 1, 1) && ats::corner_eq(v[2], 0.5f, 0.25f, 2, 4) &&
+                  ats::corner_eq(v[3], 2596, 1042, 0.5f, 0.25f) && v[1][3] == 25.4547f,
+              "rules: VS 152's pair rewritten, its screen rectangle and parameters kept");
+    }
+    {  // VS 629: the pair at 3
+        float v[5][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 0}, {0.5f, 0.5f, 5, 0}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
+        check(ats::corner_patch(v, 5, 0.5f, 0.5f) == CornerRule::pair && ats::corner_eq(v[3], 0.5f, 0.5f, 2, 2) &&
+                  ats::corner_eq(v[4], 2596, 2084, 0.5f, 0.5f) && ats::corner_eq(v[2], 0.5f, 0.5f, 5, 0),
+              "rules: VS 629's pair at its fourth vector rewritten");
+    }
+    {  // PS 631: other vectors around the pair kept
+        float v[7][4] = {{0.5f, 0.5f, 1, 1}, {2.0944f, 0, 8, 1.2f}, {0.974004f, 0.25f, 0.2f, 0}, {1, 1, 1, 1},
+                         {5192, 4168, 1, 1}, {2.70692f, 3.66836f, 5.02198f, 0}, {1.01879f, -0.984434f, -2.45128f, 1.96858f}};
+        const CornerRule r = ats::corner_patch(v, 7, 0.75f, 0.75f, false);
+        check(r == CornerRule::pair && ats::corner_eq(v[0], 0.5f, 0.5f, 1, 1) && close_to(v[3][2], 1 / 0.75f) &&
+                  ats::corner_eq(v[4], 3894, 3126, 0.75f, 0.75f) && v[6][0] == 1.01879f,
+              "rules: PS 631's pair rewritten, the AO parameters and view-ray vectors kept");
+    }
+    {  // VS 593 (the luminance downsample): the source rectangle
+        float v[4][4] = {{1, -0.5f, 0.5f, 0.121109f}, {0, 0, 1, 1}, {5192, 4168, 1, 1}, {1.52588e-05f, 26.3437f, 0.102486f, 0}};
+        const CornerRule r = ats::corner_patch(v, 4, 0.5f, 0.5f);
+        check(r == CornerRule::rect && ats::corner_eq(v[1], 0, 0, 0.5f, 0.5f) && ats::corner_eq(v[2], 5192, 4168, 1, 1),
+              "rules: VS 593's source rectangle cut, its source size kept");
+    }
+    {  // VS 571 (a bloom downsample, two vectors) with another draw's pair left behind it in the block: the cause of
+       // the strobe. The rectangle is cut all the same, the left-over untouched.
+        float v[16][4] = {{1, -0.5f, 0.5f, 0.121109f}, {0, 0, 1, 1}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
+        const CornerRule r = ats::corner_patch(v, 16, 0.7f, 0.7f);
+        check(r == CornerRule::rect && ats::corner_eq(v[1], 0, 0, 0.7f, 0.7f) && ats::corner_eq(v[2], 1, 1, 1, 1) &&
+                  ats::corner_eq(v[3], 5192, 4168, 1, 1),
+              "rules: a downsample's rectangle cut although another draw's pair is left behind it");
+    }
+    {  // VS 394 (a blur: rectangle times the pair): only the rectangle, or the blur would shrink twice
+        float v[5][4] = {{1, -0.5f, 0.5f, 1}, {0, 0, 1, 1}, {1, 1, 1, 1}, {5192, 4168, 1, 1}, {2.7f, 3.6f, 5, 0}};
+        check(ats::corner_patch(v, 5, 0.7f, 0.7f) == CornerRule::rect && ats::corner_eq(v[1], 0, 0, 0.7f, 0.7f) &&
+                  ats::corner_eq(v[2], 1, 1, 1, 1),
+              "rules: VS 394's rectangle cut once (its pair kept whole)");
+    }
+    {  // VS 62 (the final blit) with a left-over pair behind it: the source cut, the destination kept
+        float v[16][4] = {{0, 0, 1, 1}, {0, 0, 1, 1}, {7, 7, 7, 7}, {1, 1, 1, 1}, {1298, 1042, 1, 1}};
+        const CornerRule r = ats::corner_patch(v, 16, 0.5f, 0.5f);
+        check(r == CornerRule::rect && ats::corner_eq(v[0], 0, 0, 0.5f, 0.5f) && ats::corner_eq(v[1], 0, 0, 1, 1) &&
+                  ats::corner_eq(v[3], 1, 1, 1, 1),
+              "rules: VS 62's source rectangle cut, its destination kept, a left-over pair ignored");
+    }
+    {  // VS 388 (the histogram): its pixel rectangle in the luminance target
+        float v[3][4] = {{1298, 1042, 1, 1}, {0, 24.75f, 1290, 992}, {0, 0, 0, 0}};
+        const CornerRule r = ats::corner_patch(v, 3, 0.5f, 0.5f);
+        check(r == CornerRule::pixelRect && ats::corner_eq(v[1], 0, 12.375f, 645, 496) &&
+                  ats::corner_eq(v[0], 1298, 1042, 1, 1),
+              "rules: VS 388's pixel rectangle cut");
+    }
+    {  // a scene draw's matrix rows, and a pixel range without a pair: nothing
+        float v[4][4] = {{0.999436f, 0.0133385f, 0.0307816f, 0.45f}, {0.1f, 0.9f, 0, 0}, {1, 1, 1, 1}, {5192, 4168, 1, 1}};
+        float before[4][4];
+        std::memcpy(before, v, sizeof(v));
+        float w[2][4] = {{0.000192604f, 0.000239923f, 0.000856936f, -0.00152038f}, {0, 0, 1, 1}};
+        float wBefore[2][4];
+        std::memcpy(wBefore, w, sizeof(w));
+        check(ats::corner_patch(v, 4, 0.5f, 0.5f) == CornerRule::none && std::memcmp(before, v, sizeof(v)) == 0 &&
+                  ats::corner_patch(w, 2, 0.5f, 0.5f, false) == CornerRule::none && std::memcmp(wBefore, w, sizeof(w)) == 0,
+              "rules: a vertex range of another layout and a pixel range without a pair left alone");
+    }
+}
+
+// ---- WARP ----
+
+const char kVs[] = R"(
+cbuffer c0 : register(b0) { float4 rect; float4 p1; float4 nt; float4 vsz; };
+struct O { float4 pos : SV_Position; float4 t : TEXCOORD0; };
+O main(float2 v : POSITION) {
+    O o;
+    o.pos = float4(v.x * 2 - 1, -(v.y * 2 - 1) * p1.x, 0.5, 1);
+    o.t.xy = (v * rect.zw + rect.xy) * nt.xy;
+    o.t.zw = v * vsz.xy;
+    return o;
+}
+)";
+const char kPs[] = R"(
+cbuffer c0 : register(b0) { float4 nt; float4 vsz; };
+float4 main(float4 pos : SV_Position, float4 t : TEXCOORD0) : SV_Target {
+    return float4(t.xy * nt.zw, t.zw / (vsz.xy / vsz.zw));
+}
+)";
+
+ComPtr<ID3DBlob> compile(const char* src, const char* target) {
+    ComPtr<ID3DBlob> code, errors;
+    if (FAILED(D3DCompile(src, std::strlen(src), "test", nullptr, nullptr, "main", target, 0, 0, &code, &errors))) {
+        std::printf("compile: %s\n", errors ? static_cast<const char*>(errors->GetBufferPointer()) : "?");
+        return nullptr;
+    }
+    return code;
+}
+
+void warp_checks() {
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> context0;
+    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device,
+                                 nullptr, &context0))) {
+        check(false, "a WARP device");
+        return;
+    }
+    ComPtr<ID3D11DeviceContext1> context;
+    context0.As(&context);
+    constexpr UINT W = 1280, H = 1024;  // a G-buffer counts from 1024x1024 up (corner.cpp, pass_probe.h)
+    const auto rt = [&](UINT w, UINT h, DXGI_FORMAT f, ComPtr<ID3D11Texture2D>& t, ComPtr<ID3D11RenderTargetView>& v) {
+        const D3D11_TEXTURE2D_DESC d = {w, h, 1, 1, f, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, 0};
+        device->CreateTexture2D(&d, nullptr, &t);
+        device->CreateRenderTargetView(t.Get(), nullptr, &v);
+    };
+    ComPtr<ID3D11Texture2D> gbTex[4], outTex, depthTex;
+    ComPtr<ID3D11RenderTargetView> gb[4], out;
+    for (int i = 0; i < 4; ++i)
+        rt(W, H, DXGI_FORMAT_R16G16B16A16_FLOAT, gbTex[i], gb[i]);
+    rt(W, H, DXGI_FORMAT_R32G32B32A32_FLOAT, outTex, out);
+    const D3D11_TEXTURE2D_DESC dd = {W, H, 1, 1, DXGI_FORMAT_D32_FLOAT_S8X24_UINT, {1, 0}, D3D11_USAGE_DEFAULT,
+                                     D3D11_BIND_DEPTH_STENCIL, 0, 0};
+    ComPtr<ID3D11DepthStencilView> dsv;
+    device->CreateTexture2D(&dd, nullptr, &depthTex);
+    device->CreateDepthStencilView(depthTex.Get(), nullptr, &dsv);
+
+    const ComPtr<ID3DBlob> vsCode = compile(kVs, "vs_5_0"), psCode = compile(kPs, "ps_5_0");
+    if (!vsCode || !psCode) {
+        check(false, "the test's shaders");
+        return;
+    }
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11PixelShader> ps;
+    ComPtr<ID3D11InputLayout> layout;
+    device->CreateVertexShader(vsCode->GetBufferPointer(), vsCode->GetBufferSize(), nullptr, &vs);
+    device->CreatePixelShader(psCode->GetBufferPointer(), psCode->GetBufferSize(), nullptr, &ps);
+    const D3D11_INPUT_ELEMENT_DESC el = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    device->CreateInputLayout(&el, 1, vsCode->GetBufferPointer(), vsCode->GetBufferSize(), &layout);
+    const float tri[] = {0, 0, 2, 0, 0, 2};
+    const D3D11_BUFFER_DESC vbd = {sizeof(tri), D3D11_USAGE_IMMUTABLE, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+    const D3D11_SUBRESOURCE_DATA vbi = {tri, 0, 0};
+    ComPtr<ID3D11Buffer> vb;
+    device->CreateBuffer(&vbd, &vbi, &vb);
+
+    // The game's constants: one dynamic buffer, the VS range at constant 16 and the PS range at 32 (bound by range).
+    const D3D11_BUFFER_DESC cbd = {64 * 16, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
+    ComPtr<ID3D11Buffer> gameCb;
+    device->CreateBuffer(&cbd, nullptr, &gameCb);
+    {
+        D3D11_MAPPED_SUBRESOURCE m;
+        context->Map(gameCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m);
+        float* f = static_cast<float*>(m.pData);
+        std::memset(f, 0, 64 * 16);
+        const float vsRange[4][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 7}, {1, 1, 1, 1}, {W, H, 1, 1}};
+        const float psRange[2][4] = {{1, 1, 1, 1}, {W, H, 1, 1}};
+        std::memcpy(f + 16 * 4, vsRange, sizeof(vsRange));
+        std::memcpy(f + 32 * 4, psRange, sizeof(psRange));
+        context->Unmap(gameCb.Get(), 0);
+    }
+
+    check(ats::corner_install(device.Get(), 50, 30) && ats::corner_on(), "corner installed (50%, focus 30%) on a WARP device");
+
+    // The game's frame: a G-buffer bind (the corner starts), then a full-screen pass into an eye-sized target.
+    ID3D11RenderTargetView* const gbs[] = {gb[0].Get(), gb[1].Get(), gb[2].Get(), gb[3].Get()};
+    context->OMSetRenderTargets(4, gbs, dsv.Get());
+    const float clear[4] = {-1, -1, -1, -1};
+    context->ClearRenderTargetView(out.Get(), clear);
+    ID3D11RenderTargetView* const outs[] = {out.Get()};
+    context->OMSetRenderTargets(1, outs, nullptr);
+    const D3D11_VIEWPORT full = {0, 0, W, H, 0, 1};
+    context->RSSetViewports(1, &full);
+    D3D11_VIEWPORT seen{};
+    UINT seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    check(seenCount == 1 && seen.Width == W / 2 && seen.Height == H / 2, "an eye-shaped target's viewport cut to the corner");
+
+    const UINT stride = 8, offset = 0;
+    ID3D11Buffer* const vbs[] = {vb.Get()};
+    context->IASetVertexBuffers(0, 1, vbs, &stride, &offset);
+    context->IASetInputLayout(layout.Get());
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(vs.Get(), nullptr, 0);
+    context->PSSetShader(ps.Get(), nullptr, 0);
+    ID3D11Buffer* const cbs[] = {gameCb.Get()};
+    const UINT vsFirst = 16, psFirst = 32, num = 16;
+    context->VSSetConstantBuffers1(0, 1, cbs, &vsFirst, &num);
+    context->PSSetConstantBuffers1(0, 1, cbs, &psFirst, &num);
+    context->Draw(3, 0);
+
+    ID3D11Buffer* boundVs = nullptr;
+    UINT bvFirst = 0, bvNum = 0;
+    context->VSGetConstantBuffers1(0, 1, &boundVs, &bvFirst, &bvNum);
+    check(boundVs == gameCb.Get() && bvFirst == vsFirst && bvNum == num, "the game's own range bound again after the draw");
+    if (boundVs)
+        boundVs->Release();
+
+    // Read the target back.
+    D3D11_TEXTURE2D_DESC sd;
+    outTex->GetDesc(&sd);
+    sd.Usage = D3D11_USAGE_STAGING;
+    sd.BindFlags = 0;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Texture2D> staging;
+    device->CreateTexture2D(&sd, nullptr, &staging);
+    context->CopyResource(staging.Get(), outTex.Get());
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+        const auto px = [&](UINT x, UINT y) { return reinterpret_cast<const float*>(static_cast<const char*>(m.pData) + y * m.RowPitch) + x * 4; };
+        const float* a = px(0, 0);
+        const float* b = px(W / 2 - 1, H / 2 - 1);
+        const float* outside = px(W / 2 + 4, H / 2 + 4);
+        const float* right = px(W - 1, 0);
+        std::printf("     corner pixel 0,0: %.4f %.4f %.4f %.4f; last %u,%u: %.4f %.4f %.4f %.4f; outside: %.1f\n", a[0], a[1],
+                    a[2], a[3], W / 2 - 1, H / 2 - 1, b[0], b[1], b[2], b[3], outside[0]);
+        check(close_to(a[0], 0.5f / (W / 2), 2e-3f) && close_to(b[0], 1 - 0.5f / (W / 2), 2e-3f) && close_to(b[1], 1 - 0.5f / (H / 2), 2e-3f),
+              "screen fractions run 0..1 across the corner (the view-ray math sees the whole eye)");
+        check(close_to(b[2], 0.5f - 0.5f / W, 2e-3f) && close_to(b[3], 0.5f - 0.5f / H, 2e-3f),
+              "texture fractions run 0..f (the lookups stay inside the corner)");
+        check(outside[0] == -1 && right[0] == -1, "nothing drawn outside the corner and the focus region");
+        // Stage 3: the pass drawn again over the focus region (right of the corner, 30% each way), addressed from the
+        // origin of its inputs' twins: screen fractions 0..1 across the region, texture fractions 0..0.3.
+        const UINT fx0 = W / 2, fw = 384, fh = 307;
+        const float* f0 = px(fx0, 0);
+        const float* f1 = px(fx0 + fw - 1, fh - 1);
+        const float* below = px(fx0 + 8, fh + 4);
+        std::printf("     focus region first %.4f %.4f %.4f %.4f; last %.4f %.4f %.4f %.4f; below %.1f\n", f0[0], f0[1], f0[2],
+                    f0[3], f1[0], f1[1], f1[2], f1[3], below[0]);
+        check(close_to(f0[0], 0.5f / fw, 2e-3f) && close_to(f1[0], 1 - 0.5f / fw, 2e-3f) && close_to(f1[1], 1 - 0.5f / fh, 3e-3f) &&
+                  close_to(f1[2], 0.3f, 2e-3f) && close_to(f1[3], 0.3f, 2e-3f) && below[0] == -1,
+              "the pass drawn again over the focus region: screen fractions 0..1, texture fractions 0..0.3");
+        context->Unmap(staging.Get(), 0);
+    } else {
+        check(false, "the target read back");
+    }
+
+    // The frame's end: the submitted rectangle cut; the next frame's first bind puts the game's own viewport back.
+    XrCompositionLayerProjectionView views[2] = {};
+    for (auto& v : views) {
+        v.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+        v.subImage.imageRect = {{0, 0}, {static_cast<int32_t>(W), static_cast<int32_t>(H)}};
+    }
+    XrCompositionLayerProjection proj{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    proj.viewCount = 2;
+    proj.views = views;
+    const XrCompositionLayerBaseHeader* layers[] = {reinterpret_cast<const XrCompositionLayerBaseHeader*>(&proj)};
+    XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO};
+    info.layerCount = 1;
+    info.layers = layers;
+    swapImage = outTex.Get();
+    ComPtr<ID3D11Texture2D> decoyTex;
+    {
+        D3D11_TEXTURE2D_DESC dd2;
+        outTex->GetDesc(&dd2);
+        device->CreateTexture2D(&dd2, nullptr, &decoyTex);
+        ComPtr<ID3D11RenderTargetView> dv;
+        device->CreateRenderTargetView(decoyTex.Get(), nullptr, &dv);
+        const float decoyClear[4] = {-2, -2, -2, -2};
+        context->ClearRenderTargetView(dv.Get(), decoyClear);
+    }
+    decoyImage = decoyTex.Get();
+    const XrFrameEndInfo* sent = ats::corner_frame_end(&info, &fake_enumerate);  // the image not seen bound yet: the cut
+    const auto* sentProj = reinterpret_cast<const XrCompositionLayerProjection*>(sent->layers[0]);
+    check(sent != &info && sentProj->views[1].subImage.imageRect.extent.width == static_cast<int32_t>(W / 2) &&
+              sentProj->views[1].subImage.imageRect.extent.height == static_cast<int32_t>(H / 2) &&
+              views[1].subImage.imageRect.extent.width == static_cast<int32_t>(W),
+          "the frame's end submits each eye's corner (the game's own structures untouched)");
+    check(ats::corner_frame_end(&info, &fake_enumerate) == &info, "a frame without its eyes in the corner (a menu) is submitted as drawn");
+    context->OMSetRenderTargets(1, outs, nullptr);
+    seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    check(seen.Width == W && seen.Height == H, "the next frame's work before its G-buffer gets the game's own viewport");
+
+    // Frame 2: the same pass drawn indexed (as ATS's light volumes and forward draws are), its constants in a large
+    // dynamic buffer like the game's 2 MB ones: no draw of its own is rewritten, the frame's mirror carries the corner.
+    const D3D11_BUFFER_DESC bigd = {512 * 1024, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
+    ComPtr<ID3D11Buffer> bigCb;
+    device->CreateBuffer(&bigd, nullptr, &bigCb);
+    {
+        D3D11_MAPPED_SUBRESOURCE bm;
+        context->Map(bigCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &bm);
+        float* f = static_cast<float*>(bm.pData);
+        std::memset(f, 0, 512 * 1024);
+        const float vsRange[4][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 7}, {1, 1, 1, 1}, {W, H, 1, 1}};
+        const float psRange[2][4] = {{1, 1, 1, 1}, {W, H, 1, 1}};
+        const float shadowPair[2][4] = {{1, 1, 1, 1}, {4096, 4096, 1, 1}};  // not the eye's shape: left alone
+        std::memcpy(f + 64 * 4, vsRange, sizeof(vsRange));
+        std::memcpy(f + 80 * 4, psRange, sizeof(psRange));
+        std::memcpy(f + 96 * 4, shadowPair, sizeof(shadowPair));
+        context->Unmap(bigCb.Get(), 0);
+    }
+    const unsigned short idx[] = {0, 1, 2};
+    const D3D11_BUFFER_DESC ibd = {sizeof(idx), D3D11_USAGE_IMMUTABLE, D3D11_BIND_INDEX_BUFFER, 0, 0, 0};
+    const D3D11_SUBRESOURCE_DATA ibi = {idx, 0, 0};
+    ComPtr<ID3D11Buffer> ib;
+    device->CreateBuffer(&ibd, &ibi, &ib);
+    context->OMSetRenderTargets(4, gbs, dsv.Get());  // frame 2's G-buffer: the corner again, the mirror refreshed
+    context->ClearRenderTargetView(out.Get(), clear);
+    context->OMSetRenderTargets(1, outs, nullptr);
+    context->RSSetViewports(1, &full);
+    ID3D11Buffer* const bigs[] = {bigCb.Get()};
+    const UINT bigVs = 64, bigPs = 80;
+    context->VSSetConstantBuffers1(0, 1, bigs, &bigVs, &num);
+    context->PSSetConstantBuffers1(0, 1, bigs, &bigPs, &num);
+    ID3D11Buffer* boundPs = nullptr;
+    UINT bpFirst = 0, bpNum = 0;
+    context->PSGetConstantBuffers1(0, 1, &boundPs, &bpFirst, &bpNum);
+    check(boundPs && boundPs != bigCb.Get() && bpFirst == bigPs && bpNum == num,
+          "a large constant buffer bound during the corner goes to our copy, its range kept");
+    if (boundPs)
+        boundPs->Release();
+    context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);
+    context->DrawIndexed(3, 0, 0);
+    context->CopyResource(staging.Get(), outTex.Get());
+    if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+        const auto px2 = [&](UINT x, UINT y) { return reinterpret_cast<const float*>(static_cast<const char*>(m.pData) + y * m.RowPitch) + x * 4; };
+        const float* b2 = px2(W / 2 - 1, H / 2 - 1);
+        const float* out2 = px2(W / 2 + 4, H / 2 + 4);
+        std::printf("     indexed: last corner pixel %.4f %.4f %.4f %.4f; outside %.1f\n", b2[0], b2[1], b2[2], b2[3], out2[0]);
+        check(close_to(b2[0], 1 - 0.5f / (W / 2), 2e-3f) && close_to(b2[2], 0.5f - 0.5f / W, 2e-3f) && out2[0] == -1,
+              "an indexed draw reading the mirrored pair: screen fractions 0..1 across the corner, texture 0..f");
+        context->Unmap(staging.Get(), 0);
+    } else {
+        check(false, "the target read back (indexed)");
+    }
+    {  // the game writes the buffer again mid-frame (its pool, S1 run 2): the next bind gets a fresh copy
+        D3D11_MAPPED_SUBRESOURCE bm;
+        context->Map(bigCb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &bm);
+        float* f = static_cast<float*>(bm.pData);
+        std::memset(f, 0, 512 * 1024);
+        const float vsRange[4][4] = {{0, 0, 1, 1}, {1, -0.5f, 0.5f, 7}, {1, 1, 1, 1}, {W, H, 1, 1}};
+        const float psRange[3][4] = {{1, 1, 1, 1}, {W, H, 1, 1}, {5, 6, 7, 8}};
+        const float shadowPair[2][4] = {{1, 1, 1, 1}, {4096, 4096, 1, 1}};
+        std::memcpy(f + 64 * 4, vsRange, sizeof(vsRange));
+        std::memcpy(f + 80 * 4, psRange, sizeof(psRange));
+        std::memcpy(f + 96 * 4, shadowPair, sizeof(shadowPair));
+        context->Unmap(bigCb.Get(), 0);
+        context->PSSetConstantBuffers1(0, 1, bigs, &bigPs, &num);
+    }
+    {  // what the copy holds: the eye's pair rewritten, the shadow map's pair as it was
+        ID3D11Buffer* copy = nullptr;
+        UINT cf = 0, cn = 0;
+        context->PSGetConstantBuffers1(0, 1, &copy, &cf, &cn);
+        const D3D11_BUFFER_DESC rd = {512 * 1024, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
+        ComPtr<ID3D11Buffer> readBack;
+        device->CreateBuffer(&rd, nullptr, &readBack);
+        if (copy) {
+            context->CopyResource(readBack.Get(), copy);
+            copy->Release();
+        }
+        D3D11_MAPPED_SUBRESOURCE rm;
+        if (SUCCEEDED(context->Map(readBack.Get(), 0, D3D11_MAP_READ, 0, &rm))) {
+            const float* v = static_cast<const float*>(rm.pData);
+            check(close_to(v[80 * 4], 0.5f) && close_to(v[80 * 4 + 2], 2) && close_to(v[81 * 4], W / 2.0f) &&
+                      v[96 * 4] == 1 && v[97 * 4] == 4096 && v[65 * 4 + 3] == 7,
+                  "the copy: the eye's pairs rewritten, a shadow map's pair and other values as the game wrote them");
+            check(v[82 * 4] == 5 && v[82 * 4 + 3] == 8, "a buffer the game wrote again mid-frame is copied again at its next bind");
+            context->Unmap(readBack.Get(), 0);
+        } else {
+            check(false, "the copy read back");
+        }
+    }
+    ats::corner_acquired(XR_NULL_HANDLE, 0, &fake_enumerate);  // the game's image for this frame
+    ats::corner_acquired(XR_NULL_HANDLE, 1, &fake_enumerate);  // and its next one, before releasing this (as ATS does)
+    ats::corner_releasing(XR_NULL_HANDLE);                      // hands back image 0: scaled before the runtime reads it
+    {
+        D3D11_TEXTURE2D_DESC dsd;
+        decoyTex->GetDesc(&dsd);
+        dsd.Usage = D3D11_USAGE_STAGING;
+        dsd.BindFlags = 0;
+        dsd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> ds;
+        device->CreateTexture2D(&dsd, nullptr, &ds);
+        context->CopyResource(ds.Get(), decoyTex.Get());
+        D3D11_MAPPED_SUBRESOURCE dm;
+        if (SUCCEEDED(context->Map(ds.Get(), 0, D3D11_MAP_READ, 0, &dm))) {
+            check(static_cast<const float*>(dm.pData)[0] == -2,
+                  "with two images held, the release scales the oldest (the one drawn), not the next");
+            context->Unmap(ds.Get(), 0);
+        } else {
+            check(false, "the decoy read back");
+        }
+    }
+    const XrFrameEndInfo* sent2 = ats::corner_frame_end(&info, &fake_enumerate);
+    const auto* sentProj2 = reinterpret_cast<const XrCompositionLayerProjection*>(sent2->layers[0]);
+    check(sentProj2->views[0].subImage.imageRect.extent.width == static_cast<int32_t>(W) &&
+              sentProj2->views[0].subImage.imageRect.extent.height == static_cast<int32_t>(H),
+          "the image scaled back at its release: submitted whole");
+    context->CopyResource(staging.Get(), outTex.Get());
+    if (SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+        const auto px3 = [&](UINT x, UINT y) { return reinterpret_cast<const float*>(static_cast<const char*>(m.pData) + y * m.RowPitch) + x * 4; };
+        const float* farPx = px3(W - 1, H - 1);
+        const float* mid = px3(W / 2, H / 2);
+        std::printf("     scaled back: pixel %u,%u: %.4f %.4f; %u,%u: %.4f %.4f\n", W - 1, H - 1, farPx[0], farPx[1], W / 2, H / 2,
+                    mid[0], mid[1]);
+        check(close_to(farPx[0], 1, 3e-3f) && close_to(farPx[1], 1, 3e-3f) && close_to(mid[0], 0.5f, 3e-3f) && close_to(mid[1], 0.5f, 3e-3f),
+              "the corner scaled back over the whole image (its far corner the corner's, its middle the corner's middle)");
+        context->Unmap(staging.Get(), 0);
+    } else {
+        check(false, "the scaled image read back");
+    }
+    {  // the game's state as it was before xrEndFrame
+        ID3D11RenderTargetView* boundRt = nullptr;
+        context->OMGetRenderTargets(1, &boundRt, nullptr);
+        ID3D11VertexShader* v = nullptr;
+        context->VSGetShader(&v, nullptr, nullptr);
+        check(boundRt == out.Get() && v == vs.Get(), "the game's targets and shaders bound again after the scaling (at the release)");
+        if (boundRt)
+            boundRt->Release();
+        if (v)
+            v->Release();
+    }
+    context->OMSetRenderTargets(1, outs, nullptr);  // frame 3's first bind: the corner ends
+    boundPs = nullptr;
+    context->PSGetConstantBuffers1(0, 1, &boundPs, &bpFirst, &bpNum);
+    check(boundPs == bigCb.Get() && bpFirst == bigPs, "after the frame, the game's own buffer is bound again");
+    if (boundPs)
+        boundPs->Release();
+    check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
+    ats::corner_session_end();
+}
+
+}  // namespace
+
+int SIM_QVFR_TEST_MAIN() {
+    rules_checks();
+    warp_checks();
+    std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+    return failures ? 1 : 0;
+}

@@ -30,6 +30,11 @@ enum Entry : int {
     kDrawIndexedInstancedIndirect,
     kDrawInstancedIndirect,
     kExecuteCommandList,
+    kRSSetViewports,
+    kRSSetScissorRects,
+    kVSSetConstantBuffers1,
+    kPSSetConstantBuffers1,
+    kUnmap,
     kEntries
 };
 
@@ -43,6 +48,19 @@ struct Observers {
     // ExecuteCommandList, before it runs (d3d11 replays the list through the context's own functions: those calls are
     // seen too, inside it).
     void (*execute)(ID3D11DeviceContext* context, ID3D11CommandList* list) = nullptr;
+    // After any draw went on (the same arguments as `draw`): to put back what the observer changed before it.
+    // `start`: Draw's StartVertexLocation (0 for the other draws).
+    void (*draw_after)(ID3D11DeviceContext* context, Entry entry, UINT count, UINT instances, UINT start) = nullptr;
+    // RSSetViewports / RSSetScissorRects, as filters: the game's array in `in`; return true to pass `out` (room for
+    // D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE entries, `count` of them used) on instead.
+    bool (*viewports)(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* in, D3D11_VIEWPORT* out) = nullptr;
+    bool (*scissors)(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* in, D3D11_RECT* out) = nullptr;
+    // ID3D11DeviceContext1::VSSetConstantBuffers1 / PSSetConstantBuffers1 (`pixel`), as a filter on the buffers alone
+    // (the ranges pass on as the game gave them): return true to pass `out` (`count` entries) instead.
+    bool (*constant_buffers)(ID3D11DeviceContext* context, bool pixel, UINT start, UINT count, ID3D11Buffer* const* in,
+                             ID3D11Buffer** out) = nullptr;
+    // Unmap, before it goes on: the resource the game just wrote.
+    void (*unmap)(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) = nullptr;
 };
 
 struct Stats {
@@ -62,5 +80,10 @@ void rescan();
 void uninstall();
 Stats stats();
 bool installed();
+// Our own calls on the game's thread outside an observer (at xrEndFrame): they pass straight through while one lives.
+struct Bypass {
+    Bypass();
+    ~Bypass();
+};
 
 }  // namespace simqvfr::context_hooks

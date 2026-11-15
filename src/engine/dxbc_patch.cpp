@@ -1099,4 +1099,30 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
     return r;
 }
 
+uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot) {
+    std::vector<Chunk> chunks;
+    if (!read_chunks(data, size, chunks))
+        return 0;
+    for (const Chunk& c : chunks) {
+        if (c.fourcc != fourcc("SHDR") && c.fourcc != fourcc("SHEX"))
+            continue;
+        const size_t words = c.data.size() / 4;
+        if (words < 2)
+            return 0;
+        std::vector<uint32_t> t(words);
+        std::memcpy(t.data(), c.data.data(), words * 4);
+        for (size_t i = 2; i < words;) {
+            const uint32_t n = length_of(&t[i]);
+            if (!n || i + n > words)
+                break;
+            // dcl_constantbuffer cbN[size]: the operand (a constant buffer, two immediate indices), N, size.
+            if (opcode_of(t[i]) == kOpDclConstantBuffer && n >= 4 && ((t[i + 1] >> 12) & 0xff) == kConstantBuffer &&
+                ((t[i + 1] >> 20) & 3) == 2 && t[i + 2] == slot)
+                return t[i + 3];
+            i += n;
+        }
+    }
+    return 0;
+}
+
 }  // namespace simqvfr::dxbc

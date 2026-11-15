@@ -294,6 +294,9 @@ void* deviceCreation[2] = {};          // D3D11CreateDevice, D3D11CreateDeviceAn
 HRESULT STDMETHODCALLTYPE create_vertex_shader(ID3D11Device* device, const void* code, SIZE_T size,
                                                ID3D11ClassLinkage* linkage, ID3D11VertexShader** shader) {
     const HRESULT hr = originalCreateVertexShader(device, code, size, linkage, shader);
+    if (SUCCEEDED(hr) && code && size && shader && *shader)
+        if (const UINT vectors = dxbc::constant_buffer_vectors(static_cast<const uint8_t*>(code), size, 0))
+            (*shader)->SetPrivateData(kCb0VectorsGuid, sizeof(vectors), &vectors);
     if (SUCCEEDED(hr) && code && size && !inProbe)
         examine(device, static_cast<const uint8_t*>(code), size, shader ? *shader : nullptr);
     uint32_t checksum[4];
@@ -377,6 +380,9 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
     const HRESULT hr = originalCreatePixelShader(device, code, size, linkage, shader);
     if (FAILED(hr) || !shader || !*shader)
         return hr;
+    if (code && size)
+        if (const UINT vectors = dxbc::constant_buffer_vectors(static_cast<const uint8_t*>(code), size, 0))
+            (*shader)->SetPrivateData(kCb0VectorsGuid, sizeof(vectors), &vectors);
     const YebisRole role = noRoles ? YebisRole::none : yebis_role(code, size);
     if (role != YebisRole::none) {
         const UINT value = static_cast<UINT>(role);
