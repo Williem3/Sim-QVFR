@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "../../dev_build.h"
 #include "../../log.h"
 #include "../identity_adapter.h"
 #include "../lmu/mvr_probe.h"
@@ -21,15 +22,17 @@ namespace {
 //   - scs_shader_probe: every vertex shader given its twins (NVIDIA's two views and the instanced one) at creation.
 //     LMU's probe for now (its log lines say "lmu mvr probe"); it moves to src/engine with the rest of LMU's multi-view;
 //   - the corner and the focus view (scs_corner / scs_focus, percent);
-//   - scs_pass_probe: log-only, the eye passes found from the render-target binds (pass_probe.h); off while the corner
-//     runs (one set of context hooks).
+//   - scs_pass_probe: log-only, the eye passes found from the render-target binds (pass_probe.h); dev builds only, off
+//     while the corner runs (one set of context hooks).
 class ScsAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     explicit ScsAdapter(const simqvfr::games::GameInfo* game) : IdentityAdapter(game) {}
 
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
         IdentityAdapter::instance_created(ini, mode);
-        passProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"scs_pass_probe", 1, ini) != 0;
+        // The pass probe only logs: a diagnostic, in development builds alone (dev_build.h).
+        passProbe_ = simqvfr::kDevBuild && analysis() && ini &&
+                     GetPrivateProfileIntW(L"experiment", L"scs_pass_probe", 1, ini) != 0;
         shaderProbe_ = analysis() && ini && GetPrivateProfileIntW(L"experiment", L"scs_shader_probe", 1, ini) != 0;
         // QVFR at the D3D11 level: on by default, with the launcher's QVFR switch ([experiment] mode other than off) and
         // [experiment] scs_qvfr (default 1). The focus view's scene draws by NVIDIA's multi-view rendering where the

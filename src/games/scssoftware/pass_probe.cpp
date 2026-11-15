@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <mutex>
 
 #include "../../engine/context_hooks.h"
 #include "../../log.h"
@@ -257,7 +258,19 @@ void on_execute(ID3D11DeviceContext*, ID3D11CommandList*) { ++g.lists; }
 
 }  // namespace
 
-bool pass_probe_install(ID3D11Device* device) {
+namespace {
+
+// Session start and end come on the game's main thread while its render thread draws on the same immediate context
+// (not thread-safe); the hooks' install issues commands on it. So both are requests, done at the next xrEndFrame by the
+// thread that ends the frames (pass_probe_frame_end), as the corner does (corner.cpp, service_lifecycle).
+struct Lifecycle {
+    std::mutex mutex;
+    bool end = false, install = false;
+    ComPtr<ID3D11Device> device;
+} lifecycle;
+std::atomic<bool> lifecyclePending{false};
+
+bool install_now(ID3D11Device* device) {
     if (!device || g.context)
         return g.context != nullptr;
     LARGE_INTEGER f;
@@ -284,18 +297,59 @@ bool pass_probe_install(ID3D11Device* device) {
     return true;
 }
 
+void end_now() {
+    if (const std::string last = g.summary.line(); !last.empty())
+        simqvfr::logf("scs pass probe: at session end: %s", last.c_str());
+    g.summary = PassSummary{};
+    g.context = nullptr;
+    g.thread = 0;  // the next session's first G-buffer bind names its thread again
+}
+
+}  // namespace
+
+bool pass_probe_install(ID3D11Device* device) {
+    if (!device)
+        return false;
+    std::lock_guard lock(lifecycle.mutex);
+    lifecycle.install = true;
+    lifecycle.device = device;
+    lifecyclePending.store(true, std::memory_order_release);
+    return true;
+}
+
 void pass_probe_frame_end() {
+    if (lifecyclePending.load(std::memory_order_acquire)) {
+        bool end = false, install = false;
+        ComPtr<ID3D11Device> device;
+        {
+            std::lock_guard lock(lifecycle.mutex);
+            end = lifecycle.end;
+            install = lifecycle.install;
+            device = std::move(lifecycle.device);
+            lifecycle.end = lifecycle.install = false;
+            lifecyclePending.store(false, std::memory_order_release);
+        }
+        if (end && g.context)
+            end_now();
+        if (install && device)
+            install_now(device.Get());
+        return;  // this frame was drawn before the hooks were in: not counted
+    }
     if (g.context)
         g.endFrames.fetch_add(1, std::memory_order_release);
 }
 
+// The main thread, at xrDestroySession: observing stops at once (the hooks pass new calls straight on), the rest at the
+// next xrEndFrame. An install not done yet goes with its session.
 void pass_probe_session_end() {
+    std::lock_guard lock(lifecycle.mutex);
+    lifecycle.install = false;
+    lifecycle.device.Reset();
     if (!g.context)
         return;
     simqvfr::context_hooks::uninstall();
-    if (const std::string last = g.summary.line(); !last.empty())
-        simqvfr::logf("scs pass probe: at session end: %s", last.c_str());
-    g.context = nullptr;
+    lifecycle.end = true;
+    lifecyclePending.store(true, std::memory_order_release);
 }
 
 }  // namespace scs

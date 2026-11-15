@@ -83,10 +83,13 @@ struct PassSummary {
     std::string line() const;  // "" with no frames
 };
 
-// xrCreateSession with the game's D3D11 device: the immediate context observed (engine/context_hooks.h). False: off.
+// xrCreateSession with the game's D3D11 device: the immediate context observed (engine/context_hooks.h), from the
+// session's first xrEndFrame (the install issues commands on the context: done by the thread that ends the frames).
+// False: no device.
 bool pass_probe_install(ID3D11Device* device);
-// Every xrEndFrame (any thread).
+// Every xrEndFrame, on the thread that ends the frames: a session start or end asked for is done here first.
 void pass_probe_frame_end();
+// xrDestroySession (the game's main thread): observing stops at once, the rest at the next xrEndFrame.
 void pass_probe_session_end();
 
 }  // namespace scs
