@@ -32,7 +32,19 @@ struct OsdFrame {
     double cpuMs = -1;   // running, ms (-1: unknown); without workMs, the render thread's CPU over the interval
     double workMs = -1;  // xrWaitFrame's return to xrEndFrame, wall time
     double waitMs = -1;  // in xrWaitFrame
+    // The display refreshes from the previous frame's display time to this one's (osd_refreshes_between): 1 shown on
+    // its refresh, 2 or more the runtime showed a frame again in between. 0: unknown.
+    int refreshes = 0;
 };
+
+// The display refreshes between two frames' display times (xrEndFrame's displayTime, ns) at the display's period
+// (ns): their gap in whole periods. What the headset showed, which the CPU's interval between xrEndFrame calls
+// is not: the runtime takes a frame handed in a little late for its refresh all the same (the next one comes
+// early). 0: unknown (no previous frame, no period, or the same display time again).
+int osd_refreshes_between(int64_t previousNs, int64_t displayNs, int64_t periodNs);
+
+// A frame's refreshes: from the display times when known, else its interval in whole budgets (at least 1).
+int osd_refreshes(const OsdFrame& frame, double budgetMs);
 
 // Frame generation as Cheeky reports it (its snapshot's "fg").
 enum class OsdFg { Off, Starting, On };
@@ -92,7 +104,7 @@ struct OsdSummary {
     double shownFps = 0;          // frames the headset shows: with frame generation, generated ones too
     double refreshHz = 0;         // 0: unknown
     double budgetMs = 0;        // 0: unknown
-    double latePercent = 0;     // frames over the budget by more than 5% (each costs frame rate)
+    double missedPercent = 0;   // frames that missed a refresh (osd_refreshes 2 or more: each costs frame rate)
     double jitterMs = 0;        // standard deviation of the frame times
     double frameP90Ms = 0;      // the 90th percentile frame time
     double low1Fps = 0;         // the 1% low: 1000 / the 99th percentile frame time
@@ -139,11 +151,12 @@ OsdRow osd_badge(const OsdInput& input);
 std::wstring osd_clock(int hour, int minute);
 
 // RGBA8 pixels (sRGB, straight alpha), kOsdWidth x kOsdHeight: a rounded translucent card with the
-// `tiles` across the top, a strip graph of the recent frame times (`history`, ms, oldest first)
-// against the budget, then `rows` as a grid of three columns; `badge` (osd_badge) at the right of the CPU tile's label;
+// `tiles` across the top, a strip graph of the recent frames (`history`, oldest first: each bar its frame time against
+// the budget, coloured by its refreshes: green shown on its refresh, yellow one missed, red more), then `rows` as a
+// grid of three columns; `badge` (osd_badge) at the right of the CPU tile's label;
 // `clock` (osd_clock, empty: none) at the graph's right end, which then leaves room for it.
 inline constexpr int kOsdWidth = 1024, kOsdHeight = 496;
-std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
+std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<OsdFrame>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
                                      const OsdRow& badge = {}, const std::wstring& clock = {});
 

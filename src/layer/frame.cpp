@@ -29,7 +29,7 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
             pacing.interval.push_back(static_cast<float>((now - pacing.lastEnd) * cpu.msPerTick));
         pacing.lastEnd = now;
     }
-    osd_measure();   // before the layer's own work in the frame
+    osd_measure(info ? info->displayTime : 0);  // before the layer's own work in the frame
     cheeky_frame();  // Cheeky's frame callback, after ACE's frame is recorded
     XrResult r;
     if (!cpu.realEndFrame) {

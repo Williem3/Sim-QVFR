@@ -77,7 +77,7 @@ uint8_t card_alpha(int x, int y) {
 
 }  // namespace
 
-std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<double>& history,
+std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<OsdFrame>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
                                      const OsdRow& badge, const std::wstring& clock) {
     std::vector<uint32_t> out(static_cast<size_t>(kOsdWidth) * kOsdHeight, 0);
@@ -138,8 +138,9 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
              DT_CENTER);
     }
 
-    // Frame times, newest on the right: one bar per frame, coloured by how it met the budget, and the
-    // budget as a line. The scale is two budgets (or the slowest frame).
+    // Frame times, newest on the right: one bar per frame, its height the frame time, its colour what the headset
+    // showed (green on its refresh, yellow one refresh missed, red more: osd_refreshes), and the budget as a line.
+    // The scale is two budgets (or the slowest frame).
     // The clock, if any, at its right end in the cells' value font, grey; the graph stops short of it.
     const int graphTop = tileTop + 142, graphBottom = graphTop + 60, graphLeft = kMargin;
     int graphRight = kOsdWidth - kMargin;
@@ -153,16 +154,18 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
     }
     rounded(dc, graphLeft, graphTop, graphRight, graphBottom, 14, kTrack);
     if (!history.empty()) {
-        const double slowest = *std::max_element(history.begin(), history.end());
+        double slowest = 0;
+        for (const OsdFrame& f : history)
+            slowest = std::max(slowest, f.intervalMs);
         const double scale = std::max(summary.budgetMs > 0 ? 2 * summary.budgetMs : 0.0, slowest);
         const int inner = graphRight - graphLeft - 16, height = graphBottom - graphTop - 12;
         const size_t n = history.size();
         for (size_t i = 0; i < n && scale > 0; ++i) {
             const int left = graphLeft + 8 + static_cast<int>(inner * i / n);
             const int right = std::max(left + 1, graphLeft + 8 + static_cast<int>(inner * (i + 1) / n) - 1);
-            const int h = std::max(2, static_cast<int>(height * std::min(1.0, history[i] / scale)));
-            const double ratio = summary.budgetMs > 0 ? history[i] / summary.budgetMs : 1;
-            const uint32_t colour = ratio <= 1.05 ? kGreen : ratio <= 1.5 ? kYellow : kRed;
+            const int h = std::max(2, static_cast<int>(height * std::min(1.0, history[i].intervalMs / scale)));
+            const int refreshes = osd_refreshes(history[i], summary.budgetMs);
+            const uint32_t colour = refreshes <= 1 ? kGreen : refreshes == 2 ? kYellow : kRed;
             fill(dc, left, graphBottom - 6 - h, right, graphBottom - 6, mix(kTrack, colour, 0.8));
         }
         if (summary.budgetMs > 0 && scale > 0) {

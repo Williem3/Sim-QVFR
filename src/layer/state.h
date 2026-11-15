@@ -700,8 +700,9 @@ struct Osd {
     int64_t tscStartQpc = 0;
     uint64_t tscStart = 0;
     double cyclesPerMs = 0;  // the TSC's rate, measured against QPC
+    XrTime lastDisplay = 0;        // the previous frame's display time (xrEndFrame's displayTime)
     std::vector<OsdFrame> frames;  // since the last draw
-    std::deque<double> history;    // the graph: the last kOsdHistory frame times
+    std::deque<OsdFrame> history;  // the graph: the last kOsdHistory frames
     int64_t nextDraw = 0;
     uint64_t gazeQueries = 0, gazeTracked = 0;  // at the last draw
     uint64_t runtimeGazeMoves = 0;  // nativeQuad.gazeMoves at the last draw

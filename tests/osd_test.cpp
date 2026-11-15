@@ -63,7 +63,7 @@ void save_card(const wchar_t* path, const std::vector<uint32_t>& pixels) {
 int SIM_QVFR_TEST_MAIN() {
     {
         const OsdSummary s = osd_summary(steady(11.111, 5, 7));
-        check(close_to(s.fps, 90, 0.1) && close_to(s.budgetMs, 11.111) && s.latePercent == 0 && close_to(s.jitterMs, 0),
+        check(close_to(s.fps, 90, 0.1) && close_to(s.budgetMs, 11.111) && s.missedPercent == 0 && close_to(s.jitterMs, 0),
               "a steady 90 Hz frame: 90 fps, on budget, smooth");
         check(close_to(s.cpuHeadroom, 55, 0.1) && close_to(s.gpuHeadroom, 37, 0.1) && s.bound == OsdBound::None,
               "headroom is the budget left; neither processor limits");
@@ -87,7 +87,7 @@ int SIM_QVFR_TEST_MAIN() {
         in.fg = OsdFg::On;
         in.fgMultiplier = 2;
         const OsdSummary s = osd_summary(in);
-        check(close_to(s.budgetMs, 22.222) && s.latePercent == 0 && s.bound == OsdBound::None,
+        check(close_to(s.budgetMs, 22.222) && s.missedPercent == 0 && s.bound == OsdBound::None,
               "frame generation 2x: ACE's budget is two refresh periods");
     }
     {
@@ -97,9 +97,55 @@ int SIM_QVFR_TEST_MAIN() {
         const OsdSummary s = osd_summary(in);
         const std::vector<OsdRow> rows = osd_rows(in, s);
         const OsdRow* pacing = row(rows, L"Pacing");
-        check(close_to(s.latePercent, 100.0 * 5 / 45, 0.1) && pacing && pacing->tone == OsdTone::Bad &&
-                  pacing->value.find(L"late") != std::wstring::npos,
-              "skipped frames show as late in the pacing row");
+        check(close_to(s.missedPercent, 100.0 * 5 / 45, 0.1) && pacing && pacing->tone == OsdTone::Bad &&
+                  pacing->value.find(L"missed") != std::wstring::npos,
+              "skipped frames show as missed in the pacing row");
+    }
+    {
+        // A locked 90 as the CPU sees it: xrEndFrame's interval swings 1 ms either side of the period (a long one
+        // followed by a short one); the runtime showed every frame on its refresh. All green, smooth.
+        OsdInput in = steady(11.111, 5, 7);
+        for (size_t i = 0; i < in.frames.size(); ++i) {
+            in.frames[i].intervalMs = i % 2 ? 10.1 : 12.1;
+            in.frames[i].refreshes = 1;
+        }
+        const OsdSummary s = osd_summary(in);
+        const std::vector<OsdRow> rows = osd_rows(in, s);
+        const OsdRow* pacing = row(rows, L"Pacing");
+        const OsdRow* p90 = row(rows, L"Frame p90 · 1% low");
+        check(s.missedPercent == 0 && pacing && pacing->tone == OsdTone::Good && pacing->value.find(L"Smooth") == 0 &&
+                  p90 && p90->tone == OsdTone::Good,
+              "a locked 90 with the CPU's interval 9% over every other frame: smooth, p90 green");
+        // Without the display times the interval in whole budgets says the same.
+        for (OsdFrame& f : in.frames)
+            f.refreshes = 0;
+        check(osd_summary(in).missedPercent == 0, "and without display times: 12.1 ms is still one refresh");
+    }
+    {
+        // The display times say what the interval cannot: a frame handed in on time for a refresh the runtime had
+        // already passed (a 2-period step) is missed, whatever its interval.
+        OsdInput in = steady(11.111, 5, 7);
+        for (OsdFrame& f : in.frames)
+            f.refreshes = 1;
+        in.frames[10].refreshes = 2;
+        in.frames[20].refreshes = 3;
+        const OsdSummary s = osd_summary(in);
+        const OsdRow* pacing = row(osd_rows(in, s), L"Pacing");
+        check(close_to(s.missedPercent, 100.0 * 2 / 45, 0.1) && pacing && pacing->tone == OsdTone::Warn,
+              "two of 45 frames missed a refresh (by the display times): inconsistent, yellow");
+    }
+    {
+        const int64_t period = 11'111'111, t = 1'000'000'000'000;
+        check(osd_refreshes_between(t, t + period, period) == 1 && osd_refreshes_between(t, t + 2 * period, period) == 2 &&
+                  osd_refreshes_between(t, t + 3 * period + 300'000, period) == 3 &&
+                  osd_refreshes_between(t, t + period - 200'000, period) == 1,
+              "display-time steps in whole periods, a prediction's drift aside");
+        check(osd_refreshes_between(0, t, period) == 0 && osd_refreshes_between(t, t, period) == 0 &&
+                  osd_refreshes_between(t, t + period, 0) == 0,
+              "no previous frame, the same display time again, or no period: unknown");
+        check(osd_refreshes(OsdFrame{12.1}, 11.111) == 1 && osd_refreshes(OsdFrame{22.4}, 11.111) == 2 &&
+                  osd_refreshes(OsdFrame{30, -1, -1, -1, 1}, 11.111) == 1,
+              "a frame's refreshes: its interval in whole budgets, the display times first when known");
     }
     {
         const OsdSummary s = osd_summary(steady(14, 3, 6));
@@ -276,8 +322,8 @@ int SIM_QVFR_TEST_MAIN() {
             in.frames[i * 10].intervalMs = 23.5;  // 6% over
         in.frames[50].intervalMs = 40;
         const OsdSummary s = osd_summary(in);
-        check(close_to(s.latePercent, 10) && close_to(s.frameP90Ms, 23.5) && close_to(s.low1Fps, 1000 / 40.0, 0.01),
-              "frames 6% over count as late; p90 23.5 ms; the 1% low from the slowest frame");
+        check(close_to(s.missedPercent, 1) && close_to(s.frameP90Ms, 23.5) && close_to(s.low1Fps, 1000 / 40.0, 0.01),
+              "frames 6% over still make their refresh, the 40 ms one missed one; p90 23.5 ms; the 1% low from the slowest");
     }
     {
         const std::wstring ini = (std::filesystem::temp_directory_path() / L"simqvfr_osd_test.ini").wstring();
@@ -303,7 +349,7 @@ int SIM_QVFR_TEST_MAIN() {
         full.cpuBusiestName = L"GameThread";
         full.multiView = OsdMultiView::Smvr;
         const OsdSummary s = osd_summary(full);
-        std::vector<double> history(150, 24.6);
+        std::vector<OsdFrame> history(150, OsdFrame{24.6});
         const std::vector<uint32_t> pixels =
             draw_osd_panel(s, history, osd_tiles(full, s), osd_rows(full, s), osd_badge(full), osd_clock(21, 47));
         save_card(path, pixels);
@@ -311,8 +357,8 @@ int SIM_QVFR_TEST_MAIN() {
     {
         OsdInput in = steady(11.111, 5, 7);
         const OsdSummary s = osd_summary(in);
-        std::vector<double> history(120, 11.1);
-        history[60] = 30;
+        std::vector<OsdFrame> history(120, OsdFrame{11.1});
+        history[60].intervalMs = 30;
         const std::vector<uint32_t> pixels = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s));
         const auto alpha = [&](int x, int y) { return pixels[static_cast<size_t>(y) * kOsdWidth + x] >> 24; };
         bool text = false;
@@ -355,7 +401,7 @@ int SIM_QVFR_TEST_MAIN() {
         check(withFsr.value == L"SMVR + FSR4" && withFsr3.value == L"MVR + FSR3.1",
               "the multi-view badge names AMD FSR's version where it runs instead (SMVR + FSR4, MVR + FSR3.1)");
         const OsdSummary s = osd_summary(in);
-        const std::vector<double> history(120, 11.1);
+        const std::vector<OsdFrame> history(120, OsdFrame{11.1});
         const std::vector<uint32_t> plain = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), none);
         const std::vector<uint32_t> with = draw_osd_panel(s, history, osd_tiles(in, s), osd_rows(in, s), fallback);
         int inside = 0, outside = 0;

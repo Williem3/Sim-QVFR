@@ -78,9 +78,15 @@ void osd_wait_returned(double waitMs) {
     osd.waitMs = waitMs;
 }
 
-void osd_measure() {
+void osd_measure(XrTime displayTime) {
     if (!osd.placement.enabled && !optimize.optimizer.running())
         return;
+    // The refreshes since the previous frame, from the display times the runtime gave (the period: the steady one,
+    // pacing_waited). Not with two loops: their two frames share a display time, at half the period.
+    const XrTime lastDisplay = std::exchange(osd.lastDisplay, displayTime);
+    const int refreshes = experiment.twoLoops ? 0
+                                              : osd_refreshes_between(lastDisplay, displayTime,
+                                                                      osd.periodNs.load(std::memory_order_relaxed));
     const int64_t now = qpc_now();
     const DWORD thread = GetCurrentThreadId();
     ULONG64 cycles = 0;
@@ -95,6 +101,7 @@ void osd_measure() {
     if (osd.lastEnd) {
         OsdFrame frame;
         frame.intervalMs = static_cast<double>(now - osd.lastEnd) * 1000.0 / static_cast<double>(qpc_ms(1000));
+        frame.refreshes = refreshes;
         if (thread == osd.waitThread && osd.waitReturnQpc > osd.lastEnd && osd.cyclesPerMs > 0) {
             // The render thread's work for the frame: from xrWaitFrame's return, its wall time and what of it ran.
             frame.workMs = static_cast<double>(now - osd.waitReturnQpc) * 1000.0 / static_cast<double>(qpc_ms(1000));
@@ -105,7 +112,7 @@ void osd_measure() {
         }
         if (osd.placement.enabled) {
             osd.frames.push_back(frame);
-            osd.history.push_back(frame.intervalMs);
+            osd.history.push_back(frame);
             if (osd.history.size() > kOsdHistory)
                 osd.history.pop_front();
         }
@@ -144,6 +151,7 @@ void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& 
         osd.frames.clear();
         osd.history.clear();
         osd.lastEnd = 0;
+        osd.lastDisplay = 0;
         osd.nextDraw = 0;
     }
     osd.placement = placement;
@@ -413,7 +421,7 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
         SYSTEMTIME local{};
         GetLocalTime(&local);  // the card's clock (redrawn every kOsdDrawMs: the minute turns over in time)
         osd.drawing = std::async(std::launch::async, [in = std::move(in), summary = osd.shown,
-                                                      history = std::vector<double>(osd.history.begin(), osd.history.end()),
+                                                      history = std::vector<OsdFrame>(osd.history.begin(), osd.history.end()),
                                                       clock = osd_clock(local.wHour, local.wMinute)] {
             return draw_osd_panel(summary, history, osd_tiles(in, summary), osd_rows(in, summary), osd_badge(in), clock);
         });
@@ -457,6 +465,7 @@ void osd_shutdown() {
     osd.frames.clear();
     osd.history.clear();
     osd.lastEnd = 0;
+    osd.lastDisplay = 0;
 }
 
 }  // namespace simqvfr::layer

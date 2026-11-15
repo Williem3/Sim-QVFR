@@ -96,6 +96,18 @@ OsdCheeky osd_cheeky(const std::string& json) {
     return c;
 }
 
+int osd_refreshes_between(int64_t previousNs, int64_t displayNs, int64_t periodNs) {
+    if (previousNs <= 0 || periodNs <= 0 || displayNs <= previousNs)
+        return 0;
+    return static_cast<int>(std::max<long long>(1, std::llround(static_cast<double>(displayNs - previousNs) / periodNs)));
+}
+
+int osd_refreshes(const OsdFrame& f, double budgetMs) {
+    if (f.refreshes > 0)
+        return f.refreshes;
+    return budgetMs > 0 ? static_cast<int>(std::max<long>(1, std::lround(f.intervalMs / budgetMs))) : 1;
+}
+
 OsdSummary osd_summary(const OsdInput& in) {
     OsdSummary s;
     double total = 0, cpuTotal = 0, workTotal = 0, busyTotal = 0, waitTotal = 0;
@@ -141,11 +153,13 @@ OsdSummary osd_summary(const OsdInput& in) {
     s.budgetMs = in.refreshMs > 0 ? std::max(in.periodMs, in.refreshMs * multiplier)
                  : in.periodMs > 0 ? in.periodMs * multiplier
                                    : 0;
+    // Missed: the headset showed a frame again before this one (from the display times; the interval alone when they
+    // are unknown). Not the interval past the budget: a frame handed in a little late still made its refresh.
     if (s.budgetMs > 0 && n) {
-        size_t late = 0;
+        size_t missed = 0;
         for (const OsdFrame& f : in.frames)
-            late += f.intervalMs > 1.05 * s.budgetMs;
-        s.latePercent = 100.0 * static_cast<double>(late) / static_cast<double>(n);
+            missed += osd_refreshes(f, s.budgetMs) >= 2;
+        s.missedPercent = 100.0 * static_cast<double>(missed) / static_cast<double>(n);
     }
     s.refreshHz = refreshMs > 0 ? 1000.0 / refreshMs : 0;
     s.shownFps = in.fg == OsdFg::On && in.fgOutputFps > 0 ? in.fgOutputFps : s.fps;
@@ -250,9 +264,10 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
         if (s.frameMs <= 0 || s.budgetMs <= 0) {
             r.value = L"—";
         } else {
-            r.value = (s.latePercent < 1 ? std::wstring(L"Smooth") : format(L"%.0f%% late", s.latePercent)) +
+            // Green smooth (under 1% of frames missed a refresh), yellow inconsistent (under 5%), red poor.
+            r.value = (s.missedPercent < 1 ? std::wstring(L"Smooth") : format(L"%.0f%% missed", s.missedPercent)) +
                       format(L"  ±%.1f ms", s.jitterMs);
-            r.tone = s.latePercent < 1 ? OsdTone::Good : s.latePercent < 5 ? OsdTone::Warn : OsdTone::Bad;
+            r.tone = s.missedPercent < 1 ? OsdTone::Good : s.missedPercent < 5 ? OsdTone::Warn : OsdTone::Bad;
         }
         rows.push_back(r);
     }
@@ -271,8 +286,12 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     {
         OsdRow r{L"Frame p90 · 1% low"};
         r.value = s.frameP90Ms > 0 ? format(L"%.1f ms · %.0f fps", s.frameP90Ms, s.low1Fps) : L"—";
-        if (s.frameP90Ms > 0 && s.budgetMs > 0)
-            r.tone = s.frameP90Ms <= 1.05 * s.budgetMs ? OsdTone::Good : s.frameP90Ms <= 1.25 * s.budgetMs ? OsdTone::Warn : OsdTone::Bad;
+        // Coloured as a bar: within one refresh green, two yellow, more red (a p90 a little over the budget is the
+        // CPU's jitter, which the runtime absorbs).
+        if (s.frameP90Ms > 0 && s.budgetMs > 0) {
+            const int refreshes = osd_refreshes(OsdFrame{s.frameP90Ms}, s.budgetMs);
+            r.tone = refreshes <= 1 ? OsdTone::Good : refreshes == 2 ? OsdTone::Warn : OsdTone::Bad;
+        }
         rows.push_back(r);
     }
     {

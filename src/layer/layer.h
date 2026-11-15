@@ -155,7 +155,7 @@ void osd_waited(XrDuration period);
 bool frame_generation_on();
 bool osd_shown(OsdSummary& out);
 void osd_wait_returned(double waitMs);
-void osd_measure();
+void osd_measure(XrTime displayTime);  // xrEndFrame's: the frame's display time
 void osd_placement_changed();
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);
