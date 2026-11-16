@@ -94,10 +94,12 @@ height times density. A small area can take a high density cheaply.
 
 How sharp the focus area is, as a share of the headset's own pixel density.
 
-- **100-140%** is the useful range when Sim-QVFR composes the picture (SteamVR and most headsets). Above about 130%
-  it smooths edges more but adds little real detail, as the image is resampled to the headset's own resolution.
-- **With runtime composition** (Pimax and Varjo, **Let the runtime compose** on the Rendering card), a higher density
-  does show more detail, as the headset's software draws the focus area at full resolution.
+- **Above 100%** shows more detail, small text most of all, and costs more GPU time. When Sim-QVFR composes the
+  picture (SteamVR and most headsets), the image it sends to the headset grows with the density, up to the largest
+  image your headset's software accepts; the headset menu's **Output size** caps it (**Native** sends the headset's
+  own size, as older versions did, where a higher density only smooths edges).
+- **With runtime composition** (Pimax and Varjo, automatic), the headset's software draws the focus area at full
+  resolution itself, and **Output size** doesn't apply.
 
 ### 3.4 DLSS (Picture tab, DLSS) — NVIDIA RTX 20 series and newer
 
