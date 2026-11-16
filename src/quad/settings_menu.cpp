@@ -231,6 +231,7 @@ std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
         pages.push_back(MenuPage::OwnDlss);
     if (menu.launch.qvfr && menu.launch.ownDlss && menu.launch.ownNr)
         pages.push_back(MenuPage::OwnNr);
+    pages.push_back(MenuPage::Cpu);  // every game and method
     pages.push_back(MenuPage::Headset);
     return pages;
 }
@@ -247,9 +248,9 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (menu.launch.eyeOff)  // a game with it: first on the page
             items.push_back(MenuItem::EyeOff);
         items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
-                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth,
-                                   MenuItem::CpuIsolateMain,  // every game
-                                   MenuItem::HotkeyFooter});
+                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
+    } else if (page == MenuPage::Cpu) {
+        items.push_back(MenuItem::CpuIsolateMain);
     } else if (page == MenuPage::Fg) {
         items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
                                    MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
@@ -328,6 +329,7 @@ std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
     case MenuPage::OwnDlss: return fsr_runs(menu) ? L"FSR" : L"DLSS";
     case MenuPage::OwnNr: return L"DLSS-NR";
     case MenuPage::Fg: return L"Frame generation";
+    case MenuPage::Cpu: return L"CPU";
     case MenuPage::Headset: return L"Overlay and menu";
     case MenuPage::Shape: return L"Focus shape";
     case MenuPage::Crop: return L"View crop";

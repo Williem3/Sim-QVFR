@@ -61,7 +61,7 @@ enum class MenuItem {
     NrLimit,  // the most a view's model works on (NrSettings::workingLimit), after the focus working size
     // The Overlay and menu page's first line, for a game with it (MenuLaunch::eyeOff): one eye off ([quad] eye_off).
     EyeOff,
-    // The Overlay and menu page, before Hotkeys footer: the main thread's core ([cpu] isolate_main_thread, cpu_isolation.h).
+    // The CPU page: the main thread's core ([cpu] isolate_main_thread, probe/cpu_isolation.h).
     CpuIsolateMain
 };
 
@@ -93,7 +93,7 @@ struct MenuValues {
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys listed under the panel
-    bool cpuIsolateMain = true; // [cpu] isolate_main_thread: the game's main thread gets a core to itself
+    bool cpuIsolateMain = kCpuIsolateMain.def != 0;  // [cpu] isolate_main_thread: the main thread's core to itself
     bool crop = false;        // [crop] enabled (QVFR)
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)
@@ -184,7 +184,7 @@ struct SettingsMenu {
 
 // The menu's pages: the method's settings, the focus area's shape, for QVFR the view crop and the helmet, with
 // Cheeky running Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
-enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, OwnDlss, OwnNr, Headset };
+enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, OwnDlss, OwnNr, Cpu, Headset };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
 

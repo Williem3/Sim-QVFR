@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <map>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -31,7 +32,18 @@ IsolationPlan isolation_plan(const std::vector<LogicalCpu>& cpus) {
         return plan;
     for (int i = 0; i < static_cast<int>(cpus.size()); ++i)
         (cpus[i].core == plan.core ? plan.mainCpus : plan.others).push_back(i);
-    plan.valid = !plan.mainCpus.empty() && !plan.others.empty();
+    std::set<int> cores;
+    for (const LogicalCpu& c : cpus)
+        cores.insert(c.core);
+    if (static_cast<int>(cores.size()) < kIsolationMinCores) {
+        plan.why = "fewer than 6 cores: one taken from the game would cost more than it saves";
+        return plan;
+    }
+    if (plan.mainCpus.size() < 2) {
+        plan.why = "one thread per core (no SMT): no other half of a core to keep free";
+        return plan;
+    }
+    plan.valid = !plan.others.empty();
     return plan;
 }
 
@@ -70,6 +82,8 @@ struct Isolation {
     std::atomic<int> mode{0};
     // The render thread's own from here on.
     bool planned = false, isolated = false, abSide = true;
+    bool refused = false, refusedLogged = false;  // CPU sets someone else set were there: left alone
+    int moves = 0;                                // the render thread changed (logged a few times)
     IsolationPlan plan;
     std::vector<LogicalCpu> cpus;
     std::vector<ULONG> ids;  // CPU set id per cpus entry (0: unknown)
@@ -136,7 +150,8 @@ void plan_once() {
     for (ULONG id : iso.ids)
         iso.plan.valid &= id != 0;
     if (!iso.plan.valid)
-        log_line("cpu isolation: no core to give the main thread (one core, or CPU sets unknown); nothing changes");
+        logf("cpu isolation: off on this PC (%s); nothing changes",
+             iso.plan.why ? iso.plan.why : "its CPU sets are unknown");
 }
 
 std::vector<ULONG> ids_of(const std::vector<int>& indexes) {
@@ -153,30 +168,71 @@ std::string logical_list(const std::vector<int>& indexes) {
     return text;
 }
 
-// Isolated: the process's default the other logical processors, this thread the core's. Shared: neither set.
+// Isolated: the process's default the other logical processors, this (the calling) thread the core's. Shared: ours
+// taken back. CPU sets someone else set (the game, a tool such as Process Lasso) are never replaced or cleared: with
+// any there, isolation stays off. A half-made change is undone, so no core is left unused.
 bool apply(bool on) {
-    bool ok;
-    if (on) {
-        if (!iso.thread) {
-            DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &iso.thread, 0, FALSE,
-                            DUPLICATE_SAME_ACCESS);
-            iso.threadId = GetCurrentThreadId();
-        }
-        const std::vector<ULONG> others = ids_of(iso.plan.others), main = ids_of(iso.plan.mainCpus);
-        ok = SetProcessDefaultCpuSets(GetCurrentProcess(), others.data(), static_cast<ULONG>(others.size())) &&
-             SetThreadSelectedCpuSets(GetCurrentThread(), main.data(), static_cast<ULONG>(main.size()));
-    } else {
-        ok = SetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0) != FALSE;
+    if (!on) {
+        if (!iso.isolated)
+            return true;  // nothing of ours to take back
+        bool ok = SetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0) != FALSE;
         if (iso.thread)
             ok &= SetThreadSelectedCpuSets(iso.thread, nullptr, 0) != FALSE;
+        iso.isolated = false;
+        return ok;
     }
-    iso.isolated = on && ok;
-    return ok;
+    if (iso.isolated && iso.threadId == GetCurrentThreadId())
+        return true;
+    ULONG processSets = 0, threadSets = 0;
+    GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &processSets);
+    GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadSets);
+    // An affinity narrower than every processor (a Process Lasso rule pinning the game to one CCD, the game's own):
+    // the player or the game chose the cores already.
+    DWORD_PTR processMask = 0, systemMask = 0;
+    const bool affinityKnown = GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) != FALSE;
+    const bool narrowAffinity = affinityKnown && processMask != systemMask;
+    iso.refused = processSets || threadSets || narrowAffinity;
+    if (iso.refused) {
+        if (!iso.refusedLogged) {
+            if (narrowAffinity)
+                logf("cpu isolation: left off: the game's affinity is %d of %d logical processors (mask 0x%llx), set by "
+                     "the game or a tool such as Process Lasso; it stays as it is",
+                     static_cast<int>(__popcnt64(processMask)), static_cast<int>(__popcnt64(systemMask)),
+                     static_cast<unsigned long long>(processMask));
+            else
+                logf("cpu isolation: left off: the game already has CPU sets (the process %lu, the main thread %lu), "
+                     "set by the game or a tool such as Process Lasso; they stay as they are",
+                     static_cast<unsigned long>(processSets), static_cast<unsigned long>(threadSets));
+        }
+        iso.refusedLogged = true;
+        return false;
+    }
+    if (iso.threadId != GetCurrentThreadId()) {
+        if (iso.thread)
+            CloseHandle(iso.thread);
+        iso.thread = nullptr;
+        iso.threadId = 0;
+        if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &iso.thread,
+                             THREAD_SET_LIMITED_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0)) {
+            iso.thread = nullptr;
+            return false;
+        }
+        iso.threadId = GetCurrentThreadId();
+    }
+    const std::vector<ULONG> others = ids_of(iso.plan.others), main = ids_of(iso.plan.mainCpus);
+    if (!SetProcessDefaultCpuSets(GetCurrentProcess(), others.data(), static_cast<ULONG>(others.size())))
+        return false;
+    if (!SetThreadSelectedCpuSets(iso.thread, main.data(), static_cast<ULONG>(main.size()))) {
+        SetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0);  // undone: the core free for every thread again
+        return false;
+    }
+    iso.isolated = true;
+    return true;
 }
 
 void log_change(bool on, bool ok, bool ab) {
-    if (ab)
-        return;  // the A/B's sides are in its lines
+    if (ab || (on && iso.refused))
+        return;  // the A/B's sides are in its lines; a refusal has its own
     if (on)
         logf("cpu isolation: %s: the main thread %lu alone on core %d (logical %s); the game's other threads on the other %zu",
              ok ? "on" : "FAILED", static_cast<unsigned long>(GetCurrentThreadId()), iso.plan.core,
@@ -217,8 +273,16 @@ void cpu_isolation_frame() {
     plan_once();
     if (!iso.plan.valid)
         return;
-    if (iso.threadId && GetCurrentThreadId() != iso.threadId)
-        return;  // another thread's xrEndFrame: the core stays the first one's
+    // The frames now end on another thread: our sets taken back from the old one, and given to this one below.
+    if (iso.isolated && GetCurrentThreadId() != iso.threadId) {
+        const DWORD was = iso.threadId;
+        apply(false);
+        if (iso.moves++ < 3)
+            logf("cpu isolation: the frames now end on thread %lu (was %lu): the core goes to it",
+                 static_cast<unsigned long>(GetCurrentThreadId()), static_cast<unsigned long>(was));
+        if (iso.lastMode == 1)
+            iso.lastMode = -1;  // re-applied below, logged as a change
+    }
     if (mode != iso.lastMode) {
         const bool ab = mode > 1;
         if (iso.lastMode > 1 && !ab)
@@ -273,13 +337,14 @@ void cpu_isolation_frame() {
 }
 
 void cpu_isolation_end() {
-    if (iso.isolated || iso.lastMode)
-        apply(false);
+    apply(false);  // only ours, if any
     if (iso.thread)
         CloseHandle(iso.thread);
     iso.thread = nullptr;
     iso.threadId = 0;
     iso.lastMode = 0;
+    iso.refused = iso.refusedLogged = false;
+    iso.moves = 0;
     reset_stats();
 }
 

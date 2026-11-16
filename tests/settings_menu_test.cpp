@@ -27,8 +27,8 @@ int SIM_QVFR_TEST_MAIN() {
               menu_items(false).front() == MenuItem::Width,
           "QVFR lists resolution; Two-loop starts at the focus width");
     check(menu_page_items(m).size() == 12 && menu_page_items(m).front() == MenuItem::Page &&
-              menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 5,
-          "the first page: the page switch, the method's items, then Optimize; five pages without Cheeky (Focus shape; QVFR: View crop, Helmet)");
+              menu_page_items(m).back() == MenuItem::Optimize && menu_pages(m).size() == 6,
+          "the first page: the page switch, the method's items, then Optimize; six pages without Cheeky (Focus shape; QVFR: View crop, Helmet; CPU)");
     {
         SettingsMenu loop;
         loop.launch.qvfr = false;
@@ -268,8 +268,8 @@ int SIM_QVFR_TEST_MAIN() {
     // The Overlay and menu page: the overlay and both panels' places, stepped and written to [osd] and
     // [menu] for the layer to move them, then the hotkeys footer.
     SettingsMenu moving;
-    moving.page = 4;
-    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 10,
+    moving.page = 5;  // after Settings, Shape, Crop, Helmet and CPU
+    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 9,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
     check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
@@ -346,7 +346,7 @@ int SIM_QVFR_TEST_MAIN() {
     {
         SettingsMenu c;
         c.launch = {true, 50, 39, 39};
-        check(menu_pages(c).size() == 5 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
+        check(menu_pages(c).size() == 6 && menu_subtitle(c).empty(), "without Cheeky: no Cheeky pages");
         {
             // A game without the FOV crop, the helmet or live resolution (ACC): no View crop or Helmet page, and a note
             // that resolution changes apply at the next launch.
@@ -360,7 +360,7 @@ int SIM_QVFR_TEST_MAIN() {
             bool next = false;
             for (const std::wstring& n : menu_notes(g))
                 next |= n.find(L"next launch") != std::wstring::npos;
-            check(menu_pages(g).size() == 3 && !crop && !helmet && next,
+            check(menu_pages(g).size() == 4 && !crop && !helmet && next,
                   "a game without crop, helmet or live resolution: their pages left out, resolution at the next launch");
         }
         {
@@ -373,8 +373,8 @@ int SIM_QVFR_TEST_MAIN() {
             g.launch.fgPage = f.frameGeneration;
             g.cheeky.available = f.foveatedDlss && g.cheeky.available;
             check(!f.fovCrop && !f.helmet && !f.foveatedDlss &&
-                      menu_pages(g) == std::vector<MenuPage>{MenuPage::Settings, MenuPage::Shape, MenuPage::Headset},
-                  "X-Plane 12: Settings, Shape and Headset only (no crop, helmet or Foveated DLSS pages)");
+                      menu_pages(g) == std::vector<MenuPage>{MenuPage::Settings, MenuPage::Shape, MenuPage::Cpu, MenuPage::Headset},
+                  "X-Plane 12: Settings, Shape, CPU and Headset only (no crop, helmet or Foveated DLSS pages)");
         }
         {
             // Object detail: only a game whose GameFeatures has it (X-Plane), as the layer sets launch.objectDetail.
@@ -495,9 +495,9 @@ int SIM_QVFR_TEST_MAIN() {
         check(acc::kGame.features.foveatedDlss && !acc::kGame.features.frameGeneration &&
                   !ace::kGame.features.foveatedDlss && !ace::kGame.features.frameGeneration,
               "games: ACC has Foveated DLSS but not its frame generation yet; ACE neither (its API path has DLSS of its own)");
-        check(menu_pages(c).size() == 7 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
+        check(menu_pages(c).size() == 8 && menu_page_items(c).size() == 12 && menu_page_items(c).front() == MenuItem::Page &&
                   menu_title(c) == L"QVFR settings",
-              "with Cheeky: seven pages, the first the QVFR items under the page switch");
+              "with Cheeky: eight pages, the first the QVFR items under the page switch");
         check(!menu_key(c, MenuKey::Right) && c.page == 1 && menu_title(c) == L"Focus shape", "then the Focus shape page");
         check(!menu_key(c, MenuKey::Right) && c.page == 2 && menu_title(c) == L"View crop", "then the View crop page");
         check(!menu_key(c, MenuKey::Right) && c.page == 3 && menu_title(c) == L"Helmet", "then the Helmet page");
@@ -590,7 +590,9 @@ int SIM_QVFR_TEST_MAIN() {
         c.page = 0;
         c.selected = 0;
         menu_key(c, MenuKey::Left);
-        check(c.page == 6 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
+        check(c.page == 7 && menu_title(c) == L"Overlay and menu", "Left from the first page wraps to Overlay and menu");
+        menu_key(c, MenuKey::Left);
+        check(c.page == 6 && menu_title(c) == L"CPU", "then CPU");
         menu_key(c, MenuKey::Left);
         check(c.page == 5 && menu_title(c) == L"Frame generation" && menu_page_items(c).size() == 8 &&
                   menu_subtitle(c) == L"CheekyFoveatedDLSS - v0.6.3" && menu_notes(c).empty(),
@@ -649,7 +651,9 @@ int SIM_QVFR_TEST_MAIN() {
         menu_key(c, MenuKey::Up);  // back on the page switch
         menu_key(c, MenuKey::Right);
         menu_key(c, MenuKey::Right);
-        check(c.page == 0 && menu_title(c) == L"QVFR settings", "Right from Frame generation, then Overlay and menu, wraps to the first page");
+        menu_key(c, MenuKey::Right);
+        check(c.page == 0 && menu_title(c) == L"QVFR settings",
+              "Right from Frame generation, then CPU and Overlay and menu, wraps to the first page");
     }
 
     // The View crop page (QVFR): off shows only the switch; on, four sides, each on its own, written to
@@ -882,25 +886,31 @@ int SIM_QVFR_TEST_MAIN() {
               "Hotkeys footer: unset is on; written and read back");
         DeleteFileW(ini.c_str());
     }
-    {  // Main thread core ([cpu] isolate_main_thread): every game, the line before Hotkeys footer, its own by default.
+    {  // Main thread core ([cpu] isolate_main_thread): every game, its own CPU page before Overlay and menu, off by default.
         SettingsMenu f;
         f.launch = {true, 50, 39, 39};
-        f.page = static_cast<int>(menu_pages(f).size()) - 1;
+        const std::vector<MenuPage> pages = menu_pages(f);
+        check(pages.size() >= 2 && pages[pages.size() - 2] == MenuPage::Cpu, "CPU page: the one before Overlay and menu");
+        f.page = static_cast<int>(pages.size()) - 2;
         const std::vector<MenuItem> items = menu_page_items(f);
-        const int at = static_cast<int>(items.size()) - 2;
-        check(at > 0 && items[at] == MenuItem::CpuIsolateMain, "Main thread core: the line before Hotkeys footer");
-        f.selected = at;
-        check(f.values.cpuIsolateMain && menu_lines(f)[at].label == L"Main thread core" &&
-                  menu_lines(f)[at].value == L"Its own",
-              "Main thread core: its own by default");
-        check(menu_key(f, MenuKey::Left) && !f.values.cpuIsolateMain && menu_lines(f)[at].value == L"Shared",
-              "Main thread core: a step shares it");
+        check(menu_title(f) == L"CPU" && items.size() == 2 && items[1] == MenuItem::CpuIsolateMain,
+              "CPU page: titled CPU, its one line Main thread core");
+        f.selected = 1;
+        check(!f.values.cpuIsolateMain && menu_lines(f)[1].label == L"Main thread core" &&
+                  menu_lines(f)[1].value == L"Shared",
+              "Main thread core: shared by default");
+        check(menu_key(f, MenuKey::Right) && f.values.cpuIsolateMain && menu_lines(f)[1].value == L"Its own",
+              "Main thread core: a step gives it its own core");
         const std::wstring ini = temp_path(L"simqvfr-menu-cpu.ini");
         DeleteFileW(ini.c_str());
-        check(read_menu_values(ini.c_str()).cpuIsolateMain && write_menu_values(ini.c_str(), f.values, false) &&
-                  !read_menu_values(ini.c_str()).cpuIsolateMain,
-              "Main thread core: unset is its own; written (Two-loop too) and read back");
+        check(!read_menu_values(ini.c_str()).cpuIsolateMain && write_menu_values(ini.c_str(), f.values, false) &&
+                  read_menu_values(ini.c_str()).cpuIsolateMain,
+              "Main thread core: unset is shared; written (Two-loop too) and read back");
         DeleteFileW(ini.c_str());
+        SettingsMenu headset;
+        headset.page = static_cast<int>(menu_pages(headset).size()) - 1;
+        const std::vector<MenuItem> h = menu_page_items(headset);
+        check(std::find(h.begin(), h.end(), MenuItem::CpuIsolateMain) == h.end(), "not on the Overlay and menu page");
     }
 
     // Only what changed is written (ini_put.h): WritePrivateProfileString rewrites the whole ini for every key, even
