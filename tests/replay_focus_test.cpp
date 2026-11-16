@@ -17,6 +17,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include "games/ace/stereo_flag.h"
 #include "probe/replay_probe.h"
 #include "xr.h"
 
@@ -146,6 +147,7 @@ int SIM_QVFR_TEST_MAIN() {
     settings.saveCount = 2;
     settings.allTargets = true;
     settings.fog = true;  // compiles the fog-constants shader (no fog passes here: nothing else changes)
+    simqvfr::ace_known_build_for_tests(true);  // (this test exe is not ACE)
     check(simqvfr::replay_probe_start(device.Get(), 3, queue.Get(), settings), "probe installs in mode 3");
 
     // The "game": root 0 unused, root 1 the pass constants; depth-only, colour and half-width pipelines, reverse-Z.

@@ -7,6 +7,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include "games/ace/stereo_flag.h"
 #include "probe/replay_probe.h"
 #include "xr.h"
 
@@ -75,6 +76,9 @@ int SIM_QVFR_TEST_MAIN() {
               "pipeline stream: an unknown subobject type ends the walk (nothing after it guessed)");
     }
     simqvfr::replay_probe_set_thresholds(4, 256.0f);
+    simqvfr::ace_known_build_for_tests(false);
+    check(!simqvfr::replay_probe_start(device.Get(), 1), "not a known ACE build: the probe is refused");
+    simqvfr::ace_known_build_for_tests(true);  // (this test exe is not ACE)
     check(simqvfr::replay_probe_start(device.Get(), 1), "probe installs");
 
     // A root signature with one root CBV and 4 root constants. Draws are recorded without a pipeline (nothing validates

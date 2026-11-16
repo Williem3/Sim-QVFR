@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <iterator>
+#include <vector>
 
 #include <MinHook.h>
 #include <intrin.h>
@@ -286,7 +287,8 @@ void fill_focus_cameras(uint8_t* renderer) {
                                 "(views4_dlss_live)"
                               : "views4: DLSS is off: live resolution applies");
     // This frame's views render with this layout (the viewport and pass setups read `layout`, and
-    // `outputLayout` on a target of the output's size).
+    // `outputLayout` on a target of the output's size: copied under turnLock, layout_of).
+    AcquireSRWLockExclusive(&turnLock);
     if (std::memcmp(frame.renderWidth, layout.width, sizeof(frame.renderWidth)) != 0 ||
         std::memcmp(frame.renderHeight, layout.height, sizeof(frame.renderHeight)) != 0 ||
         std::memcmp(frame.width, outputLayout.width, sizeof(frame.width)) != 0 ||
@@ -298,6 +300,7 @@ void fill_focus_cameras(uint8_t* renderer) {
         layoutLogged = false;  // log the new rects
         outputLogged = !dlssLive;
     }
+    ReleaseSRWLockExclusive(&turnLock);
     XrQuaternionf turns[2] = {kNoTurn, kNoTurn};
     FocusFrustum frusta[2];
     for (int eye = 0; eye < 2; ++eye) {
@@ -441,6 +444,15 @@ void note_target(const char* what, uintptr_t site, int width, int height, bool o
              renderH.load(), outputW.load(), outputH.load());
 }
 
+// The layout a hook lays its view out with: a copy under turnLock (the frame fill and views4_set_live_layout write it
+// while ACE's render threads run the hooks).
+Views4Layout layout_of(bool output) {
+    AcquireSRWLockShared(&turnLock);
+    const Views4Layout l = output ? outputLayout : layout;
+    ReleaseSRWLockShared(&turnLock);
+    return l;
+}
+
 // Mode 1 gives two halves; with the doubled eye width the target holds the four views of `layout`
 // (`outputLayout` on DLSS's output, views4_dlss_live).
 void* viewportHook(void* renderer, void* out, const float* renderSize, int view) {
@@ -472,7 +484,8 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
     }
     if (view == 0)
         note_target("viewport", returnRva - 5, width, height, output);
-    const ViewRect r = views4_rect(output ? outputLayout : layout, view, width, height);
+    const Views4Layout now = layout_of(output);
+    const ViewRect r = views4_rect(now, view, width, height);
     const int left = r.left;
     const float w = static_cast<float>(r.width), h = static_cast<float>(r.height);
     put_f(o, 0x00, static_cast<float>(left));  // D3D12_VIEWPORT
@@ -524,7 +537,7 @@ void* viewportHook(void* renderer, void* out, const float* renderSize, int view)
         int n = std::snprintf(line, sizeof(line), "views4: viewport layout %s=%dx%d, views (x, w x h):",
                               output ? "output" : "render", width, height);
         for (int v = 0; v < kViews; ++v) {
-            const ViewRect e = views4_rect(output ? outputLayout : layout, v, width, height);
+            const ViewRect e = views4_rect(now, v, width, height);
             lefts[v] = e.left;
             widths[v] = e.width;
             n += std::snprintf(line + n, sizeof(line) - n, " %d: %d, %dx%d;", v, e.left, e.width, e.height);
@@ -580,7 +593,8 @@ void passSetupHook(void* renderer, void* pass, int view) {
     const bool output = output_target(width, height);
     if (view == 0)
         note_target("pass setup", ace::kPassSetupRvas[I], width, height, output);
-    const ViewRect r = views4_rect(output ? outputLayout : layout, view, width, height);
+    const Views4Layout now = layout_of(output);
+    const ViewRect r = views4_rect(now, view, width, height);
     put_f(p, ace::kPassViewport + 0x00, static_cast<float>(r.left));
     put_f(p, ace::kPassViewport + 0x08, static_cast<float>(r.width));
     put_f(p, ace::kPassViewport + 0x0c, static_cast<float>(r.height));
@@ -593,7 +607,7 @@ void passSetupHook(void* renderer, void* pass, int view) {
         // One view's size, as ACE's stereo setups write for each eye.
         put_f(p, ace::kPassScreenSizeDiv + 0x00, static_cast<float>(r.width));
         put_f(p, ace::kPassScreenSizeDiv + 0x04, static_cast<float>(r.height));
-    } else if (!layout.equal()) {
+    } else if (!now.equal()) {
         // Legacy (views4_screen_size_legacy): the same ratio to this view's size as it had to an
         // equal quarter of the target.
         const int quarter = width / kViews;
@@ -635,8 +649,9 @@ void normalReconstructHook(void* params) {
     void* renderer = cameraPhantom2 ? *reinterpret_cast<void**>(cameraPhantom2 + ace::kPhantomRenderer) : nullptr;
     const auto* target = *reinterpret_cast<const uint8_t* const*>(p + ace::kNormalParamsTarget);
     const int width = target ? *reinterpret_cast<const int32_t*>(target + ace::kTextureWidth) : 0;
-    const int eye1 = views4_rect(layout, 1, width, 1).left, focus0 = views4_rect(layout, 2, width, 1).left,
-              focus1 = views4_rect(layout, 3, width, 1).left;
+    const Views4Layout now = layout_of(false);
+    const int eye1 = views4_rect(now, 1, width, 1).left, focus0 = views4_rect(now, 2, width, 1).left,
+              focus1 = views4_rect(now, 3, width, 1).left;
     if (!recordB || !renderer || mode_of(renderer) != 1 || eye1 <= 0 || !pass_census_installed()) {
         normalReconstructOriginal(params);
         return;
@@ -730,6 +745,44 @@ bool parse_callers(const wchar_t* spec) {
     return true;
 }
 
+// Every code patch views4_start applies, with the bytes it replaced (each patch checks they equal its anchor): a start
+// that fails puts them back, so ACE never runs half-patched (its MinHook hooks are removed the same way).
+struct Patched {
+    uintptr_t rva;
+    const uint8_t* original;
+    size_t size;
+};
+std::vector<Patched> keptPatches;
+bool kept(bool ok, uintptr_t rva, const uint8_t* original, size_t size) {
+    if (ok)
+        keptPatches.push_back({rva, original, size});
+    return ok;
+}
+bool redirect_kept(uintptr_t rva, const uint8_t* anchor, size_t size, const uint8_t* stub, size_t stubSize) {
+    return kept(code_redirect(rva, anchor, size, stub, stubSize), rva, anchor, size);
+}
+bool imul_kept(uintptr_t rva, const uint8_t (&anchor)[7], uint8_t mask) {
+    return kept(code_mask_imul_index(rva, anchor, mask), rva, anchor, sizeof(anchor));
+}
+bool movsxd_kept(uintptr_t rva, const uint8_t (&anchor)[7], uint8_t mask) {
+    return kept(code_mask_movsxd_shl_index(rva, anchor, mask), rva, anchor, sizeof(anchor));
+}
+bool load32_kept(uintptr_t rva, const uint8_t (&anchor)[6], uint8_t mask) {
+    return kept(code_mask_load32(rva, anchor, mask), rva, anchor, sizeof(anchor));
+}
+bool call_if_below_kept(uintptr_t rva, const uint8_t (&anchor)[5], uintptr_t target, uint8_t reg, uint8_t limit,
+                        int elseClearByte) {
+    return kept(code_call_if_below(rva, anchor, target, reg, limit, elseClearByte), rva, anchor, sizeof(anchor));
+}
+void restore_patches() {
+    for (auto p = keptPatches.rbegin(); p != keptPatches.rend(); ++p)
+        if (!code_write(p->rva, p->original, p->size))
+            logf("views4: could not put back ACE's code at 0x%llx", static_cast<unsigned long long>(p->rva));
+    if (!keptPatches.empty())
+        logf("views4: %zu code patch(es) of the failed start put back", keptPatches.size());
+    keptPatches.clear();
+}
+
 // The focus views' seven history slots each, in layer memory, built with ACE's own element ctor,
 // and every view-indexed access redirected there. ACE's own slot 2 is left unused: view 2 on it
 // came out shifted against its eye (composition run 2). Called before the hooks go live; anchors
@@ -753,7 +806,7 @@ bool install_view_slots() {
     const uint64_t phantom2 = phantoms[0], phantom = phantoms[1];
 
     const auto redirect = [](uintptr_t rva, const uint8_t* anchor, size_t size, const std::vector<uint8_t>& stub) {
-        if (code_redirect(rva, anchor, size, stub.data(), stub.size()))
+        if (redirect_kept(rva, anchor, size, stub.data(), stub.size()))
             return true;
         logf("views4: slot patch at 0x%llx failed", static_cast<unsigned long long>(rva));
         return false;
@@ -773,7 +826,9 @@ bool install_view_slots() {
                       stub_import_step(ace::kImportStepAnchor, phantom2, phantom)))
             return false;
     const uint8_t bound[4] = {0x49, 0x83, 0xfc, 0x04};  // cmp r12, 4: the creator builds 4 slots
-    if (!code_write(ace::kCreatorBoundRva, bound, sizeof(bound))) {
+    static_assert(sizeof(bound) == sizeof(ace::kCreatorBoundAnchor));
+    if (!kept(code_write(ace::kCreatorBoundRva, bound, sizeof(bound)), ace::kCreatorBoundRva, ace::kCreatorBoundAnchor,
+              sizeof(bound))) {
         log_line("views4: creator bound patch failed");
         return false;
     }
@@ -859,6 +914,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
     const auto remove_all = [&] {
         for (const auto& h : hooks)
             MH_RemoveHook(reinterpret_cast<void*>(base + h.rva));
+        restore_patches();
     };
     for (const auto& h : hooks)
         if (!create_hook(h.rva, h.detour, h.original, h.name)) {
@@ -886,7 +942,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         for (size_t i = 0; i < std::size(ace::kCameraSlotIndexSites); ++i) {
             const auto& site = ace::kCameraSlotIndexSites[i];
             const auto stub = stub_camera_index(site.anchor, ace::kCameraSlotIndexBase[i], cameraPhantom2, cameraPhantom);
-            if (!code_redirect(site.rva, site.anchor, sizeof(site.anchor), stub.data(), stub.size())) {
+            if (!redirect_kept(site.rva, site.anchor, sizeof(site.anchor), stub.data(), stub.size())) {
                 logf("views4: camera-slot patch at 0x%llx failed", static_cast<unsigned long long>(site.rva));
                 remove_all();
                 return false;
@@ -895,9 +951,9 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         const auto branch = stub_eye_branch(module_base() + ace::kPassEyeBranchTarget, cameraPhantom2);
         const auto rejoin = stub_pass_rejoin(ace::kPassRejoinAnchor, static_cast<uint8_t>(ace::kPhantomRenderer));
         const bool patched =
-            code_redirect(ace::kPassEyeBranchRva, ace::kPassEyeBranchAnchor, sizeof(ace::kPassEyeBranchAnchor),
+            redirect_kept(ace::kPassEyeBranchRva, ace::kPassEyeBranchAnchor, sizeof(ace::kPassEyeBranchAnchor),
                           branch.data(), branch.size()) &&
-            code_redirect(ace::kPassRejoinRva, ace::kPassRejoinAnchor, sizeof(ace::kPassRejoinAnchor), rejoin.data(),
+            redirect_kept(ace::kPassRejoinRva, ace::kPassRejoinAnchor, sizeof(ace::kPassRejoinAnchor), rejoin.data(),
                           rejoin.size());
         if (!patched) {
             log_line("views4: pass-setup eye branch patch failed");
@@ -906,7 +962,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         }
     } else {
         for (const auto& site : ace::kCameraSlotIndexSites)
-            if (!code_mask_imul_index(site.rva, site.anchor, 1)) {
+            if (!imul_kept(site.rva, site.anchor, 1)) {
                 logf("views4: camera-slot patch at 0x%llx failed; continuing without views4 hooks",
                      static_cast<unsigned long long>(site.rva));
                 remove_all();
@@ -920,7 +976,7 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         }
     } else {
         for (const auto& site : ace::kHistorySlotIndexSites)
-            if (!code_mask_movsxd_shl_index(site.rva, site.anchor, 1)) {
+            if (!movsxd_kept(site.rva, site.anchor, 1)) {
                 logf("views4: history-slot patch at 0x%llx failed; continuing without views4 hooks",
                      static_cast<unsigned long long>(site.rva));
                 remove_all();
@@ -931,14 +987,14 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
     // of the system at renderer + 0x13e0). With "fog" the system has 4 views and each reads its own;
     // otherwise views 2-3 borrow the eyes' (wrong frustum: darker image, dark sky).
     for (const auto& site : ace::kPassViewReadSites)
-        if ((!volumetricViews || foldVolumetrics) && !code_mask_load32(site.rva, site.anchor, 1)) {
+        if ((!volumetricViews || foldVolumetrics) && !load32_kept(site.rva, site.anchor, 1)) {
             logf("views4: pass-view patch at 0x%llx failed; continuing without views4 hooks",
                  static_cast<unsigned long long>(site.rva));
             remove_all();
             return false;
         }
     for (const auto& site : ace::kSlotAdvanceSites)
-        if (eyesOnlySlotAdvance && !code_call_if_below(site.rva, site.anchor, base + ace::kSlotAdvanceRva, site.viewRegister, 2,
+        if (eyesOnlySlotAdvance && !call_if_below_kept(site.rva, site.anchor, base + ace::kSlotAdvanceRva, site.viewRegister, 2,
                                 ace::kSlotFrameFlag)) {
             logf("views4: slot-advance patch at 0x%llx failed; continuing without views4 hooks",
                  static_cast<unsigned long long>(site.rva));
@@ -946,14 +1002,14 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
             return false;
         }
     // With "tiles" the tile lists have 4 entries and views 2-3 read their own.
-    if (!tileViews && !code_redirect(ace::kVelocityPassViewRva, ace::kVelocityPassViewAnchor,
+    if (!tileViews && !redirect_kept(ace::kVelocityPassViewRva, ace::kVelocityPassViewAnchor,
                                      sizeof(ace::kVelocityPassViewAnchor), ace::kVelocityPassViewStub,
                                      sizeof(ace::kVelocityPassViewStub))) {
         log_line("views4: velocity pass patch failed; continuing without views4 hooks");
         remove_all();
         return false;
     }
-    if (drawLoops && !code_redirect(ace::kLightingLoopBoundRva, ace::kLightingLoopBoundAnchor,
+    if (drawLoops && !redirect_kept(ace::kLightingLoopBoundRva, ace::kLightingLoopBoundAnchor,
                                     sizeof(ace::kLightingLoopBoundAnchor), ace::kLightingLoopBoundStub,
                                     sizeof(ace::kLightingLoopBoundStub))) {
         log_line("views4: lighting loop patch failed; continuing without views4 hooks");
@@ -968,14 +1024,14 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
                                                    reinterpret_cast<uint64_t>(&normalDispatchGroupsX));
         normalHooked = code_matches(ace::kNormalReconstructRva, ace::kNormalReconstructAnchor,
                                     sizeof(ace::kNormalReconstructAnchor)) &&
-                       code_redirect(ace::kNormalReconstructDispatchRva, ace::kNormalReconstructDispatchAnchor,
+                       redirect_kept(ace::kNormalReconstructDispatchRva, ace::kNormalReconstructDispatchAnchor,
                                      sizeof(ace::kNormalReconstructDispatchAnchor), stub.data(), stub.size()) &&
                        create_hook(ace::kNormalReconstructRva, reinterpret_cast<void*>(&normalReconstructHook),
                                    reinterpret_cast<void**>(&normalReconstructOriginal), "normal reconstruction");
         if (!normalHooked)
             log_line("views4: normal reconstruction patch failed; views 1-3 keep the eyes' reconstruction");
         const auto record = stub_record_rdi_by_view(ace::kTileCullingEyeStructAnchor, reinterpret_cast<uint64_t>(tileEyeStruct));
-        if (kTileCullingProbe && !code_redirect(ace::kTileCullingEyeStructRva, ace::kTileCullingEyeStructAnchor,
+        if (kTileCullingProbe && !redirect_kept(ace::kTileCullingEyeStructRva, ace::kTileCullingEyeStructAnchor,
                            sizeof(ace::kTileCullingEyeStructAnchor), record.data(), record.size()))
             log_line("views4: tile culling eye-structure probe not installed");
     }
@@ -985,9 +1041,13 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
         MH_QueueEnableHook(reinterpret_cast<void*>(base + ace::kNormalReconstructRva));
     if (MH_ApplyQueued() != MH_OK) {
         log_line("views4: enabling hooks failed");
+        if (normalHooked)
+            MH_RemoveHook(reinterpret_cast<void*>(base + ace::kNormalReconstructRva));
+        remove_all();
         return false;
     }
     started = true;
+    keptPatches.clear();  // in for good
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);

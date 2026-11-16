@@ -48,6 +48,7 @@ bool in_lifetime(uint64_t life, const std::function<void()>& run) {
 }
 void set_eye_live(uint64_t) {}
 void set_eye_live_out(uint64_t) {}
+void set_release_observer(ReleaseObserver) {}
 bool evaluate(ID3D12GraphicsCommandList*, Feature*, const Inputs&) { return false; }
 
 #else
@@ -77,6 +78,7 @@ Shutdown1Fn shutdown1Original = nullptr;
 ReleaseFn releaseOriginal = nullptr;  // the game's releases, seen
 SRWLOCK lifeLock = SRWLOCK_INIT;
 std::atomic<uint64_t> generation{1};
+std::atomic<ReleaseObserver> releaseObserver{nullptr};
 // This thread's shared hold on lifeLock: SRW locks don't nest (a second shared acquire behind a waiting shutdown
 // deadlocks), so only the outermost scope takes it; a shutdown reached under it can't wait for exclusive either.
 thread_local int lifeDepth = 0;
@@ -634,6 +636,8 @@ NVSDK_NGX_Result shut_down(const char* which, F original) {
         AcquireSRWLockExclusive(&lifeLock);
     generation.fetch_add(1);
     forget_game_features(which);
+    if (const ReleaseObserver o = releaseObserver.load())
+        o(nullptr);
     const NVSDK_NGX_Result r = original();
     if (!nested)
         ReleaseSRWLockExclusive(&lifeLock);
@@ -653,6 +657,8 @@ NVSDK_NGX_Result releaseHook(NVSDK_NGX_Handle* h) {
     if (releasesLogged.fetch_add(1) < 16)
         logd("focus dlss: the game released a feature (%p; %s)", static_cast<const void*>(h),
              gone ? "one of its eyes'" : "not one we saw made");
+    if (const ReleaseObserver o = releaseObserver.load())
+        o(h);
     return releaseOriginal(h);
 }
 
@@ -910,6 +916,7 @@ void release(Feature* f) {
 
 bool alive(const Feature* f) { return f && f->generation == generation.load(); }
 uint64_t lifetime() { return generation.load(); }
+void set_release_observer(ReleaseObserver observer) { releaseObserver.store(observer); }
 bool in_lifetime(uint64_t life, const std::function<void()>& run) {
     const LifeShared hold;
     if (life != generation.load())

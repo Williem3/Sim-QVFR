@@ -25,6 +25,7 @@
 #include "../xr.h"
 #include "d3d11_capture.h"  // write_png_bgra
 #include "focus_ngx.h"
+#include "../games/ace/stereo_flag.h"
 
 extern "C" size_t simqvfr_slot_SetPipelineState(void);
 extern "C" size_t simqvfr_slot_CreateConstantBufferView(void);
@@ -63,6 +64,7 @@ extern "C" size_t simqvfr_slot_Dispatch(void);
 extern "C" size_t simqvfr_slot_CopyBufferRegion(void);
 extern "C" size_t simqvfr_slot_CreateShaderResourceView(void);
 extern "C" size_t simqvfr_slot_CopyDescriptorsSimple(void);
+extern "C" size_t simqvfr_slot_CreateUnorderedAccessView(void);
 
 namespace simqvfr {
 namespace {
@@ -145,6 +147,14 @@ using LibStreamFn = HRESULT(STDMETHODCALLTYPE*)(ID3D12PipelineLibrary1*, LPCWSTR
 LibGfxFn libGfxOriginal;
 LibStreamFn libStreamOriginal;
 CopySimpleFn copySimpleOriginal;
+using UavFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, ID3D12Resource*, ID3D12Resource*, const D3D12_UNORDERED_ACCESS_VIEW_DESC*,
+                                       D3D12_CPU_DESCRIPTOR_HANDLE);
+UavFn uavViewOriginal;  // our own UAVs go straight to it (the hook takes focus.lock)
+using CopyRangesFn = void(STDMETHODCALLTYPE*)(ID3D12Device*, UINT, const D3D12_CPU_DESCRIPTOR_HANDLE*, const UINT*, UINT,
+                                              const D3D12_CPU_DESCRIPTOR_HANDLE*, const UINT*, D3D12_DESCRIPTOR_HEAP_TYPE);
+CopyRangesFn copyRangesOriginal;
+// ID3D12Device declares CopyDescriptors right before CopyDescriptorsSimple (d3d12.h).
+size_t slot_CopyDescriptors() { return simqvfr_slot_CopyDescriptorsSimple() - 1; }
 
 enum Op : uint8_t {
     kRootSig = 1, kPso, kHeaps, kTable, kConst1, kConstN, kCbv, kSrv, kTopology, kIb, kVb, kViewports, kScissors,
@@ -867,6 +877,11 @@ struct Focus {
     std::vector<std::unique_ptr<Replay>> pool;
     std::unordered_map<List*, std::vector<Replay*>> pending;  // the game's list -> our replays of it, in order
     std::atomic<size_t> pendingLists{0};  // pending.size(), read without the lock (the game's Reset skips it when 0)
+    // After a rebuild (slots_writable): held until the GPU is past slotsFence, from frame slotsHeldFrame; submitting:
+    // execute_batch's replays taken from pending and not yet signalled.
+    std::atomic<bool> slotsHeld{false};
+    uint64_t slotsFence = 0, slotsHeldFrame = 0;
+    int submitting = 0;
     std::unordered_map<SIZE_T, ViewInfo> views;  // the game's RTV/DSV CPU handles
     std::unordered_map<ID3D12Resource*, Twin> twins;
     std::vector<SIZE_T> refused;  // handles whose view we never saw (logged once)
@@ -880,6 +895,8 @@ struct Focus {
     // before retired on a change
     ComPtr<ID3D12DescriptorHeap> gameHeap;
     UINT heapSize = 0, increment = 0;
+    // gameHeap's CPU range, for the descriptor hooks' check without the lock (0, 0: none yet)
+    std::atomic<SIZE_T> heapCpuLo{0}, heapCpuHi{0};
     D3D12_GPU_DESCRIPTOR_HANDLE bindlessBase{};  // root table 18 as ACE's stereo scene lists set it
     UINT baseIndex = 0, slotFirst = 0;            // absolute heap indices
     UINT tilesX = 0, tilesY = 0;                  // the focus views' tile grid per eye (our lists' size and stride)
@@ -2007,7 +2024,42 @@ size_t sweep_released(bool* used = nullptr) {
     return dead.size();
 }
 
+// Under focus.lock. Our fixed descriptor slots (tiles, fog, shadow, atmosphere, post, DLSS...) are written again on the
+// CPU once a rebuild has made their resources again, and D3D12 leaves a descriptor rewritten while a submitted list may
+// still read it undefined. So after a rebuild nothing of the focus views is recorded until every replay from before it
+// was submitted and the GPU is past it: checked at each list, nothing waited for (queued ones dropped after 90 frames).
+void hold_slots() {
+    if (!focus.slotsHeld.load(std::memory_order_relaxed))
+        focus.slotsHeldFrame = focus.frame.load();
+    focus.slotsFence = std::max(focus.slotsFence, focus.fenceValue.load());
+    focus.slotsHeld.store(true);
+}
+bool slots_writable() {
+    if (!focus.slotsHeld.load(std::memory_order_relaxed))
+        return true;
+    if (!focus.pending.empty()) {
+        if (focus.frame.load() - focus.slotsHeldFrame < 90)
+            return false;
+        size_t n = 0;
+        for (auto& [list, replays] : focus.pending) {
+            for (Replay* r : replays)
+                r->busy = false;  // never submitted: the fence of its last run stands
+            n += replays.size();
+        }
+        focus.pending.clear();
+        focus.pendingLists.store(0, std::memory_order_relaxed);
+        logf("replay focus: %zu replay(s) from before the rebuild never submitted: dropped", n);
+    }
+    if (focus.submitting > 0 || (focus.fence && focus.fence->GetCompletedValue() < focus.slotsFence))
+        return false;
+    focus.slotsHeld.store(false);
+    logd("replay focus: the GPU is past every replay from before the rebuild (%llu frames): the focus views go on",
+         static_cast<unsigned long long>(focus.frame.load() - focus.slotsHeldFrame));
+    return true;
+}
+
 void focus_rebuild(const char* why) {
+    hold_slots();
     const auto drop = [](ComPtr<ID3D12Resource>& r) {
         retire(r.Get());
         r.Reset();
@@ -2131,6 +2183,8 @@ void focus_rebuild(const char* why) {
 // the game's settings).
 bool focus_prepare(const Stream& s) {
     prune_retired();
+    if (!slots_writable())
+        return false;
     bool changed = false;
     // Game targets the game itself has released (a DLSS mode or resolution change: it makes its targets again, with
     // new views beside the old handles): only our own references keep them alive. Their twins and our views of them
@@ -2180,6 +2234,8 @@ bool focus_prepare(const Stream& s) {
         twinsRemade.fetch_add(released.size());
         focus_rebuild("the game made its targets again");
         changed = true;
+        if (!slots_writable())
+            return false;
     }
     if (focus.viewsMoved) {  // the game made targets again: twins of resources no view names any more are retired
         focus.viewsMoved = false;
@@ -2783,7 +2839,7 @@ void structured_views(ID3D12Resource* r, UINT elements, UINT stride, UINT uavSlo
     u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
     u.Buffer.NumElements = elements;
     u.Buffer.StructureByteStride = stride;
-    device->CreateUnorderedAccessView(r, nullptr, &u, game_cpu(uavSlot));
+    uavViewOriginal(device.Get(), r, nullptr, &u, game_cpu(uavSlot));
     D3D12_SHADER_RESOURCE_VIEW_DESC v{};
     v.Format = DXGI_FORMAT_UNKNOWN;
     v.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -2830,6 +2886,10 @@ const Twin* focus_tiles_prepare(const Stream::TileDispatch& frustums) {
         focus.gameHeap = frustums.heap;
         focus.heapSize = d.NumDescriptors;
         focus.increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        const SIZE_T cpu = focus.gameHeap->GetCPUDescriptorHandleForHeapStart().ptr;
+        focus.heapCpuLo.store(0, std::memory_order_relaxed);
+        focus.heapCpuHi.store(cpu + SIZE_T{focus.heapSize} * focus.increment, std::memory_order_relaxed);
+        focus.heapCpuLo.store(cpu, std::memory_order_relaxed);
         focus.baseIndex = static_cast<UINT>((focus.bindlessBase.ptr - focus.gameHeap->GetGPUDescriptorHandleForHeapStart().ptr) /
                                             focus.increment);
         focus.slotFirst = focus.baseIndex + kBindlessRange - kTileSlots;
@@ -3086,7 +3146,7 @@ std::vector<SkyPatch> focus_sky_prepare(const Stream& s) {
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
         u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        device->CreateUnorderedAccessView(focus.skyClouds.Get(), nullptr, &u, game_cpu(focus.slotFirst + kSkyCloudSrv + 1));
+        uavViewOriginal(device.Get(), focus.skyClouds.Get(), nullptr, &u, game_cpu(focus.slotFirst + kSkyCloudSrv + 1));
         inReplay = false;
         focus.skyCloudViews = true;
     }
@@ -3240,7 +3300,7 @@ bool focus_fog_prepare(D3D12_GPU_DESCRIPTOR_HANDLE uavTable) {
         u.Format = d.Format;
         u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
         u.Texture3D.WSize = d.DepthOrArraySize;
-        device->CreateUnorderedAccessView(r.Get(), nullptr, &u, game_cpu(focus.fogUavFirst + slot - focus.slotFirst - kFogFirst));
+        uavViewOriginal(device.Get(), r.Get(), nullptr, &u, game_cpu(focus.fogUavFirst + slot - focus.slotFirst - kFogFirst));
         D3D12_SHADER_RESOURCE_VIEW_DESC v{};
         v.Format = d.Format;
         v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
@@ -3499,7 +3559,7 @@ void focus_shadow_record(List* gameList, const Stream& s) {
                 D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
                 u.Format = DXGI_FORMAT_R8G8B8A8_SNORM;
                 u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-                device->CreateUnorderedAccessView(focus.normals.Get(), nullptr, &u, game_cpu(focus.slotFirst + 28));
+                uavViewOriginal(device.Get(), focus.normals.Get(), nullptr, &u, game_cpu(focus.slotFirst + 28));
                 D3D12_SHADER_RESOURCE_VIEW_DESC v{};
                 v.Format = DXGI_FORMAT_R8G8B8A8_SNORM;
                 v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -3744,7 +3804,7 @@ bool focus_atmo_prepare() {
         } else {
             u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         }
-        device->CreateUnorderedAccessView(focus.atmo[m].Get(), nullptr, &u, game_cpu(focus.slotFirst + 48 + m));
+        uavViewOriginal(device.Get(), focus.atmo[m].Get(), nullptr, &u, game_cpu(focus.slotFirst + 48 + m));
     }
     inReplay = false;
     if (!ok) {
@@ -3806,7 +3866,7 @@ bool focus_atmo_work_prepare() {
             D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
             u.Format = d.Format;
             u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            device->CreateUnorderedAccessView(focus.atmoSkyWork[e][k].Get(), nullptr, &u,
+            uavViewOriginal(device.Get(), focus.atmoSkyWork[e][k].Get(), nullptr, &u,
                                               game_cpu(focus.slotFirst + 112 + 8 * e + 2 * k + 1));
         }
     inReplay = false;
@@ -4034,7 +4094,7 @@ void focus_blur_record(List* gameList) {
                         u.Format = twin->viewFormat;
                         u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
                         u.Texture2D.MipSlice = m;
-                        device->CreateUnorderedAccessView(b.Get(), nullptr, &u, game_cpu(focus.slotFirst + 63 + m));
+                        uavViewOriginal(device.Get(), b.Get(), nullptr, &u, game_cpu(focus.slotFirst + 63 + m));
                     }
                     inReplay = false;
                     focus.blur = b;
@@ -4187,7 +4247,7 @@ void focus_resolve_record(List* gameList, const Stream& s) {
                     D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
                     u.Format = res->GetDesc().Format;
                     u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-                    device->CreateUnorderedAccessView(res, nullptr, &u, game_cpu(focus.fogUavFirst + offset));
+                    uavViewOriginal(device.Get(), res, nullptr, &u, game_cpu(focus.fogUavFirst + offset));
                 };
                 uav(focus.resolvedDepth.Get(), 29);
                 uav(focus.closestDepth.Get(), 30);
@@ -4374,7 +4434,7 @@ bool focus_dlss_record(List* l, const Stream& s, ID3D12Resource* colour, UINT fw
                 D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
                 u.Format = r->GetDesc().Format;
                 u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-                device->CreateUnorderedAccessView(r, nullptr, &u, game_cpu(focus.fogUavFirst + offset));
+                uavViewOriginal(device.Get(), r, nullptr, &u, game_cpu(focus.fogUavFirst + offset));
             };
             uav(focus.packMb.Get(), 24);
             uav(focus.packVelocity.Get(), 25);
@@ -4677,7 +4737,7 @@ bool focus_aa_record(List* l, const Stream& s, UINT fw2, UINT fh, const float (&
             D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
             u.Format = f;
             u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-            device->CreateUnorderedAccessView(focus.aaOut.Get(), nullptr, &u, game_cpu(focus.fogUavFirst + 32));
+            uavViewOriginal(device.Get(), focus.aaOut.Get(), nullptr, &u, game_cpu(focus.fogUavFirst + 32));
             inReplay = false;
             focus.aaSource = ms;
             focus.aaFresh = true;
@@ -4911,7 +4971,7 @@ void focus_post_record(List* gameList, const Stream& s) {
                     D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
                     u.Format = vd.Format;
                     u.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-                    device->CreateUnorderedAccessView(v2.Get(), nullptr, &u, game_cpu(focus.slotFirst + 58));
+                    uavViewOriginal(device.Get(), v2.Get(), nullptr, &u, game_cpu(focus.slotFirst + 58));
                     D3D12_SHADER_RESOURCE_VIEW_DESC ov = veilView;
                     ov.Texture2D.MostDetailedMip = 0;
                     ov.Texture2D.MipLevels = 1;
@@ -5858,7 +5918,7 @@ void focus_cull_record(List* gameList, const Stream& s) {
                 raw.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
                 raw.Buffer.NumElements = static_cast<UINT>(gameBytes / 4);
                 raw.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
-                device->CreateUnorderedAccessView(cull.instances.Get(), nullptr, &raw, game_cpu(focus.slotFirst + kCullSlot));
+                uavViewOriginal(device.Get(), cull.instances.Get(), nullptr, &raw, game_cpu(focus.slotFirst + kCullSlot));
                 structured_views(cull.counts.Get(), static_cast<UINT>(countsBytes / 4), 4, focus.slotFirst + kCullSlot + 1,
                                  focus.slotFirst + kCullSlot + 2);
                 structured_views(cull.commands.Get(), static_cast<UINT>(commandsBytes / 32), 32, focus.slotFirst + kCullSlot + 3,
@@ -6437,6 +6497,7 @@ void execute_batch(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* 
     }
     focus.pendingLists.store(focus.pending.size(), std::memory_order_relaxed);
     if (!mine.empty()) {
+        ++focus.submitting;  // until signalled below (slots_writable)
         const uint64_t frame = focus.frame.load();
         if (focus.clearedFrame.load() != frame && focus.ready) {
             if (focus.copyPending.load() && !focus.saving.load())
@@ -6484,6 +6545,9 @@ void execute_batch(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* 
         queue->Signal(focus.fence.Get(), value);
     }
     AcquireSRWLockExclusive(&focus.lock);
+    --focus.submitting;
+    if (value && focus.slotsHeld.load(std::memory_order_relaxed))  // taken before a rebuild: our slots wait for it
+        focus.slotsFence = std::max(focus.slotsFence, value);
     for (Replay* r : mine) {
         r->fence = value;
         r->busy = false;
@@ -6789,6 +6853,7 @@ void note_stream_pso(const D3D12_PIPELINE_STATE_STREAM_DESC* desc, void* pso) {
     if (ps.pShaderBytecode)
         note_sky_pso(state, ps);
 }
+void note_game_write(SIZE_T dest, UINT count);
 void STDMETHODCALLTYPE cbvViewHook(ID3D12Device* d, const D3D12_CONSTANT_BUFFER_VIEW_DESC* desc,
                                    D3D12_CPU_DESCRIPTOR_HANDLE dest) {
     cbvViewOriginal(d, desc, dest);
@@ -6797,6 +6862,13 @@ void STDMETHODCALLTYPE cbvViewHook(ID3D12Device* d, const D3D12_CONSTANT_BUFFER_
     AcquireSRWLockExclusive(&focus.cbvLock);
     focus.cbvInfo[dest.ptr] = desc ? *desc : D3D12_CONSTANT_BUFFER_VIEW_DESC{};
     ReleaseSRWLockExclusive(&focus.cbvLock);
+    note_game_write(dest.ptr, 1);
+}
+// Without the sky and tyres: CBVs checked against our slots only.
+void STDMETHODCALLTYPE cbvCheckHook(ID3D12Device* d, const D3D12_CONSTANT_BUFFER_VIEW_DESC* desc,
+                                    D3D12_CPU_DESCRIPTOR_HANDLE dest) {
+    cbvViewOriginal(d, desc, dest);
+    note_game_write(dest.ptr, 1);
 }
 
 // R2c: the transparents replayed now (replay_transparents=2: only before samples 1, 3, ...).
@@ -6820,6 +6892,13 @@ HRESULT STDMETHODCALLTYPE closeHook(List* list) {
     if (probeMode == 3) {
         if (!focusActive.load(std::memory_order_relaxed))
             return hr;  // cost A/B: the game's own frame only
+        if (focus.slotsHeld.load(std::memory_order_relaxed)) {  // after a rebuild: nothing until our slots are free
+            AcquireSRWLockExclusive(&focus.lock);
+            const bool free = slots_writable();
+            ReleaseSRWLockExclusive(&focus.lock);
+            if (!free)
+                return hr;
+        }
         if (SUCCEEDED(hr) && focus.settings.tiles && !s->tileDispatches.empty())
             focus_tiles_record(list, *s);
         if (SUCCEEDED(hr) && focus.settings.tiles && focus.settings.fog && !s->tileDispatches.empty())
@@ -7281,6 +7360,32 @@ void check_reserved(SIZE_T dest, UINT count) {  // under focus.lock
              focus.slotFirst, focus.slotFirst + kTileSlots - 1);
     }
 }
+// The other ways the game writes descriptors (CBVs, UAVs, multi-range copies), against our slots: a range compare,
+// the lock only for a write into the game's shader-visible heap.
+void note_game_write(SIZE_T dest, UINT count) {
+    if (inReplay || !count)
+        return;
+    const SIZE_T lo = focus.heapCpuLo.load(std::memory_order_relaxed), hi = focus.heapCpuHi.load(std::memory_order_relaxed);
+    if (dest < lo || dest >= hi)
+        return;
+    AcquireSRWLockExclusive(&focus.lock);
+    check_reserved(dest, count);
+    ReleaseSRWLockExclusive(&focus.lock);
+}
+void STDMETHODCALLTYPE uavViewHook(ID3D12Device* d, ID3D12Resource* r, ID3D12Resource* counter,
+                                   const D3D12_UNORDERED_ACCESS_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE dest) {
+    uavViewOriginal(d, r, counter, desc, dest);
+    note_game_write(dest.ptr, 1);
+}
+void STDMETHODCALLTYPE copyRangesHook(ID3D12Device* d, UINT destRanges, const D3D12_CPU_DESCRIPTOR_HANDLE* dest,
+                                      const UINT* destSizes, UINT srcRanges, const D3D12_CPU_DESCRIPTOR_HANDLE* src,
+                                      const UINT* srcSizes, D3D12_DESCRIPTOR_HEAP_TYPE type) {
+    copyRangesOriginal(d, destRanges, dest, destSizes, srcRanges, src, srcSizes, type);
+    if (type != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV || !dest)
+        return;
+    for (UINT i = 0; i < destRanges; ++i)  // (no sizes: one descriptor a range)
+        note_game_write(dest[i].ptr, destSizes ? destSizes[i] : 1);
+}
 void STDMETHODCALLTYPE srvViewHook(ID3D12Device* d, ID3D12Resource* r, const D3D12_SHADER_RESOURCE_VIEW_DESC* desc,
                                    D3D12_CPU_DESCRIPTOR_HANDLE dest) {
     srvViewOriginal(d, r, desc, dest);
@@ -7487,9 +7592,12 @@ bool startPatched = false;
 }
 
 void replay_probe_early_sky() {
-    if (skyHooksEarly)
+    if (skyHooksEarly || !ace_known_build())
         return;
-    HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
+    // The loaded one, else only System32's (never a d3d12.dll planted beside the game or on the search path).
+    HMODULE d3d12 = GetModuleHandleW(L"d3d12.dll");
+    if (!d3d12)
+        d3d12 = LoadLibraryExW(L"d3d12.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     using CreateFn = HRESULT(WINAPI*)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
     const auto create = d3d12 ? reinterpret_cast<CreateFn>(GetProcAddress(d3d12, "D3D12CreateDevice")) : nullptr;
     ComPtr<ID3D12Device1> d;
@@ -7515,6 +7623,10 @@ void replay_probe_early_sky() {
 bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, const ReplayFocusSettings& settings) {
     if (installed || !d)
         return installed;
+    if (!ace_known_build()) {  // ACE's root signatures are bound with one build's layouts
+        log_line("replay probe: not started (not a known ACE build, see \"ace build:\"): the game renders as it is");
+        return false;
+    }
     if (startPatched) {
         log_line("replay probe: an earlier start failed with its hooks in (passing through); not started again");
         return false;
@@ -7611,9 +7723,13 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
                  hook(vtable, simqvfr_slot_SetComputeRootDescriptorTable(), &computeTableHook, &computeTableOriginal) &&
                  hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
                  hook(deviceTable, simqvfr_slot_CreateShaderResourceView(), &srvViewHook, &srvViewOriginal) &&
-                 hook(deviceTable, simqvfr_slot_CopyDescriptorsSimple(), &copySimpleHook, &copySimpleOriginal);
-        else if (ok)
+                 hook(deviceTable, simqvfr_slot_CopyDescriptorsSimple(), &copySimpleHook, &copySimpleOriginal) &&
+                 hook(deviceTable, simqvfr_slot_CreateUnorderedAccessView(), &uavViewHook, &uavViewOriginal) &&
+                 hook(deviceTable, slot_CopyDescriptors(), &copyRangesHook, &copyRangesOriginal);
+        else if (ok) {
             srvViewOriginal = reinterpret_cast<SrvFn>(deviceTable[simqvfr_slot_CreateShaderResourceView()]);
+            uavViewOriginal = reinterpret_cast<UavFn>(deviceTable[simqvfr_slot_CreateUnorderedAccessView()]);
+        }
         if (ok && ((settings.sky && settings.tiles) || settings.tyres) && !skyHooksEarly)
             ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
                  hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
@@ -7631,6 +7747,8 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
                 log_line("replay focus: sky: no pipeline library on this device (pipelines from a cache not seen)");
             }
         }
+        else if (ok && !skyHooksEarly && settings.tiles)  // our slots: the game's CBVs checked against them
+            ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvCheckHook, &cbvViewOriginal);
         else if (ok && !skyHooksEarly)
             cbvViewOriginal = reinterpret_cast<CbvFn>(deviceTable[simqvfr_slot_CreateConstantBufferView()]);
         focus.sampleFrame = settings.saveCount ? settings.saveFirst : UINT64_MAX;

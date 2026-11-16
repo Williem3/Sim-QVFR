@@ -91,6 +91,10 @@ uint64_t lifetime();
 // Runs `run` (a submission of lists holding our evaluations) only while `life` is still NGX's lifetime, a shutdown
 // waiting for it; false, not run, once NGX was shut down since.
 bool in_lifetime(uint64_t life, const std::function<void()>& run);
+// Told of the game's own feature releases (the handle) and of NGX shutdowns (nullptr: every handle gone), once install()
+// has hooked NGX; one observer (ACE's views4 DLSS extents, which key NGX's handles).
+using ReleaseObserver = void (*)(const void* handle);
+void set_release_observer(ReleaseObserver observer);
 
 struct Inputs {
     ID3D12Resource *color = nullptr, *depth = nullptr, *motion = nullptr, *output = nullptr, *exposure = nullptr;
