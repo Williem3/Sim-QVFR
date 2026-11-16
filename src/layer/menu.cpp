@@ -368,16 +368,22 @@ void menu_controllers(XrSession session, int64_t now) {
     bool toggle = false;
     XrVector2f stick{};
     {
-        std::lock_guard guard(gaze.mutex);
+        std::unique_lock guard(gaze.mutex, std::defer_lock);
+        {
+            FramePartTimer part(FramePart::gazeLock);
+            guard.lock();
+        }
         if (!gaze.attached || !gaze.menuToggle)
             return;
         if (gaze.appSyncs == 0) {  // ACE never syncs actions: sync the layer's set alone
+            FramePartTimer part(FramePart::actionSync);
             const XrActiveActionSet active{gaze.set, XR_NULL_PATH};
             XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
             sync.countActiveActionSets = 1;
             sync.activeActionSets = &active;
             next.SyncActions(session, &sync);
         }
+        FramePartTimer readPart(FramePart::actionRead);
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action = gaze.menuToggle;
         XrActionStateBoolean pressed{XR_TYPE_ACTION_STATE_BOOLEAN};
@@ -547,8 +553,15 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     }
     const int64_t now = qpc_now();
     if (method) {
-        menu_keyboard(now);
-        menu_controllers(session, now);
+        {
+            FramePartTimer part(FramePart::keyboard);
+            menu_keyboard(now);
+        }
+        {
+            FramePartTimer part(FramePart::controllers);
+            menu_controllers(session, now);
+        }
+        FramePartTimer part(FramePart::optimizer);
         optimize_tick(now);
     }
     if (menu.visible && now >= menu.hideAt) {

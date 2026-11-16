@@ -14,6 +14,12 @@ namespace simqvfr {
 enum class FramePart : int {
     menu,       // menu_frame: the headset menu's frame, the overlay among it
     overlay,    // of menu: the performance overlay's card (osd_frame)
+    keyboard,   // of menu: the hotkeys and wheel buttons read (menu_keyboard)
+    controllers,  // of menu: the controllers' menu actions read from the runtime (menu_controllers), the lock included
+    gazeLock,   // of controllers: waiting for the gaze's lock (the gaze thread holds it around its own runtime calls)
+    actionSync, // of controllers: the layer's action set synced (only when the game syncs none)
+    actionRead, // of controllers: the two action states read
+    optimizer,  // of menu: the QVFR optimizer's tick
     gameEnd,    // the game adapter's frame_end (LMU: the multi-view probe's)
     qvfrEnd,    // the game adapter's qvfr_frame_end
     dlssEnd,    // of qvfrEnd: Sim-QVFR's own DLSS's frame end
