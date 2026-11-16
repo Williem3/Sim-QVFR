@@ -1,10 +1,12 @@
 #include "log.h"
 
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "log_prefix.h"
 #include "module_path.h"
@@ -14,10 +16,22 @@ namespace simqvfr {
 namespace {
 
 std::mutex logMutex;
+std::mutex fileMutex;  // WriteFile's: the writer thread's batches and the lines written at once
 HANDLE logFile = INVALID_HANDLE_VALUE;
 bool logOpened = false;
-uint64_t logWritten = 0;  // this process's bytes
+uint64_t logWritten = 0;  // this process's bytes (counted as they are queued or written)
 bool logFull = false;
+
+// log_async: while on, the lines go to `pending` (under logMutex) and a thread of ours writes them, so the thread that
+// logged (the game's render thread, every 900 frames) doesn't wait on the disk. Off: each line written at once.
+struct Writer {
+    std::thread thread;
+    std::condition_variable wake;
+    std::string pending;
+    bool on = false, stop = false;
+    ~Writer();
+};
+Writer writer;
 
 std::filesystem::path logPath() {
     wchar_t env[32768];
@@ -45,11 +59,60 @@ bool debugLevel() {
 
 uint64_t limit() { return debugLevel() ? kLogDebugLimitBytes : kLogLimitBytes; }
 
-void write(const char* text, int n) {
+void write_now(const char* text, size_t n) {
+    std::lock_guard file(fileMutex);
     DWORD written = 0;
     WriteFile(logFile, text, static_cast<DWORD>(n), &written, nullptr);
-    logWritten += written;
 }
+
+// A line (under logMutex): queued for the writer while it runs, else written at once.
+void write(const char* text, int n) {
+    logWritten += static_cast<uint64_t>(n);
+    if (writer.on) {
+        writer.pending.append(text, static_cast<size_t>(n));
+        writer.wake.notify_one();
+        return;
+    }
+    write_now(text, static_cast<size_t>(n));
+}
+
+void run_writer() {
+    std::string batch;
+    std::unique_lock lock(logMutex);
+    for (;;) {
+        writer.wake.wait(lock, [] { return writer.stop || !writer.pending.empty(); });
+        if (writer.pending.empty())
+            break;  // stopping, everything written
+        batch.swap(writer.pending);
+        lock.unlock();
+        write_now(batch.data(), batch.size());
+        batch.clear();
+        lock.lock();
+    }
+}
+
+void stop_writer() {
+    std::thread thread;
+    {
+        std::lock_guard lock(logMutex);
+        writer.on = false;
+        writer.stop = true;
+        thread.swap(writer.thread);
+    }
+    writer.wake.notify_all();
+    if (thread.joinable())
+        thread.join();  // (at a process's exit it has ended already: the join returns at once)
+    std::string rest;
+    {
+        std::lock_guard lock(logMutex);
+        writer.stop = false;
+        rest.swap(writer.pending);  // what an ended writer left
+    }
+    if (!rest.empty() && logFile != INVALID_HANDLE_VALUE)
+        write_now(rest.data(), rest.size());
+}
+
+Writer::~Writer() { stop_writer(); }
 
 void open() {
     logOpened = true;
@@ -110,6 +173,22 @@ void line(const char* message) {
 }  // namespace
 
 void log_line(const char* message) { line(message); }
+
+void log_async(bool on) {
+    if (!on) {
+        stop_writer();
+        return;
+    }
+    std::lock_guard lock(logMutex);
+    if (writer.on || writer.thread.joinable())
+        return;
+    try {
+        writer.thread = std::thread(run_writer);
+        writer.on = true;
+    } catch (...) {
+        writer.on = false;  // no thread: lines written at once, as before
+    }
+}
 
 bool log_debug() { return debugLevel(); }
 

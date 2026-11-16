@@ -257,6 +257,7 @@ void read_bindings() {
         g.vsRole = e ? e->role : VsRole::none;
         g.vsWorldSlot = e ? e->worldSlot : -1;
         g.vsWorldOffset = e ? e->worldOffset : 0;
+        keep_game_entry(vs, e);
     }
     if (g.carTrack) {  // car tracking: the vertex shader's constant buffers and the input assembler's buffers as bound
         ID3D11Buffer* cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};

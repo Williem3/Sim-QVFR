@@ -90,6 +90,10 @@ void mvr_probe_device(ID3D11Device* device);
 // Every xrEndFrame: a summary when the counts changed (at most every 5 s).
 void mvr_probe_frame_end();
 MvrProbeStats mvr_probe_stats();
+// YEBIS's copy pixel shaders and the game's final blits marked so far: two counters, no copy of the stats (the passes ask
+// at every pass's start and frame's end).
+uint64_t mvr_probe_yebis_copies();
+uint64_t mvr_probe_final_blits();
 // The game's device can draw two views (NVAPI's single-pass stereo with XYZW, or a vertex shader picking the viewport,
 // seen at its first vertex shader or at xrCreateSession) and the probe attaches the converted shaders: MVR can run.
 // False before either, or with the probe off.

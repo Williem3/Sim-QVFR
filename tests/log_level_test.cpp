@@ -38,6 +38,17 @@ int child(const char* name) {
         simqvfr::logd("debug line %d", 2);
         return 0;
     }
+    if (std::strcmp(name, "async") == 0) {  // a session's lines through the writer thread, then at once again
+        simqvfr::logf("before %d", 0);
+        simqvfr::log_async(true);
+        for (int i = 1; i <= 2000; ++i)
+            simqvfr::logf("queued %d", i);
+        simqvfr::log_async(false);
+        simqvfr::logf("after %d", 2001);
+        simqvfr::log_async(true);
+        simqvfr::logf("left queued at exit %d", 2002);  // written as the process ends (the writer's own end)
+        return 0;
+    }
     if (std::strcmp(name, "flood") == 0) {
         std::string big(1000, 'x');
         for (int i = 0; i < 40000; ++i)  // ~40 MB asked, over the 32 MB limit
@@ -89,6 +100,23 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     check(d.find("log: debug level") != std::string::npos && d.find("info line 1") != std::string::npos &&
               d.find("debug line 2") != std::string::npos,
           "log: SIM_QVFR_LOG_LEVEL=debug writes the debug lines too");
+
+    // log_async: every line written, in order, the writer's queue too, also a line still queued at the process's exit.
+    const fs::path async = dir / L"async.log";
+    check(run_child("async", async, L"") == 0, "log: the async child ran");
+    {
+        const std::string a = read(async);
+        size_t at = a.find("before 0");
+        bool ordered = at != std::string::npos;
+        for (int k = 1; k <= 2000 && ordered; ++k) {
+            const size_t next = a.find("queued " + std::to_string(k) + "\r\n", at);
+            ordered = next != std::string::npos && next > at;
+            at = ordered ? next : at;
+        }
+        const size_t after = a.find("after 2001", at), last = a.find("left queued at exit 2002");
+        check(ordered && after != std::string::npos && last != std::string::npos && last > after,
+              "log: lines through the writer thread all written, in order; a line queued at the exit too");
+    }
 
     const fs::path flood = dir / L"flood.log";
     check(run_child("flood", flood, L"") == 0, "log: the flooding child ran");

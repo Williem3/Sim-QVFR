@@ -115,6 +115,7 @@ XrResult XRAPI_CALL layerCreateSession(XrInstance instance, const XrSessionCreat
             sessionGraphics = session_graphics(binding);
         }
         hang_watch_arm(experiment.hangWatchSeconds);
+        log_async(true);  // while the session runs, the game's threads don't wait on the log's disk writes
         game->session_created(experiment.probes && probe_start());
         if (!experiment.probes)
             log_line(experiment.views3 ? "engine probes and D3D12 trace off (probes=0); views3 cannot report the view mode"
@@ -299,6 +300,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     cpu_load_stop();
     cpu_placement_stop();
     cpu_isolation_end();
+    log_async(false);  // the session's last lines written before it goes
     pad_watch_stop();
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it

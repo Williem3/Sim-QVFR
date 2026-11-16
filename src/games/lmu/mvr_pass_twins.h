@@ -48,7 +48,28 @@ const TwinEntry& shader_entry(ID3D11VertexShader* vs) {
     return e;
 }
 
+// The game's bound shader's entry kept (vs_set_shader, read_bindings), for update()'s twin.
+void keep_game_entry(ID3D11VertexShader* vs, const TwinEntry* e) {
+    g.gameVsLooked = e ? vs : nullptr;
+    g.gameVsTwin = e ? e->twin : nullptr;
+    g.gameVsInstanced = e ? e->instanced : nullptr;
+    g.gameVsEpoch = g.twinEpoch;
+}
+
 // The twin for the way the passes draw now: single-pass stereo's or the instanced one.
+ID3D11VertexShader* twin_of(ID3D11VertexShader* vs);
+
+// gameVs's twin: the entry its bind looked up while still current (same shader, same epoch, no shader made since),
+// else looked up again.
+ID3D11VertexShader* game_twin() {
+    if (g.gameVs && g.gameVsLooked == g.gameVs && g.gameVsEpoch == g.twinEpoch &&
+        mvr_shader_generation() == g.twinGeneration) {
+        ++g.stats.lookups;  // (counted as one: the log's lookups stay comparable)
+        return g.instanced ? g.gameVsInstanced : g.gameVsTwin;
+    }
+    return twin_of(g.gameVs);
+}
+
 ID3D11VertexShader* twin_of(ID3D11VertexShader* vs) {
     if (!vs)
         return nullptr;

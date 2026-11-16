@@ -29,5 +29,9 @@ std::wstring log_directory();
 std::wstring captures_directory();
 // The log file itself.
 std::wstring log_file();
+// On (the layer, while a game's session runs): lines are queued and a thread of ours writes them, so the thread that logs
+// doesn't wait on the disk. A crash can lose the lines queued in its last moment (the writer takes them at once). Off
+// (the session's end, the process's exit): what is queued is written, then each line at once again.
+void log_async(bool on);
 
 }  // namespace simqvfr
