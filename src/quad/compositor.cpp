@@ -10,24 +10,13 @@
 
 #include "../log.h"
 #include "compose_shader.h"
+#include "dxgi_formats.h"
 
 namespace simqvfr {
 namespace {
 
 constexpr UINT kConstants = kComposeConstants;
 constexpr UINT kSrvsPerSlot = 6;  // outer, focus, light, the helmet's visor, bottom and top
-
-bool is_typeless(DXGI_FORMAT f) {
-    switch (f) {
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
-    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
-        return true;
-    default:
-        return false;
-    }
-}
 
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
     D3D12_RESOURCE_BARRIER b{D3D12_RESOURCE_BARRIER_TYPE_TRANSITION};
@@ -277,7 +266,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
     rtv.ptr += static_cast<SIZE_T>(slotIndex) * rtvIncrement_;
     const D3D12_RESOURCE_DESC outDesc = output->GetDesc();
     D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-    rtvDesc.Format = is_typeless(outDesc.Format) ? viewFormat_ : outDesc.Format;
+    rtvDesc.Format = is_typeless_colour(outDesc.Format) ? viewFormat_ : outDesc.Format;
     rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
     device_->CreateRenderTargetView(output, &rtvDesc, rtv);
 
@@ -326,7 +315,7 @@ UINT QuadCompositor::bind_sources(UINT slotIndex, ID3D12Resource* focus) {
     auto srv = [&](ID3D12Resource* r, UINT index) {
         const D3D12_RESOURCE_DESC d = r->GetDesc();
         D3D12_SHADER_RESOURCE_VIEW_DESC v = {};
-        v.Format = is_typeless(d.Format) ? viewFormat_ : d.Format;
+        v.Format = is_typeless_colour(d.Format) ? viewFormat_ : d.Format;
         v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         v.Texture2D.MipLevels = 1;

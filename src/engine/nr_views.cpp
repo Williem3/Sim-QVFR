@@ -19,6 +19,7 @@
 
 #include "../log.h"
 #include "../probe/d3d11_capture.h"
+#include "d3d11_kit.h"
 #include "ngx_nr.h"
 #include "nr_math.h"
 
@@ -188,20 +189,16 @@ struct State {
     std::chrono::steady_clock::time_point liveAt;
 } d;
 
+const char* log_tag() { return d.tag ? d.tag : "dlss-nr"; }
+
 void say(const char* format, ...) {
-    char text[1024];
     va_list args;
     va_start(args, format);
-    std::vsnprintf(text, sizeof(text), format, args);
+    log_tagged_v(log_tag(), format, args);
     va_end(args);
-    simqvfr::logf("%s: %s", d.tag ? d.tag : "dlss-nr", text);
 }
 
-void give_up(const char* why) {
-    if (!d.off)
-        say("off for this session: %s", why);
-    d.off = true;
-}
+void give_up(const char* why) { give_up_once(d.off, log_tag(), why); }
 
 // The slot's view given up (ngx_nr.h release): with its feature go the slot's own views and textures, all kept until
 // both devices are through what is queued on them. On the game's immediate context (the render thread).
@@ -297,19 +294,12 @@ bool initialize(ID3D11DeviceContext* context) {
     }
     d.adapted = d.readPending = false;
     d.meterFrame = 0;
-    D3D11_BUFFER_DESC bd{};
-    bd.ByteWidth = sizeof(Constants);
-    bd.Usage = D3D11_USAGE_DEFAULT;
-    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SAMPLER_DESC sd{};
-    sd.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sd.MaxLOD = D3D11_FLOAT32_MAX;
     if (!vs || !prepare || !compose ||
         FAILED(d.device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &d.vs)) ||
         FAILED(d.device->CreatePixelShader(prepare->GetBufferPointer(), prepare->GetBufferSize(), nullptr, &d.prepare)) ||
         FAILED(d.device->CreatePixelShader(compose->GetBufferPointer(), compose->GetBufferSize(), nullptr, &d.compose)) ||
-        FAILED(d.device->CreateBuffer(&bd, nullptr, &d.constants)) || FAILED(d.device->CreateSamplerState(&sd, &d.linearClamp))) {
+        !make_constant_buffer(d.device.Get(), sizeof(Constants), d.constants) ||
+        !make_linear_clamp_sampler(d.device.Get(), d.linearClamp)) {
         give_up("its shaders couldn't be made");
         return false;
     }
@@ -325,16 +315,7 @@ bool initialize(ID3D11DeviceContext* context) {
 }
 
 bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT format, UINT bind) {
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = w;
-    td.Height = h;
-    td.MipLevels = td.ArraySize = 1;
-    td.Format = format;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = bind;
-    texture.Reset();
-    return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
+    return make_texture2d(d.device.Get(), texture, w, h, format, bind);
 }
 
 // The view's feature and textures for a region this size, worked at ww x wh (made again when any of it changes).

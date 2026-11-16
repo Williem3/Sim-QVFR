@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../../engine/ngx_common.h"
+
 namespace simqvfr {
 
 // NVSDK_NGX_Parameter (nvsdk_ngx_defs.h) as MSVC lays out its vtable: the eight Set overloads, then the eight Get
@@ -14,7 +16,6 @@ namespace simqvfr {
 // NVSDK_NGX_Parameter_SetUI ("OutWidth" at create) and GetUI ("SuperSampling.MinDriverVersionMajor") use these.
 inline constexpr std::ptrdiff_t kNgxSetUiOffset = 0x20, kNgxGetUiOffset = 0x60;
 inline constexpr unsigned kNgxFeatureSuperSampling = 1;  // NVSDK_NGX_Feature_SuperSampling
-inline bool ngx_succeeded(unsigned result) { return (result & 0xfff00000u) != 0xbad00000u; }  // NVSDK_NGX_SUCCEED
 
 using NgxSetUiFn = void (*)(void* bag, const char* name, unsigned value);
 using NgxGetUiFn = unsigned (*)(void* bag, const char* name, unsigned* value);

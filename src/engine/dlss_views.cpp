@@ -17,6 +17,7 @@
 #include <mutex>
 
 #include "../log.h"
+#include "d3d11_kit.h"
 #include "dlss_math.h"
 #include "fsr_upscale.h"
 #include "ngx_dlss.h"
@@ -374,21 +375,17 @@ struct Camera {
     float nearM = 0.1f, farM = 10000.0f, fovY = 1.5f;
 };
 
+const char* log_tag() { return d.cfg.tag ? d.cfg.tag : "dlss"; }
+
 // A log line with the run's tag in front ("lmu dlss: ...").
 void say(const char* format, ...) {
-    char text[1024];
     va_list args;
     va_start(args, format);
-    std::vsnprintf(text, sizeof(text), format, args);
+    log_tagged_v(log_tag(), format, args);
     va_end(args);
-    simqvfr::logf("%s: %s", d.cfg.tag ? d.cfg.tag : "dlss", text);
 }
 
-void give_up(const char* why) {
-    if (!d.off)
-        say("off for this session: %s", why);
-    d.off = true;
-}
+void give_up(const char* why) { give_up_once(d.off, log_tag(), why); }
 
 ComPtr<ID3DBlob> compile(const char* source, const char* entry, const char* profile, const D3D_SHADER_MACRO* macros) {
     ComPtr<ID3DBlob> code, errors;
@@ -420,16 +417,8 @@ bool initialize(ID3D11DeviceContext* context) {
         give_up("its shaders couldn't be made");
         return false;
     }
-    D3D11_BUFFER_DESC bd{};
-    bd.ByteWidth = sizeof(Constants);
-    bd.Usage = D3D11_USAGE_DEFAULT;
-    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SAMPLER_DESC sd{};
-    sd.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sd.MaxLOD = D3D11_FLOAT32_MAX;
-    bool ok = SUCCEEDED(d.device->CreateBuffer(&bd, nullptr, &d.constants)) &&
-              SUCCEEDED(d.device->CreateSamplerState(&sd, &d.linearClamp));
+    bool ok = make_constant_buffer(d.device.Get(), sizeof(Constants), d.constants) &&
+              make_linear_clamp_sampler(d.device.Get(), d.linearClamp);
     D3D11_TEXTURE2D_DESC td{};
     td.Width = td.Height = 64;
     td.MipLevels = td.ArraySize = 1;
@@ -500,16 +489,7 @@ bool depth_view(ID3D11DepthStencilView* dsv, unsigned& width, unsigned& height) 
 }
 
 bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT format, UINT bind) {
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = w;
-    td.Height = h;
-    td.MipLevels = td.ArraySize = 1;
-    td.Format = format;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = bind;
-    texture.Reset();
-    return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
+    return make_texture2d(d.device.Get(), texture, w, h, format, bind);
 }
 
 // The upscaler the run asks for on this GPU: AMD FSR when asked, or with fsrWhereNoDlss where NGX can't run (a GPU not

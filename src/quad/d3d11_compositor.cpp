@@ -6,23 +6,9 @@
 #include <d3dcompiler.h>
 
 #include "../log.h"
+#include "dxgi_formats.h"
 
 namespace simqvfr {
-namespace {
-
-bool is_typeless(DXGI_FORMAT f) {
-    switch (f) {
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
-    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
-        return true;
-    default:
-        return false;
-    }
-}
-
-}  // namespace
 
 bool D3D11Compositor::initialize(ID3D11Device* device, DXGI_FORMAT viewFormat) {
     shutdown();
@@ -99,7 +85,7 @@ ID3D11ShaderResourceView* D3D11Compositor::source(ID3D11Texture2D* texture) {
     if (!view) {
         D3D11_TEXTURE2D_DESC d;
         texture->GetDesc(&d);
-        D3D11_SHADER_RESOURCE_VIEW_DESC v{is_typeless(d.Format) ? viewFormat_ : d.Format, D3D11_SRV_DIMENSION_TEXTURE2D};
+        D3D11_SHADER_RESOURCE_VIEW_DESC v{is_typeless_colour(d.Format) ? viewFormat_ : d.Format, D3D11_SRV_DIMENSION_TEXTURE2D};
         v.Texture2D.MipLevels = 1;
         if (FAILED(device_->CreateShaderResourceView(texture, &v, &view)))
             view.Reset();
@@ -112,7 +98,7 @@ ID3D11RenderTargetView* D3D11Compositor::target(ID3D11Texture2D* texture, DXGI_F
     if (!view) {
         D3D11_TEXTURE2D_DESC d;
         texture->GetDesc(&d);
-        D3D11_RENDER_TARGET_VIEW_DESC v{is_typeless(d.Format) ? typelessAs : d.Format, D3D11_RTV_DIMENSION_TEXTURE2D};
+        D3D11_RENDER_TARGET_VIEW_DESC v{is_typeless_colour(d.Format) ? typelessAs : d.Format, D3D11_RTV_DIMENSION_TEXTURE2D};
         if (FAILED(device_->CreateRenderTargetView(texture, &v, &view)))
             view.Reset();
     }

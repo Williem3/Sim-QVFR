@@ -16,6 +16,7 @@
 #include <nvsdk_ngx.h>
 
 #include "../log.h"
+#include "ngx_common.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -45,8 +46,6 @@ namespace {
 
 // NGX feature 18: the neural rendering runtime (NVSDK_NGX_Feature_Reserved18 in the SDK's public header).
 constexpr NVSDK_NGX_Feature kNeuralRendering = static_cast<NVSDK_NGX_Feature>(18);
-// The project id engine/ngx_dlss.cpp starts NGX with: ours, a custom engine's.
-constexpr const char* kProjectId = "5b1c0f1e-6a57-4c1b-9d0e-51a0c7f3d2a4";
 
 struct Allocator {
     ComPtr<ID3D12CommandAllocator> allocator;
@@ -109,15 +108,9 @@ void destroy(View* v) {
 
 void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
     std::string line = message ? message : "";
-    std::string lower = line;
-    for (char& c : lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (lower.find("error") == std::string::npos && lower.find("warn") == std::string::npos && lower.find("fail") == std::string::npos)
+    if (!ngx_line_logged(ngx_lower(line)))
         return;
-    if (lower.find("failed to load ngxcore") != std::string::npos || lower.find("from cache") != std::string::npos)
-        return;
-    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-        line.pop_back();
+    ngx_trim_line_end(line);
     simqvfr::logf("ngx nr: %s", line.c_str());
 }
 
@@ -294,7 +287,7 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_ON;
     info.LoggingInfo.DisableOtherLoggingSinks = true;
     const NVSDK_NGX_Result r =
-        NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", dataFolder, s.device.Get(), &info);
+        NVSDK_NGX_D3D12_Init_with_ProjectID(kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", dataFolder, s.device.Get(), &info);
     if (NVSDK_NGX_FAILED(r)) {
         ComPtr<ID3D12Device> keep = s.device;  // not NGX's to shut down: it never started
         s.device.Reset();

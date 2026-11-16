@@ -12,6 +12,7 @@
 
 #include <MinHook.h>
 
+#include "../engine/ngx_common.h"
 #include "../log.h"
 
 #if defined(SIM_QVFR_NGX)
@@ -159,7 +160,7 @@ const char* const kPresetKeys[6] = {
     NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,    NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
     NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality};
 
-bool ok(NVSDK_NGX_Result r) { return (static_cast<unsigned>(r) & 0xfff00000u) != 0xbad00000u; }
+bool ok(NVSDK_NGX_Result r) { return ngx_succeeded(static_cast<unsigned>(r)); }
 
 std::string name_of(ID3D12Resource* r) {
     if (!r)
