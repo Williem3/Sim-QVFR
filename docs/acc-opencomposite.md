@@ -1,8 +1,10 @@
 # Assetto Corsa Competizione in VR through OpenComposite
 
-> **Sim-QVFR's ACC support is an alpha.** This guide covers the one-time setup it needs: running
-> ACC's VR through OpenXR. Many players run ACC this way anyway, because it often runs smoother than
-> through SteamVR.
+> This guide covers the one-time setup Sim-QVFR needs in ACC: running ACC's VR through OpenXR. Many
+> players run ACC this way anyway, because it often runs smoother than through SteamVR. It takes about
+> five minutes and is easy to undo.
+
+[Back to the ACC guide](guides/assetto-corsa-competizione.md) · [Back to the README](../README.md)
 
 ## Why this is needed
 
@@ -24,7 +26,8 @@ Sim-QVFR doesn't include it, and isn't made by its authors.
 
 ## Set it up (for ACC only)
 
-This changes one file in ACC's folder. Your other SteamVR games aren't affected.
+This changes one file in ACC's folder. Your other SteamVR games aren't affected. From then on ACC's VR always goes
+through OpenComposite, also when you start ACC from Steam without Sim-QVFR.
 
 1. **Close ACC.**
 2. **Download OpenComposite's 64-bit DLL:**
@@ -40,8 +43,8 @@ This changes one file in ACC's folder. Your other SteamVR games aren't affected.
 ## Start ACC in VR
 
 1. **Start Steam and your headset's software.** You don't need to start SteamVR.
-2. **With Sim-QVFR:** in the launcher, choose **Assetto Corsa Competizione** under **Game** on the
-   **Rendering** page, then **Launch**. Its **Launch checks** say whether OpenComposite is installed.
+2. **With Sim-QVFR:** in the launcher, pick **Assetto Corsa Competizione** in the game list on the
+   left, then **Launch**. Its **Launch checks** say whether OpenComposite is installed.
 3. **Without Sim-QVFR:** double-click `acc_steamvr.bat` in ACC's main folder (the one Steam opened in
    step 3). It runs `acc.exe -vr hmd=SteamVR`. Don't use `acc_vr.bat`: that's Oculus mode, which goes
    around OpenComposite.
@@ -53,8 +56,8 @@ SteamVR is your OpenXR runtime, SteamVR opens as usual: that's expected.
 
 ## After an ACC update
 
-Updates can put the original `openvr_api.dll` back. If the log above stops being updated when you start
-the game, repeat steps 4 to 6 (rename the new original first).
+Updates can put the original `openvr_api.dll` back. The launcher's **Launch checks** tells you when
+OpenComposite is missing; then repeat steps 4 to 6 (rename the new original first).
 
 ## Undo it
 
