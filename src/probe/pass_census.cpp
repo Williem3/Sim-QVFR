@@ -12,6 +12,7 @@
 
 #include <wrl/client.h>
 
+#include "../engine/code_patch.h"
 #include "../log.h"
 #include "../xr.h"
 
@@ -114,21 +115,6 @@ Region region_of(const D3D12_VIEWPORT& v) {
 Census& entry(ID3D12PipelineState* pso) { return census[pso]; }
 std::string name_of(ID3D12PipelineState* pso);
 
-// module+offset of a return address.
-std::string describe(void* address) {
-    HMODULE module = nullptr;
-    char path[MAX_PATH] = "?";
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           static_cast<LPCSTR>(address), &module) &&
-        module)
-        GetModuleFileNameA(module, path, MAX_PATH);
-    const char* slash = std::strrchr(path, '\\');
-    char out[MAX_PATH + 32];
-    std::snprintf(out, sizeof(out), "%s+0x%llx", slash ? slash + 1 : path,
-                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module)));
-    return out;
-}
-
 void STDMETHODCALLTYPE setPsoHook(List* list, ID3D12PipelineState* pso) {
     ListState& s = state_of(list);
     s.pso = pso;
@@ -192,7 +178,7 @@ void log_stack(const char* prefix, ULONG skip) {
     char line[1024];
     int len = std::snprintf(line, sizeof(line), "%s stack:", prefix);
     for (USHORT i = 0; i < n && len < 960; ++i)
-        len += std::snprintf(line + len, sizeof(line) - len, " %s", describe(frames[i]).c_str());
+        len += std::snprintf(line + len, sizeof(line) - len, " %s", module_offset(frames[i]).c_str());
     log_line(line);
 }
 
@@ -280,20 +266,6 @@ void STDMETHODCALLTYPE dispatchHook(List* list, UINT x, UINT y, UINT z) {
         barrier.UAV.pResource = nullptr;
         list->ResourceBarrier(1, &barrier);
     }
-}
-
-bool patch(void** vtable, size_t slot, void* hook, void** original) {
-    DWORD old = 0;
-    if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old))
-        return false;
-    *original = vtable[slot];
-    vtable[slot] = hook;
-    VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
-    return true;
-}
-
-template <class Fn> bool hook(void** vtable, size_t slot, Fn detour, Fn* original) {
-    return patch(vtable, slot, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original));
 }
 
 std::string name_of(ID3D12PipelineState* pso) {
@@ -387,12 +359,12 @@ bool pass_census_start(ID3D12Device* device) {
     msPerTick = 1000.0 / static_cast<double>(frequency.QuadPart);
     maxGapTicks = static_cast<int64_t>(kMaxGapMs / msPerTick);
     void** vtable = *reinterpret_cast<void***>(list.Get());
-    started = hook(vtable, simqvfr_slot_SetPipelineState(), &setPsoHook, &setPsoOriginal) &&
-              hook(vtable, simqvfr_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
-              hook(vtable, simqvfr_slot_DrawIndexedInstanced(), &drawIndexedHook, &drawIndexedOriginal) &&
-              hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
-              hook(vtable, simqvfr_slot_ExecuteIndirect(), &indirectHook, &indirectOriginal) &&
-              hook(vtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
+    started = vtable_hook(vtable, simqvfr_slot_SetPipelineState(), &setPsoHook, &setPsoOriginal) &&
+              vtable_hook(vtable, simqvfr_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
+              vtable_hook(vtable, simqvfr_slot_DrawIndexedInstanced(), &drawIndexedHook, &drawIndexedOriginal) &&
+              vtable_hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
+              vtable_hook(vtable, simqvfr_slot_ExecuteIndirect(), &indirectHook, &indirectOriginal) &&
+              vtable_hook(vtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
     logf("pass census: %s (list vtable %p)", started ? "installed" : "FAILED", vtable);
     return started;
 }

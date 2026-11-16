@@ -333,10 +333,8 @@ bool pass_probe_start(const PassProbeConfig& c) {
     LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
     qpcFrequency = f.QuadPart;
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        simqvfr::log_line("acc passes: MH_Initialize failed: probe off");
+    if (!simqvfr::minhook_ready("acc passes", ": probe off"))
         return false;
-    }
     // Setup first: the A/B's skip lives there; the timing hooks after it.
     if (!hook(kDispatchPassSetup, kDispatchPassSetupAnchor, sizeof(kDispatchPassSetupAnchor),
               reinterpret_cast<void*>(&setup_hook), originalSetup, "DispatchPassSetup") ||

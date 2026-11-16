@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "../log.h"
+#include "code_patch.h"
 
 namespace simqvfr::context_hooks {
 namespace {
@@ -307,10 +308,8 @@ bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& obs
     std::lock_guard lock(g.mutex);
     if (ID3D11DeviceContext* const current = g.context.load(); !context || current)
         return current == context && context;
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        log_line("context hooks: MH_Initialize failed: off");
+    if (!minhook_ready("context hooks", ": off"))
         return false;
-    }
     g.wanted = wanted;
     g.observers = observers;
     g.context.store(context);  // last: the detours start observing once it's set

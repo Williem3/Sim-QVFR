@@ -1260,13 +1260,6 @@ void pass_end(int p) {
     }
 }
 
-std::wstring captures_folder() {
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"captures";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    return dir.wstring();
-}
-
 const char* tag() { return "lmu qvfr"; }
 
 // ---- QVFR: the four views at the frame capture hotkey ----
@@ -1286,7 +1279,7 @@ void capture_views() {
         simqvfr::logf("lmu qvfr: frame capture: frame %llu's views couldn't be read back", frames);
         return;
     }
-    const std::wstring dir = captures_folder();
+    const std::wstring dir = simqvfr::captures_directory();
     const wchar_t* names[4] = {L"eye0", L"eye1", L"focus0", L"focus1"};
     std::wstring paths[4];
     for (int v = 0; v < 4; ++v) {
@@ -1373,10 +1366,8 @@ bool four_passes_start(const FourPassesRun& run) {
     // The game's own two eye passes, found at the d3d11 level, and the lens mask and the VR UI from their d3d11 draws:
     // no game code hooked.
     const bool driven = cfg.trackerDrives;
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        simqvfr::logf("%s: MH_Initialize failed", tag());
+    if (!simqvfr::minhook_ready(tag()))
         return false;
-    }
     if (driven) {
         installed = true;
         mvr_time_hooks(cfg.mvrTiming);

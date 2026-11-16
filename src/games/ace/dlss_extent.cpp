@@ -101,6 +101,9 @@ bool dlss_extent_start() {
         log_line("views4 dlss: NGX create/evaluate anchor mismatch; the DLSS output sizes are left to ACE");
         return false;
     }
+    // Its own MH_Initialize: views4 normally ran it first, but this start must not depend on that order.
+    if (!minhook_ready("views4 dlss", "; the DLSS output sizes are left to ACE"))
+        return false;
     void* create = reinterpret_cast<void*>(module_base() + ace::kNgxCreateFeatureRva);
     void* evaluate = reinterpret_cast<void*>(module_base() + ace::kNgxEvaluateFeatureRva);
     MH_STATUS s = MH_CreateHook(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));

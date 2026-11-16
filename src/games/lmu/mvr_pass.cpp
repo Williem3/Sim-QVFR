@@ -2039,11 +2039,11 @@ bool scene_bound(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencil
         return true;  // (tests without the tracker: as before)
     if (!dsv)
         return false;
-    ComPtr<ID3D11Resource> depth;
-    dsv->GetResource(&depth);
+    ComPtr<ID3D11Resource> bound;
+    dsv->GetResource(&bound);
     if (!g.passDepth && n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0] && is_scene_rtv(rtvs[0]))
-        g.passDepth = depth.Get();
-    return depth && depth.Get() == g.passDepth;
+        g.passDepth = bound.Get();
+    return bound && bound.Get() == g.passDepth;
 }
 
 // Twin, two views and the second viewport exactly while a focus-drawing pass draws into its scene's targets (or an
@@ -4857,7 +4857,7 @@ bool mvr_pass_install(ID3D11Device* device) {
             for (auto& q : pass)
                 device->CreateQuery(&tq, &q);
     }
-    if (const MH_STATUS s = MH_Initialize(); s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
+    if (!simqvfr::minhook_ready(nullptr))  // no line here, as before
         return false;
     // The probe's way to the two views (tests set it with mvr_use_instanced): instancing hooks the draws too.
     if (mvr_probe_backend() == MvrBackend::instanced)

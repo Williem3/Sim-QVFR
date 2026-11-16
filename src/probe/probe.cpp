@@ -8,6 +8,7 @@
 
 #include <MinHook.h>
 
+#include "../engine/code_patch.h"
 #include "../games/ace/abi.h"
 #include "../games/ace/game.h"
 #include "../sha256_file.h"
@@ -46,24 +47,6 @@ std::atomic<uint64_t> frame{0};
 std::atomic<bool> sequenceActive{false};
 std::atomic<int> sequenceFramesLeft{0};
 size_t stubJumpSlot = 0;
-
-std::string describe(uint64_t address) {
-    HMODULE module = nullptr;
-    char name[MAX_PATH] = "?";
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCSTR>(address), &module) &&
-        module) {
-        char path[MAX_PATH];
-        if (GetModuleFileNameA(module, path, MAX_PATH)) {
-            const char* slash = std::strrchr(path, '\\');
-            std::snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
-        }
-    }
-    char out[MAX_PATH + 32];
-    std::snprintf(out, sizeof(out), "%s+0x%llx", name,
-                  static_cast<unsigned long long>(address - reinterpret_cast<uint64_t>(module)));
-    return out;
-}
 
 // Unwinds from the hooked function's caller using the exe's own unwind tables.
 int walk_stack(const EntryRegisters& regs, uint64_t (&frames)[kStackFrames]) {
@@ -105,13 +88,15 @@ void log_call(size_t id, const EntryRegisters& regs, uint64_t call, bool withSta
     int n = std::snprintf(line, sizeof(line), "probe %s call=%llu frame=%llu this=%p arg2=%lld caller=%s",
                           ace::kProbeTargets[id].name, static_cast<unsigned long long>(call),
                           static_cast<unsigned long long>(frame.load()), reinterpret_cast<void*>(regs.rcx),
-                          static_cast<long long>(regs.rdx), describe(regs.returnAddress).c_str());
+                          static_cast<long long>(regs.rdx),
+                          module_offset(reinterpret_cast<const void*>(regs.returnAddress)).c_str());
     if (withStack) {
         uint64_t frames[kStackFrames];
         int count = walk_stack(regs, frames);
         n += std::snprintf(line + n, sizeof(line) - n, " stack:");
         for (int i = 1; i < count && n < static_cast<int>(sizeof(line)) - 64; ++i)
-            n += std::snprintf(line + n, sizeof(line) - n, " %s", describe(frames[i]).c_str());
+            n += std::snprintf(line + n, sizeof(line) - n, " %s",
+                               module_offset(reinterpret_cast<const void*>(frames[i])).c_str());
     }
     logd("%s", line);
 }
@@ -170,13 +155,6 @@ void set_stub_target(uint8_t* stub, void* original) {
     FlushInstructionCache(GetCurrentProcess(), stub, 256);
 }
 
-bool readable(const void* address, size_t size) {
-    MEMORY_BASIC_INFORMATION mbi;
-    return VirtualQuery(address, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
-           !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-           reinterpret_cast<uintptr_t>(address) + size <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-}
-
 bool verified_build() {
     const games::GameInfo* game = games::current_game();
     if (game != &ace::kGame) {
@@ -220,10 +198,8 @@ bool probe_start() {
     if (!verified_build())
         return false;
     // views4 may have initialised MinHook already, at xrCreateInstance.
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        log_line("probe: MH_Initialize failed");
+    if (!minhook_ready("probe"))
         return false;
-    }
     // Each probe stands alone: MinHook's decoder cannot relocate some prologues (VEX-encoded AVX
     // instructions such as set_fov's `vmovss`), and one unhookable target must not cost the rest.
     size_t queued = 0;

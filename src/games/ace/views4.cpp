@@ -894,11 +894,8 @@ bool views4_start(const wchar_t* callers, bool eyesOnlySlotAdvance, double focus
             return false;
         }
     }
-    const MH_STATUS init = MH_Initialize();
-    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        log_line("views4: MH_Initialize failed; experiment refused");
+    if (!minhook_ready("views4", "; experiment refused"))
         return false;
-    }
     const struct {
         uintptr_t rva;
         void* detour;

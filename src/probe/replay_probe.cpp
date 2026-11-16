@@ -21,6 +21,7 @@
 
 #include <wrl/client.h>
 
+#include "../engine/code_patch.h"
 #include "../log.h"
 #include "../xr.h"
 #include "d3d11_capture.h"  // write_png_bgra
@@ -7558,19 +7559,6 @@ void STDMETHODCALLTYPE indirectHook(List* l, ID3D12CommandSignature* sig, UINT m
     indirectOriginal(l, sig, max, args, argsOffset, count, countOffset);
 }
 
-bool patch(void** vtable, size_t slot, void* hook, void** original) {
-    DWORD old = 0;
-    if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old))
-        return false;
-    *original = vtable[slot];
-    vtable[slot] = hook;
-    VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
-    return true;
-}
-template <class Fn> bool hook(void** vtable, size_t slot, Fn detour, Fn* original) {
-    return patch(vtable, slot, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original));
-}
-
 void calibrate() {
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
@@ -7606,14 +7594,14 @@ void replay_probe_early_sky() {
         return;
     }
     void** deviceTable = *reinterpret_cast<void***>(d.Get());
-    bool ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
-              hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
-              hook(deviceTable, simqvfr_slot_CreatePipelineState(), &streamPsoHook, &streamPsoOriginal);
+    bool ok = vtable_hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
+              vtable_hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
+              vtable_hook(deviceTable, simqvfr_slot_CreatePipelineState(), &streamPsoHook, &streamPsoOriginal);
     ComPtr<ID3D12PipelineLibrary1> lib;
     if (ok && SUCCEEDED(d->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&lib)))) {
         void** libTable = *reinterpret_cast<void***>(lib.Get());
-        ok = hook(libTable, simqvfr_slot_LoadGraphicsPipeline(), &libGfxHook, &libGfxOriginal) &&
-             hook(libTable, simqvfr_slot_LoadPipeline(), &libStreamHook, &libStreamOriginal);
+        ok = vtable_hook(libTable, simqvfr_slot_LoadGraphicsPipeline(), &libGfxHook, &libGfxOriginal) &&
+             vtable_hook(libTable, simqvfr_slot_LoadPipeline(), &libStreamHook, &libStreamOriginal);
     }
     skyHooksEarly = ok;
     logf("replay focus: sky: early hooks (pipeline creation and cache loads, constant-buffer views) %s",
@@ -7661,37 +7649,38 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
     // failure they stay in, passing through.
     startPatched = true;
     bool ok =
-        hook(vtable, simqvfr_slot_Reset(), &resetHook, &resetOriginal) &&
-        hook(vtable, simqvfr_slot_Close(), &closeHook, &closeOriginal) &&
-        hook(vtable, simqvfr_slot_SetGraphicsRootSignature(), &rootSigHook, &rootSigOriginal) &&
-        hook(vtable, simqvfr_slot_SetPipelineState(), &psoHook, &psoOriginal) &&
-        hook(vtable, simqvfr_slot_SetDescriptorHeaps(), &heapsHook, &heapsOriginal) &&
-        hook(vtable, simqvfr_slot_SetGraphicsRootDescriptorTable(), &tableHook, &tableOriginal) &&
-        hook(vtable, simqvfr_slot_SetGraphicsRoot32BitConstant(), &const1Hook, &const1Original) &&
-        hook(vtable, simqvfr_slot_SetGraphicsRoot32BitConstants(), &constNHook, &constNOriginal) &&
-        hook(vtable, simqvfr_slot_SetGraphicsRootConstantBufferView(), &cbvHook, &cbvOriginal) &&
-        hook(vtable, simqvfr_slot_SetGraphicsRootShaderResourceView(), &srvHook, &srvOriginal) &&
-        hook(vtable, simqvfr_slot_IASetPrimitiveTopology(), &topologyHook, &topologyOriginal) &&
-        hook(vtable, simqvfr_slot_IASetIndexBuffer(), &ibHook, &ibOriginal) &&
-        hook(vtable, simqvfr_slot_IASetVertexBuffers(), &vbHook, &vbOriginal) &&
-        hook(vtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal) &&
-        hook(vtable, simqvfr_slot_RSSetScissorRects(), &scissorsHook, &scissorsOriginal) &&
-        hook(vtable, simqvfr_slot_OMSetStencilRef(), &stencilHook, &stencilOriginal) &&
-        hook(vtable, simqvfr_slot_OMSetRenderTargets(), &omHook, &omOriginal) &&
-        hook(vtable, simqvfr_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
-        hook(vtable, simqvfr_slot_DrawIndexedInstanced(), &drawIndexedHook, &drawIndexedOriginal) &&
-        hook(vtable, simqvfr_slot_ExecuteIndirect(), &indirectHook, &indirectOriginal);
+        vtable_hook(vtable, simqvfr_slot_Reset(), &resetHook, &resetOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_Close(), &closeHook, &closeOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetGraphicsRootSignature(), &rootSigHook, &rootSigOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetPipelineState(), &psoHook, &psoOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetDescriptorHeaps(), &heapsHook, &heapsOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetGraphicsRootDescriptorTable(), &tableHook, &tableOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetGraphicsRoot32BitConstant(), &const1Hook, &const1Original) &&
+        vtable_hook(vtable, simqvfr_slot_SetGraphicsRoot32BitConstants(), &constNHook, &constNOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetGraphicsRootConstantBufferView(), &cbvHook, &cbvOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_SetGraphicsRootShaderResourceView(), &srvHook, &srvOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_IASetPrimitiveTopology(), &topologyHook, &topologyOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_IASetIndexBuffer(), &ibHook, &ibOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_IASetVertexBuffers(), &vbHook, &vbOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_RSSetScissorRects(), &scissorsHook, &scissorsOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_OMSetStencilRef(), &stencilHook, &stencilOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_OMSetRenderTargets(), &omHook, &omOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_DrawInstanced(), &drawHook, &drawOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_DrawIndexedInstanced(), &drawIndexedHook, &drawIndexedOriginal) &&
+        vtable_hook(vtable, simqvfr_slot_ExecuteIndirect(), &indirectHook, &indirectOriginal);
     if (ok && mode == 3) {
         focus.queue = queue;
         void** deviceTable = *reinterpret_cast<void***>(d);
-        ok = hook(deviceTable, simqvfr_slot_CreateDepthStencilView(), &dsvHook, &dsvOriginal) &&
-             hook(deviceTable, simqvfr_slot_CreateRenderTargetView(), &rtvHook, &rtvOriginal) &&
-             hook(*reinterpret_cast<void***>(queue), simqvfr_slot_ExecuteCommandLists(), &executeHook, &executeOriginal) &&
+        ok = vtable_hook(deviceTable, simqvfr_slot_CreateDepthStencilView(), &dsvHook, &dsvOriginal) &&
+             vtable_hook(deviceTable, simqvfr_slot_CreateRenderTargetView(), &rtvHook, &rtvOriginal) &&
+             vtable_hook(*reinterpret_cast<void***>(queue), simqvfr_slot_ExecuteCommandLists(), &executeHook,
+                         &executeOriginal) &&
              focus_compile();
         if (ok && settings.cull) {  // focus culling: the buffer copies of ACE's visibility list
             cull.mode = settings.cull;
             cull.use = settings.cull == 2;
-            ok = hook(vtable, simqvfr_slot_CopyBufferRegion(), &copyRegionHook, &copyRegionOriginal);
+            ok = vtable_hook(vtable, simqvfr_slot_CopyBufferRegion(), &copyRegionHook, &copyRegionOriginal);
             logf("replay cull: focus culling %s (replay_cull=%d: 1 computed only, 2 used by the focus replays, 3 used in "
                  "alternate 900-frame windows)",
                  ok ? "on" : "could not hook", settings.cull);
@@ -7717,38 +7706,42 @@ bool replay_probe_start(ID3D12Device* d, int mode, ID3D12CommandQueue* queue, co
                  gpuSteps.on ? "on" : "could not start");
         }
         if (ok && settings.tiles)
-            ok = hook(vtable, simqvfr_slot_SetComputeRootSignature(), &computeRootSigHook, &computeRootSigOriginal) &&
-                 hook(vtable, simqvfr_slot_SetComputeRoot32BitConstants(), &computeConstNHook, &computeConstNOriginal) &&
-                 hook(vtable, simqvfr_slot_SetComputeRootConstantBufferView(), &computeCbvHook, &computeCbvOriginal) &&
-                 hook(vtable, simqvfr_slot_SetComputeRootDescriptorTable(), &computeTableHook, &computeTableOriginal) &&
-                 hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
-                 hook(deviceTable, simqvfr_slot_CreateShaderResourceView(), &srvViewHook, &srvViewOriginal) &&
-                 hook(deviceTable, simqvfr_slot_CopyDescriptorsSimple(), &copySimpleHook, &copySimpleOriginal) &&
-                 hook(deviceTable, simqvfr_slot_CreateUnorderedAccessView(), &uavViewHook, &uavViewOriginal) &&
-                 hook(deviceTable, slot_CopyDescriptors(), &copyRangesHook, &copyRangesOriginal);
+            ok = vtable_hook(vtable, simqvfr_slot_SetComputeRootSignature(), &computeRootSigHook,
+                             &computeRootSigOriginal) &&
+                 vtable_hook(vtable, simqvfr_slot_SetComputeRoot32BitConstants(), &computeConstNHook,
+                             &computeConstNOriginal) &&
+                 vtable_hook(vtable, simqvfr_slot_SetComputeRootConstantBufferView(), &computeCbvHook,
+                             &computeCbvOriginal) &&
+                 vtable_hook(vtable, simqvfr_slot_SetComputeRootDescriptorTable(), &computeTableHook,
+                             &computeTableOriginal) &&
+                 vtable_hook(vtable, simqvfr_slot_Dispatch(), &dispatchHook, &dispatchOriginal) &&
+                 vtable_hook(deviceTable, simqvfr_slot_CreateShaderResourceView(), &srvViewHook, &srvViewOriginal) &&
+                 vtable_hook(deviceTable, simqvfr_slot_CopyDescriptorsSimple(), &copySimpleHook, &copySimpleOriginal) &&
+                 vtable_hook(deviceTable, simqvfr_slot_CreateUnorderedAccessView(), &uavViewHook, &uavViewOriginal) &&
+                 vtable_hook(deviceTable, slot_CopyDescriptors(), &copyRangesHook, &copyRangesOriginal);
         else if (ok) {
             srvViewOriginal = reinterpret_cast<SrvFn>(deviceTable[simqvfr_slot_CreateShaderResourceView()]);
             uavViewOriginal = reinterpret_cast<UavFn>(deviceTable[simqvfr_slot_CreateUnorderedAccessView()]);
         }
         if (ok && ((settings.sky && settings.tiles) || settings.tyres) && !skyHooksEarly)
-            ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
-                 hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
-                 hook(deviceTable, simqvfr_slot_CreatePipelineState(), &streamPsoHook, &streamPsoOriginal);
+            ok = vtable_hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvViewHook, &cbvViewOriginal) &&
+                 vtable_hook(deviceTable, simqvfr_slot_CreateGraphicsPipelineState(), &gfxPsoHook, &gfxPsoOriginal) &&
+                 vtable_hook(deviceTable, simqvfr_slot_CreatePipelineState(), &streamPsoHook, &streamPsoOriginal);
         if (ok && ((settings.sky && settings.tiles) || settings.tyres) && !skyHooksEarly) {
             ComPtr<ID3D12Device1> d1;
             ComPtr<ID3D12PipelineLibrary1> lib;
             if (SUCCEEDED(d->QueryInterface(IID_PPV_ARGS(&d1))) &&
                 SUCCEEDED(d1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&lib)))) {
                 void** libTable = *reinterpret_cast<void***>(lib.Get());
-                if (!hook(libTable, simqvfr_slot_LoadGraphicsPipeline(), &libGfxHook, &libGfxOriginal) ||
-                    !hook(libTable, simqvfr_slot_LoadPipeline(), &libStreamHook, &libStreamOriginal))
+                if (!vtable_hook(libTable, simqvfr_slot_LoadGraphicsPipeline(), &libGfxHook, &libGfxOriginal) ||
+                    !vtable_hook(libTable, simqvfr_slot_LoadPipeline(), &libStreamHook, &libStreamOriginal))
                     log_line("replay focus: sky: could not hook the pipeline library");
             } else {
                 log_line("replay focus: sky: no pipeline library on this device (pipelines from a cache not seen)");
             }
         }
         else if (ok && !skyHooksEarly && settings.tiles)  // our slots: the game's CBVs checked against them
-            ok = hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvCheckHook, &cbvViewOriginal);
+            ok = vtable_hook(deviceTable, simqvfr_slot_CreateConstantBufferView(), &cbvCheckHook, &cbvViewOriginal);
         else if (ok && !skyHooksEarly)
             cbvViewOriginal = reinterpret_cast<CbvFn>(deviceTable[simqvfr_slot_CreateConstantBufferView()]);
         focus.sampleFrame = settings.saveCount ? settings.saveFirst : UINT64_MAX;

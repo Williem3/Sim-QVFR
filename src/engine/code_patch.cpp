@@ -1,7 +1,10 @@
 #include "code_patch.h"
 
+#include <cstdio>
 #include <cstring>
 #include <vector>
+
+#include <MinHook.h>
 
 #include "../log.h"
 #include "../xr.h"
@@ -14,13 +17,6 @@ namespace {
 uint8_t* stubPage = nullptr;
 size_t stubUsed = 0;
 constexpr size_t kStubPageSize = 0x1000;
-
-bool readable(const void* address, size_t size) {
-    MEMORY_BASIC_INFORMATION mbi;
-    return VirtualQuery(address, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
-           !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-           reinterpret_cast<uintptr_t>(address) + size <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-}
 
 // Executable memory below the module, so `jmp rel32` reaches it from the module's code and back.
 uint8_t* stub_alloc(size_t size) {
@@ -111,6 +107,40 @@ bool rel32(const void* from_end, const void* to, int32_t* out) {
 }  // namespace
 
 uintptr_t module_base() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
+
+bool readable(const void* address, size_t size) {
+    MEMORY_BASIC_INFORMATION mbi;
+    return VirtualQuery(address, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
+           !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+           reinterpret_cast<uintptr_t>(address) + size <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+}
+
+std::string module_offset(const void* address) {
+    HMODULE module = nullptr;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(address), &module) &&
+        module) {
+        char path[MAX_PATH];
+        if (GetModuleFileNameA(module, path, MAX_PATH)) {
+            const char* slash = std::strrchr(path, '\\');
+            std::snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
+        }
+    }
+    char out[MAX_PATH + 32];
+    std::snprintf(out, sizeof(out), "%s+0x%llx", name,
+                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module)));
+    return out;
+}
+
+bool minhook_ready(const char* tag, const char* outcome) {
+    const MH_STATUS init = MH_Initialize();
+    if (init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED)
+        return true;
+    if (tag)
+        logf("%s: MH_Initialize failed%s", tag, outcome);
+    return false;
+}
 
 bool code_matches(uintptr_t rva, const uint8_t* anchor, size_t size) {
     const void* p = reinterpret_cast<const void*>(module_base() + rva);
@@ -294,6 +324,25 @@ bool vtable_slot_replace(uintptr_t slotRva, uintptr_t expectedRva, const void* r
         return false;
     }
     return code_write(slotRva, &wanted, sizeof(wanted));
+}
+
+bool vtable_patch(void** vtable, size_t slot, void* hook, void** original) {
+    // Already ours (a retry after a partial failure): saving it as the original would recurse.
+    if (vtable[slot] == hook)
+        return true;
+    // Keep execute when the page had it; only add write.
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(&vtable[slot], &info, sizeof(info)))
+        return false;
+    constexpr DWORD kExecute = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    const DWORD writable = (info.Protect & kExecute) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+    DWORD old = 0;
+    if (!VirtualProtect(&vtable[slot], sizeof(void*), writable, &old))
+        return false;
+    *original = vtable[slot];
+    vtable[slot] = hook;
+    VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
+    return true;
 }
 
 }  // namespace simqvfr

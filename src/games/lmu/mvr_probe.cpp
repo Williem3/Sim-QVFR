@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../../engine/code_patch.h"
 #include "../../engine/dlss_settings.h"
 #include "../../engine/dxbc_patch.h"
 #include "../../engine/nvapi_stereo.h"
@@ -569,10 +570,8 @@ bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     markChecksums =
         attach && (nameShaders || (ini && GetPrivateProfileIntW(L"experiment", L"lmu_focus_replay", 0, ini) != 0));
     underRenderDoc = GetModuleHandleW(L"renderdoc.dll") != nullptr;
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        simqvfr::log_line("lmu mvr probe: MH_Initialize failed; probe off");
+    if (!simqvfr::minhook_ready("lmu mvr probe", "; probe off"))
         return false;
-    }
     const bool device = MH_CreateHookApiEx(L"d3d11.dll", "D3D11CreateDevice", reinterpret_cast<void*>(&create_device),
                                            reinterpret_cast<void**>(&originalCreateDevice), &deviceCreation[0]) == MH_OK &&
                         MH_EnableHook(deviceCreation[0]) == MH_OK;

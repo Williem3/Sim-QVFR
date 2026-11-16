@@ -1,10 +1,10 @@
 #include "views3.h"
 
 #include <cstdint>
-#include <cstring>
 #include <iterator>
 
 #include "abi.h"
+#include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "../../probe/probe.h"
 #include "../../xr.h"
@@ -64,20 +64,16 @@ void on_renderer_begin(void* renderer) {
 bool views3_patch() {
     if (patched)
         return true;
-    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-    auto* immediate = reinterpret_cast<uint8_t*>(base + ace::kInitVrModeImmediateRva);
-    if (std::memcmp(immediate - 1, ace::kInitVrModeAnchor, sizeof(ace::kInitVrModeAnchor)) != 0) {
+    // The anchor starts one byte early, at the `mov ebx, imm32` opcode; only the immediate's low byte is written.
+    if (!code_matches(ace::kInitVrModeImmediateRva - 1, ace::kInitVrModeAnchor, sizeof(ace::kInitVrModeAnchor))) {
         log_line("views3: renderer init anchor mismatch; experiment refused");
         return false;
     }
-    DWORD protect = 0;
-    if (!VirtualProtect(immediate, 1, PAGE_EXECUTE_READWRITE, &protect)) {
-        log_line("views3: VirtualProtect failed; experiment refused");
+    const uint8_t mode = 2;
+    if (!code_write(ace::kInitVrModeImmediateRva, &mode, 1)) {
+        log_line("views3: renderer init not written; experiment refused");
         return false;
     }
-    *immediate = 2;
-    VirtualProtect(immediate, 1, protect, &protect);
-    FlushInstructionCache(GetCurrentProcess(), immediate, 1);
     patched = true;
     log_line("views3: renderer init patched, VR selects view mode 2 (3 views)");
     return true;
