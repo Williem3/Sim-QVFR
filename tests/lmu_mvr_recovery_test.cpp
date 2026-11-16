@@ -3,19 +3,9 @@
 #include <cstdio>
 
 #include "games/lmu/mvr_recovery.h"
+#include "test_util.h"
 
 using lmu::MvrRecovery;
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-}  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     using Event = MvrRecovery::Event;

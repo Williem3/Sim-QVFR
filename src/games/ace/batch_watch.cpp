@@ -175,11 +175,8 @@ bool batch_watch_start() {
         log_line("batch: anchor mismatch (different ACE build?); batch watch off");
         return false;
     }
-    const MH_STATUS init = MH_Initialize();
-    if (init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        log_line("batch: MH_Initialize failed; batch watch off");
+    if (!minhook_ready("batch", "; batch watch off"))
         return false;
-    }
     void* target = reinterpret_cast<void*>(module_base() + ace::kBatchMergeRva);
     MH_STATUS s = MH_CreateHook(target, reinterpret_cast<void*>(&mergeHook), reinterpret_cast<void**>(&mergeOriginal));
     if (s == MH_OK)

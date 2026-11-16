@@ -10,6 +10,7 @@
 
 #include "games/adapter.h"
 #include "log.h"
+#include "probe/hang_watch.h"
 #include "quad/compositor.h"
 #include "quad/focus_outline.h"
 #include "quad/focus_turn.h"
@@ -125,5 +126,35 @@ void focus_centre(const EyeComposition& eye, float& tanX, float& tanY) {
 }
 
 bool sampled(uint64_t count) { return count <= kDetailedFrames || count % kSampleEveryFrames == 0; }
+
+XrResult acquire_wait(XrSwapchain chain, PendingImage& pending, XrDuration timeout, int tries, uint32_t& index,
+                      const char* stage) {
+    if (!pending.acquired) {
+        XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        const XrResult r = next.AcquireSwapchainImage(chain, &acquire, &pending.index);
+        if (XR_FAILED(r))
+            return r;
+        pending.acquired = true;
+    }
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, timeout};
+    XrResult r = XR_TIMEOUT_EXPIRED;
+    for (int i = 0; i < std::max(1, tries) && r == XR_TIMEOUT_EXPIRED; ++i) {
+        if (stage)
+            hang_watch_stage(stage);
+        r = next.WaitSwapchainImage(chain, &wait);
+    }
+    if (stage)
+        hang_watch_stage(nullptr);
+    // XR_TIMEOUT_EXPIRED is a success code, but the image isn't ready: it stays pending. Any other success (also
+    // XR_SESSION_LOSS_PENDING) waited for it.
+    if (XR_SUCCEEDED(r) && r != XR_TIMEOUT_EXPIRED) {
+        pending.acquired = false;
+        index = pending.index;
+        return XR_SUCCESS;
+    }
+    if (r == XR_ERROR_CALL_ORDER_INVALID)
+        pending.acquired = false;  // the runtime has no image acquired for us: acquire anew next time
+    return r;
+}
 
 }  // namespace simqvfr::layer

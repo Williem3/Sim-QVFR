@@ -79,8 +79,14 @@ using CmdPushConstants = void (*)(void* commandBuffer, std::uint64_t layout, std
                                   std::uint32_t size, const void* values);
 constexpr std::uint32_t kFocusStages = 0x1 | 0x10 | 0x20;  // vertex, fragment, compute
 constexpr PushConstantRange kFocusRange = {kFocusStages, 0, kFocusBlockBytes};
-std::once_flag g_pushLayoutOnce;
-std::uint64_t g_pushLayout = 0;  // ours, with the range alone: pushes through it reach every layout (same ranges)
+// Ours, with the range alone (pushes through it reach every extended layout: same ranges), made on the device of the
+// latest layout: a VkDevice made again gets its own at its first layout, before any of its pipelines is bound. The
+// device is told by its handle and the loader's dispatch table (its first word), so a new device at a freed address
+// is told apart too. Written under the mutex, read without it at every bind.
+std::mutex g_pushLayoutMutex;
+void* g_pushDevice = nullptr;          // under the mutex
+void* g_pushDeviceDispatch = nullptr;  // under the mutex
+std::atomic<std::uint64_t> g_pushLayout{0};  // 0: none (the bind then pushes nothing)
 std::atomic<int> g_layoutsExtended{0}, g_layoutsOwnRanges{0};
 std::atomic<std::uint64_t> g_focusPushes{0};
 
@@ -103,20 +109,28 @@ std::int32_t create_pipeline_layout(void* device, const PipelineLayoutCreateInfo
     const auto real = *reinterpret_cast<CreatePipelineLayout*>(simqvfr::module_base() + kVkCreatePipelineLayoutSlot);
     if (!g_focusPush.load(std::memory_order_relaxed) || !info)
         return real(device, info, allocator, layout);
-    std::call_once(g_pushLayoutOnce, [&] {
-        PipelineLayoutCreateInfo own{};
-        own.sType = info->sType;
-        own.pushConstantRangeCount = 1;
-        own.pPushConstantRanges = &kFocusRange;
-        const std::int32_t r = real(device, &own, nullptr, &g_pushLayout);
-        logf("xplane: focus boxes: own pipeline layout for the pushes: %d", r);
-        if (r != 0)
-            g_pushLayout = 0;
-    });
+    // This device's push layout, made at its first layout.
+    if (device) {
+        void* const dispatch = *static_cast<void**>(device);
+        std::lock_guard guard(g_pushLayoutMutex);
+        if (device != g_pushDevice || dispatch != g_pushDeviceDispatch) {
+            PipelineLayoutCreateInfo own{};
+            own.sType = info->sType;
+            own.pushConstantRangeCount = 1;
+            own.pPushConstantRanges = &kFocusRange;
+            std::uint64_t made = 0;
+            const std::int32_t r = real(device, &own, nullptr, &made);
+            logf("xplane: focus boxes: own pipeline layout for the pushes (%s device): %d",
+                 g_pushDevice ? "a new" : "the", r);
+            g_pushDevice = device;
+            g_pushDeviceDispatch = dispatch;
+            g_pushLayout.store(r == 0 ? made : 0, std::memory_order_release);
+        }
+    }
     if (info->pushConstantRangeCount != 0) {
         if (g_layoutsOwnRanges.fetch_add(1) == 0)
-            logf("xplane: focus boxes: a pipeline layout with push constants of its own (left as it is; its shaders "
-                 "would read no boxes)");
+            logf("xplane: focus boxes: a pipeline layout with push constants of its own (left as it is; shader "
+                 "modules with push constants of their own get the baked edits)");
         return real(device, info, allocator, layout);
     }
     PipelineLayoutCreateInfo extended = *info;
@@ -131,7 +145,10 @@ std::int32_t create_pipeline_layout(void* device, const PipelineLayoutCreateInfo
 void bind_pipeline(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t pipeline) {
     const auto base = simqvfr::module_base();
     (*reinterpret_cast<CmdBindPipeline*>(base + kVkCmdBindPipelineSlot))(commandBuffer, bindPoint, pipeline);
-    if (!g_pushLayout)
+    // Our layout's range only: a pipeline whose layout has push constants of its own (counted in
+    // create_pipeline_layout; X-Plane's have none) can't be told apart here without a pipeline creation hook.
+    const std::uint64_t pushLayout = g_pushLayout.load(std::memory_order_acquire);
+    if (!pushLayout)
         return;
     const FocusFrame frame = g_frame.load();
     float values[kFocusBlockBytes / 4];
@@ -139,7 +156,7 @@ void bind_pipeline(void* commandBuffer, std::uint32_t bindPoint, std::uint64_t p
     std::memcpy(values + 4 * kFocusValuesEntry, frame.values, sizeof(frame.values));
     std::memcpy(values + 4 * kViewRectsEntry, frame.rects, sizeof(frame.rects));
     std::memcpy(values + 4 * kDiagEntry, frame.diag, sizeof(frame.diag));
-    (*reinterpret_cast<CmdPushConstants*>(base + kVkCmdPushConstantsSlot))(commandBuffer, g_pushLayout, kFocusStages, 0,
+    (*reinterpret_cast<CmdPushConstants*>(base + kVkCmdPushConstantsSlot))(commandBuffer, pushLayout, kFocusStages, 0,
                                                                            kFocusBlockBytes, values);
     g_focusPushes.fetch_add(1, std::memory_order_relaxed);
 }

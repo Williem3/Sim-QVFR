@@ -52,6 +52,23 @@ XrResult XRAPI_CALL layerDestroySpace(XrSpace space) {
         std::lock_guard guard(headSpaces.mutex);
         std::erase(headSpaces.view, space);
     }
+    {
+        // The gaze thread locates against the space the game last located its views in: it is let go here, after any
+        // lookup on it has returned (locateMutex), so none runs on a destroyed space; the next xrLocateViews sets another.
+        std::lock_guard locating(gazeThread.locateMutex);
+        {
+            std::lock_guard guard(gazeThread.mutex);
+            if (gazeThread.base == space) {
+                gazeThread.base = XR_NULL_HANDLE;
+                gazeThread.directionTime = 0;  // its gaze was in that space
+            }
+        }
+        std::lock_guard guard(gaze.mutex);  // the layer's own action spaces (never the game's to destroy, but cheap)
+        if (gaze.space == space)
+            gaze.space = XR_NULL_HANDLE;
+        if (gaze.gameSpace == space)
+            gaze.gameSpace = XR_NULL_HANDLE;
+    }
     return next.DestroySpace(space);
 }
 

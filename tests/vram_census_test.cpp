@@ -8,18 +8,12 @@
 #include <wrl/client.h>
 
 #include "probe/vram_census.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 ComPtr<ID3D12Resource> texture(ID3D12Device* device, UINT64 width, UINT height, D3D12_RESOURCE_FLAGS flags) {
     D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_DEFAULT};
@@ -80,6 +74,5 @@ int SIM_QVFR_TEST_MAIN() {
     const VramCensus after = vram_census(800, 400, 1200, 600);
     check(after.scaledTextures == before.scaledTextures && after.otherTextures == before.otherTextures,
           "all freed: back to where it started");
-    std::puts(failures ? "RESULT: FAIL" : "RESULT: pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

@@ -71,6 +71,10 @@ inline constexpr GUID kMvrSlotBiasTwinGuid = {0x2a96f0c3, 0x84d7, 0x4b21, {0xae,
 // A game shader's (vertex or pixel) declared size of the constant buffer in slot 0, in vectors (a UINT).
 inline constexpr GUID kCb0VectorsGuid = {0x64b0e3a9, 0x2f17, 0x4c58, {0xb4, 0x0a, 0x91, 0x7e, 0x3d, 0x52, 0xc6, 0x1f}};
 inline constexpr GUID kMvrInstancedLayoutGuid = {0x91e3b6d0, 0x7c42, 0x4e85, {0xa3, 0x5f, 0x0d, 0x28, 0xe6, 0x19, 0xbc, 0x47}};
+// Every input layout the probe sees made, twinned or not: its kind (a UINT). Unmarked: not seen (made before the
+// probe hooked the device), not known.
+inline constexpr GUID kMvrLayoutKindGuid = {0x4c27a9e1, 0xd36b, 0x4f05, {0x8a, 0x71, 0x2e, 0xb4, 0x90, 0x5d, 0x13, 0xc8}};
+inline constexpr UINT kMvrLayoutPerVertex = 1, kMvrLayoutPerInstance = 2;
 
 // How the eye passes draw their focus views: none (four passes), NVIDIA's single-pass stereo, or instancing.
 enum class MvrBackend { none, nvapi, instanced };
@@ -95,8 +99,13 @@ bool mvr_probe_usable();
 MvrBackend mvr_probe_backend();
 // Instanced twins are attached (the device can and the probe attaches): the fallback when NVIDIA's is refused.
 bool mvr_probe_instanced();
-// Input layouts with per-instance data seen (each with its twin): a doubled draw then looks at the bound layout.
+// Input layouts with per-instance data seen with their twin.
 uint64_t mvr_probe_instanced_layouts();
+// A doubled draw must look at the bound layout (kMvrLayoutKindGuid): a layout with per-instance data was seen (twinned
+// or not), or layouts may have been made before the device was hooked (not known).
+bool mvr_probe_layouts_to_check();
+// Counts the input layouts the probe saw made (a layout looked up by its address before may be a new one since).
+uint64_t mvr_probe_layout_generation();
 // Counts the vertex shaders created on the hooked device (any thread): a shader looked up by its address before may be
 // a new one since (mvr_pass.cpp's twin cache).
 uint64_t mvr_shader_generation();

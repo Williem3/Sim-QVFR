@@ -20,7 +20,7 @@
 #include "probe/gpu_load.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "probe/probe.h"
 #include "probe/vram_census.h"
 #include "quad/session_graphics.h"
@@ -244,6 +244,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.focusFailed = false;
         v4d3d11.peripheryChain = XR_NULL_HANDLE;  // also the session's
         v4d3d11.peripheryImages.clear();
+        v4d3d11.outPending = v4d3d11.focusPending = v4d3d11.peripheryPending = {};  // gone with their chains
         v4d3d11.peripheryFailed = v4d3d11.peripheryDrawFailed = v4d3d11.peripherySharpened = false;
         v4d3d11.loggedTexelsPerPixel = 0;
         v4d3d11.layered = 0;
@@ -271,6 +272,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.appChain = quad.outChain = XR_NULL_HANDLE;
         quad.appImages.clear();
         quad.outImages.clear();
+        quad.outPending = {};
         quad.outerCaptured = quad.aViewsValid = quad.releaseHeld = false;
         quad.device = nullptr;
         quad.queue = nullptr;
@@ -546,6 +548,56 @@ XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSw
             quad.appAcquired = *index;
     }
     return r;
+}
+
+// Everything kept for the game's swapchain goes before it does (its raw image pointers would dangle, and the runtime
+// may hand the handle value out again): its size, the outline's and the D3D11 compositor's images, the game adapter's
+// (ATS's corner), and, for the eye chain the quad pipeline adopted, the adoption with its output chain, so a chain
+// made again (a game's settings change) is adopted afresh.
+XrResult XRAPI_CALL layerDestroySwapchain(XrSwapchain swapchain) {
+    logf("xrDestroySwapchain handle=%p", static_cast<void*>(swapchain));
+    {
+        std::lock_guard guard(chainMutex);
+        chainSizes.erase(swapchain);
+    }
+    {
+        std::lock_guard guard(v4outline.mutex);
+        v4outline.formats.erase(swapchain);
+        v4outline.images.erase(swapchain);
+        v4outline.acquired.erase(swapchain);
+        if (v4outline.chain == swapchain)
+            v4outline.chain = XR_NULL_HANDLE;  // taken again from the next frame's projection layer
+    }
+    {
+        std::lock_guard guard(v4d3d11.mutex);
+        v4d3d11.chains.erase(swapchain);
+    }
+    {
+        std::lock_guard guard(quad.mutex);
+        if (swapchain == quad.appChain) {
+            log_line("quad: the game destroyed its adopted eye chain: output chain and compositor released, the next "
+                     "eye chain is adopted");
+            if (quad.outChain)
+                next.DestroySwapchain(quad.outChain);  // a pending (acquired) image goes with it
+            quad.appChain = quad.outChain = XR_NULL_HANDLE;
+            quad.appImages.clear();
+            quad.outImages.clear();
+            quad.outPending = {};
+            quad.appAcquired = 0;
+            quad.outerCaptured = quad.releaseHeld = quad.v4Composed = false;
+            // The compositor was made for that chain's format; the helmet's pieces load again into the next one.
+            quad.compositor.shutdown();
+            for (int p = 0; p < 3; ++p) {
+                quad.helmetPiecesTried[p].clear();
+                quad.helmetPiecesWritten[p] = {};
+            }
+            quad.helmetPiecesLoaded = false;
+        }
+    }
+    XrSwapchain measured = swapchain;
+    measuredEyeChain.compare_exchange_strong(measured, XR_NULL_HANDLE);
+    game->swapchain_destroyed(swapchain);
+    return next.DestroySwapchain(swapchain);
 }
 
 }  // namespace simqvfr::layer

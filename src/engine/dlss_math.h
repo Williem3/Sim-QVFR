@@ -305,7 +305,7 @@ inline bool motion_vector(const M4& r, double clipX, double clipY, unsigned widt
     return true;
 }
 
-// The gate's colour verdict on one class of points (dlss_views.cpp kCheckShader), from the frame's mean difference from
+// The gate's colour verdict on one class of points (dlss_views_shaders.h kCheckShader), from the frame's mean difference from
 // the one before where the points stood (`still`), where their vectors say they were (`along`) and a pixel off that
 // (`off`). Fit: clearly better than standing; fit to the pixel: too little motion to beat standing, but clearly better
 // than a pixel off; else no better than none, or worse. Detail finer than a pixel (far scenery at a small view size)

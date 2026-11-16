@@ -8,15 +8,9 @@
 #include <wrl/client.h>
 
 #include "quad/d3d11_depth_probe.h"
+#include "test_util.h"
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 using Microsoft::WRL::ComPtr;
 
@@ -88,6 +82,5 @@ int SIM_QVFR_TEST_MAIN() {
     check(hidden && !probe.request(hidden.Get(), points), "a depth texture without a shader binding: refused");
 
     probe.shutdown();
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

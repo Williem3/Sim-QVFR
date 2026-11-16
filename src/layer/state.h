@@ -108,7 +108,7 @@ struct Experiment {
     bool views4TestHiddenMask = false;     // views4 test: a hidden-area mesh of our own (corners, centre; diagnostic)
     bool views4EyeCamera = false;          // views4: focus views render the eyes' own cameras (diagnostic)
     bool passCensus = false;              // log a per-pipeline draw/dispatch census (probe/pass_census.h)
-    int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (probe/replay_probe.h)
+    int replayProbe = 0;                  // replay_probe=1/2: re-emission cost; 3: focus depth replay (games/ace/replay_probe.h)
     UINT replayFocusPercent = 20;          // replay_focus_percent: the focus box, % of each eye's extent (half extent in NDC)
     UINT replayFocusScalePercent = 200;    // replay_focus_scale_percent: focus pixels per eye pixel, in %
     UINT replaySaveFirst = 1800, replaySaveEvery = 900, replaySaveCount = 0;  // replay_save_first/_every/_count
@@ -334,6 +334,11 @@ struct HeadSpaces {
     bool skipLogged = false;
 };
 
+// Set by DllMain at DLL_PROCESS_DETACH when the process is ending (lpReserved non-null), before this DLL's globals are
+// destroyed (globals.cpp): the other threads are already gone then, perhaps holding a mutex, so the destructors
+// below neither lock nor join.
+extern std::atomic<bool> processTerminating;
+
 // The gaze thread ([quad] gaze_thread, on by default): ACE's xrLocateViews only reads the latest gaze; this
 // thread looks it up (xrLocateSpace on the gaze action's space) at gaze_poll_hz, at the display time ACE last
 // located its views for, in the space it located them in. The lookup can be slow (~1.5 ms on the Pimax
@@ -343,6 +348,10 @@ struct HeadSpaces {
 // The lookup runs outside gaze.mutex, so ACE's xrSyncActions never waits for it.
 struct GazeThread {
     std::mutex mutex;
+    // Held by the thread from reading `base` to the end of its xrLocateSpace (taken before `mutex`, and before
+    // gaze.mutex): the game's xrDestroySpace (layerDestroySpace) takes it to clear `base` before the space goes, so no
+    // lookup runs on a destroyed space.
+    std::mutex locateMutex;
     std::condition_variable wake;
     std::thread thread;
     bool stop = false;
@@ -357,8 +366,13 @@ struct GazeThread {
     uint64_t lookups = 0;
     double lookupMs = 0, lookupMaxMs = 0;
     // A running thread left at exit (no xrDestroySession) would end the process in std::terminate. At a
-    // process exit it has already ended, so the join returns at once.
+    // process exit it has already ended, perhaps holding `mutex`: detached, not locked or joined.
     ~GazeThread() {
+        if (processTerminating.load()) {
+            if (thread.joinable())
+                thread.detach();
+            return;
+        }
         {
             std::lock_guard guard(mutex);
             stop = true;
@@ -393,6 +407,19 @@ struct EyeView {
 // The helmet layer's quads: two bands, each once (far depth) or once per eye (near depth).
 inline constexpr int kHelmetQuadsMax = 4;
 
+// One of the layer's own swapchains' image acquired and not yet waited for (acquire_wait): a wait that timed out leaves
+// it acquired, and OpenXR has the next wait be on that same image (no second acquire, no release before it), so the
+// next frame waits on it again. Reset whenever its swapchain goes.
+struct PendingImage {
+    bool acquired = false;
+    uint32_t index = 0;
+};
+
+// The bounded wait for a layer image inside the game's own calls: kImageWaitTries waits of kImageWaitNs (about a
+// second), never XR_INFINITE_DURATION under the layer's mutexes; the frame goes out without that image if it times out.
+inline constexpr XrDuration kImageWaitNs = 100'000'000;
+inline constexpr int kImageWaitTries = 10;
+
 struct Quad {
     std::mutex mutex;
     uint32_t nativeW = 0, nativeH = 0;      // runtime's recommended eye size (before eye_scale)
@@ -405,6 +432,7 @@ struct Quad {
     bool releaseHeld = false;               // B's image, released at B's xrEndFrame
     XrSwapchain outChain = XR_NULL_HANDLE;  // this layer's double-wide output
     std::vector<ID3D12Resource*> outImages;
+    PendingImage outPending;  // outChain's image left acquired by a timed-out wait
     ID3D12Device* device = nullptr;
     ID3D12CommandQueue* queue = nullptr;
     QuadCompositor compositor;
@@ -431,6 +459,7 @@ struct Quad {
     XrSpace helmetSpace = XR_NULL_HANDLE;
     std::vector<ID3D12Resource*> helmetImages;
     std::vector<ID3D11Texture2D*> helmetImages11;  // the same, for a D3D11 session (ACC)
+    PendingImage helmetPending;  // helmetChain's image left acquired by a timed-out wait
     bool helmetPiecesLoaded = false;  // the composing compositor holds pieces (helmet_pieces), for the menu and submit
     bool helmetLayerFailed = false, helmetDrawn = false;
     // Its quads this frame: the bands the pieces draw on (helmet_bands), one or two, from the same image; with a
@@ -468,6 +497,7 @@ struct V4D3D11 {
     std::map<XrSwapchain, Chain> chains;  // the game's
     XrSwapchain outChain = XR_NULL_HANDLE;
     std::vector<ID3D11Texture2D*> outImages;
+    PendingImage outPending, focusPending, peripheryPending;  // each chain's image left acquired by a timed-out wait
     uint32_t outW = 0, outH = 0;  // one eye's size in it
     bool failed = false;          // no compositor or output chain: views 0-1 as they are
     // experiment.focusLayer: the focus views' own swapchain (kHelmetLayerFormat, alpha the feather), eye e from
@@ -636,8 +666,14 @@ struct PadWatch {
     bool stop = false;
     Hotkeys bindings;              // a copy for the thread
     std::atomic<uint32_t> held{0};  // bit per HotkeyAction
-    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate.
+    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate. At a
+    // process exit it has already ended, perhaps holding `mutex`: detached, not locked or joined.
     ~PadWatch() {
+        if (processTerminating.load()) {
+            if (thread.joinable())
+                thread.detach();
+            return;
+        }
         {
             std::lock_guard guard(mutex);
             stop = true;
@@ -662,6 +698,7 @@ struct Menu {
     XrSpace view = XR_NULL_HANDLE;
     XrSwapchain chain = XR_NULL_HANDLE;
     std::vector<void*> images;  // the session API's textures
+    PendingImage pending;       // chain's image left acquired by a timed-out wait
     std::unique_ptr<PanelUpload> upload;
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     int heldKey = -1;  // keyboard repeat: the held arrow (index into kMenuKeys)
@@ -690,6 +727,7 @@ struct Osd {
     XrSpace view = XR_NULL_HANDLE;
     XrSwapchain chain = XR_NULL_HANDLE;
     std::vector<void*> images;  // the session API's textures
+    PendingImage pending;       // chain's image left acquired by a timed-out wait (the notice's and the card's)
     std::unique_ptr<PanelUpload> upload;
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     std::atomic<int64_t> periodNs{0};  // the display's, from xrWaitFrame (any thread)

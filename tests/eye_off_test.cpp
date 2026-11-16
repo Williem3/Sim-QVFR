@@ -7,17 +7,11 @@
 
 #include "quad/eye_off.h"
 #include "quad/settings_menu.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
 
 XrSwapchain chain(uintptr_t n) { return reinterpret_cast<XrSwapchain>(n); }
 

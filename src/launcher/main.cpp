@@ -11,8 +11,9 @@
 // Usage: sim-qvfr-launcher               the settings window (window.cpp)
 //        sim-qvfr-launcher --launch      launch now, report on the console it was started from
 //        sim-qvfr-launcher --dry-run     write the run folder and the plan, start nothing
-//        sim-qvfr-launcher --apply-system-layers <request>   (elevated, from the window) writes
-//                                            HKLM's part of Windows' layer list (layer_order.h)
+//        sim-qvfr-launcher --apply-system-layers <request> <sha256>   (elevated, from the window) writes
+//                                            HKLM's part of Windows' layer list (layer_order.h), if the
+//                                            request file still has that hash
 //        sim-qvfr-launcher --hang-dump <pid> <log>   (from the layer's hang watch) stands by while the game
 //                                            runs; if it hangs, logs its modules and writes its minidump
 //                                            (probe/hang_dump.h)
@@ -33,7 +34,11 @@
 #include "../cheeky/cheeky_settings.h"
 #include "../engine/nvapi_gpus.h"
 #include "../games/game.h"
+#include "../ini.h"
+#include "../log_prefix.h"
+#include "../profile/profiles.h"
 #include "../probe/hang_dump.h"
+#include "../quad/qvfr_settings.h"
 #include "explicit_layers.h"
 #include "launch_plan.h"
 #include "launcher.h"
@@ -67,16 +72,10 @@ void say(const std::wstring& line) {
     }
 }
 
-std::wstring exe_folder() {
-    wchar_t path[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
-    return fs::path(path).parent_path().wstring();
-}
+std::wstring exe_folder() { return fs::path(module_path()).parent_path().wstring(); }
 
 std::wstring ini_string(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
-    wchar_t buffer[2048] = {};
-    GetPrivateProfileStringW(section, key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
-    return buffer;
+    return simqvfr::ini_get(ini.c_str(), section, key);
 }
 
 std::vector<Registration> implicit_registrations() {
@@ -100,18 +99,6 @@ std::vector<Registration> implicit_registrations() {
     return out;
 }
 
-bool process_running(const wchar_t* exe) {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE)
-        return false;
-    PROCESSENTRY32W entry{sizeof(entry)};
-    bool found = false;
-    for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry))
-        found = _wcsicmp(entry.szExeFile, exe) == 0;
-    CloseHandle(snapshot);
-    return found;
-}
-
 // The id of a running `exe`, 0 if none.
 DWORD process_id(const wchar_t* exe) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -125,6 +112,8 @@ DWORD process_id(const wchar_t* exe) {
     CloseHandle(snapshot);
     return pid;
 }
+
+bool process_running(const wchar_t* exe) { return process_id(exe) != 0; }  // pid 0 is only the idle process
 
 // The game the anti-cheat's bootstrapper (`bootstrapper`, started) goes on to start: waited for up to `seconds`, while
 // the bootstrapper shows its splash. The game wasn't running before the launch (run checks), so the first one is it.
@@ -144,16 +133,30 @@ PROCESS_INFORMATION started_by_bootstrapper(HANDLE bootstrapper, const wchar_t* 
     return game;
 }
 
+// A REG_SZ value, empty if missing: RegGetValueW terminates it, at the size a first query gives (a value can be
+// longer than MAX_PATH, or stored without its terminator).
+std::wstring registry_text(HKEY root, const wchar_t* subkey, const wchar_t* name) {
+    for (int attempt = 0; attempt < 3; ++attempt) {  // again if it grew between the two queries
+        DWORD bytes = 0;
+        if (RegGetValueW(root, subkey, name, RRF_RT_REG_SZ, nullptr, nullptr, &bytes) != ERROR_SUCCESS || bytes == 0)
+            return {};
+        std::wstring text(bytes / sizeof(wchar_t) + 1, L'\0');
+        bytes = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+        const LSTATUS s = RegGetValueW(root, subkey, name, RRF_RT_REG_SZ, nullptr, text.data(), &bytes);
+        if (s == ERROR_MORE_DATA)
+            continue;
+        if (s != ERROR_SUCCESS)
+            return {};
+        text.resize(wcsnlen(text.c_str(), text.size()));
+        return text;
+    }
+    return {};
+}
+
 // `game`'s folder in Steam's libraries; empty if Steam doesn't have it.
 std::wstring find_game_folder(const games::GameInfo& game) {
-    HKEY key = nullptr;
-    wchar_t steam[MAX_PATH] = {};
-    DWORD size = sizeof(steam);
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", 0, KEY_READ, &key) != ERROR_SUCCESS)
-        return {};
-    const bool ok = RegQueryValueExW(key, L"SteamPath", nullptr, nullptr, reinterpret_cast<BYTE*>(steam), &size) == ERROR_SUCCESS;
-    RegCloseKey(key);
-    if (!ok)
+    const std::wstring steam = registry_text(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath");
+    if (steam.empty())
         return {};
     std::vector<std::wstring> libraries = {fs::path(steam).make_preferred().wstring()};
     std::string vdf;
@@ -171,7 +174,7 @@ std::wstring find_game_folder(const games::GameInfo& game) {
 
 // A game's folder: [launcher] game_dir_<id> (ACE: also game_dir), else its folder in Steam's libraries.
 std::wstring game_folder(const std::wstring& ini, const games::GameInfo& game = games::launcher_game()) {
-    std::wstring set = ini_string(ini, L"launcher", (L"game_dir_" + widen(game.id)).c_str());
+    std::wstring set = ini_string(ini, L"launcher", (L"game_dir_" + games::wide_id(game)).c_str());
     if (set.empty() && game.id == std::string_view("ace"))
         set = ini_string(ini, L"launcher", L"game_dir");
     return set.empty() ? find_game_folder(game) : set;
@@ -208,17 +211,14 @@ Options ini_layer_options(const std::wstring& ini, const std::vector<std::wstrin
     // Through the game's anti-cheat ([launcher] anticheat=1): Cheeky's layer off (games/game.h antiCheatStart).
     const bool antiCheat = game.antiCheatStart && games::anticheat_chosen(ini.c_str());
     return launch_options(read_launcher_layers(ini),
-                          _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0,
+                          simqvfr::parse_render_mode(mode.c_str()) == simqvfr::IniRenderMode::TwoLoop,
                           dlss && cheeky.load, dlss && cheeky.fg, variable_names(environment), antiCheat);
 }
 
 std::wstring stamp_now() {
-    wchar_t stamp[32];
-    const std::time_t now = std::time(nullptr);
-    std::tm local{};
-    localtime_s(&local, &now);
-    std::wcsftime(stamp, std::size(stamp), L"%Y%m%d-%H%M%S", &local);
-    return stamp;
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    return simqvfr::file_stamp(now);
 }
 
 // An elevated launch's registrations (explicit_layers.h): one ledger per launch in logs\openxr-registrations, and
@@ -257,15 +257,14 @@ bool start_unregister_helper(HANDLE game, const std::wstring& ledger) {
     if (InitializeProcThreadAttributeList(list, 1, 0, &size)) {
         // The game's handle is the only one it inherits.
         if (UpdateProcThreadAttribute(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &inherited, sizeof(inherited), nullptr, nullptr)) {
-            wchar_t exe[MAX_PATH] = {};
-            GetModuleFileNameW(nullptr, exe, MAX_PATH);
-            std::wstring command = L"\"" + std::wstring(exe) + L"\" --unregister-after " +
+            const std::wstring exe = module_path();
+            std::wstring command = L"\"" + exe + L"\" --unregister-after " +
                                    std::to_wstring(reinterpret_cast<uintptr_t>(inherited)) + L" \"" + ledger + L"\"";
             STARTUPINFOEXW startup{};
             startup.StartupInfo.cb = sizeof(startup);
             startup.lpAttributeList = list;
             PROCESS_INFORMATION pi{};
-            ok = CreateProcessW(exe, command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
+            ok = !exe.empty() && CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
                                 nullptr, nullptr, &startup.StartupInfo, &pi) != FALSE;
             if (ok) {
                 CloseHandle(pi.hThread);
@@ -306,16 +305,27 @@ bool write_hive(bool machine, const std::vector<SystemLayer>& want, std::wstring
                              error);
 }
 
-// --apply-system-layers: the elevated copy writes HKLM's part of the request (the window wrote HKCU's).
-int apply_request(const std::wstring& path) {
+// --apply-system-layers <request> <sha256>: the elevated copy writes HKLM's part of the request (the window writes
+// HKCU's once this succeeded). The request file is in the user-writable logs folder: it is read once, and acted on
+// only if those bytes have the hash the window put on this command line (the UAC prompt the user approved).
+int apply_request(const std::wstring& path, const std::wstring& hash) {
     std::string text;
     std::vector<SystemLayer> want;
-    if (!read_file(path, text) || !parse_system_request(text, want))
+    if (hash.size() != 64 || !read_file(path, text) || system_request_hash(text) != narrow(hash) ||
+        !parse_system_request(text, want))
         return 2;
     std::wstring error;
     if (write_hive(true, want, error))
         return 0;
-    write_file(path + L".error", narrow(error));
+    // CREATE_NEW: as administrator, never write through a file (or link) someone else put at that name.
+    const HANDLE file = CreateFileW((path + L".error").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        const std::string why = narrow(error);
+        DWORD written = 0;
+        WriteFile(file, why.data(), static_cast<DWORD>(why.size()), &written, nullptr);
+        CloseHandle(file);
+    }
     return 1;
 }
 
@@ -391,7 +401,7 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
     const games::GameInfo& info = games::launcher_game();
     const fs::path exe = game_exe(game);
     if (game.empty() || !fs::exists(exe, ec))
-        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + widen(info.id) +
+        return fail(std::wstring(info.name) + L" not found through Steam; set game_dir_" + games::wide_id(info) +
                     L" in [launcher] of sim-qvfr.ini");
     // [launcher] anticheat=1 (the Games pane), for a game with an anti-cheat bootstrapper: the game starts protected,
     // through the bootstrapper, and the layer runs in it as usual (games/game.h antiCheatStart). The user's risk.
@@ -584,10 +594,14 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
         }
         return fail(L"starting " + std::wstring(info.name) + L" failed (error " + std::to_wstring(startError) + L")");
     }
+    // The registrations go when the game's handle signals. Through the anti-cheat that is the game's, never the
+    // bootstrapper's: it exits at once, and they would go before the game's loader reads them.
+    bool followGame = true;
     if (viaAntiCheat) {
         // From here on the game itself, not the bootstrapper (which exits once the game runs).
         const PROCESS_INFORMATION protectedGame = started_by_bootstrapper(pi.hProcess, info.exeName, 90);
         if (!protectedGame.dwProcessId) {
+            followGame = false;
             say(L"  anti-cheat: " + std::wstring(info.name) + L" did not start within 90 s (the bootstrapper's window says why)");
         } else {
             say(L"  anti-cheat: " + std::wstring(info.exeName) + L" started (pid " + std::to_wstring(protectedGame.dwProcessId) + L")" +
@@ -599,11 +613,20 @@ int run(bool dryRun, LaunchedGame* launched = nullptr) {
             pi.dwProcessId = protectedGame.dwProcessId;
         }
     }
-    if (registered && pi.hProcess) {
+    if (registered && followGame && pi.hProcess) {
         ledger_game_started(ledger, process_stamp(pi.hProcess));
         say(start_unregister_helper(pi.hProcess, ledger)
                 ? L"  registry:  taken out when the game exits (a copy of the launcher waits for it)"
                 : L"  registry:  the copy that takes them out did not start; the next start as administrator does");
+    } else if (registered) {
+        // No game handle to wait on: left for the next elevated start's sweep (sweep_ledgers), once this launcher
+        // has closed.
+        const std::wstring why = !followGame ? L"the game was not seen starting through the anti-cheat"
+                                             : L"the game's handle was refused";
+        const std::wstring note = L"left registered (" + why + L"): the next start as administrator takes them out (" +
+                                  ledger + L")";
+        say(L"  registry:  " + note);
+        log_registrations({note});
     }
     if (early)
         say(L"  early load: the layer loads with " + std::wstring(info.shortName) + L"'s Vulkan start (VK_LAYER_SIM_qvfr_early)");
@@ -644,39 +667,55 @@ LayerPlan launcher_layer_plan() {
 std::wstring apply_system_layers(HWND owner, const std::vector<SystemLayer>& want) {
     const std::vector<SystemLayer> current = read_system_layers();
     std::wstring error;
+    // HKLM first, through an elevated copy of this launcher (one UAC prompt); HKCU only once that succeeded (or
+    // isn't needed), so a declined prompt or a failed HKLM write leaves both hives as they were.
+    if (system_needs_admin(current, want)) {
+        const fs::path logs = fs::path(exe_folder()) / L"logs";
+        std::error_code ec;
+        fs::create_directories(logs, ec);
+        const std::wstring request = (logs / (L"openxr-layers-request-" + stamp_now() + L".txt")).wstring();
+        const std::string text = system_request(want);
+        const std::string hash = system_request_hash(text);
+        const std::wstring exe = module_path();
+        if (hash.empty() || exe.empty())
+            return L"the machine-wide layers can't be requested; nothing was written";
+        if (!write_file(request, text))
+            return L"cannot write " + request + L"; nothing was written";
+        // The hash travels on the command line, which nothing but this process sets: the elevated copy refuses a
+        // request file changed after it was written here.
+        const std::wstring parameters = L"--apply-system-layers \"" + request + L"\" " + widen(hash);
+        SHELLEXECUTEINFOW info{sizeof(info)};
+        info.fMask = SEE_MASK_NOCLOSEPROCESS;
+        info.hwnd = owner;
+        info.lpVerb = L"runas";
+        info.lpFile = exe.c_str();
+        info.lpParameters = parameters.c_str();
+        info.nShow = SW_HIDE;
+        if (!ShellExecuteExW(&info) || !info.hProcess) {
+            const DWORD started = GetLastError();
+            DeleteFileW(request.c_str());
+            return started == ERROR_CANCELLED ? L"administrator rights were declined; the layers are unchanged"
+                                              : L"the elevated launcher did not start; the layers are unchanged";
+        }
+        const DWORD waited = WaitForSingleObject(info.hProcess, 60000);
+        DWORD code = 1;
+        GetExitCodeProcess(info.hProcess, &code);
+        CloseHandle(info.hProcess);
+        std::string why;
+        read_file(request + L".error", why);
+        DeleteFileW(request.c_str());
+        DeleteFileW((request + L".error").c_str());
+        if (waited != WAIT_OBJECT_0)
+            return L"the elevated launcher did not finish within a minute; your own layers are unchanged";
+        if (code == 2)
+            return L"the elevated launcher refused the request (changed after it was written?); the layers are unchanged";
+        if (code != 0)
+            return (why.empty() ? L"writing the machine-wide layers failed" : widen(why)) + L"; your own layers are unchanged";
+    }
     if (!write_hive(false, want, error))
-        return error;
-    if (!system_needs_admin(current, want))
-        return {};
-    // HKLM: the same request, written by an elevated copy of this launcher (one UAC prompt).
-    const fs::path logs = fs::path(exe_folder()) / L"logs";
-    std::error_code ec;
-    fs::create_directories(logs, ec);
-    const std::wstring request = (logs / (L"openxr-layers-request-" + stamp_now() + L".txt")).wstring();
-    if (!write_file(request, system_request(want)))
-        return L"cannot write " + request;
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    const std::wstring parameters = L"--apply-system-layers \"" + request + L"\"";
-    SHELLEXECUTEINFOW info{sizeof(info)};
-    info.fMask = SEE_MASK_NOCLOSEPROCESS;
-    info.hwnd = owner;
-    info.lpVerb = L"runas";
-    info.lpFile = exe;
-    info.lpParameters = parameters.c_str();
-    info.nShow = SW_HIDE;
-    if (!ShellExecuteExW(&info) || !info.hProcess)
-        return GetLastError() == ERROR_CANCELLED ? L"administrator rights were declined; the machine-wide layers are unchanged"
-                                                 : L"the elevated launcher did not start";
-    WaitForSingleObject(info.hProcess, 60000);
-    DWORD code = 1;
-    GetExitCodeProcess(info.hProcess, &code);
-    CloseHandle(info.hProcess);
-    std::string why;
-    read_file(request + L".error", why);
-    DeleteFileW(request.c_str());
-    DeleteFileW((request + L".error").c_str());
-    return code == 0 ? std::wstring() : why.empty() ? L"writing the machine-wide layers failed" : widen(why);
+        return system_needs_admin(current, want) ? L"the machine-wide layers were written, but your own failed: " + error
+                                                 : error;
+    return {};
 }
 
 std::wstring launcher_game_exe() {
@@ -693,9 +732,7 @@ bool game_installed(const games::GameInfo& game) {
 }
 
 void choose_launcher_game() {
-    wchar_t id[32] = {};
-    GetPrivateProfileStringW(L"launcher", L"game", L"ace", id, static_cast<DWORD>(std::size(id)), settings_path().c_str());
-    if (const games::GameInfo* game = games::game_by_id(narrow(id).c_str()))
+    if (const games::GameInfo* game = games::game_by_id(narrow(simqvfr::launcher_game_id(settings_path().c_str())).c_str()))
         games::set_launcher_game(*game);
 }
 
@@ -705,9 +742,10 @@ PreflightInput launcher_preflight(const std::wstring& exe, BuildState build) {
     in.gameExe = exe;
     in.build = build;
     const std::wstring mode = ini_string(ini, L"experiment", L"mode");
-    in.mode = mode.empty() || _wcsicmp(mode.c_str(), L"off") == 0                              ? LaunchMode::Off
-              : _wcsicmp(mode.c_str(), L"quad") == 0 || _wcsicmp(mode.c_str(), L"two_loops") == 0 ? LaunchMode::TwoLoop
-                                                                                                 : LaunchMode::Qvfr;
+    const simqvfr::IniRenderMode iniMode = simqvfr::parse_render_mode(mode.c_str());
+    in.mode = iniMode == simqvfr::IniRenderMode::Off ? LaunchMode::Off
+              : iniMode == simqvfr::IniRenderMode::TwoLoop ? LaunchMode::TwoLoop
+                                                           : LaunchMode::Qvfr;  // views4 and the research modes
     in.steamRunning = process_running(L"steam.exe");
     in.gameRunning = process_running(games::launcher_game().exeName);
     in.gameHasLayer = in.gameRunning && !running_live_ini(runtime_info_path()).empty();
@@ -776,16 +814,22 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         return unregister_after(handle.c_str(), ledger);
     }
     bool dryRun = false, launchNow = false;
-    std::wstring request;
+    std::wstring request, requestHash;
+    bool applyRequest = false;
     for (int i = 1; i < argc; ++i) {
         dryRun |= _wcsicmp(argv[i], L"--dry-run") == 0;
         launchNow |= _wcsicmp(argv[i], L"--launch") == 0;
-        if (_wcsicmp(argv[i], L"--apply-system-layers") == 0 && i + 1 < argc)
-            request = argv[++i];
+        if (_wcsicmp(argv[i], L"--apply-system-layers") == 0) {
+            applyRequest = true;
+            if (i + 1 < argc)
+                request = argv[++i];
+            if (i + 1 < argc)
+                requestHash = argv[++i];
+        }
     }
     LocalFree(argv);
-    if (!request.empty())
-        return apply_request(request);
+    if (applyRequest)  // nothing else: a request without its hash is refused
+        return apply_request(request, requestHash);
     // As administrator: an earlier elevated launch whose registrations were never taken out (the PC went off while
     // its game ran) is cleared from its ledger.
     if (launcher_elevated()) {

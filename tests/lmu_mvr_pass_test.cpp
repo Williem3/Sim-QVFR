@@ -16,17 +16,11 @@
 #include "engine/dxbc_patch.h"
 #include "games/lmu/mvr_pass.h"
 #include "games/lmu/mvr_probe.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 int twoViewsOn = 0, twoViewsCalls = 0;
 int fake_two_views(ID3D11DeviceContext*, bool on) {
@@ -99,10 +93,11 @@ int SIM_QVFR_TEST_MAIN() {
         return 1;
     }
     lmu::mvr_set_two_views(&fake_two_views);
-    // The hooks are on every function the context's twelve entries hold (with multithread protection off and on, idle
+    // The hooks are on every function the context's thirteen entries hold (with multithread protection off and on, idle
     // and busy), in d3d11's code: ten, PSSetShader's with texture sharpening possible (mvr_mip_bias_hooks, before the
-    // install) and ExecuteCommandList's (the game's command lists); DrawIndexed's only with the focus post
-    // (lmu_focus_post_test). The context's vtable pointer as it was (its entries are d3d11's to rewrite).
+    // install), ExecuteCommandList's (the game's command lists) and VSSetConstantBuffers' (the remap kept at b13);
+    // DrawIndexed's only with the focus post (lmu_focus_post_test). The context's vtable pointer as it was (its entries
+    // are d3d11's to rewrite).
     lmu::mvr_mip_bias_hooks(true);
     void** const ownVtable = *reinterpret_cast<void***>(context.Get());
     check(lmu::mvr_pass_install(device.Get()), "the immediate context hooked");
@@ -110,12 +105,13 @@ int SIM_QVFR_TEST_MAIN() {
     char what[200];
     const lmu::MvrPassStats installed = lmu::mvr_pass_stats();
     std::snprintf(what, sizeof(what),
-                  "%llu functions hooked for %llu entries (twelve with PSSetShader and ExecuteCommandList: no DrawIndexed "
-                  "without the focus post; two each at least: protection off and on), %llu of them ResolveSubresource's",
+                  "%llu functions hooked for %llu entries (thirteen with PSSetShader, ExecuteCommandList and "
+                  "VSSetConstantBuffers: no DrawIndexed without the focus post; two each at least: protection off and "
+                  "on), %llu of them ResolveSubresource's",
                   static_cast<unsigned long long>(installed.contextFunctions),
                   static_cast<unsigned long long>(installed.contextEntries),
                   static_cast<unsigned long long>(installed.resolveFunctions));
-    check(installed.contextEntries == 12 && installed.contextFunctions >= 24 && installed.resolveFunctions >= 2, what);
+    check(installed.contextEntries == 13 && installed.contextFunctions >= 24 && installed.resolveFunctions >= 2, what);
     ComPtr<ID3D11DeviceContext4> context4;
     check(SUCCEEDED(context.As(&context4)) && static_cast<ID3D11DeviceContext*>(context4.Get()) == context.Get(),
           "ID3D11DeviceContext4 is the same pointer: calls through it reach the hooks too");

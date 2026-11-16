@@ -2,13 +2,18 @@
 // to one flag and written anew here.
 #include "stereo_flag.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <windows.h>
 
+#include "game.h"
 #include "../../log.h"
+#include "../../sha256_file.h"
 
 namespace simqvfr {
 namespace {
@@ -90,7 +95,41 @@ bool writable(const void* p) {
 
 }  // namespace
 
+namespace {
+std::atomic<int> knownForTests{-1};
+}
+
+void ace_known_build_for_tests(bool known) { knownForTests.store(known ? 1 : 0); }
+
+bool ace_known_build() {
+    if (const int t = knownForTests.load(); t >= 0)
+        return t != 0;
+    static const bool known = [] {
+        if (games::current_game() != &ace::kGame) {
+            log_line("ace build: not AssettoCorsaEVO.exe: no API path");
+            return false;
+        }
+        const ULONGLONG t0 = GetTickCount64();
+        std::vector<wchar_t> path(32768);
+        const DWORD n = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+        const std::string sha = n && n < path.size() ? sha256_file(path.data()) : std::string();
+        if (!games::supported_build(ace::kGame, sha)) {
+            logf("ace build: AssettoCorsaEVO.exe sha256=%s is not a known build (expected %s): no API path, the game "
+                 "renders as it is",
+                 sha.empty() ? "(unreadable)" : sha.c_str(), ace::kGame.builds[0]);
+            return false;
+        }
+        logf("ace build: AssettoCorsaEVO.exe verified (%llu ms)", GetTickCount64() - t0);
+        return true;
+    }();
+    return known;
+}
+
 bool ace_single_pass_stereo_on() {
+    if (!ace_known_build()) {
+        log_line("ace stereo: ACE's single-pass stereo NOT turned on (not a known build): no focus views on the API path");
+        return false;
+    }
     const ULONGLONG t0 = GetTickCount64();
     auto* base = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
     const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);

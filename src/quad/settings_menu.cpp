@@ -8,7 +8,7 @@
 
 #include <windows.h>
 
-#include "../ini_put.h"
+#include "../ini.h"
 
 namespace simqvfr {
 namespace {
@@ -19,16 +19,19 @@ struct Spec {
     int min, max, step;
 };
 
-// The launcher's ranges (kOuterRange, kInnerRange, kSizeRange, kFeatherRange, kCornerRange).
+// A slider of the shared table's key (qvfr_settings.h), so the menu's ranges and steps are the launcher's and the layer's.
+constexpr Spec spec_of(MenuItem item, const wchar_t* label, const IniInt& k) { return {item, label, k.min, k.max, k.step}; }
+static_assert(kCropTop.max == static_cast<int>(kCropMax * 100), "the table's crop sides are fov_crop.h's kCropMax");
+
 constexpr Spec kSpecs[] = {
-    {MenuItem::Periphery, L"Periphery", 10, 100, 5},  {MenuItem::Density, L"Focus density", 50, 400, 5},
-    {MenuItem::ObjectDetail, L"Object detail", 0, 100, 10},  // the launcher's kObjectDetailRange
-    {MenuItem::Sharpening, L"Sharpening", 0, 100, 5},        // the launcher's kSharpenRange
-    {MenuItem::EyeOff, L"Eye off", 0, 2, 1},                 // [quad] eye_off: none, left, right
+    spec_of(MenuItem::Periphery, L"Periphery", kPeripheryScale), spec_of(MenuItem::Density, L"Focus density", kFocusDensity),
+    spec_of(MenuItem::ObjectDetail, L"Object detail", kObjectDetail),
+    spec_of(MenuItem::Sharpening, L"Sharpening", kSharpenPercent),
+    spec_of(MenuItem::EyeOff, L"Eye off", kEyeOff),  // [quad] eye_off: none, left, right
     {MenuItem::FocusQuadDistance, L"Focus quad distance", 0, kFocusQuadSteps - 1, 1},  // steps of kFocusQuadDistances
-    {MenuItem::Width, L"Focus width", 10, 100, 1},     {MenuItem::Height, L"Focus height", 10, 100, 1},
-    {MenuItem::Feather, L"Feather", 0, 50, 1},         {MenuItem::Corners, L"Corners", 0, 100, 5},
-    {MenuItem::Outline, L"Outline", 0, 1, 1},          {MenuItem::EyeTracking, L"Eye tracking", 0, 1, 1},
+    spec_of(MenuItem::Width, L"Focus width", kFocusPercent), spec_of(MenuItem::Height, L"Focus height", kFocusHeightPercent),
+    spec_of(MenuItem::Feather, L"Feather", kFeatherPercent), spec_of(MenuItem::Corners, L"Corners", kCornerRadiusPercent),
+    spec_of(MenuItem::Outline, L"Outline", kDebugBorder), spec_of(MenuItem::EyeTracking, L"Eye tracking", kGaze),
     {MenuItem::FocusOffset, L"Focus up / down", -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::GazeDeadzone, L"Gaze dead-zone", 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
     // The Focus shape page: each corner's insets, percent of the box (focus_shape.h's kFocusCornerMax).
@@ -71,11 +74,11 @@ constexpr Spec kSpecs[] = {
     {MenuItem::FgRelease, L"Release game", 0, 2, 1},
     {MenuItem::FgBorder, L"Show FG region", 0, 1, 1},
     // The View crop page: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
-    {MenuItem::Crop, L"Crop the view", 0, 1, 1},
-    {MenuItem::CropTop, L"Top", 0, static_cast<int>(kCropMax * 100), 1},
-    {MenuItem::CropBottom, L"Bottom", 0, static_cast<int>(kCropMax * 100), 1},
-    {MenuItem::CropOuter, L"Outer side (temple)", 0, static_cast<int>(kCropMax * 100), 1},
-    {MenuItem::CropInner, L"Inner side (nose)", 0, static_cast<int>(kCropMax * 100), 1},
+    spec_of(MenuItem::Crop, L"Crop the view", kCropEnabled),
+    spec_of(MenuItem::CropTop, L"Top", kCropTop),
+    spec_of(MenuItem::CropBottom, L"Bottom", kCropBottom),
+    spec_of(MenuItem::CropOuter, L"Outer side (temple)", kCropOuter),
+    spec_of(MenuItem::CropInner, L"Inner side (nose)", kCropInner),
     {MenuItem::Helmet, L"Helmet overlay", 0, 1, 1},
     {MenuItem::HelmetRim, L"Helmet rim", 0, kHelmetRimMax, 1},
     {MenuItem::HelmetCorners, L"Helmet corners", 0, kHelmetCornersMax, 10},
@@ -192,14 +195,12 @@ int* value_of(MenuValues& v, MenuItem item) {
     }
 }
 
-int read_int(const wchar_t* ini, const wchar_t* section, const wchar_t* key, int fallback) {
-    return static_cast<int>(GetPrivateProfileIntW(section, key, fallback, ini));
-}
-
 // Only a value that differs is written: a step changes one key of the ~50 written (ini_put.h).
 bool write(const wchar_t* ini, const wchar_t* section, const wchar_t* key, int value) {
     return ini_put(ini, section, key, value);
 }
+
+bool write(const wchar_t* ini, const IniInt& k, int value) { return ini_put(ini, k.section, k.key, value); }
 
 }  // namespace
 
@@ -506,33 +507,32 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
 
 MenuValues read_menu_values(const wchar_t* ini) {
     MenuValues v;
-    v.width = std::clamp(read_int(ini, L"experiment", L"focus_percent", v.width), 10, 100);
-    v.height = std::clamp(read_int(ini, L"experiment", L"focus_height_percent", v.width), 10, 100);
-    const int eyeScale = read_int(ini, L"experiment", L"eye_scale", v.periphery);
-    const int periphery = read_int(ini, L"experiment", L"periphery_scale", 0);
-    v.periphery = std::clamp(periphery ? periphery : eyeScale, 10, 100);
-    const int density = read_int(ini, L"experiment", L"focus_density", 0);
-    v.density = std::clamp(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / v.width)), 50, 400);
-    v.feather = std::clamp(read_int(ini, L"quad", L"feather_percent", v.feather), 0, 50);
-    v.corners = std::clamp(read_int(ini, L"quad", L"corner_radius_percent", v.corners), 0, 100);
-    v.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
-    v.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
+    v.width = ini_int(ini, kFocusPercent);
+    v.height = ini_int(ini, kFocusHeightPercent, v.width);
+    const int eyeScale = ini_raw(ini, kEyeScale, kEyeScale.def);
+    const int periphery = ini_raw(ini, kPeripheryScale, 0);
+    v.periphery = kPeripheryScale.clamp(periphery ? periphery : eyeScale);
+    const int density = ini_raw(ini, kFocusDensity, 0);
+    v.density = kFocusDensity.clamp(density ? density : static_cast<int>(std::lround(100.0 * kEyeScale.clamp(eyeScale) / v.width)));
+    v.feather = ini_int(ini, kFeatherPercent);
+    v.corners = ini_int(ini, kCornerRadiusPercent);
+    v.outline = ini_flag(ini, kDebugBorder);
+    v.eyeTracking = ini_flag(ini, kGaze);
     v.offset = read_focus_offset(ini);
     v.gazeDeadzone = read_gaze_deadzone(ini);
     v.shape = read_focus_shape(ini);
     v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
-    v.hotkeyFooter = GetPrivateProfileIntW(L"menu", L"hotkey_footer", 1, ini) != 0;
-    const int cropMax = static_cast<int>(kCropMax * 100);
-    v.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
-    v.cropTop = std::clamp(read_int(ini, L"crop", L"top", 0), 0, cropMax);
-    v.cropBottom = std::clamp(read_int(ini, L"crop", L"bottom", 0), 0, cropMax);
-    v.cropOuter = std::clamp(read_int(ini, L"crop", L"outer", 0), 0, cropMax);
-    v.cropInner = std::clamp(read_int(ini, L"crop", L"inner", 0), 0, cropMax);
+    v.hotkeyFooter = ini_flag(ini, kHotkeyFooter);
+    v.crop = ini_flag(ini, kCropEnabled);
+    v.cropTop = ini_int(ini, kCropTop);
+    v.cropBottom = ini_int(ini, kCropBottom);
+    v.cropOuter = ini_int(ini, kCropOuter);
+    v.cropInner = ini_int(ini, kCropInner);
     v.helmet = read_helmet_settings(ini);
-    v.objectDetail = std::clamp(read_int(ini, L"experiment", L"object_detail", v.objectDetail), 0, 100);
-    v.sharpen = std::clamp(read_int(ini, L"quad", L"sharpen_percent", v.sharpen), 0, 100);
-    v.eyeOff = std::clamp(read_int(ini, L"quad", L"eye_off", 0), 0, 2);
+    v.objectDetail = ini_int(ini, kObjectDetail);
+    v.sharpen = ini_int(ini, kSharpenPercent);
+    v.eyeOff = ini_int(ini, kEyeOff);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
     v.dlss = read_dlss_settings(ini);
     v.nr = read_nr_settings(ini);
@@ -543,29 +543,29 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
                        bool sharpening, bool eyeOff) {
     bool ok = true;
     if (eyeOff)  // QVFR or not: the layer shows the eye black either way
-        ok &= write(ini, L"quad", L"eye_off", std::clamp(v.eyeOff, 0, 2));
+        ok &= write(ini, kEyeOff, kEyeOff.clamp(v.eyeOff));
     if (qvfr && sharpening)
-        ok &= write(ini, L"quad", L"sharpen_percent", std::clamp(v.sharpen, 0, 100));
+        ok &= write(ini, kSharpenPercent, kSharpenPercent.clamp(v.sharpen));
     if (qvfr && focusQuads)
         ok &= write(ini, L"experiment", L"focus_quad_distance", focus_quad_metres(v.focusQuadStep));
     if (qvfr && objectDetail)
-        ok &= write(ini, L"experiment", L"object_detail", std::clamp(v.objectDetail, 0, 100));
+        ok &= write(ini, kObjectDetail, kObjectDetail.clamp(v.objectDetail));
     if (qvfr) {
-        ok &= write(ini, L"experiment", L"periphery_scale", v.periphery);
-        ok &= write(ini, L"experiment", L"focus_density", v.density);
-        ok &= write(ini, L"crop", L"enabled", v.crop ? 1 : 0);
-        ok &= write(ini, L"crop", L"top", v.cropTop);
-        ok &= write(ini, L"crop", L"bottom", v.cropBottom);
-        ok &= write(ini, L"crop", L"outer", v.cropOuter);
-        ok &= write(ini, L"crop", L"inner", v.cropInner);
+        ok &= write(ini, kPeripheryScale, v.periphery);
+        ok &= write(ini, kFocusDensity, v.density);
+        ok &= write(ini, kCropEnabled, v.crop ? 1 : 0);
+        ok &= write(ini, kCropTop, v.cropTop);
+        ok &= write(ini, kCropBottom, v.cropBottom);
+        ok &= write(ini, kCropOuter, v.cropOuter);
+        ok &= write(ini, kCropInner, v.cropInner);
         ok &= write_helmet_settings(ini, v.helmet);
     }
-    ok &= write(ini, L"experiment", L"focus_percent", v.width);
-    ok &= write(ini, L"experiment", L"focus_height_percent", v.height);
-    ok &= write(ini, L"quad", L"feather_percent", v.feather);
-    ok &= write(ini, L"quad", L"corner_radius_percent", v.corners);
-    ok &= write(ini, L"quad", L"debug_border", v.outline ? 1 : 0);
-    ok &= write(ini, L"quad", L"gaze", v.eyeTracking ? 1 : 0);
+    ok &= write(ini, kFocusPercent, v.width);
+    ok &= write(ini, kFocusHeightPercent, v.height);
+    ok &= write(ini, kFeatherPercent, v.feather);
+    ok &= write(ini, kCornerRadiusPercent, v.corners);
+    ok &= write(ini, kDebugBorder, v.outline ? 1 : 0);
+    ok &= write(ini, kGaze, v.eyeTracking ? 1 : 0);
     ok &= write_focus_offset(ini, v.offset);
     ok &= write_gaze_deadzone(ini, v.gazeDeadzone);
     ok &= write_focus_shape(ini, v.shape);
@@ -573,7 +573,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
     ok &= write(ini, L"menu", L"width", v.placement.width);
-    ok &= write(ini, L"menu", L"hotkey_footer", v.hotkeyFooter ? 1 : 0);
+    ok &= write(ini, kHotkeyFooter, v.hotkeyFooter ? 1 : 0);
     return ok;
 }
 
@@ -930,12 +930,7 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
 }
 
 MenuPlacement read_menu_placement(const wchar_t* ini) {
-    // As strings: GetPrivateProfileInt reads negative values as 0.
-    const auto read = [ini](const wchar_t* key, int fallback) {
-        wchar_t text[16] = {};
-        GetPrivateProfileStringW(L"menu", key, L"", text, 16, ini);
-        return text[0] ? _wtoi(text) : fallback;
-    };
+    const auto read = [ini](const wchar_t* key, int fallback) { return ini_signed(ini, L"menu", key, fallback); };
     MenuPlacement p;
     p.yaw = std::clamp(read(L"yaw", p.yaw), -kMenuYawMax, kMenuYawMax);
     p.pitch = std::clamp(read(L"pitch", p.pitch), -kMenuPitchMax, kMenuPitchMax);

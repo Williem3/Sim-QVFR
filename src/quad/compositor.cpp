@@ -10,6 +10,7 @@
 
 #include "../log.h"
 #include "compose_shader.h"
+#include "dxgi_formats.h"
 
 namespace simqvfr {
 namespace {
@@ -17,22 +18,27 @@ namespace {
 constexpr UINT kConstants = kComposeConstants;
 constexpr UINT kSrvsPerSlot = 6;  // outer, focus, light, the helmet's visor, bottom and top
 
-bool is_typeless(DXGI_FORMAT f) {
-    switch (f) {
-    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
-    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
-    case DXGI_FORMAT_R10G10B10A2_TYPELESS:
-    case DXGI_FORMAT_R16G16B16A16_TYPELESS:
-        return true;
-    default:
-        return false;
-    }
-}
-
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
     D3D12_RESOURCE_BARRIER b{D3D12_RESOURCE_BARRIER_TYPE_TRANSITION};
     b.Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to};
     return b;
+}
+
+// GetCompletedValue reads UINT64_MAX once the device is removed.
+bool device_removed(ID3D12Fence* fence) { return fence->GetCompletedValue() == UINT64_MAX; }
+
+// Waits up to `ms` for `value`; true only when the GPU really got there. A timeout (or a removed device)
+// leaves the work possibly running, so nothing it uses may be reset, rewritten or freed.
+bool wait_fence(ID3D12Fence* fence, HANDLE event, UINT64 value, DWORD ms) {
+    UINT64 done = fence->GetCompletedValue();
+    if (done == UINT64_MAX)
+        return false;
+    if (done >= value)
+        return true;
+    if (event && SUCCEEDED(fence->SetEventOnCompletion(value, event)))
+        WaitForSingleObject(event, ms);
+    done = fence->GetCompletedValue();
+    return done != UINT64_MAX && done >= value;
 }
 
 }  // namespace
@@ -175,10 +181,16 @@ bool QuadCompositor::initialize(ID3D12Device* device, ID3D12CommandQueue* queue,
 
 QuadCompositor::Slot* QuadCompositor::next_slot() {
     Slot& slot = slots_[slotIndex_++ % kSlots];
-    if (slot.fenceValue && fence_->GetCompletedValue() < slot.fenceValue) {
-        fence_->SetEventOnCompletion(slot.fenceValue, fenceEvent_);
-        WaitForSingleObject(fenceEvent_, 1000);
+    // The GPU may still run this slot's list (and read its views): skip the frame rather than reset under it.
+    if (slot.fenceValue && !wait_fence(fence_.Get(), fenceEvent_, slot.fenceValue, 1000)) {
+        if (!gpuWaitLogged_)
+            logf("compositor: the GPU hasn't finished an earlier composition%s: frame skipped",
+                 device_removed(fence_.Get()) ? " (device removed)" : " after 1 s");
+        gpuWaitLogged_ = true;
+        return nullptr;
     }
+    for (auto& k : slot.keep)
+        k.Reset();
     if (FAILED(slot.allocator->Reset()) || FAILED(slot.list->Reset(slot.allocator.Get(), nullptr)))
         return nullptr;
     return &slot;
@@ -254,7 +266,7 @@ bool QuadCompositor::compose(ID3D12Resource* focusImage, ID3D12Resource* output,
     rtv.ptr += static_cast<SIZE_T>(slotIndex) * rtvIncrement_;
     const D3D12_RESOURCE_DESC outDesc = output->GetDesc();
     D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-    rtvDesc.Format = is_typeless(outDesc.Format) ? viewFormat_ : outDesc.Format;
+    rtvDesc.Format = is_typeless_colour(outDesc.Format) ? viewFormat_ : outDesc.Format;
     rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
     device_->CreateRenderTargetView(output, &rtvDesc, rtv);
 
@@ -303,7 +315,7 @@ UINT QuadCompositor::bind_sources(UINT slotIndex, ID3D12Resource* focus) {
     auto srv = [&](ID3D12Resource* r, UINT index) {
         const D3D12_RESOURCE_DESC d = r->GetDesc();
         D3D12_SHADER_RESOURCE_VIEW_DESC v = {};
-        v.Format = is_typeless(d.Format) ? viewFormat_ : d.Format;
+        v.Format = is_typeless_colour(d.Format) ? viewFormat_ : d.Format;
         v.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         v.Texture2D.MipLevels = 1;
@@ -472,10 +484,17 @@ bool QuadCompositor::upload_piece(int which, const std::vector<uint8_t>& pixels,
     D3D12_RESOURCE_BARRIER ready =
         transition(texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     slot->list->ResourceBarrier(1, &ready);
-    if (!submit(*slot))
+    if (!submit(*slot)) {
+        slot->keep[0] = buffer;  // the list may have gone in before the failed signal
+        slot->keep[1] = texture;
         return false;
-    fence_->SetEventOnCompletion(slot->fenceValue, fenceEvent_);  // the upload buffer must outlive the copy
-    WaitForSingleObject(fenceEvent_, 5000);
+    }
+    if (!wait_fence(fence_.Get(), fenceEvent_, slot->fenceValue, 5000)) {  // the upload buffer must outlive the copy
+        slot->keep[0] = buffer;  // freed when the slot is next reused, after the GPU is done with it
+        slot->keep[1] = texture;
+        log_line("compositor: a helmet image copy didn't finish in 5 s: not loaded");
+        return false;
+    }
     pieces_[which] = texture;
     return true;
 }
@@ -512,10 +531,15 @@ bool QuadCompositor::save_left_eye(ID3D12Resource* image, D3D12_RESOURCE_STATES 
     slot->list->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
     D3D12_RESOURCE_BARRIER back = transition(image, D3D12_RESOURCE_STATE_COPY_SOURCE, state);
     slot->list->ResourceBarrier(1, &back);
-    if (!submit(*slot))
+    if (!submit(*slot)) {
+        slot->keep[0] = buffer;
         return false;
-    fence_->SetEventOnCompletion(slot->fenceValue, fenceEvent_);
-    WaitForSingleObject(fenceEvent_, 5000);
+    }
+    if (!wait_fence(fence_.Get(), fenceEvent_, slot->fenceValue, 5000)) {
+        slot->keep[0] = buffer;  // still being written: freed when the slot is next reused
+        log_line("compositor: a capture copy didn't finish in 5 s: not saved");
+        return false;
+    }
 
     std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
     uint8_t* mapped = nullptr;
@@ -572,9 +596,41 @@ bool QuadCompositor::save_captures(ID3D12Resource* focusImage, ID3D12Resource* o
 }
 
 void QuadCompositor::shutdown() {
-    if (fence_ && fenceCounter_ && fence_->GetCompletedValue() < fenceCounter_) {
-        fence_->SetEventOnCompletion(fenceCounter_, fenceEvent_);
-        WaitForSingleObject(fenceEvent_, 2000);
+    // Nothing is released under the GPU: wait in steps (a hung GPU gets removed by the driver's timeout,
+    // after which releasing is fine); past the cap the objects are leaked rather than freed while in use.
+    bool idle = true;
+    if (fence_ && fenceCounter_) {
+        for (int step = 0; step < 30 && !wait_fence(fence_.Get(), fenceEvent_, fenceCounter_, 1000); ++step) {
+            if (device_removed(fence_.Get()))
+                break;
+            if (step == 0)
+                log_line("compositor: shutdown waiting for the GPU to finish its compositions");
+            if (!fenceEvent_)
+                Sleep(1000);
+        }
+        idle = device_removed(fence_.Get()) || fence_->GetCompletedValue() >= fenceCounter_;
+    }
+    if (!idle) {
+        log_line("compositor: the GPU didn't finish in 30 s: its resources are leaked, not released");
+        for (Slot& s : slots_) {
+            s.allocator.Detach();
+            s.list.Detach();
+            for (auto& k : s.keep)
+                k.Detach();
+        }
+        for (auto& p : pieces_)
+            p.Detach();
+        outer_.Detach();
+        light_.Detach();
+        lightReadback_.Detach();
+        lightPipeline_.Detach();
+        helmetLayerPipeline_.Detach();
+        pipeline_.Detach();
+        rootSignature_.Detach();
+        srvHeap_.Detach();
+        rtvHeap_.Detach();
+        fence_.Detach();
+        fenceEvent_ = nullptr;  // the fence may still signal it
     }
     for (Slot& s : slots_)
         s = Slot{};
@@ -599,7 +655,7 @@ void QuadCompositor::shutdown() {
     if (fenceEvent_)
         CloseHandle(fenceEvent_);
     fenceEvent_ = nullptr;
-    outerValid_ = ready_ = false;
+    outerValid_ = ready_ = gpuWaitLogged_ = false;
 }
 
 }  // namespace simqvfr

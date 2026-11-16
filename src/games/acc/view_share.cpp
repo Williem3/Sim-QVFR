@@ -53,6 +53,20 @@ const Hooked* hooked_for_vtable(void** vtable) {
     return nullptr;
 }
 const Hooked* hooked_for(ID3D11DeviceContext* ctx) { return hooked_for_vtable(*reinterpret_cast<void***>(ctx)); }
+// The last session's entry: the originals for a context whose vtable holds our hooks but was never hooked (a copy
+// of a hooked one, another wrapper's). Entries are never dropped, so one exists whenever a hook can run.
+std::atomic<int> sessionEntry{-1};
+const Hooked* fallback_entry() {
+    const int s = sessionEntry.load(std::memory_order_acquire);
+    if (s >= 0)
+        return &hooked[s];
+    return hookedCount.load(std::memory_order_acquire) > 0 ? &hooked[0] : nullptr;
+}
+const Hooked& originals(ID3D11DeviceContext* ctx) {
+    if (const Hooked* h = hooked_for(ctx))
+        return *h;
+    return *fallback_entry();
+}
 
 // D3D11's own immediate context keeps its vtable per context, on the heap beside it, and rewrites its draw and
 // dispatch slots itself as state changes (a log, 2026-11-04: those two hooks never ran without RenderDoc, whose
@@ -162,6 +176,7 @@ struct HookCalls {
 };
 HookCalls hookCalls;
 void** sessionVtable = nullptr;  // the session's context's vtable (view_share_start), under `mutex`
+ComPtr<ID3D11DeviceContext> sessionContext;  // under `mutex`
 
 bool scene_texture(ID3D11Resource* r, DXGI_FORMAT a, DXGI_FORMAT b) {
     D3D11_RESOURCE_DIMENSION dim;
@@ -269,7 +284,7 @@ void note_shared(Counts& counts, const char* what, int view, const simqvfr::View
 // ---- SSR ----
 
 void STDMETHODCALLTYPE dispatch_hook(ID3D11DeviceContext* ctx, UINT x, UINT y, UINT z) {
-    hooked_for(ctx)->dispatch(ctx, x, y, z);
+    originals(ctx).dispatch(ctx, x, y, z);
     hookCalls.dispatches.fetch_add(1, std::memory_order_relaxed);
     if (!on_immediate(ctx))
         return;
@@ -364,7 +379,7 @@ void follow_target(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView*
 
 void STDMETHODCALLTYPE set_targets_hook(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs,
                                         ID3D11DepthStencilView* dsv) {
-    hooked_for(ctx)->setTargets(ctx, count, rtvs, dsv);
+    originals(ctx).setTargets(ctx, count, rtvs, dsv);
     follow_target(ctx, count, rtvs);
     if (on_immediate(ctx))
         fixation_targets(count, dsv);  // the base pass's depth: the scene depth (fixation.h)
@@ -373,7 +388,7 @@ void STDMETHODCALLTYPE set_targets_hook(ID3D11DeviceContext* ctx, UINT count, ID
 void STDMETHODCALLTYPE set_targets_and_uavs_hook(ID3D11DeviceContext* ctx, UINT count, ID3D11RenderTargetView* const* rtvs,
                                                  ID3D11DepthStencilView* dsv, UINT uavStart, UINT uavCount,
                                                  ID3D11UnorderedAccessView* const* uavs, const UINT* initialCounts) {
-    hooked_for(ctx)->setTargetsAndUavs(ctx, count, rtvs, dsv, uavStart, uavCount, uavs, initialCounts);
+    originals(ctx).setTargetsAndUavs(ctx, count, rtvs, dsv, uavStart, uavCount, uavs, initialCounts);
     if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         follow_target(ctx, count, rtvs);
         if (on_immediate(ctx))
@@ -469,7 +484,7 @@ void STDMETHODCALLTYPE draw_indexed_hook(ID3D11DeviceContext* ctx, UINT count, U
         if (active.load(std::memory_order_relaxed) && views_focused())
             on_tonemap(ctx, gameDirt);
     }
-    hooked_for(ctx)->drawIndexed(ctx, count, start, base);
+    originals(ctx).drawIndexed(ctx, count, start, base);
     if (gameDirt) {  // the game's dirt mask back where its state cache has it
         ID3D11ShaderResourceView* game = gameDirt.Get();
         ctx->PSSetShaderResources(2, 1, &game);
@@ -638,28 +653,70 @@ void on_tonemap(ID3D11DeviceContext* ctx, ComPtr<ID3D11ShaderResourceView>& game
     }
 }
 
-// The hooked slots of `vtable` (the entry is published before the slots point at the hooks).
+constexpr std::size_t kHookSpan = (kSlotDispatch - kSlotDrawIndexed + 1) * sizeof(void*);
+
+// The hooked slots of `vtable` (the entry is published before the slots point at the hooks). A known vtable counts
+// as hooked only while its target-set slots (which D3D11 leaves alone) still hold ours: one put back at
+// view_share_stop, or a new context's vtable at a freed one's address, is hooked again.
 bool hook_vtable(void** vtable) {
-    if (hooked_for_vtable(vtable))
+    Hooked* h = const_cast<Hooked*>(hooked_for_vtable(vtable));
+    if (h && vtable[kSlotOMSetRenderTargets] == reinterpret_cast<void*>(&set_targets_hook) &&
+        vtable[kSlotOMSetRenderTargetsAndUavs] == reinterpret_cast<void*>(&set_targets_and_uavs_hook))
         return true;
     const int n = hookedCount.load();
-    if (n >= kMaxHooked)
+    if (!h && n >= kMaxHooked)
         return false;
-    const std::size_t span = (kSlotDispatch - kSlotDrawIndexed + 1) * sizeof(void*);
+    // A slot already holding our hook keeps the original known for it (never our own hook as the original).
+    const Hooked* known = h ? h : fallback_entry();
+    const auto pick = [&](std::size_t slot, void* hook, auto knownOriginal) {
+        using Fn = decltype(knownOriginal);
+        return vtable[slot] == hook ? knownOriginal : reinterpret_cast<Fn>(vtable[slot]);
+    };
+    const Hooked entry{vtable,
+                       pick(kSlotDrawIndexed, reinterpret_cast<void*>(&draw_indexed_hook),
+                            known ? known->drawIndexed : DrawIndexedFn{}),
+                       pick(kSlotDispatch, reinterpret_cast<void*>(&dispatch_hook), known ? known->dispatch : DispatchFn{}),
+                       pick(kSlotOMSetRenderTargets, reinterpret_cast<void*>(&set_targets_hook),
+                            known ? known->setTargets : SetTargetsFn{}),
+                       pick(kSlotOMSetRenderTargetsAndUavs, reinterpret_cast<void*>(&set_targets_and_uavs_hook),
+                            known ? known->setTargetsAndUavs : SetTargetsAndUavsFn{})};
+    if (!entry.drawIndexed || !entry.dispatch || !entry.setTargets || !entry.setTargetsAndUavs)
+        return false;
     DWORD old = 0;
-    if (!VirtualProtect(&vtable[kSlotDrawIndexed], span, PAGE_READWRITE, &old))
+    if (!VirtualProtect(&vtable[kSlotDrawIndexed], kHookSpan, PAGE_READWRITE, &old))
         return false;
-    hooked[n] = {vtable, reinterpret_cast<DrawIndexedFn>(vtable[kSlotDrawIndexed]),
-                 reinterpret_cast<DispatchFn>(vtable[kSlotDispatch]),
-                 reinterpret_cast<SetTargetsFn>(vtable[kSlotOMSetRenderTargets]),
-                 reinterpret_cast<SetTargetsAndUavsFn>(vtable[kSlotOMSetRenderTargetsAndUavs])};
-    hookedCount.store(n + 1, std::memory_order_release);
+    if (h) {
+        *h = entry;
+    } else {
+        hooked[n] = entry;
+        hookedCount.store(n + 1, std::memory_order_release);
+    }
     vtable[kSlotDrawIndexed] = reinterpret_cast<void*>(&draw_indexed_hook);
     vtable[kSlotDispatch] = reinterpret_cast<void*>(&dispatch_hook);
     vtable[kSlotOMSetRenderTargets] = reinterpret_cast<void*>(&set_targets_hook);
     vtable[kSlotOMSetRenderTargetsAndUavs] = reinterpret_cast<void*>(&set_targets_and_uavs_hook);
-    VirtualProtect(&vtable[kSlotDrawIndexed], span, old, &old);
+    VirtualProtect(&vtable[kSlotDrawIndexed], kHookSpan, old, &old);
     return true;
+}
+
+// Our slots of `vtable` back to their originals; a slot something else rewrote since (D3D11's draw/dispatch, another
+// hook on top) is left as it is. The entry stays, for any copy or wrapper that still calls our hooks.
+void unhook_vtable(void** vtable) {
+    const Hooked* h = hooked_for_vtable(vtable);
+    if (!h)
+        return;
+    DWORD old = 0;
+    if (!VirtualProtect(&vtable[kSlotDrawIndexed], kHookSpan, PAGE_READWRITE, &old))
+        return;
+    const auto put_back = [&](std::size_t slot, void* hook, void* original) {
+        InterlockedCompareExchangePointer(&vtable[slot], original, hook);
+    };
+    put_back(kSlotDrawIndexed, reinterpret_cast<void*>(&draw_indexed_hook), reinterpret_cast<void*>(h->drawIndexed));
+    put_back(kSlotDispatch, reinterpret_cast<void*>(&dispatch_hook), reinterpret_cast<void*>(h->dispatch));
+    put_back(kSlotOMSetRenderTargets, reinterpret_cast<void*>(&set_targets_hook), reinterpret_cast<void*>(h->setTargets));
+    put_back(kSlotOMSetRenderTargetsAndUavs, reinterpret_cast<void*>(&set_targets_and_uavs_hook),
+             reinterpret_cast<void*>(h->setTargetsAndUavs));
+    VirtualProtect(&vtable[kSlotDrawIndexed], kHookSpan, old, &old);
 }
 
 void report(Counts& c, const char* what) {
@@ -714,8 +771,12 @@ void view_share_start(ID3D11Device* device) {
     }
     if (hookedCount.load() != before && before > 0)
         simqvfr::logf("acc view share: this session's context has another vtable (%p): hooked too", static_cast<void*>(vtable));
-    immediate.store(context.Get());  // the device holds it as long as the session's
+    immediate.store(context.Get());
     sessionVtable = vtable;
+    for (int i = 0; i < hookedCount.load(); ++i)
+        if (hooked[i].vtable == vtable)
+            sessionEntry.store(i, std::memory_order_release);
+    sessionContext = context;  // held so its vtable is still there for view_share_stop to put back
     simqvfr::logf("acc view share: the session's immediate context %p, vtable %p (in %s)",
                 static_cast<void*>(context.Get()), static_cast<void*>(vtable),
                 [&] {
@@ -737,6 +798,11 @@ void view_share_stop() {
     active.store(false);
     std::lock_guard guard(mutex);
     immediate.store(nullptr);
+    if (sessionContext) {
+        unhook_vtable(*reinterpret_cast<void***>(sessionContext.Get()));
+        sessionContext.Reset();
+    }
+    sessionVtable = nullptr;
     for (int e = 0; e < 2; ++e) {
         eyeSsr[e].Reset();
         eyeSsrFresh[e] = false;

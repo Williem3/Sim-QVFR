@@ -37,6 +37,22 @@ bool read_stamp(std::istringstream& in, ProcessStamp& p) {
 
 std::wstring status_text(LSTATUS s) { return L"error " + std::to_wstring(s); }
 
+// A value a launch of ours can have added: a .json straight in one of our run folders (logs\run-<stamp>\, beside
+// the ledgers' logs\openxr-registrations\). Ledgers sit in a folder the user can write, and the sweep runs as
+// administrator, so a ledger naming anything else (another vendor's layer at DWORD 0) never gets it deleted.
+bool in_a_run_folder(const std::wstring& value, const std::wstring& ledgerPath) {
+    const fs::path v(value);
+    if (!v.is_absolute() || _wcsicmp(v.extension().c_str(), L".json") != 0)
+        return false;
+    for (const fs::path& part : v.relative_path())
+        if (part == L".." || part == L".")
+            return false;
+    const fs::path run = v.parent_path(), logs = fs::path(ledgerPath).parent_path().parent_path().lexically_normal();
+    const std::wstring folder = run.filename().wstring();
+    return folder.size() > 4 && _wcsnicmp(folder.c_str(), L"run-", 4) == 0 && !logs.empty() &&
+           _wcsicmp(run.parent_path().lexically_normal().c_str(), logs.c_str()) == 0;
+}
+
 }  // namespace
 
 ProcessStamp process_stamp(HANDLE process) {
@@ -195,6 +211,10 @@ bool unregister_layers(HKEY root, const wchar_t* subkey, const std::wstring& led
     }
     std::vector<std::wstring> left;  // still ours, not taken out
     for (const std::wstring& v : ledger.values) {
+        if (!in_a_run_folder(v, ledgerPath)) {
+            notes.push_back(L"not a manifest in one of our run folders, ignored (left as it is): " + v);
+            continue;
+        }
         DWORD type = 0, data = 1, size = sizeof(data);
         const LSTATUS q = RegQueryValueExW(key, v.c_str(), nullptr, &type, reinterpret_cast<BYTE*>(&data), &size);
         if (q == ERROR_FILE_NOT_FOUND) {

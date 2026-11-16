@@ -7,20 +7,10 @@
 #include <wrl/client.h>
 
 #include "quad/menu_panel.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace simqvfr;
-
-namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
-
-}  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
     check(!make_panel_upload(SessionGraphics{}, 64, 8), "no device: no uploader");
@@ -64,6 +54,5 @@ int SIM_QVFR_TEST_MAIN() {
         context->Unmap(readback.Get(), 0);
     check(same, "the image holds the panel's pixels as drawn");
 
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

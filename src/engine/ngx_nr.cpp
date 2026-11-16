@@ -16,6 +16,7 @@
 #include <nvsdk_ngx.h>
 
 #include "../log.h"
+#include "ngx_common.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -23,6 +24,8 @@ namespace simqvfr::ngxnr {
 
 struct View {
     unsigned width = 0, height = 0;
+    int preset = 0;                    // what it was asked for (a creation still on the GPU is matched by it)
+    unsigned long long askedAt = 0;    // collect()'s count when create() last asked for it while it was being made
     NVSDK_NGX_Handle* handle = nullptr;
     NVSDK_NGX_Parameter* params = nullptr;
     ComPtr<ID3D12Resource> colour, depth, vectors, output;
@@ -43,8 +46,6 @@ namespace {
 
 // NGX feature 18: the neural rendering runtime (NVSDK_NGX_Feature_Reserved18 in the SDK's public header).
 constexpr NVSDK_NGX_Feature kNeuralRendering = static_cast<NVSDK_NGX_Feature>(18);
-// The project id engine/ngx_dlss.cpp starts NGX with: ours, a custom engine's.
-constexpr const char* kProjectId = "5b1c0f1e-6a57-4c1b-9d0e-51a0c7f3d2a4";
 
 struct Allocator {
     ComPtr<ID3D12CommandAllocator> allocator;
@@ -70,6 +71,7 @@ struct State {
     UINT64 timestampFrequency = 0;
     ComPtr<IDXGIAdapter3> adapter;
     std::vector<View*> released;          // given up, not destroyed yet (collect)
+    std::vector<View*> creating;          // feature created, its creation list not through on the GPU yet (create)
     unsigned long long collects = 0;
     std::deque<UINT64> outstanding;       // the evaluations' fence values the GPU hasn't reached yet
 } s;
@@ -77,13 +79,20 @@ struct State {
 // A released view is destroyed no sooner than this many collect() calls (frames) after its release, and only with the
 // GPU through its last submission.
 constexpr unsigned long long kReleaseFrames = 8;
+// create() waits this long for the feature's creation list on the render thread; longer and the view is answered
+// kCreating and handed over by a later create() once the GPU is through (a stalled GPU must not freeze the headset).
+constexpr DWORD kCreateWaitMs = 500;
+// A creation nobody asked for again in this many collect() calls (the size changed meanwhile) is given up.
+constexpr unsigned long long kCreatingFrames = 120;
 
 void destroy(View* v);
-bool wait_for(UINT64 value, DWORD ms);
-// A view that never came into use (create() failed part-way): destroyed once our queue is through its one list.
+// A view that never came into use (create() failed part-way): destroyed now if our queue is through its one list,
+// else parked with the released ones (collect, shutdown). Never waits: the render thread must not block on the GPU.
 void discard(View* v) {
-    if (s.queue && s.fence && v->lastSubmit && !wait_for(v->lastSubmit, 30000)) {
-        s.released.push_back(v);  // not through: kept (collect, shutdown)
+    if (s.queue && s.fence && v->lastSubmit && s.fence->GetCompletedValue() < v->lastSubmit) {
+        v->releaseValue = 0;  // the game's device never touched it
+        v->releasedAt = s.collects;
+        s.released.push_back(v);
         return;
     }
     destroy(v);
@@ -99,15 +108,9 @@ void destroy(View* v) {
 
 void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
     std::string line = message ? message : "";
-    std::string lower = line;
-    for (char& c : lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (lower.find("error") == std::string::npos && lower.find("warn") == std::string::npos && lower.find("fail") == std::string::npos)
+    if (!ngx_line_logged(ngx_lower(line)))
         return;
-    if (lower.find("failed to load ngxcore") != std::string::npos || lower.find("from cache") != std::string::npos)
-        return;
-    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-        line.pop_back();
+    ngx_trim_line_end(line);
     simqvfr::logf("ngx nr: %s", line.c_str());
 }
 
@@ -284,7 +287,7 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_ON;
     info.LoggingInfo.DisableOtherLoggingSinks = true;
     const NVSDK_NGX_Result r =
-        NVSDK_NGX_D3D12_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", dataFolder, s.device.Get(), &info);
+        NVSDK_NGX_D3D12_Init_with_ProjectID(kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", dataFolder, s.device.Get(), &info);
     if (NVSDK_NGX_FAILED(r)) {
         ComPtr<ID3D12Device> keep = s.device;  // not NGX's to shut down: it never started
         s.device.Reset();
@@ -296,13 +299,60 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     return true;
 }
 
+namespace {
+
+// A created feature's evaluation inputs: set once its creation list is through.
+View* finish(View* v) {
+    const unsigned width = v->width, height = v->height;
+    NVSDK_NGX_Parameter* p = v->params;
+    p->Set("DLSSNR.Color", v->colour.Get());
+    p->Set("DLSSNR.Output", v->output.Get());
+    p->Set("DLSSNR.Depth", v->depth.Get());
+    p->Set("DLSSNR.MVec", v->vectors.Get());
+    for (const char* k : {"DLSSNR.ColorSubrectBaseX", "DLSSNR.ColorSubrectBaseY", "DLSSNR.OutputSubrectBaseX", "DLSSNR.OutputSubrectBaseY",
+                          "DLSSNR.DepthSubrectBaseX", "DLSSNR.DepthSubrectBaseY", "DLSSNR.MVecSubrectBaseX", "DLSSNR.MVecSubrectBaseY"})
+        p->Set(k, 0u);
+    for (const char* k : {"DLSSNR.ColorSubrectWidth", "DLSSNR.OutputSubrectWidth", "DLSSNR.DepthSubrectWidth", "DLSSNR.MVecSubrectWidth"})
+        p->Set(k, width);
+    for (const char* k :
+         {"DLSSNR.ColorSubrectHeight", "DLSSNR.OutputSubrectHeight", "DLSSNR.DepthSubrectHeight", "DLSSNR.MVecSubrectHeight"})
+        p->Set(k, height);
+    // The vectors are fractions of the view: times its size, the texels the runtime works in.
+    p->Set("DLSSNR.MVecScaleX", static_cast<float>(width));
+    p->Set("DLSSNR.MVecScaleY", static_cast<float>(height));
+    return v;
+}
+
+}  // namespace
+
 View* create(unsigned width, unsigned height, int preset, unsigned& result) {
     result = static_cast<unsigned>(NVSDK_NGX_Result_Fail);
     if (!s.started || !width || !height)
         return nullptr;
+    // A creation of this kind already on the GPU: handed over once through, never used before (no half-made view out).
+    for (auto it = s.creating.begin(); it != s.creating.end(); ++it) {
+        View* c = *it;
+        if (c->width != width || c->height != height || c->preset != preset)
+            continue;
+        const UINT64 done = s.fence->GetCompletedValue();
+        if (done == UINT64_MAX) {  // a lost device: the creation is as good as failed
+            s.creating.erase(it);
+            discard(c);
+            return nullptr;
+        }
+        if (done < c->lastSubmit) {
+            c->askedAt = s.collects;
+            result = kCreating;
+            return nullptr;
+        }
+        s.creating.erase(it);
+        result = static_cast<unsigned>(NVSDK_NGX_Result_Success);
+        return finish(c);
+    }
     auto* v = new View;
     v->width = width;
     v->height = height;
+    v->preset = preset;
     HRESULT hr = S_OK;
     D3D12_QUERY_HEAP_DESC qd{};
     qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
@@ -343,12 +393,23 @@ View* create(unsigned width, unsigned height, int preset, unsigned& result) {
         p->Set("DLSSNR.ControlMask", static_cast<void*>(nullptr));
         p->Set("DLSSNR.Style", 0u);
         r = NVSDK_NGX_Result_Fail;
+        bool late = false;
         if (begin_list()) {
             r = NVSDK_NGX_D3D12_CreateFeature(s.list.Get(), kNeuralRendering, p, &v->handle);
             const UINT64 at = end_list();
             v->lastSubmit = at ? at : s.value;
-            if (NVSDK_NGX_SUCCEED(r) && (!at || !wait_for(at, 30000)))
+            if (NVSDK_NGX_SUCCEED(r) && !at)
                 r = NVSDK_NGX_Result_Fail;
+            else if (NVSDK_NGX_SUCCEED(r) && !wait_for(at, kCreateWaitMs))
+                late = true;
+        }
+        if (late && v->handle) {
+            simqvfr::logf("ngx nr: a %ux%u feature's creation isn't through on the GPU after %u ms: handed over on a later frame",
+                          width, height, static_cast<unsigned>(kCreateWaitMs));
+            v->askedAt = s.collects;
+            s.creating.push_back(v);
+            result = kCreating;
+            return nullptr;
         }
     }
     result = static_cast<unsigned>(r);
@@ -356,23 +417,7 @@ View* create(unsigned width, unsigned height, int preset, unsigned& result) {
         discard(v);
         return nullptr;
     }
-    NVSDK_NGX_Parameter* p = v->params;
-    p->Set("DLSSNR.Color", v->colour.Get());
-    p->Set("DLSSNR.Output", v->output.Get());
-    p->Set("DLSSNR.Depth", v->depth.Get());
-    p->Set("DLSSNR.MVec", v->vectors.Get());
-    for (const char* k : {"DLSSNR.ColorSubrectBaseX", "DLSSNR.ColorSubrectBaseY", "DLSSNR.OutputSubrectBaseX", "DLSSNR.OutputSubrectBaseY",
-                          "DLSSNR.DepthSubrectBaseX", "DLSSNR.DepthSubrectBaseY", "DLSSNR.MVecSubrectBaseX", "DLSSNR.MVecSubrectBaseY"})
-        p->Set(k, 0u);
-    for (const char* k : {"DLSSNR.ColorSubrectWidth", "DLSSNR.OutputSubrectWidth", "DLSSNR.DepthSubrectWidth", "DLSSNR.MVecSubrectWidth"})
-        p->Set(k, width);
-    for (const char* k :
-         {"DLSSNR.ColorSubrectHeight", "DLSSNR.OutputSubrectHeight", "DLSSNR.DepthSubrectHeight", "DLSSNR.MVecSubrectHeight"})
-        p->Set(k, height);
-    // The vectors are fractions of the view: times its size, the texels the runtime works in.
-    p->Set("DLSSNR.MVecScaleX", static_cast<float>(width));
-    p->Set("DLSSNR.MVecScaleY", static_cast<float>(height));
-    return v;
+    return finish(v);
 }
 
 void release(ID3D11DeviceContext* context, View* v, IUnknown* const* keep, unsigned count) {
@@ -396,6 +441,15 @@ void release(ID3D11DeviceContext* context, View* v, IUnknown* const* keep, unsig
 
 void collect() {
     ++s.collects;
+    // Creations nobody asks for any more (the size or preset changed): released as any other view.
+    for (auto it = s.creating.begin(); it != s.creating.end();) {
+        if (s.collects >= (*it)->askedAt + kCreatingFrames) {
+            discard(*it);
+            it = s.creating.erase(it);
+        } else {
+            ++it;
+        }
+    }
     if (s.released.empty() || !s.fence || !s.releaseFence)
         return;
     const UINT64 done = s.fence->GetCompletedValue(), let = s.releaseFence->GetCompletedValue();
@@ -412,7 +466,7 @@ void collect() {
     }
 }
 
-unsigned pending_releases() { return static_cast<unsigned>(s.released.size()); }
+unsigned pending_releases() { return static_cast<unsigned>(s.released.size() + s.creating.size()); }
 
 bool device_lost() { return s.device && FAILED(s.device->GetDeviceRemovedReason()); }
 
@@ -522,6 +576,11 @@ void shutdown(ID3D11DeviceContext* context) {
     // device is one object a process and adapter while anything holds it, so one reference left would hand the lost
     // device back to the next start()).
     const bool lost = device_lost();
+    for (View* v : s.creating) {  // creations still on the GPU: waited for and destroyed with the released views
+        v->releaseValue = 0;
+        s.released.push_back(v);
+    }
+    s.creating.clear();
     bool idle = true;
     if (!lost && s.queue && s.fence && s.event) {
         ComPtr<ID3D11DeviceContext4> context4;
@@ -547,7 +606,7 @@ void shutdown(ID3D11DeviceContext* context) {
     if (!idle) {
         // Work of ours still queued on a live device: nothing is destroyed. Left to the process's end.
         simqvfr::logf("ngx nr: the GPU didn't finish DLSS-NR's work within 3 s: its Direct3D 12 objects (%u released views among "
-                      "them) are left as they are, not destroyed",
+                      "them) are left as they are, not destroyed; DLSS-NR stays off until the game is restarted",
                       static_cast<unsigned>(s.released.size()));
         (void)s.device.Detach();
         (void)s.device11.Detach();
@@ -564,6 +623,10 @@ void shutdown(ID3D11DeviceContext* context) {
             for (ComPtr<IUnknown>& k : v->keep)
                 (void)k.Detach();
         s = State{};
+        // No restart in this process: the device still held would come back from D3D12CreateDevice (one a process and
+        // adapter) and NGX would start a second time on a device it was never shut down on.
+        s.tried = true;
+        s.failure = "an earlier session's DLSS-NR work never finished on the GPU: off until the game is restarted";
         return;
     }
     for (View* v : s.released)

@@ -5,7 +5,7 @@
 
 #include <windows.h>
 
-#include "../ini_put.h"
+#include "../ini.h"
 
 namespace simqvfr {
 namespace {
@@ -65,12 +65,6 @@ int vk_of(const std::wstring& name) {
     return 0;
 }
 
-std::wstring read_ini(const wchar_t* ini, const std::wstring& key) {
-    wchar_t text[256] = {};
-    GetPrivateProfileStringW(L"hotkeys", key.c_str(), L"\x01", text, static_cast<DWORD>(std::size(text)), ini);
-    return text;
-}
-
 constexpr const wchar_t* kHatNames[4] = {L"up", L"right", L"down", L"left"};
 
 }  // namespace
@@ -97,14 +91,14 @@ Hotkeys read_hotkeys(const wchar_t* ini) {
     Hotkeys h = default_hotkeys();
     for (int i = 0; i < kHotkeyActions; ++i) {
         // Unset keys keep the default; an empty value is none.
-        const std::wstring key = read_ini(ini, kIniKeys[i]);
-        if (key != L"\x01") {
+        const std::wstring key = ini_get(ini, L"hotkeys", kIniKeys[i], kIniAbsent);
+        if (key != kIniAbsent) {
             KeyCombo k;
             h[i].key = parse_key(key, k) ? k : KeyCombo{};
         }
-        const std::wstring pad = read_ini(ini, std::wstring(kIniKeys[i]) + L"_pad");
+        const std::wstring pad = ini_get(ini, L"hotkeys", (std::wstring(kIniKeys[i]) + L"_pad").c_str(), kIniAbsent);
         PadControl p;
-        h[i].pad = pad != L"\x01" && parse_pad(pad, p) ? p : PadControl{};
+        h[i].pad = pad != kIniAbsent && parse_pad(pad, p) ? p : PadControl{};
     }
     return h;
 }

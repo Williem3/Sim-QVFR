@@ -11,6 +11,7 @@
 #include <nvsdk_ngx_helpers.h>
 
 #include "../log.h"
+#include "ngx_common.h"
 
 namespace simqvfr::ngx {
 
@@ -19,9 +20,6 @@ struct Feature {
 };
 
 namespace {
-
-// A project id of our own (a GUID, custom engine): Sim-QVFR has no NVIDIA application id.
-constexpr const char* kProjectId = "5b1c0f1e-6a57-4c1b-9d0e-51a0c7f3d2a4";
 
 bool started = false, tried = false;
 std::string failure;
@@ -37,9 +35,7 @@ int testRefusePreset = -1;
 // hundreds of lines a feature otherwise).
 void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_Feature) {
     std::string line = message ? message : "";
-    std::string lower = line;
-    for (char& c : lower)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const std::string lower = ngx_lower(line);
     if (const size_t at = creatingMode ? line.find(creatingMode) : std::string::npos;
         at != std::string::npos &&
         (lower.find("using app hint preset") != std::string::npos || lower.find("using title default preset") != std::string::npos)) {
@@ -49,13 +45,9 @@ void NVSDK_CONV ngx_log(const char* message, NVSDK_NGX_Logging_Level, NVSDK_NGX_
         simqvfr::logf("ngx: %s", preset.c_str());
         return;
     }
-    if (lower.find("error") == std::string::npos && lower.find("warn") == std::string::npos && lower.find("fail") == std::string::npos)
+    if (!ngx_line_logged(lower))
         return;
-    // Not failures: its first two guesses for its core before the driver's own, and model downloads it has no copy of.
-    if (lower.find("failed to load ngxcore") != std::string::npos || lower.find("from cache") != std::string::npos)
-        return;
-    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-        line.pop_back();
+    ngx_trim_line_end(line);
     simqvfr::logf("ngx: %s", line.c_str());
 }
 
@@ -103,7 +95,7 @@ bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFo
     info.LoggingInfo.DisableOtherLoggingSinks = true;
     char text[160];
     NVSDK_NGX_Result r =
-        NVSDK_NGX_D3D11_Init_with_ProjectID(kProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", dataFolder, device, &info);
+        NVSDK_NGX_D3D11_Init_with_ProjectID(kNgxProjectId, NVSDK_NGX_ENGINE_TYPE_CUSTOM, "1.0", dataFolder, device, &info);
     if (NVSDK_NGX_FAILED(r)) {
         std::snprintf(text, sizeof(text), "NGX didn't start (0x%08x)", static_cast<unsigned>(r));
         why = failure = text;

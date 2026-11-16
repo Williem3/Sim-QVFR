@@ -1,9 +1,15 @@
 #include "code_patch.h"
 
+#include <cstdio>
 #include <cstring>
+#include <vector>
+
+#include <MinHook.h>
 
 #include "../log.h"
 #include "../xr.h"
+
+#include <tlhelp32.h>
 
 namespace simqvfr {
 namespace {
@@ -11,13 +17,6 @@ namespace {
 uint8_t* stubPage = nullptr;
 size_t stubUsed = 0;
 constexpr size_t kStubPageSize = 0x1000;
-
-bool readable(const void* address, size_t size) {
-    MEMORY_BASIC_INFORMATION mbi;
-    return VirtualQuery(address, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
-           !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
-           reinterpret_cast<uintptr_t>(address) + size <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-}
 
 // Executable memory below the module, so `jmp rel32` reaches it from the module's code and back.
 uint8_t* stub_alloc(size_t size) {
@@ -41,6 +40,62 @@ uint8_t* stub_alloc(size_t size) {
     return p;
 }
 
+// The process's other threads suspended for a live code write (as MinHook does): ACC and X-Plane patch at session
+// start with the game's threads running, and a multi-byte write could be half-seen. Nothing here may allocate or log
+// while threads are held (one may hold the heap or log lock): the ids and handles are gathered first.
+class Freeze {
+public:
+    Freeze() {
+        const DWORD self = GetCurrentThreadId(), pid = GetCurrentProcessId();
+        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE)
+            return;
+        THREADENTRY32 te{};
+        te.dwSize = sizeof(te);
+        for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te))
+            if (te.dwSize >= FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) + sizeof(te.th32OwnerProcessID) &&
+                te.th32OwnerProcessID == pid && te.th32ThreadID != self)
+                ids_.push_back(te.th32ThreadID);
+        CloseHandle(snap);
+        held_.reserve(ids_.size());  // no allocation once the first thread is held
+        for (const DWORD id : ids_) {
+            const HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, id);
+            if (!h)
+                continue;
+            if (SuspendThread(h) == static_cast<DWORD>(-1)) {
+                CloseHandle(h);
+                continue;
+            }
+            held_.push_back(h);
+        }
+    }
+    ~Freeze() {
+        for (const HANDLE h : held_) {
+            ResumeThread(h);
+            CloseHandle(h);
+        }
+    }
+    // True when a held thread is stopped inside (begin, end): it would resume in the middle of new instructions.
+    // At `begin` itself is fine, the thread runs the new bytes from their start.
+    bool inside(uintptr_t begin, uintptr_t end) const {
+#ifdef _WIN64
+        for (const HANDLE h : held_) {
+            CONTEXT c{};
+            c.ContextFlags = CONTEXT_CONTROL;
+            if (GetThreadContext(h, &c) && c.Rip > begin && c.Rip < end)
+                return true;
+        }
+#endif
+        return false;
+    }
+    Freeze(const Freeze&) = delete;
+    Freeze& operator=(const Freeze&) = delete;
+
+private:
+    std::vector<DWORD> ids_;
+    std::vector<HANDLE> held_;
+};
+
 bool rel32(const void* from_end, const void* to, int32_t* out) {
     const int64_t d = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(from_end);
     if (d < INT32_MIN || d > INT32_MAX)
@@ -53,6 +108,40 @@ bool rel32(const void* from_end, const void* to, int32_t* out) {
 
 uintptr_t module_base() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
 
+bool readable(const void* address, size_t size) {
+    MEMORY_BASIC_INFORMATION mbi;
+    return VirtualQuery(address, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
+           !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+           reinterpret_cast<uintptr_t>(address) + size <= reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+}
+
+std::string module_offset(const void* address) {
+    HMODULE module = nullptr;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(address), &module) &&
+        module) {
+        char path[MAX_PATH];
+        if (GetModuleFileNameA(module, path, MAX_PATH)) {
+            const char* slash = std::strrchr(path, '\\');
+            std::snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
+        }
+    }
+    char out[MAX_PATH + 32];
+    std::snprintf(out, sizeof(out), "%s+0x%llx", name,
+                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module)));
+    return out;
+}
+
+bool minhook_ready(const char* tag, const char* outcome) {
+    const MH_STATUS init = MH_Initialize();
+    if (init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED)
+        return true;
+    if (tag)
+        logf("%s: MH_Initialize failed%s", tag, outcome);
+    return false;
+}
+
 bool code_matches(uintptr_t rva, const uint8_t* anchor, size_t size) {
     const void* p = reinterpret_cast<const void*>(module_base() + rva);
     return readable(p, size) && std::memcmp(p, anchor, size) == 0;
@@ -60,13 +149,28 @@ bool code_matches(uintptr_t rva, const uint8_t* anchor, size_t size) {
 
 bool code_write(uintptr_t rva, const void* bytes, size_t size) {
     void* p = reinterpret_cast<void*>(module_base() + rva);
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(p);
     DWORD protect = 0;
     if (!VirtualProtect(p, size, PAGE_EXECUTE_READWRITE, &protect))
         return false;
-    std::memcpy(p, bytes, size);
+    // A thread stopped mid-range is let run on a little, then held again (it's in a few instructions at most).
+    bool written = false;
+    for (int attempt = 0; attempt < 50 && !written; ++attempt) {
+        {
+            const Freeze freeze;
+            if (!freeze.inside(begin, begin + size)) {
+                std::memcpy(p, bytes, size);
+                FlushInstructionCache(GetCurrentProcess(), p, size);
+                written = true;
+            }
+        }  // the threads run again here
+        if (!written)
+            Sleep(1);
+    }
     VirtualProtect(p, size, protect, &protect);
-    FlushInstructionCache(GetCurrentProcess(), p, size);
-    return true;
+    if (!written)
+        logf("code_patch: a thread stayed inside 0x%llx (+%zu): not written", static_cast<unsigned long long>(rva), size);
+    return written;
 }
 
 bool code_redirect(uintptr_t rva, const uint8_t* anchor, size_t size, const uint8_t* stubCode, size_t stubSize) {
@@ -220,6 +324,25 @@ bool vtable_slot_replace(uintptr_t slotRva, uintptr_t expectedRva, const void* r
         return false;
     }
     return code_write(slotRva, &wanted, sizeof(wanted));
+}
+
+bool vtable_patch(void** vtable, size_t slot, void* hook, void** original) {
+    // Already ours (a retry after a partial failure): saving it as the original would recurse.
+    if (vtable[slot] == hook)
+        return true;
+    // Keep execute when the page had it; only add write.
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(&vtable[slot], &info, sizeof(info)))
+        return false;
+    constexpr DWORD kExecute = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    const DWORD writable = (info.Protect & kExecute) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+    DWORD old = 0;
+    if (!VirtualProtect(&vtable[slot], sizeof(void*), writable, &old))
+        return false;
+    *original = vtable[slot];
+    vtable[slot] = hook;
+    VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
+    return true;
 }
 
 }  // namespace simqvfr

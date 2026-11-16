@@ -7,19 +7,11 @@
 
 #include "engine/dlss_math.h"
 #include "quad/offaxis_focus.h"
+#include "test_util.h"
 
 namespace {
 
 using namespace simqvfr::dlss;
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-bool near(double a, double b, double eps = 1e-6) { return std::fabs(a - b) <= eps; }
 
 // LMU's eye projection from the view's tangents (left-handed, row vectors, w = z).
 M4 projection_of(const Tangents& t, double n, double f) {
@@ -68,7 +60,7 @@ int SIM_QVFR_TEST_MAIN() {
     const M4 one = mul(mul(view_of(1, 2, 3, 0.7), p), inverse);
     bool unit = true;
     for (int i = 0; i < 16; ++i)
-        unit = unit && near(one[i], i % 5 == 0 ? 1 : 0, 1e-9);
+        unit = unit && close_to(one[i], i % 5 == 0 ? 1 : 0, 1e-9);
     check(unit, "the inverse times the matrix is the identity");
 
     // The jitter sequence stays inside the pixel and averages out.
@@ -124,11 +116,11 @@ int SIM_QVFR_TEST_MAIN() {
         double zn = 0, zf = 0;
         bool zinf = false;
         const bool zeroOk = near_far(0.0, 0.075, zn, zf, zinf);  // reversed with an infinite far plane
-        check(plainOk && revOk && near(n, nr, 1e-9) && near(f, fr, 1e-6 * f) && !inf && !infr && n > 0 && f > n,
+        check(plainOk && revOk && close_to(n, nr, 1e-9) && close_to(f, fr, 1e-6 * f) && !inf && !infr && n > 0 && f > n,
               "FSR's near and far are the same planes from either depth convention");
-        check(lmuOk && near(ln, 0.075, 1e-6) && near(lf, 0.075 / 3.7e-6, 1) && !linf, "LMU's measured terms give 0.075 m and ~20 km");
-        check(zeroOk && zinf && near(zn, 0.075, 1e-9) && zf == 1e6, "an infinite far plane is said so");
-        check(near(vertical_fov(1.0), 3.14159265358979 / 2, 1e-9) && near(vertical_fov(1.0, 2.0), 2 * std::atan(0.5), 1e-12) &&
+        check(lmuOk && close_to(ln, 0.075, 1e-6) && close_to(lf, 0.075 / 3.7e-6, 1) && !linf, "LMU's measured terms give 0.075 m and ~20 km");
+        check(zeroOk && zinf && close_to(zn, 0.075, 1e-9) && zf == 1e6, "an infinite far plane is said so");
+        check(close_to(vertical_fov(1.0), 3.14159265358979 / 2, 1e-9) && close_to(vertical_fov(1.0, 2.0), 2 * std::atan(0.5), 1e-12) &&
                   vertical_fov(0) == 0,
               "the vertical FOV from the y scale, a focus view's through its remap");
     }
@@ -140,14 +132,14 @@ int SIM_QVFR_TEST_MAIN() {
     Tangents moved = fov;
     shift_tangents(moved, cx, cy);
     const M4 pj = projection_of(moved, 0.05, 20000);
-    check(near(moved.right - moved.left, fov.right - fov.left) && near(moved.up - moved.down, fov.up - fov.down),
+    check(close_to(moved.right - moved.left, fov.right - fov.left, 1e-6) && close_to(moved.up - moved.down, fov.up - fov.down, 1e-6),
           "the FOV keeps its size");
-    check(near(pj[8] - p[8], cx, 1e-12) && near(pj[9] - p[9], cy, 1e-12), "the projection's third row moves by the clip shift");
+    check(close_to(pj[8] - p[8], cx, 1e-12) && close_to(pj[9] - p[9], cy, 1e-12), "the projection's third row moves by the clip shift");
     const M4 view = view_of(120, 3, -45, 0.4);
     const Pixel plain = pixel_of(mul(view, p), W, H, 118, 2.5, -20), shifted = pixel_of(mul(view, pj), W, H, 118, 2.5, -20);
-    check(near(shifted.x - plain.x, sx, 1e-6) && near(shifted.y - plain.y, sy, 1e-6),
+    check(close_to(shifted.x - plain.x, sx, 1e-6) && close_to(shifted.y - plain.y, sy, 1e-6),
           "the image moves by the pixels asked (x right, y down)");
-    check(near(mul(mul(view, pj), clip_shift(-cx, -cy))[12], mul(view, p)[12], 1e-9), "the clip shift taken off gives the plain matrix");
+    check(close_to(mul(mul(view, pj), clip_shift(-cx, -cy))[12], mul(view, p)[12], 1e-9), "the clip shift taken off gives the plain matrix");
 
     // A still world, the camera moving and turning, both frames jittered: the vector at the point's pixel leads to where
     // it was, both positions without jitter.
@@ -170,7 +162,7 @@ int SIM_QVFR_TEST_MAIN() {
             const Pixel before = pixel_of(unjitteredBefore, W, H, w[0], w[1], w[2]);
             double mx, my;
             all = all && motion_vector(r, cx, cy, W, H, now.x, now.y, now.depth, mx, my) &&
-                  near(mx, before.x - nowPlain.x, 1e-5) && near(my, before.y - nowPlain.y, 1e-5);
+                  close_to(mx, before.x - nowPlain.x, 1e-5) && close_to(my, before.y - nowPlain.y, 1e-5);
         }
         check(all, "depth reprojection gives a still point's vector, jitter out of both ends");
 
@@ -180,7 +172,7 @@ int SIM_QVFR_TEST_MAIN() {
         const Pixel now = pixel_of(renderedNow, W, H, 118, 2.5, -20);
         double mx, my;
         motion_vector(still, cx, cy, W, H, now.x, now.y, now.depth, mx, my);
-        check(near(mx, 0, 1e-6) && near(my, 0, 1e-6), "a still camera gives zero vectors under jitter");
+        check(close_to(mx, 0, 1e-6) && close_to(my, 0, 1e-6), "a still camera gives zero vectors under jitter");
     }
 
     // LMU's scene depth is reversed: the same projection with 1 at the near plane and 0 far away. The image is the
@@ -189,16 +181,16 @@ int SIM_QVFR_TEST_MAIN() {
         const M4 rev = reversed_depth(p);
         const M4 viewNow = view_of(120, 3, -45, 0.4), viewBefore = view_of(119.2, 3.02, -45.9, 0.38);
         const Pixel a = pixel_of(mul(viewNow, p), W, H, 118, 2.5, -20), b = pixel_of(mul(viewNow, rev), W, H, 118, 2.5, -20);
-        check(near(a.x, b.x, 1e-9) && near(a.y, b.y, 1e-9) && near(a.depth + b.depth, 1, 1e-9),
+        check(close_to(a.x, b.x, 1e-9) && close_to(a.y, b.y, 1e-9) && close_to(a.depth + b.depth, 1, 1e-9),
               "reversed depth: the same pixel, the depth 1 minus the ordinary one");
-        check(near(rev[10], 0.05 / (0.05 - 20000), 1e-12) && near(rev[14], 0.05 * 20000 / (20000 - 0.05), 1e-9),
+        check(close_to(rev[10], 0.05 / (0.05 - 20000), 1e-12) && close_to(rev[14], 0.05 * 20000 / (20000 - 0.05), 1e-9),
               "reversed depth: the matrix a reversed projection has (n / (n - f), f n / (f - n))");
         M4 r;
         reprojection(mul(viewNow, rev), mul(viewBefore, rev), r);
         const Pixel before = pixel_of(mul(viewBefore, rev), W, H, 118, 2.5, -20);
         double mx, my;
-        check(motion_vector(r, 0, 0, W, H, b.x, b.y, b.depth, mx, my) && near(mx, before.x - b.x, 1e-5) &&
-                  near(my, before.y - b.y, 1e-5),
+        check(motion_vector(r, 0, 0, W, H, b.x, b.y, b.depth, mx, my) && close_to(mx, before.x - b.x, 1e-5) &&
+                  close_to(my, before.y - b.y, 1e-5),
               "reversed depth: the reprojection's vector is right");
         // The mistake of run 3: reversed depth read through the ordinary projection moves a far point as a near one.
         M4 wrong;
@@ -219,7 +211,7 @@ int SIM_QVFR_TEST_MAIN() {
         const M4 h0 = head_view(q0, t0);
         check(rigid(h0), "the head's view matrix is rigid");
         const Pixel ahead = pixel_of(mul(h0, p), W, H, 0.1, 1.2, -0.3 - 0.8);  // 0.8 m in front of the eye (its -z)
-        check(ahead.depth > 0 && ahead.depth < 1 && near(ahead.y, H / 2.0, 1e-6), "a point ahead of the eye is in front of it");
+        check(ahead.depth > 0 && ahead.depth < 1 && close_to(ahead.y, H / 2.0, 1e-6), "a point ahead of the eye is in front of it");
         const Pixel right = pixel_of(mul(h0, p), W, H, 0.1 + 0.2, 1.2, -0.3 - 0.8);
         const Pixel up = pixel_of(mul(h0, p), W, H, 0.1, 1.2 + 0.2, -0.3 - 0.8);
         check(right.x > ahead.x && up.y < ahead.y, "the tracking space's right and up are the image's right and up");
@@ -232,8 +224,8 @@ int SIM_QVFR_TEST_MAIN() {
         const Pixel now = pixel_of(mul(h1, rev), W, H, dash[0], dash[1], dash[2]);
         const Pixel before = pixel_of(mul(h0, rev), W, H, dash[0], dash[1], dash[2]);
         double mx, my;
-        check(motion_vector(r, 0, 0, W, H, now.x, now.y, now.depth, mx, my) && near(mx, before.x - now.x, 1e-5) &&
-                  near(my, before.y - now.y, 1e-5) && std::fabs(mx) > 5,
+        check(motion_vector(r, 0, 0, W, H, now.x, now.y, now.depth, mx, my) && close_to(mx, before.x - now.x, 1e-5) &&
+                  close_to(my, before.y - now.y, 1e-5) && std::fabs(mx) > 5,
               "the car's vector is the head's motion alone");
     }
 
@@ -274,10 +266,10 @@ int SIM_QVFR_TEST_MAIN() {
         const Pixel now = pixel_of(renderedNow, FW, FH, 121, 3, -30), nowPlain = pixel_of(plainNow, FW, FH, 121, 3, -30);
         const Pixel before = pixel_of(unjitteredBefore, FW, FH, 121, 3, -30);
         double mx, my;
-        check(near(now.x - nowPlain.x, -0.4, 1e-6) && near(now.y - nowPlain.y, 0.25, 1e-6),
+        check(close_to(now.x - nowPlain.x, -0.4, 1e-6) && close_to(now.y - nowPlain.y, 0.25, 1e-6),
               "the remap's shift moves the focus view by its own jitter");
-        check(motion_vector(r, fx, fy, FW, FH, now.x, now.y, now.depth, mx, my) && near(mx, before.x - nowPlain.x, 1e-5) &&
-                  near(my, before.y - nowPlain.y, 1e-5),
+        check(motion_vector(r, fx, fy, FW, FH, now.x, now.y, now.depth, mx, my) && close_to(mx, before.x - nowPlain.x, 1e-5) &&
+                  close_to(my, before.y - nowPlain.y, 1e-5),
               "the focus view's vectors follow the camera and its moving box");
     }
 
@@ -293,16 +285,16 @@ int SIM_QVFR_TEST_MAIN() {
         simqvfr::FocusBox plainBox, box;
         simqvfr::focus_projection(pf, 0.3, 0.3, 0.1, -0.05, plainBox, focusPlain);
         simqvfr::focus_projection(pjf, 0.3, 0.3, 0.1, -0.05, box, focusJittered);
-        check(!near(box.eyeTan[0], plainBox.eyeTan[0], 1e-5) && !near(box.rect[0], plainBox.rect[0], 1e-6),
+        check(!close_to(box.eyeTan[0], plainBox.eyeTan[0], 1e-5) && !close_to(box.rect[0], plainBox.rect[0], 1e-6),
               "the jitter moves the box's eye tangents and its place in the eye's image");
         unshift_box(box, cx, cy);
         bool same = true;
         for (int i = 0; i < 4; ++i)
-            same = same && near(box.eyeTan[i], plainBox.eyeTan[i], 1e-5) && near(box.focusTan[i], plainBox.focusTan[i], 1e-6) &&
-                   near(box.rect[i], plainBox.rect[i], 1e-5);
+            same = same && close_to(box.eyeTan[i], plainBox.eyeTan[i], 1e-5) && close_to(box.focusTan[i], plainBox.focusTan[i], 1e-6) &&
+                   close_to(box.rect[i], plainBox.rect[i], 1e-5);
         check(same, "moved back by the clip shift, the box is the plain projection's");
-        check(near(focusPlain[0], focusJittered[0]) && near(focusPlain[8], focusJittered[8]) &&
-                  near(focusPlain[5], focusJittered[5]) && near(focusPlain[9], focusJittered[9]),
+        check(close_to(focusPlain[0], focusJittered[0], 1e-6) && close_to(focusPlain[8], focusJittered[8], 1e-6) &&
+                  close_to(focusPlain[5], focusJittered[5], 1e-6) && close_to(focusPlain[9], focusJittered[9], 1e-6),
               "the focus view's projection is the same either way");
     }
 

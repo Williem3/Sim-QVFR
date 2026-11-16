@@ -25,6 +25,8 @@ void logd(const char* format, ...);
 bool log_debug();
 // Folder the log file is in (debug captures go next to it).
 std::wstring log_directory();
+// <log folder>/captures, created if missing (the frame captures' folder).
+std::wstring captures_directory();
 // The log file itself.
 std::wstring log_file();
 

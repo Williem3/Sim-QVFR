@@ -17,7 +17,9 @@
 #include <mutex>
 
 #include "../log.h"
+#include "d3d11_kit.h"
 #include "dlss_math.h"
+#include "dlss_views_shaders.h"
 #include "fsr_upscale.h"
 #include "ngx_dlss.h"
 #include "nr_math.h"
@@ -30,227 +32,6 @@ namespace {
 
 using dlss::M4;
 namespace ngx = simqvfr::ngx;
-
-// One full-screen triangle; the pixel shader resolves the view's depth (sample 0 of the scene's multisample depth, or
-// the texel of a single-sample one) and writes its motion vector: the pixel reprojected into the frame before.
-constexpr char kVectorsShader[] = R"(
-cbuffer C : register(b0) {
-    row_major float4x4 R;    // this frame's clip (as rendered) -> the frame before's (without its jitter): the world
-    row_major float4x4 R2;   // the same for what is fixed to the player's seat (the head's motion alone)
-    float4 js;               // this frame's clip shift x, y; the view's width, height
-    float4 origin;           // the view's top-left in the depth texture; the projection's depth terms
-    float4 extra;            // x: 1 with the car's box on
-    row_major float4x4 T;    // this frame's clip -> the tracking space (through the head's view)
-    float4 head;             // the eye's position in the tracking space
-    float4 boxMin;           // the car's box about it: x right, y up, z back
-    float4 boxMax;
-    row_major float4x4 Inv;  // moving objects: this frame's clip (as rendered) -> the world
-    row_major float4x4 B;    // the world -> the frame before's clip (without its jitter)
-    float4 objects;          // x: how many object slots (0: none)
-};
-#ifdef MS
-Texture2DMS<float> depthIn : register(t0);
-#else
-Texture2D<float> depthIn : register(t0);
-#endif
-// Moving objects (DlssPass::objectSlots, objectMotion): the surface's object slot + 1 (0: the world), each object's
-// motion in the world (rows: a point [x y z 1] times it is where it was the frame before).
-#ifdef MS
-Texture2DMS<uint> slotsIn : register(t1);  // multisample with the scene: its first sample, as the depth's
-#else
-Texture2D<uint> slotsIn : register(t1);
-#endif
-struct Motion {
-    float3 r0, r1, r2, r3;
-};
-StructuredBuffer<Motion> motionIn : register(t2);
-float4 vs(uint id : SV_VertexID) : SV_Position {
-    float2 uv = float2((id << 1) & 2, id & 2);
-    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-}
-bool in_car(float2 ndc, float d) {
-    if (extra.x <= 0)
-        return false;
-    float4 q = mul(float4(ndc, d, 1), T);
-    if (abs(q.w) < 1e-9)
-        return false;
-    float3 rel = q.xyz / q.w - head.xyz;
-    return all(rel > boxMin.xyz) && all(rel < boxMax.xyz);
-}
-struct Out {
-    float depth : SV_Target0;
-    float2 motion : SV_Target1;
-};
-Out ps(float4 pos : SV_Position) {
-    int2 p = int2(pos.xy) + int2(origin.xy);
-#ifdef MS
-    float d = depthIn.Load(p, 0);
-#else
-    float d = depthIn.Load(int3(p, 0));
-#endif
-    float2 ndc = float2(pos.x / js.z * 2 - 1, 1 - pos.y / js.w * 2);
-    bool car = in_car(ndc, d);
-    float4 before = car ? mul(float4(ndc, d, 1), R2) : mul(float4(ndc, d, 1), R);
-    if (!car && objects.x > 0) {  // a moving object's surface: its point moved back with it, then into the frame before
-#ifdef MS
-        uint word = slotsIn.Load(p, 0);
-#else
-        uint word = slotsIn.Load(int3(p, 0));
-#endif
-        if (word > 0 && word <= (uint)objects.x) {
-            float4 w = mul(float4(ndc, d, 1), Inv);
-            if (abs(w.w) > 1e-20) {
-                float3 at = w.xyz / w.w;
-                Motion m = motionIn[word - 1];
-                float3 was = at.x * m.r0 + at.y * m.r1 + at.z * m.r2 + m.r3;
-                before = mul(float4(was, 1), B);
-            }
-        }
-    }
-    Out o;
-    o.depth = d;
-    o.motion = before.w > 1e-6 ? (before.xy / before.w - (ndc - js.xy)) * float2(0.5 * js.z, -0.5 * js.w) : float2(0, 0);
-    return o;
-}
-)";
-
-// The gate: over a 64x64 grid, 16 points a cell, apart for the world (first target) and what is taken for the player's
-// car (in its box, its vector the head's motion alone; with the box off: nearer than 8 m, the world's vectors; second
-// target), each point looked up in the frame before at its own jitter (that frame was rendered with it). Its colour,
-// both frames after the same small blur (a 3x3 tent: four bilinear taps half a texel off): how much the frame differs
-// from the one before where the point stood (x), where its vector says it was (y), a pixel off that (z, four ways); the
-// points counted (w). Its depth (third and fourth targets), which detail finer than a pixel doesn't scramble as it does
-// the colour: whether the frame before's depth where the vector says the point was is the depth the reprojection
-// predicts for it (within 2%), and whether it is this frame's where the point stood; for points within 1 km. Third
-// target: the world's summed vector length in pixels, its points whose depth agrees along the vectors, standing; the
-// car's summed length. Fourth: the car's agreeing along the vectors, standing; the points depth judged, the world's and
-// the car's.
-constexpr char kCheckShader[] = R"(
-cbuffer C : register(b0) {
-    row_major float4x4 R;
-    row_major float4x4 R2;
-    float4 js;
-    float4 origin;           // z, w: the projection's depth terms (depth = z + w / distance)
-    float4 extra;            // x: 1 with the car's box on; y, z: the frame before's clip shift (its jitter as rendered)
-    row_major float4x4 T;    // this frame's clip -> the tracking space (through the head's view)
-    float4 head;             // the eye's position in the tracking space
-    float4 boxMin;           // the car's box about it: x right, y up, z back
-    float4 boxMax;
-};
-Texture2D<float4> nowIn : register(t0);
-Texture2D<float4> beforeIn : register(t1);
-Texture2D<float> depthIn : register(t2);
-Texture2D<float> depthBeforeIn : register(t3);
-SamplerState linearClamp : register(s0);
-float4 vs(uint id : SV_VertexID) : SV_Position {
-    float2 uv = float2((id << 1) & 2, id & 2);
-    return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-}
-float lum(float3 c) { return log2(1 + dot(max(c, 0), float3(0.2126, 0.7152, 0.0722))); }
-// Whether `predicted` lies within the depths about uv (the four texels a bilinear lookup there would blend), 2% wider:
-// a point between texels on a slope (the road far ahead changes depth faster than 2% a pixel in a small view) and an
-// edge the jitter moved (the point's own side among them) both agree.
-bool agrees(float2 uv, float predicted) {
-    float4 seen = depthBeforeIn.GatherRed(linearClamp, uv);
-    float lo = min(min(seen.x, seen.y), min(seen.z, seen.w)), hi = max(max(seen.x, seen.y), max(seen.z, seen.w));
-    float slack = 0.02 * max(abs(predicted), 1e-7);
-    return predicted >= lo - slack && predicted <= hi + slack;
-}
-float tent(Texture2D<float4> t, float2 uv) {
-    float2 h = 0.5 / js.zw;
-    float3 c = t.SampleLevel(linearClamp, uv + float2(-h.x, -h.y), 0).rgb + t.SampleLevel(linearClamp, uv + float2(h.x, -h.y), 0).rgb +
-               t.SampleLevel(linearClamp, uv + float2(-h.x, h.y), 0).rgb + t.SampleLevel(linearClamp, uv + h, 0).rgb;
-    return lum(0.25 * c);
-}
-float around(Texture2D<float4> t, float2 uv, float v) {
-    float2 px = 1 / js.zw;
-    return 0.25 * (abs(v - tent(t, uv + float2(px.x, 0))) + abs(v - tent(t, uv - float2(px.x, 0))) +
-                   abs(v - tent(t, uv + float2(0, px.y))) + abs(v - tent(t, uv - float2(0, px.y))));
-}
-bool where(float2 ndc, float d, float4x4 m, out float2 uv, out float predicted) {
-    float4 b = mul(float4(ndc, d, 1), m);
-    uv = float2(0, 0);
-    predicted = 0;
-    if (b.w <= 1e-6)
-        return false;
-    float2 n = b.xy / b.w + extra.yz;
-    uv = float2(n.x * 0.5 + 0.5, 0.5 - n.y * 0.5);
-    predicted = b.z / b.w;
-    return all(abs(n) < 1);
-}
-bool in_car(float2 ndc, float d) {
-    if (extra.x <= 0)
-        return false;
-    float4 q = mul(float4(ndc, d, 1), T);
-    if (abs(q.w) < 1e-9)
-        return false;
-    float3 rel = q.xyz / q.w - head.xyz;
-    return all(rel > boxMin.xyz) && all(rel < boxMax.xyz);
-}
-struct Out {
-    float4 world : SV_Target0;
-    float4 car : SV_Target1;
-    float4 more : SV_Target2;
-    float4 carDepth : SV_Target3;
-};
-Out ps(float4 pos : SV_Position) {
-    Out o;
-    o.world = 0;
-    o.car = 0;
-    o.more = 0;
-    o.carDepth = 0;
-    for (int j = 0; j < 4; ++j)
-        for (int i = 0; i < 4; ++i) {
-            float2 at = (floor(pos.xy) + (float2(i, j) + 0.5) / 4) / 64;
-            int2 p = int2(at * js.zw);
-            float2 c = (float2(p) + 0.5) / js.zw;
-            float2 ndc = float2(c.x * 2 - 1, 1 - c.y * 2);
-            float d = depthIn.Load(int3(p, 0));
-            float2 a;
-            float away = d - origin.z;
-            float metres = abs(away) > 1e-9 ? origin.w / away : 1e9;
-            bool car = extra.x > 0 ? in_car(ndc, d) : metres > 0 && metres < 8;
-            bool on;
-            float predicted;
-            if (car && extra.x > 0)
-                on = where(ndc, d, R2, a, predicted);
-            else
-                on = where(ndc, d, R, a, predicted);
-            if (!on)
-                continue;
-            float now = tent(nowIn, c);
-            float4 pt = float4(abs(now - tent(beforeIn, c)), abs(now - tent(beforeIn, a)), around(beforeIn, a, now), 1);
-            float len = length((a - c) * js.zw);
-            // Depth judges points within 1 km: farther (the sky at the far plane, depth 0) nothing moves with the
-            // car's travel, and a reversed depth that near 0 is below what a 2% tolerance can tell from rounding.
-            float judged = metres > 0 && metres < 1000 ? 1 : 0;
-            float alongOk = judged * (agrees(a, predicted) ? 1 : 0);
-            float stillOk = judged * (agrees(c, d) ? 1 : 0);
-            if (car) {
-                o.car += pt;
-                o.more.w += len;
-                o.carDepth.xyw += float3(alongOk, stillOk, judged);
-            } else {
-                o.world += pt;
-                o.more.xyz += float3(len, alongOk, stillOk);
-                o.carDepth.z += judged;
-            }
-        }
-    return o;
-}
-)";
-
-// A focus view drawn smaller that DLSS didn't upscale this frame: its render stretched over its region (bilinear).
-constexpr char kStretchShader[] = R"(
-cbuffer C : register(b0) {
-    row_major float4x4 R;
-    row_major float4x4 R2;
-    float4 js;               // z, w: the region's width, height
-};
-Texture2D<float4> src : register(t0);
-SamplerState linearClamp : register(s0);
-float4 ps(float4 pos : SV_Position) : SV_Target { return src.SampleLevel(linearClamp, pos.xy / js.zw, 0); }
-)";
 
 struct Constants {
     float r[16], r2[16], js[4], origin[4], extra[4], t[16], head[4], boxMin[4], boxMax[4];
@@ -374,21 +155,17 @@ struct Camera {
     float nearM = 0.1f, farM = 10000.0f, fovY = 1.5f;
 };
 
+const char* log_tag() { return d.cfg.tag ? d.cfg.tag : "dlss"; }
+
 // A log line with the run's tag in front ("lmu dlss: ...").
 void say(const char* format, ...) {
-    char text[1024];
     va_list args;
     va_start(args, format);
-    std::vsnprintf(text, sizeof(text), format, args);
+    log_tagged_v(log_tag(), format, args);
     va_end(args);
-    simqvfr::logf("%s: %s", d.cfg.tag ? d.cfg.tag : "dlss", text);
 }
 
-void give_up(const char* why) {
-    if (!d.off)
-        say("off for this session: %s", why);
-    d.off = true;
-}
+void give_up(const char* why) { give_up_once(d.off, log_tag(), why); }
 
 ComPtr<ID3DBlob> compile(const char* source, const char* entry, const char* profile, const D3D_SHADER_MACRO* macros) {
     ComPtr<ID3DBlob> code, errors;
@@ -420,16 +197,8 @@ bool initialize(ID3D11DeviceContext* context) {
         give_up("its shaders couldn't be made");
         return false;
     }
-    D3D11_BUFFER_DESC bd{};
-    bd.ByteWidth = sizeof(Constants);
-    bd.Usage = D3D11_USAGE_DEFAULT;
-    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SAMPLER_DESC sd{};
-    sd.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sd.MaxLOD = D3D11_FLOAT32_MAX;
-    bool ok = SUCCEEDED(d.device->CreateBuffer(&bd, nullptr, &d.constants)) &&
-              SUCCEEDED(d.device->CreateSamplerState(&sd, &d.linearClamp));
+    bool ok = make_constant_buffer(d.device.Get(), sizeof(Constants), d.constants) &&
+              make_linear_clamp_sampler(d.device.Get(), d.linearClamp);
     D3D11_TEXTURE2D_DESC td{};
     td.Width = td.Height = 64;
     td.MipLevels = td.ArraySize = 1;
@@ -500,16 +269,7 @@ bool depth_view(ID3D11DepthStencilView* dsv, unsigned& width, unsigned& height) 
 }
 
 bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT format, UINT bind) {
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = w;
-    td.Height = h;
-    td.MipLevels = td.ArraySize = 1;
-    td.Format = format;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = bind;
-    texture.Reset();
-    return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
+    return make_texture2d(d.device.Get(), texture, w, h, format, bind);
 }
 
 // The upscaler the run asks for on this GPU: AMD FSR when asked, or with fsrWhereNoDlss where NGX can't run (a GPU not
@@ -775,6 +535,7 @@ void note_projection(int eye, const M4& projection, const Jitter& asked) {
 class StateGuard {
 public:
     explicit StateGuard(ID3D11DeviceContext* c) : c_(c) {
+        c->QueryInterface(IID_PPV_ARGS(&c1_));  // ranged constant buffer binds (D3D11.1) read and put back as they were
         c->IAGetInputLayout(&layout_);
         c->IAGetPrimitiveTopology(&topology_);
         c->IAGetVertexBuffers(0, kBuffers, vb_, strides_, offsets_);
@@ -786,9 +547,15 @@ public:
         c->GSGetShader(&gs_, nullptr, nullptr);
         c->HSGetShader(&hs_, nullptr, nullptr);
         c->DSGetShader(&ds_, nullptr, nullptr);
-        c->VSGetConstantBuffers(0, kCbs, vsCb_);
-        c->PSGetConstantBuffers(0, kCbs, psCb_);
-        c->CSGetConstantBuffers(0, kCbs, csCb_);
+        if (c1_) {
+            c1_->VSGetConstantBuffers1(0, kCbs, vsCb_, vsFirst_, vsCount_);
+            c1_->PSGetConstantBuffers1(0, kCbs, psCb_, psFirst_, psCount_);
+            c1_->CSGetConstantBuffers1(0, kCbs, csCb_, csFirst_, csCount_);
+        } else {
+            c->VSGetConstantBuffers(0, kCbs, vsCb_);
+            c->PSGetConstantBuffers(0, kCbs, psCb_);
+            c->CSGetConstantBuffers(0, kCbs, csCb_);
+        }
         c->VSGetShaderResources(0, kSrvs, vsSrv_);
         c->PSGetShaderResources(0, kSrvs, psSrv_);
         c->CSGetShaderResources(0, kSrvs, csSrv_);
@@ -796,20 +563,27 @@ public:
         c->PSGetSamplers(0, kSamplers, psSamp_);
         c->CSGetSamplers(0, kSamplers, csSamp_);
         c->CSGetUnorderedAccessViews(0, kUavs, csUav_);
-        c->OMGetRenderTargets(kTargets, rtv_, &dsv_);
+        c->OMGetRenderTargetsAndUnorderedAccessViews(kTargets, rtv_, &dsv_, 0, kUavs, omUav_);
         c->OMGetBlendState(&blend_, blendFactor_, &sampleMask_);
         c->OMGetDepthStencilState(&depthState_, &stencilRef_);
+        c->SOGetTargets(kStreamOut, so_);
+        c->GetPredication(&predicate_, &predicateValue_);
         c->RSGetState(&raster_);
         viewports_ = scissors_ = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
         c->RSGetViewports(&viewports_, vp_);
         c->RSGetScissorRects(&scissors_, sc_);
+        // Neither the game's predicate nor its stream-out targets may skip or capture our draws and NGX's.
+        if (predicate_)
+            c->SetPredication(nullptr, FALSE);
+        ID3D11Buffer* noSo[kStreamOut] = {};
+        c->SOSetTargets(kStreamOut, noSo, nullptr);
     }
     ~StateGuard() {
         ID3D11DeviceContext* c = c_;
         // Ours and NGX's inputs and outputs off first, so nothing put back meets a texture still bound the other way.
         ID3D11ShaderResourceView* noSrv[kSrvs] = {};
         ID3D11UnorderedAccessView* noUav[kUavs] = {};
-        c->OMSetRenderTargets(0, nullptr, nullptr);
+        c->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, kUavs, noUav, nullptr);
         c->CSSetUnorderedAccessViews(0, kUavs, noUav, nullptr);
         c->VSSetShaderResources(0, kSrvs, noSrv);
         c->PSSetShaderResources(0, kSrvs, noSrv);
@@ -824,9 +598,15 @@ public:
         c->GSSetShader(gs_, nullptr, 0);
         c->HSSetShader(hs_, nullptr, 0);
         c->DSSetShader(ds_, nullptr, 0);
-        c->VSSetConstantBuffers(0, kCbs, vsCb_);
-        c->PSSetConstantBuffers(0, kCbs, psCb_);
-        c->CSSetConstantBuffers(0, kCbs, csCb_);
+        if (c1_) {
+            c1_->VSSetConstantBuffers1(0, kCbs, vsCb_, vsFirst_, vsCount_);
+            c1_->PSSetConstantBuffers1(0, kCbs, psCb_, psFirst_, psCount_);
+            c1_->CSSetConstantBuffers1(0, kCbs, csCb_, csFirst_, csCount_);
+        } else {
+            c->VSSetConstantBuffers(0, kCbs, vsCb_);
+            c->PSSetConstantBuffers(0, kCbs, psCb_);
+            c->CSSetConstantBuffers(0, kCbs, csCb_);
+        }
         c->VSSetSamplers(0, kSamplers, vsSamp_);
         c->PSSetSamplers(0, kSamplers, psSamp_);
         c->CSSetSamplers(0, kSamplers, csSamp_);
@@ -835,16 +615,28 @@ public:
         c->RSSetScissorRects(scissors_, sc_);
         c->OMSetBlendState(blend_, blendFactor_, sampleMask_);
         c->OMSetDepthStencilState(depthState_, stencilRef_);
-        c->OMSetRenderTargets(kTargets, rtv_, dsv_);
+        // The output merger's UAVs take the slots after its render targets (UAVStartSlot >= NumRTVs).
+        UINT targets = 0;
+        for (UINT i = 0; i < kTargets; ++i)
+            if (rtv_[i])
+                targets = i + 1;
+        const UINT uavStart = (std::min)(targets, kUavs);
+        c->OMSetRenderTargetsAndUnorderedAccessViews(targets, rtv_, dsv_, uavStart, kUavs - uavStart, omUav_ + uavStart, nullptr);
         c->CSSetUnorderedAccessViews(0, kUavs, csUav_, nullptr);
         c->VSSetShaderResources(0, kSrvs, vsSrv_);
         c->PSSetShaderResources(0, kSrvs, psSrv_);
         c->CSSetShaderResources(0, kSrvs, csSrv_);
+        // Stream-out offsets can't be read back: -1 appends where each buffer's filled size left off.
+        UINT soOffsets[kStreamOut];
+        for (UINT& o : soOffsets)
+            o = static_cast<UINT>(-1);
+        c->SOSetTargets(kStreamOut, so_, soOffsets);
+        c->SetPredication(predicate_, predicateValue_);
         release(layout_), release(ib_), release(vs_), release(ps_), release(cs_), release(gs_), release(hs_), release(ds_);
-        release(dsv_), release(blend_), release(depthState_), release(raster_);
+        release(dsv_), release(blend_), release(depthState_), release(raster_), release(predicate_);
         release_all(vb_), release_all(vsCb_), release_all(psCb_), release_all(csCb_), release_all(vsSrv_);
         release_all(psSrv_), release_all(csSrv_), release_all(vsSamp_), release_all(psSamp_), release_all(csSamp_);
-        release_all(csUav_), release_all(rtv_);
+        release_all(csUav_), release_all(omUav_), release_all(rtv_), release_all(so_);
         for (UINT i = 0; i < vsInstances_ && i < kInstances; ++i)
             release(vsI_[i]);
         for (UINT i = 0; i < psInstances_ && i < kInstances; ++i)
@@ -856,7 +648,12 @@ public:
     StateGuard& operator=(const StateGuard&) = delete;
 
 private:
-    static constexpr UINT kBuffers = 4, kCbs = 8, kSrvs = 32, kSamplers = 8, kUavs = 8, kTargets = 8, kInstances = 256;
+    // Every slot NGX's evaluation could bind: all API constant buffer and sampler slots, all vertex buffers; 32 of the
+    // 128 resource slots and feature level 11.0's 8 UAV slots.
+    static constexpr UINT kBuffers = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, kCbs = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT,
+                          kSrvs = 32, kSamplers = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, kUavs = D3D11_PS_CS_UAV_REGISTER_COUNT,
+                          kTargets = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, kStreamOut = D3D11_SO_BUFFER_SLOT_COUNT,
+                          kInstances = 256;
     template <class T> static void release(T*& p) {
         if (p)
             p->Release();
@@ -867,6 +664,7 @@ private:
             release(p);
     }
     ID3D11DeviceContext* c_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext1> c1_;
     ID3D11InputLayout* layout_ = nullptr;
     D3D11_PRIMITIVE_TOPOLOGY topology_ = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
     ID3D11Buffer* vb_[kBuffers] = {};
@@ -887,6 +685,7 @@ private:
     ID3D11Buffer* vsCb_[kCbs] = {};
     ID3D11Buffer* psCb_[kCbs] = {};
     ID3D11Buffer* csCb_[kCbs] = {};
+    UINT vsFirst_[kCbs] = {}, vsCount_[kCbs] = {}, psFirst_[kCbs] = {}, psCount_[kCbs] = {}, csFirst_[kCbs] = {}, csCount_[kCbs] = {};
     ID3D11ShaderResourceView* vsSrv_[kSrvs] = {};
     ID3D11ShaderResourceView* psSrv_[kSrvs] = {};
     ID3D11ShaderResourceView* csSrv_[kSrvs] = {};
@@ -894,6 +693,7 @@ private:
     ID3D11SamplerState* psSamp_[kSamplers] = {};
     ID3D11SamplerState* csSamp_[kSamplers] = {};
     ID3D11UnorderedAccessView* csUav_[kUavs] = {};
+    ID3D11UnorderedAccessView* omUav_[kUavs] = {};
     ID3D11RenderTargetView* rtv_[kTargets] = {};
     ID3D11DepthStencilView* dsv_ = nullptr;
     ID3D11BlendState* blend_ = nullptr;
@@ -901,6 +701,9 @@ private:
     UINT sampleMask_ = 0xffffffff;
     ID3D11DepthStencilState* depthState_ = nullptr;
     UINT stencilRef_ = 0;
+    ID3D11Buffer* so_[kStreamOut] = {};
+    ID3D11Predicate* predicate_ = nullptr;
+    BOOL predicateValue_ = FALSE;
     ID3D11RasterizerState* raster_ = nullptr;
     UINT viewports_ = 0, scissors_ = 0;
     D3D11_VIEWPORT vp_[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};

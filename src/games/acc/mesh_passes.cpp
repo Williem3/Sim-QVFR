@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <mutex>
 #include <string>
 
@@ -271,6 +272,8 @@ void render_family_hook(void* rhiCmdList, void* renderer) {
     }
 }
 
+void* hookedTargets[16] = {};  // pass_probe_start's (one thread: qvfr_start's)
+int hookedCount = 0;
 template <typename Fn>
 bool hook(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, void* detour, Fn& original, const char* name) {
     if (!simqvfr::code_matches(rva, anchor, size)) {
@@ -279,11 +282,26 @@ bool hook(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, void
         return false;
     }
     void* target = reinterpret_cast<void*>(simqvfr::module_base() + rva);
-    if (MH_CreateHook(target, detour, reinterpret_cast<void**>(&original)) != MH_OK || MH_EnableHook(target) != MH_OK) {
+    // Already created by an earlier start that failed (left disabled): `original` still holds its trampoline.
+    const MH_STATUS created = MH_CreateHook(target, detour, reinterpret_cast<void**>(&original));
+    if (created != MH_OK && created != MH_ERROR_ALREADY_CREATED) {
+        simqvfr::logf("acc passes: hooking %s failed: probe off", name);
+        return false;
+    }
+    if (hookedCount < static_cast<int>(std::size(hookedTargets)))
+        hookedTargets[hookedCount++] = target;
+    if (MH_EnableHook(target) != MH_OK) {
         simqvfr::logf("acc passes: hooking %s failed: probe off", name);
         return false;
     }
     return true;
+}
+
+// The hooks this start made from `from` on, off again after a later one failed. Disabled, not removed: a thread
+// already inside a detour still calls through its trampoline.
+void unhook_since(int from) {
+    while (hookedCount > from)
+        MH_DisableHook(hookedTargets[--hookedCount]);
 }
 
 double ms(std::int64_t ticks, std::uint64_t frames) {
@@ -315,10 +333,8 @@ bool pass_probe_start(const PassProbeConfig& c) {
     LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
     qpcFrequency = f.QuadPart;
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        simqvfr::log_line("acc passes: MH_Initialize failed: probe off");
+    if (!simqvfr::minhook_ready("acc passes", ": probe off"))
         return false;
-    }
     // Setup first: the A/B's skip lives there; the timing hooks after it.
     if (!hook(kDispatchPassSetup, kDispatchPassSetupAnchor, sizeof(kDispatchPassSetupAnchor),
               reinterpret_cast<void*>(&setup_hook), originalSetup, "DispatchPassSetup") ||
@@ -327,9 +343,12 @@ bool pass_probe_start(const PassProbeConfig& c) {
         !hook(kInitViews, kInitViewsAnchor, sizeof(kInitViewsAnchor), reinterpret_cast<void*>(&init_views_hook),
               originalInitViews, "InitViews") ||
         !hook(kRenderViewFamily, kRenderViewFamilyAnchor, sizeof(kRenderViewFamilyAnchor),
-              reinterpret_cast<void*>(&render_family_hook), originalRenderFamily, "RenderViewFamily_RenderThread"))
+              reinterpret_cast<void*>(&render_family_hook), originalRenderFamily, "RenderViewFamily_RenderThread")) {
+        unhook_since(0);  // none of the probe left half on
         return false;
+    }
     // The visibility timing: with acc_pass_probe=1, and for the gather A/B.
+    const int visibilityFrom = hookedCount;
     if ((c.probe || c.gather_ab()) &&
         (!hook(kComputeViewVisibility, kComputeViewVisibilityAnchor, sizeof(kComputeViewVisibilityAnchor),
                reinterpret_cast<void*>(&compute_visibility_hook), originalComputeVisibility, "ComputeViewVisibility") ||
@@ -344,8 +363,10 @@ bool pass_probe_start(const PassProbeConfig& c) {
          !hook(kGatherDynamicMeshElements, kGatherDynamicMeshElementsAnchor, sizeof(kGatherDynamicMeshElementsAnchor),
                reinterpret_cast<void*>(&gather_hook), originalGather, "GatherDynamicMeshElements") ||
          !hook(kSetupMeshPass, kSetupMeshPassAnchor, sizeof(kSetupMeshPassAnchor),
-               reinterpret_cast<void*>(&setup_mesh_pass_hook), originalSetupMeshPass, "SetupMeshPass")))
+               reinterpret_cast<void*>(&setup_mesh_pass_hook), originalSetupMeshPass, "SetupMeshPass"))) {
+        unhook_since(visibilityFrom);  // the visibility steps hooked before the failure off too
         simqvfr::log_line("acc passes: visibility timing off (the mesh pass probe stays)");
+    }
     installed.store(true);
     std::string ab;
     if (c.skipAbFrames > 0)

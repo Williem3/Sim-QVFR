@@ -76,7 +76,29 @@ enum : uint32_t { kNamePosition = 1, kNameRenderTargetArrayIndex = 4, kNameViewp
 enum : uint32_t { kComponentUint32 = 1 };
 
 uint32_t opcode_of(uint32_t token) { return token & 0x7ff; }
-uint32_t length_of(const uint32_t* t) { return opcode_of(t[0]) == kOpCustomData ? t[1] : (t[0] >> 24) & 0x7f; }
+// The instruction's length at t with `left` tokens remaining (0: unreadable). A customdata block keeps its length in
+// its second token, which a truncated program may not have.
+uint32_t length_of(const uint32_t* t, size_t left) {
+    if (left == 0)
+        return 0;
+    if (opcode_of(t[0]) == kOpCustomData)
+        return left >= 2 ? t[1] : 0;
+    return (t[0] >> 24) & 0x7f;
+}
+// The longest instruction the 7-bit length field holds: a rewrite that grows one past it is refused.
+constexpr uint32_t kMaxInstructionLength = 0x7f;
+
+// Where the first operand starts in the instruction at t (n tokens): past the opcode token and its extended opcode
+// tokens. 0 when that chain runs past the instruction (malformed).
+size_t operands_at(const uint32_t* t, size_t n) {
+    size_t at = 1;
+    for (bool extended = (t[0] >> 31) != 0; extended; ++at) {
+        if (at >= n)
+            return 0;
+        extended = (t[at] >> 31) != 0;
+    }
+    return at <= n ? at : 0;
+}
 
 // Declarations: D3D10's (88-106), D3D11's (143-162, 206) and customdata (an immediate constant buffer).
 bool is_declaration(uint32_t op) {
@@ -382,7 +404,7 @@ SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOpt
     uint32_t temps = 0;
     size_t tempsAt = 0, lastOutputDcl = 0, lastCbDcl = 0, firstInstruction = 0, globalFlagsEnd = 2;
     for (size_t i = 2; i < length;) {
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         if (n == 0 || i + n > length) {
             r.error = "instruction walk";
             return r;
@@ -390,6 +412,10 @@ SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOpt
         const uint32_t op = opcode_of(tokens[i]);
         if (!firstInstruction && !is_declaration(op))
             firstInstruction = i;
+        if ((op == kOpDclTemps && n < 2) || (op == kOpDclConstantBuffer && n < 3)) {
+            r.error = "malformed declaration";
+            return r;
+        }
         if (op == kOpDclTemps) {
             temps = tokens[i + 1];
             tempsAt = i;
@@ -413,9 +439,12 @@ SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOpt
             }
         } else if (!is_declaration(op)) {
             // Every operand read; SV_Position may only be the first (the destination) and never relatively indexed.
-            size_t at = i + 1;
-            for (bool extended = (tokens[i] >> 31) != 0; extended; ++at)
-                extended = (tokens[at] >> 31) != 0;
+            const size_t first = operands_at(tokens + i, n);
+            if (!first) {
+                r.error = "extended opcode chain past the instruction";
+                return r;
+            }
+            size_t at = i + first;
             for (int k = 0; at < i + n; ++k) {
                 Operand o;
                 const size_t len = read_operand(tokens + at, i + n - at, o);
@@ -484,7 +513,7 @@ SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOpt
             if (!tempsAt)
                 out.insert(out.end(), {instruction(kOpDclTemps, 2), 2u});
         }
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         const uint32_t op = opcode_of(tokens[i]);
         if (op == kOpRet || op == kOpRetc)
             out.insert(out.end(), epilogue.begin(), epilogue.end());
@@ -493,9 +522,9 @@ SecondView add_second_view(const uint8_t* data, size_t size, const SecondViewOpt
         if (i == tempsAt)
             out[start + 1] = temps + 2;
         if (!is_declaration(op)) {
-            size_t at = 1;
-            for (bool extended = (tokens[i] >> 31) != 0; extended; ++at)
-                extended = (tokens[i + at] >> 31) != 0;
+            size_t at = operands_at(tokens + i, n);
+            if (!at)
+                at = n;  // not reached: the first pass refused it
             Operand o;
             const size_t len = read_operand(tokens + i + at, n - at, o);
             if (len && o.type == kOutput && o.index0Immediate && o.index0 == r.positionRegister) {
@@ -600,7 +629,7 @@ InstancedView add_instanced_view(const uint8_t* data, size_t size, const Instanc
     uint32_t temps = 0;
     size_t tempsAt = 0, lastInputDcl = 0, lastOutputDcl = 0, lastCbDcl = 0, firstInstruction = 0, globalFlagsEnd = 2;
     for (size_t i = 2; i < length;) {
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         if (n == 0 || i + n > length) {
             r.error = "instruction walk";
             return r;
@@ -608,6 +637,10 @@ InstancedView add_instanced_view(const uint8_t* data, size_t size, const Instanc
         const uint32_t op = opcode_of(tokens[i]);
         if (!firstInstruction && !is_declaration(op))
             firstInstruction = i;
+        if ((op == kOpDclTemps && n < 2) || (op == kOpDclConstantBuffer && n < 3)) {
+            r.error = "malformed declaration";
+            return r;
+        }
         if (op == kOpDclTemps) {
             temps = tokens[i + 1];
             tempsAt = i;
@@ -645,9 +678,12 @@ InstancedView add_instanced_view(const uint8_t* data, size_t size, const Instanc
                 }
             }
         } else if (!is_declaration(op)) {
-            size_t at = i + 1;
-            for (bool extended = (tokens[i] >> 31) != 0; extended; ++at)
-                extended = (tokens[at] >> 31) != 0;
+            const size_t first = operands_at(tokens + i, n);
+            if (!first) {
+                r.error = "extended opcode chain past the instruction";
+                return r;
+            }
+            size_t at = i + first;
             for (int k = 0; at < i + n; ++k) {
                 Operand o;
                 const size_t len = read_operand(tokens + at, i + n - at, o);
@@ -760,7 +796,7 @@ InstancedView add_instanced_view(const uint8_t* data, size_t size, const Instanc
         }
         if (i == firstInstruction)
             out.insert(out.end(), prologue.begin(), prologue.end());
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         const uint32_t op = opcode_of(tokens[i]);
         if (op == kOpRet || op == kOpRetc)
             out.insert(out.end(), epilogue.begin(), epilogue.end());
@@ -769,9 +805,9 @@ InstancedView add_instanced_view(const uint8_t* data, size_t size, const Instanc
         if (i == tempsAt)
             out[start + 1] = temps + 3;
         if (!is_declaration(op)) {
-            size_t at = 1;
-            for (bool extended = (tokens[i] >> 31) != 0; extended; ++at)
-                extended = (tokens[i + at] >> 31) != 0;
+            size_t at = operands_at(tokens + i, n);
+            if (!at)
+                at = n;  // not reached: the first pass refused it
             for (int k = 0; at < n; ++k) {
                 Operand o;
                 const size_t len = read_operand(tokens + i + at, n - at, o);
@@ -860,7 +896,7 @@ FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMip
     size_t tempsAt = 0, lastCbDcl = 0, lastInputDcl = 0, firstOutputDcl = 0, firstInstruction = 0, globalFlagsEnd = 2,
            positionDclAt = 0;
     for (size_t i = 2; i < length;) {
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         if (n == 0 || i + n > length) {
             r.error = "instruction walk";
             return r;
@@ -868,12 +904,20 @@ FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMip
         const uint32_t op = opcode_of(tokens[i]);
         if (!firstInstruction && !is_declaration(op))
             firstInstruction = i;
+        if ((op == kOpDclTemps && n < 2) || (op == kOpDclConstantBuffer && n < 3)) {
+            r.error = "malformed declaration";
+            return r;
+        }
+        if (op == kOpSample && n + 2 > kMaxInstructionLength) {  // its sample_b's length wouldn't fit the opcode token
+            r.error = "a sample too long to bias";
+            return r;
+        }
         if (op == kOpDclTemps) {
             temps = tokens[i + 1];
             tempsAt = i;
         } else if (op == kOpDclConstantBuffer) {
             lastCbDcl = i + n;
-            if (n >= 3 && tokens[i + 2] == options.cbSlot) {
+            if (tokens[i + 2] == options.cbSlot) {
                 r.error = "the bias's constant buffer slot is in use";
                 return r;
             }
@@ -960,7 +1004,7 @@ FocusMipBias add_focus_mip_bias(const uint8_t* data, size_t size, const FocusMip
                 out.insert(out.end(), {instruction(kOpDclTemps, 2), 1u});
             out.insert(out.end(), prologue.begin(), prologue.end());
         }
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         const uint32_t op = opcode_of(tokens[i]);
         const size_t start = out.size();
         out.insert(out.end(), tokens + i, tokens + i + n);
@@ -1033,7 +1077,7 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
     // after the last output declaration (or before the temps / the first instruction).
     size_t globalFlagsEnd = 2, lastResourceDcl = 0, lastOutputDcl = 0, tempsAt = 0, firstInstruction = 0;
     for (size_t i = 2; i < length;) {
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         if (n == 0 || i + n > length) {
             r.error = "instruction walk";
             return r;
@@ -1081,7 +1125,7 @@ SlotOutput add_slot_output(const uint8_t* data, size_t size, const SlotOutputOpt
             out.insert(out.end(), outputDcl.begin(), outputDcl.end());
         if (i == firstInstruction)
             out.insert(out.end(), load.begin(), load.end());
-        const uint32_t n = length_of(tokens + i);
+        const uint32_t n = length_of(tokens + i, length - i);
         out.insert(out.end(), tokens + i, tokens + i + n);
         i += n;
     }
@@ -1112,7 +1156,7 @@ uint32_t constant_buffer_vectors(const uint8_t* data, size_t size, uint32_t slot
         std::vector<uint32_t> t(words);
         std::memcpy(t.data(), c.data.data(), words * 4);
         for (size_t i = 2; i < words;) {
-            const uint32_t n = length_of(&t[i]);
+            const uint32_t n = length_of(&t[i], words - i);
             if (!n || i + n > words)
                 break;
             // dcl_constantbuffer cbN[size]: the operand (a constant buffer, two immediate indices), N, size.

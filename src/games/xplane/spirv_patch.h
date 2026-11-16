@@ -26,6 +26,10 @@ inline constexpr std::uint32_t kFocusValuesEntry = 2;
 inline constexpr std::uint32_t kViewRectsEntry = 3;
 inline constexpr std::uint32_t kDiagEntry = 4;
 
+// True when the module declares a push constant variable of its own (or isn't readable SPIR-V): an entry point may use
+// only one push constant block, so such a module gets no qvfr_focus block (the caller edits it without `push`).
+bool spirv_has_push_constants(const std::vector<std::uint32_t>& words);
+
 // Adds `add` to the value of the `int` input variable named `name` where the shader loads it: the one OpLoad of
 // that variable gets a new id, and an OpIAdd of a new constant gives the old id, so every use sees the sum.
 // False (and `words` unchanged) unless the module has exactly one such load. `why` says what was missing.

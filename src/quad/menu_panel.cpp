@@ -130,7 +130,8 @@ public:
 private:
     bool copy(ID3D12Resource* image, const std::vector<uint32_t>& pixels);
     void shutdown();
-    void wait();
+    bool wait();  // true when the last copy is done (bounded)
+    bool waitLogged_ = false;
     int width_ = kPanelWidth, height_ = kPanelHeight;
     ID3D12Device* device_ = nullptr;
     ID3D12CommandQueue* queue_ = nullptr;
@@ -204,13 +205,40 @@ bool PanelUploadD3D12::initialize(ID3D12Device* device, ID3D12CommandQueue* queu
     return true;
 }
 
-void PanelUploadD3D12::wait() {
-    if (fence_ && event_ && fence_->GetCompletedValue() < value_ && SUCCEEDED(fence_->SetEventOnCompletion(value_, event_)))
+bool PanelUploadD3D12::wait() {
+    if (!fence_)
+        return true;
+    UINT64 done = fence_->GetCompletedValue();
+    if (done < value_ && event_ && SUCCEEDED(fence_->SetEventOnCompletion(value_, event_)))
         WaitForSingleObject(event_, 1000);
+    done = fence_->GetCompletedValue();
+    return done != UINT64_MAX && done >= value_;  // UINT64_MAX: the device is removed
 }
 
 void PanelUploadD3D12::shutdown() {
-    wait();  // the last copy reads the buffer
+    // The last copy reads the buffer: wait in steps (a hung GPU is removed by the driver's timeout, after
+    // which releasing is fine); past the cap leak the objects rather than free them under the GPU.
+    bool idle = true;
+    if (fence_) {
+        for (int step = 0; step < 30 && !wait(); ++step) {
+            if (fence_->GetCompletedValue() == UINT64_MAX)
+                break;
+            if (step == 0)
+                log_line("settings panel: shutdown waiting for the GPU to finish the last copy");
+            if (!event_)
+                Sleep(1000);
+        }
+        const UINT64 done = fence_->GetCompletedValue();
+        idle = done == UINT64_MAX || done >= value_;
+    }
+    if (!idle) {
+        log_line("settings panel: the GPU didn't finish in 30 s: its copy objects are leaked, not released");
+        list_ = nullptr;
+        allocator_ = nullptr;
+        buffer_ = nullptr;
+        fence_ = nullptr;
+        event_ = nullptr;  // the fence may still signal it
+    }
     if (list_)
         list_->Release();
     if (allocator_)
@@ -229,12 +257,18 @@ void PanelUploadD3D12::shutdown() {
     event_ = nullptr;
     device_ = nullptr;
     queue_ = nullptr;
+    value_ = 0;  // a new fence starts at 0
 }
 
 bool PanelUploadD3D12::copy(ID3D12Resource* image, const std::vector<uint32_t>& pixels) {
     if (!list_ || !image || pixels.size() != static_cast<size_t>(width_) * height_)
         return false;
-    wait();  // the previous copy is done with the buffer and the allocator
+    if (!wait()) {  // the previous copy may still read the buffer and the allocator: skip this one
+        if (!waitLogged_)
+            log_line("settings panel: the GPU hasn't finished the previous copy: upload skipped");
+        waitLogged_ = true;
+        return false;
+    }
     std::memcpy(mapped_, pixels.data(), pixels.size() * 4);
     if (FAILED(allocator_->Reset()) || FAILED(list_->Reset(allocator_, nullptr)))
         return false;

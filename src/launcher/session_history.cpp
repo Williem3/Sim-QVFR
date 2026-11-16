@@ -8,6 +8,7 @@
 
 #include <windows.h>
 
+#include "../ini.h"
 #include "../quad/gaze_deadzone.h"
 
 namespace simqvfr::launcher {
@@ -17,11 +18,7 @@ namespace fs = std::filesystem;
 
 constexpr wchar_t kSection[] = L"session";
 
-std::wstring read(const std::wstring& file, const wchar_t* key) {
-    wchar_t buffer[512] = {};
-    GetPrivateProfileStringW(kSection, key, L"", buffer, static_cast<DWORD>(std::size(buffer)), file.c_str());
-    return buffer;
-}
+std::wstring read(const std::wstring& file, const wchar_t* key) { return ini_get(file.c_str(), kSection, key); }
 
 double read_number(const std::wstring& file, const wchar_t* key) {
     const std::wstring v = read(file, key);

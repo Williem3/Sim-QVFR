@@ -5,14 +5,12 @@
 #include <iterator>
 #include <sstream>
 
+#include <bcrypt.h>
+
+#include "../ini.h"
+
 namespace simqvfr::launcher {
 namespace {
-
-std::wstring ini_string(const std::wstring& ini, const wchar_t* key) {
-    wchar_t buffer[4096] = {};
-    GetPrivateProfileStringW(L"launcher", key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
-    return buffer;
-}
 
 std::wstring join(const std::vector<std::string>& names) {
     std::string out;
@@ -68,8 +66,6 @@ std::string layer_name(const std::wstring& manifest) {
     return layer ? layer->string_at("name") : std::string();
 }
 
-bool same_name(const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c_str(), b.c_str()) == 0; }
-
 // A .reg file of the key's values (UTF-16 with a byte-order mark, as regedit writes them).
 bool write_backup(const std::wstring& path, bool machine, const wchar_t* subkey, const std::vector<RawValue>& values) {
     std::wstring text = L"Windows Registry Editor Version 5.00\r\n\r\n[";
@@ -108,22 +104,6 @@ bool set_value(HKEY key, const RawValue& v) {
                           static_cast<DWORD>(v.data.size())) == ERROR_SUCCESS;
 }
 
-// Re-creates root\subkey holding `values`, in their order. Deleting and re-adding values keeps their old
-// places (Windows reuses a value's slot by name), so the key itself goes.
-bool recreate(HKEY root, const wchar_t* subkey, const std::vector<RawValue>& values) {
-    const LSTATUS deleted = RegDeleteKeyExW(root, subkey, KEY_WOW64_64KEY, 0);
-    if (deleted != ERROR_SUCCESS && deleted != ERROR_FILE_NOT_FOUND)
-        return false;
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(root, subkey, 0, nullptr, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &key, nullptr) != ERROR_SUCCESS)
-        return false;
-    bool ok = true;
-    for (const RawValue& v : values)
-        ok = ok && set_value(key, v);
-    RegCloseKey(key);
-    return ok;
-}
-
 }  // namespace
 
 // ---- With the launcher --------------------------------------------------------------------------
@@ -144,8 +124,9 @@ std::vector<std::string> split_layer_names(const std::wstring& list) {
 }
 
 LauncherLayers read_launcher_layers(const std::wstring& ini) {
-    return {split_layer_names(ini_string(ini, L"layer_order")), split_layer_names(ini_string(ini, L"off_layers")),
-            split_layer_names(ini_string(ini, L"on_layers"))};
+    return {split_layer_names(ini_get(ini.c_str(), L"launcher", L"layer_order")),
+            split_layer_names(ini_get(ini.c_str(), L"launcher", L"off_layers")),
+            split_layer_names(ini_get(ini.c_str(), L"launcher", L"on_layers"))};
 }
 
 bool write_launcher_layers(const std::wstring& ini, const LauncherLayers& l) {
@@ -275,46 +256,47 @@ bool write_system_hive(HKEY root, const wchar_t* subkey, bool machine, const std
     const std::vector<RawValue> existing = read_values(key);
     bool sameSet = existing.size() == want.size();
     for (const SystemLayer& w : want)
-        sameSet &= std::any_of(existing.begin(), existing.end(), [&](const RawValue& v) { return same_name(v.name, w.manifest); });
+        sameSet &= std::any_of(existing.begin(), existing.end(), [&](const RawValue& v) { return iequals(v.name, w.manifest); });
     if (!sameSet) {
         RegCloseKey(key);
         error = L"the installed layers changed since they were read; nothing was written";
         return false;
     }
+    // The order can't change: the loader reads values in their stored order, and re-adding a value keeps its
+    // slot, so only deleting the key (every vendor's layers) or rewriting other vendors' values would reorder.
+    // Neither is ours to do. The list as read_system_layers shows it (the Sim-QVFR layer locked first) is the
+    // key's order.
+    std::vector<SystemLayer> shown;
+    for (const RawValue& v : existing)
+        shown.push_back({v.name, machine, is_on(v), layer_name(v.name), {}});
+    lock_system_layers(shown);
+    for (size_t i = 0; i < want.size(); ++i)
+        if (!iequals(shown[i].manifest, want[i].manifest)) {
+            RegCloseKey(key);
+            error = L"the order of Windows' OpenXR layers can't be changed safely without the launcher; nothing was "
+                    L"written (on/off switches still apply)";
+            return false;
+        }
     if (!backup.empty() && !write_backup(backup, machine, subkey, existing)) {
         RegCloseKey(key);
         error = L"cannot write the backup " + backup + L"; nothing was written";
         return false;
     }
-    // Each value as it will be: a switch that changes is written as the loader's DWORD (0 on, 1 off).
-    std::vector<RawValue> values;
-    bool sameOrder = true;
-    for (size_t i = 0; i < want.size(); ++i) {
-        const RawValue& was = *std::find_if(existing.begin(), existing.end(), [&](const RawValue& v) { return same_name(v.name, want[i].manifest); });
-        sameOrder &= same_name(existing[i].name, want[i].manifest);
-        RawValue v = was;
-        if (is_on(was) != want[i].on) {
-            const DWORD d = want[i].on ? 0 : 1;
-            v.type = REG_DWORD;
-            v.data.assign(reinterpret_cast<const BYTE*>(&d), reinterpret_cast<const BYTE*>(&d) + sizeof(d));
-        }
-        values.push_back(std::move(v));
-    }
+    // Only a switch that changes is written, in place, as the loader's DWORD (0 on, 1 off): the user's own choice.
     bool ok = true;
-    if (sameOrder) {
-        for (size_t i = 0; i < values.size(); ++i)
-            if (values[i].type != existing[i].type || values[i].data != existing[i].data)
-                ok &= set_value(key, values[i]);
-        RegCloseKey(key);
-    } else {
-        RegCloseKey(key);
-        if (!recreate(root, subkey, values)) {
-            ok = false;
-            recreate(root, subkey, existing);  // put it back as it was
-        }
+    for (const SystemLayer& w : want) {
+        const RawValue& was = *std::find_if(existing.begin(), existing.end(), [&](const RawValue& v) { return iequals(v.name, w.manifest); });
+        if (is_on(was) == w.on)
+            continue;
+        RawValue v = was;
+        const DWORD d = w.on ? 0 : 1;
+        v.type = REG_DWORD;
+        v.data.assign(reinterpret_cast<const BYTE*>(&d), reinterpret_cast<const BYTE*>(&d) + sizeof(d));
+        ok &= set_value(key, v);
     }
+    RegCloseKey(key);
     if (!ok)
-        error = L"writing the OpenXR layer key failed; it was put back as it was (backup: " + backup + L")";
+        error = L"writing an OpenXR layer switch failed (backup of the key as it was: " + backup + L")";
     return ok;
 }
 
@@ -337,9 +319,39 @@ bool parse_system_request(const std::string& text, std::vector<SystemLayer>& wan
         if (line.size() < 5 || (line[0] != 'M' && line[0] != 'U') || line[1] != '\t' || (line[2] != '0' && line[2] != '1') ||
             line[3] != '\t')
             return false;
-        want.push_back({widen(line.substr(4)), line[0] == 'M', line[2] == '1', {}, {}});
+        // A registry value name: no control characters, at most a long path's length.
+        const std::string manifest = line.substr(4);
+        if (manifest.size() > 32767 ||
+            std::any_of(manifest.begin(), manifest.end(), [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7f; }))
+            return false;
+        want.push_back({widen(manifest), line[0] == 'M', line[2] == '1', {}, {}});
+        if (want.back().manifest.empty() || narrow(want.back().manifest) != manifest)  // not valid UTF-8
+            return false;
     }
     return !want.empty();
+}
+
+std::string system_request_hash(const std::string& request) {
+    std::string hex;
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    UCHAR digest[32];
+    if (BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0)) &&
+        BCRYPT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0)) &&
+        BCRYPT_SUCCESS(BCryptHashData(hash, reinterpret_cast<PUCHAR>(const_cast<char*>(request.data())),
+                                      static_cast<ULONG>(request.size()), 0)) &&
+        BCRYPT_SUCCESS(BCryptFinishHash(hash, digest, sizeof(digest), 0))) {
+        static const char digits[] = "0123456789abcdef";
+        for (const UCHAR b : digest) {
+            hex += digits[b >> 4];
+            hex += digits[b & 15];
+        }
+    }
+    if (hash)
+        BCryptDestroyHash(hash);
+    if (alg)
+        BCryptCloseAlgorithmProvider(alg, 0);
+    return hex;
 }
 
 }  // namespace simqvfr::launcher

@@ -15,6 +15,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../../engine/code_patch.h"
@@ -235,24 +236,85 @@ void fill_views(std::uint8_t* state) {
     }
 }
 
-bool redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
-              std::size_t stubSize, const char* what) {
-    const bool ok = code_redirect(rva, anchor, size, stub, stubSize);
-    logf("xplane: %s at 0x%llx: %s", what, static_cast<unsigned long long>(rva), ok ? "patched" : "FAILED");
-    return ok;
-}
+// One start's code edits, all or none: every anchor is checked before any byte is written, and a write that still
+// fails (protection, stub memory) puts back every site written so far. Stubs already made stay allocated, unused.
+class PatchSet {
+public:
+    // A jump at `rva` (its `size` bytes, which must be `anchor`) to `stub`, then back.
+    void redirect(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* stub,
+                  std::size_t stubSize, const char* what) {
+        edits_.push_back({rva, std::vector<std::uint8_t>(anchor, anchor + size),
+                          std::vector<std::uint8_t>(stub, stub + stubSize), true, what});
+    }
+    // `bytes` (as long as `anchor`) over the anchor at `rva`.
+    void write(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size, const std::uint8_t* bytes,
+               const char* what) {
+        edits_.push_back({rva, std::vector<std::uint8_t>(anchor, anchor + size),
+                          std::vector<std::uint8_t>(bytes, bytes + size), false, what});
+    }
+    // True when every site is this build's code; else the first that isn't is logged.
+    bool anchors_match() const {
+        for (const Edit& e : edits_)
+            if (!code_matches(e.rva, e.anchor.data(), e.anchor.size())) {
+                logf("xplane: %s at 0x%llx: not this build's code", e.what.c_str(), static_cast<unsigned long long>(e.rva));
+                return false;
+            }
+        return true;
+    }
+    // Every edit in order; on a failure the sites written (and the failed one) get their original bytes back.
+    bool apply() {
+        for (std::size_t i = 0; i < edits_.size(); ++i) {
+            const Edit& e = edits_[i];
+            const bool ok = e.redirect ? code_redirect(e.rva, e.anchor.data(), e.anchor.size(), e.code.data(), e.code.size())
+                                       : simqvfr::code_write(e.rva, e.code.data(), e.code.size());
+            logf("xplane: %s at 0x%llx: %s", e.what.c_str(), static_cast<unsigned long long>(e.rva),
+                 ok ? "patched" : "FAILED");
+            if (!ok) {
+                restore(i + 1);
+                return false;
+            }
+        }
+        applied_ = edits_.size();
+        return true;
+    }
+    // Puts back what apply wrote.
+    void undo() {
+        restore(applied_);
+        applied_ = 0;
+    }
+
+private:
+    struct Edit {
+        std::uintptr_t rva;
+        std::vector<std::uint8_t> anchor, code;
+        bool redirect;
+        std::string what;
+    };
+    void restore(std::size_t count) {
+        for (std::size_t i = count; i-- > 0;) {
+            const Edit& e = edits_[i];
+            if (code_matches(e.rva, e.anchor.data(), e.anchor.size()))
+                continue;
+            const bool ok = simqvfr::code_write(e.rva, e.anchor.data(), e.anchor.size());
+            logf("xplane: %s at 0x%llx: %s", e.what.c_str(), static_cast<unsigned long long>(e.rva),
+                 ok ? "put back" : "NOT put back");
+        }
+    }
+    std::vector<Edit> edits_;
+    std::size_t applied_ = 0;
+};
+
+// The copies start's edits and set viewports' detour (view rects), kept so four_views_copies_undo can take them out.
+PatchSet g_copiesPatches;
+bool g_setViewportsHooked = false;
 
 }  // namespace
 
 bool four_views_copies_start() {
-    if (!code_matches(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor)) ||
-        !code_matches(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
-        !code_matches(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor)) ||
-        !code_matches(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor)) ||
-        !code_matches(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor)) ||
-        !code_matches(kCloudDispatchDepth, kCloudDispatchDepthAnchor, sizeof(kCloudDispatchDepthAnchor)) ||
-        !code_matches(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor))) {
-        logf("xplane: four views not started: the draw path code isn't this build's");
+    // Every site is collected first, then checked and written all or none (PatchSet).
+    PatchSet patches;
+    if (!code_matches(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor))) {
+        logf("xplane: four views not started: the draw path code isn't this build's (set viewports)");
         return false;
     }
     // set viewports: a multiplier of 2 (stereo) becomes 4.
@@ -290,26 +352,13 @@ bool four_views_copies_start() {
     const auto hook = reinterpret_cast<std::uintptr_t>(&create_shader_module);
     std::memcpy(shader + 2, &hook, 8);
 
-    bool ok = false;
-    if (g_viewRects) {
+    const bool viewRects = g_viewRects.load();
+    if (viewRects) {
         // One viewport per view: the pipelines take four (multiViewport; X-Plane makes them with two), and set
-        // viewports is detoured (set_viewports) instead of the multiplier stub.
-        const bool count = code_matches(kPipelineViewportCount, kPipelineViewportCountAnchor,
-                                        sizeof(kPipelineViewportCountAnchor)) &&
-                           simqvfr::code_write(kPipelineViewportCount, kPipelineViewportCountFour,
-                                               sizeof(kPipelineViewportCountFour));
-        logf("xplane: view rects: pipelines with 4 viewports and scissors at 0x%llx: %s",
-             static_cast<unsigned long long>(kPipelineViewportCount), count ? "patched" : "FAILED");
-        const MH_STATUS init = MH_Initialize();
-        void* target = reinterpret_cast<void*>(simqvfr::module_base() + kSetViewports);
-        MH_STATUS detour = init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED
-                             ? MH_CreateHook(target, reinterpret_cast<void*>(&set_viewports),
-                                             reinterpret_cast<void**>(&g_setViewportsOriginal))
-                             : init;
-        if (detour == MH_OK)
-            detour = MH_EnableHook(target);
-        logf("xplane: view rects: set viewports detoured (multiplier 4, one rect per view) at 0x%llx: %s",
-             static_cast<unsigned long long>(kSetViewports), detour == MH_OK ? "patched" : MH_StatusToString(detour));
+        // viewports is detoured (set_viewports, enabled after the edits) instead of the multiplier stub.
+        static_assert(sizeof(kPipelineViewportCountFour) == sizeof(kPipelineViewportCountAnchor), "same length");
+        patches.write(kPipelineViewportCount, kPipelineViewportCountAnchor, sizeof(kPipelineViewportCountAnchor),
+                      kPipelineViewportCountFour, "view rects: pipelines with 4 viewports and scissors");
         // 3D lines: room for two viewports' entries; write the first two (abi.h kLineViewportAssert).
         static const std::uint8_t nop6[6] = {0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00};
         std::uint8_t loopEnd[] = {
@@ -325,30 +374,28 @@ bool four_views_copies_start() {
         static_assert(sizeof(loopEnd) == 19 + 12, "the jae skips the jump");
         const std::uintptr_t top = simqvfr::module_base() + kLineViewportLoopTop;
         std::memcpy(loopEnd + 21, &top, 8);
-        const bool lines =
-            code_matches(kLineViewportAssert, kLineViewportAssertAnchor, sizeof(kLineViewportAssertAnchor)) &&
-            code_matches(kLineViewportLoopEnd, kLineViewportLoopEndAnchor, sizeof(kLineViewportLoopEndAnchor)) &&
-            redirect(kLineViewportLoopEnd, kLineViewportLoopEndAnchor, sizeof(kLineViewportLoopEndAnchor), loopEnd,
-                     sizeof(loopEnd), "view rects: 3D lines write the first two viewports' entries") &&
-            simqvfr::code_write(kLineViewportAssert, nop6, sizeof(nop6));
-        logf("xplane: view rects: 3D lines' viewport assertion (<= 2) at 0x%llx: %s",
-             static_cast<unsigned long long>(kLineViewportAssert), lines ? "lifted" : "FAILED");
-        ok = count && detour == MH_OK && lines;
+        static_assert(sizeof(nop6) == sizeof(kLineViewportAssertAnchor), "same length");
+        patches.redirect(kLineViewportLoopEnd, kLineViewportLoopEndAnchor, sizeof(kLineViewportLoopEndAnchor), loopEnd,
+                         sizeof(loopEnd), "view rects: 3D lines write the first two viewports' entries");
+        patches.write(kLineViewportAssert, kLineViewportAssertAnchor, sizeof(kLineViewportAssertAnchor), nop6,
+                      "view rects: 3D lines' viewport assertion (<= 2) lifted");
     } else {
-        ok = redirect(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor), setViewports,
-                      sizeof(setViewports), "multiplier 4 in set viewports");
+        patches.redirect(kSetViewports, kSetViewportsAnchor, sizeof(kSetViewportsAnchor), setViewports,
+                         sizeof(setViewports), "multiplier 4 in set viewports");
     }
-    ok &= redirect(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
-                   "multiplier 4 (g-buffer store A)");
-    ok &= redirect(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
-                   "multiplier 4 (g-buffer store B)");
-    ok &= redirect(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor), slotCopy,
-                   sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
-    ok &= redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
-                   "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
+    patches.redirect(kMultiplierStoreA, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
+                     "multiplier 4 (g-buffer store A)");
+    patches.redirect(kMultiplierStoreB, kMultiplierStoreAnchor, sizeof(kMultiplierStoreAnchor), store, sizeof(store),
+                     "multiplier 4 (g-buffer store B)");
+    patches.redirect(kModelviewCopyEnd, kModelviewCopyEndAnchor, sizeof(kModelviewCopyEndAnchor), slotCopy,
+                     sizeof(slotCopy), "render-state slots 2-3 = copies of 0-1");
+    patches.redirect(kShaderModuleLoad, kShaderModuleLoadAnchor, sizeof(kShaderModuleLoadAnchor), shader, sizeof(shader),
+                     "vkCreateShaderModule wrapped (final resolve: layers 2-3)");
     // The focus boxes' push constants (g_focusPush): every pipeline layout gets their range, and every bind is
     // followed by a push of this frame's boxes. All three call sites or none; without them the shader edits bake in the
     // launch size and keep the boxes on the eyes' axes. In whether or not the boxes follow the gaze: the size needs them.
+    // Sites that aren't this build's leave them out (baked); sites that are join the all-or-none set.
+    bool pushSites = false;
     {
         std::uint8_t layoutCall[10] = {0x48, 0xB8};  // mov rax, create_pipeline_layout (the call that follows: call rax)
         const auto layoutHook = reinterpret_cast<std::uintptr_t>(&create_pipeline_layout);
@@ -356,24 +403,17 @@ bool four_views_copies_start() {
         std::uint8_t bindCall[12] = {0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xD0};  // mov rax, bind_pipeline; call rax
         const auto bindHook = reinterpret_cast<std::uintptr_t>(&bind_pipeline);
         std::memcpy(bindCall + 2, &bindHook, 8);
-        const bool sites =
-            code_matches(kPipelineLayoutLoad, kPipelineLayoutLoadAnchor, sizeof(kPipelineLayoutLoadAnchor)) &&
-            code_matches(kBindPipelineCompute, kBindPipelineComputeAnchor, sizeof(kBindPipelineComputeAnchor)) &&
-            code_matches(kBindPipelineGraphics, kBindPipelineGraphicsAnchor, sizeof(kBindPipelineGraphicsAnchor));
-        const bool hooked =
-            sites &&
-            redirect(kPipelineLayoutLoad, kPipelineLayoutLoadAnchor, sizeof(kPipelineLayoutLoadAnchor), layoutCall,
-                     sizeof(layoutCall), "focus boxes: vkCreatePipelineLayout wrapped (their push constant range)") &&
-            redirect(kBindPipelineCompute, kBindPipelineComputeAnchor, sizeof(kBindPipelineComputeAnchor), bindCall,
-                     sizeof(bindCall), "focus boxes: compute vkCmdBindPipeline wrapped (then the push)") &&
-            redirect(kBindPipelineGraphics, kBindPipelineGraphicsAnchor, sizeof(kBindPipelineGraphicsAnchor), bindCall,
-                     sizeof(bindCall), "focus boxes: graphics vkCmdBindPipeline wrapped (then the push)");
-        g_focusPush = hooked;
-        logf("xplane: focus boxes %s", hooked ? (g_gazeWanted.load()
-                                                     ? "pushed to the shaders each frame: size live, centres on the gaze"
-                                                     : "pushed to the shaders each frame: size live, centres on the eyes' axes")
-                                              : "baked into the shaders (launch size, eyes' axes): the pipeline calls "
-                                                "aren't this build's");
+        pushSites = code_matches(kPipelineLayoutLoad, kPipelineLayoutLoadAnchor, sizeof(kPipelineLayoutLoadAnchor)) &&
+                    code_matches(kBindPipelineCompute, kBindPipelineComputeAnchor, sizeof(kBindPipelineComputeAnchor)) &&
+                    code_matches(kBindPipelineGraphics, kBindPipelineGraphicsAnchor, sizeof(kBindPipelineGraphicsAnchor));
+        if (pushSites) {
+            patches.redirect(kPipelineLayoutLoad, kPipelineLayoutLoadAnchor, sizeof(kPipelineLayoutLoadAnchor), layoutCall,
+                             sizeof(layoutCall), "focus boxes: vkCreatePipelineLayout wrapped (their push constant range)");
+            patches.redirect(kBindPipelineCompute, kBindPipelineComputeAnchor, sizeof(kBindPipelineComputeAnchor), bindCall,
+                             sizeof(bindCall), "focus boxes: compute vkCmdBindPipeline wrapped (then the push)");
+            patches.redirect(kBindPipelineGraphics, kBindPipelineGraphicsAnchor, sizeof(kBindPipelineGraphicsAnchor),
+                             bindCall, sizeof(bindCall), "focus boxes: graphics vkCmdBindPipeline wrapped (then the push)");
+        }
     }
     // The per-draw upload: with four views, fill_views (slots 2-3 from 0-1: copies, or focus projections) right before
     // the block is filled, whichever setter wrote the slots. The function keeps rsp 16-aligned in its body (5 pushes
@@ -407,8 +447,8 @@ bool four_views_copies_start() {
     static_assert(sizeof(uploadCall) == 6 + 0x6F + 6, "the jne skips the call block");
     const auto fill = reinterpret_cast<std::uintptr_t>(&fill_views);
     std::memcpy(uploadCall + 0x3B, &fill, 8);
-    ok &= redirect(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor), uploadCall,
-                   sizeof(uploadCall), "per-draw upload: slots 2-3 filled (copies or focus)");
+    patches.redirect(kTransformUpload, kTransformUploadAnchor, sizeof(kTransformUploadAnchor), uploadCall,
+                     sizeof(uploadCall), "per-draw upload: slots 2-3 filled (copies or focus)");
     // The other multiplier writes: a 2 stored becomes 4 (the register itself is left as it is).
     for (const MultiplierWrite& w : kMoreMultiplierWrites) {
         const std::uint8_t stub[] = {
@@ -423,7 +463,7 @@ bool four_views_copies_start() {
         char what[96];
         std::snprintf(what, sizeof(what), "multiplier 4 (restore or draw-path store) at 0x%llx",
                       static_cast<unsigned long long>(w.rva));
-        ok &= redirect(w.rva, w.anchor, sizeof(w.anchor), stub, sizeof(stub), what);
+        patches.redirect(w.rva, w.anchor, sizeof(w.anchor), stub, sizeof(stub), what);
     }
     // The vegetation cull's u_render_layers (abi.h kVegetationRenderLayers): stereo ? 4 : 1 instead of stereo + 1, so
     // the cull writes four instances per tree (mesh trees: visible x 4, the VS taking point i / 4 and layer i % 4) and
@@ -455,8 +495,8 @@ bool four_views_copies_start() {
     const auto lodBias = reinterpret_cast<std::uintptr_t>(&g_vegetationLodBias);
     std::memcpy(renderLayers + 29, &culls, 8);
     std::memcpy(renderLayers + 50, &lodBias, 8);
-    ok &= redirect(kVegetationRenderLayers, kVegetationRenderLayersAnchor, sizeof(kVegetationRenderLayersAnchor),
-                   renderLayers, sizeof(renderLayers), "vegetation cull: u_render_layers 4 in stereo (was 2)");
+    patches.redirect(kVegetationRenderLayers, kVegetationRenderLayersAnchor, sizeof(kVegetationRenderLayersAnchor),
+                     renderLayers, sizeof(renderLayers), "vegetation cull: u_render_layers 4 in stereo (was 2)");
     // The cull frustum (abi.h kStereoFrustumTest): with the multiplier 4 X-Plane culled against the left eye's frustum
     // alone, so the right eye's outer strip (its tangents 1.213 to 1.402) lost objects and lights, which popped in and
     // out there. 2 or 4 take the two-eye path; others go on as before. rax is free here (the function's next write is
@@ -472,8 +512,8 @@ bool four_views_copies_start() {
     static_assert(sizeof(frustum) == 22, "the je offsets land on the stub's end");
     const std::uintptr_t other = simqvfr::module_base() + kStereoFrustumOther;
     std::memcpy(frustum + 12, &other, 8);
-    ok &= redirect(kStereoFrustumTest, kStereoFrustumTestAnchor, sizeof(kStereoFrustumTestAnchor), frustum,
-                   sizeof(frustum), "cull frustum: both eyes' with 4 views (was the left eye's alone)");
+    patches.redirect(kStereoFrustumTest, kStereoFrustumTestAnchor, sizeof(kStereoFrustumTestAnchor), frustum,
+                     sizeof(frustum), "cull frustum: both eyes' with 4 views (was the left eye's alone)");
     // Stereo as `count == 2` (abi.h kStereoCountJumps): 2 or 4 run the eyes' work; otherwise the original jne's target,
     // through `jmp [rip]` (no register used). The flags are not read after the jne.
     for (const StereoCountJump& s : kStereoCountJumps) {
@@ -490,7 +530,7 @@ bool four_views_copies_start() {
         std::memcpy(stub + 16, &target, 8);
         char what[96];
         std::snprintf(what, sizeof(what), "stereo test (count == 2) takes 4 at 0x%llx", static_cast<unsigned long long>(s.rva));
-        ok &= redirect(s.rva, s.anchor, sizeof(s.anchor), stub, sizeof(stub), what);
+        patches.redirect(s.rva, s.anchor, sizeof(s.anchor), stub, sizeof(stub), what);
     }
     // The SSR fill's count (abi.h kSsrFillCount) and the reprojection globals' (kReprojectionCount): 4 becomes 2, so
     // the stereo flag is set and the right eye's matrices are written (they were left stale: garbage in u_ssr_data[1]).
@@ -500,8 +540,8 @@ bool four_views_copies_start() {
         0xB8, 0x02, 0x00, 0x00, 0x00,        // mov eax, 2
         0x89, 0x85, 0x18, 0x05, 0x00, 0x00,  // mov [rbp+0x518], eax (the original)
     };
-    ok &= redirect(kSsrFillCount, kSsrFillCountAnchor, sizeof(kSsrFillCountAnchor), ssrCount, sizeof(ssrCount),
-                   "SSR fill: the eyes' stereo count with 4 views (right eye's u_proj/u_reproj written)");
+    patches.redirect(kSsrFillCount, kSsrFillCountAnchor, sizeof(kSsrFillCountAnchor), ssrCount, sizeof(ssrCount),
+                     "SSR fill: the eyes' stereo count with 4 views (right eye's u_proj/u_reproj written)");
     static const std::uint8_t reprojectionCount[] = {
         0x83, 0xFB, 0x04,              // cmp ebx, 4
         0x75, 0x05,                    // jne +5
@@ -509,25 +549,80 @@ bool four_views_copies_start() {
         0x83, 0xFB, 0x02,              // cmp ebx, 2 (the original)
         0x40, 0x0F, 0x94, 0xC5,        // sete bpl (the original)
     };
-    ok &= redirect(kReprojectionCount, kReprojectionCountAnchor, sizeof(kReprojectionCountAnchor), reprojectionCount,
-                   sizeof(reprojectionCount), "reprojection globals: the eyes' stereo count with 4 views (right eye's written)");
+    patches.redirect(kReprojectionCount, kReprojectionCountAnchor, sizeof(kReprojectionCountAnchor), reprojectionCount,
+                     sizeof(reprojectionCount), "reprojection globals: the eyes' stereo count with 4 views (right eye's written)");
     // The object and tree LOD's width (abi.h kWorldLodHeight, kGraphLodHeight): the VR world graph's W becomes the
     // eye's width at the focus views' pixel density (update_lod_scale), so the focus views' trees and objects aren't
     // the coarse eye's LOD magnified. The stubs always go in; scale 1 leaves W as it is.
     update_lod_scale();
     const std::vector<std::uint8_t> worldLod =
         lod_height_stub(kWorldLodHeightAnchor, sizeof(kWorldLodHeightAnchor), 8, &g_lodHeight[0]);
-    ok &= redirect(kWorldLodHeight, kWorldLodHeightAnchor, sizeof(kWorldLodHeightAnchor), worldLod.data(), worldLod.size(),
-                   "world pass LOD width (objects, the vegetation cull's u_lod_bias): the focus views' density");
+    patches.redirect(kWorldLodHeight, kWorldLodHeightAnchor, sizeof(kWorldLodHeightAnchor), worldLod.data(), worldLod.size(),
+                     "world pass LOD width (objects, the vegetation cull's u_lod_bias): the focus views' density");
     const std::vector<std::uint8_t> graphLod =
         lod_height_stub(kGraphLodHeightAnchor, sizeof(kGraphLodHeightAnchor), 0, &g_lodHeight[1]);
-    ok &= redirect(kGraphLodHeight, kGraphLodHeightAnchor, sizeof(kGraphLodHeightAnchor), graphLod.data(), graphLod.size(),
-                   "graph LOD width (REN_graph_info+0x1e8, the other object draws): the focus views' density");
-    const bool clouds = simqvfr::code_write(kCloudDispatchDepth, kCloudDispatchDepthCount, sizeof(kCloudDispatchDepthCount));
-    logf("xplane: cloud render dispatch depth = view count (was stereo ? 2 : 1) at 0x%llx: %s",
-         static_cast<unsigned long long>(kCloudDispatchDepth), clouds ? "patched" : "FAILED");
-    ok &= clouds;
-    return ok;
+    patches.redirect(kGraphLodHeight, kGraphLodHeightAnchor, sizeof(kGraphLodHeightAnchor), graphLod.data(), graphLod.size(),
+                     "graph LOD width (REN_graph_info+0x1e8, the other object draws): the focus views' density");
+    static_assert(sizeof(kCloudDispatchDepthCount) == sizeof(kCloudDispatchDepthAnchor), "same length");
+    patches.write(kCloudDispatchDepth, kCloudDispatchDepthAnchor, sizeof(kCloudDispatchDepthAnchor),
+                  kCloudDispatchDepthCount, "cloud render dispatch depth = view count (was stereo ? 2 : 1)");
+
+    if (!patches.anchors_match()) {
+        logf("xplane: four views not started: the draw path code isn't this build's (nothing written)");
+        return false;
+    }
+    // View rects: set viewports' detour made before any write (MinHook writes the target only when enabled).
+    void* target = reinterpret_cast<void*>(simqvfr::module_base() + kSetViewports);
+    if (viewRects) {
+        const MH_STATUS init = MH_Initialize();
+        const MH_STATUS made = init == MH_OK || init == MH_ERROR_ALREADY_INITIALIZED
+                                   ? MH_CreateHook(target, reinterpret_cast<void*>(&set_viewports),
+                                                   reinterpret_cast<void**>(&g_setViewportsOriginal))
+                                   : init;
+        if (made != MH_OK) {
+            logf("xplane: four views not started: set viewports' detour not made (%s; nothing written)",
+                 MH_StatusToString(made));
+            return false;
+        }
+    }
+    if (!patches.apply()) {
+        if (viewRects)
+            MH_RemoveHook(target);
+        logf("xplane: four views not started: a write failed (the sites written were put back)");
+        return false;
+    }
+    if (viewRects) {
+        const MH_STATUS on = MH_EnableHook(target);
+        logf("xplane: view rects: set viewports detoured (multiplier 4, one rect per view) at 0x%llx: %s",
+             static_cast<unsigned long long>(kSetViewports), on == MH_OK ? "patched" : MH_StatusToString(on));
+        if (on != MH_OK) {
+            MH_RemoveHook(target);
+            patches.undo();
+            logf("xplane: four views not started: the edits were put back");
+            return false;
+        }
+        g_setViewportsHooked = true;
+    }
+    g_copiesPatches = std::move(patches);
+    g_focusPush = pushSites;
+    logf("xplane: focus boxes %s", pushSites ? (g_gazeWanted.load()
+                                                    ? "pushed to the shaders each frame: size live, centres on the gaze"
+                                                    : "pushed to the shaders each frame: size live, centres on the eyes' axes")
+                                             : "baked into the shaders (launch size, eyes' axes): the pipeline calls "
+                                               "aren't this build's");
+    return true;
+}
+
+void four_views_copies_undo() {
+    if (g_setViewportsHooked) {
+        void* target = reinterpret_cast<void*>(simqvfr::module_base() + kSetViewports);
+        MH_DisableHook(target);
+        MH_RemoveHook(target);
+        g_setViewportsHooked = false;
+    }
+    g_copiesPatches.undo();
+    g_focusPush = false;
+    logf("xplane: four views taken out again (QVFR not fully patched in)");
 }
 
 void four_views_set_view_rects(bool on) {
@@ -538,14 +633,8 @@ void four_views_set_view_rects(bool on) {
 int four_views_view_rect_sets() { return g_viewRectSets.load(); }
 
 bool four_views_eye_columns_start() {
-    if (!code_matches(kRenderSizeHeight, kRenderSizeHeightAnchor, sizeof(kRenderSizeHeightAnchor)) ||
-        !code_matches(kWorldSubgraphHeight, kWorldSubgraphHeightAnchor, sizeof(kWorldSubgraphHeightAnchor)) ||
-        !code_matches(kVrContextHeight, kVrContextHeightAnchor, sizeof(kVrContextHeightAnchor)) ||
-        !code_matches(kVrContextResizeHeightA, kVrContextResizeHeightAAnchor, sizeof(kVrContextResizeHeightAAnchor)) ||
-        !code_matches(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor))) {
-        logf("xplane: eye columns not started: the view size code isn't this build's (or the VR context isn't at 4 layers)");
-        return false;
-    }
+    // All six sites or none (PatchSet).
+    PatchSet patches;
     static const std::uint8_t renderSize[] = {0x41, 0x8B, 0x8F, 0x88, 0x00, 0x00, 0x00,  // mov ecx, [r15+0x88]
                                               0xD1, 0xE9};                               // shr ecx, 1
     static const std::uint8_t subgraph[] = {0x8B, 0xB8, 0x88, 0x00, 0x00, 0x00,  // mov edi, [rax+0x88]
@@ -560,16 +649,16 @@ bool four_views_eye_columns_start() {
     static const std::uint8_t resizeB[] = {0x44, 0x8B, 0xC0,  // mov r8d, eax
                                            0x41, 0xD1, 0xE8,  // shr r8d, 1
                                            0x8B, 0xC3};       // mov eax, ebx
-    bool ok = redirect(kRenderSizeHeight, kRenderSizeHeightAnchor, sizeof(kRenderSizeHeightAnchor), renderSize,
-                       sizeof(renderSize), "eye columns: render size height / 2");
-    ok &= redirect(kWorldSubgraphHeight, kWorldSubgraphHeightAnchor, sizeof(kWorldSubgraphHeightAnchor), subgraph,
-                   sizeof(subgraph), "eye columns: 3D world graph height / 2");
-    ok &= redirect(kVrContextHeight, kVrContextHeightAnchor, sizeof(kVrContextHeightAnchor), context, sizeof(context),
-                   "eye columns: VR context height / 2");
-    ok &= redirect(kVrContextResizeHeightA, kVrContextResizeHeightAAnchor, sizeof(kVrContextResizeHeightAAnchor), resizeA,
-                   sizeof(resizeA), "eye columns: VR context resize A height / 2");
-    ok &= redirect(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor), resizeB,
-                   sizeof(resizeB), "eye columns: VR context resize B height / 2");
+    patches.redirect(kRenderSizeHeight, kRenderSizeHeightAnchor, sizeof(kRenderSizeHeightAnchor), renderSize,
+                     sizeof(renderSize), "eye columns: render size height / 2");
+    patches.redirect(kWorldSubgraphHeight, kWorldSubgraphHeightAnchor, sizeof(kWorldSubgraphHeightAnchor), subgraph,
+                     sizeof(subgraph), "eye columns: 3D world graph height / 2");
+    patches.redirect(kVrContextHeight, kVrContextHeightAnchor, sizeof(kVrContextHeightAnchor), context, sizeof(context),
+                     "eye columns: VR context height / 2");
+    patches.redirect(kVrContextResizeHeightA, kVrContextResizeHeightAAnchor, sizeof(kVrContextResizeHeightAAnchor),
+                     resizeA, sizeof(resizeA), "eye columns: VR context resize A height / 2");
+    patches.redirect(kVrContextResizeHeightB, kVrContextResizeHeightBAnchor, sizeof(kVrContextResizeHeightBAnchor),
+                     resizeB, sizeof(resizeB), "eye columns: VR context resize B height / 2");
     // The final resolve's viewport (0, 0, max(2 x context width, desktop window width), context height) gets the whole
     // column: twice the height.
     std::uint8_t viewport[] = {
@@ -612,13 +701,18 @@ bool four_views_eye_columns_start() {
     std::memcpy(viewport + kRecord + 2, &contextPointer, 8);
     std::memcpy(viewport + kRecord + 46, &counter, 8);
     static_assert(kContextWidth == 4 && kContextHeight == 8, "the stub's offsets");
-    if (!code_matches(kSetViewport, kSetViewportAnchor, sizeof(kSetViewportAnchor))) {
-        logf("xplane: eye columns: the viewport setter at 0x%llx isn't this build's", static_cast<unsigned long long>(kSetViewport));
+    patches.redirect(kSetViewport, kSetViewportAnchor, sizeof(kSetViewportAnchor), viewport, sizeof(viewport),
+                     "eye columns: the final resolve's viewport the whole column");
+    if (!patches.anchors_match()) {
+        logf("xplane: eye columns not started: the view size code isn't this build's (or the VR context isn't at 4 "
+             "layers); nothing written");
         return false;
     }
-    ok &= redirect(kSetViewport, kSetViewportAnchor, sizeof(kSetViewportAnchor), viewport, sizeof(viewport),
-                   "eye columns: the final resolve's viewport the whole column");
-    return ok;
+    if (!patches.apply()) {
+        logf("xplane: eye columns not started: a write failed (the sites written were put back)");
+        return false;
+    }
+    return true;
 }
 
 int four_views_column_viewports() { return g_columnViewports.load(); }

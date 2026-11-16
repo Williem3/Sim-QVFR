@@ -9,7 +9,7 @@
 #include "probe/d3d12_trace.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 #include "probe/pix_capture.h"
 #include "probe/probe.h"
 #include "xr.h"

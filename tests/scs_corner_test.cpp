@@ -20,19 +20,17 @@
 #include "games/scssoftware/corner.h"
 #include "games/lmu/mvr_probe.h"
 #include "games/scssoftware/corner_rules.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
 
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
+// The game's main thread at xrDestroySession (not the one drawing).
+DWORD WINAPI end_session_elsewhere(void*) {
+    scs::corner_session_end();
+    return 0;
 }
-
-bool close_to(float a, float b, float tol = 1e-4f) { return std::fabs(a - b) <= tol; }
 
 // A stand-in for the runtime's xrEnumerateSwapchainImages: two images, the test's eye target and a decoy.
 ID3D11Texture2D* swapImage = nullptr;
@@ -65,7 +63,7 @@ void rules_checks() {
         float v[7][4] = {{0.5f, 0.5f, 1, 1}, {2.0944f, 0, 8, 1.2f}, {0.974004f, 0.25f, 0.2f, 0}, {1, 1, 1, 1},
                          {5192, 4168, 1, 1}, {2.70692f, 3.66836f, 5.02198f, 0}, {1.01879f, -0.984434f, -2.45128f, 1.96858f}};
         const CornerRule r = scs::corner_patch(v, 7, 0.75f, 0.75f, false);
-        check(r == CornerRule::pair && scs::corner_eq(v[0], 0.5f, 0.5f, 1, 1) && close_to(v[3][2], 1 / 0.75f) &&
+        check(r == CornerRule::pair && scs::corner_eq(v[0], 0.5f, 0.5f, 1, 1) && close_to(v[3][2], 1 / 0.75f, 1e-4f) &&
                   scs::corner_eq(v[4], 3894, 3126, 0.75f, 0.75f) && v[6][0] == 1.01879f,
               "rules: PS 631's pair rewritten, the AO parameters and view-ray vectors kept");
     }
@@ -467,7 +465,7 @@ void warp_checks() {
         D3D11_MAPPED_SUBRESOURCE rm;
         if (SUCCEEDED(context->Map(readBack.Get(), 0, D3D11_MAP_READ, 0, &rm))) {
             const float* v = static_cast<const float*>(rm.pData);
-            check(close_to(v[80 * 4], 0.5f) && close_to(v[80 * 4 + 2], 2) && close_to(v[81 * 4], W / 2.0f) &&
+            check(close_to(v[80 * 4], 0.5f, 1e-4f) && close_to(v[80 * 4 + 2], 2, 1e-4f) && close_to(v[81 * 4], W / 2.0f, 1e-4f) &&
                       v[96 * 4] == 1 && v[97 * 4] == 4096 && v[65 * 4 + 3] == 7,
                   "the copy: the eye's pairs rewritten, a shadow map's pair and other values as the game wrote them");
             check(v[82 * 4] == 5 && v[82 * 4 + 3] == 8, "a buffer the game wrote again mid-frame is copied again at its next bind");
@@ -546,7 +544,45 @@ void warp_checks() {
     check(scs::corner_install(device.Get(), 50, 30), "the next session's install asked for");
     scs::corner_frame_end(nullptr, &fake_enumerate);
     check(scs::corner_on(), "the old session released and the new one installed at that xrEndFrame");
-    scs::corner_session_end();
+    // A session ending mid-frame from the main thread (no xrEndFrame after it: flat mode, quit): the eyes in the corner,
+    // the viewport cut, our copy bound; the main thread leaves the context alone, the render thread's next call puts the
+    // game's state back and observing stops.
+    context->OMSetRenderTargets(4, gbs, dsv.Get());
+    context->OMSetRenderTargets(1, outs, nullptr);
+    context->RSSetViewports(1, &full);
+    context->PSSetConstantBuffers1(0, 1, bigs, &bigPs, &num);
+    seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    boundPs = nullptr;
+    context->PSGetConstantBuffers1(0, 1, &boundPs, &bpFirst, &bpNum);
+    check(seen.Width == W / 2 && boundPs && boundPs != bigCb.Get(), "mid-frame: the viewport cut, our copy bound");
+    if (boundPs)
+        boundPs->Release();
+    {
+        const HANDLE main = CreateThread(nullptr, 0, &end_session_elsewhere, nullptr, 0, nullptr);
+        if (main) {
+            WaitForSingleObject(main, INFINITE);
+            CloseHandle(main);
+        }
+    }
+    seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    check(seen.Width == W / 2, "session end on another thread: the context left alone there");
+    context->OMSetRenderTargets(1, outs, nullptr);  // the render thread's next call
+    seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    boundPs = nullptr;
+    context->PSGetConstantBuffers1(0, 1, &boundPs, &bpFirst, &bpNum);
+    check(seen.Width == W && seen.Height == H && boundPs == bigCb.Get() && bpFirst == bigPs,
+          "the render thread's next call puts back the game's viewport and its own constant buffer");
+    if (boundPs)
+        boundPs->Release();
+    context->OMSetRenderTargets(4, gbs, dsv.Get());
+    context->OMSetRenderTargets(1, outs, nullptr);
+    context->RSSetViewports(1, &full);
+    seenCount = 1;
+    context->RSGetViewports(&seenCount, &seen);
+    check(seen.Width == W, "then observing has stopped: a G-buffer bind starts no corner");
     scs::corner_frame_end(nullptr, &fake_enumerate);
     check(!scs::corner_on() && SUCCEEDED(device->GetDeviceRemovedReason()), "the last session's end done at its xrEndFrame");
 }

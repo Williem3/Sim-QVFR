@@ -5,9 +5,18 @@
 // (games::early_load). The OpenXR loader later gets this same, already loaded module.
 #include <windows.h>
 
+#include <atomic>
+
 #include "games/adapter.h"
 
-BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID) {
+namespace simqvfr::layer {
+extern std::atomic<bool> processTerminating;  // layer/state.h
+}
+
+BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved) {
+    // Process exit: the CRT destroys this DLL's globals right after this returns, with the other threads already gone.
+    if (reason == DLL_PROCESS_DETACH && reserved)
+        simqvfr::layer::processTerminating.store(true);
     if (reason == DLL_PROCESS_ATTACH) {
         wchar_t early[4] = {};
         if (GetEnvironmentVariableW(L"SIM_QVFR_EARLY", early, 4) == 1 && early[0] == L'1') {

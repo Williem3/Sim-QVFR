@@ -1,4 +1,4 @@
-// Offline check of the focus replay (probe/replay_probe.h, mode 3, every stereo list) on a WARP device: a miniature of
+// Offline check of the focus replay (games/ace/replay_probe.h, mode 3, every stereo list) on a WARP device: a miniature of
 // ACE's single-pass-stereo scene (two viewports side by side, the eye from SV_InstanceID routed by SV_ViewportArrayIndex,
 // projections read from root parameter 1 in ACE's pass-constant layout, reverse-Z): a depth-only list, a colour list
 // (R11G11B10_FLOAT, depth test EQUAL, a colour that is a smooth function of world position) and a half-width pass with
@@ -17,19 +17,14 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include "probe/replay_probe.h"
+#include "games/ace/stereo_flag.h"
+#include "games/ace/replay_probe.h"
+#include "test_util.h"
 #include "xr.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    if (!ok)
-        ++failures;
-}
 
 // ACE's projection rows: x (sx, 0, ox, 0), y (0, sy, oy, 0), z (0, 0, n, f) reverse-Z, w (0, 0, -1, 0).
 void put_projection(float* rows, int base, float sx, float ox, float sy, float oy) {
@@ -115,9 +110,7 @@ void check_inverse_projection() {
 
 int SIM_QVFR_TEST_MAIN() {
     check_inverse_projection();
-    wchar_t temp[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, temp);
-    const std::wstring logPath = std::wstring(temp) + L"simqvfr-replay-focus-test.log";
+    const std::wstring logPath = temp_path(L"simqvfr-replay-focus-test.log");
     DeleteFileW(logPath.c_str());
     SetEnvironmentVariableW(L"SIM_QVFR_LOG", logPath.c_str());
     ComPtr<IDXGIFactory4> factory;
@@ -146,6 +139,7 @@ int SIM_QVFR_TEST_MAIN() {
     settings.saveCount = 2;
     settings.allTargets = true;
     settings.fog = true;  // compiles the fog-constants shader (no fog passes here: nothing else changes)
+    simqvfr::ace_known_build_for_tests(true);  // (this test exe is not ACE)
     check(simqvfr::replay_probe_start(device.Get(), 3, queue.Get(), settings), "probe installs in mode 3");
 
     // The "game": root 0 unused, root 1 the pass constants; depth-only, colour and half-width pipelines, reverse-Z.

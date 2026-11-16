@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../../engine/ngx_common.h"
+
 namespace simqvfr {
 
 // NVSDK_NGX_Parameter (nvsdk_ngx_defs.h) as MSVC lays out its vtable: the eight Set overloads, then the eight Get
@@ -14,7 +16,6 @@ namespace simqvfr {
 // NVSDK_NGX_Parameter_SetUI ("OutWidth" at create) and GetUI ("SuperSampling.MinDriverVersionMajor") use these.
 inline constexpr std::ptrdiff_t kNgxSetUiOffset = 0x20, kNgxGetUiOffset = 0x60;
 inline constexpr unsigned kNgxFeatureSuperSampling = 1;  // NVSDK_NGX_Feature_SuperSampling
-inline bool ngx_succeeded(unsigned result) { return (result & 0xfff00000u) != 0xbad00000u; }  // NVSDK_NGX_SUCCEED
 
 using NgxSetUiFn = void (*)(void* bag, const char* name, unsigned value);
 using NgxGetUiFn = unsigned (*)(void* bag, const char* name, unsigned* value);
@@ -31,38 +32,51 @@ inline bool ngx_get_ui(void* bag, const char* name, unsigned& value) {
 
 // The output size of each SuperSampling feature, by its handle (NVSDK_NGX_Handle*). ACE makes one feature per view
 // and again with every new renderer (a graphics settings change), and NGX may hand a released handle out again: the
-// newest record of a handle wins, the oldest of 32 makes room.
+// newest record of a handle wins, the oldest of 32 makes room. A record also carries NGX's lifetime it was made in
+// (bumped by every shutdown, which frees every handle) and goes when the feature is released or its handle is made
+// into a feature not recorded: a reused handle never takes a dead feature's size.
 class NgxExtents {
 public:
-    void record(const void* handle, unsigned width, unsigned height) {
+    void record(const void* handle, unsigned width, unsigned height, std::uint64_t life = 0) {
         for (std::size_t i = 0; i < count_; ++i)
             if (entries_[i].handle == handle) {
-                entries_[i].width = width;
-                entries_[i].height = height;
+                entries_[i] = {handle, width, height, life};
                 return;
             }
         if (count_ < kCapacity) {
-            entries_[count_++] = {handle, width, height};
+            entries_[count_++] = {handle, width, height, life};
             return;
         }
-        entries_[next_] = {handle, width, height};  // the oldest record
+        entries_[next_] = {handle, width, height, life};  // the oldest record
         next_ = (next_ + 1) % kCapacity;
     }
-    bool find(const void* handle, unsigned& width, unsigned& height) const {
+    bool find(const void* handle, unsigned& width, unsigned& height, std::uint64_t life = 0) const {
         for (std::size_t i = 0; i < count_; ++i)
             if (entries_[i].handle == handle) {
+                if (entries_[i].life != life)
+                    return false;  // made before an NGX shutdown: a dead feature's
                 width = entries_[i].width;
                 height = entries_[i].height;
                 return true;
             }
         return false;
     }
+    // The feature was released (or its handle now names another feature): its record goes.
+    void forget(const void* handle) {
+        for (std::size_t i = 0; i < count_; ++i)
+            if (entries_[i].handle == handle) {
+                entries_[i].handle = nullptr;  // (the slot is reused by the oldest-first order)
+                return;
+            }
+    }
+    void clear() { count_ = next_ = 0; }
 
 private:
     static constexpr std::size_t kCapacity = 32;
     struct Entry {
         const void* handle;
         unsigned width, height;
+        std::uint64_t life;
     };
     Entry entries_[kCapacity] = {};
     std::size_t count_ = 0, next_ = 0;

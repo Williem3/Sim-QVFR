@@ -2,6 +2,7 @@
 // immediate context while a pass runs and pass everything else straight through. They are on every function the
 // context's entries hold in d3d11's modes (MinHook; "How the hooks are reached" below).
 #include "mvr_pass.h"
+#include "mvr_pass_internal.h"
 
 #include <windows.h>
 #include <d3d11_4.h>
@@ -37,12 +38,14 @@
 #include "yebis_shaders.h"
 
 namespace lmu {
+
+using namespace mvr_detail;  // the state and helpers shared with mvr_pass_*.cpp (mvr_pass_internal.h)
+
 namespace {
 
 using Microsoft::WRL::ComPtr;
 
 using namespace context_slot;
-constexpr unsigned kMaxRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 
 // How the hooks are reached (mvr_pass.h context_slot): d3d11 rewrites the context's vtable entries as it runs, and a
 // hook on one function an entry held misses the calls through the others (nvapi_stereo_check 6: once protection has
@@ -136,80 +139,14 @@ void realRSSetScissorRects(ID3D11DeviceContext* c, UINT n, const D3D11_RECT* rec
 void realSOSetTargets(ID3D11DeviceContext* c, UINT n, ID3D11Buffer* const* buffers, const UINT* offsets) {
     call_real<kHookSO>(c, n, buffers, offsets);
 }
+// Our own VS buffer binds (the remap at b13) past the hook, so they aren't recorded as the game's.
+void realVSSetConstantBuffers(ID3D11DeviceContext* c, UINT start, UINT n, ID3D11Buffer* const* buffers) {
+    call_real<kHookVSCB>(c, start, n, buffers);
+}
 void realResolveSubresource(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT dstSub, ID3D11Resource* src, UINT srcSub,
                             DXGI_FORMAT format) {
     call_real<kHookResolve>(c, dst, dstSub, src, srcSub, format);
 }
-
-int nvapi_two_views(ID3D11DeviceContext* context, bool on) { return simqvfr::nvapi::set_two_views(context, on); }
-
-// GPU time per pass, split at its multisample resolve: the scene (pass start to resolve) and the post-processing (resolve
-// to pass end). Timestamps in a ring of frames, read back a few frames later without waiting.
-struct GpuFrame {
-    ComPtr<ID3D11Query> disjoint, stamp[4][3];  // pass start, resolve, pass end
-    bool stamped[4][3] = {};
-    bool pending = false;
-    int mode = 0;  // mvr_frame_mode: 0 MVR, 1 the four passes alone (an A/B run)
-};
-
-// The twin of a game shader by its address, valid until the game creates another vertex shader (a new one may take a
-// released one's address; twins are attached only at creation, mvr_probe.cpp): GetPrivateData once per shader instead of
-// at every bind. Sets of two by a multiplicative hash of the address (allocations are aligned: its low bits alone
-// collide, 30% missed in the 10:08 run); two per set, as one per slot still missed 7.8% at 10:34 (two shaders sharing a
-// slot, bound in turn, threw each other out).
-struct TwinEntry {
-    ID3D11VertexShader* vs = nullptr;
-    ID3D11VertexShader* twin = nullptr;       // raw: the game's shader holds it (its private data) while it lives
-    ID3D11VertexShader* instanced = nullptr;  // its instanced twin, likewise
-    uint32_t epoch = 0;
-    VsRole role = VsRole::none;  // the probe's marking (yebis_shaders.h)
-    int worldSlot = -1;          // where it reads its worldMatrix (car tracking; mvr_probe.h kVsWorldMatrixGuid)
-    UINT worldOffset = 0;
-};
-struct TwinSet {
-    TwinEntry entry[2];
-    uint8_t next = 0;  // the entry to replace when both hold another shader (the one not looked up last)
-};
-constexpr unsigned kTwinSetBits = 10, kTwinSets = 1u << kTwinSetBits;
-constexpr unsigned kCarSlots = 4096;  // car_motion's table (CarMotion's default), the slot views and motions
-// The same for the pixel shaders' mip bias twins (texture sharpening).
-struct PsTwinEntry {
-    ID3D11PixelShader* ps = nullptr;
-    ID3D11PixelShader* twin = nullptr;  // raw: the game's shader holds it
-    ID3D11PixelShader* slot = nullptr;  // its slot twin, and the slot twin of its mip bias twin (car slots)
-    ID3D11PixelShader* slotBias = nullptr;
-    uint32_t epoch = 0;
-};
-struct PsTwinSet {
-    PsTwinEntry entry[2];
-    uint8_t next = 0;
-};
-// A pixel shader's YEBIS role (the probe's marking, yebis_shaders.h) by its address, likewise valid until the game
-// creates another pixel shader (mvr_pixel_shader_generation: a new one may take a released one's address): the pass
-// tracker looks at the pixel shader of nearly every draw (copy_before at each DrawIndexed until the frame's first
-// multisample bind, and all through the passes with MSAA off), and GetPrivateData at each cost more than its own work.
-struct PsRoleEntry {
-    ID3D11PixelShader* ps = nullptr;
-    uint32_t epoch = 0;
-    UINT role = 0;
-};
-struct PsRoleSet {
-    PsRoleEntry entry[2];
-    uint8_t next = 0;
-};
-
-// CPU in this code's context hooks (the calls passed on included), in TSC ticks since the last log line.
-struct HookTime {
-    uint64_t hooks = 0, lookups = 0, switches = 0, calls = 0;
-    uint64_t cars = 0, carCalls = 0;  // car tracking's own work (not the calls passed on); its hooks' calls
-    uint64_t carReads = 0, carDraws = 0;  // of `cars`: the matrix reads at Unmap, the draws (keys, the table)
-    // Car slots' (the calls they make included): the slot views bound per draw (1 in 16 timed), the target's binds and
-    // the blend states' twins, the motions computed and uploaded.
-    uint64_t slotViews = 0, slotState = 0, motion = 0;
-    // The pass tracker's and the frame's shape's looks at the draws (copy_before, observe_post_draw and the like), the
-    // calls they make included; not the draws passed on.
-    uint64_t tracker = 0;
-};
 
 bool timeHooks = false;  // mvr_time_hooks
 
@@ -224,587 +161,55 @@ struct Timed {
     Timed(const Timed&) = delete;
     Timed& operator=(const Timed&) = delete;
 };
-constexpr int kGpuFrames = 4;
 
-struct State {
-    ID3D11DeviceContext* context = nullptr;  // the game's immediate context (not referenced: the device keeps it)
-    ComPtr<ID3D11Multithread> multithread;   // its multithread protection (logged when it changes)
-    bool protectedNow = false;
-    GpuFrame gpu[kGpuFrames];
-    int gpuSlot = -1;            // this frame's, while it runs
-    unsigned long long gpuFrameNo = 0;
-    int mode = 0;                // this frame's (mvr_frame_mode)
-    double sceneMs[2][4] = {}, postMs[2][4] = {};
-    unsigned gpuCounts[2][4] = {};
-    TwinSet twins[kTwinSets];
-    uint32_t twinEpoch = 1;
-    uint64_t twinGeneration = 0;
-    uint64_t loggedLookups = 0, loggedMisses = 0;  // the stats' counts at the last log line
-    uint64_t loggedRoleLookups = 0, loggedRoleMisses = 0, loggedShapeSkipped = 0;
-    HookTime time;
-    unsigned long long tscAtLog = 0;
-    long long qpcAtLog = 0;
-    ComPtr<ID3D11Buffer> remapCb;
-    TwoViewsFn twoViews = &nvapi_two_views;
-    bool broken = false;  // single-pass stereo refused once and instancing couldn't take over: off for the session
-    // Instancing instead of single-pass stereo (mvr_use_instanced): the instanced twins bound, the game's draws doubled,
-    // no stereo switch. canInstance: it may take over when single-pass stereo is refused.
-    bool instanced = false, canInstance = false;
-    bool undoubledLogged = false;
-    // The pass.
-    int pass = -1;
-    bool drawFocus = false, sample = false, replaceResolve = false;
-    uint64_t passTwinBinds = 0;  // this pass's draws that drew the focus view too
-    MvrPassView view, viewOf[2];
-    // What the game bound (raw: bound objects are kept alive by the pipeline).
-    ID3D11VertexShader* gameVs = nullptr;
-    VsRole vsRole = VsRole::none;  // the game's bound vertex shader's role, in and outside the passes (R6)
-    ID3D11ClassInstance* instances[256] = {};
-    UINT instanceCount = 0;
-    bool depthBound = false;
-    // A stage after the vertex shader (geometry, tessellation) or stream output: the twin's second position wouldn't
-    // reach the rasterizer, so no two views then.
-    bool gsBound = false, hsBound = false, dsBound = false, soBound = false;
-    UINT vpCount = 0, scCount = 0;
-    D3D11_VIEWPORT vps[kMaxRects] = {};
-    D3D11_RECT scs[kMaxRects] = {};
-    // What is applied.
-    ID3D11VertexShader* boundVs = nullptr;
-    bool on = false, stereo = false;
-    // Texture sharpening (mvr_mip_bias_hooks, MvrPassView::mipBias): the game's pixel shader as it bound it, what is
-    // bound, this pass's bias (from its view), and the constants (focus viewport, focus and eye bias) as uploaded.
-    bool biasHooks = false, bias = false, biasCbBound = false;
-    uint32_t biasChecks = 0;  // twin binds, every 16th checking the buffer is still bound
-    ID3D11PixelShader* gamePs = nullptr;
-    ID3D11PixelShader* boundPs = nullptr;
-    ID3D11ClassInstance* psInstances[256] = {};
-    UINT psInstanceCount = 0;
-    PsTwinSet psTwins[kTwinSets];
-    uint32_t psEpoch = 1;
-    uint64_t psGeneration = 0;
-    PsRoleSet psRoles[kTwinSets];  // role_of_ps: the pixel shaders' YEBIS roles by address
-    uint32_t roleEpoch = 1;
-    uint64_t roleGeneration = 0;
-    ComPtr<ID3D11Buffer> biasCb;
-    float biasConstants[8] = {};
-    // Car tracking (mvr_car_track; car_motion.h): the vertex shader's constant buffers and the input assembler's buffers
-    // as the game bound them (raw, compared and used as keys only), the bound vertex shader's worldMatrix place, the
-    // per-draw buffer (learned from a draw), its mapped memory while mapped, the matrix last written into it.
-    bool carTrack = false, carMatrix = false;
-    ID3D11Buffer* vsCb[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-    ID3D11Buffer* iaVb = nullptr;
-    ID3D11Buffer* iaIb = nullptr;
-    UINT iaVbOffset = 0, iaIbOffset = 0;
-    int vsWorldSlot = -1;
-    UINT vsWorldOffset = 0;
-    ID3D11Buffer* worldCb = nullptr;
-    ID3D11Resource* worldRes = nullptr;  // the same, as Map and Unmap name it (compared with every one of theirs)
-    ComPtr<ID3D11Buffer> worldCbHeld;
-    UINT worldCbOffset = 0;
-    ID3D11Buffer* vbChecked = nullptr;  // the vertex buffer last checked for dynamic usage (reset each frame)
-    bool vbDynamic = false;
-    struct VbSeen {  // a vertex buffer's usage as D3D gave it this frame (vb_dynamic)
-        ID3D11Buffer* vb = nullptr;
-        uint64_t frame = 0;
-        bool dynamic = false;
-    };
-    std::array<VbSeen, 512> vbSeen{};
-    void* worldMapped = nullptr;
-    float matrix[16] = {};
-    CarMotion cars;
-    uint64_t carFrame = 0;
-    CarMotionStats carLogged;     // the counts at the last log line
-    // Car slots (mvr_car_slots): the level (0 off); the slot target (the scene target's size) and its views; per slot a
-    // view of its word (slot + 1) for t127, the one bound; the target bound now (the scene's binds in a pass) and this
-    // pass's views cleared; the game's blend state as bound (its factor and mask), whether a twin is bound in its place,
-    // the depth state's writing; the default blend state's twins ([0] target 1 kept, [1] written); each slot's motion.
-    int slotsLevel = 0;
-    bool carActive = true;  // mvr_car_active (an A/B's side)
-    int eyeOff = -1;        // mvr_eye_off: the eye pass (0-1) whose DLSS is left out; -1 none
-    bool slotsOn = false, slotsBound = false, slotsCleared = false;
-    ComPtr<ID3D11DeviceContext1> context1;
-    ComPtr<ID3D11Texture2D> slotTex;
-    ComPtr<ID3D11RenderTargetView> slotRtv;
-    ComPtr<ID3D11ShaderResourceView> slotSrv;
-    UINT slotW = 0, slotH = 0;
-    UINT slotSamples = 1, slotQuality = 0;  // as the scene's target: render targets bound together share them
-    ComPtr<ID3D11Buffer> slotWords;
-    std::vector<ComPtr<ID3D11ShaderResourceView>> slotViews;
-    ID3D11ShaderResourceView* slotViewBound = nullptr;
-    ID3D11RenderTargetView* sceneRtvChecked = nullptr;  // the last render target view checked for the scene's (raw)
-    bool sceneRtvIsScene = false;
-    ID3D11Resource* sceneCheckedAgainst = nullptr;  // the tracker's scene target it was checked against (raw)
-    ID3D11Resource* sceneRtvResource = nullptr;     // that view's texture (raw, compared only) and its description
-    D3D11_TEXTURE2D_DESC sceneRtvDesc{};
-    ID3D11BlendState* gameBlend = nullptr;  // raw: bound, so alive
-    float blendFactor[4] = {1, 1, 1, 1};
-    UINT sampleMask = 0xffffffff;
-    bool blendSwapped = false, depthWrites = true;
-    ComPtr<ID3D11BlendState> defaultBlendTwin[2];
-    ComPtr<ID3D11Buffer> motionBuffer;
-    ComPtr<ID3D11ShaderResourceView> motionSrv;
-    std::vector<float> motion;
-    uint64_t slotViewsThisPass = 0;
-    uint64_t slotImageFrame = 0, slotImageAfter = 900;  // the gate image's frame (both eyes), the earliest next one
-    bool slotImages = false;                             // mvr_car_slot_images
-    MvrPassStats carStatsLogged;  // (only its car counts are read)
-    // Each pass's multisample resolve target; the sampled regions.
-    ComPtr<ID3D11Resource> resolved[4];
-    ComPtr<ID3D11Texture2D> mvrImage[2], passImage[2];
-    bool keepFocus = false;           // gate D
-    ComPtr<ID3D11Texture2D> kept[2];  // each eye pass's resolved focus region
-    bool keptOk[2] = {};
-    // The focus post (mvr_focus_replay): on; this pass's post-processing has begun (its multisample resolve is done);
-    // its copy and composite replayed.
-    bool focusReplay = false, postWindow = false, focusCopied = false, focusComposited = false;
-    bool compositeOk = false;  // this pass's focus composite made (the blit's input)
-    // In the post window before the focus copy: the last draw into a single-sample texture of the resolve's size other
-    // than the resolve's target (a stage between the resolve and YEBIS, whose copy then starts from it: reflections
-    // high, 2026-11-11), raw, compared only; whether its viewports covered the focus view beside the eye; its pixel
-    // shader's checksum (the log). Logged once each: the focus copy from that image, from the resolve instead.
-    ID3D11Resource* stageImage = nullptr;
-    bool stageCovers = false;
-    uint32_t stagePs[4] = {};
-    bool stageImageLogged = false, stageResolveLogged = false;
-    // R3 (docs/recon-lmu.md "R3b/R3c design"): the focus view's final beside the eye in the eye's final target. This
-    // pass's blit replayed; draws into the eye's final after it are overlays MVR doubles (the driver tags); the eye
-    // finals of this frame (the VR UI after the passes is doubled into them too) and their sizes.
-    bool focusBlitted = false, overlayTarget = false;
-    // mvr_fsr: FSR on; the eyes' images (raw, compared only); said once.
-    bool fsr = false, fsrLogged = false;
-    // The probe knows no copy / no final blit shader by its checksum (as of this pass's begin): found by bindings.
-    bool copyUnknown = false, blitUnknown = false, byBindingsLogged = false;
-    int copyKnownForTests = -1, blitKnownForTests = -1;
-    // mvr_shape_ready: this pass's steps as observe_post_draw saw them; each eye pass's outcome; the last frame's.
-    bool obsCopied = false, obsComposited = false, obsFinal = false;
-    // Every scene-sized image a draw made from the resolve's target this pass (raw, compared only): the composite
-    // reads one of them, not always the latest (other steps read the resolve too: 2026-11-12 13:20 run, post high).
-    ID3D11Resource* obsCopyTargets[6] = {};
-    unsigned obsCopyCount = 0;
-    bool shapeOk[2] = {}, shapeReady = false, shapeForceBad = false;
-    // observe_post_draw this pass: not where it drew focus views after a frame with both (the recovery reads the shape
-    // only while the eyes render alone, or once 45 frames in a row lacked them: every frame then is looked at).
-    bool observeShape = true, lastFrameFinals = false;
-    int shapeMissing[2] = {}, shapeMissingLast[2] = {};  // mvr_shape_missing: each eye pass's first step not seen
-    ID3D11Resource* fsrEye[2] = {};
-    ComPtr<ID3D11Resource> eyeFinal[2];
-    bool finalThisFrame[2] = {};
-    unsigned finalW[2] = {}, finalH[2] = {};
-    bool blitRefusalLogged = false;
-    int maskDrawsLogged = 0;  // the first lens mask draws logged with their state
-    const std::atomic<bool>* maskStale = nullptr;  // mvr_mask_stale
-    int maskDroppedSince = 0;                       // mvr_mask_dropped
-    PanelFn panelFn = nullptr;                      // mvr_panel_draws
-    // The game's latest CopySubresourceRegions (mvr_copy_source): raw, compared only; the frame count when seen.
-    struct CopySeen {
-        ID3D11Resource* dst = nullptr;
-        ID3D11Resource* src = nullptr;
-        unsigned long long frame = 0;
-    };
-    static constexpr unsigned kCopiesKept = 16;
-    CopySeen copies[kCopiesKept];
-    unsigned copyNext = 0;
-    // DLAA (engine/dlss_views.h): the latest depth target bound with each render target of this pass (the resolve hook finds
-    // the scene's by the render target it resolves).
-    struct SceneBind {
-        ComPtr<ID3D11RenderTargetView> rtv;
-        ComPtr<ID3D11DepthStencilView> dsv;
-    };
-    SceneBind sceneBinds[4];
-    unsigned sceneBindNext = 0;
-    FocusPost focusPost;
-    bool focusPostFailed = false;  // couldn't be made: off for the session
-    // mvr_ui_mips: the VR UI canvas's copy with mips, made once a frame for the panel's doubled draws.
-    struct UiMips {
-        bool on = true, failed = false, logged = false;
-        ComPtr<ID3D11Texture2D> texture;
-        ComPtr<ID3D11ShaderResourceView> srv;
-        ID3D11Resource* source = nullptr;  // raw, compared only: the canvas it was made from
-        DXGI_FORMAT viewFormat = DXGI_FORMAT_UNKNOWN;
-        unsigned long long frame = ~0ull;  // framesSinceInstall when its mips were last made
-    } uiMips;
-    std::string postTrace;         // this pass's draws after the copy (trace_post_draw)
-    int tracesLogged = 0;
-    uint32_t unknown[16][4] = {};  // pixel shaders seen drawing into the resolve's target instead of the composite
-    int unknownCount = 0;
-    ComPtr<ID3D11Resource> copyTarget;  // this pass's YEBIS copy's output (the composite's t0)
-    uint32_t byBindings[8][4] = {};     // composites taken by their bindings (logged once each)
-    int bindingCount = 0;
-    // The overlay trace (with the focus post; docs/recon-lmu.md "R3 plan"): every draw of a few frames from each pass's
-    // multisample resolve to its end, during the lens mask and outside the passes.
-    bool tracing = false, afterResolve = false;
-    // The focus post executing its command list: d3d11 may replay it through the immediate context's own functions
-    // (WARP does), so its state and draws reach these hooks as if they were the game's; ignored meanwhile.
-    bool replaying = false;
-    bool inList = false;  // the game's command list executing (its replayed calls counted)
-    std::atomic<bool> listsAsBefore{false};  // mvr_replay_lists_plain(false): the lists executed as before the fix
-    int framesTraced = 0, traceDraws = 0, traceDropped = 0;
-    unsigned long long framesSinceInstall = 0;
-    bool have[4] = {};
-    unsigned long long lastStatsFrame = 0;
-    MvrPassStats stats;
-} g;
-
-bool ours(ID3D11DeviceContext* context) {
-    if (g.inList && context == g.context)
-        ++g.stats.callsInLists;
-    return context == g.context && g.pass >= 0 && !g.replaying;
-}
-
-// R4b's pass tracker (mvr_track_passes): the eye passes as the d3d11 calls show them, compared with the game's bounds.
-struct Tracker {
-    bool on = false;
-    bool open = false, resolved = false, blitSeen = false;
-    // The open pass's multisample scene target (raw, compared only) and whether a YEBIS draw (any role) came after its
-    // resolve. A stage between the resolve and YEBIS (reflections high: a single-sample depth for YEBIS made, then the
-    // scene target bound again, 2026-11-11 pass trace) rebinds the pass's own scene: still that pass, not the next's.
-    ID3D11Resource* sceneTarget = nullptr;
-    bool postSeen = false, rebindLogged = false;
-    int pass = -1, passes = 0;            // the open tracked pass; tracked passes begun this frame (at most two)
-    uint64_t draws = 0;                   // draws on the immediate context this frame (the four draw calls)
-    uint64_t begin[2] = {}, end[2] = {};  // the draw count at each tracked pass's begin and end
-    const char* endWhy[2] = {};
-    int actual = 0;                                   // the game's passes 0-1 begun this frame (mvr_pass_begin)
-    uint64_t actualBegin[2] = {}, actualEnd[2] = {};  // the draw count at their begin and end
-    std::string firstBind;  // a frame without the game's passes: the first tracked pass's target (the log)
-    // MSAA off (docs/recon-lmu.md "MSAA off"): no multisample target, no resolve. The scene's target is learned from
-    // YEBIS's copy, which then reads it directly: a single-sample texture the copy reads that
-    // was drawn with a depth target, in a frame with no multisample scene. A pass then begins at its bind with a depth
-    // target, and its post-processing at the copy (post_begins) instead of at the resolve.
-    // The learned target: raw, compared only (with its description, so a texture made later at the same address isn't
-    // taken for it); no reference held, as below.
-    ID3D11Resource* scene = nullptr;
-    D3D11_TEXTURE2D_DESC sceneDesc{};
-    // This frame's single-sample textures bound as render target 0 with a depth target outside the tracked passes:
-    // raw, compared only. No reference is held: one of them is the desktop mirror's swapchain back buffer, which the
-    // game's ResizeBuffers needs every reference to gone (a reference kept here failed it at the session's start:
-    // "Resize swap chain failed", 2026-11-10 19:13).
-    ID3D11Resource* drawnWithDepth[32] = {};
-    // MSAA off past a stage (post effects medium and up, 2026-11-12 pass trace): YEBIS's copy reads the stage's image
-    // of the scene, not the scene's target, which YEBIS's composite then draws into. Outside the passes: the copy's
-    // source this frame when it wasn't drawn with depth (raw, compared only) and its size; a draw reading it into a
-    // target of that size drawn with depth teaches the scene's target. In an open single-sample pass: render target
-    // 0 is another texture, bound without depth (a draw into it reading the scene begins the post-processing).
-    ID3D11Resource* stageCandidate = nullptr;
-    UINT candidateW = 0, candidateH = 0;
-    bool offScene = false, stagePostLogged = false;
-    unsigned drawnNext = 0;
-    bool learnedThisFrame = false;  // no pass begins in the frame the target was learned in (it may be mid-frame)
-    bool msaaSinceScene = false;    // a multisample scene seen since the target was learned (MSAA on again)
-    // A single-sample pass's own final blit (YEBIS's blit reading the scene's target, seen whether or not the focus post
-    // ran) and its target (raw): the pass ends at another target after it. Without it a frame whose focus views
-    // didn't fit (the first after loading, at the game's own size) found pass 0 alone, never pass 1, after which the
-    // live resolution is applied: so it never was, and the focus views never fitted (2026-11-10 19:19).
-    ID3D11Resource* finalTarget = nullptr;
-    int blitsBeforePostLogged = 0, passesWithoutPostLogged = 0;
-    bool singleSample = false;  // the open pass began on the learned scene target
-    bool msaaFrame = false;     // a multisample scene was bound this frame
-    bool sceneLogged = false;
-    bool smallLogged = false;  // a too-small candidate for the scene's target has been said
-    MvrTrackStats stats;
-    TrackFn driveBegin = nullptr, driveEnd = nullptr;  // mvr_track_drive: the passes' work on these bounds
-    uint64_t loggedFrames = 0;
-    int detailsLogged = 0;
-    bool menuLogged = false;
-} tr;
-
-// The pass trace (log only): while the tracker drives the passes, three frames' (one without debug logs: pt_first)
-// render target binds with depth or a
-// multisample target, resolves, CopySubresourceRegions, YEBIS's draws, the focus post's window and the tracked passes'
-// bounds, in order, to see what the tracker takes for a pass's begin and end. The frames with tracked passes numbered
-// kPassTraceAt (the first renders at the game's own size); a frame without passes is dropped.
-// With [experiment] lmu_pass_trace=1 (mvr_pass_trace) every frame is recorded instead, and a frame is logged whenever
-// its shape is one not seen before this launch: the order of its passes' bounds, resolves, what is bound after a
-// resolve, YEBIS's draws and the focus post's window, with the textures' numbers left out. With it the game's graphics
-// settings as its own files hold them (UserData\Config_DX11_VR.ini, UserData\player\Settings.JSON) and the renderer's
-// post-processing bits, so a run that steps through the game's settings shows which one changes the stream.
-struct PassTrace {
-    bool recording = false;
-    int framesWithPasses = 0, logged = 0, dropped = 0;
-    std::vector<std::string> events;
-    std::vector<const void*> ids;  // the textures mentioned this frame (raw: compared only)
-    int level = 0;                 // mvr_pass_trace
-    std::vector<uint64_t> shapes;  // the shapes logged so far (their hashes)
-    int lastShape = -1;
-    unsigned long long lastSwitchFrame = 0, settingsCheckedFrame = 0;
-    std::string settings;          // the game's settings as last logged
-} pt;
-constexpr int kPassTraceAt[] = {2, 3, 45};
-// The frames of kPassTraceAt traced: every one with debug logs, else the last alone (the passes settled at QVFR's sizes).
-int pt_first() { return simqvfr::log_debug() ? 0 : static_cast<int>(std::size(kPassTraceAt)) - 1; }
-constexpr std::size_t kPassTraceEvents = 400;
-constexpr std::size_t kPassTraceShapes = 40;
-
-// The game's graphics settings, read from its own files (not its memory): one line.
-std::string pt_game_settings() {
-    wchar_t exe[MAX_PATH] = {};
-    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    if (!n || n == MAX_PATH)
-        return "?";
-    const std::filesystem::path user = std::filesystem::path(exe).parent_path() / L"UserData";
-    std::string line;
-    const std::wstring config = (user / L"Config_DX11_VR.ini").wstring();
-    for (const wchar_t* key : {L"EPostProcessingSettings", L"MSAA", L"UseFXAA", L"UpscaleMethod", L"RenderScale", L"ShaderLevel"}) {
-        wchar_t value[64] = {};
-        GetPrivateProfileStringW(L"COMPONENTS", key, L"?", value, 64, config.c_str());
-        char text[160];
-        std::snprintf(text, sizeof(text), "%s%ls=%ls", line.empty() ? "" : " ", key, value);
-        line += text;
-    }
-    std::string json;
-    if (HANDLE f = CreateFileW((user / L"player" / L"Settings.JSON").wstring().c_str(), GENERIC_READ,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
-        f != INVALID_HANDLE_VALUE) {
-        LARGE_INTEGER size{};
-        if (GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (1 << 22)) {
-            json.resize(static_cast<std::size_t>(size.QuadPart));
-            DWORD got = 0;
-            if (!ReadFile(f, json.data(), static_cast<DWORD>(json.size()), &got, nullptr))
-                got = 0;
-            json.resize(got);
-        }
-        CloseHandle(f);
-    }
-    line += ";";
-    for (const char* key : {"Environment Reflections", "Road Reflections", "Shadows", "Shadow Blur", "Soft Particles", "Motion blur",
-                            "Rain FX Quality", "Raindrop Flow", "Rainspray Flow", "Opponent Detail", "Player Detail", "Texture Detail",
-                            "Special FX", "Circuit Detail", "Sun Occlusion", "Rearview Driving", "Max Visible Vehicles",
-                            "Heat FX Fade Speed", "Live TV Displays"}) {
-        const std::string quoted = std::string("\"") + key + "\":";
-        const std::size_t at = json.find(quoted);
-        if (at == std::string::npos)
-            continue;
-        std::size_t from = at + quoted.size(), to = json.find_first_of(",\r\n}", from);
-        while (from < json.size() && json[from] == ' ')
-            ++from;
-        line += " " + std::string(key) + " " + json.substr(from, to == std::string::npos ? 8 : to - from) + ",";
-    }
-    // The renderer's own state (a read of the game's memory, this diagnostic's alone): the post-processing bits and the
-    // flags a static reading of its post-processing function names. Their offsets are from that reading, not verified.
-    const std::uintptr_t base = simqvfr::module_base();
-    if (const auto* renderer = *reinterpret_cast<const std::uint8_t* const*>(base + kRenderer)) {
-        std::uint32_t post = 0, msaa = 0;
-        std::memcpy(&post, renderer + 0x7770c, sizeof(post));
-        std::memcpy(&msaa, renderer + 0x1a1c, sizeof(msaa));
-        char text[160];
-        std::snprintf(text, sizeof(text), " renderer: post bits 0x%08x (bits 24-26: %u%u%u), +0x770fa %u, +0x1a1c %u", post,
-                      (post >> 24) & 1, (post >> 25) & 1, (post >> 26) & 1, static_cast<unsigned>(renderer[0x770fa]), msaa);
-        line += text;
-    }
-    return line;
-}
-
-void pt_event(const char* format, ...) {
-    if (pt.events.size() >= kPassTraceEvents) {
-        ++pt.dropped;
+// A game object recorded in State (`held`, its reference ours) replaced by `p`: referenced only when it changes.
+template <typename T>
+void hold(T*& held, T* p) {
+    if (p == held)
         return;
-    }
-    char head[32];
-    std::snprintf(head, sizeof(head), "@%llu ", static_cast<unsigned long long>(tr.draws));
-    char body[320];
-    va_list args;
-    va_start(args, format);
-    std::vsnprintf(body, sizeof(body), format, args);
-    va_end(args);
-    pt.events.push_back(std::string(head) + body);
+    if (p)
+        p->AddRef();
+    if (held)
+        held->Release();
+    held = p;
 }
 
-// A texture as "#n", with its size, format and sample count at its first mention this frame; "-" for none.
-std::string pt_tex(ID3D11Resource* resource) {
-    if (!resource)
-        return "-";
-    for (std::size_t i = 0; i < pt.ids.size(); ++i)
-        if (pt.ids[i] == resource)
-            return "#" + std::to_string(i);
-    pt.ids.push_back(resource);
-    std::string s = "#" + std::to_string(pt.ids.size() - 1);
-    ComPtr<ID3D11Texture2D> t;
-    if (SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&t)))) {
-        D3D11_TEXTURE2D_DESC d;
-        t->GetDesc(&d);
-        char desc[64];
-        std::snprintf(desc, sizeof(desc), "(%ux%u f%d x%u%s)", d.Width, d.Height, static_cast<int>(d.Format),
-                      d.SampleDesc.Count, d.ArraySize > 1 ? " array" : "");
-        s += desc;
-    } else {
-        s += "(not 2D)";
-    }
-    return s;
+// The class instances likewise: `count` of `src` (null: none) in place of the `heldCount` held (nothing to do with none,
+// LMU's case). `src` mustn't be `held`.
+void hold_instances(ID3D11ClassInstance** held, UINT& heldCount, ID3D11ClassInstance* const* src, UINT count) {
+    for (UINT i = 0; src && i < count; ++i)
+        if (src[i])
+            src[i]->AddRef();
+    for (UINT i = 0; i < heldCount; ++i)
+        if (held[i])
+            held[i]->Release();
+    for (UINT i = 0; i < count; ++i)
+        held[i] = src ? src[i] : nullptr;
+    for (UINT i = count; i < heldCount; ++i)
+        held[i] = nullptr;
+    heldCount = count;
 }
 
-std::string pt_view(ID3D11View* view) {
-    if (!view)
-        return "-";
-    ComPtr<ID3D11Resource> r;
-    view->GetResource(&r);
-    return pt_tex(r.Get());
-}
+}  // namespace
 
-UINT role_of_ps(ID3D11PixelShader* ps);
+// The state shared with mvr_pass_trace.cpp, mvr_pass_census.cpp and mvr_pass_samples.cpp (mvr_pass_internal.h),
+// defined here once.
+namespace mvr_detail {
 
-// A draw on the game's context with one of YEBIS's pixel shaders (copy, composite, final blit): its input and target.
-void pt_draw(ID3D11DeviceContext* context, const char* call) {
-    ComPtr<ID3D11PixelShader> ps;
-    context->PSGetShader(&ps, nullptr, nullptr);
-    const UINT role = role_of_ps(ps.Get());
-    if (!role)
-        return;
-    ComPtr<ID3D11ShaderResourceView> srv;
-    context->PSGetShaderResources(0, 1, &srv);
-    ComPtr<ID3D11RenderTargetView> rtv;
-    context->OMGetRenderTargets(1, &rtv, nullptr);
-    const char* name = role == static_cast<UINT>(YebisRole::copy)        ? "copy"
-                       : role == static_cast<UINT>(YebisRole::composite) ? "composite"
-                       : role == static_cast<UINT>(YebisRole::blit)      ? "final blit"
-                                                                         : "?";
-    const std::string in = pt_view(srv.Get()), out = pt_view(rtv.Get());
-    pt_event("YEBIS %s (%s) t0 %s > %s, %s", name, call, in.c_str(), out.c_str(),
-             tr.open ? ("in tracked pass " + std::to_string(tr.pass)).c_str() : "outside the tracked passes");
-}
+int nvapi_two_views(ID3D11DeviceContext* context, bool on) { return simqvfr::nvapi::set_two_views(context, on); }
 
-// A frame's events written out, a few to a line.
-void pt_log_events() {
-    std::string line;
-    for (const std::string& e : pt.events) {
-        if (!line.empty() && line.size() + e.size() > 1300) {
-            simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
-            line.clear();
-        }
-        line += line.empty() ? e : "; " + e;
-    }
-    if (!line.empty())
-        simqvfr::logf("lmu mvr: pass trace: %s", line.c_str());
-}
+State g;
+Tracker tr;
+PassTrace pt;
+SizeCut sizeCut;
+PostCensus census;
+std::unordered_set<std::uint64_t> censusSaved;
 
-// The frame's shape (PassTrace): per tracked pass, what it began on, what is bound between its resolve and YEBIS's first
-// draw (a stage there is what the first shape rule missed: it took YEBIS's metering copies, which come and go, and every
-// bind after the resolve, for shape), whether YEBIS's first copy reads the resolve, whether the composite and the final
-// blit were seen, and why it ended. A frame without tracked passes: whether YEBIS drew at all. `yebis`: it did.
-std::string pt_shape(bool& yebis) {
-    const auto id_after = [](const std::string& k, const char* mark) -> std::string {
-        const std::size_t at = k.find(mark);
-        if (at == std::string::npos)
-            return {};
-        std::size_t i = at + std::strlen(mark), j = i;
-        while (j < k.size() && k[j] >= '0' && k[j] <= '9')
-            ++j;
-        return k.substr(i, j - i);
-    };
-    const auto size_of = [](const std::string& k, std::size_t from) -> std::string {  // "(WxH fN xS)" right after an id
-        const std::size_t open = k.find('(', from), close = open == std::string::npos ? open : k.find(')', open);
-        return close == std::string::npos ? std::string() : k.substr(open, close - open + 1);
-    };
-    std::string shape, resolveTo;
-    bool inPass = false, resolved = false, copySeen = false, composite = false, blit = false;
-    yebis = false;
-    int passes = 0;
-    for (const std::string& e : pt.events) {
-        const std::size_t space = e.find(' ');
-        const std::string k = space == std::string::npos ? e : e.substr(space + 1);
-        const auto starts = [&k](const char* with) { return k.rfind(with, 0) == 0; };
-        if (starts("YEBIS"))
-            yebis = true;
-        if (starts("P+")) {
-            inPass = true;
-            resolved = copySeen = composite = blit = false;
-            resolveTo.clear();
-            ++passes;
-            shape += k.substr(0, k.find(';')) + " [";
-        } else if (starts("P-") && inPass) {
-            shape += std::string(copySeen ? "" : " NO-COPY") + (composite ? " composite" : " NO-COMPOSITE") +
-                     (blit ? " blit" : " NO-BLIT") + "] " + k.substr(3) + " | ";
-            inPass = false;
-        } else if (!inPass) {
-            continue;
-        } else if (starts("R ")) {
-            resolved = true;
-            resolveTo = id_after(k, "> #");
-            shape += " R";
-        } else if (starts("B ") && resolved && !copySeen) {  // between the resolve and YEBIS: a stage
-            const std::string target = id_after(k, "B #");
-            const std::size_t depthAt = k.find(" depth ");
-            shape += " B(" + (target.empty() ? std::string("-") : target == resolveTo ? std::string("the resolve") : "t" + size_of(k, 2)) +
-                     (depthAt != std::string::npos && k.compare(depthAt + 7, 1, "-") != 0 ? " +depth)" : ")");
-        } else if (starts("YEBIS copy") && resolved && !copySeen) {
-            copySeen = true;
-            const std::string from = id_after(k, "t0 #");
-            shape += from == resolveTo ? " copy<-resolve" : " copy<-OTHER" + size_of(k, k.find("t0 #"));
-        } else if (starts("YEBIS composite") && resolved) {
-            composite = true;
-        } else if (starts("YEBIS final blit") && resolved && copySeen) {
-            blit = true;
-        }
-    }
-    if (inPass)
-        shape += " (open at the frame's end)";
-    if (!passes)
-        shape = yebis ? "no tracked pass, YEBIS drew" : "no tracked pass";
-    return shape;
-}
+}  // namespace mvr_detail
 
-// The frame end (after the tracker's): the trace logged if this frame is one of kPassTraceAt, or with lmu_pass_trace
-// if its shape is new; the next frame's decided.
-void pt_frame_end(unsigned long long frame, int passes) {
-    if (passes > 0)
-        ++pt.framesWithPasses;
-    const char* const key = "@N = the game's draws this frame so far, #n = a texture (size, format, samples at its first "
-                            "mention); B = a render target bind (target 0, depth), R = a resolve, C = a "
-                            "CopySubresourceRegion, P+/P- = a tracked pass's begin/end, W = the focus post's window opened";
-    if (pt.level && pt.recording) {
-        // The game's settings, when its files change (looked at every two seconds or so).
-        if (frame - pt.settingsCheckedFrame >= 180 || pt.settings.empty()) {
-            pt.settingsCheckedFrame = frame;
-            std::string now = pt_game_settings();
-            if (now != pt.settings) {
-                simqvfr::logf("lmu mvr: pass trace: frame %llu: the game's settings%s: %s", frame, pt.settings.empty() ? "" : " CHANGED",
-                              now.c_str());
-                pt.settings = std::move(now);
-            }
-        }
-        bool yebis = false;
-        const std::string shape = pt_shape(yebis);
-        if (passes > 0 || yebis) {
-            uint64_t hash = 1469598103934665603ull;
-            for (const char c : shape)
-                hash = (hash ^ static_cast<unsigned char>(c)) * 1099511628211ull;
-            int index = -1;
-            for (std::size_t i = 0; i < pt.shapes.size(); ++i)
-                if (pt.shapes[i] == hash)
-                    index = static_cast<int>(i);
-            if (index < 0 && pt.shapes.size() < kPassTraceShapes) {
-                pt.shapes.push_back(hash);
-                index = static_cast<int>(pt.shapes.size()) - 1;
-                simqvfr::logf("lmu mvr: pass trace: frame %llu: SHAPE %d, new (%d tracked passes): %zu events, %d not logged (over "
-                              "%zu); %s",
-                              frame, index, passes, pt.events.size(), pt.dropped, kPassTraceEvents, key);
-                simqvfr::logf("lmu mvr: pass trace: shape %d with the game's settings: %s", index, pt_game_settings().c_str());
-                pt_log_events();
-                simqvfr::logf("lmu mvr: pass trace: shape %d is: %s", index, shape.c_str());
-                pt.lastShape = index;
-                pt.lastSwitchFrame = frame;
-            } else if (index >= 0 && index != pt.lastShape && frame - pt.lastSwitchFrame >= 45) {
-                simqvfr::logf("lmu mvr: pass trace: frame %llu: shape %d again (was %d; %d tracked passes)", frame, index, pt.lastShape,
-                              passes);
-                pt.lastShape = index;
-                pt.lastSwitchFrame = frame;
-            }
-        }
-    } else if (pt.recording && passes > 0 && pt_first() + pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
-               pt.framesWithPasses == kPassTraceAt[pt_first() + pt.logged]) {
-        ++pt.logged;
-        simqvfr::logf("lmu mvr: pass trace: frame %llu (number %d with tracked passes, %d of them): %zu events, %d not "
-                      "logged (over %zu); %s",
-                      frame, pt.framesWithPasses, passes, pt.events.size(), pt.dropped, kPassTraceEvents, key);
-        pt_log_events();
-    }
-    pt.events.clear();
-    pt.ids.clear();
-    pt.dropped = 0;
-    pt.recording = tr.on && tr.driveBegin &&
-                   (pt.level ? true
-                             : pt_first() + pt.logged < static_cast<int>(std::size(kPassTraceAt)) &&
-                                   pt.framesWithPasses + 1 == kPassTraceAt[pt_first() + pt.logged]);
-}
+namespace {
+
+// The pass trace (pt, pt_*): mvr_pass_trace.cpp.
 
 void track_begin(const char* what) {
     tr.open = true;
@@ -977,7 +382,6 @@ void track_frame_end(unsigned long long frame) {
 
 template <class Shader>
 std::string shader_name(Shader* shader);
-std::string describe(ID3D11Resource* resource);
 UINT marked_role(ID3D11DeviceContext* context);
 ComPtr<ID3D11Resource> ps_input0(ID3D11DeviceContext* context);
 ComPtr<ID3D11Resource> target0(ID3D11DeviceContext* context);
@@ -1163,34 +567,12 @@ void update_bias_constants(const D3D11_VIEWPORT* focus) {
     }
 }
 
-std::string describe(ID3D11Resource* resource);  // a texture's size and format for the log (below)
-
 // ---- Live resolution (mvr_size_cut; docs/recon-lmu.md "Census run 3"): the live resolution without writing into the game.
 // The game renders at its own size; in a tracked eye pass before its post every viewport and scissor that is the game's
 // render size (0,0 full W x H) is cut to the live eye's (0,0 eye W x H), as the game's own render size would have made
 // them. Not cut: a draw into a full-size 32-bit single-channel target (the post's depth copy, which today covers the whole
 // target: the focus view beside the eye needs its depth too).
-struct SizeCut {
-    bool on = false;
-    unsigned fullW = 0, fullH = 0, eyeW = 0, eyeH = 0;
-    unsigned long long viewports = 0, scissors = 0, left = 0;  // since the install: cut, cut, left as they were
-    bool leftLogged = false;
-    // The post's depth copy was bound in this pass (MSAA off: the scene's last step before its post): no more cuts in it.
-    // Every bind after it is the post's (YEBIS's), and YEBIS reads the viewport bound as it starts (its device's
-    // GetViewport, the only RSGetViewports in it) to size the region it processes: it must see the game's own (full)
-    // viewport there, as with the render scale written, or it stretches the eye's corner over its whole target.
-    bool endedThisPass = false;
-    unsigned cutLoggedW = 0, cutLoggedH = 0;  // the render size the last "cut" line was for (logged again at a new one)
-    // Viewports at 0,0 larger than the eye on both axes that aren't the game's render size: left as they are, logged
-    // (the first 12 sizes): a game size the cut doesn't know shows here.
-    float otherSizes[12][2] = {};
-    int otherCount = 0;
-    // The game's own rects as it set them (g.vps / g.scs hold them cut): the cut is decided again from these at each
-    // render target bind, since the game may set a viewport before binding the target it is for (its depth copy does).
-    UINT vpCount = 0, scCount = 0;
-    D3D11_VIEWPORT vps[kMaxRects] = {};
-    D3D11_RECT scs[kMaxRects] = {};
-} sizeCut;
+// (SizeCut and sizeCut: mvr_pass_internal.h.)
 
 // The game's rects stored as it set them: its viewports (its RSSetViewports), its scissors (RSSetScissorRects), both as
 // the pass begins (read from the context, which holds them as the game set them outside the passes).
@@ -1328,11 +710,14 @@ void apply_viewports() {
             two[1] = unshifted(two[1], g.view.overlayShift[1]);
         }
         realRSSetViewports(g.context, 2, two);
+        std::memcpy(g.appliedVps, two, sizeof(two));
+        g.twoVpsApplied = true;
         ++g.stats.viewportRewrites;
     } else {
         if (g.on)
             update_bias_constants(nullptr);
         realRSSetViewports(g.context, g.vpCount, g.vps);
+        g.twoVpsApplied = false;
     }
 }
 
@@ -1340,9 +725,12 @@ void apply_scissors() {
     if (g.on && g.scCount == 1 && g.vpCount == 1) {
         const D3D11_RECT two[2] = {g.scs[0], focus_scissor(g.scs[0])};
         realRSSetScissorRects(g.context, 2, two);
+        std::memcpy(g.appliedScs, two, sizeof(two));
+        g.twoScsApplied = true;
         ++g.stats.scissorRewrites;
     } else if (g.scCount) {
         realRSSetScissorRects(g.context, g.scCount, g.scs);
+        g.twoScsApplied = false;
     }
 }
 
@@ -1497,7 +885,7 @@ void update_ps() {
         }
         if (rebind) {
             g.context->PSSetConstantBuffers(13, 1, g.biasCb.GetAddressOf());
-            g.biasCbBound = true;
+            g.biasCbBound = g.biasCbUsed = true;  // (the game's b13 back at the pass end)
         }
     }
     if (bind != g.boundPs) {
@@ -1516,10 +904,10 @@ void STDMETHODCALLTYPE ps_set_shader(ID3D11DeviceContext* context, ID3D11PixelSh
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.gamePs = ps;
-    g.psInstanceCount = std::min<UINT>(count, 256);
-    for (UINT i = 0; i < g.psInstanceCount; ++i)
-        g.psInstances[i] = instances ? instances[i] : nullptr;
+    if (ps && ps == g.boundPs && ps != g.gamePs)  // our twin given back (a Get/Set round trip): the game's own
+        ps = g.gamePs;
+    hold(g.gamePs, ps);
+    hold_instances(g.psInstances, g.psInstanceCount, instances, std::min<UINT>(count, 256));
     g.boundPs = reinterpret_cast<ID3D11PixelShader*>(~uintptr_t{0});  // the game's call always takes effect
     update_ps();
 }
@@ -1555,15 +943,28 @@ using UnmapFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Resource*, 
 using IaVbFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, UINT, UINT, ID3D11Buffer* const*, const UINT*, const UINT*);
 using IaIbFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11Buffer*, DXGI_FORMAT, UINT);
 
+// Hooked whenever MVR is (not only for car tracking): the game's own b13 recorded, and our remap bound again over a
+// game bind of b13 while two views are on (the twins read it there).
 inline void vs_set_constant_buffers(VsCbFn real, ID3D11DeviceContext* context, UINT start, UINT n,
                                     ID3D11Buffer* const* buffers) {
-    if (context == g.context && !g.replaying) {
+    if (context != g.context || g.replaying) {
+        real(context, start, n, buffers);
+        return;
+    }
+    if (g.carTrack) {
         if (timeHooks)
             ++g.time.carCalls;
         for (UINT i = 0; i < n && start + i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
             g.vsCb[start + i] = buffers ? buffers[i] : nullptr;
     }
+    // (a call past the last slot is the runtime's to drop: not recorded)
+    const bool covers13 = start <= 13 && n > 13 - start && start + n <= D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+    ID3D11Buffer* const b13 = covers13 && buffers ? buffers[13 - start] : nullptr;
+    if (covers13 && b13 != g.remapCb.Get())  // our remap given back (a Get/Set round trip): not the game's
+        hold(g.gameVsCb13, b13);
     real(context, start, n, buffers);
+    if (covers13 && g.on && g.pass >= 0)
+        real(context, 13, 1, g.remapCb.GetAddressOf());
 }
 
 // Map and Unmap: any resource but the per-draw buffer passes with one comparison.
@@ -1689,7 +1090,7 @@ using DepthFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStenci
 inline void om_set_blend_state(BlendFn real, ID3D11DeviceContext* context, ID3D11BlendState* bs, const FLOAT* factor,
                                UINT mask) {
     if (context == g.context && !g.replaying) {
-        g.gameBlend = bs;
+        hold(g.gameBlend, bs);
         for (int i = 0; i < 4; ++i)
             g.blendFactor[i] = factor ? factor[i] : 1.0f;
         g.sampleMask = mask;
@@ -1941,12 +1342,31 @@ bool take_over_with_instancing() {
     return true;
 }
 
-// Twin, two views and the second viewport exactly while a focus-drawing pass has a depth target and a shader with a twin.
+// Single-pass stereo wouldn't go off: the driver's state is unknown, so MVR stops for the session (mvr_broken: the
+// frame end's fallback, the eyes alone). Logged once.
+void stereo_off_failed(const char* where) {
+    ++g.stats.stereoErrors;
+    g.broken = true;
+    if (!g.stereoOffLogged) {
+        g.stereoOffLogged = true;
+        simqvfr::logf("lmu mvr: NVIDIA's multi-view rendering couldn't be turned off (%s): off for the session", where);
+    }
+}
+
+// Twin, two views and the second viewport exactly while a focus-drawing pass draws with a depth target (or an overlay
+// into the eye's final) with one viewport and a shader with a twin.
 void update() {
     ID3D11VertexShader* twin = nullptr;
-    // The scene's draws (a depth target bound) and, after the focus view's final blit, the overlays into the eye's final.
-    const bool can = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.gameVs && !g.gsBound &&
-                     !g.hsBound && !g.dsBound && !g.soBound;
+    // The pass's draws with a depth target bound (any of them: the car shadows' own depth target is not the scene's,
+    // 2026-11-15) and, after the focus view's final blit, the overlays into the eye's final. One viewport only: the
+    // focus one is appended to it (apply_viewports); with more the twin would draw into the game's own second one.
+    const bool can = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.vpCount == 1 && g.gameVs &&
+                     !g.gsBound && !g.hsBound && !g.dsBound && !g.soBound;
+    if (g.drawFocus && g.depthBound && g.vpCount != 1 && !g.manyViewportsLogged) {
+        g.manyViewportsLogged = true;
+        simqvfr::logf("lmu mvr: pass %d: a depth-bound draw with %u viewports: into the eye alone (logged once)", g.pass,
+                      g.vpCount);
+    }
     bool want = can;
     if (want) {
         twin = twin_of(g.gameVs);
@@ -1958,8 +1378,8 @@ void update() {
     } else if (want != g.stereo) {
         Timed timed(g.time.switches);
         if (g.twoViews(g.context, want) != 0) {
-            ++g.stats.stereoErrors;
             if (want) {
+                ++g.stats.stereoErrors;
                 want = false;
                 twin = nullptr;
                 if (take_over_with_instancing() && can) {
@@ -1967,6 +1387,8 @@ void update() {
                     want = twin != nullptr;
                     g.stereo = want;
                 }
+            } else {
+                stereo_off_failed("as a draw's two views ended");
             }
         } else {
             g.stereo = want;
@@ -1983,7 +1405,8 @@ void update() {
     if (want != g.on) {
         g.on = want;
         if (want) {
-            g.context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
+            realVSSetConstantBuffers(g.context, 13, 1, g.remapCb.GetAddressOf());
+            g.remapBound = true;  // (the game's b13 back at the pass end)
             g.biasCbBound = false;  // texture sharpening's buffer bound again with the next twin (the game unbinds it)
         }
         apply_viewports();
@@ -1994,6 +1417,9 @@ void update() {
 
 void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexShader* vs,
                                      ID3D11ClassInstance* const* instances, UINT count) {
+    // The twin bound in the game's shader's place given back (a VSGetShader/VSSetShader round trip): the game's own.
+    if (vs && vs == g.boundVs && vs != g.gameVs && context == g.context && !g.replaying && g.pass >= 0)
+        vs = g.gameVs;
     if (context == g.context && !g.replaying) {  // every game bind, so a draw anywhere knows its shader's role (R6)
         const TwinEntry* e = vs ? &shader_entry(vs) : nullptr;
         g.vsRole = e ? e->role : VsRole::none;
@@ -2006,10 +1432,8 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.gameVs = vs;
-    g.instanceCount = std::min<UINT>(count, 256);
-    for (UINT i = 0; i < g.instanceCount; ++i)
-        g.instances[i] = instances ? instances[i] : nullptr;
+    hold(g.gameVs, vs);
+    hold_instances(g.instances, g.instanceCount, instances, std::min<UINT>(count, 256));
     g.boundVs = reinterpret_cast<ID3D11VertexShader*>(~uintptr_t{0});  // the game's call always takes effect
     update();
 }
@@ -2081,18 +1505,29 @@ ID3D11DepthStencilView* scene_depth(ID3D11Resource* colour) {
 }
 
 // FSR (mvr_fsr): this pass's focus composite into the scene's target beside the eye, right after YEBIS's composite
-// drew the eye's there: FSR upscales the whole target into the eye's image, the focus view with it.
-void fsr_place(int eye) {
+// drew the eye's there: FSR upscales the whole target into the eye's image, the focus view with it. False: not placed.
+bool fsr_place(int eye) {
     ID3D11Texture2D* image = g.focusPost.image(eye);
     if (!image || !g.resolved[g.pass])
-        return;
+        return false;
     const MvrPassView& v = g.view;
+    // Room beside the eye in the scene's target, and the whole region in the image (else no copy: no focus final).
+    ComPtr<ID3D11Texture2D> scene;
+    D3D11_TEXTURE2D_DESC sd{}, id{};
+    image->GetDesc(&id);
+    if (SUCCEEDED(g.resolved[g.pass].As(&scene)))
+        scene->GetDesc(&sd);
+    if (!scene || v.eyeW + v.focusW > sd.Width || v.focusH > sd.Height || v.focusW > id.Width || v.focusH > id.Height) {
+        ++g.stats.focusFailures;
+        return false;
+    }
     const D3D11_BOX box{0, 0, 0, v.focusW, v.focusH, 1};
     const bool was = g.replaying;
     g.replaying = true;
     g.context->CopySubresourceRegion(g.resolved[g.pass].Get(), 0, v.eyeW, 0, 0, image, 0, &box);
     g.replaying = was;
     ++g.stats.fsrPlaced;
+    return true;
 }
 
 // FSR: a render target bind in a pass whose focus composite was placed (fsr_place). The eye's image bound: FSR has
@@ -2138,8 +1573,30 @@ void fsr_final(UINT n, ID3D11RenderTargetView* const* rtvs) {
     }
 }
 
+// Car slots: the slot target given back among the game's render targets (an OMGetRenderTargets/OMSet round trip)
+// dropped: `rtvs` then points at `own`, a copy without it, `n` its count up to the last view (the others unbound either
+// way). At most eight compares, and only while the slot target exists.
+void without_slot(UINT& n, ID3D11RenderTargetView* const*& rtvs, ID3D11RenderTargetView* (&own)[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]) {
+    ID3D11RenderTargetView* const slot = g.slotRtv.Get();
+    if (!slot || !rtvs || !n || n > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+        return;
+    bool found = false;
+    for (UINT i = 0; i < n; ++i)
+        found = found || rtvs[i] == slot;
+    if (!found)
+        return;
+    for (UINT i = 0; i < n; ++i)
+        own[i] = rtvs[i] == slot ? nullptr : rtvs[i];
+    while (n > 1 && !own[n - 1])
+        --n;
+    rtvs = own;
+}
+
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
+    ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    if (context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        without_slot(n, rtvs, own);
     if (!ours(context)) {
         realOMSetRenderTargets(context, n, rtvs, dsv);
         if (tr.on && context == g.context && !g.replaying)
@@ -2182,6 +1639,9 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
                                                       ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv,
                                                       UINT uavStart, UINT uavCount,
                                                       ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+    if (context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+        without_slot(n, rtvs, own);
     if (!ours(context)) {
         realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
         if (tr.on && context == g.context && !g.replaying && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
@@ -2194,6 +1654,11 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
+    // The game's render targets kept, its views from slot 1 on: the slot target holds RT1 (the runtime would refuse
+    // the call), so it goes first.
+    if (n == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && g.slotsBound && uavCount != D3D11_KEEP_UNORDERED_ACCESS_VIEWS &&
+        uavCount && uavStart < 2)
+        slot_unbind();
     realOMSetRenderTargetsAndUavs(context, n, rtvs, dsv, uavStart, uavCount, uavs, counts);
     if (tr.on && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
         track_bind(n, rtvs, dsv);
@@ -2210,39 +1675,55 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
 }
 
 void STDMETHODCALLTYPE rs_set_viewports(ID3D11DeviceContext* context, UINT n, const D3D11_VIEWPORT* vps) {
-    if (!ours(context)) {
+    // Not ours, or a call the runtime drops (no rects, too many): passed on untouched, nothing recorded.
+    if (!ours(context) || (n && !vps) || n > kMaxRects) {
         realRSSetViewports(context, n, vps);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.vpCount = std::min<UINT>(n, kMaxRects);
-    if (vps)
-        std::memcpy(g.vps, vps, g.vpCount * sizeof(D3D11_VIEWPORT));
+    D3D11_VIEWPORT own;
+    if (g.twoVpsApplied && n == 2 && sizeCut.vpCount == 1 && std::memcmp(vps, g.appliedVps, sizeof(g.appliedVps)) == 0) {
+        own = sizeCut.vps[0];  // our two given back (a Get/Set round trip): the game's own one
+        n = 1;
+        vps = &own;
+    }
+    g.vpCount = n;
+    if (n)
+        std::memcpy(g.vps, vps, n * sizeof(D3D11_VIEWPORT));
     keep_game_vps();
     cut_rects();  // live resolution: the game's render size cut to the eye's
-    apply_viewports();
+    const bool was = g.on;
+    update();  // two views only with one viewport
+    if (g.on == was)  // (update applied them if they turned on or off)
+        apply_viewports();
 }
 
 void STDMETHODCALLTYPE rs_set_scissor_rects(ID3D11DeviceContext* context, UINT n, const D3D11_RECT* rects) {
-    if (!ours(context)) {
+    if (!ours(context) || (n && !rects) || n > kMaxRects) {
         realRSSetScissorRects(context, n, rects);
         return;
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.scCount = std::min<UINT>(n, kMaxRects);
-    if (rects)
-        std::memcpy(g.scs, rects, g.scCount * sizeof(D3D11_RECT));
+    D3D11_RECT own;
+    if (g.twoScsApplied && n == 2 && sizeCut.scCount == 1 && std::memcmp(rects, g.appliedScs, sizeof(g.appliedScs)) == 0) {
+        own = sizeCut.scs[0];  // our two given back: the game's own one
+        n = 1;
+        rects = &own;
+    }
+    g.scCount = n;
+    if (n)
+        std::memcpy(g.scs, rects, n * sizeof(D3D11_RECT));
     keep_game_scs();
     cut_rects();
-    if (!g.scCount)
+    if (!g.scCount) {
         realRSSetScissorRects(context, 0, nullptr);
-    else
+        g.twoScsApplied = false;
+    } else {
         apply_scissors();
+    }
 }
-
-bool copy_region(ComPtr<ID3D11Texture2D>& dst, ID3D11Resource* src, unsigned x, unsigned y, unsigned w, unsigned h);
 
 // The resolve target cleared (its view made once: it holds the resource, so the pointer stays its own).
 ComPtr<ID3D11RenderTargetView> clearRtv;
@@ -2317,7 +1798,6 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
 // The pass's post-processing begins on `scene` (the resolve's target; with MSAA off the scene's own target, at YEBIS's
 // copy, before it reads it), which was drawn into `drawn` (the multisample target, or the same): DLAA on the eye and its
 // focus view, gate D's kept region, the focus post's window.
-void save_slot_image(int eye, ID3D11Resource* scene);
 void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn) {
     ID3D11Resource* const dst = scene;
     const int eye = g.pass & 1;
@@ -2376,15 +1856,23 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
             dp.objectMotion = g.motionSrv.Get();
             dp.objectCount = kCarSlots;
         }
-        const bool stereo = g.stereo && !g.instanced;
-        if (stereo)
-            g.twoViews(g.context, false);
+        bool stereoOff = false;
+        if (g.stereo && !g.instanced) {
+            if (g.twoViews(g.context, false) == 0)
+                stereoOff = true;
+            else
+                stereo_off_failed("before DLSS");
+        }
         const bool was = g.replaying;
         g.replaying = true;
         simqvfr::dlss_after_resolve(context, dst, scene_depth(drawn), dp);
         g.replaying = was;
-        if (stereo)
-            g.twoViews(g.context, true);
+        if (stereoOff && g.twoViews(g.context, true) != 0) {
+            // Refused back on: off as far as we know; update() tries once more and, refused, hands over as at any
+            // refused turn-on (instancing, or the game's shader and one viewport with MVR off for the session).
+            g.stereo = false;
+            update();
+        }
     }
     if (g.keepFocus && g.pass < 2 && g.drawFocus && g.passTwinBinds > 0) {
         g.keptOk[eye] = copy_region(g.kept[eye], dst, g.view.eyeW, 0, g.view.focusW, g.view.focusH);
@@ -2409,6 +1897,10 @@ void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Reso
                  static_cast<unsigned long long>(g.passTwinBinds), g.view.box.valid ? 1 : 0);
 }
 
+}  // namespace
+
+namespace mvr_detail {
+
 // The focus post at one of the pass's post-processing draws (the post window open): after YEBIS's copy of the resolved
 // scene (the copy's pixel shader reading the resolve's target; its downsamples read other textures) the focus view's part
 // copied likewise; after its composite (with the eye's glare and exposure bound) the focus view's composite.
@@ -2423,6 +1915,10 @@ std::string describe(ID3D11Resource* resource) {
     std::snprintf(s, sizeof(s), "%ux%u f%d", d.Width, d.Height, static_cast<int>(d.Format));
     return s;
 }
+
+}  // namespace mvr_detail
+
+namespace {
 
 // After the copy and before a composite is seen: each draw's pixel shader (its checksum, from the probe) and target,
 // for the log when the pass ends without one ("r" marks the resolve's target); a draw into the resolve's target with
@@ -2647,8 +2143,8 @@ void focus_post_draw(ID3D11DeviceContext* context) {
             g.replaying = false;
         }
         g.compositeOk = ok;
-        if (ok && g.fsr)
-            fsr_place(eye);
+        if (ok && g.fsr && !fsr_place(eye))
+            g.compositeOk = false;  // not beside the eye: no focus final from FSR's image (fsr_final)
         ++(ok ? g.stats.focusComposites : g.stats.focusFailures);
     }
 }
@@ -2717,23 +2213,61 @@ void focus_blit(ID3D11DeviceContext* context, UINT count, UINT start) {
 // Instancing: draw H made with twice its instances (the instanced twin bound: each instance's even copy into the eye's
 // viewport, its odd one into the focus view's); with input layouts that read per-instance data, the bound one's twin
 // (step rates doubled, mvr_probe.cpp) around it, so a pair reads its instance's data.
+// May the draw with the bound input layout be doubled? None or per-vertex data: yes. Per-instance data: only with its
+// twin (`twin`, raw: the layout holds it while bound), else a pair would read two instances' data at the game's step
+// rate. A layout the probe never saw (made before it hooked the device; a layout's elements can't be read back): not
+// known, so no. `layout`: the bound one, referenced for the caller to release. Looked at only once the probe has seen
+// a per-instance layout or missed some (mvr_probe_layouts_to_check); one cached lookup per draw then.
+bool layout_doubles(ID3D11DeviceContext* context, ID3D11InputLayout*& layout, ID3D11InputLayout*& twin) {
+    layout = twin = nullptr;
+    if (!mvr_probe_layouts_to_check())
+        return true;
+    context->IAGetInputLayout(&layout);
+    if (!layout)
+        return true;
+    // (a new layout may take a released one's address: the probe's generation changes with each made)
+    if (const uint64_t generation = mvr_probe_layout_generation(); layout != g.layoutChecked || generation != g.layoutGeneration) {
+        g.layoutChecked = layout;
+        g.layoutGeneration = generation;
+        g.layoutTwin = nullptr;
+        UINT kind = 0, size = sizeof(kind);
+        if (FAILED(layout->GetPrivateData(kMvrLayoutKindGuid, &size, &kind)) || size != sizeof(kind))
+            kind = 0;
+        if (kind == kMvrLayoutPerInstance) {
+            IUnknown* unknown = nullptr;
+            size = sizeof(unknown);
+            if (SUCCEEDED(layout->GetPrivateData(kMvrInstancedLayoutGuid, &size, &unknown)) && unknown) {
+                ComPtr<ID3D11InputLayout> t;
+                unknown->QueryInterface(IID_PPV_ARGS(&t));
+                unknown->Release();
+                g.layoutTwin = t.Get();  // raw: the game's layout holds it
+            }
+        }
+        g.layoutKind = kind;
+    }
+    twin = g.layoutTwin;
+    if (g.layoutKind == kMvrLayoutPerVertex || (g.layoutKind == kMvrLayoutPerInstance && twin))
+        return true;
+    ++g.stats.layoutEyeOnly;
+    if (!g.layoutEyeOnlyLogged) {
+        g.layoutEyeOnlyLogged = true;
+        simqvfr::logf("lmu mvr: pass %d: a draw with an input layout %s: drawn into the eye alone (counted from now on)",
+                      g.pass, g.layoutKind == kMvrLayoutPerInstance ? "of per-instance data without its twin"
+                                                                    : "the probe didn't see made");
+    }
+    return false;
+}
+
+// Instancing: draw H made with twice its instances (the instanced twin bound: each instance's even copy into the eye's
+// viewport, its odd one into the focus view's); with an input layout that reads per-instance data, its twin `twin`
+// (step rates doubled, mvr_probe.cpp) around it in place of `layout`, so a pair reads its instance's data
+// (layout_doubles decides).
 template <int H, typename... A>
-void doubled_draw(ID3D11DeviceContext* context, A... a) {
+void doubled_draw(ID3D11DeviceContext* context, ID3D11InputLayout* layout, ID3D11InputLayout* twin, A... a) {
     const std::tuple<A...> t(a...);
-    ID3D11InputLayout* layout = nullptr;
-    ComPtr<ID3D11InputLayout> twinLayout;
-    if (mvr_probe_instanced_layouts() > 0) {
-        context->IAGetInputLayout(&layout);
-        IUnknown* unknown = nullptr;
-        UINT size = sizeof(unknown);
-        if (layout && SUCCEEDED(layout->GetPrivateData(kMvrInstancedLayoutGuid, &size, &unknown)) && unknown) {
-            unknown->QueryInterface(IID_PPV_ARGS(&twinLayout));
-            unknown->Release();
-        }
-        if (twinLayout) {
-            context->IASetInputLayout(twinLayout.Get());
-            ++g.stats.layoutSwaps;
-        }
+    if (twin) {
+        context->IASetInputLayout(twin);
+        ++g.stats.layoutSwaps;
     }
     ++g.stats.doubledDraws;
     if constexpr (H == kHookDrawIndexed)
@@ -2746,19 +2280,29 @@ void doubled_draw(ID3D11DeviceContext* context, A... a) {
         call_real<H>(context, std::get<0>(t), std::get<1>(t) * 2, std::get<2>(t), std::get<3>(t));
     else
         static_assert(H == kHookDraw, "a draw with an instance count");
-    if (twinLayout)
+    if (twin)
         context->IASetInputLayout(layout);
-    if (layout)
-        layout->Release();
 }
 
-// The game's draw H in a pass as it reaches d3d11: doubled with instancing while two views are on, else as it was.
+// The game's draw H in a pass as it reaches d3d11: doubled with instancing while two views are on (its layout
+// allowing), else as it was; a draw that can't be doubled with the game's own shader, into the eye's viewport alone.
 template <int H, typename... A>
 void game_draw(ID3D11DeviceContext* context, A... a) {
-    if (g.instanced && g.on && ours(context))
-        doubled_draw<H>(context, a...);
-    else
+    if (!(g.instanced && g.on && ours(context))) {
         call_real<H>(context, a...);
+        return;
+    }
+    ID3D11InputLayout* layout = nullptr;
+    ID3D11InputLayout* twin = nullptr;
+    if (layout_doubles(context, layout, twin)) {
+        doubled_draw<H>(context, layout, twin, a...);
+    } else {
+        realVSSetShader(context, g.gameVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
+        call_real<H>(context, a...);
+        realVSSetShader(context, g.boundVs, g.instanceCount ? g.instances : nullptr, g.instanceCount);
+    }
+    if (layout)
+        layout->Release();
 }
 
 // mvr_ui_mips: for the panel's canvas `canvas` (the draw's pixel shader input 0), a copy of it with its mips, made once a
@@ -2867,7 +2411,12 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
     context->RSGetViewports(&n, vps);
     ComPtr<ID3D11GeometryShader> gs;
     context->GSGetShader(&gs, nullptr, nullptr);
-    if (!twin || gs || n != 1 || g.broken) {
+    ID3D11InputLayout* layout = nullptr;
+    ID3D11InputLayout* twinLayout = nullptr;
+    // (instancing: a layout it can't double leaves the draw to the caller, as the game drew it)
+    if (!twin || gs || n != 1 || g.broken || (g.instanced && !layout_doubles(context, layout, twinLayout))) {
+        if (layout)
+            layout->Release();
         release();
         return false;
     }
@@ -2875,7 +2424,7 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
     ID3D11Buffer* kept = nullptr;
     context->VSGetConstantBuffers(13, 1, &kept);
     context->UpdateSubresource(g.remapCb.Get(), 0, nullptr, v.remap, 0, 0);
-    context->VSSetConstantBuffers(13, 1, g.remapCb.GetAddressOf());
+    realVSSetConstantBuffers(context, 13, 1, g.remapCb.GetAddressOf());  // (not the game's: past the hook)
     bool doubled = false;
     if (g.instanced || g.twoViews(context, true) == 0) {
         const D3D11_VIEWPORT first = overlay_viewport(eye, v, vps[0]);
@@ -2889,10 +2438,11 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
         realVSSetShader(context, twin, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, 2, two);
         if (g.instanced) {
-            doubled_draw<H>(context, a...);
+            doubled_draw<H>(context, layout, twinLayout, a...);
         } else {
             call_real<H>(context, a...);
-            g.twoViews(context, false);
+            if (g.twoViews(context, false) != 0)
+                stereo_off_failed("after an overlay's doubled draw");
         }
         realVSSetShader(context, vs, instanceCount ? instances : nullptr, instanceCount);
         realRSSetViewports(context, n, vps);
@@ -2903,9 +2453,11 @@ bool double_outside(ID3D11DeviceContext* context, A... a) {
         doubled = true;
         ++g.stats.overlaysOutside;
     }
-    context->VSSetConstantBuffers(13, 1, &kept);
+    realVSSetConstantBuffers(context, 13, 1, &kept);
     if (kept)
         kept->Release();
+    if (layout)
+        layout->Release();
     release();
     return doubled;
 }
@@ -3031,7 +2583,7 @@ void STDMETHODCALLTYPE copy_subresource_region(ID3D11DeviceContext* context, ID3
     }
     State::CopySeen& c = g.copies[g.copyNext++ % State::kCopiesKept];
     c.dst = dst;
-    c.src = src;
+    hold(c.src, src);  // per copy, not per draw
     c.frame = g.framesSinceInstall;
 }
 
@@ -3223,6 +2775,10 @@ UINT marked_role(ID3D11DeviceContext* context) {
     return role_of_ps(ps.Get());
 }
 
+}  // namespace
+
+namespace mvr_detail {
+
 // The cache's answer for `ps` (PsRoleEntry), GetPrivateData only the first time a shader is seen since the game last
 // created one. 0: none (no shader, unmarked, or a role the probe doesn't know).
 UINT role_of_ps(ID3D11PixelShader* ps) {
@@ -3249,6 +2805,10 @@ UINT role_of_ps(ID3D11PixelShader* ps) {
     set.entry[k] = {ps, g.roleEpoch, role};
     return role;
 }
+
+}  // namespace mvr_detail
+
+namespace {
 
 // The texture pixel shader slot 0 reads, and render target 0's (null: none).
 ComPtr<ID3D11Resource> ps_input0(ID3D11DeviceContext* context) {
@@ -3422,415 +2982,8 @@ void learn_by_signature(ID3D11DeviceContext* context) {
     learn_scene(target.Get(), d, true);
 }
 
-// ---- Post census (mvr_post_census; diagnostics, log only): what the eye's post-processing draws with ----
-// Zero writes (docs/recon-lmu.md "Zero writes"): YEBIS's region follows the game's render scale by itself, so before its
-// draws can be scaled at the d3d11 level, every draw of tracked pass 0 from its resolve (or post start) to its end is
-// logged at a sampled frame: shaders, target, the game's viewport and scissor, the inputs, the first vertices and the
-// first constants of each bound buffer. Two censuses at two live resolutions in one run show what follows the scale.
-struct PostCensus {
-    int level = 0;
-    bool active = false;
-    int draws = 0;
-    unsigned long long next = 0;  // framesSinceInstall of the next census
-    unsigned long long taken = 0;
-    unsigned lastEye[2] = {};     // the eye size of the last census (a new size: a census at the next pass 0)
-    // Level 2: each bound constant buffer's whole bound range saved (logs\census\c<N>_d<draw>_<stage><slot>.bin) for
-    // the first kCensusDumps censuses at a new eye size; with lmu_mvr_dump=1's shaders, read offline.
-    bool dumpThis = false;
-    int dumps = 0;
-    // Level 4: also the draws between a frame's end and the next pass 0 (outside the tracked passes), as level 3 logs them.
-    bool pre = false;
-} census;
-constexpr int kCensusDumps = 4;
-constexpr int kCensusDraws = 120;
-constexpr unsigned long long kCensusEvery = 900;
-
-// `bytes` of `buffer` from `offset`, read back through a staging copy (a stall: census frames only).
-bool census_read(ID3D11Buffer* buffer, UINT offset, UINT bytes, std::vector<std::uint8_t>& out) {
-    out.clear();
-    if (!buffer || !bytes)
-        return false;
-    D3D11_BUFFER_DESC bd;
-    buffer->GetDesc(&bd);
-    if (offset >= bd.ByteWidth)
-        return false;
-    bytes = (std::min)(bytes, bd.ByteWidth - offset);
-    ComPtr<ID3D11Device> device;
-    g.context->GetDevice(&device);
-    D3D11_BUFFER_DESC sd{};
-    sd.ByteWidth = (bytes + 15) & ~15u;
-    sd.Usage = D3D11_USAGE_STAGING;
-    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Buffer> staging;
-    if (FAILED(device->CreateBuffer(&sd, nullptr, &staging)))
-        return false;
-    const D3D11_BOX box{offset, 0, 0, offset + bytes, 1, 1};
-    const bool replaying = g.replaying;
-    g.replaying = true;  // our own calls: the hooks pass them on
-    g.context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, buffer, 0, &box);
-    D3D11_MAPPED_SUBRESOURCE m;
-    const bool mapped = SUCCEEDED(g.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m));
-    if (mapped) {
-        out.assign(static_cast<const std::uint8_t*>(m.pData), static_cast<const std::uint8_t*>(m.pData) + bytes);
-        g.context->Unmap(staging.Get(), 0);
-    }
-    g.replaying = replaying;
-    return mapped;
-}
-
-std::string census_floats(const std::vector<std::uint8_t>& bytes, std::size_t count) {
-    std::string s;
-    const std::size_t n = (std::min)(count, bytes.size() / 4);
-    for (std::size_t i = 0; i < n; ++i) {
-        float f;
-        std::memcpy(&f, bytes.data() + i * 4, 4);
-        char v[24];
-        std::snprintf(v, sizeof(v), "%s%.5g", i ? (i % 4 ? "," : " | ") : "", f);
-        s += v;
-    }
-    return s;
-}
-
-template <typename Shader>
-uint32_t census_checksum(Shader* shader) {
-    uint32_t c[4] = {};
-    UINT size = sizeof(c);
-    return shader && SUCCEEDED(shader->GetPrivateData(kShaderChecksumGuid, &size, c)) && size == sizeof(c) ? c[0] : 0;
-}
-
-// Level 2: `cb`'s bound range (num constants from first; 0: the whole buffer from first) saved for offline reading.
-void census_save(ID3D11Buffer* cb, UINT first, UINT num, const char* stage, UINT slot) {
-    D3D11_BUFFER_DESC bd;
-    cb->GetDesc(&bd);
-    const UINT offset = first * 16;
-    if (offset >= bd.ByteWidth)
-        return;
-    const UINT bytes = (std::min)(num ? num * 16 : bd.ByteWidth - offset, bd.ByteWidth - offset);
-    std::vector<std::uint8_t> data;
-    if (!census_read(cb, offset, bytes, data))
-        return;
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"census";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    wchar_t name[64];
-    swprintf_s(name, L"c%llu_d%d_%hs%u.bin", census.taken, census.draws - 1, stage, slot);
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, (dir / name).c_str(), L"wb") == 0 && f) {
-        std::fwrite(data.data(), 1, data.size(), f);
-        std::fclose(f);
-    }
-}
-
-// The constant buffers 0-3 of a stage: their first 8 float4s from the bound first constant.
-template <typename Get>
-std::string census_cbs(Get get, const char* stage) {
-    std::string s;
-    for (UINT slot = 0; slot < 4; ++slot) {
-        ID3D11Buffer* cb = nullptr;
-        UINT first = 0, num = 0;
-        get(slot, &cb, &first, &num);
-        if (!cb)
-            continue;
-        if (census.dumpThis)
-            census_save(cb, first, num, stage, slot);
-        std::vector<std::uint8_t> bytes;
-        if (census_read(cb, first * 16, 128, bytes)) {
-            char head[48];
-            std::snprintf(head, sizeof(head), " cb%u@%u: ", slot, first);
-            s += head + census_floats(bytes, 32);
-        }
-        cb->Release();
-    }
-    return s;
-}
-
-void census_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
-    if (census.draws++ >= kCensusDraws)
-        return;
-    ComPtr<ID3D11VertexShader> vs;
-    context->VSGetShader(&vs, nullptr, nullptr);
-    ComPtr<ID3D11PixelShader> ps;
-    context->PSGetShader(&ps, nullptr, nullptr);
-    ID3D11RenderTargetView* rtvs[2] = {};
-    ComPtr<ID3D11DepthStencilView> dsv;
-    context->OMGetRenderTargets(2, rtvs, &dsv);
-    std::string targets;
-    for (ID3D11RenderTargetView* rtv : rtvs) {
-        if (!rtv)
-            continue;
-        ComPtr<ID3D11Resource> r;
-        rtv->GetResource(&r);
-        targets += (targets.empty() ? "" : "+") + describe(r.Get());
-        rtv->Release();
-    }
-    std::string inputs;
-    ID3D11ShaderResourceView* srvs[4] = {};
-    context->PSGetShaderResources(0, 4, srvs);
-    for (int i = 0; i < 4; ++i) {
-        if (!srvs[i])
-            continue;
-        ComPtr<ID3D11Resource> r;
-        srvs[i]->GetResource(&r);
-        D3D11_SHADER_RESOURCE_VIEW_DESC vd;
-        srvs[i]->GetDesc(&vd);
-        char mip[16] = "";
-        if (vd.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D && vd.Texture2D.MostDetailedMip)
-            std::snprintf(mip, sizeof(mip), " mip%u", vd.Texture2D.MostDetailedMip);
-        inputs += " t" + std::to_string(i) + " " + describe(r.Get()) + mip;
-        srvs[i]->Release();
-    }
-    char head[400];
-    std::snprintf(head, sizeof(head),
-                  "lmu mvr: post census %llu: #%d %s(%lld,%lld) vs %08x ps %08x > %s%s; vp %u [%.1f,%.1f %.1fx%.1f] sc %u "
-                  "[%ld,%ld,%ld,%ld]; inputs%s",
-                  census.taken, census.draws - 1, call, a, b, census_checksum(vs.Get()), census_checksum(ps.Get()),
-                  targets.empty() ? "-" : targets.c_str(), dsv ? " +depth" : "", g.vpCount, g.vps[0].TopLeftX,
-                  g.vps[0].TopLeftY, g.vps[0].Width, g.vps[0].Height, g.scCount, g.scs[0].left, g.scs[0].top,
-                  g.scs[0].right, g.scs[0].bottom, inputs.empty() ? " none" : inputs.c_str());
-    // The first vertices of slot 0 (a full-screen quad's UVs, if baked in), from the draw's first vertex.
-    std::string verts;
-    ComPtr<ID3D11Buffer> vb;
-    UINT stride = 0, offset = 0;
-    context->IAGetVertexBuffers(0, 1, &vb, &stride, &offset);
-    if (vb && stride && stride <= 64) {
-        const bool indexed = std::strcmp(call, "DrawIndexed") == 0;
-        const UINT first = indexed ? 0 : static_cast<UINT>(b);  // DrawIndexed: base vertex unknown here, from 0
-        std::vector<std::uint8_t> bytes;
-        if (census_read(vb.Get(), offset + first * stride, stride * 4, bytes)) {
-            char s[32];
-            std::snprintf(s, sizeof(s), " vb stride %u:", stride);
-            verts = s;
-            for (std::size_t v = 0; v * stride < bytes.size(); ++v) {
-                std::vector<std::uint8_t> one(bytes.begin() + v * stride,
-                                              bytes.begin() + (std::min)(bytes.size(), (v + 1) * stride));
-                verts += " [" + census_floats(one, 8) + "]";
-            }
-        }
-    }
-    // The bound first constants (PSSetConstantBuffers1: YEBIS's $Globals is one 64 KB buffer at offsets), through
-    // ID3D11DeviceContext1; without it, from offset 0.
-    ComPtr<ID3D11DeviceContext1> c1;
-    context->QueryInterface(IID_PPV_ARGS(&c1));
-    const std::string vcb = census_cbs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
-        if (c1)
-            c1->VSGetConstantBuffers1(s, 1, cb, f, n);
-        else
-            context->VSGetConstantBuffers(s, 1, cb);
-    }, "vs");
-    const std::string pcb = census_cbs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
-        if (c1)
-            c1->PSGetConstantBuffers1(s, 1, cb, f, n);
-        else
-            context->PSGetConstantBuffers(s, 1, cb);
-    }, "ps");
-    simqvfr::logf("%s;%s", head, verts.empty() ? " no vertex buffer" : verts.c_str());
-    if (!vcb.empty())
-        simqvfr::logf("lmu mvr: post census %llu: #%d vs constants:%s", census.taken, census.draws - 1, vcb.c_str());
-    if (!pcb.empty())
-        simqvfr::logf("lmu mvr: post census %llu: #%d ps constants:%s", census.taken, census.draws - 1, pcb.c_str());
-}
-
-// Level 3: the whole pass from its start, one line a draw (shaders, targets, viewport, scissor and whether the
-// rasterizer uses it), and every bound constant buffer of both stages (slots 0-13) saved once per distinct content as
-// logs\census\c<N>_<hash>.bin, named in the line: an offline diff between eye sizes finds what follows the size.
-constexpr int kCensusWholeDraws = 2500;
-std::unordered_set<std::uint64_t> censusSaved;  // this census's saved contents
-
-std::uint64_t census_hash(const std::vector<std::uint8_t>& bytes) {
-    std::uint64_t h = 1469598103934665603ull;
-    for (std::uint8_t b : bytes)
-        h = (h ^ b) * 1099511628211ull;
-    return h;
-}
-
-template <typename Get>
-std::string census_refs(Get get, const char* stage) {
-    std::string s;
-    for (UINT slot = 0; slot < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++slot) {
-        ID3D11Buffer* cb = nullptr;
-        UINT first = 0, num = 0;
-        get(slot, &cb, &first, &num);
-        if (!cb)
-            continue;
-        D3D11_BUFFER_DESC bd;
-        cb->GetDesc(&bd);
-        const UINT offset = first * 16;
-        std::vector<std::uint8_t> data;
-        if (offset < bd.ByteWidth &&
-            census_read(cb, offset, (std::min)(num ? num * 16 : bd.ByteWidth - offset, bd.ByteWidth - offset), data)) {
-            const std::uint64_t h = census_hash(data);
-            if (censusSaved.insert(h).second) {
-                const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"census";
-                std::error_code ec;
-                std::filesystem::create_directories(dir, ec);
-                wchar_t name[64];
-                swprintf_s(name, L"c%llu_%016llx.bin", census.taken, static_cast<unsigned long long>(h));
-                FILE* f = nullptr;
-                if (_wfopen_s(&f, (dir / name).c_str(), L"wb") == 0 && f) {
-                    std::fwrite(data.data(), 1, data.size(), f);
-                    std::fclose(f);
-                }
-            }
-            char ref[48];
-            std::snprintf(ref, sizeof(ref), " %s%u=%016llx", stage, slot, static_cast<unsigned long long>(h));
-            s += ref;
-        }
-        cb->Release();
-    }
-    return s;
-}
-
-void census_draw_whole(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
-    if (census.draws++ >= kCensusWholeDraws)
-        return;
-    ComPtr<ID3D11VertexShader> vs;
-    context->VSGetShader(&vs, nullptr, nullptr);
-    ComPtr<ID3D11PixelShader> ps;
-    context->PSGetShader(&ps, nullptr, nullptr);
-    ID3D11RenderTargetView* rtvs[2] = {};
-    ComPtr<ID3D11DepthStencilView> dsv;
-    context->OMGetRenderTargets(2, rtvs, &dsv);
-    std::string targets;
-    for (ID3D11RenderTargetView* rtv : rtvs) {
-        if (!rtv)
-            continue;
-        ComPtr<ID3D11Resource> r;
-        rtv->GetResource(&r);
-        targets += (targets.empty() ? "" : "+") + describe(r.Get());
-        rtv->Release();
-    }
-    if (dsv) {
-        ComPtr<ID3D11Resource> r;
-        dsv->GetResource(&r);
-        targets += " z " + describe(r.Get());
-    }
-    ComPtr<ID3D11RasterizerState> rs;
-    context->RSGetState(&rs);
-    D3D11_RASTERIZER_DESC rd{};
-    if (rs)
-        rs->GetDesc(&rd);
-    ComPtr<ID3D11DeviceContext1> c1;
-    context->QueryInterface(IID_PPV_ARGS(&c1));
-    const std::string refs =
-        census_refs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
-            if (c1)
-                c1->VSGetConstantBuffers1(s, 1, cb, f, n);
-            else
-                context->VSGetConstantBuffers(s, 1, cb);
-        }, "vs") +
-        census_refs([&](UINT s, ID3D11Buffer** cb, UINT* f, UINT* n) {
-            if (c1)
-                c1->PSGetConstantBuffers1(s, 1, cb, f, n);
-            else
-                context->PSGetConstantBuffers(s, 1, cb);
-        }, "ps");
-    // Inside a pass the rects as the hooks hold them (cut); outside, as the context holds them (the game's).
-    UINT vpCount = g.vpCount, scCount = g.scCount;
-    D3D11_VIEWPORT vp = g.vps[0];
-    D3D11_RECT sc = g.scs[0];
-    if (g.pass < 0) {
-        D3D11_VIEWPORT vps[kMaxRects] = {};
-        D3D11_RECT scs[kMaxRects] = {};
-        vpCount = kMaxRects;
-        context->RSGetViewports(&vpCount, vps);
-        scCount = kMaxRects;
-        context->RSGetScissorRects(&scCount, scs);
-        vp = vps[0];
-        sc = scs[0];
-    }
-    simqvfr::logf("lmu mvr: pass census %llu: #%d %s %s(%lld,%lld) vs %08x ps %08x > %s; vp %u [%.1f,%.1f %.1fx%.1f] sc %u%s "
-                  "[%ld,%ld,%ld,%ld];%s",
-                  census.taken, census.draws - 1, g.pass < 0 ? "before" : g.afterResolve ? "post" : "scene", call, a, b,
-                  census_checksum(vs.Get()), census_checksum(ps.Get()), targets.empty() ? "-" : targets.c_str(), vpCount,
-                  vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, scCount, rd.ScissorEnable ? " on" : " off", sc.left, sc.top,
-                  sc.right, sc.bottom, refs.c_str());
-}
-
-bool census_here(ID3D11DeviceContext* context) {
-    if (census.pre)
-        return context == g.context && !g.replaying && g.pass < 0;
-    return census.active && g.pass == 0 && (census.level >= 3 || g.afterResolve) && ours(context);
-}
-
-// Level 5: on the first census, after each full-size draw of pass 0's post (and once of the scene before it), the
-// target saved as logs\captures\census<N>-d<draw>-<what>.png: which step of the eye's post-processing makes its image.
-bool read_halves(ID3D11Texture2D* texture, std::vector<uint16_t>& out, unsigned& w, unsigned& h);
-std::vector<uint8_t> tonemapped(const std::vector<uint16_t>& px, unsigned w, unsigned h);
-int censusSnaps = 0;
-
-void census_snap(ID3D11Resource* resource, const char* what) {
-    ComPtr<ID3D11Texture2D> t;
-    if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(&t))) || censusSnaps >= 16)
-        return;
-    D3D11_TEXTURE2D_DESC d;
-    t->GetDesc(&d);
-    if (d.Width != sizeCut.fullW || d.Height != sizeCut.fullH || d.SampleDesc.Count != 1)
-        return;
-    const bool replaying = g.replaying;
-    g.replaying = true;
-    std::vector<uint8_t> bgra;
-    unsigned w = 0, h = 0;
-    std::vector<uint16_t> halves;
-    bool ok = false;
-    if (read_halves(t.Get(), halves, w, h)) {
-        bgra = tonemapped(halves, w, h);
-        ok = true;
-    } else {
-        ok = simqvfr::d3d11_read_bgra8(t.Get(), bgra, w, h);
-    }
-    g.replaying = replaying;
-    if (!ok) {
-        simqvfr::logf("lmu mvr: pass census %llu: #%d %s: %ux%u f%d can't be read back", census.taken, census.draws - 1,
-                      what, d.Width, d.Height, static_cast<int>(d.Format));
-        return;
-    }
-    ++censusSnaps;
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"captures";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    wchar_t name[96];
-    swprintf_s(name, L"census%llu-d%d-%hs.png", census.taken, census.draws - 1, what);
-    simqvfr::write_png_bgra((dir / name).wstring(), bgra, w, h);
-    simqvfr::logf("lmu mvr: pass census %llu: #%d %s saved (%ls, %ux%u f%d)", census.taken, census.draws - 1, what, name, w,
-                  h, static_cast<int>(d.Format));
-}
-
-// Before a census draw (level 5): the post's first draw's inputs, the scene as the post finds it.
-void census_snap_before(ID3D11DeviceContext* context) {
-    if (census.level < 5 || census.dumps != 1 || g.pass != 0 || !g.afterResolve || censusSnaps)
-        return;
-    ID3D11ShaderResourceView* srvs[2] = {};
-    context->PSGetShaderResources(0, 2, srvs);
-    for (int i = 0; i < 2; ++i) {
-        if (!srvs[i])
-            continue;
-        ComPtr<ID3D11Resource> r;
-        srvs[i]->GetResource(&r);
-        srvs[i]->Release();
-        census_snap(r.Get(), i ? "input1-before-post" : "input0-before-post");
-    }
-}
-
-// After a census draw (level 5): its target, if full-size.
-void census_after(ID3D11DeviceContext* context) {
-    if (census.level < 5 || census.dumps != 1 || !census.active || g.pass != 0 || !g.afterResolve)
-        return;
-    ComPtr<ID3D11RenderTargetView> rtv;
-    context->OMGetRenderTargets(1, &rtv, nullptr);
-    ComPtr<ID3D11Resource> r;
-    if (rtv)
-        rtv->GetResource(&r);
-    census_snap(r.Get(), "after");
-}
-
-void census_any(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
-    if (census.level >= 3) {
-        census_draw_whole(context, call, a, b);
-        census_snap_before(context);
-    }
-    else
-        census_draw(context, call, a, b);
-}
+// ---- Post census (mvr_post_census; diagnostics, log only): mvr_pass_census.cpp; census_here and its state in
+// mvr_pass_internal.h ----
 
 void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UINT start, INT base) {
     if (g.slotsBound && g.vsRole == VsRole::lensMask && ours(context))
@@ -4001,6 +3154,8 @@ void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11
         if (g.twoViews(g.context, false) == 0) {
             g.stereo = false;
             ++g.stats.toggles;
+        } else {
+            stereo_off_failed("before the game's command list");
         }
     }
     g.inList = true;
@@ -4011,7 +3166,16 @@ void STDMETHODCALLTYPE execute_command_list(ID3D11DeviceContext* context, ID3D11
     if (!plain)
         return;
     if (!restore) {  // the context's state cleared to its defaults: nothing of ours (twin, cb13, two viewports) bound
+        // Nothing of ours bound now (slot target and view, blend twin, the b13 buffers): the flags as the context is,
+        // the game's b13 none.
+        g.slotsBound = g.blendSwapped = g.biasCbBound = g.biasCbUsed = g.remapBound = false;
+        g.slotViewBound = nullptr;
+        g.twoVpsApplied = g.twoScsApplied = false;
+        hold(g.gameVsCb13, static_cast<ID3D11Buffer*>(nullptr));
+        hold(g.gamePsCb13, static_cast<ID3D11Buffer*>(nullptr));
         read_bindings();
+        keep_game_vps();  // live resolution: the game's own rects are the cleared ones now
+        keep_game_scs();
         g.on = false;
     }
     update();
@@ -4130,6 +3294,8 @@ void* detour_for(int h, int n) {
 bool wanted(int h) {
     if (h == kHookPS)
         return g.biasHooks || g.slotsOn;
+    if (h == kHookVSCB)  // always: the remap at b13 kept over the game's binds of it
+        return true;
     if (is_car_hook(h))
         return g.carTrack;
     if (is_slot_hook(h))
@@ -4214,24 +3380,31 @@ void unhook_entries() {
     }
 }
 
+// The pixel shader bound now and its class instances, held in g (the Get's references given back).
+void read_ps_binding() {
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11ClassInstance* got[256] = {};
+    UINT count = 256;
+    g.context->PSGetShader(&ps, got, &count);
+    count = std::min<UINT>(count, 256);
+    hold(g.gamePs, ps);
+    hold_instances(g.psInstances, g.psInstanceCount, got, ps ? count : 0);
+    for (UINT i = 0; i < count; ++i)
+        if (got[i])
+            got[i]->Release();
+    if (ps)
+        ps->Release();
+    g.boundPs = ps;
+}
+
 // The game's bindings as the pass starts (the hooks only see later changes).
 void read_bindings() {
-    if (g.biasHooks || g.slotsOn) {  // the pixel shader bound as the pass starts (set outside the passes, not seen)
-        ID3D11PixelShader* ps = nullptr;
-        UINT count = 256;
-        g.context->PSGetShader(&ps, g.psInstances, &count);
-        g.psInstanceCount = ps ? count : 0;
-        for (UINT i = 0; i < g.psInstanceCount; ++i)
-            if (g.psInstances[i])
-                g.psInstances[i]->Release();  // raw, like the game's own bindings
-        if (ps)
-            ps->Release();
-        g.gamePs = g.boundPs = ps;
-    }
+    if (g.biasHooks || g.slotsOn)  // the pixel shader bound as the pass starts (set outside the passes, not seen)
+        read_ps_binding();
     if (g.slotsOn) {  // car slots: the blend state (its twin goes in its place) and whether the depth state writes
         ID3D11BlendState* bs = nullptr;
         g.context->OMGetBlendState(&bs, g.blendFactor, &g.sampleMask);
-        g.gameBlend = bs;  // raw, like the game's own bindings
+        hold(g.gameBlend, bs);
         if (bs)
             bs->Release();
         ID3D11DepthStencilState* ds = nullptr;
@@ -4242,15 +3415,20 @@ void read_bindings() {
             ds->Release();
     }
     ID3D11VertexShader* vs = nullptr;
-    UINT count = 256;
-    g.context->VSGetShader(&vs, g.instances, &count);
-    g.instanceCount = vs ? count : 0;
-    for (UINT i = 0; i < g.instanceCount; ++i)
-        if (g.instances[i])
-            g.instances[i]->Release();  // raw, like the game's own bindings
-    if (vs)
-        vs->Release();
-    g.gameVs = g.boundVs = vs;
+    {
+        ID3D11ClassInstance* got[256] = {};
+        UINT count = 256;
+        g.context->VSGetShader(&vs, got, &count);
+        count = std::min<UINT>(count, 256);
+        hold(g.gameVs, vs);
+        hold_instances(g.instances, g.instanceCount, got, vs ? count : 0);
+        for (UINT i = 0; i < count; ++i)
+            if (got[i])
+                got[i]->Release();
+        if (vs)
+            vs->Release();  // g's own reference keeps it (vs is used below)
+    }
+    g.boundVs = vs;
     {
         const TwinEntry* e = vs ? &shader_entry(vs) : nullptr;
         g.vsRole = e ? e->role : VsRole::none;
@@ -4281,21 +3459,12 @@ void read_bindings() {
         if (ib)
             ib->Release();
     }
-    if (g.biasHooks) {  // texture sharpening: the pixel shader the pass starts with
-        ID3D11PixelShader* ps = nullptr;
-        UINT psCount = 256;
-        g.context->PSGetShader(&ps, g.psInstances, &psCount);
-        g.psInstanceCount = ps ? psCount : 0;
-        for (UINT i = 0; i < g.psInstanceCount; ++i)
-            if (g.psInstances[i])
-                g.psInstances[i]->Release();
-        if (ps)
-            ps->Release();
-        g.gamePs = g.boundPs = ps;
-    }
+    ID3D11RenderTargetView* rtv = nullptr;
     ID3D11DepthStencilView* dsv = nullptr;
-    g.context->OMGetRenderTargets(0, nullptr, &dsv);
+    g.context->OMGetRenderTargets(1, &rtv, &dsv);
     g.depthBound = dsv != nullptr;
+    if (rtv)
+        rtv->Release();
     if (dsv)
         dsv->Release();
     g.vpCount = kMaxRects;
@@ -4324,207 +3493,7 @@ void read_bindings() {
             u->Release();
 }
 
-// `dst` (made or re-made at w x h in `src`'s format) = src's region at (x, y).
-bool copy_region(ComPtr<ID3D11Texture2D>& dst, ID3D11Resource* src, unsigned x, unsigned y, unsigned w, unsigned h) {
-    ComPtr<ID3D11Texture2D> source;
-    if (!src || FAILED(src->QueryInterface(IID_PPV_ARGS(&source))) || !w || !h)
-        return false;
-    D3D11_TEXTURE2D_DESC d;
-    source->GetDesc(&d);
-    if (x + w > d.Width || y + h > d.Height || d.SampleDesc.Count != 1)
-        return false;
-    if (dst) {
-        D3D11_TEXTURE2D_DESC have;
-        dst->GetDesc(&have);
-        if (have.Width != w || have.Height != h || have.Format != d.Format)
-            dst.Reset();
-    }
-    if (!dst) {
-        D3D11_TEXTURE2D_DESC c = d;
-        c.Width = w;
-        c.Height = h;
-        c.MipLevels = 1;
-        c.ArraySize = 1;
-        c.Usage = D3D11_USAGE_DEFAULT;
-        c.BindFlags = 0;
-        c.CPUAccessFlags = 0;
-        c.MiscFlags = 0;
-        ComPtr<ID3D11Device> device;
-        g.context->GetDevice(&device);
-        if (FAILED(device->CreateTexture2D(&c, nullptr, &dst)))
-            return false;
-    }
-    const D3D11_BOX box{x, y, 0, x + w, y + h, 1};
-    g.context->CopySubresourceRegion(dst.Get(), 0, 0, 0, 0, source.Get(), 0, &box);
-    return true;
-}
-
-bool read_halves(ID3D11Texture2D* texture, std::vector<uint16_t>& out, unsigned& w, unsigned& h) {
-    D3D11_TEXTURE2D_DESC d;
-    texture->GetDesc(&d);
-    if (d.Format != DXGI_FORMAT_R16G16B16A16_FLOAT && d.Format != DXGI_FORMAT_R16G16B16A16_TYPELESS)
-        return false;
-    D3D11_TEXTURE2D_DESC s = d;
-    s.Usage = D3D11_USAGE_STAGING;
-    s.BindFlags = 0;
-    s.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    s.MiscFlags = 0;
-    ComPtr<ID3D11Device> device;
-    g.context->GetDevice(&device);
-    ComPtr<ID3D11Texture2D> staging;
-    if (FAILED(device->CreateTexture2D(&s, nullptr, &staging)))
-        return false;
-    g.context->CopyResource(staging.Get(), texture);
-    D3D11_MAPPED_SUBRESOURCE map;
-    if (FAILED(g.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
-        return false;
-    w = d.Width;
-    h = d.Height;
-    out.resize(static_cast<size_t>(w) * h * 4);
-    for (unsigned y = 0; y < h; ++y)
-        std::memcpy(out.data() + static_cast<size_t>(y) * w * 4, static_cast<const uint8_t*>(map.pData) + y * map.RowPitch,
-                    static_cast<size_t>(w) * 8);
-    g.context->Unmap(staging.Get(), 0);
-    return true;
-}
-
-float half_to_float(uint16_t v) {
-    const uint32_t sign = (v >> 15) & 1, exponent = (v >> 10) & 0x1f, mantissa = v & 0x3ff;
-    float f;
-    if (exponent == 0)
-        f = std::ldexp(static_cast<float>(mantissa), -24);
-    else if (exponent == 31)
-        f = mantissa ? 0.0f : 65504.0f;  // NaN as 0, infinity as the largest half
-    else
-        f = std::ldexp(static_cast<float>(mantissa | 0x400), static_cast<int>(exponent) - 25);
-    return sign ? -f : f;
-}
-
-std::vector<float> luminance(const std::vector<uint16_t>& px, unsigned w, unsigned h) {
-    std::vector<float> l(static_cast<size_t>(w) * h);
-    for (size_t i = 0; i < l.size(); ++i)
-        l[i] = std::max(0.0f, 0.2126f * half_to_float(px[i * 4]) + 0.7152f * half_to_float(px[i * 4 + 1]) +
-                                  0.0722f * half_to_float(px[i * 4 + 2]));
-    return l;
-}
-
-// For looking at: x / (1 + x), gamma 2.2, BGRA.
-std::vector<uint8_t> tonemapped(const std::vector<uint16_t>& px, unsigned w, unsigned h) {
-    std::vector<uint8_t> out(static_cast<size_t>(w) * h * 4);
-    for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
-        for (int c = 0; c < 3; ++c) {
-            const float v = std::max(0.0f, half_to_float(px[i * 4 + c]));
-            out[i * 4 + 2 - c] = static_cast<uint8_t>(std::lround(255.0f * std::pow(v / (1.0f + v), 1.0f / 2.2f)));
-        }
-        out[i * 4 + 3] = 255;
-    }
-    return out;
-}
-
-// Car slots' gate image: the pass's views (the eye, its focus view beside it) as drawn, each car part's pixels in a colour
-// of its slot over the scene darkened; the share of the views' pixels that are car parts and how many parts, logged.
-void save_slot_image(int eye, ID3D11Resource* scene) {
-    const UINT fw = g.drawFocus ? (g.view.focusRenderW ? g.view.focusRenderW : g.view.focusW) : 0;
-    const UINT fh = g.drawFocus ? (g.view.focusRenderH ? g.view.focusRenderH : g.view.focusH) : 0;
-    const UINT w = std::min(g.view.eyeW + fw, g.slotW), h = std::min(std::max(g.view.eyeH, fh), g.slotH);
-    if (!w || !h || !scene || !g.slotTex || g.slotSamples > 1 || tr.sceneDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
-        return;  // (the gate image is of a single-sample slot target: MSAA off)
-    ComPtr<ID3D11Device> device;
-    g.context->GetDevice(&device);
-    const auto staged = [&](ID3D11Resource* src, DXGI_FORMAT format, ComPtr<ID3D11Texture2D>& out) {
-        const D3D11_TEXTURE2D_DESC t = {w, h, 1, 1, format, {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
-        if (FAILED(device->CreateTexture2D(&t, nullptr, &out)))
-            return false;
-        const D3D11_BOX box = {0, 0, 0, w, h, 1};
-        g.context->CopySubresourceRegion(out.Get(), 0, 0, 0, 0, src, 0, &box);
-        return true;
-    };
-    ComPtr<ID3D11Texture2D> slots, colour;
-    if (!staged(g.slotTex.Get(), DXGI_FORMAT_R16_UINT, slots) || !staged(scene, DXGI_FORMAT_R16G16B16A16_FLOAT, colour))
-        return;
-    D3D11_MAPPED_SUBRESOURCE ms{}, mc{};
-    if (FAILED(g.context->Map(slots.Get(), 0, D3D11_MAP_READ, 0, &ms)))
-        return;
-    if (FAILED(g.context->Map(colour.Get(), 0, D3D11_MAP_READ, 0, &mc))) {
-        g.context->Unmap(slots.Get(), 0);
-        return;
-    }
-    std::vector<uint8_t> bgra(static_cast<size_t>(w) * h * 4);
-    std::vector<uint8_t> seen(kCarSlots + 1, 0);
-    size_t carPixels = 0, viewPixels = 0, parts = 0;
-    for (UINT y = 0; y < h; ++y) {
-        const auto* sr = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(ms.pData) + y * ms.RowPitch);
-        const auto* cr = reinterpret_cast<const uint16_t*>(static_cast<const uint8_t*>(mc.pData) + y * mc.RowPitch);
-        for (UINT x = 0; x < w; ++x) {
-            const bool inView = (x < g.view.eyeW && y < g.view.eyeH) || (x >= g.view.eyeW && y < fh);
-            uint8_t* o = bgra.data() + (static_cast<size_t>(y) * w + x) * 4;
-            for (int c = 0; c < 3; ++c) {
-                const float v = std::max(0.0f, half_to_float(cr[x * 4 + c]));
-                o[2 - c] = static_cast<uint8_t>(std::lround(110.0f * std::pow(v / (1.0f + v), 1.0f / 2.2f)));
-            }
-            o[3] = 255;
-            if (!inView)
-                continue;
-            ++viewPixels;
-            const uint16_t word = sr[x];
-            if (word == 0 || word > kCarSlots)
-                continue;
-            ++carPixels;
-            if (!seen[word]) {
-                seen[word] = 1;
-                ++parts;
-            }
-            const uint32_t hash = word * 2654435761u;  // a colour per slot
-            o[0] = static_cast<uint8_t>(96 + (hash >> 8) % 160);
-            o[1] = static_cast<uint8_t>(96 + (hash >> 16) % 160);
-            o[2] = static_cast<uint8_t>(96 + (hash >> 24) % 160);
-        }
-    }
-    g.context->Unmap(colour.Get(), 0);
-    g.context->Unmap(slots.Get(), 0);
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"captures";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    wchar_t name[96];
-    swprintf_s(name, L"lmu-car-slots-frame%llu-eye%d.png", g.framesSinceInstall, eye);
-    simqvfr::write_png_bgra((dir / name).wstring(), bgra, w, h);
-    ++g.stats.slotImages;
-    simqvfr::logf("lmu mvr: car slots: gate image %ls (%ux%u, eye %d%s): %.2f%% of the views' pixels car parts, %zu "
-                  "parts; %llu slot views bound in the pass",
-                  (dir / name).c_str(), w, h, eye, fw ? " and its focus view" : "",
-                  viewPixels ? 100.0 * static_cast<double>(carPixels) / static_cast<double>(viewPixels) : 0.0, parts,
-                  static_cast<unsigned long long>(g.slotViewsThisPass));
-}
-
-void compare_sample(unsigned long long frame) {
-    ++g.stats.samples;
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"captures";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    for (int eye = 0; eye < 2; ++eye) {
-        std::vector<uint16_t> a, b;
-        unsigned aw = 0, ah = 0, bw = 0, bh = 0;
-        if (!g.have[eye] || !g.have[2 + eye] || !read_halves(g.mvrImage[eye].Get(), a, aw, ah) ||
-            !read_halves(g.passImage[eye].Get(), b, bw, bh) || aw != bw || ah != bh) {
-            simqvfr::logf("lmu mvr: frame %llu: eye %d's focus images not both copied (%d %d); not compared", frame, eye,
-                          g.have[eye], g.have[2 + eye]);
-            continue;
-        }
-        const MvrComparison c = mvr_compare(a, b, aw, ah);
-        simqvfr::logf("lmu mvr: frame %llu: focus %d drawn in pass %d (MVR) vs pass %d, %ux%u: aligned at %+d,%+d px; "
-                      "brightness %.4f (cell median %.4f); mean difference %.2f%%; %.2f%% of pixels differ >10%%",
-                      frame, eye, eye, 2 + eye, aw, ah, c.shiftX, c.shiftY, c.brightness, c.cellMedian, 100 * c.meanDiff,
-                      c.differingPct);
-        if (g.stats.samples == 1) {
-            wchar_t name[96];
-            swprintf_s(name, L"lmu-mvr-frame%llu-focus%d-mvr.png", frame, eye);
-            simqvfr::write_png_bgra((dir / name).wstring(), tonemapped(a, aw, ah), aw, ah);
-            swprintf_s(name, L"lmu-mvr-frame%llu-focus%d-pass.png", frame, eye);
-            simqvfr::write_png_bgra((dir / name).wstring(), tonemapped(b, bw, bh), bw, bh);
-            simqvfr::logf("lmu mvr: images in %ls (lmu-mvr-frame%llu-focus*-mvr/pass.png)", dir.c_str(), frame);
-        }
-    }
-}
+// Sample images and their comparison (copy_region, read_halves, save_slot_image, compare_sample): mvr_pass_samples.cpp.
 
 }  // namespace
 
@@ -4592,7 +3561,7 @@ bool mvr_pass_install(ID3D11Device* device) {
             for (auto& q : pass)
                 device->CreateQuery(&tq, &q);
     }
-    if (const MH_STATUS s = MH_Initialize(); s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
+    if (!simqvfr::minhook_ready(nullptr))  // no line here, as before
         return false;
     // The probe's way to the two views (tests set it with mvr_use_instanced): instancing hooks the draws too.
     if (mvr_probe_backend() == MvrBackend::instanced)
@@ -4601,6 +3570,13 @@ bool mvr_pass_install(ID3D11Device* device) {
         g.canInstance = true;
     g.context = context.Get();
     context.As(&g.multithread);
+    {  // the game's VS b13 before its binds are seen
+        ID3D11Buffer* b = nullptr;
+        context->VSGetConstantBuffers(13, 1, &b);
+        hold(g.gameVsCb13, b);
+        if (b)
+            b->Release();
+    }
     hook_every_mode();
     for (int h = 0; h < kHooks; ++h)
         if (wanted(h) && !functions[h].hooked) {
@@ -4760,6 +3736,15 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     if (g.blendSwapped)  // a pass that didn't end: the game's blend state back before it is read
         apply_blend();
     g.stats.biasPasses += g.bias ? 1 : 0;
+    if (g.biasHooks && g.biasCb) {  // the game's PS b13 as the pass begins (texture sharpening's buffer may go there)
+        ID3D11Buffer* b = nullptr;
+        g.context->PSGetConstantBuffers(13, 1, &b);
+        if (b != g.biasCb.Get())
+            hold(g.gamePsCb13, b);
+        if (b)
+            b->Release();
+        g.biasCbUsed = false;
+    }
     read_bindings();
     keep_game_vps();
     keep_game_scs();
@@ -4809,6 +3794,19 @@ void mvr_pass_end(int pass) {
     update();  // the game's shader, one view, its own viewports
     g.bias = false;
     update_ps();  // the game's pixel shader (update() put it back if two views were on)
+    if (g.remapBound) {  // the game's VS b13 in place of our remap
+        realVSSetConstantBuffers(g.context, 13, 1, &g.gameVsCb13);
+        g.remapBound = false;
+    }
+    if (g.biasCbUsed) {  // and its PS b13, if texture sharpening's buffer is still there
+        ID3D11Buffer* b = nullptr;
+        g.context->PSGetConstantBuffers(13, 1, &b);
+        if (b == g.biasCb.Get())
+            g.context->PSSetConstantBuffers(13, 1, &g.gamePsCb13);
+        if (b)
+            b->Release();
+        g.biasCbUsed = g.biasCbBound = false;
+    }
     stamp(pass, 2);
     if (pass == 3 && g.gpuSlot >= 0) {
         g.context->End(g.gpu[g.gpuSlot].disjoint.Get());
@@ -4945,8 +3943,8 @@ ID3D11Resource* mvr_copy_source(ID3D11Resource* dst) {
         return nullptr;
     for (unsigned i = 1; i <= State::kCopiesKept; ++i) {
         const State::CopySeen& c = g.copies[(g.copyNext - i) % State::kCopiesKept];
-        if (c.dst == dst && c.frame + 1 >= g.framesSinceInstall)  // this frame's or the one before's (a frame end since)
-            return c.src;
+        if (c.dst == dst && c.src && c.frame + 1 >= g.framesSinceInstall)  // this frame's or the one before's
+            return c.src;  // held by the ring (render thread: valid until its next copies)
     }
     return nullptr;
 }
@@ -5063,6 +4061,12 @@ void mvr_frame_end(unsigned long long frame) {
     g.shapeOk[0] = g.shapeOk[1] = false;
     for (State::SceneBind& b : g.sceneBinds)  // DLAA's: nothing of the game's held between frames
         b = State::SceneBind{};
+    for (State::CopySeen& c : g.copies)  // the copies mvr_copy_source no longer gives: their sources given back
+        if (c.src && c.frame + 1 < g.framesSinceInstall) {
+            hold(c.src, static_cast<ID3D11Resource*>(nullptr));
+            c.dst = nullptr;
+        }
+    g.sceneRtvChecked = nullptr;  // is_scene_rtv's cache: a view's address may be another's after targets are remade
     // The overlay trace (debug logs only): the frames 600, 2400 and 4200 frame ends after the install, each from the
     // frame end before.
     ++g.framesSinceInstall;
@@ -5222,9 +4226,10 @@ void mvr_frame_end(unsigned long long frame) {
                               : "plain (the two views off, their calls passed on)");
         if (g.instanced)
             simqvfr::logf("lmu mvr: instancing: %llu draws made with twice their instances (%llu with a per-instance "
-                          "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect)%s",
+                          "layout's twin), %llu drawn into the eye alone (DrawAuto, indirect), %llu for their input "
+                          "layout%s",
                           static_cast<unsigned long long>(s.doubledDraws), static_cast<unsigned long long>(s.layoutSwaps),
-                          static_cast<unsigned long long>(s.eyeOnlyDraws),
+                          static_cast<unsigned long long>(s.eyeOnlyDraws), static_cast<unsigned long long>(s.layoutEyeOnly),
                           s.instancedTakeovers ? "; took over from NVIDIA's MVR, which the driver refused" : "");
         if (s.maskDraws || s.maskDropped || s.panelReplays || s.uiMipFrames)
             simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "
@@ -5312,112 +4317,6 @@ void mvr_time_hooks(bool on) {
     timeHooks = on;
 }
 
-namespace {
-
-// mvr_compare's measures on two luminance images.
-MvrComparison compare_luminance(const std::vector<float>& la, const std::vector<float>& lb, unsigned w, unsigned h,
-                                int range) {
-    MvrComparison c;
-    const int border = range + 8;
-    double best = -1, bestMeanA = 0;
-    for (int dy = -range; dy <= range; ++dy)
-        for (int dx = -range; dx <= range; ++dx) {
-            double diff = 0, sumA = 0;
-            for (int y = border; y < static_cast<int>(h) - border; y += 4)
-                for (int x = border; x < static_cast<int>(w) - border; x += 4) {
-                    const float va = la[static_cast<size_t>(y) * w + x];
-                    const float vb = lb[static_cast<size_t>(y + dy) * w + (x + dx)];
-                    diff += std::fabs(va - vb);
-                    sumA += va;
-                }
-            if (best < 0 || diff < best) {
-                best = diff;
-                bestMeanA = sumA;
-                c.shiftX = dx;
-                c.shiftY = dy;
-            }
-        }
-    c.meanDiff = bestMeanA > 0 ? best / bestMeanA : 0;
-    double sumA = 0, sumB = 0;
-    size_t differing = 0, counted = 0;
-    constexpr int kCells = 16;
-    std::vector<double> cellA(kCells * kCells, 0), cellB(kCells * kCells, 0);
-    for (int y = border; y < static_cast<int>(h) - border; ++y)
-        for (int x = border; x < static_cast<int>(w) - border; ++x) {
-            const float va = la[static_cast<size_t>(y) * w + x];
-            const float vb = lb[static_cast<size_t>(y + c.shiftY) * w + (x + c.shiftX)];
-            sumA += va;
-            sumB += vb;
-            ++counted;
-            if (std::fabs(va - vb) > 0.1f * std::max(va, vb) && std::max(va, vb) > 1e-4f)
-                ++differing;
-            const int cell = (y * kCells / static_cast<int>(h)) * kCells + x * kCells / static_cast<int>(w);
-            cellA[cell] += va;
-            cellB[cell] += vb;
-        }
-    c.brightness = sumA > 0 ? sumB / sumA : 0;
-    std::vector<double> ratios;
-    for (int i = 0; i < kCells * kCells; ++i)
-        if (cellA[i] > 1e-6)
-            ratios.push_back(cellB[i] / cellA[i]);
-    std::sort(ratios.begin(), ratios.end());
-    c.cellMedian = ratios.empty() ? 0 : ratios[ratios.size() / 2];
-    c.differingPct = counted ? 100.0 * static_cast<double>(differing) / static_cast<double>(counted) : 0;
-    c.ok = true;
-    return c;
-}
-
-float srgb_to_linear(uint8_t v) {
-    const float x = static_cast<float>(v) / 255.0f;
-    return x <= 0.04045f ? x / 12.92f : std::pow((x + 0.055f) / 1.055f, 2.4f);
-}
-
-}  // namespace
-
-MvrComparison mvr_compare(const std::vector<uint16_t>& a, const std::vector<uint16_t>& b, unsigned w, unsigned h,
-                          int range) {
-    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
-        return {};
-    return compare_luminance(luminance(a, w, h), luminance(b, w, h), w, h, range);
-}
-
-MvrComparison mvr_compare_bgra8(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, unsigned w, unsigned h,
-                                int range) {
-    if (a.size() != static_cast<size_t>(w) * h * 4 || b.size() != a.size() || w < 64 || h < 64)
-        return {};
-    float table[256];
-    for (int i = 0; i < 256; ++i)
-        table[i] = srgb_to_linear(static_cast<uint8_t>(i));
-    const auto lum = [&](const std::vector<uint8_t>& px) {
-        std::vector<float> l(static_cast<size_t>(w) * h);
-        for (size_t i = 0; i < l.size(); ++i)
-            l[i] = 0.0722f * table[px[i * 4]] + 0.7152f * table[px[i * 4 + 1]] + 0.2126f * table[px[i * 4 + 2]];
-        return l;
-    };
-    MvrComparison c = compare_luminance(lum(a), lum(b), w, h, range);
-    // The bytes themselves at that offset (colour channels; alpha left out).
-    const int border = range + 8;
-    double sum = 0;
-    size_t counted = 0, over = 0;
-    for (int y = border; y < static_cast<int>(h) - border; ++y)
-        for (int x = border; x < static_cast<int>(w) - border; ++x) {
-            const size_t ia = (static_cast<size_t>(y) * w + x) * 4;
-            const size_t ib = (static_cast<size_t>(y + c.shiftY) * w + (x + c.shiftX)) * 4;
-            int most = 0;
-            for (int k = 0; k < 3; ++k) {
-                const int d = std::abs(static_cast<int>(a[ia + k]) - static_cast<int>(b[ib + k]));
-                most = std::max(most, d);
-                sum += d;
-            }
-            c.maxByte = std::max(c.maxByte, most);
-            over += most > 4 ? 1 : 0;
-            ++counted;
-        }
-    c.meanByte = counted ? sum / (3.0 * static_cast<double>(counted)) : 0;
-    c.bytesOverPct = counted ? 100.0 * static_cast<double>(over) / static_cast<double>(counted) : 0;
-    return c;
-}
-
 MvrPassStats mvr_pass_stats() { return g.stats; }
 
 CarMotionStats mvr_car_stats() { return g.cars.stats(); }
@@ -5427,24 +4326,6 @@ bool mvr_broken() { return g.context && g.broken; }
 void mvr_track_drive(TrackFn begin, TrackFn end) {
     tr.driveBegin = begin;
     tr.driveEnd = end;
-}
-
-void mvr_pass_trace(int level) {
-    pt.level = level;
-    pt.shapes.clear();
-    pt.lastShape = -1;
-    pt.settings.clear();
-    if (level)
-        simqvfr::log_line("lmu mvr: pass trace on (lmu_pass_trace): every frame recorded, a frame logged when its shape is new, "
-                          "with the game's settings as its files hold them");
-}
-
-void mvr_post_census(int level) {
-    census = PostCensus{};
-    census.level = level;
-    if (level)
-        simqvfr::log_line("lmu mvr: post census on (lmu_post_census): every draw after tracked pass 0's resolve logged with "
-                          "its viewport, inputs, first vertices and constants, every 900 frames and at each new eye size");
 }
 
 void mvr_track_passes(bool on) {

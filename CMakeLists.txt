@@ -118,9 +118,9 @@ endif()
 add_library(sim_qvfr_core STATIC
   src/games/games.cpp src/games/multi_view.cpp src/log.cpp src/layer_chain.cpp
   src/probe/probe.cpp src/probe/hang_watch.cpp
-  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/replay_probe.cpp src/probe/focus_ngx.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
+  src/probe/d3d11_capture.cpp src/probe/d3d12_trace.cpp src/probe/dred.cpp src/probe/pass_census.cpp src/probe/focus_ngx.cpp src/probe/pix_capture.cpp src/probe/gpu_frame_timer.cpp src/probe/d3d11_compose_timer.cpp src/probe/gpu_load.cpp src/probe/cpu_load.cpp src/probe/cpu_profile.cpp src/probe/vram_census.cpp src/probe/run_exit.cpp
   src/probe/d3d12_vtable_index.c
-  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
+  src/games/ace/double_render.cpp src/games/ace/views3.cpp src/games/ace/views4.cpp src/games/ace/replay_probe.cpp src/games/ace/replay_samples.cpp src/games/ace/replay_cull.cpp src/games/ace/batch_watch.cpp src/games/ace/dlss_extent.cpp src/games/ace/stereo_flag.cpp src/games/ace/adapter.cpp src/games/acc/adapter.cpp src/games/acc/views.cpp src/games/acc/view_share.cpp src/games/acc/mesh_passes.cpp src/games/acc/gates.cpp src/games/acc/fixation.cpp src/games/xplane/adapter.cpp src/games/xplane/four_views.cpp src/games/xplane/four_views_shaders.cpp src/games/xplane/four_views_frame.cpp src/games/xplane/focus_projection.cpp src/games/xplane/spirv_patch.cpp src/games/xplane/spirv_module.cpp src/games/xplane/spirv_patch_eyes.cpp src/games/xplane/spirv_patch_focus.cpp src/games/xplane/spirv_patch_rays.cpp src/games/xplane/spirv_patch_view_rects.cpp src/games/xplane/spirv_patch_diag.cpp src/games/lmu/adapter.cpp src/games/lmu/view_probe.cpp src/games/lmu/four_passes.cpp src/games/lmu/mvr_probe.cpp src/games/lmu/mvr_pass.cpp src/games/lmu/mvr_pass_trace.cpp src/games/lmu/mvr_pass_census.cpp src/games/lmu/mvr_pass_samples.cpp src/games/lmu/focus_post.cpp src/games/lmu/dlss_inputs.cpp src/games/lmu/car_motion.cpp src/games/scssoftware/adapter.cpp src/games/scssoftware/pass_probe.cpp src/games/scssoftware/corner.cpp src/games/scssoftware/corner_math.cpp src/games/scssoftware/corner_mirrors.cpp src/games/scssoftware/corner_eye_order.cpp src/games/scssoftware/corner_focus.cpp src/games/scssoftware/corner_present.cpp src/games/scssoftware/corner_burst.cpp src/games/scssoftware/corner_diag.cpp src/engine/context_hooks.cpp src/engine/dlss_views.cpp src/engine/ngx_dlss.cpp src/engine/nr_views.cpp src/engine/ngx_nr.cpp src/engine/fsr_upscale.cpp src/games/adapters.cpp src/engine/code_patch.cpp src/engine/object_vtable.cpp src/engine/d3d11_vtables.cpp src/engine/dxbc_patch.cpp src/engine/nvapi_stereo.cpp src/engine/nvapi_gpus.cpp
   src/quad/compositor.cpp src/quad/helmet_pieces.cpp src/quad/d3d11_compositor.cpp src/quad/d3d11_view_resample.cpp src/quad/d3d11_depth_probe.cpp src/quad/focus_outline.cpp src/quad/settings_menu.cpp src/quad/menu_panel.cpp
   src/quad/osd.cpp src/quad/osd_panel.cpp src/quad/qvfr_optimizer.cpp src/cheeky/cheeky_host.cpp
   src/input/hotkeys.cpp src/profile/profiles.cpp src/input/pad_input.cpp)
@@ -149,7 +149,7 @@ set_source_files_properties(src/probe/d3d12_vtable_index.c src/engine/d3d11_vtab
 # xrNegotiateLoaderApiLayerInterface, which nothing in the DLL references.
 add_library(sim_qvfr_layer OBJECT src/xr_layer.cpp src/layer/globals.cpp src/layer/config.cpp
   src/layer/gaze_actions.cpp src/layer/gaze.cpp src/layer/quad_state.cpp src/layer/reports.cpp src/layer/session.cpp
-  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
+  src/layer/helmet_layer.cpp src/layer/views4.cpp src/layer/views4_d3d11.cpp src/layer/two_loops.cpp src/layer/views.cpp src/layer/live_ini.cpp
   src/layer/hotkey_watch.cpp src/layer/menu.cpp src/layer/overlay.cpp src/layer/optimizer.cpp src/layer/frame.cpp src/layer/native_quad.cpp
   src/layer/eye_off.cpp)
 target_include_directories(sim_qvfr_layer PRIVATE src ${THIRD_PARTY}/openxr/include)
@@ -328,6 +328,21 @@ target_include_directories(lmu_focus_post_test PRIVATE src ${THIRD_PARTY}/openxr
 target_compile_definitions(lmu_focus_post_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lmu_focus_post_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(lmu_focus_post_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+sim_qvfr_test(lmu_mvr_tracker_test tests/lmu_mvr_tracker_test.cpp)
+target_include_directories(lmu_mvr_tracker_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(lmu_mvr_tracker_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_mvr_tracker_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_mvr_tracker_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+sim_qvfr_test(lmu_focus_post_msaa_test tests/lmu_focus_post_msaa_test.cpp)
+target_include_directories(lmu_focus_post_msaa_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(lmu_focus_post_msaa_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_focus_post_msaa_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_focus_post_msaa_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
+sim_qvfr_test(lmu_focus_post_roles_test tests/lmu_focus_post_roles_test.cpp)
+target_include_directories(lmu_focus_post_roles_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(lmu_focus_post_roles_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lmu_focus_post_roles_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(lmu_focus_post_roles_test PRIVATE sim_qvfr_core d3d11 d3dcompiler)
 
 # Offline check of the D3D11 compositor on a WARP device (tests/d3d11_compositor_test.cpp).
 sim_qvfr_test(d3d11_compositor_test tests/d3d11_compositor_test.cpp)
@@ -485,6 +500,13 @@ target_compile_definitions(settings_menu_test PRIVATE SIM_QVFR_DOCUMENTED_INI="$
 target_compile_options(settings_menu_test PRIVATE /utf-8)
 target_link_libraries(settings_menu_test PRIVATE sim_qvfr_core)
 
+# Offline check that the launcher, the headset menu and the layer read the shared settings table alike
+# (tests/qvfr_settings_test.cpp; quad/qvfr_settings.h).
+sim_qvfr_test(qvfr_settings_test tests/qvfr_settings_test.cpp)
+target_include_directories(qvfr_settings_test PRIVATE src ${THIRD_PARTY}/openxr/include)
+target_compile_definitions(qvfr_settings_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(qvfr_settings_test PRIVATE /W4 /permissive- /utf-8)
+
 # Offline check of the performance overlay: its numbers, rows and card (tests/osd_test.cpp).
 sim_qvfr_test(osd_test tests/osd_test.cpp)
 target_include_directories(osd_test PRIVATE src)
@@ -546,7 +568,8 @@ add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to 
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 # The launcher's code that launcher_test checks, compiled once for both. An OBJECT library, so the launcher links every
 # object as it did when they were its own sources (none has a static initializer, so their order doesn't matter).
-add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp src/launcher/launch_watch.cpp
+add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp
+  src/launcher/settings_per_game.cpp src/launcher/settings_runtime.cpp src/launcher/settings_readouts.cpp src/launcher/launch_watch.cpp
   src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
   src/launcher/leftovers.cpp
@@ -630,6 +653,36 @@ target_include_directories(launcher_test PRIVATE src)
 target_compile_definitions(launcher_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(launcher_test PRIVATE /W4 /permissive- /utf-8)
 target_link_libraries(launcher_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(launcher_state_test tests/launcher_state_test.cpp)
+target_include_directories(launcher_state_test PRIVATE src)
+target_compile_definitions(launcher_state_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_state_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(launcher_state_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(launcher_settings_test tests/launcher_settings_test.cpp)
+target_include_directories(launcher_settings_test PRIVATE src)
+target_compile_definitions(launcher_settings_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_settings_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(launcher_settings_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(launcher_report_test tests/launcher_report_test.cpp)
+target_include_directories(launcher_report_test PRIVATE src)
+target_compile_definitions(launcher_report_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_report_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(launcher_report_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(launcher_preflight_test tests/launcher_preflight_test.cpp)
+target_include_directories(launcher_preflight_test PRIVATE src)
+target_compile_definitions(launcher_preflight_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_preflight_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(launcher_preflight_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(launcher_profiles_test tests/launcher_profiles_test.cpp)
+target_include_directories(launcher_profiles_test PRIVATE src)
+target_compile_definitions(launcher_profiles_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_profiles_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(launcher_profiles_test PRIVATE sim_qvfr_launcher_shared)
+sim_qvfr_test(launcher_install_test tests/launcher_install_test.cpp)
+target_include_directories(launcher_install_test PRIVATE src)
+target_compile_definitions(launcher_install_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(launcher_install_test PRIVATE /W4 /permissive- /utf-8)
+target_link_libraries(launcher_install_test PRIVATE sim_qvfr_launcher_shared)
 
 # Offline check of the VRAM census on a WARP device: textures recorded, sorted and taken off when freed
 # (tests/vram_census_test.cpp).
@@ -651,7 +704,8 @@ target_include_directories(xplane_focus_test PRIVATE src)
 target_compile_options(xplane_focus_test PRIVATE /W4 /permissive- /utf-8)
 
 # Offline check of the SPIR-V edit for X-Plane's final resolve shader (tests/xplane_spirv_test.cpp).
-sim_qvfr_test(xplane_spirv_test tests/xplane_spirv_test.cpp src/games/xplane/spirv_patch.cpp)
+sim_qvfr_test(xplane_spirv_test tests/xplane_spirv_test.cpp src/games/xplane/spirv_patch.cpp
+  src/games/xplane/spirv_module.cpp src/games/xplane/spirv_patch_eyes.cpp src/games/xplane/spirv_patch_focus.cpp src/games/xplane/spirv_patch_rays.cpp src/games/xplane/spirv_patch_view_rects.cpp src/games/xplane/spirv_patch_diag.cpp)
 target_include_directories(xplane_spirv_test PRIVATE src)
 target_compile_definitions(xplane_spirv_test PRIVATE _CRT_SECURE_NO_WARNINGS)
 target_compile_options(xplane_spirv_test PRIVATE /W4 /permissive- /utf-8)

@@ -81,7 +81,7 @@ float about_pane(float x, float y, float w, bool draw) {
     std::vector<Row> updateRows = {autoCheck, status};
     if (!app.installing) {
         const bool install = installable();
-        const bool download = (app.update == Update::Available || app.update == Update::Dev) && !app.release.url.empty();
+        const bool download = (app.update == Update::Available || app.update == Update::Dev) && trusted_release_page(app.release.url);
         const std::wstring installLabel = app.installError.empty() ? L"Install " + app.release.tag : L"Try again";
         Row actions;
         actions.fullHeight = [](float) { return t::kControlHeight; };

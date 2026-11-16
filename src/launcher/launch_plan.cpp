@@ -16,12 +16,18 @@ namespace {
 
 namespace fs = std::filesystem;
 
-bool same_name(const std::wstring& a, const std::wstring& b) { return _wcsicmp(a.c_str(), b.c_str()) == 0; }
-
 bool is_variable_name(const std::string& s) {
     if (s.empty() || !(isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_'))
         return false;
     return std::all_of(s.begin(), s.end(), [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_'; });
+}
+
+// A layer name that can become a file name in the run folder and an XR_ENABLE_API_LAYERS entry: the name comes
+// from another vendor's manifest (an HKCU registration is user-writable) and the launch may run elevated, so no
+// separators, drive colons, "..", or the list's ',' and ';'.
+bool is_safe_layer_name(const std::string& s) {
+    return !s.empty() && s.find("..") == std::string::npos &&
+           std::all_of(s.begin(), s.end(), [](char c) { return isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '.' || c == '-'; });
 }
 
 // The layer object of a single-layer manifest, or null.
@@ -58,30 +64,44 @@ std::string loader_rejects(const json::Value& manifest) {
     return {};
 }
 
-std::wstring widen(const std::string& utf8) {
-    if (utf8.empty())
-        return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
-    std::wstring out(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), n);
-    return out;
-}
-
-std::string narrow(const std::wstring& wide) {
-    if (wide.empty())
-        return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), out.data(), n, nullptr, nullptr);
-    return out;
-}
-
-bool read_file(const std::wstring& path, std::string& out) {
+bool read_file(const std::wstring& path, std::string& out, unsigned long long maxBytes) {
     std::ifstream in(fs::path(path), std::ios::binary);
     if (!in)
         return false;
-    out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    if (!maxBytes) {
+        out.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        return true;
+    }
+    in.seekg(0, std::ios::end);
+    const std::streamoff size = in.tellg();
+    if (size < 0 || static_cast<unsigned long long>(size) > maxBytes)
+        return false;
+    in.seekg(0, std::ios::beg);
+    // One byte past its size: a file still growing (maybe past the cap) is refused rather than read cut.
+    out.assign(static_cast<size_t>(size) + 1, '\0');
+    in.read(out.data(), static_cast<std::streamsize>(out.size()));
+    out.resize(static_cast<size_t>(in.gcount()));
+    if (out.size() > static_cast<size_t>(size)) {
+        out.clear();
+        return false;
+    }
     return true;
+}
+
+std::wstring module_path(void* module) {
+    std::wstring path(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(static_cast<HMODULE>(module), path.data(), static_cast<DWORD>(path.size()));
+        if (n == 0)
+            return {};
+        if (n < path.size()) {  // cut paths return the buffer's size
+            path.resize(n);
+            return path;
+        }
+        if (path.size() >= 32768)  // the longest path Windows has
+            return {};
+        path.resize(path.size() * 2);
+    }
 }
 
 bool write_file(const std::wstring& path, const std::string& data) {
@@ -117,7 +137,7 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
     const auto is_set = [&](const std::string& variable) {
         const std::wstring w = widen(variable);
         return std::any_of(options.setVariables.begin(), options.setVariables.end(),
-                           [&](const std::wstring& v) { return same_name(v, w); });
+                           [&](const std::wstring& v) { return iequals(v, w); });
     };
     const auto listed = [](const std::vector<std::string>& names, const std::string& name) {
         return std::find(names.begin(), names.end(), name) != names.end();
@@ -135,8 +155,11 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
         std::string text;
         json::Value manifest;
         if (!read_file(r.manifest, text) || !json::parse(text, manifest) || !layer_of(manifest)) {
+            std::error_code ec;
+            const bool tooBig = fs::file_size(fs::path(r.manifest), ec) > kMaxReadBytes && !ec;
             if (r.enabled)
-                plan.notes.push_back(where + ": unreadable manifest, left alone");
+                plan.notes.push_back(where + (tooBig ? ": manifest larger than 1 MB, not read, left alone"
+                                                     : ": unreadable manifest, left alone"));
             continue;
         }
         const json::Value& layer = *layer_of(manifest);
@@ -148,6 +171,10 @@ LayerPlan plan_layers(const std::vector<Registration>& registrations, const Opti
         }
         if (name == kLayerName)
             continue;  // this layer's installed copy: silenced below, loaded explicitly instead
+        if (!is_safe_layer_name(name)) {
+            plan.notes.push_back(where + ": layer name \"" + name + "\" is not a plain name (A-Z, 0-9, _ . -), left alone");
+            continue;
+        }
         const auto same = std::find_if(candidates.begin(), candidates.end(), [&](const Candidate& c) { return c.name == name; });
         if (same != candidates.end() && (same->systemOn || !r.enabled))
             continue;  // a second registration of a layer already handled (same disable variable)
@@ -242,11 +269,19 @@ bool write_run_folder(const std::wstring& folder, const std::wstring& layerManif
         error = L"cannot write the layer manifest in " + folder;
         return false;
     }
-    for (const MovedLayer& m : plan.below)
-        if (!write_file((fs::path(folder) / (m.name + ".json")).wstring(), json::dump(m.manifest))) {
+    // Each copy lands in the run folder itself, whatever the plan holds (plan_layers already refuses odd names).
+    const fs::path run = (fs::path(folder) / L"x").lexically_normal().parent_path();  // no trailing separator
+    for (const MovedLayer& m : plan.below) {
+        const fs::path file = (run / widen(m.name + ".json")).lexically_normal();
+        if (!is_safe_layer_name(m.name) || _wcsicmp(file.parent_path().c_str(), run.c_str()) != 0) {
+            error = L"the layer name " + widen(m.name) + L" is not a plain file name; nothing of it was written";
+            return false;
+        }
+        if (!write_file(file.wstring(), json::dump(m.manifest))) {
             error = L"cannot write " + widen(m.name) + L".json in " + folder;
             return false;
         }
+    }
     return true;
 }
 
@@ -293,7 +328,7 @@ std::wstring environment_block(const std::vector<std::wstring>& current,
         vars.emplace_back(std::move(name), entry.substr(eq + 1));
     }
     for (const auto& [name, value] : set) {
-        const auto it = std::find_if(vars.begin(), vars.end(), [&](const auto& p) { return same_name(p.first, name); });
+        const auto it = std::find_if(vars.begin(), vars.end(), [&](const auto& p) { return iequals(p.first, name); });
         if (it != vars.end())
             it->second = value;
         else

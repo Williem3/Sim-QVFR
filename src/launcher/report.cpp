@@ -11,7 +11,9 @@
 #include <dxgi.h>
 #include <shlobj.h>
 
-#include "json.h"
+#include "../json.h"
+#include "../log_prefix.h"
+#include "../text.h"
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "shell32.lib")
@@ -22,15 +24,6 @@ namespace simqvfr::launcher {
 namespace fs = std::filesystem;
 
 namespace {
-
-std::wstring widen(const std::string& text) {
-    if (text.empty())
-        return {};
-    const int n = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    std::wstring out(static_cast<size_t>(std::max(n, 0)), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), n);
-    return out;
-}
 
 // `format` with one number, at whatever length it comes to.
 std::wstring formatted(const wchar_t* format, double v) {
@@ -43,11 +36,6 @@ std::wstring formatted(const wchar_t* format, double v) {
 }
 
 std::wstring number(int v) { return std::to_wstring(v); }
-
-bool starts_with(const std::wstring& s, const wchar_t* prefix) { return s.rfind(prefix, 0) == 0; }
-bool ends_with(const std::wstring& s, const std::wstring& suffix) {
-    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
 
 struct Found {
     fs::path path;
@@ -178,10 +166,7 @@ std::wstring local_stamp(uint64_t ticks) {
     SYSTEMTIME utc{}, local{};
     if (!FileTimeToSystemTime(&ft, &utc) || !SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local))
         return L"unknown";
-    wchar_t text[32];
-    swprintf_s(text, L"%04u%02u%02u-%02u%02u%02u", local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute,
-               local.wSecond);
-    return text;
+    return file_stamp(local);
 }
 
 // The game's crash folders (any folder in `folder` holding a minidump or a CrashContext), newest first by their
@@ -232,7 +217,174 @@ std::string trimmed(std::string s) {
     return s;
 }
 
+// ---- The user's and computer's names out of the zip (redact_identity) ----
+
+// ASCII A-Z folded, byte by byte: the same on the data and on every pattern, so UTF-8 and UTF-16 match in any case
+// at the same offsets.
+std::string folded_copy(std::string s) {
+    for (char& c : s)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c + ('a' - 'A'));
+    return s;
+}
+
+// `text` as UTF-8, or as UTF-16LE bytes.
+std::string encoded(const std::wstring& text, bool wide) {
+    if (!wide)
+        return utf8(text);
+    std::string out;
+    for (const wchar_t ch : text) {
+        out += static_cast<char>(ch & 0xff);
+        out += static_cast<char>((ch >> 8) & 0xff);
+    }
+    return out;
+}
+
+// A letter, digit or '_' (or anything not ASCII) at `at`, one unit (1 byte, or 2 for UTF-16) long.
+bool word_unit(const std::string& d, size_t at, size_t unit) {
+    const auto c = static_cast<unsigned char>(d[at]);
+    if (unit == 2 && d[at + 1] != '\0')
+        return true;
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c >= 0x80;
+}
+
+// `name` where `before` and `after` surround it (all folded and encoded alike); `bounded`: not inside a longer word
+// at an end with no context.
+struct NameForm {
+    std::string before, name, after;
+    bool bounded = true;
+};
+
+// Every match of `f` in `data` (`folded` its folded copy, kept in step): the name replaced by `as` (text), or with
+// `keepSize` (a minidump, whose offsets must hold) overwritten by '0's of its length.
+void redact_form(std::string& data, std::string& folded, const NameForm& f, size_t unit, const std::string& as,
+                 bool keepSize) {
+    if (f.name.empty())
+        return;
+    const std::string pattern = f.before + f.name + f.after;
+    const auto ok = [&](size_t at) {
+        if (f.before.empty() && at >= unit) {
+            if (f.bounded && word_unit(folded, at - unit, unit))
+                return false;
+            if (folded[at - unit] == '<' && (unit == 1 || folded[at - 1] == '\0'))
+                return false;  // a placeholder already ("<user>")
+        }
+        const size_t end = at + pattern.size();
+        return !(f.bounded && f.after.empty() && end + unit <= folded.size() && word_unit(folded, end, unit));
+    };
+    if (keepSize) {
+        for (size_t at = 0; (at = folded.find(pattern, at)) != std::string::npos;) {
+            if (!ok(at)) {
+                ++at;
+                continue;
+            }
+            const size_t begin = at + f.before.size(), end = begin + f.name.size();
+            for (size_t i = begin; i + unit <= end; i += unit) {
+                data[i] = folded[i] = '0';
+                if (unit == 2)
+                    data[i + 1] = folded[i + 1] = '\0';
+            }
+            at = end;
+        }
+        return;
+    }
+    // Text: built anew in one pass (a replace per match would move the rest of a large log each time).
+    std::string out, outFolded;
+    const std::string asFolded = folded_copy(as);
+    size_t copied = 0;
+    bool found = false;
+    for (size_t at = 0; (at = folded.find(pattern, at)) != std::string::npos;) {
+        if (!ok(at)) {
+            ++at;
+            continue;
+        }
+        found = true;
+        const size_t begin = at + f.before.size(), end = begin + f.name.size();
+        out.append(data, copied, begin - copied);
+        out += as;
+        outFolded.append(folded, copied, begin - copied);
+        outFolded += asFolded;
+        copied = at = end;
+    }
+    if (!found)
+        return;
+    out.append(data, copied, std::string::npos);
+    outFolded.append(folded, copied, std::string::npos);
+    data.swap(out);
+    folded.swap(outFolded);
+}
+
+// `folder` with `separator` between its parts and after the last: "C:\Users" -> "C:/Users/".
+std::wstring with_separators(const std::wstring& folder, const std::wstring& separator) {
+    std::wstring out;
+    for (const wchar_t ch : folder)
+        out += ch == L'\\' || ch == L'/' ? separator : std::wstring(1, ch);
+    return out + separator;
+}
+
+std::wstring environment_value(const wchar_t* name) {
+    const DWORD n = GetEnvironmentVariableW(name, nullptr, 0);
+    if (n == 0)
+        return {};
+    std::wstring value(n, L'\0');
+    const DWORD got = GetEnvironmentVariableW(name, value.data(), n);
+    value.resize(got < n ? got : 0);
+    return value;
+}
+
 }  // namespace
+
+Identity current_identity() {
+    Identity who{environment_value(L"USERPROFILE"), environment_value(L"USERNAME"), environment_value(L"COMPUTERNAME")};
+    if (who.user.empty()) {
+        wchar_t name[257] = {};
+        DWORD size = static_cast<DWORD>(std::size(name));
+        if (GetUserNameW(name, &size))
+            who.user = name;
+    }
+    if (who.computer.empty()) {
+        wchar_t name[MAX_COMPUTERNAME_LENGTH + 1] = {};
+        DWORD size = static_cast<DWORD>(std::size(name));
+        if (GetComputerNameW(name, &size))
+            who.computer = name;
+    }
+    return who;
+}
+
+std::string redact_identity(std::string data, const Identity& who, bool keepSize) {
+    if (data.empty() || (who.profile.empty() && who.user.empty() && who.computer.empty()))
+        return data;
+    std::string folded = folded_copy(data);
+    const fs::path profile(who.profile);
+    const std::wstring profileName = profile.filename().wstring(), profileParent = profile.parent_path().wstring();
+    // Paths as Windows, URLs and JSON write them.
+    const std::wstring separators[] = {L"\\", L"/", L"\\\\"};
+    for (const bool wide : {false, true}) {
+        const size_t unit = wide ? 2 : 1;
+        const auto enc = [&](const std::wstring& t) { return folded_copy(encoded(t, wide)); };
+        const std::string user = encoded(L"<user>", wide), computer = encoded(L"<computer>", wide);
+        // The profile folder first: its name can differ from the user name (a renamed account).
+        if (!profileName.empty() && !profileParent.empty())
+            for (const std::wstring& sep : separators)
+                redact_form(data, folded, {enc(with_separators(profileParent, sep)), enc(profileName), {}, true}, unit, user,
+                            keepSize);
+        if (!who.user.empty()) {
+            // A short name would match ordinary words: in paths and the environment only.
+            for (const std::wstring& sep : separators)
+                redact_form(data, folded, {enc(L"users" + sep), enc(who.user), enc(sep), false}, unit, user, keepSize);
+            redact_form(data, folded, {enc(L"username="), enc(who.user), {}, true}, unit, user, keepSize);
+            if (who.user.size() >= 4)
+                redact_form(data, folded, {{}, enc(who.user), {}, true}, unit, user, keepSize);
+        }
+        if (!who.computer.empty()) {
+            for (const wchar_t* key : {L"computername=", L"userdomain=", L"\\\\"})
+                redact_form(data, folded, {enc(key), enc(who.computer), {}, true}, unit, computer, keepSize);
+            if (who.computer.size() >= 4)
+                redact_form(data, folded, {{}, enc(who.computer), {}, true}, unit, computer, keepSize);
+        }
+    }
+    return data;
+}
 
 std::vector<ReportFile> report_files(const ReportSources& sources, uint64_t now) {
     constexpr uint64_t kDay = 24ull * 3600 * 10'000'000;
@@ -515,7 +667,7 @@ uint32_t crc32(const void* data, size_t size, uint32_t crc) {
     return ~crc;
 }
 
-std::wstring write_zip(const std::wstring& zip, const std::vector<ReportFile>& files) {
+std::wstring write_zip(const std::wstring& zip, const std::vector<ReportFile>& files, const Identity& who) {
     // Stored entries (method 0), names in UTF-8 (flag bit 11), all stamped with the time now (DOS time).
     SYSTEMTIME t;
     GetLocalTime(&t);
@@ -529,6 +681,9 @@ std::wstring write_zip(const std::wstring& zip, const std::vector<ReportFile>& f
             data = f.data;
         else if (!read_file(f.path, data))
             continue;  // gone or locked meanwhile: the rest still helps
+        // Every entry, whatever made it: the hang dumps too (MiniDumpWithHandleData names files under the profile).
+        const bool dump = f.name.size() >= 4 && _wcsicmp(f.name.c_str() + f.name.size() - 4, L".dmp") == 0;
+        data = redact_identity(std::move(data), who, dump);
         if (out.size() + data.size() > 0xffffffffull - (1u << 20))
             return L"too large for a zip";
         const std::string name = utf8(f.name);
@@ -656,15 +811,6 @@ SystemInfo system_info() {
         info.openxrRuntime = read_file(manifest, text) ? openxr_runtime_name(text, manifest)
                                                        : fs::path(manifest).filename().wstring() + L" (missing)";
     return info;
-}
-
-std::string utf8(const std::wstring& text) {
-    if (text.empty())
-        return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    std::string out(static_cast<size_t>(std::max(n, 0)), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), n, nullptr, nullptr);
-    return out;
 }
 
 std::vector<Cause> likely_causes(const Settings& s, const RuntimeInfo& rt) {

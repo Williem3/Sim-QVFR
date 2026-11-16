@@ -8,18 +8,12 @@
 #include <string>
 
 #include "games/ace/ngx_extent.h"
+#include "test_util.h"
 
 struct ID3D11Resource;
 struct ID3D12Resource;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 enum NgxResult : int { kSuccess = 0x1, kFailNotFound = static_cast<int>(0xbad00002) };
 
@@ -141,6 +135,25 @@ int SIM_QVFR_TEST_MAIN() {
         for (int i = 8; i < 40; ++i)
             newKept &= extents.find(&handles[i], w, h) && w == 10u + i && h == 20u + i;
         check(oldGone && newKept, "40 handles: the last 32 kept, the first 8 gone");
+    }
+
+    // A released handle, a handle reused as another feature, and an NGX shutdown: no stale size is found.
+    {
+        NgxExtents extents;
+        int handles[3] = {};
+        unsigned w = 0, h = 0;
+        extents.record(&handles[0], 582, 599, 1);
+        extents.record(&handles[1], 1259, 1294, 1);
+        extents.forget(&handles[0]);
+        check(!extents.find(&handles[0], w, h, 1), "a released feature's handle is not found");
+        check(extents.find(&handles[1], w, h, 1) && w == 1259 && h == 1294, "the others stay");
+        check(!extents.find(&handles[1], w, h, 2), "after an NGX shutdown (another lifetime) the record is dead");
+        extents.record(&handles[1], 640, 480, 2);
+        check(extents.find(&handles[1], w, h, 2) && w == 640 && h == 480, "made again in the new lifetime: its new size");
+        extents.clear();
+        check(!extents.find(&handles[1], w, h, 2), "cleared: nothing found");
+        extents.record(&handles[2], 100, 100, 2);
+        check(extents.find(&handles[2], w, h, 2) && w == 100, "records after a clear");
     }
 
     std::printf("%s (%d failure%s)\n", failures ? "FAILED" : "passed", failures, failures == 1 ? "" : "s");

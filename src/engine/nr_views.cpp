@@ -19,6 +19,7 @@
 
 #include "../log.h"
 #include "../probe/d3d11_capture.h"
+#include "d3d11_kit.h"
 #include "ngx_nr.h"
 #include "nr_math.h"
 
@@ -134,6 +135,7 @@ struct Slot {
     int preset = 0;
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     bool made = false, refused = false;
+    int creatingPreset = -1;  // >= 0: its feature is still being made on the GPU with this preset (ngxnr::kCreating)
     ngxnr::View* view = nullptr;
     ComPtr<ID3D11RenderTargetView> colourRtv, depthRtv, vectorsRtv, resultRtv;
     ComPtr<ID3D11ShaderResourceView> colourSrv, outputSrv, sourceSrv, resultSrv;
@@ -187,20 +189,16 @@ struct State {
     std::chrono::steady_clock::time_point liveAt;
 } d;
 
+const char* log_tag() { return d.tag ? d.tag : "dlss-nr"; }
+
 void say(const char* format, ...) {
-    char text[1024];
     va_list args;
     va_start(args, format);
-    std::vsnprintf(text, sizeof(text), format, args);
+    log_tagged_v(log_tag(), format, args);
     va_end(args);
-    simqvfr::logf("%s: %s", d.tag ? d.tag : "dlss-nr", text);
 }
 
-void give_up(const char* why) {
-    if (!d.off)
-        say("off for this session: %s", why);
-    d.off = true;
-}
+void give_up(const char* why) { give_up_once(d.off, log_tag(), why); }
 
 // The slot's view given up (ngx_nr.h release): with its feature go the slot's own views and textures, all kept until
 // both devices are through what is queued on them. On the game's immediate context (the render thread).
@@ -296,19 +294,12 @@ bool initialize(ID3D11DeviceContext* context) {
     }
     d.adapted = d.readPending = false;
     d.meterFrame = 0;
-    D3D11_BUFFER_DESC bd{};
-    bd.ByteWidth = sizeof(Constants);
-    bd.Usage = D3D11_USAGE_DEFAULT;
-    bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SAMPLER_DESC sd{};
-    sd.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-    sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sd.MaxLOD = D3D11_FLOAT32_MAX;
     if (!vs || !prepare || !compose ||
         FAILED(d.device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &d.vs)) ||
         FAILED(d.device->CreatePixelShader(prepare->GetBufferPointer(), prepare->GetBufferSize(), nullptr, &d.prepare)) ||
         FAILED(d.device->CreatePixelShader(compose->GetBufferPointer(), compose->GetBufferSize(), nullptr, &d.compose)) ||
-        FAILED(d.device->CreateBuffer(&bd, nullptr, &d.constants)) || FAILED(d.device->CreateSamplerState(&sd, &d.linearClamp))) {
+        !make_constant_buffer(d.device.Get(), sizeof(Constants), d.constants) ||
+        !make_linear_clamp_sampler(d.device.Get(), d.linearClamp)) {
         give_up("its shaders couldn't be made");
         return false;
     }
@@ -324,16 +315,7 @@ bool initialize(ID3D11DeviceContext* context) {
 }
 
 bool make(ComPtr<ID3D11Texture2D>& texture, unsigned w, unsigned h, DXGI_FORMAT format, UINT bind) {
-    D3D11_TEXTURE2D_DESC td{};
-    td.Width = w;
-    td.Height = h;
-    td.MipLevels = td.ArraySize = 1;
-    td.Format = format;
-    td.SampleDesc.Count = 1;
-    td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = bind;
-    texture.Reset();
-    return SUCCEEDED(d.device->CreateTexture2D(&td, nullptr, &texture));
+    return make_texture2d(d.device.Get(), texture, w, h, format, bind);
 }
 
 // The view's feature and textures for a region this size, worked at ww x wh (made again when any of it changes).
@@ -343,6 +325,11 @@ bool ensure(Slot& s, int index, const nr::Region& region, unsigned ww, unsigned 
         return s.view != nullptr;
     if (s.view)
         ++d.remade;
+    // A creation still on the GPU for this very slot's sizes: asked for again with the preset it was started with.
+    const int creatingPreset = s.creatingPreset >= 0 && s.region.width == region.width && s.region.height == region.height &&
+                                       s.workingW == ww && s.workingH == wh && s.preset == d.cfg.preset && s.format == format
+                                   ? s.creatingPreset
+                                   : -1;
     release_slot(s);
     s.made = true;
     s.region = region;
@@ -352,10 +339,10 @@ bool ensure(Slot& s, int index, const nr::Region& region, unsigned ww, unsigned 
     s.format = format;
     unsigned result = 0;
     // Room on the card first: a feature made into a full card has Windows move memory off it every frame (frames of
-    // hundreds of ms).
+    // hundreds of ms). Not for a creation already on the GPU: its memory is counted in use already.
     double used = 0, budget = 0;
     const double needs = ngxnr::view_memory_mb(ww, wh);
-    if (ngxnr::video_memory(used, budget) && used + needs > budget) {
+    if (creatingPreset < 0 && ngxnr::video_memory(used, budget) && used + needs > budget) {
         if (!d.memoryLogged)
             say("view %d: not made: worked at %ux%u it needs about %.0f MB of video memory, and the game uses %.0f of the %.0f MB "
                 "Windows gives it. Lower the working size or its limit, or the game's resolution",
@@ -365,14 +352,25 @@ bool ensure(Slot& s, int index, const nr::Region& region, unsigned ww, unsigned 
         return false;
     }
     const auto t0 = std::chrono::steady_clock::now();
-    s.view = ngxnr::create(ww, wh, d.cfg.preset, result);
-    if (!s.view && d.cfg.preset != 0) {  // a runtime without that model: its default
+    const int first = creatingPreset >= 0 ? creatingPreset : d.cfg.preset;
+    int pendingWith = -1;
+    s.view = ngxnr::create(ww, wh, first, result);
+    if (!s.view && result == ngxnr::kCreating)
+        pendingWith = first;
+    else if (!s.view && first != 0) {  // a runtime without that model: its default
         unsigned again = 0;
         s.view = ngxnr::create(ww, wh, 0, again);
         if (s.view)
             say("view %d: preset %s refused (0x%08x): made with the runtime's default instead", index, preset_name(d.cfg.preset), result);
-        else
-            result = again;
+        else if (again == ngxnr::kCreating)
+            pendingWith = 0;
+        result = s.view ? result : again;
+    }
+    if (pendingWith >= 0) {  // not through on the GPU yet: not a failure, asked for again next frame (nothing waits)
+        s.made = false;
+        s.creatingPreset = pendingWith;
+        d.madeThisFrame = true;
+        return false;
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     bool ok = s.view != nullptr;
@@ -486,7 +484,12 @@ void nr_start(const char* tag, const NrSettings& settings) {
     }
     d.tag = tag ? tag : "dlss-nr";
     d.cfg = nr_clamped(settings);
-    d.savesLeft = d.cfg.saveFrames;
+    // Automatic pictures (synchronous readbacks and PNG writes on the render thread) only in a Detailed logs launch,
+    // as layer/config.cpp gates the other diagnostics. (cfg keeps the value: live settings compare equal to it.)
+    d.savesLeft = d.cfg.saveFrames && log_debug() ? d.cfg.saveFrames : 0;
+    if (d.cfg.saveFrames && !d.savesLeft)
+        say("[experiment] dlss_nr_save is off: its pictures are saved only in a Detailed logs launch (the launcher's "
+            "Diagnostics pane)");
     d.saved = 0;
     d.off = false;
     if (d.cfg.on && !ngxnr::built_in()) {
@@ -544,7 +547,8 @@ bool nr_run_view(ID3D11DeviceContext* context, const NrView& v) {
         s.preset == d.cfg.preset && s.format == v.format)
         return false;
     if (!ensure(s, v.index, region, ww, wh, v.format)) {
-        ++d.failures;
+        if (s.creatingPreset < 0)  // a creation still on the GPU isn't a failure
+            ++d.failures;
         return false;
     }
     // History: the frame before, the same side of DLSS, and the region no further than a quarter of itself from where

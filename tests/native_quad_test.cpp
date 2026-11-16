@@ -12,18 +12,12 @@
 
 #include "layer/layer.h"
 #include "quad/native_quad.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 using namespace simqvfr::layer;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += !ok;
-}
 
 // The fake runtime's record of what reached it.
 struct Fake {

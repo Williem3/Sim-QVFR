@@ -86,7 +86,8 @@ bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& obs
 // The entries' current functions hooked if new (the game's thread, between its commands: an xrEndFrame).
 void rescan();
 // Observing stops (session end): the hooks stay in d3d11's code and pass every call straight on. A later install on
-// the same context hooks again only what's new.
+// the same context hooks again only what's new. Calls already inside an observer are waited out (up to 500 ms), so
+// the observers' state may be freed after it returns; not to be called from inside an observer.
 void uninstall();
 Stats stats();
 bool installed();

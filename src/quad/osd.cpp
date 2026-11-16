@@ -7,17 +7,12 @@
 
 #include <windows.h>
 
-#include "../ini_put.h"
+#include "../ini.h"
 
 namespace simqvfr {
 
 OsdPlacement read_osd_placement(const wchar_t* ini) {
-    // As strings: GetPrivateProfileInt reads negative values as 0.
-    const auto read = [ini](const wchar_t* key, int fallback) {
-        wchar_t text[16] = {};
-        GetPrivateProfileStringW(L"osd", key, L"", text, 16, ini);
-        return text[0] ? _wtoi(text) : fallback;
-    };
+    const auto read = [ini](const wchar_t* key, int fallback) { return ini_signed(ini, L"osd", key, fallback); };
     OsdPlacement p;
     p.enabled = read(L"enabled", 0) != 0;
     p.yaw = std::clamp(read(L"yaw", p.yaw), -kOsdYawMax, kOsdYawMax);

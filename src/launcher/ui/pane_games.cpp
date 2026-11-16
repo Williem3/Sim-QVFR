@@ -26,18 +26,18 @@ void refresh_installed() {
     std::size_t count = 0;
     const games::GameInfo* const* all = games::all_games(count);
     for (std::size_t i = 0; i < count; ++i)
-        app.installed[game_id(*all[i])] = game_installed(*all[i]);
+        app.installed[games::wide_id(*all[i])] = game_installed(*all[i]);
 }
 
 bool installed(const games::GameInfo& game) {
-    const auto it = app.installed.find(game_id(game));
+    const auto it = app.installed.find(games::wide_id(game));
     return it == app.installed.end() || it->second;
 }
 
 // A game has a tab when it is installed and not hidden, or when the user gave it one (one Steam doesn't find, installed
 // elsewhere: its folder is chosen in Launch checks).
 bool game_shown(const games::GameInfo& game) {
-    return installed(game) ? !game_hidden(app.s.hiddenGames, game_id(game)) : game_hidden(app.s.shownGames, game_id(game));
+    return installed(game) ? !game_hidden(app.s.hiddenGames, games::wide_id(game)) : game_hidden(app.s.shownGames, games::wide_id(game));
 }
 
 int shown_game_count() {
@@ -72,7 +72,7 @@ void load_color_edit() {
     if (app.colorLoaded == index)
         return;
     app.colorLoaded = index;
-    const auto it = app.s.gameColors.find(game_id(color_game()));
+    const auto it = app.s.gameColors.find(games::wide_id(color_game()));
     const uint32_t rgb = it != app.s.gameColors.end() ? it->second : builtin_accent(color_game()).accent_fill;
     float value = 1;
     rgb_hsv(rgb, app.colorHue, app.colorSat, value);
@@ -80,7 +80,7 @@ void load_color_edit() {
 }
 
 void apply_color_edit() {
-    app.s.gameColors[game_id(color_game())] = hsv_rgb(app.colorHue, app.colorSat, app.colorValue / 100.0f);
+    app.s.gameColors[games::wide_id(color_game())] = hsv_rgb(app.colorHue, app.colorSat, app.colorValue / 100.0f);
     apply_theme();  // the selected game's accent may be the one changed
 }
 
@@ -146,7 +146,7 @@ static_assert(std::size(kColorPresets) == 6, "six presets");
 void use_color_preset(int preset) {
     if (preset < 0 || preset >= static_cast<int>(std::size(kColorPresets)))
         return;
-    app.s.gameColors[game_id(color_game())] = kColorPresets[preset];
+    app.s.gameColors[games::wide_id(color_game())] = kColorPresets[preset];
     app.colorLoaded = -2;
     load_color_edit();
     apply_theme();  // the selected game's accent may be the one changed
@@ -215,7 +215,7 @@ void game_row(const Rect& r, size_t i) {
 void color_row(const Rect& r) {
     Canvas& cv = app.canvas;
     const games::GameInfo& game = color_game();
-    const auto custom = app.s.gameColors.find(game_id(game));
+    const auto custom = app.s.gameColors.find(games::wide_id(game));
     const bool hasCustom = custom != app.s.gameColors.end();
     const std::wstring label = L"Colour for " + std::wstring(game.shortName);
     cv.text(label, t::kBody, {r.x, r.y, r.w, 20}, col(app.c->label));

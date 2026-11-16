@@ -118,6 +118,7 @@ bool helmet_layer_resources(XrSession session) {
     }
     quad.helmetImages.clear();
     quad.helmetImages11.clear();
+    quad.helmetPending = {};
     for (const auto& image : images)
         quad.helmetImages.push_back(image.texture);
     for (const auto& image : images11)
@@ -146,6 +147,7 @@ void helmet_layer_release() {
     quad.helmetSpace = XR_NULL_HANDLE;
     quad.helmetImages.clear();
     quad.helmetImages11.clear();
+    quad.helmetPending = {};  // an image left acquired goes with its swapchain
     quad.helmetSide = 0;
     quad.helmetQuadCount = 0;
     quad.helmetDrawn = quad.helmetResize = false;
@@ -160,12 +162,17 @@ namespace {
 bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2], const float (&full)[2][4],
                        double visorOffset, ID3D11Texture2D* views11) {
     uint32_t index = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     const size_t images = views11 ? quad.helmetImages11.size() : quad.helmetImages.size();
-    if (XR_FAILED(next.AcquireSwapchainImage(quad.helmetChain, &acquire, &index)) || index >= images)
+    // Bounded (inside the game's calls, under quad.mutex). Timed out: no helmet layer this frame, the image (still
+    // acquired, not released) waited on again at the next.
+    if (acquire_wait(quad.helmetChain, quad.helmetPending, kImageWaitNs, kImageWaitTries, index,
+                     "helmet: layer image wait") != XR_SUCCESS)
         return false;
+    if (index >= images) {
+        next.ReleaseSwapchainImage(quad.helmetChain, &release);
+        return false;
+    }
     const double tilt = h.height * kHelmetDegrees, distance = helmet_distance(h);
     const XrQuaternionf up{static_cast<float>(std::sin(tilt / 2)), 0, 0, static_cast<float>(std::cos(tilt / 2))};
     float rotation[2][9], offset[2][3];
@@ -194,9 +201,8 @@ bool helmet_layer_draw(const HelmetSettings& h, const EyeComposition (&eyes)[2],
     std::memcpy(draw.outerSource[0], eyes[0].outerSource, sizeof(draw.outerSource[0]));
     std::memcpy(draw.outerSource[1], eyes[1].outerSource, sizeof(draw.outerSource[1]));
     draw.bands = bands;
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.helmetChain, &wait)) &&
-                    (views11 ? v4d3d11.compositor.draw_helmet_layer(views11, quad.helmetImages11[index], draw)
-                             : quad.compositor.draw_helmet_layer(quad.helmetImages[index], draw));
+    const bool ok = views11 ? v4d3d11.compositor.draw_helmet_layer(views11, quad.helmetImages11[index], draw)
+                            : quad.compositor.draw_helmet_layer(quad.helmetImages[index], draw);
     next.ReleaseSwapchainImage(quad.helmetChain, &release);
     // The quads, in VIEW space: the whole quad centred `height` above straight ahead, facing the eyes; each band its
     // slice of it (along the quad's own up) and of the image. Always kHelmetFarM away (helmet_far_centre: SteamVR drew

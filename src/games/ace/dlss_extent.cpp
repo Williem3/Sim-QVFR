@@ -11,6 +11,7 @@
 #include "ngx_extent.h"
 #include "../../engine/code_patch.h"
 #include "../../log.h"
+#include "../../probe/focus_ngx.h"
 
 namespace simqvfr {
 namespace {
@@ -42,10 +43,19 @@ unsigned createHook(void* commandList, unsigned feature, void* bag, void** outHa
         ngx_get_ui(bag, "Width", rw);
         ngx_get_ui(bag, "Height", rh);
     }
+    const uint64_t life = focus_ngx::lifetime();
     const unsigned result = createOriginal(commandList, feature, bag, outHandle);
-    if (dlss && ngx_succeeded(result) && outHandle && *outHandle && w > 0 && h > 0) {
+    if (!ngx_succeeded(result) || !outHandle || !*outHandle)
+        return result;
+    if (!dlss || w == 0 || h == 0) {  // a reused handle as another feature: no size of an older one for it
         AcquireSRWLockExclusive(&lock);
-        extents.record(*outHandle, w, h);
+        extents.forget(*outHandle);
+        ReleaseSRWLockExclusive(&lock);
+        return result;
+    }
+    {
+        AcquireSRWLockExclusive(&lock);
+        extents.record(*outHandle, w, h, life);
         ReleaseSRWLockExclusive(&lock);
         logf("views4 dlss: feature 0x%llx made with output %ux%u (render up to %ux%u)",
              static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(*outHandle)), w, h, rw, rh);
@@ -57,7 +67,7 @@ unsigned evaluateHook(void* commandList, const void* handle, void* bag, void* ca
     if (handle && bag) {
         unsigned w = 0, h = 0;
         AcquireSRWLockShared(&lock);
-        const bool known = extents.find(handle, w, h);
+        const bool known = extents.find(handle, w, h, focus_ngx::lifetime());
         ReleaseSRWLockShared(&lock);
         if (known) {
             evaluated.fetch_add(1, std::memory_order_relaxed);
@@ -68,6 +78,16 @@ unsigned evaluateHook(void* commandList, const void* handle, void* bag, void* ca
         }
     }
     return evaluateOriginal(commandList, handle, bag, callback);
+}
+
+// The game's releases and NGX's shutdowns (seen by focus_ngx once it has hooked NGX): those records go.
+void released(const void* handle) {
+    AcquireSRWLockExclusive(&lock);
+    if (handle)
+        extents.forget(handle);
+    else
+        extents.clear();
+    ReleaseSRWLockExclusive(&lock);
 }
 
 }  // namespace
@@ -81,6 +101,9 @@ bool dlss_extent_start() {
         log_line("views4 dlss: NGX create/evaluate anchor mismatch; the DLSS output sizes are left to ACE");
         return false;
     }
+    // Its own MH_Initialize: views4 normally ran it first, but this start must not depend on that order.
+    if (!minhook_ready("views4 dlss", "; the DLSS output sizes are left to ACE"))
+        return false;
     void* create = reinterpret_cast<void*>(module_base() + ace::kNgxCreateFeatureRva);
     void* evaluate = reinterpret_cast<void*>(module_base() + ace::kNgxEvaluateFeatureRva);
     MH_STATUS s = MH_CreateHook(create, reinterpret_cast<void*>(&createHook), reinterpret_cast<void**>(&createOriginal));
@@ -99,6 +122,7 @@ bool dlss_extent_start() {
         return false;
     }
     installed = true;
+    focus_ngx::set_release_observer(&released);
     log_line("views4 dlss: each DLSS feature's output size goes into NGX's parameters at its evaluation "
              "(views4_dlss_extent)");
     return true;

@@ -18,17 +18,11 @@
 
 #include "games/lmu/mvr_pass.h"
 #include "games/lmu/mvr_probe.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 int fake_two_views(ID3D11DeviceContext*, bool) { return 0; }
 
@@ -318,6 +312,5 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                     (after - untimed) / 5 * 36000 / 1e6);
     }
 
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

@@ -106,32 +106,96 @@ void refresh(Mirror& m) {
 Mirror* learn(ID3D11Buffer* b) {
     if (!b)
         return nullptr;
-    if (Mirror* m = mirror_of_game(b))
+    if (Mirror* m = mirror_of_game(b)) {
+        m->usedFrame = g.stats.frames;
         return m;
+    }
     if (game_of(b) != b)
         return nullptr;  // one of ours
     D3D11_BUFFER_DESC d;
     b->GetDesc(&d);
     if (d.ByteWidth < kMirrorMin || !(d.BindFlags & D3D11_BIND_CONSTANT_BUFFER))
         return nullptr;
+    // A slot for other threads' writes: a freed one (evict_mirrors) or the next. None: not mirrored (the game's own
+    // buffer stays bound, its pairs not rewritten for the corner) rather than a copy other threads' writes miss.
+    const int n = g.mirrorIdCount.load(std::memory_order_relaxed);
+    int id = -1;
+    for (int i = 0; i < n && id < 0; ++i)
+        if (!g.mirrorIds[i].load(std::memory_order_relaxed))
+            id = i;
+    if (id < 0 && n < State::kMirrorIds)
+        id = n;
+    if (id < 0) {
+        ++g.mirrorNoId;
+        if (!g.mirrorNoIdLogged) {
+            g.mirrorNoIdLogged = true;
+            simqvfr::logf("scs corner: the game's constant buffer %p (%u bytes) not mirrored: all %d mirrors in use (it "
+                          "stays the game's own until one is let go)",
+                          static_cast<void*>(b), d.ByteWidth, State::kMirrorIds);
+        }
+        return nullptr;
+    }
     Mirror m;
     m.game = b;
     m.bytes = d.ByteWidth & ~15u;
+    m.usedFrame = g.stats.frames;
     const D3D11_BUFFER_DESC cd = {m.bytes, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
     if (FAILED(g.device->CreateBuffer(&cd, nullptr, &m.copy))) {
         simqvfr::logf("scs corner: a copy of the game's %u-byte constant buffer couldn't be made", d.ByteWidth);
         return nullptr;
     }
-    if (const int n = g.mirrorIdCount.load(std::memory_order_relaxed); n < State::kMirrorIds) {
-        m.id = n;
-        g.mirrorGen[n].store(0, std::memory_order_relaxed);
-        g.mirrorIds[n].store(b, std::memory_order_relaxed);
+    m.id = id;  // published before the first copy (refresh), so no other thread's write after it goes unseen
+    g.mirrorGen[id].store(0, std::memory_order_relaxed);
+    g.mirrorIds[id].store(b, std::memory_order_release);
+    if (id == n)
         g.mirrorIdCount.store(n + 1, std::memory_order_release);
-    }
     g.mirrors.push_back(m);
     simqvfr::logf("scs corner: the game's constant buffer %p (%u bytes, usage %u) mirrored (%zu so far)",
                   static_cast<void*>(b), d.ByteWidth, static_cast<unsigned>(d.Usage), g.mirrors.size());
     return &g.mirrors.back();
+}
+
+// Mirrors no bind has used for kEvictFrames frames, let go with their slot (as evict_unused does twins): the game
+// makes new buffers at level loads, and each mirror holds the game's old one alive with our copy (256 KB and more
+// each). At the frame's end, outside the corner (our copies swapped back out); one still bound anyway is kept, so
+// game_of can still map it back.
+void evict_mirrors() {
+    if (g.active || g.mirrors.empty())
+        return;
+    constexpr UINT n = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
+    ID3D11Buffer* bound[2][n] = {};
+    g.context->VSGetConstantBuffers(0, n, bound[0]);
+    g.context->PSGetConstantBuffers(0, n, bound[1]);
+    const auto held = [&](const Mirror& m) {
+        for (const auto& stage : bound)
+            for (ID3D11Buffer* b : stage)
+                if (b && b == m.copy.Get())
+                    return true;
+        return false;
+    };
+    const uint64_t now = g.stats.frames;
+    size_t gone = 0;
+    for (auto it = g.mirrors.begin(); it != g.mirrors.end();)
+        if (now - it->usedFrame > kEvictFrames && !held(*it)) {
+            if (it->id >= 0)  // first: other threads stop matching it (before the game's buffer, and its address, go)
+                g.mirrorIds[it->id].store(nullptr, std::memory_order_release);
+            it = g.mirrors.erase(it);
+            ++gone;
+        } else {
+            ++it;
+        }
+    for (const auto& stage : bound)
+        for (ID3D11Buffer* b : stage)
+            if (b)
+                b->Release();
+    if (gone) {
+        g.mirrorsEvicted += gone;
+        g.mirrorNoIdLogged = false;  // a buffer left unmirrored is logged again if it still finds no slot
+        simqvfr::logf("scs corner: %zu mirrors unused for %llu frames let go (%zu left; %llu let go, %llu binds left "
+                      "unmirrored for want of a slot so far)",
+                      gone, static_cast<unsigned long long>(kEvictFrames), g.mirrors.size(),
+                      static_cast<unsigned long long>(g.mirrorsEvicted), static_cast<unsigned long long>(g.mirrorNoId));
+    }
 }
 
 // The vertex and pixel stages' bound constant buffers swapped to our copies (on) or back to the game's (off), ranges kept.
@@ -177,6 +241,8 @@ void swap_bound(bool on) {
 // after this frame's copy was made: the stale copy flickered on the cab roof, S1 run 2). From another thread: through
 // the buffer's generation (refresh), since the mirror list is the drawing thread's.
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT) {
+    if (session_ending())
+        return;
     if (const DWORD self = GetCurrentThreadId(); self != g.thread) {
         const int n = g.mirrorIdCount.load(std::memory_order_acquire);
         for (int i = 0; i < n; ++i)
@@ -200,7 +266,7 @@ void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT) {
 }
 
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out) {
-    if (!g.active || g.mirrorsOff || GetCurrentThreadId() != g.thread)
+    if (session_ending() || !g.active || g.mirrorsOff || GetCurrentThreadId() != g.thread)
         return false;
     bool changed = false;
     for (UINT i = 0; i < count; ++i) {

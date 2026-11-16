@@ -35,6 +35,15 @@ unsigned adapter_vendor(ID3D11Device* device) {
 #ifdef SIM_QVFR_FFX
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <wincrypt.h>
+#include <wintrust.h>
+#include <softpub.h>
+
+#include <cwchar>
+#include <string>
+
+#pragma comment(lib, "wintrust.lib")
+#pragma comment(lib, "crypt32.lib")
 
 #include <ffx_api.h>
 #include <ffx_api_loader.h>
@@ -128,8 +137,12 @@ void destroy(View* v) {
     delete v;
 }
 
+// A view that never came into use: destroyed now if our queue is through it, else parked with the released ones
+// (collect, shutdown). Never waits: the render thread must not block on the GPU.
 void discard(View* v) {
-    if (s.queue && s.fence && v->lastSubmit && !wait_for(v->lastSubmit, 30000)) {
+    if (s.queue && s.fence && v->lastSubmit && s.fence->GetCompletedValue() < v->lastSubmit) {
+        v->releaseValue = 0;  // the game's device never touched it
+        v->releasedAt = s.collects;
         s.released.push_back(v);
         return;
     }
@@ -269,22 +282,84 @@ bool has_both(const std::wstring& folder) {
            GetFileAttributesW((folder + L"\\" + kLoaderDll).c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
-// AMD's two DLLs from the first folder holding both: the upscaler first and by its full path, so the loader finds it
-// already loaded and takes no other copy (its lookup: a loaded module, the exe's folder, its own folder).
+// Opens `path` without write or delete sharing (so it can't be swapped between this check and the load) and checks
+// its Authenticode signature is valid and AMD's: the DLLs can come from the game's folder. Once per load, no UI,
+// revocation from the cache only (no network stall). INVALID_HANDLE_VALUE (and `why`) when it isn't; the caller
+// closes the handle once the DLL is loaded.
+HANDLE open_signed_by_amd(const std::wstring& path, std::string& why) {
+    const HANDLE file =
+        CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        why = "couldn't be opened (error " + std::to_string(GetLastError()) + ")";
+        return file;
+    }
+    WINTRUST_FILE_INFO info{sizeof(info)};
+    info.pcwszFilePath = path.c_str();
+    info.hFile = file;
+    WINTRUST_DATA data{sizeof(data)};
+    data.dwUIChoice = WTD_UI_NONE;
+    data.fdwRevocationChecks = WTD_REVOKE_NONE;
+    data.dwUnionChoice = WTD_CHOICE_FILE;
+    data.pFile = &info;
+    data.dwStateAction = WTD_STATEACTION_VERIFY;
+    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE;
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    const LONG trust = WinVerifyTrust(nullptr, &action, &data);
+    wchar_t signer[256] = L"";
+    if (trust == ERROR_SUCCESS) {
+        CRYPT_PROVIDER_DATA* provider = WTHelperProvDataFromStateData(data.hWVTStateData);
+        CRYPT_PROVIDER_SGNR* sgnr = provider ? WTHelperGetProvSignerFromChain(provider, 0, FALSE, 0) : nullptr;
+        if (sgnr && sgnr->csCertChain && sgnr->pasCertChain && sgnr->pasCertChain[0].pCert)
+            CertGetNameStringW(sgnr->pasCertChain[0].pCert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, nullptr, signer, 256);
+    }
+    data.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(nullptr, &action, &data);
+    if (trust == ERROR_SUCCESS && std::wcsstr(signer, L"Advanced Micro Devices"))
+        return file;
+    CloseHandle(file);
+    char text[160];
+    if (trust != ERROR_SUCCESS)
+        std::snprintf(text, sizeof(text), "has no valid signature (WinVerifyTrust 0x%08lx)", static_cast<unsigned long>(trust));
+    else
+        std::snprintf(text, sizeof(text), "isn't signed by AMD (signer \"%ls\")", signer);
+    why = text;
+    return INVALID_HANDLE_VALUE;
+}
+
+// AMD's two DLLs from the first folder holding both, signed by AMD: the upscaler first and by its full path, so the
+// loader finds it already loaded and takes no other copy (its lookup: a loaded module, the exe's folder, its own folder).
 bool load_runtime(const wchar_t* dllFolder, std::string& why) {
     std::vector<std::wstring> folders;
     if (dllFolder && *dllFolder)
         folders.emplace_back(dllFolder);
     folders.push_back(own_folder());
     folders.push_back(exe_folder());
+    std::string refused;  // the last unsigned pair's reason, if no folder had a signed one
     for (const std::wstring& f : folders) {
         if (!has_both(f))
             continue;
+        const std::wstring upscalerPath = f + L"\\" + kUpscalerDll, loaderPath = f + L"\\" + kLoaderDll;
+        std::string bad;
+        const HANDLE upscalerFile = open_signed_by_amd(upscalerPath, bad);
+        const HANDLE loaderFile =
+            upscalerFile != INVALID_HANDLE_VALUE ? open_signed_by_amd(loaderPath, bad) : INVALID_HANDLE_VALUE;
+        if (loaderFile == INVALID_HANDLE_VALUE) {
+            if (upscalerFile != INVALID_HANDLE_VALUE)
+                CloseHandle(upscalerFile);
+            refused = std::string(upscalerFile != INVALID_HANDLE_VALUE ? "amd_fidelityfx_loader_dx12.dll "
+                                                                       : "amd_fidelityfx_upscaler_dx12.dll ") +
+                      bad;
+            logf("fsr: refused AMD's FSR DLLs in %ls: %s", f.c_str(), refused.c_str());
+            continue;
+        }
+        // (the handles, shared for reading only, keep both files as checked until loaded)
         const DWORD flags = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
-        s.upscaler = LoadLibraryExW((f + L"\\" + kUpscalerDll).c_str(), nullptr, flags);
-        s.loader = s.upscaler ? LoadLibraryExW((f + L"\\" + kLoaderDll).c_str(), nullptr, flags) : nullptr;
+        s.upscaler = LoadLibraryExW(upscalerPath.c_str(), nullptr, flags);
+        s.loader = s.upscaler ? LoadLibraryExW(loaderPath.c_str(), nullptr, flags) : nullptr;
+        const DWORD error = GetLastError();
+        CloseHandle(upscalerFile);
+        CloseHandle(loaderFile);
         if (!s.loader) {
-            const DWORD error = GetLastError();
             if (s.upscaler)
                 FreeLibrary(s.upscaler);
             s.upscaler = nullptr;
@@ -295,11 +370,20 @@ bool load_runtime(const wchar_t* dllFolder, std::string& why) {
         }
         ffxLoadFunctions(&s.ffx, s.loader);
         if (!s.ffx.CreateContext || !s.ffx.DestroyContext || !s.ffx.Query || !s.ffx.Dispatch) {
+            // Unloaded and cleared: s.upscaler set would read as a loaded runtime next time.
+            FreeLibrary(s.loader);
+            FreeLibrary(s.upscaler);
+            s.loader = s.upscaler = nullptr;
+            s.ffx = {};
             why = s.failure = "amd_fidelityfx_loader_dx12.dll lacks the FSR API's functions";
             return false;
         }
         s.folder = f;
         return true;
+    }
+    if (!refused.empty()) {
+        why = s.failure = "AMD's FSR DLLs weren't loaded: " + refused;
+        return false;
     }
     why = s.failure = dllFolder && *dllFolder
                           ? "amd_fidelityfx_upscaler_dx12.dll and amd_fidelityfx_loader_dx12.dll aren't both in the folder "

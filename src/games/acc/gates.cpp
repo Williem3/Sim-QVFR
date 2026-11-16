@@ -70,13 +70,6 @@ const char* state_label() {
 
 const char* tag() { return cfg.copies ? "acc copies" : "acc focus"; }
 
-std::wstring captures_folder() {
-    const std::filesystem::path dir = std::filesystem::path(simqvfr::log_directory()) / L"captures";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    return dir.wstring();
-}
-
 // A rect of the image as its own picture.
 std::vector<std::uint8_t> crop(const GateImage& img, const GateRect& r) {
     std::vector<std::uint8_t> out(static_cast<std::size_t>(r.w) * r.h * 4);
@@ -88,7 +81,7 @@ std::vector<std::uint8_t> crop(const GateImage& img, const GateRect& r) {
 void save(const GateImage& img, const GateRect& r, const wchar_t* what, int eye) {
     wchar_t name[96];
     swprintf_s(name, L"\\%ls-frame%llu-%ls%d.png", cfg.copies ? L"acc-copies" : L"acc-focus", endFrames, what, eye);
-    const std::wstring path = captures_folder() + name;
+    const std::wstring path = simqvfr::captures_directory() + name;
     simqvfr::write_png_bgra(path, crop(img, r), static_cast<unsigned>(r.w), static_cast<unsigned>(r.h));
 }
 
@@ -189,7 +182,7 @@ void sample_focus(const GateImage& img, const GateRect (&views)[4], Sample& s) {
             save(img, views[eye], L"eye", eye);
             save(img, views[eye + 2], L"focus", eye);
             simqvfr::logf("acc focus: images in %ls: python tools/focus_compare.py <eye png> <focus png> %.5f %.5f %.5f %.5f",
-                          captures_folder().c_str(), box[0], box[1], box[2], box[3]);
+                          simqvfr::captures_directory().c_str(), box[0], box[1], box[2], box[3]);
         }
     }
 }

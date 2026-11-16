@@ -15,18 +15,12 @@
 #include <wrl/client.h>
 
 #include "engine/dxbc_patch.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 namespace dxbc = simqvfr::dxbc;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 ComPtr<ID3DBlob> compile(const char* source, const char* entry, const char* target) {
     ComPtr<ID3DBlob> code, errors;
@@ -354,6 +348,5 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
     const dxbc::SlotOutput again = dxbc::add_slot_output(twin.bytecode.data(), twin.bytecode.size());
     check(again.bytecode.empty(), "a shader with the slot output already: refused");
 
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

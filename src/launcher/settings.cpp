@@ -2,46 +2,30 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <cwchar>
-#include <iterator>
 #include <filesystem>
 #include <string>
 
 #include <windows.h>
 
 #include "../games/game.h"
-#include "../ini_put.h"
+#include "../ini.h"
 #include "game_tabs.h"
+#include "settings_ini.h"
 
+// Load, save and defaults, and profiles of the settings. Per-game copies: settings_per_game.cpp; Cheeky, launch
+// sizes and runtime info: settings_runtime.cpp; readouts and slider maths: settings_readouts.cpp.
 namespace simqvfr::launcher {
+
+using settings_ini::clamp_to;
+using settings_ini::read_int;
+using settings_ini::read_signed;
+using settings_ini::read_string;
+using settings_ini::write;
+
 namespace {
 
 // The views4 call sites of the tested QVFR configuration (recon "Darkness fixed").
 constexpr wchar_t kQvfrCallers[] = L"init,draw,tiles,slots,cameras,fog,consts,final,oitpass,dlss";
-
-int read_int(const std::wstring& ini, const wchar_t* section, const wchar_t* key, int fallback) {
-    return static_cast<int>(GetPrivateProfileIntW(section, key, fallback, ini.c_str()));
-}
-
-std::wstring read_string(const std::wstring& ini, const wchar_t* section, const wchar_t* key) {
-    wchar_t buffer[256] = {};
-    GetPrivateProfileStringW(section, key, L"", buffer, static_cast<DWORD>(std::size(buffer)), ini.c_str());
-    return buffer;
-}
-
-// Signed: GetPrivateProfileInt reads negative values as 0.
-int read_signed(const std::wstring& ini, const wchar_t* section, const wchar_t* key, int fallback) {
-    const std::wstring text = read_string(ini, section, key);
-    return text.empty() ? fallback : _wtoi(text.c_str());
-}
-
-int clamp_to(int v, Range r) { return std::clamp(v, r.min, r.max); }
-
-// Only a value that differs is written: a change saves ~100 keys, each write rewrites the whole ini (ini_put.h).
-bool write(const std::wstring& ini, const wchar_t* section, const wchar_t* key, const std::wstring& value) {
-    return ini_put(ini.c_str(), section, key, value.c_str());
-}
 
 }  // namespace
 
@@ -55,27 +39,28 @@ const wchar_t* color_name(OutlineColor color) {
 
 Settings load_settings(const std::wstring& ini) {
     Settings s;
-    const std::wstring mode = read_string(ini, L"experiment", L"mode");
-    s.mode = _wcsicmp(mode.c_str(), L"quad") == 0 ? RenderMode::TwoLoop : RenderMode::Qvfr;
-    s.width = clamp_to(read_int(ini, L"experiment", L"focus_percent", s.width), kSizeRange);
-    s.height = clamp_to(read_int(ini, L"experiment", L"focus_height_percent", s.width), kSizeRange);
-    const int eyeScale = read_int(ini, L"experiment", L"eye_scale", s.outer);
-    const int periphery = read_int(ini, L"experiment", L"periphery_scale", 0);
-    s.outer = clamp_to(s.mode == RenderMode::Qvfr && periphery ? periphery : eyeScale, kOuterRange);
+    const wchar_t* const f = ini.c_str();
+    s.mode = parse_render_mode(read_string(ini, L"experiment", L"mode").c_str()) == IniRenderMode::TwoLoop ? RenderMode::TwoLoop
+                                                                                                          : RenderMode::Qvfr;
+    s.width = ini_int(f, kFocusPercent);
+    s.height = ini_int(f, kFocusHeightPercent, s.width);
+    const int eyeScale = ini_raw(f, kEyeScale, kEyeScale.def);
+    const int periphery = ini_raw(f, kPeripheryScale, 0);
+    s.outer = kPeripheryScale.clamp(s.mode == RenderMode::Qvfr && periphery ? periphery : eyeScale);
     // Unset, the layer derives the density from eye_scale (equal quarters); show that value.
-    const int density = read_int(ini, L"experiment", L"focus_density", 0);
-    s.inner = clamp_to(density ? density : static_cast<int>(std::lround(100.0 * eyeScale / s.width)), kInnerRange);
-    s.objectDetail = clamp_to(read_int(ini, L"experiment", L"object_detail", s.objectDetail), kObjectDetailRange);
-    s.sharpen = clamp_to(read_int(ini, L"quad", L"sharpen_percent", s.sharpen), kSharpenRange);
-    s.eyeOff = std::clamp(read_int(ini, L"quad", L"eye_off", 0), 0, 2);
+    const int density = ini_raw(f, kFocusDensity, 0);
+    s.inner = kFocusDensity.clamp(density ? density : static_cast<int>(std::lround(100.0 * kEyeScale.clamp(eyeScale) / s.width)));
+    s.objectDetail = ini_int(f, kObjectDetail);
+    s.sharpen = ini_int(f, kSharpenPercent);
+    s.eyeOff = ini_int(f, kEyeOff);
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
-    s.feather = clamp_to(read_int(ini, L"quad", L"feather_percent", s.feather), kFeatherRange);
-    s.corner = clamp_to(read_int(ini, L"quad", L"corner_radius_percent", s.corner), kCornerRange);
-    s.eyeTracking = read_int(ini, L"quad", L"gaze", 1) != 0;
-    s.offset = read_focus_offset(ini.c_str());
-    s.gazeDeadzone = read_gaze_deadzone(ini.c_str());
-    s.shape = read_focus_shape(ini.c_str());
-    s.outline = read_int(ini, L"quad", L"debug_border", 0) != 0;
+    s.feather = ini_int(f, kFeatherPercent);
+    s.corner = ini_int(f, kCornerRadiusPercent);
+    s.eyeTracking = ini_flag(f, kGaze);
+    s.offset = read_focus_offset(f);
+    s.gazeDeadzone = read_gaze_deadzone(f);
+    s.shape = read_focus_shape(f);
+    s.outline = ini_flag(f, kDebugBorder);
     s.cpuProfile = read_int(ini, L"experiment", L"cpu_profile", 0) != 0;
     s.frameCapture = read_int(ini, L"experiment", L"d3d11_capture_hotkey", 0) != 0;
     s.baselineNext = read_int(ini, L"launcher", L"baseline_next", 0) != 0;
@@ -89,29 +74,27 @@ Settings load_settings(const std::wstring& ini) {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);
         for (std::size_t i = 0; i < count; ++i) {
-            const std::wstring id(all[i]->id, all[i]->id + std::strlen(all[i]->id));
+            const std::wstring id = games::wide_id(*all[i]);
             uint32_t rgb = 0;
             if (parse_color(read_string(ini, L"launcher", (L"color_" + id).c_str()), rgb))
                 s.gameColors[id] = rgb;
         }
     }
-    const std::wstring color = read_string(ini, L"quad", L"debug_border_color");
-    s.color = _wcsicmp(color.c_str(), L"magenta") == 0 ? OutlineColor::Magenta
-              : _wcsicmp(color.c_str(), L"green") == 0 ? OutlineColor::Green
-                                                       : OutlineColor::Teal;
+    const BorderColor color = read_border_color(f);
+    s.color = color == BorderColor::Magenta ? OutlineColor::Magenta : color == BorderColor::Teal ? OutlineColor::Teal : OutlineColor::Green;
     s.menuYaw = clamp_to(read_signed(ini, L"menu", L"yaw", s.menuYaw), kMenuYawRange);
     s.menuPitch = clamp_to(read_signed(ini, L"menu", L"pitch", s.menuPitch), kMenuPitchRange);
     s.menuWidth = clamp_to(read_signed(ini, L"menu", L"width", s.menuWidth), kMenuWidthRange);
-    s.hotkeyFooter = read_int(ini, L"menu", L"hotkey_footer", 1) != 0;
+    s.hotkeyFooter = ini_flag(f, kHotkeyFooter);
     s.cheeky = read_cheeky_settings(ini.c_str());
     s.dlss = read_dlss_settings(ini.c_str());
     s.nr = read_nr_settings(ini.c_str());
     s.osd = read_osd_placement(ini.c_str());
-    s.crop = read_int(ini, L"crop", L"enabled", 0) != 0;
-    s.cropTop = clamp_to(read_int(ini, L"crop", L"top", 0), kCropRange);
-    s.cropBottom = clamp_to(read_int(ini, L"crop", L"bottom", 0), kCropRange);
-    s.cropOuter = clamp_to(read_int(ini, L"crop", L"outer", 0), kCropRange);
-    s.cropInner = clamp_to(read_int(ini, L"crop", L"inner", 0), kCropRange);
+    s.crop = ini_flag(f, kCropEnabled);
+    s.cropTop = ini_int(f, kCropTop);
+    s.cropBottom = ini_int(f, kCropBottom);
+    s.cropOuter = ini_int(f, kCropOuter);
+    s.cropInner = ini_int(f, kCropInner);
     s.helmet = read_helmet_settings(ini.c_str());
     s.hotkeys = read_hotkeys(ini.c_str());
     return s;
@@ -159,12 +142,12 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         ok &= write(ini, L"experiment", L"views4_callers", kQvfrCallers);
         ok &= write(ini, L"experiment", L"views4_compose", L"1");
         ok &= write(ini, L"experiment", L"views4_show_copies", L"0");
-        ok &= write(ini, L"experiment", L"periphery_scale", n(s.outer));
-        ok &= write(ini, L"experiment", L"focus_density", n(s.inner));
+        ok &= write(ini, kPeripheryScale, n(s.outer));
+        ok &= write(ini, kFocusDensity, n(s.inner));
     } else {
         ok &= write(ini, L"experiment", L"mode", L"quad");
     }
-    ok &= write(ini, L"experiment", L"eye_scale", n(s.outer));  // Two-loop's resolution; QVFR's fallback
+    ok &= write(ini, kEyeScale, n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
@@ -179,7 +162,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
         std::size_t count = 0;
         const games::GameInfo* const* all = games::all_games(count);
         for (std::size_t i = 0; i < count; ++i) {
-            const std::wstring id(all[i]->id, all[i]->id + std::strlen(all[i]->id)), key = L"color_" + id;
+            const std::wstring id = games::wide_id(*all[i]), key = L"color_" + id;
             const auto it = s.gameColors.find(id);
             ok &= WritePrivateProfileStringW(L"launcher", key.c_str(), it == s.gameColors.end() ? nullptr : color_text(it->second).c_str(),
                                              ini.c_str()) != 0 || it == s.gameColors.end();  // no colour: the key goes
@@ -198,32 +181,32 @@ bool save_live_settings(const std::wstring& ini, const Settings& in) {
     const auto n = [](int v) { return std::to_wstring(v); };
     bool ok = true;
     if (s.mode == RenderMode::Qvfr) {  // QVFR resizes its views live, up to their launch size
-        ok &= write(ini, L"experiment", L"periphery_scale", n(clamp_to(s.outer, kOuterRange)));
-        ok &= write(ini, L"experiment", L"focus_density", n(clamp_to(s.inner, kInnerRange)));
-        ok &= write(ini, L"crop", L"enabled", s.crop ? L"1" : L"0");  // and the FOV crop
-        ok &= write(ini, L"crop", L"top", n(clamp_to(s.cropTop, kCropRange)));
-        ok &= write(ini, L"crop", L"bottom", n(clamp_to(s.cropBottom, kCropRange)));
-        ok &= write(ini, L"crop", L"outer", n(clamp_to(s.cropOuter, kCropRange)));
-        ok &= write(ini, L"crop", L"inner", n(clamp_to(s.cropInner, kCropRange)));
+        ok &= write(ini, kPeripheryScale, n(clamp_to(s.outer, kOuterRange)));
+        ok &= write(ini, kFocusDensity, n(clamp_to(s.inner, kInnerRange)));
+        ok &= write(ini, kCropEnabled, s.crop ? L"1" : L"0");  // and the FOV crop
+        ok &= write(ini, kCropTop, n(clamp_to(s.cropTop, kCropRange)));
+        ok &= write(ini, kCropBottom, n(clamp_to(s.cropBottom, kCropRange)));
+        ok &= write(ini, kCropOuter, n(clamp_to(s.cropOuter, kCropRange)));
+        ok &= write(ini, kCropInner, n(clamp_to(s.cropInner, kCropRange)));
         ok &= write_helmet_settings(ini.c_str(), s.helmet);
-        ok &= write(ini, L"experiment", L"object_detail", n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
-        ok &= write(ini, L"quad", L"sharpen_percent", n(clamp_to(s.sharpen, kSharpenRange)));
+        ok &= write(ini, kObjectDetail, n(clamp_to(s.objectDetail, kObjectDetailRange)));  // X-Plane's
+        ok &= write(ini, kSharpenPercent, n(clamp_to(s.sharpen, kSharpenRange)));
     }
-    ok &= write(ini, L"experiment", L"focus_percent", n(s.width));
-    ok &= write(ini, L"experiment", L"focus_height_percent", n(s.height));
-    ok &= write(ini, L"quad", L"feather_percent", n(s.feather));
-    ok &= write(ini, L"quad", L"corner_radius_percent", n(s.corner));
-    ok &= write(ini, L"quad", L"gaze", s.eyeTracking ? L"1" : L"0");
-    ok &= write(ini, L"quad", L"eye_off", n(std::clamp(s.eyeOff, 0, 2)));  // QVFR or not (the layer's black eye)
+    ok &= write(ini, kFocusPercent, n(s.width));
+    ok &= write(ini, kFocusHeightPercent, n(s.height));
+    ok &= write(ini, kFeatherPercent, n(s.feather));
+    ok &= write(ini, kCornerRadiusPercent, n(s.corner));
+    ok &= write(ini, kGaze, s.eyeTracking ? L"1" : L"0");
+    ok &= write(ini, kEyeOff, n(kEyeOff.clamp(s.eyeOff)));  // QVFR or not (the layer's black eye)
     ok &= write_focus_offset(ini.c_str(), s.offset);
     ok &= write_gaze_deadzone(ini.c_str(), s.gazeDeadzone);
     ok &= write_focus_shape(ini.c_str(), s.shape);
-    ok &= write(ini, L"quad", L"debug_border",s.outline ? L"1" : L"0");
-    ok &= write(ini, L"quad", L"debug_border_color", color_name(s.color));
+    ok &= write(ini, kDebugBorder, s.outline ? L"1" : L"0");
+    ok &= write(ini, kBorderColorSection, kBorderColorKey, color_name(s.color));
     ok &= write(ini, L"menu", L"yaw", n(clamp_to(s.menuYaw, kMenuYawRange)));
     ok &= write(ini, L"menu", L"pitch", n(clamp_to(s.menuPitch, kMenuPitchRange)));
     ok &= write(ini, L"menu", L"width", n(clamp_to(s.menuWidth, kMenuWidthRange)));
-    ok &= write(ini, L"menu", L"hotkey_footer", s.hotkeyFooter ? L"1" : L"0");
+    ok &= write(ini, kHotkeyFooter, s.hotkeyFooter ? L"1" : L"0");
     ok &= write_cheeky_settings(ini.c_str(), s.cheeky, false);  // the layer applies them to Cheeky live
     ok &= write_dlss_settings(ini.c_str(), s.dlss);  // and Sim-QVFR's own DLSS to the game (but the folder: next launch)
     ok &= write_nr_settings(ini.c_str(), s.nr);      // and DLSS-NR on its views (the folder likewise)
@@ -259,148 +242,6 @@ bool per_game_key(const std::wstring& section, const std::wstring& key) {
              (section == L"dlss" && key == L"folder") || (section == L"dlss_nr" && key == L"folder"));
 }
 
-namespace {
-
-std::wstring widen_id(const char* id) { return std::wstring(id, id + std::strlen(id)); }
-
-constexpr wchar_t kAbsent[] = L"\x01";  // GetPrivateProfileString's fallback: the key isn't there
-
-std::wstring ini_value(const std::wstring& ini, const std::wstring& section, const std::wstring& key) {
-    wchar_t value[1024] = {};
-    GetPrivateProfileStringW(section.c_str(), key.c_str(), kAbsent, value, static_cast<DWORD>(std::size(value)), ini.c_str());
-    return value;
-}
-
-// A game's copy written in one go (each WritePrivateProfileString rewrites the whole file): its keys by section, in
-// the ANSI code page as WritePrivateProfileString writes a new file, through a temporary file so a copy is never half
-// written.
-bool write_game_copy(const std::wstring& file, const std::vector<ProfileKey>& keys) {
-    std::vector<std::wstring> sections;
-    for (const ProfileKey& k : keys)
-        if (std::find(sections.begin(), sections.end(), k.section) == sections.end())
-            sections.push_back(k.section);
-    std::wstring text;
-    for (const std::wstring& section : sections) {
-        text += L"[" + section + L"]\r\n";
-        for (const ProfileKey& k : keys)
-            if (k.section == section)
-                text += k.key + L"=" + k.value + L"\r\n";
-    }
-    const int bytes = WideCharToMultiByte(CP_ACP, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    std::string ansi(static_cast<std::size_t>(std::max(bytes, 0)), '\0');
-    if (bytes > 0)
-        WideCharToMultiByte(CP_ACP, 0, text.c_str(), static_cast<int>(text.size()), ansi.data(), bytes, nullptr, nullptr);
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(file).parent_path(), ec);
-    const std::wstring temp = file + L".new";
-    HANDLE h = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return false;
-    DWORD written = 0;
-    const bool ok = WriteFile(h, ansi.data(), static_cast<DWORD>(ansi.size()), &written, nullptr) && written == ansi.size();
-    CloseHandle(h);
-    if (!ok || !MoveFileExW(temp.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileW(temp.c_str());
-        return false;
-    }
-    return true;
-}
-
-// The ini's per-game keys (as a profile of its settings) and its [profiles] current, for a game's copy.
-std::vector<ProfileKey> game_copy_keys(const std::wstring& ini) {
-    std::vector<ProfileKey> keys = settings_profile(load_settings(ini), L"game").keys;
-    const std::wstring current = ini_value(ini, L"profiles", L"current");
-    if (current != kAbsent)
-        keys.push_back({L"profiles", L"current", current});
-    return keys;
-}
-
-}  // namespace
-
-// A game's first copy: the settings in use, with the sizes the game starts a fresh install with (GameInfo::defaults).
-std::vector<ProfileKey> first_game_copy(std::vector<ProfileKey> keys, const std::wstring& gameId) {
-    std::size_t count = 0;
-    const games::GameInfo* const* all = games::all_games(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        if (_wcsicmp(widen_id(all[i]->id).c_str(), gameId.c_str()) != 0)
-            continue;
-        const games::GameInfo::Defaults& d = all[i]->defaults;
-        const std::pair<const wchar_t*, int> sizes[] = {{L"periphery_scale", d.periphery}, {L"focus_density", d.density},
-                                                        {L"focus_percent", d.focusWidth}, {L"focus_height_percent", d.focusHeight}};
-        for (const auto& [key, value] : sizes) {
-            if (value <= 0)
-                continue;
-            const std::wstring text = std::to_wstring(value);
-            bool found = false;
-            for (ProfileKey& k : keys)
-                if (_wcsicmp(k.section.c_str(), L"experiment") == 0 && _wcsicmp(k.key.c_str(), key) == 0) {
-                    k.value = text;
-                    found = true;
-                }
-            if (!found)
-                keys.push_back({L"experiment", key, text});
-        }
-    }
-    return keys;
-}
-
-bool store_game_settings(const std::wstring& ini, const std::wstring& gameId) {
-    if (gameId.empty() || is_preset_name(gameId) || GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return false;
-    return write_game_copy(game_settings_file(ini, gameId), game_copy_keys(ini));
-}
-
-bool restore_game_settings(const std::wstring& ini, const std::wstring& gameId) {
-    Profile stored;
-    if (gameId.empty() || is_preset_name(gameId) || !load_profile(game_settings_folder(ini), gameId, stored, true))
-        return false;
-    // Only the keys whose value differs are written: each write rewrites the whole ini, and between two games
-    // usually only a few differ.
-    bool ok = true;
-    for (const ProfileKey& k : stored.keys)
-        if ((per_game_key(k.section, k.key) || (k.section == L"profiles" && k.key == L"current")) &&
-            ini_value(ini, k.section, k.key) != k.value)
-            ok &= WritePrivateProfileStringW(k.section.c_str(), k.key.c_str(), k.value.c_str(), ini.c_str()) != 0;
-    // A per-game key the copy doesn't hold (a setting newer than the copy, such as [quad] sharpen_percent): its default,
-    // not the value the last game left in the ini, which would otherwise carry over into this game.
-    static const std::vector<ProfileKey> defaults = settings_profile(Settings{}, L"defaults").keys;
-    for (const ProfileKey& d : defaults) {
-        const bool held = std::any_of(stored.keys.begin(), stored.keys.end(), [&](const ProfileKey& k) {
-            return _wcsicmp(k.section.c_str(), d.section.c_str()) == 0 && _wcsicmp(k.key.c_str(), d.key.c_str()) == 0;
-        });
-        if (!held && per_game_key(d.section, d.key) && ini_value(ini, d.section, d.key) != d.value)
-            ok &= WritePrivateProfileStringW(d.section.c_str(), d.key.c_str(), d.value.c_str(), ini.c_str()) != 0;
-    }
-    return ok;
-}
-
-int seed_game_settings(const std::wstring& ini) {
-    if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return 0;
-    std::size_t count = 0;
-    const games::GameInfo* const* all = games::all_games(count);
-    int made = 0;
-    std::vector<ProfileKey> keys;  // the settings in use, read once for every game that needs them
-    for (std::size_t i = 0; i < count; ++i) {
-        const std::wstring file = game_settings_file(ini, widen_id(all[i]->id));
-        if (GetFileAttributesW(file.c_str()) != INVALID_FILE_ATTRIBUTES)
-            continue;
-        if (keys.empty())
-            keys = game_copy_keys(ini);
-        made += write_game_copy(file, first_game_copy(keys, widen_id(all[i]->id))) ? 1 : 0;
-    }
-    return made;
-}
-
-bool switch_game_settings(const std::wstring& ini, const std::wstring& fromId, const std::wstring& toId) {
-    bool ok = store_game_settings(ini, fromId);
-    if (GetFileAttributesW(game_settings_file(ini, toId).c_str()) == INVALID_FILE_ATTRIBUTES)  // none yet: it starts from
-        ok &= !toId.empty() && !is_preset_name(toId) &&                                         // the settings in use and
-              write_game_copy(game_settings_file(ini, toId), first_game_copy(game_copy_keys(ini), toId));  // its own sizes
-    ok &= restore_game_settings(ini, toId);
-    return ok;
-}
-
 std::string share_profile(const Profile& profile) {
     const Profile defaults = settings_profile(Settings{}, profile.name);
     Profile diff;
@@ -427,279 +268,6 @@ bool shared_profile(const std::string& text, Profile& profile) {
     }
     profile = std::move(p);
     return true;
-}
-
-std::wstring cheeky_runtime_path(const std::wstring& ini, const std::wstring& layerFolder) {
-    const auto absolute = [&](const std::wstring& path) {
-        const std::filesystem::path p(path);
-        return (p.is_absolute() ? p : std::filesystem::path(layerFolder) / p).lexically_normal().wstring();
-    };
-    const std::wstring runtime = read_string(ini, L"cheeky", L"runtime");
-    if (!runtime.empty())
-        return absolute(runtime);
-    std::wstring configDir = read_string(ini, L"cheeky", L"config_dir");
-    if (configDir.empty())
-        configDir = L"CheekyFoveatedDLSS";
-    return (std::filesystem::path(absolute(configDir)) / L"CheekyFoveatedDLSSRuntime.dll").wstring();
-}
-
-bool save_cheeky_runtime(const std::wstring& ini, const std::wstring& runtime) {
-    return write(ini, L"cheeky", L"runtime", runtime);
-}
-
-std::wstring dlss_dll_path(const std::wstring& folder, const std::wstring& layerFolder) {
-    const std::wstring& in = folder.empty() ? layerFolder : folder;
-    return in.empty() ? std::wstring() : (std::filesystem::path(in) / L"nvngx_dlss.dll").wstring();
-}
-
-CheekyLayer cheeky_layer_state() {
-    // Implicit layers: value name = manifest path, data 0 = enabled (the OpenXR loader's convention).
-    CheekyLayer state = CheekyLayer::Missing;
-    for (HKEY root : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER}) {
-        HKEY key = nullptr;
-        if (RegOpenKeyExW(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit", 0, KEY_READ, &key) != ERROR_SUCCESS)
-            continue;
-        wchar_t name[1024];
-        for (DWORD i = 0;; ++i) {
-            DWORD nameLength = static_cast<DWORD>(std::size(name)), data = 1, dataSize = sizeof(data), type = 0;
-            if (RegEnumValueW(key, i, name, &nameLength, nullptr, &type, reinterpret_cast<BYTE*>(&data), &dataSize) !=
-                ERROR_SUCCESS)
-                break;
-            std::wstring lower(name, nameLength);
-            for (wchar_t& ch : lower)
-                ch = static_cast<wchar_t>(towlower(ch));
-            if (lower.find(L"xr_apilayer_cheeky") == std::wstring::npos)
-                continue;
-            if (type == REG_DWORD && data == 0)
-                state = CheekyLayer::Enabled;
-            else if (state == CheekyLayer::Missing)
-                state = CheekyLayer::Disabled;
-        }
-        RegCloseKey(key);
-    }
-    return state;
-}
-
-std::wstring running_live_ini(const std::wstring& runtimeInfo) {
-    const std::wstring ini = read_string(runtimeInfo, L"runtime", L"live_ini");
-    const DWORD pid = static_cast<DWORD>(read_int(runtimeInfo, L"runtime", L"live_pid", 0));
-    if (ini.empty() || pid == 0)
-        return {};
-    // That process, still running, and still ACE (not a reused id).
-    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (!process)
-        return {};
-    DWORD code = 0;
-    wchar_t path[MAX_PATH] = {};
-    DWORD length = MAX_PATH;
-    const bool running = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE &&
-                         QueryFullProcessImageNameW(process, 0, path, &length);
-    CloseHandle(process);
-    const std::wstring exe = path;
-    const std::wstring ace = L"\\" + std::wstring(games::launcher_game().exeName);
-    if (!running || exe.size() < ace.size() || _wcsicmp(exe.c_str() + exe.size() - ace.size(), ace.c_str()) != 0)
-        return {};
-    return ini;
-}
-
-LaunchSizes load_launch_sizes(const std::wstring& runtimeInfo) {
-    LaunchSizes l;
-    const std::wstring mode = read_string(runtimeInfo, L"runtime", L"launch_mode");
-    l.known = !mode.empty();
-    l.mode = _wcsicmp(mode.c_str(), L"quad") == 0 ? RenderMode::TwoLoop : RenderMode::Qvfr;
-    l.outer = read_int(runtimeInfo, L"runtime", L"launch_outer", 0);
-    l.focusWidth = read_int(runtimeInfo, L"runtime", L"launch_focus_width", 0);
-    l.focusHeight = read_int(runtimeInfo, L"runtime", L"launch_focus_height", 0);
-    l.crop = read_string(runtimeInfo, L"runtime", L"launch_crop");
-    if (l.crop.empty())
-        l.crop = L"0,0,0,0";  // a layer from before the crop
-    return l;
-}
-
-bool fits_launch(const Settings& s, const LaunchSizes& launch) {
-    if (!launch.known || s.mode != launch.mode)
-        return false;
-    if (s.mode == RenderMode::TwoLoop)
-        return s.outer == launch.outer;
-    // The focus views' size against the native eye, as the layer computes it (percent, rounded there).
-    const double focusWidth = s.inner * s.width / 100.0, focusHeight = s.inner * s.height / 100.0;
-    // The outer views (periphery density over the crop's share) no larger than at launch.
-    int top = 0, bottom = 0, outer = 0, inner = 0;
-    swscanf_s(launch.crop.c_str(), L"%d,%d,%d,%d", &top, &bottom, &outer, &inner);
-    const double launchWidth = launch.outer * (100 - outer - inner) / 100.0, launchHeight = launch.outer * (100 - top - bottom) / 100.0;
-    return s.outer * s.crop_width() <= launchWidth + 0.5 && s.outer * s.crop_height() <= launchHeight + 0.5 &&
-           focusWidth <= launch.focusWidth + 0.5 && focusHeight <= launch.focusHeight + 0.5;
-}
-
-
-RuntimeInfo load_runtime_info(const std::wstring& path) {
-    RuntimeInfo r;
-    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
-        return r;
-    r.width = read_int(path, L"runtime", L"recommended_width", 0);
-    r.height = read_int(path, L"runtime", L"recommended_height", 0);
-    r.maxWidth = read_int(path, L"runtime", L"max_width", 0);
-    r.maxHeight = read_int(path, L"runtime", L"max_height", 0);
-    r.centerPpd = _wtof(read_string(path, L"runtime", L"native_center_ppd").c_str());
-    const int eye = read_int(path, L"runtime", L"eye_tracking", -1);
-    r.eyeTracker = eye == 1 ? EyeTracker::Detected : eye == 0 ? EyeTracker::Missing : EyeTracker::Unknown;
-    r.cheekyStatus = read_string(path, L"runtime", L"cheeky_status");
-    r.cheekyVersion = read_string(path, L"runtime", L"cheeky_version");
-    r.quadViews = read_string(path, L"runtime", L"quad_views");
-    r.quadViewsUsed = read_int(path, L"runtime", L"quad_views_used", 0) != 0;
-    swscanf_s(read_string(path, L"runtime", L"quad_runtime_focus").c_str(), L"%dx%d", &r.quadFocusWidth, &r.quadFocusHeight);
-    r.vramUsedMb = read_int(path, L"runtime", L"vram_used_mb", 0);
-    r.vramBudgetMb = read_int(path, L"runtime", L"vram_budget_mb", 0);
-    r.vramScaledMb = read_int(path, L"runtime", L"vram_scaled_mb", 0);
-    swscanf_s(read_string(path, L"runtime", L"vram_target").c_str(), L"%dx%d", &r.vramTarget.width, &r.vramTarget.height);
-    // The last session's measurements (empty keys: not measured).
-    SessionInfo& s = r.session;
-    const auto number = [&](const wchar_t* key) {
-        const std::wstring v = read_string(path, L"runtime", key);
-        return v.empty() ? -1.0 : _wtof(v.c_str());
-    };
-    s.time = read_string(path, L"runtime", L"session_time");
-    s.mode = read_string(path, L"runtime", L"session_mode");
-    s.limited = read_string(path, L"runtime", L"session_limited");
-    s.layersBelow = read_string(path, L"runtime", L"session_layers_below");
-    s.log = read_string(path, L"runtime", L"session_log");
-    s.cpuProfile = read_string(path, L"runtime", L"session_cpu_profile");
-    s.fps = number(L"session_fps");
-    s.frameP50 = number(L"session_frame_p50_ms");
-    s.frameP90 = number(L"session_frame_p90_ms");
-    s.latePercent = number(L"session_late_percent");
-    s.refreshHz = number(L"session_refresh_hz");
-    s.halfRatePercent = number(L"session_half_rate_percent");
-    s.cpuMs = number(L"session_cpu_ms");
-    s.gpuMs = number(L"session_gpu_ms");
-    s.gpuBusy = number(L"session_gpu_busy");
-    s.cores = number(L"session_cpu_cores");
-    s.gazeMs = number(L"session_gaze_ms");
-    s.layerMs = number(L"session_layer_ms");
-    s.frameGeneration = read_int(path, L"runtime", L"session_frame_generation", 0) != 0;
-    // "GameThread=69|Physics=95|(aSeeVRClient.dll)=97": name, share of one core.
-    const std::wstring list = read_string(path, L"runtime", L"session_threads");
-    for (size_t at = 0; at < list.size();) {
-        const size_t bar = list.find(L'|', at), end = bar == std::wstring::npos ? list.size() : bar;
-        const std::wstring item = list.substr(at, end - at);
-        const size_t eq = item.rfind(L'=');
-        if (eq != std::wstring::npos && eq > 0)
-            s.threads.push_back({item.substr(0, eq), _wtof(item.c_str() + eq + 1)});
-        at = end + 1;
-    }
-    return r;
-}
-
-std::wstring session_summary_text(const RuntimeInfo& r) {
-    const SessionInfo& s = r.session;
-    if (!s.known())
-        return L"Sim-QVFR: no session measured yet.";
-    const auto f = [](const wchar_t* format, double v) {  // at whatever length it comes to
-        const int n = _scwprintf(format, v);
-        if (n <= 0)
-            return std::wstring();
-        std::wstring text(static_cast<size_t>(n), L'\0');
-        swprintf_s(text.data(), static_cast<size_t>(n) + 1, format, v);
-        return text;
-    };
-    std::wstring t = L"Sim-QVFR session " + s.time + L" · " + s.mode;
-    if (s.refreshHz > 0)
-        t += f(L" · %.0f Hz", s.refreshHz);
-    t += s.frameGeneration ? L" · frame generation on\n" : L" · frame generation off\n";
-    t += f(L"Frame rate: %.1f fps", s.fps);
-    if (s.frameP50 > 0)
-        t += f(L"; frame time %.2f ms median", s.frameP50) + f(L", %.2f ms 90th percentile", s.frameP90);
-    if (s.latePercent >= 0)
-        t += f(L"; %.1f%% of frames late", s.latePercent);
-    t += L"\n";
-    if (s.halfRatePercent > 0)
-        t += f(L"Runtime at half rate: %.1f%% of the session's frames\n", s.halfRatePercent);
-    if (s.cpuMs >= 0)
-        t += f(L"CPU frame time (render thread): %.2f ms\n", s.cpuMs);
-    if (s.gpuMs >= 0)
-        t += f(L"GPU frame time (whole GPU): %.2f ms", s.gpuMs) + f(L", %.0f%% busy\n", s.gpuBusy);
-    if (!s.limited.empty())
-        t += L"Limited by: " + s.limited + L"\n";
-    if (s.cores >= 0)
-        t += f(L"CPU in use: %.1f cores in all\n", s.cores);
-    if (!s.threads.empty()) {
-        t += L"Busiest threads (share of one core):";
-        for (size_t i = 0; i < s.threads.size(); ++i)
-            t += (i ? L"," : L"") + std::wstring(L" ") + s.threads[i].first + f(L" %.0f%%", s.threads[i].second);
-        t += L"\n";
-    }
-    if (s.gazeMs >= 0)
-        t += f(L"Eye tracking lookup: %.3f ms (own thread)\n", s.gazeMs);
-    if (s.layerMs >= 0)
-        t += f(L"Layer's own render-thread time: %.2f ms per frame\n", s.layerMs);
-    if (r.vramUsedMb > 0)
-        t += f(L"VRAM: %.1f GB", r.vramUsedMb / 1024) + f(L" of %.1f GB\n", r.vramBudgetMb / 1024);
-    t += L"Layers below: " + (s.layersBelow.empty() ? std::wstring(L"none") : s.layersBelow) + L"\n";
-    if (!s.log.empty())
-        t += L"Log: " + s.log + L"\n";
-    if (!s.cpuProfile.empty())
-        t += L"CPU capture: " + s.cpuProfile + L"\n";
-    return t;
-}
-
-Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
-    Readouts r;
-    const auto scaled = [](int base, double fraction) { return static_cast<int>(std::lround(base * fraction)); };
-    const auto area = [](Size v) { return static_cast<double>(v.width) * v.height; };
-    // QVFR's FOV crop: the outer views keep their density over the kept share of the eye.
-    r.outer = {scaled(runtime.width, s.outer / 100.0 * s.crop_width()), scaled(runtime.height, s.outer / 100.0 * s.crop_height())};
-    if (s.mode == RenderMode::Qvfr) {
-        // The kit's QVFR.viewPixels: focus px = recommended x inner % x foveated size %.
-        r.focus = {scaled(runtime.width, s.inner / 100.0 * s.width / 100.0),
-                   scaled(runtime.height, s.inner / 100.0 * s.height / 100.0)};
-        r.target = {2 * (r.outer.width + r.focus.width), std::max(r.outer.height, r.focus.height)};
-        r.focusDensity = s.inner / 100.0;
-    } else {
-        // Two frames per headset frame, both at the outer size; frame B spans the foveated size.
-        r.focus = r.outer;
-        r.target = {2 * r.outer.width, r.outer.height};
-        r.focusDensity = static_cast<double>(s.outer) / s.width;
-    }
-    // ACE's double-wide target must fit the runtime's maximum width, so each eye gets half.
-    const int eyeWidth = r.target.width / 2;
-    const int maxEyeWidth = runtime.maxWidth > 0 ? std::max(64, runtime.maxWidth / 2) : 0;
-    const int maxEyeHeight = runtime.maxHeight > 0 ? std::max(64, runtime.maxHeight) : 0;
-    const double sx = maxEyeWidth > 0 && eyeWidth > maxEyeWidth ? static_cast<double>(maxEyeWidth) / eyeWidth : 1.0;
-    const double sy = maxEyeHeight > 0 && r.target.height > maxEyeHeight ? static_cast<double>(maxEyeHeight) / r.target.height : 1.0;
-    r.overRuntimeLimit = sx < 1.0 || sy < 1.0;
-    if (r.overRuntimeLimit) {
-        // The layer clamps the offered eye to the maximum and every view keeps its share of it, so all
-        // of them shrink by the same factor on that axis.
-        const auto shrink = [&](Size v) { return Size{scaled(v.width, sx), scaled(v.height, sy)}; };
-        r.outer = shrink(r.outer);
-        r.focus = shrink(r.focus);
-        r.target = shrink(r.target);
-    }
-    // QVFR: two outer and two focus views. Two-loop: two frames of two outer-sized eyes.
-    r.pixels = s.mode == RenderMode::Qvfr ? 2.0 * (area(r.outer) + area(r.focus)) : 4.0 * area(r.outer);
-    r.runtime = {runtime.width, runtime.height};
-    r.runtimePixels = 2.0 * area(r.runtime);
-    r.saved = r.runtimePixels > 0 ? 1.0 - r.pixels / r.runtimePixels : 0;
-    r.centerPpd = runtime.centerPpd * r.focusDensity * sx;  // a runtime-maximum clamp lowers the density too
-    return r;
-}
-
-VramEstimate vram_estimate(const Settings& s, const Readouts& r, const RuntimeInfo& runtime) {
-    VramEstimate e;
-    const double launchArea = static_cast<double>(runtime.vramTarget.width) * runtime.vramTarget.height;
-    if (s.mode != RenderMode::Qvfr || runtime.vramUsedMb <= 0 || launchArea <= 0)
-        return e;
-    const double area = static_cast<double>(r.target.width) * r.target.height;
-    const double scaled = std::min(runtime.vramScaledMb, runtime.vramUsedMb);
-    e.mb = runtime.vramUsedMb - scaled + scaled * area / launchArea;
-    e.budgetMb = runtime.vramBudgetMb;
-    return e;
-}
-
-int slider_value_at(Range range, double share, int step) {
-    step = std::max(step, 1);
-    const double offset = std::clamp(share, 0.0, 1.0) * (range.max - range.min);
-    return std::min(range.min + static_cast<int>(std::lround(offset / step)) * step, range.max);
 }
 
 }  // namespace simqvfr::launcher

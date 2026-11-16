@@ -8,6 +8,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include "../engine/code_patch.h"
 #include "../log.h"
 
 extern "C" size_t simqvfr_slot_CreateCommittedResource(void);
@@ -145,20 +146,6 @@ HRESULT STDMETHODCALLTYPE committed3Hook(ID3D12Device10* d, const D3D12_HEAP_PRO
     return hr;
 }
 
-bool patch(void** vtable, size_t slot, void* hook, void** original) {
-    DWORD old = 0;
-    if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old))
-        return false;
-    *original = vtable[slot];
-    vtable[slot] = hook;
-    VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
-    return true;
-}
-
-template <class Fn> bool hook(void** vtable, size_t slot, Fn detour, Fn* original) {
-    return patch(vtable, slot, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original));
-}
-
 }  // namespace
 
 bool vram_follows(uint64_t width, uint32_t height, int targetWidth, int targetHeight) {
@@ -178,20 +165,20 @@ bool vram_census_start(ID3D12Device* device) {
     if (started || !device)
         return started;
     void** vtable = *reinterpret_cast<void***>(device);
-    bool ok = hook(vtable, simqvfr_slot_CreateCommittedResource(), &committedHook, &committedOriginal);
+    bool ok = vtable_hook(vtable, simqvfr_slot_CreateCommittedResource(), &committedHook, &committedOriginal);
     // Newer interfaces on the same object: their methods extend the device's single vtable.
     Microsoft::WRL::ComPtr<ID3D12Device4> device4;
     Microsoft::WRL::ComPtr<ID3D12Device8> device8;
     Microsoft::WRL::ComPtr<ID3D12Device10> device10;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device4))))
-        ok = ok && hook(*reinterpret_cast<void***>(device4.Get()), simqvfr_slot_CreateCommittedResource1(), &committed1Hook,
-                        &committed1Original);
+        ok = ok && vtable_hook(*reinterpret_cast<void***>(device4.Get()), simqvfr_slot_CreateCommittedResource1(),
+                               &committed1Hook, &committed1Original);
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device8))))
-        ok = ok && hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreateCommittedResource2(), &committed2Hook,
-                        &committed2Original);
+        ok = ok && vtable_hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreateCommittedResource2(),
+                               &committed2Hook, &committed2Original);
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device10))))
-        ok = ok && hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreateCommittedResource3(), &committed3Hook,
-                        &committed3Original);
+        ok = ok && vtable_hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreateCommittedResource3(),
+                               &committed3Hook, &committed3Original);
     started = ok;
     logf("vram census: %s (device4/8/10 %d/%d/%d)", ok ? "on" : "FAILED to patch the device", device4 ? 1 : 0,
          device8 ? 1 : 0, device10 ? 1 : 0);

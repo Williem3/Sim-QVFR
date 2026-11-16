@@ -250,7 +250,7 @@ Card diagnostics_card() {
         // The game's last few sessions, each with what changed since the one before it.
         {
             const int now = last_session_index();
-            const std::wstring game = now >= 0 ? app.sessions[now].game : game_id(games::launcher_game());
+            const std::wstring game = now >= 0 ? app.sessions[now].game : games::wide_id(games::launcher_game());
             std::vector<size_t> recent;
             for (size_t i = 0; i < app.sessions.size() && recent.size() < kSessionRows; ++i)
                 if (app.sessions[i].game == game)

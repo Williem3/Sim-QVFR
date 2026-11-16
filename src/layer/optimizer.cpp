@@ -17,6 +17,7 @@
 #include "probe/pix_capture.h"
 #include "quad/osd.h"
 #include "quad/qvfr_optimizer.h"
+#include "quad/qvfr_settings.h"
 #include "quad/settings_menu.h"
 #include "layer/layer.h"
 
@@ -78,9 +79,10 @@ void optimize_start(int64_t now) {
     const MenuValues& v = menu.model.values;
     const MenuLaunch& l = menu.model.launch;
     QvfrLimits limits;
-    const int minFocus = read(L"min_focus", limits.floor.width, 10, 100);
-    limits.floor = {read(L"min_periphery", limits.floor.periphery, 10, 100), read(L"min_density", limits.floor.density, 50, 400),
-                    minFocus, minFocus};
+    // The floors stay inside the settings' own ranges (quad/qvfr_settings.h).
+    const int minFocus = read(L"min_focus", limits.floor.width, kFocusPercent.min, kFocusPercent.max);
+    limits.floor = {read(L"min_periphery", limits.floor.periphery, kPeripheryScale.min, kPeripheryScale.max),
+                    read(L"min_density", limits.floor.density, kFocusDensity.min, kFocusDensity.max), minFocus, minFocus};
     limits.cropWidth = v.crop_width();
     limits.cropHeight = v.crop_height();
     limits.nativeWidth = nativeW;

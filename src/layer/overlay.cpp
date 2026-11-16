@@ -389,11 +389,9 @@ const XrCompositionLayerBaseHeader* notice_frame(XrSession session, int64_t now)
         osd_place();
         const std::vector<uint32_t> pixels = draw_notice_panel(notice.title, notice.lines);  // once: a few ms
         uint32_t index = 0;
-        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-        wait.timeout = 100'000'000;
-        if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
-            notice.uploaded = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() &&
-                              osd.upload && osd.upload->upload(osd.images[index], pixels);
+        // A timed-out wait: the image stays acquired (not released), waited on again at the next frame.
+        if (acquire_wait(osd.chain, osd.pending, kImageWaitNs, 1, index) == XR_SUCCESS) {
+            notice.uploaded = index < osd.images.size() && osd.upload && osd.upload->upload(osd.images[index], pixels);
             next.ReleaseSwapchainImage(osd.chain, nullptr);
         }
         if (notice.uploaded)
@@ -429,12 +427,12 @@ const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now) {
     if (osd.drawing.valid() && osd.drawing.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const std::vector<uint32_t> pixels = osd.drawing.get();
         uint32_t index = 0;
-        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-        wait.timeout = 100'000'000;
         hang_watch_stage("overlay card: xrAcquireSwapchainImage");
-        if (XR_SUCCEEDED(next.AcquireSwapchainImage(osd.chain, nullptr, &index))) {
-            hang_watch_stage("overlay card: xrWaitSwapchainImage");
-            bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(osd.chain, &wait)) && index < osd.images.size() && osd.upload;
+        // A timed-out wait: the image stays acquired (not released), waited on again at the card's next upload; this
+        // drawing is dropped (the next one comes kOsdDrawMs later).
+        if (acquire_wait(osd.chain, osd.pending, kImageWaitNs, 1, index, "overlay card: xrWaitSwapchainImage") ==
+            XR_SUCCESS) {
+            bool ok = index < osd.images.size() && osd.upload;
             hang_watch_stage("overlay card: the upload");
             ok = ok && osd.upload->upload(osd.images[index], pixels);
             hang_watch_stage("overlay card: xrReleaseSwapchainImage");
@@ -461,6 +459,7 @@ void osd_shutdown() {
     osd.view = XR_NULL_HANDLE;
     osd.adapter = nullptr;
     osd.images.clear();
+    osd.pending = {};
     osd.uploaded = osd.failed = false;
     osd.frames.clear();
     osd.history.clear();

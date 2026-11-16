@@ -42,19 +42,13 @@
 #include "engine/nvapi_stereo.h"
 #include "engine/object_vtable.h"
 #include "games/lmu/mvr_pass.h"
+#include "test_util.h"
 
 using Microsoft::WRL::ComPtr;
 namespace dxbc = simqvfr::dxbc;
 namespace nvapi = simqvfr::nvapi;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 std::vector<uint8_t> compile(const char* source, const char* profile) {
     ComPtr<ID3DBlob> code, errors;
@@ -1014,7 +1008,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
                       static_cast<unsigned long long>(hookedNow),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().contextEntries),
                       static_cast<unsigned long long>(lmu::mvr_pass_stats().resolveFunctions));
-        check(installed && lmu::mvr_pass_stats().contextEntries == 16 && hookedNow >= 32, what);
+        check(installed && lmu::mvr_pass_stats().contextEntries == 17 && hookedNow >= 32, what);
         ComPtr<ID3D11Multithread> mt;
         if (SUCCEEDED(context.As(&mt))) {
             const BOOL was = mt->SetMultithreadProtected(TRUE);

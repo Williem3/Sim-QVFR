@@ -12,12 +12,14 @@
 #include "ini_put.h"
 #include "input/hotkeys.h"
 #include "log.h"
+#include "module_path.h"
 #include "quad/focus_offset.h"
 #include "quad/focus_shape.h"
 #include "quad/fov_crop.h"
 #include "quad/focus_quad_distance.h"
 #include "quad/gaze_deadzone.h"
 #include "quad/helmet.h"
+#include "quad/qvfr_settings.h"
 #include "quad/settings_menu.h"
 #include "layer/layer.h"
 
@@ -27,10 +29,9 @@ namespace {
 
 // [crop] (QVFR): the sides of each eye's FOV ACE does not render (fov_crop.h), each on its own.
 FovCrop read_crop(const wchar_t* ini) {
-    if (GetPrivateProfileIntW(L"crop", L"enabled", 0, ini) == 0)
+    if (!ini_flag(ini, kCropEnabled))
         return {};
-    const auto side = [&](const wchar_t* key) { return static_cast<int>(GetPrivateProfileIntW(L"crop", key, 0, ini)); };
-    return fov_crop(side(L"top"), side(L"bottom"), side(L"outer"), side(L"inner"));
+    return fov_crop(ini_int(ini, kCropTop), ini_int(ini, kCropBottom), ini_int(ini, kCropOuter), ini_int(ini, kCropInner));
 }
 
 }  // namespace
@@ -51,29 +52,29 @@ LiveSettings read_live(const wchar_t* ini) {
     l.helmet = read_helmet_settings(ini);
     l.helmet.on = l.helmet.on && features.helmet;
     if (features.objectDetail)
-        l.objectDetail = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"object_detail", 100, ini)), 0, 100);
+        l.objectDetail = ini_int(ini, kObjectDetail);
     if (features.sharpening)
-        l.sharpen = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"quad", L"sharpen_percent", 0, ini)), 0, 100);
+        l.sharpen = ini_int(ini, kSharpenPercent);
     if (features.eyeOff)
-        l.eyeOff = eye_off_from_ini(static_cast<int>(GetPrivateProfileIntW(L"quad", L"eye_off", 0, ini)));
-    l.focusFraction = std::clamp(GetPrivateProfileIntW(L"experiment", L"focus_percent", 35, ini), 10u, 100u) / 100.0;
-    const UINT heightPercent = GetPrivateProfileIntW(L"experiment", L"focus_height_percent", 0, ini);
-    l.focusFractionY = heightPercent ? std::clamp(heightPercent, 10u, 100u) / 100.0 : 0.0;
-    l.feather = std::clamp(GetPrivateProfileIntW(L"quad", L"feather_percent", 10, ini), 0u, 50u) / 100.0;
-    l.cornerRadius = std::clamp(GetPrivateProfileIntW(L"quad", L"corner_radius_percent", 0, ini), 0u, 100u) / 100.0;
+        l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
+    l.focusFraction = ini_int(ini, kFocusPercent) / 100.0;
+    // Missing (or 0): focus_percent's, as views4_sizes takes 0.
+    const int heightPercent = ini_raw(ini, kFocusHeightPercent, 0);
+    l.focusFractionY = heightPercent ? kFocusHeightPercent.clamp(heightPercent) / 100.0 : 0.0;
+    l.feather = ini_int(ini, kFeatherPercent) / 100.0;
+    l.cornerRadius = ini_int(ini, kCornerRadiusPercent) / 100.0;
     l.shape = read_focus_shape(ini);
     if (l.shape.corners)
         l.cornerRadius = 0;
-    l.border = GetPrivateProfileIntW(L"quad", L"debug_border", 0, ini) != 0;
-    wchar_t borderColor[16] = {};
-    GetPrivateProfileStringW(L"quad", L"debug_border_color", L"green", borderColor, 16, ini);
-    // Linear values; teal is #00A0A0 in sRGB.
+    l.border = ini_flag(ini, kDebugBorder);
+    // Linear values; teal is #00A0A0 in sRGB. Green (LiveSettings' own) for anything else.
     const float magentaColor[4] = {1, 0, 1, 1}, tealColor[4] = {0, 0.352f, 0.352f, 1};
-    if (_wcsicmp(borderColor, L"magenta") == 0)
+    const BorderColor borderColor = read_border_color(ini);
+    if (borderColor == BorderColor::Magenta)
         std::memcpy(l.borderColor, magentaColor, sizeof(magentaColor));
-    else if (_wcsicmp(borderColor, L"teal") == 0)
+    else if (borderColor == BorderColor::Teal)
         std::memcpy(l.borderColor, tealColor, sizeof(tealColor));
-    l.gaze = GetPrivateProfileIntW(L"quad", L"gaze", 1, ini) != 0;
+    l.gaze = ini_flag(ini, kGaze);
     l.offset = read_focus_offset(ini);
     l.gazeDeadzone = read_gaze_deadzone(ini) / 10.0;
     l.focusQuadDistance = read_focus_quad_distance(ini);
@@ -95,15 +96,15 @@ std::wstring restart_keys(const wchar_t* ini, bool views4) {
 }
 
 Views4Sizes views4_sizes(const wchar_t* ini, double focusFraction, double focusFractionY) {
-    const double eyeScale = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini), 10u, 200u) / 100.0;
-    const UINT peripheryPercent = GetPrivateProfileIntW(L"experiment", L"periphery_scale", 0, ini);
-    const UINT focusDensityPercent = GetPrivateProfileIntW(L"experiment", L"focus_density", 0, ini);
+    const double eyeScale = ini_int(ini, kEyeScale) / 100.0;
+    const int peripheryPercent = ini_raw(ini, kPeripheryScale, 0);
+    const int focusDensityPercent = ini_raw(ini, kFocusDensity, 0);
     Views4Sizes s;
     s.fromEyeScale = !peripheryPercent && !focusDensityPercent;
-    s.outer = peripheryPercent ? std::clamp(peripheryPercent, 10u, 200u) / 100.0 : eyeScale;
+    s.outer = peripheryPercent ? kPeripheryScale.clamp(peripheryPercent) / 100.0 : eyeScale;
     // The focus views' linear size against the native eye: density times the box's share of the FOV,
     // per axis. Unset, the density is eye_scale / focus_percent (equal quarters for a square box).
-    s.density = focusDensityPercent ? std::clamp(focusDensityPercent, 25u, 400u) / 100.0 : eyeScale / focusFraction;
+    s.density = focusDensityPercent ? kFocusDensity.clamp(focusDensityPercent) / 100.0 : eyeScale / focusFraction;
     // Unset, exactly eye_scale on the width (not density x fraction, whose rounding would leave equal quarters).
     s.focus = focusDensityPercent ? s.density * focusFraction : eyeScale;
     s.focusHeight = focusFractionY > 0 ? s.density * focusFractionY : s.focus;
@@ -123,14 +124,7 @@ void runtime_info(const wchar_t* key, const std::wstring& value) {
 }
 
 // The folder this DLL is in.
-std::wstring layer_directory() {
-    HMODULE self = nullptr;
-    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                       reinterpret_cast<LPCWSTR>(&layer_directory), &self);
-    wchar_t module[MAX_PATH] = {};
-    GetModuleFileNameW(self, module, MAX_PATH);
-    return std::filesystem::path(module).parent_path().wstring();
-}
+std::wstring layer_directory() { return module_folder(reinterpret_cast<const void*>(&layer_directory)); }
 
 std::wstring experiment_ini() {
     // A launcher passes its per-launch settings in SIM_QVFR_INI; otherwise the ini next to the DLL.
@@ -184,7 +178,7 @@ void load_experiment() {
     // underneath (ACE renders its own two eyes; nothing of views4's), with the replay keys defaulting on below.
     {
         const bool ace = std::strcmp(game->info()->id, "ace") == 0;
-        const bool qvfr = !baseline && !logOnly && _wcsicmp(mode, L"views4") == 0;
+        const bool qvfr = !baseline && !logOnly && parse_render_mode(mode) == IniRenderMode::Qvfr;
         const bool legacy = GetPrivateProfileIntW(L"experiment", L"ace_legacy_views4", 0, ini.c_str()) != 0;
         experiment.apiPath = ace && qvfr && !legacy;
         if (experiment.apiPath) {
@@ -199,7 +193,7 @@ void load_experiment() {
     experiment.focusOnly = _wcsicmp(mode, L"focus_only") == 0;
     experiment.doubleRender = _wcsicmp(mode, L"double_render") == 0;
     experiment.views3 = _wcsicmp(mode, L"views3") == 0;
-    experiment.views4 = _wcsicmp(mode, L"views4") == 0;
+    experiment.views4 = parse_render_mode(mode) == IniRenderMode::Qvfr;
     wcscpy_s(experiment.mode, mode);
     experiment.views4ShowCopies = GetPrivateProfileIntW(L"experiment", L"views4_show_copies", 0, ini.c_str()) != 0;
     experiment.views4Compose = experiment.views4 && !experiment.views4ShowCopies &&
@@ -337,7 +331,7 @@ void load_experiment() {
     if (experiment.d3d11CaptureHotkey && experiment.d3d11CaptureFrame == 0)
         experiment.d3d11CaptureFrame = 0xFFFFFFFFu;
     experiment.quad = _wcsicmp(mode, L"quad") == 0;
-    experiment.twoLoops = experiment.quad || _wcsicmp(mode, L"two_loops") == 0;
+    experiment.twoLoops = parse_render_mode(mode) == IniRenderMode::TwoLoop;  // quad too (its frame B the focus box)
     experiment.focusInB = experiment.quad || GetPrivateProfileIntW(L"experiment", L"b_focus", 0, ini.c_str()) != 0;
     const LiveSettings settings = read_live(ini.c_str());
     experiment.focusFraction = settings.focusFraction;
@@ -403,11 +397,11 @@ void load_experiment() {
     }
     experiment.probes = logOnly || GetPrivateProfileIntW(L"experiment", L"probes", 0, ini.c_str()) != 0;
     experiment.hangWatchSeconds = GetPrivateProfileIntW(L"experiment", L"hang_watch_s", game->hang_watch_s(), ini.c_str());
-    // Above 100 supersamples (in quad mode this is the outer view's resolution). Only the modes that render
+    // In quad mode this is the outer view's resolution; at most 100 (the shared table's range). Only the modes that render
     // through it scale what ACE is offered: with mode=off (baseline=1 too) ACE gets the runtime's own size, the
     // resolution the user set before launch (the launcher writes eye_scale for Two-loop and QVFR's fallback,
     // so a baseline run got 30% of it, 2026-11-03).
-    const UINT eyePercent = std::clamp(GetPrivateProfileIntW(L"experiment", L"eye_scale", 100, ini.c_str()), 10u, 200u);
+    const int eyePercent = ini_int(ini.c_str(), kEyeScale);
     const bool scaledMode = experiment.views4 || experiment.twoLoops || experiment.focusOnly || experiment.doubleRender ||
                             experiment.views3;
     experiment.eyeScale = scaledMode ? eyePercent / 100.0 : 1.0;
@@ -419,7 +413,7 @@ void load_experiment() {
         logf("experiment: baseline_eye_scale=%u: the game's own two views at %.0f%% of the runtime's eye size",
              baselinePercent, experiment.eyeScale * 100);
     } else if (!scaledMode && eyePercent != 100)
-        logf("experiment: mode=off: the game gets the runtime's own eye size (eye_scale=%u applies to the other modes)",
+        logf("experiment: mode=off: the game gets the runtime's own eye size (eye_scale=%d applies to the other modes)",
              eyePercent);
     // views4: periphery and focus resolution each on their own. This sizes ACE's target, the most
     // either can be live.
@@ -489,7 +483,7 @@ void load_experiment() {
         runtime_info(L"launch_crop",
                      percent(c.top) + L"," + percent(c.bottom) + L"," + percent(c.outer) + L"," + percent(c.inner));
     }
-    logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%u feather_percent=%.0f corner_radius_percent=%.0f "
+    logf("experiment: mode=%ls focus_percent=%.0f b_focus=%d eye_scale=%d feather_percent=%.0f corner_radius_percent=%.0f "
          "debug_border=%d gaze=%d fixed_offset_y=%d gaze_offset_y=%d (from %ls)",
          mode, experiment.focusFraction * 100, experiment.focusInB ? 1 : 0, eyePercent, experiment.feather * 100,
          experiment.cornerRadius * 100,

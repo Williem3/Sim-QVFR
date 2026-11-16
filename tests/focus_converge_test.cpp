@@ -3,15 +3,9 @@
 #include <cstdio>
 
 #include "quad/focus_converge.h"
+#include "test_util.h"
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 XrQuaternionf yaw(double degrees) {  // about +y: positive turns -z (forward) towards -x (left)
     const double h = degrees * 3.14159265358979 / 360;
@@ -70,6 +64,5 @@ int SIM_QVFR_TEST_MAIN() {
     check(now > 9.0 && now < 10.5, "a new fixation followed within a second");
     check(f.update(-1, 0.011) == now && f.update(std::nan(""), 0.011) == now, "no depth: the last fixation kept");
 
-    std::printf("RESULT: %s\n", failures ? "FAIL" : "pass");
-    return failures ? 1 : 0;
+    return test_result();
 }

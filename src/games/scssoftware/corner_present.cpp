@@ -440,4 +440,22 @@ void corner_releasing(XrSwapchain chain) {
         shoot(image, chainIdx, released, true, c.scaled);
 }
 
+void corner_swapchain_destroyed(XrSwapchain chain) {
+    // Every use of g.chains (and g.targets' views of their images) is under frameMutex, on whichever thread, so the
+    // entry goes at once; nothing waits for the session lifecycle (release_all clears them all anyway).
+    std::lock_guard lock(g.frameMutex);
+    for (auto it = g.chains.begin(); it != g.chains.end();) {
+        if (it->handle != chain) {
+            ++it;
+            continue;
+        }
+        std::erase_if(g.targets, [&](const State::Target& t) {
+            return std::find(it->images.begin(), it->images.end(), t.image) != it->images.end();
+        });
+        simqvfr::logf("scs corner: swapchain %p destroyed: its %zu images forgotten", static_cast<void*>(chain),
+                      it->images.size());
+        it = g.chains.erase(it);
+    }
+}
+
 }  // namespace scs

@@ -8,19 +8,11 @@
 #include <windows.h>
 
 #include "quad/osd.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
-
-bool close_to(double a, double b, double tolerance = 0.05) { return a > b - tolerance && a < b + tolerance; }
 
 OsdInput steady(double intervalMs, double cpuMs, double gpuMs, double periodMs = 11.111) {
     OsdInput in;
@@ -63,7 +55,7 @@ void save_card(const wchar_t* path, const std::vector<uint32_t>& pixels) {
 int SIM_QVFR_TEST_MAIN() {
     {
         const OsdSummary s = osd_summary(steady(11.111, 5, 7));
-        check(close_to(s.fps, 90, 0.1) && close_to(s.budgetMs, 11.111) && s.missedPercent == 0 && close_to(s.jitterMs, 0),
+        check(close_to(s.fps, 90, 0.1) && close_to(s.budgetMs, 11.111, 0.05) && s.missedPercent == 0 && close_to(s.jitterMs, 0, 0.05),
               "a steady 90 Hz frame: 90 fps, on budget, smooth");
         check(close_to(s.cpuHeadroom, 55, 0.1) && close_to(s.gpuHeadroom, 37, 0.1) && s.bound == OsdBound::None,
               "headroom is the budget left; neither processor limits");
@@ -87,7 +79,7 @@ int SIM_QVFR_TEST_MAIN() {
         in.fg = OsdFg::On;
         in.fgMultiplier = 2;
         const OsdSummary s = osd_summary(in);
-        check(close_to(s.budgetMs, 22.222) && s.missedPercent == 0 && s.bound == OsdBound::None,
+        check(close_to(s.budgetMs, 22.222, 0.05) && s.missedPercent == 0 && s.bound == OsdBound::None,
               "frame generation 2x: ACE's budget is two refresh periods");
     }
     {
@@ -189,7 +181,7 @@ int SIM_QVFR_TEST_MAIN() {
                   tiles[1].value == L"11.1" && tiles[1].tone == OsdTone::Good && tiles[2].label == L"CPU" &&
                   tiles[2].detail == L"55% headroom" && tiles[3].value == L"7.0" && tiles[3].detail == L"37% headroom",
               "four tiles: frame rate, frame time, CPU and GPU with their headroom");
-        check(vram && vram->value == L"11.0 / 12.0 GB" && vram->tone == OsdTone::Warn && close_to(vram->meter, 11.0 / 12),
+        check(vram && vram->value == L"11.0 / 12.0 GB" && vram->tone == OsdTone::Warn && close_to(vram->meter, 11.0 / 12, 0.05),
               "VRAM: used of the budget, with a meter, amber above 85%");
         check(fg && fg->pill && fg->value == L"Waiting for guides" && fg->tone == OsdTone::Warn,
               "frame generation not yet generating shows Cheeky's state");
@@ -249,14 +241,14 @@ int SIM_QVFR_TEST_MAIN() {
         const OsdInput in = measured(22.222, 9, 12.5, 9.7, 98, 60);
         const OsdSummary s = osd_summary(in);
         check(s.gpuWhole && close_to(s.gpuMs, 0.98 * 22.222, 0.01) && close_to(s.gpuRestMs, 0.98 * 22.222 - 19 - 1.1 - 0.4, 0.01) &&
-                  close_to(s.gpuFgMs, 1.1) && s.bound == OsdBound::Gpu && s.gpuHeadroom < 3,
+                  close_to(s.gpuFgMs, 1.1, 0.05) && s.bound == OsdBound::Gpu && s.gpuHeadroom < 3,
               "the whole GPU 98% busy: its time per frame, the rest beyond ACE, FG and the layer; GPU bound, ~2% left");
         const std::vector<OsdRow> rows = osd_rows(in, s);
         check(row(rows, L"GPU ms: game/FG/layer/rest")->value == L"19.0 / 1.1 / 0.4 / 1.3" &&
                   row(rows, L"Limited by")->value == L"GPU" && osd_tiles(in, s)[3].label == L"GPU (all work)",
               "the GPU row shows its parts; the tile says it is all the GPU's work");
-        check(close_to(s.cpuMs, 12.5) && close_to(s.cpuBusyMs, 9) && close_to(s.cpuBlockedMs, 3.5) &&
-                  close_to(s.cpuThreadMs, 0.6 * 22.222, 0.01) && close_to(s.waitMs, 9.7) &&
+        check(close_to(s.cpuMs, 12.5, 0.05) && close_to(s.cpuBusyMs, 9, 0.05) && close_to(s.cpuBlockedMs, 3.5, 0.05) &&
+                  close_to(s.cpuThreadMs, 0.6 * 22.222, 0.01) && close_to(s.waitMs, 9.7, 0.05) &&
                   row(rows, L"Render thread")->value == L"9.0 busy · 3.5 blocked",
               "the render thread: 12.5 ms of work, 9 running and 3.5 blocked; the busiest thread 60% of the frame");
         check(close_to(s.cpuHeadroom, (22.222 - 0.6 * 22.222) / 22.222 * 100, 0.1),
@@ -270,7 +262,7 @@ int SIM_QVFR_TEST_MAIN() {
         in.gpuGamePercent = 80;
         const OsdSummary s = osd_summary(in);
         const double frame = 22.222;
-        check(s.gpuWhole && close_to(s.gpuGameMs, 0.8 * frame - 0.4, 0.01) && close_to(s.gpuLayerMs, 0.4) &&
+        check(s.gpuWhole && close_to(s.gpuGameMs, 0.8 * frame - 0.4, 0.01) && close_to(s.gpuLayerMs, 0.4, 0.05) &&
                   close_to(s.gpuRestMs, 0.9 * frame - (0.8 * frame - 0.4) - 1.1 - 0.4, 0.01),
               "D3D11: game = its GPU share less the layer's composition; rest = whole less game, FG and layer");
         const std::wstring parts = row(osd_rows(in, s), L"GPU ms: game/FG/layer/rest")->value;
@@ -294,12 +286,12 @@ int SIM_QVFR_TEST_MAIN() {
         doubled.periodMs = 22.222;
         doubled.refreshMs = 11.111;
         const OsdSummary d = osd_summary(doubled);
-        check(close_to(d.budgetMs, 22.222) && close_to(d.refreshHz, 90, 0.01) &&
+        check(close_to(d.budgetMs, 22.222, 0.05) && close_to(d.refreshHz, 90, 0.01) &&
                   close_to(d.gpuHeadroom, (22.222 - 0.71 * 22.4) / 22.222 * 100, 0.1),
               "frame generation through Cheeky's layer: the budget is 22.2 ms (not 44.4), the refresh 90 Hz");
         OsdInput plain = doubled;
         plain.periodMs = 11.111;  // a runtime that gives ACE the refresh period itself
-        check(close_to(osd_summary(plain).budgetMs, 22.222), "the refresh period given as it is: multiplied once");
+        check(close_to(osd_summary(plain).budgetMs, 22.222, 0.05), "the refresh period given as it is: multiplied once");
         // ACE held in xrWaitFrame yet 3% past its slot (43 fps of 45), neither processor full: pacing.
         OsdInput slip = doubled;
         for (OsdFrame& f : slip.frames)
@@ -322,7 +314,7 @@ int SIM_QVFR_TEST_MAIN() {
             in.frames[i * 10].intervalMs = 23.5;  // 6% over
         in.frames[50].intervalMs = 40;
         const OsdSummary s = osd_summary(in);
-        check(close_to(s.missedPercent, 1) && close_to(s.frameP90Ms, 23.5) && close_to(s.low1Fps, 1000 / 40.0, 0.01),
+        check(close_to(s.missedPercent, 1, 0.05) && close_to(s.frameP90Ms, 23.5, 0.05) && close_to(s.low1Fps, 1000 / 40.0, 0.01),
               "frames 6% over still make their refresh, the 40 ms one missed one; p90 23.5 ms; the 1% low from the slowest");
     }
     {

@@ -391,7 +391,7 @@ std::wstring file_version(const std::wstring& path) {
 
 OpenComposite open_composite(const std::wstring& path) {
     std::string bytes;
-    if (!read_file(path, bytes))
+    if (!read_file(path, bytes, 0))  // a DLL: no text-file cap
         return OpenComposite::Missing;
     return bytes.find("OpenComposite") != std::string::npos ? OpenComposite::Installed : OpenComposite::Valve;
 }
@@ -401,7 +401,7 @@ std::vector<std::wstring> cheeky_loaders(const std::wstring& gameFolder) {
     for (const wchar_t* name : {L"dxgi.dll", L"version.dll"}) {
         const std::wstring path = (fs::path(gameFolder) / name).wstring();
         std::string bytes;
-        if (read_file(path, bytes) && bytes.find("Cheeky") != std::string::npos)
+        if (read_file(path, bytes, 0) && bytes.find("Cheeky") != std::string::npos)  // a DLL: no text-file cap
             out.push_back(path);
     }
     return out;

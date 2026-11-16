@@ -1,4 +1,4 @@
-// Offline check of the re-emission probe (probe/replay_probe.h) on a WARP device: a command list with enough draws and a
+// Offline check of the re-emission probe (games/ace/replay_probe.h) on a WARP device: a command list with enough draws and a
 // wide viewport is recorded and re-emitted at Close (never executed), one with too few draws or a narrow viewport is not;
 // the real list still executes and its draw lands in the target (the hooks forward every call).
 #include <cstdio>
@@ -7,26 +7,15 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include "probe/replay_probe.h"
+#include "games/ace/stereo_flag.h"
+#include "games/ace/replay_probe.h"
+#include "test_util.h"
 #include "xr.h"
 
 using Microsoft::WRL::ComPtr;
 
-namespace {
-
-int failures = 0;
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    if (!ok)
-        ++failures;
-}
-
-}  // namespace
-
 int SIM_QVFR_TEST_MAIN() {
-    wchar_t temp[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, temp);
-    SetEnvironmentVariableW(L"SIM_QVFR_LOG", (std::wstring(temp) + L"simqvfr-replay-probe-test.log").c_str());
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG", temp_path(L"simqvfr-replay-probe-test.log").c_str());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;
@@ -75,6 +64,9 @@ int SIM_QVFR_TEST_MAIN() {
               "pipeline stream: an unknown subobject type ends the walk (nothing after it guessed)");
     }
     simqvfr::replay_probe_set_thresholds(4, 256.0f);
+    simqvfr::ace_known_build_for_tests(false);
+    check(!simqvfr::replay_probe_start(device.Get(), 1), "not a known ACE build: the probe is refused");
+    simqvfr::ace_known_build_for_tests(true);  // (this test exe is not ACE)
     check(simqvfr::replay_probe_start(device.Get(), 1), "probe installs");
 
     // A root signature with one root CBV and 4 root constants. Draws are recorded without a pipeline (nothing validates

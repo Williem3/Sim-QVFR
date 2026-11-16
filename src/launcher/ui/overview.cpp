@@ -58,7 +58,7 @@ std::wstring degrees_to(int v, const wchar_t* plus, const wchar_t* minus) {
 
 // The selected game's sessions in the history, newest first.
 std::vector<const SessionRecord*> game_sessions() {
-    const std::wstring id = game_id(games::launcher_game());
+    const std::wstring id = games::wide_id(games::launcher_game());
     std::vector<const SessionRecord*> out;
     for (const SessionRecord& r : app.sessions)
         if (r.game == id)

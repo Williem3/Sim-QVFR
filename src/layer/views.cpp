@@ -11,7 +11,7 @@
 #include "quad/fov_crop.h"
 #include "xr.h"
 #include "layer/layer.h"
-#include "probe/replay_probe.h"
+#include "games/ace/replay_probe.h"
 
 namespace simqvfr::layer {
 

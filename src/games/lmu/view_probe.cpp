@@ -138,10 +138,8 @@ bool view_probe_start() {
         simqvfr::log_line("lmu view probe: the code isn't this build's (anchor or vtable slot); not installed");
         return false;
     }
-    if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
-        simqvfr::log_line("lmu view probe: MH_Initialize failed");
+    if (!simqvfr::minhook_ready("lmu view probe"))
         return false;
-    }
     void* target = reinterpret_cast<void*>(simqvfr::module_base() + kRenderView);
     if (MH_CreateHook(target, reinterpret_cast<void*>(&render_view), reinterpret_cast<void**>(&originalRenderView)) !=
             MH_OK ||

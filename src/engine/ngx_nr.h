@@ -22,13 +22,16 @@ namespace simqvfr::ngxnr {
 bool built_in();
 // A D3D12 device on `device`'s adapter, the shared fence, and NGX started on it with nvngx_dlssnr.dll looked for in
 // `dllFolder`; NGX's own files in `dataFolder`. False with the reason in `why`. Once per session; a second call answers
-// as the first did (shutdown() forgets).
+// as the first did (shutdown() forgets, unless it had to leave work on the GPU).
 bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFolder, std::string& why);
 
 // A view's feature at width x height (what the model works at) and its four shared textures at that size.
 struct View;
-// `preset`: the runtime's model (0 its default, 1 A, 2 B). Null with NGX's or Direct3D's result in `result`.
+// `preset`: the runtime's model (0 its default, 1 A, 2 B). Null with NGX's or Direct3D's result in `result`, or with
+// kCreating: the feature is made but the GPU isn't through its creation within a short wait; ask again on a later frame
+// with the same width, height and preset and it is handed over once through (asked no more, it is released).
 View* create(unsigned width, unsigned height, int preset, unsigned& result);
+inline constexpr unsigned kCreating = 0x4e520002;
 // The view is given up: nothing waits, and nothing of it is let go of yet on either device. Its feature and textures,
 // and `keep` (the caller's own Direct3D 11 objects made on those textures: views, the textures they draw from), are
 // destroyed by a later collect(), once both devices are through everything queued that touches them: the D3D12 queue
@@ -87,7 +90,7 @@ double take_gpu_ms(View* view);
 // The session's end, on the thread of the game's immediate `context`. Flushes it and waits a bounded time for both
 // devices to finish what was queued, destroys the released views, shuts NGX on D3D12 down and releases the D3D12
 // device. If they don't finish in that time, nothing is destroyed: the objects are left to the process's end (a leak,
-// logged) rather than destroyed under work still queued.
+// logged) rather than destroyed under work still queued, and start() refuses for the rest of the process.
 void shutdown(ID3D11DeviceContext* context);
 
 // The nvngx_dlssnr.dll NGX loaded into this process (its full path), empty while none is.

@@ -10,6 +10,7 @@
 
 #include <wrl/client.h>
 
+#include "../engine/code_patch.h"
 #include "../log.h"
 #include "../xr.h"
 
@@ -95,35 +96,18 @@ std::unordered_map<ID3D12Resource*, ImageInfo> images;
 std::unordered_set<std::string> seenTargets, seenAllocations;
 UINT rtvIncrement = 0;
 bool started = false;
+bool attempted = false;  // one try per process: a partial failure leaves some slots patched
 std::atomic<uint64_t> swapchainHits{0}, swapchainHitsThisFrame{0}, bindsThisFrame{0};
 std::atomic<bool> sequence{false};
 thread_local int pendingViewportLog = 0;
 thread_local char pendingLabel[96];
-
-std::string describe(void* address) {
-    HMODULE module = nullptr;
-    char name[MAX_PATH] = "?";
-    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           static_cast<LPCSTR>(address), &module) &&
-        module) {
-        char path[MAX_PATH];
-        if (GetModuleFileNameA(module, path, MAX_PATH)) {
-            const char* slash = std::strrchr(path, '\\');
-            std::snprintf(name, sizeof(name), "%s", slash ? slash + 1 : path);
-        }
-    }
-    char out[MAX_PATH + 32];
-    std::snprintf(out, sizeof(out), "%s+0x%llx", name,
-                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address) - reinterpret_cast<uintptr_t>(module)));
-    return out;
-}
 
 int append_stack(char* line, int len, int capacity, ULONG skip) {
     void* frames[14];
     const USHORT captured = RtlCaptureStackBackTrace(skip, 14, frames, nullptr);
     len += std::snprintf(line + len, capacity - len, " stack:");
     for (USHORT i = 0; i < captured && len < capacity - 64; ++i)
-        len += std::snprintf(line + len, capacity - len, " %s", describe(frames[i]).c_str());
+        len += std::snprintf(line + len, capacity - len, " %s", module_offset(frames[i]).c_str());
     return len;
 }
 
@@ -296,24 +280,10 @@ HRESULT STDMETHODCALLTYPE placed2Hook(ID3D12Device10* d, ID3D12Heap* heap, UINT6
     return placed2Original(d, heap, offset, desc, layout, cv, nf, formats, riid, out);
 }
 
-bool patch(void** vtable, size_t slot, void* hook, void** original) {
-    DWORD old = 0;
-    if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old))
-        return false;
-    *original = vtable[slot];
-    vtable[slot] = hook;
-    VirtualProtect(&vtable[slot], sizeof(void*), old, &old);
-    return true;
-}
-
-template <class Fn> bool hook(void** vtable, size_t slot, Fn detour, Fn* original) {
-    return patch(vtable, slot, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(original));
-}
-
 }  // namespace
 
 bool d3d12_trace_start(ID3D12Device* device) {
-    if (started || !device)
+    if (attempted || !device)
         return started;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
@@ -324,6 +294,7 @@ bool d3d12_trace_start(ID3D12Device* device) {
         return false;
     }
     list->Close();
+    attempted = true;
     rtvIncrement = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     void** deviceVtable = *reinterpret_cast<void***>(device);
     void** listVtable = *reinterpret_cast<void***>(list.Get());
@@ -336,28 +307,28 @@ bool d3d12_trace_start(ID3D12Device* device) {
     const bool has8 = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device8)));
     const bool has10 = SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device10)));
 
-    bool ok = hook(deviceVtable, simqvfr_slot_CreateRenderTargetView(), &createRtvHook, &createRtvOriginal) &&
-              hook(deviceVtable, simqvfr_slot_CreateCommittedResource(), &committedHook, &committedOriginal) &&
-              hook(deviceVtable, simqvfr_slot_CreatePlacedResource(), &placedHook, &placedOriginal) &&
-              hook(listVtable, simqvfr_slot_OMSetRenderTargets(), &omSetHook, &omSetOriginal) &&
-              hook(listVtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
+    bool ok = vtable_hook(deviceVtable, simqvfr_slot_CreateRenderTargetView(), &createRtvHook, &createRtvOriginal) &&
+              vtable_hook(deviceVtable, simqvfr_slot_CreateCommittedResource(), &committedHook, &committedOriginal) &&
+              vtable_hook(deviceVtable, simqvfr_slot_CreatePlacedResource(), &placedHook, &placedOriginal) &&
+              vtable_hook(listVtable, simqvfr_slot_OMSetRenderTargets(), &omSetHook, &omSetOriginal) &&
+              vtable_hook(listVtable, simqvfr_slot_RSSetViewports(), &viewportsHook, &viewportsOriginal);
     // Newer interfaces on the same object: their methods extend the device's single vtable.
     if (ok && has4)
-        ok = hook(*reinterpret_cast<void***>(device4.Get()), simqvfr_slot_CreateCommittedResource1(), &committed1Hook,
-                  &committed1Original);
+        ok = vtable_hook(*reinterpret_cast<void***>(device4.Get()), simqvfr_slot_CreateCommittedResource1(),
+                         &committed1Hook, &committed1Original);
     if (ok && has8)
-        ok = hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreateCommittedResource2(), &committed2Hook,
-                  &committed2Original) &&
-             hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreatePlacedResource1(), &placed1Hook,
-                  &placed1Original);
+        ok = vtable_hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreateCommittedResource2(),
+                         &committed2Hook, &committed2Original) &&
+             vtable_hook(*reinterpret_cast<void***>(device8.Get()), simqvfr_slot_CreatePlacedResource1(), &placed1Hook,
+                         &placed1Original);
     if (ok && has10)
-        ok = hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreateCommittedResource3(), &committed3Hook,
-                  &committed3Original) &&
-             hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreatePlacedResource2(), &placed2Hook,
-                  &placed2Original);
+        ok = vtable_hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreateCommittedResource3(),
+                         &committed3Hook, &committed3Original) &&
+             vtable_hook(*reinterpret_cast<void***>(device10.Get()), simqvfr_slot_CreatePlacedResource2(), &placed2Hook,
+                         &placed2Original);
     if (ok && hasRenderPasses)
-        ok = hook(*reinterpret_cast<void***>(list4.Get()), simqvfr_slot_BeginRenderPass(), &beginPassHook,
-                  &beginPassOriginal);
+        ok = vtable_hook(*reinterpret_cast<void***>(list4.Get()), simqvfr_slot_BeginRenderPass(), &beginPassHook,
+                         &beginPassOriginal);
     started = ok;
     logf("d3d12 trace: %s (device vtable %p, list vtable %p, render passes %d, device4/8/10 %d/%d/%d, rtv increment %u)",
          ok ? "installed" : "FAILED", deviceVtable, listVtable, hasRenderPasses ? 1 : 0, has4 ? 1 : 0, has8 ? 1 : 0,

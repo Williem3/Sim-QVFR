@@ -3,17 +3,11 @@
 #include <cstdio>
 
 #include "quad/qvfr_optimizer.h"
+#include "test_util.h"
 
 using namespace simqvfr;
 
 namespace {
-
-int failures = 0;
-
-void check(bool ok, const char* what) {
-    std::printf("%s %s\n", ok ? "ok  " : "FAIL", what);
-    failures += ok ? 0 : 1;
-}
 
 // A GPU whose frame time is `fixed` + `perPixel` x qvfr_pixels, against a 90 Hz budget.
 struct Sim {
