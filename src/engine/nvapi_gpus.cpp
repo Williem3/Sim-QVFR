@@ -25,7 +25,8 @@ const Loader& loader() {
     static Loader l;
     static std::once_flag once;
     std::call_once(once, [] {
-        HMODULE dll = LoadLibraryW(L"nvapi64.dll");  // the driver's; kept loaded
+        // The driver's, from System32 only (the default order tries the game's folder first); kept loaded.
+        HMODULE dll = LoadLibraryExW(L"nvapi64.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!dll)
             return;
         auto queryInterface = reinterpret_cast<void* (*)(unsigned int)>(GetProcAddress(dll, "nvapi_QueryInterface"));

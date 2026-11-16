@@ -121,6 +121,7 @@ private:
         Com<ID3D12CommandAllocator> allocator;
         Com<ID3D12GraphicsCommandList> list;
         UINT64 fenceValue = 0;
+        Com<ID3D12Resource> keep[2];  // a timed-out copy's buffers, held until the GPU is past fenceValue
     };
     Slot* next_slot();
     bool submit(Slot& slot);
@@ -142,6 +143,7 @@ private:
     Com<ID3D12Fence> fence_;
     HANDLE fenceEvent_ = nullptr;
     UINT64 fenceCounter_ = 0;
+    bool gpuWaitLogged_ = false;  // next_slot's skipped frame, logged once
     UINT srvIncrement_ = 0, rtvIncrement_ = 0;
     Slot slots_[kSlots];
     UINT slotIndex_ = 0;
