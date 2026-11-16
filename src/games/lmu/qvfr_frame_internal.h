@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <d3d11.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 
@@ -139,6 +140,8 @@ extern bool carAbLogged, carsOn;
 extern int maskSide;
 extern bool maskAbLogged;
 bool car_ab_on();
+extern std::atomic<bool> carsWanted;
+extern bool carsPaused;
 int ab_side();
 bool ab_run();
 

@@ -104,15 +104,14 @@ void stop_writer() {
     writer.wake.notify_all();
     if (thread.joinable())
         thread.join();
-    std::string rest;
-    {
-        std::lock_guard lock(logMutex);
-        writer.on = false;
-        writer.stop = false;
-        rest.swap(writer.pending);  // queued after the writer's last look
-    }
-    if (!rest.empty() && logFile != INVALID_HANDLE_VALUE)
-        write_now(rest.data(), rest.size());
+    // What was queued after the writer's last look, written before the lock is given back: a line logged meanwhile
+    // (written at once from now on) can't overtake it.
+    std::lock_guard lock(logMutex);
+    writer.on = false;
+    writer.stop = false;
+    if (!writer.pending.empty() && logFile != INVALID_HANDLE_VALUE)
+        write_now(writer.pending.data(), writer.pending.size());
+    writer.pending.clear();
 }
 
 std::atomic<bool> processEnding{false};  // log_process_ending
