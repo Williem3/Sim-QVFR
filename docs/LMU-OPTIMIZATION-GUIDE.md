@@ -229,7 +229,8 @@ Use these freely to make the picture look better:
   nothing heavy runs in the background (a browser with video, a game recorder, another game's launcher).
 - **No change after lowering resolution.** You're CPU-limited (section 4).
 - **A change didn't seem to do anything.** Some settings apply at the **next launch**: the launcher marks each card
-  **Live** or **Next launch**. Settings marked "Now when lowered" apply at once when lowered, but raising them above
+  **Changes now** or **Next game start** (in the cost table below: Live or Next launch). Settings marked "Now when
+  lowered" apply at once when lowered, but raising them above
   what the game started with waits for the next launch.
 - **You want to see what QVFR gives you.** On the Diagnostics page, **Next launch without QVFR** starts LMU once
   without foveated rendering, still measuring, so you can compare the same race with and without it.
