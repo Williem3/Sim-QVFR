@@ -12,7 +12,7 @@
 #include "../../engine/dlss_views.h"
 #include "../../engine/nr_views.h"
 #include "dlss_inputs.h"
-#include "four_passes.h"
+#include "qvfr_frame.h"
 #include "game.h"
 #include "mvr_pass.h"
 #include "mvr_probe.h"
@@ -34,8 +34,8 @@ bool qvfr_wanted() {
 
 // Identity only with lmu_qvfr=0: the layer logs, QVFR doesn't start. Its experiments run only when their
 // [experiment] key asks, and not in a launch the anti-cheat protects unless the user chose it ([launcher] anticheat=1;
-// otherwise adapter_for hands out the plain identity adapter there): the view probe (log only), the copies and focus
-// gates (four passes, docs/recon-lmu.md), and QVFR.
+// otherwise adapter_for hands out the plain identity adapter there): the view probe (log only), multi-view's shader
+// probe, and QVFR.
 class LmuAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     LmuAdapter() : IdentityAdapter(&kGame) {}
@@ -50,11 +50,11 @@ public:
     bool qvfr_start(const simqvfr::games::QvfrStart& s) override {
         if (!has_qvfr())
             return false;
-        FourPassesRun run;
+        QvfrFrameRun run;
         run.qvfr = true;
         run.fraction = s.focusFraction > 0 ? s.focusFraction : 0.3;
         run.fractionY = s.focusFractionY;
-        // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (four_passes.h).
+        // Menus (frames without the eye loop) at the native eye, the UI drawn at that size (qvfr_frame.h).
         run.menuNative = !s.ini || GetPrivateProfileIntW(L"experiment", L"lmu_menu_native", 1, s.ini) != 0;
         run.layerWidth = s.layout.layer_width();
         run.layerHeight = s.layout.layer_height();
@@ -62,7 +62,6 @@ public:
         // where the layer made room (Views4Layout::secondViewRoom), post-process them (focus post, focus finals) and are
         // found at the d3d11 level (the pass tracker): no game code hooked. The only way LMU's QVFR runs.
         run.mvr = s.layout.secondViewRoom;
-        run.mvrSkip = run.mvr;
         run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images the outer views' shape, the focus views beside
         if (run.mvr) {
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.
@@ -72,7 +71,7 @@ public:
             // lmu_post_census=1-3 (diagnostics, log only): the eye pass's draws in detail (docs/recon-lmu.md "Census").
             run.postCensus = static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_post_census", 0, s.ini));
             run.textureSharpening = s.ini && simqvfr::read_dlss_settings(s.ini).textureSharpening != 0;
-            // Other cars' motion in DLSS's vectors (four_passes.h carTrack, carSlots): the player's [dlss] car_vectors
+            // Other cars' motion in DLSS's vectors (qvfr_frame.h carTrack, carSlots): the player's [dlss] car_vectors
             // with DLSS on at launch; or as a diagnostic, [experiment] lmu_car_track=1 (the tracking, log only with
             // car_vectors=0) and lmu_car_vectors=1 (the slots and a gate image) or 2 (DLSS takes them); 0 (the shipped
             // ini's): as the player's.
@@ -99,7 +98,7 @@ public:
             run.passTracker = true;    // the eye passes from the d3d11 calls
             run.trackerDrives = true;  // and nothing of the game's hooked
             {
-                // lmu_mvr_backend_ab=N: N frames NVIDIA's single-pass stereo, N instancing, in turn (four_passes.h).
+                // lmu_mvr_backend_ab=N: N frames NVIDIA's single-pass stereo, N instancing, in turn (qvfr_frame.h).
                 run.backendAb = !s.ini ? 0 : (std::max)(0, static_cast<int>(GetPrivateProfileIntW(L"experiment", L"lmu_mvr_backend_ab", 0,
                                                                                       s.ini)));
                 run.mvrTiming = run.mvrTiming || run.backendAb > 0;
@@ -180,7 +179,7 @@ public:
             simqvfr::logf("lmu: diagnostics on: Ctrl+Alt+1 switches the multi-view shadow fix (lmu_diag_list_fix_off=1 in "
                           "%ls turns it off)",
                           diag_.ini().c_str());
-        qvfr_ = four_passes_start(run);
+        qvfr_ = qvfr_frame_start(run);
         // The views' launch sizes inside the layer (larger with the menus' floor, views4_menu_scale): from the first
         // frame, as a live change would set them.
         if (qvfr_)
@@ -189,13 +188,13 @@ public:
     }
     void qvfr_set_gaze(const float (&tan)[2][2], const bool (&valid)[2], bool) override {
         if (qvfr_)
-            four_passes_set_gaze(tan, valid);
+            qvfr_frame_set_gaze(tan, valid);
     }
     void qvfr_set_live(double focus, double focusY, double, bool) override {
         if (qvfr_)
-            four_passes_set_box(focus, focusY);
+            qvfr_frame_set_box(focus, focusY);
     }
-    // Live resolution: each pass at its own render scale inside the launch-size targets (four_passes.h). On for QVFR
+    // Live resolution: each pass at its own render scale inside the launch-size targets (qvfr_frame.h). On for QVFR
     // runs; GameFeatures::liveResolution stays off until it passes its card.
     bool qvfr_live_resolution() const override { return has_qvfr(); }
     // `live`: views4_live_one_size's layout (each view's share of its layer, halved). LMU scales both axes together, so
@@ -205,15 +204,15 @@ public:
             set_scales(live);
     }
     void qvfr_target_sizes(int (&render)[2], int (&output)[2]) override {
-        four_passes_view_size(render);
+        qvfr_frame_view_size(render);
         output[0] = render[0];
         output[1] = render[1];
     }
     // The FOV crop reaches LMU through the located FOV; its lens mask is built with the FOV located when it fetches the
-    // mesh, so a live crop change leaves the mask off until the FOV matches again (four_passes.h).
+    // mesh, so a live crop change leaves the mask off until the FOV matches again (qvfr_frame.h).
     void qvfr_note_views(const XrView* views, uint32_t count) override {
         if (qvfr_)
-            four_passes_note_views(views, count);
+            qvfr_frame_note_views(views, count);
     }
     void session_destroyed() override {
         IdentityAdapter::session_destroyed();
@@ -260,25 +259,25 @@ public:
     }
     void visibility_mask_taken(uint32_t viewIndex) override {
         if (qvfr_)
-            four_passes_mask_taken(viewIndex);
+            qvfr_frame_mask_taken(viewIndex);
     }
-    bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
+    bool qvfr_take_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && qvfr_frame_record(frame); }
     simqvfr::games::QvfrMultiView qvfr_multi_view() const override {
-        return qvfr_ ? four_passes_multi_view() : simqvfr::games::QvfrMultiView::none;
+        return qvfr_ ? qvfr_frame_multi_view() : simqvfr::games::QvfrMultiView::none;
     }
-    bool qvfr_latest_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && four_passes_record(frame); }
+    bool qvfr_latest_frame(simqvfr::Views4Frame& frame) override { return qvfr_ && qvfr_frame_record(frame); }
     bool qvfr_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) override {
-        return qvfr_ && four_passes_eye_extent(width, height);
+        return qvfr_ && qvfr_frame_eye_extent(width, height);
     }
     ID3D11Texture2D* qvfr_views_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) override {
-        return qvfr_ ? four_passes_atlas(eyes, uv) : nullptr;
+        return qvfr_ ? qvfr_frame_atlas(eyes, uv) : nullptr;
     }
     void qvfr_frame_end() override {
         if (!qvfr_)
             return;
         if (diag_.poll())  // the switch off: the lists executed as before the fix
             mvr_replay_lists_plain(!diag_.off(0));
-        four_passes_frame_end();
+        qvfr_frame_frame_end();
     }
 
     void instance_created(const wchar_t* ini, const wchar_t* mode) override {
@@ -296,7 +295,7 @@ public:
     void d3d11_session(ID3D11Device* device) override {
         if (mvrProbe_)
             mvr_probe_device(device);
-        four_passes_device(device);
+        qvfr_frame_device(device);
     }
     void frame_end() override {
         if (mvrProbe_)
@@ -308,9 +307,9 @@ public:
 private:
     static void set_scales(const simqvfr::Views4Layout& live) {
         const auto share = [&](int v) { return std::max(2 * live.width[v], 2 * live.height[v]); };
-        four_passes_set_live_scales(share(0), share(2));
+        qvfr_frame_set_live_scales(share(0), share(2));
         // Per axis (side by side for MVR): each view's share of the target's width and height.
-        four_passes_set_live_axes(2 * live.width[0], 2 * live.height[0], 2 * live.width[2], 2 * live.height[2]);
+        qvfr_frame_set_live_axes(2 * live.width[0], 2 * live.height[0], 2 * live.width[2], 2 * live.height[2]);
     }
     bool viewProbe_ = false;
     bool mvrProbe_ = false;

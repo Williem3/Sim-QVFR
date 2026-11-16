@@ -1,5 +1,5 @@
 // LMU's multi-view path: what it does when the focus views stop coming, in place of a fallback for the rest of the
-// session (the four passes, which hook the game's code). Pure arithmetic: games/lmu/four_passes.cpp feeds it each
+// session (the four passes, which hook the game's code). Pure arithmetic: games/lmu/qvfr_frame.cpp feeds it each
 // frame's outcome and acts on its state; tests/lmu_mvr_recovery_test.cpp is its check.
 //   foveated  the eyes at the periphery's size, each with its focus view beside it: the normal state.
 //   plain     entered after kNoFinalsFrames frames in a row with an eye pass but without both focus views (a pipeline

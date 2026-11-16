@@ -1,15 +1,15 @@
-// What LMU's QVFR passes cost (CPU clocks, GPU spans) and the A/B runs' sides: four_passes_internal.h.
-#include "four_passes_internal.h"
+// What LMU's QVFR passes cost (CPU clocks, GPU spans) and the A/B runs' sides: qvfr_frame_internal.h.
+#include "qvfr_frame_internal.h"
 
 #include <windows.h>
 #include <intrin.h>
 
-namespace lmu::four_passes_detail {
+namespace lmu::qvfr_frame_detail {
 
 // ---- QVFR: what the four passes cost ----
 // CPU: each pass's time on the render thread, wall clock and the thread's own CPU (its cycle counter), and this code's
 // own work in its hooks. GPU: timestamp queries around this code's copies, read back frames later without stalling.
-// Averages logged every 900 frames while the scene runs (four_passes_frame_end).
+// Averages logged every 900 frames while the scene runs (qvfr_frame_frame_end).
 double qpcPerMs = 0, tscPerMs = 0;
 long long calibQpc = 0;
 unsigned long long calibTsc = 0;
@@ -58,4 +58,4 @@ bool ab_run() { return (cfg.backendAb > 0 && backendAbOk) || car_ab_on(); }
 
 AbWindow ab;
 
-}  // namespace lmu::four_passes_detail
+}  // namespace lmu::qvfr_frame_detail

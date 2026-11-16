@@ -551,7 +551,7 @@ HRESULT WINAPI create_device_and_swap_chain(IDXGIAdapter* adapter, D3D_DRIVER_TY
 bool mvr_probe_install(const wchar_t* ini, bool attachTwins, bool nameShaders) {
     dump = ini && GetPrivateProfileIntW(L"experiment", L"lmu_mvr_dump", 0, ini) != 0;
     attach = attachTwins;
-    // Texture sharpening's twins only when it's on at launch (as its hook, four_passes.cpp install_mvr).
+    // Texture sharpening's twins only when it's on at launch (as its hook, qvfr_frame.cpp install_mvr).
     makeBiasTwins = attach && ini && simqvfr::read_dlss_settings(ini).textureSharpening != 0;
     {  // other cars' motion: as the adapter decides it (games/lmu/adapter.cpp): the player's [dlss] car_vectors with
        // DLSS on, or the diagnostics' lmu_car_track / lmu_car_vectors above 0

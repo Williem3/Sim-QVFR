@@ -1,14 +1,14 @@
-// four_passes.h's internals, shared by its files (detail: not for other code). The state is the render thread's unless
+// qvfr_frame.h's internals, shared by its files (detail: not for other code). The state is the render thread's unless
 // its comment says otherwise (liveMutex), defined once in the file that owns it. Nothing here runs per draw: the passes'
 // bounds (pass_begin, pass_end) and the menus' VR UI panel draws (panel_draw) come in through mvr_pass.h's function
 // pointers, the rest per pass or per frame.
-//   four_passes.cpp   the frame: eye images, focus matrices, the atlas, live resolution, eye off, multi-view's install
+//   qvfr_frame.cpp    the frame: eye images, focus matrices, the atlas, live resolution, eye off, multi-view's install
 //                     and switching, the passes' begin and end, the frame capture, the frame's end, the public calls
 //   pass_costs.cpp    what the passes cost: CPU clocks, GPU spans, the A/B runs' sides
 //   native_menus.cpp  the menus at native resolution (frames without the eye loop, the VR UI panel drawn again)
 #pragma once
 
-#include "four_passes.h"
+#include "qvfr_frame.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -18,10 +18,10 @@
 
 #include "../../log.h"
 
-namespace lmu::four_passes_detail {
+namespace lmu::qvfr_frame_detail {
 
-// ---- four_passes.cpp ----
-extern FourPassesRun cfg;
+// ---- qvfr_frame.cpp ----
+extern QvfrFrameRun cfg;
 extern bool qvfrMode;
 extern std::mutex liveMutex;
 extern double focusFraction;
@@ -140,7 +140,7 @@ bool car_ab_on();
 int ab_side();
 bool ab_run();
 
-// An A/B run (FourPassesRun::mvrAb): each side's CPU per pass since the last cost line, in thread cycles.
+// An A/B run (QvfrFrameRun::mvrAb): each side's CPU per pass since the last cost line, in thread cycles.
 struct AbWindow {
     double cpu[2][4] = {};  // [0] with MVR, [1] without
     unsigned frames[2] = {};
@@ -158,4 +158,4 @@ extern unsigned long long menuFrames;
 void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start);
 void menu_finish();
 
-}  // namespace lmu::four_passes_detail
+}  // namespace lmu::qvfr_frame_detail
