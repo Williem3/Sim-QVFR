@@ -217,6 +217,9 @@ public:
         (void)enumerate;
     }
     virtual void swapchain_releasing(XrSwapchain chain) { (void)chain; }
+    // xrDestroySwapchain for one of the game's swapchains, before it goes on (any thread the game destroys it on):
+    // whatever the adapter keeps for `chain` (its images' raw pointers) must go now; the handle may come back for another.
+    virtual void swapchain_destroyed(XrSwapchain chain) { (void)chain; }
     // `enumerate`: the next layer's xrEnumerateSwapchainImages (the swapchains' images, if the adapter draws into them).
     virtual const XrFrameEndInfo* adjust_frame_end(const XrFrameEndInfo* info, PFN_xrEnumerateSwapchainImages enumerate) {
         (void)enumerate;

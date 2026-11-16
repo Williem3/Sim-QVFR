@@ -504,13 +504,13 @@ void menu_render() {
                                                              ? hotkey_footer(menu.model.values.helmet.on && experiment.composing())
                                                              : L"");
     uint32_t index = 0;
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-    wait.timeout = 100'000'000;
     hang_watch_stage("menu panel: xrAcquireSwapchainImage");
-    if (XR_FAILED(next.AcquireSwapchainImage(menu.chain, nullptr, &index)))
+    // A timed-out wait leaves the image acquired, not waited for: not released, waited on again at the next draw.
+    if (acquire_wait(menu.chain, menu.pending, kImageWaitNs, 1, index, "menu panel: xrWaitSwapchainImage") != XR_SUCCESS) {
+        hang_watch_stage("menu panel: done");
         return;
-    hang_watch_stage("menu panel: xrWaitSwapchainImage");
-    bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(menu.chain, &wait)) && index < menu.images.size() && menu.upload;
+    }
+    bool ok = index < menu.images.size() && menu.upload;
     hang_watch_stage("menu panel: the upload");
     ok = ok && menu.upload->upload(menu.images[index], pixels);
     hang_watch_stage("menu panel: xrReleaseSwapchainImage");
@@ -581,6 +581,7 @@ void menu_shutdown() {
     menu.chain = XR_NULL_HANDLE;
     menu.view = XR_NULL_HANDLE;
     menu.images.clear();
+    menu.pending = {};
     menu.visible = menu.uploaded = menu.failed = false;
     menu.dirty = true;
 }

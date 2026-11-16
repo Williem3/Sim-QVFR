@@ -60,6 +60,198 @@ int run(int appFrames, bool frameGenerator) {
     return errors;
 }
 
+// A layer swapchain under OpenXR's image rules (3 images): acquire within the count, wait only on an acquired image,
+// release only a waited one; the first `timeoutsLeft` waits time out.
+struct FakeImages {
+    int acquiredNotWaited = 0, waitedNotReleased = 0;
+    int acquires = 0, waits = 0, releases = 0, violations = 0, timeoutsLeft = 0;
+    uint32_t nextIndex = 0;
+} images;
+
+XrResult XRAPI_CALL fakeAcquireImage(XrSwapchain, const XrSwapchainImageAcquireInfo*, uint32_t* index) {
+    if (images.acquiredNotWaited + images.waitedNotReleased >= 3) {
+        ++images.violations;
+        return XR_ERROR_CALL_ORDER_INVALID;
+    }
+    ++images.acquires;
+    ++images.acquiredNotWaited;
+    *index = images.nextIndex++ % 3;
+    return XR_SUCCESS;
+}
+XrResult XRAPI_CALL fakeWaitImage(XrSwapchain, const XrSwapchainImageWaitInfo* info) {
+    ++images.waits;
+    if (images.acquiredNotWaited == 0 || !info || info->timeout == XR_INFINITE_DURATION) {
+        ++images.violations;  // no image to wait on, or an unbounded wait
+        return XR_ERROR_CALL_ORDER_INVALID;
+    }
+    if (images.timeoutsLeft > 0) {
+        --images.timeoutsLeft;
+        return XR_TIMEOUT_EXPIRED;
+    }
+    --images.acquiredNotWaited;
+    ++images.waitedNotReleased;
+    return XR_SUCCESS;
+}
+XrResult XRAPI_CALL fakeReleaseImage(XrSwapchain, const XrSwapchainImageReleaseInfo*) {
+    if (images.waitedNotReleased == 0) {
+        ++images.violations;  // released before its wait completed
+        return XR_ERROR_CALL_ORDER_INVALID;
+    }
+    --images.waitedNotReleased;
+    ++images.releases;
+    return XR_SUCCESS;
+}
+
+std::vector<XrSwapchain> destroyedChains;
+XrResult XRAPI_CALL fakeDestroyChain(XrSwapchain chain) {
+    destroyedChains.push_back(chain);
+    return XR_SUCCESS;
+}
+XrResult XRAPI_CALL fakeDestroySpaceCall(XrSpace) { return XR_SUCCESS; }
+
+XrSwapchain handle(uintptr_t value) { return reinterpret_cast<XrSwapchain>(value); }
+
+// A timed-out wait keeps its image: no second acquire, no release, the next call waits on the same image; never an
+// unbounded wait.
+bool image_wait_rules() {
+    using namespace simqvfr::layer;
+    images = FakeImages{};
+    next.AcquireSwapchainImage = fakeAcquireImage;
+    next.WaitSwapchainImage = fakeWaitImage;
+    next.ReleaseSwapchainImage = fakeReleaseImage;
+    const XrSwapchain chain = handle(0x700);
+    PendingImage pending;
+    XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    images.timeoutsLeft = 2 * kImageWaitTries + 5;  // two whole calls time out, the third gets it
+    uint32_t index = 99;
+    const XrResult first = acquire_wait(chain, pending, kImageWaitNs, kImageWaitTries, index);
+    const XrResult second = acquire_wait(chain, pending, kImageWaitNs, kImageWaitTries, index);
+    const bool heldWhileTimedOut = first == XR_TIMEOUT_EXPIRED && second == XR_TIMEOUT_EXPIRED && pending.acquired &&
+                                   images.acquires == 1 && images.releases == 0 && index == 99;
+    const XrResult third = acquire_wait(chain, pending, kImageWaitNs, kImageWaitTries, index);
+    const bool sameImage = third == XR_SUCCESS && index == 0 && !pending.acquired && images.acquires == 1;
+    next.ReleaseSwapchainImage(chain, &release);
+    const XrResult fourth = acquire_wait(chain, pending, kImageWaitNs, kImageWaitTries, index);  // the fast case
+    const bool fast = fourth == XR_SUCCESS && index == 1 && images.acquires == 2;
+    next.ReleaseSwapchainImage(chain, &release);
+    // A single short wait (the menu's, the overlay's): timed out, then waited on again.
+    images.timeoutsLeft = 1;
+    const bool shortTimeout = acquire_wait(chain, pending, kImageWaitNs, 1, index) == XR_TIMEOUT_EXPIRED &&
+                              acquire_wait(chain, pending, kImageWaitNs, 1, index) == XR_SUCCESS && index == 2 &&
+                              images.acquires == 3;
+    next.ReleaseSwapchainImage(chain, &release);
+    std::printf("image waits: held while timed out=%d, then the same image=%d, fast case=%d, short timeout=%d, "
+                "%d waits, %d rule violations\n",
+                heldWhileTimedOut ? 1 : 0, sameImage ? 1 : 0, fast ? 1 : 0, shortTimeout ? 1 : 0, images.waits,
+                images.violations);
+    next.AcquireSwapchainImage = nullptr;
+    next.WaitSwapchainImage = nullptr;
+    next.ReleaseSwapchainImage = nullptr;
+    return heldWhileTimedOut && sameImage && fast && shortTimeout && images.violations == 0;
+}
+
+// xrDestroySwapchain: the layer's per-swapchain state for it goes first, an adopted eye chain with its output chain,
+// and the call goes on; another chain's state stays.
+bool destroy_swapchain_purges() {
+    using namespace simqvfr::layer;
+    destroyedChains.clear();
+    next.DestroySwapchain = fakeDestroyChain;
+    const XrSwapchain gameChain = handle(0x801), other = handle(0x802), eyes = handle(0x803), out = handle(0x804);
+    {
+        std::lock_guard guard(chainMutex);
+        chainSizes[gameChain] = {64, 64};
+        chainSizes[other] = {32, 32};
+    }
+    {
+        std::lock_guard guard(v4d3d11.mutex);
+        v4d3d11.chains[gameChain].format = 29;
+        v4d3d11.chains[other].format = 29;
+    }
+    {
+        std::lock_guard guard(v4outline.mutex);
+        v4outline.formats[gameChain] = 29;
+        v4outline.acquired[gameChain] = 1;
+        v4outline.chain = gameChain;
+    }
+    {
+        std::lock_guard guard(quad.mutex);
+        quad.appChain = eyes;
+        quad.outChain = out;
+        quad.outPending.acquired = true;
+    }
+    measuredEyeChain = gameChain;
+    layerDestroySwapchain(gameChain);
+    bool purged, kept;
+    {
+        std::lock_guard guard(chainMutex);
+        purged = !chainSizes.count(gameChain);
+        kept = chainSizes.count(other) == 1;
+    }
+    {
+        std::lock_guard guard(v4d3d11.mutex);
+        purged &= !v4d3d11.chains.count(gameChain);
+        kept &= v4d3d11.chains.count(other) == 1;
+    }
+    {
+        std::lock_guard guard(v4outline.mutex);
+        purged &= !v4outline.formats.count(gameChain) && !v4outline.acquired.count(gameChain) && v4outline.chain == XR_NULL_HANDLE;
+    }
+    purged &= measuredEyeChain.load() == XR_NULL_HANDLE;
+    bool quadKept;
+    {
+        std::lock_guard guard(quad.mutex);
+        quadKept = quad.appChain == eyes && quad.outChain == out;
+    }
+    layerDestroySwapchain(eyes);  // the adopted eye chain: its output chain goes too, adoption starts again
+    bool unadopted;
+    {
+        std::lock_guard guard(quad.mutex);
+        unadopted = quad.appChain == XR_NULL_HANDLE && quad.outChain == XR_NULL_HANDLE && !quad.outPending.acquired;
+    }
+    const bool calledDown = destroyedChains == std::vector<XrSwapchain>{gameChain, out, eyes};
+    std::printf("xrDestroySwapchain: its state purged=%d, another chain's kept=%d, quad chains kept for another=%d, "
+                "adopted chain released with its output=%d, called down=%d\n",
+                purged ? 1 : 0, kept ? 1 : 0, quadKept ? 1 : 0, unadopted ? 1 : 0, calledDown ? 1 : 0);
+    {
+        std::lock_guard guard(chainMutex);
+        chainSizes.clear();
+    }
+    {
+        std::lock_guard guard(v4d3d11.mutex);
+        v4d3d11.chains.clear();
+    }
+    next.DestroySwapchain = nullptr;
+    return purged && kept && quadKept && unadopted && calledDown;
+}
+
+// xrDestroySpace on the space the gaze thread locates against: it is cleared first; another space leaves it.
+bool destroy_space_clears_gaze_base() {
+    using namespace simqvfr::layer;
+    next.DestroySpace = fakeDestroySpaceCall;
+    const XrSpace base = reinterpret_cast<XrSpace>(static_cast<uintptr_t>(0x901));
+    const XrSpace other = reinterpret_cast<XrSpace>(static_cast<uintptr_t>(0x902));
+    {
+        std::lock_guard guard(gazeThread.mutex);
+        gazeThread.base = base;
+        gazeThread.directionTime = 1234;
+    }
+    layerDestroySpace(other);
+    bool keptForOther, cleared;
+    {
+        std::lock_guard guard(gazeThread.mutex);
+        keptForOther = gazeThread.base == base && gazeThread.directionTime == 1234;
+    }
+    layerDestroySpace(base);
+    {
+        std::lock_guard guard(gazeThread.mutex);
+        cleared = gazeThread.base == XR_NULL_HANDLE && gazeThread.directionTime == 0;
+    }
+    std::printf("xrDestroySpace: the gaze thread's space kept for another=%d, cleared for its own=%d\n",
+                keptForOther ? 1 : 0, cleared ? 1 : 0);
+    next.DestroySpace = nullptr;
+    return keptForOther && cleared;
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN() {
@@ -74,6 +266,11 @@ int SIM_QVFR_TEST_MAIN() {
     std::printf("frame generator above: active=%d broken=%d (expected 0 and 1)\n", simqvfr::layer::loops.active ? 1 : 0,
                 simqvfr::layer::loops.broken ? 1 : 0);
     ok &= !simqvfr::layer::loops.active && simqvfr::layer::loops.broken;
+
+    // The layer's own swapchain images and the game's swapchains and spaces going.
+    ok &= image_wait_rules();
+    ok &= destroy_swapchain_purges();
+    ok &= destroy_space_clears_gaze_base();
 
     // Live settings: an edited ini applies at the next xrEndFrame, but never between frames A and B.
     {

@@ -343,6 +343,10 @@ struct HeadSpaces {
 // The lookup runs outside gaze.mutex, so ACE's xrSyncActions never waits for it.
 struct GazeThread {
     std::mutex mutex;
+    // Held by the thread from reading `base` to the end of its xrLocateSpace (taken before `mutex`, and before
+    // gaze.mutex): the game's xrDestroySpace (layerDestroySpace) takes it to clear `base` before the space goes, so no
+    // lookup runs on a destroyed space.
+    std::mutex locateMutex;
     std::condition_variable wake;
     std::thread thread;
     bool stop = false;
@@ -393,6 +397,19 @@ struct EyeView {
 // The helmet layer's quads: two bands, each once (far depth) or once per eye (near depth).
 inline constexpr int kHelmetQuadsMax = 4;
 
+// One of the layer's own swapchains' image acquired and not yet waited for (acquire_wait): a wait that timed out leaves
+// it acquired, and OpenXR has the next wait be on that same image (no second acquire, no release before it), so the
+// next frame waits on it again. Reset whenever its swapchain goes.
+struct PendingImage {
+    bool acquired = false;
+    uint32_t index = 0;
+};
+
+// The bounded wait for a layer image inside the game's own calls: kImageWaitTries waits of kImageWaitNs (about a
+// second), never XR_INFINITE_DURATION under the layer's mutexes; the frame goes out without that image if it times out.
+inline constexpr XrDuration kImageWaitNs = 100'000'000;
+inline constexpr int kImageWaitTries = 10;
+
 struct Quad {
     std::mutex mutex;
     uint32_t nativeW = 0, nativeH = 0;      // runtime's recommended eye size (before eye_scale)
@@ -405,6 +422,7 @@ struct Quad {
     bool releaseHeld = false;               // B's image, released at B's xrEndFrame
     XrSwapchain outChain = XR_NULL_HANDLE;  // this layer's double-wide output
     std::vector<ID3D12Resource*> outImages;
+    PendingImage outPending;  // outChain's image left acquired by a timed-out wait
     ID3D12Device* device = nullptr;
     ID3D12CommandQueue* queue = nullptr;
     QuadCompositor compositor;
@@ -431,6 +449,7 @@ struct Quad {
     XrSpace helmetSpace = XR_NULL_HANDLE;
     std::vector<ID3D12Resource*> helmetImages;
     std::vector<ID3D11Texture2D*> helmetImages11;  // the same, for a D3D11 session (ACC)
+    PendingImage helmetPending;  // helmetChain's image left acquired by a timed-out wait
     bool helmetPiecesLoaded = false;  // the composing compositor holds pieces (helmet_pieces), for the menu and submit
     bool helmetLayerFailed = false, helmetDrawn = false;
     // Its quads this frame: the bands the pieces draw on (helmet_bands), one or two, from the same image; with a
@@ -468,6 +487,7 @@ struct V4D3D11 {
     std::map<XrSwapchain, Chain> chains;  // the game's
     XrSwapchain outChain = XR_NULL_HANDLE;
     std::vector<ID3D11Texture2D*> outImages;
+    PendingImage outPending, focusPending, peripheryPending;  // each chain's image left acquired by a timed-out wait
     uint32_t outW = 0, outH = 0;  // one eye's size in it
     bool failed = false;          // no compositor or output chain: views 0-1 as they are
     // experiment.focusLayer: the focus views' own swapchain (kHelmetLayerFormat, alpha the feather), eye e from
@@ -662,6 +682,7 @@ struct Menu {
     XrSpace view = XR_NULL_HANDLE;
     XrSwapchain chain = XR_NULL_HANDLE;
     std::vector<void*> images;  // the session API's textures
+    PendingImage pending;       // chain's image left acquired by a timed-out wait
     std::unique_ptr<PanelUpload> upload;
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     int heldKey = -1;  // keyboard repeat: the held arrow (index into kMenuKeys)
@@ -690,6 +711,7 @@ struct Osd {
     XrSpace view = XR_NULL_HANDLE;
     XrSwapchain chain = XR_NULL_HANDLE;
     std::vector<void*> images;  // the session API's textures
+    PendingImage pending;       // chain's image left acquired by a timed-out wait (the notice's and the card's)
     std::unique_ptr<PanelUpload> upload;
     XrCompositionLayerQuad layer{XR_TYPE_COMPOSITION_LAYER_QUAD};
     std::atomic<int64_t> periodNs{0};  // the display's, from xrWaitFrame (any thread)

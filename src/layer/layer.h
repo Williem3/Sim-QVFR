@@ -56,6 +56,12 @@ bool quad_ready();
 void turn_view(XrView& view, double fractionX, double fractionY, double tanX, double tanY);
 void focus_centre(const EyeComposition& eye, float& tanX, float& tanY);
 bool sampled(uint64_t count);
+// An image of the layer's own swapchain `chain` to write: the next one acquired (or the one a timed-out wait left
+// acquired, `pending`) and waited for, up to `tries` waits of `timeout` each (`stage`: the hang watch's name for the
+// wait, or null). XR_SUCCESS: `index` is ready; release it after. XR_TIMEOUT_EXPIRED: still acquired and not waited for:
+// don't release it (OpenXR), the next call waits on it again. A failure code: the acquire's or the wait's.
+XrResult acquire_wait(XrSwapchain chain, PendingImage& pending, XrDuration timeout, int tries, uint32_t& index,
+                      const char* stage = nullptr);
 
 // reports.cpp
 int64_t qpc_now();
@@ -82,6 +88,7 @@ XrResult XRAPI_CALL layerEnumerateSwapchainImages(XrSwapchain swapchain, uint32_
                                                   XrSwapchainImageBaseHeader* images);
 XrResult XRAPI_CALL layerAcquireSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageAcquireInfo* info,
                                                uint32_t* index);
+XrResult XRAPI_CALL layerDestroySwapchain(XrSwapchain swapchain);
 
 // helmet_layer.cpp
 void helmet_layer_release();

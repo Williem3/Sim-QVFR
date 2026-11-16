@@ -57,6 +57,9 @@ void corner_acquired(XrSwapchain chain, uint32_t index, PFN_xrEnumerateSwapchain
 // xrReleaseSwapchainImage, before it goes on: the corner scaled back over the image (the render thread, a frame with
 // its eyes in the corner).
 void corner_releasing(XrSwapchain chain);
+// xrDestroySwapchain, before it goes on (any thread): `chain`'s images forgotten (their raw pointers), learned again if
+// the handle comes back.
+void corner_swapchain_destroyed(XrSwapchain chain);
 // Where each eye's focus box should be centred on that eye's screen (x right, y down, 0..1; any thread). Taken at each
 // frame's start; the box is kept inside the screen.
 void corner_set_gaze(const float (&screen)[2][2]);

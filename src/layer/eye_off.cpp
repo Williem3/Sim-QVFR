@@ -58,13 +58,12 @@ bool black_ready(XrSession session) {
     bool ok = XR_SUCCEEDED(r) && upload;
     if (ok) {  // one image released black: the runtime shows the last released one from then on
         uint32_t index = 0;
-        XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-        wait.timeout = 100'000'000;
-        ok = XR_SUCCEEDED(next.AcquireSwapchainImage(chain, nullptr, &index));
+        PendingImage pending;
+        // Timed out: the image stays acquired, not waited for, so it isn't released; the chain goes below.
+        ok = acquire_wait(chain, pending, kImageWaitNs, 1, index) == XR_SUCCESS;
         if (ok) {
             const std::vector<uint32_t> pixels(static_cast<size_t>(kBlackSize) * kBlackSize, 0u);
-            ok = XR_SUCCEEDED(next.WaitSwapchainImage(chain, &wait)) && index < images.size() &&
-                 upload->upload(images[index], pixels);
+            ok = index < images.size() && upload->upload(images[index], pixels);
             next.ReleaseSwapchainImage(chain, nullptr);
         }
     }

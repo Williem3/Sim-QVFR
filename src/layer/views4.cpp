@@ -118,16 +118,22 @@ void views4_compose() {
     if (helmet.on)
         log_helmet_light();
     uint32_t outIndex = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(quad.outChain, &acquire, &outIndex)) || outIndex >= quad.outImages.size()) {
+    // Bounded (inside ACE's xrReleaseSwapchainImage, under quad.mutex): timed out, ACE's own eyes go out this frame and
+    // the image, still acquired, is waited on again at the next.
+    const XrResult waited =
+        acquire_wait(quad.outChain, quad.outPending, kImageWaitNs, kImageWaitTries, outIndex, "views4: output image wait");
+    if (waited != XR_SUCCESS) {
+        quad_fail(waited == XR_TIMEOUT_EXPIRED ? "views4 output wait timed out" : "views4 output acquire failed");
+        return;
+    }
+    if (outIndex >= quad.outImages.size()) {
+        next.ReleaseSwapchainImage(quad.outChain, &release);
         quad_fail("views4 output acquire failed");
         return;
     }
     ID3D12Resource* out = quad.outImages[outIndex];
-    bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) && quad.compositor.capture_outer(app) &&
-              quad.compositor.compose(app, out, eyes);
+    bool ok = quad.compositor.capture_outer(app) && quad.compositor.compose(app, out, eyes);
     if (ok && quad_capture_due())
         views4_capture(app, out);
     next.ReleaseSwapchainImage(quad.outChain, &release);
@@ -196,17 +202,24 @@ void replay_compose() {
         views4_helmet_eye(helmet, helmetFrame, e, c, quad.v4SubmitFov[e], quad.v4Extent[e]);
     }
     uint32_t outIndex = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(quad.outChain, &acquire, &outIndex)) || outIndex >= quad.outImages.size()) {
+    // Bounded (inside ACE's xrReleaseSwapchainImage, under quad.mutex): timed out, ACE's eyes go out uncomposed this
+    // frame and the image, still acquired, is waited on again at the next.
+    const XrResult waited =
+        acquire_wait(quad.outChain, quad.outPending, kImageWaitNs, kImageWaitTries, outIndex, "replay compose: output image wait");
+    if (waited != XR_SUCCESS) {
+        quad_fail(waited == XR_TIMEOUT_EXPIRED ? "replay compose: output wait timed out"
+                                               : "replay compose: output acquire failed");
+        return;
+    }
+    if (outIndex >= quad.outImages.size()) {
+        next.ReleaseSwapchainImage(quad.outChain, &release);
         quad_fail("replay compose: output acquire failed");
         return;
     }
     ID3D12Resource* out = quad.outImages[outIndex];
     replay_probe_gpu_scope(true);
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) && quad.compositor.capture_outer(app) &&
-                    quad.compositor.compose(focusImage, out, eyes, focusState);
+    const bool ok = quad.compositor.capture_outer(app) && quad.compositor.compose(focusImage, out, eyes, focusState);
     replay_probe_gpu_scope(false);
     if (experiment.replayEyeCapture) {  // diagnostic: ACE's whole eye image and the composed left eye, about two seconds
                                         // after each change of the live periphery (up to 12 a session)
@@ -463,13 +476,13 @@ bool v4d3d11_sharpened_periphery(XrSession session, int64_t format, ID3D11Textur
     const float sources[2][4] = {{eyes[0].outerSource[0], eyes[0].outerSource[1], eyes[0].outerSource[2], eyes[0].outerSource[3]},
                                  {eyes[1].outerSource[0], eyes[1].outerSource[1], eyes[1].outerSource[2], eyes[1].outerSource[3]}};
     uint32_t index = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.peripheryChain, &acquire, &index)) ||
-        index >= v4d3d11.peripheryImages.size())
+    // Bounded (in the game's xrEndFrame, under the layer's mutexes): timed out, the game's own periphery this frame, the
+    // image (still acquired) waited on again at the next.
+    if (acquire_wait(v4d3d11.peripheryChain, v4d3d11.peripheryPending, kImageWaitNs, kImageWaitTries, index,
+                     "views4 d3d11: periphery image wait") != XR_SUCCESS)
         return false;
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.peripheryChain, &wait)) &&
+    const bool ok = index < v4d3d11.peripheryImages.size() &&
                     v4d3d11.compositor.draw_view_copies(views, v4d3d11.peripheryImages[index], sources, rects,
                                                         eyes[0].sharpness);
     next.ReleaseSwapchainImage(v4d3d11.peripheryChain, &release);
@@ -575,11 +588,13 @@ void v4d3d11_region_note() {
 // sharpening on, a sharpened copy of them in the game's `format`: v4d3d11_sharpened_periphery).
 // Native quad views: views 2-3 cover exactly the runtime's focus views located for `displayTime` (a runtime may draw
 // them into its own focus region whatever FOV they carry): the focus box drawn inside, the periphery around it.
-// False: nothing changed (the caller composes as without focus_layer).
+// False: nothing changed (the caller composes as without focus_layer), or, `*focusTimedOut` set, the focus chain's
+// image wasn't ready in time (this frame only: the caller submits the game's views as they are).
 bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj, const Views4Frame& frame,
                      const EyeComposition (&eyes)[2], ID3D11Texture2D* views, float texW, float texH, int64_t format,
                      const float (&texelsPerPixel)[2], XrTime displayTime,
-                     std::vector<XrCompositionLayerProjectionView>& copy, XrCompositionLayerProjectionView (&focus)[2]) {
+                     std::vector<XrCompositionLayerProjectionView>& copy, XrCompositionLayerProjectionView (&focus)[2],
+                     bool* focusTimedOut) {
     int render[2] = {}, output[2] = {};
     game->qvfr_target_sizes(render, output);  // the game's view images (LMU: one size for all four)
     // Each view's size as rendered (live resolution), from its region of the views' image.
@@ -624,12 +639,21 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
                     pixels(eyes[e].outerSource[3], texH, static_cast<uint32_t>(std::max(gameRect.height, 1)))};
     }
     uint32_t index = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.focusChain, &acquire, &index)) ||
-        index >= v4d3d11.focusImages.size())
+    // Bounded (in the game's xrEndFrame, under v4d3d11.mutex and quad.mutex). Timed out: the image stays acquired (not
+    // released), waited on again at the next frame; this one goes out without its focus layer.
+    const XrResult waited = acquire_wait(v4d3d11.focusChain, v4d3d11.focusPending, kImageWaitNs, kImageWaitTries, index,
+                                         "views4 d3d11: focus layer image wait");
+    if (waited == XR_TIMEOUT_EXPIRED) {
+        *focusTimedOut = true;
         return false;
+    }
+    if (waited != XR_SUCCESS)
+        return false;
+    if (index >= v4d3d11.focusImages.size()) {
+        next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
+        return false;
+    }
     // A quad view session: opaque focus views (the runtime blends them into the eyes itself, and takes no alpha from
     // a projection layer's views 2-3), the periphery blended into their edge by the feather and the outline drawn
     // kNativeOutlineInset in from it (FocusLayerPS); otherwise the feather in alpha.
@@ -646,8 +670,7 @@ bool v4d3d11_layered(XrSession session, const XrCompositionLayerProjection* proj
     // Sharpening: the focus views' texels per display pixel (FocusLayerPS sharpens at the display's scale above 1.25).
     for (int e = 0; e < 2; ++e)
         drawn[e].viewTan[2] = texelsPerPixel[e];
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.focusChain, &wait)) &&
-                    v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
+    const bool ok = v4d3d11.compositor.draw_focus_layer(views, v4d3d11.focusImages[index], drawn, rects);
     next.ReleaseSwapchainImage(v4d3d11.focusChain, &release);
     if (!ok)
         return false;
@@ -831,11 +854,14 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
                  texelsPerPixel[0] > 1.25f ? " (sharpened at the display's scale)" : "");
             v4d3d11.loggedTexelsPerPixel = texelsPerPixel[0];
         }
+        bool focusTimedOut = false;
         if (v4d3d11_layered(session, proj, frame, eyes, views, texW, texH, it->second.format, texelsPerPixel,
-                            displayTime, copy, *focus)) {
+                            displayTime, copy, *focus, &focusTimedOut)) {
             *layered = true;
             return true;
         }
+        if (focusTimedOut)  // a slow image, not a broken layer: focus_layer stays on, this frame goes out as it is
+            return fallback("the focus layer's image wasn't ready in time");
         // Composed from now on: the output chain can't be made here (under quad.mutex), so this frame only if a menu
         // made it already; otherwise the next frame makes it.
         if (!v4d3d11.focusFailed)
@@ -845,14 +871,20 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
             return fallback("focus_layer failed, the output chain is made at the next frame");
     }
     uint32_t outIndex = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(v4d3d11.outChain, &acquire, &outIndex)) ||
-        outIndex >= v4d3d11.outImages.size())
+    // Bounded (in the game's xrEndFrame, under v4d3d11.mutex and quad.mutex). Timed out: views 0-1 this frame, the
+    // image (still acquired, not released) waited on again at the next.
+    const XrResult waited = acquire_wait(v4d3d11.outChain, v4d3d11.outPending, kImageWaitNs, kImageWaitTries, outIndex,
+                                         "views4 d3d11: output image wait");
+    if (waited == XR_TIMEOUT_EXPIRED)
+        return fallback("output wait timed out");
+    if (waited != XR_SUCCESS)
         return fallback("output acquire failed");
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(v4d3d11.outChain, &wait)) &&
-                    v4d3d11.compositor.compose(views, v4d3d11.outImages[outIndex], eyes);
+    if (outIndex >= v4d3d11.outImages.size()) {
+        next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
+        return fallback("output acquire failed");
+    }
+    const bool ok = v4d3d11.compositor.compose(views, v4d3d11.outImages[outIndex], eyes);
     if (ok && experiment.d3d11CaptureFrame) {
         d3d11_capture_acquired(v4d3d11.outChain, outIndex);
         d3d11_capture_release(v4d3d11.outChain, endFrames);

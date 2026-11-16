@@ -167,13 +167,20 @@ XrResult quad_submit_b(XrSession session, const XrFrameEndInfo* info) {
     }
 
     uint32_t outIndex = 0;
-    XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(next.AcquireSwapchainImage(quad.outChain, &acquire, &outIndex)) || outIndex >= quad.outImages.size())
+    // Bounded (in ACE's xrEndFrame, under quad.mutex). Timed out: frame B as it is, the image (still acquired, not
+    // released) waited on again at the next frame.
+    const XrResult waited =
+        acquire_wait(quad.outChain, quad.outPending, kImageWaitNs, kImageWaitTries, outIndex, "quad: output image wait");
+    if (waited == XR_TIMEOUT_EXPIRED)
+        return fallback("output wait timed out");
+    if (waited != XR_SUCCESS)
         return fallback("output acquire failed");
-    const bool ok = XR_SUCCEEDED(next.WaitSwapchainImage(quad.outChain, &wait)) &&
-                    quad.compositor.compose(quad.appImages[quad.appAcquired], quad.outImages[outIndex], eyes);
+    if (outIndex >= quad.outImages.size()) {
+        next.ReleaseSwapchainImage(quad.outChain, &release);
+        return fallback("output acquire failed");
+    }
+    const bool ok = quad.compositor.compose(quad.appImages[quad.appAcquired], quad.outImages[outIndex], eyes);
     if (ok && quad_capture_due())
         quad_capture(quad.appImages[quad.appAcquired], quad.outImages[outIndex], eyes[0]);
     next.ReleaseSwapchainImage(quad.outChain, &release);

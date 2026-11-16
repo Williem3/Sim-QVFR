@@ -111,10 +111,18 @@ void gaze_thread_run() {
     const auto period = std::chrono::microseconds(1'000'000 / std::max(1, experiment.gazePollHz));
     while (!gazeThread.stop) {
         const auto due = std::chrono::steady_clock::now() + period;
-        const XrSession session = gazeThread.session;
-        const XrSpace base = gazeThread.base;
-        const XrTime time = gazeThread.time;
         lock.unlock();
+        // From reading `base` to the end of the lookup: the game's xrDestroySpace waits here and clears it first.
+        std::unique_lock locating(gazeThread.locateMutex);
+        XrSession session;
+        XrSpace base;
+        XrTime time;
+        {
+            std::lock_guard guard(gazeThread.mutex);
+            session = gazeThread.session;
+            base = gazeThread.base;
+            time = gazeThread.time;
+        }
         XrSpace space = XR_NULL_HANDLE;
         {
             std::lock_guard guard(gaze.mutex);
@@ -139,6 +147,7 @@ void gaze_thread_run() {
             XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
             const auto t0 = std::chrono::steady_clock::now();
             const XrResult located = next.LocateSpace(space, base, time, &location);
+            locating.unlock();
             const bool ok = XR_SUCCEEDED(located) &&
                             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) &&
                             (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
@@ -163,7 +172,7 @@ void gaze_thread_run() {
                 runtime_info(L"eye_tracking", L"1");
             }
             lock.lock();
-            if (ok) {
+            if (ok && gazeThread.base) {  // not if the space went meanwhile (layerDestroySpace cleared it)
                 gazeThread.direction = direction;
                 gazeThread.directionTime = time;
             }
@@ -171,6 +180,7 @@ void gaze_thread_run() {
             gazeThread.lookupMs += ms;
             gazeThread.lookupMaxMs = std::max(gazeThread.lookupMaxMs, ms);
         } else {
+            locating.unlock();
             lock.lock();
         }
         gazeThread.wake.wait_until(lock, due, [] { return gazeThread.stop; });

@@ -134,6 +134,7 @@ public:
         corner_acquired(chain, index, enumerate);
     }
     void swapchain_releasing(XrSwapchain chain) override { corner_releasing(chain); }
+    void swapchain_destroyed(XrSwapchain chain) override { corner_swapchain_destroyed(chain); }
     const XrFrameEndInfo* adjust_frame_end(const XrFrameEndInfo* info, PFN_xrEnumerateSwapchainImages enumerate) override {
         return corner_frame_end(info, enumerate);
     }

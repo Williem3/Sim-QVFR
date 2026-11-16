@@ -41,6 +41,7 @@ XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* na
         SIMQVFR_INTERCEPT(BeginFrame)
         SIMQVFR_INTERCEPT(CreateSwapchain)
         SIMQVFR_INTERCEPT(EnumerateSwapchainImages)
+        SIMQVFR_INTERCEPT(DestroySwapchain)  // the per-swapchain state goes first (layerDestroySwapchain)
         SIMQVFR_INTERCEPT(LocateViews)
         SIMQVFR_INTERCEPT(CreateReferenceSpace)
         SIMQVFR_INTERCEPT(DestroySpace)
