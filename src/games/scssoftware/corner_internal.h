@@ -25,15 +25,28 @@
 #include <vector>
 
 #include "../../engine/context_hooks.h"
+#include "../../engine/d3d11_state.h"
 
 namespace scs::detail {
 
 
 using Microsoft::WRL::ComPtr;
 namespace ch = simqvfr::context_hooks;
+namespace d3s = simqvfr::d3d11_state;
 
 constexpr UINT kMaxVectors = 4096;  // a constant buffer's most (64 KB)
 constexpr UINT kMaxViews = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+
+// The game's state one of our blits changes, kept and put back (d3d11_state.h): `parts` with pixel t0 and s0, the
+// shaders without class instances, a saved count of 0 viewports or scissors left unset (as the blits always did).
+inline d3s::Spec blit_state(uint32_t parts) {
+    d3s::Spec s;
+    s.parts = parts;
+    s.psSrv = s.psSamplers = {0, 1};
+    s.instances = false;
+    s.emptyRects = false;
+    return s;
+}
 
 // A large constant buffer of the game's (each written once at the frame's start: ats_frame5585.rdc) and our copy with
 // every eye-shaped pair rewritten, bound in its place for the rest of the frame.

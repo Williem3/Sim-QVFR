@@ -106,40 +106,11 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     ID3D11DeviceContext1* c = g.context.Get();
     const D3D11_BOX box = {x, y, 0, x + w, y + h, 1};
     c->CopySubresourceRegion(st->tex.Get(), 0, 0, 0, 0, game, 0, &box);
-    // The game's state this draw touches.
-    ComPtr<ID3D11InputLayout> layout;
-    D3D11_PRIMITIVE_TOPOLOGY topology;
-    ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> ps;
-    ComPtr<ID3D11GeometryShader> gs;  // nulled for the blit (as upscale): a game's GS or tessellation would reshape it
-    ComPtr<ID3D11HullShader> hs;
-    ComPtr<ID3D11DomainShader> ds;
-    ComPtr<ID3D11ShaderResourceView> srv;
-    ComPtr<ID3D11SamplerState> samp;
-    ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-    ID3D11DepthStencilView* dsv = nullptr;
-    ComPtr<ID3D11BlendState> blend;
-    FLOAT blendFactor[4];
-    UINT sampleMask, stencilRef, vpCount = kMaxViews, scCount = kMaxViews;
-    ComPtr<ID3D11DepthStencilState> depthState;
-    ComPtr<ID3D11RasterizerState> raster;
-    D3D11_VIEWPORT vp[kMaxViews];
-    D3D11_RECT sc[kMaxViews];
-    c->IAGetInputLayout(&layout);
-    c->IAGetPrimitiveTopology(&topology);
-    c->VSGetShader(&vs, nullptr, nullptr);
-    c->PSGetShader(&ps, nullptr, nullptr);
-    c->GSGetShader(&gs, nullptr, nullptr);
-    c->HSGetShader(&hs, nullptr, nullptr);
-    c->DSGetShader(&ds, nullptr, nullptr);
-    c->PSGetShaderResources(0, 1, &srv);
-    c->PSGetSamplers(0, 1, &samp);
-    c->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
-    c->OMGetBlendState(&blend, blendFactor, &sampleMask);
-    c->OMGetDepthStencilState(&depthState, &stencilRef);
-    c->RSGetState(&raster);
-    c->RSGetViewports(&vpCount, vp);
-    c->RSGetScissorRects(&scCount, sc);
+    // The game's state this draw touches, put back when this returns. GS and tessellation nulled for the blit (as
+    // upscale): a game's would reshape it.
+    const simqvfr::D3D11StateGuard keep(c, blit_state(d3s::kInputLayout | d3s::kVS | d3s::kPS | d3s::kGsHsDs |
+                                                      d3s::kOMTargets | d3s::kBlend | d3s::kDepth | d3s::kRSState |
+                                                      d3s::kViewports | d3s::kScissors));
 
     const D3D11_RECT f = focus_rect_in(d.Width, d.Height);
     const float ow = (f.right - f.left) * extent, oh = f.bottom * extent;
@@ -165,30 +136,6 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     c->PSSetSamplers(0, 1, linear);
     c->Draw(3, 0);
 
-    ID3D11ShaderResourceView* putSrv[] = {srv.Get()};
-    ID3D11SamplerState* putSamp[] = {samp.Get()};
-    c->PSSetShaderResources(0, 1, putSrv);
-    c->PSSetSamplers(0, 1, putSamp);
-    c->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, dsv);
-    for (ID3D11RenderTargetView* r : rtvs)
-        if (r)
-            r->Release();
-    if (dsv)
-        dsv->Release();
-    c->OMSetBlendState(blend.Get(), blendFactor, sampleMask);
-    c->OMSetDepthStencilState(depthState.Get(), stencilRef);
-    c->RSSetState(raster.Get());
-    if (vpCount)
-        c->RSSetViewports(vpCount, vp);
-    if (scCount)
-        c->RSSetScissorRects(scCount, sc);
-    c->IASetInputLayout(layout.Get());
-    c->IASetPrimitiveTopology(topology);
-    c->VSSetShader(vs.Get(), nullptr, 0);
-    c->PSSetShader(ps.Get(), nullptr, 0);
-    c->GSSetShader(gs.Get(), nullptr, 0);
-    c->HSSetShader(hs.Get(), nullptr, 0);
-    c->DSSetShader(ds.Get(), nullptr, 0);
     ++g.stretched;
     return true;
 }
