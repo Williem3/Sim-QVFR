@@ -9,6 +9,7 @@
 
 #include <dxgi1_4.h>
 
+#include "probe/frame_parts.h"
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "engine/dlss_settings.h"
@@ -558,7 +559,11 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     if (showMenu && menu.dirty)
         menu_render();
     showMenu = showMenu && menu.uploaded;
-    const XrCompositionLayerBaseHeader* card = osd_frame(session, now);
+    const XrCompositionLayerBaseHeader* card;
+    {
+        FramePartTimer part(FramePart::overlay);
+        card = osd_frame(session, now);
+    }
     if (!showMenu && !card)
         return info;
     layers.assign(info->layers, info->layers + info->layerCount);

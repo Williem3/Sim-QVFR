@@ -6,6 +6,7 @@
 #include <mutex>
 #include <vector>
 
+#include "probe/frame_parts.h"
 #include "games/adapter.h"
 #include "log.h"
 #include "probe/d3d11_capture.h"
@@ -505,7 +506,10 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         if (right == v4d3d11.chains.end() || right->second.acquired >= right->second.images.size())
             return fallback("the game's right eye image is unknown");
         ID3D11Texture2D* const eyeImages[2] = {views, right->second.images[right->second.acquired]};
-        views = game->qvfr_views_atlas(eyeImages, atlasUv);
+        {
+            FramePartTimer part(FramePart::atlas);
+            views = game->qvfr_views_atlas(eyeImages, atlasUv);
+        }
         if (!views)
             return fallback("no four views this frame");
     }
@@ -599,8 +603,12 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     // Bounded (in the game's xrEndFrame, under v4d3d11.mutex and quad.mutex). Timed out: views 0-1 this frame, the
     // image (still acquired, not released) waited on again at the next.
-    const XrResult waited = acquire_wait(v4d3d11.outChain, v4d3d11.outPending, kImageWaitNs, kImageWaitTries, outIndex,
-                                         "views4 d3d11: output image wait");
+    XrResult waited;
+    {
+        FramePartTimer part(FramePart::chain);
+        waited = acquire_wait(v4d3d11.outChain, v4d3d11.outPending, kImageWaitNs, kImageWaitTries, outIndex,
+                              "views4 d3d11: output image wait");
+    }
     if (waited == XR_TIMEOUT_EXPIRED)
         return fallback("output wait timed out");
     if (waited != XR_SUCCESS)
@@ -609,15 +617,25 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
         next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
         return fallback("output acquire failed");
     }
-    const bool ok = v4d3d11.compositor.compose(views, v4d3d11.outImages[outIndex], eyes);
+    bool ok;
+    {
+        FramePartTimer part(FramePart::compose);
+        ok = v4d3d11.compositor.compose(views, v4d3d11.outImages[outIndex], eyes);
+    }
     if (ok && experiment.d3d11CaptureFrame) {
         d3d11_capture_acquired(v4d3d11.outChain, outIndex);
         d3d11_capture_release(v4d3d11.outChain, endFrames);
     }
-    next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
+    {
+        FramePartTimer part(FramePart::chain);
+        next.ReleaseSwapchainImage(v4d3d11.outChain, &release);
+    }
     if (!ok)
         return fallback("compose failed");
-    views4_helmet_layer(helmet, helmetFrame, eyes, views);
+    {
+        FramePartTimer part(FramePart::helmet);
+        views4_helmet_layer(helmet, helmetFrame, eyes, views);
+    }
     if (v4d3d11.composed++ == 0 || v4d3d11.lastFallback) {
         logf("views4 d3d11: composing (eye 0: outer %.0f,%.0f %.0fx%.0f, focus %.0f,%.0f %.0fx%.0f of the game's "
              "%ux%u image; focus tangents +-%.3f x +-%.3f)",

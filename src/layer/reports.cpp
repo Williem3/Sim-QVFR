@@ -12,6 +12,7 @@
 #include "log.h"
 #include "probe/cpu_load.h"
 #include "probe/cpu_placement.h"
+#include "probe/frame_parts.h"
 #include "probe/cpu_profile.h"
 #include "probe/gpu_frame_timer.h"
 #include "probe/gpu_load.h"
@@ -287,6 +288,24 @@ void write_session_summary(double layerMs) {
 }  // namespace
 
 void report_cpu_times() {
+    // The layer's part of xrEndFrame in parts (probe/frame_parts.h), per frame; the submission less the runtime's own
+    // xrEndFrame (`below`, read before the line below resets it).
+    {
+        const double frames = static_cast<double>(kCpuReportFrames);
+        const auto ms = [&](uint64_t ticks) { return static_cast<double>(ticks) * cpu.msPerTick / frames; };
+        const uint64_t below = cpu.endFrameBelow.ticks.load(std::memory_order_relaxed);
+        const uint64_t submit = frame_part_take(FramePart::submit);
+        logf("views4 end-frame parts, ms per frame: menu %.3f (the overlay's card %.3f); the game's frame end %.3f; its QVFR "
+             "frame end %.3f (DLSS's %.3f, multi-view's %.3f); submission %.3f, the runtime's xrEndFrame left out (the "
+             "views' atlas %.3f, the output image's acquire, wait and release %.3f, the composition %.3f, the helmet "
+             "%.3f)",
+             ms(frame_part_take(FramePart::menu)), ms(frame_part_take(FramePart::overlay)),
+             ms(frame_part_take(FramePart::gameEnd)), ms(frame_part_take(FramePart::qvfrEnd)),
+             ms(frame_part_take(FramePart::dlssEnd)), ms(frame_part_take(FramePart::mvrEnd)),
+             ms(submit > below ? submit - below : 0), ms(frame_part_take(FramePart::atlas)),
+             ms(frame_part_take(FramePart::chain)), ms(frame_part_take(FramePart::compose)),
+             ms(frame_part_take(FramePart::helmet)));
+    }
     const auto line = [](CpuSpan& total, CpuSpan* below, char* out, size_t size) {
         const uint64_t n = total.calls.exchange(0), t = total.ticks.exchange(0), m = total.maxTicks.exchange(0);
         const uint64_t bt = below ? below->ticks.exchange(0) : 0;
