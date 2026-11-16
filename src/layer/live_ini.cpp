@@ -93,8 +93,6 @@ void live_apply(const LiveSettings& l) {
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
-    if (experiment.cpuFullSpeed != l.cpuFullSpeed)
-        apply_cpu_full_speed(l.cpuFullSpeed);
     if (eye_off() != l.eyeOff) {
         set_eye_off(l.eyeOff);
         logf("live: %s", eye_off_name(l.eyeOff));

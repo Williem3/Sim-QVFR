@@ -207,10 +207,6 @@ void native_quad_plan(XrInstance instance, XrSystemId system);
 // At xrDestroySession: the session's counts logged, the state reset.
 void native_quad_session_ended();
 
-// config.cpp: [cpu] full_speed on the game's own process (engine/cpu_boost.h), logged; at the load and live. Nothing
-// in a baseline or a log-only run (experiment.cpuSettings).
-void apply_cpu_full_speed(bool full);
-
 // eye_off.cpp (quad/eye_off.h): one eye off at the runtime's xrEndFrame. Installed into `next` before native quad
 // views' wrappers, so it is the last of the layer's before the runtime.
 void eye_off_install();

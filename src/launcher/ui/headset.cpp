@@ -70,21 +70,6 @@ Card vision_card() {
     return c;
 }
 
-// Windows' efficiency mode for the game ([cpu] full_speed, engine/cpu_boost.h): every game.
-Card cpu_card() {
-    Card c{Tab::Headset, L"CPU", Applies::Live};
-    c.body = [](Body& b) {
-        b.toggle(kCpuFullSpeed, L"Keep the game out of efficiency mode", app.s.cpuFullSpeed,
-                 app.s.cpuFullSpeed ? L"On: Windows never slows the game down to save power, even when its window is "
-                                      L"behind others (in VR it usually is)."
-                                    : L"Off: Windows decides, as for any other program.");
-        b.note(L"Nothing outside the game changes: no Windows settings, no other programs. The headset menu's Overlay "
-               L"and menu page changes it too.");
-    };
-    c.reset = [](Settings& s) { s.cpuFullSpeed = Settings{}.cpuFullSpeed; };
-    return c;
-}
-
 Card placement_card() {
     Card c{Tab::Headset, L"Placement", Applies::Live};
     c.body = [](Body& b) {
@@ -197,7 +182,7 @@ Card hotkeys_card() {
 }
 
 std::vector<Card> headset_cards() {
-    std::vector<Card> cards = {menu_card(), overlay_card(), placement_card(), cpu_card(), hotkeys_card()};
+    std::vector<Card> cards = {menu_card(), overlay_card(), placement_card(), hotkeys_card()};
     if (game_has(&games::GameFeatures::eyeOff))  // a game whose eye passes can be turned off (LMU)
         cards.insert(cards.begin() + 2, vision_card());
     return cards;

@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "engine/cpu_boost.h"
 #include "probe/cpu_placement.h"
 #include "test_util.h"
 
@@ -90,21 +89,6 @@ int SIM_QVFR_TEST_MAIN() {
         std::printf("     Sleep(1) %.2f ms\n", sleep);
         check(sleep > 0.4 && sleep < 40, "Sleep(1) measured");
         check(std::string(priority_class_name(0x20)) == "Normal", "priority class name");
-    }
-    {  // EcoQoS off (engine/cpu_boost.h): only its bit changes; the game's other choices (LMU's timer bit, 0x4) kept
-        check(with_full_speed({0x4, 0}, true) == PowerThrottling{0x5, 0}, "full speed: EcoQoS controlled, off; timer bit kept");
-        check(with_full_speed({0x5, 0x1}, true) == PowerThrottling{0x5, 0}, "full speed over EcoQoS on: off");
-        check(with_full_speed({0x5, 0x4}, false) == PowerThrottling{0x4, 0x4}, "Windows decides: EcoQoS uncontrolled, the rest kept");
-        PowerThrottling before{}, on{}, off{};
-        const bool known = read_power_throttling(before);
-        check(cpu_set_full_speed(true) && read_power_throttling(on) && (on.control & kThrottleExecutionSpeed) &&
-                  !(on.state & kThrottleExecutionSpeed),
-              "this process: full speed set and read back");
-        check(cpu_set_full_speed(false) && read_power_throttling(off) && !(off.control & kThrottleExecutionSpeed),
-              "this process: back to Windows");
-        std::printf("     power throttling before 0x%x/0x%x, full speed 0x%x/0x%x, Windows 0x%x/0x%x\n", before.control,
-                    before.state, on.control, on.state, off.control, off.state);
-        check(known, "power throttling readable");
     }
     return test_result();
 }

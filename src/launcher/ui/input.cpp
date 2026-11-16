@@ -284,7 +284,6 @@ void activate(Ctl id, int option) {
         return;
     case kOsdOn: app.s.osd.enabled = !app.s.osd.enabled; changed(); return;
     case kHotkeyFooter: app.s.hotkeyFooter = !app.s.hotkeyFooter; changed(); return;
-    case kCpuFullSpeed: app.s.cpuFullSpeed = !app.s.cpuFullSpeed; changed(); return;
     case kUpdateCheck:
         app.s.updateCheck = !app.s.updateCheck;
         app.s.updateAsked = true;  // a choice: the first start's question is answered
@@ -493,7 +492,6 @@ bool space_control(Ctl id) {
     case kDlssSharpening:
     case kOsdOn:
     case kHotkeyFooter:
-    case kCpuFullSpeed:
     case kUpdateCheck:
     case kNativeQuad:
     case kCropOn:

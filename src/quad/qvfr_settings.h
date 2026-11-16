@@ -51,9 +51,6 @@ inline constexpr IniInt kCropBottom{L"crop", L"bottom", 0, 0, 40, 1};
 inline constexpr IniInt kCropOuter{L"crop", L"outer", 0, 0, 40, 1};
 inline constexpr IniInt kCropInner{L"crop", L"inner", 0, 0, 40, 1};
 inline constexpr IniInt kHotkeyFooter{L"menu", L"hotkey_footer", 1, 0, 1, 1};
-// [cpu] (engine/cpu_boost.h): 1 Windows never runs the game in efficiency mode (EcoQoS off, the default), 0 Windows
-// decides. Live; not in a baseline or a log-only run.
-inline constexpr IniInt kCpuFullSpeed{L"cpu", L"full_speed", 1, 0, 1, 1};
 
 // The key as written, `fallback` when missing; not clamped (0 keeps its "unset" meaning where a key has one).
 // GetPrivateProfileInt, as every reader had it: a negative value reads as 0.

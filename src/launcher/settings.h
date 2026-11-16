@@ -59,8 +59,6 @@ struct Settings {
     int menuPitch = -4;       // [menu] pitch
     int menuWidth = 33;       // [menu] width
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys under the headset menu
-    // [cpu] full_speed (engine/cpu_boost.h): Windows never runs the game in efficiency mode (EcoQoS off; live).
-    bool cpuFullSpeed = kCpuFullSpeed.def != 0;
     OsdPlacement osd;         // [osd]: the performance overlay, its corner and size (live)
     // [crop] (QVFR): shares of each eye's field of view ACE does not render, each side on its own (the
     // layer's fov_crop.h): outer is the temple side, inner the nose side. Applies at the next launch.

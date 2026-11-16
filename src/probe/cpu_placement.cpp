@@ -357,8 +357,8 @@ std::string power_throttling() {
     if (!GetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &s, sizeof(s)))
         return "EcoQoS unknown";
     std::string text = !(s.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED) ? "EcoQoS left to Windows"
-                       : (s.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED)  ? "EcoQoS on (set)"
-                                                                                   : "EcoQoS off (set: full speed)";
+                       : (s.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED)  ? "EcoQoS on (set by the process)"
+                                                                                   : "EcoQoS off (set by the process)";
     constexpr ULONG kIgnoreTimer = 0x4;  // PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
     if (s.ControlMask & kIgnoreTimer)
         text += (s.StateMask & kIgnoreTimer) ? ", timer requests ignored when hidden (set)" : ", timer requests kept when hidden (set)";
@@ -371,7 +371,7 @@ std::string process_state() {
     GetProcessAffinityMask(GetCurrentProcess(), &mine, &system);
     ULONG sets = 0;
     const BOOL noSets = GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &sets);
-    const int own = static_cast<int>(__popcnt64(mine)), all = static_cast<int>(__popcnt64(system));
+    const int own = __popcnt64(mine), all = __popcnt64(system);
     char affinity[64];
     if (own == all)
         std::snprintf(affinity, sizeof(affinity), "all %d", all);
