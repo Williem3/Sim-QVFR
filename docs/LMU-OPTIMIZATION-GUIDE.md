@@ -33,8 +33,8 @@ All settings named here are in **sim-qvfr-launcher.exe**. Most also appear in th
    (Game tab) shows your last session next to the one before, with the settings you changed in between. A change
    made while you drive starts a new stint with its own entry, so you can tune in the headset and compare afterwards.
 6. **Launch with your highest settings, then tune down.** Live changes can lower the resolution and raise it back to
-   what the game started with, not above. In the headset menu, **Auto-fit to headset rate** (last line of the settings
-   page) does the GPU side for you: Right starts it, it fits periphery, focus density and focus size to your frame
+   what the game started with, not above. In the headset menu, **Auto-fit to headset rate** (Picture tab, Resolution
+   section) does the GPU side for you: Right starts it, it fits periphery, focus density and focus size to your frame
    budget while you drive, and Left undoes it.
 
 ---

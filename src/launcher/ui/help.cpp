@@ -283,7 +283,7 @@ constexpr Help kHelp[] = {
     {L"Size", L"How wide it is, in degrees of your view."},
     {L"Show the hotkeys under the menu",
      L"A line under the headset menu with the in-game hotkeys (overlay, visor, CPU capture) and their wheel buttons, as set "
-     L"in Hotkeys. Also on the menu’s Overlay and menu page."},
+     L"in Hotkeys. Also on the menu’s Headset page."},
     {L"Open or close", L"Opens the headset menu, or closes it."},
     {L"Up", L"Selects the line above in the headset menu."},
     {L"Down", L"Selects the line below in the headset menu."},

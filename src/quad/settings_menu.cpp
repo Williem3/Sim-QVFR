@@ -25,17 +25,17 @@ constexpr Spec spec_of(MenuItem item, const wchar_t* label, const IniInt& k) { r
 static_assert(kCropTop.max == static_cast<int>(kCropMax * 100), "the table's crop sides are fov_crop.h's kCropMax");
 
 constexpr Spec kSpecs[] = {
-    spec_of(MenuItem::Periphery, L"Periphery", kPeripheryScale), spec_of(MenuItem::Density, L"Focus density", kFocusDensity),
+    spec_of(MenuItem::Periphery, L"Periphery resolution", kPeripheryScale), spec_of(MenuItem::Density, L"Focus density", kFocusDensity),
     spec_of(MenuItem::ObjectDetail, L"Object detail", kObjectDetail),
     spec_of(MenuItem::Sharpening, L"Sharpening", kSharpenPercent),
     spec_of(MenuItem::EyeOff, L"Eye off", kEyeOff),  // [quad] eye_off: none, left, right
     {MenuItem::FocusQuadDistance, L"Focus quad distance", 0, kFocusQuadSteps - 1, 1},  // steps of kFocusQuadDistances
     spec_of(MenuItem::Width, L"Focus width", kFocusPercent), spec_of(MenuItem::Height, L"Focus height", kFocusHeightPercent),
-    spec_of(MenuItem::Feather, L"Feather", kFeatherPercent), spec_of(MenuItem::Corners, L"Corners", kCornerRadiusPercent),
-    spec_of(MenuItem::Outline, L"Outline", kDebugBorder), spec_of(MenuItem::EyeTracking, L"Eye tracking", kGaze),
-    {MenuItem::FocusOffset, L"Focus up / down", -kFocusOffsetMax, kFocusOffsetMax, 1},
+    spec_of(MenuItem::Feather, L"Feather", kFeatherPercent), spec_of(MenuItem::Corners, L"Corner radius", kCornerRadiusPercent),
+    spec_of(MenuItem::Outline, L"Show focus outline", kDebugBorder), spec_of(MenuItem::EyeTracking, L"Foveated mode", kGaze),
+    {MenuItem::FocusOffset, L"Gaze offset", -kFocusOffsetMax, kFocusOffsetMax, 1},
     {MenuItem::GazeDeadzone, L"Gaze dead-zone", 0, kGazeDeadzoneMax, 5},  // tenths of a degree, 0.5 a step
-    // The Focus shape page: each corner's insets, percent of the box (focus_shape.h's kFocusCornerMax).
+    // The Foveation section's Custom corners: each corner's insets, percent of the box (focus_shape.h's kFocusCornerMax).
     {MenuItem::Shape, L"Shape", 0, 1, 1},
     {MenuItem::ShapeTopLeftIn, L"Top left in", 0, kFocusCornerMax, 5},
     {MenuItem::ShapeTopLeftDown, L"Top left down", 0, kFocusCornerMax, 5},
@@ -46,18 +46,19 @@ constexpr Spec kSpecs[] = {
     {MenuItem::ShapeBottomRightIn, L"Bottom right in", 0, kFocusCornerMax, 5},
     {MenuItem::ShapeBottomRightUp, L"Bottom right up", 0, kFocusCornerMax, 5},
     // The performance overlay's place, degrees (the launcher's sliders).
-    {MenuItem::Overlay, L"Performance overlay", 0, 1, 1},
-    {MenuItem::OverlayYaw, L"Overlay left / right", -kOsdYawMax, kOsdYawMax, 1},
-    {MenuItem::OverlayPitch, L"Overlay up / down", -kOsdPitchMax, kOsdPitchMax, 1},
-    {MenuItem::OverlayWidth, L"Overlay size", kOsdWidthMin, kOsdWidthMax, 1},
+    {MenuItem::Overlay, L"Show the overlay", 0, 1, 1},
+    {MenuItem::OverlayYaw, L"Horizontal", -kOsdYawMax, kOsdYawMax, 1},
+    {MenuItem::OverlayPitch, L"Vertical", -kOsdPitchMax, kOsdPitchMax, 1},
+    {MenuItem::OverlayWidth, L"Size", kOsdWidthMin, kOsdWidthMax, 1},
     // The clock's place, degrees (its size: the launcher's slider).
-    {MenuItem::Clock, L"Clock", 0, 1, 1},
-    {MenuItem::ClockYaw, L"Clock left / right", -kClockYawMax, kClockYawMax, 1},
-    {MenuItem::ClockPitch, L"Clock up / down", -kClockPitchMax, kClockPitchMax, 1},
+    {MenuItem::Clock, L"Show the clock", 0, 1, 1},
+    {MenuItem::ClockYaw, L"Horizontal", -kClockYawMax, kClockYawMax, 1},
+    {MenuItem::ClockPitch, L"Vertical", -kClockPitchMax, kClockPitchMax, 1},
+    {MenuItem::ClockWidth, L"Size", kClockWidthMin, kClockWidthMax, 1},
     // The panel's place, degrees (the launcher's kMenuYawRange, kMenuPitchRange, kMenuWidthRange).
-    {MenuItem::MenuYaw, L"Menu left / right", -kMenuYawMax, kMenuYawMax, 1},
-    {MenuItem::MenuPitch, L"Menu up / down", -kMenuPitchMax, kMenuPitchMax, 1},
-    {MenuItem::MenuWidth, L"Menu size", kMenuWidthMin, kMenuWidthMax, 1},
+    {MenuItem::MenuYaw, L"Horizontal", -kMenuYawMax, kMenuYawMax, 1},
+    {MenuItem::MenuPitch, L"Vertical", -kMenuPitchMax, kMenuPitchMax, 1},
+    {MenuItem::MenuWidth, L"Size", kMenuWidthMin, kMenuWidthMax, 1},
     // The page switch and the Foveated DLSS page (cheeky_settings.h's ranges; presets step through its list).
     {MenuItem::Page, L"Page", 0, 1, 1},
     {MenuItem::CheekyProcessing, L"Foveated DLSS", 0, 1, 1},
@@ -68,7 +69,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::CheekySupersampling, L"Focus supersampling", kCheekySupersamplingMin, kCheekySupersamplingMax,
      kCheekySupersamplingStep},
     {MenuItem::CheekyMotionFix, L"Fix motion-vector blur", 0, 1, 1},
-    {MenuItem::CheekyNr, L"DLSS-NR (experimental)", 0, 1, 1},
+    {MenuItem::CheekyNr, L"DLSS-NR", 0, 1, 1},
     {MenuItem::CheekyNrPreset, L"DLSS-NR preset", 0, kCheekyNrPresetMax, 1},
     {MenuItem::CheekyNrPasses, L"DLSS-NR passes", 1, kCheekyNrPassesMax, 1},
     {MenuItem::FgOn, L"Frame generation", 0, 1, 1},
@@ -77,36 +78,36 @@ constexpr Spec kSpecs[] = {
     {MenuItem::FgScale, L"Center FG scale", 25, 100, 25},
     {MenuItem::FgPeriphery, L"Periphery FG scale", 25, 100, 25},
     {MenuItem::FgRelease, L"Release game", 0, 2, 1},
-    {MenuItem::FgBorder, L"Show FG region", 0, 1, 1},
-    // The View crop page: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
+    {MenuItem::FgBorder, L"Show the center region", 0, 1, 1},
+    // The View & helmet section's crop: shares of each eye's view removed at each side (fov_crop.h's kCropMax).
     spec_of(MenuItem::Crop, L"Crop the view", kCropEnabled),
     spec_of(MenuItem::CropTop, L"Top", kCropTop),
     spec_of(MenuItem::CropBottom, L"Bottom", kCropBottom),
     spec_of(MenuItem::CropOuter, L"Outer side (temple)", kCropOuter),
     spec_of(MenuItem::CropInner, L"Inner side (nose)", kCropInner),
-    {MenuItem::Helmet, L"Helmet overlay", 0, 1, 1},
-    {MenuItem::HelmetRim, L"Helmet rim", 0, kHelmetRimMax, 1},
-    {MenuItem::HelmetCorners, L"Helmet corners", 0, kHelmetCornersMax, 10},
-    {MenuItem::HelmetLight, L"Helmet lighting", 0, kHelmetLightMax, kHelmetLightStep},
+    {MenuItem::Helmet, L"Show a helmet", 0, 1, 1},
+    {MenuItem::HelmetRim, L"Rim", 0, kHelmetRimMax, 1},
+    {MenuItem::HelmetCorners, L"Corners", 0, kHelmetCornersMax, 10},
+    {MenuItem::HelmetLight, L"Lighting", 0, kHelmetLightMax, kHelmetLightStep},
     {MenuItem::HelmetDebug, L"Show helmet light", 0, 1, 1},
     {MenuItem::Visor, L"Visor", 0, 2, 1},
-    {MenuItem::HelmetSize, L"Helmet size", kHelmetSizeMin, kHelmetSizeMax, 5},
-    {MenuItem::HelmetHeight, L"Helmet height", -kHelmetHeightMax, kHelmetHeightMax, 1},
-    {MenuItem::HelmetDepth, L"Helmet depth", 0, kHelmetDepthMax, 1},
-    {MenuItem::HelmetDetail, L"Helmet detail", 0, 1, 1},
+    {MenuItem::HelmetSize, L"Size", kHelmetSizeMin, kHelmetSizeMax, 5},
+    {MenuItem::HelmetHeight, L"Height", -kHelmetHeightMax, kHelmetHeightMax, 1},
+    {MenuItem::HelmetDepth, L"Depth", 0, kHelmetDepthMax, 1},
+    {MenuItem::HelmetDetail, L"Detail", 0, 1, 1},
     {MenuItem::Optimize, L"Auto-fit to headset rate", 0, 0, 1},
     {MenuItem::Profile, L"Profile", 0, 0, 1},
-    {MenuItem::HotkeyFooter, L"Hotkeys footer", 0, 1, 1},
-    spec_of(MenuItem::CpuIsolateMain, L"Main thread core", kCpuIsolateMain),
+    {MenuItem::HotkeyFooter, L"Show the hotkeys under the menu", 0, 1, 1},
+    spec_of(MenuItem::CpuIsolateMain, L"Give the main thread a core of its own", kCpuIsolateMain),
     // The DLSS page (Sim-QVFR's own; engine/dlss_settings.h's choices).
-    {MenuItem::DlssOn, L"DLSS", 0, 1, 1},
+    {MenuItem::DlssOn, L"Use DLSS", 0, 1, 1},
     {MenuItem::DlssUpscaler, L"Upscaler", 0, 1, 1},
     {MenuItem::DlssFocusMode, L"Focus views", 0, 0, 1},
     {MenuItem::DlssFocusPreset, L"Focus preset", 0, 0, 1},
     {MenuItem::DlssEyePreset, L"Periphery preset", 0, 0, 1},
     {MenuItem::DlssSharpening, L"Texture sharpening", 0, 0, 1},
     // The DLSS-NR page (engine/nr_settings.h's ranges).
-    {MenuItem::NrOn, L"DLSS-NR", 0, 1, 1},
+    {MenuItem::NrOn, L"Use DLSS-NR", 0, 1, 1},
     {MenuItem::NrIntensity, L"Intensity", 0, 100, 5},
     {MenuItem::NrStyle, L"Style", 0, 2, 1},
     {MenuItem::NrPreset, L"Preset", 0, 2, 1},
@@ -120,6 +121,19 @@ constexpr Spec kSpecs[] = {
     {MenuItem::NrPeripheryScale, L"Periphery working size", kNrScaleMin, 100, 5},
     {MenuItem::NrPeripheryCoverage, L"Periphery covered", kNrCoverageMin, 100, 10},
     {MenuItem::NrLimit, L"Working size limit", kNrLimitMin, kNrLimitMax, 1},  // tenths of a megapixel a view
+    // The sections: the launcher's card names (HeadDlss: "FSR" while FSR runs the views, menu_lines).
+    {MenuItem::HeadResolution, L"Resolution", 0, 0, 0},
+    {MenuItem::HeadFoveation, L"Foveation", 0, 0, 0},
+    {MenuItem::HeadView, L"View & helmet", 0, 0, 0},
+    {MenuItem::HeadDlss, L"DLSS", 0, 0, 0},
+    {MenuItem::HeadNr, L"DLSS-NR", 0, 0, 0},
+    {MenuItem::HeadCheeky, L"Foveated DLSS", 0, 0, 0},
+    {MenuItem::HeadFg, L"Frame generation", 0, 0, 0},
+    {MenuItem::HeadMenu, L"Headset menu", 0, 0, 0},
+    {MenuItem::HeadOverlay, L"Performance overlay", 0, 0, 0},
+    {MenuItem::HeadClock, L"Clock", 0, 0, 0},
+    {MenuItem::HeadVision, L"Vision", 0, 0, 0},
+    {MenuItem::HeadCpu, L"CPU", 0, 0, 0},
 };
 
 // AMD FSR runs the DLSS page's views: a PC without an NVIDIA RTX card, or the experiment's Upscaler on FSR.
@@ -190,6 +204,7 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::OverlayWidth: return &v.overlay.width;
     case MenuItem::ClockYaw: return &v.clock.yaw;
     case MenuItem::ClockPitch: return &v.clock.pitch;
+    case MenuItem::ClockWidth: return &v.clock.width;
     case MenuItem::CropTop: return &v.cropTop;
     case MenuItem::CropBottom: return &v.cropBottom;
     case MenuItem::CropOuter: return &v.cropOuter;
@@ -221,25 +236,19 @@ std::vector<MenuItem> menu_items(bool qvfr) {
     return items;
 }
 
+namespace {
+
+// The View page: the launcher's View & helmet card, as the game has it.
+bool view_section(const SettingsMenu& menu) { return menu.launch.qvfr && (menu.launch.cropPage || menu.launch.helmetPage); }
+
+}  // namespace
+
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu) {
-    std::vector<MenuPage> pages = {MenuPage::Settings};
-    if (menu.launch.shapePage)
-        pages.push_back(MenuPage::Shape);
-    if (menu.launch.qvfr && menu.launch.cropPage)
-        pages.push_back(MenuPage::Crop);
-    if (menu.launch.qvfr && menu.launch.helmetPage)
-        pages.push_back(MenuPage::Helmet);
-    if (menu.cheeky.available) {
-        pages.push_back(MenuPage::Dlss);
-        if (menu.launch.fgPage)
-            pages.push_back(MenuPage::Fg);
-    }
-    if (menu.launch.qvfr && menu.launch.ownDlss)
-        pages.push_back(MenuPage::OwnDlss);
-    if (menu.launch.qvfr && menu.launch.ownDlss && menu.launch.ownNr)
-        pages.push_back(MenuPage::OwnNr);
-    pages.push_back(MenuPage::Cpu);  // every game and method
+    std::vector<MenuPage> pages = {MenuPage::Picture, MenuPage::Foveation};
+    if (view_section(menu))
+        pages.push_back(MenuPage::View);
     pages.push_back(MenuPage::Headset);
+    pages.push_back(MenuPage::Game);  // every game and method: the CPU card
     return pages;
 }
 
@@ -250,124 +259,164 @@ MenuPage menu_page(const SettingsMenu& menu) {
 
 std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
     std::vector<MenuItem> items = {MenuItem::Page};
+    const auto add = [&items](std::initializer_list<MenuItem> more) { items.insert(items.end(), more); };
+    const MenuLaunch& l = menu.launch;
+    const MenuValues& v = menu.values;
     const MenuPage page = menu_page(menu);
-    if (page == MenuPage::Headset) {
-        if (menu.launch.eyeOff)  // a game with it: first on the page
-            items.push_back(MenuItem::EyeOff);
-        items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
-                                   MenuItem::Clock, MenuItem::ClockYaw, MenuItem::ClockPitch, MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
-    } else if (page == MenuPage::Cpu) {
-        items.push_back(MenuItem::CpuIsolateMain);
-    } else if (page == MenuPage::Fg) {
-        items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
-                                   MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
-    } else if (page == MenuPage::Shape) {
-        items.push_back(MenuItem::Shape);
-        if (menu.values.shape.corners)
-            items.insert(items.end(), {MenuItem::ShapeTopLeftIn, MenuItem::ShapeTopLeftDown, MenuItem::ShapeTopRightIn,
-                                       MenuItem::ShapeTopRightDown, MenuItem::ShapeBottomLeftIn, MenuItem::ShapeBottomLeftUp,
-                                       MenuItem::ShapeBottomRightIn, MenuItem::ShapeBottomRightUp});
-    } else if (page == MenuPage::Crop) {
-        items.push_back(MenuItem::Crop);
-        if (menu.values.crop)
-            items.insert(items.end(), {MenuItem::CropTop, MenuItem::CropBottom, MenuItem::CropOuter, MenuItem::CropInner});
-    } else if (page == MenuPage::Helmet) {
-        items.push_back(MenuItem::Helmet);
-        if (menu.values.helmet.on && menu.launch.helmetPieces)
-            items.insert(items.end(), {MenuItem::Visor, MenuItem::HelmetSize, MenuItem::HelmetHeight, MenuItem::HelmetDepth,
-                                       MenuItem::HelmetDetail, MenuItem::HelmetLight, MenuItem::HelmetDebug});
-        else if (menu.values.helmet.on)
-            items.insert(items.end(), {MenuItem::HelmetRim, MenuItem::HelmetCorners, MenuItem::HelmetLight, MenuItem::HelmetDebug});
-    } else if (page == MenuPage::OwnDlss) {
-        items.push_back(MenuItem::DlssOn);
-        // AMD FSR has no NGX presets: their rows go while it runs the views. The Upscaler row is the RTX test's only.
-        const bool fsr = fsr_runs(menu);
-        if (menu.values.dlss.on && menu.launch.fsr && !menu.launch.fsrPc)
-            items.push_back(MenuItem::DlssUpscaler);
-        if (menu.values.dlss.on && fsr)
-            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssSharpening});
-        else if (menu.values.dlss.on)
-            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset,
-                                       MenuItem::DlssSharpening});
-    } else if (page == MenuPage::OwnNr) {
-        items.push_back(MenuItem::NrOn);
-        if (menu.values.nr.on) {
-            items.insert(items.end(), {MenuItem::NrIntensity, MenuItem::NrStyle, MenuItem::NrPreset, MenuItem::NrLocalTone,
-                                       MenuItem::NrLocalStructure, MenuItem::NrAutoMask, MenuItem::NrOrder, MenuItem::NrFocusScale,
-                                       MenuItem::NrLimit, MenuItem::NrEdgeBlend, MenuItem::NrPeriphery});
-            if (menu.values.nr.periphery)
-                items.insert(items.end(), {MenuItem::NrPeripheryScale, MenuItem::NrPeripheryCoverage});
+    if (page == MenuPage::Headset) {  // the launcher's Headset tab: its cards in its order
+        add({MenuItem::HeadMenu, MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter,
+             MenuItem::HeadOverlay, MenuItem::Overlay});
+        if (v.overlay.enabled)  // its place while it shows, as the launcher reveals it
+            add({MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth});
+        add({MenuItem::HeadClock, MenuItem::Clock});
+        if (v.clock.enabled)
+            add({MenuItem::ClockYaw, MenuItem::ClockPitch, MenuItem::ClockWidth});
+    } else if (page == MenuPage::Game) {
+        add({MenuItem::HeadCpu, MenuItem::CpuIsolateMain});
+    } else if (page == MenuPage::View) {  // the launcher's View & helmet card
+        items.push_back(MenuItem::HeadView);
+        if (l.cropPage) {
+            items.push_back(MenuItem::Crop);
+            if (v.crop)
+                add({MenuItem::CropTop, MenuItem::CropBottom, MenuItem::CropOuter, MenuItem::CropInner});
         }
-    } else if (page == MenuPage::Dlss) {
-        items.insert(items.end(), {MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
-                                   MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
-                                   MenuItem::CheekyMotionFix, MenuItem::CheekyNr, MenuItem::CheekyNrPreset,
-                                   MenuItem::CheekyNrPasses});
-    } else {
+        if (l.helmetPage) {
+            items.push_back(MenuItem::Helmet);
+            if (v.helmet.on && l.helmetPieces)
+                add({MenuItem::Visor, MenuItem::HelmetSize, MenuItem::HelmetHeight, MenuItem::HelmetDepth,
+                     MenuItem::HelmetDetail, MenuItem::HelmetLight, MenuItem::HelmetDebug});
+            else if (v.helmet.on)
+                add({MenuItem::HelmetRim, MenuItem::HelmetCorners, MenuItem::HelmetLight, MenuItem::HelmetDebug});
+        }
+    } else if (page == MenuPage::Foveation) {
+        // The launcher's Foveation card in its order: mode, size, shape (its corner radius, or each corner's insets),
+        // feather, the focus's vertical place, the gaze dead-zone (eye tracked), the outline.
+        add({MenuItem::HeadFoveation, MenuItem::EyeTracking, MenuItem::Width, MenuItem::Height});
+        if (l.shapePage)
+            items.push_back(MenuItem::Shape);
+        if (l.shapePage && v.shape.corners)
+            add({MenuItem::ShapeTopLeftIn, MenuItem::ShapeTopLeftDown, MenuItem::ShapeTopRightIn, MenuItem::ShapeTopRightDown,
+                 MenuItem::ShapeBottomLeftIn, MenuItem::ShapeBottomLeftUp, MenuItem::ShapeBottomRightIn,
+                 MenuItem::ShapeBottomRightUp});
+        else
+            items.push_back(MenuItem::Corners);
+        add({MenuItem::Feather, MenuItem::FocusOffset});
+        if (v.eyeTracking)
+            items.push_back(MenuItem::GazeDeadzone);
+        if (l.qvfr && l.focusQuads)  // focus_layer=2's test
+            items.push_back(MenuItem::FocusQuadDistance);
+        items.push_back(MenuItem::Outline);
+    } else {  // Picture: the profile, the Resolution card, the game's upscaler cards, Vision
         if (!menu.profiles.empty())
             items.push_back(MenuItem::Profile);
-        std::vector<MenuItem> method = menu_items(menu.launch.qvfr);
-        if (menu.launch.qvfr && menu.launch.objectDetail)  // only a game with it (X-Plane), after Focus density
-            method.insert(std::find(method.begin(), method.end(), MenuItem::Density) + 1, MenuItem::ObjectDetail);
-        if (menu.launch.qvfr && menu.launch.sharpening) {  // a game with it, after Focus density (and detail)
-            auto at = std::find(method.begin(), method.end(), MenuItem::ObjectDetail);
-            if (at == method.end())
-                at = std::find(method.begin(), method.end(), MenuItem::Density);
-            method.insert(at == method.end() ? at : at + 1, MenuItem::Sharpening);
+        if (l.qvfr) {
+            add({MenuItem::HeadResolution, MenuItem::Periphery, MenuItem::Density});
+            if (l.objectDetail)  // only a game with it (X-Plane)
+                items.push_back(MenuItem::ObjectDetail);
+            if (l.sharpening)
+                items.push_back(MenuItem::Sharpening);
+            if (l.optimize)
+                items.push_back(MenuItem::Optimize);
         }
-        if (menu.launch.qvfr && menu.launch.focusQuads) {  // focus_layer=2's test, after Gaze dead-zone
-            const auto at = std::find(method.begin(), method.end(), MenuItem::GazeDeadzone);
-            method.insert(at == method.end() ? at : at + 1, MenuItem::FocusQuadDistance);
+        if (l.apiDlss)  // the API path's DLSS: the focus views' mode and preset, live (the periphery: F, fixed)
+            add({MenuItem::HeadDlss, MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset});
+        if (l.qvfr && l.ownDlss) {
+            add({MenuItem::HeadDlss, MenuItem::DlssOn});
+            // AMD FSR has no NGX presets: their rows go while it runs the views. The Upscaler row is the RTX test's only.
+            const bool fsr = fsr_runs(menu);
+            if (v.dlss.on && l.fsr && !l.fsrPc)
+                items.push_back(MenuItem::DlssUpscaler);
+            if (v.dlss.on && fsr)
+                add({MenuItem::DlssFocusMode, MenuItem::DlssSharpening});
+            else if (v.dlss.on)
+                add({MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset, MenuItem::DlssEyePreset, MenuItem::DlssSharpening});
+            if (l.ownNr) {
+                add({MenuItem::HeadNr, MenuItem::NrOn});
+                if (v.nr.on) {
+                    add({MenuItem::NrIntensity, MenuItem::NrStyle, MenuItem::NrPreset, MenuItem::NrLocalTone,
+                         MenuItem::NrLocalStructure, MenuItem::NrAutoMask, MenuItem::NrOrder, MenuItem::NrFocusScale,
+                         MenuItem::NrLimit, MenuItem::NrEdgeBlend, MenuItem::NrPeriphery});
+                    if (v.nr.periphery)
+                        add({MenuItem::NrPeripheryScale, MenuItem::NrPeripheryCoverage});
+                }
+            }
         }
-        items.insert(items.end(), method.begin(), method.end());
-        if (menu.launch.apiDlss)  // the API path's DLSS: the focus views' mode and preset, live (the periphery: F, fixed)
-            items.insert(items.end(), {MenuItem::DlssFocusMode, MenuItem::DlssFocusPreset});
-        if (menu.launch.qvfr && menu.launch.optimize)  // last: Up from the page switch reaches it
-            items.push_back(MenuItem::Optimize);
+        if (menu.cheeky.available) {
+            add({MenuItem::HeadCheeky, MenuItem::CheekyProcessing, MenuItem::CheekyOuterDlaa, MenuItem::CheekyOuterScale,
+                 MenuItem::CheekyOuterPreset, MenuItem::CheekyFocusPreset, MenuItem::CheekySupersampling,
+                 MenuItem::CheekyMotionFix, MenuItem::CheekyNr, MenuItem::CheekyNrPreset, MenuItem::CheekyNrPasses});
+            if (l.fgPage)
+                add({MenuItem::HeadFg, MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
+                     MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
+        }
+        if (l.eyeOff)  // a game with it (LMU): the Vision card
+            add({MenuItem::HeadVision, MenuItem::EyeOff});
     }
     return items;
 }
 
+MenuItem menu_section(const SettingsMenu& menu) {
+    const std::vector<MenuItem> items = menu_page_items(menu);
+    const int at = std::clamp(menu.selected, 0, static_cast<int>(items.size()) - 1);
+    for (int i = at; i >= 0; --i)
+        if (menu_item_is_header(items[i]))
+            return items[i];
+    for (const MenuItem item : items)  // the page switch, the profile: the page's first section
+        if (menu_item_is_header(item))
+            return item;
+    return MenuItem::HeadFoveation;
+}
+
 namespace {
 
-std::wstring page_name(const SettingsMenu& menu, MenuPage page) {
+std::wstring page_name(const SettingsMenu&, MenuPage page) {
     switch (page) {
-    case MenuPage::Dlss: return L"Foveated DLSS";
-    case MenuPage::OwnDlss: return fsr_runs(menu) ? L"FSR" : L"DLSS";
-    case MenuPage::OwnNr: return L"DLSS-NR";
-    case MenuPage::Fg: return L"Frame generation";
-    case MenuPage::Cpu: return L"CPU";
-    case MenuPage::Headset: return L"Overlay and menu";
-    case MenuPage::Shape: return L"Focus shape";
-    case MenuPage::Crop: return L"View crop";
-    case MenuPage::Helmet: return L"Helmet";
-    default: return menu.launch.apiPath ? L"QVFR (API path)" : menu.launch.qvfr ? L"QVFR" : L"Two-loop (legacy)";
+    case MenuPage::Foveation: return L"Foveation";
+    case MenuPage::View: return L"View";
+    case MenuPage::Headset: return L"Headset";
+    case MenuPage::Game: return L"Game";
+    default: return L"Picture";
     }
 }
 
 }  // namespace
 
-std::wstring menu_title(const SettingsMenu& menu) {
-    const MenuPage page = menu_page(menu);
-    return page == MenuPage::Settings ? page_name(menu, page) + L" settings" : page_name(menu, page);
+std::vector<std::wstring> menu_tabs(const SettingsMenu& menu) {
+    std::vector<std::wstring> tabs;
+    for (const MenuPage p : menu_pages(menu))
+        tabs.push_back(page_name(menu, p));
+    return tabs;
 }
+
+std::wstring menu_title(const SettingsMenu& menu) {
+    // The launcher's name for the panel; the method where it isn't plain QVFR. The page: the tabs under it.
+    return menu.launch.apiPath ? L"Headset menu \u00b7 QVFR (API path)"
+           : menu.launch.qvfr  ? L"Headset menu"
+                               : L"Headset menu \u00b7 Two-loop (legacy)";
+}
+
+std::wstring menu_page_name(const SettingsMenu& menu) { return page_name(menu, menu_page(menu)); }
 
 std::wstring menu_subtitle(const SettingsMenu& menu) {
     if (!menu.notice.empty())
         return menu.notice;
     const MenuPage page = menu_page(menu);
-    // The runtime composing the views (Pimax, Varjo): the focus area shows inside the runtime's own focus region.
-    if (page == MenuPage::Settings && menu.optimizeDetail.empty() && menu.launch.runtimeComposes)
-        return L"The runtime composes the views: the focus area shows inside its own focus region";
-    if (page == MenuPage::Settings)
+    const MenuItem section = menu_section(menu);
+    // The optimizer's detail on the Resolution card (it sets the focus size too, but it is started there).
+    if (section == MenuItem::HeadResolution && !menu.optimizeDetail.empty())
         return menu.optimizeDetail;
-    if (page == MenuPage::OwnDlss && fsr_runs(menu))
+    // The runtime composing the views (Pimax, Varjo): the focus area shows inside the runtime's own focus region.
+    if (page == MenuPage::Foveation && menu.launch.runtimeComposes)
+        return L"The runtime composes the views: the focus area shows inside its own focus region";
+    if (page == MenuPage::Foveation || section == MenuItem::HeadResolution)
+        return L"";
+    if (section == MenuItem::HeadDlss && menu.launch.ownDlss && fsr_runs(menu))
         return L"AMD FSR, run by Sim-QVFR (experimental): changes apply at once";
-    if (page == MenuPage::OwnDlss)
+    if (section == MenuItem::HeadDlss && menu.launch.ownDlss)
         return L"NVIDIA DLSS, run by Sim-QVFR through NVIDIA's NGX: changes apply at once";
-    if (page == MenuPage::OwnNr)
+    if (section == MenuItem::HeadNr)
         return L"NVIDIA DLSS neural rendering, your own nvngx_dlssnr.dll (experimental)";
-    return page == MenuPage::Dlss || page == MenuPage::Fg ? cheeky_version_label(menu.cheeky.version) : L"";
+    return section == MenuItem::HeadCheeky || section == MenuItem::HeadFg ? cheeky_version_label(menu.cheeky.version) : L"";
 }
 
 bool menu_key(SettingsMenu& menu, MenuKey key) {
@@ -376,8 +425,12 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     const std::vector<MenuItem> items = menu_page_items(menu);
     const int n = static_cast<int>(items.size());
     menu.selected = std::clamp(menu.selected, 0, n - 1);
-    if (key == MenuKey::Up || key == MenuKey::Down) {
-        menu.selected = (menu.selected + (key == MenuKey::Down ? 1 : n - 1)) % n;
+    if (key == MenuKey::Up || key == MenuKey::Down) {  // the next line that isn't a section's heading (wrapping)
+        for (int tries = 0; tries < n; ++tries) {
+            menu.selected = (menu.selected + (key == MenuKey::Down ? 1 : n - 1)) % n;
+            if (!menu_item_is_header(items[menu.selected]))
+                break;
+        }
         return false;
     }
     const MenuItem item = items[menu.selected];
@@ -396,8 +449,11 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     if (item == MenuItem::Page) {  // the next or previous page, with the switch still selected
         menu.page = (menu.page + (key == MenuKey::Right ? 1 : pages - 1)) % pages;
         menu.selected = 0;
+        menu.scroll = 0;
         return false;
     }
+    if (menu_item_is_header(item))  // never selected by the keys; a stale index lands here at most
+        return false;
     CheekySettings& c = menu.cheeky.values;
     const int step = key == MenuKey::Right ? 1 : -1;
     DlssSettings& dl = menu.values.dlss;
@@ -672,7 +728,8 @@ MenuResolution menu_resolution(const SettingsMenu& menu) {
     MenuResolution r;
     const MenuLaunch& l = menu.launch;
     const MenuPage page = menu_page(menu);
-    if (!l.qvfr || (page != MenuPage::Settings && page != MenuPage::Crop && menu.cheeky.available))
+    const MenuItem section = menu_section(menu);
+    if (!l.qvfr || (section != MenuItem::HeadResolution && page != MenuPage::Foveation && section != MenuItem::HeadView))
         return r;
     const MenuFit f = menu_fit(menu);
     const MenuValues& v = menu.values;
@@ -726,18 +783,21 @@ MenuStats menu_stats(const SettingsMenu& menu) {
 std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     std::vector<std::wstring> notes;
     const MenuPage page = menu_page(menu);
-    if (page == MenuPage::Fg) {
+    const MenuItem section = menu_section(menu);
+    if (page == MenuPage::Headset || page == MenuPage::Game)
+        return notes;
+    if (section == MenuItem::HeadFg) {
         if (menu.cheeky.values.fg)
             notes.push_back(L"Needs OpenXR Toolkit's Turbo mode and other frame generation off");
         return notes;
     }
-    if (page == MenuPage::OwnDlss && fsr_runs(menu)) {
+    if (section == MenuItem::HeadDlss && menu.launch.ownDlss && fsr_runs(menu)) {
         if (menu.values.dlss.on && menu.values.dlss.textureSharpening != 0 && !menu.launch.sharpeningReady)
             notes.push_back(L"Texture sharpening was off at launch: it starts at the next launch");
         notes.push_back(L"Each change rebuilds FSR: a short stutter (not texture sharpening)");
         return notes;
     }
-    if (page == MenuPage::OwnDlss) {
+    if (section == MenuItem::HeadDlss && menu.launch.ownDlss) {
         if (menu.values.dlss.on)
             notes.push_back(menu.values.dlss.eyePreset == 6 ? L"Periphery F: cheaper, more aliasing; suits eye tracking"
                                                             : L"Periphery K: steadier; F is cheaper and suits eye tracking");
@@ -746,27 +806,34 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
         notes.push_back(L"Each change rebuilds DLSS: a short stutter (not texture sharpening)");
         return notes;
     }
-    if (page == MenuPage::OwnNr) {
+    if (section == MenuItem::HeadNr) {
         const NrSettings& n = menu.values.nr;
         if (n.on && !menu.values.dlss.on)
-            notes.push_back(L"Runs with DLSS on (the DLSS page): it takes DLSS's depth and motion");
+            notes.push_back(L"Runs with DLSS on (Use DLSS, above): it takes DLSS's depth and motion");
         if (n.on)
             notes.push_back(L"Each view: 2 ms of GPU at least, about 2 ms and 130 MB a megapixel worked on");
         if (n.on)
             notes.push_back(L"Preset, working sizes, coverage and order rebuild it: a short stutter");
         return notes;
     }
-    if (page == MenuPage::Dlss || page == MenuPage::Helmet)
+    if (section == MenuItem::HeadCheeky || section == MenuItem::HeadVision ||
+        (section == MenuItem::HeadDlss && !menu.launch.ownDlss))
         return notes;
-    if (page == MenuPage::Shape) {
-        const bool masks = menu.launch.focusMask && menu.values.focusMask;
-        notes.push_back(!menu.values.shape.corners
-                            ? L"Corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid"
-                        : masks ? L"The cut corners aren't rendered: the shape saves pixels too"
-                                : L"The focus views still render the whole box: the shape picks what stays sharp");
-        return notes;
+    if (section == MenuItem::HeadFoveation) {
+        // On the shape's lines: what Custom corners does (the resolution's notes stay with the Resolution section).
+        const std::vector<MenuItem> items = menu_page_items(menu);
+        const MenuItem at = items[std::clamp(menu.selected, 0, static_cast<int>(items.size()) - 1)];
+        const bool shapeLine = at == MenuItem::Shape || (at >= MenuItem::ShapeTopLeftIn && at <= MenuItem::ShapeBottomRightUp);
+        if (shapeLine) {
+            const bool masks = menu.launch.focusMask && menu.values.focusMask;
+            notes.push_back(!menu.values.shape.corners
+                                ? L"Custom corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid"
+                            : masks ? L"The cut corners aren't rendered: the shape saves pixels too"
+                                    : L"The focus views still render the whole box: the shape picks what stays sharp");
+            return notes;
+        }
     }
-    if (page == MenuPage::Crop) {
+    if (section == MenuItem::HeadView) {
         // The FOV follows at once; the views' pixels only without DLSS (and up to the launch size).
         if (menu.launch.dlssHeld)
             notes.push_back(L"DLSS is on: the view crops now, its pixel savings apply at the next launch");
@@ -820,10 +887,20 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
     const MenuFit fit = menu_fit(menu);
     for (size_t i = 0; i < items.size(); ++i) {
         MenuLine line;
-        line.label = items[i] == MenuItem::DlssOn && fsr_runs(menu) ? L"FSR" : spec(items[i]).label;
+        line.label = items[i] == MenuItem::DlssOn && fsr_runs(menu)     ? L"Use FSR"
+                     : items[i] == MenuItem::HeadDlss && fsr_runs(menu) ? L"FSR"
+                     : items[i] == MenuItem::FocusOffset && !v.eyeTracking ? L"Vertical position"
+                                                                           : spec(items[i]).label;
         line.selected = static_cast<int>(i) == menu.selected;
+        line.header = menu_item_is_header(items[i]);
+        if (line.header) {
+            line.selected = false;
+            lines.push_back(line);
+            continue;
+        }
         if (items[i] == MenuItem::Page)
-            line.value = page_name(menu, menu_page(menu));
+            line.value = page_name(menu, menu_page(menu)) + L"  " + std::to_wstring(std::clamp(menu.page, 0, static_cast<int>(menu_pages(menu).size()) - 1) + 1) +
+                         L" of " + std::to_wstring(menu_pages(menu).size());
         else if (items[i] == MenuItem::Optimize)
             line.value = menu.optimizeStatus.empty() ? L"Right: start · Left: undo" : menu.optimizeStatus;
         else if (items[i] == MenuItem::Profile)
@@ -896,11 +973,9 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
         else if (items[i] == MenuItem::Outline)
             line.value = v.outline ? L"On" : L"Off";
         else if (items[i] == MenuItem::Shape)
-            line.value = v.shape.corners ? L"Corners" : L"Box";
-        else if (items[i] == MenuItem::Corners && v.shape.corners)
-            line.value = L"Corner shape";
+            line.value = v.shape.corners ? L"Custom corners" : L"Rectangle";
         else if (items[i] == MenuItem::EyeTracking)
-            line.value = v.eyeTracking ? L"On" : L"Off";
+            line.value = v.eyeTracking ? L"Eye tracked" : L"Fixed";
         else if (items[i] == MenuItem::Overlay)
             line.value = v.overlay.enabled ? L"On" : L"Off";
         else if (items[i] == MenuItem::Clock)
@@ -908,7 +983,7 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
         else if (items[i] == MenuItem::HotkeyFooter)
             line.value = v.hotkeyFooter ? L"On" : L"Off";
         else if (items[i] == MenuItem::CpuIsolateMain)
-            line.value = v.cpuIsolateMain ? L"Its own" : L"Shared";
+            line.value = v.cpuIsolateMain ? L"On" : L"Off";
         else if (items[i] == MenuItem::Crop)
             line.value = v.crop ? L"On" : L"Off";
         else if (items[i] == MenuItem::Helmet)
@@ -947,6 +1022,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = degrees(v.clock.yaw, L"right", L"left");
         else if (items[i] == MenuItem::ClockPitch)
             line.value = degrees(v.clock.pitch, L"up", L"down");
+        else if (items[i] == MenuItem::ClockWidth)
+            line.value = std::to_wstring(v.clock.width) + L"\u00b0";
         else if (items[i] == MenuItem::MenuYaw)
             line.value = degrees(v.placement.yaw, L"right", L"left");
         else if (items[i] == MenuItem::MenuPitch)

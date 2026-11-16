@@ -27,8 +27,8 @@ enum class MenuItem {
     // The Focus shape page (focus_shape.h): box or corners, then each corner's insets.
     Shape, ShapeTopLeftIn, ShapeTopLeftDown, ShapeTopRightIn, ShapeTopRightDown, ShapeBottomLeftIn, ShapeBottomLeftUp,
     ShapeBottomRightIn, ShapeBottomRightUp,
-    // The Overlay and menu page: the performance overlay ([osd], osd.h), the clock ([clock]; its size in the launcher
-    // only: the page's 13 lines) and the panels' places.
+    // The Headset page: the performance overlay ([osd], osd.h), the clock ([clock]; ClockWidth its size) and the
+    // panels' places.
     Overlay, OverlayYaw, OverlayPitch, OverlayWidth, Clock, ClockYaw, ClockPitch, MenuYaw, MenuPitch, MenuWidth,
     // The page switch, and with Cheeky running the Foveated DLSS page ([cheeky], cheeky_settings.h).
     Page, CheekyProcessing, CheekyOuterDlaa, CheekyOuterScale, CheekyOuterPreset, CheekyFocusPreset,
@@ -42,7 +42,7 @@ enum class MenuItem {
     Optimize,
     // The settings page's first line: the profiles (profile/profiles.h), stepped through and used at once.
     Profile,
-    // The Overlay and menu page: the hotkeys' line under the panel ([menu] hotkey_footer).
+    // The Headset page: the hotkeys' line under the panel ([menu] hotkey_footer).
     HotkeyFooter,
     // The settings page, after Focus density, for a game with it (MenuLaunch::objectDetail: X-Plane): object detail.
     ObjectDetail,
@@ -60,11 +60,22 @@ enum class MenuItem {
     NrOn, NrIntensity, NrStyle, NrPreset, NrLocalTone, NrLocalStructure, NrAutoMask, NrOrder, NrFocusScale, NrEdgeBlend,
     NrPeriphery, NrPeripheryScale, NrPeripheryCoverage,
     NrLimit,  // the most a view's model works on (NrSettings::workingLimit), after the focus working size
-    // The Overlay and menu page's first line, for a game with it (MenuLaunch::eyeOff): one eye off ([quad] eye_off).
+    // The Picture page's Vision section, for a game with it (MenuLaunch::eyeOff): one eye off ([quad] eye_off).
     EyeOff,
     // The CPU page: the main thread's core ([cpu] isolate_main_thread, probe/cpu_isolation.h).
-    CpuIsolateMain
+    CpuIsolateMain,
+    // The clock's size ([clock] width, degrees), as the launcher's Clock card.
+    ClockWidth,
+    // The pages' section headers: the launcher's card names, drawn as small headings, never selected (menu_key skips
+    // them). Each page is a launcher tab, its sections that tab's cards.
+    HeadResolution, HeadFoveation, HeadView, HeadDlss, HeadNr, HeadCheeky, HeadFg, HeadMenu, HeadOverlay, HeadClock,
+    HeadVision, HeadCpu
 };
+// A section header (HeadResolution .. HeadCpu): drawn as a heading, skipped by Up and Down.
+inline bool menu_item_is_header(MenuItem item) {
+    return static_cast<int>(item) >= static_cast<int>(MenuItem::HeadResolution) &&
+           static_cast<int>(item) <= static_cast<int>(MenuItem::HeadCpu);
+}
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
 // reloaded live): degrees right (yaw) and up (pitch) of straight ahead, and the panel's width in
@@ -136,7 +147,7 @@ struct MenuLaunch {
     bool objectDetail = false;
     // Sharpening on the settings page (GameFeatures::sharpening), as objectDetail.
     bool sharpening = false;
-    // One eye off on the Overlay and menu page (GameFeatures::eyeOff), as objectDetail.
+    // One eye off on the Picture page (GameFeatures::eyeOff), as objectDetail.
     bool eyeOff = false;
     // The game masks its focus views (GameFeatures::focusMask): the pixels saved leave out what the mask skips.
     bool focusMask = false;
@@ -179,6 +190,7 @@ struct SettingsMenu {
     MenuCheeky cheeky;
     int page = 0;  // index into menu_pages
     int selected = 0;
+    int scroll = 0;  // the first line drawn after the page switch (menu_panel.h menu_first_visible), the panel's to keep
     std::wstring optimizeStatus;  // the optimizer's line, short (empty: not run yet)
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
     std::wstring dlssState;  // the API path: what DLSS runs on the periphery and the focus views (empty: nothing to say)
@@ -196,17 +208,26 @@ struct SettingsMenu {
     int profileRequest = -1;
 };
 
-// The menu's pages: the method's settings, the focus area's shape, for QVFR the view crop and the helmet, with
-// Cheeky running Foveated DLSS and Frame generation, then the performance overlay and the panels' places.
-enum class MenuPage { Settings, Shape, Crop, Helmet, Dlss, Fg, OwnDlss, OwnNr, Cpu, Headset };
+// The menu's pages, as tabs, their sections the launcher's cards by the launcher's names: Picture (Resolution, the
+// game's upscaler: DLSS or FSR and DLSS-NR, or Foveated DLSS and Frame generation; Vision), Foveation, View (View &
+// helmet; a game without either, no page), Headset (Headset menu, Performance overlay, Clock) and Game (CPU). The
+// user's layout (2026-11-16); before it ten pages of their own names, some of one line, the page shown only by its title.
+enum class MenuPage { Picture, Foveation, View, Headset, Game };
 std::vector<MenuPage> menu_pages(const SettingsMenu& menu);
 MenuPage menu_page(const SettingsMenu& menu);
+// The pages' names for the tab strip under the title, in order (menu_pages'); the current one is menu.page.
+std::vector<std::wstring> menu_tabs(const SettingsMenu& menu);
+// The section the selected line is in: its header (MenuItem::Head*), or the page's first one for the page switch and
+// the profile. The notes and the line under the title follow it.
+MenuItem menu_section(const SettingsMenu& menu);
 
 // The items for the method: QVFR also resizes its views live (and the settings page ends with Optimize).
 std::vector<MenuItem> menu_items(bool qvfr);
 // The current page's items: the page switch first, then the page's.
 std::vector<MenuItem> menu_page_items(const SettingsMenu& menu);
-// The current page's title, and its line under it: Cheeky's pages their credit ("CheekyFoveatedDLSS - v0.6.3"),
+// The current page's name, as its tab shows it ("Picture", "View & DLSS", "Headset", "Game").
+std::wstring menu_page_name(const SettingsMenu& menu);
+// The panel's title ("Headset menu", the method added for Two-loop and the API path), and its line under it: Cheeky's pages their credit ("CheekyFoveatedDLSS - v0.6.3"),
 // the settings page the optimizer's detail while it has one; else empty.
 std::wstring menu_title(const SettingsMenu& menu);
 std::wstring menu_subtitle(const SettingsMenu& menu);
@@ -239,6 +260,7 @@ struct MenuLine {
     std::wstring label, value;
     bool selected = false;
     bool capped = false;  // asked above the launch size: `value` also says what is in effect
+    bool header = false;  // a section's heading (the launcher's card name): no value, never selected
 };
 std::vector<MenuLine> menu_lines(const SettingsMenu& menu);
 // Why a value did not take and what to lower (empty when everything fits): at most two lines.

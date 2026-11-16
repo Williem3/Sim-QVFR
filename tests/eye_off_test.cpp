@@ -1,6 +1,6 @@
 // Offline check of one eye off (quad/eye_off.h): the ini's values, the frame's layers as the runtime gets them with an
 // eye off (stereo and quad view projection layers, quad layers for both eyes or one, other layers untouched, depth
-// left out of the black views), and the headset menu's Eye off line (on the Overlay and menu page for a game with it).
+// left out of the black views), and the headset menu's Eye off line (the Picture page's Vision card for a game with it).
 #include <algorithm>
 #include <cstdio>
 #include <vector>
@@ -129,17 +129,19 @@ int SIM_QVFR_TEST_MAIN() {
               reinterpret_cast<const XrCompositionLayerProjection*>(f.layers[0])->views[0].subImage.swapchain == chain(1),
           "a one-view layer untouched");
 
-    // The headset menu: Eye off first on the Overlay and menu page for a game with it, stepped none - left - right.
+    // The headset menu: Eye off under Vision, the Picture page's last card, for a game with it, stepped none - left - right.
     SettingsMenu menu;
-    menu.page = static_cast<int>(menu_pages(menu).size()) - 1;  // the Overlay and menu page is the last
+    menu.page = 0;  // Picture
     std::vector<MenuItem> items = menu_page_items(menu);
     check(std::find(items.begin(), items.end(), MenuItem::EyeOff) == items.end(), "no Eye off line for a game without it");
     menu.launch.eyeOff = true;
     items = menu_page_items(menu);
-    check(items.size() > 1 && items[1] == MenuItem::EyeOff, "Eye off is the page's first line for a game with it");
-    menu.selected = 1;
-    check(menu_lines(menu)[1].value == L"None", "it reads None");
-    check(menu_key(menu, MenuKey::Right) && menu.values.eyeOff == 1 && menu_lines(menu)[1].value == L"Left (right eye only)",
+    const int at = static_cast<int>(items.size()) - 1;
+    check(items.size() > 2 && items[at] == MenuItem::EyeOff && items[at - 1] == MenuItem::HeadVision,
+          "Eye off is the Picture page's last line, under Vision, for a game with it");
+    menu.selected = at;
+    check(menu_lines(menu)[at].value == L"None" && menu_lines(menu)[at].label == L"Eye off", "it reads None");
+    check(menu_key(menu, MenuKey::Right) && menu.values.eyeOff == 1 && menu_lines(menu)[at].value == L"Left (right eye only)",
           "Right: the left eye off");
     check(menu_key(menu, MenuKey::Right) && menu.values.eyeOff == 2, "Right again: the right eye off");
     check(!menu_key(menu, MenuKey::Right) && menu.values.eyeOff == 2, "no further");
