@@ -66,6 +66,9 @@ int child(const char* name) {
         simqvfr::log_async(true);
         for (int i = 1; i <= 2000; ++i)
             simqvfr::logf("queued %d", i);
+        // In a game the writer was killed by now; here it is alive: let it write its queue and wait idle first, so the
+        // exit's detach doesn't race it touching the writer's state.
+        Sleep(300);
         simqvfr::log_process_ending();
         return 0;
     }
