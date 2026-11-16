@@ -28,6 +28,21 @@ bool write_osd_placement(const wchar_t* ini, const OsdPlacement& p) {
     return put(L"enabled", p.enabled ? 1 : 0) && put(L"yaw", p.yaw) && put(L"pitch", p.pitch) && put(L"width", p.width);
 }
 
+ClockPlacement read_clock_placement(const wchar_t* ini) {
+    const auto read = [ini](const wchar_t* key, int fallback) { return ini_signed(ini, L"clock", key, fallback); };
+    ClockPlacement p;
+    p.enabled = read(L"enabled", 0) != 0;
+    p.yaw = std::clamp(read(L"yaw", p.yaw), -kClockYawMax, kClockYawMax);
+    p.pitch = std::clamp(read(L"pitch", p.pitch), -kClockPitchMax, kClockPitchMax);
+    p.width = std::clamp(read(L"width", p.width), kClockWidthMin, kClockWidthMax);
+    return p;
+}
+
+bool write_clock_placement(const wchar_t* ini, const ClockPlacement& p) {
+    const auto put = [ini](const wchar_t* key, int value) { return ini_put(ini, L"clock", key, value); };
+    return put(L"enabled", p.enabled ? 1 : 0) && put(L"yaw", p.yaw) && put(L"pitch", p.pitch) && put(L"width", p.width);
+}
+
 namespace {
 
 // The value after the first "key": at or after `from` (npos: none). Cheeky's snapshot is flat

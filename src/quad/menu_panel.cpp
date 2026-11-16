@@ -12,6 +12,7 @@ namespace {
 constexpr uint32_t kBackground = 0x16181c, kHighlight = 0x0a6e78, kLabel = 0xe8eaed, kDim = 0x9aa0a6,
                    kCapped = 0xff6b5e;  // a value that did not take, and why
 constexpr uint8_t kAlpha = 0xe6;
+constexpr int kCornerRadius = 32;  // as the overlay's card
 constexpr int kMargin = 36, kLineHeight = 50, kTitleHeight = 64;
 
 COLORREF gdi(uint32_t rgb) { return RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff); }
@@ -103,12 +104,14 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
              DT_LEFT | DT_END_ELLIPSIS);
     text(dc, smallFont, hint, kMargin, kPanelHeight - 56, kPanelWidth - kMargin, kPanelHeight - 16, kDim, DT_LEFT);
     GdiFlush();
-    // GDI writes BGRx; the swapchain wants RGBA with the panel's alpha.
+    // GDI writes BGRx; the swapchain wants RGBA with the panel's alpha (rounded corners), premultiplied (osd.h).
     const auto* src = static_cast<const uint32_t*>(bits);
-    for (size_t i = 0; i < out.size(); ++i) {
-        const uint32_t p = src[i];
-        out[i] = ((p >> 16) & 0xff) | (p & 0xff00) | ((p & 0xff) << 16) | (static_cast<uint32_t>(kAlpha) << 24);
-    }
+    for (int py = 0; py < kPanelHeight; ++py)
+        for (int px = 0; px < kPanelWidth; ++px) {
+            const size_t i = static_cast<size_t>(py) * kPanelWidth + px;
+            const double coverage = panel_corner_coverage(px, py, kPanelWidth, kPanelHeight, kCornerRadius);
+            out[i] = panel_rgba(src[i], static_cast<uint8_t>(kAlpha * coverage + 0.5));
+        }
     SelectObject(dc, previous);
     for (HFONT f : {titleFont, lineFont, smallFont})
         DeleteObject(f);

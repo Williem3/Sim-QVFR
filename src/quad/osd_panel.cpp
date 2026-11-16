@@ -66,16 +66,47 @@ int text(HDC dc, HFONT font, const std::wstring& s, int left, int top, int right
     return size.cx;
 }
 
-// The card's alpha at a pixel: kCardAlpha inside the rounded rectangle, antialiased at its corners.
-uint8_t card_alpha(int x, int y) {
-    const double cx = std::clamp(x + 0.5, static_cast<double>(kRadius), static_cast<double>(kOsdWidth - kRadius));
-    const double cy = std::clamp(y + 0.5, static_cast<double>(kRadius), static_cast<double>(kOsdHeight - kRadius));
-    const double d = std::hypot(x + 0.5 - cx, y + 0.5 - cy);
-    const double coverage = std::clamp(kRadius + 0.5 - d, 0.0, 1.0);
-    return static_cast<uint8_t>(std::lround(kCardAlpha * coverage));
+// The card's alpha at a pixel: kCardAlpha inside the rounded rectangle (width x height, corners of `radius`),
+// antialiased at its corners.
+uint8_t card_alpha(int x, int y, int width = kOsdWidth, int height = kOsdHeight, int radius = kRadius) {
+    return static_cast<uint8_t>(std::lround(kCardAlpha * panel_corner_coverage(x, y, width, height, radius)));
 }
 
+// sRGB byte -> linear, and linear -> sRGB byte.
+double srgb_to_linear(int v) {
+    const double c = v / 255.0;
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+uint8_t linear_to_srgb(double l) {
+    const double c = l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1 / 2.4) - 0.055;
+    return static_cast<uint8_t>(std::lround(std::clamp(c, 0.0, 1.0) * 255));
+}
+
+// premultiplied[alpha][value]: an sRGB channel value times alpha in linear light, encoded sRGB again.
+struct PremultiplyTable {
+    uint8_t v[256][256];
+    PremultiplyTable() {
+        for (int a = 0; a < 256; ++a)
+            for (int c = 0; c < 256; ++c)
+                v[a][c] = a == 255 ? static_cast<uint8_t>(c) : linear_to_srgb(srgb_to_linear(c) * a / 255.0);
+    }
+};
+
 }  // namespace
+
+double panel_corner_coverage(int x, int y, int width, int height, int radius) {
+    const double cx = std::clamp(x + 0.5, static_cast<double>(radius), static_cast<double>(width - radius));
+    const double cy = std::clamp(y + 0.5, static_cast<double>(radius), static_cast<double>(height - radius));
+    const double d = std::hypot(x + 0.5 - cx, y + 0.5 - cy);
+    return std::clamp(radius + 0.5 - d, 0.0, 1.0);
+}
+
+uint32_t panel_rgba(uint32_t gdi, uint8_t alpha) {
+    static const PremultiplyTable table;  // built once (thread-safe), 64 KB
+    const uint8_t* t = table.v[alpha];
+    return t[(gdi >> 16) & 0xff] | (static_cast<uint32_t>(t[(gdi >> 8) & 0xff]) << 8) |
+           (static_cast<uint32_t>(t[gdi & 0xff]) << 16) | (static_cast<uint32_t>(alpha) << 24);
+}
 
 std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vector<OsdFrame>& history,
                                      const std::vector<OsdTile>& tiles, const std::vector<OsdRow>& rows,
@@ -208,17 +239,54 @@ std::vector<uint32_t> draw_osd_panel(const OsdSummary& summary, const std::vecto
         }
     }
     GdiFlush();
-    // GDI writes BGRx; the swapchain wants RGBA with the card's alpha.
+    // GDI writes BGRx; the swapchain wants RGBA with the card's alpha, premultiplied.
     const auto* src = static_cast<const uint32_t*>(bits);
     for (int py = 0; py < kOsdHeight; ++py)
         for (int px = 0; px < kOsdWidth; ++px) {
             const size_t i = static_cast<size_t>(py) * kOsdWidth + px;
-            const uint32_t p = src[i];
-            out[i] = ((p >> 16) & 0xff) | (p & 0xff00) | ((p & 0xff) << 16) | (static_cast<uint32_t>(card_alpha(px, py)) << 24);
+            out[i] = panel_rgba(src[i], card_alpha(px, py));
         }
     SelectObject(dc, previous);
     for (HFONT f : {labelFont, bigFont, unitFont, detailFont, valueFont, badgeFont})
         DeleteObject(f);
+    DeleteObject(bitmap);
+    DeleteDC(dc);
+    return out;
+}
+
+std::vector<uint32_t> draw_clock_panel(const std::wstring& time) {
+    constexpr int kClockRadius = 28;
+    std::vector<uint32_t> out(static_cast<size_t>(kClockWidth) * kClockHeight, 0);
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = kClockWidth;
+    bi.bmiHeader.biHeight = -kClockHeight;  // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bitmap = dc ? CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    if (!bitmap || !bits) {
+        if (dc)
+            DeleteDC(dc);
+        return out;
+    }
+    HGDIOBJ previous = SelectObject(dc, bitmap);
+    HFONT timeFont = CreateFontW(-64, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    SetBkMode(dc, TRANSPARENT);
+    fill(dc, 0, 0, kClockWidth, kClockHeight, kCard);
+    text(dc, timeFont, time, 16, 0, kClockWidth - 16, kClockHeight, kPrimary, DT_CENTER);
+    GdiFlush();
+    const auto* src = static_cast<const uint32_t*>(bits);
+    for (int py = 0; py < kClockHeight; ++py)
+        for (int px = 0; px < kClockWidth; ++px) {
+            const size_t i = static_cast<size_t>(py) * kClockWidth + px;
+            out[i] = panel_rgba(src[i], card_alpha(px, py, kClockWidth, kClockHeight, kClockRadius));
+        }
+    SelectObject(dc, previous);
+    DeleteObject(timeFont);
     DeleteObject(bitmap);
     DeleteDC(dc);
     return out;
@@ -264,8 +332,7 @@ std::vector<uint32_t> draw_notice_panel(const std::wstring& title, const std::ve
     for (int py = 0; py < kOsdHeight; ++py)
         for (int px = 0; px < kOsdWidth; ++px) {
             const size_t i = static_cast<size_t>(py) * kOsdWidth + px;
-            const uint32_t p = src[i];
-            out[i] = ((p >> 16) & 0xff) | (p & 0xff00) | ((p & 0xff) << 16) | (static_cast<uint32_t>(card_alpha(px, py)) << 24);
+            out[i] = panel_rgba(src[i], card_alpha(px, py));
         }
     SelectObject(dc, previous);
     DeleteObject(titleFont);

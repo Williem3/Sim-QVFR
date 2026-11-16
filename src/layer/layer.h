@@ -178,6 +178,9 @@ void osd_placement_changed();
 void osd_placement_changed(const OsdPlacement& placement, const CheekySettings& cheeky);
 const XrCompositionLayerBaseHeader* osd_frame(XrSession session, int64_t now);
 void osd_shutdown();
+void clock_placement_changed(const ClockPlacement& placement);
+const XrCompositionLayerBaseHeader* clock_frame(XrSession session);  // the clock's card while it is on
+void clock_shutdown();
 
 // optimizer.cpp
 void optimize_tick(int64_t now);

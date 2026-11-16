@@ -13,7 +13,7 @@ namespace simqvfr {
 
 enum class FramePart : int {
     menu,       // menu_frame: the headset menu's frame, the overlay among it
-    overlay,    // of menu: the performance overlay's card (osd_frame)
+    overlay,    // of menu: the performance overlay's card (osd_frame) and the clock's (clock_frame)
     keyboard,   // of menu: the hotkeys and wheel buttons read (menu_keyboard)
     controllers,  // of menu: the controllers' menu actions read from the runtime (menu_controllers), the lock included
     gazeLock,   // of controllers: waiting for the gaze's lock (the gaze thread holds it around its own runtime calls)

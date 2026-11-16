@@ -53,6 +53,23 @@ Card overlay_card() {
     return c;
 }
 
+// The clock ([clock]): the local time on a card of its own, for players who want it without the overlay.
+Card clock_card() {
+    Card c{Tab::Headset, L"Clock", Applies::Live};
+    c.body = [](Body& b) {
+        const bool on = app.s.clock.enabled;
+        b.toggle(kClockOn, L"Show the clock", on, on ? L"The local time, on a small card of its own." : L"Off");
+        b.reveal(kClockOn, on, L"Show the clock", {L"Horizontal", L"Vertical", L"Size"}, [](Body& r) {
+            r.sliders({kClockYaw, L"Horizontal", app.s.clock.yaw, L"°"}, {kClockPitch, L"Vertical", app.s.clock.pitch, L"°"});
+            r.slider({kClockSize, L"Size", app.s.clock.width, L"°"});
+        });
+        b.note(L"The performance overlay keeps its own clock; the headset menu’s Overlay and menu page turns this one on "
+               L"and off and moves it too.");
+    };
+    c.reset = [](Settings& s) { s.clock = ClockPlacement{}; };
+    return c;
+}
+
 // One eye off ([quad] eye_off): for a player who sees with one eye.
 Card vision_card() {
     Card c{Tab::Headset, L"Vision", Applies::Live};
@@ -182,9 +199,9 @@ Card hotkeys_card() {
 }
 
 std::vector<Card> headset_cards() {
-    std::vector<Card> cards = {menu_card(), overlay_card(), placement_card(), hotkeys_card()};
+    std::vector<Card> cards = {menu_card(), overlay_card(), clock_card(), placement_card(), hotkeys_card()};
     if (game_has(&games::GameFeatures::eyeOff))  // a game whose eye passes can be turned off (LMU)
-        cards.insert(cards.begin() + 2, vision_card());
+        cards.insert(cards.begin() + 3, vision_card());
     return cards;
 }
 

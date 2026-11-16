@@ -49,6 +49,10 @@ constexpr Spec kSpecs[] = {
     {MenuItem::OverlayYaw, L"Overlay left / right", -kOsdYawMax, kOsdYawMax, 1},
     {MenuItem::OverlayPitch, L"Overlay up / down", -kOsdPitchMax, kOsdPitchMax, 1},
     {MenuItem::OverlayWidth, L"Overlay size", kOsdWidthMin, kOsdWidthMax, 1},
+    // The clock's place, degrees (its size: the launcher's slider).
+    {MenuItem::Clock, L"Clock", 0, 1, 1},
+    {MenuItem::ClockYaw, L"Clock left / right", -kClockYawMax, kClockYawMax, 1},
+    {MenuItem::ClockPitch, L"Clock up / down", -kClockPitchMax, kClockPitchMax, 1},
     // The panel's place, degrees (the launcher's kMenuYawRange, kMenuPitchRange, kMenuWidthRange).
     {MenuItem::MenuYaw, L"Menu left / right", -kMenuYawMax, kMenuYawMax, 1},
     {MenuItem::MenuPitch, L"Menu up / down", -kMenuPitchMax, kMenuPitchMax, 1},
@@ -183,6 +187,8 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::OverlayYaw: return &v.overlay.yaw;
     case MenuItem::OverlayPitch: return &v.overlay.pitch;
     case MenuItem::OverlayWidth: return &v.overlay.width;
+    case MenuItem::ClockYaw: return &v.clock.yaw;
+    case MenuItem::ClockPitch: return &v.clock.pitch;
     case MenuItem::CropTop: return &v.cropTop;
     case MenuItem::CropBottom: return &v.cropBottom;
     case MenuItem::CropOuter: return &v.cropOuter;
@@ -248,7 +254,7 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (menu.launch.eyeOff)  // a game with it: first on the page
             items.push_back(MenuItem::EyeOff);
         items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
-                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
+                                   MenuItem::Clock, MenuItem::ClockYaw, MenuItem::ClockPitch, MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
     } else if (page == MenuPage::Cpu) {
         items.push_back(MenuItem::CpuIsolateMain);
     } else if (page == MenuPage::Fg) {
@@ -488,7 +494,8 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     }
     default: break;
     }
-    if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Crop ||
+    if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Clock ||
+        item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
         item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
@@ -500,6 +507,7 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
                      : item == MenuItem::Helmet      ? menu.values.helmet.on
                      : item == MenuItem::HelmetDebug ? menu.values.helmet.debugLight
                      : item == MenuItem::HelmetDetail ? menu.values.helmet.detail
+                     : item == MenuItem::Clock       ? menu.values.clock.enabled
                                                      : menu.values.overlay.enabled;
         flag = !flag;
         return true;
@@ -528,6 +536,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.gazeDeadzone = read_gaze_deadzone(ini);
     v.shape = read_focus_shape(ini);
     v.overlay = read_osd_placement(ini);
+    v.clock = read_clock_placement(ini);
     v.placement = read_menu_placement(ini);
     v.hotkeyFooter = ini_flag(ini, kHotkeyFooter);
     v.cpuIsolateMain = ini_flag(ini, kCpuIsolateMain);
@@ -577,6 +586,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     ok &= write_gaze_deadzone(ini, v.gazeDeadzone);
     ok &= write_focus_shape(ini, v.shape);
     ok &= write_osd_placement(ini, v.overlay);
+    ok &= write_clock_placement(ini, v.clock);
     ok &= write(ini, L"menu", L"yaw", v.placement.yaw);
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
     ok &= write(ini, L"menu", L"width", v.placement.width);
@@ -878,6 +888,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = v.eyeTracking ? L"On" : L"Off";
         else if (items[i] == MenuItem::Overlay)
             line.value = v.overlay.enabled ? L"On" : L"Off";
+        else if (items[i] == MenuItem::Clock)
+            line.value = v.clock.enabled ? L"On" : L"Off";
         else if (items[i] == MenuItem::HotkeyFooter)
             line.value = v.hotkeyFooter ? L"On" : L"Off";
         else if (items[i] == MenuItem::CpuIsolateMain)
@@ -916,6 +928,10 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = degrees(v.overlay.pitch, L"up", L"down");
         else if (items[i] == MenuItem::OverlayWidth)
             line.value = std::to_wstring(v.overlay.width) + L"\u00b0";
+        else if (items[i] == MenuItem::ClockYaw)
+            line.value = degrees(v.clock.yaw, L"right", L"left");
+        else if (items[i] == MenuItem::ClockPitch)
+            line.value = degrees(v.clock.pitch, L"up", L"down");
         else if (items[i] == MenuItem::MenuYaw)
             line.value = degrees(v.placement.yaw, L"right", L"left");
         else if (items[i] == MenuItem::MenuPitch)

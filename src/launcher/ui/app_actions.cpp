@@ -316,6 +316,9 @@ int* slider_value(Ctl id) {
     case kOsdYaw: return &app.s.osd.yaw;
     case kOsdPitch: return &app.s.osd.pitch;
     case kOsdSize: return &app.s.osd.width;
+    case kClockYaw: return &app.s.clock.yaw;
+    case kClockPitch: return &app.s.clock.pitch;
+    case kClockSize: return &app.s.clock.width;
     case kCropTop: return &app.s.cropTop;
     case kCropBottom: return &app.s.cropBottom;
     case kCropOuter: return &app.s.cropOuter;
@@ -366,6 +369,9 @@ Range slider_range(Ctl id) {
     case kOsdYaw: return {-kOsdYawMax, kOsdYawMax};
     case kOsdPitch: return {-kOsdPitchMax, kOsdPitchMax};
     case kOsdSize: return {kOsdWidthMin, kOsdWidthMax};
+    case kClockYaw: return {-kClockYawMax, kClockYawMax};
+    case kClockPitch: return {-kClockPitchMax, kClockPitchMax};
+    case kClockSize: return {kClockWidthMin, kClockWidthMax};
     case kCropTop:
     case kCropBottom:
     case kCropOuter:
