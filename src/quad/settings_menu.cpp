@@ -1,5 +1,6 @@
 #include "settings_menu.h"
 
+#include "focus_mask.h"
 #include "fov_crop.h"
 #include "views4_layout.h"
 
@@ -535,6 +536,8 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.offset = read_focus_offset(ini);
     v.gazeDeadzone = read_gaze_deadzone(ini);
     v.shape = read_focus_shape(ini);
+    v.focusMask = ini_flag(ini, kFocusMask);
+    v.focusMaskMargin = ini_int(ini, kFocusMaskMargin);
     v.overlay = read_osd_placement(ini);
     v.clock = read_clock_placement(ini);
     v.placement = read_menu_placement(ini);
@@ -691,18 +694,28 @@ MenuStats menu_stats(const SettingsMenu& menu) {
     if (l.nativePpd > 0)
         s.centerPpd = static_cast<int>(std::lround(l.nativePpd * density / 100));
     // Rendered against both native eyes, in pixels when the native size is known (as the launcher).
+    // The focus mask (a game with it, QVFR): the share of the focus views' pixels it skips, at their size in pixels (a
+    // nominal 2000-wide native eye while the native size is unknown: only the margin depends on it).
+    double masked = 0;
+    if (l.qvfr && l.focusMask && menu.values.focusMask) {
+        const int nw = l.nativeWidth > 0 ? l.nativeWidth : 2000, nh = l.nativeHeight > 0 ? l.nativeHeight : 2000;
+        masked = focus_mask_share(focus_area_of(menu.values.shape, menu.values.corners),
+                                  static_cast<unsigned>(std::max(px(nw, f.focusWidth), 1)),
+                                  static_cast<unsigned>(std::max(px(nh, f.focusHeight), 1)),
+                                  static_cast<unsigned>(std::max(menu.values.focusMaskMargin, 0)));
+    }
     double rendered, native;
     if (l.nativeWidth > 0 && l.nativeHeight > 0) {
         const auto area = [&](double w, double h) {
             return static_cast<double>(px(l.nativeWidth, w)) * px(l.nativeHeight, h);
         };
         rendered = l.qvfr ? 2 * (area(f.periphery * menu.values.crop_width() / 100, f.periphery * menu.values.crop_height() / 100) +
-                                 area(f.focusWidth, f.focusHeight))
+                                 area(f.focusWidth, f.focusHeight) * (1 - masked))
                           : 4 * area(l.twoLoopScale, l.twoLoopScale);
         native = 2.0 * l.nativeWidth * l.nativeHeight;
     } else {
         rendered = l.qvfr ? 2 * (f.periphery * f.periphery * menu.values.crop_width() * menu.values.crop_height() / 1e4 +
-                                 f.focusWidth * f.focusHeight)
+                                 f.focusWidth * f.focusHeight * (1 - masked))
                           : 4 * l.twoLoopScale * l.twoLoopScale;
         native = 2 * 100.0 * 100.0;
     }
@@ -746,9 +759,11 @@ std::vector<std::wstring> menu_notes(const SettingsMenu& menu) {
     if (page == MenuPage::Dlss || page == MenuPage::Helmet)
         return notes;
     if (page == MenuPage::Shape) {
-        notes.push_back(menu.values.shape.corners
-                            ? L"The focus views still render the whole box: the shape picks what stays sharp"
-                            : L"Corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid");
+        const bool masks = menu.launch.focusMask && menu.values.focusMask;
+        notes.push_back(!menu.values.shape.corners
+                            ? L"Corners pulls each corner of the focus area in, e.g. the top ones for a trapezoid"
+                        : masks ? L"The cut corners aren't rendered: the shape saves pixels too"
+                                : L"The focus views still render the whole box: the shape picks what stays sharp");
         return notes;
     }
     if (page == MenuPage::Crop) {

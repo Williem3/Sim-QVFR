@@ -201,6 +201,30 @@ inline bool rounded_mesh(const FocusArea& a, double margin, std::vector<float>& 
 
 }  // namespace focus_mask_detail
 
+// The focus area of the settings: the pulled-in corners (focus_shape.h) or, without them, the box rounded by
+// corner_radius_percent, as the layer hands it to the game (qvfr_set_focus_mask).
+inline FocusArea focus_area_of(const FocusShape& shape, int cornerRadiusPercent) {
+    FocusArea a;
+    focus_shape_insets(focus_shape_bits(shape), a.inset);
+    a.radius = a.corners() ? 0.0f : static_cast<float>(std::clamp(cornerRadiusPercent, 0, 100)) / 100.0f;
+    return a;
+}
+
+// The share (0..1) of a width x height focus view the mask skips: its texels more than `marginTexels` outside the shape
+// (what the mesh covers; sampled on a grid). The aspect is the view's (square texels). 0 for the plain box.
+inline double focus_mask_share(FocusArea area, unsigned width, unsigned height, unsigned marginTexels) {
+    if (!width || !height || (!area.corners() && area.radius <= 0))
+        return 0;
+    area.aspect = static_cast<float>(width) / static_cast<float>(height);
+    const double margin = focus_mask_margin(marginTexels, width, height);
+    constexpr int kGrid = 64;
+    int masked = 0;
+    for (int y = 0; y < kGrid; ++y)
+        for (int x = 0; x < kGrid; ++x)
+            masked += focus_area_inside(area, (x + 0.5) / kGrid, (y + 0.5) / kGrid) < -margin ? 1 : 0;
+    return static_cast<double>(masked) / (kGrid * kGrid);
+}
+
 // The focus mask's triangles (a list, x and y per vertex, the focus view's clip space: x right, y up, the box +-1) for
 // `area` with `margin` (focus_mask_margin). Empty: nothing to mask (the plain box, a margin past the rounding, a shape it
 // can't follow). Points past the box are the viewport's to clip.

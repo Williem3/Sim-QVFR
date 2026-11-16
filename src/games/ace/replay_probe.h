@@ -21,6 +21,8 @@
 
 #include <d3d12.h>
 
+#include "../../quad/focus_mask.h"
+
 namespace simqvfr {
 
 struct ReplayProbeStats {
@@ -83,6 +85,8 @@ struct ReplayFocusSettings {
     bool cullProbe = false;       // replay_cull_probe=1 (diagnostic): by 900-frame window, the focus scene replays whole,
                                   // without their ExecuteIndirect draws, without their direct draws: each kind's GPU share
                                   // (with gpuSteps); the focus picture is missing those objects meanwhile
+    bool maskAb = false;          // replay_mask_ab=1 (diagnostic, with gpuSteps): the focus mask in alternate 900-frame
+                                  // windows (on, off, ...), each window's "replay gpu:" line one side
     bool gpuSteps = false;        // replay_gpu_steps=1 (diagnostic): GPU time by step from timestamps on ACE's queue, one
                                   // frame in sixteen, logged every 900 frames ("replay gpu:")
     bool costAb = false;
@@ -129,6 +133,9 @@ void replay_probe_set_gaze(const float (&ndc)[2][2]);
 // sized is then made again.
 void replay_probe_set_size(double k, double kY, double renderScale);
 void replay_probe_set_box(double box, double boxY = 0);
+// The focus mask ([quad] focus_mask; quad/focus_mask.h), live, any thread: the focus views skip their pixels more than
+// `marginTexels` outside the focus shape. Settable before the start (the launch's values).
+void replay_probe_set_focus_mask(bool on, const FocusArea& area, unsigned marginTexels);
 // The live periphery: ACE's own eyes drawn at `scale` (0.25..1) of their launch size each way, into the top left of its
 // launch-size targets (1: off). Taken at a frame's end once the value has settled; only while the compositor reads the
 // region in use (replay_probe_eye_allow, each frame: whether the frame was composed).

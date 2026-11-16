@@ -1,6 +1,7 @@
 // The focus area's shape ([quad] focus_shape and its corners; live): a box (its corners rounded by
 // corner_radius_percent), or a quadrilateral whose four corners are pulled in from the box's, each on its
-// own. The focus views still render the whole box; only the area blended into the outer views changes.
+// own. The area blended into the outer views changes; a game with the focus mask (quad/focus_mask.h: LMU) also skips
+// rendering the focus views outside it, elsewhere they still render the whole box.
 // With the box held low and its top corners pulled in, a trapezoid keeps more of the dash sharp and
 // less of the far field (fixed foveation). Shared by the layer, the launcher and the in-headset menu.
 #pragma once

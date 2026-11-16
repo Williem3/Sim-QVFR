@@ -24,8 +24,8 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     // The helmet overlay (the layer's, over the composed views: crop-aware), the FOV crop (through the located FOV) and
     // NVIDIA multi-view rendering (mvr_pass.h), runtime-composed quad views on a Pimax or Varjo runtime, sharpening, and
     // Sim-QVFR's own DLSS on its views (engine/dlss_views.h; with multi-view), and one eye off (qvfr_frame.cpp: that
-    // eye's pass with no focus view, its scene cut to a few pixels, no DLSS).
-    {false, true, false, true, false, false, true, true, true, true, false, true},
+    // eye's pass with no focus view, its scene cut to a few pixels, no DLSS), and the focus mask (mvr_pass_focus_mask.h).
+    {false, true, false, true, false, false, true, true, true, true, false, true, true},
     kBuilds, std::size(kBuilds),
     false,
     nullptr,  // crash reports: BugSplat's, not looked at yet

@@ -51,6 +51,10 @@ struct Settings {
     int feather = kFeatherPercent.def;      // [quad] feather_percent: blend band, percent of the focus region
     int corner = 0;           // [quad] corner_radius_percent: corner radius, percent of half the shorter side
     FocusShape shape;         // [quad] focus_shape: the box (rounded by corner), or each corner pulled in on its own
+    // [quad] focus_mask and [experiment] focus_mask_margin (quad/focus_mask.h; a game with GameFeatures::focusMask):
+    // the focus views skip their pixels outside the shape; the readouts leave them out. Read only (the ini's own).
+    bool focusMask = kFocusMask.def != 0;
+    int focusMaskMargin = kFocusMaskMargin.def;
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y: the focus region's vertical offset, degrees up
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone: tenths of a degree the gaze moves before the region follows
     // The in-headset settings menu's place (the layer's MenuPlacement, src/quad/settings_menu.h): degrees
@@ -242,10 +246,14 @@ struct Readouts {
     double runtimePixels = 0;  // both eyes at the runtime's recommended size, as ACE renders without the layer
     double saved = 0;          // 1 - pixels / runtimePixels; negative when the layer renders more
     double focusDensity = 0;   // focus pixel density against recommended (horizontal)
+    double focusMasked = 0;    // the share of the focus views' pixels the focus mask skips (left out of `pixels`)
     double centerPpd = 0;      // the focus area's pixels per degree at its centre (0: not known yet)
     bool overRuntimeLimit = false;  // the offered eye is wider or taller than the runtime's maximum
 };
+// The chosen game (games::launcher_game) says whether it masks its focus views (GameFeatures::focusMask); the second
+// form says it outright (tests).
 Readouts readouts(const Settings& settings, const RuntimeInfo& runtime);
+Readouts readouts(const Settings& settings, const RuntimeInfo& runtime, bool gameMasksFocus);
 
 // VRAM at `settings` (QVFR), from the last launch's measurement: ACE's render targets that follow its
 // target scale with the target's area, the rest of its use stays. `mb` 0: not known (no QVFR launch yet,

@@ -56,6 +56,8 @@ Settings load_settings(const std::wstring& ini) {
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
     s.feather = ini_int(f, kFeatherPercent);
     s.corner = ini_int(f, kCornerRadiusPercent);
+    s.focusMask = ini_flag(f, kFocusMask);
+    s.focusMaskMargin = ini_int(f, kFocusMaskMargin);
     s.eyeTracking = ini_flag(f, kGaze);
     s.offset = read_focus_offset(f);
     s.gazeDeadzone = read_gaze_deadzone(f);

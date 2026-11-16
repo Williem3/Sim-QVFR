@@ -1046,7 +1046,8 @@ void execute_batch(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* 
             if (focus.copyPending.load() && !focus.saving.load())
                 focus_copy_sample();  // the sample frame's replays are all done: copy before this frame's clear
             focus_prev_copy(queue);   // last frame's focus colour, before this frame's clear
-            ID3D12CommandList* clear[] = {focus.clearList.Get(), focus.eyeClearList.Get()};
+            focus_mask_refresh();     // the focus mask's settings changed: the clear lists recorded again
+            ID3D12CommandList* clear[] = {focus_clear_list(frame), focus.eyeClearList.Get()};
             // The eye references are drawn only at sample frames: cleared only then.
             executeOriginal(queue, focus.sampleFrame.load() == frame ? 2u : 1u, clear);
             focus.clearedFrame = frame;
@@ -2328,6 +2329,10 @@ bool replay_probe_eye_region(float& fx, float& fy) {
     fy = now.on ? o.lh / o.h : 1.0f;
     return now.on;
 }
+void replay_probe_set_focus_mask(bool on, const FocusArea& area, unsigned marginTexels) {
+    replay_detail::focus_mask_set(on, area, marginTexels);  // (stored before the start too: the launch's values)
+}
+
 void replay_probe_set_box(double box, double boxY) {
     if (probeMode != 3)
         return;
@@ -2499,6 +2504,7 @@ void replay_probe_frame_end() {
                 g.samples = g.dropped = 0;
             }
         }
+        focus_mask_window_log(ended);  // replay_mask_ab: which side the window just logged was
         {  // The live periphery: the size the next frame's lists take. A new value is taken once it has stood for a
            // third of a second (stepping a menu item is one change: each makes NGX features of that size).
             static float held = 1.0f;

@@ -278,6 +278,7 @@ void load_experiment() {
         experiment.replayDlss = GetPrivateProfileIntW(L"experiment", L"replay_dlss", api, ini.c_str());
         experiment.replayEyeCapture = GetPrivateProfileIntW(L"experiment", L"replay_eye_capture", 0, ini.c_str()) != 0;
         experiment.replayGpuSteps = GetPrivateProfileIntW(L"experiment", L"replay_gpu_steps", 0, ini.c_str()) != 0;
+        experiment.replayMaskAb = GetPrivateProfileIntW(L"experiment", L"replay_mask_ab", 0, ini.c_str()) != 0;
         experiment.replayRecordTiming =
             GetPrivateProfileIntW(L"experiment", L"replay_record_timing", 0, ini.c_str()) != 0;
         experiment.replayCullProbe = GetPrivateProfileIntW(L"experiment", L"replay_cull_probe", 0, ini.c_str()) != 0;
@@ -349,6 +350,11 @@ void load_experiment() {
     experiment.feather = settings.feather;
     experiment.cornerRadius = settings.cornerRadius;
     experiment.focusShape = focus_shape_bits(settings.shape);
+    {  // the focus mask at launch (live from then on: live_apply); a game that starts later keeps it until then
+        float inset[2 * kFocusCorners];
+        focus_shape_insets(experiment.focusShape.load(), inset);
+        game->qvfr_set_focus_mask(settings.focusMask, inset, settings.cornerRadius, settings.focusMaskMargin);
+    }
     experiment.border = settings.border;
     experiment.borderAtLaunch = settings.border;
     std::memcpy(experiment.borderColor, settings.borderColor, sizeof(experiment.borderColor));
@@ -397,12 +403,14 @@ void load_experiment() {
     // the player asks for with a hotkey stay.
     if (!log_debug()) {
         const bool any = experiment.replaySaveCount || experiment.captureEverySeconds || experiment.replayEyeCapture ||
-                         experiment.replayGpuSteps || experiment.replayCullProbe || experiment.replayCull == 3 ||
+                         experiment.replayGpuSteps || experiment.replayMaskAb || experiment.replayCullProbe ||
+                         experiment.replayCull == 3 ||
                          experiment.replayCostAb || experiment.replayRecordTiming ||
                          experiment.pixCaptureFrame || (experiment.d3d11CaptureFrame && !experiment.d3d11CaptureHotkey);
         experiment.replaySaveCount = 0;
         experiment.captureEverySeconds = 0;
         experiment.replayEyeCapture = experiment.replayGpuSteps = experiment.replayCullProbe = experiment.replayCostAb = false;
+        experiment.replayMaskAb = false;
         experiment.replayRecordTiming = false;
         if (experiment.replayCull == 3)  // the alternating A/B: the culling simply on
             experiment.replayCull = 2;

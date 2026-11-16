@@ -61,12 +61,8 @@ bool mask_mesh(unsigned w, unsigned h) {
     if (mesh.size() / 2 > kMaskMaxVertices)
         m.vertices = 0;  // (never: the meshes are smaller) rather none than a cut one
     ++m.epoch;
-    // The share of the focus view masked, for the log: the texels more than the margin outside the shape.
-    int masked = 0;
-    constexpr int kGrid = 64;
-    for (int y = 0; y < kGrid; ++y)
-        for (int x = 0; x < kGrid; ++x)
-            masked += simqvfr::focus_area_inside(area, (x + 0.5) / kGrid, (y + 0.5) / kGrid) < -margin ? 1 : 0;
+    // The share of the focus view masked, for the log (as the launcher and the headset menu count it).
+    const double share = simqvfr::focus_mask_share(area, w, h, m.margin);
     char shape[160];
     if (area.corners())
         std::snprintf(shape, sizeof(shape), "corners %.0f/%.0f %.0f/%.0f %.0f/%.0f %.0f/%.0f", area.inset[0] * 100,
@@ -78,7 +74,7 @@ bool mask_mesh(unsigned w, unsigned h) {
         mesh.resize(kMaskMaxVertices * 2, 0.0f);
         g.context->UpdateSubresource(m.vb.Get(), 0, nullptr, mesh.data(), 0, 0);
         simqvfr::logf("lmu mvr: focus mask: %s, margin %u texels: %u triangles over about %.0f%% of the %ux%u focus view",
-                      shape, m.margin, m.vertices / 3, 100.0 * masked / (kGrid * kGrid), w, h);
+                      shape, m.margin, m.vertices / 3, 100.0 * share, w, h);
     } else if (m.on) {
         simqvfr::logf("lmu mvr: focus mask: %s at %ux%u leaves nothing past the %u-texel margin: none", shape, w, h,
                       m.margin);

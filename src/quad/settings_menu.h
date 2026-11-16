@@ -91,6 +91,8 @@ struct MenuValues {
     FocusOffset offset;       // [quad] fixed_offset_y, gaze_offset_y
     int gazeDeadzone = kGazeDeadzoneDefault;  // [quad] gaze_deadzone, tenths of a degree
     FocusShape shape;         // [quad] focus_shape and its corners
+    bool focusMask = kFocusMask.def != 0;        // [quad] focus_mask (read only: the pixels saved)
+    int focusMaskMargin = kFocusMaskMargin.def;  // [experiment] focus_mask_margin (likewise)
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     ClockPlacement clock;     // [clock]: the clock, on or off, and its place
     MenuPlacement placement;  // [menu]
@@ -135,6 +137,8 @@ struct MenuLaunch {
     bool sharpening = false;
     // One eye off on the Overlay and menu page (GameFeatures::eyeOff), as objectDetail.
     bool eyeOff = false;
+    // The game masks its focus views (GameFeatures::focusMask): the pixels saved leave out what the mask skips.
+    bool focusMask = false;
     // focus_layer=2 in this run: the focus quads' distance on the settings page (focus_quad_distance.h).
     bool focusQuads = false;
     // The runtime composes the views (native quad views: Pimax, Varjo): the settings page says its own sliders don't apply.

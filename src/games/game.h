@@ -38,6 +38,9 @@ struct GameFeatures {
     // The layer shows black in that eye for any game; a game with this also stops rendering most of it (LMU: no focus
     // view, its scene cut to a few pixels, no DLSS on it). Offered in the launcher and the headset menu only with this.
     bool eyeOff = false;
+    // The focus mask ([quad] focus_mask, live; quad/focus_mask.h): the focus views skip rendering their pixels outside the
+    // focus shape (pulled-in corners, rounding), so the launcher's and the headset menu's pixel counts leave them out.
+    bool focusMask = false;
 };
 
 struct GameInfo {
