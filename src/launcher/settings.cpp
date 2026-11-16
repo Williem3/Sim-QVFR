@@ -54,6 +54,8 @@ Settings load_settings(const std::wstring& ini) {
     s.sharpen = ini_int(f, kSharpenPercent);
     s.eyeOff = ini_int(f, kEyeOff);
     s.nativeQuad = std::clamp(read_int(ini, L"experiment", L"native_quad_views", 1), 0, 2);
+    if (read_int(ini, L"launcher", L"native_quad_reset", 0) == 0)  // its card is gone: an off it saved goes back to auto
+        s.nativeQuad = 1;
     s.feather = ini_int(f, kFeatherPercent);
     s.corner = ini_int(f, kCornerRadiusPercent);
     s.focusMask = ini_flag(f, kFocusMask);
@@ -153,6 +155,7 @@ bool save_settings(const std::wstring& ini, const Settings& in) {
     }
     ok &= write(ini, kEyeScale, n(s.outer));  // Two-loop's resolution; QVFR's fallback
     ok &= write(ini, L"experiment", L"native_quad_views", n(s.nativeQuad));    // LMU's, at the next launch
+    ok &= write(ini, L"launcher", L"native_quad_reset", L"1");  // the card's old off reset once (load_settings)
     ok &= write(ini, L"experiment", L"cpu_profile", s.cpuProfile ? L"1" : L"0");
     ok &= write(ini, L"experiment", L"d3d11_capture_hotkey", s.frameCapture ? L"1" : L"0");
     ok &= write(ini, L"launcher", L"baseline_next", s.baselineNext ? L"1" : L"0");

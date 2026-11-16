@@ -11,8 +11,8 @@
 - **Then pick Assetto Corsa Competizione** in the launcher's game list and click **Launch**. The launcher starts ACC
   in VR mode for you.
 - **Eye tracking works** without any other tool.
-- **On Pimax and Varjo,** Sim-QVFR puts the picture together itself in ACC (the **Let the runtime compose** option is
-  Le Mans Ultimate only).
+- **On Pimax and Varjo,** Sim-QVFR puts the picture together itself in ACC (runtime composition is Le Mans Ultimate
+  only).
 - **Online play** is at your own risk: see [Online play and anti-cheat](online-play.md).
 
 What works in ACC: the sharp area that follows your eyes, the headset menu, the performance overlay, the view crop,

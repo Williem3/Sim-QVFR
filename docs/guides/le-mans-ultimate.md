@@ -64,7 +64,7 @@ with the same options. Both are also in the headset menu.
   resolution on top of Sim-QVFR's sliders. This is LMU's own FSR, separate from Sim-QVFR's **FSR (experimental)**
   card above.
 - **MFAA** (an anti-aliasing option in the NVIDIA Control Panel) works: you can leave it on.
-- **Pimax and Varjo:** see [Let the runtime compose](headsets.md#pimax-and-varjo).
+- **Pimax and Varjo:** the headset's software composes the views itself; see [Pimax and Varjo](headsets.md#pimax-and-varjo).
 - **VectorXR** (a separate tool that adds frame generation, made-up in-between frames) works alongside. Turn it on in
   the launcher's **Game › OpenXR layers**. Use one frame generator at a time.
 - **Not in LMU:** Cheeky Foveated DLSS (it builds on a game's own DLSS, which LMU doesn't have).

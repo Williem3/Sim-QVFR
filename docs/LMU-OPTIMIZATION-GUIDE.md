@@ -96,7 +96,7 @@ How sharp the focus area is, as a share of the headset's own pixel density.
 
 - **100-140%** is the useful range when Sim-QVFR composes the picture (SteamVR and most headsets). Above about 130%
   it smooths edges more but adds little real detail, as the image is resampled to the headset's own resolution.
-- **With runtime composition** (Pimax and Varjo, **Let the runtime compose** on the Rendering card), a higher density
+- **With runtime composition** (Pimax and Varjo, automatic), a higher density
   does show more detail, as the headset's software draws the focus area at full resolution.
 
 ### 3.4 DLSS (Picture tab, DLSS) — NVIDIA RTX 20 series and newer
@@ -211,7 +211,6 @@ Use these freely to make the picture look better:
 | **Gaze dead-zone**, **Gaze offset**, **Vertical position** | Picture tab, Foveation | None. |
 | **Sharpening** | Picture tab, Resolution | A little GPU time. Crisper edges; too much makes the periphery shimmer. |
 | **Show a helmet** | Picture tab, View & helmet | Nothing for the game; the headset composites one extra layer. |
-| **Let the runtime compose** | Picture tab, Rendering (Pimax, Varjo) | Usually a sharper focus area for the same settings. With **Sharpening** on, the periphery is sharpened on a copy, which costs a little more. |
 | **Show focus outline** | Picture tab, Foveation | None, but turn it off to drive. |
 
 ---

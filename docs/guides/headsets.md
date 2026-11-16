@@ -40,13 +40,11 @@ tracking (see [Eye tracking](#eye-tracking)).
 Start Pimax Play or Varjo Base, then launch from Sim-QVFR. Eye tracking on the Pimax Crystal and Varjo headsets is
 used when it's turned on in their software.
 
-In every game, Sim-QVFR puts the picture together itself, as on any headset. **In Le Mans Ultimate only**, there's
-one more option:
+In every game, Sim-QVFR puts the picture together itself, as on any headset, except in Le Mans Ultimate:
 
-**Let the runtime compose** (Le Mans Ultimate only; the launcher's **Picture › Rendering**, on by default): Pimax's
-and Varjo's software can put the sharp area on the display themselves, at its full resolution. Sim-QVFR then hands
-them its views instead of putting the picture together itself. The sharp area is noticeably crisper this way above
-100% focus density.
+**Runtime composition** (Le Mans Ultimate only, automatic, nothing to set): Pimax's and Varjo's software puts the
+sharp area on the display itself, at its full resolution. Sim-QVFR hands it its views instead of putting the picture
+together itself, which saves the memory and GPU time of that step.
 
 - Tested on Pimax's software; Varjo's should work the same way but hasn't been tried yet (reports welcome).
 - **Keep Pimax Play's or Varjo Base's own foveated area at least as large as Sim-QVFR's focus area.** The headset
@@ -54,7 +52,7 @@ them its views instead of putting the picture together itself. The sharp area is
   too small.
 - The headset's software places the sharp area here, so Sim-QVFR's gaze dead-zone and vertical offset don't apply.
 - With frame generation (VectorXR, Cheeky's) or another OpenXR tool in between, Sim-QVFR puts the picture together
-  itself as usual. The Rendering card shows what the last launch did.
+  itself as usual. A report from **Game › Diagnostics** says what the last launch did.
 
 ## SteamVR headsets
 
