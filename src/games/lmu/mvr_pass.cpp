@@ -226,6 +226,34 @@ struct Timed {
 };
 constexpr int kGpuFrames = 4;
 
+// A game object recorded in State (`held`, its reference ours) replaced by `p`: referenced only when it changes.
+template <typename T>
+void hold(T*& held, T* p) {
+    if (p == held)
+        return;
+    if (p)
+        p->AddRef();
+    if (held)
+        held->Release();
+    held = p;
+}
+
+// The class instances likewise: `count` of `src` (null: none) in place of the `heldCount` held (nothing to do with none,
+// LMU's case). `src` mustn't be `held`.
+void hold_instances(ID3D11ClassInstance** held, UINT& heldCount, ID3D11ClassInstance* const* src, UINT count) {
+    for (UINT i = 0; src && i < count; ++i)
+        if (src[i])
+            src[i]->AddRef();
+    for (UINT i = 0; i < heldCount; ++i)
+        if (held[i])
+            held[i]->Release();
+    for (UINT i = 0; i < count; ++i)
+        held[i] = src ? src[i] : nullptr;
+    for (UINT i = count; i < heldCount; ++i)
+        held[i] = nullptr;
+    heldCount = count;
+}
+
 struct State {
     ID3D11DeviceContext* context = nullptr;  // the game's immediate context (not referenced: the device keeps it)
     ComPtr<ID3D11Multithread> multithread;   // its multithread protection (logged when it changes)
@@ -256,7 +284,9 @@ struct State {
     bool drawFocus = false, sample = false, replaceResolve = false;
     uint64_t passTwinBinds = 0;  // this pass's draws that drew the focus view too
     MvrPassView view, viewOf[2];
-    // What the game bound (raw: bound objects are kept alive by the pipeline).
+    // What the game bound. gameVs, gamePs, gameBlend and their class instances are held (one reference each, taken when
+    // recorded, given back when replaced: hold / hold_instances): while a twin is bound in their place the pipeline
+    // holds the twin, not them, and LMU releases its shaders at any time; the twins live as their private data.
     ID3D11VertexShader* gameVs = nullptr;
     VsRole vsRole = VsRole::none;  // the game's bound vertex shader's role, in and outside the passes (R6)
     ID3D11ClassInstance* instances[256] = {};
@@ -275,7 +305,7 @@ struct State {
     // bound, this pass's bias (from its view), and the constants (focus viewport, focus and eye bias) as uploaded.
     bool biasHooks = false, bias = false, biasCbBound = false;
     uint32_t biasChecks = 0;  // twin binds, every 16th checking the buffer is still bound
-    ID3D11PixelShader* gamePs = nullptr;
+    ID3D11PixelShader* gamePs = nullptr;  // held, like gameVs
     ID3D11PixelShader* boundPs = nullptr;
     ID3D11ClassInstance* psInstances[256] = {};
     UINT psInstanceCount = 0;
@@ -336,7 +366,7 @@ struct State {
     ID3D11Resource* sceneCheckedAgainst = nullptr;  // the tracker's scene target it was checked against (raw)
     ID3D11Resource* sceneRtvResource = nullptr;     // that view's texture (raw, compared only) and its description
     D3D11_TEXTURE2D_DESC sceneRtvDesc{};
-    ID3D11BlendState* gameBlend = nullptr;  // raw: bound, so alive
+    ID3D11BlendState* gameBlend = nullptr;  // held, like gameVs (its twin is bound in its place)
     float blendFactor[4] = {1, 1, 1, 1};
     UINT sampleMask = 0xffffffff;
     bool blendSwapped = false, depthWrites = true;
@@ -443,6 +473,8 @@ struct State {
     bool have[4] = {};
     unsigned long long lastStatsFrame = 0;
     MvrPassStats stats;
+    // No destructor gives the held game objects back: g lives until the process ends, and calling into d3d11 from
+    // DLL_PROCESS_DETACH risks its locks (held by threads ExitProcess already ended); the references go with the process.
 } g;
 
 bool ours(ID3D11DeviceContext* context) {
@@ -1516,10 +1548,8 @@ void STDMETHODCALLTYPE ps_set_shader(ID3D11DeviceContext* context, ID3D11PixelSh
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.gamePs = ps;
-    g.psInstanceCount = std::min<UINT>(count, 256);
-    for (UINT i = 0; i < g.psInstanceCount; ++i)
-        g.psInstances[i] = instances ? instances[i] : nullptr;
+    hold(g.gamePs, ps);
+    hold_instances(g.psInstances, g.psInstanceCount, instances, std::min<UINT>(count, 256));
     g.boundPs = reinterpret_cast<ID3D11PixelShader*>(~uintptr_t{0});  // the game's call always takes effect
     update_ps();
 }
@@ -1689,7 +1719,7 @@ using DepthFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11DepthStenci
 inline void om_set_blend_state(BlendFn real, ID3D11DeviceContext* context, ID3D11BlendState* bs, const FLOAT* factor,
                                UINT mask) {
     if (context == g.context && !g.replaying) {
-        g.gameBlend = bs;
+        hold(g.gameBlend, bs);
         for (int i = 0; i < 4; ++i)
             g.blendFactor[i] = factor ? factor[i] : 1.0f;
         g.sampleMask = mask;
@@ -2006,10 +2036,8 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
     }
     Timed timed(g.time.hooks);
     ++g.time.calls;
-    g.gameVs = vs;
-    g.instanceCount = std::min<UINT>(count, 256);
-    for (UINT i = 0; i < g.instanceCount; ++i)
-        g.instances[i] = instances ? instances[i] : nullptr;
+    hold(g.gameVs, vs);
+    hold_instances(g.instances, g.instanceCount, instances, std::min<UINT>(count, 256));
     g.boundVs = reinterpret_cast<ID3D11VertexShader*>(~uintptr_t{0});  // the game's call always takes effect
     update();
 }
@@ -4214,24 +4242,31 @@ void unhook_entries() {
     }
 }
 
+// The pixel shader bound now and its class instances, held in g (the Get's references given back).
+void read_ps_binding() {
+    ID3D11PixelShader* ps = nullptr;
+    ID3D11ClassInstance* got[256] = {};
+    UINT count = 256;
+    g.context->PSGetShader(&ps, got, &count);
+    count = std::min<UINT>(count, 256);
+    hold(g.gamePs, ps);
+    hold_instances(g.psInstances, g.psInstanceCount, got, ps ? count : 0);
+    for (UINT i = 0; i < count; ++i)
+        if (got[i])
+            got[i]->Release();
+    if (ps)
+        ps->Release();
+    g.boundPs = ps;
+}
+
 // The game's bindings as the pass starts (the hooks only see later changes).
 void read_bindings() {
-    if (g.biasHooks || g.slotsOn) {  // the pixel shader bound as the pass starts (set outside the passes, not seen)
-        ID3D11PixelShader* ps = nullptr;
-        UINT count = 256;
-        g.context->PSGetShader(&ps, g.psInstances, &count);
-        g.psInstanceCount = ps ? count : 0;
-        for (UINT i = 0; i < g.psInstanceCount; ++i)
-            if (g.psInstances[i])
-                g.psInstances[i]->Release();  // raw, like the game's own bindings
-        if (ps)
-            ps->Release();
-        g.gamePs = g.boundPs = ps;
-    }
+    if (g.biasHooks || g.slotsOn)  // the pixel shader bound as the pass starts (set outside the passes, not seen)
+        read_ps_binding();
     if (g.slotsOn) {  // car slots: the blend state (its twin goes in its place) and whether the depth state writes
         ID3D11BlendState* bs = nullptr;
         g.context->OMGetBlendState(&bs, g.blendFactor, &g.sampleMask);
-        g.gameBlend = bs;  // raw, like the game's own bindings
+        hold(g.gameBlend, bs);
         if (bs)
             bs->Release();
         ID3D11DepthStencilState* ds = nullptr;
@@ -4242,15 +4277,20 @@ void read_bindings() {
             ds->Release();
     }
     ID3D11VertexShader* vs = nullptr;
-    UINT count = 256;
-    g.context->VSGetShader(&vs, g.instances, &count);
-    g.instanceCount = vs ? count : 0;
-    for (UINT i = 0; i < g.instanceCount; ++i)
-        if (g.instances[i])
-            g.instances[i]->Release();  // raw, like the game's own bindings
-    if (vs)
-        vs->Release();
-    g.gameVs = g.boundVs = vs;
+    {
+        ID3D11ClassInstance* got[256] = {};
+        UINT count = 256;
+        g.context->VSGetShader(&vs, got, &count);
+        count = std::min<UINT>(count, 256);
+        hold(g.gameVs, vs);
+        hold_instances(g.instances, g.instanceCount, got, vs ? count : 0);
+        for (UINT i = 0; i < count; ++i)
+            if (got[i])
+                got[i]->Release();
+        if (vs)
+            vs->Release();  // g's own reference keeps it (vs is used below)
+    }
+    g.boundVs = vs;
     {
         const TwinEntry* e = vs ? &shader_entry(vs) : nullptr;
         g.vsRole = e ? e->role : VsRole::none;
@@ -4280,18 +4320,6 @@ void read_bindings() {
         g.iaIbOffset = ibOffset;
         if (ib)
             ib->Release();
-    }
-    if (g.biasHooks) {  // texture sharpening: the pixel shader the pass starts with
-        ID3D11PixelShader* ps = nullptr;
-        UINT psCount = 256;
-        g.context->PSGetShader(&ps, g.psInstances, &psCount);
-        g.psInstanceCount = ps ? psCount : 0;
-        for (UINT i = 0; i < g.psInstanceCount; ++i)
-            if (g.psInstances[i])
-                g.psInstances[i]->Release();
-        if (ps)
-            ps->Release();
-        g.gamePs = g.boundPs = ps;
     }
     ID3D11DepthStencilView* dsv = nullptr;
     g.context->OMGetRenderTargets(0, nullptr, &dsv);
