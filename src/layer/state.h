@@ -746,6 +746,8 @@ struct Menu {
 };
 
 inline constexpr int64_t kMenuHideMs = 6000, kRepeatDelayMs = 400, kRepeatMs = 90;
+// With the performance overlay on, the menu stays this long after the last press: a step, then its frame times.
+inline constexpr int64_t kMenuHideOverlayMs = 15000;
 
 // ---- Performance overlay ---------------------------------------------------------------------
 // [osd] (quad/osd.h): a head-locked card where the launcher's Headset menu pane or the menu places it, redrawn every kOsdDrawMs from the
@@ -897,6 +899,9 @@ extern uint64_t locates;
 extern CpuTimes cpu;
 extern Pacing pacing;
 extern SessionSummary summary;
+// The settings' generation for the session record's stints (quad/session_stint.h): live_reload counts a change of a
+// setting that changes the picture or its cost; the report windows of an older one end its stint.
+extern std::atomic<uint32_t> stintGeneration;
 extern std::string layersBelow;
 extern IDXGIAdapter3* vramAdapter;
 extern bool visibilityMaskLogged;

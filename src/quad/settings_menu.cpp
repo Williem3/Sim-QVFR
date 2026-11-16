@@ -94,7 +94,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::HelmetHeight, L"Helmet height", -kHelmetHeightMax, kHelmetHeightMax, 1},
     {MenuItem::HelmetDepth, L"Helmet depth", 0, kHelmetDepthMax, 1},
     {MenuItem::HelmetDetail, L"Helmet detail", 0, 1, 1},
-    {MenuItem::Optimize, L"Optimize for frame rate", 0, 0, 1},
+    {MenuItem::Optimize, L"Auto-fit to headset rate", 0, 0, 1},
     {MenuItem::Profile, L"Profile", 0, 0, 1},
     {MenuItem::HotkeyFooter, L"Hotkeys footer", 0, 1, 1},
     spec_of(MenuItem::CpuIsolateMain, L"Main thread core", kCpuIsolateMain),
@@ -825,7 +825,7 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
         if (items[i] == MenuItem::Page)
             line.value = page_name(menu, menu_page(menu));
         else if (items[i] == MenuItem::Optimize)
-            line.value = menu.optimizeStatus.empty() ? L"Right: run · Left: undo" : menu.optimizeStatus;
+            line.value = menu.optimizeStatus.empty() ? L"Right: start · Left: undo" : menu.optimizeStatus;
         else if (items[i] == MenuItem::Profile)
             line.value = menu.profile < 0 || menu.profile >= static_cast<int>(menu.profiles.size())
                              ? L"Your own"

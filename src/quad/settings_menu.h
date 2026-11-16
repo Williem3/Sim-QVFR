@@ -110,6 +110,7 @@ struct MenuValues {
     // The outer views' kept share of the eye (percent; 100 without a crop).
     double crop_width() const { return crop ? 100.0 - cropOuter - cropInner : 100.0; }
     double crop_height() const { return crop ? 100.0 - cropTop - cropBottom : 100.0; }
+    bool operator==(const MenuValues&) const = default;
 };
 
 // What the running game launched with: the outer and focus views' sizes, percent of the native eye
@@ -182,6 +183,10 @@ struct SettingsMenu {
     std::wstring optimizeDetail;  // what it measured and did, under the title of the settings page (empty: none)
     std::wstring dlssState;  // the API path: what DLSS runs on the periphery and the focus views (empty: nothing to say)
     std::wstring notice;  // a passing message under the title of any page (a CPU capture running or done; empty: none)
+    // The frame times beside the title (osd_menu_line; with the overlay off, how to see them), and whether they're over
+    // the budget (in red).
+    std::wstring frameLine;
+    bool frameBad = false;
     int optimizeRequest = 0;      // set by menu_key on Optimize: 1 run or stop, -1 undo; the layer takes it
     // The profiles' names (the presets first), the one in use (-1: none) and whether a value changed since, and
     // the one Left/Right stepped to, for the layer to use (-1: none; it takes it, as optimizeRequest).

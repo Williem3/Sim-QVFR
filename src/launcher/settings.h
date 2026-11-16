@@ -190,9 +190,13 @@ struct Size {
 };
 
 // The last session's measurements (runtime.ini's session_* keys, the layer's write_session_summary, updated
-// every ~10 s while ACE runs): for the Diagnostics pane and a summary users can paste. -1: not measured.
+// every ~10 s while ACE runs): for the Diagnostics pane and a summary users can paste. -1: not measured. They cover
+// the session's latest stint (quad/session_stint.h): the driving since the last settings change, the headset menu's
+// windows left out.
 struct SessionInfo {
     std::wstring time, mode, limited, layersBelow, log, cpuProfile;
+    int stint = 0;        // the stint's number in the session (1 the first; 0 a layer from before stints)
+    double seconds = -1;  // how long it ran, without the menu's windows
     double fps = -1, frameP50 = -1, frameP90 = -1, latePercent = -1, refreshHz = -1;
     double halfRatePercent = -1;  // the session's frames the runtime ran the game at half rate (or slower)
     double cpuMs = -1, gpuMs = -1, gpuBusy = -1, cores = -1, gazeMs = -1, layerMs = -1;

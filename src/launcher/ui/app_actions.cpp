@@ -191,7 +191,7 @@ void record_session() {
     const SessionInfo& s = app.runtime.session;
     if (!app.iniFound || !s.known())
         return;
-    const std::wstring id = session_id(s.log);
+    const std::wstring id = session_record_id(s);
     if (id.empty())
         return;
     for (const SessionRecord& r : app.sessions)

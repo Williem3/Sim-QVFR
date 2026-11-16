@@ -43,7 +43,7 @@ int SIM_QVFR_TEST_MAIN() {
         check(!menu_key(o, MenuKey::Right) && o.optimizeRequest == 1 && o.values.periphery == before.periphery,
               "Optimize: Right asks the layer to run it, no value changes");
         check(!menu_key(o, MenuKey::Left) && o.optimizeRequest == -1, "Optimize: Left asks to undo");
-        check(menu_lines(o).back().label == L"Optimize for frame rate" && !menu_lines(o).back().value.empty(),
+        check(menu_lines(o).back().label == L"Auto-fit to headset rate" && !menu_lines(o).back().value.empty(),
               "Optimize's line before a run: how to use it");
         o.optimizeStatus = L"Running…";
         o.optimizeDetail = L"Measuring… keep driving";

@@ -36,7 +36,8 @@ void text(HDC dc, HFONT font, const std::wstring& s, int left, int top, int righ
 std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResolution& resolution,
                                       const MenuStats& stats, const std::vector<MenuLine>& lines,
                                       const std::vector<std::wstring>& notes, const std::wstring& hint,
-                                      const std::wstring& subtitle, const std::wstring& footer) {
+                                      const std::wstring& subtitle, const std::wstring& footer,
+                                      const std::wstring& frame, bool frameBad) {
     std::vector<uint32_t> out(static_cast<size_t>(kPanelWidth) * kPanelHeight, 0);
     BITMAPINFO bi{};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -63,10 +64,18 @@ std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResol
     SetBkMode(dc, TRANSPARENT);
     fill(dc, 0, 0, kPanelWidth, kPanelHeight, kBackground);
     text(dc, titleFont, title, kMargin, 16, kPanelWidth - kMargin, 16 + kTitleHeight, kLabel, DT_LEFT);
+    // The frame times, from the performance overlay, beside the title: a step's effect without turning to the overlay.
+    if (!frame.empty()) {  // right-aligned, after the title (the longest, "QVFR (API path) settings", leaves ~480 px)
+        SelectObject(dc, titleFont);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, title.c_str(), static_cast<int>(title.size()), &size);
+        text(dc, smallFont, frame, kMargin + static_cast<int>(size.cx) + 28, 16, kPanelWidth - kMargin, 16 + kTitleHeight,
+             frameBad ? kCapped : kDim, DT_RIGHT | DT_END_ELLIPSIS);
+    }
     int y = 16 + kTitleHeight;
     // ACE's render target: the most this launch allows and what renders now.
     if (resolution.shown) {
-        text(dc, smallFont, L"Max  " + resolution.max, kMargin, y, kPanelWidth / 2, y + 36, kDim, DT_LEFT);
+        text(dc, smallFont, L"Launch max  " + resolution.max, kMargin, y, kPanelWidth / 2, y + 36, kDim, DT_LEFT);
         text(dc, smallFont, L"Now  " + resolution.current, kPanelWidth / 2, y, kPanelWidth - kMargin, y + 36, kLabel,
              DT_RIGHT);
         y += 36;

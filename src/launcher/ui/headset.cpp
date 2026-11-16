@@ -25,7 +25,8 @@ Card menu_card() {
         b.toggle(kHotkeyFooter, L"Show the hotkeys under the menu", app.s.hotkeyFooter,
                  L"The in-game hotkeys and their wheel buttons, on a line under it.");
         b.note(L"Ctrl+Alt+arrows (or your keys and wheel buttons below) open it while the game has focus, or a click of the "
-               L"left stick; the right stick selects and changes. It hides after a few seconds.");
+               L"left stick; the right stick selects and changes. It hides 6 s after your last press, 15 s with the performance overlay on, which "
+               L"also puts the frame times beside its title.");
     };
     c.reset = [](Settings& s) {
         const Settings d;

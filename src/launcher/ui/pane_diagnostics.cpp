@@ -116,7 +116,7 @@ namespace {
 
 // The last session's record in the history (runtime.ini's session), -1: not kept (no ini, or not measured).
 int last_session_index() {
-    const std::wstring id = session_id(app.runtime.session.log);
+    const std::wstring id = session_record_id(app.runtime.session);
     for (size_t i = 0; !id.empty() && i < app.sessions.size(); ++i)
         if (app.sessions[i].id == id)
             return static_cast<int>(i);
@@ -273,7 +273,9 @@ Card diagnostics_card() {
                     std::wstring value = formatted(L"%.1f fps", r.fps);
                     if (r.frameP90 > 0)
                         value += formatted(L"  ·  %.2f ms", r.frameP90);
-                    b.row(r.time + (static_cast<int>(i) == now ? L"  ·  last" : L""), desc, value);
+                    const std::wstring stint = stint_text(r);
+                    b.row(r.time + (stint.empty() ? L"" : L"  ·  " + stint) + (static_cast<int>(i) == now ? L"  ·  last" : L""),
+                          desc, value);
                 }
             }
         }

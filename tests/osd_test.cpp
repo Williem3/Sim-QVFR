@@ -1,13 +1,16 @@
 // Offline check of the performance overlay (quad/osd.h): frame rate, pacing and headroom from frame
 // times, which processor limits the frame, the rows' states, the [osd] round trip, and that the card
 // draws with rounded, see-through corners.
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 
 #include "quad/osd.h"
+#include "quad/session_stint.h"
 #include "test_util.h"
 
 using namespace simqvfr;
@@ -477,6 +480,57 @@ int SIM_QVFR_TEST_MAIN() {
               "the notice card: a yellow title, the first paragraph in white, rounded corners");
         if (wchar_t path[MAX_PATH] = {}; GetEnvironmentVariableW(L"SIMQVFR_NOTICE_SAVE", path, MAX_PATH))
             save_card(path, pixels);
+    }
+    {  // The headset menu's frame line: GPU, CPU, what is left of the budget, the missed share
+        OsdSummary s;
+        s.fps = 90;
+        s.budgetMs = 11.1;
+        s.gpuMs = 9.8;
+        s.cpuMs = 7.1;
+        bool bad = true;
+        check(osd_menu_line(s, bad) == L"GPU 9.8 ms · CPU 7.1 ms · 1.3 ms left · 0% missed" && !bad,
+              "menu line: the times and the headroom");
+        s.gpuMs = 11.9;
+        s.missedPercent = 4;
+        check(osd_menu_line(s, bad) == L"GPU 11.9 ms · CPU 7.1 ms · 0.8 ms over · 4% missed" && bad,
+              "menu line: over the budget, in red");
+        s.fps = 0;
+        check(osd_menu_line(s, bad).empty(), "menu line: nothing before the overlay has frames");
+    }
+    {  // The session record's stint: whole stints, the menu's windows left out, a settings change a new one
+        SessionStint st;
+        const std::vector<float> fast(900, 11.111f), slow(900, 22.222f);
+        const auto window = [](const std::vector<float>& v, double gpu) {
+            return StintWindow{&v, 11.111, 0, 6.0, gpu, 80, 2};
+        };
+        st.add(0, false, window(fast, 9));
+        st.add(0, true, window(slow, 20));  // the menu was open: not the drive's
+        st.add(0, false, window(fast, 10));
+        StintNumbers n = st.numbers();
+        check(st.known() && n.index == 1 && std::fabs(n.fps - 90) < 0.1 && std::fabs(n.seconds - 20) < 0.1 &&
+                  n.latePercent == 0 && std::fabs(n.gpuMs - 9.5) < 1e-6,
+              "stint: two windows' frames, the menu's window left out, the GPU time frame-weighted");
+        st.add(1, false, window(slow, 20));  // a settings change: this window straddles it, dropped
+        check(!st.known() && st.numbers().index == 2, "stint: a change starts the next stint, its first window dropped");
+        st.add(1, false, window(slow, 20));
+        n = st.numbers();
+        check(n.index == 2 && std::fabs(n.fps - 45) < 0.1 && n.latePercent == 100 && std::fabs(n.frameP90 - 22.222) < 1e-3,
+              "stint: the new stint's own numbers");
+        st.add(2, true, window(fast, 9));
+        st.add(3, false, window(fast, 9));  // a stint with no windows of its own doesn't count
+        check(st.numbers().index == 3, "stint: an empty stint keeps its number for the next");
+        // A long stint: past the sample's size the frames are thinned evenly, the numbers stay the stint's.
+        SessionStint longer;
+        std::vector<float> mixed(900, 11.111f);
+        for (size_t i = 0; i < mixed.size(); i += 5)
+            mixed[i] = 22.222f;  // one frame in five slow
+        for (int i = 0; i < 40; ++i)  // 36000 frames, past kMaxFrames
+            longer.add(0, false, window(mixed, 9));
+        n = longer.numbers();
+        check(std::fabs(n.seconds - 36000 * (0.8 * 11.111 + 0.2 * 22.222) / 1000) < 0.5 &&
+                  std::fabs(n.latePercent - 20) < 0.01 && std::fabs(n.frameP90 - 22.222) < 1e-3 &&
+                  std::fabs(n.frameP50 - 11.111) < 1e-3,
+              "stint: a long stint, its percentiles from an even sample");
     }
     std::printf(failures ? "%d FAILED\n" : "all passed\n", failures);
     return failures ? 1 : 0;

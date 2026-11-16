@@ -271,7 +271,7 @@ void menu_open(int64_t now) {
         menu.visible = menu.dirty = true;
         log_line("settings menu: open");
     }
-    menu.hideAt = now + qpc_ms(kMenuHideMs);
+    menu.hideAt = now + qpc_ms(menu_hide_ms());
 }
 
 void menu_press(MenuKey key, int64_t now) {
@@ -279,7 +279,7 @@ void menu_press(MenuKey key, int64_t now) {
         menu_open(now);
         return;
     }
-    menu.hideAt = now + qpc_ms(kMenuHideMs);
+    menu.hideAt = now + qpc_ms(menu_hide_ms());
     menu.dirty = true;
     if (!menu_key(menu.model, key)) {
         menu_profile_use();
@@ -523,12 +523,14 @@ void menu_render() {
         std::lock_guard guard(quad.mutex);
         menu.model.launch.helmetPieces = quad.helmetPiecesLoaded;
     }
+    menu_frame_line();
     const std::vector<uint32_t> pixels = draw_menu_panel(title, menu_resolution(menu.model), menu_stats(menu.model),
                                                          menu_lines(menu.model),
                                                          menu_notes(menu.model), hint, menu_subtitle(menu.model),
                                                          menu.model.values.hotkeyFooter
                                                              ? hotkey_footer(menu.model.values.helmet.on && experiment.composing())
-                                                             : L"");
+                                                             : L"",
+                                                         menu.model.frameLine, menu.model.frameBad);
     uint32_t index = 0;
     hang_watch_stage("menu panel: xrAcquireSwapchainImage");
     // A timed-out wait leaves the image acquired, not waited for: not released, waited on again at the next draw.

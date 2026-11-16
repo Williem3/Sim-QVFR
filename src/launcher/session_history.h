@@ -21,12 +21,14 @@ inline constexpr int kSessionHistory = 12;  // every game's together; the pane l
 inline constexpr int kSessionRows = 5;
 
 struct SessionRecord {
-    std::wstring id;    // its log's name without .log ("session-20261107-101500")
+    std::wstring id;    // its log's name without .log ("session-20261107-101500"), "-s02" on for its second stint on
     std::wstring game;  // the game's id ("ace")
     std::wstring time, mode;
     bool baseline = false;  // without QVFR: the game's own two views (Next launch without QVFR)
     double fps = -1, frameP50 = -1, frameP90 = -1, latePercent = -1, cpuMs = -1, gpuMs = -1;
     std::wstring limited;
+    int stint = 0;        // the stint's number in its session (0: a record from before stints)
+    double seconds = -1;  // the stint's length (-1: not known)
     Settings settings;
     // The same numbers as `session` (nothing new to store).
     bool same_numbers(const SessionInfo& session) const;
@@ -36,6 +38,10 @@ struct SessionRecord {
 std::wstring sessions_folder(const std::wstring& settingsIni);
 // A session's id from runtime.ini's session_log (the log's file name without .log); empty without one.
 std::wstring session_id(const std::wstring& log);
+// A record's id: the session's, with "-s02" on for its second stint on (record files sort newest first by name).
+std::wstring session_record_id(const SessionInfo& session);
+// "Stint 2 · 6 min", "4 min", "45 s": a record's stint and length for the lists (empty: neither known).
+std::wstring stint_text(const SessionRecord& record);
 // The run folder's copy of the ini for a session's log (logs\run-<stamp>\sim-qvfr.ini), where the launch wrote the
 // game's id; empty if `log` isn't a session log.
 std::wstring session_run_ini(const std::wstring& log);

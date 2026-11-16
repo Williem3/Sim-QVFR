@@ -376,6 +376,34 @@ std::vector<OsdRow> osd_rows(const OsdInput& in, const OsdSummary& s) {
     return rows;
 }
 
+std::wstring osd_menu_line(const OsdSummary& s, bool& bad) {
+    bad = false;
+    if (s.fps <= 0)
+        return L"";
+    const double cpu = std::max(s.cpuMs, s.cpuThreadMs);
+    std::wstring line;
+    const auto ms = [](double v) {
+        wchar_t text[32];
+        swprintf_s(text, L"%.1f ms", v);
+        return std::wstring(text);
+    };
+    if (s.gpuMs >= 0)
+        line += L"GPU " + ms(s.gpuMs);
+    if (cpu >= 0)
+        line += (line.empty() ? L"CPU " : L" \u00b7 CPU ") + ms(cpu);
+    const double used = std::max(s.gpuMs, cpu);
+    if (s.budgetMs > 0 && used >= 0) {
+        const double left = s.budgetMs - used;
+        line += (line.empty() ? L"" : L" \u00b7 ") + (left >= 0 ? ms(left) + L" left" : ms(-left) + L" over");
+        bad = left < 0;
+    }
+    wchar_t missed[32];
+    swprintf_s(missed, L"%.0f%% missed", s.missedPercent);
+    line += (line.empty() ? L"" : L" \u00b7 ") + std::wstring(missed);
+    bad = bad || s.missedPercent >= 1;
+    return line;
+}
+
 std::wstring osd_clock(int hour, int minute) {
     hour = ((hour % 24) + 24) % 24;
     const int twelve = hour % 12 == 0 ? 12 : hour % 12;

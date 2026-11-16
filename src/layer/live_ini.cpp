@@ -244,6 +244,42 @@ void ini_worker_loop() {
     }
 }
 
+// The session record's stints (quad/session_stint.h): a new one when a setting that changes the picture or its cost
+// changes. Not the panels' places, the in-game hotkeys' footer or the focus outline. The first snapshot after the
+// launch is compared with the ini as the launch read it (read once, here).
+struct StintKey {
+    MenuValues menu;
+    CheekySettings cheeky;
+    bool operator==(const StintKey&) const = default;
+};
+std::optional<StintKey> stintKey;
+
+StintKey stint_key(MenuValues values, const CheekySettings& cheeky) {
+    values.overlay = {};
+    values.clock = {};
+    values.placement = {};
+    values.hotkeyFooter = true;
+    values.outline = false;
+    return {values, cheeky};
+}
+
+}  // namespace
+
+void stint_key_init() {
+    if (!stintKey && !live.ini.empty())
+        stintKey = stint_key(read_menu_values(live.ini.c_str()), read_cheeky_settings(live.ini.c_str()));
+}
+
+namespace {
+
+void stint_check(const IniSnapshot& s) {
+    const StintKey key = stint_key(s.menu, s.cheeky);
+    if (stintKey && *stintKey == key)
+        return;
+    stintKey = key;  // without a key from the launch (a change before the first report): a new stint all the same
+    stintGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
 // Starts the worker (once) and points it at `ini`, read from `written` on (a new path drops what it read).
 // Under iniWorker.mutex.
 void ini_worker_watch(const std::wstring& ini, const FILETIME& written) {
@@ -312,6 +348,7 @@ void live_reload() {
     }
     if (!s)
         return;
+    stint_check(*s);
     live_apply(s->live);
     cheeky_apply_settings(s->cheeky, s->live.gaze);
     if (experiment.views4 && game_features().sideLoadedDlss) {

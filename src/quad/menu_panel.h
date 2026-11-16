@@ -25,7 +25,8 @@ inline constexpr int kPanelWidth = 1024, kPanelHeight = 1072;  // up to 13 lines
 std::vector<uint32_t> draw_menu_panel(const std::wstring& title, const MenuResolution& resolution,
                                       const MenuStats& stats, const std::vector<MenuLine>& lines,
                                       const std::vector<std::wstring>& notes, const std::wstring& hint,
-                                      const std::wstring& subtitle = L"", const std::wstring& footer = L"");
+                                      const std::wstring& subtitle = L"", const std::wstring& footer = L"",
+                                      const std::wstring& frame = L"", bool frameBad = false);
 
 // Copies a panel image (RGBA8, width x height) into a swapchain image of the session's API. D3D12: on the game's
 // queue, the image kept in D3D12_RESOURCE_STATE_RENDER_TARGET around the copy, as OpenXR requires for a colour
