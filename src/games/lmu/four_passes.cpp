@@ -2,9 +2,6 @@
 
 #include <windows.h>
 #include <d3d11.h>
-#include <intrin.h>
-
-#include <MinHook.h>
 
 #include <algorithm>
 #include <atomic>
@@ -21,8 +18,6 @@
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
-#include "../../probe/run_exit.h"
-#include "../../quad/d3d11_view_resample.h"
 #include "../../quad/eye_off.h"
 #include "../../sha256_file.h"
 #include "abi.h"
@@ -35,23 +30,16 @@
 #include "mvr_pass.h"
 #include "mvr_recovery.h"
 #include "mvr_probe.h"
-#include "tag_viewport.h"
 #include "four_passes_internal.h"
 
 namespace lmu {
 namespace four_passes_detail {
 
-using RenderSceneFn = void (*)(void* arg, char laterEye);
-using TargetFn = void* (*)(void* renderer);
-using HistoryCtorFn = void (*)(void* record);
-using SetDeltaTimeFn = long (*)(void* postEffect, float seconds);
-using MaskDrawFn = void (*)(void* mask, void* camera);
-
 bool installed = false;
 FourPassesRun cfg;           // the run's settings (four_passes.h)
 bool qvfrMode = false;       // QVFR: four passes every frame, composed (no samples)
 // The frame capture hotkey (d3d11_capture_hotkey=1): the arm last acted on (capture_views), and as this frame's pass 0
-// read it (render_scene), so the views and the glare read back pass by pass are of one frame.
+// read it (pass_begin), so the views and the glare read back pass by pass are of one frame.
 std::uint64_t seenCaptureArm = 0;
 std::uint64_t frameCaptureArm = 0;
 bool capture_due(std::uint64_t arm) { return arm != seenCaptureArm && arm != 0 && arm != 0xFFFFFFFFull; }
@@ -65,15 +53,7 @@ double focusFractionY = 0;
 float gazeTan[2][2] = {};
 bool gazeValid[2] = {};
 
-// The eye loop's pass count, switched per frame: two (the stock loop, full frame rate) except in the short windows
-// before each sample, where four. It's the immediate of the tail stub's last `cmp edi, n`, in our own stub memory
-// (read-write-execute), written on the render thread between frames.
 unsigned long long sceneFrames = 0;  // frames that rendered the 3D scene (the eye loop ran)
-
-// Passes 2-3 render with YEBIS's frame time held near zero, so its auto exposure (one state for both eyes) isn't
-// advanced again by the extra passes: they use the exposure their eye just had, and a focus view can't pull it toward
-// its box. Not 0: YEBIS treats <= 0 as paused and divides by it elsewhere (docs/recon-lmu.md "[Post-effect time]").
-bool inPass = false;       // a pass of the eye loop is rendering (render thread)
 
 // QVFR: the mask's own FOV. VR_Init turns the runtime's mesh (tangents) into screen space with the FOV it just located,
 // so the mask fits only that FOV: after a live FOV crop change it would black out what the lens shows. Under liveMutex,
@@ -87,16 +67,14 @@ bool maskStaleLogged = false;
 int maskStaleThisFrame = 0;
 
 
-// The render thread's view of the frame (render_scene and frame_end both run on it; checked).
+// The render thread's view of the frame (pass_begin and frame_end both run on it; checked).
 unsigned long renderThread = 0;
 // xrEndFrame on another thread than the passes' (known once a pass ran): the immediate context is the render thread's,
 // so the frame end's context work waits for a frame end on it and the atlas isn't made (the eyes submitted alone).
 bool off_render_thread() { return renderThread && GetCurrentThreadId() != renderThread; }
-int pass = -1;  // this frame's pass, 0-3
 int passesThisFrame = 0;
 int eyeOfPass[4] = {-1, -1, -1, -1};
-unsigned long long frames = 0, fourPassFrames = 0, comparisons = 0;
-ID3D11Texture2D* copies[4] = {};
+unsigned long long frames = 0;
 
 std::uintptr_t base() { return simqvfr::module_base(); }
 
@@ -144,11 +122,10 @@ float* slot_matrix(int eye, int kind) {
 }
 
 FocusBox boxes[2];
-float saved[2][2][16];
 bool shapeLogged = false;
 
-// MVR (lmu_mvr): both eyes' focus projections taken once at pass 0, so the focus view drawn in its eye's pass and the
-// one pass 2/3 renders use the same box (the gaze moves between them).
+// Both eyes' focus projections taken once at pass 0, so both eye passes and the frame's record use the same boxes (the
+// gaze moves between them).
 float frozenFocus[2][2][16];
 FocusBox frozenBox[2];
 ClipRemap frozenRemap[2];
@@ -214,9 +191,7 @@ void freeze_focus() {
 ID3D11Texture2D* atlas = nullptr;
 unsigned viewW = 0, viewH = 0;  // every view's size (the eye targets')
 DXGI_FORMAT atlasFormat = DXGI_FORMAT_UNKNOWN;
-bool eyesInAtlas = false;   // this frame's eyes are in the top row while the focus views use their targets
-bool frameFocusOk = false;  // this frame's focus passes rendered with their focus projections
-bool atlasReady = false;    // this frame's four views are in the atlas, until the layer takes it
+bool atlasReady = false;    // this frame's focus finals are both made, until the layer takes them into the atlas
 unsigned long long composedFrames = 0, refusedFrames = 0;
 bool atlasRefusalLogged = false, atlasThreadLogged = false, frameEndThreadLogged = false;
 
@@ -452,30 +427,13 @@ unsigned long long mvrRoomRefused = 0, mvrRoomRefusedLater = 0, mvrNoBox = 0;
 char mvrLastRefusal[160] = {};  // the last refusal's sizes
 // Two-pass frames without both focus finals, by the first reason found (after_two_passes); and those with both.
 unsigned long long finalsNoBlit = 0, finalsNoBox = 0, finalsOutside = 0, finalsNoViews = 0, finalsBoth = 0;
-// R4a (FourPassesRun::focusFinal, docs/recon-lmu.md "R4 plan"): this frame runs the game's two eye passes only, its
-// focus views the focus finals beside the eyes (mvr_focus_final); the atlas takes them from there.
-bool atlasFromFinals = false;
+// R4a (docs/recon-lmu.md "R4 plan"): each frame runs the game's two eye passes only, its focus views the focus finals
+// beside the eyes (mvr_focus_final); the atlas takes them from there.
 bool frameFinalsOk = false;          // this frame's focus finals both made (after_two_passes)
 unsigned finalAt[2][2] = {};  // each focus final's top-left in its eye's texture
-bool finalsMissingLogged = false, twoPassLogged = false, countLogged = false;
-unsigned long long twoPassFrames = 0, finalsMissing = 0;
+bool finalsMissingLogged = false;
+unsigned long long twoPassFrames = 0;
 
-// Gate D (lmu_mvr=2): passes 2-3 skip the scene work before their post-processing (abi.h [MVR]) while skipScene is set
-// (render thread only: Cull_Item is also called from elsewhere).
-using ViewSceneFn = void (*)(void*, void*, void*, unsigned, char);
-using SortMeshBucketFn = std::uintptr_t (*)(void*, void*, std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uintptr_t);
-using CullItemFn = void (*)(void*, void*, void*, float);
-using CullSceneGraphFn = void (*)(void*, void*, void*);
-SortMeshBucketFn originalSortMeshBucket = nullptr;
-bool skipScene = false;
-unsigned long long skipped[4] = {};  // view scenes, sort buckets, cull items, scene graph culls: since the last log
-unsigned long long passesSkipped = 0, passesNotSkipped = 0;
-
-bool skipping() { return skipScene && GetCurrentThreadId() == renderThread; }
-
-
-// Before pass p: the eye's size (qvfr_before_pass took it), its focus view's,
-// this frame's remap (frozen at pass 0), and whether this frame is a gate sample.
 // MVR's context hooks on `device` (at the first pass, or with the pass tracker at the session's first frame end, so menus
 // are seen too). False: MVR off for the session.
 ID3D11Device* sessionDevice = nullptr;  // four_passes_device (not referenced: the session keeps it)
@@ -528,10 +486,10 @@ bool install_mvr(ID3D11Device* device) {
     return true;
 }
 
+// Before eye pass p: its focus view's size, this frame's remap (frozen at pass 0) and the room check.
 void mvr_before_pass(int p) {
     if (!mvrInstalled)  // (the tracker's passes come only once its hooks are in: four_passes_frame_end)
         return;
-    bool sample = false;
     if (p == 0) {
         mvr_frame_mode(0);
         {
@@ -650,7 +608,7 @@ void mvr_before_pass(int p) {
     } else {
         ++mvrNoBox;  // no focus box this frame (its projection, or the game's scale not known yet)
     }
-    mvr_pass_begin(p, draw ? &v : nullptr, sample);
+    mvr_pass_begin(p, draw ? &v : nullptr, false);  // (no gate samples)
 }
 
 // The view `src` (its top-left w x h) into the atlas at (x, y), or (atlas_out) the atlas's at (x, y) into `dst`.
@@ -676,17 +634,6 @@ void atlas_in_from(ID3D11Texture2D* src, unsigned sx, unsigned sy, unsigned x, u
     context->Release();
     device->Release();
 }
-
-// The focus views' own images, render targets: the game's VR UI (the HUD, the in-car menus) is drawn into the eyes after
-// the eye loop, and into these too (vrui_draw). The atlas gets them at xrEndFrame.
-ID3D11Texture2D* focusTex[2] = {};
-
-// ---- QVFR: the driver tags under live resolution (tag_viewport.h) ----
-// The tags are drawn after each pass's post-processing with a viewport of the whole eye target; a pass rendered smaller
-// (live resolution) gets them too far out and too large. For that draw the viewport is cut to what the pass rendered.
-using LabelsDrawFn = void (*)(void* camera, void* labels);
-unsigned long long labelsCut = 0, labelsKept = 0;
-bool labelsCutLogged = false, labelsKeptLogged = false, labelsResetLogged = false;
 
 // The frame's record for the layer (adapter.h Views4Frame: tangents left, right, up, down; the focus views off-centre,
 // unturned). Under liveMutex.
@@ -715,15 +662,11 @@ void store_record() {
     haveRecord = true;
 }
 
-// QVFR, after pass p: the eyes go into the atlas's top row while the focus views render into their targets (pass 2 =
-// focus 0 in eye 0's, pass 3 = focus 1 in eye 1's), each focus view into its own image, then the eyes back for the
-// game's VR UI and submit.
 // R4a, after pass 1 of a two-pass frame: the eye loop ends here; the eyes stay in their targets with the focus finals
 // beside them (the VR UI is doubled onto those after the loop). The frame's record and sizes from the focus finals;
 // the atlas takes them at xrEndFrame (four_passes_atlas). No focus finals: no four views this frame.
 void after_two_passes() {
-    eyesInAtlas = frameFocusOk = false;
-    atlasFromFinals = false;
+    atlasReady = false;  // this pass's finals decide (pass 0 cleared it already, unless the tracker saw pass 1 again)
     ID3D11Texture2D* e0 = game_eye_image(0);
     ID3D11Texture2D* e1 = game_eye_image(1);
     // The multi-view path, once: the copies' eye images are the targets the passes' final blits drew into.
@@ -769,12 +712,11 @@ void after_two_passes() {
         frameFinalsOk = ok;
         if (ok) {
             ++finalsBoth;
-            atlasReady = atlasFromFinals = true;
+            atlasReady = true;
             store_record();
             if (gpuSpans.ready(e0))
                 gpuSpans.begin_frame();
         } else {
-            ++finalsMissing;
             if (!finalsMissingLogged) {
                 finalsMissingLogged = true;
                 simqvfr::logf("lmu mvr: frame %llu: two passes without both focus finals: no four views this frame (the eyes "
@@ -796,9 +738,8 @@ void qvfr_after_pass(int p) {
         after_two_passes();
 }
 
-// The work around one eye pass: render_scene's (the game's scene render, hooked), or with R4b's pass tracker driving
-// (FourPassesRun::trackerDrives) the d3d11 bounds' (mvr_pass.h mvr_track_drive): pass_begin before the pass's draws,
-// pass_end after them, on the render thread.
+// The work around one eye pass, at the bounds R4b's pass tracker finds at the d3d11 level (mvr_pass.h mvr_track_drive):
+// pass_begin before the pass's draws, pass_end after them, on the render thread.
 double passWall0 = 0;
 unsigned long long passCpu0 = 0;
 int trackedEyeLogged = 0;                    // tracked passes that rendered another eye: the first 5 logged
@@ -806,7 +747,6 @@ unsigned long long trackedEyeMismatches = 0;  // and counted
 
 void pass_begin(int p) {
     renderThread = GetCurrentThreadId();
-    pass = p;
     ++passesThisFrame;
     if (p == 0) {
         atlasReady = menuReady = false;  // a new frame: its own four views, or none
@@ -831,13 +771,11 @@ void pass_begin(int p) {
     passWall0 = now_ms();
     passCpu0 = thread_cycles();
     costWindow.hookCycles += static_cast<double>(passCpu0 - hook0);
-    inPass = true;
 }
 
 void pass_end(int p) {
     const double wall0 = passWall0;
     const unsigned long long cpu0 = passCpu0;
-    inPass = false;
     if (cfg.mvr && p < 2)
         mvr_pass_end(p);
     const unsigned long long cpu1 = thread_cycles();
@@ -872,7 +810,7 @@ const char* tag() { return "lmu qvfr"; }
 // frame's four views are saved too, each as far as it rendered, and the log gives each focus view's box in its eye:
 // what tools/halo_profile.py and tools/focus_compare.py measure.
 void capture_views() {
-    const std::uint64_t arm = frameCaptureArm;  // as this frame's pass 0 saw it (render_scene)
+    const std::uint64_t arm = frameCaptureArm;  // as this frame's pass 0 saw it (pass_begin)
     if (arm == seenCaptureArm)
         return;
     seenCaptureArm = arm;
@@ -1120,10 +1058,6 @@ void four_passes_frame_end() {
             atlasReady = false;  // no four views this frame (menus, loading): the layer submits the eyes as they are
             seenCaptureArm = simqvfr::d3d11_capture_armed();  // a frame capture now has no views to save (not later)
         }
-        if (eyesInAtlas) {
-            eyesInAtlas = false;
-            simqvfr::logf("lmu qvfr: frame %llu stopped after %d passes with the eyes set aside", frames, passes);
-        }
         menu_finish();  // before the layer takes the atlas (views4_submit, after this)
         maskStaleThisFrame += mvr_mask_dropped();
         const bool stale = maskStale.load(std::memory_order_relaxed);
@@ -1291,9 +1225,9 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
         }
         return nullptr;
     }
-    // The eyes again, as the game submitted them: with what it drew after its eye loop (the VR UI); the focus views with
-    // the UI drawn into them too (vrui_draw).
-    // Each only as far as its pass rendered (live resolution: the top-left of the launch-size targets).
+    // The eyes as the game submitted them, with what it drew after its eye loop (the VR UI), each only as far as its pass
+    // rendered (live resolution: the top-left of the launch-size targets); the focus finals beside them, the VR UI
+    // doubled onto them.
     const unsigned long long c0 = thread_cycles();
     gpuSpans.mark(3, 0);
     // The eye that's off: only the few pixels its pass drew (the headset shows it black).
@@ -1301,14 +1235,8 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     const auto eyeH = [](int e) { return off_pass(e) ? std::min(kOffEyeSize, passH[e]) : passH[e]; };
     atlas_in(eyes[0], 0, 0, eyeW(0), eyeH(0));
     atlas_in(eyes[1], viewW, 0, eyeW(1), eyeH(1));
-    if (atlasFromFinals) {  // R4a: the focus finals beside the eyes, the VR UI doubled onto them
-        atlasFromFinals = false;
-        atlas_in_from(eyes[0], finalAt[0][0], finalAt[0][1], 0, viewH, passW[2], passH[2]);
-        atlas_in_from(eyes[1], finalAt[1][0], finalAt[1][1], viewW, viewH, passW[3], passH[3]);
-    } else {
-        atlas_in(focusTex[0], 0, viewH, passW[2], passH[2]);
-        atlas_in(focusTex[1], viewW, viewH, passW[3], passH[3]);
-    }
+    atlas_in_from(eyes[0], finalAt[0][0], finalAt[0][1], 0, viewH, passW[2], passH[2]);
+    atlas_in_from(eyes[1], finalAt[1][0], finalAt[1][1], viewW, viewH, passW[3], passH[3]);
     gpuSpans.mark(3, 1);
     gpuSpans.end_frame();
     costWindow.hookCycles += static_cast<double>(thread_cycles() - c0);

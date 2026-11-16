@@ -35,10 +35,6 @@ float menuUv[4][4] = {};
 unsigned long long menuFrames = 0;
 bool menuRefusalLogged = false;
 
-// ---- QVFR: the VR UI in the focus views ----
-// VR_Present draws the HUD canvas onto a curved panel in each eye's final with the eye's projection x view (kVruiDraw);
-// the same draw again into the focus images, with that matrix remapped to the focus view's clip space (uiRemap).
-
 // RTVs on `textures` like the game's eye RTV `like`; false (none made) when they can't be.
 bool make_rtvs(ID3D11DeviceContext* context, ID3D11RenderTargetView* like, ID3D11Texture2D* const (&textures)[2],
                ID3D11RenderTargetView* (&out)[2]) {

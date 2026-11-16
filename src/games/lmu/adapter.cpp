@@ -34,8 +34,8 @@ bool qvfr_wanted() {
 
 // Identity only with lmu_qvfr=0: the layer logs, QVFR doesn't start. Its experiments run only when their
 // [experiment] key asks, and not in a launch the anti-cheat protects unless the user chose it ([launcher] anticheat=1;
-// otherwise adapter_for hands out the plain identity adapter there): the view probe (log only), the copies and focus
-// gates (four passes, docs/recon-lmu.md), and QVFR.
+// otherwise adapter_for hands out the plain identity adapter there): the view probe (log only), multi-view's shader
+// probe, and QVFR.
 class LmuAdapter final : public simqvfr::games::IdentityAdapter {
 public:
     LmuAdapter() : IdentityAdapter(&kGame) {}
@@ -62,7 +62,6 @@ public:
         // where the layer made room (Views4Layout::secondViewRoom), post-process them (focus post, focus finals) and are
         // found at the d3d11 level (the pass tracker): no game code hooked. The only way LMU's QVFR runs.
         run.mvr = s.layout.secondViewRoom;
-        run.mvrSkip = run.mvr;
         run.perAxis = run.mvr && s.layout.secondViewBeside;  // the images the outer views' shape, the focus views beside
         if (run.mvr) {
             // lmu_mvr_timing=1 (and any A/B run): the CPU in the context hooks, logged.

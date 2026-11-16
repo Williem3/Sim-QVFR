@@ -23,7 +23,6 @@ struct FourPassesRun {
     double layerWidth = 1, layerHeight = 1;
     // Multi-view rendering (mvr_pass.h): the eye passes draw their focus views too, beside the eye.
     bool mvr = false;
-    bool mvrSkip = false;
     // The focus views beside their eyes in images of the outer views' shape (Views4Layout::secondViewBeside): the eyes at
     // one share on both axes, the focus views at their own width and height (four_passes_set_live_axes), drawn by their
     // eye's pass.
@@ -75,16 +74,14 @@ struct FourPassesRun {
     int backendAb = 0;
 };
 
-// Installs the four passes on this build (hash and anchors checked); false and a log line otherwise. Focus views render
-// into the eye targets and are set aside before the game submits, so the headset shows the eyes (gates) or, composed,
-// all four (QVFR).
+// Starts QVFR on this build (its hash checked) when the run has multi-view's room (run.trackerDrives); false and a log
+// line otherwise. The focus views are drawn beside the eyes by their eye passes and composed with them by the layer.
 bool four_passes_start(const FourPassesRun& run);
-// Every xrEndFrame: counts the passes; gates: at a few frames on track compares passes 2-3 with eyes 0-1 (copies: pixel
-// for pixel; focus: each focus view with its eye's crop).
+// Every xrEndFrame: counts the passes, multi-view's health and recovery, the frame's eye extent and the overlay's badge.
 void four_passes_frame_end();
 // How the focus views were drawn as of the last frame end (the overlay's badge): NVIDIA's multi-view rendering, the
-// software multi-view (instancing, or instancing taken over from NVIDIA's), the four passes after a fallback, or none
-// (multi-view off at launch, or not running yet). Any thread.
+// software multi-view (instancing, or instancing taken over from NVIDIA's), the eyes alone, or none (multi-view off at
+// launch, or not running yet). Any thread.
 simqvfr::games::QvfrMultiView four_passes_multi_view();
 // xrCreateSession with a D3D11 binding: the game's device (the pass tracker installs MVR's hooks on it at a frame end).
 void four_passes_device(ID3D11Device* device);
