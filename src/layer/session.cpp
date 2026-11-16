@@ -41,6 +41,8 @@ XrResult XRAPI_CALL layerEnumerateViewConfigurationViews(XrInstance instance, Xr
         std::lock_guard guard(quad.mutex);
         quad.nativeW = views[0].recommendedImageRectWidth;
         quad.nativeH = views[0].recommendedImageRectHeight;
+        quad.maxW = views[0].maxImageRectWidth;
+        quad.maxH = views[0].maxImageRectHeight;
         runtime_info(L"recommended_width", std::to_wstring(views[0].recommendedImageRectWidth));
         runtime_info(L"recommended_height", std::to_wstring(views[0].recommendedImageRectHeight));
         runtime_info(L"max_width", std::to_wstring(views[0].maxImageRectWidth));
@@ -244,6 +246,10 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         v4d3d11.chains.clear();
         v4d3d11.outChain = XR_NULL_HANDLE;  // the session's: destroyed with it
         v4d3d11.outImages.clear();
+        v4d3d11.outDensity = {};
+        v4d3d11.retiredChain = XR_NULL_HANDLE;  // also the session's
+        v4d3d11.retiredFrames = 0;
+        v4d3d11.growFailed = false;
         v4d3d11.failed = false;
         v4d3d11.focusChain = XR_NULL_HANDLE;  // also the session's
         v4d3d11.focusImages.clear();
@@ -280,6 +286,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
         quad.appImages.clear();
         quad.outImages.clear();
         quad.outPending = {};
+        quad.outDensity = {};
         quad.outerCaptured = quad.aViewsValid = quad.releaseHeld = false;
         quad.device = nullptr;
         quad.queue = nullptr;
@@ -430,8 +437,16 @@ void quad_adopt_chain(XrSession session, const XrSwapchainCreateInfo* info, XrSw
     }
     XrSwapchainCreateInfo out = *info;
     out.next = nullptr;
-    out.width = 2 * quad.nativeW;
-    out.height = quad.nativeH;
+    // views4: at the focus density's size (quad/output_density.h; made once, not grown live); the two loops at native.
+    if (experiment.views4Compose || experiment.replayCompose) {
+        views4_output_chain(quad.outDensity);
+    } else {
+        quad.outDensity = {};
+        quad.outDensity.eyeW = quad.nativeW;
+        quad.outDensity.eyeH = quad.nativeH;
+    }
+    out.width = 2 * quad.outDensity.eyeW;
+    out.height = quad.outDensity.eyeH;
     out.mipCount = 1;
     out.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
     XrSwapchain outChain = XR_NULL_HANDLE;
@@ -593,6 +608,7 @@ XrResult XRAPI_CALL layerDestroySwapchain(XrSwapchain swapchain) {
             quad.appImages.clear();
             quad.outImages.clear();
             quad.outPending = {};
+            quad.outDensity = {};
             quad.appAcquired = 0;
             quad.outerCaptured = quad.releaseHeld = quad.v4Composed = false;
             // The compositor was made for that chain's format; the helmet's pieces load again into the next one.

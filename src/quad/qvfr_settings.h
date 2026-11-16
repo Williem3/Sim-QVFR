@@ -43,6 +43,9 @@ inline constexpr IniInt kFocusMask{L"quad", L"focus_mask", 1, 0, 1, 1};
 inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};
 inline constexpr IniInt kGaze{L"quad", L"gaze", 1, 0, 1, 1};
 inline constexpr IniInt kSharpenPercent{L"quad", L"sharpen_percent", 0, 0, 100, 5};
+// The composed output's largest size for the focus density (quad/output_density.h), percent of the native eye; the
+// runtime's largest image caps it too. 100: composed at the native size, as before. Live.
+inline constexpr IniInt kOutputDensityMax{L"quad", L"output_density_max", 400, 100, 400, 25};
 inline constexpr IniInt kEyeOff{L"quad", L"eye_off", 0, 0, 2, 1};  // 0 both eyes on, 1 the left off, 2 the right
 // [crop] (QVFR): fov_crop.h's kCropMax is the sides' 40.
 inline constexpr IniInt kCropEnabled{L"crop", L"enabled", 0, 0, 1, 1};

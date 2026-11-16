@@ -14,6 +14,7 @@
 #include "quad/focus_turn.h"
 #include "quad/helmet.h"
 #include "quad/native_quad.h"
+#include "quad/output_density.h"
 #include "xr.h"
 #include "layer/layer.h"
 #include "layer/views4_internal.h"
@@ -22,25 +23,45 @@ namespace simqvfr::layer {
 
 namespace {
 
-// The D3D11 output chain and compositor, made at the first composition (the game's format, the native eye size,
-// double wide). False: v4d3d11.failed, with the reason logged once.
+// The D3D11 output chain and compositor, made at the first composition (the game's format, double wide, each eye the
+// native eye at the focus density's scale: quad/output_density.h). Made again larger when a live change wants more
+// than it holds; the old chain goes a few compositions later. False: v4d3d11.failed, with the reason logged once.
 bool v4d3d11_resources(XrSession session, int64_t format) {
-    if (v4d3d11.outChain)
-        return true;
+    if (v4d3d11.retiredChain && --v4d3d11.retiredFrames <= 0) {
+        next.DestroySwapchain(v4d3d11.retiredChain);
+        v4d3d11.retiredChain = XR_NULL_HANDLE;
+    }
+    const bool growing = v4d3d11.outChain != XR_NULL_HANDLE;
+    if (growing) {
+        bool grow;
+        {
+            std::lock_guard guard(quad.mutex);
+            const OutputDensity& d = v4d3d11.outDensity;
+            grow = !v4d3d11.growFailed && d.target > d.chainScale + 1e-9 && d.cap > d.chainScale + 1e-9;
+        }
+        // Not while its image is left acquired (a timed-out wait) or the last old chain is still waiting to go.
+        if (!grow || v4d3d11.outPending.acquired || v4d3d11.retiredChain)
+            return true;
+    }
     if (v4d3d11.failed)
         return false;
-    v4d3d11.failed = true;  // until everything below is made
+    if (!growing)
+        v4d3d11.failed = true;  // until everything below is made
     uint32_t nativeW, nativeH;
     ID3D11Device* device;
+    OutputDensity density;
     {
         std::lock_guard guard(quad.mutex);
         nativeW = quad.nativeW;
         nativeH = quad.nativeH;
         device = sessionGraphics.d3d11;
+        density = v4d3d11.outDensity;
+        if (nativeW && nativeH)
+            views4_output_chain(density);
     }
     if (!device || !nativeW || !nativeH) {
         log_line("views4 d3d11: no D3D11 device or native eye size; the headset shows views 0-1");
-        return false;
+        return growing;
     }
     if (!v4d3d11.compositor.ready() && !v4d3d11.compositor.initialize(device, static_cast<DXGI_FORMAT>(format))) {
         log_line("views4 d3d11: compositor unavailable; the headset shows views 0-1");
@@ -50,8 +71,8 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
     out.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
     out.format = format;
     out.sampleCount = out.faceCount = out.arraySize = out.mipCount = 1;
-    out.width = 2 * nativeW;
-    out.height = nativeH;
+    out.width = 2 * density.eyeW;
+    out.height = density.eyeH;
     XrSwapchain chain = XR_NULL_HANDLE;
     XrResult r = next.CreateSwapchain(session, &out, &chain);
     uint32_t count = 0;
@@ -61,21 +82,41 @@ bool v4d3d11_resources(XrSession session, int64_t format) {
     if (XR_SUCCEEDED(r))
         r = next.EnumerateSwapchainImages(chain, count, &count, reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
     if (XR_FAILED(r)) {
-        logf("views4 d3d11: output swapchain %ux%u failed (%d); the headset shows views 0-1", out.width, out.height, r);
         if (chain)
             next.DestroySwapchain(chain);
+        if (growing) {  // the chain it has stays, at its own size
+            logf("views4 d3d11: a larger output chain %ux%u failed (%d); the output stays %ux%u", out.width, out.height,
+                 r, 2 * v4d3d11.outW, v4d3d11.outH);
+            v4d3d11.growFailed = true;
+            return true;
+        }
+        logf("views4 d3d11: output swapchain %ux%u failed (%d); the headset shows views 0-1", out.width, out.height, r);
         v4d3d11.compositor.shutdown();
         return false;
+    }
+    if (growing) {
+        // The old chain's last image went out with an earlier frame; the runtime may still read it for a few.
+        v4d3d11.retiredChain = v4d3d11.outChain;
+        v4d3d11.retiredFrames = 8;
+        v4d3d11.outImages.clear();
     }
     v4d3d11.outChain = chain;
     for (const auto& image : images)
         v4d3d11.outImages.push_back(image.texture);
     d3d11_capture_images(chain, images.data(), count);  // d3d11_capture_frame saves the composed output too
-    v4d3d11.outW = nativeW;
-    v4d3d11.outH = nativeH;
+    {
+        std::lock_guard guard(quad.mutex);
+        v4d3d11.outDensity = density;
+        v4d3d11.outDensity.logged = 0;  // its scale logged again at the next composition
+    }
+    v4d3d11.outW = density.eyeW;
+    v4d3d11.outH = density.eyeH;
     v4d3d11.failed = false;
-    logf("views4 d3d11: output chain %p %ux%u (%u images, format %lld), focus box %.0f%% x %.0f%%, feather %.0f%%",
-         static_cast<void*>(chain), out.width, out.height, count, static_cast<long long>(format),
+    logf("views4 d3d11: %soutput chain %p %ux%u (%u images, format %lld, ~%.0f MB at 4 bytes a pixel; %.0f%% of the %ux%u "
+         "native eye, up to %.0f%%), focus box %.0f%% x %.0f%%, feather %.0f%%",
+         growing ? "larger " : "", static_cast<void*>(chain), out.width, out.height, count,
+         static_cast<long long>(format), 4.0 * out.width * out.height * count / (1024.0 * 1024.0),
+         density.chainScale * 100, nativeW, nativeH, density.cap * 100,
          experiment.box_x() * 100, experiment.box_y() * 100, experiment.feather * 100);
     return true;
 }
@@ -561,10 +602,17 @@ bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj
     EyeComposition eyes[2] = {};
     XrFovf submitFov[2];
     XrExtent2Di extent[2];
+    // The output's density only for a composed frame: with focus_layer the runtime samples the focus views itself, and
+    // the eyes' sizes stay the native eye's (the display's pixels, for the sharpening's footprint below).
+    OutputDensity layeredDensity;  // scale 1, the native eye
     for (int e = 0; e < 2; ++e) {
         views4_eye(frame, e, source, eyes[e]);
-        views4_helmet_eye(helmet, helmetFrame, e, eyes[e], submitFov[e], extent[e]);
+        views4_helmet_eye(helmet, helmetFrame, e, eyes[e], submitFov[e], extent[e],
+                          useLayered ? layeredDensity : v4d3d11.outDensity,
+                          useLayered ? 0.0 : static_cast<double>(eyes[e].focusSource[2]) * texW);
     }
+    if (!useLayered)
+        views4_output_density(v4d3d11.outDensity, "views4 d3d11");
     if (helmet.on)
         log_helmet_light();
     if (useLayered) {

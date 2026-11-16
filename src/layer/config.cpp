@@ -56,6 +56,7 @@ LiveSettings read_live(const wchar_t* ini) {
         l.objectDetail = ini_int(ini, kObjectDetail);
     if (features.sharpening)
         l.sharpen = ini_int(ini, kSharpenPercent);
+    l.outputDensityMax = ini_int(ini, kOutputDensityMax);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
     const int isolateExperiment = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_isolate", 0, ini)), 0, 100000);
@@ -379,6 +380,7 @@ void load_experiment() {
     experiment.gazeDeadzone = settings.gazeDeadzone;
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
+    experiment.outputDensityMax = settings.outputDensityMax;
     set_eye_off(settings.eyeOff);
     // Applied on the render thread at its next xrEndFrame; nothing in a baseline or a log-only run.
     experiment.cpuIsolate = experiment.cpuSettings ? settings.cpuIsolate : 0;
@@ -517,6 +519,10 @@ void load_experiment() {
     logf("experiment: focus shape %ls", focus_shape_text(settings.shape).c_str());
     if (game_features().sharpening)
         logf("experiment: sharpening %d%%%s", settings.sharpen, settings.sharpen ? " (CAS as the views are composed)" : " (off)");
+    if (experiment.composing())
+        logf("experiment: output density up to %d%% of the native eye%s", settings.outputDensityMax,
+             settings.outputDensityMax <= 100 ? " (composed at native size, [quad] output_density_max=100)"
+                                              : " (the focus density's texels reach the runtime; its largest image caps it)");
     if (experiment.views4)
         logf("experiment: views4 periphery %.0f%% of native, focus density %.0f%% of native, focus box %.0f%% x %.0f%% "
              "(focus views %.0f%% x %.0f%% of the native eye)%s",

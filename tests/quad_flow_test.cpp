@@ -4,6 +4,7 @@
 // narrowed focus FOV. After arming, every submitted frame must be this layer's native-size output
 // with ACE's full FOV, showing red around a green focus box placed where the focus FOV lies.
 #include "layer/layer.h"
+#include "quad/output_density.h"
 #include "quad/focus_turn.h"
 #include "../src/games/ace/game.h"
 #include "../src/games/ace/views4.h"
@@ -929,7 +930,11 @@ int SIM_QVFR_TEST_MAIN() {
                   (hq.layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) &&
                   !(hq.layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT),
               "helmet: its own premultiplied quads over the scene, at 8 cm one per eye kept far");
-        check(scene.extent.height == static_cast<int32_t>(std::lround(kNativeH * 0.6)) &&
+        // ACE's target is 1.5x what it was offered, so its focus views (25% of the native width over 35% of the FOV)
+        // carry 1.07 texels per native pixel: the output is 105% of the native eye (quad/output_density.h).
+        check(std::fabs(quad.outDensity.scale - 1.05) < 1e-9 && quad.outDensity.eyeH >= static_cast<uint32_t>(kNativeH * 1.05),
+              "output density: the output follows the focus views' texels (1.5x target: 105% of the native eye)");
+        check(scene.extent.height == output_density_pixels(kNativeH, quad.outDensity.scale, 0.6, quad.outDensity.eyeH) &&
                   std::tan(rt.submittedViews[0].fov.angleUp) < std::tan(kFullFov.angleUp) - 0.01f,
               "helmet: the scene is submitted cropped, not over the whole eye");
         helmetSettings = HelmetSettings{};
