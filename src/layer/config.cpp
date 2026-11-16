@@ -58,7 +58,8 @@ LiveSettings read_live(const wchar_t* ini) {
         l.sharpen = ini_int(ini, kSharpenPercent);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
-    l.cpuIsolate = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_isolate", 0, ini)), 0, 100000);
+    const int isolateExperiment = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_isolate", 0, ini)), 0, 100000);
+    l.cpuIsolate = isolateExperiment ? isolateExperiment : ini_flag(ini, kCpuIsolateMain) ? 1 : 0;
     l.focusFraction = ini_int(ini, kFocusPercent) / 100.0;
     // Missing (or 0): focus_percent's, as views4_sizes takes 0.
     const int heightPercent = ini_raw(ini, kFocusHeightPercent, 0);
@@ -185,6 +186,7 @@ void load_experiment() {
         const bool qvfr = !baseline && !logOnly && parse_render_mode(mode) == IniRenderMode::Qvfr;
         const bool legacy = GetPrivateProfileIntW(L"experiment", L"ace_legacy_views4", 0, ini.c_str()) != 0;
         experiment.apiPath = ace && qvfr && !legacy;
+        experiment.cpuSettings = !baseline && !logOnly;  // a baseline measures the game as it runs without us
         if (experiment.apiPath) {
             log_line("experiment: ACE's QVFR: the API path (its own two eyes, the focus views replayed at the D3D12 level; "
                      "ace_legacy_views4=1 for the old 4views path)");
@@ -372,9 +374,14 @@ void load_experiment() {
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
     set_eye_off(settings.eyeOff);
-    cpu_isolation_mode(settings.cpuIsolate);  // applied on the render thread at its next xrEndFrame
-    if (settings.cpuIsolate)
-        logf("experiment: cpu_isolate=%d (probe/cpu_isolation.h)", settings.cpuIsolate);
+    // Applied on the render thread at its next xrEndFrame; nothing in a baseline or a log-only run.
+    experiment.cpuIsolate = experiment.cpuSettings ? settings.cpuIsolate : 0;
+    cpu_isolation_mode(experiment.cpuIsolate);
+    if (settings.cpuIsolate > 1)
+        logf("experiment: cpu_isolate=%d (probe/cpu_isolation.h): an A/B of %d frames a side", settings.cpuIsolate,
+             settings.cpuIsolate);
+    else if (!experiment.cpuSettings)
+        log_line("cpu: the game's CPU scheduling left as it is (a baseline or log-only run)");
     if (settings.eyeOff != kEyeOffNone)
         logf("experiment: %s ([quad] eye_off: that eye shows black)", eye_off_name(settings.eyeOff));
     live.ini = ini;

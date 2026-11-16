@@ -60,7 +60,9 @@ enum class MenuItem {
     NrPeriphery, NrPeripheryScale, NrPeripheryCoverage,
     NrLimit,  // the most a view's model works on (NrSettings::workingLimit), after the focus working size
     // The Overlay and menu page's first line, for a game with it (MenuLaunch::eyeOff): one eye off ([quad] eye_off).
-    EyeOff
+    EyeOff,
+    // The Overlay and menu page, before Hotkeys footer: the main thread's core ([cpu] isolate_main_thread, cpu_isolation.h).
+    CpuIsolateMain
 };
 
 // Where the panel floats ([menu], set in the launcher's Headset menu pane or from the menu itself,
@@ -91,6 +93,7 @@ struct MenuValues {
     OsdPlacement overlay;     // [osd]: the performance overlay, on or off, and its place
     MenuPlacement placement;  // [menu]
     bool hotkeyFooter = true; // [menu] hotkey_footer: the in-game hotkeys listed under the panel
+    bool cpuIsolateMain = true; // [cpu] isolate_main_thread: the game's main thread gets a core to itself
     bool crop = false;        // [crop] enabled (QVFR)
     int cropTop = 0, cropBottom = 0, cropOuter = 0, cropInner = 0;  // [crop] top, bottom, outer, inner: percent
     HelmetSettings helmet;    // [helmet] (QVFR)

@@ -94,10 +94,9 @@ void live_apply(const LiveSettings& l) {
     experiment.gazeDeadzone = l.gazeDeadzone;
     if (experiment.sharpen.exchange(l.sharpen) != l.sharpen)
         logf("live: sharpening %d%%%s", l.sharpen, l.sharpen ? " (CAS)" : " (off)");
-    if (static int isolate = -1; isolate != l.cpuIsolate) {
-        if (isolate >= 0)
-            logf("live: cpu_isolate=%d", l.cpuIsolate);
-        isolate = l.cpuIsolate;
+    if (experiment.cpuSettings && experiment.cpuIsolate != l.cpuIsolate) {
+        logf("live: main thread core %s", l.cpuIsolate == 1 ? "its own" : l.cpuIsolate > 1 ? "A/B" : "shared");
+        experiment.cpuIsolate = l.cpuIsolate;
         cpu_isolation_mode(l.cpuIsolate);
     }
     if (eye_off() != l.eyeOff) {

@@ -92,6 +92,7 @@ constexpr Spec kSpecs[] = {
     {MenuItem::Optimize, L"Optimize for frame rate", 0, 0, 1},
     {MenuItem::Profile, L"Profile", 0, 0, 1},
     {MenuItem::HotkeyFooter, L"Hotkeys footer", 0, 1, 1},
+    spec_of(MenuItem::CpuIsolateMain, L"Main thread core", kCpuIsolateMain),
     // The DLSS page (Sim-QVFR's own; engine/dlss_settings.h's choices).
     {MenuItem::DlssOn, L"DLSS", 0, 1, 1},
     {MenuItem::DlssUpscaler, L"Upscaler", 0, 1, 1},
@@ -246,7 +247,9 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
         if (menu.launch.eyeOff)  // a game with it: first on the page
             items.push_back(MenuItem::EyeOff);
         items.insert(items.end(), {MenuItem::Overlay, MenuItem::OverlayYaw, MenuItem::OverlayPitch, MenuItem::OverlayWidth,
-                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth, MenuItem::HotkeyFooter});
+                                   MenuItem::MenuYaw, MenuItem::MenuPitch, MenuItem::MenuWidth,
+                                   MenuItem::CpuIsolateMain,  // every game
+                                   MenuItem::HotkeyFooter});
     } else if (page == MenuPage::Fg) {
         items.insert(items.end(), {MenuItem::FgOn, MenuItem::FgMultiplier, MenuItem::FgSize, MenuItem::FgScale,
                                    MenuItem::FgPeriphery, MenuItem::FgRelease, MenuItem::FgBorder});
@@ -485,9 +488,10 @@ bool menu_key(SettingsMenu& menu, MenuKey key) {
     }
     if (item == MenuItem::Outline || item == MenuItem::EyeTracking || item == MenuItem::Overlay || item == MenuItem::Crop ||
         item == MenuItem::Helmet || item == MenuItem::HelmetDebug || item == MenuItem::HelmetDetail ||
-        item == MenuItem::Shape || item == MenuItem::HotkeyFooter) {
+        item == MenuItem::Shape || item == MenuItem::HotkeyFooter || item == MenuItem::CpuIsolateMain) {
         bool& flag = item == MenuItem::Outline       ? menu.values.outline
                      : item == MenuItem::HotkeyFooter ? menu.values.hotkeyFooter
+                     : item == MenuItem::CpuIsolateMain ? menu.values.cpuIsolateMain
                      : item == MenuItem::Shape       ? menu.values.shape.corners
                      : item == MenuItem::EyeTracking ? menu.values.eyeTracking
                      : item == MenuItem::Crop        ? menu.values.crop
@@ -524,6 +528,7 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.overlay = read_osd_placement(ini);
     v.placement = read_menu_placement(ini);
     v.hotkeyFooter = ini_flag(ini, kHotkeyFooter);
+    v.cpuIsolateMain = ini_flag(ini, kCpuIsolateMain);
     v.crop = ini_flag(ini, kCropEnabled);
     v.cropTop = ini_int(ini, kCropTop);
     v.cropBottom = ini_int(ini, kCropBottom);
@@ -574,6 +579,7 @@ bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool 
     ok &= write(ini, L"menu", L"pitch", v.placement.pitch);
     ok &= write(ini, L"menu", L"width", v.placement.width);
     ok &= write(ini, kHotkeyFooter, v.hotkeyFooter ? 1 : 0);
+    ok &= write(ini, kCpuIsolateMain, v.cpuIsolateMain ? 1 : 0);
     return ok;
 }
 
@@ -872,6 +878,8 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = v.overlay.enabled ? L"On" : L"Off";
         else if (items[i] == MenuItem::HotkeyFooter)
             line.value = v.hotkeyFooter ? L"On" : L"Off";
+        else if (items[i] == MenuItem::CpuIsolateMain)
+            line.value = v.cpuIsolateMain ? L"Its own" : L"Shared";
         else if (items[i] == MenuItem::Crop)
             line.value = v.crop ? L"On" : L"Off";
         else if (items[i] == MenuItem::Helmet)

@@ -269,7 +269,7 @@ int SIM_QVFR_TEST_MAIN() {
     // [menu] for the layer to move them, then the hotkeys footer.
     SettingsMenu moving;
     moving.page = 4;
-    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 9,
+    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 10,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
     check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
@@ -880,6 +880,26 @@ int SIM_QVFR_TEST_MAIN() {
         check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
                   !read_menu_values(ini.c_str()).hotkeyFooter,
               "Hotkeys footer: unset is on; written and read back");
+        DeleteFileW(ini.c_str());
+    }
+    {  // Main thread core ([cpu] isolate_main_thread): every game, the line before Hotkeys footer, its own by default.
+        SettingsMenu f;
+        f.launch = {true, 50, 39, 39};
+        f.page = static_cast<int>(menu_pages(f).size()) - 1;
+        const std::vector<MenuItem> items = menu_page_items(f);
+        const int at = static_cast<int>(items.size()) - 2;
+        check(at > 0 && items[at] == MenuItem::CpuIsolateMain, "Main thread core: the line before Hotkeys footer");
+        f.selected = at;
+        check(f.values.cpuIsolateMain && menu_lines(f)[at].label == L"Main thread core" &&
+                  menu_lines(f)[at].value == L"Its own",
+              "Main thread core: its own by default");
+        check(menu_key(f, MenuKey::Left) && !f.values.cpuIsolateMain && menu_lines(f)[at].value == L"Shared",
+              "Main thread core: a step shares it");
+        const std::wstring ini = temp_path(L"simqvfr-menu-cpu.ini");
+        DeleteFileW(ini.c_str());
+        check(read_menu_values(ini.c_str()).cpuIsolateMain && write_menu_values(ini.c_str(), f.values, false) &&
+                  !read_menu_values(ini.c_str()).cpuIsolateMain,
+              "Main thread core: unset is its own; written (Two-loop too) and read back");
         DeleteFileW(ini.c_str());
     }
 

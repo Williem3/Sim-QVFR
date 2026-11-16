@@ -90,6 +90,9 @@ struct Experiment {
     bool views3 = false;          // single-frame quad views step 1: VR runs the renderer's 3-view mode
     bool views4 = false;          // QVFR: 4 views in one game frame (the game's adapter, games/adapter.h)
     wchar_t mode[32] = L"off";    // [experiment] mode in effect (baseline=1: off), for the game's adapter
+    // The layer may change the game's CPU scheduling ([cpu], probe/cpu_isolation.h): not in a baseline or a log-only run.
+    bool cpuSettings = false;
+    int cpuIsolate = 0;  // core isolation's mode in effect (LiveSettings::cpuIsolate)
     bool views4ShowCopies = false;         // views4 debug: submit quarters 2-3 (the copies) instead of 0-1
     bool views4Compose = false;            // views4: blend the focus views into the outer views (native-size output)
     bool views4ComposeD3D11 = false;       // views4_compose for a D3D11 game (qvfr_compose_d3d11; V4D3D11 below)
@@ -248,7 +251,9 @@ struct LiveSettings {
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
     bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)
-    int cpuIsolate = 0;           // [experiment] cpu_isolate (probe/cpu_isolation.h): 0 off, 1 on, N > 1 an A/B of N frames a side
+    // Core isolation's mode (probe/cpu_isolation.h): [experiment] cpu_isolate when above 0 (1 on, N > 1 an A/B of N frames
+    // a side), else [cpu] isolate_main_thread (1 on, 0 off).
+    int cpuIsolate = 0;
     int focusMaskMargin = 16;     // [experiment] focus_mask_margin, focus view texels
 };
 
