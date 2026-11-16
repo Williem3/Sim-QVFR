@@ -137,8 +137,12 @@ void destroy(View* v) {
     delete v;
 }
 
+// A view that never came into use: destroyed now if our queue is through it, else parked with the released ones
+// (collect, shutdown). Never waits: the render thread must not block on the GPU.
 void discard(View* v) {
-    if (s.queue && s.fence && v->lastSubmit && !wait_for(v->lastSubmit, 30000)) {
+    if (s.queue && s.fence && v->lastSubmit && s.fence->GetCompletedValue() < v->lastSubmit) {
+        v->releaseValue = 0;  // the game's device never touched it
+        v->releasedAt = s.collects;
         s.released.push_back(v);
         return;
     }

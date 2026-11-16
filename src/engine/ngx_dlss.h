@@ -18,7 +18,9 @@ bool built_in();
 // NGX started on `device` with a project id of ours, nvngx_dlss.dll looked for in `dllFolder` (the player's choice,
 // may be empty), then in Sim-QVFR's own folder (beside the layer: the one its releases include), then beside the game's
 // exe; NGX's own files in `dataFolder`. False with the reason in `why` (not built in, no RTX GPU, no DLL, an old
-// driver). Once per device; a second call answers as the first did.
+// driver). Once per process until shutdown(): a second call answers as the first did, whatever device it names (the
+// state is not per device). Callers start it on one device a session and shut it down with that session
+// (dlss_views.cpp: dlss_shutdown at the session's end, before any other device can reach start()).
 bool start(ID3D11Device* device, const wchar_t* dllFolder, const wchar_t* dataFolder, std::string& why);
 
 struct Feature;

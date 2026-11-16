@@ -154,6 +154,8 @@ void eye_projection(const XrFovf& fov, float (&p)[16]) {
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN(int argc, wchar_t** argv) {
+    // A Detailed logs run: the diagnostic pictures checked below are saved only then (nr_start). Before the first log line.
+    SetEnvironmentVariableW(L"SIM_QVFR_LOG_LEVEL", L"debug");
     if (argc < 3) {
         std::printf("usage: nr_views_check <folder with nvngx_dlss.dll> <folder with nvngx_dlssnr.dll>\n");
         return 2;

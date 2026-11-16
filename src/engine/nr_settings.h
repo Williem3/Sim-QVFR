@@ -67,7 +67,7 @@ struct NrSettings {
     int maxGain = 300;
     // Diagnostics, [experiment] dlss_nr_save=N (not written back): N sets of pictures into the log folder, the first
     // half a second after it starts and then every ten: what the model got, what it gave back and the composed result,
-    // as PNG (each read back from the GPU: a hitch a set).
+    // as PNG (each read back from the GPU: a hitch a set). Only in a Detailed logs launch (nr_start).
     int saveFrames = 0;
     bool operator==(const NrSettings&) const = default;
 };

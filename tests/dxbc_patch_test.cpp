@@ -954,6 +954,97 @@ void real_pixel_shaders(Gpu& g, const char* folder) {
     check(converted > 0 && created == converted, "focus mip bias: every converted game pixel shader is created");
 }
 
+// A compiled shader's container with its program chunk replaced by `program` (its signatures kept): malformed programs
+// that must be refused, never read past their ends. The checksum is left zero (the edits don't check it).
+std::vector<uint8_t> with_program(const std::vector<uint8_t>& container, std::vector<uint32_t> program) {
+    if (container.size() < 32 || program.size() < 2)
+        return {};
+    program[1] = static_cast<uint32_t>(program.size());
+    uint32_t count = 0;
+    std::memcpy(&count, container.data() + 28, 4);
+    std::vector<std::pair<uint32_t, std::vector<uint8_t>>> chunks;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t at = 0, cc = 0, len = 0;
+        std::memcpy(&at, container.data() + 32 + i * 4, 4);
+        std::memcpy(&cc, container.data() + at, 4);
+        std::memcpy(&len, container.data() + at + 4, 4);
+        std::vector<uint8_t> data(container.data() + at + 8, container.data() + at + 8 + len);
+        if (std::memcmp(&cc, "SHDR", 4) == 0 || std::memcmp(&cc, "SHEX", 4) == 0)
+            data.assign(reinterpret_cast<const uint8_t*>(program.data()),
+                        reinterpret_cast<const uint8_t*>(program.data()) + program.size() * 4);
+        chunks.emplace_back(cc, std::move(data));
+    }
+    uint32_t total = 32 + count * 4;
+    for (const auto& c : chunks)
+        total += 8 + static_cast<uint32_t>(c.second.size());
+    std::vector<uint8_t> out(total, 0);
+    std::memcpy(out.data(), "DXBC", 4);
+    const uint32_t one = 1;
+    std::memcpy(out.data() + 20, &one, 4);
+    std::memcpy(out.data() + 24, &total, 4);
+    std::memcpy(out.data() + 28, &count, 4);
+    uint32_t at = 32 + count * 4;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t len = static_cast<uint32_t>(chunks[i].second.size());
+        std::memcpy(out.data() + 32 + i * 4, &at, 4);
+        std::memcpy(out.data() + at, &chunks[i].first, 4);
+        std::memcpy(out.data() + at + 4, &len, 4);
+        if (len)
+            std::memcpy(out.data() + at + 8, chunks[i].second.data(), len);
+        at += 8 + len;
+    }
+    return out;
+}
+
+// Malformed token streams: each refused with an error (the caller keeps the original shader), none read past its end.
+void malformed_cases() {
+    const std::vector<uint8_t> vs = compile(kPassThrough, "vs_4_0");
+    const std::vector<uint8_t> ps = compile(
+        "Texture2D t : register(t0); SamplerState s : register(s0);"
+        "float4 main(float4 p : SV_Position) : SV_Target { return t.Sample(s, p.xy); }", "ps_4_0");
+    check(!vs.empty() && !ps.empty(), "malformed: the carrier shaders compiled");
+    if (vs.empty() || ps.empty())
+        return;
+    const uint32_t vsVersion = (1u << 16) | (4u << 4), psVersion = 4u << 4;
+    const auto op = [](uint32_t code, uint32_t length) { return code | (length << 24); };
+    const uint32_t kExtended = 0x80000000u, kRet = 62, kMov = 54, kDclTemps = 104, kDclCb = 89, kCustomData = 53,
+                   kSample = 69;
+    struct Case {
+        const char* name;
+        std::vector<uint32_t> tokens;  // tokens[1] (the length) filled in
+    };
+    // Each program's last instruction is the malformed one: nothing after it in the chunk to read by mistake.
+    const Case vertex[] = {
+        {"a truncated extended opcode chain", {vsVersion, 0, op(kMov, 2) | kExtended, kExtended}},
+        {"dcl_temps of one token", {vsVersion, 0, op(kDclTemps, 1)}},
+        {"dcl_constantbuffer of two tokens", {vsVersion, 0, op(kDclCb, 2), 0x00008000u /* a constant buffer, no indices */}},
+        {"customdata at the program's end", {vsVersion, 0, op(kRet, 1), kCustomData}},
+    };
+    for (const Case& c : vertex) {
+        const std::vector<uint8_t> bad = with_program(vs, c.tokens);
+        const dxbc::SecondView sv = dxbc::add_second_view(bad.data(), bad.size());
+        check(!bad.empty() && sv.bytecode.empty() && !sv.error.empty(), (std::string("malformed: second view refuses ") + c.name).c_str());
+        const dxbc::InstancedView iv = dxbc::add_instanced_view(bad.data(), bad.size());
+        check(!bad.empty() && iv.bytecode.empty() && !iv.error.empty(), (std::string("malformed: instanced view refuses ") + c.name).c_str());
+    }
+    std::vector<uint32_t> longSample = {psVersion, 0, op(kSample, 126)};  // as sample_b 128 tokens: past the 7-bit length
+    longSample.resize(longSample.size() + 125, 0);
+    longSample.push_back(op(kRet, 1));
+    const Case pixel[] = {
+        {"dcl_temps of one token", {psVersion, 0, op(kDclTemps, 1)}},
+        {"dcl_constantbuffer of two tokens", {psVersion, 0, op(kDclCb, 2), 0x00008000u}},
+        {"customdata at the program's end", {psVersion, 0, op(kRet, 1), kCustomData}},
+        {"a sample whose sample_b would be longer than 127 tokens", longSample},
+    };
+    for (const Case& c : pixel) {
+        const std::vector<uint8_t> bad = with_program(ps, c.tokens);
+        const dxbc::FocusMipBias b = dxbc::add_focus_mip_bias(bad.data(), bad.size());
+        check(!bad.empty() && b.bytecode.empty() && !b.error.empty(), (std::string("malformed: focus mip bias refuses ") + c.name).c_str());
+    }
+    const std::vector<uint8_t> bad = with_program(ps, {psVersion, 0, op(kRet, 1), kCustomData});
+    check(dxbc::constant_buffer_vectors(bad.data(), bad.size(), 0) == 0, "malformed: declared constants of customdata at the end: none");
+}
+
 }  // namespace
 
 int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
@@ -971,6 +1062,7 @@ int SIM_QVFR_TEST_MAIN(int argc, char** argv) {
         check(dxbc::constant_buffer_vectors(ps.data(), ps.size(), 1) == 0, "declared constants: no cb1");
         check(dxbc::constant_buffer_vectors(ps.data(), 12, 0) == 0, "declared constants: not a container");
     }
+    malformed_cases();
     Gpu g;
     if (FAILED(D3D11CreateDevice(nullptr, driverType, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &g.device,
                                  nullptr, &g.context))) {
