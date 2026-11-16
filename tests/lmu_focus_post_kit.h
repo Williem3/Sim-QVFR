@@ -42,10 +42,10 @@ inline ID3D11VertexShader* bound_vs(ID3D11DeviceContext* context) {
     return vs;
 }
 
-// R4b-2: the tracker's calls when it drives the passes (as four_passes' pass_begin / pass_end would).
+// R4b-2: the tracker's calls when it drives the passes (as qvfr_frame's pass_begin / pass_end would).
 const lmu::MvrPassView* driveViews[2] = {};
 std::string driveLog;
-bool driveFinals = false;  // both eyes' focus finals there at pass 1's end (as four_passes' after_two_passes reads them)
+bool driveFinals = false;  // both eyes' focus finals there at pass 1's end (as qvfr_frame's after_two_passes reads them)
 inline void drive_begin(int pass) {
     driveLog += " b" + std::to_string(pass);
     lmu::mvr_pass_begin(pass, driveViews[pass & 1], false);
@@ -58,7 +58,7 @@ inline void drive_end(int pass) {
         driveFinals = lmu::mvr_focus_final(0, x, y, w, h) && lmu::mvr_focus_final(1, x, y, w, h);
 }
 
-// R6b: the panel callback (as four_passes' panel_draw): logs before/after; after, the panel again into panelTarget.
+// R6b: the panel callback (as qvfr_frame's panel_draw): logs before/after; after, the panel again into panelTarget.
 std::string panelLog;
 ID3D11RenderTargetView* panelTarget = nullptr;
 unsigned panelW = 0, panelH = 0;

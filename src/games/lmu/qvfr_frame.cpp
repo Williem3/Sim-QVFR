@@ -1,4 +1,4 @@
-#include "four_passes.h"
+#include "qvfr_frame.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -30,13 +30,13 @@
 #include "mvr_pass.h"
 #include "mvr_recovery.h"
 #include "mvr_probe.h"
-#include "four_passes_internal.h"
+#include "qvfr_frame_internal.h"
 
 namespace lmu {
-namespace four_passes_detail {
+namespace qvfr_frame_detail {
 
 bool installed = false;
-FourPassesRun cfg;           // the run's settings (four_passes.h)
+QvfrFrameRun cfg;           // the run's settings (qvfr_frame.h)
 bool qvfrMode = false;       // QVFR: four passes every frame, composed (no samples)
 // The frame capture hotkey (d3d11_capture_hotkey=1): the arm last acted on (capture_views), and as this frame's pass 0
 // read it (pass_begin), so the views and the glare read back pass by pass are of one frame.
@@ -274,7 +274,7 @@ bool ensure_atlas(ID3D11Texture2D* eyeTexture) {
 // mvr_pass.h mvr_size_cut cuts their viewports and scissors to the live eye size at the d3d11 level, the eye in the
 // top-left of its launch-size targets, its focus view beside it (docs/recon-lmu.md "Census run 3": nothing else in the
 // pass follows the size; YEBIS works on its whole targets at any size). The eye size is the game's own scale times the
-// outer share (four_passes_set_live_scales), as the game itself would size a pass at that scale.
+// outer share (qvfr_frame_set_live_scales), as the game itself would size a pass at that scale.
 // Two sizes per pass (focus_math.h final_extent): sceneW/sceneH, what it rendered of the main targets (the scene, the
 // resolve, YEBIS: glare share and MVR's side-by-side viewports work there); passW/passH, the part of its eye target
 // that holds its view after the final blit or FSR stretched the main target over it (the copies, the atlas regions, the
@@ -412,7 +412,7 @@ bool plain_now() { return cfg.trackerDrives && recovery.plain(); }
 int recoveryLogged = 0;
 unsigned long long eyesOnlyRun = 0;  // scene frames in a row without focus views (the overlay's badge)
 // A frame with eye passes but no four views: the part of each eye's image its pass rendered (the top-left, at the live
-// resolution), which the layer submits in place of the whole image (four_passes_eye_extent).
+// resolution), which the layer submits in place of the whole image (qvfr_frame_eye_extent).
 bool eyeExtentReady = false;
 unsigned eyeExtent[2][2] = {};
 
@@ -436,7 +436,7 @@ unsigned long long twoPassFrames = 0;
 
 // MVR's context hooks on `device` (at the first pass, or with the pass tracker at the session's first frame end, so menus
 // are seen too). False: MVR off for the session.
-ID3D11Device* sessionDevice = nullptr;  // four_passes_device (not referenced: the session keeps it)
+ID3D11Device* sessionDevice = nullptr;  // qvfr_frame_device (not referenced: the session keeps it)
 void pass_begin(int p);
 void pass_end(int p);
 void panel_draw(ID3D11DeviceContext* context, bool after, unsigned count, unsigned start);
@@ -488,7 +488,7 @@ bool install_mvr(ID3D11Device* device) {
 
 // Before eye pass p: its focus view's size, this frame's remap (frozen at pass 0) and the room check.
 void mvr_before_pass(int p) {
-    if (!mvrInstalled)  // (the tracker's passes come only once its hooks are in: four_passes_frame_end)
+    if (!mvrInstalled)  // (the tracker's passes come only once its hooks are in: qvfr_frame_frame_end)
         return;
     if (p == 0) {
         mvr_frame_mode(0);
@@ -664,7 +664,7 @@ void store_record() {
 
 // R4a, after pass 1 of a two-pass frame: the eye loop ends here; the eyes stay in their targets with the focus finals
 // beside them (the VR UI is doubled onto those after the loop). The frame's record and sizes from the focus finals;
-// the atlas takes them at xrEndFrame (four_passes_atlas). No focus finals: no four views this frame.
+// the atlas takes them at xrEndFrame (qvfr_frame_atlas). No focus finals: no four views this frame.
 void after_two_passes() {
     atlasReady = false;  // this pass's finals decide (pass 0 cleared it already, unless the tracker saw pass 1 again)
     ID3D11Texture2D* e0 = game_eye_image(0);
@@ -779,7 +779,7 @@ void pass_end(int p) {
     if (cfg.mvr && p < 2)
         mvr_pass_end(p);
     const unsigned long long cpu1 = thread_cycles();
-    if (p < 4) {  // what the game's own pass cost (four_passes_frame_end logs the averages)
+    if (p < 4) {  // what the game's own pass cost (qvfr_frame_frame_end logs the averages)
         costWindow.passWallMs[p] += now_ms() - wall0;
         costWindow.passCpuCycles[p] += static_cast<double>(cpu1 - cpu0);
         if (cfg.mvr && ab_run())
@@ -846,16 +846,16 @@ void capture_views() {
     }
 }
 
-}  // namespace four_passes_detail
+}  // namespace qvfr_frame_detail
 
-using namespace four_passes_detail;
+using namespace qvfr_frame_detail;
 
 // R5: the multi-view path (the tracker driving the game's two passes) gives way to the four passes without MVR, for
 // the rest of the session: at xrCreateSession when the device can't do it, or at a frame end (render thread, between
 // frames) when MVR fails while running. Logged once with `why`.
 int badgeLogged = 0;
 bool losingForTest = false;  // lmu_mvr_lose_at's window is open
-std::atomic<int> multiViewNow{0};  // four_passes_multi_view's (a QvfrMultiView), as of the last frame end
+std::atomic<int> multiViewNow{0};  // qvfr_frame_multi_view's (a QvfrMultiView), as of the last frame end
 
 // What the multi-view path did before it stopped, step by step, so a log shows which one the focus views didn't get past:
 // the eye passes' room check and focus box (mvr_before_pass), drawing the focus view, the focus post's copy, composite
@@ -893,7 +893,7 @@ void stop_multi_view(const char* why) {
                   frames, why);
 }
 
-bool four_passes_start(const FourPassesRun& run) {
+bool qvfr_frame_start(const QvfrFrameRun& run) {
     if (installed)
         return true;
     cfg = run;
@@ -901,7 +901,7 @@ bool four_passes_start(const FourPassesRun& run) {
     menuNative = run.qvfr && run.menuNative && run.layerWidth > 0 && run.layerHeight > 0;
     layerShare[0] = run.layerWidth;
     layerShare[1] = run.layerHeight;
-    four_passes_set_box(run.fraction, run.fractionY);
+    qvfr_frame_set_box(run.fraction, run.fractionY);
     wchar_t exe[MAX_PATH] = {};
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     if (!simqvfr::games::supported_build(kGame, simqvfr::sha256_file(exe))) {
@@ -931,7 +931,7 @@ bool four_passes_start(const FourPassesRun& run) {
     return false;
 }
 
-void four_passes_device(ID3D11Device* device) {
+void qvfr_frame_device(ID3D11Device* device) {
     sessionDevice = device;
     recovery.new_session();  // a graphics setting may have changed: no waiting for the next try
     // R5: the device decides; the game is still in its menus, the eye loop not yet run.
@@ -945,7 +945,7 @@ void four_passes_device(ID3D11Device* device) {
                           : "");
 }
 
-void four_passes_frame_end() {
+void qvfr_frame_frame_end() {
     if (!installed)
         return;
     ++frames;
@@ -1151,7 +1151,7 @@ void four_passes_frame_end() {
 
 }
 
-void four_passes_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
+void qvfr_frame_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
     std::lock_guard guard(liveMutex);
     for (int e = 0; e < 2; ++e) {
         gazeValid[e] = valid[e] && std::isfinite(tan[e][0]) && std::isfinite(tan[e][1]);
@@ -1160,17 +1160,17 @@ void four_passes_set_gaze(const float (&tan)[2][2], const bool (&valid)[2]) {
     }
 }
 
-void four_passes_set_box(double fractionX, double fractionY) {
+void qvfr_frame_set_box(double fractionX, double fractionY) {
     std::lock_guard guard(liveMutex);
     focusFraction = std::clamp(fractionX, 0.05, 1.0);
     focusFractionY = fractionY > 0 ? std::clamp(fractionY, 0.05, 1.0) : 0.0;
 }
 
-simqvfr::games::QvfrMultiView four_passes_multi_view() {
+simqvfr::games::QvfrMultiView qvfr_frame_multi_view() {
     return static_cast<simqvfr::games::QvfrMultiView>(multiViewNow.load(std::memory_order_relaxed));
 }
 
-bool four_passes_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) {
+bool qvfr_frame_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) {
     if (!eyeExtentReady)
         return false;
     eyeExtentReady = false;  // this frame's
@@ -1181,7 +1181,7 @@ bool four_passes_eye_extent(unsigned (&width)[2], unsigned (&height)[2]) {
     return true;
 }
 
-bool four_passes_record(simqvfr::Views4Frame& frame) {
+bool qvfr_frame_record(simqvfr::Views4Frame& frame) {
     std::lock_guard guard(liveMutex);
     if (!haveRecord)
         return false;
@@ -1189,7 +1189,7 @@ bool four_passes_record(simqvfr::Views4Frame& frame) {
     return true;
 }
 
-ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
+ID3D11Texture2D* qvfr_frame_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv)[4][4]) {
     if (off_render_thread()) {  // the copies would race the render thread on its context: the eyes as submitted
         if (!atlasThreadLogged) {
             atlasThreadLogged = true;
@@ -1261,7 +1261,7 @@ ID3D11Texture2D* four_passes_atlas(ID3D11Texture2D* const (&eyes)[2], float (&uv
     return atlas;
 }
 
-void four_passes_note_views(const XrView* views, uint32_t count) {
+void qvfr_frame_note_views(const XrView* views, uint32_t count) {
     if (!views || count < 2)
         return;
     std::lock_guard guard(liveMutex);
@@ -1278,7 +1278,7 @@ void four_passes_note_views(const XrView* views, uint32_t count) {
     maskStale.store(stale, std::memory_order_relaxed);
 }
 
-void four_passes_mask_taken(uint32_t viewIndex) {
+void qvfr_frame_mask_taken(uint32_t viewIndex) {
     if (viewIndex >= 2)
         return;
     std::lock_guard guard(liveMutex);
@@ -1290,7 +1290,7 @@ void four_passes_mask_taken(uint32_t viewIndex) {
                   viewIndex, t[0], t[1], t[2], t[3], locatedValid ? "" : " -- none located yet: the mask is always drawn");
 }
 
-void four_passes_set_live_scales(double outer, double focus) {
+void qvfr_frame_set_live_scales(double outer, double focus) {
     const float o = static_cast<float>(std::clamp(outer, 0.1, 1.0)), f = static_cast<float>(std::clamp(focus, 0.1, 1.0));
     std::lock_guard guard(liveMutex);
     if (o == liveScale[0] && f == liveScale[1])
@@ -1302,7 +1302,7 @@ void four_passes_set_live_scales(double outer, double focus) {
                   o * 100, f * 100);
 }
 
-void four_passes_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight) {
+void qvfr_frame_set_live_axes(double outerWidth, double outerHeight, double focusWidth, double focusHeight) {
     const auto share = [](double v) { return static_cast<float>(std::clamp(v, 0.05, 1.0)); };
     const float a[2][2] = {{share(outerWidth), share(outerHeight)}, {share(focusWidth), share(focusHeight)}};
     std::lock_guard guard(liveMutex);
@@ -1315,7 +1315,7 @@ void four_passes_set_live_axes(double outerWidth, double outerHeight, double foc
                       a[0][0] * 100, a[0][1] * 100, a[1][0] * 100, a[1][1] * 100);
 }
 
-void four_passes_view_size(int (&size)[2]) {
+void qvfr_frame_view_size(int (&size)[2]) {
     size[0] = static_cast<int>(viewW);
     size[1] = static_cast<int>(viewH);
 }

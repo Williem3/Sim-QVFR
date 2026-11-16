@@ -320,7 +320,7 @@ void mvr_pass_end(int pass) {
         g.gpu[g.gpuSlot].pending = true;
         g.gpuSlot = -1;
     }
-    if (g.sample && !g.keepFocus && pass >= 0 && pass < 4) {  // gate C's comparison (gate D's is four_passes.cpp's)
+    if (g.sample && !g.keepFocus && pass >= 0 && pass < 4) {  // gate C's comparison (gate D's went with the four passes)
         const int eye = pass & 1;
         const MvrPassView& v = g.viewOf[eye];
         if (pass < 2)

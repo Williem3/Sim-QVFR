@@ -1,5 +1,5 @@
-// LMU's menus at native resolution (frames without the eye loop; the VR UI panel drawn again): four_passes_internal.h.
-#include "four_passes_internal.h"
+// LMU's menus at native resolution (frames without the eye loop; the VR UI panel drawn again): qvfr_frame_internal.h.
+#include "qvfr_frame_internal.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -15,15 +15,15 @@
 #include "focus_math.h"
 #include "mvr_pass.h"
 
-namespace lmu::four_passes_detail {
+namespace lmu::qvfr_frame_detail {
 
 // ---- QVFR: the menus at native resolution ----
 // A frame without the eye loop (the main menu, loading) is the game's eye images as they are, at the views' size: its
 // UI as soft as the periphery. Instead each eye's image is scaled up to the native eye into an image of ours before the
 // game draws its UI, the UI panel drawn into that at native after (as into the focus views), and the layer composes a
 // menu atlas of the two (the focus views the same pixels). Kept for the session (the compositor holds views of them).
-bool menuNative = false;        // FourPassesRun::menuNative
-double layerShare[2] = {1, 1};  // the views' layer in native eye widths and heights (FourPassesRun)
+bool menuNative = false;        // QvfrFrameRun::menuNative
+double layerShare[2] = {1, 1};  // the views' layer in native eye widths and heights (QvfrFrameRun)
 simqvfr::D3D11ViewResample menuResample;
 bool menuResampleTried = false;
 ID3D11Texture2D* menuTex[2] = {};
@@ -190,7 +190,7 @@ bool menu_record(simqvfr::Views4Frame& f, float (&uv)[4][4]) {
     return true;
 }
 
-// The menu images (their UI drawn) into the menu atlas, the record stored: the layer composes the menu (four_passes_atlas).
+// The menu images (their UI drawn) into the menu atlas, the record stored: the layer composes the menu (qvfr_frame_atlas).
 void menu_publish(const simqvfr::Views4Frame& f, const float (&uv)[4][4]) {
     ID3D11Device* device = nullptr;
     menuAtlas->GetDevice(&device);
@@ -268,4 +268,4 @@ void menu_finish() {
         menu_publish(f, uv);
 }
 
-}  // namespace lmu::four_passes_detail
+}  // namespace lmu::qvfr_frame_detail

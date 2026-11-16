@@ -184,7 +184,7 @@ int SIM_QVFR_TEST_MAIN() {
     const double slack = 1 + simqvfr::Views4Layout::kRoomSlack;
     // The pass sizes the game renders in a layer made for a native eye of nativeW x nativeH (session.cpp truncates the
     // offered size, the game rounds each pass up), and whether the eye and its focus view fit side by side
-    // (four_passes.cpp's MVR check).
+    // (qvfr_frame.cpp's MVR check).
     const auto fits = [](const simqvfr::Views4Layout& launch, const simqvfr::Views4Layout& live, unsigned nativeW,
                          unsigned nativeH, unsigned (&eye)[2], unsigned (&focus)[2]) {
         const auto viewW = static_cast<unsigned>(nativeW * launch.layer_width());
