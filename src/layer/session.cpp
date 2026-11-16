@@ -13,6 +13,7 @@
 #include "log.h"
 #include "probe/cpu_load.h"
 #include "probe/cpu_placement.h"
+#include "probe/cpu_isolation.h"
 #include "probe/d3d11_capture.h"
 #include "probe/d3d11_compose_timer.h"
 #include "probe/d3d12_trace.h"
@@ -297,6 +298,7 @@ XrResult XRAPI_CALL layerDestroySession(XrSession session) {
     gpu_load_stop();
     cpu_load_stop();
     cpu_placement_stop();
+    cpu_isolation_end();
     pad_watch_stop();
     {
         std::lock_guard guard(gaze.mutex);  // the session's spaces and attachment go with it

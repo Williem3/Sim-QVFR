@@ -6,6 +6,7 @@
 #include "log.h"
 #include "probe/cpu_load.h"
 #include "probe/cpu_placement.h"
+#include "probe/cpu_isolation.h"
 #include "probe/cpu_profile.h"
 #include "probe/d3d12_trace.h"
 #include "probe/hang_watch.h"
@@ -23,6 +24,7 @@ XrResult XRAPI_CALL layerEndFrame(XrSession session, const XrFrameEndInfo* info)
     cpu_profile_mark_frame();  // the game's frame ends here: a running capture's samples go to their frames
     cpu_load_render_thread(GetCurrentThreadId());
     cpu_placement_frame();  // which kind of core the render thread is on (read only)
+    cpu_isolation_frame();  // [experiment] cpu_isolate: the render thread's core to itself, or the A/B's side
     cpu_profile_poll();
     frame_capture_poll();
     if ((experiment.views4 || experiment.measure) && cpu.msPerTick > 0) {

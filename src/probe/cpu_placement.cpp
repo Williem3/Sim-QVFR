@@ -371,7 +371,7 @@ std::string process_state() {
     GetProcessAffinityMask(GetCurrentProcess(), &mine, &system);
     ULONG sets = 0;
     const BOOL noSets = GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &sets);
-    const int own = __popcnt64(mine), all = __popcnt64(system);
+    const int own = static_cast<int>(__popcnt64(mine)), all = static_cast<int>(__popcnt64(system));
     char affinity[64];
     if (own == all)
         std::snprintf(affinity, sizeof(affinity), "all %d", all);

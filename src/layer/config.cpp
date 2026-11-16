@@ -6,6 +6,7 @@
 #include <string>
 
 #include "engine/dlss_math.h"
+#include "probe/cpu_isolation.h"
 #include "engine/dlss_settings.h"
 #include "games/game.h"
 #include "games/multi_view.h"
@@ -57,6 +58,7 @@ LiveSettings read_live(const wchar_t* ini) {
         l.sharpen = ini_int(ini, kSharpenPercent);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
+    l.cpuIsolate = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"experiment", L"cpu_isolate", 0, ini)), 0, 100000);
     l.focusFraction = ini_int(ini, kFocusPercent) / 100.0;
     // Missing (or 0): focus_percent's, as views4_sizes takes 0.
     const int heightPercent = ini_raw(ini, kFocusHeightPercent, 0);
@@ -370,6 +372,9 @@ void load_experiment() {
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
     set_eye_off(settings.eyeOff);
+    cpu_isolation_mode(settings.cpuIsolate);  // applied on the render thread at its next xrEndFrame
+    if (settings.cpuIsolate)
+        logf("experiment: cpu_isolate=%d (probe/cpu_isolation.h)", settings.cpuIsolate);
     if (settings.eyeOff != kEyeOffNone)
         logf("experiment: %s ([quad] eye_off: that eye shows black)", eye_off_name(settings.eyeOff));
     live.ini = ini;

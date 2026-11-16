@@ -5,6 +5,9 @@
 #include <string>
 #include <vector>
 
+#include <windows.h>
+
+#include "probe/cpu_isolation.h"
 #include "probe/cpu_placement.h"
 #include "test_util.h"
 
@@ -89,6 +92,48 @@ int SIM_QVFR_TEST_MAIN() {
         std::printf("     Sleep(1) %.2f ms\n", sleep);
         check(sleep > 0.4 && sleep < 40, "Sleep(1) measured");
         check(std::string(priority_class_name(0x20)) == "Normal", "priority class name");
+    }
+    {  // core isolation's plan: the fastest kind's highest core, never core 0
+        const IsolationPlan one = isolation_plan(layout(8, 8, 96, 96));
+        check(one.valid && one.core == 7 && one.mainCpus == std::vector<int>{14, 15} && one.others.size() == 14,
+              "5800X3D: core 7 (logical 14+15), the other 14 for the rest");
+        const IsolationPlan x3d = isolation_plan(layout(16, 8, 32, 96));
+        check(x3d.valid && x3d.core == 15, "dual-CCD X3D, V-Cache on CCD1: its highest core");
+        const IsolationPlan x3d0 = isolation_plan(layout(16, 8, 96, 32));
+        check(x3d0.valid && x3d0.core == 7, "dual-CCD X3D, V-Cache on CCD0: core 7, not the other CCD's");
+        std::vector<LogicalCpu> hybrid;
+        uint8_t n = 0;
+        for (int c = 0; c < 8; ++c)
+            for (int t = 0; t < 2; ++t)
+                hybrid.push_back({0, n++, c, 0, 36 * kMb, 1});
+        for (int c = 8; c < 24; ++c)
+            hybrid.push_back({0, n++, c, 0, 36 * kMb, 0});
+        const IsolationPlan intel = isolation_plan(hybrid);
+        check(intel.valid && intel.core == 7 && intel.mainCpus.size() == 2, "hybrid: the highest P-core");
+        check(!isolation_plan(layout(1, 1, 32, 32)).valid, "one core: nothing to isolate");
+        const SideStats st = side_stats({1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, {11, 11, 11, 11, 11, 11, 11, 11, 11, 20}, 5);
+        check(st.frames == 10 && close_to(st.cpuMean, 5.5, 1e-9) && close_to(st.cpuP90, 10, 1e-9) &&
+                  close_to(st.frameP90, 20, 1e-9) && close_to(st.onCore, 50, 1e-9),
+              "side stats: mean, p90, share on the core");
+    }
+    {  // this process: on gives the thread its core and the process the rest, off takes both back
+        const IsolationPlan plan = isolation_plan(cpu_topology());
+        ULONG count = 0;
+        cpu_isolation_mode(1);
+        cpu_isolation_frame();
+        GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &count);
+        ULONG threadCount = 0;
+        GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
+        std::printf("     on: process default %lu CPU sets, this thread %lu (plan: core %d)\n", count, threadCount, plan.core);
+        check(!plan.valid || (count == plan.others.size() && threadCount == plan.mainCpus.size()),
+              "isolation on: the other logical processors for the process, the core's for the thread");
+        cpu_isolation_mode(0);
+        cpu_isolation_frame();
+        count = threadCount = 99;
+        const BOOL processNone = GetProcessDefaultCpuSets(GetCurrentProcess(), nullptr, 0, &count);
+        const BOOL threadNone = GetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0, &threadCount);
+        check(processNone && count == 0 && threadNone && threadCount == 0, "isolation off: both cleared");
+        cpu_isolation_end();
     }
     return test_result();
 }

@@ -248,6 +248,7 @@ struct LiveSettings {
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
     bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)
+    int cpuIsolate = 0;           // [experiment] cpu_isolate (probe/cpu_isolation.h): 0 off, 1 on, N > 1 an A/B of N frames a side
     int focusMaskMargin = 16;     // [experiment] focus_mask_margin, focus view texels
 };
 
