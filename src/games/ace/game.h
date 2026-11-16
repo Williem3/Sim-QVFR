@@ -15,8 +15,9 @@ inline constexpr simqvfr::games::GameInfo kGame = {
     L"nvngx_dlss.dll",         // its DLSS (310.9.1 in this build)
     // Everything but object detail (X-Plane's) and the LMU-only multi-view rendering and runtime composition; no Cheeky
     // Foveated DLSS or its frame generation since QVFR is the API path (2026-11-14: its own focus DLSS; Cheeky untried
-    // there).
-    {false, true, true, true, false, false, false, false, true},
+    // there). The focus mask on the API path's focus views (replay_focus.cpp: drawn after their clear; 2026-11-16 A/B
+    // about -0.2 to -0.3 ms GPU for a 30% trapezoid).
+    {false, true, true, true, false, false, false, false, true, false, false, false, true},
     kBuilds, std::size(kBuilds),
 };
 

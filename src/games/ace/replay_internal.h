@@ -286,6 +286,18 @@ struct Focus {
     std::vector<Retired> retired;
     ComPtr<ID3D12CommandAllocator> clearAllocator, eyeClearAllocator;
     ComPtr<List> clearList, eyeClearList;  // the focus twins every frame; the eye references at sample frames
+    // The focus mask (replay_probe_set_focus_mask; quad/focus_mask.h): right after the clear, the focus views' depth
+    // twins get the nearest depth (1: reverse-Z) outside the focus shape, so the replays' depth-tested draws skip those
+    // pixels. clearList draws it while it is on; plainClearList is the clear alone (the A/B's other side, replay_mask_ab).
+    ComPtr<ID3D12CommandAllocator> plainClearAllocator;
+    ComPtr<List> plainClearList;
+    ComPtr<ID3D12RootSignature> maskRoot;
+    ComPtr<ID3D12Resource> maskVb;  // upload heap: every depth twin's mesh, one after another
+    std::unordered_map<uint64_t, ComPtr<ID3D12PipelineState>> maskPsos;  // by DSV format and sample count
+    bool maskFailed = false;        // its shader or root signature couldn't be made: off for the session
+    uint64_t maskRecorded = 0;      // the mask settings' epoch the lists were recorded with
+    uint32_t maskTwins = 0, maskVertices = 0;  // what the last recording masked (the log)
+    double maskShare = 0;           // the share of the scene twin's focus pixels it covers (the log)
     SRWLOCK lock = SRWLOCK_INIT;  // pool, pending, twins, views, clear list
     std::vector<std::unique_ptr<Replay>> pool;
     std::unordered_map<List*, std::vector<Replay*>> pending;  // the game's list -> our replays of it, in order
@@ -636,6 +648,14 @@ EyeOut eye_out(const EyeNow& now, uint64_t out);  // eye_now / eye_out: here, pe
 // ---- replay_focus.cpp
 extern std::atomic<int> remakeEpoch;
 bool focus_compile();
+// The focus mask: under focus.lock, the clear lists recorded again when its settings changed since; the list to run this
+// frame (the plain clear on the A/B's other side).
+void focus_mask_set(bool on, const FocusArea& area, unsigned marginTexels);  // any thread
+void focus_mask_refresh();
+List* focus_clear_list(uint64_t frame);
+// The A/B (replay_mask_ab): the side of a frame, 0 with the mask, 1 without; and the frame end's log of the windows.
+int focus_mask_side(uint64_t frame);
+void focus_mask_window_log(uint64_t ended);
 D3D12_CPU_DESCRIPTOR_HANDLE view_slot(bool depth, int& index);
 void retire(IUnknown* object);  // under focus.lock: kept alive until no list can still use it
 void retire_feature(focus_ngx::Feature*& feature);

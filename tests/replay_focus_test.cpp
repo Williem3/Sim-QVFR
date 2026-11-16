@@ -116,6 +116,11 @@ int SIM_QVFR_TEST_MAIN() {
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter> warp;
     ComPtr<ID3D12Device> device;
+    {  // D3D12's debug layer where it is installed (Graphics Tools): its errors are printed at the end
+        ComPtr<ID3D12Debug> debug;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
+            debug->EnableDebugLayer();
+    }
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || FAILED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))) ||
         FAILED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
         std::puts("no WARP D3D12 device");
@@ -293,6 +298,7 @@ int SIM_QVFR_TEST_MAIN() {
     };
 
     simqvfr::ReplayFocusCompare compare;
+    double firstAgree = 0, firstColour = 0;  // the first sample's, without the focus mask
     const auto wait_compare = [&](uint64_t sample) {
         for (int i = 0; i < 200 && compare.sample < sample; ++i) {
             Sleep(50);
@@ -319,6 +325,12 @@ int SIM_QVFR_TEST_MAIN() {
             check(compare.colourHoodAgree >= compare.colourEyeAgree, "the neighbourhood test is at least as tolerant");
             eyeW = 320;
             eyeH = 240;
+            // The focus mask from here on (quad/focus_mask.h): the top corners 30% in, a 1-texel margin.
+            simqvfr::FocusArea trapezoid;
+            trapezoid.inset[0] = trapezoid.inset[2] = 0.3f;
+            simqvfr::replay_probe_set_focus_mask(true, trapezoid, 1);
+            firstAgree = compare.agree;
+            firstColour = compare.colourAgree;
             make_targets();
         }
         frame();
@@ -335,9 +347,39 @@ int SIM_QVFR_TEST_MAIN() {
     wait_compare(2);
     check(compare.sample == 2, "the second sample, after the game's targets were made again, was compared");
     check(compare.pixels > 3000, "at the new size (more focus pixels)");
-    check(compare.agree > 0.97 && compare.shiftX == 0 && compare.shiftY == 0, "depth agrees at shift (0, 0)");
-    check(compare.colourAgree > 0.95, "colour agrees");
+    // With the focus mask the focus views' cut corners hold the nearest depth and no colour: the replay no longer agrees
+    // with the eye reference there, and still does elsewhere (the shift found stays 0, 0).
+    std::printf("focus mask: depth agreement %.2f%% -> %.2f%%, colour %.2f%% -> %.2f%%\n", firstAgree * 100,
+                compare.agree * 100, firstColour * 100, compare.colourAgree * 100);
+    check(compare.shiftX == 0 && compare.shiftY == 0, "with the focus mask: still aligned at shift (0, 0)");
+    // (the trapezoid hides about 29% of each focus view: depth there is the nearest, colour black where the scene was lit)
+    check(compare.agree < firstAgree - 0.15 && compare.agree > 0.6 && compare.colourAgree < firstColour - 0.05,
+          "with the focus mask: the cut corners differ from the eye reference, the rest agrees");
+    {
+        const std::string log = read_text(logPath);
+        check(log.find("replay mask: on: ") != std::string::npos, "the log says the mask was recorded into the clear list");
+    }
     check(SUCCEEDED(device->GetDeviceRemovedReason()), "the device is fine");
+    {  // the debug layer's errors, if it ran
+        ComPtr<ID3D12InfoQueue> info;
+        if (SUCCEEDED(device.As(&info))) {
+            const UINT64 n = info->GetNumStoredMessages();
+            int errors = 0;
+            for (UINT64 i = 0; i < n; ++i) {
+                SIZE_T size = 0;
+                info->GetMessage(i, nullptr, &size);
+                std::string buffer(size, '\0');
+                auto* m = reinterpret_cast<D3D12_MESSAGE*>(buffer.data());
+                if (SUCCEEDED(info->GetMessage(i, m, &size)) &&
+                    (m->Severity == D3D12_MESSAGE_SEVERITY_ERROR || m->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) &&
+                    errors++ < 8)
+                    std::printf("debug layer: %s\n", m->pDescription);
+            }
+            std::printf("debug layer: %d errors\n", errors);
+        } else {
+            std::puts("debug layer: not installed");
+        }
+    }
     CloseHandle(event);
     std::printf("%s\n", failures ? "replay focus test FAILED" : "replay focus test passed");
     return failures ? 1 : 0;

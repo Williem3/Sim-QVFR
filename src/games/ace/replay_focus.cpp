@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../../log.h"
+#include "../../quad/focus_mask.h"
 #include "replay_shaders.h"
 
 namespace simqvfr::replay_detail {
@@ -499,38 +500,237 @@ void prune_retired() {
                         focus.retired.end());
 }
 
-// Under focus.lock: one clear list for the focus twins (every frame) and one for the eye references (sample frames):
-// depth to 0 (reverse-Z), colour to 0.
+// ---- The focus mask (replay_probe_set_focus_mask; quad/focus_mask.h) ----
+// The settings, set from any thread; the clear lists are recorded again (under focus.lock) when their epoch moves.
+struct MaskSettings {
+    SRWLOCK lock = SRWLOCK_INIT;
+    bool on = false;
+    FocusArea area{};
+    unsigned margin = 16;
+    std::atomic<uint64_t> epoch{1};
+};
+MaskSettings maskSettings;
+
+struct MaskSnapshot {
+    bool on = false;
+    FocusArea area{};
+    unsigned margin = 16;
+    uint64_t epoch = 0;
+};
+MaskSnapshot mask_snapshot() {
+    MaskSnapshot s;
+    AcquireSRWLockShared(&maskSettings.lock);
+    s.on = maskSettings.on;
+    s.area = maskSettings.area;
+    s.margin = maskSettings.margin;
+    s.epoch = maskSettings.epoch.load();
+    ReleaseSRWLockShared(&maskSettings.lock);
+    return s;
+}
+
+// Under focus.lock: the mask's depth-only pipeline for a depth format and sample count (made once each). Null: none.
+ID3D12PipelineState* mask_pso(DXGI_FORMAT format, DXGI_SAMPLE_DESC samples) {
+    if (focus.maskFailed || format == DXGI_FORMAT_UNKNOWN)
+        return nullptr;
+    static ComPtr<ID3DBlob> vs;
+    if (!focus.maskRoot || !vs) {
+        // z 0.5 at a viewport whose depth range is one value: that value.
+        static const char kSource[] = "float4 main(float2 p : POSITION) : SV_Position { return float4(p, 0.5, 1); }";
+        ComPtr<ID3DBlob> errors, blob;
+        const D3D12_ROOT_SIGNATURE_DESC desc{0, nullptr, 0, nullptr,
+                                             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
+        if (FAILED(D3DCompile(kSource, sizeof(kSource) - 1, "focus-mask", nullptr, nullptr, "main", "vs_5_0", 0, 0, &vs,
+                              &errors)) ||
+            FAILED(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errors)) ||
+            FAILED(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+                                               IID_PPV_ARGS(&focus.maskRoot)))) {
+            focus.maskFailed = true;
+            log_line("replay mask: its shader or root signature could not be made; off for the session");
+            return nullptr;
+        }
+    }
+    const uint64_t key = (uint64_t{static_cast<uint32_t>(format)} << 32) | (uint64_t{samples.Count} << 16) | samples.Quality;
+    if (const auto it = focus.maskPsos.find(key); it != focus.maskPsos.end())
+        return it->second.Get();
+    const D3D12_INPUT_ELEMENT_DESC element = {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
+                                              D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0};
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+    d.pRootSignature = focus.maskRoot.Get();
+    d.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+    d.SampleMask = UINT_MAX;
+    d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    d.RasterizerState.DepthClipEnable = TRUE;
+    d.DepthStencilState.DepthEnable = TRUE;
+    d.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    d.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    d.InputLayout = {&element, 1};
+    d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    d.NumRenderTargets = 0;  // depth only
+    d.DSVFormat = format;
+    d.SampleDesc = samples;
+    ComPtr<ID3D12PipelineState> pso;
+    if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)))) {
+        logf("replay mask: no pipeline for depth format %d with %u sample(s): those twins unmasked",
+             static_cast<int>(format), samples.Count);
+        focus.maskPsos.emplace(key, nullptr);
+        return nullptr;
+    }
+    return focus.maskPsos.emplace(key, pso).first->second.Get();
+}
+
+struct MaskDraw {
+    const Twin* twin = nullptr;
+    ID3D12PipelineState* pso = nullptr;
+    UINT first = 0, count = 0;
+};
+
+// Under focus.lock: each depth twin's mesh (its focus view's size and aspect) in one upload buffer of ours.
+std::vector<MaskDraw> mask_draws(const MaskSnapshot& snap) {
+    std::vector<MaskDraw> draws;
+    focus.maskTwins = focus.maskVertices = 0;
+    focus.maskShare = 0;
+    if (!snap.on || (!snap.area.corners() && snap.area.radius <= 0))
+        return draws;
+    std::vector<float> all;
+    UINT widest = 0;
+    for (const auto& [game, t] : focus.twins) {
+        if (!t.depth || !t.focusW || !t.focusH)
+            continue;
+        FocusArea area = snap.area;
+        area.aspect = static_cast<float>(t.focusW) / static_cast<float>(t.focusH);
+        const std::vector<float> mesh = focus_mask_mesh(area, focus_mask_margin(snap.margin, t.focusW, t.focusH));
+        ID3D12PipelineState* pso = mesh.empty() ? nullptr : mask_pso(t.viewFormat, t.gameDesc.SampleDesc);
+        if (!pso)
+            continue;
+        draws.push_back({&t, pso, static_cast<UINT>(all.size() / 2), static_cast<UINT>(mesh.size() / 2)});
+        all.insert(all.end(), mesh.begin(), mesh.end());
+        if (t.focusW > widest) {  // the scene's (the largest) for the log
+            widest = t.focusW;
+            focus.maskShare = focus_mask_share(snap.area, t.focusW, t.focusH, snap.margin);
+        }
+    }
+    if (all.empty())
+        return {};
+    const D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_UPLOAD};
+    const D3D12_RESOURCE_DESC buffer{D3D12_RESOURCE_DIMENSION_BUFFER, 0, all.size() * sizeof(float), 1, 1, 1,
+                                     DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_NONE};
+    ComPtr<ID3D12Resource> vb;
+    void* data = nullptr;
+    const D3D12_RANGE none{0, 0};
+    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ,
+                                               nullptr, IID_PPV_ARGS(&vb))) ||
+        FAILED(vb->Map(0, &none, &data)) || !data) {
+        log_line("replay mask: its vertex buffer could not be made: unmasked");
+        return {};
+    }
+    std::memcpy(data, all.data(), all.size() * sizeof(float));
+    vb->Unmap(0, nullptr);
+    retire(focus.maskVb.Get());
+    focus.maskVb = vb;
+    focus.maskTwins = static_cast<uint32_t>(draws.size());
+    focus.maskVertices = static_cast<uint32_t>(all.size() / 2);
+    return draws;
+}
+
+// Into `l` (after the clears): the mask's depth into both focus views of each depth twin (its halves).
+void record_mask(List* l, const std::vector<MaskDraw>& draws) {
+    if (draws.empty())
+        return;
+    l->SetGraphicsRootSignature(focus.maskRoot.Get());
+    l->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const D3D12_VERTEX_BUFFER_VIEW vbv{focus.maskVb->GetGPUVirtualAddress(),
+                                       static_cast<UINT>(focus.maskVertices * 2 * sizeof(float)), 2 * sizeof(float)};
+    l->IASetVertexBuffers(0, 1, &vbv);
+    for (const MaskDraw& d : draws) {
+        const Twin& t = *d.twin;
+        l->OMSetRenderTargets(0, nullptr, FALSE, &t.focusView);
+        l->SetPipelineState(d.pso);
+        for (UINT e = 0; e < 2; ++e) {
+            const float x = static_cast<float>(e * t.focusW);
+            const D3D12_VIEWPORT vp{x, 0, static_cast<float>(t.focusW), static_cast<float>(t.focusH), 1, 1};  // nearest
+            const D3D12_RECT rect{static_cast<LONG>(e * t.focusW), 0, static_cast<LONG>((e + 1) * t.focusW),
+                                  static_cast<LONG>(t.focusH)};
+            l->RSSetViewports(1, &vp);
+            l->RSSetScissorRects(1, &rect);
+            l->DrawInstanced(d.count, 1, d.first, 0);
+        }
+    }
+}
+
+// Under focus.lock: the clear lists for the focus twins (every frame; with the mask, and without it for the A/B) and one
+// for the eye references (sample frames): depth to 0 (reverse-Z), colour to 0.
 bool record_clear() {
-    retire(focus.clearAllocator.Get());
-    retire(focus.eyeClearAllocator.Get());
-    retire(focus.clearList.Get());
-    retire(focus.eyeClearList.Get());
-    focus.clearAllocator.Reset();
-    focus.eyeClearAllocator.Reset();
-    focus.clearList.Reset();
-    focus.eyeClearList.Reset();
-    for (int which = 0; which < 2; ++which) {
-        ComPtr<ID3D12CommandAllocator>& a = which ? focus.eyeClearAllocator : focus.clearAllocator;
-        ComPtr<List>& l = which ? focus.eyeClearList : focus.clearList;
+    ComPtr<ID3D12CommandAllocator>* allocators[3] = {&focus.clearAllocator, &focus.eyeClearAllocator,
+                                                     &focus.plainClearAllocator};
+    ComPtr<List>* lists[3] = {&focus.clearList, &focus.eyeClearList, &focus.plainClearList};
+    for (int i = 0; i < 3; ++i) {
+        retire(allocators[i]->Get());
+        retire(lists[i]->Get());
+        allocators[i]->Reset();
+        lists[i]->Reset();
+    }
+    const MaskSnapshot snap = mask_snapshot();
+    focus.maskRecorded = snap.epoch;
+    const std::vector<MaskDraw> draws = mask_draws(snap);
+    for (int which = 0; which < 3; ++which) {
+        ComPtr<ID3D12CommandAllocator>& a = *allocators[which];
+        ComPtr<List>& l = *lists[which];
         if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&a))) ||
             FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, a.Get(), nullptr, IID_PPV_ARGS(&l))))
             return false;
         inReplay = true;
         const float zero[4] = {}, one[4] = {1, 1, 1, 1};
         for (const auto& [game, t] : focus.twins) {
-            const D3D12_CPU_DESCRIPTOR_HANDLE v = which ? t.eyeView : t.focusView;
+            const D3D12_CPU_DESCRIPTOR_HANDLE v = which == 1 ? t.eyeView : t.focusView;
             if (t.depth)
                 l->ClearDepthStencilView(v, D3D12_CLEAR_FLAG_DEPTH, 0.0f, 0, 0, nullptr);
             else  // ACE clears its OIT reveal target to 1 (nothing in front), everything else to 0
                 l->ClearRenderTargetView(v, t.name == "oitReveal" ? one : zero, 0, nullptr);
         }
+        if (which == 0)
+            record_mask(l.Get(), draws);
         l->Close();
         inReplay = false;
     }
+    if (snap.on)
+        logf("replay mask: %s: %u depth twins, %u vertices, about %.0f%% of the scene's focus views (margin %u texels)",
+             draws.empty() ? "nothing to mask (the plain box, or a margin past the rounding)" : "on", focus.maskTwins,
+             focus.maskVertices, focus.maskShare * 100, snap.margin);
     return true;
 }
 }  // namespace
+
+void focus_mask_set(bool on, const FocusArea& area, unsigned marginTexels) {
+    AcquireSRWLockExclusive(&maskSettings.lock);
+    const bool changed = maskSettings.on != on || !(maskSettings.area == area) || maskSettings.margin != marginTexels;
+    maskSettings.on = on;
+    maskSettings.area = area;
+    maskSettings.margin = marginTexels;
+    if (changed)
+        maskSettings.epoch.fetch_add(1);
+    ReleaseSRWLockExclusive(&maskSettings.lock);
+}
+
+void focus_mask_refresh() {
+    if (focus.ready && maskSettings.epoch.load() != focus.maskRecorded && !record_clear())
+        log_line("replay mask: the clear lists could not be recorded again");
+}
+
+int focus_mask_side(uint64_t frame) { return focus.settings.maskAb ? static_cast<int>((frame / 900) % 2) : 0; }
+
+List* focus_clear_list(uint64_t frame) {
+    return focus_mask_side(frame) == 1 && focus.plainClearList ? focus.plainClearList.Get() : focus.clearList.Get();
+}
+
+void focus_mask_window_log(uint64_t ended) {
+    if (!focus.settings.maskAb || ended % 900 != 0 || ended == 0)
+        return;
+    logf("replay mask A/B: frames %llu-%llu were %s the focus mask (the replay gpu line just before is that side's); "
+         "next %s",
+         static_cast<unsigned long long>(ended - 899), static_cast<unsigned long long>(ended),
+         focus_mask_side(ended - 1) == 0 ? "WITH" : "WITHOUT", focus_mask_side(ended + 1) == 0 ? "with" : "without");
+}
 
 // The rate-limited "why not" lines print again after every remake of the game's targets (remakeEpoch): a step that
 // goes quiet after a mode or resolution change in the game says why.
