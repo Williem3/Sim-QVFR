@@ -28,7 +28,6 @@ constexpr Spec kSpecs[] = {
     spec_of(MenuItem::Periphery, L"Periphery", kPeripheryScale), spec_of(MenuItem::Density, L"Focus density", kFocusDensity),
     spec_of(MenuItem::ObjectDetail, L"Object detail", kObjectDetail),
     spec_of(MenuItem::Sharpening, L"Sharpening", kSharpenPercent),
-    spec_of(MenuItem::OutputSize, L"Output size", kOutputDensityMax),
     spec_of(MenuItem::EyeOff, L"Eye off", kEyeOff),  // [quad] eye_off: none, left, right
     {MenuItem::FocusQuadDistance, L"Focus quad distance", 0, kFocusQuadSteps - 1, 1},  // steps of kFocusQuadDistances
     spec_of(MenuItem::Width, L"Focus width", kFocusPercent), spec_of(MenuItem::Height, L"Focus height", kFocusHeightPercent),
@@ -167,7 +166,6 @@ int* value_of(MenuValues& v, MenuItem item) {
     case MenuItem::Density: return &v.density;
     case MenuItem::ObjectDetail: return &v.objectDetail;
     case MenuItem::Sharpening: return &v.sharpen;
-    case MenuItem::OutputSize: return &v.outputDensityMax;
     case MenuItem::EyeOff: return &v.eyeOff;
     case MenuItem::FocusQuadDistance: return &v.focusQuadStep;
     case MenuItem::Width: return &v.width;
@@ -316,14 +314,6 @@ std::vector<MenuItem> menu_page_items(const SettingsMenu& menu) {
             if (at == method.end())
                 at = std::find(method.begin(), method.end(), MenuItem::Density);
             method.insert(at == method.end() ? at : at + 1, MenuItem::Sharpening);
-        }
-        if (menu.launch.qvfr && menu.launch.outputSize) {  // where the layer composes, after Sharpening (or density)
-            auto at = std::find(method.begin(), method.end(), MenuItem::Sharpening);
-            if (at == method.end())
-                at = std::find(method.begin(), method.end(), MenuItem::ObjectDetail);
-            if (at == method.end())
-                at = std::find(method.begin(), method.end(), MenuItem::Density);
-            method.insert(at == method.end() ? at : at + 1, MenuItem::OutputSize);
         }
         if (menu.launch.qvfr && menu.launch.focusQuads) {  // focus_layer=2's test, after Gaze dead-zone
             const auto at = std::find(method.begin(), method.end(), MenuItem::GazeDeadzone);
@@ -561,7 +551,6 @@ MenuValues read_menu_values(const wchar_t* ini) {
     v.helmet = read_helmet_settings(ini);
     v.objectDetail = ini_int(ini, kObjectDetail);
     v.sharpen = ini_int(ini, kSharpenPercent);
-    v.outputDensityMax = ini_int(ini, kOutputDensityMax);
     v.eyeOff = ini_int(ini, kEyeOff);
     v.focusQuadStep = focus_quad_step(read_focus_quad_distance(ini));
     v.dlss = read_dlss_settings(ini);
@@ -570,10 +559,8 @@ MenuValues read_menu_values(const wchar_t* ini) {
 }
 
 bool write_menu_values(const wchar_t* ini, const MenuValues& v, bool qvfr, bool objectDetail, bool focusQuads,
-                       bool sharpening, bool eyeOff, bool outputSize) {
+                       bool sharpening, bool eyeOff) {
     bool ok = true;
-    if (qvfr && outputSize)
-        ok &= write(ini, kOutputDensityMax, kOutputDensityMax.clamp(v.outputDensityMax));
     if (eyeOff)  // QVFR or not: the layer shows the eye black either way
         ok &= write(ini, kEyeOff, kEyeOff.clamp(v.eyeOff));
     if (qvfr && sharpening)
@@ -705,15 +692,7 @@ MenuStats menu_stats(const SettingsMenu& menu) {
     // Density in effect (QVFR: the fit's, horizontal; Two-loop: eye_scale over the box's share).
     const double density = l.qvfr ? f.densityX : l.twoLoopScale * 100 / menu.values.width;
     if (l.nativePpd > 0)
-    {
-        // Composed by the layer: no more than its output holds (the runtime's largest image, then Output size).
-        double shown = density;
-        if (l.outputCap > 0)
-            shown = std::min(shown, l.outputCap);
-        if (l.outputSize)
-            shown = std::min(shown, static_cast<double>(std::max(100, menu.values.outputDensityMax)));
-        s.centerPpd = static_cast<int>(std::lround(l.nativePpd * shown / 100));
-    }
+        s.centerPpd = static_cast<int>(std::lround(l.nativePpd * (l.outputCap > 0 ? std::min(density, l.outputCap) : density) / 100));
     // Rendered against both native eyes, in pixels when the native size is known (as the launcher).
     // The focus mask (a game with it, QVFR): the share of the focus views' pixels it skips, at their size in pixels (a
     // nominal 2000-wide native eye while the native size is unknown: only the margin depends on it).
@@ -952,9 +931,6 @@ std::vector<MenuLine> menu_lines(const SettingsMenu& menu) {
             line.value = std::to_wstring(focus_quad_metres(v.focusQuadStep)) + L" m";
         else if (items[i] == MenuItem::Sharpening && v.sharpen == 0)
             line.value = L"Off";
-        else if (items[i] == MenuItem::OutputSize)
-            line.value = v.outputDensityMax <= 100 ? std::wstring(L"Native")
-                                                   : L"Up to " + std::to_wstring(v.outputDensityMax) + L"%";
         else if (items[i] == MenuItem::EyeOff)
             line.value = v.eyeOff == 1 ? L"Left (right eye only)" : v.eyeOff == 2 ? L"Right (left eye only)" : L"None";
         else if (items[i] == MenuItem::HelmetDetail)

@@ -50,9 +50,6 @@ enum class MenuItem {
     FocusQuadDistance,
     // The settings page, after Focus density (and Object detail), for a game with it (MenuLaunch::sharpening).
     Sharpening,
-    // The settings page, after Sharpening (or Focus density), where the layer composes (MenuLaunch::outputSize):
-    // [quad] output_density_max, how far the composed image may grow for the focus density (quad/output_density.h).
-    OutputSize,
     // The DLSS page, Sim-QVFR's own ([dlss], engine/dlss_settings.h), for a game with it (MenuLaunch::ownDlss: LMU): on,
     // the focus views' mode and preset, the eyes' preset, texture sharpening; with MenuLaunch::fsr the upscaler (DLSS or
     // AMD FSR, an experiment).
@@ -106,7 +103,6 @@ struct MenuValues {
     HelmetSettings helmet;    // [helmet] (QVFR)
     int objectDetail = kObjectDetail.def;  // [experiment] object_detail (QVFR, a game with it: X-Plane), percent
     int sharpen = 0;          // [quad] sharpen_percent (QVFR, a game with it), percent; 0 off
-    int outputDensityMax = kOutputDensityMax.def;  // [quad] output_density_max (QVFR composed), percent; 100 native
     int eyeOff = 0;           // [quad] eye_off (a game with it): 0 both eyes on, 1 the left off, 2 the right (eye_off.h)
     int focusQuadStep = kFocusQuadSteps - 1;  // [experiment] focus_quad_distance, as a step of kFocusQuadDistances
     DlssSettings dlss;        // [dlss]: Sim-QVFR's own DLSS (a game with it: LMU; the DLSS page)
@@ -163,11 +159,9 @@ struct MenuLaunch {
     // items are still the plain set until the path has settings of its own).
     bool apiPath = false;
     int apiFocusScale = 100;  // the focus views' mode this launch runs ([dlss] focus_scale at launch)
-    // Composed by the layer: the most focus density the runtime's largest image lets through, percent of the native eye
-    // (quad/output_density.h; Output size caps it further); above it the density only antialiases. 0: no such cap.
+    // Composed by the layer: the most focus density the headset gets, percent of the native eye (the output's largest
+    // size, quad/output_density.h); above it the density only antialiases. 0: no such cap (the runtime composes).
     double outputCap = 0;
-    // The layer composes the views (not the runtime: native quad views, focus_layer): the Output size line.
-    bool outputSize = false;
     bool apiDlss = false;  // the API path with DLSS: the two presets on the settings page ([dlss] eye_preset, focus_preset)
 };
 
@@ -217,10 +211,9 @@ bool menu_key(SettingsMenu& menu, MenuKey key);
 // The values in an ini, read as the launcher reads them (unset periphery and density follow eye_scale).
 MenuValues read_menu_values(const wchar_t* ini);
 // Writes the menu's keys (resolution, the crop and the helmet only for QVFR; object detail only with `objectDetail`,
-// sharpening only with `sharpening`, a game that has it; the output size only with `outputSize`). False if the file
-// cannot be written.
+// sharpening only with `sharpening`, a game that has it). False if the file cannot be written.
 bool write_menu_values(const wchar_t* ini, const MenuValues& values, bool qvfr, bool objectDetail = false,
-                       bool focusQuads = false, bool sharpening = false, bool eyeOff = false, bool outputSize = false);
+                       bool focusQuads = false, bool sharpening = false, bool eyeOff = false);
 
 // What the values ask for against the launch (QVFR), by the layer's rule (views4_layout.h's
 // views4_fit): the views share ACE's launch target, so periphery and focus trade width; the focus
