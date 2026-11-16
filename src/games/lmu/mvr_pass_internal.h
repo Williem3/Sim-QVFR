@@ -157,11 +157,7 @@ struct State {
     UINT vpCount = 0, scCount = 0;
     D3D11_VIEWPORT vps[kMaxRects] = {};
     D3D11_RECT scs[kMaxRects] = {};
-    // The pass's scene depth (raw, compared only; learned at the scene's bind) and whether the bound depth is it: two
-    // views only into the scene's targets (a shadow atlas or mirror has its own depth). Without the tracker (tests)
-    // every depth target counts, as before.
-    ID3D11Resource* passDepth = nullptr;
-    bool sceneBound = true, notSceneLogged = false;
+    bool manyViewportsLogged = false;  // a depth-bound draw with more than one viewport, eye only (said once)
     // What is applied.
     ID3D11VertexShader* boundVs = nullptr;
     // The two viewports / scissors last applied with the focus rect appended (a game's Get/Set round trip gives them

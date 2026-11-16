@@ -1353,29 +1353,20 @@ void stereo_off_failed(const char* where) {
     }
 }
 
-// Is the depth target bound with these render targets the pass's scene depth? Learned at the first bind in the pass of
-// the scene's render target (is_scene_rtv) with a depth target. Per bind, not per draw.
-bool scene_bound(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
-    if (!tr.on)
-        return true;  // (tests without the tracker: as before)
-    if (!dsv)
-        return false;
-    ComPtr<ID3D11Resource> bound;
-    dsv->GetResource(&bound);
-    if (!g.passDepth && n && n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL && rtvs && rtvs[0] && is_scene_rtv(rtvs[0]))
-        g.passDepth = bound.Get();
-    return bound && bound.Get() == g.passDepth;
-}
-
-// Twin, two views and the second viewport exactly while a focus-drawing pass draws into its scene's targets (or an
-// overlay into the eye's final) with one viewport and a shader with a twin.
+// Twin, two views and the second viewport exactly while a focus-drawing pass draws with a depth target (or an overlay
+// into the eye's final) with one viewport and a shader with a twin.
 void update() {
     ID3D11VertexShader* twin = nullptr;
-    // The scene's draws (its depth target bound) and, after the focus view's final blit, the overlays into the eye's
-    // final. One viewport only: the focus one is appended to it (apply_viewports); with more the twin would draw into
-    // the game's own second one.
-    const bool can = g.drawFocus && !g.broken && ((g.depthBound && g.sceneBound) || g.overlayTarget) && g.vpCount == 1 &&
-                     g.gameVs && !g.gsBound && !g.hsBound && !g.dsBound && !g.soBound;
+    // The pass's draws with a depth target bound (any of them: the car shadows' own depth target is not the scene's,
+    // 2026-11-15) and, after the focus view's final blit, the overlays into the eye's final. One viewport only: the
+    // focus one is appended to it (apply_viewports); with more the twin would draw into the game's own second one.
+    const bool can = g.drawFocus && !g.broken && (g.depthBound || g.overlayTarget) && g.vpCount == 1 && g.gameVs &&
+                     !g.gsBound && !g.hsBound && !g.dsBound && !g.soBound;
+    if (g.drawFocus && g.depthBound && g.vpCount != 1 && !g.manyViewportsLogged) {
+        g.manyViewportsLogged = true;
+        simqvfr::logf("lmu mvr: pass %d: a depth-bound draw with %u viewports: into the eye alone (logged once)", g.pass,
+                      g.vpCount);
+    }
     bool want = can;
     if (want) {
         twin = twin_of(g.gameVs);
@@ -1601,17 +1592,6 @@ void without_slot(UINT& n, ID3D11RenderTargetView* const*& rtvs, ID3D11RenderTar
     rtvs = own;
 }
 
-// A bind in a pass: whether its depth target is the scene's (update), the first bind into another one said.
-void note_scene_target(UINT n, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
-    g.sceneBound = scene_bound(n, rtvs, dsv);
-    if (dsv && !g.sceneBound && g.drawFocus && !g.notSceneLogged) {
-        g.notSceneLogged = true;
-        simqvfr::logf("lmu mvr: pass %d: a depth target other than the scene's bound: its draws into the eye alone "
-                      "(logged once)",
-                      g.pass);
-    }
-}
-
 void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT n, ID3D11RenderTargetView* const* rtvs,
                                              ID3D11DepthStencilView* dsv) {
     ID3D11RenderTargetView* own[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
@@ -1645,7 +1625,6 @@ void STDMETHODCALLTYPE om_set_render_targets(ID3D11DeviceContext* context, UINT 
         g.obsFinal = bound && bound.Get() == g.fsrEye[g.pass & 1];
     }
     g.depthBound = dsv != nullptr;
-    note_scene_target(n, rtvs, dsv);
     g.overlayTarget = overlay_target(n, rtvs);
     const bool recut = cut_rects();  // live resolution: the cut decided again for the target now bound
     update();
@@ -1690,7 +1669,6 @@ void STDMETHODCALLTYPE om_set_render_targets_and_uavs(ID3D11DeviceContext* conte
         fsr_final(n, rtvs);
     if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) {
         g.depthBound = dsv != nullptr;
-        note_scene_target(n, rtvs, dsv);
         g.overlayTarget = overlay_target(n, rtvs);
         update();
     }
@@ -3485,7 +3463,6 @@ void read_bindings() {
     ID3D11DepthStencilView* dsv = nullptr;
     g.context->OMGetRenderTargets(1, &rtv, &dsv);
     g.depthBound = dsv != nullptr;
-    g.sceneBound = scene_bound(rtv ? 1u : 0u, &rtv, dsv);  // (at a pass's start: its scene depth learned here)
     if (rtv)
         rtv->Release();
     if (dsv)
@@ -3768,7 +3745,6 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
             b->Release();
         g.biasCbUsed = false;
     }
-    g.passDepth = nullptr;  // this pass's scene depth: learned from the bindings as it begins, or at its scene's bind
     read_bindings();
     keep_game_vps();
     keep_game_scs();
