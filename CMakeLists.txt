@@ -553,7 +553,8 @@ add_dependencies(hang_watch_test sim_qvfr_launcher)  # the dump helper, next to 
 configure_file(src/launcher/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher_version.h @ONLY)
 # The launcher's code that launcher_test checks, compiled once for both. An OBJECT library, so the launcher links every
 # object as it did when they were its own sources (none has a static initializer, so their order doesn't matter).
-add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp src/launcher/launch_watch.cpp
+add_library(sim_qvfr_launcher_shared OBJECT src/games/games.cpp src/launcher/settings.cpp
+  src/launcher/settings_per_game.cpp src/launcher/settings_runtime.cpp src/launcher/settings_readouts.cpp src/launcher/launch_watch.cpp
   src/launcher/game_tabs.cpp src/launcher/report.cpp src/launcher/launch_plan.cpp src/launcher/layer_order.cpp
   src/launcher/explicit_layers.cpp src/launcher/session_history.cpp src/launcher/preflight.cpp src/input/hotkeys.cpp
   src/launcher/leftovers.cpp
