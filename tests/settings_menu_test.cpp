@@ -139,6 +139,25 @@ int SIM_QVFR_TEST_MAIN() {
     SettingsMenu unknownPpd = stats;
     unknownPpd.launch.nativePpd = 0;
     check(menu_stats(unknownPpd).centerPpd == 0, "no PPD before ACE has rendered");
+    {  // The focus mask: a game that masks (GameFeatures::focusMask) leaves the cut corners out of the pixels saved.
+        SettingsMenu trap = stats;
+        trap.values.shape.corners = true;
+        trap.values.shape.in[0] = trap.values.shape.in[1] = 30;  // the top corners 30% in
+        SettingsMenu masks = trap;
+        masks.launch.focusMask = true;
+        SettingsMenu maskOff = masks;
+        maskOff.values.focusMask = false;
+        SettingsMenu rounded = stats;
+        rounded.launch.focusMask = true;
+        rounded.values.corners = 100;
+        const int plain = menu_stats(trap).savedPercent, masked = menu_stats(masks).savedPercent,
+                  round = menu_stats(rounded).savedPercent;
+        std::printf("     pixels saved: %d%% box, %d%% trapezoid masked, %d%% rounded masked\n", plain, masked, round);
+        check(plain == st.savedPercent && menu_stats(maskOff).savedPercent == plain && masked > plain && round > plain &&
+                  round < masked,
+              "pixels saved: the trapezoid and the rounding count their masked corners where the game masks; nothing "
+              "with focus_mask=0 or another game");
+    }
     run.values.periphery = 10;
     run.values.density = 84;
     run.values.height = 35;  // 84% x 43% = 36.1%: still over 36%

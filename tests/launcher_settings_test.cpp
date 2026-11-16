@@ -3,6 +3,8 @@
 // every setting the launcher shows surviving a load and save (the UI overhaul's round trip).
 #include "launcher_test_kit.h"
 
+#include "quad/focus_mask.h"
+
 namespace {
 
 // Every key of an ini file, "section/key" (lower case) -> value.
@@ -477,6 +479,36 @@ int SIM_QVFR_TEST_MAIN() {
         check(l.focus.width == 1292 && l.target.width == 2584 && std::abs(l.pixels - 4.0 * 1292 * 1080) < 1 &&
                   std::abs(l.focusDensity - 50.0 / 35) < 1e-9,
               "readouts: Two-loop renders two outer-size frames; focus density = outer / width");
+
+        // The focus mask: in a game that masks its focus views (GameFeatures::focusMask), the pixels it skips outside
+        // the focus shape leave the count; nothing for the plain box, the mask off or another game.
+        {
+            Settings trap;
+            trap.shape.corners = true;
+            trap.shape.in[0] = trap.shape.in[1] = 30;  // the top corners 30% in: a trapezoid
+            const Readouts other = readouts(trap, rt, false), lmu = readouts(trap, rt, true);
+            const double share = focus_mask_share(focus_area_of(trap.shape, 0), static_cast<unsigned>(lmu.focus.width),
+                                                  static_cast<unsigned>(lmu.focus.height), 16);
+            const double outerArea = static_cast<double>(lmu.outer.width) * lmu.outer.height;
+            const double focusArea = static_cast<double>(lmu.focus.width) * lmu.focus.height;
+            std::printf("     trapezoid: %.1f%% of the focus views masked, saved %.1f%% (%.1f%% without the mask)\n",
+                        lmu.focusMasked * 100, lmu.saved * 100, other.saved * 100);
+            check(other.focusMasked == 0 && other.pixels == r.pixels && lmu.focusMasked == share && share > 0.25 &&
+                      share < 0.30 && std::abs(lmu.pixels - 2.0 * (outerArea + focusArea * (1 - share))) < 1 &&
+                      lmu.saved > other.saved,
+                  "readouts: a trapezoid in a game that masks: its cut corners left out of the pixels, more saved");
+            Settings maskOff = trap;
+            maskOff.focusMask = false;
+            Settings rounded;
+            rounded.corner = 100;
+            const Readouts round = readouts(rounded, rt, true);
+            check(readouts(Settings{}, rt, true).focusMasked == 0 && readouts(maskOff, rt, true).focusMasked == 0 &&
+                      round.focusMasked > 0.1 && round.focusMasked < share && round.pixels < r.pixels,
+                  "readouts: the plain box or focus_mask=0 mask nothing; full rounding masks less than the trapezoid");
+            Settings loopTrap = trap;
+            loopTrap.mode = RenderMode::TwoLoop;
+            check(readouts(loopTrap, rt, true).focusMasked == 0, "readouts: Two-loop has no focus views to mask");
+        }
 
         // Live settings: only the reloadable keys go to the running game's ini, and only while that
         // process is ACE.

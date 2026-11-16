@@ -1,5 +1,8 @@
 #include "settings.h"
 
+#include "../games/game.h"
+#include "../quad/focus_mask.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -62,6 +65,10 @@ std::wstring session_summary_text(const RuntimeInfo& r) {
 }
 
 Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
+    return readouts(s, runtime, games::launcher_game().features.focusMask);
+}
+
+Readouts readouts(const Settings& s, const RuntimeInfo& runtime, bool gameMasksFocus) {
     Readouts r;
     const auto scaled = [](int base, double fraction) { return static_cast<int>(std::lround(base * fraction)); };
     const auto area = [](Size v) { return static_cast<double>(v.width) * v.height; };
@@ -94,8 +101,13 @@ Readouts readouts(const Settings& s, const RuntimeInfo& runtime) {
         r.focus = shrink(r.focus);
         r.target = shrink(r.target);
     }
-    // QVFR: two outer and two focus views. Two-loop: two frames of two outer-sized eyes.
-    r.pixels = s.mode == RenderMode::Qvfr ? 2.0 * (area(r.outer) + area(r.focus)) : 4.0 * area(r.outer);
+    // QVFR: two outer and two focus views, less what the focus mask skips in the focus views (outside the focus shape,
+    // in a game that masks them). Two-loop: two frames of two outer-sized eyes.
+    if (s.mode == RenderMode::Qvfr && gameMasksFocus && s.focusMask && r.focus.width > 0 && r.focus.height > 0)
+        r.focusMasked = focus_mask_share(focus_area_of(s.shape, s.corner), static_cast<unsigned>(r.focus.width),
+                                         static_cast<unsigned>(r.focus.height),
+                                         static_cast<unsigned>(std::max(s.focusMaskMargin, 0)));
+    r.pixels = s.mode == RenderMode::Qvfr ? 2.0 * (area(r.outer) + area(r.focus) * (1 - r.focusMasked)) : 4.0 * area(r.outer);
     r.runtime = {runtime.width, runtime.height};
     r.runtimePixels = 2.0 * area(r.runtime);
     r.saved = r.runtimePixels > 0 ? 1.0 - r.pixels / r.runtimePixels : 0;
