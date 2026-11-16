@@ -123,6 +123,17 @@ void log_submitted_fov(uint32_t eye, const XrFovf& submitted, const XrFovf& comp
 // views4.cpp
 XrResult views4_submit(XrSession session, const XrFrameEndInfo* info);
 
+// views4_d3d11.cpp (v4d3d11_tracks_chains: state.h)
+// The game's image (eye columns: the whole target in the first eye's swapchain) to the game's adapter, with each
+// view's rect in it (GameAdapter::qvfr_game_image), before anything composes it.
+void v4d3d11_game_image(const XrCompositionLayerProjection* proj, const Views4Layout& layout);
+// Composes both eyes of `proj` into the D3D11 output chain and points `copy` at it; false: nothing changed. With
+// focus_layer (`focus` given): the periphery in `copy`, the focus views' layer in `focus`, `*layered` true.
+bool v4d3d11_compose(XrSession session, const XrCompositionLayerProjection* proj,
+                     std::vector<XrCompositionLayerProjectionView>& copy,
+                     XrCompositionLayerProjectionView (*focus)[2] = nullptr, bool* layered = nullptr,
+                     XrTime displayTime = 0);
+
 // views.cpp
 XrResult XRAPI_CALL layerLocateViews(XrSession session, const XrViewLocateInfo* info, XrViewState* state,
                                      uint32_t capacity, uint32_t* countOutput, XrView* views);
