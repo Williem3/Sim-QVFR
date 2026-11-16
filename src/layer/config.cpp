@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 
+#include "engine/cpu_boost.h"
 #include "engine/dlss_math.h"
 #include "engine/dlss_settings.h"
 #include "games/game.h"
@@ -57,6 +58,7 @@ LiveSettings read_live(const wchar_t* ini) {
         l.sharpen = ini_int(ini, kSharpenPercent);
     if (features.eyeOff)
         l.eyeOff = eye_off_from_ini(ini_int(ini, kEyeOff));
+    l.cpuFullSpeed = ini_flag(ini, kCpuFullSpeed);
     l.focusFraction = ini_int(ini, kFocusPercent) / 100.0;
     // Missing (or 0): focus_percent's, as views4_sizes takes 0.
     const int heightPercent = ini_raw(ini, kFocusHeightPercent, 0);
@@ -111,6 +113,21 @@ Views4Sizes views4_sizes(const wchar_t* ini, double focusFraction, double focusF
     s.focus = focusDensityPercent ? s.density * focusFraction : eyeScale;
     s.focusHeight = focusFractionY > 0 ? s.density * focusFractionY : s.focus;
     return s;
+}
+
+void apply_cpu_full_speed(bool full) {
+    if (!experiment.cpuSettings) {
+        experiment.cpuFullSpeed = full;  // remembered: a live change logs nothing either
+        return;
+    }
+    const bool ok = cpu_set_full_speed(full);
+    experiment.cpuFullSpeed = full;
+    PowerThrottling now{};
+    const bool known = read_power_throttling(now);
+    logf("cpu: %s%s (power throttling control 0x%x, state 0x%x%s)",
+         full ? "full speed: Windows never runs the game in efficiency mode (EcoQoS off)"
+              : "Windows decides the game's efficiency mode (EcoQoS)",
+         ok ? "" : " - Windows refused it", known ? now.control : 0, known ? now.state : 0, known ? "" : ", unknown");
 }
 
 // What the launcher shows before the next launch (SIM_QVFR_RUNTIME_INFO, set by the launcher): the
@@ -183,6 +200,7 @@ void load_experiment() {
         const bool qvfr = !baseline && !logOnly && parse_render_mode(mode) == IniRenderMode::Qvfr;
         const bool legacy = GetPrivateProfileIntW(L"experiment", L"ace_legacy_views4", 0, ini.c_str()) != 0;
         experiment.apiPath = ace && qvfr && !legacy;
+        experiment.cpuSettings = !baseline && !logOnly;  // a baseline measures the game as it runs without us
         if (experiment.apiPath) {
             log_line("experiment: ACE's QVFR: the API path (its own two eyes, the focus views replayed at the D3D12 level; "
                      "ace_legacy_views4=1 for the old 4views path)");
@@ -370,6 +388,7 @@ void load_experiment() {
     experiment.focusQuadDistance = settings.focusQuadDistance;
     experiment.sharpen = settings.sharpen;
     set_eye_off(settings.eyeOff);
+    apply_cpu_full_speed(settings.cpuFullSpeed);
     if (settings.eyeOff != kEyeOffNone)
         logf("experiment: %s ([quad] eye_off: that eye shows black)", eye_off_name(settings.eyeOff));
     live.ini = ini;

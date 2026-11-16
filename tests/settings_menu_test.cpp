@@ -269,7 +269,7 @@ int SIM_QVFR_TEST_MAIN() {
     // [menu] for the layer to move them, then the hotkeys footer.
     SettingsMenu moving;
     moving.page = 4;
-    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 9,
+    check(menu_title(moving) == L"Overlay and menu" && menu_subtitle(moving).empty() && menu_page_items(moving).size() == 10,
           "the Overlay and menu page");
     const std::vector<MenuLine> placeLines = menu_lines(moving);
     check(placeLines[1].label == L"Performance overlay" && placeLines[1].value == L"Off" && placeLines[2].value == L"0°" &&
@@ -880,6 +880,27 @@ int SIM_QVFR_TEST_MAIN() {
         check(read_menu_values(ini.c_str()).hotkeyFooter && write_menu_values(ini.c_str(), f.values, true) &&
                   !read_menu_values(ini.c_str()).hotkeyFooter,
               "Hotkeys footer: unset is on; written and read back");
+        DeleteFileW(ini.c_str());
+    }
+    {  // CPU efficiency mode ([cpu] full_speed): every game, on the Overlay and menu page before Hotkeys footer, full speed
+       // by default.
+        SettingsMenu f;
+        f.launch = {true, 50, 39, 39};
+        f.page = static_cast<int>(menu_pages(f).size()) - 1;
+        const std::vector<MenuItem> items = menu_page_items(f);
+        const int at = static_cast<int>(items.size()) - 2;
+        check(at > 0 && items[at] == MenuItem::CpuFullSpeed, "CPU efficiency mode: the line before Hotkeys footer");
+        f.selected = at;
+        check(f.values.cpuFullSpeed && menu_lines(f)[at].label == L"CPU efficiency mode" &&
+                  menu_lines(f)[at].value == L"Off (full speed)",
+              "CPU efficiency mode: off (full speed) by default");
+        check(menu_key(f, MenuKey::Left) && !f.values.cpuFullSpeed && menu_lines(f)[at].value == L"Windows decides",
+              "CPU efficiency mode: a step leaves it to Windows");
+        const std::wstring ini = temp_path(L"simqvfr-menu-cpu.ini");
+        DeleteFileW(ini.c_str());
+        check(read_menu_values(ini.c_str()).cpuFullSpeed && write_menu_values(ini.c_str(), f.values, false) &&
+                  !read_menu_values(ini.c_str()).cpuFullSpeed,
+              "CPU efficiency mode: unset is full speed; written (Two-loop too) and read back");
         DeleteFileW(ini.c_str());
     }
 

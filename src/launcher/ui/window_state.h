@@ -94,6 +94,8 @@ enum Ctl {
     kProfileUse, kProfileShare, kProfileDelete, kProfileUpdate, kProfileRevert, kProfileSave, kProfilePaste,
     // The Headset menu pane: the hotkeys footer ([menu] hotkey_footer).
     kHotkeyFooter,
+    // The Headset tab's CPU card: Windows' efficiency mode for the game ([cpu] full_speed).
+    kCpuFullSpeed,
     // The About pane's update check (update_check.h): the start-up switch, Check now, Download, and the action bar's badge.
     kUpdateCheck, kUpdateNow, kUpdateDownload, kUpdateBadge, kUpdateInstall,
     // The Games pane: a game's tab on or off (option: its index in games::all_games), the game whose colour is edited
