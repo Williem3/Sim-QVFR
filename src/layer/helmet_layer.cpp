@@ -11,6 +11,7 @@
 #include "quad/focus_turn.h"
 #include "quad/fov_crop.h"
 #include "quad/helmet.h"
+#include "quad/output_density.h"
 #include "xr.h"
 #include "layer/layer.h"
 
@@ -307,12 +308,17 @@ V4Helmet views4_helmet_start(const HelmetSettings& helmet) {
 // output is submitted with, and the eye's size in the output from the top left of its half (native, or with the
 // FOV crop its kept share; with the pieces in the scene, the whole uncropped eye at native size).
 void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComposition& c, XrFovf& submitFov,
-                       XrExtent2Di& extent) {
+                       XrExtent2Di& extent, OutputDensity& out, double focusTexels) {
     // The output covers the outer view's tangents, so that is the FOV it is submitted with.
     submitFov = tangents_fov(c.outerTan);
     float full[4];
     uncrop_tangents(c.outerTan, quad.v4Crop, e, full);
     std::memcpy(h.fullView[e], full, sizeof(full));
+    // The output's density: the focus view's texels per native pixel (the native eye spans the uncropped FOV).
+    if (focusTexels > 0)
+        out.wanting = std::max(out.wanting, output_density_wanted(focusTexels, c.focusTan[1] - c.focusTan[0],
+                                                                  quad.nativeW, full[1] - full[0]));
+    const uint32_t eyeW = out.eyeW ? out.eyeW : quad.nativeW, eyeH = out.eyeH ? out.eyeH : quad.nativeH;
     if (h.pieces) {
         // The crop hint once the game renders the located view (not its own projection on the loading screens).
         float located[4];
@@ -333,11 +339,14 @@ void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComp
         c.helmet = helmet.debugLight ? 3 : 1;
     }
     if (h.piecesInScene) {
-        // Fallback (no layer of their own): the output covers the whole uncropped eye at native size;
+        // Fallback (no layer of their own): the output covers the whole uncropped eye at the output's scale;
         // the pieces fill what the game did not render.
         std::memcpy(c.viewTan, full, sizeof(full));
         submitFov = tangents_fov(full);
-        extent = {static_cast<int32_t>(quad.nativeW), static_cast<int32_t>(quad.nativeH)};
+        extent = {output_density_pixels(quad.nativeW, out.scale, 1, eyeW),
+                  output_density_pixels(quad.nativeH, out.scale, 1, eyeH)};
+        c.outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(eyeW);
+        c.outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(eyeH);
         const HelmetShape shape = helmet_shape(helmet, full, c.outerTan);
         std::memcpy(c.helmetOpening, shape.opening, sizeof(shape.opening));
         c.helmetRim = shape.rim;
@@ -359,10 +368,10 @@ void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComp
         c.visorBlend = helmet.visorBlend;
         return;
     }
-    // The FOV crop: the output keeps native density over the cropped FOV (views4_output_extent).
-    extent = views4_output_extent();
-    c.outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(quad.nativeW);
-    c.outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(quad.nativeH);
+    // The FOV crop: the output keeps its density over the cropped FOV (views4_output_extent).
+    extent = views4_output_extent(out);
+    c.outputSize[0] = static_cast<float>(extent.width) / static_cast<float>(eyeW);
+    c.outputSize[1] = static_cast<float>(extent.height) / static_cast<float>(eyeH);
 }
 
 // After a composition (as views4_helmet_start): the helmet's own layer drawn for it, unless its size changed

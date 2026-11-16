@@ -93,14 +93,20 @@ XrResult XRAPI_CALL layerDestroySwapchain(XrSwapchain swapchain);
 // helmet_layer.cpp
 void helmet_layer_release();
 
-// views4.cpp
-XrExtent2Di views4_output_extent();
+// views4.cpp (under quad.mutex; quad/output_density.h)
+XrExtent2Di views4_output_extent(const OutputDensity& d);
+// A new output chain's size for `d`: the launch focus density or what the last compositions wanted, if more.
+void views4_output_chain(OutputDensity& d);
+// After a composition: the next one's scale from what its eyes wanted (views4_helmet_eye); `who` names the path in the log.
+void views4_output_density(OutputDensity& d, const char* who);
 
 // helmet_layer.cpp
 void log_helmet_light();
 V4Helmet views4_helmet_start(const HelmetSettings& helmet);
+// `out`: the output's density (its scale this frame; the eye's wish added); `focusTexels`: the focus view's width in
+// its source, texels (0: unknown, the output's scale not measured from this eye).
 void views4_helmet_eye(const HelmetSettings& helmet, V4Helmet& h, int e, EyeComposition& c, XrFovf& submitFov,
-                       XrExtent2Di& extent);
+                       XrExtent2Di& extent, OutputDensity& out, double focusTexels);
 void views4_helmet_layer(const HelmetSettings& helmet, const V4Helmet& h, const EyeComposition (&eyes)[2],
                          ID3D11Texture2D* views11);
 void views4_helmet_submit(XrSession session, int layer, XrCompositionLayerQuad (&quads)[kHelmetQuadsMax], int& count,

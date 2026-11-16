@@ -210,6 +210,9 @@ struct Experiment {
     // [quad] sharpen_percent (a game with GameFeatures::sharpening): CAS on the focus views as they are composed
     // (EyeComposition::sharpness), percent; 0 off.
     std::atomic<int> sharpen = 0;
+    // [quad] output_density_max (quad/output_density.h): the most the composed output grows past the native eye for
+    // the focus density, percent; 100 composes at native size (as before). Live.
+    std::atomic<int> outputDensityMax = 400;
     std::atomic<bool> border = false;      // quad: debug outline (borderColor) on the focus box (views4: on the outer views)
     bool borderAtLaunch = false;           // views4 without composition tracks the outline's chains only if on at launch
     float borderColor[4] = {0, 1, 0, 1};   // debug outline colour (linear RGBA): debug_border_color green|magenta|teal
@@ -249,6 +252,7 @@ struct LiveSettings {
     HelmetSettings helmet;  // views4 composing only
     int objectDetail = 100;  // [experiment] object_detail, percent (a game with GameFeatures::objectDetail)
     int sharpen = 0;         // [quad] sharpen_percent, percent (a game with GameFeatures::sharpening); 0 off
+    int outputDensityMax = 400;  // [quad] output_density_max, percent of the native eye (100: composed at native size)
     int eyeOff = -1;         // [quad] eye_off (a game with GameFeatures::eyeOff; quad/eye_off.h): -1 none, 0 left, 1 right
     int focusQuadDistance = 100;  // [experiment] focus_quad_distance, metres (focus_layer=2)
     bool focusMask = true;        // [quad] focus_mask (quad/focus_mask.h)
@@ -436,9 +440,23 @@ struct PendingImage {
 inline constexpr XrDuration kImageWaitNs = 100'000'000;
 inline constexpr int kImageWaitTries = 10;
 
+// Output density (quad/output_density.h): the composed output's scale of the native eye, this frame's and its chain's.
+// Above 1 the runtime gets the focus views' texels instead of their average down to the native eye.
+struct OutputDensity {
+    double scale = 1;       // this frame's: each eye composed into native x scale (times the FOV crop's kept share)
+    double chainScale = 1;  // the output chain's eye is native x this
+    double target = 1;      // the scale the focus density wants (output_density_next); above chainScale: a larger chain
+    double wanting = 0;     // the most an eye wants this composition (views4_helmet_eye), taken by views4_output_density
+    double wanted = 0;      // ... at the last composition; 0 none yet
+    double cap = 1;         // output_density_cap: the runtime's largest image and [quad] output_density_max
+    uint32_t eyeW = 0, eyeH = 0;  // the chain's eye, pixels
+    double logged = 0;      // the scale last logged
+};
+
 struct Quad {
     std::mutex mutex;
     uint32_t nativeW = 0, nativeH = 0;      // runtime's recommended eye size (before eye_scale)
+    uint32_t maxW = 0, maxH = 0;            // the runtime's largest eye image (output_density_cap)
     uint32_t reportedW = 0, reportedH = 0;  // what ACE was offered
     XrSwapchain appChain = XR_NULL_HANDLE;  // ACE's double-wide colour swapchain
     uint32_t appW = 0, appH = 0;
@@ -489,6 +507,7 @@ struct Quad {
     ULONGLONG helmetLightLogAt = 0;  // when to ask the compositor for the helmet's light again (log_helmet_light)
     bool v4FovValid = false;
     XrExtent2Di v4Extent[2] = {};  // each composed eye's size in the output (views4_compose), for views4_submit
+    OutputDensity outDensity;      // the D3D12 output chain's (made at launch density; not grown live)
     XrFovf v4SubmitFov[2] = {};  // the FOV the composed output covers (views4_compose), for views4_submit
     XrFovf v4LoggedGameFov[2] = {};  // ACE's submitted FOV, as last logged against v4SubmitFov
     bool v4Composed = false;
@@ -515,6 +534,11 @@ struct V4D3D11 {
     std::vector<ID3D11Texture2D*> outImages;
     PendingImage outPending, focusPending;  // each chain's image left acquired by a timed-out wait
     uint32_t outW = 0, outH = 0;  // one eye's size in it
+    OutputDensity outDensity;     // its scale of the native eye; grown live (v4d3d11_resources)
+    // A chain replaced by a larger one: destroyed once the runtime is surely done with its last image.
+    XrSwapchain retiredChain = XR_NULL_HANDLE;
+    int retiredFrames = 0;  // compositions left before it goes
+    bool growFailed = false;  // a larger chain failed: the output keeps the size it has
     bool failed = false;          // no compositor or output chain: views 0-1 as they are
     // experiment.focusLayer: the focus views' own swapchain (kHelmetLayerFormat, alpha the feather), eye e from
     // x = e x focusW; made at the first frame with four views, the size of the game's view images.

@@ -294,27 +294,11 @@ Card view_card() {
 
 // ---- Rendering ---------------------------------------------------------------------------------
 
-// What the last launch found about the runtime composing the views (runtime.ini), or nothing before a launch.
-std::wstring native_quad_last() {
-    const RuntimeInfo& rt = app.runtime;
-    if (rt.quadViewsUsed && rt.quadFocusWidth > 0 && rt.quadFocusHeight > 0)
-        return L"Last launch: the runtime composed the views, its focus region " + std::to_wstring(rt.quadFocusWidth) + L"% × " +
-               std::to_wstring(rt.quadFocusHeight) + L"% of the view.";
-    if (rt.quadViewsUsed)
-        return L"Last launch: the runtime composed the views.";
-    if (rt.quadViews == L"offered")
-        return L"Last launch: the runtime offers it, but it wasn’t used (frame generation, or see the log).";
-    if (rt.quadViews == L"none")
-        return L"Last launch: this runtime doesn’t offer it, so Sim-QVFR composed the views.";
-    if (rt.quadViews == L"unknown")
-        return L"Last launch: another OpenXR layer sits between Sim-QVFR and the runtime, so it wasn’t tried.";
-    return L"";
-}
-
-// The method (Two-loop only), the runtime composing the views, and how a multi-view game (LMU, ATS, ETS2) draws its
-// focus views; DLSS and Foveated DLSS are their own cards, each with its switch.
+// The method (Two-loop only) and how a multi-view game (LMU, ATS, ETS2) draws its focus views; DLSS and Foveated DLSS
+// are their own cards, each with its switch. The runtime composing the views (Pimax, Varjo) has no switch: it is
+// automatic ([experiment] native_quad_views, the report bundle says what the last launch did).
 bool rendering_shown() {
-    return method_shown() || game_has(&games::GameFeatures::nativeQuadViews) || multi_view_game();
+    return method_shown() || multi_view_game();
 }
 
 Card rendering_card() {
@@ -324,20 +308,6 @@ Card rendering_card() {
             b.popup(kMethod, L"Rendering method", kMethodNames[qvfr() ? 0 : 1], items_of(kMethod), Applies::NextLaunch);
             b.note(L"Two-loop renders each headset frame twice. Switch to Quad View Foveated Rendering; Two-loop won’t be "
                    L"offered again.");
-        }
-        if (game_has(&games::GameFeatures::nativeQuadViews)) {
-            if (!qvfr()) {
-                b.note(L"Runtime composition is available in Quad View Foveated Rendering.");
-            } else {
-                const bool on = app.s.nativeQuad != 0;
-                b.toggle(kNativeQuad, L"Let the runtime compose", on,
-                         on ? L"Pimax or Varjo: your headset’s software draws the focus area, sharper." : L"Off: Sim-QVFR draws the views",
-                         false, Applies::NextLaunch);
-                if (on && !native_quad_last().empty())
-                    b.note(native_quad_last());
-                if (on && app.runtime.session.frameGeneration)  // only when it matters
-                    b.note(L"Off while frame generation runs: it needs one composed image.");
-            }
         }
         if (multi_view_game()) {
             if (!qvfr()) {
@@ -353,7 +323,6 @@ Card rendering_card() {
     c.reset = [](Settings& s) {
         const Settings d;
         s.mode = d.mode;
-        s.nativeQuad = d.nativeQuad;
     };
     return c;
 }

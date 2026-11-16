@@ -109,7 +109,6 @@ Profiles live in the profiles folder next to the ini (`profile/profiles.h`). The
 | Resolution | Footer "Percent of the headset's recommended resolution (W × H px per eye)…" | info | runtime.ini `recommended_width/height` | — | — | — | Picture › Resolution ⓘ |
 | Resolution | Object detail (0–100 %) | slider | `[experiment] object_detail` | Live | X-Plane only (`objectDetail`); greyed in Two-loop | Yes | Picture › Resolution |
 | Resolution | Sharpening (0–100 %, 0 = Off) | slider | `[quad] sharpen_percent` | Live | All four games (`sharpening`); greyed in Two-loop | Yes | Picture › Resolution |
-| Resolution | Let the runtime compose (Pimax, Varjo) | toggle | `[experiment] native_quad_views` (1 auto, 0 off; a hand-set 2 toggles to 0) | Next launch | LMU only (`nativeQuadViews`); greyed in Two-loop | Yes | Picture › Rendering |
 | Resolution | Runtime composition: last-launch line ("composed the views, its focus region W % × H %", "offers it but it wasn't used", "doesn't offer it", "another layer sits between") | info | runtime.ini `quad_views`, `quad_views_used`, `quad_runtime_focus` | — | Runtime composition on | — | Picture › Rendering |
 | Resolution | Runtime composition footer (focus area inside the runtime's focus region; off with frame generation) | info | — | — | — | — | Picture › Rendering ⓘ; the frame generation note only when frame generation is on |
 | Resolution | Crop the view | toggle | `[crop] enabled` | Live | ACE, ACC, LMU (`fovCrop`); QVFR only | Yes | Picture › View & helmet |

@@ -39,7 +39,7 @@ Hover over the **ⓘ** next to any setting in the launcher to see what it does a
 | **Focus area** (sharp area) | The part of the view drawn at full sharpness: the middle, or where your eyes look with eye tracking. |
 | **Periphery** | Everything around the focus area, drawn at a lower resolution. |
 | **Periphery resolution** | How sharp the periphery is, as a share of your headset's recommended resolution. Lower = more frames. |
-| **Focus density** | How sharp the focus area is. 100% matches your headset's own sharpness where you look; above 100% is sharper still (smoother edges and text) and costs more; below is softer. 50% to 400%. |
+| **Focus density** | How sharp the focus area is. 100% matches your headset's own sharpness where you look; above 100% is sharper still (more detail and smoother edges and text) and costs more, the image sent to the headset growing with it; below is softer. 50% to 400%. |
 | **Eye tracked / Fixed** | Whether the focus area follows your eyes or stays in the middle. |
 | **QVFR** | Quad View Foveated Rendering: the method Sim-QVFR uses (two views per eye, one wide and soft, one small and sharp). |
 

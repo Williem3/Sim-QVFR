@@ -20,20 +20,63 @@
 #include "quad/focus_turn.h"
 #include "quad/helmet.h"
 #include "quad/native_quad.h"
+#include "quad/output_density.h"
 #include "xr.h"
 #include "layer/layer.h"
 #include "layer/views4_internal.h"
 
 namespace simqvfr::layer {
 
-// The composed eyes' size in the output (under quad.mutex), from the top left of each eye's half:
-// native, or with the FOV crop its kept share (the same density over the cropped FOV). The crop ACE
-// located its views with, so a live change follows ACE's frames (at most a frame apart).
-XrExtent2Di views4_output_extent() {
-    const auto kept = [](uint32_t native, double share) {
-        return static_cast<int32_t>(std::clamp<long>(std::lround(native * share), 1, static_cast<long>(native)));
-    };
-    return {kept(quad.nativeW, quad.v4Crop.kept_width()), kept(quad.nativeH, quad.v4Crop.kept_height())};
+// The composed eyes' size in the output (under quad.mutex), from the top left of each eye's half: the native eye at
+// this frame's output scale (quad/output_density.h), or with the FOV crop its kept share (the same density over the
+// cropped FOV). The crop ACE located its views with, so a live change follows ACE's frames (at most a frame apart).
+XrExtent2Di views4_output_extent(const OutputDensity& d) {
+    const double scale = std::max(1.0, d.scale);
+    return {output_density_pixels(quad.nativeW, scale, quad.v4Crop.kept_width(), d.eyeW),
+            output_density_pixels(quad.nativeH, scale, quad.v4Crop.kept_height(), d.eyeH)};
+}
+
+void views4_output_chain(OutputDensity& d) {
+    d.cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH,
+                               experiment.outputDensityMax.load(std::memory_order_relaxed));
+    // The launch focus density: the focus views' size against the native eye over the box's share of the FOV.
+    const Views4Layout& launch = experiment.views4Layout;
+    double density = 1;
+    if (experiment.focusFraction > 0)
+        density = std::max(density, launch.focus / experiment.focusFraction);
+    if (experiment.focus_y() > 0)
+        density = std::max(density, launch.focusHeight / experiment.focus_y());
+    const double want = std::clamp(std::max(density, d.target), 1.0, d.cap);
+    d.chainScale = output_chain_scale(want, d.cap);
+    d.eyeW = static_cast<uint32_t>(output_density_pixels(quad.nativeW, d.chainScale, 1, 0));
+    d.eyeH = static_cast<uint32_t>(output_density_pixels(quad.nativeH, d.chainScale, 1, 0));
+    if (quad.maxW)
+        d.eyeW = std::min(d.eyeW, quad.maxW);
+    if (quad.maxH)
+        d.eyeH = std::min(d.eyeH, quad.maxH);
+    if (d.wanted <= 0)  // the first chain: the launch density until a composition measures it
+        d.target = output_density_next(want, 1, d.cap);
+    d.scale = std::min(d.target, d.chainScale);
+}
+
+void views4_output_density(OutputDensity& d, const char* who) {
+    d.cap = output_density_cap(quad.nativeW, quad.nativeH, quad.maxW, quad.maxH,
+                               experiment.outputDensityMax.load(std::memory_order_relaxed));
+    d.wanted = d.wanting;
+    d.wanting = 0;
+    if (d.wanted > 0)
+        d.target = output_density_next(d.wanted, d.target, d.cap);
+    else
+        d.target = std::min(d.target, d.cap);
+    d.scale = std::min(d.target, d.chainScale);
+    if (std::abs(d.scale - d.logged) > 1e-6) {
+        logf("%s: output %.0f%% of the native eye (%ux%u per eye of a %ux%u chain eye; the focus views at %.2f texels "
+             "per native pixel, up to %.0f%%)%s",
+             who, d.scale * 100, output_density_pixels(quad.nativeW, d.scale, 1, d.eyeW),
+             output_density_pixels(quad.nativeH, d.scale, 1, d.eyeH), d.eyeW, d.eyeH, d.wanted, d.cap * 100,
+             d.target > d.chainScale + 1e-9 ? " (more wanted than its chain holds)" : "");
+        d.logged = d.scale;
+    }
 }
 
 namespace {
@@ -64,8 +107,10 @@ void views4_compose() {
     const auto source = [&](int view, float (&uv)[4]) { views4_source(layout, view, false, w, h, {0, 0}, w, h, uv); };
     for (int e = 0; e < 2; ++e) {
         views4_eye(frame, e, source, eyes[e]);
-        views4_helmet_eye(helmet, helmetFrame, e, eyes[e], quad.v4SubmitFov[e], quad.v4Extent[e]);
+        views4_helmet_eye(helmet, helmetFrame, e, eyes[e], quad.v4SubmitFov[e], quad.v4Extent[e], quad.outDensity,
+                          static_cast<double>(eyes[e].focusSource[2]) * w);
     }
+    views4_output_density(quad.outDensity, "views4");
     if (helmet.on)
         log_helmet_light();
     uint32_t outIndex = 0;
@@ -99,7 +144,7 @@ void views4_compose() {
         logf("views4: first composed frame: eye 0 outer tangents %.3f/%.3f/%.3f/%.3f, focus +-%.3f x +-%.3f, output "
              "%ux%u per eye",
              eyes[0].outerTan[0], eyes[0].outerTan[1], eyes[0].outerTan[2], eyes[0].outerTan[3], eyes[0].focusTan[1],
-             eyes[0].focusTan[2], quad.nativeW, quad.nativeH);
+             eyes[0].focusTan[2], quad.v4Extent[0].width, quad.v4Extent[0].height);
 }
 
 // P3, the API-level path (replay_compose): ACE renders only its two eyes (single-pass stereo); the replay probe has
@@ -125,7 +170,8 @@ void replay_compose() {
     EyeComposition eyes[2] = {};
     const HelmetSettings& helmet = helmetSettings;
     V4Helmet helmetFrame = views4_helmet_start(helmet);
-    const XrExtent2Di extent = views4_output_extent();
+    const XrExtent2Di extent = views4_output_extent(quad.outDensity);
+    const double focusTexels = 0.5 * static_cast<double>(focusImage->GetDesc().Width);  // each eye's half
     for (int e = 0; e < 2; ++e) {
         EyeComposition& c = eyes[e];
         fov_tangents(quad.v4Fov[e], c.outerTan);
@@ -150,8 +196,9 @@ void replay_compose() {
         focus_shape_insets(experiment.focusShape.load(std::memory_order_relaxed), c.cornerInset);
         c.sharpness = static_cast<float>(experiment.sharpen.load(std::memory_order_relaxed)) / 100.0f;
         quad.v4Extent[e] = extent;
-        views4_helmet_eye(helmet, helmetFrame, e, c, quad.v4SubmitFov[e], quad.v4Extent[e]);
+        views4_helmet_eye(helmet, helmetFrame, e, c, quad.v4SubmitFov[e], quad.v4Extent[e], quad.outDensity, focusTexels);
     }
+    views4_output_density(quad.outDensity, "replay compose");
     uint32_t outIndex = 0;
     XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     // Bounded (inside ACE's xrReleaseSwapchainImage, under quad.mutex): timed out, ACE's eyes go out uncomposed this
@@ -302,7 +349,7 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
         if ((experiment.views4Compose || experiment.replayCompose) && proj->viewCount == 2) {
             std::lock_guard guard(quad.mutex);
             if (quad.v4Composed && proj->views[0].subImage.swapchain == quad.appChain) {
-                // The composed output, at native size, with ACE's own pose and FOV for each eye.
+                // The composed output (at its density's size), with ACE's own pose and FOV for each eye.
                 quad.v4Composed = false;
                 for (uint32_t v = 0; v < 2; ++v) {
                     log_submitted_fov(v, copy[v].fov, quad.v4SubmitFov[v]);
@@ -311,7 +358,8 @@ XrResult views4_submit(XrSession session, const XrFrameEndInfo* info) {
                     copy[v].fov = quad.v4SubmitFov[v];
                     copy[v].next = nullptr;  // depth info would describe ACE's quarters, not the output
                     copy[v].subImage.swapchain = quad.outChain;
-                    copy[v].subImage.imageRect = {{static_cast<int32_t>(v * quad.nativeW), 0}, quad.v4Extent[v]};
+                    const uint32_t eyeW = quad.outDensity.eyeW ? quad.outDensity.eyeW : quad.nativeW;
+                    copy[v].subImage.imageRect = {{static_cast<int32_t>(v * eyeW), 0}, quad.v4Extent[v]};
                     copy[v].subImage.imageArrayIndex = 0;
                 }
                 projections.push_back(*proj);
