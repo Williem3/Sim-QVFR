@@ -1,9 +1,12 @@
 #include "code_patch.h"
 
 #include <cstring>
+#include <vector>
 
 #include "../log.h"
 #include "../xr.h"
+
+#include <tlhelp32.h>
 
 namespace simqvfr {
 namespace {
@@ -41,6 +44,62 @@ uint8_t* stub_alloc(size_t size) {
     return p;
 }
 
+// The process's other threads suspended for a live code write (as MinHook does): ACC and X-Plane patch at session
+// start with the game's threads running, and a multi-byte write could be half-seen. Nothing here may allocate or log
+// while threads are held (one may hold the heap or log lock): the ids and handles are gathered first.
+class Freeze {
+public:
+    Freeze() {
+        const DWORD self = GetCurrentThreadId(), pid = GetCurrentProcessId();
+        const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE)
+            return;
+        THREADENTRY32 te{};
+        te.dwSize = sizeof(te);
+        for (BOOL more = Thread32First(snap, &te); more; more = Thread32Next(snap, &te))
+            if (te.dwSize >= FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) + sizeof(te.th32OwnerProcessID) &&
+                te.th32OwnerProcessID == pid && te.th32ThreadID != self)
+                ids_.push_back(te.th32ThreadID);
+        CloseHandle(snap);
+        held_.reserve(ids_.size());  // no allocation once the first thread is held
+        for (const DWORD id : ids_) {
+            const HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, id);
+            if (!h)
+                continue;
+            if (SuspendThread(h) == static_cast<DWORD>(-1)) {
+                CloseHandle(h);
+                continue;
+            }
+            held_.push_back(h);
+        }
+    }
+    ~Freeze() {
+        for (const HANDLE h : held_) {
+            ResumeThread(h);
+            CloseHandle(h);
+        }
+    }
+    // True when a held thread is stopped inside (begin, end): it would resume in the middle of new instructions.
+    // At `begin` itself is fine, the thread runs the new bytes from their start.
+    bool inside(uintptr_t begin, uintptr_t end) const {
+#ifdef _WIN64
+        for (const HANDLE h : held_) {
+            CONTEXT c{};
+            c.ContextFlags = CONTEXT_CONTROL;
+            if (GetThreadContext(h, &c) && c.Rip > begin && c.Rip < end)
+                return true;
+        }
+#endif
+        return false;
+    }
+    Freeze(const Freeze&) = delete;
+    Freeze& operator=(const Freeze&) = delete;
+
+private:
+    std::vector<DWORD> ids_;
+    std::vector<HANDLE> held_;
+};
+
 bool rel32(const void* from_end, const void* to, int32_t* out) {
     const int64_t d = reinterpret_cast<intptr_t>(to) - reinterpret_cast<intptr_t>(from_end);
     if (d < INT32_MIN || d > INT32_MAX)
@@ -60,13 +119,28 @@ bool code_matches(uintptr_t rva, const uint8_t* anchor, size_t size) {
 
 bool code_write(uintptr_t rva, const void* bytes, size_t size) {
     void* p = reinterpret_cast<void*>(module_base() + rva);
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(p);
     DWORD protect = 0;
     if (!VirtualProtect(p, size, PAGE_EXECUTE_READWRITE, &protect))
         return false;
-    std::memcpy(p, bytes, size);
+    // A thread stopped mid-range is let run on a little, then held again (it's in a few instructions at most).
+    bool written = false;
+    for (int attempt = 0; attempt < 50 && !written; ++attempt) {
+        {
+            const Freeze freeze;
+            if (!freeze.inside(begin, begin + size)) {
+                std::memcpy(p, bytes, size);
+                FlushInstructionCache(GetCurrentProcess(), p, size);
+                written = true;
+            }
+        }  // the threads run again here
+        if (!written)
+            Sleep(1);
+    }
     VirtualProtect(p, size, protect, &protect);
-    FlushInstructionCache(GetCurrentProcess(), p, size);
-    return true;
+    if (!written)
+        logf("code_patch: a thread stayed inside 0x%llx (+%zu): not written", static_cast<unsigned long long>(rva), size);
+    return written;
 }
 
 bool code_redirect(uintptr_t rva, const uint8_t* anchor, size_t size, const uint8_t* stubCode, size_t stubSize) {

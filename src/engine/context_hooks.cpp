@@ -6,6 +6,7 @@
 
 #include <MinHook.h>
 
+#include <atomic>
 #include <mutex>
 #include <tuple>
 #include <utility>
@@ -36,7 +37,8 @@ struct Functions {
 };
 
 struct State {
-    ID3D11DeviceContext* context = nullptr;  // raw: the game's, alive while its session is
+    // Raw: the game's, alive while its session is. Atomic: the detours read it on game threads while uninstall clears it.
+    std::atomic<ID3D11DeviceContext*> context{nullptr};
     uint32_t wanted = 0;
     Observers observers;
     Functions functions[kEntries];
@@ -46,6 +48,11 @@ struct State {
 
 // Calls inside an observer, and one d3d11 function calling another of the same entry, go straight through.
 thread_local int depth = 0;
+// Observed detour calls, for uninstall to wait out (a caller frees its observers' state after it).
+std::atomic<int> inFlight{0};
+struct InFlight {
+    ~InFlight() { inFlight.fetch_sub(1); }
+};
 
 template <Entry E, typename... A>
 struct Detours {
@@ -53,12 +60,28 @@ struct Detours {
     static void STDMETHODCALLTYPE fn(ID3D11DeviceContext* context, A... a) {
         using Fn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, A...);
         const Fn real = reinterpret_cast<Fn>(g.functions[E].real[N]);
-        if (depth != 0 || context != g.context) {
+        if (depth != 0) {
             ++depth;
             real(context, a...);
             --depth;
             return;
         }
+        // Counted only for the game's context (other threads' deferred contexts never touch the counter): counted, then
+        // checked again, so a call uninstall's wait didn't see has seen the cleared context.
+        bool observed = context == g.context.load(std::memory_order_relaxed);
+        if (observed) {
+            inFlight.fetch_add(1);
+            observed = context == g.context.load();
+            if (!observed)
+                inFlight.fetch_sub(1);
+        }
+        if (!observed) {
+            ++depth;
+            real(context, a...);
+            --depth;
+            return;
+        }
+        const InFlight counted;
         if constexpr (E == kRSSetViewports || E == kRSSetScissorRects) {
             filter<E>(real, context, a...);
         } else if constexpr (E == kVSSetConstantBuffers1 || E == kPSSetConstantBuffers1) {
@@ -213,11 +236,24 @@ void* detour_for(int e, int n) {
     }
 }
 
+// Entries whose detours take the same arguments and mean the same to the observers (an indirect draw is reported as
+// 0 vertices, 0 instances either way).
+int signature(int e) { return e == kDrawInstancedIndirect ? kDrawIndexedInstancedIndirect : e; }
+
+// The entry other than `e` already hooked on `fn`, or -1. Under g.mutex.
+int owner_of(int e, void* fn) {
+    for (int o = 0; o < kEntries; ++o)
+        for (int i = 0; o != e && i < g.functions[o].count; ++i)
+            if (g.functions[o].target[i] == fn)
+                return o;
+    return -1;
+}
+
 // The function entry `e` holds now, hooked if new. Under g.mutex.
 void hook_entry(int e) {
     if (!(g.wanted & (1u << e)))
         return;
-    void* fn = (*reinterpret_cast<void** const*>(g.context))[kSlot[e]];
+    void* fn = (*reinterpret_cast<void** const*>(g.context.load()))[kSlot[e]];
     Functions& f = g.functions[e];
     for (int i = 0; i < f.count; ++i)
         if (f.target[i] == fn)
@@ -232,12 +268,30 @@ void hook_entry(int e) {
     }
     const int n = f.count;
     f.target[n] = fn;
-    if (MH_CreateHook(fn, detour_for(e, n), &f.real[n]) == MH_OK && MH_EnableHook(fn) == MH_OK) {
+    // One d3d11 function in two entries: one detour only (MinHook refuses a second), so calls through this entry reach
+    // the other entry's. Kept when they read the same arguments; otherwise neither is observed there, since the
+    // detour would read this entry's arguments as its own.
+    if (const int other = owner_of(e, fn); other >= 0) {
+        f.real[n] = fn;
+        ++g.stats.failed;
+        if (signature(other) != signature(e) && MH_DisableHook(fn) == MH_OK)
+            logf("context hooks: the context's %s and %s entries share function %p: unhooked, calls through both pass "
+                 "on unobserved", kName[other], kName[e], fn);
+        else
+            logf("context hooks: the context's %s entry shares function %p with %s: its calls are seen as %s'", kName[e],
+                 fn, kName[other], kName[other]);
+        ++f.count;
+        return;
+    }
+    const MH_STATUS created = MH_CreateHook(fn, detour_for(e, n), &f.real[n]);
+    if (created == MH_OK && MH_EnableHook(fn) == MH_OK) {
         ++g.stats.functions;
     } else {
         f.real[n] = fn;
         ++g.stats.failed;
-        logf("context hooks: the context's %s function %p couldn't be hooked", kName[e], fn);
+        // ALREADY_CREATED here: hooked by other code of ours (not this file's): its detour gets the calls, not ours.
+        logf("context hooks: the context's %s function %p couldn't be hooked%s", kName[e], fn,
+             created == MH_ERROR_ALREADY_CREATED ? " (another hook of ours is on it)" : "");
     }
     ++f.count;  // last: the detours read real[] up to it
 }
@@ -251,15 +305,15 @@ void hook_entries() {
 
 bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& observers) {
     std::lock_guard lock(g.mutex);
-    if (!context || g.context)
-        return g.context == context && context;
+    if (ID3D11DeviceContext* const current = g.context.load(); !context || current)
+        return current == context && context;
     if (const MH_STATUS init = MH_Initialize(); init != MH_OK && init != MH_ERROR_ALREADY_INITIALIZED) {
         log_line("context hooks: MH_Initialize failed: off");
         return false;
     }
-    g.context = context;
     g.wanted = wanted;
     g.observers = observers;
+    g.context.store(context);  // last: the detours start observing once it's set
     ComPtr<ID3D11Device> device;
     context->GetDevice(&device);
     // A command of ours that changes nothing the game sees: a 16-byte constant buffer of our own updated.
@@ -301,14 +355,26 @@ bool install(ID3D11DeviceContext* context, uint32_t wanted, const Observers& obs
 
 void rescan() {
     std::lock_guard lock(g.mutex);
-    if (g.context)
+    if (g.context.load())
         hook_entries();
 }
 
 // The hooks stay in d3d11's code (a game thread may be inside one): with no context they pass every call straight on.
+// The detours themselves (this file's state) live for the process. Calls already inside an observer are waited out
+// (bounded) so the caller may free its observers' state after this returns; never from inside an observer.
 void uninstall() {
     std::lock_guard lock(g.mutex);
-    g.context = nullptr;
+    g.context.store(nullptr);
+    if (depth != 0)
+        return;  // inside a detour on this thread: waiting would wait on ourselves
+    const ULONGLONG start = GetTickCount64();
+    while (inFlight.load() != 0) {
+        if (GetTickCount64() - start > 500) {
+            log_line("context hooks: uninstall: a call still inside an observer after 500 ms: going on");
+            return;
+        }
+        Sleep(0);
+    }
 }
 
 Bypass::Bypass() { ++depth; }
@@ -321,7 +387,7 @@ Stats stats() {
 
 bool installed() {
     std::lock_guard lock(g.mutex);
-    return g.context != nullptr;
+    return g.context.load() != nullptr;
 }
 
 }  // namespace simqvfr::context_hooks

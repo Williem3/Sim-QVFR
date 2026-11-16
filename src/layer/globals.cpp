@@ -17,6 +17,8 @@
 
 namespace simqvfr::layer {
 
+std::atomic<bool> processTerminating{false};  // constant-initialised: set from DllMain (early_load.cpp)
+
 Dispatch next;
 NativeQuad nativeQuad;
 

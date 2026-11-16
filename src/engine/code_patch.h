@@ -10,7 +10,8 @@ namespace simqvfr {
 std::uintptr_t module_base();
 // True when the code at `rva` starts with `anchor` (and is readable).
 bool code_matches(std::uintptr_t rva, const std::uint8_t* anchor, std::size_t size);
-// Overwrites code at `rva` (protection switched temporarily, instruction cache flushed).
+// Overwrites code at `rva` (protection switched temporarily, instruction cache flushed), with the process's other
+// threads suspended and none stopped inside the range (false if one stays there).
 bool code_write(std::uintptr_t rva, const void* bytes, std::size_t size);
 // Replaces the 7-byte `imul r64, r64, imm32` at `rva` with a jump to a stub that computes
 // `dst = (src & mask) * imm32`, then continues after the original instruction. `anchor` is the

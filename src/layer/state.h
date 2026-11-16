@@ -334,6 +334,11 @@ struct HeadSpaces {
     bool skipLogged = false;
 };
 
+// Set by DllMain at DLL_PROCESS_DETACH when the process is ending (lpReserved non-null), before this DLL's globals are
+// destroyed (globals.cpp): the other threads are already gone then, perhaps holding a mutex, so the destructors
+// below neither lock nor join.
+extern std::atomic<bool> processTerminating;
+
 // The gaze thread ([quad] gaze_thread, on by default): ACE's xrLocateViews only reads the latest gaze; this
 // thread looks it up (xrLocateSpace on the gaze action's space) at gaze_poll_hz, at the display time ACE last
 // located its views for, in the space it located them in. The lookup can be slow (~1.5 ms on the Pimax
@@ -361,8 +366,13 @@ struct GazeThread {
     uint64_t lookups = 0;
     double lookupMs = 0, lookupMaxMs = 0;
     // A running thread left at exit (no xrDestroySession) would end the process in std::terminate. At a
-    // process exit it has already ended, so the join returns at once.
+    // process exit it has already ended, perhaps holding `mutex`: detached, not locked or joined.
     ~GazeThread() {
+        if (processTerminating.load()) {
+            if (thread.joinable())
+                thread.detach();
+            return;
+        }
         {
             std::lock_guard guard(mutex);
             stop = true;
@@ -656,8 +666,14 @@ struct PadWatch {
     bool stop = false;
     Hotkeys bindings;              // a copy for the thread
     std::atomic<uint32_t> held{0};  // bit per HotkeyAction
-    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate.
+    // Left running at exit (no xrDestroySession), the thread would end the process in std::terminate. At a
+    // process exit it has already ended, perhaps holding `mutex`: detached, not locked or joined.
     ~PadWatch() {
+        if (processTerminating.load()) {
+            if (thread.joinable())
+                thread.detach();
+            return;
+        }
         {
             std::lock_guard guard(mutex);
             stop = true;

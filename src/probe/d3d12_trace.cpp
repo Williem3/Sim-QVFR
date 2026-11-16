@@ -95,6 +95,7 @@ std::unordered_map<ID3D12Resource*, ImageInfo> images;
 std::unordered_set<std::string> seenTargets, seenAllocations;
 UINT rtvIncrement = 0;
 bool started = false;
+bool attempted = false;  // one try per process: a partial failure leaves some slots patched
 std::atomic<uint64_t> swapchainHits{0}, swapchainHitsThisFrame{0}, bindsThisFrame{0};
 std::atomic<bool> sequence{false};
 thread_local int pendingViewportLog = 0;
@@ -297,8 +298,17 @@ HRESULT STDMETHODCALLTYPE placed2Hook(ID3D12Device10* d, ID3D12Heap* heap, UINT6
 }
 
 bool patch(void** vtable, size_t slot, void* hook, void** original) {
+    // Already ours (a retry after a partial failure): saving it as the original would recurse.
+    if (vtable[slot] == hook)
+        return true;
+    // Keep execute when the page had it; only add write.
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(&vtable[slot], &info, sizeof(info)))
+        return false;
+    constexpr DWORD kExecute = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    const DWORD writable = (info.Protect & kExecute) ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
     DWORD old = 0;
-    if (!VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old))
+    if (!VirtualProtect(&vtable[slot], sizeof(void*), writable, &old))
         return false;
     *original = vtable[slot];
     vtable[slot] = hook;
@@ -313,7 +323,7 @@ template <class Fn> bool hook(void** vtable, size_t slot, Fn detour, Fn* origina
 }  // namespace
 
 bool d3d12_trace_start(ID3D12Device* device) {
-    if (started || !device)
+    if (attempted || !device)
         return started;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
@@ -324,6 +334,7 @@ bool d3d12_trace_start(ID3D12Device* device) {
         return false;
     }
     list->Close();
+    attempted = true;
     rtvIncrement = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     void** deviceVtable = *reinterpret_cast<void***>(device);
     void** listVtable = *reinterpret_cast<void***>(list.Get());

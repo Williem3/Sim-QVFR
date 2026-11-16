@@ -4,6 +4,7 @@
 // GetInstanceProcAddr, the layer order and gaze extension checks, CreateApiLayerInstance and the exported
 // negotiation; the rest is in src/layer/ (layer.h).
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -22,10 +23,38 @@
 
 namespace simqvfr::layer {
 
-#define SIMQVFR_INTERCEPT(fn)                                              \
-    if (std::strcmp(name, "xr" #fn) == 0) {                              \
-        *function = reinterpret_cast<PFN_xrVoidFunction>(&layer##fn);    \
-        return XR_SUCCESS;                                               \
+namespace {
+
+// A C++ exception must not cross the C ABI into the loader or the game (std::terminate there): each entry point the
+// loader or game gets is this wrapper around ours, which logs and fails the call instead. SEH is not caught.
+template <auto F>
+struct Guarded;
+template <typename... A, XrResult(XRAPI_CALL* F)(A...)>
+struct Guarded<F> {
+    static XrResult XRAPI_CALL call(A... a) noexcept {
+        try {
+            return F(a...);
+        } catch (const std::exception& e) {
+            failed(e.what());
+        } catch (...) {
+            failed("unknown");
+        }
+        return XR_ERROR_RUNTIME_FAILURE;
+    }
+    static void failed(const char* what) noexcept {
+        try {
+            logf("an exception (%s) inside a layer entry point: the call fails with XR_ERROR_RUNTIME_FAILURE", what);
+        } catch (...) {
+        }
+    }
+};
+
+}  // namespace
+
+#define SIMQVFR_INTERCEPT(fn)                                                         \
+    if (std::strcmp(name, "xr" #fn) == 0) {                                           \
+        *function = reinterpret_cast<PFN_xrVoidFunction>(&Guarded<&layer##fn>::call); \
+        return XR_SUCCESS;                                                            \
     }
 
 XrResult XRAPI_CALL layerGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function) {
@@ -408,9 +437,14 @@ xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo* loaderInfo, cons
         return XR_ERROR_INITIALIZATION_FAILED;
     request->layerInterfaceVersion = XR_CURRENT_LOADER_API_LAYER_VERSION;
     request->layerApiVersion = XR_API_VERSION_1_0;
-    request->getInstanceProcAddr = simqvfr::layer::layerGetInstanceProcAddr;
-    request->createApiLayerInstance = simqvfr::layer::layerCreateApiLayerInstance;
+    request->getInstanceProcAddr = &simqvfr::layer::Guarded<&simqvfr::layer::layerGetInstanceProcAddr>::call;
+    request->createApiLayerInstance = &simqvfr::layer::Guarded<&simqvfr::layer::layerCreateApiLayerInstance>::call;
     if (simqvfr::layer::is_game_process()) {
+        // The game's code is patched to point into this module and our threads run in it: pinned, the loader's
+        // FreeLibrary (instance destroyed, a failed create) can't unload it under them.
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                           reinterpret_cast<LPCWSTR>(&xrNegotiateLoaderApiLayerInterface), &pinned);
         simqvfr::log_line("Loader negotiated API layer interface v1 (Sim-QVFR probe build)");
         simqvfr::layer::note_loader_negotiation();
     }

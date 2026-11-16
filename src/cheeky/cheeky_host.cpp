@@ -4,8 +4,11 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include "cheeky/cheeky_views.h"
@@ -78,28 +81,46 @@ std::string snapshot_locked() {
     // Bounded JSON; false also means it did not fit, so grow up to 8 MB.
     for (uint32_t capacity = 256 * 1024; capacity <= 8u * 1024 * 1024; capacity *= 2) {
         std::vector<char> buffer(capacity);
-        if (host.snapshot(buffer.data(), capacity))
-            return std::string(buffer.data());
+        if (host.snapshot(buffer.data(), capacity))  // no length given: up to its NUL, never past the buffer
+            return std::string(buffer.data(), strnlen(buffer.data(), capacity));
     }
     return {};
 }
 
+// The snapshot file written on a thread-pool thread: report_locked runs inside xrEndFrame under host.mutex. One write
+// at a time; a report while one is still going skips its file (the next one has newer numbers).
+std::atomic<bool> snapshotWriting{false};
+
+void write_snapshot_later(std::string json) {
+    if (host.snapshotFile.empty() || snapshotWriting.exchange(true))
+        return;
+    auto job = std::make_unique<std::pair<std::filesystem::path, std::string>>(host.snapshotFile, std::move(json));
+    const auto write = [](PTP_CALLBACK_INSTANCE, void* context) {
+        const std::unique_ptr<std::pair<std::filesystem::path, std::string>> owned(
+            static_cast<std::pair<std::filesystem::path, std::string>*>(context));
+        HANDLE file = CreateFileW(owned->first.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(file, owned->second.data(), static_cast<DWORD>(owned->second.size()), &written, nullptr);
+            CloseHandle(file);
+        }
+        snapshotWriting.store(false);
+    };
+    if (TrySubmitThreadpoolCallback(write, job.get(), nullptr))
+        job.release();  // the callback owns it
+    else
+        snapshotWriting.store(false);
+}
+
 void report_locked() {
-    const std::string json = snapshot_locked();
+    std::string json = snapshot_locked();
     if (json.empty()) {
         log_line("cheeky: snapshot failed");
         return;
     }
-    if (!host.snapshotFile.empty()) {
-        HANDLE file = CreateFileW(host.snapshotFile.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
-                                  FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (file != INVALID_HANDLE_VALUE) {
-            DWORD written = 0;
-            WriteFile(file, json.data(), static_cast<DWORD>(json.size()), &written, nullptr);
-            CloseHandle(file);
-        }
-    }
     std::vector<CheekyView> views = cheeky_views(json);
+    write_snapshot_later(std::move(json));
     const uint64_t frames = host.frames - host.framesAtReport;
     logf("cheeky: %zu DLSS view(s) over the last %llu xrEndFrames%s", views.size(),
          static_cast<unsigned long long>(frames), views.size() != host.viewsLogged ? " (count changed)" : "");

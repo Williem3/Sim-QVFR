@@ -262,15 +262,18 @@ uint64_t ini_write_later(std::function<void()> write, IniWrite kind) {
 }
 
 // Waits until the writes queued so far are done and the ini has been read after them (tests; the
-// session's end, so no change is lost).
+// session's end, so no change is lost). Bounded: it runs inside the game's xrDestroySession, and a stuck file
+// (a scanner, a network drive) must not hang the game; the worker still finishes the writes after it.
 void ini_worker_sync() {
+    constexpr auto kSyncLimit = std::chrono::seconds(2);
     std::unique_lock lock(iniWorker.mutex);
     if (!iniWorker.started)
         return;
     const uint64_t want = ++iniWorker.requested;
     iniWorker.poke = true;
     iniWorker.wake.notify_one();
-    iniWorker.settled.wait(lock, [want] { return iniWorker.done >= want; });
+    if (!iniWorker.settled.wait_for(lock, kSyncLimit, [want] { return iniWorker.done >= want; }))
+        log_line("live: the ini worker hadn't finished its writes after 2 s: going on (they finish later)");
 }
 
 // Applies the ini's live keys when the worker read a change. Only between display frames: with

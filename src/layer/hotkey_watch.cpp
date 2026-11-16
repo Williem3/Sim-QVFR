@@ -71,6 +71,11 @@ void pad_watch_run() {
             pads.rescan();
             nextRescan = qpc_now() + qpc_ms(kPadRescanMs);
         }
+        // The window is top-level: a broadcast SendMessage (a display or power change) waits for this thread to take
+        // it, so its messages are drained every poll.
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+            DispatchMessageW(&msg);
         lock.lock();
         padWatch.wake.wait_for(lock, std::chrono::milliseconds(kPadPollMs), [] { return padWatch.stop; });
     }
