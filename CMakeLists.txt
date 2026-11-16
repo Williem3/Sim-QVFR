@@ -475,6 +475,11 @@ sim_qvfr_test(focus_turn_test tests/focus_turn_test.cpp)
 target_include_directories(focus_turn_test PRIVATE src ${THIRD_PARTY}/openxr/include)
 target_compile_definitions(focus_turn_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 
+# Offline check of the focus mask's mesh against the compositor's focus shape (tests/focus_mask_test.cpp).
+sim_qvfr_test(focus_mask_test tests/focus_mask_test.cpp)
+target_include_directories(focus_mask_test PRIVATE src)
+target_compile_definitions(focus_mask_test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+
 # Offline check of LMU's multi-view recovery rule (tests/lmu_mvr_recovery_test.cpp).
 sim_qvfr_test(lmu_mvr_recovery_test tests/lmu_mvr_recovery_test.cpp)
 target_include_directories(lmu_mvr_recovery_test PRIVATE src)

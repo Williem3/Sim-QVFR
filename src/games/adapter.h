@@ -117,6 +117,15 @@ public:
     virtual bool qvfr_live_resolution() const { return info() && info()->features.liveResolution; }
     // Live focus box and focus cull, from the next frame the game fills on.
     virtual void qvfr_set_live(double focusFraction, double focusFractionY, double cullScale, bool gaze) = 0;
+    // The focus mask ([quad] focus_mask; quad/focus_mask.h), live: the focus shape as the compositor composes it (the
+    // pulled-in corners' insets, focus_shape_insets' order; the corner radius, unused with corners) and the margin in
+    // focus view texels. A game that can mask its focus views skips their texels outside it.
+    virtual void qvfr_set_focus_mask(bool on, const float (&inset)[8], double cornerRadius, int marginTexels) {
+        (void)on;
+        (void)inset;
+        (void)cornerRadius;
+        (void)marginTexels;
+    }
     // QVFR: object and tree detail, percent (GameFeatures::objectDetail; [experiment] object_detail), at launch and
     // live. 100: the LOD the focus views' pixel density needs, 0: the game's own for its render size.
     virtual void qvfr_set_object_detail(int percent) { (void)percent; }

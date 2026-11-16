@@ -50,11 +50,14 @@ bool backendAbOk = false, backendAbLogged = false;
 int carSide = 0;
 bool carAbLogged = false, carsOn = false;
 bool car_ab_on() { return cfg.carAb > 0 && carsOn; }
+// lmu_mask_ab's: 0 with the lens mask's and the focus mask's draws, 1 without.
+int maskSide = 0;
+bool maskAbLogged = false;
 
-// The A/B side of this frame: lmu_focus_final_ab's (0 two passes, 1 four), lmu_mvr_backend_ab's (0 NVIDIA's, 1
-// instancing) or lmu_mvr_ab's (0 MVR, 1 without).
-int ab_side() { return cfg.backendAb > 0 ? backendSide : carSide; }
-bool ab_run() { return (cfg.backendAb > 0 && backendAbOk) || car_ab_on(); }
+// The A/B side of this frame: lmu_mask_ab's (0 with the masks, 1 without), lmu_mvr_backend_ab's (0 NVIDIA's, 1
+// instancing) or lmu_car_vectors_ab's (0 with the cars' motion, 1 without).
+int ab_side() { return cfg.maskAb > 0 ? maskSide : cfg.backendAb > 0 ? backendSide : carSide; }
+bool ab_run() { return cfg.maskAb > 0 || (cfg.backendAb > 0 && backendAbOk) || car_ab_on(); }
 
 AbWindow ab;
 

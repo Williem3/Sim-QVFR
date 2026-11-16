@@ -50,6 +50,10 @@ bool capture_due(std::uint64_t arm) { return arm != seenCaptureArm && arm != 0 &
 std::mutex liveMutex;
 double focusFraction = 0.3;
 double focusFractionY = 0;
+// The focus mask as last set (qvfr_frame_set_focus_mask), handed to mvr_pass at each frame's pass 0.
+bool focusMaskOn = false;
+simqvfr::FocusArea focusMaskArea{};
+unsigned focusMaskMargin = 16;
 float gazeTan[2][2] = {};
 bool gazeValid[2] = {};
 
@@ -524,6 +528,21 @@ void mvr_before_pass(int p) {
                 carSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.carAb)) % 2);
                 mvr_car_active(carSide == 0);
                 mvr_frame_mode(carSide);
+            }
+            if (cfg.maskAb > 0) {  // the lens mask this frame or not (between frames)
+                if (!maskAbLogged) {
+                    maskAbLogged = true;
+                    simqvfr::logf("lmu mvr: lens mask A/B: %d frames with the game's mask draw, then %d without, in "
+                                  "turn (lmu_mask_ab)",
+                                  cfg.maskAb, cfg.maskAb);
+                }
+                maskSide = static_cast<int>((sceneFrames / static_cast<unsigned long long>(cfg.maskAb)) % 2);
+                mvr_mask_ab_drop(maskSide == 1);
+                mvr_frame_mode(maskSide);
+            }
+            {  // the focus mask as last set (live)
+                std::lock_guard guard(liveMutex);
+                mvr_focus_mask(focusMaskOn, focusMaskArea, focusMaskMargin);
             }
         }
         freeze_focus();
@@ -1164,6 +1183,13 @@ void qvfr_frame_set_box(double fractionX, double fractionY) {
     std::lock_guard guard(liveMutex);
     focusFraction = std::clamp(fractionX, 0.05, 1.0);
     focusFractionY = fractionY > 0 ? std::clamp(fractionY, 0.05, 1.0) : 0.0;
+}
+
+void qvfr_frame_set_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels) {
+    std::lock_guard guard(liveMutex);
+    focusMaskOn = on;
+    focusMaskArea = area;
+    focusMaskMargin = marginTexels;
 }
 
 simqvfr::games::QvfrMultiView qvfr_frame_multi_view() {

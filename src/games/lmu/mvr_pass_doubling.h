@@ -318,6 +318,10 @@ void trace_draw(ID3D11DeviceContext* context, const char* call, long long a, lon
 // that draws its focus view: the twin puts the hidden area where the focus view sees it, R6a), or dropped while the mask
 // is stale (mvr_mask_stale). The first two logged with the state they ran with. True: dropped (the caller skips it).
 bool lens_mask_draw(ID3D11DeviceContext* context, const char* call, long long a, long long b) {
+    if (g.maskAbDrop) {  // lmu_mask_ab's side without the mask: not counted as stale
+        ++g.stats.maskAbDropped;
+        return true;
+    }
     const bool drop = g.maskStale && g.maskStale->load(std::memory_order_relaxed);
     if (drop) {
         ++g.stats.maskDropped;

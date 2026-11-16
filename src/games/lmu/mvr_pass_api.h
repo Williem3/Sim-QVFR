@@ -172,6 +172,16 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     }
     g.drawFocus = view != nullptr && !g.broken;
     g.passTwinBinds = 0;
+    if (pass >= 0 && pass < 2) {  // the focus mask: this pass's scene depth, as bound at its begin
+        g.mask.done[pass] = false;
+        g.mask.sceneDepth[pass] = nullptr;
+        ComPtr<ID3D11DepthStencilView> dsv;
+        g.context->OMGetRenderTargets(0, nullptr, &dsv);
+        ComPtr<ID3D11Resource> depthTarget;
+        if (dsv)
+            dsv->GetResource(&depthTarget);
+        g.mask.sceneDepth[pass] = depthTarget.Get();
+    }
     g.postWindow = g.focusCopied = g.focusComposited = false;
     g.postTrace.clear();
     g.copyTarget.Reset();
@@ -436,6 +446,24 @@ bool mvr_focus_final(int eye, unsigned& x, unsigned& y, unsigned& width, unsigne
 bool mvr_focus_ready(int eye) { return g.context && g.keepFocus && g.keptOk[eye & 1]; }
 
 void mvr_mask_stale(const std::atomic<bool>* stale) { g.maskStale = stale; }
+
+void mvr_mask_ab_drop(bool drop) { g.maskAbDrop = drop; }
+
+void mvr_focus_mask(bool on, const simqvfr::FocusArea& area, unsigned marginTexels) {
+    auto& m = g.mask;
+    const bool shape = area.corners() || area.radius > 0;
+    if (m.on != (on && shape) || m.margin != marginTexels) {  // (a new shape logs its mesh as it's made)
+        if (on && shape)
+            simqvfr::logf("lmu mvr: focus mask on: the focus views' texels %u past the focus shape skip the scene%s",
+                          marginTexels, m.failed ? " (its resources failed: stays off)" : "");
+        else if (m.on)
+            simqvfr::log_line(on ? "lmu mvr: focus mask off: the focus shape is the plain box"
+                                 : "lmu mvr: focus mask off ([quad] focus_mask=0)");
+    }
+    m.on = on && shape;
+    m.area = area;
+    m.margin = marginTexels;
+}
 
 int mvr_mask_dropped() {
     const int n = g.maskDroppedSince;

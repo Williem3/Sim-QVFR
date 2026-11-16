@@ -111,6 +111,11 @@ void live_apply(const LiveSettings& l) {
                         experiment.box_y(l.focusFractionY > 0 ? l.focusFractionY : l.focusFraction),
                         1.0 + l.feather + experiment.views4FocusCullMargin,
                         l.gaze && experiment.composing());
+    if (experiment.views4 && !experiment.views4EyeCamera) {  // the focus mask: the shape as the compositor has it
+        float inset[2 * kFocusCorners];
+        focus_shape_insets(focus_shape_bits(l.shape), inset);
+        game->qvfr_set_focus_mask(l.focusMask, inset, l.cornerRadius, l.focusMaskMargin);
+    }
     if (game->shows_overlay()) {
         const Views4Sizes wanted = views4_sizes(live.ini.c_str(), l.focusFraction, l.focusFractionY);
         games::GameAdapter::LiveView v;

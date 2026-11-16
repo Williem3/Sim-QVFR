@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 
 #include <MinHook.h>
+#include <d3dcompiler.h>
 
 #include <algorithm>
 #include <array>
@@ -147,6 +148,8 @@ UINT role_of_ps(ID3D11PixelShader* ps) {
 namespace {
 
 #include "mvr_pass_post_roles.h"
+
+#include "mvr_pass_focus_mask.h"
 
 #include "mvr_pass_hooks_entry.h"
 

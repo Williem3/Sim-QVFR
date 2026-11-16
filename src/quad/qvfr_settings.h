@@ -35,6 +35,12 @@ inline constexpr IniInt kFocusHeightPercent{L"experiment", L"focus_height_percen
 inline constexpr IniInt kFeatherPercent{L"quad", L"feather_percent", 10, 0, 50, 1};
 inline constexpr IniInt kCornerRadiusPercent{L"quad", L"corner_radius_percent", 0, 0, 100, 5};
 inline constexpr IniInt kDebugBorder{L"quad", L"debug_border", 0, 0, 1, 1};
+// The focus mask (quad/focus_mask.h; a game with it, LMU): the focus views skip rendering their texels outside the focus
+// shape (pulled-in corners or rounding). 0: they render the whole box, as before. Live.
+inline constexpr IniInt kFocusMask{L"quad", L"focus_mask", 1, 0, 1, 1};
+// Diagnostics: the mask's margin past the shape, focus view texels (what DLSS, sharpening and screen-space effects read
+// beside the shown texels). Live.
+inline constexpr IniInt kFocusMaskMargin{L"experiment", L"focus_mask_margin", 16, 0, 64, 1};
 inline constexpr IniInt kGaze{L"quad", L"gaze", 1, 0, 1, 1};
 inline constexpr IniInt kSharpenPercent{L"quad", L"sharpen_percent", 0, 0, 100, 5};
 inline constexpr IniInt kEyeOff{L"quad", L"eye_off", 0, 0, 2, 1};  // 0 both eyes on, 1 the left off, 2 the right

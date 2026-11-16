@@ -14,6 +14,8 @@ void STDMETHODCALLTYPE draw_indexed(ID3D11DeviceContext* context, UINT count, UI
         ++tr.draws;
         if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, "DrawIndexed", count, start))
             return;
+        if (g.mask.on && g.drawFocus)
+            focus_mask_before_draw(context);
         Timed timed(g.time.tracker);
         if (tr.on && tr.stageCandidate)
             learn_at_composite(context);
@@ -72,6 +74,8 @@ void STDMETHODCALLTYPE draw_traced(ID3D11DeviceContext* context, A... a) {
         const long long args[] = {static_cast<long long>(a)...};
         if (g.vsRole == VsRole::lensMask && lens_mask_draw(context, kHookName[H], args[0], args[1]))
             return;
+        if (g.mask.on && g.drawFocus)
+            focus_mask_before_draw(context);
         Timed timed(g.time.tracker);
         if (tr.on && tr.stageCandidate)
             learn_at_composite(context);

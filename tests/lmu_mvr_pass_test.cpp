@@ -758,6 +758,94 @@ O main(float4 p : POSITION, float4 c : COLOR0) {
                           "pixels differ), the focus view's as its own projection draws it (%d of 3000 differ: edges; %d lit)",
                           eyeDiff, focusDiff, lit);
             check(eyeDiff == 0 && focusDiff <= 60 && lit > 2500, what);  // gaps where neighbours' w differ, in both
+
+            // The focus mask (quad/focus_mask.h): the same pass with a trapezoid (top corners 30% in) and a 1-texel
+            // margin. The eye exactly as before; in the focus view the texels past the margin outside the shape left
+            // black (the scene's draws failed the mask's depth: the default LESS test, so the nearest is 0), the rest
+            // as before; the pass's state as the game left it after the mask.
+            {
+                simqvfr::FocusArea trapezoid;
+                trapezoid.inset[0] = trapezoid.inset[2] = 0.3f;
+                lmu::mvr_focus_mask(true, trapezoid, 1);
+                ComPtr<ID3D11Texture2D> mkT;
+                ComPtr<ID3D11RenderTargetView> mkR;
+                ComPtr<ID3D11DepthStencilView> mkD;
+                target(256, 128, mkT, mkR, mkD);
+                const lmu::MvrPassStats beforeMask = lmu::mvr_pass_stats();
+                context->RSSetViewports(1, &eye);
+                context->OMSetRenderTargets(1, mkR.GetAddressOf(), mkD.Get());
+                context->VSSetShader(svs.Get(), nullptr, 0);
+                lmu::mvr_pass_begin(0, &fv, false);
+                draw_scene(eyeCb.Get());
+                D3D11_VIEWPORT after[16];
+                const UINT afterCount = viewports(context.Get(), after);
+                ID3D11DepthStencilView* boundDsv = nullptr;
+                context->OMGetRenderTargets(0, nullptr, &boundDsv);
+                const bool stateKept = bound_vs(context.Get()) == stwin.Get() && afterCount == 2 &&
+                                       same(after[1], 100, 0, 60, 50) && boundDsv == mkD.Get();
+                if (boundDsv)
+                    boundDsv->Release();
+                draw_scene(eyeCb.Get());  // a second draw in the pass: the mask isn't drawn again
+                lmu::mvr_pass_end(0);
+                lmu::mvr_focus_mask(false, trapezoid, 1);
+                const lmu::MvrPassStats afterMask = lmu::mvr_pass_stats();
+                check(stateKept, "focus mask: after it the game's state in the pass (the twin, both viewports, its depth)");
+                check(afterMask.focusMaskDraws == beforeMask.focusMaskDraws + 1 &&
+                          afterMask.focusMaskRecords == beforeMask.focusMaskRecords + 1,
+                      "focus mask: drawn once in the pass, recorded once");
+                const std::vector<uint32_t> mk = read(mkT.Get(), 256, 128);
+                int eyeChanged = 0, masked = 0, maskedLit = 0, shownChanged = 0, shown = 0, wantMasked = 0;
+                for (UINT y = 0; y < 80; ++y)
+                    for (UINT x = 0; x < 100; ++x)
+                        eyeChanged += mk[y * 256 + x] != mv[y * 256 + x] ? 1 : 0;
+                const double margin = simqvfr::focus_mask_margin(1, 60, 50);
+                simqvfr::FocusArea area = trapezoid;
+                area.aspect = 60.0f / 50.0f;
+                for (UINT y = 0; y < 50; ++y)
+                    for (UINT x = 0; x < 60; ++x) {
+                        const double inside = simqvfr::focus_area_inside(area, (x + 0.5) / 60, (y + 0.5) / 50);
+                        const uint32_t px = mk[y * 256 + 100 + x], was = mv[y * 256 + 100 + x];
+                        if (inside < -margin - 0.03) {  // well past the margin: masked
+                            ++wantMasked;
+                            masked += px == 0 ? 1 : 0;
+                            maskedLit += was != 0 ? 1 : 0;
+                        } else if (inside > 0) {  // shown: untouched
+                            ++shown;
+                            shownChanged += px != was ? 1 : 0;
+                        }
+                    }
+                std::snprintf(what, sizeof(what),
+                              "focus mask: the eye untouched (%d of 8000 differ); %d of %d texels past the margin black "
+                              "(%d lit without the mask); %d of %d shown texels differ",
+                              eyeChanged, masked, wantMasked, maskedLit, shownChanged, shown);
+                check(eyeChanged == 0 && wantMasked > 600 && masked == wantMasked && maskedLit > wantMasked / 2 &&
+                          shownChanged == 0,
+                      what);
+
+                // NVIDIA's single-pass stereo (the stand-in switch): off around the mask's command list, on again after.
+                lmu::mvr_use_instanced(false, false);
+                lmu::mvr_focus_mask(true, trapezoid, 1);
+                target(256, 128, mkT, mkR, mkD);
+                context->RSSetViewports(1, &eye);
+                context->OMSetRenderTargets(1, mkR.GetAddressOf(), mkD.Get());
+                context->VSSetShader(game.Get(), nullptr, 0);
+                lmu::mvr_pass_begin(0, &fv, false);
+                const int callsBefore = twoViewsCalls;
+                const lmu::MvrPassStats beforeNv = lmu::mvr_pass_stats();
+                context->Draw(3, 0);
+                const lmu::MvrPassStats afterNv = lmu::mvr_pass_stats();
+                std::snprintf(what, sizeof(what),
+                              "focus mask, NVIDIA's path: single-pass stereo off and on around it (%d switches), on after, "
+                              "the twin bound, two viewports",
+                              twoViewsCalls - callsBefore);
+                check(afterNv.focusMaskDraws == beforeNv.focusMaskDraws + 1 && twoViewsCalls - callsBefore == 2 &&
+                          twoViewsOn == 1 && bound_vs(context.Get()) == gameTwin.Get() &&
+                          viewports(context.Get(), after) == 2,
+                      what);
+                lmu::mvr_pass_end(0);
+                lmu::mvr_focus_mask(false, trapezoid, 1);
+                lmu::mvr_use_instanced(true);
+            }
             context->OMSetRenderTargets(1, rtv.GetAddressOf(), dsv.Get());
             context->IASetInputLayout(nullptr);
             context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 0);

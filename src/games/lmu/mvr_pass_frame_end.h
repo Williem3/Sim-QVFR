@@ -224,12 +224,21 @@ void mvr_frame_end(unsigned long long frame) {
                           static_cast<unsigned long long>(s.doubledDraws), static_cast<unsigned long long>(s.layoutSwaps),
                           static_cast<unsigned long long>(s.eyeOnlyDraws), static_cast<unsigned long long>(s.layoutEyeOnly),
                           s.instancedTakeovers ? "; took over from NVIDIA's MVR, which the driver refused" : "");
-        if (s.maskDraws || s.maskDropped || s.panelReplays || s.uiMipFrames)
-            simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale; VR UI panel "
-                          "draws replayed at the menus' native size: %llu; frames whose panel sampled its canvas with "
-                          "mips: %llu",
+        if (g.mask.on || s.focusMaskDraws)
+            simqvfr::logf("lmu mvr: focus mask: drawn in %llu eye passes (recorded %llu times), left out of %llu for the "
+                          "A/B, %llu for an unknown depth test, %llu with nothing to mask",
+                          static_cast<unsigned long long>(s.focusMaskDraws),
+                          static_cast<unsigned long long>(s.focusMaskRecords),
+                          static_cast<unsigned long long>(s.focusMaskAbSkipped),
+                          static_cast<unsigned long long>(s.focusMaskOtherTest),
+                          static_cast<unsigned long long>(s.focusMaskEmpty));
+        if (s.maskDraws || s.maskDropped || s.maskAbDropped || s.panelReplays || s.uiMipFrames)
+            simqvfr::logf("lmu mvr: lens mask: %llu draws (%llu with two views), %llu dropped while stale, %llu on the "
+                          "A/B's side without it; VR UI panel draws replayed at the menus' native size: %llu; frames whose "
+                          "panel sampled its canvas with mips: %llu",
                           static_cast<unsigned long long>(s.maskDraws), static_cast<unsigned long long>(s.maskDrawsTwo),
                           static_cast<unsigned long long>(s.maskDropped),
+                          static_cast<unsigned long long>(s.maskAbDropped),
                           static_cast<unsigned long long>(s.panelReplays),
                           static_cast<unsigned long long>(s.uiMipFrames));
         if (g.focusReplay) {
@@ -266,8 +275,8 @@ void mvr_frame_end(unsigned long long frame) {
                 total += avg(sc[p] + po[p], n[p]);
             simqvfr::logf("lmu mvr: GPU per pass%s, scene / post-processing (to the resolve / after it): pass 0 %.2f / %.2f, "
                           "pass 1 %.2f / %.2f, pass 2 %.2f / %.2f, pass 3 %.2f / %.2f ms, %.2f in all (%u frames timed)",
-                          m ? " on the A/B's other side (without MVR, the four passes, instancing, or without the other "
-                              "cars' motion)"
+                          m ? " on the A/B's other side (without MVR, the four passes, instancing, without the other "
+                              "cars' motion, or without the lens mask)"
                             : "", avg(sc[0], n[0]), avg(po[0], n[0]), avg(sc[1], n[1]), avg(po[1], n[1]),
                           avg(sc[2], n[2]), avg(po[2], n[2]), avg(sc[3], n[3]), avg(po[3], n[3]), total, n[0]);
             for (int p = 0; p < 4; ++p) {

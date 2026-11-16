@@ -136,6 +136,8 @@ extern int backendSide;
 extern bool backendAbOk, backendAbLogged;
 extern int carSide;
 extern bool carAbLogged, carsOn;
+extern int maskSide;
+extern bool maskAbLogged;
 bool car_ab_on();
 int ab_side();
 bool ab_run();
