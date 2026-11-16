@@ -18,6 +18,7 @@
 #include "../../engine/code_patch.h"
 #include "../../log.h"
 #include "../../probe/d3d11_capture.h"
+#include "../../probe/frame_parts.h"
 #include "../../quad/eye_off.h"
 #include "../../sha256_file.h"
 #include "abi.h"
@@ -977,10 +978,15 @@ void qvfr_frame_frame_end() {
     if (cfg.mvr && cfg.passTracker && !mvrInstalled && sessionDevice && !offThread)  // the tracker sees the menus too
         if (!install_mvr(sessionDevice))
             stop_multi_view("multi-view's context hooks couldn't be installed");
-    simqvfr::dlss_frame_end(frames);
+    {
+        simqvfr::FramePartTimer part(simqvfr::FramePart::dlssEnd);
+        simqvfr::dlss_frame_end(frames);
+    }
     if (cfg.mvr) {
-        if (!offThread)  // (skipped: the next frame end on the render thread ends the tracker's frame)
+        if (!offThread) {  // (skipped: the next frame end on the render thread ends the tracker's frame)
+            simqvfr::FramePartTimer part(simqvfr::FramePart::mvrEnd);
             mvr_frame_end(frames);
+        }
         frozen[0] = frozen[1] = false;
     }
     const int passes = passesThisFrame;

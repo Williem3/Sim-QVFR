@@ -69,6 +69,7 @@ bool noRoles = false;
 std::atomic<bool> nvapiUsable{false};
 std::atomic<bool> instancedUsable{false};  // the device lets a vertex shader pick the viewport (D3D11_OPTIONS3)
 std::atomic<uint64_t> perInstanceLayouts{0};
+std::atomic<uint64_t> yebisCopiesMarked{0}, finalBlitsMarked{0};  // as stats.yebisCopies and stats.finalBlits
 // Any per-instance layout seen (twinned or not), or the device hooked late (layouts made before it not known): doubled
 // draws look at the bound layout's kind. The layouts made (each marked before it counts).
 std::atomic<bool> layoutsToCheck{false};
@@ -404,6 +405,10 @@ HRESULT STDMETHODCALLTYPE create_pixel_shader(ID3D11Device* device, const void* 
         (*shader)->SetPrivateData(kYebisRoleGuid, sizeof(value), &value);
         std::lock_guard guard(statsMutex);
         ++(role == YebisRole::copy ? stats.yebisCopies : role == YebisRole::composite ? stats.yebisComposites : stats.finalBlits);
+        if (role == YebisRole::copy)
+            yebisCopiesMarked.fetch_add(1, std::memory_order_relaxed);
+        else if (role != YebisRole::composite)
+            finalBlitsMarked.fetch_add(1, std::memory_order_relaxed);
     }
     if (markChecksums) {  // the focus post's diagnostics (lmu_focus_replay): which shaders the post-processing runs
         uint32_t checksum[4];
@@ -695,6 +700,9 @@ MvrProbeStats mvr_probe_stats() {
     std::lock_guard guard(statsMutex);
     return stats;
 }
+
+uint64_t mvr_probe_yebis_copies() { return yebisCopiesMarked.load(std::memory_order_relaxed); }
+uint64_t mvr_probe_final_blits() { return finalBlitsMarked.load(std::memory_order_relaxed); }
 
 uint64_t mvr_shader_generation() { return shaderGeneration.load(std::memory_order_acquire); }
 uint64_t mvr_pixel_shader_generation() { return pixelGeneration.load(std::memory_order_acquire); }

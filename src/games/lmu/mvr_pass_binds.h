@@ -336,6 +336,7 @@ void STDMETHODCALLTYPE resolve_subresource(ID3D11DeviceContext* context, ID3D11R
 // copy, before it reads it), which was drawn into `drawn` (the multisample target, or the same): DLAA on the eye and its
 // focus view, gate D's kept region, the focus post's window.
 void post_begins(ID3D11DeviceContext* context, ID3D11Resource* scene, ID3D11Resource* drawn) {
+    Timed postTimed(g.time.post, true);
     ID3D11Resource* const dst = scene;
     const int eye = g.pass & 1;
     g.resolved[g.pass] = dst;

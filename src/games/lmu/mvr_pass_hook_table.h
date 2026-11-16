@@ -106,15 +106,37 @@ void realResolveSubresource(ID3D11DeviceContext* c, ID3D11Resource* dst, UINT ds
     call_real<kHookResolve>(c, dst, dstSub, src, srcSub, format);
 }
 
-bool timeHooks = false;  // mvr_time_hooks
+// mvr_time_hooks: the sections are timed in 1 frame in kTimedEvery (timeHooks that frame), so the timing's own cost
+// (two time-stamp reads per section, thousands of sections a frame) stays off the other frames; the log's figures are
+// per timed frame.
+bool timeHooksOn = false;
+bool timeHooks = false;
+inline constexpr unsigned long long kTimedEvery = 16;
 
+// A timed section: its ticks added to `sum`, less those of sections inside it that are taken out of their parents
+// (`takeOut`: the post-processing's start, DLSS among it, is not the hooks' or the tracker's own work).
 struct Timed {
     uint64_t* const sum;
     const uint64_t t0;
-    explicit Timed(uint64_t& s) : sum(timeHooks ? &s : nullptr), t0(sum ? __rdtsc() : 0) {}
-    ~Timed() {
+    Timed* const parent;
+    const bool takeOut;
+    uint64_t excluded = 0;
+    static inline thread_local Timed* current = nullptr;  // this thread's innermost running one
+    explicit Timed(uint64_t& s, bool takeOutOfParents = false)
+        : sum(timeHooks ? &s : nullptr), t0(sum ? __rdtsc() : 0), parent(sum ? current : nullptr),
+          takeOut(takeOutOfParents) {
         if (sum)
-            *sum += __rdtsc() - t0;
+            current = this;
+    }
+    ~Timed() {
+        if (!sum)
+            return;
+        const uint64_t d = __rdtsc() - t0;
+        *sum += d > excluded ? d - excluded : 0;
+        current = parent;
+        if (takeOut)
+            for (Timed* p = parent; p; p = p->parent)
+                p->excluded += d;
     }
     Timed(const Timed&) = delete;
     Timed& operator=(const Timed&) = delete;

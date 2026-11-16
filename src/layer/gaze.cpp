@@ -134,6 +134,7 @@ void gaze_thread_run() {
                 sync.countActiveActionSets = 1;
                 sync.activeActionSets = &active;
                 next.SyncActions(session, &sync);
+                gaze.threadSyncQpc = qpc_now();
             }
             if (gaze.attached && !gaze.space) {
                 XrActionSpaceCreateInfo spaceInfo{XR_TYPE_ACTION_SPACE_CREATE_INFO};

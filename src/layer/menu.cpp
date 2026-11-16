@@ -9,6 +9,7 @@
 
 #include <dxgi1_4.h>
 
+#include "probe/frame_parts.h"
 #include "cheeky/cheeky_host.h"
 #include "cheeky/cheeky_settings.h"
 #include "engine/dlss_settings.h"
@@ -367,16 +368,29 @@ void menu_controllers(XrSession session, int64_t now) {
     bool toggle = false;
     XrVector2f stick{};
     {
-        std::lock_guard guard(gaze.mutex);
+        std::unique_lock guard(gaze.mutex, std::defer_lock);
+        {
+            FramePartTimer part(FramePart::gazeLock);
+            guard.lock();
+        }
         if (!gaze.attached || !gaze.menuToggle)
             return;
-        if (gaze.appSyncs == 0) {  // ACE never syncs actions: sync the layer's set alone
+        // The game syncs no actions (ACE, LMU): the layer's set needs syncing for its states to change. The gaze thread
+        // does that 250 times a second while it runs: its last sync is fresh enough for a menu button. Otherwise the
+        // menu syncs it itself, at most every kMenuSyncMs (a press or a push lasts far longer), not every frame.
+        constexpr int64_t kMenuSyncMs = 25;
+        const int64_t fresh = qpc_ms(kMenuSyncMs);
+        const bool threadSynced = gaze.threadSyncQpc && now - gaze.threadSyncQpc < fresh;
+        if (gaze.appSyncs == 0 && !threadSynced && (!gaze.menuSyncQpc || now - gaze.menuSyncQpc >= fresh)) {
+            FramePartTimer part(FramePart::actionSync);
             const XrActiveActionSet active{gaze.set, XR_NULL_PATH};
             XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
             sync.countActiveActionSets = 1;
             sync.activeActionSets = &active;
             next.SyncActions(session, &sync);
+            gaze.menuSyncQpc = now;
         }
+        FramePartTimer readPart(FramePart::actionRead);
         XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
         get.action = gaze.menuToggle;
         XrActionStateBoolean pressed{XR_TYPE_ACTION_STATE_BOOLEAN};
@@ -546,8 +560,15 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     }
     const int64_t now = qpc_now();
     if (method) {
-        menu_keyboard(now);
-        menu_controllers(session, now);
+        {
+            FramePartTimer part(FramePart::keyboard);
+            menu_keyboard(now);
+        }
+        {
+            FramePartTimer part(FramePart::controllers);
+            menu_controllers(session, now);
+        }
+        FramePartTimer part(FramePart::optimizer);
         optimize_tick(now);
     }
     if (menu.visible && now >= menu.hideAt) {
@@ -558,7 +579,11 @@ const XrFrameEndInfo* menu_frame(XrSession session, const XrFrameEndInfo* info, 
     if (showMenu && menu.dirty)
         menu_render();
     showMenu = showMenu && menu.uploaded;
-    const XrCompositionLayerBaseHeader* card = osd_frame(session, now);
+    const XrCompositionLayerBaseHeader* card;
+    {
+        FramePartTimer part(FramePart::overlay);
+        card = osd_frame(session, now);
+    }
     if (!showMenu && !card)
         return info;
     layers.assign(info->layers, info->layers + info->layerCount);

@@ -191,11 +191,8 @@ void mvr_pass_begin(int pass, const MvrPassView* view, bool sample, bool replace
     g.obsCopyCount = 0;
     g.observeShape = !g.drawFocus || !g.lastFrameFinals;
     g.stats.shapeSkippedPasses += pass < 2 && !g.observeShape ? 1 : 0;
-    {
-        const MvrProbeStats known = mvr_probe_stats();
-        g.copyUnknown = g.copyKnownForTests >= 0 ? g.copyKnownForTests == 0 : known.yebisCopies == 0;
-        g.blitUnknown = g.blitKnownForTests >= 0 ? g.blitKnownForTests == 0 : known.finalBlits == 0;
-    }
+    g.copyUnknown = g.copyKnownForTests >= 0 ? g.copyKnownForTests == 0 : mvr_probe_yebis_copies() == 0;
+    g.blitUnknown = g.blitKnownForTests >= 0 ? g.blitKnownForTests == 0 : mvr_probe_final_blits() == 0;
     if (pass == 0)
         g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // a new frame: its own focus finals
     if (pass == 0 && g.carTrack) {  // car tracking: the matrices drawn from now on are this frame's

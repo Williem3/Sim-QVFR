@@ -8,6 +8,7 @@
 #include "probe/cpu_placement.h"
 #include "probe/cpu_isolation.h"
 #include "probe/cpu_profile.h"
+#include "probe/frame_parts.h"
 #include "probe/d3d12_trace.h"
 #include "probe/hang_watch.h"
 #include "probe/pass_census.h"
@@ -53,7 +54,11 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
     XrFrameEndInfo withMenu{};
     std::vector<const XrCompositionLayerBaseHeader*> menuLayers;
     hang_watch_stage("overlay and menu: before");
-    const XrFrameEndInfo* info = menu_frame(session, frameInfo, withMenu, menuLayers);
+    const XrFrameEndInfo* info;
+    {
+        FramePartTimer part(FramePart::menu);
+        info = menu_frame(session, frameInfo, withMenu, menuLayers);
+    }
     hang_watch_stage("overlay and menu: done");
     ++endFrames;
     // The API path's gaze: ACE attaches its action sets (and the layer's gaze with them) at start-up, but not on every
@@ -91,9 +96,16 @@ XrResult end_frame(XrSession session, const XrFrameEndInfo* frameInfo) {
         pass_census_frame_end();
     if (experiment.replayProbe)
         replay_probe_frame_end();
-    game->frame_end();
+    {
+        FramePartTimer part(FramePart::gameEnd);
+        game->frame_end();
+    }
     if (experiment.views4) {
-        game->qvfr_frame_end();
+        {
+            FramePartTimer part(FramePart::qvfrEnd);
+            game->qvfr_frame_end();
+        }
+        FramePartTimer part(FramePart::submit);
         return views4_submit(session, info);
     }
     if (experiment.replayCompose)  // P3: the composed output in place of ACE's eyes (views4's submission)

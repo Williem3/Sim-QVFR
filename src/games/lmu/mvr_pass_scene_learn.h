@@ -185,8 +185,15 @@ void stage_before(ID3D11DeviceContext* context) {
     post_begins(context, scene.Get(), scene.Get());
 }
 
-// A pixel shader's YEBIS role as the probe marked it by its checksum (0: none, or not one the probe knows).
+// A pixel shader's YEBIS role as the probe marked it by its checksum (0: none, or not one the probe knows). Inside a
+// pass with the PSSetShader hook on (texture sharpening or car slots), the game's own shader as its last bind set it
+// (read_bindings at the pass's start, the hook after: what update_ps trusts too), with no runtime call per draw;
+// elsewhere asked of the context.
 UINT marked_role(ID3D11DeviceContext* context) {
+    if (context == g.context && g.pass >= 0 && !g.replaying && (g.biasHooks || g.slotsOn)) {
+        ++g.stats.rolesByBind;
+        return role_of_ps(g.gamePs);
+    }
     ComPtr<ID3D11PixelShader> ps;
     context->PSGetShader(&ps, nullptr, nullptr);
     return role_of_ps(ps.Get());

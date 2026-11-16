@@ -116,8 +116,13 @@ struct HookTime {
     // the blend states' twins, the motions computed and uploaded.
     uint64_t slotViews = 0, slotState = 0, motion = 0;
     // The pass tracker's and the frame's shape's looks at the draws (copy_before, observe_post_draw and the like), the
-    // calls they make included; not the draws passed on.
+    // calls they make included; not the draws passed on, nor the post-processing's start (`post`).
     uint64_t tracker = 0;
+    // The post-processing's start (post_begins: DLSS, the slot unbind, the motions' upload, the focus post's window),
+    // taken out of the hooks' and the tracker's figures it sits in.
+    uint64_t post = 0;
+    // The car hooks' calls in all, the calls passed on included (1 in 16 timed): the most their detours can cost.
+    uint64_t carHooks = 0;
 };
 constexpr int kGpuFrames = 4;
 
@@ -135,7 +140,7 @@ struct State {
     uint32_t twinEpoch = 1;
     uint64_t twinGeneration = 0;
     uint64_t loggedLookups = 0, loggedMisses = 0;  // the stats' counts at the last log line
-    uint64_t loggedRoleLookups = 0, loggedRoleMisses = 0, loggedShapeSkipped = 0;
+    uint64_t loggedRoleLookups = 0, loggedRoleMisses = 0, loggedShapeSkipped = 0, loggedRolesByBind = 0;
     HookTime time;
     unsigned long long tscAtLog = 0;
     long long qpcAtLog = 0;
@@ -162,6 +167,11 @@ struct State {
     // recorded, given back when replaced: hold / hold_instances): while a twin is bound in their place the pipeline
     // holds the twin, not them, and LMU releases its shaders at any time; the twins live as their private data.
     ID3D11VertexShader* gameVs = nullptr;
+    // gameVs's twins as its bind looked them up (gameVsLooked == gameVs, the twins' epoch then): update() reuses them.
+    ID3D11VertexShader* gameVsLooked = nullptr;
+    ID3D11VertexShader* gameVsTwin = nullptr;
+    ID3D11VertexShader* gameVsInstanced = nullptr;
+    uint32_t gameVsEpoch = 0;
     VsRole vsRole = VsRole::none;  // the game's bound vertex shader's role, in and outside the passes (R6)
     ID3D11ClassInstance* instances[256] = {};
     UINT instanceCount = 0;
@@ -248,6 +258,18 @@ struct State {
     ComPtr<ID3D11Buffer> slotWords;
     std::vector<ComPtr<ID3D11ShaderResourceView>> slotViews;
     ID3D11ShaderResourceView* slotViewBound = nullptr;
+    // The last blend state's twin (per write mask) and depth state's writes. Each holds a reference to the state it
+    // caches, so no other state can take its address while it is cached (the twin lives as the held state's private
+    // data); reset at each frame end. (Not render target views: a reference held on a swapchain's back buffer makes
+    // the game's ResizeBuffers fail, lmu_focus_post_roles_test.)
+    struct BlendLook {
+        ComPtr<ID3D11BlendState> game;
+        ID3D11BlendState* twin[2] = {};
+    } blendLook;
+    struct DepthLook {
+        ComPtr<ID3D11DepthStencilState> ds;
+        bool writes = true, known = false;
+    } depthLook;
     ID3D11RenderTargetView* sceneRtvChecked = nullptr;  // the last render target view checked for the scene's (raw)
     bool sceneRtvIsScene = false;
     ID3D11Resource* sceneCheckedAgainst = nullptr;  // the tracker's scene target it was checked against (raw)
@@ -361,6 +383,7 @@ struct State {
     unsigned long long framesSinceInstall = 0;
     bool have[4] = {};
     unsigned long long lastStatsFrame = 0;
+    unsigned long long timedFrames = 0;  // frames timed (mvr_time_hooks: 1 in kTimedEvery) since the last log
     // The focus mask (mvr_focus_mask; quad/focus_mask.h): its depth drawn into the focus viewport before the scene.
     struct FocusMask {
         bool on = false;

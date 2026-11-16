@@ -46,7 +46,7 @@ void update() {
     }
     bool want = can;
     if (want) {
-        twin = twin_of(g.gameVs);
+        twin = game_twin();
         want = twin != nullptr;
     }
     if (want != g.stereo && g.instanced) {  // no mode to switch: the draws are doubled while the twin is bound
@@ -60,7 +60,7 @@ void update() {
                 want = false;
                 twin = nullptr;
                 if (take_over_with_instancing() && can) {
-                    twin = twin_of(g.gameVs);
+                    twin = game_twin();
                     want = twin != nullptr;
                     g.stereo = want;
                 }
@@ -102,6 +102,7 @@ void STDMETHODCALLTYPE vs_set_shader(ID3D11DeviceContext* context, ID3D11VertexS
         g.vsRole = e ? e->role : VsRole::none;
         g.vsWorldSlot = e ? e->worldSlot : -1;  // car tracking: where it reads its worldMatrix
         g.vsWorldOffset = e ? e->worldOffset : 0;
+        keep_game_entry(vs, e);
     }
     if (!ours(context)) {
         realVSSetShader(context, vs, instances, count);

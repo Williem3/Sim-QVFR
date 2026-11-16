@@ -11,7 +11,7 @@
 // work (a timed section ~17 ns, lmu_car_motion_test --bench), so 1 in 16 is timed and counted 16 times, each site with
 // a counter of its own (the matrix read and the draw alternate in the eye passes: one counter for both timed one of
 // them for long stretches, run 22), less the two timestamp reads' own ticks inside the section (timedEmptyTicks).
-uint32_t carSampleRead = 0, carSampleDraw = 0;
+uint32_t carSampleRead = 0, carSampleDraw = 0, carSampleHook = 0;
 uint64_t timedEmptyTicks = 0;  // the least a section with nothing in it measures (mvr_time_hooks)
 struct SampledTimed {
     uint64_t* const sum;
@@ -44,6 +44,7 @@ inline void vs_set_constant_buffers(VsCbFn real, ID3D11DeviceContext* context, U
         real(context, start, n, buffers);
         return;
     }
+    SampledTimed whole(g.time.carHooks, carSampleHook);
     if (g.carTrack) {
         if (timeHooks)
             ++g.time.carCalls;
@@ -63,6 +64,9 @@ inline void vs_set_constant_buffers(VsCbFn real, ID3D11DeviceContext* context, U
 // Map and Unmap: any resource but the per-draw buffer passes with one comparison.
 inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Resource* resource, UINT sub, D3D11_MAP type,
                             UINT flags, D3D11_MAPPED_SUBRESOURCE* mapped) {
+    if (context != g.context)
+        return real(context, resource, sub, type, flags, mapped);
+    SampledTimed whole(g.time.carHooks, carSampleHook);
     const HRESULT hr = real(context, resource, sub, type, flags, mapped);
     if (timeHooks)
         ++g.time.carCalls;
@@ -73,6 +77,11 @@ inline HRESULT map_resource(MapFn real, ID3D11DeviceContext* context, ID3D11Reso
 
 // The per-draw buffer's matrix, read as its update ends (its memory is still ours to read until the call passes on).
 inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Resource* resource, UINT sub) {
+    if (context != g.context) {
+        real(context, resource, sub);
+        return;
+    }
+    SampledTimed whole(g.time.carHooks, carSampleHook);
     if (timeHooks)
         ++g.time.carCalls;
     if (resource == g.worldRes && g.worldMapped && g.carActive && context == g.context) {
@@ -87,7 +96,12 @@ inline void unmap_resource(UnmapFn real, ID3D11DeviceContext* context, ID3D11Res
 
 inline void ia_set_vertex_buffers(IaVbFn real, ID3D11DeviceContext* context, UINT start, UINT n,
                                   ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets) {
-    if (context == g.context && !g.replaying) {
+    if (context != g.context) {
+        real(context, start, n, buffers, strides, offsets);
+        return;
+    }
+    SampledTimed whole(g.time.carHooks, carSampleHook);
+    if (!g.replaying) {
         if (timeHooks)
             ++g.time.carCalls;
         if (start == 0 && n > 0) {
@@ -100,7 +114,12 @@ inline void ia_set_vertex_buffers(IaVbFn real, ID3D11DeviceContext* context, UIN
 
 inline void ia_set_index_buffer(IaIbFn real, ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format,
                                 UINT offset) {
-    if (context == g.context && !g.replaying) {
+    if (context != g.context) {
+        real(context, buffer, format, offset);
+        return;
+    }
+    SampledTimed whole(g.time.carHooks, carSampleHook);
+    if (!g.replaying) {
         if (timeHooks)
             ++g.time.carCalls;
         g.iaIb = buffer;
@@ -130,9 +149,23 @@ D3D11_BLEND_DESC blend_twin_desc(const D3D11_BLEND_DESC& game, bool write) {
 }
 
 // The twin of the game's blend state `game` (null: D3D11's default), made the first time it's needed.
+ID3D11BlendState* blend_twin_looked_up(ID3D11BlendState* game, bool write);
+
+// blend_twin_looked_up, remembered for the last game state this frame (the game binds a few states over and over).
 ID3D11BlendState* blend_twin(ID3D11BlendState* game, bool write) {
     if (!game)
         return g.defaultBlendTwin[write ? 1 : 0].Get();
+    if (game != g.blendLook.game.Get()) {
+        g.blendLook = {};
+        g.blendLook.game = game;
+    }
+    ID3D11BlendState*& twin = g.blendLook.twin[write ? 1 : 0];
+    if (!twin)
+        twin = blend_twin_looked_up(game, write);
+    return twin;
+}
+
+ID3D11BlendState* blend_twin_looked_up(ID3D11BlendState* game, bool write) {
     IUnknown* unknown = nullptr;
     UINT size = sizeof(unknown);
     if (SUCCEEDED(game->GetPrivateData(kSlotBlendTwinGuid[write ? 1 : 0], &size, &unknown)) && unknown) {
@@ -172,9 +205,14 @@ void apply_blend() {
 bool depth_writes(ID3D11DepthStencilState* ds) {
     if (!ds)
         return true;  // D3D11's default: depth on, written
+    if (g.depthLook.known && ds == g.depthLook.ds.Get())  // the last state looked at this frame
+        return g.depthLook.writes;
     D3D11_DEPTH_STENCIL_DESC d;
     ds->GetDesc(&d);
-    return d.DepthEnable && d.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ALL;
+    g.depthLook.ds = ds;
+    g.depthLook.writes = d.DepthEnable && d.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ALL;
+    g.depthLook.known = true;
+    return g.depthLook.writes;
 }
 
 using BlendFn = void(STDMETHODCALLTYPE*)(ID3D11DeviceContext*, ID3D11BlendState*, const FLOAT*, UINT);

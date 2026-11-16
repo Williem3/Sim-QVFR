@@ -45,7 +45,7 @@ void mvr_frame_end(unsigned long long frame) {
     g.finalThisFrame[0] = g.finalThisFrame[1] = false;  // the next frame's are its own (a menu frame has none)
     g.shapeReady = g.shapeOk[0] && g.shapeOk[1] && !g.shapeForceBad;
     if (g.copyKnownForTests < 0)
-        g.copyUnknown = mvr_probe_stats().yebisCopies == 0;
+        g.copyUnknown = mvr_probe_yebis_copies() == 0;
     g.stats.shapeFrames += g.shapeOk[0] && g.shapeOk[1] ? 1 : 0;
     for (int e = 0; e < 2; ++e) {
         g.shapeMissingLast[e] = g.shapeOk[e] ? 0 : g.shapeMissing[e] ? g.shapeMissing[e] : 5;
@@ -60,6 +60,11 @@ void mvr_frame_end(unsigned long long frame) {
             c.dst = nullptr;
         }
     g.sceneRtvChecked = nullptr;  // is_scene_rtv's cache: a view's address may be another's after targets are remade
+    g.blendLook = {};             // likewise the blend twin's and the depth state's
+    g.depthLook = {};
+    // mvr_time_hooks: this frame was timed (counted for the per-frame figures); the next one is if it is 1 in 16.
+    g.timedFrames += timeHooks ? 1 : 0;
+    timeHooks = timeHooksOn && (frame + 1) % kTimedEvery == 0;
     // The overlay trace (debug logs only): the frames 600, 2400 and 4200 frame ends after the install, each from the
     // frame end before.
     ++g.framesSinceInstall;
@@ -89,20 +94,26 @@ void mvr_frame_end(unsigned long long frame) {
         QueryPerformanceFrequency(&f);
         const unsigned long long tsc = __rdtsc();
         const double ms = 1000.0 * static_cast<double>(now.QuadPart - g.qpcAtLog) / static_cast<double>(f.QuadPart);
-        if (timeHooks && ms > 0 && tsc > g.tscAtLog && frames > 0) {
+        const double timed = static_cast<double>(g.timedFrames);
+        if (timeHooksOn && ms > 0 && tsc > g.tscAtLog && frames > 0 && timed > 0) {
             const double perMs = static_cast<double>(tsc - g.tscAtLog) / ms;
-            const auto per = [&](uint64_t ticks) { return static_cast<double>(ticks) / perMs / frames; };
+            const auto per = [&](uint64_t ticks) { return static_cast<double>(ticks) / perMs / timed; };
             simqvfr::logf("lmu mvr: this code's CPU in the context hooks %.3f ms per frame, the calls passed on included "
-                          "(twin lookups %.3f: %llu, %llu not cached; stereo switches %.3f); %.0f hooked calls per frame",
+                          "(twin lookups %.3f: %llu, %llu not cached; stereo switches %.3f); %.0f hooked calls per frame; "
+                          "%.0f of %.0f frames timed (1 in %llu)",
                           per(g.time.hooks), per(g.time.lookups),
                           static_cast<unsigned long long>(g.stats.lookups - g.loggedLookups),
                           static_cast<unsigned long long>(g.stats.lookupMisses - g.loggedMisses), per(g.time.switches),
-                          static_cast<double>(g.time.calls) / frames);
+                          static_cast<double>(g.time.calls) / frames, timed, frames, kTimedEvery);  // (counted every frame)
             simqvfr::logf("lmu mvr: the pass tracker's and the frame shape's looks at the draws %.3f ms per frame (not in "
-                          "the hooks' figure above; the draws passed on not included); pixel shader roles: %llu looked up, "
-                          "%llu not cached; %llu eye passes' shape not looked at (focus views drawn after a frame with both)",
-                          per(g.time.tracker), static_cast<unsigned long long>(g.stats.roleLookups - g.loggedRoleLookups),
+                          "the hooks' figure above; the draws passed on not included); the post-processing's start (DLSS, "
+                          "the motions' upload, the focus post's window) %.3f, taken out of both figures; pixel shader "
+                          "roles: %llu looked up, %llu not cached, %llu by the game's bind (no runtime call); %llu eye "
+                          "passes' shape not looked at (focus views drawn after a frame with both)",
+                          per(g.time.tracker), per(g.time.post),
+                          static_cast<unsigned long long>(g.stats.roleLookups - g.loggedRoleLookups),
                           static_cast<unsigned long long>(g.stats.roleLookupMisses - g.loggedRoleMisses),
+                          static_cast<unsigned long long>(g.stats.rolesByBind - g.loggedRolesByBind),
                           static_cast<unsigned long long>(g.stats.shapeSkippedPasses - g.loggedShapeSkipped));
             if (g.carTrack)
                 simqvfr::logf("lmu mvr: car tracking's own CPU %.3f ms per frame (its matrix reads %.3f, its draws %.3f, "
@@ -112,7 +123,11 @@ void mvr_frame_end(unsigned long long frame) {
                               "buffers)",
                               per(g.time.cars + g.time.carReads + g.time.carDraws), per(g.time.carReads),
                               per(g.time.carDraws), per(g.time.cars), static_cast<unsigned long long>(timedEmptyTicks),
-                              static_cast<double>(g.time.carCalls) / frames);
+                              static_cast<double>(g.time.carCalls) / timed);
+            if (g.carTrack)
+                simqvfr::logf("lmu mvr: car tracking's hooks' calls in all, the calls passed on included, %.3f ms per "
+                              "frame (1 in 16 timed): the most their detours themselves can cost",
+                              per(g.time.carHooks));
             if (g.slotsOn)
                 simqvfr::logf("lmu mvr: car slots' CPU per frame, the calls they make included: slot views %.3f ms (1 in "
                               "16 timed), the target's binds and the blend states' twins %.3f, the motions computed and "
@@ -120,6 +135,8 @@ void mvr_frame_end(unsigned long long frame) {
                               per(g.time.slotViews), per(g.time.slotState), per(g.time.motion));
         }
         g.time = HookTime{};
+        g.timedFrames = 0;
+        g.loggedRolesByBind = g.stats.rolesByBind;
         g.loggedLookups = g.stats.lookups;
         g.loggedMisses = g.stats.lookupMisses;
         g.loggedRoleLookups = g.stats.roleLookups;
@@ -316,7 +333,9 @@ void mvr_time_hooks(bool on) {
         }
         timedEmptyTicks = least;
     }
-    timeHooks = on;
+    timeHooksOn = on;
+    if (!on)
+        timeHooks = false;  // (on: from the next 1-in-16 frame)
 }
 
 MvrPassStats mvr_pass_stats() { return g.stats; }
