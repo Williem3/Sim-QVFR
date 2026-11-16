@@ -120,6 +120,8 @@ void take_frame_end() {
         apply_views();      // the next frame's shared work at the game's own sizes
         swap_bound(false);  // and the game's own constant buffers
     }
+    if (g.stats.frames % kEvictFrames == 0)
+        evict_mirrors();  // after our copies were swapped back out (above)
     g.way.store(!g.focusPercent || (!g.mvr && !g.instanced) || g.scaleMismatch ? 0
                 : g.focusOff ? 3
                 : g.instanced && (g.preferInstanced || !g.mvr) ? 2 : 1,
@@ -171,6 +173,8 @@ void take_frame_end() {
 }
 
 void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv) {
+    if (session_ending())
+        return;
     const DWORD self = GetCurrentThreadId();
     if (g.thread && self != g.thread)
         return;
@@ -286,7 +290,7 @@ void on_targets(ID3D11DeviceContext*, UINT count, ID3D11RenderTargetView* const*
 }
 
 bool on_viewports(ID3D11DeviceContext*, UINT count, const D3D11_VIEWPORT* in, D3D11_VIEWPORT* out) {
-    if (g.thread && GetCurrentThreadId() != g.thread)
+    if (session_ending() || (g.thread && GetCurrentThreadId() != g.thread))
         return false;
     g.viewportCount = std::min(count, kMaxViews);
     g.viewsDual = false;
@@ -299,7 +303,7 @@ bool on_viewports(ID3D11DeviceContext*, UINT count, const D3D11_VIEWPORT* in, D3
 }
 
 bool on_scissors(ID3D11DeviceContext*, UINT count, const D3D11_RECT* in, D3D11_RECT* out) {
-    if (g.thread && GetCurrentThreadId() != g.thread)
+    if (session_ending() || (g.thread && GetCurrentThreadId() != g.thread))
         return false;
     g.scissorCount = std::min(count, kMaxViews);
     g.viewsDual = false;
@@ -313,7 +317,7 @@ bool on_scissors(ID3D11DeviceContext*, UINT count, const D3D11_RECT* in, D3D11_R
 
 void on_draw(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT) {
     g.instancedDraw = false;
-    if (!g.active || GetCurrentThreadId() != g.thread)
+    if (session_ending() || !g.active || GetCurrentThreadId() != g.thread)
         return;
     if (entry == ch::kDrawIndexed || entry == ch::kDrawIndexedInstanced) {
         if (focus_on() && (g.mvr || g.instanced) && g.depthBound && g.fullSize) {
@@ -381,6 +385,9 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
         put_back(g.vs, false);
         put_back(g.ps, true);
     }
+    // After the put-backs: what this draw's on_draw changed goes back even if the session ended in between.
+    if (session_ending())
+        return;
     // The focus view's turn: a full-screen triangle into a full-size target of the eye's. The quarter-size exposure and
     // bloom chain stays the eye's alone, and so does the half-size ambient occlusion chain (S6 run 2): its search
     // reaches up to a quarter of the eye's screen, most of a focus view's width, and the shader drops every sample
@@ -458,6 +465,46 @@ bool make_resources() {
            SUCCEEDED(g.device->CreateShaderResourceView(g.rawIn.Get(), &sv, &g.rawInView)) &&
            SUCCEEDED(g.device->CreateUnorderedAccessView(g.rawOut.Get(), &uv, &g.rawOutView)) &&
            SUCCEEDED(g.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &g.patchCs));
+}
+
+// The game's own state back, on the render thread between its calls (inside an observer, or under a ch::Bypass):
+// NVAPI's one view, its viewports and scissors as it set them, its constant buffers in our copies' place. Session end
+// can come mid-frame, and no xrEndFrame may follow (flat mode, quit) to do it at a frame's end.
+void restore_game_state() {
+    g.active = false;
+    g.activeNow.store(false, std::memory_order_relaxed);
+    two_views(false);
+    g.viewsDual = false;
+    apply_views();  // not active: the game's own
+    swap_bound(false);
+}
+
+constexpr uint64_t kRestoreMs = 2000;  // the render thread's next observed call, waited for this long at most
+
+// At each observer's start. False: the session goes on. True: it ended (corner_session_end) and the observer returns
+// at once (the game's call passes on as it is). The render thread's first call after it puts the game's state back
+// and stops observing. Past kRestoreMs without one (the render thread no longer drawing), a call on another thread
+// stops observing without it; end_now settles one still asked for.
+bool session_ending() {
+    const int s = g.restore.load(std::memory_order_acquire);
+    if (s == 0)
+        return false;
+    if (s != 1)
+        return true;
+    const bool render = g.thread && GetCurrentThreadId() == g.thread;
+    if (!render && GetTickCount64() < g.restoreDeadline.load(std::memory_order_relaxed))
+        return true;
+    int asked = 1;
+    if (!g.restore.compare_exchange_strong(asked, 2, std::memory_order_acq_rel))
+        return true;  // another thread took it
+    if (render)
+        restore_game_state();  // our calls pass straight through (inside an observer)
+    ch::uninstall();
+    simqvfr::logf("scs corner: after the session's end: %s, observing stopped (thread %lu)",
+                  render ? "the game's views, viewports and constant buffers put back" : "no render-thread call came: "
+                  "nothing put back", GetCurrentThreadId());
+    g.restore.store(3, std::memory_order_release);
+    return true;
 }
 
 // Everything tied to the device and the session, released and reset: at session end, and on every way out of
@@ -546,6 +593,7 @@ void release_all() {
     g.burstFramesLeft = 0;
     g.context.Reset();
     g.device.Reset();
+    g.restore.store(0, std::memory_order_release);  // the next session's end asks again
 }
 
 }  // namespace detail
@@ -569,6 +617,22 @@ struct Lifecycle {
 } lifecycle;
 
 void end_now() {
+    // The restore session end asked for, if no observed call took it: here (on the render thread, the game's state put
+    // back between its calls; elsewhere not touched), and observing stopped before anything is released.
+    int asked = 1;
+    if (g.restore.compare_exchange_strong(asked, 2, std::memory_order_acq_rel)) {
+        if (g.thread && GetCurrentThreadId() == g.thread) {
+            const ch::Bypass bypass;  // our calls straight on, past the still-installed observers
+            restore_game_state();
+        }
+        ch::uninstall();
+        g.restore.store(3, std::memory_order_release);
+    }
+    // One being done inside an observer on another thread: a few calls; waited for (bounded) so the release doesn't
+    // pull the context away under it.
+    for (int i = 0; i < 500 && g.restore.load(std::memory_order_acquire) == 2; ++i)
+        Sleep(1);
+    ch::uninstall();  // (again: a no-op unless that wait ran out)
     simqvfr::logf("scs corner: at session end: %llu frames, %llu with the eyes in the corner",
                   static_cast<unsigned long long>(g.stats.frames), static_cast<unsigned long long>(g.stats.cornerFrames));
     release_all();  // the session's swapchains go with it (ATS makes new ones when its AA setting changes)
@@ -728,17 +792,33 @@ int corner_way() { return g.context ? g.way.load(std::memory_order_relaxed) : 0;
 
 CornerStats corner_stats() { return g.stats; }
 
-// The game's main thread, at xrDestroySession: observing stops now (the hooks pass every new call straight on; one
-// already inside an observer finishes with everything still there), the release waits for the render thread's next
-// xrEndFrame (service_lifecycle). An install not done yet is dropped with its session.
+// At xrDestroySession, usually on the game's main thread. The session can end mid-frame (the views doubled, the
+// viewports cut, our copies bound) with no xrEndFrame after it (flat mode, quit), and the main thread mustn't touch the
+// render thread's context: so the game's state is put back by the render thread's next observed call (session_ending),
+// which then stops observing; until then every observer passes calls straight on. On the render thread itself: here,
+// at once. The release still waits for the next xrEndFrame (service_lifecycle). An install not done yet is dropped.
 void corner_session_end() {
     std::lock_guard lock(lifecycle.mutex);
     lifecycle.install = false;
     lifecycle.device.Reset();
     if (!g.context)
         return;
-    ch::uninstall();
     lifecycle.end = true;
+    g.restoreDeadline.store(GetTickCount64() + kRestoreMs, std::memory_order_relaxed);
+    int none = 0;
+    g.restore.compare_exchange_strong(none, 1, std::memory_order_acq_rel);  // once per session
+    if (g.thread && GetCurrentThreadId() == g.thread) {  // between the render thread's own calls: no wait
+        int asked = 1;
+        if (g.restore.compare_exchange_strong(asked, 2, std::memory_order_acq_rel)) {
+            {
+                const ch::Bypass bypass;
+                restore_game_state();
+            }
+            ch::uninstall();
+            g.restore.store(3, std::memory_order_release);
+            simqvfr::log_line("scs corner: session end on the render thread: the game's state put back, observing stopped");
+        }
+    }
     g.lifecyclePending.store(true, std::memory_order_release);
 }
 

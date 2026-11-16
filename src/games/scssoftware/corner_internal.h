@@ -42,8 +42,9 @@ struct Mirror {
     ComPtr<ID3D11Buffer> game, copy;
     UINT bytes = 0;
     uint64_t refreshedFrame = ~0ull;
-    int id = -1;           // its slot in State::mirrorIds (-1: none free: another thread's writes go unseen)
-    uint32_t seenGen = 0;  // State::mirrorGen[id] as of the copy
+    uint64_t usedFrame = 0;  // the last frame a bind used it (evict_mirrors)
+    int id = -1;             // its slot in State::mirrorIds (every mirror has one: learn mirrors nothing without)
+    uint32_t seenGen = 0;    // State::mirrorGen[id] as of the copy
 };
 
 struct Range {
@@ -87,14 +88,21 @@ struct State {
     // drawing thread, so another thread's write would leave the rest of the frame reading the copy's older contents. Such
     // a write bumps the buffer's generation, and its next bind copies it again (refresh). Counted too (ETS2 2026-11-15:
     // markers flashing in one eye for single frames; ATS: 8,629 such writes, none with the eyes in the corner). The
-    // buffers' identities are kept here for the other threads to compare with.
+    // buffers' identities are kept here for the other threads to compare with. A slot is null while free (an evicted
+    // mirror's, reused by the next); with none free a buffer isn't mirrored at all (mirrorNoId counts those binds).
     static constexpr int kMirrorIds = 16;
     std::atomic<ID3D11Resource*> mirrorIds[kMirrorIds] = {};
     std::atomic<uint32_t> mirrorGen[kMirrorIds] = {};
-    std::atomic<int> mirrorIdCount{0};
+    std::atomic<int> mirrorIdCount{0};  // the slots ever used (the other threads compare those)
+    uint64_t mirrorsEvicted = 0, mirrorNoId = 0;
+    bool mirrorNoIdLogged = false;
     std::atomic<bool> activeNow{false};  // the eyes in the corner (g.active, for the other threads)
     // A session start or end asked for and not done yet (service_lifecycle): the swapchain calls leave the state alone.
     std::atomic<bool> lifecyclePending{false};
+    // The game's state put back after session end (session_ending): 0 nothing asked, 1 asked, 2 being done, 3 done
+    // (observing stopped). A fallback after restoreDeadline (GetTickCount64) stops observing without it.
+    std::atomic<int> restore{0};
+    std::atomic<uint64_t> restoreDeadline{0};
     std::atomic<uint64_t> otherWrites{0}, otherWritesActive{0};
     std::atomic<DWORD> otherWriter{0};
     bool otherWriterLogged = false;
@@ -156,7 +164,9 @@ struct State {
     // as the game's, with the region copied to their top-left (Prism's passes address a region from the origin only).
     struct Tex {
         uint64_t writeSerial = 0, writeFrame = ~0ull;  // the focus region's last write
-        ComPtr<ID3D11Texture2D> game, twin;            // the game's (kept alive with its twin)
+        // The game's, held by every entry (with or without a twin): its address, the key, can't be another texture's
+        // while the entry lives (else a new texture there would inherit the write serial or the failed flag).
+        ComPtr<ID3D11Texture2D> game, twin;
         ComPtr<ID3D11RenderTargetView> twinRtv;
         ComPtr<ID3D11ShaderResourceView> twinAll;  // every mip (GenerateMips)
         uint64_t copiedSerial = ~0ull;
@@ -312,6 +322,8 @@ void on_draw_after(ID3D11DeviceContext*, ch::Entry entry, UINT count, UINT, UINT
 bool make_resources();
 void release_all();
 void service_lifecycle();  // the session start and end the main thread asked for, done at an xrEndFrame
+void restore_game_state();
+bool session_ending();  // at each observer's start: true, return at once (the session ended)
 
 // corner_math.cpp
 bool focus_on();
@@ -341,6 +353,7 @@ void run_cs(ID3D11ComputeShader* cs, ID3D11ShaderResourceView* in, ID3D11Unorder
             UINT groups);
 void refresh(Mirror& m);
 Mirror* learn(ID3D11Buffer* b);
+void evict_mirrors();
 void swap_bound(bool on);
 void on_unmap(ID3D11DeviceContext*, ID3D11Resource* resource, UINT);
 bool on_constant_buffers(ID3D11DeviceContext*, bool, UINT, UINT count, ID3D11Buffer* const* in, ID3D11Buffer** out);

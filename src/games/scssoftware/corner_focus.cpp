@@ -50,6 +50,8 @@ void mark_bound_written() {
     for (ID3D11Texture2D* t : g.boundRt)
         if (t) {
             State::Tex& x = g.texes[t];
+            if (!x.game)
+                x.game = t;  // held: the key stays this texture's (bound now, so alive)
             ++x.writeSerial;
             x.writeFrame = g.stats.frames;
             x.usedFrame = g.stats.frames;
@@ -109,6 +111,9 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     D3D11_PRIMITIVE_TOPOLOGY topology;
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11PixelShader> ps;
+    ComPtr<ID3D11GeometryShader> gs;  // nulled for the blit (as upscale): a game's GS or tessellation would reshape it
+    ComPtr<ID3D11HullShader> hs;
+    ComPtr<ID3D11DomainShader> ds;
     ComPtr<ID3D11ShaderResourceView> srv;
     ComPtr<ID3D11SamplerState> samp;
     ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
@@ -124,6 +129,9 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     c->IAGetPrimitiveTopology(&topology);
     c->VSGetShader(&vs, nullptr, nullptr);
     c->PSGetShader(&ps, nullptr, nullptr);
+    c->GSGetShader(&gs, nullptr, nullptr);
+    c->HSGetShader(&hs, nullptr, nullptr);
+    c->DSGetShader(&ds, nullptr, nullptr);
     c->PSGetShaderResources(0, 1, &srv);
     c->PSGetSamplers(0, 1, &samp);
     c->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, &dsv);
@@ -150,6 +158,9 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     c->VSSetShader(g.blitVs.Get(), nullptr, 0);
     c->PSSetShader(g.blitPs.Get(), nullptr, 0);
+    c->GSSetShader(nullptr, nullptr, 0);
+    c->HSSetShader(nullptr, nullptr, 0);
+    c->DSSetShader(nullptr, nullptr, 0);
     c->PSSetShaderResources(0, 1, src);
     c->PSSetSamplers(0, 1, linear);
     c->Draw(3, 0);
@@ -175,6 +186,9 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
     c->IASetPrimitiveTopology(topology);
     c->VSSetShader(vs.Get(), nullptr, 0);
     c->PSSetShader(ps.Get(), nullptr, 0);
+    c->GSSetShader(gs.Get(), nullptr, 0);
+    c->HSSetShader(hs.Get(), nullptr, 0);
+    c->DSSetShader(ds.Get(), nullptr, 0);
     ++g.stretched;
     return true;
 }
@@ -184,6 +198,8 @@ bool stretch_into_twin(State::Tex& t, ID3D11Texture2D* game, const D3D11_TEXTURE
 State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
     State::Tex& t = g.texes[game];
     t.usedFrame = g.stats.frames;
+    if (!t.game)
+        t.game = game;  // held by every entry, a failed one too: the key stays this texture's
     if (t.failed)
         return nullptr;
     if (!t.twin) {
@@ -210,7 +226,6 @@ State::Tex* twin_of(ID3D11Texture2D* game, const D3D11_TEXTURE2D_DESC& d) {
         }
         if (td.MiscFlags)
             g.device->CreateShaderResourceView(t.twin.Get(), nullptr, &t.twinAll);
-        t.game = game;
         t.mips = d.MipLevels;
         const float none[4] = {};
         g.context->ClearRenderTargetView(t.twinRtv.Get(), none);
